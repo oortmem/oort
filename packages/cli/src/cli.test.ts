@@ -778,29 +778,77 @@ describe('wire', () => {
     expect(drain.config.sources['writer']).toBe('default');
   });
 
-  it('cli.wire-honours-config-project-id', async () => {
+  it('cli.project-link-unlink', async () => {
     const root = tmpdir();
     const home = path.join(root, 'oort-home');
     const env = { HOME: root, OORT_HOME: home };
-    const ids: (string | undefined)[] = [];
-    for (const name of ['main', 'worktree']) {
-      const cwd = path.join(root, name);
-      fs.mkdirSync(path.join(cwd, '.git'), { recursive: true });
-      const before = await wire(cwd, { env });
-      const derived = before.scope.projectId;
-      await before.close();
-      fs.writeFileSync(
-        path.join(cwd, 'oort.config.json'),
-        JSON.stringify({ project: { id: 'one' } }),
-      );
+    const main = path.join(root, 'main');
+    fs.mkdirSync(path.join(main, '.git', 'worktrees', 'wt'), { recursive: true });
+    fs.writeFileSync(path.join(main, '.git', 'worktrees', 'wt', 'commondir'), '../..\n');
+    const worktree = path.join(root, 'wt');
+    fs.mkdirSync(worktree);
+    fs.writeFileSync(
+      path.join(worktree, '.git'),
+      `gitdir: ${path.join(main, '.git', 'worktrees', 'wt')}\n`,
+    );
+    fs.writeFileSync(
+      path.join(main, 'oort.config.json'),
+      JSON.stringify({ project: { id: 'one' } }),
+    );
+    const run = async (cwd: string, args: string[]) => {
+      const io = fakeIo({ cwd, env });
+      return { code: await runCli(args, io, wire), io };
+    };
+    const scopeOf = async (cwd: string): Promise<string | undefined> => {
       const w = await wire(cwd, { env });
-      ids.push(derived, w.scope.projectId);
       await w.close();
-    }
-    const [mainDerived, mainId, worktreeDerived, worktreeId] = ids;
-    expect(mainDerived).toMatch(/^main-[0-9a-f]{8}$/);
-    expect(worktreeDerived).toMatch(/^worktree-[0-9a-f]{8}$/);
-    expect([mainId, worktreeId]).toEqual(['one', 'one']);
+      return w.scope.projectId;
+    };
+
+    // Unlinked: the worktree shares the main checkout's derived id, the file's id is ignored.
+    const derived = await scopeOf(main);
+    expect(derived).toMatch(/^main-[0-9a-f]{8}$/);
+    expect(await scopeOf(worktree)).toBe(derived);
+    const stats = await run(main, ['stats']);
+    expect(stats.code).toBe(0);
+    expect(stats.io.stderr.match(/oort project link/g)).toHaveLength(1);
+    // Hooks stay silent on stderr and log the code.
+    const hookIo = fakeIo({
+      cwd: main,
+      env,
+      stdin: JSON.stringify({ session_id: 's', cwd: main }),
+    });
+    expect(await runCli(['hook', 'SessionStart'], hookIo, wire)).toBe(0);
+    expect(hookIo.stderr).toBe('');
+    const log = readLines(path.join(home, 'logs', 'hooks.log'));
+    expect(log.map((l) => l['outcome'])).toContain('config:project-id-untrusted');
+
+    // link binds the configured id; it holds in every worktree.
+    const linked = await run(main, ['project', 'link']);
+    expect(linked.code).toBe(0);
+    expect(linked.io.stdout).toBe(`Linked ${main} to project "cfg:one"\n`);
+    expect(await scopeOf(main)).toBe('cfg:one');
+    expect(await scopeOf(worktree)).toBe('cfg:one');
+    expect((await run(main, ['stats'])).io.stderr).not.toContain('oort project link');
+    const file = path.join(home, 'project-links.json');
+    expect((fs.statSync(file).mode & 0o777).toString(8)).toBe('600');
+    // --id overrides, from a worktree too (the binding is on the main root).
+    expect((await run(worktree, ['project', 'link', '--id', 'two'])).code).toBe(0);
+    expect(await scopeOf(main)).toBe('cfg:two');
+
+    const unlinked = await run(worktree, ['project', 'unlink']);
+    expect(unlinked.io.stdout).toBe(`Unlinked ${main}\n`);
+    expect(await scopeOf(main)).toBe(derived);
+    expect((await run(main, ['project', 'unlink'])).io.stdout).toBe(`No link for ${main}\n`);
+
+    // Refusals: outside a repository, and with nothing to bind.
+    const loose = path.join(root, 'loose');
+    fs.mkdirSync(loose);
+    expect((await run(loose, ['project', 'link', '--id', 'x'])).code).toBe(2);
+    fs.writeFileSync(path.join(main, 'oort.config.json'), JSON.stringify({ project: {} }));
+    const none = await run(main, ['project', 'link']);
+    expect(none.code).toBe(2);
+    expect(none.io.stderr).toContain('pass --id');
   });
 
   it('cli.wire-ignores-project-embed-dimension', async () => {

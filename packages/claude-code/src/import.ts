@@ -113,9 +113,9 @@ function transcripts(projectsDir: string, since: Date | undefined, skip: () => v
  * directory is unresolved even inside a git repo: walking up from it would
  * attribute the session to the enclosing repository instead.
  */
-function resolveProject(cwd: string | undefined): string | undefined {
+function resolveProject(cwd: string | undefined, home: string): string | undefined {
   if (cwd === undefined || !fs.existsSync(cwd)) return undefined;
-  return resolveProjectId(cwd);
+  return resolveProjectId(cwd, home);
 }
 
 function chars(o: Observation): number {
@@ -160,7 +160,7 @@ export async function importTranscripts(
     }
     const detailed = parseTranscriptDetailed(text);
     const cwd = detailed.find((d) => d.turn.cwd.length > 0)?.turn.cwd;
-    const projectId = resolveProject(cwd);
+    const projectId = resolveProject(cwd, deps.config.home);
     const scope = localScope(projectId);
     const { fresh } = selectAfterCursor(detailed, await deps.store.getCursor(cursorKey(session)));
     const mine: Item[] = [];

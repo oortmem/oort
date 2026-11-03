@@ -271,9 +271,14 @@ on Marcus's own transcripts first.
 ## 8. Local engine (Phase 1 target)
 
 - **One global store per machine**, under `~/.oort/`, project-aware (decided by
-  Marcus). Memories carry `project_id` (derived from the repo root, overridable in
-  `oort.config.json` as `project.id`; the nearest such file at or above the cwd counts, the
-  home config's does not, so a worktree can share its main checkout's project). `recall` searches the current project plus global memories by
+  Marcus). Memories carry `project_id`, derived from the main repository root (a linked
+  worktree resolves through its `.git` file's `commondir` to its main checkout, so worktrees
+  share memories with no config). `project.id` in `oort.config.json` overrides it only once
+  the user trusts it: the file is committed with the repository, so in a cloned repo it could
+  name another project's scope. `oort project link [--id <id>]` binds the repository's main
+  root to the id in `$OORT_HOME/project-links.json` (0600); unbound, the file's `project.id`
+  is ignored with a hint. A configured id is stored as `cfg:<id>`, so it never equals a
+  derived id (derived ids contain no `:`). `oort project unlink` removes the binding. `recall` searches the current project plus global memories by
   default. A project can set `private: true` in its `oort.config.json`, after which its
   memories never surface in any other project and are never promoted to global.
   Claude Code hooks therefore install at user scope (`~/.claude/settings.json`), with

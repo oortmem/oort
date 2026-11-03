@@ -1,7 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { projectIdFor, scrubObservation, type Memory, type MemoryWriter } from '@oortmem/core';
+import {
+  linkProject,
+  projectIdFor,
+  scrubObservation,
+  type Memory,
+  type MemoryWriter,
+} from '@oortmem/core';
 import {
   AWS_KEY,
   SESSION,
@@ -113,23 +119,33 @@ describe('importTranscripts', () => {
     ]);
   });
 
-  it('import.honours-recorded-cwd-project-id', async () => {
+  it('import.recorded-cwd-project-id-needs-link', async () => {
     const t = tempHome();
     const dir = projects(t);
-    // The recorded cwd's own oort.config.json names the project.
+    // The recorded cwd's own oort.config.json names the project; it counts once linked.
     fs.writeFileSync(
       path.join(t.cwd, 'oort.config.json'),
       JSON.stringify({ project: { id: 'pinned-id' } }),
     );
     const deps = makeDeps(t);
-    const r = await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
-    expect(r).toMatchObject({ observations: 10, outcomes: { added: 10 } });
-    const listed = await deps.store.list(
-      { ...LOCAL, projectIds: ['pinned-id'] },
-      { validOnly: false },
-    );
-    expect(listed).toHaveLength(10);
+    linkProject(t.home, t.cwd, 'pinned-id');
+    const done = await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
+    expect(done).toMatchObject({ observations: 10, outcomes: { added: 10 } });
+    const linked = { ...LOCAL, projectIds: ['cfg:pinned-id'] };
+    expect(await deps.store.list(linked, { validOnly: false })).toHaveLength(10);
     expect(await deps.store.list(scopeOf(t), { validOnly: false })).toEqual([]);
+  });
+
+  it('import.untrusted-project-id-keeps-derived', async () => {
+    const t = tempHome();
+    const dir = projects(t);
+    fs.writeFileSync(
+      path.join(t.cwd, 'oort.config.json'),
+      JSON.stringify({ project: { id: 'pinned-id' } }),
+    );
+    const deps = makeDeps(t);
+    await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
+    expect(await deps.store.list(scopeOf(t), { validOnly: false })).toHaveLength(10);
   });
 
   it('import.sets-cursors-so-stop-skips-imported-turns', async () => {

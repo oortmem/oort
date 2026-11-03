@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -35,5 +36,33 @@ export function appendPrivateFile(file: string, data: string): void {
     fs.writeSync(fd, data);
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+/**
+ * Replaces `file` with `data` atomically: a 0600 temp file beside it, then a
+ * rename (its directory is created 0700). Readers see the old or the new
+ * content, never a partial write.
+ */
+export function writePrivateFile(file: string, data: string): void {
+  ensurePrivateDir(path.dirname(file));
+  const tmp = `${file}.${process.pid}-${randomBytes(4).toString('hex')}.tmp`;
+  const fd = fs.openSync(tmp, 'wx', 0o600);
+  try {
+    try {
+      tightenFd(fd);
+      fs.writeSync(fd, data);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // Already renamed or never created: nothing to clean up.
+    }
+    throw e;
   }
 }

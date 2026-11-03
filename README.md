@@ -7,3 +7,5 @@ To get started, run `pnpm install && pnpm verify`. That installs dependencies an
 To use the `oort` CLI with Claude Code, install it from the repo with `pnpm build && cd packages/cli && pnpm add -g .`, then run `oort init` and `oort install claude-code`.
 
 A project's `oort.config.json` shapes recall in that project, but not the write path: queued turns are observed by a background drain that runs in `~/.oort` and reads only `~/.oort/config.json`. The store's `embed.dimension` likewise always comes from the home config; a different project value is ignored with a warning.
+
+Memories are scoped to a project: by default its id is derived from the main repository root, so a git worktree shares memories with its main checkout. A `project.id` in `oort.config.json` is ignored until you trust it, because that file comes with the repository and a cloned repo could use it to name another project's memories. Run `oort project link` in the repository to bind it to the configured id (or `oort project link --id <id>`), and `oort project unlink` to go back; the binding lives in `~/.oort/project-links.json` and the scope becomes `cfg:<id>`.

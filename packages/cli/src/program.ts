@@ -11,6 +11,7 @@ import { inspectCommand } from './commands/inspect.js';
 import { installCommand } from './commands/install.js';
 import { observeCommand } from './commands/observe.js';
 import { pinCommand } from './commands/pin.js';
+import { projectLinkCommand, projectUnlinkCommand } from './commands/project.js';
 import { recallCommand } from './commands/recall.js';
 import { statsCommand } from './commands/stats.js';
 import type { Io } from './io.js';
@@ -116,6 +117,19 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('unpin a memory')
     .argument('<id>', 'memory id or unique prefix')
     .action(run((id: string) => pinCommand(id, false, ctx)));
+
+  const project = p
+    .command('project')
+    .description('trust a project id for this repository (oort.config.json project.id)');
+  project
+    .command('link')
+    .description('bind this repository to its configured project id, or to --id')
+    .option('--id <id>', 'the project id to bind (default: project.id in oort.config.json)')
+    .action(run((o: { id?: string }) => projectLinkCommand(o, ctx)));
+  project
+    .command('unlink')
+    .description("remove this repository's binding (back to the derived id)")
+    .action(run(() => projectUnlinkCommand(ctx)));
 
   p.command('import')
     .description('import existing Claude Code transcripts (estimates first, then asks)')

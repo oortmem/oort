@@ -1,7 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { localScope, projectIdFor, type Embedder, type MemoryStore } from '@oortmem/core';
+import {
+  linkProject,
+  localScope,
+  projectIdFor,
+  type Embedder,
+  type MemoryStore,
+} from '@oortmem/core';
 import { makeMemory, vec } from '@oortmem/core/store-conformance';
 import {
   AWS_KEY,
@@ -227,17 +233,17 @@ describe('UserPromptSubmit', () => {
     expect(readLog(t.home)[0]?.project).toBe(projectId);
   });
 
-  it('hook.prompt-honours-config-project-id', async () => {
+  it('hook.prompt-config-project-id-needs-link', async () => {
     const t = tempHome();
     fs.mkdirSync(path.join(t.cwd, '.git'));
     fs.writeFileSync(
       path.join(t.cwd, 'oort.config.json'),
       JSON.stringify({ project: { id: 'shared-checkout' } }),
     );
-    const mine = {
+    const linked = {
       ...PORT_MEMORY,
-      id: 'mine',
-      scope: localScope('shared-checkout'),
+      id: 'linked',
+      scope: localScope('cfg:shared-checkout'),
       text: 'auth port is 4471 here',
     };
     const derived = {
@@ -246,12 +252,23 @@ describe('UserPromptSubmit', () => {
       scope: localScope(projectIdFor(t.cwd)),
       text: 'auth port derived 7777',
     };
-    const deps = await withMemories(t, mine, derived);
-    const out = await handleUserPromptSubmit(prompt(t, 'which auth port do we use?'), deps);
-    const ctx = context(out.stdout, 'UserPromptSubmit');
+    const deps = await withMemories(t, linked, derived);
+    const ask = async (): Promise<string> =>
+      context(
+        (await handleUserPromptSubmit(prompt(t, 'which auth port do we use?'), deps)).stdout,
+        'UserPromptSubmit',
+      );
+    // Untrusted: the repository file cannot pick the scope.
+    let ctx = await ask();
+    expect(ctx).toContain('7777');
+    expect(ctx).not.toContain('4471');
+    expect(readLog(t.home)[0]?.project).toBe(projectIdFor(t.cwd));
+    // After the user links it, it does.
+    linkProject(t.home, t.cwd, 'shared-checkout');
+    ctx = await ask();
     expect(ctx).toContain('4471');
     expect(ctx).not.toContain('7777');
-    expect(readLog(t.home)[0]?.project).toBe('shared-checkout');
+    expect(readLog(t.home)[1]?.project).toBe('cfg:shared-checkout');
   });
 });
 

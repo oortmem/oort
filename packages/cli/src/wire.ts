@@ -4,7 +4,7 @@ import {
   MissingCredentialError,
   OortConfig,
   localScope,
-  resolveProjectId,
+  resolveProject,
   resolveConfig,
   type DecisionController,
   type Embedder,
@@ -17,6 +17,7 @@ import {
 import { createHookLogger, type HookLogger } from '@oortmem/claude-code';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import type { Env } from './io.js';
+import { echo } from './util.js';
 
 export type AdapterRole = 'embed' | 'rerank' | 'decide' | 'write';
 
@@ -33,14 +34,15 @@ export interface Wired {
   harnessLog: HookLogger;
   /**
    * Config problems worked around while wiring, as short tokens
-   * (`embed-dimension-ignored`). Commands print each message on stderr; hooks log the code.
+   * (`embed-dimension-ignored`, `project-id-untrusted`). Commands print each
+   * message on stderr; hooks log the code.
    */
   warnings: WireWarning[];
   close(): Promise<void>;
 }
 
 export interface WireWarning {
-  code: 'embed-dimension-ignored';
+  code: 'embed-dimension-ignored' | 'project-id-untrusted';
   /** One line for stderr; holds config values only. */
   message: string;
 }
@@ -161,7 +163,15 @@ export const wire: WireFn = async (cwd, opts = {}) => {
       config = { ...config, embed: { ...config.embed, dimension } };
     }
   }
-  const scope = localScope(resolveProjectId(cwd));
+  const project = resolveProject(cwd, config.home);
+  // A repository file cannot choose a scope without the user's trust binding.
+  if (project.untrustedId !== undefined && opts.projectConfig !== false) {
+    warnings.push({
+      code: 'project-id-untrusted',
+      message: `oort.config.json sets project.id ${echo(project.untrustedId)}, ignored until you trust it: run \`oort project link\` in this repository.`,
+    });
+  }
+  const scope = localScope(project.projectId);
   const store = await openSqliteStore({
     path: path.join(config.home, 'oort.sqlite'),
     coldDir: path.join(config.home, 'cold'),
