@@ -18,3 +18,11 @@ pneumonoultramicroscopicsilicovolcanoconiosis is a long word
 internationalization-and-localization-considerations-for-teams
 ssh git@github.com:org/repo.git works
 the token budget per turn is 4096 tokens
+see https://github.com/org/repo/commit/3f786850e387550fdab836ed7e6dc881de23001b for it
+open /Users/mjnong/repos/oort/packages/core/src/scrubObservation now
+packages/core/src/memory-store/HybridRetriever/RankFusion2
+call getUserProfileSettingsForAccount_v2 first
+config max_tokens: 1024
+MAX_TOKENS=4096
+class pa-container-with-very-long-name-here
+pip package sk-learn-is-not-the-package-name

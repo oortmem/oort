@@ -40,21 +40,23 @@ interface Rule {
 
 const tag = (kind: string): string => `${MARK}${kind}]`;
 
+/** Redact the whole match only if its body (after `skip` prefix chars) has a digit. */
+function withDigit(kind: string, skip: number): Hit {
+  return (m) => (/[0-9]/.test(m.slice(skip)) ? { out: tag(kind), removed: m.length } : null);
+}
+
 /**
- * Keep everything up to the value (the name, the delimiter, and optionally a
- * `Bearer` scheme) and redact the value, unless it is already redacted.
+ * Keep everything up to the value (name, delimiter and, for headers, a kept
+ * scheme word) and redact the value. Skips values that already contain a
+ * marker, so a second pass never re-redacts and the ratio stays at most 1.
  */
-function keepName(kind: string, scheme: boolean): Hit {
+function keepName(kind: string, prefix: RegExp, drop?: RegExp): Hit {
   return (m) => {
-    const delim = m.search(/[=:]/) + 1;
-    const rest = m.slice(delim);
-    const lead = /^[ \t]*/.exec(rest)?.[0].length ?? 0;
-    let cut = delim + lead;
-    if (scheme) cut += /^bearer[ \t]+/i.exec(m.slice(cut))?.[0].length ?? 0;
+    if (drop?.test(m) === true) return null;
+    const cut = prefix.exec(m)?.[0].length ?? 0;
     const value = m.slice(cut);
-    return value.startsWith(MARK)
-      ? null
-      : { out: `${m.slice(0, cut)}${tag(kind)}`, removed: value.length };
+    if (value.includes(MARK) || cut === 0) return null;
+    return { out: `${m.slice(0, cut)}${tag(kind)}`, removed: value.length };
   };
 }
 
@@ -74,24 +76,50 @@ export function shannonEntropy(s: string): number {
 const HEX = /^[0-9a-f]+$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const KEYISH = /(secret|token|key|password)/i;
+const WORD_SEGMENT = /^[a-z_-]{3,}$/;
 
 function classes(s: string): number {
   return [/[A-Z]/, /[a-z]/, /[0-9]/, /[+/=_-]/].filter((r) => r.test(s)).length;
 }
 
+/** Does this piece, on its own, look like random key material? */
+function looksRandom(seg: string, before: string): boolean {
+  if (seg.length < 32 || UUID.test(seg)) return false;
+  if (HEX.test(seg)) {
+    if (seg.length === 40) return false; // git SHA
+    if (seg.length === 64) return KEYISH.test(before.slice(-40));
+  }
+  if (classes(seg) < 3 || shannonEntropy(seg) < ENTROPY_MIN) return false;
+  // Identifiers (camelCase and friends) are mostly letters with next to no digits.
+  const letters = seg.replace(/[^A-Za-z]/g, '').length;
+  const digits = seg.replace(/[^0-9]/g, '').length;
+  return !(letters / seg.length > 0.85 && digits <= 2);
+}
+
+/**
+ * Candidate tokens are split on `/` and `.` first, so paths and URLs are judged
+ * piece by piece. A token with slashes and no plain lowercase word between them
+ * (so not a path) is also judged whole, because base64 contains `/`.
+ */
 function highEntropy(m: string, ...args: unknown[]): Replacement | null {
   const offset = args[0] as number;
   const whole = args[1] as string;
-  const hit = { out: tag('high-entropy'), removed: m.length };
-  if (UUID.test(m)) return null;
-  if (HEX.test(m)) {
-    if (m.length === 40) return null; // git SHA
-    if (m.length === 64) {
-      return KEYISH.test(whole.slice(Math.max(0, offset - 40), offset)) ? hit : null;
-    }
+  const parts = m.split(/([/.])/);
+  let pos = offset;
+  let removed = 0;
+  const out = parts.map((part) => {
+    const at = pos;
+    pos += part.length;
+    if (!looksRandom(part, whole.slice(Math.max(0, at - 40), at))) return part;
+    removed += part.length;
+    return tag('high-entropy');
+  });
+  if (removed > 0) return { out: out.join(''), removed };
+  const segs = m.split('/');
+  if (segs.length > 1 && !segs.some((x) => WORD_SEGMENT.test(x)) && looksRandom(m, '')) {
+    return { out: tag('high-entropy'), removed: m.length };
   }
-  if (classes(m) < 3 || shannonEntropy(m) < ENTROPY_MIN) return null;
-  return hit;
+  return null;
 }
 
 /**
@@ -120,27 +148,37 @@ const RULES: Rule[] = [
   { kind: 'anthropic-key', re: /\bsk-ant-[A-Za-z0-9_-]{20,}/g },
   { kind: 'stripe-key', re: /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
   { kind: 'typesafe-key', re: /\bts_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
-  { kind: 'openai-key', re: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}/g },
-  { kind: 'voyage-key', re: /\bpa-[A-Za-z0-9_-]{20,}/g },
+  // A digit is required in the body so kebab-case words like `sk-learn-...` survive.
+  { kind: 'openai-key', re: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}/g, hit: withDigit('openai-key', 3) },
+  { kind: 'voyage-key', re: /\bpa-[A-Za-z0-9_-]{20,}/g, hit: withDigit('voyage-key', 3) },
   {
     kind: 'jwt',
     re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
   },
   {
     kind: 'url-credentials',
-    // Only `user:password@` is redacted; scheme and host survive.
-    re: /(?<=\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^@\s/]+(?=@)/gi,
-    hit: (m) => (m.startsWith(MARK) ? null : { out: tag('url-credentials'), removed: m.length }),
+    // Only `user:password@` is redacted; scheme and host survive. The user may
+    // be empty and the password may hold `@`: it runs to the last `@` of the authority.
+    re: /(?<=\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]*:[^\s/]+(?=@[^@\s/]*(?:[/\s]|$))/gi,
+    hit: (m) => (m.includes(MARK) ? null : { out: tag('url-credentials'), removed: m.length }),
   },
   {
     kind: 'auth-header',
-    re: /\b(?:authorization|x-api-key|api-key|x-auth-token)[ \t]*[:=][ \t]*(?:bearer[ \t]+)?\S+/gi,
-    hit: keepName('auth-header', true),
+    re: /["']?\b(?:authorization|x-api-key|api-key|x-auth-token)["']?[ \t]*[:=][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']?)?[^\s"']+/gi,
+    hit: keepName(
+      'auth-header',
+      /^[^=:]*[=:][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']?)?/i,
+    ),
   },
   {
     kind: 'env-secret',
-    re: /^[ \t]*(?:export[ \t]+)?[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE_KEY|ACCESS_KEY)[A-Z0-9_]*[ \t]*[=:][ \t]*\S+/gim,
-    hit: keepName('env-secret', false),
+    // Key: whole word or `_`-suffix keyword, bounded so a long run cannot go quadratic.
+    re: /(?<![A-Za-z0-9_])["']?(?:export[ \t]+)?(?:[A-Z0-9_]{0,64}_)?(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE_KEY|ACCESS_KEY)(?:_[A-Z0-9_]{0,64})?["']?[ \t]*[=:][ \t]*(?:"[^"\n]*"|'[^'\n]*'|[^\s"']+)/gi,
+    hit: keepName(
+      'env-secret',
+      /^[^=:]*[=:][ \t]*/,
+      /^["']?(?:export[ \t]+)?(?:MAX|MIN|NUM|COUNT)_/i,
+    ),
   },
   {
     kind: 'high-entropy',
@@ -180,7 +218,7 @@ export function scrub(text: string): ScrubResult {
   return {
     text: r.text,
     redactions: r.redactions,
-    secretRatio: text.length === 0 ? 0 : r.removed / text.length,
+    secretRatio: text.length === 0 ? 0 : Math.min(1, r.removed / text.length),
   };
 }
 

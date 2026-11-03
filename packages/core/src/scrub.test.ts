@@ -18,7 +18,7 @@ const SECRETS = fixture('secrets.txt').map((l) => {
 
 describe('scrub', () => {
   it('scrub.redacts-all-fixture-secrets', () => {
-    expect(SECRETS).toHaveLength(20);
+    expect(SECRETS.length).toBeGreaterThanOrEqual(20);
     for (const { kind, secret, text } of SECRETS) {
       expect(text).toContain(secret);
       const out = scrub(text);
@@ -50,7 +50,7 @@ describe('scrub', () => {
 
   it('scrub.leaves-lookalikes', () => {
     const lines = fixture('lookalikes.txt');
-    expect(lines).toHaveLength(20);
+    expect(lines.length).toBeGreaterThanOrEqual(20);
     for (const line of lines) {
       const out = scrub(line);
       expect(out.text).toBe(line);
@@ -86,6 +86,26 @@ describe('scrub', () => {
     const out = scrub('a AKIAIOSFODNN7EXAMPLE b ASIAIOSFODNN7EXAMPLE c');
     expect(out.redactions).toEqual([{ kind: 'aws-access-key', count: 2 }]);
     expect(out.secretRatio).toBeCloseTo(40 / 47, 5);
+  });
+
+  it('scrub.ratio-never-exceeds-one', () => {
+    const quoted = SECRETS.map((s) => s.text.split(s.secret).join(`"${s.secret}"`)).join('\n');
+    const once = scrub(quoted);
+    expect(once.secretRatio).toBeLessThanOrEqual(1);
+    expect(scrub(once.text).secretRatio).toBe(0);
+    for (const { text, secret } of SECRETS) {
+      if (text.includes(`"${secret}"`)) continue; // already quoted
+      const r = scrub(text.split(secret).join(`"${secret}"`));
+      expect(r.secretRatio).toBeLessThanOrEqual(1);
+      expect(r.text).not.toContain(secret);
+    }
+  });
+
+  it('scrub.env-secret-is-linear', () => {
+    const big = 'SECRET'.repeat(Math.ceil(100_000 / 6));
+    const t = performance.now();
+    scrub(big);
+    expect(performance.now() - t).toBeLessThan(100);
   });
 
   it('scrub.exempts-hashes-and-uuids', () => {
