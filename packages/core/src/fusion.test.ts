@@ -7,6 +7,8 @@ import { makeMemory } from './store-conformance.js';
 
 const P: ActivationParams = { d: 0.5, ws: 1.0 };
 const NOW = new Date('2026-11-03T12:00:00.000Z');
+/** A fixed start date before NOW, so memories are current regardless of the real clock. */
+const START = '2026-11-01T00:00:00.000Z';
 
 function hits(...idList: string[]): Hit[] {
   return idList.map((id, i) => ({ id, score: 100 - i, tier: 'warm' }));
@@ -74,15 +76,29 @@ describe('fusion', () => {
     expect(out.map((r) => r.id)).toEqual(['soon']);
   });
 
+  it('fusion.asOf-ignores-expiredAt', () => {
+    const m = makeMemory({
+      id: 'm',
+      validFrom: START,
+      validTo: '2026-12-01T00:00:00.000Z',
+      expiredAt: '2026-11-02T00:00:00.000Z',
+      endReason: 'superseded',
+    });
+    const list = [hits('m')];
+    const asOf = '2026-11-01T12:00:00.000Z';
+    expect(fuse(list, byId(m), NOW, { activation: P, asOf }).map((r) => r.id)).toEqual(['m']);
+    expect(fuse(list, byId(m), NOW, { activation: P })).toEqual([]);
+  });
+
   it('adds-a-tenth-of-activation', () => {
     const recent = '2026-11-03T11:00:00.000Z';
     const hot = makeMemory({
       id: 'hot',
       salience: 0.9,
-      validFrom: '2026-11-01T00:00:00.000Z',
+      validFrom: START,
       accessLog: { count: 1, recent: [recent], compactedSum: 0, compactedAt: null },
     });
-    const cold = makeMemory({ id: 'cold', salience: 0.1, validFrom: '2026-11-01T00:00:00.000Z' });
+    const cold = makeMemory({ id: 'cold', salience: 0.1, validFrom: START });
     // `cold` ranks first in the only list, but `hot` has far higher activation.
     const out = fuse([hits('cold', 'hot')], byId(hot, cold), NOW, { activation: P });
     const expected = (m: Memory, rank: number) =>
@@ -94,7 +110,7 @@ describe('fusion', () => {
   });
 
   it('drops-ids-missing-from-memories', () => {
-    const a = makeMemory({ id: 'a', validFrom: '2026-11-01T00:00:00.000Z' });
+    const a = makeMemory({ id: 'a', validFrom: START });
     const out = fuse([hits('ghost', 'a')], byId(a), NOW, { activation: P });
     expect(out.map((r) => r.id)).toEqual(['a']);
   });

@@ -128,6 +128,27 @@ export async function observe(
   const w = await write.write(obs, action, prior);
   const id = randomUUID();
   const iso = now.toISOString();
+  // Temporal order of the new fact against the one it replaces. `deep` means it is
+  // also older than the prior's own predecessor; chains are re-slotted at most one
+  // step back (deeper out-of-order chains are a Phase 2 concern).
+  const validFrom = obs.at;
+  const inOrder = prior === undefined || Date.parse(prior.validFrom) <= Date.parse(validFrom);
+  let pred: Memory | null = null;
+  if (prior !== undefined && !inOrder && prior.supersedes !== null) {
+    pred = await store.get(prior.supersedes);
+  }
+  const deep = pred !== null && Date.parse(validFrom) < Date.parse(pred.validFrom);
+  const temporal: Decision | undefined =
+    prior === undefined
+      ? undefined
+      : {
+          stage: 'temporal',
+          question: 'order',
+          answer: inOrder ? 'in-order' : deep ? 'out-of-order-deep' : 'out-of-order',
+          probability: 1,
+        };
+  if (temporal !== undefined) decisions.push(temporal);
+
   const memory: Memory = {
     id,
     scope,
@@ -139,7 +160,7 @@ export async function observe(
     pinned: false,
     tier: g.salience >= HOT_SALIENCE ? 'hot' : 'warm',
     accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
-    validFrom: obs.at,
+    validFrom,
     validTo: null,
     expiredAt: null,
     endReason: null,
@@ -159,40 +180,55 @@ export async function observe(
     createdAt: iso,
     updatedAt: iso,
   };
-  if (prior !== undefined) {
-    const inOrder = Date.parse(prior.validFrom) <= Date.parse(memory.validFrom);
-    const temporal: Decision = {
-      stage: 'temporal',
-      question: 'order',
-      answer: inOrder ? 'in-order' : 'out-of-order',
-      probability: 1,
-    };
-    if (inOrder) {
-      // Close the prior where the new fact starts, not where we observed it.
-      await store.upsert(memory);
+  if (prior === undefined) {
+    await store.upsert(memory);
+  } else if (inOrder) {
+    // Close the prior where the new fact starts, not where we observed it. A fact
+    // starting in the future leaves the prior current until then (`expiredAt` stays
+    // null; consolidation expires it once `validTo` has passed).
+    await store.upsert(memory);
+    await store.upsert({
+      ...prior,
+      validTo: validFrom,
+      expiredAt: Date.parse(validFrom) <= now.getTime() ? iso : null,
+      endReason: 'superseded',
+      supersededBy: id,
+      updatedAt: iso,
+    });
+  } else if (pred !== null && deep) {
+    // Older than the prior's predecessor too: close at the predecessor's start and slot in before it.
+    await store.upsert({
+      ...memory,
+      validTo: pred.validFrom,
+      expiredAt: iso,
+      endReason: 'superseded',
+      supersededBy: pred.id,
+      supersedes: pred.supersedes,
+    });
+    await store.upsert({ ...pred, supersedes: id, updatedAt: iso });
+    if (pred.supersedes !== null) {
+      const before = await store.get(pred.supersedes);
+      if (before !== null) await store.upsert({ ...before, supersededBy: id, updatedAt: iso });
+    }
+  } else {
+    // The "new" fact is older than the prior: it slots in before it, already closed.
+    await store.upsert({
+      ...memory,
+      validTo: prior.validFrom,
+      expiredAt: iso,
+      endReason: 'superseded',
+      supersededBy: prior.id,
+      supersedes: prior.supersedes,
+    });
+    await store.upsert({ ...prior, supersedes: id, updatedAt: iso });
+    if (pred !== null) {
       await store.upsert({
-        ...prior,
-        validTo: memory.validFrom,
-        expiredAt: iso,
-        endReason: 'superseded',
+        ...pred,
+        validTo: validFrom,
         supersededBy: id,
         updatedAt: iso,
       });
-    } else {
-      // The "new" fact is older than the prior: it slots in before it, already closed.
-      await store.upsert({
-        ...memory,
-        validTo: prior.validFrom,
-        expiredAt: iso,
-        endReason: 'superseded',
-        supersededBy: prior.id,
-        supersedes: prior.supersedes,
-      });
-      await store.upsert({ ...prior, supersedes: id, updatedAt: iso });
     }
-    decisions.push(temporal);
-  } else {
-    await store.upsert(memory);
   }
 
   const outcome = action === 'ADD' ? 'added' : action === 'UPDATE' ? 'updated' : 'superseded';
