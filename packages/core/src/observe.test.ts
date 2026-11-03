@@ -15,7 +15,12 @@ import type {
 } from './adapters.js';
 import { resolveConfig } from './config.js';
 import { createMemoryStore } from './memory-store.js';
-import { observe, type ObserveDeps } from './observe.js';
+import {
+  observe,
+  REINFORCE_MIN_CONTAINMENT,
+  REINFORCE_MIN_SHARED,
+  type ObserveDeps,
+} from './observe.js';
 import { localScope } from './scope.js';
 import { makeMemory, vec } from './store-conformance.js';
 
@@ -414,10 +419,12 @@ describe('observe', () => {
   });
 
   it('observe.reinforce-sets-lastConfirmedAt', async () => {
+    // Only a decided REINFORCE confirms; the gate-stage path bumps activation alone.
     const gateSide = setup(gate(0.1), []);
     await gateSide.store.upsert(makeMemory({ id: 'X', text: 'auth runs on port 4000' }));
-    await observe(obs('auth runs on port 4000'), localScope(), gateSide.deps);
-    expect((await gateSide.store.get('X'))?.lastConfirmedAt).toBe('2026-01-01T00:00:00.000Z');
+    const res = await observe(obs('auth runs on port 4000'), localScope(), gateSide.deps);
+    expect(res).toMatchObject({ outcome: 'reinforced', memoryId: 'X' });
+    expect((await gateSide.store.get('X'))?.lastConfirmedAt).toBeNull();
 
     const rec2 = setup(gate(0.9), [rec('Y', 'REINFORCE')]);
     await rec2.store.upsert(
@@ -447,6 +454,49 @@ describe('observe', () => {
     expect([spy.embed, spy.reconcile.length, spy.write.length]).toEqual([0, 0, 0]);
   });
 
+  it('observe.gate-reinforce-ignores-coincidental-overlap', async () => {
+    const { store, deps, spy } = setup(gate(0.1), []);
+    // One shared token ("job").
+    await store.upsert(makeMemory({ id: 'one', text: 'Billing job runs nightly at 02:00' }));
+    // Four shared tokens, but under a third of a long memory's.
+    await store.upsert(
+      makeMemory({
+        id: 'long',
+        text: 'Staging deploys of the payments service wait for the canary, then promote at noon',
+      }),
+    );
+    const res = await observe(
+      obs('which job deploys the payments thing to staging?'),
+      localScope(),
+      deps,
+    );
+    expect(res.outcome).toBe('skipped');
+    expect(spy.access).toEqual([]);
+    for (const id of ['one', 'long']) {
+      const m = await store.get(id);
+      expect(m?.accessLog.count).toBe(0);
+      expect(m?.lastConfirmedAt).toBeNull();
+    }
+  });
+
+  it('observe.gate-reinforce-on-strong-match', async () => {
+    const { store, deps, spy } = setup(gate(0.1), []);
+    await store.upsert(makeMemory({ id: 'weak', text: 'The billing job runs nightly' }));
+    await store.upsert(makeMemory({ id: 'X', text: 'The auth service listens on port 4000' }));
+    const res = await observe(
+      obs('so the auth service listens on port 4000, right?'),
+      localScope(),
+      deps,
+    );
+    expect(res).toMatchObject({ outcome: 'reinforced', memoryId: 'X' });
+    expect(spy.access).toEqual([['X']]);
+    const m = await store.get('X');
+    expect(m?.accessLog.count).toBe(1);
+    expect(m?.lastConfirmedAt).toBeNull(); // activation only: nothing decided it was confirmed
+    expect((await store.get('weak'))?.accessLog.count).toBe(0);
+    expect([REINFORCE_MIN_SHARED, REINFORCE_MIN_CONTAINMENT]).toEqual([3, 0.5]);
+  });
+
   it('observe.gate-skip-calls-nothing', async () => {
     const { deps, spy } = setup(gate(0.1), []);
     const res = await observe(obs('hello there'), localScope(), deps);
@@ -466,8 +516,10 @@ describe('observe', () => {
         supersededBy: 'cur',
       }),
     );
-    await store.upsert(makeMemory({ id: 'cur', text: 'auth port', supersedes: 'old' }));
-    const res = await observe(obs('auth port'), localScope(), deps);
+    await store.upsert(
+      makeMemory({ id: 'cur', text: 'auth runs on port 3000', supersedes: 'old' }),
+    );
+    const res = await observe(obs('auth runs on port 3000'), localScope(), deps);
     expect(res).toMatchObject({ outcome: 'reinforced', memoryId: 'cur' });
     expect(spy.access).toEqual([['cur']]);
   });

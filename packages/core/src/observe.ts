@@ -12,6 +12,7 @@ import type {
 import type { ResolvedConfig } from './config.js';
 import type { Decision, Memory, Scope } from './model.js';
 import { scrubObservation } from './scrub.js';
+import { tokenizeLexical } from './tokenize.js';
 
 export interface ObserveResult {
   outcome: 'skipped' | 'reinforced' | 'added' | 'updated' | 'superseded';
@@ -39,6 +40,24 @@ export interface ObserveDeps {
  */
 function isLive(m: Memory, now: Date): boolean {
   return m.expiredAt === null && (m.validTo === null || Date.parse(m.validTo) > now.getTime());
+}
+
+/**
+ * Gate-stage reinforcement match floor. When the gate says "do not store", a
+ * lexical hit is reinforced only if the turn shares at least
+ * `REINFORCE_MIN_SHARED` distinct lexical tokens with the memory's text, and
+ * those make up at least `REINFORCE_MIN_CONTAINMENT` of the memory's distinct
+ * tokens. An any-token match is a coincidence, not a re-observation.
+ */
+export const REINFORCE_MIN_SHARED = 3;
+export const REINFORCE_MIN_CONTAINMENT = 0.5;
+
+/** True when `turn` (distinct lexical tokens) clears the gate-stage floor for `m`. */
+function strongMatch(turn: ReadonlySet<string>, m: Memory): boolean {
+  const own = new Set(tokenizeLexical(m.text));
+  let shared = 0;
+  for (const t of own) if (turn.has(t)) shared++;
+  return shared >= REINFORCE_MIN_SHARED && shared >= REINFORCE_MIN_CONTAINMENT * own.size;
 }
 
 async function confirm(store: MemoryStore, id: string, nowIso: string): Promise<void> {
@@ -76,12 +95,14 @@ export async function observe(
 
   if (g.shouldStore < GATE_THRESHOLD) {
     // Lexical search ignores validity, so look past superseded rows for a live one.
-    const hits = await store.lexical(`${obs.userText} ${obs.assistantText}`, filter, 3);
+    const turnText = `${obs.userText} ${obs.assistantText}`;
+    const turn = new Set(tokenizeLexical(turnText));
+    const hits = await store.lexical(turnText, filter, 3);
     for (const hit of hits) {
       const m = await store.get(hit.id);
-      if (m === null || !isLive(m, now)) continue;
+      if (m === null || !isLive(m, now) || !strongMatch(turn, m)) continue;
+      // Activation only: `lastConfirmedAt` is reserved for a decided REINFORCE.
       await store.recordAccess([m.id], now);
-      await confirm(store, m.id, now.toISOString());
       return { outcome: 'reinforced', memoryId: m.id, decisions: g.decisions };
     }
     return { outcome: 'skipped', decisions: g.decisions };
