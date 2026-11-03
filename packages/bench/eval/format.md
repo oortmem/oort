@@ -31,8 +31,9 @@ Unknown keys are ignored, so the `memoryId` the importer adds is harmless.
 - `multi-session`: several memories (from different sessions) are all expected.
 - `abstention`: nothing should be returned. A row is a false positive when recall returns
   any memory (or, with `--abstain-threshold`, one whose fused score exceeds it). The fused score is
-  RRF plus `0.1 x activation`, so it is not on a 0-1 scale and can be negative; a useful cut-off depends on the
-  store's activations and has to be picked by looking at the scores, not assumed.
+  RRF scaled by a bounded activation boost, so it lies within [rrf, 1.5 x rrf] with rrf at most about 0.033
+  (two lists, rank 1 in both); it is non-negative but not on a 0-1 scale, and a useful cut-off has to be
+  picked by looking at the scores, not assumed.
 
 ## Metrics
 

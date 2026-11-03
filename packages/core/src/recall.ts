@@ -17,7 +17,10 @@ export interface RecalledMemory extends Memory {
   explanation: {
     lexicalRank?: number;
     denseRank?: number;
+    /** Final fused score: rrf scaled by the bounded activation boost. */
     fused: number;
+    /** Raw reciprocal-rank-fusion score. */
+    rrf: number;
     reranked?: number;
     activation: number;
     hydrated: boolean;
@@ -172,6 +175,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         ...(lr >= 0 ? { lexicalRank: lr + 1 } : {}),
         ...(dr >= 0 ? { denseRank: dr + 1 } : {}),
         fused: f.score,
+        rrf: f.rrf,
         ...(rs !== undefined ? { reranked: rs } : {}),
         activation: activation(m.accessLog, m.salience, now, config.activation),
         hydrated: hydratedIds.has(f.id),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { activation, type ActivationParams } from './activation.js';
 import type { Hit } from './adapters.js';
-import { fuse, rrf } from './fusion.js';
+import { ACTIVATION_BOOST, activationBoost, fuse, rrf, sigmoid } from './fusion.js';
 import type { Memory } from './model.js';
 import { makeMemory } from './store-conformance.js';
 
@@ -90,7 +90,8 @@ describe('fusion', () => {
     expect(fuse(list, byId(m), NOW, { activation: P })).toEqual([]);
   });
 
-  it('adds-a-tenth-of-activation', () => {
+  // Task 4b (see task-4b-brief.md) replaced the old additive `0.1 * activation`.
+  it('fusion.multiplies-rrf-by-bounded-activation-boost', () => {
     const recent = '2026-11-03T11:00:00.000Z';
     const hot = makeMemory({
       id: 'hot',
@@ -99,14 +100,76 @@ describe('fusion', () => {
       accessLog: { count: 1, recent: [recent], compactedSum: 0, compactedAt: null },
     });
     const cold = makeMemory({ id: 'cold', salience: 0.1, validFrom: START });
-    // `cold` ranks first in the only list, but `hot` has far higher activation.
     const out = fuse([hits('cold', 'hot')], byId(hot, cold), NOW, { activation: P });
     const expected = (m: Memory, rank: number) =>
-      1 / (60 + rank) + 0.1 * activation(m.accessLog, m.salience, NOW, P);
+      (1 / (60 + rank)) *
+      (1 + ACTIVATION_BOOST * sigmoid(activation(m.accessLog, m.salience, NOW, P)));
     expect(out).toHaveLength(2);
-    expect(out[0]?.id).toBe('hot');
-    expect(out[0]?.score).toBeCloseTo(expected(hot, 2), 12);
-    expect(out[1]?.score).toBeCloseTo(expected(cold, 1), 12);
+    const score = (id: string) => out.find((r) => r.id === id)?.score;
+    expect(score('hot')).toBeCloseTo(expected(hot, 2), 12);
+    expect(score('cold')).toBeCloseTo(expected(cold, 1), 12);
+  });
+
+  it('fusion.relevance-dominates-activation', () => {
+    const r = makeMemory({ id: 'R', salience: 0.1, validFrom: START });
+    const hot = Array.from({ length: 32 }, (_, i) =>
+      new Date(NOW.getTime() - (i + 1) * 60_000).toISOString(),
+    );
+    const s = makeMemory({
+      id: 'S',
+      salience: 0.9,
+      validFrom: START,
+      accessLog: { count: 32, recent: hot, compactedSum: 0, compactedAt: null },
+    });
+    expect(activation(r.accessLog, r.salience, NOW, P)).toBeLessThan(-3);
+    expect(activation(s.accessLog, s.salience, NOW, P)).toBeGreaterThan(2);
+    const filler = Array.from({ length: 8 }, (_, i) => `f${i}`);
+    const list1 = hits('R', ...filler, 'S');
+    const list2 = hits('R');
+    const out = fuse([list1, list2], byId(r, s), NOW, { activation: P });
+    expect(out.map((x) => x.id)).toEqual(['R', 'S']);
+  });
+
+  it('fusion.activation-breaks-near-ties', () => {
+    const recent = '2026-11-03T11:00:00.000Z';
+    const hot = makeMemory({
+      id: 'hot',
+      validFrom: START,
+      accessLog: { count: 1, recent: [recent], compactedSum: 0, compactedAt: null },
+    });
+    const cold = makeMemory({ id: 'cold', validFrom: START });
+    // Same rank in two separate lists: identical RRF.
+    const out = fuse([hits('cold'), hits('hot')], byId(hot, cold), NOW, { activation: P });
+    expect(out.map((x) => x.id)).toEqual(['hot', 'cold']);
+    expect(out[0]?.rrf).toBeCloseTo(out[1]?.rrf ?? NaN, 12);
+  });
+
+  it('fusion.boost-bounded', () => {
+    for (let a = -20; a <= 20; a += 0.5) {
+      const b = activationBoost(a);
+      expect(b).toBeGreaterThanOrEqual(1);
+      expect(b).toBeLessThanOrEqual(1.5);
+    }
+    expect(sigmoid(-1000)).toBe(0);
+    expect(sigmoid(1000)).toBe(1);
+    // End to end: fused / rrf stays in [1, 1.5] for a cold and a hot memory.
+    const hot = makeMemory({
+      id: 'hot',
+      validFrom: START,
+      accessLog: {
+        count: 32,
+        recent: Array.from({ length: 32 }, (_, i) =>
+          new Date(NOW.getTime() - (i + 1) * 1000).toISOString(),
+        ),
+        compactedSum: 0,
+        compactedAt: null,
+      },
+    });
+    const cold = makeMemory({ id: 'cold', validFrom: START });
+    for (const o of fuse([hits('hot', 'cold')], byId(hot, cold), NOW, { activation: P })) {
+      expect(o.score / o.rrf).toBeGreaterThanOrEqual(1);
+      expect(o.score / o.rrf).toBeLessThanOrEqual(1.5);
+    }
   });
 
   it('drops-ids-missing-from-memories', () => {

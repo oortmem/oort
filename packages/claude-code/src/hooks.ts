@@ -229,6 +229,7 @@ export async function handleSessionStart(
         ...m,
         explanation: {
           fused: 0,
+          rrf: 0,
           activation: activation(m.accessLog, m.salience, now, config.activation),
           hydrated: false,
         },

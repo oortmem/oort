@@ -248,7 +248,7 @@ describe('format', () => {
       text,
       validFrom: new Date(now.getTime() - daysAgo * DAY).toISOString(),
     }),
-    explanation: { fused: 0, activation: 0, hydrated: false },
+    explanation: { fused: 0, rrf: 0, activation: 0, hydrated: false },
   });
 
   it('format.empty', () => {
