@@ -14,7 +14,7 @@
 
 - License: Apache 2.0 on every package; `LICENSE` at the repo root, `"license": "Apache-2.0"` in every `package.json`.
 - Package names: `@oortmem/<name>`; the CLI package is `oort` with bin `oort`.
-- Engines: `"node": ">=22.12.0"`. ESM only (`"type": "module"`).
+- Engines: `"node": ">=22.15.0"` (`node:zlib` zstd, used for cold blobs, arrived in 22.15.0). ESM only (`"type": "module"`).
 - No `@smeltjs/*` dependency anywhere. Code adapted from Smelt carries a one-line attribution comment at the top of the file.
 - Zero network calls from `core`, `store-sqlite`, `claude-code`, `cli` (except through injected adapters). Only `embed-voyage`, `rerank-voyage`, `decide-jev`, `writer` may import a network client.
 - Tier names in identifiers are `hot` | `warm` | `cold`. No astro names in code.

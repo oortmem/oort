@@ -901,6 +901,25 @@ describe('oort usage', () => {
     expect(named).toEqual([path.join(repo, 'packages', 'cli')]);
   });
 
+  it('cli.engines-require-zstd-node', () => {
+    // node:zlib zstd (cold blobs) arrived in 22.15.0; older 22.x throws on the first eviction.
+    const repo = path.join(import.meta.dirname, '..', '..', '..');
+    const dirs = [
+      repo,
+      ...fs
+        .readdirSync(path.join(repo, 'packages'))
+        .map((d) => path.join(repo, 'packages', d))
+        .filter((d) => fs.existsSync(path.join(d, 'package.json'))),
+    ];
+    expect(dirs.length).toBeGreaterThan(5);
+    for (const dir of dirs) {
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as {
+        engines?: { node?: string };
+      };
+      expect(`${path.basename(dir)} ${pkg.engines?.node}`).toBe(`${path.basename(dir)} >=22.15.0`);
+    }
+  });
+
   it('cli.usage-errors-exit-2', async () => {
     const h = harness();
     expect((await h.run(['no-such-command'])).code).toBe(2);
