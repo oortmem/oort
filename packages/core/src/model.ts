@@ -14,6 +14,12 @@ export interface AccessLog {
   recent: string[];
   compactedSum: number;
   compactedAt: string | null;
+  /**
+   * Mean age in hours (at `compactedAt`) of the folded accesses, weighted by
+   * their contribution to `compactedSum`. Used to re-age `compactedSum` to
+   * the present. Optional; absent means 0 (treated as the one-minute floor).
+   */
+  compactedMeanAgeHours?: number;
 }
 
 export interface Decision {
