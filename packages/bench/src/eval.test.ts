@@ -250,7 +250,7 @@ describe('eval', () => {
     const base = { rows, storePath: dbPath, coldDir, dimension: DIM, now: new Date(NOW) };
     // No threshold: any returned memory is a false positive.
     expect((await runEval(base)).groups['abstention']?.abstainFp).toBe(1);
-    // Fused scores here are small (RRF plus 0.1 x activation); a high cut-off suppresses them.
+    // Fused scores here are small (RRF scaled by at most 1.05); a high cut-off suppresses them.
     expect((await runEval({ ...base, abstainThreshold: 10 })).groups['abstention']?.abstainFp).toBe(
       0,
     );

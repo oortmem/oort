@@ -25,7 +25,9 @@ Unknown keys are ignored, so the `memoryId` the importer adds is harmless.
 
 ## Categories
 
-- `single-fact`: one memory answers the question.
+- `single-fact`: one memory answers the question. In the bundled demo these rows are a lexical
+  regression guard (the expected memory is lexical rank 1, so fusion must keep it in the top 5); they do not
+  measure paraphrase or dense recall, which needs real embeddings (CON-45, Phase 2).
 - `knowledge-update`: the answer changed; the current version is expected, older ones go in `notExpectedMemoryIds`.
 - `temporal`: asked with `asOf`; the version valid then is expected.
 - `multi-session`: several memories (from different sessions) are all expected.

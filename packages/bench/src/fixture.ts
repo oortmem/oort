@@ -37,7 +37,7 @@ const SYNONYMS: Record<string, string> = {
   decision: 'choice',
 };
 
-/** A query in other words: identifiers dropped, synonyms swapped, word order reversed. */
+/** A query in other words: numeric/path-like tokens dropped, some synonyms swapped, word order reversed. */
 function paraphrase(stub: string): string {
   return stub
     .split(/\s+/)
@@ -96,8 +96,12 @@ export function buildFixtureRows(memories: Memory[]): EvalRow[] {
       (m) => m.type === 'semantic' && !inChain(m) && (df.get(rareTokens(m)[0] ?? '') ?? 99) <= 2,
     ),
   );
-  // single-fact: 2 exact (the four rarest words), 2 partial (the rarest, an identifier,
-  // left out) and 2 paraphrased (synonyms, no identifiers, reversed word order).
+  // single-fact: 2 exact (the four rarest words), 2 partial (the rarest word plus the 3rd and
+  // 4th rarest, skipping the 2nd) and 2 reworded (a reversed, synonym-swapped stub that still
+  // keeps plain words like library names). Every question has exactly one lexical answer, and
+  // that memory is lexical rank 1: these rows are a lexical regression guard (fusion must never
+  // demote a lexical top hit out of the top 5). They do not measure paraphrase or dense recall;
+  // that needs real embeddings (CON-45, Phase 2).
   const loose = shuffled(
     memories.filter((m) => m.type === 'semantic' && !inChain(m) && !plain.includes(m)),
   );
@@ -146,10 +150,11 @@ export function buildFixtureRows(memories: Memory[]): EvalRow[] {
   };
   const exact = need(pick(plain, 2, exactQ, used), 2);
   const partial = need(pick(plain, 2, partialQ, used), 2);
-  // Paraphrases drop identifiers, so most are ambiguous; top up from `plain` (paraphrased) if needed.
   const reworded = pick(loose, 2, (m) => paraphrase(m.stub), used);
-  reworded.push(...pick(plain, 2 - reworded.length, (m) => paraphrase(m.stub), used));
-  need(reworded, 2);
+  if (reworded.length < 2)
+    throw new Error(
+      `fixture: only ${reworded.length} of 2 reworded questions have a unique answer`,
+    );
   for (const { m, q } of [...exact, ...partial, ...reworded]) {
     rows.push({ question: q, expectedMemoryIds: [m.id], category: 'single-fact' });
   }

@@ -90,7 +90,8 @@ describe('fusion', () => {
     expect(fuse(list, byId(m), NOW, { activation: P })).toEqual([]);
   });
 
-  // Task 4b (see task-4b-brief.md) replaced the old additive `0.1 * activation`.
+  // Activation is a multiplicative boost (band 0.05), not additive: single-list RRF ranks differ
+  // by (r-1)/61, so the band reorders at most ~3 ranks.
   it('fusion.multiplies-rrf-by-bounded-activation-boost', () => {
     const recent = '2026-11-03T11:00:00.000Z';
     const hot = makeMemory({
