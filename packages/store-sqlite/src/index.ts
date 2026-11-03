@@ -1,4 +1,3 @@
-import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
@@ -16,15 +15,24 @@ import {
   type ScopeFilter,
   type Tier,
 } from '@oortmem/core';
-import { createColdCodec } from './cold.js';
+import { chmodIfExists, openBlobDir, prepareDbDir, withPrivateUmask } from './blobs.js';
+import { ColdBlobCorruptError, createColdCodec } from './cold.js';
 import { applySchema } from './schema.js';
 
-export { createColdCodec, type ColdCodec } from './cold.js';
+export {
+  ColdBlobCorruptError,
+  createColdCodec,
+  type ColdCodec,
+  type ColdCodecOptions,
+} from './cold.js';
 
 export interface SqliteStoreOptions {
-  /** The SQLite database file; its directory is created if missing. */
+  /**
+   * The SQLite database file. A missing directory is created owner-only; an
+   * existing one is left as is (with a warning when group or others can read it).
+   */
   path: string;
-  /** Directory for cold blobs (`<id>.zst`); created if missing. */
+  /** Directory for cold blobs; created owner-only, or tightened to 0700. */
   coldDir: string;
   /** Embedding dimension. Fixed at first open; a later open with another value is refused. */
   dimension: number;
@@ -36,20 +44,12 @@ export interface SqliteStoreOptions {
   /** Clock for `list`'s validity filter; defaults to `new Date()`. */
   now?: () => Date;
   /**
-   * One-line maintenance notices (orphan sweeps, tightened permissions). They
-   * carry counts only, never paths or memory content. Defaults to stderr.
+   * One-line maintenance notices (orphan sweeps, permissions, corrupt cold
+   * blobs). They carry counts, directory paths or memory ids, never memory
+   * content. Defaults to stderr.
    */
   log?: (message: string) => void;
 }
-
-/** A `.zst.tmp` older than this is a crashed write. */
-const STALE_TMP_MS = 60 * 60 * 1000;
-/**
- * An unreferenced `.zst` younger than this may belong to another process's
- * `coldPut` that has renamed its blob but not yet committed (it can wait up to
- * the 5 s busy timeout), so the sweep leaves it for a later open.
- */
-const ORPHAN_GRACE_MS = 60 * 1000;
 
 /** sqlite-vec's upper bound on `k` in a KNN query. */
 const MAX_KNN = 4096;
@@ -103,13 +103,6 @@ function scopeKey(orgId: string, customerId: string, agentId: string): string {
 /** vec0 metadata cannot be NULL, so global (no project) gets its own key. */
 function projectKey(projectId: string | null | undefined): string {
   return projectId === null || projectId === undefined ? 'g' : `p:${projectId}`;
-}
-
-/** Ids that are safe, case-insensitive-unique file names are used as is; anything else is hashed. */
-function coldFileName(id: string): string {
-  return /^[a-z0-9_-]{1,128}$/.test(id)
-    ? `${id}.zst`
-    : `~${createHash('sha256').update(id).digest('hex')}.zst`;
 }
 
 function toBytes(v: Int8Array): Buffer {
@@ -221,134 +214,6 @@ function scopeParams(s: ScopeFilter) {
   };
 }
 
-function unlinkQuietly(file: string): void {
-  try {
-    fs.unlinkSync(file);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-  }
-}
-
-/** Creates `dir` owner-only, or tightens an existing one; returns true when it had to tighten. */
-function ensureOwnerDir(dir: string): boolean {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform === 'win32') return false;
-  if ((fs.statSync(dir).mode & 0o077) === 0) return false;
-  fs.chmodSync(dir, 0o700);
-  return true;
-}
-
-function chmodIfExists(file: string, mode: number): void {
-  try {
-    fs.chmodSync(file, mode);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-  }
-}
-
-/**
- * Runs `fn` with umask 077 so files SQLite creates (`-wal`, `-shm`) are
- * owner-only. `process.umask` cannot be set in worker threads; there the
- * explicit chmods after open are the only guard.
- */
-function withPrivateUmask<T>(fn: () => T): T {
-  let previous: number | undefined;
-  try {
-    previous = process.umask(0o077);
-  } catch {
-    previous = undefined;
-  }
-  try {
-    return fn();
-  } finally {
-    if (previous !== undefined) process.umask(previous);
-  }
-}
-
-/** Opens a new owner-only file exclusively; a leftover file at `file` is removed and the open retried once. */
-function openExclusive(file: string): number {
-  try {
-    return fs.openSync(file, 'wx', 0o600);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-    unlinkQuietly(file);
-    return fs.openSync(file, 'wx', 0o600);
-  }
-}
-
-/** Best-effort fsync of a directory so a rename survives a crash (not supported everywhere). */
-function fsyncDir(dir: string): void {
-  try {
-    const fd = fs.openSync(dir, 'r');
-    try {
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    // Windows cannot open directories; the rename is still atomic.
-  }
-}
-
-/**
- * Writes `data` to `file` atomically: an owner-only temp file ending in
- * `.zst.tmp` (unique per writer, so concurrent `coldPut`s of one id never
- * write into the same temp file), fsync, rename. Readers never see a partial blob.
- */
-function writeAtomically(file: string, data: Uint8Array): void {
-  const tmp = `${file.slice(0, -'.zst'.length)}.${process.pid}-${randomBytes(4).toString('hex')}.zst.tmp`;
-  const fd = openExclusive(tmp);
-  try {
-    fs.writeSync(fd, data);
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  try {
-    fs.renameSync(tmp, file);
-  } catch (e) {
-    unlinkQuietly(tmp);
-    throw e;
-  }
-  fsyncDir(path.dirname(file));
-}
-
-/**
- * Removes crash leftovers from `coldDir`: `.zst.tmp` files older than an hour
- * (an interrupted write) and `.zst` blobs no `cold_index` row references (a
- * `coldPut` whose transaction never committed), past a short grace period.
- * Other files are left alone. Logs counts only.
- */
-function sweepColdDir(db: Database.Database, coldDir: string, log: (message: string) => void) {
-  const referenced = new Set(
-    db
-      .prepare<[], { path: string }>('SELECT path FROM cold_index')
-      .all()
-      .map((r) => r.path),
-  );
-  const now = Date.now();
-  let tmps = 0;
-  let orphans = 0;
-  for (const name of fs.readdirSync(coldDir)) {
-    const file = path.join(coldDir, name);
-    const isTmp = name.endsWith('.zst.tmp');
-    if (!isTmp && (!name.endsWith('.zst') || referenced.has(name))) continue;
-    let age: number;
-    try {
-      age = now - fs.statSync(file).mtimeMs;
-    } catch {
-      continue;
-    }
-    if (age < (isTmp ? STALE_TMP_MS : ORPHAN_GRACE_MS)) continue;
-    unlinkQuietly(file);
-    if (isTmp) tmps++;
-    else orphans++;
-  }
-  if (tmps + orphans > 0) {
-    log(`oort store: removed ${orphans} orphan cold blob(s) and ${tmps} stale temp file(s)`);
-  }
-}
-
 /**
  * Opens (creating if needed) a SQLite-backed `MemoryStore`: rows in `memories`,
  * lexical search through FTS5, dense search through sqlite-vec (int8, cosine),
@@ -366,12 +231,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const log = opts.log ?? ((message: string) => process.stderr.write(`${message}\n`));
   const dbPath = path.resolve(opts.path);
   const coldDir = path.resolve(opts.coldDir);
-  const tightened = [path.dirname(dbPath), coldDir].filter(ensureOwnerDir).length;
-  if (tightened > 0) {
-    log(
-      `oort store: tightened permissions to 0700 on ${tightened} existing director${tightened === 1 ? 'y' : 'ies'}`,
-    );
-  }
+  prepareDbDir(path.dirname(dbPath), log);
+  const blobs = openBlobDir(coldDir, log);
   if (!fs.existsSync(dbPath)) fs.closeSync(fs.openSync(dbPath, 'a', 0o600));
 
   const db = withPrivateUmask(() => {
@@ -392,13 +253,20 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     if (process.platform !== 'win32') {
       for (const suffix of ['', '-wal', '-shm']) chmodIfExists(`${dbPath}${suffix}`, 0o600);
     }
-    sweepColdDir(db, coldDir, log);
+    blobs.sweep(
+      new Set(
+        db
+          .prepare<[], { path: string }>('SELECT path FROM cold_index')
+          .all()
+          .map((r) => r.path),
+      ),
+    );
   } catch (e) {
     db.close();
     throw e;
   }
 
-  const codec = createColdCodec();
+  const codec = createColdCodec({ dimension });
 
   const q = {
     upsertRow: db.prepare<[RowParams], { rid: number }>(
@@ -516,9 +384,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
 
   /**
    * Writes one memory's row, FTS row and vec row. Call inside a transaction.
-   * Returns `[id, blob]` to unlink after commit when a non-cold write dropped the cold copy.
+   * Returns the blob to unlink after commit when a non-cold write dropped the cold copy.
    */
-  function writeMemory(m: Memory): [string, string][] {
+  function writeMemory(m: Memory): string[] {
     if (m.embedding !== undefined) checkDimension(m.embedding, `upsert ${m.id}`);
     const row = q.upsertRow.get(toRow(m));
     if (row === undefined) throw new Error(`upsert ${m.id}: no row returned`);
@@ -536,21 +404,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     }
     if (m.tier === 'cold') return [];
     const dropped = q.coldDelete.get(m.id);
-    return dropped === undefined ? [] : [[m.id, dropped.path]];
+    return dropped === undefined ? [] : [dropped.path];
   }
 
   const writeAll = db.transaction((ms: Memory[]) => ms.flatMap(writeMemory));
 
-  /**
-   * Unlinks a cold blob whose `cold_index` row a committed transaction deleted,
-   * unless another process has since re-referenced it with its own `coldPut`.
-   */
-  function dropBlob(id: string, file: string): void {
-    if (q.coldPath.get(id) === undefined) unlinkQuietly(path.join(coldDir, file));
-  }
-
   function upsertMany(ms: Memory[]): void {
-    for (const [id, file] of writeAll.immediate(ms)) dropBlob(id, file);
+    // The rows are gone once the transaction commits; only then unlink exactly
+    // the blob each one named (unique per coldPut, so never another write's).
+    for (const file of writeAll.immediate(ms)) blobs.remove(file);
   }
 
   const forgetTx = db.transaction((id: string): string | undefined => {
@@ -576,10 +438,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     writeFts(row.rid, tier, row.text, row.stub, JSON.parse(row.entities) as string[]);
   });
 
-  const coldPutTx = db.transaction((m: Memory, file: string) => {
+  /** Makes `file` the cold copy of `m`; returns the blob it replaced, to unlink after commit. */
+  const coldPutTx = db.transaction((m: Memory, file: string): string | undefined => {
+    const previous = q.coldPath.get(m.id)?.path;
     const { embedding: _dropped, ...rest } = m;
     writeMemory({ ...rest, tier: 'cold' });
     q.coldInsert.run(m.id, file);
+    return previous;
   });
 
   return {
@@ -602,7 +467,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     async forget(id) {
       open();
       const file = forgetTx.immediate(id);
-      if (file !== undefined) dropBlob(id, file);
+      if (file !== undefined) blobs.remove(file);
     },
 
     /** BM25 over normalised tokens, any-token match; `score` is -bm25 (higher is better). */
@@ -648,33 +513,39 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         .sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt));
     },
 
+    /**
+     * Writes a new uniquely named blob, then commits it as the cold copy. The
+     * previously committed blob is untouched until that commit succeeds, and
+     * removed after; a failed commit removes only the new blob.
+     */
     async coldPut(m) {
       open();
-      const file = coldFileName(m.id);
-      const full = path.join(coldDir, file);
-      writeAtomically(full, codec.encode(m));
+      if (m.embedding !== undefined) checkDimension(m.embedding, `coldPut ${m.id}`);
+      const file = blobs.write(m.id, codec.encode(m));
+      let previous: string | undefined;
       try {
-        coldPutTx.immediate(m, file);
+        previous = coldPutTx.immediate(m, file);
       } catch (e) {
-        // Leave the blob only if a committed cold_index row still points at it
-        // (an earlier coldPut of this id, or a concurrent one that won).
-        if (q.coldPath.get(m.id)?.path !== file) unlinkQuietly(full);
+        blobs.remove(file);
         throw e;
       }
+      if (previous !== undefined && previous !== file) blobs.remove(previous);
     },
 
+    /** A missing or corrupt blob (logged by id) reads as no cold copy. */
     async coldGet(id) {
       open();
       const row = q.coldPath.get(id);
       if (row === undefined) return null;
-      let blob: Buffer;
+      const blob = blobs.read(row.path);
+      if (blob === null) return null;
       try {
-        blob = fs.readFileSync(path.join(coldDir, row.path));
+        return codec.decode(blob);
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
-        throw e;
+        if (!(e instanceof ColdBlobCorruptError)) throw e;
+        log(`oort store: cold blob for memory ${id} is corrupt; ignoring it`);
+        return null;
       }
-      return codec.decode(blob);
     },
 
     async setTier(id, tier) {

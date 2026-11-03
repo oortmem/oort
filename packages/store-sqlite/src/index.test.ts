@@ -1,6 +1,9 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { zstdCompressSync } from 'node:zlib';
+import { Worker } from 'node:worker_threads';
+import Database from 'better-sqlite3';
 import { afterAll, describe, expect, it } from 'vitest';
 import { localScope, type Memory, type ScopeFilter } from '@oortmem/core';
 import {
@@ -9,7 +12,7 @@ import {
   storeConformance,
   vec,
 } from '@oortmem/core/store-conformance';
-import { createColdCodec, openSqliteStore } from './index.js';
+import { ColdBlobCorruptError, createColdCodec, openSqliteStore } from './index.js';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-store-sqlite-'));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -31,6 +34,14 @@ const LOCAL: ScopeFilter = {
   agentId: 'claude-code',
   projectIds: [null],
 };
+
+/** The cold blob files (not the marker or temp files) under `dir/cold`. */
+function blobFiles(dir: string): string[] {
+  return fs
+    .readdirSync(path.join(dir, 'cold'))
+    .filter((f) => f.endsWith('.zst'))
+    .sort();
+}
 
 function ids(xs: { id: string }[]): string[] {
   return xs.map((x) => x.id);
@@ -193,18 +204,125 @@ describe('sqlite store', () => {
     const dir = freshDir();
     const store = await openSqliteStore(optsIn(dir));
     await store.coldPut(makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) }));
-    expect(fs.readdirSync(path.join(dir, 'cold'))).toEqual(['c1.zst']);
+    expect(blobFiles(dir)).toEqual([expect.stringMatching(/^c1\.\d+-[0-9a-f]{8}\.zst$/)]);
+    expect(fs.existsSync(path.join(dir, 'cold', '.oort-cold'))).toBe(true);
+
+    // A second coldPut replaces the blob: one file per id, the newest snapshot.
+    await store.coldPut(makeMemory({ id: 'c1', text: 'second', embedding: vec(4, 3, 2, 1) }));
+    expect(blobFiles(dir)).toHaveLength(1);
+    expect((await store.coldGet('c1'))?.text).toBe('second');
+
     await store.forget('c1');
-    expect(fs.readdirSync(path.join(dir, 'cold'))).toEqual([]);
+    expect(blobFiles(dir)).toEqual([]);
 
     // Ids that are not safe file names never escape the cold directory.
     const odd = makeMemory({ id: '../Escape/ME', embedding: vec(1, 2, 3, 4) });
     await store.coldPut(odd);
     expect((await store.coldGet(odd.id))?.embedding).toEqual(vec(1, 2, 3, 4));
-    const files = fs.readdirSync(path.join(dir, 'cold'));
-    expect(files).toHaveLength(1);
-    expect(files[0]).toMatch(/^~[0-9a-f]{64}\.zst$/);
+    expect(blobFiles(dir)).toEqual([
+      expect.stringMatching(/^~[0-9a-f]{64}\.\d+-[0-9a-f]{8}\.zst$/),
+    ]);
     expect(fs.existsSync(path.join(dir, 'Escape'))).toBe(false);
+    await store.close();
+  });
+
+  it('store.coldPut-rejects-wrong-dimension', async () => {
+    const dir = freshDir();
+    const store = await openSqliteStore(optsIn(dir));
+    const err = await rejection(
+      store.coldPut(makeMemory({ id: 'g1', embedding: vec(1, 2, 3, 4, 5, 6, 7) })),
+    );
+    expect(err).toBeInstanceOf(RangeError);
+    expect((err as Error).message).toContain('7');
+    expect(await store.get('g1')).toBeNull();
+    expect(blobFiles(dir)).toEqual([]);
+    await store.close();
+  });
+
+  it('store.coldGet-returns-null-for-corrupt-blob', async () => {
+    const dir = freshDir();
+    const messages: string[] = [];
+    const store = await openSqliteStore({ ...optsIn(dir), log: (m) => messages.push(m) });
+    for (const [id, damage] of [
+      ['truncated', (b: Buffer) => b.subarray(0, Math.floor(b.length / 2))],
+      ['flipped', (b: Buffer) => Buffer.from(b.map((x, i) => (i === b.length - 6 ? x ^ 1 : x)))],
+    ] as const) {
+      await store.coldPut(makeMemory({ id, embedding: vec(5, -6, 7, -8) }));
+      const file = path.join(
+        dir,
+        'cold',
+        blobFiles(dir).find((f) => f.startsWith(`${id}.`))!,
+      );
+      fs.writeFileSync(file, damage(fs.readFileSync(file)));
+      expect(await store.coldGet(id)).toBeNull();
+      // The main record is untouched: hydration falls back to it.
+      expect((await store.get(id))?.tier).toBe('cold');
+    }
+    expect(messages).toEqual([
+      'oort store: cold blob for memory truncated is corrupt; ignoring it',
+      'oort store: cold blob for memory flipped is corrupt; ignoring it',
+    ]);
+    await store.close();
+  });
+
+  it('store.failed-coldPut-keeps-previous-blob', async () => {
+    const dir = freshDir();
+    const store = await openSqliteStore(optsIn(dir));
+    const first = makeMemory({ id: 'c1', text: 'first snapshot', embedding: vec(1, 2, 3, 4) });
+    await store.coldPut(first);
+    const before = blobFiles(dir);
+
+    // Another connection makes the next cold_index write fail inside the transaction.
+    const raw = new Database(path.join(dir, 'oort.sqlite'));
+    raw.exec(`CREATE TRIGGER fail_cold BEFORE UPDATE ON cold_index
+      BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
+    raw.close();
+    const err = await rejection(
+      store.coldPut(makeMemory({ id: 'c1', text: 'second snapshot', embedding: vec(4, 3, 2, 1) })),
+    );
+    expect((err as Error).message).toContain('injected failure');
+
+    expect(blobFiles(dir)).toEqual(before);
+    expect(await store.coldGet('c1')).toEqual(first);
+    expect((await store.get('c1'))?.text).toBe('first snapshot');
+    await store.close();
+  });
+
+  it('store.concurrent-coldPut-same-id', async () => {
+    const dir = freshDir();
+    const a = await openSqliteStore(optsIn(dir));
+    const b = await openSqliteStore(optsIn(dir));
+    const fromA = makeMemory({ id: 'c1', text: 'from a', embedding: vec(1, 1, 1, 1) });
+    const fromB = makeMemory({ id: 'c1', text: 'from b', embedding: vec(2, 2, 2, 2) });
+    for (let i = 0; i < 20; i++) await Promise.all([a.coldPut(fromA), b.coldPut(fromB)]);
+    await a.close();
+    await b.close();
+
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    for (const f of blobFiles(dir)) fs.utimesSync(path.join(dir, 'cold', f), old, old);
+    const store = await openSqliteStore({ ...optsIn(dir), log: () => {} }); // sweeps
+    const got = await store.coldGet('c1');
+    expect([fromA, fromB]).toContainEqual(got);
+    expect(got?.embedding).toHaveLength(CONFORMANCE_DIMENSION);
+    expect(blobFiles(dir)).toHaveLength(1);
+    await store.close();
+  });
+
+  it('store.parallel-writers-no-busy', async () => {
+    const dir = freshDir();
+    const opts = optsIn(dir);
+    // Two worker threads: truly parallel connections (and no umask in workers).
+    const worker = new URL('../test/parallel-writer.mjs', import.meta.url);
+    const run = (tag: string) =>
+      new Promise<string[]>((resolve, reject) => {
+        const w = new Worker(worker, { workerData: { ...opts, tag, n: 200 } });
+        w.once('message', resolve);
+        w.once('error', reject);
+      });
+    const errors = (await Promise.all([run('W1'), run('W2')])).flat();
+    expect(errors).toEqual([]);
+    const store = await openSqliteStore(opts);
+    expect(await store.list(LOCAL, { validOnly: false })).toHaveLength(400);
     await store.close();
   });
 
@@ -214,27 +332,33 @@ describe('sqlite store', () => {
     const first = await openSqliteStore(optsIn(dir));
     await first.coldPut(makeMemory({ id: 'kept', embedding: vec(1, 2, 3, 4) }));
     await first.close();
+    const [kept] = blobFiles(dir);
 
     const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
     const plant = (name: string, aged: boolean) => {
       fs.writeFileSync(path.join(cold, name), 'x');
       if (aged) fs.utimesSync(path.join(cold, name), old, old);
     };
-    plant('orphan.zst', true); // never committed: removed
-    plant('fresh-orphan.zst', false); // may be another process mid-coldPut: kept
+    plant('orphan.123-abcd1234.zst', true); // never committed: removed
+    plant('fresh.123-abcd1234.zst', false); // may be another process mid-coldPut: kept
     plant('crashed.123-abcd1234.zst.tmp', true); // interrupted write: removed
     plant('inflight.456-abcd1234.zst.tmp', false); // a write in progress: kept
+    plant('notes.zst', true); // not a blob name: kept
     plant('notes.txt', true); // not ours: kept
-    fs.utimesSync(path.join(cold, 'kept.zst'), old, old); // referenced: kept however old
+    fs.utimesSync(path.join(cold, kept!), old, old); // referenced: kept however old
 
     const messages: string[] = [];
     const store = await openSqliteStore({ ...optsIn(dir), log: (m) => messages.push(m) });
-    expect(fs.readdirSync(cold).sort()).toEqual([
-      'fresh-orphan.zst',
-      'inflight.456-abcd1234.zst.tmp',
-      'kept.zst',
-      'notes.txt',
-    ]);
+    expect(fs.readdirSync(cold).sort()).toEqual(
+      [
+        '.oort-cold',
+        'fresh.123-abcd1234.zst',
+        'inflight.456-abcd1234.zst.tmp',
+        kept!,
+        'notes.txt',
+        'notes.zst',
+      ].sort(),
+    );
     expect(messages).toEqual([
       'oort store: removed 1 orphan cold blob(s) and 1 stale temp file(s)',
     ]);
@@ -247,28 +371,66 @@ describe('sqlite store', () => {
     expect(quiet).toEqual([]);
   });
 
-  it.skipIf(process.platform === 'win32')('store.files-are-owner-only', async () => {
-    const home = path.join(freshDir(), 'home');
-    fs.mkdirSync(home);
-    fs.chmodSync(home, 0o755);
+  it('store.sweep-needs-marker', async () => {
+    // A populated directory the store did not create (a misconfigured shared dir).
+    const dir = freshDir();
+    const cold = path.join(dir, 'cold');
+    fs.mkdirSync(cold, { mode: 0o700 });
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.writeFileSync(path.join(cold, 'looks-like.123-abcd1234.zst'), 'x');
+    fs.utimesSync(path.join(cold, 'looks-like.123-abcd1234.zst'), old, old);
     const messages: string[] = [];
-    const dbPath = path.join(home, 'oort.sqlite');
+    const store = await openSqliteStore({ ...optsIn(dir), log: (m) => messages.push(m) });
+    expect(fs.readdirSync(cold)).toEqual(['looks-like.123-abcd1234.zst']);
+    expect(messages).toEqual([
+      `oort: ${cold} has no .oort-cold marker; orphan cold blob sweep disabled`,
+    ]);
+    await store.close();
+  });
+
+  it.skipIf(process.platform === 'win32')('store.files-are-owner-only', async () => {
+    // A project root the caller owns: never chmodded, only warned about.
+    const project = path.join(freshDir(), 'project');
+    fs.mkdirSync(project);
+    fs.chmodSync(project, 0o755);
+    const messages: string[] = [];
+    const dbPath = path.join(project, 'oort.sqlite');
+    const coldDir = path.join(project, '.oort', 'cold');
     const store = await openSqliteStore({
       path: dbPath,
-      coldDir: path.join(home, 'cold'),
+      coldDir,
       dimension: CONFORMANCE_DIMENSION,
       log: (m) => messages.push(m),
     });
     await store.upsert(makeMemory({ id: 'm1', embedding: vec(1, 2, 3, 4) }));
     await store.coldPut(makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) }));
-    const mode = (p: string) => fs.statSync(p).mode & 0o777;
-    expect(mode(home)).toBe(0o700);
-    expect(mode(path.join(home, 'cold'))).toBe(0o700);
-    for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, path.join(home, 'cold', 'c1.zst')]) {
-      expect(`${path.basename(f)} ${mode(f).toString(8)}`).toBe(`${path.basename(f)} 600`);
+    const mode = (p: string) => (fs.statSync(p).mode & 0o777).toString(8);
+    expect(mode(project)).toBe('755');
+    expect(mode(path.join(project, '.oort'))).toBe('700');
+    expect(mode(coldDir)).toBe('700');
+    const blob = fs.readdirSync(coldDir).find((f) => f.endsWith('.zst'))!;
+    for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, path.join(coldDir, blob)]) {
+      expect(`${path.basename(f)} ${mode(f)}`).toBe(`${path.basename(f)} 600`);
     }
-    expect(messages).toEqual(['oort store: tightened permissions to 0700 on 1 existing directory']);
+    expect(messages).toEqual([
+      `oort: ${project} is readable by group/others; memory files inside are 0600`,
+    ]);
     await store.close();
+
+    // A loose cold directory is the store's own: tightened.
+    const loose = path.join(freshDir(), 'cold');
+    fs.mkdirSync(loose);
+    fs.chmodSync(loose, 0o755);
+    const notes: string[] = [];
+    const other = await openSqliteStore({
+      path: path.join(path.dirname(loose), 'oort.sqlite'),
+      coldDir: loose,
+      dimension: CONFORMANCE_DIMENSION,
+      log: (m) => notes.push(m),
+    });
+    expect(mode(loose)).toBe('700');
+    expect(notes).toEqual(['oort store: tightened permissions to 0700 on the cold directory']);
+    await other.close();
   });
 
   it('store.two-handles-share-one-file', async () => {
@@ -373,6 +535,50 @@ describe('cold codec', () => {
 
   it('cold.decode-rejects-corrupt-frames', () => {
     const codec = createColdCodec();
-    expect(() => codec.decode(new Uint8Array([1, 2, 3]))).toThrow();
+    expect(() => codec.decode(new Uint8Array([1, 2, 3]))).toThrow(ColdBlobCorruptError);
+    expect(() => codec.decode(new Uint8Array([]))).toThrow(ColdBlobCorruptError);
+    const unknown = Buffer.from(codec.encode(realisticMemory()));
+    unknown[0] = 0x09;
+    expect(() => codec.decode(unknown)).toThrow(/unsupported frame version 9/);
+  });
+
+  it('cold.decode-rejects-truncated-frame', () => {
+    const codec = createColdCodec({ dimension: 512 });
+    const blob = codec.encode(realisticMemory());
+    for (const at of [0.25, 0.5, 0.75]
+      .map((f) => Math.floor(blob.length * f))
+      .concat(blob.length - 1)) {
+      expect(() => codec.decode(blob.subarray(0, at)), `truncated at ${at}`).toThrow(
+        ColdBlobCorruptError,
+      );
+    }
+  });
+
+  it('cold.decode-rejects-bitflip', () => {
+    const codec = createColdCodec({ dimension: 512 });
+    const blob = codec.encode(realisticMemory());
+    // Version byte excluded (that is the unknown-version case); every other region:
+    // JSON length, compressed JSON, embedding length, embedding bytes, CRC.
+    const positions = [1, 4, 10, Math.floor(blob.length / 2), blob.length - 300, blob.length - 520];
+    for (const at of [...positions, blob.length - 4, blob.length - 1]) {
+      const flipped = Uint8Array.from(blob);
+      flipped[at] = (flipped[at] ?? 0) ^ 0x10;
+      expect(() => codec.decode(flipped), `bit flip at ${at}`).toThrow(ColdBlobCorruptError);
+    }
+  });
+
+  it('cold.decodes-v1-frames-and-checks-dimension', () => {
+    const m = makeMemory({ id: 'v1', embedding: vec(1, -2, 3, -4) });
+    const { embedding, ...rest } = m;
+    const json = zstdCompressSync(Buffer.from(JSON.stringify(rest)));
+    const head = Buffer.alloc(5);
+    head[0] = 0x01;
+    head.writeUInt32BE(json.length, 1);
+    const v1 = Buffer.concat([head, json, Buffer.from([1]), Buffer.from(embedding!.buffer)]);
+    expect(createColdCodec({ dimension: 4 }).decode(v1)).toEqual(m);
+    expect(() => createColdCodec({ dimension: 8 }).decode(v1)).toThrow(ColdBlobCorruptError);
+    expect(() => createColdCodec({ dimension: 4 }).decode(v1.subarray(0, v1.length - 1))).toThrow(
+      ColdBlobCorruptError,
+    );
   });
 });
