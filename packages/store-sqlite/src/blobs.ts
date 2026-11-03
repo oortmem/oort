@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { ensurePrivateDir } from '@oortmem/core';
 
@@ -86,14 +87,51 @@ export function withPrivateUmask<T>(fn: () => T): T {
 }
 
 /** Opens a new owner-only file exclusively; a leftover file at `file` is removed and the open retried once. */
-function openExclusive(file: string): number {
+async function openExclusive(file: string): Promise<fsp.FileHandle> {
   try {
-    return fs.openSync(file, 'wx', 0o600);
+    return await fsp.open(file, 'wx', 0o600);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
     unlinkQuietly(file);
-    return fs.openSync(file, 'wx', 0o600);
+    return await fsp.open(file, 'wx', 0o600);
   }
+}
+
+/**
+ * Durability note. Blob files are NOT fsynced individually; the rename and one
+ * directory fsync per batch are kept. Per-file fsync cost about 12 ms each and
+ * made the first consolidate of 10k memories take 60 s (25 s even with 8
+ * fsyncs in parallel). A cold blob holds the embedding and a snapshot only:
+ * the database row keeps text, stub and entities. After a power loss a blob
+ * may be torn or empty; the v2 frame's CRC32 detects that, `coldGet` returns
+ * null (logged), and recall falls back to the live row. Worst case the
+ * embedding is lost and must be re-derived. A process crash loses nothing
+ * (the page cache survives it). The database itself keeps its WAL durability.
+ */
+
+/** Blobs written at once: bounds open file handles. */
+const WRITE_CONCURRENCY = 8;
+
+/** Runs `fn` over `items` with at most `limit` in flight; every started task settles before this does. */
+async function mapBounded<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const out: PromiseSettledResult<R>[] = Array.from({ length: items.length });
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      try {
+        out[i] = { status: 'fulfilled', value: await fn(items[i] as T, i) };
+      } catch (reason) {
+        out[i] = { status: 'rejected', reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
 /** Best-effort fsync of a directory so a rename survives a crash (not supported everywhere). */
@@ -111,8 +149,14 @@ function fsyncDir(dir: string): void {
 }
 
 export interface BlobDir {
-  /** Writes a new blob for `id` atomically (tmp, fsync, rename) and returns its file name. */
-  write(id: string, data: Uint8Array): string;
+  /**
+   * Writes a new uniquely named blob per item: temp files written with bounded
+   * parallelism, then all renamed, then one directory fsync. The files
+   * themselves are not fsynced (see the durability note above).
+   * Returns the file names in input order. On any failure every file this call
+   * created is removed and the error is rethrown.
+   */
+  writeMany(items: readonly { id: string; data: Uint8Array }[]): Promise<string[]>;
   /** The blob's bytes, or null when it is missing or `name` is not a blob name. */
   read(name: string): Buffer | null;
   /** Removes a blob; missing files and non-blob names are ignored. */
@@ -139,25 +183,38 @@ export function openBlobDir(dir: string, log: Log): BlobDir {
   }
 
   return {
-    write(id, data) {
-      const base = `${safeId(id)}.${process.pid}-${randomBytes(4).toString('hex')}`;
-      const name = `${base}.zst`;
-      const tmp = path.join(dir, `${name}.tmp`);
-      const fd = openExclusive(tmp);
+    async writeMany(items) {
+      const names = items.map(
+        ({ id }) => `${safeId(id)}.${process.pid}-${randomBytes(4).toString('hex')}.zst`,
+      );
+      const tmpOf = (name: string): string => path.join(dir, `${name}.tmp`);
+      const renamed: string[] = [];
+      const cleanup = (): void => {
+        for (const name of names) {
+          unlinkQuietly(tmpOf(name));
+          if (renamed.includes(name)) unlinkQuietly(path.join(dir, name));
+        }
+      };
       try {
-        fs.writeSync(fd, data);
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
-      }
-      try {
-        fs.renameSync(tmp, path.join(dir, name));
+        const written = await mapBounded(items, WRITE_CONCURRENCY, async ({ data }, i) => {
+          const fh = await openExclusive(tmpOf(names[i] as string));
+          try {
+            await fh.writeFile(data);
+          } finally {
+            await fh.close();
+          }
+        });
+        for (const r of written) if (r.status === 'rejected') throw r.reason;
+        for (const name of names) {
+          await fsp.rename(tmpOf(name), path.join(dir, name));
+          renamed.push(name);
+        }
+        fsyncDir(dir);
       } catch (e) {
-        unlinkQuietly(tmp);
+        cleanup();
         throw e;
       }
-      fsyncDir(dir);
-      return name;
+      return names;
     },
 
     read(name) {

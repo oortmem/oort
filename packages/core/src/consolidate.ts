@@ -14,6 +14,9 @@ export interface ConsolidateResult {
   expired: string[];
 }
 
+/** Evictions per `coldPutMany` call: one store transaction and one directory sync each. */
+export const COLD_EVICT_BATCH = 500;
+
 const RANK: Record<Tier, number> = { cold: 0, warm: 1, hot: 2 };
 
 /**
@@ -22,7 +25,7 @@ const RANK: Record<Tier, number> = { cold: 0, warm: 1, hot: 2 };
  *    `expiredAt = now`, `endReason = endReason ?? "expired"`.
  * 2. Rank current memories by ACT-R activation (ties: newer `updatedAt`
  *    first) and assign tiers via `tierFor`; changes are `setTier`d and new
- *    cold memories are `coldPut`.
+ *    cold memories are collected and `coldPutMany`'d in batches of `COLD_EVICT_BATCH`.
  * 3. Non-current memories (superseded, expired, corrected) go straight to cold.
  *
  * Rules: pinned memories are never cold-put; a pinned non-current memory is
@@ -58,13 +61,14 @@ export async function consolidate(
       y.a - x.a || (x.m.updatedAt < y.m.updatedAt ? 1 : x.m.updatedAt > y.m.updatedAt ? -1 : 0),
   );
   const currentIds = new Set(current.map((m) => m.id));
+  const evictions: Memory[] = [];
 
   for (const [rank, { m, a }] of scored.entries()) {
     const target = tierFor(a, rank, m.pinned, config.activation);
     if (target === m.tier) continue;
     if (m.tier === 'cold') continue; // never promote out of cold here
     if (target === 'cold') {
-      await evict(store, m, result);
+      evictions.push(m);
     } else {
       await store.setTier(m.id, target);
       (RANK[target] > RANK[m.tier] ? result.promoted : result.demoted).push(m.id);
@@ -74,15 +78,25 @@ export async function consolidate(
   // 3. Non-current memories go straight to cold (unless pinned or already cold).
   for (const m of await store.list(scope, { validOnly: false })) {
     if (currentIds.has(m.id) || m.pinned || m.tier === 'cold') continue;
-    await evict(store, m, result);
+    evictions.push(m);
   }
+  await evictAll(store, evictions, result);
 
   return result;
 }
 
-async function evict(store: MemoryStore, m: Memory, result: ConsolidateResult): Promise<void> {
-  // coldPut itself sets tier 'cold' on the main record.
-  await store.coldPut({ ...m, tier: 'cold' });
-  result.demoted.push(m.id);
-  result.evicted.push(m.id);
+async function evictAll(
+  store: MemoryStore,
+  evictions: Memory[],
+  result: ConsolidateResult,
+): Promise<void> {
+  for (let i = 0; i < evictions.length; i += COLD_EVICT_BATCH) {
+    const batch = evictions.slice(i, i + COLD_EVICT_BATCH);
+    // coldPutMany itself sets tier 'cold' on the main record.
+    await store.coldPutMany(batch.map((m) => ({ ...m, tier: 'cold' as const })));
+    for (const m of batch) {
+      result.demoted.push(m.id);
+      result.evicted.push(m.id);
+    }
+  }
 }

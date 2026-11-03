@@ -452,14 +452,43 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     writeFts(row.rid, tier, row.text, row.stub, JSON.parse(row.entities) as string[]);
   });
 
-  /** Makes `file` the cold copy of `m`; returns the blob it replaced, to unlink after commit. */
-  const coldPutTx = db.transaction((m: Memory, file: string): string | undefined => {
-    const previous = q.coldPath.get(m.id)?.path;
-    const { embedding: _dropped, ...rest } = m;
-    writeMemory({ ...rest, tier: 'cold' });
-    q.coldInsert.run(m.id, file);
+  /**
+   * Makes `files[i]` the cold copy of `ms[i]` for every i, all in one
+   * transaction; returns the blobs they replaced, to unlink after commit.
+   */
+  const coldPutManyTx = db.transaction((ms: Memory[], files: string[]): string[] => {
+    const previous: string[] = [];
+    for (const [i, m] of ms.entries()) {
+      const old = q.coldPath.get(m.id)?.path;
+      if (old !== undefined) previous.push(old);
+      const { embedding: _dropped, ...rest } = m;
+      writeMemory({ ...rest, tier: 'cold' });
+      q.coldInsert.run(m.id, files[i] as string);
+    }
     return previous;
   });
+
+  /**
+   * Writes new uniquely named blobs, then commits every row in one IMMEDIATE
+   * transaction. Previously committed blobs are untouched until that commit
+   * succeeds and removed after; a failed commit removes only the new blobs.
+   */
+  async function coldPutMany(ms: Memory[]): Promise<void> {
+    open();
+    if (ms.length === 0) return;
+    for (const m of ms) {
+      if (m.embedding !== undefined) checkDimension(m.embedding, `coldPut ${m.id}`);
+    }
+    const files = await blobs.writeMany(ms.map((m) => ({ id: m.id, data: codec.encode(m) })));
+    let previous: string[];
+    try {
+      previous = coldPutManyTx.immediate(ms, files);
+    } catch (e) {
+      for (const file of files) blobs.remove(file);
+      throw e;
+    }
+    for (const file of previous) blobs.remove(file);
+  }
 
   return {
     async upsert(m) {
@@ -527,24 +556,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         .sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt));
     },
 
-    /**
-     * Writes a new uniquely named blob, then commits it as the cold copy. The
-     * previously committed blob is untouched until that commit succeeds, and
-     * removed after; a failed commit removes only the new blob.
-     */
-    async coldPut(m) {
-      open();
-      if (m.embedding !== undefined) checkDimension(m.embedding, `coldPut ${m.id}`);
-      const file = blobs.write(m.id, codec.encode(m));
-      let previous: string | undefined;
-      try {
-        previous = coldPutTx.immediate(m, file);
-      } catch (e) {
-        blobs.remove(file);
-        throw e;
-      }
-      if (previous !== undefined && previous !== file) blobs.remove(previous);
-    },
+    coldPut: (m) => coldPutMany([m]),
+
+    coldPutMany,
 
     /** A missing or corrupt blob (logged by id) reads as no cold copy. */
     async coldGet(id) {

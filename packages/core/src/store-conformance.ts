@@ -130,6 +130,35 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
       expect(await store.coldGet('c2')).toBeNull();
     });
 
+    it('cold-put-many-roundtrip', async () => {
+      const a = makeMemory({ id: 'a', text: 'alpha', embedding: vec(1, 2, 3, 4) });
+      const b = makeMemory({ id: 'b', text: 'beta', embedding: vec(4, 3, 2, 1) });
+      await store.coldPut(makeMemory({ id: 'a', text: 'old alpha', embedding: vec(9, 9, 9, 9) }));
+      await store.coldPutMany([a, b]);
+      for (const m of [a, b]) {
+        expect(await store.coldGet(m.id)).toEqual(m);
+        const main = await store.get(m.id);
+        expect(main?.tier).toBe('cold');
+        expect(main?.text).toBe(m.text);
+        expect(main?.embedding).toBeUndefined();
+      }
+      await expect(store.coldPutMany([])).resolves.toBeUndefined();
+    });
+
+    it('cold-put-many-is-atomic', async () => {
+      const first = makeMemory({ id: 'x', text: 'first', embedding: vec(1, 2, 3, 4) });
+      await store.coldPut(first);
+      const good = makeMemory({ id: 'y', text: 'good', embedding: vec(1, 1, 1, 1) });
+      const replacement = makeMemory({ id: 'x', text: 'second', embedding: vec(4, 3, 2, 1) });
+      const bad = makeMemory({ id: 'z', embedding: vec(1, 2, 3, 4, 5) }); // wrong dimension
+      await expect(store.coldPutMany([good, replacement, bad])).rejects.toThrow();
+      expect(await store.get('y')).toBeNull();
+      expect(await store.coldGet('y')).toBeNull();
+      expect(await store.get('z')).toBeNull();
+      expect(await store.coldGet('x')).toEqual(first);
+      expect((await store.get('x'))?.text).toBe('first');
+    });
+
     it('lexical-finds-exact-identifier', async () => {
       await store.upsert(
         makeMemory({ id: 'target', text: 'Requests now route through auth-service-8080 only' }),
@@ -347,6 +376,7 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
         ['recordAccess', () => store.recordAccess(['m1'], new Date())],
         ['list', () => store.list(LOCAL)],
         ['coldPut', () => store.coldPut(m)],
+        ['coldPutMany', () => store.coldPutMany([m])],
         ['coldGet', () => store.coldGet('m1')],
         ['setTier', () => store.setTier('m1', 'hot')],
         ['getCursor', () => store.getCursor('k')],

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ScopeFilter } from './adapters.js';
 import { appendAccess } from './activation.js';
 import { resolveConfig } from './config.js';
-import { consolidate } from './consolidate.js';
+import { COLD_EVICT_BATCH, consolidate } from './consolidate.js';
 import { createMemoryStore } from './memory-store.js';
 import type { AccessLog, Memory } from './model.js';
 import { makeMemory as baseMemory, vec } from './store-conformance.js';
@@ -221,5 +221,29 @@ describe('consolidate', () => {
     await consolidate(SCOPE, deps);
     expect((await store.get('newer'))?.tier).toBe('hot');
     expect((await store.get('older'))?.tier).toBe('warm');
+  });
+
+  it('consolidate.uses-batched-eviction', async () => {
+    const { store, deps } = setup(1);
+    const n = COLD_EVICT_BATCH * 2 + 7;
+    for (let i = 0; i < n; i++) {
+      // Superseded memories go straight to cold.
+      await store.upsert(makeMemory({ id: `m${i}`, validTo: ago(DAY).toISOString() }));
+    }
+    const sizes: number[] = [];
+    let singles = 0;
+    const origMany = store.coldPutMany.bind(store);
+    store.coldPutMany = async (ms) => {
+      sizes.push(ms.length);
+      return origMany(ms);
+    };
+    store.coldPut = async () => {
+      singles++;
+    };
+    const res = await consolidate(SCOPE, deps);
+    expect(res.evicted).toHaveLength(n);
+    expect(sizes).toEqual([COLD_EVICT_BATCH, COLD_EVICT_BATCH, 7]);
+    expect(singles).toBe(0);
+    expect((await store.list(SCOPE, { tier: 'cold', validOnly: false })).length).toBe(n);
   });
 });

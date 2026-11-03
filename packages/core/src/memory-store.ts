@@ -68,6 +68,20 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     return [...main.values()].filter((m) => scopeMatches(m.scope, scope));
   }
 
+  /** Atomic trivially: validates and clones every record before writing any. */
+  async function coldPutMany(ms: Memory[]): Promise<void> {
+    open();
+    const dims = new Set(
+      ms.flatMap((m) => (m.embedding === undefined ? [] : [m.embedding.length])),
+    );
+    if (dims.size > 1) throw new RangeError('coldPutMany: embeddings differ in dimension');
+    for (const m of ms.map((x) => structuredClone(x))) {
+      cold.set(m.id, m);
+      const { embedding: _dropped, ...rest } = structuredClone(m);
+      main.set(m.id, { ...rest, tier: 'cold' });
+    }
+  }
+
   return {
     async upsert(m) {
       open();
@@ -147,12 +161,9 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         .map((m) => structuredClone(m));
     },
 
-    async coldPut(m) {
-      open();
-      cold.set(m.id, structuredClone(m));
-      const { embedding: _dropped, ...rest } = structuredClone(m);
-      main.set(m.id, { ...rest, tier: 'cold' });
-    },
+    coldPut: (m) => coldPutMany([m]),
+
+    coldPutMany,
 
     async coldGet(id) {
       open();

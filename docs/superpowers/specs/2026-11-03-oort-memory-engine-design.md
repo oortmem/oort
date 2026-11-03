@@ -294,6 +294,11 @@ on Marcus's own transcripts first.
   index row keeps stub, entities, and blob pointer. The blob includes the original
   embedding so hydration never re-embeds. *My call, so cold promotion stays local and
   under the latency target even when the embedder is remote.*
+  Local durability (Task 8b): eviction writes blobs in batches (rename plus one
+  directory fsync per batch, one DB transaction); blob files are not fsynced
+  individually, since per-file fsync made the first 10k consolidate take 60 s.
+  A blob torn by power loss fails its v2 CRC32, `coldGet` returns null, and recall
+  falls back to the live row (worst case the embedding is lost and re-derivable).
 - Daemon: a long-lived local process (`oort serve`) so hooks pay no startup cost;
   hooks fall back to in-process if the daemon is down.
 - Embedding/rerank/decide adapters resolved from `oort.config.json` the way Smelt

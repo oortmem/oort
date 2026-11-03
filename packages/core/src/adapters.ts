@@ -116,6 +116,13 @@ export interface MemoryStore {
    */
   coldPut(m: Memory): Promise<void>;
   /**
+   * `coldPut` for each of `ms`, in order (a later entry for the same id wins),
+   * atomic per call: if any entry fails, none is applied and every previous
+   * cold copy stays readable. Previous cold copies are discarded only after
+   * the whole batch has committed. An empty list is a no-op.
+   */
+  coldPutMany(ms: Memory[]): Promise<void>;
+  /**
    * The cold copy written by `coldPut` (a snapshot, embedding included), or
    * null. Fields that changed after `coldPut` (e.g. the access log) are not
    * reflected; hydration should take live fields from `get`.

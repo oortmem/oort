@@ -288,6 +288,50 @@ describe('sqlite store', () => {
     await store.close();
   });
 
+  it('store.failed-coldPutMany-leaves-no-blobs-and-keeps-previous', async () => {
+    const dir = freshDir();
+    const store = await openSqliteStore(optsIn(dir));
+    const first = makeMemory({ id: 'c1', text: 'first snapshot', embedding: vec(1, 2, 3, 4) });
+    await store.coldPut(first);
+    const before = blobFiles(dir);
+
+    // Fail the second row's cold_index write, after the first row was written in the transaction.
+    const raw = new Database(path.join(dir, 'oort.sqlite'));
+    raw.exec(`CREATE TRIGGER fail_cold BEFORE INSERT ON cold_index
+      WHEN NEW.id = 'c3' BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
+    raw.close();
+    const err = await rejection(
+      store.coldPutMany([
+        makeMemory({ id: 'c2', embedding: vec(1, 1, 1, 1) }),
+        makeMemory({ id: 'c1', text: 'second snapshot', embedding: vec(4, 3, 2, 1) }),
+        makeMemory({ id: 'c3', embedding: vec(2, 2, 2, 2) }),
+      ]),
+    );
+    expect((err as Error).message).toContain('injected failure');
+
+    expect(blobFiles(dir)).toEqual(before);
+    expect(await store.coldGet('c1')).toEqual(first);
+    expect(await store.get('c2')).toBeNull();
+    expect(await store.get('c3')).toBeNull();
+    await store.close();
+  });
+
+  it('store.coldPutMany-unlinks-previous-blobs-after-commit', async () => {
+    const dir = freshDir();
+    const store = await openSqliteStore(optsIn(dir));
+    await store.coldPut(makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) }));
+    await store.coldPut(makeMemory({ id: 'c2', embedding: vec(1, 2, 3, 4) }));
+    expect(blobFiles(dir)).toHaveLength(2);
+    await store.coldPutMany([
+      makeMemory({ id: 'c1', text: 'again', embedding: vec(4, 3, 2, 1) }),
+      makeMemory({ id: 'c2', text: 'again', embedding: vec(4, 3, 2, 1) }),
+      makeMemory({ id: 'c3', embedding: vec(1, 1, 1, 1) }),
+    ]);
+    expect(blobFiles(dir)).toHaveLength(3);
+    expect((await store.coldGet('c1'))?.text).toBe('again');
+    await store.close();
+  });
+
   it('store.concurrent-coldPut-same-id', async () => {
     const dir = freshDir();
     const a = await openSqliteStore(optsIn(dir));

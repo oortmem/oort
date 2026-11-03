@@ -29,13 +29,9 @@ describe('consolidate on 10k memories', () => {
     expect(run.secondMs).toBeLessThan(run.firstMs);
   });
 
-  // KNOWN FAILURE, reported to the controller (the bound must not be raised): a
-  // first 10k consolidate takes about 60 to 70 s, 98% of it in about 5,100
-  // `coldPut` calls at about 12 ms each (the zstd encode is 0.13 ms; the rest
-  // is per-blob fsync, rename and a WAL commit). Only the timing assertion is
-  // `it.fails`, so a crash or a wrong result still fails the run. It turns red
-  // once consolidate is fast enough: change it to a plain `it` then.
-  it.fails('bench.consolidate-10k-under-30s', () => {
+  // A 30 s bound, not the 10 s target: wall-clock bounds in the default suite
+  // flake under load. The 10 s target is judged from `pnpm bench` numbers.
+  it('bench.consolidate-10k-under-30s', () => {
     expect(run.firstMs).toBeLessThan(30_000);
   });
 });
