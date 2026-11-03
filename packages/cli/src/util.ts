@@ -122,6 +122,40 @@ export function toJson(m: Memory): Record<string, unknown> {
       };
 }
 
+/** Set when a link was nulled because it points outside the reader's scope. */
+export interface HiddenLinkFlags {
+  supersedesHidden?: true;
+  supersededByHidden?: true;
+}
+
+/**
+ * `m` shaped for output from `filter`'s point of view: a `supersedes` or
+ * `supersededBy` pointing at a memory outside `filter` becomes null and is
+ * flagged, so output never names another scope's memory. Storage is untouched;
+ * a link to a memory that no longer exists keeps its id.
+ */
+export async function shapeLinks<T extends Memory>(
+  store: MemoryStore,
+  filter: ScopeFilter,
+  m: T,
+): Promise<T & HiddenLinkFlags> {
+  const hidden = async (id: string | null): Promise<boolean> => {
+    if (id === null) return false;
+    const target = await store.get(id);
+    return target !== null && !scopeMatches(target.scope, filter);
+  };
+  const out: T & HiddenLinkFlags = { ...m };
+  if (await hidden(m.supersedes)) {
+    out.supersedes = null;
+    out.supersedesHidden = true;
+  }
+  if (await hidden(m.supersededBy)) {
+    out.supersededBy = null;
+    out.supersededByHidden = true;
+  }
+  return out;
+}
+
 /** A memory without its embedding, for human-facing JSON. */
 export function withoutEmbedding<T extends Memory>(m: T): Omit<T, 'embedding'> {
   const { embedding: _e, ...rest } = m;

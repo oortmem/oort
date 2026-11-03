@@ -194,8 +194,22 @@ describe('scope boundaries', () => {
     const parsed = JSON.parse(json.io.stdout) as { chain: { id: string }[]; hiddenLinks: number };
     expect(parsed.chain.map((l) => l.id)).toEqual([g.id]);
     expect(parsed.hiddenLinks).toBe(1);
-    // The shown record's own supersededBy still names the id; nothing of its content leaks.
     expect(json.io.stdout).not.toContain('project-only');
+    // Omitted links show no id either: the pointer is nulled and flagged.
+    expect(json.io.stdout).not.toContain(p.id);
+    const shown = JSON.parse(json.io.stdout) as { memory: Record<string, unknown> };
+    expect(shown.memory).toMatchObject({ supersededBy: null, supersededByHidden: true });
+    expect(shown.memory['supersedesHidden']).toBeUndefined();
+    // The listing and recall --json shape their records the same way.
+    for (const args of [
+      ['inspect', '--json'],
+      ['recall', 'global port', '--json'],
+    ]) {
+      const r = await h.run(args);
+      expect(r.io.stdout, args.join(' ')).not.toContain(p.id);
+    }
+    // Storage is untouched.
+    expect((await h.store.get(g.id))?.supersededBy).toBe(p.id);
   });
 
   it('cli.pin-forget-refuse-out-of-scope-id', async () => {
@@ -301,6 +315,8 @@ const MemoryLineSchema = z.strictObject({
   lastConfirmedAt: iso.nullable(),
   supersedes: z.string().nullable(),
   supersededBy: z.string().nullable(),
+  supersedesHidden: z.literal(true).optional(),
+  supersededByHidden: z.literal(true).optional(),
   source: z.strictObject({
     harness: z.string(),
     sessionId: z.string().optional(),
@@ -377,6 +393,47 @@ describe('oort export', () => {
   });
 });
 
+describe('oort export, scope', () => {
+  it('cli.export-redacts-out-of-scope-links', async () => {
+    const h = harness(); // global scope
+    const other = localScope('other-1234abcd');
+    const a = memory({ text: 'global a', createdAt: '2026-09-01T00:00:00.000Z' });
+    const p = memory({ text: 'project p', scope: other, createdAt: '2026-09-02T00:00:00.000Z' });
+    const b = memory({ text: 'global b', createdAt: '2026-09-03T00:00:00.000Z' });
+    await h.store.upsertMany([
+      { ...a, supersededBy: p.id, validTo: p.validFrom, endReason: 'superseded' },
+      { ...p, supersedes: a.id, supersededBy: b.id },
+      { ...b, supersedes: p.id },
+    ]);
+    const r = await h.run(['export']);
+    expect(r.code).toBe(0);
+    expect(r.io.stdout).not.toContain(p.id);
+    expect(r.io.stdout).not.toContain('project p');
+    const lines = r.io.stdout
+      .trimEnd()
+      .split('\n')
+      .slice(1)
+      .map((l) => MemoryLineSchema.parse(JSON.parse(l)));
+    expect(
+      lines.map((l) => [
+        l.id,
+        l.supersedes,
+        l.supersededBy,
+        l.supersedesHidden,
+        l.supersededByHidden,
+      ]),
+    ).toEqual([
+      [a.id, null, null, undefined, true],
+      [b.id, null, null, true, undefined],
+    ]);
+    // In-scope links keep their ids.
+    const c = memory({ text: 'global c', supersedes: b.id, createdAt: '2026-09-04T00:00:00.000Z' });
+    await h.store.upsert(c);
+    const again = (await h.run(['export'])).io.stdout;
+    expect(again).toContain(`"supersedes":"${b.id}"`);
+  });
+});
+
 describe('oort export --out', () => {
   it('cli.export-out-refuses-existing-and-symlinks', async () => {
     const h = harness();
@@ -435,6 +492,19 @@ describe('refusal messages', () => {
     expect(key.code).toBe(2);
     expect(key.io.stderr).not.toContain(AWS_KEY);
     expect(key.io.stderr).toContain('[REDACTED:');
+  });
+});
+
+describe('commander errors', () => {
+  it('cli.unknown-command-and-option-scrub-args', async () => {
+    const h = harness();
+    for (const args of [[AWS_KEY], ['stats', `--${AWS_KEY}`], ['recall', 'q', `--${AWS_KEY}`]]) {
+      const r = await h.run(args);
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(r.io.stderr).toMatch(/unknown (command|option)/);
+      expect(r.io.stderr).not.toContain(AWS_KEY);
+      expect(r.io.stderr).not.toContain(AWS_KEY.slice(4));
+    }
   });
 });
 
@@ -666,6 +736,40 @@ describe('oort import (in process)', () => {
 });
 
 describe('wire', () => {
+  it('cli.drain-ignores-project-config', async () => {
+    // The drain wires with projectConfig: false; every other run keeps discovery.
+    const h = harness();
+    const seen: (boolean | undefined)[] = [];
+    const inner = h.wire;
+    h.wire = async (cwd, o) => {
+      seen.push(o?.projectConfig);
+      return inner(cwd, o);
+    };
+    await h.run(['hook', 'drain']);
+    await h.run(['hook', 'SessionStart'], {
+      stdin: JSON.stringify({ session_id: 's', cwd: h.cwd }),
+    });
+    await h.run(['stats']);
+    expect(seen).toEqual([false, undefined, undefined]);
+
+    // The real wire then never reads an oort.config.json at or above OORT_HOME.
+    const root = tmpdir();
+    fs.mkdirSync(path.join(root, '.git'));
+    fs.writeFileSync(
+      path.join(root, 'oort.config.json'),
+      JSON.stringify({ writer: { provider: 'anthropic', model: 'project-model' } }),
+    );
+    const home = path.join(root, '.oort');
+    const env = { HOME: root, OORT_HOME: home };
+    const discovered = await wire(path.join(root), { env });
+    await discovered.close();
+    expect(discovered.config.writer.model).toBe('project-model');
+    const drain = await wire(home, { env, projectConfig: false });
+    await drain.close();
+    expect(drain.config.writer.model).toBe('claude-haiku-5-5');
+    expect(drain.config.sources['writer']).toBe('default');
+  });
+
   it('cli.wire-ignores-project-embed-dimension', async () => {
     const root = tmpdir();
     const home = path.join(root, 'oort-home');

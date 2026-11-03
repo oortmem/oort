@@ -32,8 +32,8 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .configureOutput({
       writeOut: (s) => ctx.io.out(s),
       writeErr: (s) => ctx.io.err(s),
-      // Commander quotes the offending argument ('…'); clip it like our own refusals.
-      outputError: (s, write) => write(s.replace(/'([^'\n]{25,})'/g, (_m, a: string) => echo(a))),
+      // Commander quotes the offending argument ('…'): scrub and clip it like our own refusals.
+      outputError: (s, write) => write(s.replace(/'([^'\n]*)'/g, (_m, a: string) => echo(a))),
     })
     .showHelpAfterError('(run `oort --help` for usage)');
 

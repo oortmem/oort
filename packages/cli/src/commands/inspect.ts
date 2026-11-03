@@ -13,6 +13,7 @@ import {
   clip,
   findMemory,
   fixed,
+  shapeLinks,
   short,
   table,
   withoutEmbedding,
@@ -106,7 +107,8 @@ export async function inspectCommand(
     if (id === undefined) {
       const current = (await w.store.list(filter)).slice(0, limit);
       if (opts.json === true) {
-        ctx.io.out(`${JSON.stringify(current.map(withoutEmbedding), null, 2)}\n`);
+        const shaped = await Promise.all(current.map((m) => shapeLinks(w.store, filter, m)));
+        ctx.io.out(`${JSON.stringify(shaped.map(withoutEmbedding), null, 2)}\n`);
         return 0;
       }
       const rows = current.map((m) => [
@@ -123,7 +125,8 @@ export async function inspectCommand(
     const m = await findMemory(w.store, filter, id);
     const { links: chain, hidden } = await supersedeChain(w.store, m, filter);
     if (opts.json === true) {
-      const out = { memory: withoutEmbedding(m), chain, hiddenLinks: hidden };
+      const memory = withoutEmbedding(await shapeLinks(w.store, filter, m));
+      const out = { memory, chain, hiddenLinks: hidden };
       ctx.io.out(`${JSON.stringify(out, null, 2)}\n`);
       return 0;
     }

@@ -69,12 +69,14 @@ per dimension, two's complement), and is absent when the memory has none.
 | `lastConfirmedAt` | ISO 8601 \| null                                           |
 | `supersedes`      | string \| null: id of the memory this one replaced         |
 | `supersededBy`    | string \| null: id of the memory that replaced this one    |
+| `supersedesHidden`   | `true`, optional: `supersedes` was nulled (see Limitations)   |
+| `supersededByHidden` | `true`, optional: `supersededBy` was nulled (see Limitations) |
 | `source`          | `{ harness, sessionId?, turnRef?, decisions: { stage, question, answer, probability }[] }` |
 | `embedding`       | base64 string, optional                                    |
 | `createdAt`       | ISO 8601                                                   |
 | `updatedAt`       | ISO 8601                                                   |
 
-No other fields appear. Decoding an embedding in Node:
+No other fields appear. The two `…Hidden` flags appear only when set. Decoding an embedding in Node:
 
 ```js
 const vector = Int8Array.from(Buffer.from(line.embedding, 'base64'));
@@ -90,3 +92,10 @@ before storage, but treat the file like the store itself.
   through a scope filter, so memories of other projects (including private
   ones) are left out. To export them, run `oort export` from each project.
   A whole-store export needs an unscoped listing, which arrives with CON-36.
+- **Links into other scopes.** A `supersedes` or `supersededBy` that points
+  at a memory the exporting scope cannot see (another project's, from before
+  observe kept supersede chains within one scope) is written as `null`, with
+  `supersedesHidden: true` or `supersededByHidden: true`. The export names no
+  memory outside its scope, by id or by text. The store keeps the real link; an
+  importer sees a chain that ends where the hidden memory was. A link to a
+  memory that no longer exists keeps its id.

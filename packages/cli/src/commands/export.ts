@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { filterFor } from '@oortmem/claude-code';
 import type { Memory, MemoryStore, Scope } from '@oortmem/core';
-import { toJson, withWired, writeOwnerOnly, type Ctx } from '../util.js';
+import { shapeLinks, toJson, withWired, writeOwnerOnly, type Ctx } from '../util.js';
 
 /** Version of the export format documented in docs/export-format.md. */
 export const EXPORT_VERSION = 1;
@@ -49,13 +49,16 @@ export async function exportCommand(
   ctx: Ctx,
 ): Promise<number> {
   return withWired(ctx, async (w) => {
-    const listed = await w.store.list(filterFor(w.scope), { validOnly: false });
+    const filter = filterFor(w.scope);
+    const listed = await w.store.list(filter, { validOnly: false });
     // Oldest first, so an importer replays supersede chains in order.
     listed.sort(
       (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.id < b.id ? -1 : 1),
     );
     const memories: Memory[] = [];
-    for (const m of listed) memories.push(await decoded(m, w.store, ctx));
+    for (const m of listed) {
+      memories.push(await shapeLinks(w.store, filter, await decoded(m, w.store, ctx)));
+    }
     const scopes = new Map<string, Scope>();
     for (const m of memories) scopes.set(scopeKey(m.scope), m.scope);
     const manifest: ExportManifest = {

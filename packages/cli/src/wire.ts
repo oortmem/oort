@@ -49,6 +49,8 @@ export interface WireOptions {
   env?: Env;
   /** How long a store write may wait for another connection's lock (the store's default: 5000). */
   busyTimeoutMs?: number;
+  /** false: read no `oort.config.json` at all, only the home config (the drain). */
+  projectConfig?: boolean;
 }
 
 export type WireFn = (cwd: string, opts?: WireOptions) => Promise<Wired>;
@@ -142,7 +144,9 @@ function homeDimension(home: string): number {
  */
 export const wire: WireFn = async (cwd, opts = {}) => {
   const env = opts.env ?? process.env;
-  let config = resolveConfig(cwd, env);
+  let config = resolveConfig(cwd, env, {
+    ...(opts.projectConfig !== undefined && { projectConfig: opts.projectConfig }),
+  });
   const warnings: WireWarning[] = [];
   // One store serves every project, so its dimension is the home config's: a
   // project config cannot change it (the store would refuse to open, or embed

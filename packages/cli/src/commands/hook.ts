@@ -102,7 +102,8 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
       const stdin = event === 'drain' ? '' : await io.readStdin(HOOK_STDIN_CAP_MS);
       w = await ctx.wire(inputCwd(stdin) ?? io.cwd, {
         env: io.env,
-        ...(event !== 'drain' && { busyTimeoutMs: HOOK_BUSY_TIMEOUT_MS }),
+        // The drain serves every project's queue: home config only, whatever lies above OORT_HOME.
+        ...(event === 'drain' ? { projectConfig: false } : { busyTimeoutMs: HOOK_BUSY_TIMEOUT_MS }),
       });
       for (const warning of w.warnings) log(ctx, w, event, `config:${warning.code}`);
       const home = w.config.home;

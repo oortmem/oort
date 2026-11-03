@@ -1,6 +1,13 @@
 import { filterFor } from '@oortmem/claude-code';
 import { formatForInjection, recall, type RecallResult } from '@oortmem/core';
-import { Refusal, degradedHint, withoutEmbedding, withWired, type Ctx } from '../util.js';
+import {
+  Refusal,
+  degradedHint,
+  shapeLinks,
+  withoutEmbedding,
+  withWired,
+  type Ctx,
+} from '../util.js';
 import type { Wired } from '../wire.js';
 
 export interface RecallOptions {
@@ -38,7 +45,9 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
     const result = await runRecall(w, text, opts.asOf, now);
     degradedHint(ctx.io, w, result.degraded);
     if (opts.json === true) {
-      const plain = { ...result, memories: result.memories.map(withoutEmbedding) };
+      const filter = filterFor(w.scope);
+      const shaped = await Promise.all(result.memories.map((m) => shapeLinks(w.store, filter, m)));
+      const plain = { ...result, memories: shaped.map(withoutEmbedding) };
       ctx.io.out(`${JSON.stringify(plain, null, 2)}\n`);
     } else {
       const block = formatForInjection(result, w.config.recall.budgetChars, now);
