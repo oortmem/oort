@@ -1,0 +1,138 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { z } from 'zod';
+
+const embed = z
+  .strictObject({
+    provider: z.string().default('voyage'),
+    model: z.string().default('voyage-3.5-lite'),
+    dimension: z.number().int().positive().default(512),
+    dtype: z.enum(['int8', 'float32']).default('int8'),
+  })
+  .default({ provider: 'voyage', model: 'voyage-3.5-lite', dimension: 512, dtype: 'int8' });
+
+const rerank = z
+  .strictObject({
+    provider: z.string().default('voyage'),
+    model: z.string().default('rerank-3-lite'),
+    topK: z.number().int().positive().default(10),
+  })
+  .default({ provider: 'voyage', model: 'rerank-3-lite', topK: 10 });
+
+const decide = z.strictObject({ provider: z.string().default('jev') }).default({ provider: 'jev' });
+
+const writer = z
+  .strictObject({
+    provider: z.string().default('anthropic'),
+    model: z.string().default('claude-haiku-4-5'),
+  })
+  .default({ provider: 'anthropic', model: 'claude-haiku-4-5' });
+
+const activation = z
+  .strictObject({
+    d: z.number().default(0.5),
+    ws: z.number().default(1.0),
+    hotTopN: z.number().int().positive().default(50),
+    coldBelow: z.number().default(-2.0),
+  })
+  .default({ d: 0.5, ws: 1.0, hotTopN: 50, coldBelow: -2.0 });
+
+const recall = z
+  .strictObject({
+    lexicalK: z.number().int().positive().default(50),
+    denseK: z.number().int().positive().default(50),
+    rerankK: z.number().int().positive().default(30),
+    returnK: z.number().int().positive().default(10),
+    budgetChars: z.number().int().positive().default(6000),
+  })
+  .default({ lexicalK: 50, denseK: 50, rerankK: 30, returnK: 10, budgetChars: 6000 });
+
+const project = z
+  .strictObject({
+    id: z.string().optional(),
+    private: z.boolean().default(false),
+  })
+  .default({ private: false });
+
+export const OortConfig = z.strictObject({
+  embed,
+  rerank,
+  decide,
+  writer,
+  activation,
+  recall,
+  project,
+});
+export type OortConfig = z.infer<typeof OortConfig>;
+
+export type ConfigSource = 'project' | 'home' | 'default';
+
+export type ResolvedConfig = OortConfig & {
+  home: string;
+  sources: Record<string, ConfigSource>;
+};
+
+const CONFIG_KEYS = Object.keys(OortConfig.shape);
+
+function findProjectConfig(cwd: string): string | undefined {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    const candidate = path.join(dir, 'oort.config.json');
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+function readJsonObject(file: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    throw new Error(`Invalid config file ${file}: ${(err as Error).message}`);
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Invalid config file ${file}: expected a JSON object`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/** Validate one file against the strict schema (all keys optional); errors name the file and key. */
+function readConfigFile(file: string): Record<string, unknown> {
+  const raw = readJsonObject(file);
+  const result = OortConfig.partial().safeParse(raw);
+  if (!result.success) {
+    throw new Error(`Invalid config file ${file}: ${result.error.message}`);
+  }
+  return raw;
+}
+
+export function resolveConfig(
+  cwd: string,
+  env: Record<string, string | undefined> = process.env,
+): ResolvedConfig {
+  const home = env['OORT_HOME'] ?? path.join(env['HOME'] ?? os.homedir(), '.oort');
+
+  const projectFile = findProjectConfig(cwd);
+  const homeFile = path.join(home, 'config.json');
+  const projectRaw = projectFile ? readConfigFile(projectFile) : {};
+  const homeRaw = fs.existsSync(homeFile) ? readConfigFile(homeFile) : {};
+
+  const merged: Record<string, unknown> = {};
+  const sources: Record<string, ConfigSource> = {};
+  for (const key of CONFIG_KEYS) {
+    if (key in projectRaw) {
+      merged[key] = projectRaw[key];
+      sources[key] = 'project';
+    } else if (key in homeRaw) {
+      merged[key] = homeRaw[key];
+      sources[key] = 'home';
+    } else {
+      sources[key] = 'default';
+    }
+  }
+
+  return { ...OortConfig.parse(merged), home, sources };
+}
