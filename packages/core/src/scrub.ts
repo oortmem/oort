@@ -60,6 +60,47 @@ function keepName(kind: string, prefix: RegExp, drop?: RegExp): Hit {
   };
 }
 
+const KEYWORD = /secret|token|passw(?:or)?d|api_?key|private_?key|access_?key/gi;
+
+/** Is the identifier a credential name, judged on word boundaries? */
+function envKey(key: string): boolean {
+  if (/^(?:MAX|MIN|NUM|COUNT)_/i.test(key) || /_(?:COUNT|LIMIT|LENGTH|SIZE)$/i.test(key)) {
+    return false;
+  }
+  for (const k of key.matchAll(KEYWORD)) {
+    const i = k.index;
+    const word = k[0];
+    const prev = key[i - 1];
+    const startOk =
+      prev === undefined ||
+      prev === '_' ||
+      word === word.toUpperCase() || // glued upper-case prefix: PGPASSWORD
+      (/[a-z]/.test(prev) && /[A-Z]/.test(word[0] ?? '')); // camelCase boundary
+    const rest = key.slice(i + word.length);
+    const endOk = rest === '' || /^[sS]?\d*(?:_.*)?$/.test(rest) || /^[A-Z]/.test(rest);
+    if (startOk && endOk) return true;
+  }
+  return false;
+}
+
+/** Redact the value of a credential-named variable, keeping JSON quotes valid. */
+function envSecret(m: string): Replacement | null {
+  const key = /^["']?(?:export[ \t]+)?([A-Za-z][A-Za-z0-9_]*)/.exec(m)?.[1];
+  const head = /^[^=:]*[=:][ \t]*/.exec(m)?.[0].length;
+  if (key === undefined || head === undefined || !envKey(key)) return null;
+  let value = m.slice(head);
+  let open = '';
+  let close = '';
+  const q = value[0];
+  if ((q === '"' || q === "'") && value.length >= 2 && value.endsWith(q)) {
+    open = q;
+    close = q;
+    value = value.slice(1, -1);
+  }
+  if (value === '' || value.includes(MARK)) return null;
+  return { out: `${m.slice(0, head)}${open}${tag('env-secret')}${close}`, removed: value.length };
+}
+
 /** Shannon entropy in bits per character. */
 export function shannonEntropy(s: string): number {
   if (s.length === 0) return 0;
@@ -76,7 +117,7 @@ export function shannonEntropy(s: string): number {
 const HEX = /^[0-9a-f]+$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const KEYISH = /(secret|token|key|password)/i;
-const WORD_SEGMENT = /^[a-z_-]{3,}$/;
+const WORD_SEGMENT = /^(?:[a-z_-]{4,}|src|lib|bin|etc|usr|var|org|tmp|dev|opt|app|pkg|doc|api|me)$/;
 
 function classes(s: string): number {
   return [/[A-Z]/, /[a-z]/, /[0-9]/, /[+/=_-]/].filter((r) => r.test(s)).length;
@@ -87,7 +128,7 @@ function looksRandom(seg: string, before: string): boolean {
   if (seg.length < 32 || UUID.test(seg)) return false;
   if (HEX.test(seg)) {
     if (seg.length === 40) return false; // git SHA
-    if (seg.length === 64) return KEYISH.test(before.slice(-40));
+    if (seg.length === 64) return !/sha256:$/.test(before) && KEYISH.test(before.slice(-40));
   }
   if (classes(seg) < 3 || shannonEntropy(seg) < ENTROPY_MIN) return false;
   // Identifiers (camelCase and friends) are mostly letters with next to no digits.
@@ -96,30 +137,37 @@ function looksRandom(seg: string, before: string): boolean {
   return !(letters / seg.length > 0.85 && digits <= 2);
 }
 
+const INTEGRITY = /^sha(?:256|384|512)-/;
+const PATH_START = /^(?:\.\/|~\/|http)/;
+
 /**
- * Candidate tokens are split on `/` and `.` first, so paths and URLs are judged
- * piece by piece. A token with slashes and no plain lowercase word between them
- * (so not a path) is also judged whole, because base64 contains `/`.
+ * Candidate tokens are split on `/` and `.` and judged piece by piece. Only a
+ * path-like token (two or more plain lowercase words between slashes, or a path prefix) is
+ * redacted per piece, so the path survives and just the key in it goes. Any
+ * other token is one secret, because base64 contains `/`: if any piece or the
+ * whole looks random, all of it is redacted. npm integrity strings are exempt.
  */
 function highEntropy(m: string, ...args: unknown[]): Replacement | null {
   const offset = args[0] as number;
   const whole = args[1] as string;
-  const parts = m.split(/([/.])/);
+  if (INTEGRITY.test(m)) return null;
+  const before = (at: number): string => whole.slice(Math.max(0, at - 40), at);
+  const segs = m.split('/');
+  const pathLike = PATH_START.test(m) || segs.filter((x) => WORD_SEGMENT.test(x)).length >= 2;
+  if (!pathLike) {
+    const any = m.split(/[/.]/).some((p) => looksRandom(p, '')) || looksRandom(m, before(offset));
+    return any ? { out: tag('high-entropy'), removed: m.length } : null;
+  }
   let pos = offset;
   let removed = 0;
-  const out = parts.map((part) => {
+  const out = m.split(/([/.])/).map((part) => {
     const at = pos;
     pos += part.length;
-    if (!looksRandom(part, whole.slice(Math.max(0, at - 40), at))) return part;
+    if (!looksRandom(part, before(at))) return part;
     removed += part.length;
     return tag('high-entropy');
   });
-  if (removed > 0) return { out: out.join(''), removed };
-  const segs = m.split('/');
-  if (segs.length > 1 && !segs.some((x) => WORD_SEGMENT.test(x)) && looksRandom(m, '')) {
-    return { out: tag('high-entropy'), removed: m.length };
-  }
-  return null;
+  return removed > 0 ? { out: out.join(''), removed } : null;
 }
 
 /**
@@ -172,13 +220,10 @@ const RULES: Rule[] = [
   },
   {
     kind: 'env-secret',
-    // Key: whole word or `_`-suffix keyword, bounded so a long run cannot go quadratic.
-    re: /(?<![A-Za-z0-9_])["']?(?:export[ \t]+)?(?:[A-Z0-9_]{0,64}_)?(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE_KEY|ACCESS_KEY)(?:_[A-Z0-9_]{0,64})?["']?[ \t]*[=:][ \t]*(?:"[^"\n]*"|'[^'\n]*'|[^\s"']+)/gi,
-    hit: keepName(
-      'env-secret',
-      /^[^=:]*[=:][ \t]*/,
-      /^["']?(?:export[ \t]+)?(?:MAX|MIN|NUM|COUNT)_/i,
-    ),
+    // Any identifier-ish key containing a keyword; `envKey` decides whether the
+    // keyword sits on a real boundary. The lookahead keeps this linear.
+    re: /(?<![A-Za-z0-9_])["']?(?:export[ \t]+)?(?=[A-Za-z0-9_]{0,95}?(?:secret|token|passw(?:or)?d|api_?key|private_?key|access_?key))[A-Za-z][A-Za-z0-9_]{0,95}["']?[ \t]*[=:][ \t]*(?:"[^"\n]*"|'[^'\n]*'|[^\s"']+)/gi,
+    hit: envSecret,
   },
   {
     kind: 'high-entropy',

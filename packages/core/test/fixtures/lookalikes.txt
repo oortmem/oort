@@ -26,3 +26,6 @@ config max_tokens: 1024
 MAX_TOKENS=4096
 class pa-container-with-very-long-name-here
 pip package sk-learn-is-not-the-package-name
+TOKEN_COUNT=4096
+"integrity": "sha512-Ia8uUyRAYLaYPq9wuxduycBaPWQKpcywU6NgAFDUcQ+pkYLvjAFsvzB8JXGNANySSQQ26DseSAaslkbuaLpOQB=="
+integrity sha256-wU6ROOLKKFPDbOuA4OAkoho9EcW0kZvdZO2TM9hRYZb=

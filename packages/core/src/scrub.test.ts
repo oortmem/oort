@@ -108,6 +108,22 @@ describe('scrub', () => {
     expect(performance.now() - t).toBeLessThan(100);
   });
 
+  it('scrub.keeps-path-redacts-key-in-it', () => {
+    const key = 'Zk3Qx9Lm2Vb7Nc4Rt8Yp1Wd6Hs5Jg0Fa9Eu3Io7Kl2Mn';
+    expect(key).toHaveLength(44);
+    const out = scrub(`/home/me/.cache/blobs/${key}/data.bin`);
+    expect(out.text).toBe('/home/me/.cache/blobs/[REDACTED:high-entropy]/data.bin');
+  });
+
+  it('scrub.keeps-json-valid-and-count-keys', () => {
+    expect(scrub('{"password": "hunter2hunter2"}').text).toBe(
+      '{"password": "[REDACTED:env-secret]"}',
+    );
+    expect(scrub('TOKEN_COUNT=4096\nmax_tokens: 1024').text).toBe(
+      'TOKEN_COUNT=4096\nmax_tokens: 1024',
+    );
+  });
+
   it('scrub.exempts-hashes-and-uuids', () => {
     const sha256 = 'a'.repeat(8) + '0123456789abcdef'.repeat(3) + 'b'.repeat(8);
     expect(sha256).toHaveLength(64);
