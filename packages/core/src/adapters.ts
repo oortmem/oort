@@ -87,6 +87,10 @@ export interface MemoryStore {
   /**
    * Nearest neighbours of `v` among scoped memories with an embedding, best
    * first. Never returns cold memories. Does not filter by temporal validity.
+   *
+   * Every implementation rejects with a `RangeError` whose message names both
+   * dimensions when `v.length` differs from the store's dimension (a store
+   * without a fixed dimension compares against its stored embeddings).
    */
   dense(v: Int8Array, scope: ScopeFilter, k: number): Promise<Hit[]>;
   /** Appends an access at `at` to each listed memory's access log; unknown ids are ignored. */
@@ -113,7 +117,10 @@ export interface MemoryStore {
   /** A stored cursor (e.g. a transcript import offset), or null when unset. */
   getCursor(key: string): Promise<string | null>;
   setCursor(key: string, value: string): Promise<void>;
-  /** Releases resources. Idempotent. */
+  /**
+   * Releases resources. Idempotent: closing again resolves. Every other
+   * operation after `close` rejects.
+   */
   close(): Promise<void>;
 }
 

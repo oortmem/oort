@@ -7,7 +7,8 @@
  *     storeConformance('sqlite', async () => openSqliteStore({ dir, dimension: CONFORMANCE_DIMENSION }));
  *
  * Every embedding and query vector the suite uses has `CONFORMANCE_DIMENSION`
- * dimensions; a store with a fixed dimension must be built by `make()` with it.
+ * dimensions (except `dense-rejects-dimension-mismatch`, which queries with one
+ * more); a store with a fixed dimension must be built by `make()` with it.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { MemoryStore, ScopeFilter } from './adapters.js';
@@ -134,20 +135,39 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
       expect(hits[0]?.tier).toBe('warm');
     });
 
-    it('scope-excludes-other-customer', async () => {
+    it('scope-excludes-other-org-customer-agent', async () => {
       const text = 'Deploys go through auth-service-8080';
-      await store.upsert(makeMemory({ id: 'mine', text, embedding: vec(1, 1, 1, 1) }));
-      await store.upsert(
-        makeMemory({
-          id: 'theirs',
-          text,
-          embedding: vec(1, 1, 1, 1),
-          scope: { ...localScope(), customerId: 'someone-else' },
-        }),
-      );
+      const embedding = vec(1, 1, 1, 1);
+      const others = {
+        'other-org': { ...localScope(), orgId: 'another-org' },
+        'other-customer': { ...localScope(), customerId: 'someone-else' },
+        'other-agent': { ...localScope(), agentId: 'another-agent' },
+      };
+      await store.upsert(makeMemory({ id: 'mine', text, embedding }));
+      for (const [id, scope] of Object.entries(others)) {
+        await store.upsert(makeMemory({ id, text, embedding, scope }));
+      }
       expect(ids(await store.lexical('auth-service-8080', LOCAL, 10))).toEqual(['mine']);
-      expect(ids(await store.dense(vec(1, 1, 1, 1), LOCAL, 10))).toEqual(['mine']);
+      expect(ids(await store.dense(embedding, LOCAL, 10))).toEqual(['mine']);
       expect(ids(await store.list(LOCAL))).toEqual(['mine']);
+
+      const none: ScopeFilter = { ...LOCAL, projectIds: [] };
+      expect(await store.lexical('auth-service-8080', none, 10)).toEqual([]);
+      expect(await store.dense(embedding, none, 10)).toEqual([]);
+      expect(await store.list(none)).toEqual([]);
+    });
+
+    it('dense-rejects-dimension-mismatch', async () => {
+      await store.upsert(makeMemory({ id: 'four', embedding: vec(1, 2, 3, 4) }));
+      const wrong = new Int8Array(CONFORMANCE_DIMENSION + 1).fill(1);
+      const err: unknown = await store.dense(wrong, LOCAL, 10).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(RangeError);
+      const message = (err as RangeError).message;
+      expect(message).toContain(String(CONFORMANCE_DIMENSION));
+      expect(message).toContain(String(CONFORMANCE_DIMENSION + 1));
     });
 
     it('scope-project-ids-global-and-p1-not-p2', async () => {
@@ -253,6 +273,33 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
     it('close-is-idempotent', async () => {
       await store.close();
       await expect(store.close()).resolves.toBeUndefined();
+    });
+
+    it('rejects-after-close', async () => {
+      const m = makeMemory({ id: 'm1', embedding: vec(1, 2, 3, 4) });
+      await store.upsert(m);
+      await store.close();
+      const calls: [string, () => Promise<unknown>][] = [
+        ['upsert', () => store.upsert(m)],
+        ['get', () => store.get('m1')],
+        ['forget', () => store.forget('m1')],
+        ['lexical', () => store.lexical('memory', LOCAL, 10)],
+        ['dense', () => store.dense(vec(1, 2, 3, 4), LOCAL, 10)],
+        ['recordAccess', () => store.recordAccess(['m1'], new Date())],
+        ['list', () => store.list(LOCAL)],
+        ['coldPut', () => store.coldPut(m)],
+        ['coldGet', () => store.coldGet('m1')],
+        ['setTier', () => store.setTier('m1', 'hot')],
+        ['getCursor', () => store.getCursor('k')],
+        ['setCursor', () => store.setCursor('k', 'v')],
+      ];
+      for (const [method, call] of calls) {
+        const outcome = await call().then(
+          () => 'resolved',
+          () => 'rejected',
+        );
+        expect(`${method}: ${outcome}`).toBe(`${method}: rejected`);
+      }
     });
   });
 }

@@ -117,7 +117,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         if (m.tier === 'cold' || m.embedding === undefined) continue;
         if (m.embedding.length !== v.length) {
           throw new RangeError(
-            `dense: query has ${v.length} dimensions but memory ${m.id} has ${m.embedding.length}`,
+            `dense: query vector has ${v.length} dimensions, store embeddings have ${m.embedding.length} (memory ${m.id})`,
           );
         }
         scored.push({ m, score: cosine(v, m.embedding) });
