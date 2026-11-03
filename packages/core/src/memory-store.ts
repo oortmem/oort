@@ -1,6 +1,7 @@
 import { appendAccess } from './activation.js';
 import { scopeMatches, type Hit, type MemoryStore, type ScopeFilter } from './adapters.js';
 import { isCurrent, type Memory, type Tier } from './model.js';
+import { tokenizeLexical as tokens } from './tokenize.js';
 
 export interface MemoryStoreOptions {
   /**
@@ -11,19 +12,6 @@ export interface MemoryStoreOptions {
   d?: number;
   /** Clock for `list`'s validity filter; defaults to `new Date()`. */
   now?: () => Date;
-}
-
-/**
- * Lowercase, split on anything that is not a letter, digit, `-`, `_` or `.`,
- * then trim those joiners from token ends, so `auth-service-8080` stays one
- * token but a sentence-final `8080.` becomes `8080`.
- */
-function tokens(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}\-_.]+/u)
-    .map((t) => t.replace(/^[-_.]+|[-_.]+$/g, ''))
-    .filter((t) => t.length > 0);
 }
 
 function cosine(a: Int8Array, b: Int8Array): number {

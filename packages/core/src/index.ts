@@ -6,6 +6,7 @@ export * from './activation.js';
 export * from './adapters.js';
 export * from './fusion.js';
 export * from './memory-store.js';
+export * from './tokenize.js';
 export * from './gate.js';
 export * from './recall.js';
 export * from './observe.js';
