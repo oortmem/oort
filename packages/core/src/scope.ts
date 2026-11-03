@@ -29,8 +29,14 @@ export function findGitRoot(start: string): string | undefined {
  * checkout is the main root. A `.git` file (`gitdir: <path>`, a linked
  * worktree): `<gitdir>/commondir` names the main repository's git directory,
  * whose parent is the main root (a bare repository is its own root). Reads
- * files only; never spawns git. Anything malformed or missing (a submodule has
- * no `commondir`) falls back to `root` itself.
+ * files only; never spawns git.
+ *
+ * A `.git` file can be forged (an extracted archive, a nested folder), so the
+ * mapping is accepted only when the main repository vouches for it, all paths
+ * realpathed: `gitdir` must sit directly in `<commonDir>/worktrees/`, and the
+ * back-pointer `<gitdir>/gitdir` (inside the main repository, which a forger
+ * cannot write) must name this checkout's `.git`. Any mismatch, missing file
+ * or read error (a submodule has no `commondir`) falls back to `root` itself.
  */
 function mainRootOf(root: string): string {
   const dotGit = path.join(root, '.git');
@@ -38,12 +44,20 @@ function mainRootOf(root: string): string {
     if (fs.statSync(dotGit).isDirectory()) return root;
     const m = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dotGit, 'utf8'));
     if (m?.[1] === undefined) return root;
-    const gitdir = path.resolve(root, m[1]);
+    const written = path.resolve(root, m[1]);
+    const gitdir = fs.realpathSync(written);
     const common = fs.readFileSync(path.join(gitdir, 'commondir'), 'utf8').trim();
     if (common === '') return root;
-    const commonDir = path.resolve(gitdir, common);
+    const commonDir = fs.realpathSync(path.resolve(gitdir, common));
     if (!fs.statSync(commonDir).isDirectory()) return root;
-    return path.basename(commonDir) === '.git' ? path.dirname(commonDir) : commonDir;
+    if (path.dirname(gitdir) !== path.join(commonDir, 'worktrees')) return root;
+    const back = fs.readFileSync(path.join(gitdir, 'gitdir'), 'utf8').trim();
+    if (back === '') return root;
+    if (fs.realpathSync(path.resolve(gitdir, back)) !== fs.realpathSync(dotGit)) return root;
+    // Verified on realpaths; the id uses the path as written (`<main>/.git/worktrees/<name>`),
+    // so it matches what the main checkout derives when reached through the same symlinks.
+    const main = path.resolve(written, common);
+    return path.basename(main) === '.git' ? path.dirname(main) : main;
   } catch {
     return root;
   }

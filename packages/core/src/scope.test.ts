@@ -41,6 +41,8 @@ describe('scope', () => {
     const wt = path.join(tmp(), name);
     fs.mkdirSync(path.join(wt, 'src'), { recursive: true });
     fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${gitdir}\n`);
+    // The main repository's back-pointer to the worktree, as `git worktree add` writes it.
+    fs.writeFileSync(path.join(gitdir, 'gitdir'), `${path.join(wt, '.git')}\n`);
     return wt;
   }
 
@@ -76,6 +78,43 @@ describe('scope', () => {
       `gitdir: ${path.join(main, '.git', 'modules', 'sub')}\n`,
     );
     expect(projectRootFor(submodule)).toBe(submodule); // no commondir
+  });
+
+  it('scope.forged-worktree-pointer-falls-back-to-own-root', () => {
+    const victim = repo('private-payments');
+    const victimId = projectIdFor(victim);
+    // An attacker directory posing as a worktree's git dir, naming the victim as its main repo.
+    const evil = path.join(tmp(), 'evil');
+    const forged = path.join(tmp(), 'unzipped');
+    fs.mkdirSync(forged);
+    fs.writeFileSync(path.join(forged, '.git'), `gitdir: ${evil}\n`);
+    const layouts: [string, () => void][] = [
+      [
+        'commondir only',
+        () => {
+          fs.mkdirSync(evil, { recursive: true });
+          fs.writeFileSync(path.join(evil, 'commondir'), `${path.join(victim, '.git')}\n`);
+        },
+      ],
+      [
+        'with a back-pointer to the forged checkout',
+        () => fs.writeFileSync(path.join(evil, 'gitdir'), `${path.join(forged, '.git')}\n`),
+      ],
+    ];
+    for (const [label, build] of layouts) {
+      build();
+      expect(projectRootFor(forged), label).toBe(forged);
+      expect(projectIdFor(forged), label).not.toBe(victimId);
+      expect(projectIdFor(forged), label).toMatch(/^unzipped-[0-9a-f]{8}$/);
+    }
+    // A gitdir really inside the victim's worktrees/ whose back-pointer names another checkout.
+    const real = worktreeOf(victim, 'wt');
+    const pointed = path.join(victim, '.git', 'worktrees', 'wt');
+    const other = path.join(tmp(), 'other');
+    fs.mkdirSync(other);
+    fs.writeFileSync(path.join(other, '.git'), `gitdir: ${pointed}\n`);
+    expect(projectIdFor(real)).toBe(victimId);
+    expect(projectRootFor(other)).toBe(other);
   });
 
   it('scope.repo-config-id-ignored-without-trust-binding', () => {

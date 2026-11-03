@@ -273,7 +273,9 @@ on Marcus's own transcripts first.
 - **One global store per machine**, under `~/.oort/`, project-aware (decided by
   Marcus). Memories carry `project_id`, derived from the main repository root (a linked
   worktree resolves through its `.git` file's `commondir` to its main checkout, so worktrees
-  share memories with no config). `project.id` in `oort.config.json` overrides it only once
+  share memories with no config; the mapping counts only when the main repository vouches
+  for it, its `worktrees/<name>/gitdir` back-pointer naming this checkout, so a forged `.git`
+  file falls back to its own root). `project.id` in `oort.config.json` overrides it only once
   the user trusts it: the file is committed with the repository, so in a cloned repo it could
   name another project's scope. `oort project link [--id <id>]` binds the repository's main
   root to the id in `$OORT_HOME/project-links.json` (0600); unbound, the file's `project.id`

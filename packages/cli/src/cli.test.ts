@@ -792,6 +792,10 @@ describe('wire', () => {
       `gitdir: ${path.join(main, '.git', 'worktrees', 'wt')}\n`,
     );
     fs.writeFileSync(
+      path.join(main, '.git', 'worktrees', 'wt', 'gitdir'),
+      `${path.join(worktree, '.git')}\n`,
+    );
+    fs.writeFileSync(
       path.join(main, 'oort.config.json'),
       JSON.stringify({ project: { id: 'one' } }),
     );
