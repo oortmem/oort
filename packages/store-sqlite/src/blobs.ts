@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { ensurePrivateDir } from '@oortmem/core';
 
 /**
  * The file layer under the SQLite store: owner-only directories and files,
@@ -62,15 +63,6 @@ export function prepareDbDir(dir: string, log: Log): void {
   if (process.platform !== 'win32' && (fs.statSync(dir).mode & 0o077) !== 0) {
     log(`oort: ${dir} is readable by group/others; memory files inside are 0600`);
   }
-}
-
-/** Creates `dir` owner-only, or tightens an existing one; returns true when it had to tighten. */
-function ensureOwnerDir(dir: string): boolean {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform === 'win32') return false;
-  if ((fs.statSync(dir).mode & 0o077) === 0) return false;
-  fs.chmodSync(dir, 0o700);
-  return true;
 }
 
 /**
@@ -139,7 +131,7 @@ export interface BlobDir {
  * without one is not swept, so a misconfigured shared directory loses nothing.
  */
 export function openBlobDir(dir: string, log: Log): BlobDir {
-  if (ensureOwnerDir(dir)) log('oort store: tightened permissions to 0700 on the cold directory');
+  if (ensurePrivateDir(dir)) log('oort store: tightened permissions to 0700 on the cold directory');
   const marker = path.join(dir, MARKER);
   if (!fs.existsSync(marker)) {
     if (fs.readdirSync(dir).length === 0) fs.closeSync(fs.openSync(marker, 'a', 0o600));

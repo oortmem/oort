@@ -13,3 +13,4 @@ export * from './observe.js';
 export * from './scrub.js';
 export * from './consolidate.js';
 export * from './errors.js';
+export * from './private-fs.js';
