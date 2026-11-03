@@ -45,7 +45,8 @@ function realOr(p: string): string {
  * mapping is accepted only when the main repository vouches for it, all paths
  * realpathed: `gitdir` must sit directly in `<commonDir>/worktrees/`, and the
  * back-pointer `<gitdir>/gitdir` (inside the main repository, which a forger
- * cannot write) must name this checkout's `.git`. The root returned is derived
+ * cannot write) must name this checkout's own `.git` (`<realpath(root)>/.git`).
+ * A `.git` that is itself a symlink is never followed. The root returned is derived
  * from that verified `commonDir` and nothing else: a lexical resolution of the
  * written path could run through an attacker's symlink to another repository.
  * Any mismatch, missing file or read error (a submodule has no `commondir`)
@@ -55,7 +56,11 @@ function mainRootOf(root: string): string {
   const own = realOr(root);
   const dotGit = path.join(root, '.git');
   try {
-    if (fs.statSync(dotGit).isDirectory()) return own;
+    // A symlinked `.git` (to a file or a directory) never inherits another
+    // checkout's identity: archives carry symlinks, and checkout paths are guessable.
+    const entry = fs.lstatSync(dotGit);
+    if (entry.isSymbolicLink()) return own;
+    if (entry.isDirectory()) return own;
     const m = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dotGit, 'utf8'));
     if (m?.[1] === undefined) return own;
     const gitdir = fs.realpathSync(path.resolve(root, m[1]));
@@ -66,7 +71,8 @@ function mainRootOf(root: string): string {
     if (path.dirname(gitdir) !== path.join(commonDir, 'worktrees')) return own;
     const back = fs.readFileSync(path.join(gitdir, 'gitdir'), 'utf8').trim();
     if (back === '') return own;
-    if (fs.realpathSync(path.resolve(gitdir, back)) !== fs.realpathSync(dotGit)) return own;
+    // The back-pointer must name this checkout's own `.git`, not wherever it leads.
+    if (fs.realpathSync(path.resolve(gitdir, back)) !== path.join(own, '.git')) return own;
     return path.basename(commonDir) === '.git' ? path.dirname(commonDir) : commonDir;
   } catch {
     return own;

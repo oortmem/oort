@@ -144,6 +144,26 @@ describe('scope', () => {
     expect(resolveProjectId(victim, home)).toBe('cfg:secret');
   });
 
+  it('scope.symlinked-dot-git-does-not-inherit-identity', () => {
+    const main = repo('private-main');
+    const wt = worktreeOf(main, 'private-wt');
+    const id = projectIdFor(main);
+    // The legitimate worktree still shares the main repo's id.
+    expect(projectIdFor(wt)).toBe(id);
+    for (const [label, target] of [
+      ["the worktree's .git file", path.join(wt, '.git')],
+      ["the main repo's .git directory", path.join(main, '.git')],
+    ] as const) {
+      // An extracted archive whose `.git` is a symlink to a guessable real checkout's.
+      const attacker = path.join(tmp(), 'unpacked');
+      fs.mkdirSync(path.join(attacker, 'src'), { recursive: true });
+      fs.symlinkSync(target, path.join(attacker, '.git'));
+      expect(projectRootFor(path.join(attacker, 'src')), label).toBe(attacker);
+      expect(projectIdFor(attacker), label).not.toBe(id);
+      expect(projectIdFor(attacker), label).toMatch(/^unpacked-[0-9a-f]{8}$/);
+    }
+  });
+
   it('scope.symlinked-main-checkout-and-worktree-share-id', () => {
     const real = tmp();
     const main = repo();
