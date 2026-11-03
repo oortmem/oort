@@ -182,28 +182,33 @@ describe('UserPromptSubmit', () => {
   it('hook.prompt-lexical-retry-after-throw', async () => {
     const t = tempHome();
     const deps = await withMemories(t, PORT_MEMORY);
-    let first = true;
-    const store = new Proxy(deps.store, {
-      get(target, prop, receiver) {
-        if (prop === 'dense') {
-          return () => {
+    // Recall degrades a dense failure itself; only a lexical failure makes it throw.
+    const flaky = (method: 'lexical' | 'dense') => {
+      let first = true;
+      return new Proxy(deps.store, {
+        get(target, prop, receiver) {
+          const v = Reflect.get(target, prop, receiver) as unknown;
+          const bound = typeof v === 'function' ? (v as () => unknown).bind(target) : v;
+          if (prop !== method) return bound;
+          return (...args: unknown[]) => {
             if (first) {
               first = false;
-              return Promise.reject(new Error('dense index broken'));
+              return Promise.reject(new Error(`${method} index broken`));
             }
-            return Promise.resolve([]);
+            return (bound as (...a: unknown[]) => unknown)(...args);
           };
-        }
-        const v = Reflect.get(target, prop, receiver) as unknown;
-        return typeof v === 'function' ? (v as () => unknown).bind(target) : v;
-      },
-    });
-    const out = await handleUserPromptSubmit(prompt(t, 'which port does the auth service use?'), {
-      ...deps,
-      store,
-    });
+        },
+      });
+    };
+    const ask = 'which port does the auth service use?';
+    let out = await handleUserPromptSubmit(prompt(t, ask), { ...deps, store: flaky('lexical') });
     expect(context(out.stdout, 'UserPromptSubmit')).toContain('port 4471');
     expect(readLog(t.home)[0]?.degraded).toContain('error');
+
+    out = await handleUserPromptSubmit(prompt(t, ask), { ...deps, store: flaky('dense') });
+    expect(context(out.stdout, 'UserPromptSubmit')).toContain('port 4471');
+    expect(readLog(t.home)[1]?.degraded).toContain('dense-failed');
+    expect(readLog(t.home)[1]?.degraded).not.toContain('error');
   });
 
   it('hook.prompt-respects-project-scope', async () => {

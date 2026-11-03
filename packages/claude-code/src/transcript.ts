@@ -377,7 +377,33 @@ export interface PairedObservation {
 }
 
 /**
- * One observation per user→assistant pair, at the assistant turn's timestamp.
+ * Per turn, its own timestamp when it parses, else the nearest turn's that
+ * does (earlier first on a tie), else `""` (observe then uses its own time).
+ * Linear: one pass each way.
+ */
+function nearestKnownTimestamps(turns: Turn[]): string[] {
+  const known = (t: Turn | undefined): boolean =>
+    t !== undefined && t.timestamp !== '' && !Number.isNaN(Date.parse(t.timestamp));
+  const prev: number[] = [];
+  let last = -1;
+  turns.forEach((t, i) => {
+    if (known(t)) last = i;
+    prev.push(last);
+  });
+  const out: string[] = Array.from({ length: turns.length }, () => '');
+  let next = -1;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (known(turns[i])) next = i;
+    const p = prev[i] as number;
+    const pick = p < 0 ? next : next < 0 ? p : i - p <= next - i ? p : next;
+    out[i] = pick < 0 ? '' : (turns[pick] as Turn).timestamp;
+  }
+  return out;
+}
+
+/**
+ * One observation per user→assistant pair, at the assistant turn's timestamp
+ * (or the nearest known one when it has none, see `nearestKnownTimestamps`).
  * Consecutive user turns (an interrupted prompt and its retry) are joined; an
  * assistant turn without a user turn before it, and a trailing unanswered user
  * turn, yield nothing. A reply to harness-only rows (a background task report,
@@ -385,6 +411,7 @@ export interface PairedObservation {
  * both sides are empty after stripping, the pair yields nothing.
  */
 export function pairTurns(turns: Turn[]): PairedObservation[] {
+  const at = nearestKnownTimestamps(turns);
   const out: PairedObservation[] = [];
   let pending: Turn[] = [];
   turns.forEach((t, i) => {
@@ -408,7 +435,7 @@ export function pairTurns(turns: Turn[]): PairedObservation[] {
         toolSummaries: [...pending.flatMap((u) => u.toolSummaries), ...t.toolSummaries],
         sessionId: t.sessionId,
         turnRef: t.uuid,
-        at: t.timestamp,
+        at: at[i] as string,
       },
       assistantIndex: i,
     });

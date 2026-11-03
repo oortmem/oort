@@ -27,7 +27,17 @@ export interface RecalledMemory extends Memory {
   };
 }
 
-export type Degradation = 'no-embedder' | 'no-reranker' | 'embed-failed' | 'rerank-failed';
+export type Degradation =
+  | 'no-embedder'
+  | 'no-reranker'
+  | 'embed-failed'
+  | 'rerank-failed'
+  /** The reranker returned no ids: the fused order stands. */
+  | 'rerank-empty'
+  /** The store's dense search failed: lexical-only. */
+  | 'dense-failed'
+  /** Reading or promoting a cold copy failed: those memories stay cold, unhydrated. */
+  | 'hydrate-failed';
 
 export interface RecallResult {
   memories: RecalledMemory[];
@@ -49,7 +59,9 @@ const clock = (): number => performance.now();
 
 /**
  * Hybrid recall: lexical + dense first stage, cold hydration, activation-aware
- * fusion, optional rerank. Adapter failures degrade, never throw.
+ * fusion, optional rerank. Adapter failures degrade, never throw; so do store
+ * failures in the dense search and in cold hydration (lexical-only, with the
+ * reason in `degraded`). The lexical search is the floor: its failure rejects.
  */
 export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallResult> {
   const { store, config } = deps;
@@ -96,7 +108,12 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     timed('lexicalMs', () => store.lexical(text, q.scope, config.recall.lexicalK)),
     v === undefined
       ? Promise.resolve<Hit[]>([])
-      : timed('denseMs', () => store.dense(v, q.scope, config.recall.denseK)),
+      : timed('denseMs', () =>
+          store.dense(v, q.scope, config.recall.denseK).catch((): Hit[] => {
+            degraded.push('dense-failed');
+            return [];
+          }),
+        ),
   ]);
 
   const ids = [...new Set([...lexical, ...dense].map((h) => h.id))];
@@ -104,29 +121,36 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
 
   const th = clock();
   const hydratedIds = new Set<string>();
+  let hydrateFailed = false;
   const loaded = await Promise.all(
     ids.map(async (id): Promise<Memory | null> => {
       const live = await store.get(id);
       if (live === null) return null;
       if (live.tier !== 'cold' && !coldIds.has(id)) return live;
-      const blob = await store.coldGet(id);
-      // A lost or torn blob: the memory stays cold, lexical-only.
-      // TODO(Phase 2): re-embed on hydration when an embedder is present.
-      if (!blob?.embedding) return live;
-      const hydrated: Memory = {
-        ...live,
-        text: blob.text,
-        stub: blob.stub,
-        entities: blob.entities,
-        embedding: blob.embedding,
-        tier: 'warm',
-      };
-      await store.upsert(hydrated);
-      hydratedIds.add(id);
-      return hydrated;
+      try {
+        const blob = await store.coldGet(id);
+        // A lost or torn blob: the memory stays cold, lexical-only.
+        // TODO(Phase 2): re-embed on hydration when an embedder is present.
+        if (!blob?.embedding) return live;
+        const hydrated: Memory = {
+          ...live,
+          text: blob.text,
+          stub: blob.stub,
+          entities: blob.entities,
+          embedding: blob.embedding,
+          tier: 'warm',
+        };
+        await store.upsert(hydrated);
+        hydratedIds.add(id);
+        return hydrated;
+      } catch {
+        hydrateFailed = true;
+        return live;
+      }
     }),
   );
   timings['hydrateMs'] = clock() - th;
+  if (hydrateFailed) degraded.push('hydrate-failed');
 
   const memories = new Map<string, Memory>();
   for (const m of loaded) if (m !== null) memories.set(m.id, m);
@@ -156,7 +180,12 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         next.push(f);
         byId.delete(r.id);
       }
-      ordered = next;
+      if (next.length === 0) {
+        // Nothing usable came back (an empty list, or only unknown ids): keep the fused order.
+        degraded.push('rerank-empty');
+      } else {
+        ordered = next;
+      }
     } catch {
       degraded.push('rerank-failed');
       rerankScores.clear();

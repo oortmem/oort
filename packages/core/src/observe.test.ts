@@ -497,6 +497,16 @@ describe('observe', () => {
     expect([REINFORCE_MIN_SHARED, REINFORCE_MIN_CONTAINMENT]).toEqual([3, 0.5]);
   });
 
+  it('observe.unparseable-at-uses-observe-time', async () => {
+    for (const at of ['', 'not a date']) {
+      const { store, deps } = setup(gate(0.9), [rec(null, 'ADD')]);
+      const res = await observe(obs('auth moved to port 4000', at), localScope(), deps);
+      const m = await store.get(res.memoryId ?? '');
+      expect(m?.validFrom, JSON.stringify(at)).toBe('2026-01-01T00:00:00.000Z');
+      expect((await store.list(FILTER)).map((x) => x.id)).toEqual([res.memoryId]);
+    }
+  });
+
   it('observe.gate-skip-calls-nothing', async () => {
     const { deps, spy } = setup(gate(0.1), []);
     const res = await observe(obs('hello there'), localScope(), deps);

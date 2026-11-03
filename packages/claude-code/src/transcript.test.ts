@@ -90,7 +90,7 @@ describe('parseTranscript', () => {
         type: 'user',
         uuid: 'u',
         parentUuid: null,
-        timestamp: 't0',
+        timestamp: '2026-10-01T00:00:00.000Z',
         sessionId: 's',
         cwd: '/',
         message: { role: 'user', content: 'go' },
@@ -99,7 +99,7 @@ describe('parseTranscript', () => {
         type: 'assistant',
         uuid: 'a',
         parentUuid: 'u',
-        timestamp: 't1',
+        timestamp: '2026-10-01T00:00:01.000Z',
         sessionId: 's',
         cwd: '/',
         message: {
@@ -111,7 +111,7 @@ describe('parseTranscript', () => {
         type: 'user',
         uuid: 'r',
         parentUuid: 'a',
-        timestamp: 't2',
+        timestamp: '2026-10-01T00:00:02.000Z',
         sessionId: 's',
         cwd: '/',
         message: {
@@ -192,12 +192,13 @@ describe('turnsToObservations', () => {
   });
 
   it('parser.joins-consecutive-user-turns-and-drops-unpaired', () => {
+    const order = ['a0', 'u1', 'u2', 'a1', 'u3'];
     const row = (type: string, uuid: string, text: string) =>
       JSON.stringify({
         type,
         uuid,
         parentUuid: null,
-        timestamp: `t-${uuid}`,
+        timestamp: `2026-10-01T00:00:0${order.indexOf(uuid)}.000Z`,
         sessionId: 's',
         cwd: '/',
         message: { role: type, content: type === 'user' ? text : [{ type: 'text', text }] },
@@ -215,8 +216,40 @@ describe('turnsToObservations', () => {
       userText: 'first try\nsecond try',
       assistantText: 'answer',
       turnRef: 'a1',
-      at: 't-a1',
+      at: '2026-10-01T00:00:03.000Z',
     });
+  });
+
+  it('parser.missing-timestamp-uses-nearest-known', () => {
+    const row = (type: string, uuid: string, text: string, timestamp?: string) =>
+      JSON.stringify({
+        type,
+        uuid,
+        parentUuid: null,
+        ...(timestamp !== undefined && { timestamp }),
+        sessionId: 's',
+        cwd: '/',
+        message: { role: type, content: type === 'user' ? text : [{ type: 'text', text }] },
+      });
+    const jsonl = [
+      row('user', 'u1', 'question one', '2026-10-01T10:00:00.000Z'),
+      row('assistant', 'a1', 'answer one'), // no timestamp: the user turn's
+      row('user', 'u2', 'question two'),
+      row('assistant', 'a2', 'answer two', 'not a date'), // nearest known: u1, three turns back
+      row('user', 'u3', 'question three'),
+      row('assistant', 'a3', 'answer three'), // nearest known: u4, the next turn
+      row('user', 'u4', 'question four', '2026-10-01T12:00:00.000Z'),
+    ].join('\n');
+    const at = turnsToObservations(parseTranscript(jsonl)).map((o) => o.at);
+    expect(at).toEqual([
+      '2026-10-01T10:00:00.000Z',
+      '2026-10-01T10:00:00.000Z',
+      '2026-10-01T12:00:00.000Z',
+    ]);
+    for (const a of at) expect(Number.isNaN(Date.parse(a))).toBe(false);
+    // Nothing known at all: left empty for observe, which uses the observe time.
+    const bare = [row('user', 'u1', 'q'), row('assistant', 'a1', 'a')].join('\n');
+    expect(turnsToObservations(parseTranscript(bare)).map((o) => o.at)).toEqual(['']);
   });
 });
 
@@ -321,7 +354,7 @@ describe('harness blocks', () => {
         type: 'user',
         uuid: 'n1',
         parentUuid: null,
-        timestamp: 't1',
+        timestamp: '2026-10-01T00:00:01.000Z',
         sessionId: 's',
         cwd: '/',
         message: {
@@ -333,7 +366,7 @@ describe('harness blocks', () => {
         type: 'assistant',
         uuid: 'a1',
         parentUuid: 'n1',
-        timestamp: 't2',
+        timestamp: '2026-10-01T00:00:02.000Z',
         sessionId: 's',
         cwd: '/',
         message: {
@@ -345,7 +378,7 @@ describe('harness blocks', () => {
         type: 'user',
         uuid: 'r1',
         parentUuid: 'a1',
-        timestamp: 't3',
+        timestamp: '2026-10-01T00:00:03.000Z',
         sessionId: 's',
         cwd: '/',
         message: {
@@ -360,7 +393,7 @@ describe('harness blocks', () => {
         type: 'assistant',
         uuid: 'a2',
         parentUuid: 'r1',
-        timestamp: 't4',
+        timestamp: '2026-10-01T00:00:04.000Z',
         sessionId: 's',
         cwd: '/',
         message: {
@@ -381,7 +414,7 @@ describe('harness blocks', () => {
         toolSummaries: ['Read({"file_path":"report.md"})', 'result: all green'],
         sessionId: 's',
         turnRef: 'a2',
-        at: 't4',
+        at: '2026-10-01T00:00:04.000Z',
       },
     ]);
   });

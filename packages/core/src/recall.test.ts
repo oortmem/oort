@@ -183,6 +183,61 @@ describe('recall', () => {
     expect(r.memories.map((m) => m.id)).toEqual(['a']);
   });
 
+  it('recall.degrades-on-dense-store-error', async () => {
+    const embed = fakeEmbedder([['auth', vec(100, 0, 0, 0)]]);
+    const store = await setup([
+      makeMemory({ id: 'a', text: 'port 8080 for auth', embedding: vec(100, 0, 0, 0) }),
+    ]);
+    // A dense failure (SQLITE_BUSY, a dimension RangeError) leaves the lexical result.
+    const busy: MemoryStore = {
+      ...store,
+      dense: () => Promise.reject(Object.assign(new Error('busy'), { code: 'SQLITE_BUSY' })),
+    };
+    const r = await recall(
+      { text: 'auth port 8080', scope: SCOPE },
+      { store: busy, embed, config },
+    );
+    expect(r.memories.map((m) => m.id)).toEqual(['a']);
+    expect(r.degraded).toContain('dense-failed');
+    expect(r.memories[0]?.explanation.denseRank).toBeUndefined();
+
+    // A failing cold hydration returns the live (cold) row instead of rejecting.
+    await seedCold(
+      store,
+      makeMemory({ id: 'c', text: 'quokka notes', stub: 'quokka', embedding: vec(1, 2, 3, 4) }),
+    );
+    for (const broken of [
+      { ...store, coldGet: () => Promise.reject(new Error('EIO')) },
+      { ...store, upsert: () => Promise.reject(new Error('SQLITE_BUSY')) },
+    ] as MemoryStore[]) {
+      const h = await recall({ text: 'quokka', scope: SCOPE }, { store: broken, config });
+      expect(h.memories.map((m) => m.id)).toEqual(['c']);
+      expect(h.memories[0]?.explanation.hydrated).toBe(false);
+      expect(h.degraded).toContain('hydrate-failed');
+    }
+    expect((await store.get('c'))?.tier).toBe('cold');
+
+    // The lexical store is the floor: its failure still rejects.
+    const noLexical: MemoryStore = { ...store, lexical: () => Promise.reject(new Error('fts')) };
+    await expect(
+      recall({ text: 'auth port 8080', scope: SCOPE }, { store: noLexical, embed, config }),
+    ).rejects.toThrow('fts');
+  });
+
+  it('recall.empty-rerank-falls-back-to-fused', async () => {
+    const store = await setup([
+      makeMemory({ id: 'a', text: 'auth port 8080 is the default' }),
+      makeMemory({ id: 'b', text: 'auth port moved' }),
+    ]);
+    const plain = await recall({ text: 'auth port 8080', scope: SCOPE }, { store, config });
+    const rerank: Reranker = { rerank: async () => [] };
+    const r = await recall({ text: 'auth port 8080', scope: SCOPE }, { store, rerank, config });
+    expect(r.memories.map((m) => m.id)).toEqual(plain.memories.map((m) => m.id));
+    expect(r.memories).toHaveLength(2);
+    expect(r.degraded).toContain('rerank-empty');
+    expect(r.memories[0]?.explanation.reranked).toBeUndefined();
+  });
+
   it('recall.respects-asOf', async () => {
     const now = new Date();
     const old = makeMemory({

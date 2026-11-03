@@ -164,7 +164,9 @@ export async function observe(
   // Temporal order of the new fact against the one it replaces. `deep` means it is
   // also older than the prior's own predecessor; chains are re-slotted at most one
   // step back (deeper out-of-order chains are a Phase 2 concern).
-  const validFrom = obs.at;
+  // A turn with no usable timestamp starts now: an empty or unparseable validFrom
+  // would make the memory never current (and consolidation would evict it).
+  const validFrom = Number.isNaN(Date.parse(obs.at)) ? iso : obs.at;
   const inOrder = prior === undefined || Date.parse(prior.validFrom) <= Date.parse(validFrom);
   let pred: Memory | null = null;
   if (prior !== undefined && !inOrder && prior.supersedes !== null) {
