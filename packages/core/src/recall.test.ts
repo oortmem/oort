@@ -102,7 +102,8 @@ describe('recall', () => {
   });
 
   it('recall.scrubs-query-before-network', async () => {
-    const key = 'AKIAABCDEFGHIJKLMNOP'; // nosemgrep: synthetic test credential, not a real secret
+    // Assembled at runtime so no full key literal appears in source.
+    const key = 'AKIA' + 'ABCDEFGHIJKLMNOP';
     const seen: string[] = [];
     const guard = (texts: string[]): void => {
       for (const t of texts) {
@@ -123,9 +124,15 @@ describe('recall', () => {
         return docs.map((d, i) => ({ id: d.id, score: 1 - i * 0.1 }));
       },
     };
-    const store = await setup([
+    const inner = await setup([
       makeMemory({ id: 'a', text: 'rotate the credential soon', embedding: vec(100, 0, 0, 0) }),
     ]);
+    const lexicalQueries: string[] = [];
+    const store: MemoryStore = Object.create(inner) as MemoryStore;
+    store.lexical = (q, scope, k) => {
+      lexicalQueries.push(q);
+      return inner.lexical(q, scope, k);
+    };
     const r = await recall(
       { text: `rotate the credential ${key}`, scope: SCOPE },
       { store, embed, rerank, config },
@@ -133,7 +140,8 @@ describe('recall', () => {
     expect(r.degraded).toBeUndefined();
     expect(r.memories.map((m) => m.id)).toEqual(['a']);
     expect(seen).toHaveLength(2);
-    for (const t of seen) {
+    expect(lexicalQueries).toHaveLength(1);
+    for (const t of [...seen, ...lexicalQueries]) {
       expect(t).not.toContain(key);
       expect(t).toContain('[REDACTED:aws-access-key]');
     }

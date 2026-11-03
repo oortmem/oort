@@ -70,6 +70,7 @@ export async function postJson(
       }
     }
     if (attempt === 0 && (res.status === 429 || res.status >= 500)) {
+      void res.body?.cancel().catch(() => undefined); // free the connection; never block on it
       await new Promise((r) => setTimeout(r, retryDelay(res)));
       continue;
     }

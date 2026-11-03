@@ -3,7 +3,7 @@ import { VoyageError, postJson } from './http.js';
 
 export { VoyageError, type VoyageErrorKind } from './http.js';
 
-const URL = 'https://api.voyageai.com/v1/embeddings';
+const ENDPOINT = 'https://api.voyageai.com/v1/embeddings';
 const BATCH = 128;
 
 export interface VoyageEmbedderOptions {
@@ -47,7 +47,7 @@ export function voyageEmbedder(opts: VoyageEmbedderOptions): Embedder {
       const out: Int8Array[] = [];
       for (let i = 0; i < texts.length; i += BATCH) {
         const input = texts.slice(i, i + BATCH);
-        const res = (await postJson(doFetch, URL, apiKey, {
+        const res = (await postJson(doFetch, ENDPOINT, apiKey, {
           input,
           model,
           input_type: kind,
@@ -63,6 +63,14 @@ export function voyageEmbedder(opts: VoyageEmbedderOptions): Embedder {
           );
         }
         const sorted = [...data].sort((a, b) => a.index - b.index);
+        sorted.forEach((d, i) => {
+          if (!Number.isInteger(d.index) || d.index !== i) {
+            throw new VoyageError(
+              'bad-response',
+              'Voyage returned embeddings with invalid indices',
+            );
+          }
+        });
         for (const d of sorted) out.push(toInt8(d.embedding, dimension));
       }
       return out;

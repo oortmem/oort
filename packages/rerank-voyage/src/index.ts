@@ -3,7 +3,7 @@ import { VoyageError, postJson } from './http.js';
 
 export { VoyageError, type VoyageErrorKind } from './http.js';
 
-const URL = 'https://api.voyageai.com/v1/rerank';
+const ENDPOINT = 'https://api.voyageai.com/v1/rerank';
 
 export interface VoyageRerankerOptions {
   /** Defaults to `process.env.VOYAGE_API_KEY`. */
@@ -20,7 +20,7 @@ export function voyageReranker(opts: VoyageRerankerOptions): Reranker {
   return {
     async rerank(query, docs, topK) {
       if (docs.length === 0) return [];
-      const res = (await postJson(doFetch, URL, apiKey, {
+      const res = (await postJson(doFetch, ENDPOINT, apiKey, {
         query,
         documents: docs.map((d) => d.text),
         model: opts.model,

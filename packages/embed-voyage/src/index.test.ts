@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MissingCredentialError } from '@oortmem/core';
 import { VoyageError, voyageEmbedder } from './index.js';
 
@@ -107,6 +107,12 @@ describe('voyageEmbedder', () => {
     const s = stub(() => json({ data: [{ index: 0, embedding: [1, 2, 3] }] }));
     const e = voyageEmbedder({ ...base, fetch: s.fn });
     await expect(e.embed(['a'], 'query')).rejects.toMatchObject({ kind: 'bad-response' });
+    const long = stub(() => json({ data: [{ index: 0, embedding: [1, 2, 3, 4, 5] }] }));
+    await expect(
+      voyageEmbedder({ ...base, fetch: long.fn }).embed(['a'], 'query'),
+    ).rejects.toMatchObject({
+      kind: 'bad-response',
+    });
     const s2 = stub(() => json({ data: [{ index: 0, embedding: [1, 2, 3, 300] }] }));
     await expect(
       voyageEmbedder({ ...base, fetch: s2.fn }).embed(['a'], 'query'),
@@ -118,7 +124,7 @@ describe('voyageEmbedder', () => {
     const out = await voyageEmbedder({ ...base, fetch: s.fn }).embed(['a'], 'query');
     expect(out).toHaveLength(1);
     expect(s.calls).toHaveLength(2);
-    const always = stub(() => json({}, 503));
+    const always = stub(() => json({}, 503, { 'retry-after': '0' }));
     await expect(
       voyageEmbedder({ ...base, fetch: always.fn }).embed(['a'], 'query'),
     ).rejects.toMatchObject({
@@ -164,6 +170,53 @@ describe('voyageEmbedder', () => {
     });
   });
 
+  it('embed.rejects-duplicate-index', async () => {
+    const s = stub(() =>
+      json({
+        data: [
+          { index: 0, embedding: [1, 1, 1, 1] },
+          { index: 0, embedding: [2, 2, 2, 2] },
+        ],
+      }),
+    );
+    await expect(
+      voyageEmbedder({ ...base, fetch: s.fn }).embed(['a', 'b'], 'query'),
+    ).rejects.toMatchObject({
+      kind: 'bad-response',
+    });
+  });
+
+  it('embed.rejects-gap-index', async () => {
+    const s = stub(() =>
+      json({
+        data: [
+          { index: 0, embedding: [1, 1, 1, 1] },
+          { index: 2, embedding: [2, 2, 2, 2] },
+        ],
+      }),
+    );
+    await expect(
+      voyageEmbedder({ ...base, fetch: s.fn }).embed(['a', 'b'], 'query'),
+    ).rejects.toMatchObject({
+      kind: 'bad-response',
+    });
+  });
+
+  it('embed.caps-retry-after-at-5s', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = stub((c, n) => (n === 1 ? json({}, 429, { 'retry-after': '30' }) : echo(4)(c)));
+      const p = voyageEmbedder({ ...base, fetch: s.fn }).embed(['a'], 'query');
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(s.calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await p).toHaveLength(1);
+      expect(s.calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('embed.empty-no-request', async () => {
     const s = stub(echo(4));
     expect(await voyageEmbedder({ ...base, fetch: s.fn }).embed([], 'query')).toEqual([]);
@@ -204,7 +257,6 @@ describe('voyageEmbedder', () => {
       throw new Error('network call at import');
     }) as typeof fetch;
     try {
-      const { vi } = await import('vitest');
       vi.resetModules();
       await import('./index.js');
     } finally {

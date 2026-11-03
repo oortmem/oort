@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { Observation } from './adapters.js';
 import { scrub, scrubObservation } from './scrub.js';
 
+// Synthetic credentials are assembled at runtime so no full key literal appears in source.
+const AWS_AKID = 'AKIA' + 'IOSFODNN7EXAMPLE';
+const AWS_ASIA = 'ASIA' + 'IOSFODNN7EXAMPLE';
+
 function fixture(name: string): string[] {
   const url = new URL(`../test/fixtures/${name}`, import.meta.url);
   return fs
@@ -113,7 +117,7 @@ describe('scrub', () => {
   });
 
   it('scrub.keeps-surrounding-text', () => {
-    const out = scrub('before AKIAIOSFODNN7EXAMPLE after\nDB_PASSWORD=hunter2hunter2\nlast line'); // nosemgrep: synthetic test credential, not a real secret
+    const out = scrub(`before ${AWS_AKID} after\nDB_PASSWORD=hunter2hunter2\nlast line`);
     expect(out.text).toBe(
       'before [REDACTED:aws-access-key] after\nDB_PASSWORD=[REDACTED:env-secret]\nlast line',
     );
@@ -123,7 +127,7 @@ describe('scrub', () => {
   });
 
   it('scrub.counts-redactions-and-ratio', () => {
-    const out = scrub('a AKIAIOSFODNN7EXAMPLE b ASIAIOSFODNN7EXAMPLE c'); // nosemgrep: synthetic test credential, not a real secret
+    const out = scrub(`a ${AWS_AKID} b ${AWS_ASIA} c`);
     expect(out.redactions).toEqual([{ kind: 'aws-access-key', count: 2 }]);
     expect(out.secretRatio).toBeCloseTo(40 / 47, 5);
   });
@@ -443,7 +447,7 @@ describe('scrubObservation', () => {
 
   it('scrub.keeps-small-secret-in-long-prose', () => {
     const key =
-      'sk-ant-' + 'aB3dE5gH7jK9mN1pQ3rS5tU7vW9xYz2C4e6G8i0K1m3O5q7S9u1W3y5A7c9E1'.slice(0, 53); // nosemgrep: synthetic test credential, not a real secret
+      'sk-' + 'ant-' + 'aB3dE5gH7jK9mN1pQ3rS5tU7vW9xYz2C4e6G8i0K1m3O5q7S9u1W3y5A7c9E1'.slice(0, 53);
     expect(key).toHaveLength(60);
     const prose = 'The deploy went fine and we discussed the schema. '.repeat(11);
     const res = scrubObservation(o(`${prose}${key}`, ['ran tests']));
@@ -455,8 +459,8 @@ describe('scrubObservation', () => {
 
   it('scrub.observation-merges-redactions-and-scrubs-tools', () => {
     const res = scrubObservation({
-      userText: 'AKIAIOSFODNN7EXAMPLE and some long prose '.padEnd(400, '.'), // nosemgrep: synthetic test credential, not a real secret
-      assistantText: 'ASIAIOSFODNN7EXAMPLE '.padEnd(400, '.'), // nosemgrep: synthetic test credential, not a real secret
+      userText: `${AWS_AKID} and some long prose `.padEnd(400, '.'),
+      assistantText: `${AWS_ASIA} `.padEnd(400, '.'),
       toolSummaries: ['export SECRET_TOKEN=letmein99'.padEnd(400, ' ') + 'ok'], // nosemgrep: synthetic test credential, not a real secret
       at: '2026-01-01T00:00:00.000Z',
     });
