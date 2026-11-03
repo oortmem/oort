@@ -122,7 +122,19 @@ export async function observe(
   }
 
   let action: 'ADD' | 'UPDATE' | 'SUPERSEDE' = best.action;
-  const prior = action === 'ADD' ? undefined : candidates.find((c) => c.id === best.candidateId);
+  let prior = action === 'ADD' ? undefined : candidates.find((c) => c.id === best.candidateId);
+  if (prior !== undefined && (prior.scope.projectId ?? null) !== (scope.projectId ?? null)) {
+    // Candidates include global memories. A project's observation must not end or
+    // rewrite a fact another scope (every project, for a global one) relies on, so it
+    // becomes the project's own memory instead. Reinforcing it (above) stays allowed.
+    decisions.push({
+      stage: 'scope',
+      question: 'cross-scope-target',
+      answer: 'add-instead',
+      probability: 1,
+    });
+    prior = undefined;
+  }
   if (action !== 'ADD' && prior === undefined) action = 'ADD';
 
   const w = await write.write(obs, action, prior);

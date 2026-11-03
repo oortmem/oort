@@ -513,6 +513,46 @@ describe('observe', () => {
     expect(m?.source.decisions.at(-1)).toMatchObject({ stage: 'write', answer: 'ADD' });
   });
 
+  it('observe.project-observation-never-supersedes-global', async () => {
+    for (const action of ['SUPERSEDE', 'UPDATE'] as const) {
+      const { store, deps, spy } = setup(gate(0.9), [rec('G', action)]);
+      const global = makeMemory({
+        id: 'G',
+        text: 'auth on port 4000',
+        embedding: vec(100, 0, 0, 0),
+      });
+      await store.upsert(global);
+      const res = await observe(obs('auth on port 5000'), localScope('p'), deps);
+      // The global fact is another scope's: the project gets its own memory instead.
+      expect(res.outcome).toBe('added');
+      expect(spy.write).toEqual([{ action: 'ADD' }]);
+      expect(await store.get('G')).toEqual(global);
+      const m = await store.get(res.memoryId ?? '');
+      expect(m?.scope.projectId).toBe('p');
+      expect(m?.supersedes).toBeNull();
+      const scopeDecision = {
+        stage: 'scope',
+        question: 'cross-scope-target',
+        answer: 'add-instead',
+        probability: 1,
+      };
+      expect(res.decisions).toContainEqual(scopeDecision);
+      expect(m?.source.decisions).toContainEqual(scopeDecision);
+      expect(m?.source.decisions.at(-1)).toMatchObject({ stage: 'write', answer: 'ADD' });
+    }
+  });
+
+  it('observe.project-observation-may-reinforce-global', async () => {
+    const { store, deps } = setup(gate(0.9), [rec('G', 'REINFORCE')]);
+    await store.upsert(
+      makeMemory({ id: 'G', text: 'auth on port 4000', embedding: vec(100, 0, 0, 0) }),
+    );
+    const res = await observe(obs('auth on port 4000'), localScope('p'), deps);
+    expect(res).toMatchObject({ outcome: 'reinforced', memoryId: 'G' });
+    expect((await store.get('G'))?.accessLog.count).toBe(1);
+    expect(res.decisions.some((d) => d.stage === 'scope')).toBe(false);
+  });
+
   it('observe.salience-boundary-is-hot', async () => {
     const { store, deps } = setup(gate(0.9, 0.8), [rec(null, 'ADD')]);
     const res = await observe(obs('auth moved'), localScope(), deps);
