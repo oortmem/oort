@@ -460,6 +460,18 @@ describe('tool summaries and stripping cost', () => {
     expect(use).toBe('Bash({"command":"x [REDACTED:aws-access-key] y"})');
   });
 
+  it('parser.scrubs-string-leaves-before-stringify', () => {
+    // JSON.stringify turns the newline into a literal `\n`; the key must be
+    // scrubbed while it still follows a real newline. Assembled at runtime.
+    const key = 'AK' + 'IA' + 'Q7XZB3KM' + 'P9RTW2LN';
+    const input = { args: { script: { lines: ['ok', `echo hi\n${key}`] } }, n: 3 };
+    const [use] = summaries(input, 'ok');
+    expect(leaks(use ?? '', key)).toEqual([]);
+    expect(use).toBe(
+      'Bash({"args":{"script":{"lines":["ok","echo hi\\n[REDACTED:aws-access-key]"]}},"n":3})',
+    );
+  });
+
   it('parser.strip-is-linear', () => {
     const row = (type: string, uuid: string, text: string) =>
       JSON.stringify({

@@ -195,11 +195,44 @@ function resultText(content: unknown): string {
   return parts.join('\n');
 }
 
+/**
+ * Scrubs every string leaf of a tool input before it is serialised:
+ * `JSON.stringify` turns a newline into a literal `\n`, and a secret right
+ * after it would then follow a letter. Only what can reach the summary is
+ * scrubbed, so a huge input stays cheap: a leaf is cut to the remaining budget
+ * and leaves past it are emptied (serialising only lengthens text, so the
+ * budget still covers the summary and the scrub lookahead after it).
+ */
+function scrubLeaves(v: unknown, budget: { left: number }): unknown {
+  if (typeof v === 'string') {
+    if (budget.left <= 0) return '';
+    const s = v.length > budget.left ? v.slice(0, budget.left) : v;
+    budget.left -= s.length;
+    return scrub(s).text;
+  }
+  if (Array.isArray(v)) return v.map((x) => scrubLeaves(x, budget));
+  if (typeof v === 'object' && v !== null) {
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) {
+      budget.left -= k.length;
+      Object.defineProperty(out, k, {
+        value: scrubLeaves(x, budget),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return out;
+  }
+  return v;
+}
+
 function toolUseSummary(b: Block): string {
   const name = str(b['name']) ?? 'tool';
   let input: string;
   try {
-    input = JSON.stringify(b['input'] ?? {}) ?? '';
+    const budget = { left: TOOL_INPUT_CHARS + SCRUB_LOOKAHEAD };
+    input = JSON.stringify(scrubLeaves(b['input'] ?? {}, budget)) ?? '';
   } catch {
     input = '';
   }
