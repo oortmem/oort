@@ -180,55 +180,54 @@ export async function observe(
     createdAt: iso,
     updatedAt: iso,
   };
+  // A supersede, update or out-of-order insert changes several records; they land
+  // together in one atomic write so a crash cannot leave a half-linked chain.
   if (prior === undefined) {
     await store.upsert(memory);
   } else if (inOrder) {
     // Close the prior where the new fact starts, not where we observed it. A fact
     // starting in the future leaves the prior current until then (`expiredAt` stays
     // null; consolidation expires it once `validTo` has passed).
-    await store.upsert(memory);
-    await store.upsert({
-      ...prior,
-      validTo: validFrom,
-      expiredAt: Date.parse(validFrom) <= now.getTime() ? iso : null,
-      endReason: 'superseded',
-      supersededBy: id,
-      updatedAt: iso,
-    });
-  } else if (pred !== null && deep) {
-    // Older than the prior's predecessor too: close at the predecessor's start and slot in before it.
-    await store.upsert({
-      ...memory,
-      validTo: pred.validFrom,
-      expiredAt: iso,
-      endReason: 'superseded',
-      supersededBy: pred.id,
-      supersedes: pred.supersedes,
-    });
-    await store.upsert({ ...pred, supersedes: id, updatedAt: iso });
-    if (pred.supersedes !== null) {
-      const before = await store.get(pred.supersedes);
-      if (before !== null) await store.upsert({ ...before, supersededBy: id, updatedAt: iso });
-    }
-  } else {
-    // The "new" fact is older than the prior: it slots in before it, already closed.
-    await store.upsert({
-      ...memory,
-      validTo: prior.validFrom,
-      expiredAt: iso,
-      endReason: 'superseded',
-      supersededBy: prior.id,
-      supersedes: prior.supersedes,
-    });
-    await store.upsert({ ...prior, supersedes: id, updatedAt: iso });
-    if (pred !== null) {
-      await store.upsert({
-        ...pred,
+    await store.upsertMany([
+      memory,
+      {
+        ...prior,
         validTo: validFrom,
+        expiredAt: Date.parse(validFrom) <= now.getTime() ? iso : null,
+        endReason: 'superseded',
         supersededBy: id,
         updatedAt: iso,
-      });
-    }
+      },
+    ]);
+  } else if (pred !== null && deep) {
+    // Older than the prior's predecessor too: close at the predecessor's start and slot in before it.
+    const before = pred.supersedes === null ? null : await store.get(pred.supersedes);
+    await store.upsertMany([
+      {
+        ...memory,
+        validTo: pred.validFrom,
+        expiredAt: iso,
+        endReason: 'superseded',
+        supersededBy: pred.id,
+        supersedes: pred.supersedes,
+      },
+      { ...pred, supersedes: id, updatedAt: iso },
+      ...(before === null ? [] : [{ ...before, supersededBy: id, updatedAt: iso }]),
+    ]);
+  } else {
+    // The "new" fact is older than the prior: it slots in before it, already closed.
+    await store.upsertMany([
+      {
+        ...memory,
+        validTo: prior.validFrom,
+        expiredAt: iso,
+        endReason: 'superseded',
+        supersededBy: prior.id,
+        supersedes: prior.supersedes,
+      },
+      { ...prior, supersedes: id, updatedAt: iso },
+      ...(pred === null ? [] : [{ ...pred, validTo: validFrom, supersededBy: id, updatedAt: iso }]),
+    ]);
   }
 
   const outcome = action === 'ADD' ? 'added' : action === 'UPDATE' ? 'updated' : 'superseded';

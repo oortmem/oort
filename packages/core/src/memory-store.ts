@@ -70,6 +70,12 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     if (closed) throw new Error('memory store is closed');
   }
 
+  /** Stores `m` (already cloned); a non-cold write drops the cold copy. */
+  function put(m: Memory): void {
+    main.set(m.id, m);
+    if (m.tier !== 'cold') cold.delete(m.id);
+  }
+
   function scoped(scope: ScopeFilter): Memory[] {
     return [...main.values()].filter((m) => scopeMatches(m.scope, scope));
   }
@@ -77,7 +83,13 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   return {
     async upsert(m) {
       open();
-      main.set(m.id, structuredClone(m));
+      put(structuredClone(m));
+    },
+
+    /** Atomic trivially: clones every record before writing any. */
+    async upsertMany(ms) {
+      open();
+      for (const m of ms.map((x) => structuredClone(x))) put(m);
     },
 
     async get(id) {

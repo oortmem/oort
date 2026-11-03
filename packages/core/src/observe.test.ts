@@ -65,6 +65,8 @@ interface Spy {
   write: { action: string; prior?: Memory }[];
   access: string[][];
   filters: ScopeFilter[];
+  /** One entry per store write call: the method and the ids it wrote. */
+  writes: string[][];
 }
 
 function setup(
@@ -73,7 +75,7 @@ function setup(
   listNow?: () => Date,
 ) {
   const real = createMemoryStore({ d: config.activation.d, ...(listNow && { now: listNow }) });
-  const spy: Spy = { embed: 0, reconcile: [], write: [], access: [], filters: [] };
+  const spy: Spy = { embed: 0, reconcile: [], write: [], access: [], filters: [], writes: [] };
   const store: MemoryStore = Object.create(real) as MemoryStore;
   store.lexical = (q, f, k) => {
     spy.filters.push(f);
@@ -82,6 +84,14 @@ function setup(
   store.dense = (v, f, k) => {
     spy.filters.push(f);
     return real.dense(v, f, k);
+  };
+  store.upsert = (m) => {
+    spy.writes.push(['upsert', m.id]);
+    return real.upsert(m);
+  };
+  store.upsertMany = (ms) => {
+    spy.writes.push(['upsertMany', ...ms.map((m) => m.id)]);
+    return real.upsertMany(ms);
   };
   store.recordAccess = (ids, at) => {
     spy.access.push(ids);
@@ -374,6 +384,33 @@ describe('observe', () => {
     expect(B?.source.decisions).toContainEqual(
       expect.objectContaining({ stage: 'temporal', answer: 'out-of-order-deep' }),
     );
+  });
+
+  it('observe.multi-record-writes-are-one-upsertMany', async () => {
+    let next: ReconcileDecision[] = [rec(null, 'ADD')];
+    const { deps, spy } = setup(gate(0.9), () => next);
+    const z = await observe(
+      obs('auth on port 1000', '2026-01-01T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    next = [rec(z.memoryId ?? null, 'SUPERSEDE')];
+    const a = await observe(
+      obs('auth on port 3000', '2026-01-10T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    next = [rec(a.memoryId ?? null, 'SUPERSEDE')];
+    const b = await observe(
+      obs('auth on port 2000', '2026-01-05T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    expect(spy.writes).toEqual([
+      ['upsert', z.memoryId],
+      ['upsertMany', a.memoryId, z.memoryId],
+      ['upsertMany', b.memoryId, a.memoryId, z.memoryId],
+    ]);
   });
 
   it('observe.reinforce-sets-lastConfirmedAt', async () => {

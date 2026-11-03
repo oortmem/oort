@@ -95,6 +95,41 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
       expect(await store.get('m1')).toEqual(updated);
     });
 
+    it('upsert-many-roundtrip', async () => {
+      const a = makeMemory({ id: 'a', text: 'first', embedding: vec(1, 2, 3, 4) });
+      const b = makeMemory({ id: 'b', text: 'second' });
+      await store.upsertMany([a, b]);
+      expect(await store.get('a')).toEqual(a);
+      expect(await store.get('b')).toEqual(b);
+
+      const a2 = { ...a, text: 'first, revised', embedding: vec(4, 3, 2, 1) };
+      const c = makeMemory({ id: 'c', text: 'third', embedding: vec(0, 0, 0, 1) });
+      await store.upsertMany([a2, c]);
+      expect(await store.get('a')).toEqual(a2);
+      expect(await store.get('b')).toEqual(b);
+      expect(await store.get('c')).toEqual(c);
+      await expect(store.upsertMany([])).resolves.toBeUndefined();
+    });
+
+    it('upsert-warm-drops-cold-copy', async () => {
+      const m = makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) });
+      await store.coldPut(m);
+      const main = await store.get('c1');
+      if (main === null) throw new Error('coldPut lost the main record');
+
+      // Re-upserting while still cold keeps the cold copy.
+      await store.upsert(main);
+      expect((await store.coldGet('c1'))?.embedding).toEqual(vec(1, 2, 3, 4));
+
+      await store.upsert({ ...main, embedding: vec(1, 2, 3, 4), tier: 'warm' });
+      expect(await store.coldGet('c1')).toBeNull();
+      expect((await store.get('c1'))?.tier).toBe('warm');
+
+      await store.coldPut(makeMemory({ id: 'c2' }));
+      await store.upsertMany([{ ...makeMemory({ id: 'c2' }), tier: 'hot' }]);
+      expect(await store.coldGet('c2')).toBeNull();
+    });
+
     it('lexical-finds-exact-identifier', async () => {
       await store.upsert(
         makeMemory({ id: 'target', text: 'Requests now route through auth-service-8080 only' }),
@@ -304,6 +339,7 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
       await store.close();
       const calls: [string, () => Promise<unknown>][] = [
         ['upsert', () => store.upsert(m)],
+        ['upsertMany', () => store.upsertMany([m])],
         ['get', () => store.get('m1')],
         ['forget', () => store.forget('m1')],
         ['lexical', () => store.lexical('memory', LOCAL, 10)],

@@ -72,8 +72,17 @@ export function scopeMatches(scope: Scope, filter: ScopeFilter): boolean {
 }
 
 export interface MemoryStore {
-  /** Insert or replace the memory with `m.id`. */
+  /**
+   * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
+   * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).
+   */
   upsert(m: Memory): Promise<void>;
+  /**
+   * `upsert` for each memory, in order, atomically: either every write lands or
+   * none does (a rejection leaves the store as it was). Used where several
+   * records must change together, e.g. a supersede closing the prior.
+   */
+  upsertMany(ms: Memory[]): Promise<void>;
   /** The current record, or null. Unscoped: callers obtain ids from scoped reads. */
   get(id: string): Promise<Memory | null>;
   /** Removes the memory everywhere (main record and cold copy). Never throws for an unknown id. */
