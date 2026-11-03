@@ -1,9 +1,9 @@
 {"question":"8204 queue-runner development listens","expectedMemoryIds":["m7-1124"],"category":"single-fact"}
 {"question":"2026-08-15 refresh token keeps","expectedMemoryIds":["m7-269"],"category":"single-fact"}
-{"question":"feature flags class","expectedMemoryIds":["m7-439"],"category":"single-fact"}
-{"question":"approach descriptors leaked","expectedMemoryIds":["m7-281"],"category":"single-fact"}
-{"question":"every shared and wired client esbuild","expectedMemoryIds":["m7-200"],"category":"single-fact"}
-{"question":"lockfile the pins and npm with","expectedMemoryIds":["m7-520"],"category":"single-fact"}
+{"question":"2026-09-08 flags class","expectedMemoryIds":["m7-439"],"category":"single-fact"}
+{"question":"2026-04-13 descriptors leaked","expectedMemoryIds":["m7-281"],"category":"single-fact"}
+{"question":"than rather ioredis with pooling connection","expectedMemoryIds":["m7-1009"],"category":"single-fact"}
+{"question":"polling than rather zod with refresh","expectedMemoryIds":["m7-113"],"category":"single-fact"}
 {"question":"which library does the sync daemon use to validate requests now","expectedMemoryIds":["m7-74"],"notExpectedMemoryIds":["m7-72","m7-73"],"category":"knowledge-update"}
 {"question":"which library does the notify relay use to validate requests now","expectedMemoryIds":["m7-62"],"notExpectedMemoryIds":["m7-60","m7-61"],"category":"knowledge-update"}
 {"question":"which library does the queue runner use to validate requests now","expectedMemoryIds":["m7-47"],"notExpectedMemoryIds":["m7-45","m7-46"],"category":"knowledge-update"}

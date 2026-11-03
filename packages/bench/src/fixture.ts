@@ -101,29 +101,57 @@ export function buildFixtureRows(memories: Memory[]): EvalRow[] {
   const loose = shuffled(
     memories.filter((m) => m.type === 'semantic' && !inChain(m) && !plain.includes(m)),
   );
-  const exact = plain.slice(0, 2);
-  const partial = plain.slice(2, 4);
-  const reworded = loose.slice(0, 2);
-  for (const m of exact) {
-    rows.push({
-      question: rareTokens(m).slice(0, 4).join(' '),
-      expectedMemoryIds: [m.id],
-      category: 'single-fact',
-    });
-  }
-  for (const m of partial) {
-    rows.push({
-      question: rareTokens(m).slice(1, 4).join(' '),
-      expectedMemoryIds: [m.id],
-      category: 'single-fact',
-    });
-  }
-  for (const m of reworded) {
-    rows.push({
-      question: paraphrase(m.stub),
-      expectedMemoryIds: [m.id],
-      category: 'single-fact',
-    });
+  // A question is answerable when exactly one memory (the expected one) has every question token.
+  const uniqueAnswer = (question: string, expected: Memory): boolean => {
+    const qt = new Set(tokenizeLexical(question));
+    if (qt.size === 0) return false;
+    let hits = 0;
+    for (const m of memories) {
+      const have = new Set(tokenizeLexical(m.text));
+      if ([...qt].every((t) => have.has(t))) {
+        if (m.id !== expected.id) return false;
+        hits++;
+      }
+    }
+    return hits === 1;
+  };
+  const exactQ = (m: Memory): string => rareTokens(m).slice(0, 4).join(' ');
+  // The rarest word, a different one left out (the 2nd rarest), then the 3rd and 4th.
+  const partialQ = (m: Memory): string => {
+    const r = rareTokens(m);
+    return [r[0], r[2], r[3]].filter((t) => t !== undefined).join(' ');
+  };
+  const pick = (
+    pool: Memory[],
+    n: number,
+    question: (m: Memory) => string,
+    used: Set<string>,
+  ): { m: Memory; q: string }[] => {
+    const out: { m: Memory; q: string }[] = [];
+    for (const m of pool) {
+      if (out.length === n) break;
+      if (used.has(m.id)) continue;
+      const q = question(m);
+      if (uniqueAnswer(q, m)) {
+        out.push({ m, q });
+        used.add(m.id);
+      }
+    }
+    return out;
+  };
+  const used = new Set<string>();
+  const need = (found: { m: Memory; q: string }[], n: number) => {
+    if (found.length < n) throw new Error('fixture: not enough uniquely answerable memories');
+    return found;
+  };
+  const exact = need(pick(plain, 2, exactQ, used), 2);
+  const partial = need(pick(plain, 2, partialQ, used), 2);
+  // Paraphrases drop identifiers, so most are ambiguous; top up from `plain` (paraphrased) if needed.
+  const reworded = pick(loose, 2, (m) => paraphrase(m.stub), used);
+  reworded.push(...pick(plain, 2 - reworded.length, (m) => paraphrase(m.stub), used));
+  need(reworded, 2);
+  for (const { m, q } of [...exact, ...partial, ...reworded]) {
+    rows.push({ question: q, expectedMemoryIds: [m.id], category: 'single-fact' });
   }
 
   // chains: heads (no `supersedes`) lead to the current tail.

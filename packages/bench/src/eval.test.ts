@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { localScope, type Memory } from '@oortmem/core';
+import { localScope, tokenizeLexical, type Memory } from '@oortmem/core';
 import { makeMemory, vec } from '@oortmem/core/store-conformance';
 import Database from 'better-sqlite3';
 import { openSqliteStore } from '@oortmem/store-sqlite';
@@ -257,6 +257,24 @@ describe('eval', () => {
     expect(
       (await runEval({ ...base, abstainThreshold: -10 })).groups['abstention']?.abstainFp,
     ).toBe(1);
+  });
+
+  it('fixture.single-fact-questions-have-unique-answers', () => {
+    const memories = generateMemories(FIXTURE_COUNT, FIXTURE_SEED);
+    const rows = buildFixtureRows(memories).filter((r) => r.category === 'single-fact');
+    expect(rows).toHaveLength(6);
+    for (const r of rows) {
+      const qt = new Set(tokenizeLexical(r.question));
+      expect(qt.size).toBeGreaterThan(0);
+      const answers = memories.filter((m) => {
+        const have = new Set(tokenizeLexical(m.text));
+        return [...qt].every((t) => have.has(t));
+      });
+      expect(
+        answers.map((m) => m.id),
+        r.question,
+      ).toEqual(r.expectedMemoryIds);
+    }
   });
 
   it('eval.fixture-in-sync', () => {
