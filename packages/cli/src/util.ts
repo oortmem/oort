@@ -35,7 +35,7 @@ export async function withWired<T>(ctx: Ctx, fn: (w: Wired) => Promise<T>): Prom
 
 /**
  * The adapters the write path needs (embed, decide, write). Refuses (exit 2)
- * when any is missing, with each missing adapter's fix (env var, config key).
+ * when any is missing, with each missing adapter's fix (the env var to export).
  */
 export function writePath(
   w: Wired,

@@ -224,7 +224,9 @@ describe('jevDecider', () => {
     try {
       expect(() => jevDecider()).toThrow(MissingCredentialError);
       expect(() => jevDecider()).toThrow(/TYPESAFE_API_KEY/);
-      expect(() => jevDecider()).toThrow(/decide\.apiKey/);
+      expect(() => jevDecider()).toThrow(
+        /^Missing TYPESAFE_API_KEY\. Set it with: export TYPESAFE_API_KEY=\.\.\.$/,
+      );
     } finally {
       if (prev !== undefined) process.env['TYPESAFE_API_KEY'] = prev;
     }

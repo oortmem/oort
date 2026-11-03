@@ -107,7 +107,8 @@ describe('oort bin', () => {
     expect(r.stdout).toContain('<oort-memory>');
     expect(r.stdout).toContain('port 5582');
     expect(r.stderr).toContain('VOYAGE_API_KEY');
-    expect(r.stderr).toContain('embed.apiKey');
+    expect(r.stderr).toContain('export VOYAGE_API_KEY=...');
+    expect(r.stderr).not.toContain('config.json');
     expect(r.stderr.trim().split('\n')).toHaveLength(1);
     expect(r.stderr).not.toContain('5582');
 

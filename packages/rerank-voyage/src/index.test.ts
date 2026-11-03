@@ -65,7 +65,9 @@ describe('voyageReranker', () => {
     delete process.env['VOYAGE_API_KEY'];
     try {
       expect(() => voyageReranker({ model: 'm' })).toThrow(MissingCredentialError);
-      expect(() => voyageReranker({ model: 'm' })).toThrow('rerank.apiKey');
+      expect(() => voyageReranker({ model: 'm' })).toThrow(
+        /^Missing VOYAGE_API_KEY\. Set it with: export VOYAGE_API_KEY=\.\.\.$/,
+      );
     } finally {
       if (prev !== undefined) process.env['VOYAGE_API_KEY'] = prev;
     }
