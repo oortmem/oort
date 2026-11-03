@@ -277,12 +277,16 @@ on Marcus's own transcripts first.
   memories never surface in any other project and are never promoted to global.
   Claude Code hooks therefore install at user scope (`~/.claude/settings.json`), with
   the project-scope install kept as an option.
-  *Implementation note (2026-11-03):* in Phase 1 every recall is filtered to the current
-  project plus global memories, and nothing promotes a project memory to global, so
-  `private: true` has no runtime effect yet; no path can surface one project's memories
-  in another. Any future feature that shares memories across projects (cross-project
-  recall, promotion to global, a global "preferences" tier) must read `project.private`
-  and exclude private projects; add a conformance test when that feature lands.
+  *Implementation note (2026-11-03, corrected):* recall is filtered to the current
+  project plus global memories, but two Phase 1 paths crossed scope and are being fixed:
+  (1) a project observation could UPDATE/SUPERSEDE a *global* memory, hiding the global
+  fact everywhere and linking the two, so `inspect` from another project followed the
+  chain into the project memory's text; (2) exact-id lookups in `inspect`/`pin`/`forget`
+  were unscoped. Rules from now on: a project observation may REINFORCE a global memory
+  but never UPDATE or SUPERSEDE one (it becomes an ADD in its own project); every lookup,
+  chain walk and mutation is checked against the caller's scope filter. `private: true`
+  still has no extra runtime effect, because nothing promotes or shares across projects;
+  any future cross-project feature must read it and add a conformance test.
 - Single SQLite file for that store: `memories` table, FTS5 virtual table over
   `text, stub, entities`, sqlite-vec `vec0` table for int8 embeddings (512-d Matryoshka
   truncation of a 1024-d model by default), `access_log` compacted summaries.
