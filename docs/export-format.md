@@ -18,9 +18,6 @@ owner-only (`0600`). This format is the basis for import and migration (CON-36).
 - Memories are ordered oldest first by `createdAt`, then by `id`, so a
   reader can replay supersede chains in order.
 
-Phase 1 limitation: the store API is scoped, so one export covers one project
-(plus global). A memory of another project is exported by running
-`oort export` from that project.
 
 ## Line 1: the manifest
 
@@ -83,3 +80,11 @@ const vector = Int8Array.from(Buffer.from(line.embedding, 'base64'));
 
 The export contains memory text, which may be sensitive. Secrets were scrubbed
 before storage, but treat the file like the store itself.
+
+## Limitations
+
+- **Scope.** In Phase 1, an export covers the current project (the git root
+  above the cwd) plus global memories, nothing else. The store API only lists
+  through a scope filter, so memories of other projects (including private
+  ones) are left out. To export them, run `oort export` from each project.
+  A whole-store export needs an unscoped listing, which arrives with CON-36.

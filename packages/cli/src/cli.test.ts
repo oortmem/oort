@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import type { Embedder, Memory } from '@oortmem/core';
+import { localScope, type Embedder, type Memory } from '@oortmem/core';
 import { AWS_KEY, harness, memory, writeTranscript } from '../test/helpers.js';
 
 const readLines = (file: string): Record<string, unknown>[] =>
@@ -281,7 +281,8 @@ describe('oort export', () => {
       embedding: undefined,
       createdAt: '2026-10-03T00:00:00.000Z',
     });
-    await h.store.upsertMany([warm, cold, noEmbedding]);
+    const elsewhere = memory({ text: 'another project', scope: localScope('other-1234abcd') });
+    await h.store.upsertMany([warm, cold, noEmbedding, elsewhere]);
     await h.store.coldPut(cold);
     expect((await h.store.get(cold.id))?.embedding).toBeUndefined();
 
@@ -298,6 +299,7 @@ describe('oort export', () => {
       { orgId: 'local', customerId: 'self', agentId: 'claude-code' },
     ]);
     const lines = rest.map((l) => MemoryLineSchema.parse(l));
+    // Phase 1: the cwd's project plus global only (docs/export-format.md, Limitations).
     expect(lines.map((l) => l.id)).toEqual([warm.id, cold.id, noEmbedding.id]);
     const c = lines[1];
     expect(c?.tier).toBe('cold');
@@ -315,6 +317,20 @@ describe('oort export', () => {
     expect(stdoutLines.slice(1)).toEqual(
       fs.readFileSync(file, 'utf8').trimEnd().split('\n').slice(1),
     );
+  });
+});
+
+describe('docs/export-format.md', () => {
+  it('cli.export-doc-states-limitations', () => {
+    const doc = fs.readFileSync(
+      path.join(import.meta.dirname, '..', '..', '..', 'docs', 'export-format.md'),
+      'utf8',
+    );
+    const limits = doc.slice(doc.indexOf('\n## Limitations\n'));
+    expect(limits.startsWith('\n## Limitations\n')).toBe(true);
+    expect(limits).toMatch(/current project/);
+    expect(limits).toMatch(/plus global/);
+    expect(limits).toMatch(/CON-36/);
   });
 });
 
