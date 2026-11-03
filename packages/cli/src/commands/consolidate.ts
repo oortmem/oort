@@ -7,7 +7,7 @@ export async function consolidateCommand(ctx: Ctx): Promise<number> {
   return withWired(ctx, async (w) => {
     const r = await consolidate(filterFor(w.scope), { store: w.store, config: w.config });
     ctx.io.out(
-      `promoted ${r.promoted.length}\ndemoted ${r.demoted.length}\nevicted ${r.evicted.length}\nexpired ${r.expired.length}\n`,
+      `promoted ${r.promoted.length}\ndemoted ${r.demoted.length}\nevicted ${r.evicted.length}\nexpired ${r.expired.length}\nskipped ${r.skipped}\n`,
     );
     return 0;
   });

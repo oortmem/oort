@@ -7,6 +7,7 @@ import {
   isCurrent,
   tokenizeLexical,
   type AccessLog,
+  type GuardedWriteResult,
   type Hit,
   type Memory,
   type MemorySource,
@@ -297,6 +298,23 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     setTierRow: db.prepare<[Tier, string], Pick<MemoryRow, 'rid' | 'text' | 'stub' | 'entities'>>(
       'UPDATE memories SET tier = ? WHERE id = ? RETURNING rid, text, stub, entities',
     ),
+    // Guarded writes: each applies only while the row matches the caller's snapshot.
+    setTierIfUnchanged: db.prepare<
+      [{ id: string; tier: Tier; updatedAt: string; was: Tier }],
+      Pick<MemoryRow, 'rid' | 'text' | 'stub' | 'entities'>
+    >(
+      `UPDATE memories SET tier = @tier
+       WHERE id = @id AND updated_at = @updatedAt AND tier = @was
+       RETURNING rid, text, stub, entities`,
+    ),
+    expireIfUnchanged: db.prepare<
+      [{ id: string; at: string; updatedAt: string; was: Tier }],
+      { rid: number }
+    >(
+      `UPDATE memories SET expired_at = @at, end_reason = COALESCE(end_reason, 'expired')
+       WHERE id = @id AND updated_at = @updatedAt AND tier = @was AND expired_at IS NULL
+       RETURNING rid`,
+    ),
     getAccess: db.prepare<[string], { access_log: string }>(
       'SELECT access_log FROM memories WHERE id = ?',
     ),
@@ -445,49 +463,105 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     }
   });
 
-  const setTierTx = db.transaction((id: string, tier: Tier) => {
-    const row = q.setTierRow.get(tier, id);
-    if (row === undefined) return;
+  /** Rewrites the derived rows (vec tier metadata, FTS) after a tier change. */
+  function afterTierChange(
+    id: string,
+    tier: Tier,
+    row: Pick<MemoryRow, 'rid' | 'text' | 'stub' | 'entities'>,
+  ): void {
     q.vecSetTier.run(tier, id);
     writeFts(row.rid, tier, row.text, row.stub, JSON.parse(row.entities) as string[]);
-  });
+  }
+
+  const setTierTx = db.transaction(
+    (id: string, tier: Tier, snapshot?: Pick<Memory, 'updatedAt' | 'tier'>): boolean => {
+      const row =
+        snapshot === undefined
+          ? q.setTierRow.get(tier, id)
+          : q.setTierIfUnchanged.get({
+              id,
+              tier,
+              updatedAt: snapshot.updatedAt,
+              was: snapshot.tier,
+            });
+      if (row === undefined) return false;
+      afterTierChange(id, tier, row);
+      return true;
+    },
+  );
+
+  const expireManyTx = db.transaction((ms: Memory[], at: string): string[] =>
+    ms
+      .filter(
+        (m) =>
+          q.expireIfUnchanged.get({ id: m.id, at, updatedAt: m.updatedAt, was: m.tier }) ===
+          undefined,
+      )
+      .map((m) => m.id),
+  );
 
   /**
-   * Makes `files[i]` the cold copy of `ms[i]` for every i, all in one
-   * transaction; returns the blobs they replaced, to unlink after commit.
+   * Demotes `ms[i]`'s row to cold with `files[i]` as its cold copy, for every i
+   * whose row still matches its snapshot, all in one transaction. Only the
+   * tier, the derived rows (vec, FTS) and the cold index change. Returns the
+   * indices skipped by the guard and the blobs replaced, both to unlink after commit.
    */
-  const coldPutManyTx = db.transaction((ms: Memory[], files: string[]): string[] => {
-    const previous: string[] = [];
-    for (const [i, m] of ms.entries()) {
-      const old = q.coldPath.get(m.id)?.path;
-      if (old !== undefined) previous.push(old);
-      const { embedding: _dropped, ...rest } = m;
-      writeMemory({ ...rest, tier: 'cold' });
-      q.coldInsert.run(m.id, files[i] as string);
-    }
-    return previous;
-  });
+  const coldPutManyTx = db.transaction(
+    (ms: Memory[], files: string[]): { skipped: number[]; previous: string[] } => {
+      const skipped: number[] = [];
+      const previous: string[] = [];
+      for (const [i, m] of ms.entries()) {
+        const row = q.setTierIfUnchanged.get({
+          id: m.id,
+          tier: 'cold',
+          updatedAt: m.updatedAt,
+          was: m.tier,
+        });
+        if (row === undefined) {
+          skipped.push(i);
+          continue;
+        }
+        writeFts(row.rid, 'cold', row.text, row.stub, JSON.parse(row.entities) as string[]);
+        q.vecDelete.run(m.id);
+        const old = q.coldPath.get(m.id)?.path;
+        if (old !== undefined) previous.push(old);
+        q.coldInsert.run(m.id, files[i] as string);
+      }
+      return { skipped, previous };
+    },
+  );
 
   /**
-   * Writes new uniquely named blobs, then commits every row in one IMMEDIATE
-   * transaction. Previously committed blobs are untouched until that commit
-   * succeeds and removed after; a failed commit removes only the new blobs.
+   * Writes new uniquely named blobs, then commits every guarded row change in
+   * one IMMEDIATE transaction. Previously committed blobs are untouched until
+   * that commit succeeds and removed after; a failed commit removes only the
+   * new blobs, and so does a skipped entry once the commit is done.
    */
-  async function coldPutMany(ms: Memory[]): Promise<void> {
+  async function coldPutMany(snapshots: Memory[]): Promise<GuardedWriteResult> {
     open();
-    if (ms.length === 0) return;
-    for (const m of ms) {
+    const skipped: string[] = [];
+    const ms: Memory[] = [];
+    for (const m of new Map(snapshots.map((x) => [x.id, x])).values()) {
       if (m.embedding !== undefined) checkDimension(m.embedding, `coldPut ${m.id}`);
+      // A cold snapshot has no embedding to keep: nothing to write.
+      if (m.tier === 'cold') skipped.push(m.id);
+      else ms.push(m);
     }
+    if (ms.length === 0) return { skipped };
     const files = await blobs.writeMany(ms.map((m) => ({ id: m.id, data: codec.encode(m) })));
-    let previous: string[];
+    let tx: { skipped: number[]; previous: string[] };
     try {
-      previous = coldPutManyTx.immediate(ms, files);
+      tx = coldPutManyTx.immediate(ms, files);
     } catch (e) {
       for (const file of files) blobs.remove(file);
       throw e;
     }
-    for (const file of previous) blobs.remove(file);
+    for (const i of tx.skipped) {
+      blobs.remove(files[i] as string);
+      skipped.push((ms[i] as Memory).id);
+    }
+    for (const file of tx.previous) blobs.remove(file);
+    return { skipped };
   }
 
   return {
@@ -556,6 +630,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         .sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt));
     },
 
+    async expireMany(snapshots, at) {
+      open();
+      const ms = [...new Map(snapshots.map((m) => [m.id, m])).values()];
+      if (ms.length === 0) return { skipped: [] };
+      return { skipped: expireManyTx.immediate(ms, at.toISOString()) };
+    },
+
     coldPut: (m) => coldPutMany([m]),
 
     coldPutMany,
@@ -576,9 +657,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       }
     },
 
-    async setTier(id, tier) {
+    async setTier(id, tier, snapshot) {
       open();
-      setTierTx.immediate(id, tier);
+      return setTierTx.immediate(id, tier, snapshot);
     },
 
     async getCursor(key) {

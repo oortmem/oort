@@ -9,6 +9,7 @@ import { localScope, type Memory, type ScopeFilter } from '@oortmem/core';
 import {
   CONFORMANCE_DIMENSION,
   makeMemory,
+  seedCold,
   storeConformance,
   vec,
 } from '@oortmem/core/store-conformance';
@@ -203,12 +204,12 @@ describe('sqlite store', () => {
   it('store.cold-blob-on-disk-and-forget-removes-it', async () => {
     const dir = freshDir();
     const store = await openSqliteStore(optsIn(dir));
-    await store.coldPut(makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) }));
+    await seedCold(store, makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) }));
     expect(blobFiles(dir)).toEqual([expect.stringMatching(/^c1\.\d+-[0-9a-f]{8}\.zst$/)]);
     expect(fs.existsSync(path.join(dir, 'cold', '.oort-cold'))).toBe(true);
 
-    // A second coldPut replaces the blob: one file per id, the newest snapshot.
-    await store.coldPut(makeMemory({ id: 'c1', text: 'second', embedding: vec(4, 3, 2, 1) }));
+    // Hydrating (a warm upsert) drops the blob; the next eviction writes a new one.
+    await seedCold(store, makeMemory({ id: 'c1', text: 'second', embedding: vec(4, 3, 2, 1) }));
     expect(blobFiles(dir)).toHaveLength(1);
     expect((await store.coldGet('c1'))?.text).toBe('second');
 
@@ -217,7 +218,7 @@ describe('sqlite store', () => {
 
     // Ids that are not safe file names never escape the cold directory.
     const odd = makeMemory({ id: '../Escape/ME', embedding: vec(1, 2, 3, 4) });
-    await store.coldPut(odd);
+    await seedCold(store, odd);
     expect((await store.coldGet(odd.id))?.embedding).toEqual(vec(1, 2, 3, 4));
     expect(blobFiles(dir)).toEqual([
       expect.stringMatching(/^~[0-9a-f]{64}\.\d+-[0-9a-f]{8}\.zst$/),
@@ -247,7 +248,7 @@ describe('sqlite store', () => {
       ['truncated', (b: Buffer) => b.subarray(0, Math.floor(b.length / 2))],
       ['flipped', (b: Buffer) => Buffer.from(b.map((x, i) => (i === b.length - 6 ? x ^ 1 : x)))],
     ] as const) {
-      await store.coldPut(makeMemory({ id, embedding: vec(5, -6, 7, -8) }));
+      await seedCold(store, makeMemory({ id, embedding: vec(5, -6, 7, -8) }));
       const file = path.join(
         dir,
         'cold',
@@ -265,11 +266,27 @@ describe('sqlite store', () => {
     await store.close();
   });
 
+  /**
+   * A row that is warm again but still indexes a cold copy: `setTier` up from
+   * cold keeps the copy (consolidation never does this; recall re-upserts).
+   * The only way an eviction replaces a previous blob.
+   */
+  async function warmWithPreviousBlob(
+    store: Awaited<ReturnType<typeof openSqliteStore>>,
+    m: Memory,
+  ): Promise<Memory> {
+    await seedCold(store, m);
+    await store.setTier(m.id, 'warm');
+    const live = await store.get(m.id);
+    if (live === null) throw new Error(`lost ${m.id}`);
+    return live;
+  }
+
   it('store.failed-coldPut-keeps-previous-blob', async () => {
     const dir = freshDir();
     const store = await openSqliteStore(optsIn(dir));
     const first = makeMemory({ id: 'c1', text: 'first snapshot', embedding: vec(1, 2, 3, 4) });
-    await store.coldPut(first);
+    const live = await warmWithPreviousBlob(store, first);
     const before = blobFiles(dir);
 
     // Another connection makes the next cold_index write fail inside the transaction.
@@ -277,14 +294,12 @@ describe('sqlite store', () => {
     raw.exec(`CREATE TRIGGER fail_cold BEFORE UPDATE ON cold_index
       BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
     raw.close();
-    const err = await rejection(
-      store.coldPut(makeMemory({ id: 'c1', text: 'second snapshot', embedding: vec(4, 3, 2, 1) })),
-    );
+    const err = await rejection(store.coldPut({ ...live, embedding: vec(4, 3, 2, 1) }));
     expect((err as Error).message).toContain('injected failure');
 
     expect(blobFiles(dir)).toEqual(before);
     expect(await store.coldGet('c1')).toEqual(first);
-    expect((await store.get('c1'))?.text).toBe('first snapshot');
+    expect(await store.get('c1')).toEqual(live);
     await store.close();
   });
 
@@ -292,43 +307,72 @@ describe('sqlite store', () => {
     const dir = freshDir();
     const store = await openSqliteStore(optsIn(dir));
     const first = makeMemory({ id: 'c1', text: 'first snapshot', embedding: vec(1, 2, 3, 4) });
-    await store.coldPut(first);
+    const c1 = await warmWithPreviousBlob(store, first);
+    const c2 = makeMemory({ id: 'c2', embedding: vec(1, 1, 1, 1) });
+    const c3 = makeMemory({ id: 'c3', embedding: vec(2, 2, 2, 2) });
+    await store.upsertMany([c2, c3]);
     const before = blobFiles(dir);
 
-    // Fail the second row's cold_index write, after the first row was written in the transaction.
+    // Fail the third row's cold_index write, after the first two were written in the transaction.
     const raw = new Database(path.join(dir, 'oort.sqlite'));
     raw.exec(`CREATE TRIGGER fail_cold BEFORE INSERT ON cold_index
       WHEN NEW.id = 'c3' BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
     raw.close();
-    const err = await rejection(
-      store.coldPutMany([
-        makeMemory({ id: 'c2', embedding: vec(1, 1, 1, 1) }),
-        makeMemory({ id: 'c1', text: 'second snapshot', embedding: vec(4, 3, 2, 1) }),
-        makeMemory({ id: 'c3', embedding: vec(2, 2, 2, 2) }),
-      ]),
-    );
+    const err = await rejection(store.coldPutMany([c2, { ...c1, embedding: vec(4, 3, 2, 1) }, c3]));
     expect((err as Error).message).toContain('injected failure');
 
     expect(blobFiles(dir)).toEqual(before);
     expect(await store.coldGet('c1')).toEqual(first);
-    expect(await store.get('c2')).toBeNull();
-    expect(await store.get('c3')).toBeNull();
+    expect(await store.get('c1')).toEqual(c1);
+    expect(await store.get('c2')).toEqual(c2);
+    expect(await store.coldGet('c2')).toBeNull();
+    expect(await store.get('c3')).toEqual(c3);
     await store.close();
   });
 
   it('store.coldPutMany-unlinks-previous-blobs-after-commit', async () => {
     const dir = freshDir();
     const store = await openSqliteStore(optsIn(dir));
-    await store.coldPut(makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) }));
-    await store.coldPut(makeMemory({ id: 'c2', embedding: vec(1, 2, 3, 4) }));
-    expect(blobFiles(dir)).toHaveLength(2);
-    await store.coldPutMany([
-      makeMemory({ id: 'c1', text: 'again', embedding: vec(4, 3, 2, 1) }),
-      makeMemory({ id: 'c2', text: 'again', embedding: vec(4, 3, 2, 1) }),
-      makeMemory({ id: 'c3', embedding: vec(1, 1, 1, 1) }),
-    ]);
-    expect(blobFiles(dir)).toHaveLength(3);
-    expect((await store.coldGet('c1'))?.text).toBe('again');
+    const c1 = await warmWithPreviousBlob(
+      store,
+      makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) }),
+    );
+    const c2 = await warmWithPreviousBlob(
+      store,
+      makeMemory({ id: 'c2', embedding: vec(1, 2, 3, 4) }),
+    );
+    const c3 = makeMemory({ id: 'c3', embedding: vec(1, 1, 1, 1) });
+    await store.upsert(c3);
+    const previous = blobFiles(dir);
+    expect(previous).toHaveLength(2);
+    const again = vec(4, 3, 2, 1);
+    expect(
+      await store.coldPutMany([{ ...c1, embedding: again }, { ...c2, embedding: again }, c3]),
+    ).toEqual({ skipped: [] });
+    const now = blobFiles(dir);
+    expect(now).toHaveLength(3);
+    for (const f of previous) expect(now).not.toContain(f);
+    expect((await store.coldGet('c1'))?.embedding).toEqual(again);
+    await store.close();
+  });
+
+  it('store.skipped-eviction-unlinks-its-blob', async () => {
+    const dir = freshDir();
+    const store = await openSqliteStore(optsIn(dir));
+    const kept = makeMemory({ id: 'kept', embedding: vec(1, 2, 3, 4) });
+    const raced = makeMemory({ id: 'raced', embedding: vec(4, 3, 2, 1) });
+    await store.upsertMany([kept, raced]);
+    // `raced` changes after the snapshot was read: its blob is written, then skipped.
+    const later = {
+      ...raced,
+      validTo: new Date().toISOString(),
+      updatedAt: '2999-01-01T00:00:00.000Z',
+    };
+    await store.upsert(later);
+    expect(await store.coldPutMany([kept, raced])).toEqual({ skipped: ['raced'] });
+    expect(blobFiles(dir)).toEqual([expect.stringMatching(/^kept\./)]);
+    expect(await store.get('raced')).toEqual(later);
+    expect(await store.coldGet('raced')).toBeNull();
     await store.close();
   });
 
@@ -336,15 +380,23 @@ describe('sqlite store', () => {
     const dir = freshDir();
     const a = await openSqliteStore(optsIn(dir));
     const b = await openSqliteStore(optsIn(dir));
-    const fromA = makeMemory({ id: 'c1', text: 'from a', embedding: vec(1, 1, 1, 1) });
-    const fromB = makeMemory({ id: 'c1', text: 'from b', embedding: vec(2, 2, 2, 2) });
-    for (let i = 0; i < 20; i++) await Promise.all([a.coldPut(fromA), b.coldPut(fromB)]);
+    const m = makeMemory({ id: 'c1', text: 'contended', embedding: vec(1, 1, 1, 1) });
+    const fromA = { ...m, embedding: vec(1, 1, 1, 1) };
+    const fromB = { ...m, embedding: vec(2, 2, 2, 2) };
+    for (let i = 0; i < 20; i++) {
+      await a.upsert(m); // warm again: drops the last round's cold copy
+      const results = await Promise.all([a.coldPut(fromA), b.coldPut(fromB)]);
+      // Both read the same snapshot; exactly one eviction lands, the other is skipped.
+      expect(results.flatMap((r) => r.skipped)).toEqual(['c1']);
+    }
     await a.close();
     await b.close();
 
     const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
     for (const f of blobFiles(dir)) fs.utimesSync(path.join(dir, 'cold', f), old, old);
-    const store = await openSqliteStore({ ...optsIn(dir), log: () => {} }); // sweeps
+    const messages: string[] = [];
+    const store = await openSqliteStore({ ...optsIn(dir), log: (x) => messages.push(x) }); // sweeps
+    expect(messages).toEqual([]); // the skipped blobs were unlinked, not left for the sweep
     const got = await store.coldGet('c1');
     expect([fromA, fromB]).toContainEqual(got);
     expect(got?.embedding).toHaveLength(CONFORMANCE_DIMENSION);
@@ -407,7 +459,7 @@ describe('sqlite store', () => {
     const dir = freshDir();
     const cold = path.join(dir, 'cold');
     const first = await openSqliteStore(optsIn(dir));
-    await first.coldPut(makeMemory({ id: 'kept', embedding: vec(1, 2, 3, 4) }));
+    await seedCold(first, makeMemory({ id: 'kept', embedding: vec(1, 2, 3, 4) }));
     await first.close();
     const [kept] = blobFiles(dir);
 
@@ -480,7 +532,7 @@ describe('sqlite store', () => {
       log: (m) => messages.push(m),
     });
     await store.upsert(makeMemory({ id: 'm1', embedding: vec(1, 2, 3, 4) }));
-    await store.coldPut(makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) }));
+    await seedCold(store, makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) }));
     const mode = (p: string) => (fs.statSync(p).mode & 0o777).toString(8);
     expect(mode(project)).toBe('755');
     expect(mode(path.join(project, '.oort'))).toBe('700');

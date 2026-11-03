@@ -331,6 +331,8 @@ export interface ConsolidateRun {
   evicted: number;
   promoted: number;
   demoted: number;
+  /** Guarded writes skipped by the first run (0 unless something wrote concurrently). */
+  skipped: number;
   profile: CallProfile[];
 }
 
@@ -350,6 +352,7 @@ async function runConsolidate(env: Env): Promise<ConsolidateRun> {
     evicted: first.r.evicted.length,
     promoted: first.r.promoted.length,
     demoted: first.r.demoted.length,
+    skipped: first.r.skipped,
     profile: firstProfile,
   };
 }
@@ -607,7 +610,7 @@ export function renderMarkdown(r: BenchResult): string {
     ['consolidate, second run', `${f1(r.consolidate.secondMs)} ms`],
     [
       'consolidate first run moves',
-      `${r.consolidate.evicted} to cold, ${r.consolidate.promoted} promoted, ${r.consolidate.demoted} demoted (incl. evicted)`,
+      `${r.consolidate.evicted} to cold, ${r.consolidate.promoted} promoted, ${r.consolidate.demoted} demoted (incl. evicted), ${r.consolidate.skipped} skipped`,
     ],
     [
       'Tier counts after consolidate',

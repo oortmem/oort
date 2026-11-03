@@ -8,7 +8,7 @@ import { ACKNOWLEDGMENTS, shouldRecall } from './gate.js';
 import { createMemoryStore } from './memory-store.js';
 import type { Memory } from './model.js';
 import { formatForInjection, recall, type RecallResult } from './recall.js';
-import { makeMemory, vec } from './store-conformance.js';
+import { makeMemory, seedCold, vec } from './store-conformance.js';
 
 const SCOPE: ScopeFilter = {
   orgId: 'local',
@@ -91,7 +91,7 @@ describe('recall', () => {
       embedding: vec(1, 2, 3, 4),
       salience: 0.9,
     });
-    await store.coldPut(cold);
+    await seedCold(store, cold);
     const r = await recall({ text: 'quokka', scope: SCOPE }, { store, config });
     expect(r.memories).toHaveLength(1);
     expect(r.memories[0]?.text).toBe('full text about quokka migration');

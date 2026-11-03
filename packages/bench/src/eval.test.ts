@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { localScope, tokenizeLexical, type Memory } from '@oortmem/core';
-import { makeMemory, vec } from '@oortmem/core/store-conformance';
+import { makeMemory, seedCold, vec } from '@oortmem/core/store-conformance';
 import Database from 'better-sqlite3';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import { loadEvalRows, runEval, type EvalRow } from './eval.js';
@@ -158,7 +158,8 @@ describe('eval', () => {
     const store = await openSqliteStore({ path: dbPath, coldDir, dimension: DIM, log: () => {} });
     await store.upsertMany([mem('w1', 'warm memory about caching')]);
     // A cold memory the row below hydrates: on a live store that is a write.
-    await store.coldPut(
+    await seedCold(
+      store,
       mem('c1', 'zeppelin hydration marker', { embedding: vec(1, 2, 3, 4), tier: 'cold' }),
     );
     // A second connection keeps the WAL (and shm) alive after the store closes.
@@ -222,7 +223,8 @@ describe('eval', () => {
     const dbPath = path.join(dir, 'oort.sqlite');
     const coldDir = path.join(dir, 'cold');
     const store = await openSqliteStore({ path: dbPath, coldDir, dimension: DIM, log: () => {} });
-    await store.coldPut(
+    await seedCold(
+      store,
       mem('c1', 'zeppelin hydration marker', { embedding: vec(1, 2, 3, 4), tier: 'cold' }),
     );
     await store.close();

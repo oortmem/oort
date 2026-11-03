@@ -25,6 +25,7 @@ describe('consolidate on 10k memories', () => {
 
   it('bench.consolidate-10k-completes', () => {
     expect(run.evicted).toBeGreaterThan(0);
+    expect(run.skipped).toBe(0); // nothing writes concurrently here
     expect(Number.isFinite(run.firstMs)).toBe(true);
     expect(run.secondMs).toBeLessThan(run.firstMs);
   });

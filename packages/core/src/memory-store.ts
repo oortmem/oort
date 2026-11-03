@@ -1,5 +1,11 @@
 import { appendAccess } from './activation.js';
-import { scopeMatches, type Hit, type MemoryStore, type ScopeFilter } from './adapters.js';
+import {
+  scopeMatches,
+  type GuardedWriteResult,
+  type Hit,
+  type MemoryStore,
+  type ScopeFilter,
+} from './adapters.js';
 import { isCurrent, type Memory, type Tier } from './model.js';
 import { tokenizeLexical as tokens } from './tokenize.js';
 
@@ -68,18 +74,51 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     return [...main.values()].filter((m) => scopeMatches(m.scope, scope));
   }
 
-  /** Atomic trivially: validates and clones every record before writing any. */
-  async function coldPutMany(ms: Memory[]): Promise<void> {
+  /** True while the live record still matches the snapshot a guarded write was computed from. */
+  function unchanged(live: Memory | undefined, snap: Pick<Memory, 'updatedAt' | 'tier'>) {
+    return live !== undefined && live.updatedAt === snap.updatedAt && live.tier === snap.tier;
+  }
+
+  /** The last entry per id, in first-seen order. */
+  function lastPerId(ms: Memory[]): Memory[] {
+    return [...new Map(ms.map((m) => [m.id, m])).values()];
+  }
+
+  /** Atomic trivially: validates and clones every snapshot before writing any. */
+  async function coldPutMany(snapshots: Memory[]): Promise<GuardedWriteResult> {
     open();
     const dims = new Set(
-      ms.flatMap((m) => (m.embedding === undefined ? [] : [m.embedding.length])),
+      snapshots.flatMap((m) => (m.embedding === undefined ? [] : [m.embedding.length])),
     );
     if (dims.size > 1) throw new RangeError('coldPutMany: embeddings differ in dimension');
-    for (const m of ms.map((x) => structuredClone(x))) {
-      cold.set(m.id, m);
-      const { embedding: _dropped, ...rest } = structuredClone(m);
-      main.set(m.id, { ...rest, tier: 'cold' });
+    const skipped: string[] = [];
+    for (const snap of lastPerId(snapshots).map((x) => structuredClone(x))) {
+      const live = main.get(snap.id);
+      if (snap.tier === 'cold' || live === undefined || !unchanged(live, snap)) {
+        skipped.push(snap.id);
+        continue;
+      }
+      cold.set(snap.id, snap);
+      delete live.embedding;
+      live.tier = 'cold';
     }
+    return { skipped };
+  }
+
+  async function expireMany(snapshots: Memory[], at: Date): Promise<GuardedWriteResult> {
+    open();
+    const iso = at.toISOString();
+    const skipped: string[] = [];
+    for (const snap of lastPerId(snapshots)) {
+      const live = main.get(snap.id);
+      if (live === undefined || !unchanged(live, snap) || live.expiredAt !== null) {
+        skipped.push(snap.id);
+        continue;
+      }
+      live.expiredAt = iso;
+      live.endReason ??= 'expired';
+    }
+    return { skipped };
   }
 
   return {
@@ -161,6 +200,8 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         .map((m) => structuredClone(m));
     },
 
+    expireMany,
+
     coldPut: (m) => coldPutMany([m]),
 
     coldPutMany,
@@ -171,10 +212,12 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       return m === undefined ? null : structuredClone(m);
     },
 
-    async setTier(id: string, tier: Tier) {
+    async setTier(id: string, tier: Tier, snapshot?: Pick<Memory, 'updatedAt' | 'tier'>) {
       open();
       const m = main.get(id);
-      if (m !== undefined) m.tier = tier;
+      if (m === undefined || (snapshot !== undefined && !unchanged(m, snapshot))) return false;
+      m.tier = tier;
+      return true;
     },
 
     async getCursor(key) {

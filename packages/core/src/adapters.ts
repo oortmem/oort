@@ -71,6 +71,18 @@ export function scopeMatches(scope: Scope, filter: ScopeFilter): boolean {
   );
 }
 
+/**
+ * The outcome of a guarded write. A guarded write is computed from snapshots
+ * (records as read from the store, e.g. by `list`) and applies to a record
+ * only while it still matches its snapshot: it exists, with the same
+ * `updatedAt` and the same `tier`. Anything else means another writer got
+ * there first (a supersede, a forget, another consolidation), so the record
+ * is left exactly as it is and its id is listed in `skipped`.
+ */
+export interface GuardedWriteResult {
+  skipped: string[];
+}
+
 export interface MemoryStore {
   /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
@@ -110,26 +122,40 @@ export interface MemoryStore {
    */
   list(scope: ScopeFilter, opts?: { tier?: Tier; validOnly?: boolean }): Promise<Memory[]>;
   /**
-   * Demotes `m` to cold: stores the full record (embedding included) as the
-   * cold copy, and replaces the main record with `m` minus its embedding and
-   * with `tier: "cold"`. Stub and entities stay lexically searchable.
+   * Marks each snapshot's record expired: sets `expiredAt = at`, and
+   * `endReason = "expired"` where it is null. No other field is written.
+   * Guarded (see `GuardedWriteResult`); a record already expired is skipped
+   * too. Atomic per call. An empty list is a no-op.
    */
-  coldPut(m: Memory): Promise<void>;
+  expireMany(snapshots: Memory[], at: Date): Promise<GuardedWriteResult>;
+  /** `coldPutMany([snapshot])`. */
+  coldPut(snapshot: Memory): Promise<GuardedWriteResult>;
   /**
-   * `coldPut` for each of `ms`, in order (a later entry for the same id wins),
-   * atomic per call: if any entry fails, none is applied and every previous
-   * cold copy stays readable. Previous cold copies are discarded only after
-   * the whole batch has committed. An empty list is a no-op.
+   * Demotes each snapshot's record to cold. The cold copy becomes the
+   * snapshot (embedding included); the main record gets `tier: "cold"` and
+   * loses its embedding, and no other field is written (stub and entities stay
+   * lexically searchable). Guarded (see `GuardedWriteResult`); a cold snapshot
+   * is skipped too, since it has no embedding to keep. A skipped entry leaves
+   * no cold copy behind. Only the last entry for an id counts.
+   *
+   * Atomic per call: if any entry fails (as opposed to being skipped), none is
+   * applied and every previous cold copy stays readable. Previous cold copies
+   * are discarded only after the whole batch has committed. An empty list is
+   * a no-op.
    */
-  coldPutMany(ms: Memory[]): Promise<void>;
+  coldPutMany(snapshots: Memory[]): Promise<GuardedWriteResult>;
   /**
    * The cold copy written by `coldPut` (a snapshot, embedding included), or
    * null. Fields that changed after `coldPut` (e.g. the access log) are not
    * reflected; hydration should take live fields from `get`.
    */
   coldGet(id: string): Promise<Memory | null>;
-  /** Changes the tier only; unknown ids are ignored. */
-  setTier(id: string, tier: Tier): Promise<void>;
+  /**
+   * Changes the tier only. With `snapshot`, guarded: applies only while the
+   * record's `updatedAt` and `tier` still equal the snapshot's. Resolves true
+   * when the tier was written, false for an unknown id or a failed guard.
+   */
+  setTier(id: string, tier: Tier, snapshot?: Pick<Memory, 'updatedAt' | 'tier'>): Promise<boolean>;
   /** A stored cursor (e.g. a transcript import offset), or null when unset. */
   getCursor(key: string): Promise<string | null>;
   setCursor(key: string, value: string): Promise<void>;

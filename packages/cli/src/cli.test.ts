@@ -553,6 +553,14 @@ describe('oort forget, pin', () => {
     expect((await h.run(['unpin', m.id])).code).toBe(0);
     expect((await h.store.get(m.id))?.pinned).toBe(false);
   });
+
+  it('cli.consolidate-prints-skipped', async () => {
+    const h = harness();
+    await h.store.upsert(memory({ validTo: '2026-10-02T00:00:00.000Z' }));
+    const r = await h.run(['consolidate']);
+    expect(r.code).toBe(0);
+    expect(r.io.stdout).toBe('promoted 0\ndemoted 1\nevicted 1\nexpired 1\nskipped 0\n');
+  });
 });
 
 describe('oort hook (in process)', () => {

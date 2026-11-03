@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { ScopeFilter } from './adapters.js';
+import type { MemoryStore, ScopeFilter } from './adapters.js';
 import { appendAccess } from './activation.js';
 import { resolveConfig } from './config.js';
 import { COLD_EVICT_BATCH, consolidate } from './consolidate.js';
 import { createMemoryStore } from './memory-store.js';
-import type { AccessLog, Memory } from './model.js';
+import { isCurrent, type AccessLog, type Memory } from './model.js';
 import { makeMemory as baseMemory, vec } from './store-conformance.js';
 
 const SCOPE: ScopeFilter = {
@@ -162,7 +162,7 @@ describe('consolidate', () => {
     const first = await consolidate(SCOPE, deps);
     expect(first.promoted.length + first.demoted.length + first.expired.length).toBeGreaterThan(0);
     const second = await consolidate(SCOPE, deps);
-    expect(second).toEqual({ promoted: [], demoted: [], evicted: [], expired: [] });
+    expect(second).toEqual({ promoted: [], demoted: [], evicted: [], expired: [], skipped: 0 });
   });
   it('consolidate.leaves-out-of-scope-untouched', async () => {
     const { store, deps } = setup(50);
@@ -182,7 +182,7 @@ describe('consolidate', () => {
     await store.upsert(a);
     await store.upsert(b);
     const res = await consolidate(SCOPE, deps);
-    for (const arr of Object.values(res)) {
+    for (const arr of [res.promoted, res.demoted, res.evicted, res.expired]) {
       expect(arr).not.toContain('other-customer');
       expect(arr).not.toContain('other-agent');
     }
@@ -239,11 +239,79 @@ describe('consolidate', () => {
     };
     store.coldPut = async () => {
       singles++;
+      return { skipped: [] };
     };
     const res = await consolidate(SCOPE, deps);
     expect(res.evicted).toHaveLength(n);
     expect(sizes).toEqual([COLD_EVICT_BATCH, COLD_EVICT_BATCH, 7]);
     expect(singles).toBe(0);
     expect((await store.list(SCOPE, { tier: 'cold', validOnly: false })).length).toBe(n);
+  });
+
+  it('consolidate.race-with-supersede-keeps-chain', async () => {
+    const { store, deps } = setup(0);
+    // Stale and rarely read: consolidation will evict it.
+    await store.upsert(
+      makeMemory({
+        id: 'prior',
+        text: 'the api listens on 8080',
+        salience: 0.1,
+        embedding: vec(1, 1, 1, 1),
+        accessLog: logAt(ago(300 * DAY)),
+        updatedAt: ago(10 * DAY).toISOString(),
+      }),
+    );
+    // A drain supersedes `prior` after consolidate's list() but before its eviction lands.
+    const supersede = async (): Promise<void> => {
+      const live = await store.get('prior');
+      if (live === null) throw new Error('prior missing');
+      const iso = NOW.toISOString();
+      await store.upsertMany([
+        makeMemory({
+          id: 'next',
+          text: 'the api listens on 9090',
+          validFrom: iso,
+          supersedes: 'prior',
+          embedding: vec(2, 2, 2, 2),
+          accessLog: logAt(NOW),
+          createdAt: iso,
+          updatedAt: iso,
+        }),
+        {
+          ...live,
+          validTo: iso,
+          expiredAt: iso,
+          endReason: 'superseded',
+          supersededBy: 'next',
+          updatedAt: iso,
+        },
+      ]);
+    };
+    let raced = false;
+    const racing: MemoryStore = {
+      ...store,
+      async coldPutMany(ms) {
+        if (!raced) {
+          raced = true;
+          await supersede();
+        }
+        return store.coldPutMany(ms);
+      },
+    };
+    const res = await consolidate(SCOPE, { ...deps, store: racing });
+    expect(raced).toBe(true);
+    const prior = await store.get('prior');
+    const next = await store.get('next');
+    expect(prior?.supersededBy).toBe('next');
+    expect(prior?.expiredAt).toBe(NOW.toISOString());
+    expect(prior?.validTo).toBe(NOW.toISOString());
+    expect(prior?.endReason).toBe('superseded');
+    expect(next?.supersedes).toBe('prior');
+    // Exactly one current version of the fact.
+    expect([prior, next].filter((m) => m !== null && isCurrent(m, NOW)).map((m) => m?.id)).toEqual([
+      'next',
+    ]);
+    expect(res.evicted).not.toContain('prior');
+    expect(res.skipped).toBe(1);
   });
 });

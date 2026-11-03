@@ -49,6 +49,19 @@ export function vec(...values: number[]): Int8Array {
   return Int8Array.from(values);
 }
 
+/**
+ * Stores `m` and demotes it to cold, the way consolidation does: `coldPut` is
+ * targeted and guarded, so it only demotes a record read back from the store.
+ * A `tier: "cold"` input is stored warm first. Returns the record as demoted.
+ */
+export async function seedCold(store: MemoryStore, m: Memory): Promise<Memory> {
+  const snapshot: Memory = { ...m, tier: m.tier === 'cold' ? 'warm' : m.tier };
+  await store.upsert(snapshot);
+  const { skipped } = await store.coldPut(snapshot);
+  if (skipped.length > 0) throw new Error(`seedCold: coldPut skipped ${m.id}`);
+  return snapshot;
+}
+
 const LOCAL: ScopeFilter = {
   orgId: 'local',
   customerId: 'self',
@@ -113,7 +126,7 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
 
     it('upsert-warm-drops-cold-copy', async () => {
       const m = makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) });
-      await store.coldPut(m);
+      await seedCold(store, m);
       const main = await store.get('c1');
       if (main === null) throw new Error('coldPut lost the main record');
 
@@ -125,38 +138,153 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
       expect(await store.coldGet('c1')).toBeNull();
       expect((await store.get('c1'))?.tier).toBe('warm');
 
-      await store.coldPut(makeMemory({ id: 'c2' }));
+      await seedCold(store, makeMemory({ id: 'c2' }));
       await store.upsertMany([{ ...makeMemory({ id: 'c2' }), tier: 'hot' }]);
       expect(await store.coldGet('c2')).toBeNull();
     });
 
     it('cold-put-many-roundtrip', async () => {
       const a = makeMemory({ id: 'a', text: 'alpha', embedding: vec(1, 2, 3, 4) });
-      const b = makeMemory({ id: 'b', text: 'beta', embedding: vec(4, 3, 2, 1) });
-      await store.coldPut(makeMemory({ id: 'a', text: 'old alpha', embedding: vec(9, 9, 9, 9) }));
-      await store.coldPutMany([a, b]);
+      const b = makeMemory({ id: 'b', text: 'beta', tier: 'hot', embedding: vec(4, 3, 2, 1) });
+      await store.upsertMany([a, b]);
+      expect(await store.coldPutMany([a, b])).toEqual({ skipped: [] });
       for (const m of [a, b]) {
+        // The cold copy is the snapshot; the main record changes only tier and embedding.
         expect(await store.coldGet(m.id)).toEqual(m);
-        const main = await store.get(m.id);
-        expect(main?.tier).toBe('cold');
-        expect(main?.text).toBe(m.text);
-        expect(main?.embedding).toBeUndefined();
+        const { embedding: _dropped, ...rest } = m;
+        expect(await store.get(m.id)).toEqual({ ...rest, tier: 'cold' });
       }
-      await expect(store.coldPutMany([])).resolves.toBeUndefined();
+      await expect(store.coldPutMany([])).resolves.toEqual({ skipped: [] });
     });
 
     it('cold-put-many-is-atomic', async () => {
       const first = makeMemory({ id: 'x', text: 'first', embedding: vec(1, 2, 3, 4) });
-      await store.coldPut(first);
+      await seedCold(store, first);
       const good = makeMemory({ id: 'y', text: 'good', embedding: vec(1, 1, 1, 1) });
-      const replacement = makeMemory({ id: 'x', text: 'second', embedding: vec(4, 3, 2, 1) });
-      const bad = makeMemory({ id: 'z', embedding: vec(1, 2, 3, 4, 5) }); // wrong dimension
-      await expect(store.coldPutMany([good, replacement, bad])).rejects.toThrow();
-      expect(await store.get('y')).toBeNull();
+      const plain = makeMemory({ id: 'z' });
+      await store.upsertMany([good, plain]);
+      const bad = { ...plain, embedding: vec(1, 2, 3, 4, 5) }; // wrong dimension
+      await expect(store.coldPutMany([good, bad])).rejects.toThrow();
+      expect(await store.get('y')).toEqual(good);
       expect(await store.coldGet('y')).toBeNull();
-      expect(await store.get('z')).toBeNull();
+      expect(await store.get('z')).toEqual(plain);
       expect(await store.coldGet('x')).toEqual(first);
-      expect((await store.get('x'))?.text).toBe('first');
+      expect((await store.get('x'))?.tier).toBe('cold');
+    });
+
+    it('cold-put-skips-changed-missing-and-cold', async () => {
+      const a = makeMemory({ id: 'a', embedding: vec(1, 2, 3, 4) });
+      const b = makeMemory({ id: 'b', embedding: vec(1, 2, 3, 4) });
+      const c = makeMemory({ id: 'c', embedding: vec(1, 2, 3, 4) });
+      await store.upsertMany([a, b, c]);
+      await store.setTier('b', 'hot'); // tier moved since the snapshot
+      await store.forget('c'); // gone since the snapshot
+      const coldSnap = await seedCold(store, makeMemory({ id: 'd', embedding: vec(1, 2, 3, 4) }));
+      const d = await store.get('d'); // a cold record has no embedding to keep
+      if (d === null) throw new Error('seedCold lost d');
+      const res = await store.coldPutMany([a, b, c, d]);
+      expect([...res.skipped].sort()).toEqual(['b', 'c', 'd']);
+      expect((await store.get('a'))?.tier).toBe('cold');
+      expect(await store.get('b')).toEqual({ ...b, tier: 'hot' });
+      expect(await store.coldGet('b')).toBeNull();
+      expect(await store.get('c')).toBeNull(); // never resurrected
+      expect(await store.coldGet('c')).toBeNull();
+      expect(await store.coldGet('d')).toEqual(coldSnap);
+      // Only the last entry for an id counts.
+      const e = makeMemory({ id: 'e', text: 'e', embedding: vec(1, 1, 1, 1) });
+      await store.upsert(e);
+      const eLater = { ...e, embedding: vec(2, 2, 2, 2) };
+      expect(await store.coldPutMany([e, eLater])).toEqual({ skipped: [] });
+      expect((await store.coldGet('e'))?.embedding).toEqual(vec(2, 2, 2, 2));
+    });
+
+    it('targeted-eviction-preserves-concurrent-supersede', async () => {
+      const t0 = '2026-11-01T00:00:00.000Z';
+      const t1 = '2026-11-02T00:00:00.000Z';
+      const prior = makeMemory({
+        id: 'prior',
+        text: 'the api listens on 8080',
+        validFrom: t0,
+        embedding: vec(1, 2, 3, 4),
+        createdAt: t0,
+        updatedAt: t0,
+      });
+      const other = makeMemory({ id: 'other', embedding: vec(4, 3, 2, 1), updatedAt: t0 });
+      await store.upsertMany([prior, other]);
+      // Consolidation reads its snapshot ...
+      const snapshot = await store.list(LOCAL, { validOnly: false });
+      // ... a drain supersedes `prior` and a recall reads `other` before the eviction lands.
+      const next = makeMemory({
+        id: 'next',
+        text: 'the api listens on 9090',
+        validFrom: t1,
+        supersedes: 'prior',
+        embedding: vec(1, 1, 2, 2),
+        createdAt: t1,
+        updatedAt: t1,
+      });
+      const closed: Memory = {
+        ...prior,
+        validTo: t1,
+        expiredAt: t1,
+        endReason: 'superseded',
+        supersededBy: 'next',
+        updatedAt: t1,
+      };
+      await store.upsertMany([next, closed]);
+      await store.recordAccess(['other'], new Date(t1));
+      const liveOther = await store.get('other');
+
+      const res = await store.coldPutMany(snapshot);
+      // The chain survives intact: prior stays non-current and linked, nothing resurrected.
+      expect(await store.get('prior')).toEqual(closed);
+      expect(res.skipped).toEqual(['prior']);
+      expect(await store.coldGet('prior')).toBeNull();
+      expect(await store.get('next')).toEqual(next);
+      // The applied eviction is targeted: the concurrent access is kept.
+      const { embedding: _dropped, ...rest } = liveOther as Memory;
+      expect(await store.get('other')).toEqual({ ...rest, tier: 'cold' });
+      expect((await store.get('other'))?.accessLog.count).toBe(1);
+    });
+
+    it('targeted-expiry-preserves-concurrent-change', async () => {
+      const t0 = '2026-11-01T00:00:00.000Z';
+      const t1 = '2026-11-02T00:00:00.000Z';
+      const at = new Date('2026-11-03T00:00:00.000Z');
+      const past = '2026-11-01T12:00:00.000Z';
+      const base = { validFrom: t0, validTo: past, embedding: vec(1, 2, 3, 4), updatedAt: t0 };
+      const due = makeMemory({ id: 'due', ...base });
+      const redated = makeMemory({ id: 'redated', ...base });
+      const ended = makeMemory({ id: 'ended', ...base, endReason: 'superseded' });
+      const gone = makeMemory({ id: 'gone', ...base });
+      await store.upsertMany([due, redated, ended, gone]);
+      const snapshot = await store.list(LOCAL, { validOnly: false });
+      // Between the read and the expiry: one fact is re-dated, one is read, one forgotten.
+      const later = { ...redated, validTo: '2999-01-01T00:00:00.000Z', updatedAt: t1 };
+      await store.upsert(later);
+      await store.recordAccess(['due'], new Date(t1));
+      await store.forget('gone');
+
+      const res = await store.expireMany(snapshot, at);
+      expect([...res.skipped].sort()).toEqual(['gone', 'redated']);
+      expect(await store.get('redated')).toEqual(later);
+      expect(await store.get('gone')).toBeNull();
+      // Only the expiry fields change; the concurrent access is kept.
+      const live = await store.get('due');
+      expect(live).toEqual({
+        ...due,
+        expiredAt: at.toISOString(),
+        endReason: 'expired',
+        accessLog: live?.accessLog,
+      });
+      expect(live?.accessLog.count).toBe(1);
+      // An existing end reason is kept.
+      expect(await store.get('ended')).toEqual({ ...ended, expiredAt: at.toISOString() });
+      // Already expired: skipped, and the first expiry stands.
+      const again = await store.expireMany(snapshot, new Date('2026-11-04T00:00:00.000Z'));
+      expect([...again.skipped].sort()).toEqual(['due', 'ended', 'gone', 'redated']);
+      expect((await store.get('due'))?.expiredAt).toBe(at.toISOString());
+      await expect(store.expireMany([], at)).resolves.toEqual({ skipped: [] });
     });
 
     it('lexical-finds-exact-identifier', async () => {
@@ -178,7 +306,7 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
         entities: ['auth-service-8080'],
         embedding: vec(1, 2, 3, 4),
       });
-      await store.coldPut(m);
+      await seedCold(store, m);
       const hits = await store.lexical('auth-service-8080', LOCAL, 10);
       expect(hits).toHaveLength(1);
       expect(hits[0]).toMatchObject({ id: 'c1', tier: 'cold' });
@@ -196,7 +324,7 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
     it('dense-excludes-cold', async () => {
       await store.upsert(makeMemory({ id: 'warm', embedding: vec(0, 100, 0, 0) }));
       await store.upsert(makeMemory({ id: 'bare' }));
-      await store.coldPut(makeMemory({ id: 'cold', embedding: vec(100, 0, 0, 0) }));
+      await seedCold(store, makeMemory({ id: 'cold', embedding: vec(100, 0, 0, 0) }));
       const hits = await store.dense(vec(100, 0, 0, 0), LOCAL, 10);
       expect(ids(hits)).toEqual(['warm']);
       expect(hits[0]?.tier).toBe('warm');
@@ -273,7 +401,7 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
 
     it('cold-roundtrip-preserves-embedding', async () => {
       const m = makeMemory({ id: 'c1', text: 'A long claim', embedding: vec(5, -6, 7, -8) });
-      await store.coldPut(m);
+      await seedCold(store, m);
       const cold = await store.coldGet('c1');
       expect(cold?.text).toBe('A long claim');
       expect(cold?.embedding).toEqual(vec(5, -6, 7, -8));
@@ -287,9 +415,15 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
     it('set-tier', async () => {
       const m = makeMemory({ id: 'm1', embedding: vec(1, 2, 3, 4) });
       await store.upsert(m);
-      await store.setTier('m1', 'hot');
+      expect(await store.setTier('m1', 'hot')).toBe(true);
       expect(await store.get('m1')).toEqual({ ...m, tier: 'hot' });
-      await expect(store.setTier('missing', 'hot')).resolves.toBeUndefined();
+      expect(await store.setTier('missing', 'hot')).toBe(false);
+      // Guarded by a snapshot: applies only while updatedAt and tier still match it.
+      expect(await store.setTier('m1', 'warm', m)).toBe(false); // tier moved since `m`
+      expect(await store.setTier('m1', 'warm', { ...m, tier: 'hot', updatedAt: 'x' })).toBe(false);
+      expect((await store.get('m1'))?.tier).toBe('hot');
+      expect(await store.setTier('m1', 'warm', { ...m, tier: 'hot' })).toBe(true);
+      expect(await store.get('m1')).toEqual(m);
     });
 
     it('cursor-roundtrip', async () => {
@@ -303,7 +437,8 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
 
     it('forget-removes-everywhere', async () => {
       await store.upsert(makeMemory({ id: 'warm', text: 'auth-service-8080 warm' }));
-      await store.coldPut(
+      await seedCold(
+        store,
         makeMemory({ id: 'cold', stub: 'auth-service-8080 cold', embedding: vec(1, 2, 3, 4) }),
       );
       await store.forget('warm');
@@ -378,6 +513,7 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
         ['coldPut', () => store.coldPut(m)],
         ['coldPutMany', () => store.coldPutMany([m])],
         ['coldGet', () => store.coldGet('m1')],
+        ['expireMany', () => store.expireMany([m], new Date())],
         ['setTier', () => store.setTier('m1', 'hot')],
         ['getCursor', () => store.getCursor('k')],
         ['setCursor', () => store.setCursor('k', 'v')],
