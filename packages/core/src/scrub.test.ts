@@ -70,6 +70,18 @@ describe('scrub', () => {
       'auth-header',
       'env-secret',
       'high-entropy',
+      'shopify-key',
+      'digitalocean-token',
+      'mailgun-key',
+      'gitlab-token',
+      'square-token',
+      'slack-token',
+      'slack-webhook',
+      'npm-token',
+      'huggingface-token',
+      'twilio-sid',
+      'twilio-key',
+      'basic-auth-arg',
     ]) {
       expect(kinds.has(k), k).toBe(true);
     }
@@ -101,18 +113,17 @@ describe('scrub', () => {
   });
 
   it('scrub.keeps-surrounding-text', () => {
-    const out = scrub('before AKIAIOSFODNN7EXAMPLE after\nDB_PASSWORD=hunter2hunter2\nlast line');
+    const out = scrub('before AKIAIOSFODNN7EXAMPLE after\nDB_PASSWORD=hunter2hunter2\nlast line'); // nosemgrep: synthetic test credential, not a real secret
     expect(out.text).toBe(
       'before [REDACTED:aws-access-key] after\nDB_PASSWORD=[REDACTED:env-secret]\nlast line',
     );
-    expect(scrub('https://u:pw@host.example/path').text).toBe(
-      'https://[REDACTED:url-credentials]@host.example/path',
-    );
+    const url = 'https://u:pw@host.example/path'; // nosemgrep: synthetic test credential, not a real secret
+    expect(scrub(url).text).toBe('https://[REDACTED:url-credentials]@host.example/path');
     expect(scrub('').secretRatio).toBe(0);
   });
 
   it('scrub.counts-redactions-and-ratio', () => {
-    const out = scrub('a AKIAIOSFODNN7EXAMPLE b ASIAIOSFODNN7EXAMPLE c');
+    const out = scrub('a AKIAIOSFODNN7EXAMPLE b ASIAIOSFODNN7EXAMPLE c'); // nosemgrep: synthetic test credential, not a real secret
     expect(out.redactions).toEqual([{ kind: 'aws-access-key', count: 2 }]);
     expect(out.secretRatio).toBeCloseTo(40 / 47, 5);
   });
@@ -123,8 +134,16 @@ describe('scrub', () => {
     expect(once.secretRatio).toBeLessThanOrEqual(1);
     expect(scrub(once.text).secretRatio).toBe(0);
     for (const { text, secret } of SECRETS) {
-      // Already quoted, or inside escaped JSON where a bare quote would be invalid.
-      if (text.includes(`"${secret}"`) || text.includes('\\"')) continue;
+      // Already quoted, inside escaped JSON, or a URL userinfo: a bare quote there
+      // makes the input invalid rather than the secret quoted.
+      if (
+        text.includes(`"${secret}"`) ||
+        text.includes('\\"') ||
+        text.includes(`://${secret}@`) ||
+        text.includes(`/services/${secret}`)
+      ) {
+        continue;
+      }
       const r = scrub(text.split(secret).join(`"${secret}"`));
       expect(r.secretRatio).toBeLessThanOrEqual(1);
       expect(r.text).not.toContain(secret);
@@ -139,7 +158,7 @@ describe('scrub', () => {
   });
 
   it('scrub.keeps-path-redacts-key-in-it', () => {
-    const key = 'Zk3Qx9Lm2Vb7Nc4Rt8Yp1Wd6Hs5Jg0Fa9Eu3Io7Kl2Mn';
+    const key = 'Zk3Qx9Lm2Vb7Nc4Rt8Yp1Wd6Hs5Jg0Fa9Eu3Io7Kl2Mn'; // nosemgrep: synthetic test credential, not a real secret
     expect(key).toHaveLength(44);
     const out = scrub(`/home/me/.cache/blobs/${key}/data.bin`);
     // The short component on each side of a key goes with it: base64 contains
@@ -151,18 +170,17 @@ describe('scrub', () => {
   });
 
   it('scrub.keeps-json-valid-and-count-keys', () => {
-    expect(scrub('{"password": "hunter2hunter2"}').text).toBe(
-      '{"password": "[REDACTED:env-secret]"}',
-    );
+    const json = '{"password": "hunter2hunter2"}'; // nosemgrep: synthetic test credential, not a real secret
+    expect(scrub(json).text).toBe('{"password": "[REDACTED:env-secret]"}');
     expect(scrub('TOKEN_COUNT=4096\nmax_tokens: 1024').text).toBe(
       'TOKEN_COUNT=4096\nmax_tokens: 1024',
     );
   });
 
   it('scrub.redacts-keys-in-paths-without-leaks', () => {
-    const k44 = 'kT9+vQ2/Lm8Xp4Rz+Wd6Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq';
+    const k44 = 'kT9+vQ2/Lm8Xp4Rz+Wd6Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq'; // nosemgrep: synthetic test credential, not a real secret
     const k88 =
-      '452GH2wVMPSIobFpU6EpN4dQJzEI66h/aJF++WFGNdC4Oq08twSbp5YOgw4keTUTI5W4VT/MC54cHr4b1/gktN==';
+      '452GH2wVMPSIobFpU6EpN4dQJzEI66h/aJF++WFGNdC4Oq08twSbp5YOgw4keTUTI5W4VT/MC54cHr4b1/gktN=='; // nosemgrep: synthetic test credential, not a real secret
     const R = '[REDACTED:high-entropy]';
     // A base64 key with `/` takes the short components beside it: any of them
     // could be its edge chunk. Hosts and dot-directories stay.
@@ -193,35 +211,35 @@ describe('scrub', () => {
     const cases: [string, string][] = [
       // An unquoted value ends at a delimiter only when the delimiter ends the value.
       ['DB_PASSWORD=Xk9}mQ2)vLp,8rT', `DB_PASSWORD=${R('env-secret')}`],
-      ['export DB_PASSWORD=hunter2,secondhalf', `export DB_PASSWORD=${R('env-secret')}`],
+      ['export DB_PASSWORD=hunter2,secondhalf', `export DB_PASSWORD=${R('env-secret')}`], // nosemgrep: synthetic test credential, not a real secret
       ['PGPASSWORD=ab]cd]ef', `PGPASSWORD=${R('env-secret')}`],
       ['{"password": 1234, "x": 1}', `{"password": ${R('env-secret')}, "x": 1}`],
-      ['f(password=hunter2)', `f(password=${R('env-secret')})`],
+      ['f(password=hunter2)', `f(password=${R('env-secret')})`], // nosemgrep: synthetic test credential, not a real secret
       ['[password=abc]', `[password=${R('env-secret')}]`],
-      ['password=hunter2, next', `password=${R('env-secret')}, next`],
+      ['password=hunter2, next', `password=${R('env-secret')}, next`], // nosemgrep: synthetic test credential, not a real secret
       [
-        '{"password": "hunter2hunter2", "user": "bob"}',
+        '{"password": "hunter2hunter2", "user": "bob"}', // nosemgrep: synthetic test credential, not a real secret
         `{"password": "${R('env-secret')}", "user": "bob"}`,
       ],
       // Arrays of strings: each element goes, the array stays valid.
       ['secrets: ["a","b"]', `secrets: ["${R('env-secret')}","${R('env-secret')}"]`],
       // JSON inside a JSON string (AWS Secrets Manager).
       [
-        '{"SecretString": "{\\"username\\":\\"admin\\",\\"password\\":\\"Tr0ub4dor3x\\"}"}',
+        '{"SecretString": "{\\"username\\":\\"admin\\",\\"password\\":\\"Tr0ub4dor3x\\"}"}', // nosemgrep: synthetic test credential, not a real secret
         `{"SecretString": "${R('env-secret')}"}`,
       ],
       [
         [
           '{',
           '    "Name": "prod/db",',
-          '    "SecretString": "{\\"username\\":\\"admin\\",\\"password\\":\\"Tr0ub4dor3x\\"}",',
+          '    "SecretString": "{\\"username\\":\\"admin\\",\\"password\\":\\"Tr0ub4dor3x\\"}",', // nosemgrep: synthetic test credential, not a real secret
           '    "VersionId": "abc"',
           '}',
         ].join('\n'),
         `{\n    "Name": "prod/db",\n    "SecretString": "${R('env-secret')}",\n    "VersionId": "abc"\n}`,
       ],
       [
-        '{"body": "{\\"password\\":\\"Tr0ub4dor3x\\"}"}',
+        '{"body": "{\\"password\\":\\"Tr0ub4dor3x\\"}"}', // nosemgrep: synthetic test credential, not a real secret
         `{"body": "{\\"password\\":\\"${R('env-secret')}\\"}"}`,
       ],
       // Query parameters keep their name.
@@ -233,10 +251,6 @@ describe('scrub', () => {
       [
         'cat ./secrets/kT9+vQ2/Lm8Xp4Rz+Wd6Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq.json',
         `cat ./${R('high-entropy')}.json`,
-      ],
-      [
-        'curl https://hooks.slack.com/' + 'services/T01ABCDEF/B02GHIJKL/xYz9AbC3dEf6GhI2jKl5MnO8',
-        `curl https://hooks.slack.com/${R('high-entropy')}`,
       ],
     ];
     expect(cases.map(([i]) => scrub(i).text)).toEqual(cases.map(([, o]) => o));
@@ -259,6 +273,9 @@ describe('scrub', () => {
       ['session_id=sess_9fK2mQ7xL4pR8tZ1', 'session_id=sess_9fK2mQ7xL4pR8tZ1'],
       ['x 9fKq2LmZ8xRt4VbN7wPy3HsJ6cD1eG.', 'x 9fKq2LmZ8xRt4VbN7wPy3HsJ6cD1eG.'],
       ['passwordHash: $2b$10$abc', 'passwordHash: $2b$10$abc'],
+      // Code with a credential-named variable: the expression goes too.
+      ['const tokenValue = parseToken(raw);', 'const tokenValue = [REDACTED:env-secret]'],
+      ['dict(password=pw,host=db1)', 'dict(password=[REDACTED:env-secret])'],
       ['the secret: we ship friday', 'the secret: [REDACTED:env-secret] ship friday'],
       [
         'https://docs.google.com/document/d/1aBcD3fGhIjKlMnOpQrStUvWxYz0123456789AbCdEf/edit',
@@ -400,7 +417,7 @@ describe('scrub', () => {
       'tokenizer:'.repeat(10_000),
       '/'.repeat(100_000),
       'a.'.repeat(50_000),
-      'kT9+vQ2/Lm8Xp4Rz+Wd6Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq '.repeat(2_300),
+      'kT9+vQ2/Lm8Xp4Rz+Wd6Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq '.repeat(2_300), // nosemgrep: synthetic test credential, not a real secret
     ];
     for (const s of inputs) {
       const t = performance.now();
@@ -416,7 +433,7 @@ function o(userText: string, tools: string[] = []): Observation {
 
 describe('scrubObservation', () => {
   it('scrub.secret-ratio-drops-mostly-secret', () => {
-    const pem = `-----BEGIN PRIVATE KEY-----\n${'A1b2C3d4E5f6G7h8'.repeat(80).slice(0, 1146)}\n-----END PRIVATE KEY-----`;
+    const pem = `-----BEGIN PRIVATE KEY-----\n${'A1b2C3d4E5f6G7h8'.repeat(80).slice(0, 1146)}\n-----END PRIVATE KEY-----`; // nosemgrep: synthetic test credential, not a real secret
     expect(pem.length).toBe(1200);
     const prose = 'p'.repeat(50);
     const res = scrubObservation(o(`${pem}${prose}`));
@@ -426,7 +443,7 @@ describe('scrubObservation', () => {
 
   it('scrub.keeps-small-secret-in-long-prose', () => {
     const key =
-      'sk-ant-' + 'aB3dE5gH7jK9mN1pQ3rS5tU7vW9xYz2C4e6G8i0K1m3O5q7S9u1W3y5A7c9E1'.slice(0, 53);
+      'sk-ant-' + 'aB3dE5gH7jK9mN1pQ3rS5tU7vW9xYz2C4e6G8i0K1m3O5q7S9u1W3y5A7c9E1'.slice(0, 53); // nosemgrep: synthetic test credential, not a real secret
     expect(key).toHaveLength(60);
     const prose = 'The deploy went fine and we discussed the schema. '.repeat(11);
     const res = scrubObservation(o(`${prose}${key}`, ['ran tests']));
@@ -438,9 +455,9 @@ describe('scrubObservation', () => {
 
   it('scrub.observation-merges-redactions-and-scrubs-tools', () => {
     const res = scrubObservation({
-      userText: 'AKIAIOSFODNN7EXAMPLE and some long prose '.padEnd(400, '.'),
-      assistantText: 'ASIAIOSFODNN7EXAMPLE '.padEnd(400, '.'),
-      toolSummaries: ['export SECRET_TOKEN=letmein99'.padEnd(400, ' ') + 'ok'],
+      userText: 'AKIAIOSFODNN7EXAMPLE and some long prose '.padEnd(400, '.'), // nosemgrep: synthetic test credential, not a real secret
+      assistantText: 'ASIAIOSFODNN7EXAMPLE '.padEnd(400, '.'), // nosemgrep: synthetic test credential, not a real secret
+      toolSummaries: ['export SECRET_TOKEN=letmein99'.padEnd(400, ' ') + 'ok'], // nosemgrep: synthetic test credential, not a real secret
       at: '2026-01-01T00:00:00.000Z',
     });
     expect(res.dropped).toBe(false);

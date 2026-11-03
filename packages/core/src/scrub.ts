@@ -125,7 +125,9 @@ function envKey(key: string): 'always' | 'unless-count' | null {
   return plural ? 'unless-count' : null;
 }
 
-const COUNT_VALUE = /^(?:-?\d[\d_,.]*[kKmM]?|true|false|null|none|True|False|None)$/;
+/** Values of a plural `TOKENS` key that count rather than hold: `128`, `~4k`, `6m0s`, `undefined`. */
+const COUNT_VALUE =
+  /^(?:[~<>≈][ \t]*)?(?:-?\d[\d_,.]*[kKmM]?|\d+(?:ms|s|m|h|d)(?:\d+(?:ms|s|m|h))*|true|false|null|none|undefined|NaN|True|False|None)$/;
 
 /**
  * A value: double-quoted (escapes allowed), single-quoted, escaped-quoted
@@ -170,7 +172,11 @@ function envSecret(head: string, offset: number, text: string): Replacement | nu
       break;
     }
   }
-  if (value === '' || (level === 'unless-count' && COUNT_VALUE.test(value))) return null;
+  if (value === '') return null;
+  // A plural `tokens` value is a count, or quoted text with spaces (`"Hello world"`).
+  if (level === 'unless-count' && (COUNT_VALUE.test(value) || (quote !== '' && /\s/.test(value)))) {
+    return null;
+  }
   return { out: `${head}${quote}${tag('env-secret')}${quote}`, removed: value.length, length };
 }
 
@@ -419,6 +425,33 @@ const RULES: Rule[] = [
   { kind: 'anthropic-key', re: /(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}/g },
   { kind: 'stripe-key', re: /(?<![A-Za-z0-9_-])(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
   { kind: 'typesafe-key', re: /(?<![A-Za-z0-9_-])ts_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
+  // Vendor tokens shorter than 32 chars or with hex bodies (two character
+  // classes) that the high-entropy rule cannot see.
+  { kind: 'shopify-key', re: /(?<![A-Za-z0-9_-])(?:shpat|shpss|shppa)_[0-9a-f]{32}\b/g },
+  { kind: 'digitalocean-token', re: /(?<![A-Za-z0-9_-])(?:dop|doo|dor)_v1_[0-9a-f]{64}\b/g },
+  { kind: 'mailgun-key', re: /(?<![A-Za-z0-9_-])key-[0-9a-f]{32}\b/g },
+  { kind: 'gitlab-token', re: /(?<![A-Za-z0-9_-])glpat-[A-Za-z0-9_-]{20,}\b/g },
+  { kind: 'square-token', re: /(?<![A-Za-z0-9_-])sq0(?:atp|csp)-[A-Za-z0-9_-]{22,}\b/g },
+  { kind: 'slack-token', re: /(?<![A-Za-z0-9_-])xox[abprs]-[A-Za-z0-9-]{10,}\b/g },
+  { kind: 'npm-token', re: /(?<![A-Za-z0-9_-])npm_[A-Za-z0-9]{36}\b/g },
+  // Letters-only bodies included; 34 chars is the current shape, longer ones too.
+  { kind: 'huggingface-token', re: /(?<![A-Za-z0-9_-])hf_[A-Za-z0-9]{34,}\b/g },
+  {
+    kind: 'twilio-sid',
+    // An account SID is an id, but with the key it is half a credential; only
+    // when named as one, so other `AC<hex>` strings survive.
+    re: /(?<![A-Za-z0-9_-])AC[0-9a-f]{32}\b/g,
+    hit: (m, offset, text) =>
+      /sid|account/i.test(text.slice(Math.max(0, offset - 20), offset))
+        ? { out: tag('twilio-sid'), removed: m.length }
+        : null,
+  },
+  { kind: 'twilio-key', re: /(?<![A-Za-z0-9_-])SK[0-9a-f]{32}\b/g },
+  {
+    kind: 'slack-webhook',
+    // The path is the credential; the host stays.
+    re: /(?<=https:\/\/hooks\.slack\.com\/services\/)T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+/g,
+  },
   // Vendor prefixes start a token: `-pa-` inside a base64url key is no Voyage key.
   // A digit is required in the body so kebab-case words like `sk-learn-...` survive.
   {
@@ -441,6 +474,22 @@ const RULES: Rule[] = [
     // be empty and the password may hold `@`: it runs to the last `@` of the authority.
     re: /(?<=\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]*:[^\s/]+(?=@[^@\s/]*(?:[/\s]|$))/gi,
     hit: (m) => (m.includes(MARK) ? null : { out: tag('url-credentials'), removed: m.length }),
+  },
+  {
+    kind: 'url-credentials',
+    // A user-only userinfo of 20+ token characters is a key (Sentry DSN, a
+    // token used as a git username); short names like `user@` stay.
+    re: /(?<=\b[a-z][a-z0-9+.-]*:\/\/)[A-Za-z0-9_-]{20,}(?=@[^@\s/]*(?:[/\s]|$))/gi,
+  },
+  {
+    kind: 'basic-auth-arg',
+    // `curl -u user:password`: the flag and the user stay. A numeric value is a
+    // group id (`docker run -u 1000:1000`).
+    re: /(?<=(?:^|\s)(?:-u[ \t]+|--user[ \t=]+)[^\s:]+:)\S+/g,
+    hit: (m) =>
+      /^\d+$/.test(m) || m.includes(MARK)
+        ? null
+        : { out: tag('basic-auth-arg'), removed: m.length },
   },
   {
     kind: 'auth-header',

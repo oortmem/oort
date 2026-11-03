@@ -312,7 +312,7 @@ describe('observe', () => {
   });
 
   it('observe.never-sends-secret-to-adapters', async () => {
-    const key = 'sk-ant-api03-Zk3Qx9Lm2Vb7Nc4Rt8Yp1Wd6';
+    const key = 'sk-ant-api03-Zk3Qx9Lm2Vb7Nc4Rt8Yp1Wd6'; // nosemgrep: synthetic test credential, not a real secret
     const { deps, spy } = setup(gate(0.9), [rec(null, 'ADD')]);
     const guard = (v: unknown): void => {
       if (JSON.stringify(v).includes(key)) throw new Error('secret reached an adapter');
@@ -357,7 +357,7 @@ describe('observe', () => {
 
   it('observe.drops-mostly-secret-turn', async () => {
     const { deps, spy } = setup(gate(0.9), [rec(null, 'ADD')]);
-    const pem = `-----BEGIN PRIVATE KEY-----\n${'A1b2C3d4E5f6G7h8'.repeat(80).slice(0, 1146)}\n-----END PRIVATE KEY-----`;
+    const pem = `-----BEGIN PRIVATE KEY-----\n${'A1b2C3d4E5f6G7h8'.repeat(80).slice(0, 1146)}\n-----END PRIVATE KEY-----`; // nosemgrep: synthetic test credential, not a real secret
     const res = await observe(obs(`${pem} ok`), localScope(), deps);
     expect(res).toEqual({ outcome: 'skipped', reason: 'secret', decisions: [] });
     expect(spy.embed).toBe(0);

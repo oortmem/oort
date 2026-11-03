@@ -228,3 +228,22 @@ open /Users/mjnong/Projects/MyApp2024/Build/Output/Release9/Win64
 open /Users/mjnong/Documents/Work/Q3/Notes/Draft/A/B/C
 open /Users/mjnong/Desktop/Screenshots/Screenshot_2024_11_03/Image
 open /Users/mjnong/Downloads/Invoice-2024-11/Receipts/Q4
+x-ratelimit-reset-tokens: 6m0s
+"tokens": "Hello world"
+total_tokens: ~4k
+cacheTokens: undefined
+x-ratelimit-remaining-tokens: 39000
+tokens: 1.2k
+output_tokens=56 stop_reason=end_turn
+input_tokens: <100
+prompt_tokens: NaN
+docker run -u 1000:1000 node:22
+git push -u origin main
+git push -u origin feature/x
+https://user@example.com/x
+https://registry.npmjs.org/@typescript-eslint/eslint-plugin/-/eslint-plugin-8.18.2.tgz
+https://d1a2b3c4d5e6f7.cloudfront.net/static/media/HeroBanner.4f8a2c1e9b3d7a05.webp
+kubectl logs web-7d9f8b6c5-x2k9q -n production --since=1h
+the keyboard key-binding is ctrl-k
+monkey-patched-module-for-tests
+SKU SK-1234 in stock
