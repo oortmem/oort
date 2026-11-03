@@ -3,3 +3,6 @@ export * from './model.js';
 export * from './scope.js';
 export * from './config.js';
 export * from './activation.js';
+export * from './adapters.js';
+export * from './fusion.js';
+export * from './memory-store.js';

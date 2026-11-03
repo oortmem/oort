@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./store-conformance": {
+      "types": "./dist/store-conformance.d.ts",
+      "default": "./dist/store-conformance.js"
     }
   },
   "files": [
@@ -23,5 +27,16 @@
   },
   "dependencies": {
     "zod": "4.6.7"
+  },
+  "peerDependencies": {
+    "vitest": "^5.0.5"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
   }
 }
