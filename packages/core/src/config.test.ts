@@ -63,6 +63,29 @@ describe('config', () => {
     expect(resolveHome({ OORT_HOME: '', HOME: h })).toBe(path.join(h, '.oort'));
   });
 
+  it('config.project-config-false-ignores-project-file', () => {
+    // A dotfiles-style HOME: a git repository with an oort.config.json at its root,
+    // and OORT_HOME inside it. The drain must see only the home config.
+    const h = tmp();
+    fs.mkdirSync(path.join(h, '.git'));
+    fs.writeFileSync(
+      path.join(h, 'oort.config.json'),
+      JSON.stringify({ writer: { provider: 'anthropic', model: 'project-model' } }),
+    );
+    const home = path.join(h, '.oort');
+    fs.mkdirSync(home);
+    fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ recall: { returnK: 3 } }));
+    const env = { HOME: h, OORT_HOME: home };
+    expect(resolveConfig(home, env).writer.model).toBe('project-model');
+    const c = resolveConfig(home, env, { projectConfig: false });
+    expect(c.writer.model).toBe('claude-haiku-5-5');
+    expect(c.recall.returnK).toBe(3);
+    expect(c.sources).toMatchObject({ writer: 'default', recall: 'home' });
+    // Not even read: an invalid project file does not throw.
+    fs.writeFileSync(path.join(h, 'oort.config.json'), '{not json');
+    expect(() => resolveConfig(home, env, { projectConfig: false })).not.toThrow();
+  });
+
   it('config.precedence', () => {
     const home = tmp();
     const root = tmp();

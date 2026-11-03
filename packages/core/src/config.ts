@@ -121,13 +121,23 @@ export function resolveHome(env: Record<string, string | undefined> = process.en
   return path.resolve(home !== undefined && home !== '' ? home : os.homedir(), '.oort');
 }
 
+export interface ResolveConfigOptions {
+  /**
+   * Look for `oort.config.json` from `cwd` upward (default true). With false,
+   * no project file is searched for or read: only the home config and the
+   * defaults apply (the write-path drain, which serves every project).
+   */
+  projectConfig?: boolean;
+}
+
 export function resolveConfig(
   cwd: string,
   env: Record<string, string | undefined> = process.env,
+  opts: ResolveConfigOptions = {},
 ): ResolvedConfig {
   const home = resolveHome(env);
 
-  const projectFile = findProjectConfig(cwd);
+  const projectFile = opts.projectConfig === false ? undefined : findProjectConfig(cwd);
   const homeFile = path.join(home, 'config.json');
   const projectRaw = projectFile ? readConfigFile(projectFile) : {};
   const homeRaw = fs.existsSync(homeFile) ? readConfigFile(homeFile) : {};
