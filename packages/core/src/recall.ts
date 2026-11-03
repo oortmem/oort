@@ -201,7 +201,11 @@ function age(validFrom: string, now: Date): string {
   return `${Math.floor(days / 365)}y ago`;
 }
 
-/** Render recalled memories as an `<oort-memory>` block, whole lines only, within `budgetChars`. */
+/**
+ * Render recalled memories as an `<oort-memory>` block, whole lines only, within `budgetChars`.
+ * Each memory's text is scrubbed again (spec §6.2, Stage 0): the last line of defence for a
+ * memory stored before a rule existed, written by another tool, or missed by a regression.
+ */
 export function formatForInjection(r: RecallResult, budgetChars: number, now = new Date()): string {
   if (r.memories.length === 0) return '';
   const open = '<oort-memory>\n';
@@ -209,7 +213,7 @@ export function formatForInjection(r: RecallResult, budgetChars: number, now = n
   let total = open.length + close.length;
   const lines: string[] = [];
   for (const m of r.memories) {
-    const line = `- [${m.type}, ${age(m.validFrom, now)}] ${m.text}`;
+    const line = `- [${m.type}, ${age(m.validFrom, now)}] ${scrub(m.text).text}`;
     const cost = line.length + (lines.length > 0 ? 1 : 0);
     if (total + cost > budgetChars) break;
     lines.push(line);

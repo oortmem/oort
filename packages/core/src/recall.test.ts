@@ -288,4 +288,19 @@ describe('format', () => {
     expect(out.length).toBeLessThanOrEqual(100);
     expect(formatForInjection(r, 10, now)).toBe('');
   });
+
+  it('recall.injection-is-scrubbed', async () => {
+    // Assembled at runtime so no full key literal appears in source.
+    const key = 'AKIA' + 'QWERTYUIOPASDFGH';
+    // Stored directly, as by an older build or another tool: the write path never saw it.
+    const store = await setup([
+      makeMemory({ id: 'leak', text: `deploy with key ${key} via the quokka pipeline` }),
+    ]);
+    const r = await recall({ text: 'quokka pipeline', scope: SCOPE }, { store, config });
+    expect(r.memories.map((m) => m.id)).toEqual(['leak']);
+    const out = formatForInjection(r, 6000);
+    expect(out).not.toContain(key);
+    expect(out).toContain('deploy with key [REDACTED:');
+    expect(out).toContain('via the quokka pipeline');
+  });
 });
