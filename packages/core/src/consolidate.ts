@@ -25,8 +25,8 @@ const RANK: Record<Tier, number> = { cold: 0, warm: 1, hot: 2 };
  *    cold memories are `coldPut`.
  * 3. Non-current memories (superseded, expired, corrected) go straight to cold.
  *
- * Rules: pinned memories are never cold-put (a pinned non-current memory
- * stays as it is); consolidate never promotes cold to warm/hot, since
+ * Rules: pinned memories are never cold-put; a pinned non-current memory is
+ * left in its current tier (hot or warm); consolidate never promotes cold to warm/hot, since
  * hydration is recall's job.
  * Idempotent for a fixed `now`.
  */
@@ -81,7 +81,7 @@ export async function consolidate(
 }
 
 async function evict(store: MemoryStore, m: Memory, result: ConsolidateResult): Promise<void> {
-  await store.setTier(m.id, 'cold');
+  // coldPut itself sets tier 'cold' on the main record.
   await store.coldPut({ ...m, tier: 'cold' });
   result.demoted.push(m.id);
   result.evicted.push(m.id);

@@ -164,4 +164,62 @@ describe('consolidate', () => {
     const second = await consolidate(SCOPE, deps);
     expect(second).toEqual({ promoted: [], demoted: [], evicted: [], expired: [] });
   });
+  it('consolidate.leaves-out-of-scope-untouched', async () => {
+    const { store, deps } = setup(50);
+    const stale = { salience: 0.1, embedding: vec(1, 1, 1, 1), accessLog: logAt(ago(300 * DAY)) };
+    const base = makeMemory({ id: 'x' }).scope;
+    const a = makeMemory({
+      id: 'other-customer',
+      scope: { ...base, customerId: 'someone-else' },
+      ...stale,
+    });
+    const b = makeMemory({
+      id: 'other-agent',
+      scope: { ...base, agentId: 'another-agent' },
+      validTo: ago(HOUR).toISOString(),
+      ...stale,
+    });
+    await store.upsert(a);
+    await store.upsert(b);
+    const res = await consolidate(SCOPE, deps);
+    for (const arr of Object.values(res)) {
+      expect(arr).not.toContain('other-customer');
+      expect(arr).not.toContain('other-agent');
+    }
+    expect(await store.get('other-customer')).toEqual(a);
+    expect(await store.get('other-agent')).toEqual(b);
+  });
+
+  it('consolidate.pinned-non-current-keeps-tier', async () => {
+    const { store, deps } = setup(50);
+    await store.upsert(
+      makeMemory({
+        id: 'ps',
+        pinned: true,
+        tier: 'hot',
+        embedding: vec(1, 1, 1, 1),
+        validTo: ago(DAY).toISOString(),
+        expiredAt: ago(DAY).toISOString(),
+        endReason: 'superseded',
+        supersededBy: 'new',
+      }),
+    );
+    const res = await consolidate(SCOPE, deps);
+    expect(res.evicted).toEqual([]);
+    expect(res.demoted).toEqual([]);
+    expect((await store.get('ps'))?.tier).toBe('hot');
+    expect(await store.coldGet('ps')).toBeNull();
+  });
+
+  it('consolidate.tie-break-newer-updatedAt-first', async () => {
+    const { store, deps } = setup(1);
+    const common = { accessLog: logAt(ago(HOUR)), salience: 0.5 };
+    await store.upsert(
+      makeMemory({ id: 'older', updatedAt: ago(2 * DAY).toISOString(), ...common }),
+    );
+    await store.upsert(makeMemory({ id: 'newer', updatedAt: ago(DAY).toISOString(), ...common }));
+    await consolidate(SCOPE, deps);
+    expect((await store.get('newer'))?.tier).toBe('hot');
+    expect((await store.get('older'))?.tier).toBe('warm');
+  });
 });
