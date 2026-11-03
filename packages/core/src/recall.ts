@@ -110,6 +110,8 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
       if (live === null) return null;
       if (live.tier !== 'cold' && !coldIds.has(id)) return live;
       const blob = await store.coldGet(id);
+      // A lost or torn blob: the memory stays cold, lexical-only.
+      // TODO(Phase 2): re-embed on hydration when an embedder is present.
       if (!blob?.embedding) return live;
       const hydrated: Memory = {
         ...live,

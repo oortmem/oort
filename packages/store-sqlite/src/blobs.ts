@@ -134,7 +134,10 @@ async function openExclusive(file: string): Promise<fsp.FileHandle> {
  * the database row keeps text, stub and entities. After a power loss a blob
  * may be torn or empty; the v2 frame's CRC32 detects that, `coldGet` returns
  * null (logged), and recall falls back to the live row. Worst case the
- * embedding is lost and must be re-derived. A process crash loses nothing
+ * embedding is lost: nothing re-derives it yet, so the memory stays cold
+ * without one and is found lexically only (stub, entities).
+ * TODO(Phase 2): re-embed on hydration when an embedder is present.
+ * A process crash loses nothing
  * (the page cache survives it). The database itself keeps its WAL durability.
  */
 

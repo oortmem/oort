@@ -101,6 +101,22 @@ describe('recall', () => {
     expect(live?.embedding).toBeDefined();
   });
 
+  it('recall.lost-cold-embedding-stays-cold-lexical-only', async () => {
+    // Pins what spec §8 says about a lost cold blob: nothing re-derives the embedding yet.
+    const store = await setup([]);
+    await seedCold(
+      store,
+      makeMemory({ id: 'c', text: 'quokka migration notes', stub: 'quokka migration' }),
+    );
+    const lost: MemoryStore = { ...store, coldGet: async () => null };
+    const r = await recall({ text: 'quokka', scope: SCOPE }, { store: lost, config });
+    expect(r.memories.map((m) => m.id)).toEqual(['c']);
+    expect(r.memories[0]?.explanation.hydrated).toBe(false);
+    const live = await store.get('c');
+    expect(live?.tier).toBe('cold');
+    expect(live?.embedding).toBeUndefined();
+  });
+
   it('recall.scrubs-query-before-network', async () => {
     // Assembled at runtime so no full key literal appears in source.
     const key = 'AKIA' + 'ABCDEFGHIJKLMNOP';

@@ -306,7 +306,9 @@ on Marcus's own transcripts first.
   directory fsync per batch, one DB transaction); blob files are not fsynced
   individually, since per-file fsync made the first 10k consolidate take 60 s.
   A blob torn by power loss fails its v2 CRC32, `coldGet` returns null, and recall
-  falls back to the live row (worst case the embedding is lost and re-derivable).
+  falls back to the live row. Worst case the embedding is lost: nothing re-derives it
+  in Phase 1, so the memory stays cold without an embedding and is found lexically only
+  (stub, entities) until re-embedding on hydration lands (TODO, Phase 2).
 - Daemon: a long-lived local process (`oort serve`) so hooks pay no startup cost;
   hooks fall back to in-process if the daemon is down.
 - Embedding/rerank/decide adapters resolved from `oort.config.json` the way Smelt
