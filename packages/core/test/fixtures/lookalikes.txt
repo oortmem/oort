@@ -51,3 +51,180 @@ TOKENIZER_PATH=/models/tok.json
 secretName: db-credentials
 passwordMinLength: 12
 PASSWORDLESS_LOGIN=true
+main.7f3a9c2b1e4d6a8f.chunk.js
+static/js/787.a1b2c3d4.chunk.js
+_next/static/chunks/pages/_app-3f2a1b9c8d7e6f5a.js
+.next/static/chunks/webpack-59c5c889f52620d6.js
+assets/index-BkL9xQ2mZ7.js
+release-v2.4.17-rc.3-darwin-arm64.dmg
+version 1.2.3-beta.4+build.5678.20241103
+~/.vscode/extensions/ms-python.python-2024.18.1-darwin-arm64
+ip-10-0-12-34.eu-west-1.compute.internal
+s3://bucket/2024/11/03/i-0abc123def4567890.log.gz
+Photos/2024-11-03/DSC_00123.NEF
+report_2024-11-03T12.30.45.final.v2.pdf
+file report_2024-11-03T12.30.45.final.v2.pdf
+src/__tests__/__snapshots__/UserCard.test.tsx.snap
+gh pr checkout feature/JIRA-4821/AddOAuth2Flow
+/home/ci/work/_temp/7f3a9c2b-1e4d-4a8f-9c2b-1e4d6a8f9c2b.sh
+ip-172-31-45-210.ec2.internal
+dist/assets/index-DyF3kL9q.css
+app.a1b2c3d4e5f6a7b8c9d0.bundle.js
+dist/assets/index-BkL9xQ2mZ7.js
+  dist/assets/vendor-C3xT9qLp.js   142.31 kB
+build/static/js/main.8e9f2c1a.js
+_next/static/BkL9xQ2mZ7aBcDeFgHiJk/_buildManifest.js
+C:\Users\Me\AppData\Local\Temp\ab12CD34ef56GH78ij90KL12mn34
+~/Library/Caches/pnpm/v3/files/ab/cdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd-index.json
+commit 3f786850e387550fdab836ed7e6dc881de23001b
+sha 3f786850e38
+uuid 123e4567-e89b-12d3-a456-426614174000
+getUserProfileSettingsForAccountV2Handler
+requestId: 1-67a2b3c4-5d6e7f8091a2b3c4d5e6f7a8
+X-Amzn-Trace-Id: Root=1-67a2b3c4-5d6e7f8091a2b3c4d5e6f7a8
+trace 4bf92f3577b34da6a3ce929d0e0e4736
+span 00f067aa0ba902b7
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+npm ERR! /Users/me/.npm/_cacache/content-v2/sha512/ab/cd/ef0123456789
+node_modules/.vite/deps/chunk-BKL9XQ2M.js
+node_modules/.vite/deps/react-dom_client.js?v=3a1b2c4d
+file:///Users/me/proj/node_modules/.pnpm/esbuild@0.21.5/node_modules/esbuild/lib/main.js
+at Object.<anonymous> (/Users/me/proj/src/components/UserProfile/UserProfileCard.test.tsx:42:13)
+/Users/mjnong/repos/oort/.worktrees/phase-1/packages/core/src/scrub.ts
+dQw4w9WgXcQ
+youtu.be/dQw4w9WgXcQ?si=AbCdEfGh12345678
+Successfully built 3f2a1b9c8d7e  sha256:9c7e2b1d0f4a6e8c
+docker pull node@sha256:a3f19c7ea3f19c7ea3f19c7ea3f19c7ea3f19c7ea3f19c7ea3f19c7ea3f19c7e
+eyJhbGciOiJIUzI1NiJ9
+my.app.config.production.local.yaml
+example.test.integration.spec.ts.snap
+images/2024/11/03/IMG_20241103_120719_123.jpg
+s3://my-bucket/logs/2024/11/03/i-0abc123def4567890.log.gz
+i-0abc123def4567890
+vpc-0a1b2c3d4e5f67890
+sg-0123456789abcdef0
+arn:aws:lambda:us-east-1:123456789012:function:my-function:42
+projects/123456789012/secrets/db-password/versions/3
+C:/WINDOWS/SYSTEM32/DRIVERS/ETC/HOSTS
+/DCIM/100APPLE/IMG_0001.JPG/IMG_0002
+/mnt/c/Users/JD/AppData/X1/Y22/Z333
+/Users/JD/A1/B2/C3/D4/E5/F6/G7/H8
+/opt/X1/Y2/Z3abc/Q4/R5/S6/T7
+/Users/mjnong/.oort/cold/AbC123/XyZ987/blob.zst
+/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/
+/proc/12345/fd/67/net/tcp6
+/sys/class/net/eth0/statistics/rx_bytes
+refs/remotes/origin/feature/ABC-1234-fix-login
+origin/dependabot/npm_and_yarn/next-14.2.15
+ghcr.io/acme/oort-core@sha256:9c7e2b1d0f4a6e8c9c7e2b1d0f4a6e8c9c7e2b1d0f4a6e8c9c7e2b1d0f4a6e8c
+/Applications/Visual Studio Code.app/Contents/MacOS/Electron
+~/go/pkg/mod/github.com/aws/aws-sdk-go-v2@v1.32.2/config
+tsconfig.tsbuildinfo
+packages/core/dist/index.d.ts.map
+coverage/lcov-report/src/scrub.ts.html
+/opt/X1/Y2/Z3abc
+/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w
+./dist/chunk-ABCDEF123456.js
+com.example.myapplication.ui.MainActivity
+org.springframework.boot.autoconfigure.SpringBootApplication
+api.staging.us-east-1.internal.example.com
+pkg @typescript-eslint/eslint-plugin@8.12.2
+from torch.nn.functional import scaled_dot_product_attention
+see node_modules/.pnpm/vitest@2.1.4_@types+node@22.9.0/node_modules
+~/.ssh/id_ed25519.pub
+~/.config/gcloud/application_default_credentials.json
+mjnong@users.noreply.github.com
+sentry.io/organizations/acme/issues/4567891234
+docker.io/library/postgres:16.4-bookworm
+ghcr.io/acme/oort-core:v0.3.1-rc.2
+arn:aws:iam::123456789012:role/service-role/MyLambdaRole-abc123
+projects/my-proj-123456/locations/us-central1/keyRings/kr1
+test_should_redact_secret_when_present_in_path
+TestScrubRedactsKeysInPathsWithoutLeaks
+2024-11-03T12:07:19.123456789Z
+1730635639.123456.789012
+v20.11.1-darwin-arm64.tar.gz
+E2E_TEST_TIMEOUT_MS_FOR_CI=120000
+ENABLE_EXPERIMENTAL_FEATURE_FLAGS_V2=true
+/private/tmp/claude-501/-Users-mjnong-repos/b6974d38-d78e-478f-bfed-6be3c182ce0b/scratchpad
+Library/Developer/Xcode/DerivedData/MyApp-fhqxyzabcdefghijklmnopqrstuv/Build
+~/Library/Developer/Xcode/DerivedData/MyApp-ahbqwertzuiopasdfghjklyxcv/Build
+Bearer abc
+tokenizer: cl100k_base
+tokenUrl: https://x/token
+PASSWORD_RESET_URL=https://x
+tokenEndpoint: https://x
+secretArn: arn:aws:x
+SECRET_ARN=arn:aws:x
+secretsPath: /etc/x
+TOKEN_PATH=/var/run/x
+maxSecretAge: 30
+numPasswords: 3
+tokens_used=5
+totalTokens: 100
+tokenExpiry: 3600
+TOKEN_TTL=3600
+TOKEN_EXPIRES_IN=3600
+PASSWORD_MIN_LENGTH=12
+secret_count=4
+rateLimitTokens: 10
+SECRET_NAME=prod/db/password
+TOKEN_TYPE=Bearer
+DB_PASSWORD_FILE=/run/secrets/db
+GITHUB_TOKEN_PATH=/x
+SECRET_SIZE=32
+passwordLength: 16
+TokenPer: 1
+MAX_PASSWORD=abc
+SECRETS_MANAGER_REGION=us-east-1
+usage: prompt_tokens=812 completion_tokens=96 total_tokens=908
+const opts = { maxTokens: 4096, temperature: 0 }
+token_count: 99
+NUM_TOKENS=12
+input_tokens=1
+total_tokens=908
+MAX_TOKEN_LENGTH=10
+max_token: 100
+num_secrets: 3
+maxPasswordAge: 90
+MIN_PASSWORD_LENGTH=8
+cache_token_ttl: 30
+tokens: ["Hello", " world"]
+secrets: [1, 2]
+"secrets": {"db": 1}
+call handleRequestV2Timeout30sRetry3 now
+call parseHttp2ResponseHeadersForUtf8Decoding now
+open /Volumes/Backup2024/Photos/Album2023/Edited/Final/Export3 now
+cd /Applications/Xcode/Contents/Developer/Platforms/iPhoneOS
+open /Users/mjnong/repos/oort/packages/core/src/scrub.ts
+tail /var/log/syslog
+ls /tmp/x
+vi /etc/nginx/nginx.conf
+dir C:\Users\me\AppData\Local\Temp\abc
+POST https://api.example.com/v1/orgs/ACME/keys/rotate
+open /Users/mjnong/Library/Application_Support/Code/User/settings
+open /Users/MJ/Library/Caches/Google/Chrome/Default/Cache2024
+see /opt/homebrew/Cellar/python3/3_12_1/Frameworks/Python
+node_modules/@types/node/ts5_6/compatibility/disposable
+read /usr/local/lib/python3_11/site-packages/numpy/core/multiarray
+src/components/Dashboard/Widgets/RevenueChart2024/index
+GET /api/v1/orgs/ACME/projects/Proj42/Builds/B9981/Artifacts
+C:/Users/Me/AppData/Local/Microsoft/WindowsApps/Python311
+https://github.com/org/repo/blob/main/packages/core/src/scrubObservation
+https://example.com/download/release/v2/MyApp-Setup-x64-2024
+./src/Generated/Proto/V2/UserServiceGrpcPb2Client
+open /home/ubuntu/Projects/WebApp2/Dist/Assets/Bundle3/Main9
+/Users/mjnong/repos/oort/packages/core/src/scrub.ts
+open /Users/mjnong/Library/Mobile_Documents/iCloud/Desktop/Photos
+cd /Users/mjnong/Code/MyProject/Packages/Web/Src/Components
+cd /Users/mjnong/repos/oort/packages/core/src
+image@sha256:a3f1a3f1a3f1a3f19c7e2b1d0f4a6e8c9c7e2b1d0f4a6e8c9c7e2b1d0f4a6e8c
+secret digest sha256:a3f1a3f1a3f1a3f19c7e2b1d0f4a6e8c9c7e2b1d0f4a6e8c9c7e2b1d0f4a6e8c
+SHA512-Ia8uUyRAYLaYPq9wuxduycBaPWQKpcywU6NgAFDUcQ+pkYLvjAFsvzB8JXGNANySSQQ26DseSAaslkbuaLpOQB==
+call handleRequestV2Timeout30sRetry3Ms now
+cd /Volumes/Backup2024/Photos/Album2023/Edited/Final/Export3
+open /Users/mjnong/Library/Application_Support/Code/User/Settings2024/Backup3
+open /Users/mjnong/Projects/MyApp2024/Build/Output/Release9/Win64
+open /Users/mjnong/Documents/Work/Q3/Notes/Draft/A/B/C
+open /Users/mjnong/Desktop/Screenshots/Screenshot_2024_11_03/Image
+open /Users/mjnong/Downloads/Invoice-2024-11/Receipts/Q4

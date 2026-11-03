@@ -16,17 +16,44 @@ const SECRETS = fixture('secrets.txt').map((l) => {
   return { kind, secret, text: rest.join('\t') };
 });
 
+/** Some 8-character window of `secret` that survives in `out`, if any. */
+function survivingWindow(secret: string, out: string): string | undefined {
+  for (let i = 0; i + 8 <= secret.length; i++) {
+    const w = secret.slice(i, i + 8);
+    if (out.includes(w)) return w;
+  }
+  return undefined;
+}
+
+/** Deterministic PRNG (mulberry32), so property tests are reproducible. */
+function prng(seed: number): (n: number) => number {
+  let a = seed >>> 0;
+  return (n) => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return Math.floor((((t ^ (t >>> 14)) >>> 0) / 4294967296) * n);
+  };
+}
+
 describe('scrub', () => {
   it('scrub.redacts-all-fixture-secrets', () => {
     expect(SECRETS.length).toBeGreaterThanOrEqual(20);
+    const failures: string[] = [];
     for (const { kind, secret, text } of SECRETS) {
       expect(text).toContain(secret);
       const out = scrub(text);
-      expect(out.text, text).toContain('[REDACTED:');
-      expect(out.text, text).toContain(`[REDACTED:${kind}]`);
-      expect(out.text, text).not.toContain(secret);
-      expect(out.redactions.map((r) => r.kind)).toContain(kind);
+      const kept = out.text.includes(secret) ? secret : survivingWindow(secret, out.text);
+      if (
+        !out.text.includes(`[REDACTED:${kind}]`) ||
+        kept !== undefined ||
+        !out.redactions.map((r) => r.kind).includes(kind)
+      ) {
+        failures.push(`${text}  ->  ${out.text}${kept === undefined ? '' : `  (kept ${kept})`}`);
+      }
     }
+    expect(failures).toEqual([]);
     const kinds = new Set(SECRETS.map((s) => s.kind));
     for (const k of [
       'aws-access-key',
@@ -51,12 +78,14 @@ describe('scrub', () => {
   it('scrub.leaves-lookalikes', () => {
     const lines = fixture('lookalikes.txt');
     expect(lines.length).toBeGreaterThanOrEqual(20);
+    const failures: string[] = [];
     for (const line of lines) {
       const out = scrub(line);
-      expect(out.text).toBe(line);
-      expect(out.redactions).toEqual([]);
-      expect(out.secretRatio).toBe(0);
+      if (out.text !== line || out.redactions.length > 0 || out.secretRatio !== 0) {
+        failures.push(`${line}  ->  ${out.text}`);
+      }
     }
+    expect(failures).toEqual([]);
   });
 
   it('scrub.idempotent', () => {
@@ -94,7 +123,8 @@ describe('scrub', () => {
     expect(once.secretRatio).toBeLessThanOrEqual(1);
     expect(scrub(once.text).secretRatio).toBe(0);
     for (const { text, secret } of SECRETS) {
-      if (text.includes(`"${secret}"`)) continue; // already quoted
+      // Already quoted, or inside escaped JSON where a bare quote would be invalid.
+      if (text.includes(`"${secret}"`) || text.includes('\\"')) continue;
       const r = scrub(text.split(secret).join(`"${secret}"`));
       expect(r.secretRatio).toBeLessThanOrEqual(1);
       expect(r.text).not.toContain(secret);
@@ -112,7 +142,12 @@ describe('scrub', () => {
     const key = 'Zk3Qx9Lm2Vb7Nc4Rt8Yp1Wd6Hs5Jg0Fa9Eu3Io7Kl2Mn';
     expect(key).toHaveLength(44);
     const out = scrub(`/home/me/.cache/blobs/${key}/data.bin`);
-    expect(out.text).toBe('/home/me/.cache/blobs/[REDACTED:high-entropy]/data.bin');
+    // The short component on each side of a key goes with it: base64 contains
+    // `/`, so `blobs` or `data` could be the key's own edge chunk.
+    expect(out.text).toBe('/home/me/.cache/[REDACTED:high-entropy].bin');
+    expect(scrub('/Users/mjnong/Library/Application_Support/Code/User').text).toBe(
+      '/Users/mjnong/Library/Application_Support/Code/User',
+    );
   });
 
   it('scrub.keeps-json-valid-and-count-keys', () => {
@@ -129,9 +164,14 @@ describe('scrub', () => {
     const k88 =
       '452GH2wVMPSIobFpU6EpN4dQJzEI66h/aJF++WFGNdC4Oq08twSbp5YOgw4keTUTI5W4VT/MC54cHr4b1/gktN==';
     const R = '[REDACTED:high-entropy]';
-    expect(scrub(`/srv/uploads/tokens/${k88}`).text).toBe(`/srv/uploads/tokens/${R}`);
-    expect(scrub(`/var/lib/app/${k44}`).text).toBe(`/var/lib/app/${R}`);
-    expect(scrub(`example.com/download/${k44}`).text).toBe(`example.com/download/${R}`);
+    // A base64 key with `/` takes the short components beside it: any of them
+    // could be its edge chunk. Hosts and dot-directories stay.
+    expect(scrub(`/srv/uploads/tokens/${k88}`).text).toBe(`/${R}`);
+    expect(scrub(`/var/lib/app/${k44}`).text).toBe(`/${R}`);
+    expect(scrub(`example.com/download/${k44}`).text).toBe(`example.com/${R}`);
+    expect(scrub(`GET https://api.example.com/v1/keys/${k44}`).text).toBe(
+      `GET https://api.example.com/${R}`,
+    );
     expect(scrub(`key sha512-${k44}`).text).toBe(`key ${R}`);
   });
 
@@ -146,6 +186,227 @@ describe('scrub', () => {
     expect(sha256).toHaveLength(64);
     expect(scrub(`digest ${sha256}`).text).toBe(`digest ${sha256}`);
     expect(scrub(`secret ${sha256}`).text).toBe('secret [REDACTED:high-entropy]');
+  });
+
+  it('scrub.exact-outputs', () => {
+    const R = (k: string): string => `[REDACTED:${k}]`;
+    const cases: [string, string][] = [
+      // An unquoted value ends at a delimiter only when the delimiter ends the value.
+      ['DB_PASSWORD=Xk9}mQ2)vLp,8rT', `DB_PASSWORD=${R('env-secret')}`],
+      ['export DB_PASSWORD=hunter2,secondhalf', `export DB_PASSWORD=${R('env-secret')}`],
+      ['PGPASSWORD=ab]cd]ef', `PGPASSWORD=${R('env-secret')}`],
+      ['{"password": 1234, "x": 1}', `{"password": ${R('env-secret')}, "x": 1}`],
+      ['f(password=hunter2)', `f(password=${R('env-secret')})`],
+      ['[password=abc]', `[password=${R('env-secret')}]`],
+      ['password=hunter2, next', `password=${R('env-secret')}, next`],
+      [
+        '{"password": "hunter2hunter2", "user": "bob"}',
+        `{"password": "${R('env-secret')}", "user": "bob"}`,
+      ],
+      // Arrays of strings: each element goes, the array stays valid.
+      ['secrets: ["a","b"]', `secrets: ["${R('env-secret')}","${R('env-secret')}"]`],
+      // JSON inside a JSON string (AWS Secrets Manager).
+      [
+        '{"SecretString": "{\\"username\\":\\"admin\\",\\"password\\":\\"Tr0ub4dor3x\\"}"}',
+        `{"SecretString": "${R('env-secret')}"}`,
+      ],
+      [
+        [
+          '{',
+          '    "Name": "prod/db",',
+          '    "SecretString": "{\\"username\\":\\"admin\\",\\"password\\":\\"Tr0ub4dor3x\\"}",',
+          '    "VersionId": "abc"',
+          '}',
+        ].join('\n'),
+        `{\n    "Name": "prod/db",\n    "SecretString": "${R('env-secret')}",\n    "VersionId": "abc"\n}`,
+      ],
+      [
+        '{"body": "{\\"password\\":\\"Tr0ub4dor3x\\"}"}',
+        `{"body": "{\\"password\\":\\"${R('env-secret')}\\"}"}`,
+      ],
+      // Query parameters keep their name.
+      [
+        'https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG',
+        `https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=${R('high-entropy')}`,
+      ],
+      // A key in a path goes with its base64 chunks; the file extension stays.
+      [
+        'cat ./secrets/kT9+vQ2/Lm8Xp4Rz+Wd6Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq.json',
+        `cat ./${R('high-entropy')}.json`,
+      ],
+      [
+        'curl https://hooks.slack.com/' + 'services/T01ABCDEF/B02GHIJKL/xYz9AbC3dEf6GhI2jKl5MnO8',
+        `curl https://hooks.slack.com/${R('high-entropy')}`,
+      ],
+    ];
+    expect(cases.map(([i]) => scrub(i).text)).toEqual(cases.map(([, o]) => o));
+  });
+
+  /**
+   * Accepted trade-offs, pinned so a change in either direction is deliberate.
+   * Misses: tokens under 32 chars are never judged (too many ids look random
+   * at 24); "the secret: we" cannot be told from YAML; a bcrypt hash is not a
+   * credential shape. Over-redactions: ids shaped exactly like keys (mixed
+   * case, digits, 32+ chars), and the short path components beside a key.
+   */
+  it('scrub.documented-trade-offs', () => {
+    const R = '[REDACTED:high-entropy]';
+    const cases: [string, string][] = [
+      ['x 9fKq2LmZ8xRt4VbN7wPy3HsJ6c y', 'x 9fKq2LmZ8xRt4VbN7wPy3HsJ6c y'],
+      ['x aZ3kP9qL2mX7vB4nR8tW1yC6 y', 'x aZ3kP9qL2mX7vB4nR8tW1yC6 y'],
+      ['aZ3kP9qL2mX7vB4nR8tW1yC6', 'aZ3kP9qL2mX7vB4nR8tW1yC6'],
+      ['x 9fKq2LmZ8xRt4VbN7wPy3HsJ6cD1eG', 'x 9fKq2LmZ8xRt4VbN7wPy3HsJ6cD1eG'],
+      ['session_id=sess_9fK2mQ7xL4pR8tZ1', 'session_id=sess_9fK2mQ7xL4pR8tZ1'],
+      ['x 9fKq2LmZ8xRt4VbN7wPy3HsJ6cD1eG.', 'x 9fKq2LmZ8xRt4VbN7wPy3HsJ6cD1eG.'],
+      ['passwordHash: $2b$10$abc', 'passwordHash: $2b$10$abc'],
+      ['the secret: we ship friday', 'the secret: [REDACTED:env-secret] ship friday'],
+      [
+        'https://docs.google.com/document/d/1aBcD3fGhIjKlMnOpQrStUvWxYz0123456789AbCdEf/edit',
+        `https://docs.google.com/${R}`,
+      ],
+      ['/dev/disk/by-id/nvme-Samsung_SSD_980_1TB_S64ANS0T123456X', `/dev/disk/by-id/${R}`],
+    ];
+    expect(cases.map(([i]) => scrub(i).text)).toEqual(cases.map(([, o]) => o));
+  });
+
+  /**
+   * Random keys, bare and inside paths, are redacted whole or not at all: no
+   * key character survives (a key's own `/` may, it carries nothing). Accepted
+   * misses are keys that read as identifiers: a word share of 0.75 or more
+   * (0.5 when over 85% letters with under 3 digits), measured with
+   * scratch sweeps of 3000 keys per cell and 5 seeds at about 1-2% of 32-char
+   * keys, 0.5% at 40, 0.3% at 44 and 0% at 64+, with 0 partial leaks.
+   * The bounds asserted are the task's: 10% at 32 chars, 3% at 44.
+   */
+  it('scrub.random-keys-fully-redacted', () => {
+    const AL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const alphabets: Record<string, string> = {
+      alnum: AL,
+      base64: `${AL}+/`,
+      base64url: `${AL}-_`,
+    };
+    const prefixes = [
+      '/var/lib/app/',
+      '/srv/uploads/tokens/',
+      'example.com/download/',
+      '/home/me/.cache/blobs/',
+      './',
+      '~/',
+      'https://api.example.com/v1/keys/',
+      's3://bucket/uploads/',
+      '/Users/mjnong/Desktop/',
+      'C:/Users/Me/AppData/',
+    ];
+    const suffixes = ['', '/data.bin', '.json', '/x'];
+    const maxMiss: Record<number, number> = { 32: 0.1, 40: 0.05, 44: 0.03, 64: 0.01, 88: 0.01 };
+    const rnd = prng(6);
+    const partial: string[] = [];
+    const rates: string[] = [];
+    for (const [name, al] of Object.entries(alphabets)) {
+      for (const n of [32, 40, 44, 64, 88]) {
+        for (const ctx of ['bare', 'path']) {
+          let miss = 0;
+          for (let i = 0; i < 200; i++) {
+            let key = '';
+            for (let j = 0; j < n; j++) key += al[rnd(al.length)];
+            const pre = ctx === 'bare' ? '' : (prefixes[rnd(prefixes.length)] ?? '');
+            const suf = ctx === 'bare' ? '' : (suffixes[rnd(suffixes.length)] ?? '');
+            const text = `see ${pre}${key}${suf} now`;
+            const out = scrub(text);
+            expect(out.secretRatio).toBeLessThanOrEqual(1);
+            expect(scrub(out.text).text).toBe(out.text);
+            if (out.text === text) {
+              miss++;
+              continue;
+            }
+            // Zero key characters survive: what is left is the context only.
+            const bare = (x: string): string => x.replace(/\//g, '');
+            const rest = bare(out.text.replace(/\[REDACTED:[a-z-]+\]/g, ''));
+            const mid = rest.slice(4, -4);
+            let ok = rest.startsWith('see ') && rest.endsWith(' now');
+            ok &&= [...Array(mid.length + 1).keys()].some(
+              (k) => bare(pre).startsWith(mid.slice(0, k)) && bare(suf).endsWith(mid.slice(k)),
+            );
+            if (!ok) partial.push(`${text}  ->  ${out.text}`);
+          }
+          rates.push(`${name} ${n} ${ctx} ${miss / 200}`);
+          expect(miss / 200, `${name} n=${n} ${ctx}`).toBeLessThanOrEqual(maxMiss[n] ?? 0);
+        }
+      }
+    }
+    expect(partial).toEqual([]);
+    if (process.env['SCRUB_RATES'] !== undefined) console.log(rates.join('\n'));
+  });
+
+  it('scrub.fuzz-ratio-and-idempotence', () => {
+    const MARKS = /\[REDACTED:[a-z-]+\]/g;
+    const bits = [
+      ...SECRETS.map((s) => s.text),
+      ...fixture('lookalikes.txt'),
+      '"',
+      "'",
+      'Authorization: "',
+      'PASSWORD="',
+      '[REDACTED:env-secret]',
+      'TOKEN=',
+      'x-api-key: ',
+      'https://:',
+      '@',
+      ' ',
+      '\n',
+      'pa-',
+      'sk-',
+      '/',
+      '.',
+      ',',
+      '}',
+      '\\"',
+    ];
+    const rnd = prng(11);
+    const bad: string[] = [];
+    for (let i = 0; i < 5000; i++) {
+      let s = '';
+      const k = 1 + rnd(6);
+      for (let j = 0; j < k; j++) s += (bits[rnd(bits.length)] ?? '') + (rnd(3) === 0 ? ' ' : '');
+      const out = scrub(s);
+      const kept = out.text.replace(MARKS, '').length + (s.length - s.replace(MARKS, '').length);
+      // Every character is either kept or counted as removed, exactly once.
+      const removed = out.secretRatio * s.length;
+      if (Math.abs(removed - Math.min(s.length, s.length - kept)) > 1e-6) bad.push(`ratio ${s}`);
+      if (scrub(out.text).text !== out.text) bad.push(`idempotence ${s}`);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('scrub.adversarial-inputs-are-fast', () => {
+    const inputs = [
+      ' SECRET_'.repeat(12_500),
+      '-SECRET'.repeat(14_000),
+      'a://:' + 'x@'.repeat(50_000),
+      'PASSWORD="'.repeat(10_000),
+      '"authorization": "'.repeat(5_000),
+      ('_' + 'A'.repeat(70) + '_SECRET').repeat(1_300),
+      'Ab1/'.repeat(25_000),
+      'secret '.repeat(15_000),
+      'aSecret_'.repeat(13_000),
+      'x='.repeat(50_000),
+      'tokenA'.repeat(17_000),
+      '"secret":'.repeat(11_000),
+      'aB3/'.repeat(25_000),
+      'aB3.'.repeat(25_000),
+      'password=a,'.repeat(9_000),
+      'secrets: ["a",'.repeat(7_000),
+      '"secret": "\\'.repeat(8_000),
+      'tokenizer:'.repeat(10_000),
+      '/'.repeat(100_000),
+      'a.'.repeat(50_000),
+      'kT9+vQ2/Lm8Xp4Rz+Wd6Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq '.repeat(2_300),
+    ];
+    for (const s of inputs) {
+      const t = performance.now();
+      scrub(s);
+      expect(performance.now() - t, s.slice(0, 20)).toBeLessThan(250);
+    }
   });
 });
 

@@ -22,9 +22,11 @@ const MARK = '[REDACTED:';
 interface Replacement {
   out: string;
   removed: number;
+  /** Input characters replaced, from the match start (default: the match). */
+  length?: number;
 }
 
-type Hit = (match: string, ...args: unknown[]) => Replacement | null;
+type Hit = (match: string, offset: number, text: string) => Replacement | null;
 
 interface Rule {
   kind: string;
@@ -62,26 +64,49 @@ function keepName(kind: string, prefix: RegExp, drop?: RegExp): Hit {
 
 const KEYWORD = /secret|token|passw(?:or)?d|api_?key|private_?key|access_?key/gi;
 
-const SUFFIXES = 'count|limit|budget|length|size|type|name|path|per|izer|ize';
-const SNAKE_SUFFIX = new RegExp(`_(?:${SUFFIXES})$`, 'i');
+/** Key names that describe a credential rather than hold one: `TOKEN_TTL`, `secretName`. */
+const SUFFIXES = [
+  'count',
+  'limit',
+  'budget',
+  'length',
+  'size',
+  'type',
+  'name',
+  'path',
+  'per',
+  'izer',
+  'ize',
+  'url',
+  'uri',
+  'endpoint',
+  'arn',
+  'ttl',
+  'expiry',
+  'region',
+  'file',
+];
+const SNAKE_SUFFIX = new RegExp(`_(?:${SUFFIXES.join('|')}|expires_(?:in|at))$`, 'i');
 const CAMEL_SUFFIX = new RegExp(
-  `[a-z](?:${SUFFIXES.replace(/\b[a-z]/g, (c) => c.toUpperCase())})$`,
+  `[a-z](?:${SUFFIXES.map((x) => x[0]?.toUpperCase() + x.slice(1)).join('|')}|Expires(?:In|At))$`,
 );
+/** What may follow the keyword in a credential name: `secretValue`, `SecretString`, `apiKEY`. */
+const CONTINUATION =
+  /^(?:KEY|VALUE|STRING|TEXT|RAW|PLAIN|ENCODED|Key|Value|String|Text|Raw|Plain|Encoded)/;
 
-/** Is the identifier a credential name, judged on word boundaries? */
-function envKey(key: string): boolean {
-  const lead = /^(?:max|min|num|total|input|output|prompt|completion|cache|rate)/i.exec(key)?.[0];
-  const camelPrefix =
-    lead !== undefined && /^[a-z]+$/.test(lead) && /^[A-Z]/.test(key.slice(lead.length));
-  if (
-    /^(?:max|min|num|total|input|output|prompt|completion|cache|rate)_/i.test(key) ||
-    camelPrefix
-  ) {
-    return false;
+/**
+ * Is the identifier a credential name, judged on word boundaries? `always`
+ * redacts any value; `unless-count` (a plural `TOKENS`, as in `input_tokens`)
+ * redacts only values that are not numbers, booleans or arrays.
+ */
+function envKey(key: string): 'always' | 'unless-count' | null {
+  // Counters, not credentials: MAX_TOKENS, numPasswords. Other prefixes are
+  // real credentials (GitHub Actions passes inputs as INPUT_PASSWORD).
+  if (/^(?:max|min|num|count)_/i.test(key) || /^(?:max|min|num|count)[A-Z]/.test(key)) {
+    return null;
   }
-  if (SNAKE_SUFFIX.test(key) || CAMEL_SUFFIX.test(key)) {
-    return false;
-  }
+  if (SNAKE_SUFFIX.test(key) || CAMEL_SUFFIX.test(key)) return null;
+  let plural = false;
   for (const k of key.matchAll(KEYWORD)) {
     const i = k.index;
     const word = k[0];
@@ -91,30 +116,62 @@ function envKey(key: string): boolean {
       prev === '_' ||
       word === word.toUpperCase() || // glued upper-case prefix: PGPASSWORD
       (/[a-z]/.test(prev) && /[A-Z]/.test(word[0] ?? '')); // camelCase boundary
+    if (!startOk) continue;
     const rest = key.slice(i + word.length);
-    const plural = /^(?:secret|passw(?:or)?d)$/i.test(word) && /^[sS]\d*(?:_.*)?$/.test(rest);
-    const endOk = /^\d*(?:_.*)?$/.test(rest) || plural || /^(?:KEY|Key)/.test(rest);
-    if (startOk && endOk) return true;
+    const many = /^(?:secret|passw(?:or)?d)$/i.test(word) && /^[sS]\d*$/.test(rest);
+    if (/^\d*(?:_.*)?$/.test(rest) || CONTINUATION.test(rest) || many) return 'always';
+    if (/^token$/i.test(word) && /^[sS]$/.test(rest)) plural = true;
   }
-  return false;
+  return plural ? 'unless-count' : null;
 }
 
-/** Redact the value of a credential-named variable, keeping JSON quotes valid. */
-function envSecret(m: string): Replacement | null {
-  const key = /^["']?(?:export[ \t]+)?([A-Za-z][A-Za-z0-9_]*)/.exec(m)?.[1];
-  const head = /^[^=:]*[=:][ \t]*/.exec(m)?.[0].length;
-  if (key === undefined || head === undefined || !envKey(key)) return null;
-  let value = m.slice(head);
-  let open = '';
-  let close = '';
-  const q = value[0];
-  if ((q === '"' || q === "'") && value.length >= 2 && value.endsWith(q)) {
-    open = q;
-    close = q;
-    value = value.slice(1, -1);
+const COUNT_VALUE = /^(?:-?\d[\d_,.]*[kKmM]?|true|false|null|none|True|False|None)$/;
+
+/**
+ * A value: double-quoted (escapes allowed), single-quoted, escaped-quoted
+ * (JSON inside a JSON string), an array of strings, or bare. A bare value may
+ * hold `, } ] )`: one ends it only when followed by whitespace, a quote,
+ * another delimiter or the end. A bracket followed by space, a quote, a
+ * bracket or a digit opens a structure, which is left to the keys inside it.
+ */
+const ENV_VALUE =
+  /"(?:[^"\\\n]|\\.)*"|"[^"\n]*"|'[^'\n]*'|\\"[^"\\\n]*\\"|\[[ \t]*(?:"[^"\n]*"|'[^'\n]*')(?:[ \t]*,[ \t]*(?:"[^"\n]*"|'[^'\n]*'))*[ \t]*\]|(?![[{](?:[\s"'[\]{}\d]|$))(?:[^\s"',}\])]|[,}\])](?![\s"',}\])]|$))+/y;
+
+/**
+ * Redact the value after a credential-named key, keeping JSON quotes valid.
+ * The value is read only once the key is accepted, so a rejected key
+ * (`tokenizer:`) never hides a real one in its value.
+ */
+function envSecret(head: string, offset: number, text: string): Replacement | null {
+  const key = /^["']?(?:export[ \t]+)?([A-Za-z][A-Za-z0-9_]*)/.exec(head)?.[1];
+  const level = key === undefined ? null : envKey(key);
+  if (level === null) return null;
+  ENV_VALUE.lastIndex = offset + head.length;
+  const raw = ENV_VALUE.exec(text)?.[0];
+  if (raw === undefined || raw.includes(MARK)) return null;
+  const length = head.length + raw.length;
+  if (raw.startsWith('[')) {
+    // An array of strings: redact each element, keep the array.
+    if (level === 'unless-count') return null;
+    let removed = 0;
+    const out = raw.replace(/"[^"\n]*"|'[^'\n]*'/g, (q) => {
+      if (q.length <= 2) return q;
+      removed += q.length - 2;
+      return `${q[0]}${tag('env-secret')}${q[0]}`;
+    });
+    return removed === 0 ? null : { out: `${head}${out}`, removed, length };
   }
-  if (value === '' || value.includes(MARK)) return null;
-  return { out: `${m.slice(0, head)}${open}${tag('env-secret')}${close}`, removed: value.length };
+  let value = raw;
+  let quote = '';
+  for (const q of ['\\"', '"', "'"]) {
+    if (value.length >= 2 * q.length && value.startsWith(q) && value.endsWith(q)) {
+      quote = q;
+      value = value.slice(q.length, -q.length);
+      break;
+    }
+  }
+  if (value === '' || (level === 'unless-count' && COUNT_VALUE.test(value))) return null;
+  return { out: `${head}${quote}${tag('env-secret')}${quote}`, removed: value.length, length };
 }
 
 /** Shannon entropy in bits per character. */
@@ -133,134 +190,207 @@ export function shannonEntropy(s: string): number {
 const HEX = /^[0-9a-f]+$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const KEYISH = /(secret|token|key|password)/i;
-const TOKEN_MIN = 24;
+/** Shorter tokens are never judged: too many ids and hashes look random at 24. */
+const TOKEN_MIN = 32;
 /** npm subresource-integrity strings, anchored to the exact digest length. */
 const INTEGRITY =
-  /^(?:sha256-[A-Za-z0-9+/]{43}=|sha384-[A-Za-z0-9+/]{64}|sha512-[A-Za-z0-9+/]{86}==)$/;
+  /^(?:sha256-[A-Za-z0-9+/]{43}=|sha384-[A-Za-z0-9+/]{64}|sha512-[A-Za-z0-9+/]{86}==)$/i;
 const SHA_HEX_LEN: Record<string, number> = { sha256: 64, sha384: 96, sha512: 128 };
 const WORDLIKE = /^(?:[a-z]+|[A-Z][a-z]+|[A-Z]+)\d{0,4}$/;
+/** A short part made only of base64 characters: could be a chunk of a key. */
+const CHUNK = /^[A-Za-z0-9+=]{0,8}$/;
+/** The longest base64-only component taken as key glue or as a key's edge chunk. */
+const GLUE = /^[A-Za-z0-9+=]{0,16}$/;
+/** A real directory name next to a key, not a chunk of it: `app`, `blobs`, `Desktop`. */
+const PATH_WORD = /^(?:[a-z]{3,}|[A-Z][a-z]{3,})\d{0,4}$/;
+/** Words that are no part of a key: a lowercase run, or a character base64 lacks. */
+const REAL_WORD = /[a-z]{3}|[-_~]/;
 
 type Piece = 'word' | 'random' | 'neutral';
 
+/** Character classes; `+ / =` are the only symbols base64 adds to letters and digits. */
 function classes(s: string): number {
-  return [/[A-Z]/, /[a-z]/, /[0-9]/, /[+/=_.~-]/].filter((r) => r.test(s)).length;
+  return [/[A-Z]/, /[a-z]/, /[0-9]/, /[+/=]/].filter((r) => r.test(s)).length;
 }
 
-/** Long, mixed-class, high-entropy and not just a long identifier. */
-function isRandom(s: string): boolean {
-  if (s.length < TOKEN_MIN || classes(s) < 3 || shannonEntropy(s) < ENTROPY_MIN) return false;
+/** Share of the letters that sit in words (`Request`, `get`): high in identifiers, low in keys. */
+function wordShare(s: string): number {
+  const letters = s.replace(/[^A-Za-z]/g, '').length;
+  let inWords = 0;
+  for (const w of s.matchAll(/[A-Z]?[a-z]{3,}/g)) inWords += w[0].length;
+  return letters === 0 ? 0 : inWords / letters;
+}
+
+/**
+ * Mixed-class, high-entropy and not an identifier (length aside). Identifiers
+ * are mostly words (word share 0.8 to 1.0, `handleRequestV2Timeout30sRetry3Ms`
+ * included); random keys sit near 0.2 and under 0.75 in 99.9% of cases. A
+ * letter-heavy token (over 85% letters, under 3 digits) needs only 0.5, so
+ * acronym-heavy names (`getHTTPSURLForAWSS3Bucket`) stay.
+ */
+function keyLike(s: string): boolean {
+  if (classes(s) < 3 || shannonEntropy(s) < ENTROPY_MIN) return false;
   const letters = s.replace(/[^A-Za-z]/g, '').length;
   const digits = s.replace(/[^0-9]/g, '').length;
-  return digits >= 3 || letters / s.length <= 0.85;
+  const heavy = digits < 3 && letters / s.length > 0.85;
+  return wordShare(s) < (heavy ? 0.5 : 0.75);
+}
+
+function isRandom(s: string): boolean {
+  return s.length >= TOKEN_MIN && keyLike(s);
+}
+
+/** Do these parts, joined by `/` as base64 would have them, look like one key? */
+function runIsKey(parts: string[]): boolean {
+  return parts.join('/').length >= TOKEN_MIN && keyLike(parts.join(''));
 }
 
 /** Words, camel/snake words, short names and numbers: things a path is made of. */
 function isWord(p: string): boolean {
-  const w = p.replace(/^[.~]+/, '');
-  if (w === '' || /^\d{1,8}$/.test(w)) return true;
-  const dot = w.indexOf('.');
-  if (
-    dot > 0 &&
-    /^[A-Za-z][a-z]{2,}\d{0,4}$/.test(w.slice(0, dot)) &&
-    /^[A-Za-z0-9.]{1,12}$/.test(w.slice(dot + 1))
-  ) {
-    return true;
-  }
+  const w = p.replace(/^~+/, '');
+  if (w === '' || /^\d+$/.test(w)) return true;
   if (w.length <= 11) {
-    const parts = w.split(/[_.-]+/).filter((x) => x !== '');
+    const parts = w.split(/[_-]+/).filter((x) => x !== '');
     if (parts.every((x) => WORDLIKE.test(x) || /^\d{1,8}$/.test(x))) return true;
   }
   if (/^[A-Za-z][a-z]{2,}\d{0,4}$/.test(w) || /^[A-Z]{1,8}\d{0,4}$/.test(w)) return true;
   const parts = w
     .replace(/\d{0,4}$/, '')
     .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .split(/[ _-]+/);
+    .split(/[ _-]+/)
+    .filter((x) => x !== '');
   return parts.length >= 2 && parts.every((x) => /^[A-Z]?[a-z]{2,}$/.test(x));
 }
 
+/** Classify one part of a token (no `/` or `.` in it). */
 function classify(p: string, before: string): Piece {
   if (UUID.test(p) || INTEGRITY.test(p)) return 'word';
   if (HEX.test(p)) {
     if (p.length === 40) return 'word'; // git SHA
-    const sha = /(sha(?:256|384|512)):$/.exec(before)?.[1];
+    const sha = /(sha(?:256|384|512)):$/i.exec(before)?.[1]?.toLowerCase();
     if (sha !== undefined && SHA_HEX_LEN[sha] === p.length) return 'word';
     if (p.length === 64) return KEYISH.test(before.slice(-40)) ? 'random' : 'word';
   }
   if (isWord(p)) return 'word';
-  return isRandom(p) ? 'random' : 'neutral';
+  if (isRandom(p)) return 'random';
+  // `-`, `_` and `~` never occur in standard base64, so such a part is no chunk of a key.
+  return /[-_~]/.test(p) ? 'word' : 'neutral';
 }
 
 /**
- * Judge a candidate token (a run of `[A-Za-z0-9+/=_.~-]` of 24+ chars) piece by
- * piece, splitting on `/`. A path-like token (two or more real words, or one after a
- * `./`, `~/` or drive prefix) keeps its words and redacts random pieces together
- * with the neutral pieces next to them, since base64 contains `/` and its chunks
- * can look like anything; a run of neutral pieces totalling 32+ chars goes too.
- * Any other token is one secret: if any piece or the whole is random, all of it
- * is redacted.
+ * Judge a candidate token (a run of `[A-Za-z0-9+/=_.~-]` of 32+ chars). A
+ * query-style `name=` prefix is kept and the value judged on its own, since
+ * base64 has `=` only at its end.
  */
-function highEntropy(full: string, ...args: unknown[]): Replacement | null {
-  const offset = args[0] as number;
-  const text = args[1] as string;
+function highEntropy(full: string, offset: number, text: string): Replacement | null {
   const trail = /\.*$/.exec(full)?.[0] ?? '';
   const m = full.slice(0, full.length - trail.length);
+  const name = /^[A-Za-z_][A-Za-z0-9_]*=(?=[^=])/.exec(m)?.[0] ?? '';
+  const r = judgeToken(m.slice(name.length), offset + name.length, text);
+  return r === null ? null : { out: name + r.out + trail, removed: r.removed };
+}
+
+/**
+ * The token is split into parts on `/` and `.`, each judged word, random or
+ * neutral (could be a chunk of base64, which contains `/` but never `.`, `-`,
+ * `_` or `~`). A path-like token (two or more real words, or one after `./` or
+ * `~/`) keeps its words and redacts each key in it: a run of random, neutral
+ * and short chunk parts joined by `/`, plus the short components beside it. Any
+ * other token is one secret: if any part is random, or its parts other than
+ * real words together look like a key, all of it is redacted.
+ */
+function judgeToken(m: string, offset: number, text: string): Replacement | null {
   if (m.length < TOKEN_MIN || INTEGRITY.test(m)) return null;
-  const before = (at: number): string => text.slice(Math.max(0, at - 40), at);
-  const pieces = m.split('/');
+  const bits = m.split(/([/.])/);
+  const parts = bits.filter((_, i) => i % 2 === 0);
+  /** `seps[i]` sits between `parts[i]` and `parts[i + 1]`. */
+  const seps = bits.filter((_, i) => i % 2 === 1);
+  const slash = (i: number): boolean => seps[i] === '/';
+  const n = parts.length;
   const kinds: Piece[] = [];
   let at = offset;
-  for (const p of pieces) {
-    kinds.push(classify(p, before(at)));
-    at += p.length + 1;
+  for (const [i, p] of parts.entries()) {
+    kinds.push(classify(p, text.slice(Math.max(0, at - 40), at)));
+    at += p.length + (seps[i]?.length ?? 0);
   }
-  // A one or two character piece wedged between non-word pieces is key chunk
-  // glue (base64 contains `/`), not a path component.
-  const glue = kinds.map((k, i) => {
-    const piece = pieces[i] ?? '';
-    const edgeEmpty = piece === '' && (i === 0 || i === kinds.length - 1);
-    if (k !== 'word' || piece.length > 2 || edgeEmpty) return k;
-    return kinds[i - 1] !== 'word' && kinds[i + 1] !== 'word' ? 'neutral' : k;
-  });
-  kinds.splice(0, kinds.length, ...glue);
-  // Only real words count as path evidence: key chunks often look like `Q4` or `Bo5`.
-  const words = pieces.filter((p, i) => kinds[i] === 'word' && /[a-z]{3}/.test(p)).length;
-  const marker = /^(?:\.\/|~\/|[A-Za-z]:\\)/.test(m) ? 1 : 2;
-  if (words < marker) {
-    const hit = kinds.includes('random') || isRandom(m);
-    return hit ? { out: tag('high-entropy') + trail, removed: m.length } : null;
-  }
-  const mark = kinds.map((k) => k === 'random');
-  for (let i = 0; i < kinds.length; i++) {
-    if (kinds[i] !== 'random') continue;
-    for (let j = i - 1; j >= 0 && kinds[j] === 'neutral'; j--) mark[j] = true;
-    for (let j = i + 1; j < kinds.length && kinds[j] === 'neutral'; j++) mark[j] = true;
-  }
-  for (let i = 0; i < kinds.length;) {
-    if (kinds[i] !== 'neutral') {
+  // Short chunks that could belong to a key: `Q4`, `kT9`, `x`, empty; not `app`,
+  // `Desktop` or a number.
+  const chunk = (i: number): boolean => {
+    const p = parts[i] ?? '';
+    return kinds[i] === 'word' && CHUNK.test(p) && !PATH_WORD.test(p) && !/^\d+$/.test(p);
+  };
+  const loose = (i: number): boolean => kinds[i] !== undefined && kinds[i] !== 'word';
+  // Short base64-only words wedged by slashes between two parts of key material
+  // are key chunk glue (base64 contains `/`), not path components.
+  const glued = kinds.slice();
+  for (let i = 0; i < n;) {
+    if (!loose(i)) {
       i++;
       continue;
     }
-    let j = i;
-    while (j < kinds.length && kinds[j] === 'neutral') j++;
-    if (j - i >= 2 && pieces.slice(i, j).join('/').length >= 32) {
-      for (let k = i; k < j; k++) mark[k] = true;
-    }
+    let j = i + 1;
+    while (j < n && slash(j - 1) && kinds[j] === 'word' && GLUE.test(parts[j] ?? '')) j++;
+    if (j > i + 1 && j < n && slash(j - 1) && loose(j)) glued.fill('neutral', i + 1, j);
     i = j;
+  }
+  // Only real words count as path evidence: key chunks often look like `Q4` or `Bo5`.
+  const words = parts.filter((p, i) => glued[i] === 'word' && /[a-z]{3}/.test(p)).length;
+  if (words < (/^[.~]\//.test(m) ? 1 : 2)) {
+    // Only real words (a lowercase run, or a `-`, `_` or `~`) are left out.
+    const material = parts.filter((p, i) => glued[i] !== 'word' || !REAL_WORD.test(p));
+    const hit = glued.includes('random') || runIsKey(material);
+    return hit ? { out: tag('high-entropy'), removed: m.length } : null;
+  }
+  // A key is a run of parts joined by `/` that are random, neutral or short
+  // chunks (`Q4`, `kT9`, `x`, empty): it goes whole if it holds a random part,
+  // or if its neutral parts carry it and together they look like a key.
+  const mark = parts.map(() => false);
+  const inKey = (i: number): boolean => glued[i] !== 'word' || chunk(i);
+  for (let i = 0; i < n;) {
+    if (!inKey(i)) {
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    while (j < n && slash(j - 1) && inKey(j)) j++;
+    const run = parts.slice(i, j);
+    const neutral = run.filter((_, k) => glued[i + k] === 'neutral').join('').length;
+    const random = glued.slice(i, j).includes('random');
+    if (random || (neutral >= 16 && runIsKey(run))) mark.fill(true, i, j);
+    i = j;
+  }
+  // Base64 contains `/`, so the components next to a key may be its edge chunks
+  // (`.../qvnp`, `53/S/...`) and cannot be told from directories: the short
+  // ones go too. Leftwards this stops at a dot (`example.com`, `.cache`), which
+  // base64 never has, and at an empty part (the root, or `//`).
+  const short = (j: number): boolean => GLUE.test(parts[j] ?? '');
+  const dotted = (j: number): boolean => j > 0 && seps[j - 1] === '.';
+  const keys = mark.slice();
+  for (let i = 0; i < n; i++) {
+    if (!keys[i]) continue;
+    for (let j = i - 1; j >= 0 && !keys[j] && slash(j) && short(j) && !dotted(j); j--) {
+      if (parts[j] === '') break; // the root, or `//`
+      mark[j] = true;
+    }
+    for (let j = i + 1; j < n && !keys[j] && slash(j - 1) && short(j); j++) {
+      mark[j] = true;
+      if (parts[j] === '') break;
+    }
   }
   if (!mark.some(Boolean)) return null;
   let out = '';
   let removed = 0;
-  for (let i = 0; i < pieces.length; i++) {
-    const piece = pieces[i] ?? '';
-    const sep = i > 0 ? '/' : '';
-    if (mark[i] === true) {
-      removed += piece.length + (i > 0 && mark[i - 1] === true ? 1 : 0);
-      out += mark[i - 1] === true ? '' : sep + tag('high-entropy');
-    } else {
-      out += sep + piece;
+  for (let i = 0; i < n; i++) {
+    const piece = parts[i] ?? '';
+    const sep = i > 0 ? (seps[i - 1] ?? '') : '';
+    if (mark[i] !== true) out += sep + piece;
+    else if (i > 0 && mark[i - 1] === true) removed += sep.length + piece.length;
+    else {
+      out += sep + tag('high-entropy');
+      removed += piece.length;
     }
   }
-  return { out: out + trail, removed };
+  return { out, removed };
 }
 
 /**
@@ -284,14 +414,23 @@ const RULES: Rule[] = [
       return { out: `${m.slice(0, at)}${tag('aws-secret-key')}`, removed: m.length - at };
     },
   },
-  { kind: 'github-token', re: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b/g },
-  { kind: 'github-token', re: /\bgithub_pat_[A-Za-z0-9_]{22,}\b/g },
-  { kind: 'anthropic-key', re: /\bsk-ant-[A-Za-z0-9_-]{20,}/g },
-  { kind: 'stripe-key', re: /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
-  { kind: 'typesafe-key', re: /\bts_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
+  { kind: 'github-token', re: /(?<![A-Za-z0-9_-])(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b/g },
+  { kind: 'github-token', re: /(?<![A-Za-z0-9_-])github_pat_[A-Za-z0-9_]{22,}\b/g },
+  { kind: 'anthropic-key', re: /(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}/g },
+  { kind: 'stripe-key', re: /(?<![A-Za-z0-9_-])(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
+  { kind: 'typesafe-key', re: /(?<![A-Za-z0-9_-])ts_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
+  // Vendor prefixes start a token: `-pa-` inside a base64url key is no Voyage key.
   // A digit is required in the body so kebab-case words like `sk-learn-...` survive.
-  { kind: 'openai-key', re: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}/g, hit: withDigit('openai-key', 3) },
-  { kind: 'voyage-key', re: /\bpa-[A-Za-z0-9_-]{20,}/g, hit: withDigit('voyage-key', 3) },
+  {
+    kind: 'openai-key',
+    re: /(?<![A-Za-z0-9_-])sk-(?:proj-)?[A-Za-z0-9_-]{20,}/g,
+    hit: withDigit('openai-key', 3),
+  },
+  {
+    kind: 'voyage-key',
+    re: /(?<![A-Za-z0-9_-])pa-[A-Za-z0-9_-]{20,}/g,
+    hit: withDigit('voyage-key', 3),
+  },
   {
     kind: 'jwt',
     re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
@@ -305,22 +444,25 @@ const RULES: Rule[] = [
   },
   {
     kind: 'auth-header',
-    re: /["']?\b(?:authorization|x-api-key|api-key|x-auth-token)["']?[ \t]*[:=][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']?)?[^\s"']+/gi,
+    re: /["']?\b(?:authorization|x-api-key|api-key|x-auth-token)["']?[ \t]*[:=][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']{0,2})?[^\s"']+/gi,
     hit: keepName(
       'auth-header',
-      /^[^=:]*[=:][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']?)?/i,
+      /^[^=:]*[=:][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']{0,2})?/i,
     ),
   },
   {
     kind: 'env-secret',
-    // Any identifier-ish key containing a keyword; `envKey` decides whether the
-    // keyword sits on a real boundary. The lookahead keeps this linear.
-    re: /(?<![A-Za-z0-9_])["']?(?:export[ \t]+)?(?=[A-Za-z0-9_]{0,95}?(?:secret|token|passw(?:or)?d|api_?key|private_?key|access_?key))[A-Za-z][A-Za-z0-9_]{0,95}["']?[ \t]*[=:][ \t]*(?:"[^"\n]*"|'[^'\n]*'|[^\s"',}\])]+)/gi,
+    // Any identifier-ish key containing a keyword, up to its `=` or `:`; `envKey`
+    // decides whether the keyword sits on a real boundary and `envSecret` reads
+    // the value. The lookahead keeps this linear.
+    re: /(?<![A-Za-z0-9_])["']?(?:export[ \t]+)?(?=[A-Za-z0-9_]{0,95}?(?:secret|token|passw(?:or)?d|api_?key|private_?key|access_?key))[A-Za-z][A-Za-z0-9_]{0,95}\\?["']?[ \t]*[=:][ \t]*/gi,
     hit: envSecret,
   },
   {
     kind: 'high-entropy',
-    re: /(?<![A-Za-z0-9+/=_.~-])[A-Za-z0-9+/=_.~-]{24,}(?![A-Za-z0-9+/=_.~-])/g,
+    // A token touching a marker is the rest of one already judged: skip it, so
+    // a second pass changes nothing.
+    re: /(?<![A-Za-z0-9+/=_.~-]|\[REDACTED:[a-z-]+\])[A-Za-z0-9+/=_.~-]{32,}(?![A-Za-z0-9+/=_.~-]|\[REDACTED:)/g,
     hit: highEntropy,
   },
 ];
@@ -336,13 +478,20 @@ function run(input: string): Scrubbed {
   let removed = 0;
   const counts = new Map<string, number>();
   for (const { kind, re, hit } of RULES) {
-    text = text.replace(re, (m: string, ...args: unknown[]) => {
-      const r = hit === undefined ? { out: tag(kind), removed: m.length } : hit(m, ...args);
-      if (r === null) return m;
+    let out = '';
+    let from = 0;
+    re.lastIndex = 0;
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+      const r =
+        hit === undefined ? { out: tag(kind), removed: m[0].length } : hit(m[0], m.index, text);
+      if (r === null) continue;
+      out += text.slice(from, m.index) + r.out;
+      from = m.index + (r.length ?? m[0].length);
+      re.lastIndex = from;
       counts.set(kind, (counts.get(kind) ?? 0) + 1);
       removed += r.removed;
-      return r.out;
-    });
+    }
+    text = out + text.slice(from);
   }
   return { text, redactions: [...counts].map(([kind, count]) => ({ kind, count })), removed };
 }
