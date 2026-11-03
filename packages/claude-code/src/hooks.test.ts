@@ -226,6 +226,33 @@ describe('UserPromptSubmit', () => {
     expect(ctx).not.toContain('7777');
     expect(readLog(t.home)[0]?.project).toBe(projectId);
   });
+
+  it('hook.prompt-honours-config-project-id', async () => {
+    const t = tempHome();
+    fs.mkdirSync(path.join(t.cwd, '.git'));
+    fs.writeFileSync(
+      path.join(t.cwd, 'oort.config.json'),
+      JSON.stringify({ project: { id: 'shared-checkout' } }),
+    );
+    const mine = {
+      ...PORT_MEMORY,
+      id: 'mine',
+      scope: localScope('shared-checkout'),
+      text: 'auth port is 4471 here',
+    };
+    const derived = {
+      ...PORT_MEMORY,
+      id: 'derived',
+      scope: localScope(projectIdFor(t.cwd)),
+      text: 'auth port derived 7777',
+    };
+    const deps = await withMemories(t, mine, derived);
+    const out = await handleUserPromptSubmit(prompt(t, 'which auth port do we use?'), deps);
+    const ctx = context(out.stdout, 'UserPromptSubmit');
+    expect(ctx).toContain('4471');
+    expect(ctx).not.toContain('7777');
+    expect(readLog(t.home)[0]?.project).toBe('shared-checkout');
+  });
 });
 
 describe('Stop', () => {

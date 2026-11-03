@@ -4,7 +4,7 @@ import {
   appendPrivateFile,
   localScope,
   observe,
-  projectIdFor,
+  resolveProjectId,
   scrubObservation,
   type Observation,
   type ObserveResult,
@@ -115,7 +115,7 @@ function transcripts(projectsDir: string, since: Date | undefined, skip: () => v
  */
 function resolveProject(cwd: string | undefined): string | undefined {
   if (cwd === undefined || !fs.existsSync(cwd)) return undefined;
-  return projectIdFor(cwd);
+  return resolveProjectId(cwd);
 }
 
 function chars(o: Observation): number {

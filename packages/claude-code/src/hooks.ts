@@ -4,7 +4,7 @@ import {
   activation,
   formatForInjection,
   localScope,
-  projectIdFor,
+  resolveProjectId,
   recall,
   shouldRecall,
   type RecallQuery,
@@ -46,7 +46,7 @@ const TIMEOUT = Symbol('timeout');
 export const cursorKey = (session: string): string => `claude-code:${session}`;
 
 function scopeFor(cwd: string, deps: HookDeps): Scope {
-  return deps.scope ?? localScope(projectIdFor(cwd));
+  return deps.scope ?? localScope(resolveProjectId(cwd));
 }
 
 /** The scope's project plus global memories. A private project's memories carry its own id. */

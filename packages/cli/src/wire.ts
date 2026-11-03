@@ -4,7 +4,7 @@ import {
   MissingCredentialError,
   OortConfig,
   localScope,
-  projectIdFor,
+  resolveProjectId,
   resolveConfig,
   type DecisionController,
   type Embedder,
@@ -161,7 +161,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
       config = { ...config, embed: { ...config.embed, dimension } };
     }
   }
-  const scope = localScope(projectIdFor(cwd));
+  const scope = localScope(resolveProjectId(cwd));
   const store = await openSqliteStore({
     path: path.join(config.home, 'oort.sqlite'),
     coldDir: path.join(config.home, 'cold'),

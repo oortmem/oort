@@ -113,6 +113,25 @@ describe('importTranscripts', () => {
     ]);
   });
 
+  it('import.honours-recorded-cwd-project-id', async () => {
+    const t = tempHome();
+    const dir = projects(t);
+    // The recorded cwd's own oort.config.json names the project.
+    fs.writeFileSync(
+      path.join(t.cwd, 'oort.config.json'),
+      JSON.stringify({ project: { id: 'pinned-id' } }),
+    );
+    const deps = makeDeps(t);
+    const r = await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
+    expect(r).toMatchObject({ observations: 10, outcomes: { added: 10 } });
+    const listed = await deps.store.list(
+      { ...LOCAL, projectIds: ['pinned-id'] },
+      { validOnly: false },
+    );
+    expect(listed).toHaveLength(10);
+    expect(await deps.store.list(scopeOf(t), { validOnly: false })).toEqual([]);
+  });
+
   it('import.sets-cursors-so-stop-skips-imported-turns', async () => {
     const t = tempHome();
     const dir = projects(t);

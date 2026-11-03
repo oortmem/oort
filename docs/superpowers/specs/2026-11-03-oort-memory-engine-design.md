@@ -272,7 +272,8 @@ on Marcus's own transcripts first.
 
 - **One global store per machine**, under `~/.oort/`, project-aware (decided by
   Marcus). Memories carry `project_id` (derived from the repo root, overridable in
-  `oort.config.json`). `recall` searches the current project plus global memories by
+  `oort.config.json` as `project.id`; the nearest such file at or above the cwd counts, the
+  home config's does not, so a worktree can share its main checkout's project). `recall` searches the current project plus global memories by
   default. A project can set `private: true` in its `oort.config.json`, after which its
   memories never surface in any other project and are never promoted to global.
   Claude Code hooks therefore install at user scope (`~/.claude/settings.json`), with

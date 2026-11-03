@@ -778,6 +778,31 @@ describe('wire', () => {
     expect(drain.config.sources['writer']).toBe('default');
   });
 
+  it('cli.wire-honours-config-project-id', async () => {
+    const root = tmpdir();
+    const home = path.join(root, 'oort-home');
+    const env = { HOME: root, OORT_HOME: home };
+    const ids: (string | undefined)[] = [];
+    for (const name of ['main', 'worktree']) {
+      const cwd = path.join(root, name);
+      fs.mkdirSync(path.join(cwd, '.git'), { recursive: true });
+      const before = await wire(cwd, { env });
+      const derived = before.scope.projectId;
+      await before.close();
+      fs.writeFileSync(
+        path.join(cwd, 'oort.config.json'),
+        JSON.stringify({ project: { id: 'one' } }),
+      );
+      const w = await wire(cwd, { env });
+      ids.push(derived, w.scope.projectId);
+      await w.close();
+    }
+    const [mainDerived, mainId, worktreeDerived, worktreeId] = ids;
+    expect(mainDerived).toMatch(/^main-[0-9a-f]{8}$/);
+    expect(worktreeDerived).toMatch(/^worktree-[0-9a-f]{8}$/);
+    expect([mainId, worktreeId]).toEqual(['one', 'one']);
+  });
+
   it('cli.wire-ignores-project-embed-dimension', async () => {
     const root = tmpdir();
     const home = path.join(root, 'oort-home');

@@ -50,7 +50,8 @@ const recall = z
 
 const project = z
   .strictObject({
-    id: z.string().optional(),
+    /** Overrides the id derived from the git root (spec §8); see `resolveProjectId`. */
+    id: z.string().min(1).optional(),
     private: z.boolean().default(false),
   })
   .default({ private: false });
@@ -128,6 +129,18 @@ export interface ResolveConfigOptions {
    * defaults apply (the write-path drain, which serves every project).
    */
   projectConfig?: boolean;
+}
+
+/**
+ * `project.id` from the nearest `oort.config.json` at or above `cwd`, or
+ * undefined. The file is validated like any config file: an invalid one
+ * throws, naming it. The home config is not consulted: one id there would
+ * merge every project into one.
+ */
+export function configuredProjectId(cwd: string): string | undefined {
+  const file = findProjectConfig(cwd);
+  if (file === undefined) return undefined;
+  return OortConfig.shape.project.parse(readConfigFile(file)['project']).id;
 }
 
 export function resolveConfig(
