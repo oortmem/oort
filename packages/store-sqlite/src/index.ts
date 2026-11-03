@@ -16,7 +16,13 @@ import {
   type ScopeFilter,
   type Tier,
 } from '@oortmem/core';
-import { chmodIfExists, openBlobDir, prepareDbDir, withPrivateUmask } from './blobs.js';
+import {
+  chmodIfExists,
+  openBlobDir,
+  prepareDbDir,
+  withCleanupFailures,
+  withPrivateUmask,
+} from './blobs.js';
 import { ColdBlobCorruptError, createColdCodec } from './cold.js';
 import { applySchema } from './schema.js';
 
@@ -439,12 +445,26 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     return dropped === undefined ? [] : [dropped.path];
   }
 
+  /**
+   * Unlinks blobs no committed row references any more. The commit landed, so
+   * an unlink failure must not fail the call; what is left is unreferenced and
+   * the next open's sweep removes it.
+   */
+  function removeAfterCommit(files: string[]): void {
+    const failures = blobs.removeAll(files);
+    if (failures.length > 0) {
+      log(
+        `oort store: could not remove ${failures.length} unreferenced cold blob(s); the next open sweeps them`,
+      );
+    }
+  }
+
   const writeAll = db.transaction((ms: Memory[]) => ms.flatMap(writeMemory));
 
   function upsertMany(ms: Memory[]): void {
     // The rows are gone once the transaction commits; only then unlink exactly
     // the blob each one named (unique per coldPut, so never another write's).
-    for (const file of writeAll.immediate(ms)) blobs.remove(file);
+    removeAfterCommit(writeAll.immediate(ms));
   }
 
   const forgetTx = db.transaction((id: string): string | undefined => {
@@ -553,14 +573,10 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     try {
       tx = coldPutManyTx.immediate(ms, files);
     } catch (e) {
-      for (const file of files) blobs.remove(file);
-      throw e;
+      throw withCleanupFailures(e, blobs.removeAll(files));
     }
-    for (const i of tx.skipped) {
-      blobs.remove(files[i] as string);
-      skipped.push((ms[i] as Memory).id);
-    }
-    for (const file of tx.previous) blobs.remove(file);
+    for (const i of tx.skipped) skipped.push((ms[i] as Memory).id);
+    removeAfterCommit([...tx.skipped.map((k) => files[k] as string), ...tx.previous]);
     return { skipped };
   }
 

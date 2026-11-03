@@ -43,6 +43,35 @@ export function unlinkQuietly(file: string): void {
   }
 }
 
+/** Runs every unlink, best effort; returns the failures (missing files are not failures). */
+function unlinkEach(files: readonly string[]): unknown[] {
+  const failures: unknown[] = [];
+  for (const file of files) {
+    try {
+      unlinkQuietly(file);
+    } catch (e) {
+      failures.push(e);
+    }
+  }
+  return failures;
+}
+
+/**
+ * Returns `original`, the error the caller must see, with any cleanup
+ * failures attached as its `cause` (an `AggregateError`; a cause it already
+ * had becomes that error's cause). A non-Error is returned unchanged.
+ */
+export function withCleanupFailures(original: unknown, failures: readonly unknown[]): unknown {
+  if (failures.length === 0 || !(original instanceof Error)) return original;
+  const previous = original.cause;
+  original.cause = new AggregateError(
+    failures,
+    `cold blob cleanup: ${failures.length} unlink(s) failed`,
+    previous === undefined ? undefined : { cause: previous },
+  );
+  return original;
+}
+
 export function chmodIfExists(file: string, mode: number): void {
   try {
     fs.chmodSync(file, mode);
@@ -162,6 +191,11 @@ export interface BlobDir {
   /** Removes a blob; missing files and non-blob names are ignored. */
   remove(name: string): void;
   /**
+   * `remove` for every name, best effort: one failing unlink does not stop the
+   * rest. Returns the failures (empty when all went).
+   */
+  removeAll(names: readonly string[]): unknown[];
+  /**
    * Removes crash leftovers: blob temp files older than an hour, and blobs not
    * in `referenced` older than a minute. Only when the directory carries the
    * marker, and only files matching the blob-name pattern. Logs counts only.
@@ -189,12 +223,13 @@ export function openBlobDir(dir: string, log: Log): BlobDir {
       );
       const tmpOf = (name: string): string => path.join(dir, `${name}.tmp`);
       const renamed: string[] = [];
-      const cleanup = (): void => {
-        for (const name of names) {
-          unlinkQuietly(tmpOf(name));
-          if (renamed.includes(name)) unlinkQuietly(path.join(dir, name));
-        }
-      };
+      // Best effort over every file this call created; never masks the original error.
+      const cleanup = (): unknown[] =>
+        unlinkEach(
+          names.flatMap((name) =>
+            renamed.includes(name) ? [tmpOf(name), path.join(dir, name)] : [tmpOf(name)],
+          ),
+        );
       try {
         const written = await mapBounded(items, WRITE_CONCURRENCY, async ({ data }, i) => {
           const fh = await openExclusive(tmpOf(names[i] as string));
@@ -211,8 +246,7 @@ export function openBlobDir(dir: string, log: Log): BlobDir {
         }
         fsyncDir(dir);
       } catch (e) {
-        cleanup();
-        throw e;
+        throw withCleanupFailures(e, cleanup());
       }
       return names;
     },
@@ -229,6 +263,10 @@ export function openBlobDir(dir: string, log: Log): BlobDir {
 
     remove(name) {
       if (BLOB_NAME.test(name)) unlinkQuietly(path.join(dir, name));
+    },
+
+    removeAll(names) {
+      return unlinkEach(names.filter((n) => BLOB_NAME.test(n)).map((n) => path.join(dir, n)));
     },
 
     sweep(referenced) {
