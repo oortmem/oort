@@ -10,3 +10,4 @@ export * from './gate.js';
 export * from './recall.js';
 export * from './observe.js';
 export * from './scrub.js';
+export * from './consolidate.js';
