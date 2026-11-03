@@ -8,3 +8,4 @@ export * from './fusion.js';
 export * from './memory-store.js';
 export * from './gate.js';
 export * from './recall.js';
+export * from './observe.js';
