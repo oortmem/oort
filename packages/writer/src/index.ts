@@ -17,7 +17,8 @@ export { WRITER_SYSTEM_PROMPT, buildWriterPrompt };
 
 /** Default Anthropic model for `anthropicWriter` (Claude Haiku 5.5). */
 const DEFAULT_MODEL = 'claude-haiku-5-5';
-const DEFAULT_MAX_OUTPUT_TOKENS = 512;
+// Headroom for the JSON answer; thinking is disabled below, but other providers may still spend tokens.
+const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 
 const outputSchema = z.object({
   text: z.string().min(1).max(600),
@@ -44,8 +45,11 @@ export class WriterError extends Error {
   readonly kind: WriterErrorKind;
   readonly status: number | undefined;
 
-  constructor(kind: WriterErrorKind, status?: number) {
-    super(`Memory writer call failed (${kind}${status === undefined ? '' : `, HTTP ${status}`})`);
+  constructor(kind: WriterErrorKind, status?: number, message?: string) {
+    super(
+      message ??
+        `Memory writer call failed (${kind}${status === undefined ? '' : `, HTTP ${status}`})`,
+    );
     this.name = 'WriterError';
     this.kind = kind;
     this.status = status;
@@ -82,12 +86,27 @@ function wrap(e: unknown): WriterError {
   if (name === 'TimeoutError' || name === 'AbortError') return new WriterError('timeout');
   if (name === 'AI_LoadAPIKeyError') return new WriterError('auth');
   if (AISDKError.isInstance(e)) return new WriterError('bad-response');
-  return new WriterError('network');
+  return new WriterError('bad-response', undefined, 'Memory writer internal error (bad-response)');
 }
 
 /** True for the failures a corrective retry can fix: the model's output did not validate. */
 function isSchemaFailure(e: unknown): boolean {
   return NoObjectGeneratedError.isInstance(e) || TypeValidationError.isInstance(e);
+}
+
+/** Truncated or declined output cannot be fixed by a field-level retry. */
+function throwIfUnusable(e: unknown): void {
+  if (!NoObjectGeneratedError.isInstance(e)) return;
+  if (e.finishReason === 'length') {
+    throw new WriterError(
+      'bad-response',
+      undefined,
+      'Memory writer model output truncated (bad-response)',
+    );
+  }
+  if (e.finishReason === 'content-filter') {
+    throw new WriterError('bad-response', undefined, 'Memory writer model declined (bad-response)');
+  }
 }
 
 /** Names the schema fields that failed, from the raw model text if it parses; never returns text. */
@@ -123,8 +142,21 @@ function correction(fields: string[]): string {
 }
 
 // Defense in depth: the writer is told never to emit secrets, but scrub its output anyway.
-// If scrubbing changes anything the scrubbed value is returned. The MemoryWriter contract has
-// no debug field, so the count is not surfaced.
+// If scrubbing changes anything the scrubbed value is returned (an entity that changed is dropped).
+// The MemoryWriter contract has no debug field, so the redaction count is not surfaced.
+function fit(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > 0 ? cut.slice(0, sp) : cut).trimEnd();
+}
+
+function scrubField(s: string, max: number): string {
+  const r = scrub(s).text;
+  const out = r === s ? s : fit(r, max);
+  return out === '' ? 'A credential was configured.' : out;
+}
+
 function scrubbed(o: WriterOutput): {
   text: string;
   stub: string;
@@ -132,9 +164,9 @@ function scrubbed(o: WriterOutput): {
   type: MemoryType;
 } {
   return {
-    text: scrub(o.text).text,
-    stub: scrub(o.stub).text,
-    entities: o.entities.map((x) => scrub(x).text),
+    text: scrubField(o.text, 600),
+    stub: scrubField(o.stub, 200),
+    entities: o.entities.filter((x) => scrub(x).text === x),
     type: o.type,
   };
 }
@@ -152,7 +184,8 @@ export function aiSdkWriter(opts: {
       system: WRITER_SYSTEM_PROMPT,
       messages,
       output: Output.object({ schema: outputSchema }),
-      temperature: 0,
+      // No sampling parameters: Claude Haiku 5.5 rejects non-default values, and the defaults suit this task.
+      providerOptions: { anthropic: { thinking: { type: 'disabled' } } },
       maxOutputTokens,
     });
     return output;
@@ -160,12 +193,16 @@ export function aiSdkWriter(opts: {
 
   return {
     async write(obs, action, prior) {
+      if (action !== 'ADD' && prior === undefined) {
+        throw new TypeError(`MemoryWriter.write: ${action} requires a prior memory`);
+      }
       const user = { role: 'user' as const, content: buildWriterPrompt(obs, action, prior) };
       let first: unknown;
       try {
         return scrubbed(await attempt([user]));
       } catch (e) {
         if (!isSchemaFailure(e)) throw wrap(e);
+        throwIfUnusable(e);
         first = e;
       }
       const fields = failingFields(first);
@@ -173,6 +210,7 @@ export function aiSdkWriter(opts: {
         return scrubbed(await attempt([user, { role: 'user', content: correction(fields) }]));
       } catch (e) {
         if (!isSchemaFailure(e)) throw wrap(e);
+        throwIfUnusable(e);
         throw new WriterOutputError(failingFields(e));
       }
     },
