@@ -44,6 +44,13 @@ export interface SqliteStoreOptions {
   /** Clock for `list`'s validity filter; defaults to `new Date()`. */
   now?: () => Date;
   /**
+   * How long a write (and the open, which checks the schema in a write
+   * transaction) waits for another connection's write lock before failing
+   * with `SQLITE_BUSY`. Defaults to 5000. The wait is synchronous and blocks
+   * the event loop, so latency-bound callers (hooks) pass a short one.
+   */
+  busyTimeoutMs?: number;
+  /**
    * One-line maintenance notices (orphan sweeps, permissions, corrupt cold
    * blobs). They carry counts, directory paths or memory ids, never memory
    * content. Defaults to stderr.
@@ -218,13 +225,20 @@ function scopeParams(s: ScopeFilter) {
  * Opens (creating if needed) a SQLite-backed `MemoryStore`: rows in `memories`,
  * lexical search through FTS5, dense search through sqlite-vec (int8, cosine),
  * cold copies as zstd blobs under `coldDir`. Safe to open from several
- * processes at once (WAL, 5 s busy timeout, IMMEDIATE write transactions).
+ * processes at once (WAL, a busy timeout (5 s by default), IMMEDIATE write
+ * transactions).
  * Every method is async per the contract; the work underneath is synchronous.
  */
 export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryStore> {
   const { dimension } = opts;
   if (!Number.isInteger(dimension) || dimension <= 0) {
     throw new RangeError(`sqlite store: dimension must be a positive integer, got ${dimension}`);
+  }
+  const busyTimeoutMs = opts.busyTimeoutMs ?? 5000;
+  if (!Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0) {
+    throw new RangeError(
+      `sqlite store: busyTimeoutMs must be a non-negative integer, got ${busyTimeoutMs}`,
+    );
   }
   const d = opts.d ?? 0.5;
   const clock = opts.now ?? (() => new Date());
@@ -238,7 +252,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const db = withPrivateUmask(() => {
     const conn = new Database(dbPath);
     try {
-      conn.pragma('busy_timeout = 5000');
+      conn.pragma(`busy_timeout = ${busyTimeoutMs}`);
       conn.pragma('journal_mode = WAL');
       conn.pragma('foreign_keys = ON');
       sqliteVec.load(conn);

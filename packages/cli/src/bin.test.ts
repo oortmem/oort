@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import Database from 'better-sqlite3';
 import { execa } from 'execa';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { OortConfig, projectIdFor } from '@oortmem/core';
@@ -186,6 +187,40 @@ describe('oort bin', () => {
     const unknown = await oort(s, ['hook', 'NoSuchEvent'], { input: '{}' });
     expect(unknown.exitCode).toBe(0);
     expect(unknown.stdout).toBe('');
+  });
+
+  it('cli.hook-yields-when-store-locked', async () => {
+    const s = sandbox();
+    const dbPath = path.join(s.oortHome, 'oort.sqlite');
+    const store = await openSqliteStore({
+      path: dbPath,
+      coldDir: path.join(s.oortHome, 'cold'),
+      dimension: 512,
+      log: () => {},
+    });
+    await store.upsert(memory({ embedding: new Int8Array(512).fill(3) }));
+    await store.close();
+    // Another process (say, a drain) holds the write lock for the whole hook run.
+    const holder = new Database(dbPath);
+    holder.exec('BEGIN IMMEDIATE');
+    try {
+      const r = await oort(s, ['hook', 'UserPromptSubmit'], {
+        input: JSON.stringify({
+          session_id: 's-locked',
+          cwd: s.cwd,
+          hook_event_name: 'UserPromptSubmit',
+          prompt: 'which port does the auth service listen on?',
+        }),
+      });
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toBe('');
+      expect(r.durationMs).toBeLessThan(1500);
+    } finally {
+      holder.exec('ROLLBACK');
+      holder.close();
+    }
+    const log = fs.readFileSync(path.join(s.oortHome, 'logs', 'hooks.log'), 'utf8');
+    expect(log).toContain('"outcome":"degraded:busy"');
   });
 
   it('cli.hook-exits-promptly-with-slow-adapters', (ctx) => {

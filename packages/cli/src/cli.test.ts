@@ -403,6 +403,68 @@ describe('oort hook (in process)', () => {
     expect(r.io.spawned).toBe(1);
   });
 
+  it('cli.hook-store-busy-timeout', async () => {
+    const h = harness();
+    const seen: (number | undefined)[] = [];
+    const inner = h.wire;
+    h.wire = async (cwd, o) => {
+      seen.push(o?.busyTimeoutMs);
+      return inner(cwd, o);
+    };
+    await h.run(['hook', 'UserPromptSubmit'], { stdin: prompt(h.cwd) });
+    await h.run(['hook', 'SessionStart'], {
+      stdin: JSON.stringify({ session_id: 's', cwd: h.cwd }),
+    });
+    await h.run(['hook', 'Stop'], { stdin: '{}' });
+    await h.run(['hook', 'drain']);
+    await h.run(['recall', 'port']);
+    // Hooks wait at most 250 ms for the lock; the detached drain and commands keep the default.
+    expect(seen).toEqual([250, 250, 250, undefined, undefined]);
+  });
+
+  it('cli.hook-busy-store-logs-degraded', async () => {
+    const busy = (): Error =>
+      Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+    const logOf = (home: string) => readLines(path.join(home, 'logs', 'hooks.log'));
+
+    // The open itself hit the lock.
+    const a = harness();
+    a.wire = async () => {
+      throw busy();
+    };
+    const opened = await a.run(['hook', 'UserPromptSubmit'], { stdin: prompt(a.cwd) });
+    expect(opened.code).toBe(0);
+    expect(opened.io.hookStdout).toBe('');
+    expect(logOf(a.home)).toEqual([
+      expect.objectContaining({
+        event: 'UserPromptSubmit',
+        outcome: 'degraded:busy',
+        degraded: ['busy'],
+      }),
+    ]);
+
+    // A write inside the handler hit the lock: no context is injected.
+    const b = harness();
+    await b.store.upsert(memory());
+    const inner = b.wire;
+    b.wire = async (cwd, o) => {
+      const w = await inner(cwd, o);
+      return {
+        ...w,
+        store: {
+          ...w.store,
+          recordAccess: async () => {
+            throw busy();
+          },
+        },
+      };
+    };
+    const during = await b.run(['hook', 'UserPromptSubmit'], { stdin: prompt(b.cwd) });
+    expect(during.code).toBe(0);
+    expect(during.io.hookStdout).toBe('');
+    expect(logOf(b.home).map((l) => l['outcome'])).toContain('degraded:busy');
+  });
+
   it('cli.hook-slow-adapters-in-process', async () => {
     const h = harness();
     await h.store.upsert(memory());

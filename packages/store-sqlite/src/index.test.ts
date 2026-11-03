@@ -308,6 +308,39 @@ describe('sqlite store', () => {
     await store.close();
   });
 
+  it('store.busy-timeout-option', async () => {
+    const dir = freshDir();
+    const opts = optsIn(dir);
+    await (await openSqliteStore(opts)).close(); // schema in place
+    const open = await openSqliteStore({ ...opts, busyTimeoutMs: 250 });
+    const holder = new Database(opts.path);
+    holder.exec('BEGIN IMMEDIATE');
+    try {
+      const busy = expect.objectContaining({ code: expect.stringMatching(/^SQLITE_BUSY/) });
+      // A write on an open handle gives up after ~250 ms instead of the 5 s default.
+      let t = performance.now();
+      await expect(open.upsert(makeMemory({ id: 'w' }))).rejects.toEqual(busy);
+      let ms = performance.now() - t;
+      expect(ms).toBeGreaterThanOrEqual(200);
+      expect(ms).toBeLessThan(750);
+      // Opening takes the write lock (schema check), so it gives up just as fast.
+      t = performance.now();
+      await expect(openSqliteStore({ ...opts, busyTimeoutMs: 250 })).rejects.toEqual(busy);
+      ms = performance.now() - t;
+      expect(ms).toBeGreaterThanOrEqual(200);
+      expect(ms).toBeLessThan(750);
+      // Reads never wait on a writer under WAL.
+      expect(await open.list(LOCAL, { validOnly: false })).toEqual([]);
+    } finally {
+      holder.exec('ROLLBACK');
+      holder.close();
+    }
+    await open.upsert(makeMemory({ id: 'w' }));
+    expect(await open.get('w')).not.toBeNull();
+    await open.close();
+    await expect(openSqliteStore({ ...opts, busyTimeoutMs: -1 })).rejects.toThrow(RangeError);
+  });
+
   it('store.parallel-writers-no-busy', async () => {
     const dir = freshDir();
     const opts = optsIn(dir);

@@ -34,6 +34,8 @@ export interface Wired {
 
 export interface WireOptions {
   env?: Env;
+  /** How long a store write may wait for another connection's lock (the store's default: 5000). */
+  busyTimeoutMs?: number;
 }
 
 export type WireFn = (cwd: string, opts?: WireOptions) => Promise<Wired>;
@@ -124,6 +126,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     coldDir: path.join(config.home, 'cold'),
     dimension: config.embed.dimension,
     d: config.activation.d,
+    ...(opts.busyTimeoutMs !== undefined && { busyTimeoutMs: opts.busyTimeoutMs }),
   });
   const out: Wired = {
     config,

@@ -1,5 +1,5 @@
 import { HOOK_TIMEOUTS, createHookLogger, runHook, type HookEvent } from '@oortmem/claude-code';
-import { resolveHome } from '@oortmem/core';
+import { resolveHome, type MemoryStore } from '@oortmem/core';
 import type { Ctx } from '../util.js';
 import type { Wired } from '../wire.js';
 
@@ -14,6 +14,38 @@ export const HOOK_COMMAND_EVENTS: readonly HookEvent[] = [
 export const HOOK_STDIN_CAP_MS = 1000;
 /** Exit this long before Claude Code's own hook timeout would discard the output. */
 const DEADLINE_MARGIN_MS = 1000;
+/**
+ * A hook waits at most this long for the store's write lock (held, say, by a
+ * drain). SQLite's busy wait is synchronous: it freezes the event loop, the
+ * deadline timer included, so it must stay short. The drain keeps the default.
+ */
+export const HOOK_BUSY_TIMEOUT_MS = 250;
+
+/** SQLite's "another connection holds the lock" errors. */
+function isBusy(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  return (
+    typeof code === 'string' && (code.startsWith('SQLITE_BUSY') || code.startsWith('SQLITE_LOCKED'))
+  );
+}
+
+/** `store`, noting through `onBusy` any call that failed on the lock (the handlers swallow errors). */
+function busyAware(store: MemoryStore, onBusy: () => void): MemoryStore {
+  return new Proxy(store, {
+    get(target, prop, receiver) {
+      const value: unknown = Reflect.get(target, prop, receiver);
+      if (typeof value !== 'function') return value;
+      return async (...args: unknown[]) => {
+        try {
+          return await (value as (...a: unknown[]) => Promise<unknown>).apply(target, args);
+        } catch (e) {
+          if (isBusy(e)) onBusy();
+          throw e;
+        }
+      };
+    },
+  });
+}
 
 const isEvent = (e: string): e is HookEvent =>
   (HOOK_COMMAND_EVENTS as readonly string[]).includes(e);
@@ -38,7 +70,9 @@ function inputCwd(stdin: string): string | undefined {
  * flushed: after a recall timeout the losing full recall is still pending and
  * would otherwise hold the process past Claude Code's timeout. Every failure
  * (bad config, a store that will not open, a throwing handler) is logged to
- * the hook log and swallowed. A deadline exits 0 with empty stdout should
+ * the hook log and swallowed. A store locked by another writer (a drain) makes
+ * the open or a write fail after 250 ms: stdout is then empty and the log
+ * records `degraded:busy`. A deadline exits 0 with empty stdout should
  * anything hang.
  */
 export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
@@ -57,6 +91,7 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
 
   let w: Wired | undefined;
   let stdout = '';
+  let busy = false;
   try {
     if (!isEvent(event)) {
       io.err(
@@ -65,11 +100,17 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
       log(ctx, undefined, event, 'unknown-event');
     } else {
       const stdin = event === 'drain' ? '' : await io.readStdin(HOOK_STDIN_CAP_MS);
-      w = await ctx.wire(inputCwd(stdin) ?? io.cwd, { env: io.env });
-      const { harnessLog, unavailable: _u, close: _c, scope: _s, ...engine } = w;
+      w = await ctx.wire(inputCwd(stdin) ?? io.cwd, {
+        env: io.env,
+        ...(event !== 'drain' && { busyTimeoutMs: HOOK_BUSY_TIMEOUT_MS }),
+      });
+      const { harnessLog, unavailable: _u, close: _c, scope: _s, store, ...engine } = w;
       // The scope is left out: each handler derives it from the session's cwd.
       const out = await runHook(event, stdin, {
         ...engine,
+        store: busyAware(store, () => {
+          busy = true;
+        }),
         log: harnessLog,
         spawnDrain: () => io.spawnDrain(),
       });
@@ -77,16 +118,36 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
       // The drain is detached and nothing waits on it, so it closes the store cleanly.
       if (event === 'drain') await w.close();
     }
-  } catch {
-    log(ctx, w, event, 'cli-error');
+  } catch (e) {
+    if (isBusy(e)) busy = true;
+    else log(ctx, w, event, 'cli-error');
+  }
+  if (busy) {
+    // The store was locked: whatever the handler made of it, inject nothing.
+    stdout = '';
+    log(ctx, w, event, 'degraded:busy', ['busy']);
   }
   exit(stdout);
 }
 
-function log(ctx: Ctx, w: Wired | undefined, event: string, outcome: string): void {
+function log(
+  ctx: Ctx,
+  w: Wired | undefined,
+  event: string,
+  outcome: string,
+  degraded?: string[],
+): void {
   try {
     const logger = w?.harnessLog ?? createHookLogger(resolveHome(ctx.io.env));
-    logger.write({ event, session: null, project: null, outcome, counts: {}, timings: {} });
+    logger.write({
+      event,
+      session: null,
+      project: null,
+      outcome,
+      counts: {},
+      timings: {},
+      ...(degraded !== undefined && { degraded }),
+    });
   } catch {
     // Logging is best effort; the session must go on.
   }
