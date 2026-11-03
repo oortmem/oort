@@ -124,6 +124,23 @@ describe('scrub', () => {
     );
   });
 
+  it('scrub.redacts-keys-in-paths-without-leaks', () => {
+    const k44 = 'kT9+vQ2/Lm8Xp4Rz+Wd6Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq';
+    const k88 =
+      '452GH2wVMPSIobFpU6EpN4dQJzEI66h/aJF++WFGNdC4Oq08twSbp5YOgw4keTUTI5W4VT/MC54cHr4b1/gktN==';
+    const R = '[REDACTED:high-entropy]';
+    expect(scrub(`/srv/uploads/tokens/${k88}`).text).toBe(`/srv/uploads/tokens/${R}`);
+    expect(scrub(`/var/lib/app/${k44}`).text).toBe(`/var/lib/app/${R}`);
+    expect(scrub(`example.com/download/${k44}`).text).toBe(`example.com/download/${R}`);
+    expect(scrub(`key sha512-${k44}`).text).toBe(`key ${R}`);
+  });
+
+  it('scrub.json-values-stop-at-delimiters', () => {
+    expect(scrub('{"password": 1234, "x": 1}').text).toBe(
+      '{"password": [REDACTED:env-secret], "x": 1}',
+    );
+  });
+
   it('scrub.exempts-hashes-and-uuids', () => {
     const sha256 = 'a'.repeat(8) + '0123456789abcdef'.repeat(3) + 'b'.repeat(8);
     expect(sha256).toHaveLength(64);

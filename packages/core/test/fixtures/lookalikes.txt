@@ -29,3 +29,25 @@ pip package sk-learn-is-not-the-package-name
 TOKEN_COUNT=4096
 "integrity": "sha512-Ia8uUyRAYLaYPq9wuxduycBaPWQKpcywU6NgAFDUcQ+pkYLvjAFsvzB8JXGNANySSQQ26DseSAaslkbuaLpOQB=="
 integrity sha256-wU6ROOLKKFPDbOuA4OAkoho9EcW0kZvdZO2TM9hRYZb=
+/Users/mjnong/Desktop/Screenshots/Screenshot_2024_11_03/Image
+/Users/mjnong/Downloads/Invoice-2024-11/Receipts/Q4
+/Users/mjnong/Documents/Work/Q3/Notes/Draft/A/B/C
+/Users/mjnong/Projects/MyApp2024/Build/Output/Release9/Win64
+/Users/mjnong/Library/Application_Support/Code/User/Settings2024/Backup3
+packages/Core/Src/Memory/HybridRetriever2/RankFusion3V2
+gs://my-bucket/Exports/2024/Q3/Run7/Part0001ABCDEF
+{"input_tokens": 1234, "output_tokens": 567}
+prompt_tokens=812 completion_tokens=96 total_tokens=908
+maxTokens: 4096
+tokenCount: 42
+tokenBudget: 8000
+tokenLimit: 4096
+tokens: 128
+cacheTokens: true
+tokenType: bearer
+TOKENS_PER_MINUTE=90000
+RATE_LIMIT_TOKENS=1000
+TOKENIZER_PATH=/models/tok.json
+secretName: db-credentials
+passwordMinLength: 12
+PASSWORDLESS_LOGIN=true
