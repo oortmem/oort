@@ -247,3 +247,17 @@ kubectl logs web-7d9f8b6c5-x2k9q -n production --since=1h
 the keyboard key-binding is ctrl-k
 monkey-patched-module-for-tests
 SKU SK-1234 in stock
+{"text":"line one\nline two\n\nline three"}
+{"description":"Run the tests\nthen commit the result\n"}
+{"file_path":"\/Users\/mjnong\/repos\/oort\/packages\/core\/src\/scrub.ts"}
+{"command":"cat src/components/UserProfile/UserProfileCard.test.tsx\nls -la packages/core/src"}
+{"file_path":"/Users/mjnong/repos/oort/.worktrees/phase-1/packages/core/src/scrub.ts","limit":200}
+{"text":"caf\u00e9 r\u00e9sum\u00e9 na\u00efve d\u00e9j\u00e0 vu"}
+{"text":"\u00c9cole normale sup\u00e9rieure"}
+{"command":"npm run build\n\ttsc -p tsconfig.json\n\tvitest run"}
+{"path":"C:\\Users\\me\\AppData\\Local\\Temp\\notes.txt"}
+{"text":"see \"README.md\" for details\n"}
+{"content":"function foo() {\n  return getUserProfileSettingsForAccountV2Handler();\n}\n"}
+{"command":"git log --oneline\nnpm test\nnode_modules/.bin/tsc --noEmit"}
+{"text":"tokens used:\n  input_tokens: 1234\n  output_tokens: 567"}
+{"command":"echo done\r\nrm -rf dist\f"}

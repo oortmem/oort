@@ -261,6 +261,40 @@ describe('scrub', () => {
   });
 
   /**
+   * Serialised tool input: a literal `\n` (backslash, `n`) or other JSON escape
+   * is a token boundary on both sides, and the escape itself survives. Tokens
+   * are assembled at runtime so no credential literal sits in this file.
+   */
+  it('scrub.json-escapes-are-token-boundaries', () => {
+    const B = '\\';
+    const A = 'Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7cDe0fGh2jKm';
+    const aws = 'AK' + 'IA' + 'Q7XZB3KMP9RTW2LN';
+    const gitlab = 'gl' + 'pat-' + A.slice(0, 20);
+    const pw = 'hunter2' + 'hunter2';
+    const R = (k: string): string => `[REDACTED:${k}]`;
+    const cases: [string, string][] = [
+      [
+        `{"command":"echo hi${B}n${aws}${B}necho"}`,
+        `{"command":"echo hi${B}n${R('aws-access-key')}${B}necho"}`,
+      ],
+      [`{"c":"x${B}t${gitlab}${B}t"}`, `{"c":"x${B}t${R('gitlab-token')}${B}t"}`],
+      [`{"c":"${B}u00e9${aws}"}`, `{"c":"${B}u00e9${R('aws-access-key')}"}`],
+      [
+        `{"command":"export A=1${B}nDB_PASSWORD=${pw}${B}necho ok"}`,
+        `{"command":"export A=1${B}nDB_PASSWORD=${R('env-secret')}${B}necho ok"}`,
+      ],
+      [
+        `{"c":"a${B}n${'kT9+vQ2/Lm8Xp4Rz+Wd6'}${'Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq'}${B}nb"}`,
+        `{"c":"a${B}n${R('high-entropy')}${B}nb"}`,
+      ],
+      // A backslash in a password is not an escape that ends it.
+      [`PASSWORD=pa${B}${B}ss${pw}`, `PASSWORD=${R('env-secret')}`],
+    ];
+    expect(cases.map(([i]) => scrub(i).text)).toEqual(cases.map(([, o]) => o));
+    for (const [i] of cases) expect(scrub(scrub(i).text).text).toBe(scrub(i).text);
+  });
+
+  /**
    * Accepted trade-offs, pinned so a change in either direction is deliberate.
    * Misses: tokens under 32 chars are never judged (too many ids look random
    * at 24); "the secret: we" cannot be told from YAML; a bcrypt hash is not a

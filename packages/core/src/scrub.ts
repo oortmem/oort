@@ -130,14 +130,45 @@ const COUNT_VALUE =
   /^(?:[~<>≈][ \t]*)?(?:-?\d[\d_,.]*[kKmM]?|\d+(?:ms|s|m|h|d)(?:\d+(?:ms|s|m|h))*|true|false|null|none|undefined|NaN|True|False|None)$/;
 
 /**
+ * JSON string escapes. Tool inputs reach the scrubber serialised, so a token
+ * may sit right after a literal `\n` (backslash, `n`): the `n` must not count
+ * as part of the token, or `\b` and the lookbehinds below never see its start.
+ */
+const ESC_TAIL = String.raw`(?:[nrtbf"\\/]|u[0-9A-Fa-f]{4})`;
+/** Just after an escape: a token may start here even though the last char is a letter. */
+const AFTER_ESC = String.raw`(?<=\\${ESC_TAIL})`;
+/** The letter of an escape (`n` in `\n`) never starts a token. */
+const NOT_ESC_LETTER = String.raw`(?!(?<=\\)[nrtbfu])`;
+/**
+ * Escapes that end a value (`PASSWORD=x\necho`): the control characters and
+ * `\"`. `\\` and `\/` do not, since a password may hold a backslash or slash,
+ * and nor does `\u` above U+001F (an escaped `é`).
+ */
+const VALUE_END_ESC = String.raw`\\(?:[nrtbf"]|u00[01][0-9A-Fa-f])`;
+
+/**
+ * Gives a rule that starts with `\b` or a negative lookbehind an escape-aware
+ * left boundary: the old boundary (never on an escape's letter), or just after
+ * an escape. Rules with other starts are returned unchanged.
+ */
+function escapeBounded(rule: Rule): Rule {
+  const lead = /^(?:\\b|\(\?<![^()]*\))/.exec(rule.re.source)?.[0];
+  if (lead === undefined) return rule;
+  const src = `(?:${lead}${NOT_ESC_LETTER}|${AFTER_ESC})${rule.re.source.slice(lead.length)}`;
+  return { ...rule, re: new RegExp(src, rule.re.flags) };
+}
+
+/**
  * A value: double-quoted (escapes allowed), single-quoted, escaped-quoted
  * (JSON inside a JSON string), an array of strings, or bare. A bare value may
  * hold `, } ] )`: one ends it only when followed by whitespace, a quote,
- * another delimiter or the end. A bracket followed by space, a quote, a
+ * another delimiter, a value-ending escape or the end; such an escape ends it too. A bracket followed by space, a quote, a
  * bracket or a digit opens a structure, which is left to the keys inside it.
  */
-const ENV_VALUE =
-  /"(?:[^"\\\n]|\\.)*"|"[^"\n]*"|'[^'\n]*'|\\"[^"\\\n]*\\"|\[[ \t]*(?:"[^"\n]*"|'[^'\n]*')(?:[ \t]*,[ \t]*(?:"[^"\n]*"|'[^'\n]*'))*[ \t]*\]|(?![[{](?:[\s"'[\]{}\d]|$))(?:[^\s"',}\])]|[,}\])](?![\s"',}\])]|$))+/y;
+const ENV_VALUE = new RegExp(
+  String.raw`"(?:[^"\\\n]|\\.)*"|"[^"\n]*"|'[^'\n]*'|\\"[^"\\\n]*\\"|\[[ \t]*(?:"[^"\n]*"|'[^'\n]*')(?:[ \t]*,[ \t]*(?:"[^"\n]*"|'[^'\n]*'))*[ \t]*\]|(?![[{](?:[\s"'[\]{}\d]|$))(?:(?!${VALUE_END_ESC})(?:[^\s"',}\])]|[,}\])](?![\s"',}\])]|$|${VALUE_END_ESC})))+`,
+  'y',
+);
 
 /**
  * Redact the value after a credential-named key, keeping JSON quotes valid.
@@ -400,121 +431,130 @@ function judgeToken(m: string, offset: number, text: string): Replacement | null
 }
 
 /**
- * Applied in this order. Order matters: specific vendor shapes run before the
+ * Applied in this order; every rule that starts at a boundary gets the
+ * escape-aware one (`escapeBounded`). Order matters: specific vendor shapes run before the
  * generic ones so each secret gets its most precise kind, and the generic
  * rules skip anything already replaced by a marker.
  *
  * Assumption: Typesafe keys are modelled as `ts_(live|test)_<16+ alnum>`.
  */
-const RULES: Rule[] = [
-  {
-    kind: 'pem-private-key',
-    re: /-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----/gs,
-  },
-  { kind: 'aws-access-key', re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
-  {
-    kind: 'aws-secret-key',
-    re: /aws_secret_access_key[ \t]*[=:][ \t]*["']?[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])/gi,
-    hit: (m) => {
-      const at = m.search(/[A-Za-z0-9/+=]{40}$/);
-      return { out: `${m.slice(0, at)}${tag('aws-secret-key')}`, removed: m.length - at };
+const RULES: Rule[] = (
+  [
+    {
+      kind: 'pem-private-key',
+      re: /-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----/gs,
     },
-  },
-  { kind: 'github-token', re: /(?<![A-Za-z0-9_-])(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b/g },
-  { kind: 'github-token', re: /(?<![A-Za-z0-9_-])github_pat_[A-Za-z0-9_]{22,}\b/g },
-  { kind: 'anthropic-key', re: /(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}/g },
-  { kind: 'stripe-key', re: /(?<![A-Za-z0-9_-])(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
-  { kind: 'typesafe-key', re: /(?<![A-Za-z0-9_-])ts_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
-  // Vendor tokens shorter than 32 chars or with hex bodies (two character
-  // classes) that the high-entropy rule cannot see.
-  { kind: 'shopify-key', re: /(?<![A-Za-z0-9_-])(?:shpat|shpss|shppa)_[0-9a-f]{32}\b/g },
-  { kind: 'digitalocean-token', re: /(?<![A-Za-z0-9_-])(?:dop|doo|dor)_v1_[0-9a-f]{64}\b/g },
-  { kind: 'mailgun-key', re: /(?<![A-Za-z0-9_-])key-[0-9a-f]{32}\b/g },
-  { kind: 'gitlab-token', re: /(?<![A-Za-z0-9_-])glpat-[A-Za-z0-9_-]{20,}\b/g },
-  { kind: 'square-token', re: /(?<![A-Za-z0-9_-])sq0(?:atp|csp)-[A-Za-z0-9_-]{22,}\b/g },
-  { kind: 'slack-token', re: /(?<![A-Za-z0-9_-])xox[abprs]-[A-Za-z0-9-]{10,}\b/g },
-  { kind: 'npm-token', re: /(?<![A-Za-z0-9_-])npm_[A-Za-z0-9]{36}\b/g },
-  // Letters-only bodies included; 34 chars is the current shape, longer ones too.
-  { kind: 'huggingface-token', re: /(?<![A-Za-z0-9_-])hf_[A-Za-z0-9]{34,}\b/g },
-  {
-    kind: 'twilio-sid',
-    // An account SID is an id, but with the key it is half a credential; only
-    // when named as one, so other `AC<hex>` strings survive.
-    re: /(?<![A-Za-z0-9_-])AC[0-9a-f]{32}\b/g,
-    hit: (m, offset, text) =>
-      /sid|account/i.test(text.slice(Math.max(0, offset - 20), offset))
-        ? { out: tag('twilio-sid'), removed: m.length }
-        : null,
-  },
-  { kind: 'twilio-key', re: /(?<![A-Za-z0-9_-])SK[0-9a-f]{32}\b/g },
-  {
-    kind: 'slack-webhook',
-    // The path is the credential; the host stays.
-    re: /(?<=https:\/\/hooks\.slack\.com\/services\/)T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+/g,
-  },
-  // Vendor prefixes start a token: `-pa-` inside a base64url key is no Voyage key.
-  // A digit is required in the body so kebab-case words like `sk-learn-...` survive.
-  {
-    kind: 'openai-key',
-    re: /(?<![A-Za-z0-9_-])sk-(?:proj-)?[A-Za-z0-9_-]{20,}/g,
-    hit: withDigit('openai-key', 3),
-  },
-  {
-    kind: 'voyage-key',
-    re: /(?<![A-Za-z0-9_-])pa-[A-Za-z0-9_-]{20,}/g,
-    hit: withDigit('voyage-key', 3),
-  },
-  {
-    kind: 'jwt',
-    re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-  },
-  {
-    kind: 'url-credentials',
-    // Only `user:password@` is redacted; scheme and host survive. The user may
-    // be empty and the password may hold `@`: it runs to the last `@` of the authority.
-    re: /(?<=\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]*:[^\s/]+(?=@[^@\s/]*(?:[/\s]|$))/gi,
-    hit: (m) => (m.includes(MARK) ? null : { out: tag('url-credentials'), removed: m.length }),
-  },
-  {
-    kind: 'url-credentials',
-    // A user-only userinfo of 20+ token characters is a key (Sentry DSN, a
-    // token used as a git username); short names like `user@` stay.
-    re: /(?<=\b[a-z][a-z0-9+.-]*:\/\/)[A-Za-z0-9_-]{20,}(?=@[^@\s/]*(?:[/\s]|$))/gi,
-  },
-  {
-    kind: 'basic-auth-arg',
-    // `curl -u user:password`: the flag and the user stay. A numeric value is a
-    // group id (`docker run -u 1000:1000`).
-    re: /(?<=(?:^|\s)(?:-u[ \t]+|--user[ \t=]+)[^\s:]+:)\S+/g,
-    hit: (m) =>
-      /^\d+$/.test(m) || m.includes(MARK)
-        ? null
-        : { out: tag('basic-auth-arg'), removed: m.length },
-  },
-  {
-    kind: 'auth-header',
-    re: /["']?\b(?:authorization|x-api-key|api-key|x-auth-token)["']?[ \t]*[:=][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']{0,2})?[^\s"']+/gi,
-    hit: keepName(
-      'auth-header',
-      /^[^=:]*[=:][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']{0,2})?/i,
-    ),
-  },
-  {
-    kind: 'env-secret',
-    // Any identifier-ish key containing a keyword, up to its `=` or `:`; `envKey`
-    // decides whether the keyword sits on a real boundary and `envSecret` reads
-    // the value. The lookahead keeps this linear.
-    re: /(?<![A-Za-z0-9_])["']?(?:export[ \t]+)?(?=[A-Za-z0-9_]{0,95}?(?:secret|token|passw(?:or)?d|api_?key|private_?key|access_?key))[A-Za-z][A-Za-z0-9_]{0,95}\\?["']?[ \t]*[=:][ \t]*/gi,
-    hit: envSecret,
-  },
-  {
-    kind: 'high-entropy',
-    // A token touching a marker is the rest of one already judged: skip it, so
-    // a second pass changes nothing.
-    re: /(?<![A-Za-z0-9+/=_.~-]|\[REDACTED:[a-z-]+\])[A-Za-z0-9+/=_.~-]{32,}(?![A-Za-z0-9+/=_.~-]|\[REDACTED:)/g,
-    hit: highEntropy,
-  },
-];
+    { kind: 'aws-access-key', re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
+    {
+      kind: 'aws-secret-key',
+      re: /aws_secret_access_key[ \t]*[=:][ \t]*["']?[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])/gi,
+      hit: (m) => {
+        const at = m.search(/[A-Za-z0-9/+=]{40}$/);
+        return { out: `${m.slice(0, at)}${tag('aws-secret-key')}`, removed: m.length - at };
+      },
+    },
+    { kind: 'github-token', re: /(?<![A-Za-z0-9_-])(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b/g },
+    { kind: 'github-token', re: /(?<![A-Za-z0-9_-])github_pat_[A-Za-z0-9_]{22,}\b/g },
+    { kind: 'anthropic-key', re: /(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}/g },
+    { kind: 'stripe-key', re: /(?<![A-Za-z0-9_-])(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
+    { kind: 'typesafe-key', re: /(?<![A-Za-z0-9_-])ts_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
+    // Vendor tokens shorter than 32 chars or with hex bodies (two character
+    // classes) that the high-entropy rule cannot see.
+    { kind: 'shopify-key', re: /(?<![A-Za-z0-9_-])(?:shpat|shpss|shppa)_[0-9a-f]{32}\b/g },
+    { kind: 'digitalocean-token', re: /(?<![A-Za-z0-9_-])(?:dop|doo|dor)_v1_[0-9a-f]{64}\b/g },
+    { kind: 'mailgun-key', re: /(?<![A-Za-z0-9_-])key-[0-9a-f]{32}\b/g },
+    { kind: 'gitlab-token', re: /(?<![A-Za-z0-9_-])glpat-[A-Za-z0-9_-]{20,}\b/g },
+    { kind: 'square-token', re: /(?<![A-Za-z0-9_-])sq0(?:atp|csp)-[A-Za-z0-9_-]{22,}\b/g },
+    { kind: 'slack-token', re: /(?<![A-Za-z0-9_-])xox[abprs]-[A-Za-z0-9-]{10,}\b/g },
+    { kind: 'npm-token', re: /(?<![A-Za-z0-9_-])npm_[A-Za-z0-9]{36}\b/g },
+    // Letters-only bodies included; 34 chars is the current shape, longer ones too.
+    { kind: 'huggingface-token', re: /(?<![A-Za-z0-9_-])hf_[A-Za-z0-9]{34,}\b/g },
+    {
+      kind: 'twilio-sid',
+      // An account SID is an id, but with the key it is half a credential; only
+      // when named as one, so other `AC<hex>` strings survive.
+      re: /(?<![A-Za-z0-9_-])AC[0-9a-f]{32}\b/g,
+      hit: (m, offset, text) =>
+        /sid|account/i.test(text.slice(Math.max(0, offset - 20), offset))
+          ? { out: tag('twilio-sid'), removed: m.length }
+          : null,
+    },
+    { kind: 'twilio-key', re: /(?<![A-Za-z0-9_-])SK[0-9a-f]{32}\b/g },
+    {
+      kind: 'slack-webhook',
+      // The path is the credential; the host stays.
+      re: /(?<=https:\/\/hooks\.slack\.com\/services\/)T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+/g,
+    },
+    // Vendor prefixes start a token: `-pa-` inside a base64url key is no Voyage key.
+    // A digit is required in the body so kebab-case words like `sk-learn-...` survive.
+    {
+      kind: 'openai-key',
+      re: /(?<![A-Za-z0-9_-])sk-(?:proj-)?[A-Za-z0-9_-]{20,}/g,
+      hit: withDigit('openai-key', 3),
+    },
+    {
+      kind: 'voyage-key',
+      re: /(?<![A-Za-z0-9_-])pa-[A-Za-z0-9_-]{20,}/g,
+      hit: withDigit('voyage-key', 3),
+    },
+    {
+      kind: 'jwt',
+      re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+    },
+    {
+      kind: 'url-credentials',
+      // Only `user:password@` is redacted; scheme and host survive. The user may
+      // be empty and the password may hold `@`: it runs to the last `@` of the authority.
+      re: /(?<=\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]*:[^\s/]+(?=@[^@\s/]*(?:[/\s]|$))/gi,
+      hit: (m) => (m.includes(MARK) ? null : { out: tag('url-credentials'), removed: m.length }),
+    },
+    {
+      kind: 'url-credentials',
+      // A user-only userinfo of 20+ token characters is a key (Sentry DSN, a
+      // token used as a git username); short names like `user@` stay.
+      re: /(?<=\b[a-z][a-z0-9+.-]*:\/\/)[A-Za-z0-9_-]{20,}(?=@[^@\s/]*(?:[/\s]|$))/gi,
+    },
+    {
+      kind: 'basic-auth-arg',
+      // `curl -u user:password`: the flag and the user stay. A numeric value is a
+      // group id (`docker run -u 1000:1000`).
+      re: new RegExp(
+        String.raw`(?<=(?:^|\s|\\[nrt])(?:-u[ \t]+|--user[ \t=]+)[^\s:\\]+:)(?:(?!${VALUE_END_ESC})\S)+`,
+        'g',
+      ),
+      hit: (m) =>
+        /^\d+$/.test(m) || m.includes(MARK)
+          ? null
+          : { out: tag('basic-auth-arg'), removed: m.length },
+    },
+    {
+      kind: 'auth-header',
+      re: new RegExp(
+        String.raw`["']?(?:\b${NOT_ESC_LETTER}|${AFTER_ESC})(?:authorization|x-api-key|api-key|x-auth-token)["']?[ \t]*[:=][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']{0,2})?(?:(?!${VALUE_END_ESC})[^\s"'])+`,
+        'gi',
+      ),
+      hit: keepName(
+        'auth-header',
+        /^[^=:]*[=:][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']{0,2})?/i,
+      ),
+    },
+    {
+      kind: 'env-secret',
+      // Any identifier-ish key containing a keyword, up to its `=` or `:`; `envKey`
+      // decides whether the keyword sits on a real boundary and `envSecret` reads
+      // the value. The lookahead keeps this linear.
+      re: /(?<![A-Za-z0-9_])["']?(?:export[ \t]+)?(?=[A-Za-z0-9_]{0,95}?(?:secret|token|passw(?:or)?d|api_?key|private_?key|access_?key))[A-Za-z][A-Za-z0-9_]{0,95}\\?["']?[ \t]*[=:][ \t]*/gi,
+      hit: envSecret,
+    },
+    {
+      kind: 'high-entropy',
+      // A token touching a marker is the rest of one already judged: skip it, so
+      // a second pass changes nothing.
+      re: /(?<![A-Za-z0-9+/=_.~-]|\[REDACTED:[a-z-]+\])[A-Za-z0-9+/=_.~-]{32,}(?![A-Za-z0-9+/=_.~-]|\[REDACTED:)/g,
+      hit: highEntropy,
+    },
+  ] satisfies Rule[]
+).map(escapeBounded);
 
 interface Scrubbed {
   text: string;
