@@ -80,7 +80,7 @@
 **Interfaces:**
 - Produces:
   - `activation(log: AccessLog, salience: number, now: Date, p: { d: number; ws: number }): number`
-  - `appendAccess(log: AccessLog, at: Date): AccessLog` (append; when `recent.length > 32`, fold the oldest 16 into `compactedSum` as `Σ t^-d` evaluated at `compactedAt`, which `activation` re-ages)
+  - `appendAccess(log: AccessLog, at: Date, p: { d: number }): AccessLog` (append; `d` is required because `compactedSum` is only valid for the `d` it was folded with; when `recent.length > 32`, fold the oldest 16 into `compactedSum` as `Σ t^-d` evaluated at `compactedAt`, which `activation` re-ages)
   - `tierFor(a: number, rank: number, pinned: boolean, p: { hotTopN: number; coldBelow: number }): Tier`
 
 - [ ] **Step 1: Failing tests**: `activation.recent-beats-old` (one access 1 h ago > one access 100 h ago), `activation.frequency-adds` (five accesses > one access, same ages), `activation.salience-weight` (same log, salience 1 vs 0 differs by exactly `ws`), `activation.compaction-preserves-order` (ranking of two logs unchanged after `appendAccess` compacts one of them), `tierFor.pinned-is-hot`, `tierFor.below-threshold-is-cold`.
