@@ -2,6 +2,7 @@ import type { Embedder, Hit, MemoryStore, Reranker, ScopeFilter } from './adapte
 import type { ResolvedConfig } from './config.js';
 import { activation } from './activation.js';
 import { fuse } from './fusion.js';
+import { scrub } from './scrub.js';
 import type { Memory } from './model.js';
 
 export interface RecallQuery {
@@ -49,6 +50,8 @@ const clock = (): number => performance.now();
  */
 export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallResult> {
   const { store, config } = deps;
+  // Scrub once: the query text reaches embedders and rerankers, which may be remote.
+  const text = scrub(q.text).text;
   const now = deps.now ?? new Date();
   const t0 = clock();
   const degraded: Degradation[] = [];
@@ -69,7 +72,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   } else {
     const t = clock();
     try {
-      vector = (await deps.embed.embed([q.text], 'query'))[0];
+      vector = (await deps.embed.embed([text], 'query'))[0];
       if (vector === undefined) degraded.push('embed-failed');
     } catch {
       degraded.push('embed-failed');
@@ -87,7 +90,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   };
   const v = vector;
   const [lexical, dense] = await Promise.all([
-    timed('lexicalMs', () => store.lexical(q.text, q.scope, config.recall.lexicalK)),
+    timed('lexicalMs', () => store.lexical(text, q.scope, config.recall.lexicalK)),
     v === undefined
       ? Promise.resolve<Hit[]>([])
       : timed('denseMs', () => store.dense(v, q.scope, config.recall.denseK)),
@@ -138,7 +141,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     const tr = clock();
     try {
       const docs = ordered.map((f) => ({ id: f.id, text: memories.get(f.id)?.text ?? '' }));
-      const reranked = await deps.rerank.rerank(q.text, docs, config.recall.returnK);
+      const reranked = await deps.rerank.rerank(text, docs, config.recall.returnK);
       const byId = new Map(ordered.map((f) => [f.id, f]));
       const next: typeof ordered = [];
       for (const r of reranked) {

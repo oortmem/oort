@@ -12,3 +12,4 @@ export * from './recall.js';
 export * from './observe.js';
 export * from './scrub.js';
 export * from './consolidate.js';
+export * from './errors.js';
