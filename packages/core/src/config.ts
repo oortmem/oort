@@ -109,11 +109,23 @@ function readConfigFile(file: string): Record<string, unknown> {
   return raw;
 }
 
+/**
+ * Oort's home directory, always absolute: `OORT_HOME` resolved against the
+ * process cwd (hooks run from many working directories, and a relative path
+ * would split the store), else `$HOME/.oort`. An empty value counts as unset.
+ */
+export function resolveHome(env: Record<string, string | undefined> = process.env): string {
+  const set = env['OORT_HOME'];
+  if (set !== undefined && set !== '') return path.resolve(set);
+  const home = env['HOME'];
+  return path.resolve(home !== undefined && home !== '' ? home : os.homedir(), '.oort');
+}
+
 export function resolveConfig(
   cwd: string,
   env: Record<string, string | undefined> = process.env,
 ): ResolvedConfig {
-  const home = env['OORT_HOME'] ?? path.join(env['HOME'] ?? os.homedir(), '.oort');
+  const home = resolveHome(env);
 
   const projectFile = findProjectConfig(cwd);
   const homeFile = path.join(home, 'config.json');

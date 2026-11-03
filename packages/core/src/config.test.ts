@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveConfig } from './config.js';
+import { resolveConfig, resolveHome } from './config.js';
 
 function tmp(): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'oort-cfg-')));
@@ -38,6 +38,29 @@ describe('config', () => {
   it('home default falls back to HOME/.oort', () => {
     const h = tmp();
     expect(resolveConfig(tmp(), { HOME: h }).home).toBe(path.join(h, '.oort'));
+  });
+
+  it('config.oort-home-resolved-absolute', () => {
+    const base = tmp();
+    const cwd = path.join(base, 'a', 'b');
+    fs.mkdirSync(cwd, { recursive: true });
+    const before = process.cwd();
+    process.chdir(base);
+    try {
+      // Hooks run from many working directories; a relative OORT_HOME must not split the store.
+      const c = resolveConfig(cwd, { OORT_HOME: 'rel-home' });
+      expect(path.isAbsolute(c.home)).toBe(true);
+      expect(c.home).toBe(path.join(base, 'rel-home'));
+      expect(resolveHome({ OORT_HOME: './x/../rel-home' })).toBe(path.join(base, 'rel-home'));
+    } finally {
+      process.chdir(before);
+    }
+  });
+
+  it('config.oort-home-empty-is-unset', () => {
+    const h = tmp();
+    expect(resolveConfig(tmp(), { OORT_HOME: '', HOME: h }).home).toBe(path.join(h, '.oort'));
+    expect(resolveHome({ OORT_HOME: '', HOME: h })).toBe(path.join(h, '.oort'));
   });
 
   it('config.precedence', () => {
