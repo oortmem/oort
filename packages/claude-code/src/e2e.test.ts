@@ -41,14 +41,14 @@ describe('end to end', () => {
         deps,
       );
       expect(stop).toEqual({ stdout: '', exitCode: 0 });
-      expect(queueLines(t.home)).toHaveLength(3);
+      expect(queueLines(t.home)).toHaveLength(4);
       expect(calls).toMatchObject({ embed: 0, gate: 0, write: 0 });
       expect(spawned).toBe(1);
 
       // 2. The drain observes them with the fake decide and write.
       expect(await runHook('drain', '', deps)).toEqual({ stdout: '', exitCode: 0 });
       expect(queueLines(t.home)).toEqual([]);
-      expect(calls.write).toBe(3);
+      expect(calls.write).toBe(4);
 
       // 3. A later prompt recalls the memory as additional context.
       const out = await runHook(

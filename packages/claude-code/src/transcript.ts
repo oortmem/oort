@@ -27,6 +27,47 @@ export interface DetailedTurn {
   rowUuids: string[];
 }
 
+/**
+ * XML-style blocks Claude Code writes into user rows on the harness's behalf:
+ * background-task reports, `!` shell mode, slash commands and their local
+ * output, and system reminders (which carry hook context). They are not the
+ * user's words and are stripped, tag and content, before a row becomes text.
+ */
+export const HARNESS_TAGS = [
+  'task-notification',
+  'bash-input',
+  'bash-stdout',
+  'bash-stderr',
+  'command-name',
+  'command-message',
+  'command-args',
+  'local-command-stdout',
+  'local-command-caveat',
+  'system-reminder',
+] as const;
+
+/**
+ * Oort's own injected block (see `formatForInjection`). Stripped from user and
+ * assistant text alike, so recalled memories are never observed back into memory.
+ */
+export const OORT_MEMORY_TAG = 'oort-memory';
+
+function blockPattern(tags: readonly string[]): RegExp {
+  return new RegExp(`<(${tags.join('|')})(?:\\s[^>]*)?>[\\s\\S]*?</\\1\\s*>`, 'g');
+}
+const USER_BLOCKS = blockPattern([...HARNESS_TAGS, OORT_MEMORY_TAG]);
+const ASSISTANT_BLOCKS = blockPattern([OORT_MEMORY_TAG]);
+
+/** Removes whole blocks (non-greedy, across lines) and tidies the whitespace left behind. */
+function stripBlocks(text: string, pattern: RegExp): string {
+  if (!text.includes('<')) return text;
+  return text
+    .replace(pattern, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 const TOOL_INPUT_CHARS = 120;
 const TOOL_RESULT_CHARS = 200;
 
@@ -114,10 +155,17 @@ function messageRow(line: string): Row | undefined {
  * - `tool_use` blocks become `"<name>(<first 120 chars of input>)"` summaries;
  * - a user row holding only `tool_result` blocks merges into the previous
  *   turn's summaries as `"result: <first 200 chars>"`; mixed rows contribute
- *   their results to the previous turn and their text to a new user turn.
+ *   their results to the previous turn and their text to a new user turn;
+ * - `HARNESS_TAGS` blocks and `<oort-memory>` are stripped from user text, and
+ *   `<oort-memory>` from assistant text; a user row left empty yields no turn,
+ *   and the assistant reply to it is a turn of its own with no user turn before
+ *   it, so it yields no observation either.
  */
 export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
   const out: DetailedTurn[] = [];
+  // Set by a user row that held only harness output: what Claude says next
+  // answers the harness, not the previous prompt, so it starts a new turn.
+  let boundary = false;
   for (const line of jsonl.split('\n')) {
     const row = messageRow(line);
     if (row === undefined) continue;
@@ -144,12 +192,19 @@ export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
         }
       }
     }
-    const text = texts.filter((t) => t.length > 0).join('\n');
+    const pattern = role === 'user' ? USER_BLOCKS : ASSISTANT_BLOCKS;
+    const raw = texts.filter((t) => t.length > 0).join('\n');
+    const text = stripBlocks(raw, pattern);
     const prev = out.at(-1);
 
     if (role === 'user') {
       if (results.length > 0 && prev !== undefined) prev.turn.toolSummaries.push(...results);
-      if (text.length === 0) continue;
+      if (text.length === 0) {
+        // Only harness output (or Oort's own block): no turn, no observation.
+        if (raw.length > 0) boundary = true;
+        continue;
+      }
+      boundary = false;
       out.push({
         turn: {
           uuid,
@@ -166,7 +221,7 @@ export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
       continue;
     }
 
-    if (prev?.turn.role === 'assistant') {
+    if (prev?.turn.role === 'assistant' && !boundary) {
       const t = prev.turn;
       if (text.length > 0) t.text = t.text.length > 0 ? `${t.text}\n${text}` : text;
       t.toolSummaries.push(...summaries);
@@ -175,6 +230,7 @@ export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
       prev.rowUuids.push(uuid);
       continue;
     }
+    boundary = false;
     out.push({
       turn: {
         uuid,

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { AWS_KEY, SESSION, fixtureText } from '../test/helpers.js';
-import { parseTranscript, turnsToObservations } from './transcript.js';
+import {
+  HARNESS_TAGS,
+  OORT_MEMORY_TAG,
+  parseTranscript,
+  turnsToObservations,
+} from './transcript.js';
 
 const CWD = '/synthetic/project';
 const turns = () => parseTranscript(fixtureText(CWD));
@@ -15,6 +20,10 @@ describe('parseTranscript', () => {
       'user',
       'assistant',
       'user',
+      'assistant',
+      'user',
+      'assistant',
+      // The reply to a background task report: its user row was harness-only.
       'assistant',
     ]);
     for (const t of ts) {
@@ -158,7 +167,7 @@ describe('parseTranscript', () => {
 describe('turnsToObservations', () => {
   it('parser.pairs-user-and-assistant-at-assistant-time', () => {
     const obs = turnsToObservations(turns());
-    expect(obs).toHaveLength(3);
+    expect(obs).toHaveLength(4);
     expect(obs[0]).toEqual({
       userText: 'Which port does the auth service listen on in this repo?',
       assistantText: 'The auth service listens on port 4471, set in src/auth.ts.',
@@ -172,7 +181,7 @@ describe('turnsToObservations', () => {
     });
     // The parser does not scrub; that happens before anything is queued or observed.
     expect(obs[1]?.userText).toContain(AWS_KEY);
-    expect(obs.map((o) => o.turnRef)).toEqual(['a-0001c', 'a-0002', 'a-0003b']);
+    expect(obs.map((o) => o.turnRef)).toEqual(['a-0001c', 'a-0002', 'a-0003b', 'a-0014']);
   });
 
   it('parser.joins-consecutive-user-turns-and-drops-unpaired', () => {
@@ -201,5 +210,84 @@ describe('turnsToObservations', () => {
       turnRef: 'a1',
       at: 't-a1',
     });
+  });
+});
+
+describe('harness blocks', () => {
+  const row = (type: string, uuid: string, text: string) =>
+    JSON.stringify({
+      type,
+      uuid,
+      parentUuid: null,
+      timestamp: `2026-10-02T00:00:0${uuid.length % 10}.000Z`,
+      sessionId: 's',
+      cwd: '/',
+      message: { role: type, content: type === 'user' ? text : [{ type: 'text', text }] },
+    });
+
+  it('parser.strips-harness-blocks', () => {
+    expect([...HARNESS_TAGS].sort()).toEqual(
+      [
+        'bash-input',
+        'bash-stderr',
+        'bash-stdout',
+        'command-args',
+        'command-message',
+        'command-name',
+        'local-command-caveat',
+        'local-command-stdout',
+        'system-reminder',
+        'task-notification',
+      ].sort(),
+    );
+    expect(OORT_MEMORY_TAG).toBe('oort-memory');
+    const obs = turnsToObservations(turns());
+    expect(obs[3]).toMatchObject({
+      userText: 'Where do the auth docs live?',
+      assistantText: 'The auth docs live in docs/auth.md.',
+      turnRef: 'a-0014',
+    });
+
+    // Non-greedy, across lines, with attributes; two blocks of one tag stay two blocks.
+    const jsonl = [
+      row(
+        'user',
+        'u1',
+        'keep A <system-reminder kind="x">\nhidden 1\n</system-reminder> keep B ' +
+          '<system-reminder>hidden 2</system-reminder> keep C\n<oort-memory>\n- hidden 3\n</oort-memory>',
+      ),
+      // Assistant text loses only Oort's block; other tags are its own words.
+      row(
+        'assistant',
+        'a1',
+        'answer <oort-memory>- hidden 4</oort-memory> and <command-name>kept</command-name>',
+      ),
+    ].join('\n');
+    const [o] = turnsToObservations(parseTranscript(jsonl));
+    expect(o?.userText).toBe('keep A  keep B  keep C');
+    expect(o?.assistantText).toBe('answer  and <command-name>kept</command-name>');
+    expect(JSON.stringify(o)).not.toContain('hidden');
+  });
+
+  it('parser.drops-turn-that-is-only-harness-output', () => {
+    const ts = turns();
+    expect(ts.some((t) => t.uuid.startsWith('h-') || t.uuid.startsWith('t-'))).toBe(false);
+    // The reply to the task report is not merged into the previous assistant turn.
+    expect(ts.at(-2)?.uuid).toBe('a-0014');
+    expect(ts.at(-1)).toMatchObject({ role: 'assistant', uuid: 'a-0015' });
+    expect(turnsToObservations(ts).map((o) => o.turnRef)).not.toContain('a-0015');
+
+    // A slash command row before a real prompt adds nothing to the prompt.
+    const jsonl = [
+      row('user', 'c1', '<command-name>/clear</command-name>\n<command-args></command-args>'),
+      row('user', 'u2', 'what is the deploy region?'),
+      row('assistant', 'a2', 'eu-north-1'),
+      row('user', 'n3', '<task-notification>\nfinished\n</task-notification>'),
+      row('assistant', 'a3', 'noted'),
+    ].join('\n');
+    const obs = turnsToObservations(parseTranscript(jsonl));
+    expect(obs).toEqual([
+      expect.objectContaining({ userText: 'what is the deploy region?', turnRef: 'a2' }),
+    ]);
   });
 });

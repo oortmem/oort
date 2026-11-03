@@ -257,19 +257,20 @@ describe('Stop', () => {
       'a-0001c',
       'a-0002',
       'a-0003b',
+      'a-0014',
     ]);
-    expect(await deps.store.getCursor(key)).toBe('a-0003b');
+    expect(await deps.store.getCursor(key)).toBe('a-0014');
 
     // Nothing new: nothing queued, cursor unchanged.
     await handleStop(stopInput(t, transcript), deps);
-    expect(queueLines(t.home)).toHaveLength(3);
+    expect(queueLines(t.home)).toHaveLength(4);
 
     const more = [
       {
         type: 'user',
         uuid: 'u-0004',
-        parentUuid: 'a-0003b',
-        timestamp: '2026-10-01T09:03:00.000Z',
+        parentUuid: 'a-0015',
+        timestamp: '2026-10-01T09:06:00.000Z',
         sessionId: SESSION,
         cwd: t.cwd,
         isSidechain: false,
@@ -279,7 +280,7 @@ describe('Stop', () => {
         type: 'assistant',
         uuid: 'a-0004',
         parentUuid: 'u-0004',
-        timestamp: '2026-10-01T09:03:01.000Z',
+        timestamp: '2026-10-01T09:06:01.000Z',
         sessionId: SESSION,
         cwd: t.cwd,
         isSidechain: false,
@@ -289,12 +290,12 @@ describe('Stop', () => {
     fs.appendFileSync(transcript, more.map((r) => JSON.stringify(r)).join('\n') + '\n');
     await handleStop(stopInput(t, transcript), deps);
     const lines = queueLines(t.home);
-    expect(lines).toHaveLength(4);
-    expect(lines[3]).toMatchObject({
+    expect(lines).toHaveLength(5);
+    expect(lines[4]).toMatchObject({
       obs: { turnRef: 'a-0004', assistantText: 'In docs/auth.md.' },
     });
     expect(await deps.store.getCursor(key)).toBe('a-0004');
-    expect(readLog(t.home).map((l) => l.counts['queued'])).toEqual([3, 0, 1]);
+    expect(readLog(t.home).map((l) => l.counts['queued'])).toEqual([4, 0, 1]);
   });
 
   it('hook.stop-reprocesses-grown-turn', async () => {
@@ -429,6 +430,103 @@ describe('Stop', () => {
     expect(readLog(t.home)[0]?.counts).toMatchObject({ cursorMissing: 1, queued: 20, capped: 5 });
   });
 
+  it('hook.stop-never-observes-injected-oort-memory', async () => {
+    const t = tempHome();
+    const CANARY = 'recalled-canary-k3';
+    const deps = await withMemories(t, {
+      ...PORT_MEMORY,
+      text: `The auth service listens on port 4471 (${CANARY}).`,
+    });
+    const asked = 'which port does the auth service use?';
+    const ups = await handleUserPromptSubmit(prompt(t, asked), deps);
+    const ctx = context(ups.stdout, 'UserPromptSubmit');
+    expect(ctx).toContain(CANARY);
+
+    // How the injected context can come back in a transcript: as a hook attachment
+    // row, inside a system reminder in the user row, bare in a later user row, and
+    // echoed by Claude in its reply.
+    const base = { sessionId: SESSION, cwd: t.cwd, isSidechain: false };
+    const rows = [
+      {
+        ...base,
+        type: 'user',
+        uuid: 'u1',
+        parentUuid: null,
+        timestamp: '2026-10-03T10:00:00.000Z',
+        message: {
+          role: 'user',
+          content: `${asked}\n\n<system-reminder>\nUserPromptSubmit hook additional context: ${ctx}\n</system-reminder>`,
+        },
+      },
+      {
+        ...base,
+        type: 'attachment',
+        uuid: 'att1',
+        parentUuid: 'u1',
+        timestamp: '2026-10-03T10:00:00.100Z',
+        attachment: {
+          type: 'hook_additional_context',
+          content: [ctx],
+          hookName: 'UserPromptSubmit',
+        },
+      },
+      {
+        ...base,
+        type: 'assistant',
+        uuid: 'a1',
+        parentUuid: 'att1',
+        timestamp: '2026-10-03T10:00:02.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `From memory:\n${ctx}\nSo it is port 4471.` }],
+        },
+      },
+      {
+        ...base,
+        type: 'user',
+        uuid: 'u2',
+        parentUuid: 'a1',
+        timestamp: '2026-10-03T10:01:00.000Z',
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: `${ctx}\nand which host runs it?` }],
+        },
+      },
+      {
+        ...base,
+        type: 'assistant',
+        uuid: 'a2',
+        parentUuid: 'u2',
+        timestamp: '2026-10-03T10:01:02.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'The auth host is auth-1.' }],
+        },
+      },
+    ];
+    const transcript = writeTranscript(
+      path.join(t.root, 'p'),
+      t.cwd,
+      SESSION,
+      rows.map((r) => JSON.stringify(r)).join('\n') + '\n',
+    );
+    await handleStop(stopInput(t, transcript), deps);
+    const lines = queueLines(t.home);
+    expect(lines.map((l) => l['obs'])).toEqual([
+      expect.objectContaining({
+        userText: asked,
+        assistantText: 'From memory:\n\nSo it is port 4471.',
+      }),
+      expect.objectContaining({
+        userText: 'and which host runs it?',
+        assistantText: 'The auth host is auth-1.',
+      }),
+    ]);
+    const raw = fs.readFileSync(path.join(t.home, 'queue', `${SESSION}.jsonl`), 'utf8');
+    expect(raw).not.toContain(CANARY);
+    expect(raw).not.toContain('oort-memory');
+  });
+
   it('hook.stop-missing-transcript-exit-0', async () => {
     const t = tempHome();
     const out = await handleStop(stopInput(t, path.join(t.root, 'nope.jsonl')), makeDeps(t));
@@ -554,7 +652,7 @@ describe('runHook', () => {
     await runHook('Stop', JSON.stringify(stopInput(t, transcript)), deps);
     expect(await runHook('drain', '', deps)).toEqual({ stdout: '', exitCode: 0 });
     expect(queueLines(t.home)).toEqual([]);
-    expect(deps.calls.write).toBe(3);
+    expect(deps.calls.write).toBe(4);
   });
 });
 

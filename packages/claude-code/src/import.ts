@@ -23,6 +23,12 @@ export interface ImportOptions {
   estimateOnly: boolean;
   /** Share of observations expected to reach the writer (after the gate). Default 0.25. */
   writerFraction?: number;
+  /**
+   * Import sessions whose project cannot be resolved into global scope.
+   * Default false: they are skipped, since a deleted private project's
+   * memories would otherwise surface in every project.
+   */
+  includeUnresolved?: boolean;
 }
 
 export interface ImportResult {
@@ -31,6 +37,11 @@ export interface ImportResult {
   observations: number;
   /** Writer tokens: Σ(chars / 4 + 400) × writerFraction. No price table in Phase 1. */
   estimatedTokens: number;
+  /**
+   * Sessions with observations that were left out because their project could
+   * not be resolved (recorded `cwd` gone, or not in a git repository).
+   */
+  skippedUnresolved: number;
   results?: ObserveResult[];
   /** Per-outcome counts, plus `failed` for observations whose observe threw. */
   outcomes?: Record<string, number>;
@@ -80,6 +91,16 @@ function transcripts(projectsDir: string, since: Date | undefined): string[] {
   return out.sort();
 }
 
+/**
+ * The session's project id, or undefined when it cannot be resolved. A missing
+ * directory is unresolved even inside a git repo: walking up from it would
+ * attribute the session to the enclosing repository instead.
+ */
+function resolveProject(cwd: string | undefined): string | undefined {
+  if (cwd === undefined || !fs.existsSync(cwd)) return undefined;
+  return projectIdFor(cwd);
+}
+
 function chars(o: Observation): number {
   return (
     o.userText.length + o.assistantText.length + o.toolSummaries.reduce((n, s) => n + s.length, 0)
@@ -96,6 +117,8 @@ function chars(o: Observation): number {
  * `$OORT_HOME/eval/import-<YYYY-MM-DD>.jsonl`.
  *
  * The scope of each transcript is derived from the `cwd` its rows recorded.
+ * A session whose project cannot be resolved is skipped (and counted in
+ * `skippedUnresolved`) unless `includeUnresolved` imports it as global.
  */
 export async function importTranscripts(
   opts: ImportOptions,
@@ -104,6 +127,7 @@ export async function importTranscripts(
   const items: Item[] = [];
   let weighted = 0;
   const sessions = new Set<string>();
+  let skippedUnresolved = 0;
   for (const file of transcripts(opts.projectsDir, opts.since)) {
     const session = path.basename(file, '.jsonl');
     let text: string;
@@ -114,22 +138,30 @@ export async function importTranscripts(
     }
     const detailed = parseTranscriptDetailed(text);
     const cwd = detailed.find((d) => d.turn.cwd.length > 0)?.turn.cwd;
-    const scope = cwd === undefined ? localScope() : localScope(projectIdFor(cwd));
+    const projectId = resolveProject(cwd);
+    const scope = localScope(projectId);
     const { fresh } = selectAfterCursor(detailed, await deps.store.getCursor(cursorKey(session)));
-    let pos = 0;
+    const mine: Item[] = [];
     for (const raw of fresh) {
       const s = scrubObservation(raw);
       if (s.dropped) continue;
-      items.push({ session, pos: pos++, obs: s.obs, scope });
-      weighted += chars(s.obs) / 4 + WRITER_OVERHEAD_TOKENS;
-      sessions.add(session);
+      mine.push({ session, pos: mine.length, obs: s.obs, scope });
     }
+    if (mine.length === 0) continue;
+    if (projectId === undefined && opts.includeUnresolved !== true) {
+      skippedUnresolved++;
+      continue;
+    }
+    for (const item of mine) weighted += chars(item.obs) / 4 + WRITER_OVERHEAD_TOKENS;
+    items.push(...mine);
+    sessions.add(session);
   }
   const fraction = opts.writerFraction ?? DEFAULT_WRITER_FRACTION;
   const summary = {
     sessions: sessions.size,
     observations: items.length,
     estimatedTokens: Math.ceil(weighted * fraction),
+    skippedUnresolved,
   };
   if (opts.estimateOnly) return summary;
 
