@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { projectIdFor, scrubObservation, type Memory } from '@oortmem/core';
+import { projectIdFor, scrubObservation, type Memory, type MemoryWriter } from '@oortmem/core';
 import {
   AWS_KEY,
   SESSION,
@@ -71,6 +71,7 @@ describe('importTranscripts', () => {
       observations: 10,
       estimatedTokens: expectedTokens(t),
       skippedUnresolved: 0,
+      skippedUnreadable: 0,
     });
     expect(await deps.store.list(scopeOf(t), { validOnly: false })).toEqual([]);
     expect(await deps.store.getCursor(`claude-code:${SESSION}`)).toBeNull();
@@ -265,5 +266,54 @@ describe('importTranscripts', () => {
     const elsewhere = { ...LOCAL, projectIds: [null, 'p-other'] };
     expect(await deps.store.list(elsewhere, { validOnly: false })).toEqual([]);
     expect(await deps.store.lexical('auth service port', elsewhere, 10)).toEqual([]);
+  });
+
+  it('import.cursor-stops-at-first-failure', async () => {
+    const t = tempHome();
+    const dir = projects(t);
+    const calls = newCalls();
+    const base = makeDeps(t, { calls });
+    // The older session's second observation fails; nothing after it in that session runs.
+    const write: MemoryWriter = {
+      async write(obs, action, prior) {
+        if (obs.turnRef === 'o-a-0002') throw new Error('writer unavailable');
+        return base.write!.write(obs, action, prior);
+      },
+    };
+    const deps = { ...base, write };
+    const r = await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
+    expect(r.outcomes).toEqual({ added: 6, failed: 1 });
+    expect(r.failedSessions).toEqual({ [OTHER]: { failed: 1, notAttempted: 3 } });
+    expect(calls.written.map((o) => o.turnRef)).toEqual([
+      'o-a-0001c',
+      'a-0001c',
+      'a-0002',
+      'a-0003b',
+      'a-0014',
+      'a-0015',
+    ]);
+    expect(await deps.store.getCursor(`claude-code:${OTHER}`)).toBe('o-a-0001c');
+    expect(await deps.store.getCursor(`claude-code:${SESSION}`)).toBe('a-0015');
+
+    // The Stop hook (or a later import) picks the session up where it stopped.
+    const again = await importTranscripts({ projectsDir: dir, estimateOnly: true }, base);
+    expect(again).toMatchObject({ sessions: 1, observations: 4 });
+  });
+
+  it('import.counts-unreadable-transcripts', async () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+    const t = tempHome();
+    const dir = projects(t);
+    const locked = path.join(dir, '-synthetic-project-b', `${OTHER}.jsonl`);
+    fs.chmodSync(locked, 0o000);
+    try {
+      const est = await importTranscripts(
+        { projectsDir: dir, estimateOnly: true, since: new Date(0) },
+        makeDeps(t),
+      );
+      expect(est).toMatchObject({ sessions: 1, observations: 5, skippedUnreadable: 1 });
+    } finally {
+      fs.chmodSync(locked, 0o600);
+    }
   });
 });

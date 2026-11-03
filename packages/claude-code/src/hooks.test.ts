@@ -747,4 +747,27 @@ describe('hook log', () => {
       }),
     ).not.toThrow();
   });
+
+  it('hook.log-clamps-tokens', () => {
+    const t = tempHome();
+    const log = createHookLogger(t.home);
+    log.write({
+      event: 'Stop now please',
+      session: 'which port does the auth service use?',
+      project: null,
+      outcome: 'the user said: which port does the auth service use, and much more text after that',
+      counts: {},
+      timings: {},
+      degraded: ['embed failed: ECONNREFUSED at 10.0.0.1', 'timeout'],
+    });
+    const [line] = readLog(t.home);
+    const TOKEN = /^[A-Za-z0-9:_-]{1,64}$/;
+    expect(line?.event).toMatch(TOKEN);
+    expect(line?.outcome).toMatch(TOKEN);
+    for (const d of line?.degraded ?? []) expect(d).toMatch(TOKEN);
+    expect(line?.degraded).toContain('timeout');
+    expect(line?.session).toBe('[invalid]');
+    const raw = fs.readFileSync(path.join(t.home, 'logs', 'hooks.log'), 'utf8');
+    expect(raw).not.toMatch(/auth service/);
+  });
 });

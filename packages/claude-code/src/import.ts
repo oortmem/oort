@@ -42,9 +42,17 @@ export interface ImportResult {
    * not be resolved (recorded `cwd` gone, or not in a git repository).
    */
   skippedUnresolved: number;
+  /** Transcripts that vanished or could not be read during the walk. */
+  skippedUnreadable: number;
   results?: ObserveResult[];
   /** Per-outcome counts, plus `failed` for observations whose observe threw. */
   outcomes?: Record<string, number>;
+  /**
+   * Sessions that stopped at a failed observation: its cursor stays before it,
+   * and the session's later observations were not attempted (the Stop hook or
+   * a later import picks them up).
+   */
+  failedSessions?: Record<string, { failed: number; notAttempted: number }>;
 }
 
 /** Fixed per-call writer overhead (system prompt, schema), in tokens. */
@@ -64,7 +72,7 @@ interface Item {
  * transcripts (one level deeper) and orphaned copies Claude Code set aside
  * (`<session>.orphaned-…jsonl`) are not sessions of their own.
  */
-function transcripts(projectsDir: string, since: Date | undefined): string[] {
+function transcripts(projectsDir: string, since: Date | undefined, skip: () => void): string[] {
   const out: string[] = [];
   let projects: fs.Dirent[];
   try {
@@ -84,7 +92,16 @@ function transcripts(projectsDir: string, since: Date | undefined): string[] {
     for (const f of files) {
       if (!f.isFile() || !f.name.endsWith('.jsonl') || f.name.includes('.orphaned-')) continue;
       const file = path.join(dir, f.name);
-      if (since !== undefined && fs.statSync(file).mtimeMs < since.getTime()) continue;
+      if (since !== undefined) {
+        let mtime: number;
+        try {
+          mtime = fs.statSync(file).mtimeMs;
+        } catch {
+          skip(); // Vanished mid-walk.
+          continue;
+        }
+        if (mtime < since.getTime()) continue;
+      }
       out.push(file);
     }
   }
@@ -128,12 +145,17 @@ export async function importTranscripts(
   let weighted = 0;
   const sessions = new Set<string>();
   let skippedUnresolved = 0;
-  for (const file of transcripts(opts.projectsDir, opts.since)) {
+  let skippedUnreadable = 0;
+  const skip = (): void => {
+    skippedUnreadable++;
+  };
+  for (const file of transcripts(opts.projectsDir, opts.since, skip)) {
     const session = path.basename(file, '.jsonl');
     let text: string;
     try {
       text = fs.readFileSync(file, 'utf8');
     } catch {
+      skip();
       continue;
     }
     const detailed = parseTranscriptDetailed(text);
@@ -162,6 +184,7 @@ export async function importTranscripts(
     observations: items.length,
     estimatedTokens: Math.ceil(weighted * fraction),
     skippedUnresolved,
+    skippedUnreadable,
   };
   if (opts.estimateOnly) return summary;
 
@@ -169,20 +192,34 @@ export async function importTranscripts(
   if (embed === undefined || decide === undefined || write === undefined) {
     throw new Error('import needs the embed, decide and write adapters');
   }
-  const at = (o: Observation): number => {
-    const t = Date.parse(o.at);
-    return Number.isNaN(t) ? 0 : t;
-  };
-  items.sort((a, b) => at(a.obs) - at(b.obs)); // Stable: ties keep transcript order.
+  // Oldest first across sessions, but never out of order within one: each item
+  // sorts at its session's running maximum timestamp (the sort is stable).
+  const runningMax = new Map<string, number>();
+  const key = new Map<Item, number>();
+  for (const item of items) {
+    const t = Date.parse(item.obs.at);
+    const k = Math.max(runningMax.get(item.session) ?? 0, Number.isNaN(t) ? 0 : t);
+    runningMax.set(item.session, k);
+    key.set(item, k);
+  }
+  items.sort((a, b) => (key.get(a) ?? 0) - (key.get(b) ?? 0));
 
   const day = (deps.now?.() ?? new Date()).toISOString().slice(0, 10);
   const evalFile = path.join(deps.config.home, 'eval', `import-${day}.jsonl`);
   const results: ObserveResult[] = [];
   const outcomes: Record<string, number> = {};
+  const failedSessions: Record<string, { failed: number; notAttempted: number }> = {};
   const done = new Map<string, number>();
   for (const item of items) {
+    const stopped = failedSessions[item.session];
+    if (stopped !== undefined) {
+      // The session stopped at an earlier failure; its cursor must not pass it.
+      stopped.notAttempted++;
+      continue;
+    }
+    let r: ObserveResult;
     try {
-      const r = await observe(item.obs, item.scope, {
+      r = await observe(item.obs, item.scope, {
         store: deps.store,
         embed,
         decide,
@@ -191,26 +228,33 @@ export async function importTranscripts(
         now: deps.now?.() ?? new Date(),
         harness: 'claude-code',
       });
-      results.push(r);
-      outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1;
-      if (r.outcome === 'added' && r.memoryId !== undefined) {
-        const row = {
-          memoryId: r.memoryId,
-          question: '',
-          expectedMemoryIds: [r.memoryId],
-          asOf: item.obs.at,
-        };
-        appendPrivateFile(evalFile, `${JSON.stringify(row)}\n`);
-      }
     } catch {
       outcomes['failed'] = (outcomes['failed'] ?? 0) + 1;
+      failedSessions[item.session] = { failed: 1, notAttempted: 0 };
+      continue;
     }
-    // The cursor only moves forward within a session, even if timestamps do not.
+    results.push(r);
+    outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1;
+    if (r.outcome === 'added' && r.memoryId !== undefined) {
+      const row = {
+        memoryId: r.memoryId,
+        question: '',
+        expectedMemoryIds: [r.memoryId],
+        asOf: item.obs.at,
+      };
+      appendPrivateFile(evalFile, `${JSON.stringify(row)}\n`);
+    }
+    // Only past observations that succeeded, and only forward within a session.
     const prev = done.get(item.session) ?? -1;
     if (item.pos > prev && item.obs.turnRef !== undefined) {
       await deps.store.setCursor(cursorKey(item.session), item.obs.turnRef);
       done.set(item.session, item.pos);
     }
   }
-  return { ...summary, results, outcomes };
+  return {
+    ...summary,
+    results,
+    outcomes,
+    ...(Object.keys(failedSessions).length > 0 && { failedSessions }),
+  };
 }

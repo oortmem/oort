@@ -386,3 +386,107 @@ describe('harness blocks', () => {
     ]);
   });
 });
+
+describe('tool summaries and stripping cost', () => {
+  const GHP = 'ghp_' + 'Ab3dEf6hIj9kLm2nOp5q' + 'Rs8tUv1wXy4zAb7cDe0f';
+  const AKID = 'AKIA' + 'Q7XZB3KM' + 'P9RTW2LN';
+  /** Every prefix of `tok` of 6+ chars; none may survive into a summary. */
+  const leaks = (summary: string, tok: string): string[] => {
+    const out: string[] = [];
+    for (let k = 6; k <= tok.length; k++)
+      if (summary.includes(tok.slice(0, k))) out.push(tok.slice(0, k));
+    return out;
+  };
+  const brokenMarker = /\[(?:R|RE|RED|REDA|REDAC|REDACT|REDACTE|REDACTED|REDACTED:[a-z-]*)$/;
+
+  function summaries(input: Record<string, unknown>, result: string): string[] {
+    const rows = [
+      {
+        type: 'user',
+        uuid: 'u',
+        parentUuid: null,
+        timestamp: 't',
+        sessionId: 's',
+        cwd: '/',
+        message: { role: 'user', content: 'run it' },
+      },
+      {
+        type: 'assistant',
+        uuid: 'a',
+        parentUuid: 'u',
+        timestamp: 't',
+        sessionId: 's',
+        cwd: '/',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'x', name: 'Bash', input }],
+        },
+      },
+      {
+        type: 'user',
+        uuid: 'r',
+        parentUuid: 'a',
+        timestamp: 't',
+        sessionId: 's',
+        cwd: '/',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'x', content: result }],
+        },
+      },
+    ];
+    return parseTranscript(rows.map((r) => JSON.stringify(r)).join('\n'))[1]?.toolSummaries ?? [];
+  }
+
+  it('parser.scrubs-before-truncating-tool-summaries', () => {
+    for (const tok of [GHP, AKID]) {
+      for (const keep of [1, 4, 10, 24, tok.length - 1]) {
+        // tool_use: the token starts `keep` chars before the 120-char cut of the input JSON.
+        const head = '{"command":"';
+        const pad = `${'p'.repeat(120 - head.length - keep - 1)} `;
+        // tool_result: the token starts `keep` chars before the 200-char cut.
+        const rpad = `${'q'.repeat(200 - keep - 1)} `;
+        const [use, res] = summaries({ command: `${pad}${tok} --flag` }, `${rpad}${tok} trailing`);
+        for (const s of [use ?? '', res ?? '']) {
+          expect(leaks(s, tok)).toEqual([]);
+          expect(s.replace(/\)$/, '')).not.toMatch(brokenMarker);
+        }
+        expect((use ?? '').length).toBeLessThanOrEqual('Bash()'.length + 120);
+        expect((res ?? '').length).toBeLessThanOrEqual('result: '.length + 200);
+      }
+    }
+    // A whole marker inside the cut is kept.
+    const [use] = summaries({ command: `x ${AKID} y` }, 'ok');
+    expect(use).toBe('Bash({"command":"x [REDACTED:aws-access-key] y"})');
+  });
+
+  it('parser.strip-is-linear', () => {
+    const row = (type: string, uuid: string, text: string) =>
+      JSON.stringify({
+        type,
+        uuid,
+        parentUuid: null,
+        timestamp: 't',
+        sessionId: 's',
+        cwd: '/',
+        message: { role: type, content: type === 'user' ? text : [{ type: 'text', text }] },
+      });
+    for (const body of [
+      '<bash-stdout>x '.repeat(20_000),
+      '<bash-stdout x '.repeat(20_000),
+      '<system-reminder></bash-stdout '.repeat(20_000),
+      '<oort-memory>'.repeat(20_000) + '</oort-memory',
+    ]) {
+      const jsonl = [row('user', 'u', body), row('assistant', 'a', body)].join('\n');
+      const t0 = performance.now();
+      const ts = parseTranscript(jsonl);
+      expect(performance.now() - t0).toBeLessThan(50);
+      // Nothing closed, so nothing stripped and nothing reflowed.
+      expect(ts[0]?.text).toBe(body);
+    }
+    // Text that merely mentions the tags is untouched, spacing included.
+    const legit =
+      'why does  system-reminder show up?\n\n\n\nalso a < b and <bash-stdout without close';
+    expect(parseTranscript(row('user', 'u', legit))[0]?.text).toBe(legit);
+  });
+});

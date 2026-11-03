@@ -202,7 +202,7 @@ export async function drainQueue(deps: HookDeps): Promise<DrainResult> {
     const remaining = countLines(dir);
     deps.log.write({
       ...logBase,
-      outcome: 'drain skipped: missing adapters',
+      outcome: 'drain-skipped:missing-adapters',
       counts: { remaining },
       timings: { totalMs: performance.now() - t0 },
     });

@@ -1,4 +1,4 @@
-import type { Observation } from '@oortmem/core';
+import { scrub, type Observation } from '@oortmem/core';
 
 /**
  * Claude Code session transcripts (`~/.claude/projects/<project>/<session>.jsonl`).
@@ -52,17 +52,87 @@ export const HARNESS_TAGS = [
  */
 export const OORT_MEMORY_TAG = 'oort-memory';
 
-function blockPattern(tags: readonly string[]): RegExp {
-  return new RegExp(`<(${tags.join('|')})(?:\\s[^>]*)?>[\\s\\S]*?</\\1\\s*>`, 'g');
-}
-const USER_BLOCKS = blockPattern([...HARNESS_TAGS, OORT_MEMORY_TAG]);
-const ASSISTANT_BLOCKS = blockPattern([OORT_MEMORY_TAG]);
+/** Attributes on an opening tag are scanned at most this far, so a `<tag` with no `>` costs O(1). */
+const MAX_OPEN_TAG_ATTRS = 256;
 
-/** Removes whole blocks (non-greedy, across lines) and tidies the whitespace left behind. */
-function stripBlocks(text: string, pattern: RegExp): string {
+interface TagSet {
+  names: ReadonlySet<string>;
+  /** Sticky: an opening tag of one of `names`, at `lastIndex`. */
+  open: RegExp;
+}
+
+function tagSet(tags: readonly string[]): TagSet {
+  return {
+    names: new Set(tags),
+    open: new RegExp(`<(${tags.join('|')})(?:\\s[^>]{0,${MAX_OPEN_TAG_ATTRS}})?>`, 'y'),
+  };
+}
+const USER_BLOCKS = tagSet([...HARNESS_TAGS, OORT_MEMORY_TAG]);
+const ASSISTANT_BLOCKS = tagSet([OORT_MEMORY_TAG]);
+
+/**
+ * Removes whole `<tag …>…</tag>` blocks for the tags in `set`: each block ends
+ * at the first matching close after it (non-greedy, across lines); an opening
+ * tag with no close is left as text. A linear scan: every tag's closing-tag
+ * search only moves forward, and a tag found to have no later close is never
+ * searched again, so unclosed tags cannot make it quadratic. Whitespace is
+ * tidied only when something was removed.
+ */
+function stripBlocks(text: string, set: TagSet): string {
   if (!text.includes('<')) return text;
-  return text
-    .replace(pattern, '')
+  /** Per tag: the next close found (start, end), or null once none remains. */
+  const closes = new Map<string, { start: number; end: number } | null>();
+  const findClose = (tag: string, from: number): { start: number; end: number } | null => {
+    const cached = closes.get(tag);
+    if (cached === null) return null;
+    if (cached !== undefined && cached.start >= from) return cached;
+    const needle = `</${tag}`;
+    let p = from;
+    for (;;) {
+      const k = text.indexOf(needle, p);
+      if (k < 0) {
+        closes.set(tag, null);
+        return null;
+      }
+      let e = k + needle.length;
+      while (e < text.length && /\s/.test(text[e] ?? '')) e++;
+      if (text[e] === '>') {
+        const found = { start: k, end: e + 1 };
+        closes.set(tag, found);
+        return found;
+      }
+      p = k + 1;
+    }
+  };
+
+  let out = '';
+  let i = 0;
+  let removed = false;
+  for (;;) {
+    const lt = text.indexOf('<', i);
+    if (lt < 0) break;
+    set.open.lastIndex = lt;
+    const m = set.open.exec(text);
+    const tag = m?.[1];
+    if (m === null || tag === undefined || !set.names.has(tag)) {
+      out += text.slice(i, lt + 1);
+      i = lt + 1;
+      continue;
+    }
+    const afterOpen = lt + m[0].length;
+    const close = findClose(tag, afterOpen);
+    if (close === null) {
+      out += text.slice(i, afterOpen);
+      i = afterOpen;
+      continue;
+    }
+    out += text.slice(i, lt);
+    i = close.end;
+    removed = true;
+  }
+  if (!removed) return text;
+  out += text.slice(i);
+  return out
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -70,6 +140,28 @@ function stripBlocks(text: string, pattern: RegExp): string {
 
 const TOOL_INPUT_CHARS = 120;
 const TOOL_RESULT_CHARS = 200;
+/**
+ * Scrubbing looks this far past the cut, so a secret that straddles the cut is
+ * seen whole (the longest secrets the scrubber knows, PEM keys, fit easily).
+ */
+const SCRUB_LOOKAHEAD = 8192;
+const MARKER = /\[REDACTED:[a-z0-9-]*\]/g;
+
+/**
+ * Scrubs `s` before cutting it to `n` chars: cutting first would leave a
+ * secret's prefix that the scrubber no longer recognises. A cut that would
+ * fall inside a `[REDACTED:…]` marker moves to just before it.
+ */
+export function scrubThenCut(s: string, n: number): string {
+  const clean = scrub(s.length > n + SCRUB_LOOKAHEAD ? s.slice(0, n + SCRUB_LOOKAHEAD) : s).text;
+  if (clean.length <= n) return clean;
+  let cut = n;
+  MARKER.lastIndex = 0;
+  for (let m = MARKER.exec(clean); m !== null && m.index < n; m = MARKER.exec(clean)) {
+    if (m.index + m[0].length > n) cut = m.index;
+  }
+  return clean.slice(0, cut);
+}
 
 /**
  * Cheap pre-filter: a message row always carries a top-level `"type":"user"` or
@@ -111,11 +203,11 @@ function toolUseSummary(b: Block): string {
   } catch {
     input = '';
   }
-  return `${name}(${input.slice(0, TOOL_INPUT_CHARS)})`;
+  return `${name}(${scrubThenCut(input, TOOL_INPUT_CHARS)})`;
 }
 
 function toolResultSummary(b: Block): string {
-  return `result: ${resultText(b['content']).slice(0, TOOL_RESULT_CHARS)}`;
+  return `result: ${scrubThenCut(resultText(b['content']), TOOL_RESULT_CHARS)}`;
 }
 
 /** A row that is conversation: a user or assistant message on the main chain, not injected. */
@@ -188,9 +280,9 @@ export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
         }
       }
     }
-    const pattern = role === 'user' ? USER_BLOCKS : ASSISTANT_BLOCKS;
+    const tags = role === 'user' ? USER_BLOCKS : ASSISTANT_BLOCKS;
     const raw = texts.filter((t) => t.length > 0).join('\n');
-    const text = stripBlocks(raw, pattern);
+    const text = stripBlocks(raw, tags);
     const prev = out.at(-1);
 
     if (role === 'user') {

@@ -31,6 +31,16 @@ export interface HookLogger {
 export const HOOK_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
 const ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const TOKEN_MAX = 64;
+
+/**
+ * Event, outcome and degradation names: short tokens of `[A-Za-z0-9:_-]`,
+ * whatever a caller passes, so free text cannot reach the log by construction.
+ */
+function token(v: string): string {
+  const t = v.replace(/[^A-Za-z0-9:_-]+/g, '_').slice(0, TOKEN_MAX);
+  return t.length > 0 ? t : '_';
+}
 
 /** Ids and outcome names are ours, but are clamped to a safe charset anyway. */
 function safeId(v: string | null): string | null {
@@ -53,14 +63,14 @@ export function createHookLogger(home: string, opts: { maxBytes?: number } = {})
       try {
         const line: HookLogEntry = {
           ts: entry.ts ?? new Date().toISOString(),
-          event: entry.event,
+          event: token(entry.event),
           session: safeId(entry.session),
           project: safeId(entry.project),
-          outcome: entry.outcome,
+          outcome: token(entry.outcome),
           counts: numbers(entry.counts),
           timings: numbers(entry.timings),
           ...(entry.degraded !== undefined && entry.degraded.length > 0
-            ? { degraded: entry.degraded }
+            ? { degraded: entry.degraded.map(token) }
             : {}),
           ...(entry.ids !== undefined && entry.ids.length > 0
             ? { ids: entry.ids.map((id) => safeId(id) ?? '[invalid]') }

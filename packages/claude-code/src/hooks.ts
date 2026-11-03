@@ -267,6 +267,9 @@ const SessionStartInput = z.looseObject({
  * The `oort hook <event>` entry point: parses the hook's stdin JSON (unknown
  * fields are kept and ignored) and dispatches. `drain` ignores stdin. Invalid
  * input logs one line and yields empty stdout; nothing here ever throws.
+ *
+ * Task 13 (CLI): write `stdout`, then call `process.exit(0)` at once; after a
+ * recall timeout the losing full recall is still pending and would hold the process.
  */
 export async function runHook(
   event: HookEvent,

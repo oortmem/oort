@@ -23,48 +23,36 @@ export const HOOK_TIMEOUTS: Record<InstalledEvent, number> = {
 };
 
 type Json = Record<string, unknown>;
-interface Handler {
-  type?: unknown;
-  command?: unknown;
-  [k: string]: unknown;
-}
-interface Group {
-  matcher?: unknown;
-  hooks?: unknown;
-  [k: string]: unknown;
-}
+type Handler = Record<string, unknown>;
 
 const isObject = (v: unknown): v is Json =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** `cmd` as one shell word: as is when it is plainly safe, otherwise single-quoted. */
+export function shellQuote(cmd: string): string {
+  return /^[A-Za-z0-9_@%+=:,./~-]+$/.test(cmd) ? cmd : `'${cmd.replaceAll("'", `'\\''`)}'`;
+}
+
+const commandFor = (cmd: string, event: InstalledEvent): string =>
+  `${shellQuote(cmd)} hook ${event}`;
+
 /**
- * Ours: a command that starts with `<cmd> hook `, or any `oort hook <Event>`
- * command (an install from another path or an older version of the binary).
+ * Ours, under `event`: exactly `<cmd> hook <event>`, or exactly `oort hook
+ * <event>` from any install path (a stale entry from a moved binary). Anything
+ * with more around it (`cd x && oort hook Stop`, `oort hook Stop --flag`) is
+ * the user's own wrapper and is never touched.
  */
-function isOurs(h: unknown, cmd: string): boolean {
+function isOurs(h: unknown, cmd: string, event: InstalledEvent): boolean {
   if (!isObject(h) || h['type'] !== 'command' || typeof h['command'] !== 'string') return false;
   const c = h['command'];
-  return (
-    c.startsWith(`${cmd} hook `) ||
-    /(?:^|[\s/\\])oort(?:\.c?[jt]s|\.mjs|\.cmd|\.exe)? hook (?:UserPromptSubmit|Stop|SessionStart|drain)\b/.test(
-      c,
-    )
-  );
+  return c === commandFor(cmd, event) || new RegExp(`^(?:\\S*/)?oort hook ${event}$`).test(c);
 }
 
 function desired(cmd: string, event: InstalledEvent): Handler {
-  return { type: 'command', command: `${cmd} hook ${event}`, timeout: HOOK_TIMEOUTS[event] };
+  return { type: 'command', command: commandFor(cmd, event), timeout: HOOK_TIMEOUTS[event] };
 }
 
-function readSettings(file: string): { settings: Json; existed: boolean; mode: number } {
-  let text: string;
-  try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT')
-      return { settings: {}, existed: false, mode: 0o600 };
-    throw e;
-  }
+function parseSettings(text: string, file: string): Json {
   let parsed: unknown;
   try {
     parsed = text.trim().length === 0 ? {} : JSON.parse(text);
@@ -72,15 +60,39 @@ function readSettings(file: string): { settings: Json; existed: boolean; mode: n
     throw new Error(`Claude Code settings ${file} is not valid JSON: ${(e as Error).message}`);
   }
   if (!isObject(parsed)) throw new Error(`Claude Code settings ${file} is not a JSON object`);
-  if (parsed['hooks'] !== undefined && !isObject(parsed['hooks'])) {
-    throw new Error(`Claude Code settings ${file}: "hooks" is not an object`);
+  const hooks = parsed['hooks'];
+  if (hooks === undefined) return parsed;
+  if (!isObject(hooks)) throw new Error(`Claude Code settings ${file}: "hooks" is not an object`);
+  for (const event of HOOK_EVENTS) {
+    if (hooks[event] !== undefined && !Array.isArray(hooks[event])) {
+      throw new Error(`Claude Code settings ${file}: "hooks.${event}" is not an array`);
+    }
   }
-  return { settings: parsed, existed: true, mode: fs.statSync(file).mode & 0o777 };
+  return parsed;
 }
+
+function readSettings(file: string): { settings: Json; existed: boolean; mode: number } {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { settings: {}, existed: false, mode: 0o600 };
+    }
+    throw e;
+  }
+  return {
+    settings: parseSettings(text, file),
+    existed: true,
+    mode: fs.statSync(file).mode & 0o777,
+  };
+}
+
+const backupPath = (file: string): string => `${file}.oort-backup`;
 
 function writeSettings(file: string, settings: Json, existed: boolean, mode: number): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const backup = `${file}.oort-backup`;
+  const backup = backupPath(file);
   if (existed && !fs.existsSync(backup)) {
     fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL);
     if (process.platform !== 'win32') fs.chmodSync(backup, 0o600);
@@ -90,20 +102,28 @@ function writeSettings(file: string, settings: Json, existed: boolean, mode: num
   writeFileAtomic(target, `${JSON.stringify(settings, null, 2)}\n`, mode);
 }
 
-/** Removes our handlers from `groups`; drops groups that held only ours. Returns the new list. */
-function withoutOurs(groups: unknown[], cmd: string): unknown[] {
-  const out: unknown[] = [];
-  for (const g of groups) {
-    if (!isObject(g) || !Array.isArray(g['hooks'])) {
-      out.push(g);
-      continue;
-    }
-    const hooks = g['hooks'] as unknown[];
-    const kept = hooks.filter((h) => !isOurs(h, cmd));
-    if (kept.length === hooks.length) out.push(g);
-    else if (kept.length > 0) out.push({ ...g, hooks: kept });
+/**
+ * Containers (`hooks`, `hooks.<Event>`) that existed before Oort first
+ * installed, read from the one-time backup. No backup means the file did not
+ * exist then, so every container is ours. An unreadable backup keeps them all.
+ */
+function preexisting(file: string): { hooks: boolean; events: Set<string> } {
+  let text: string;
+  try {
+    text = fs.readFileSync(backupPath(file), 'utf8');
+  } catch {
+    return { hooks: false, events: new Set() };
   }
-  return out;
+  try {
+    const before = parseSettings(text, backupPath(file));
+    const hooks = before['hooks'];
+    return {
+      hooks: isObject(hooks),
+      events: new Set(isObject(hooks) ? Object.keys(hooks) : []),
+    };
+  } catch {
+    return { hooks: true, events: new Set(HOOK_EVENTS) };
+  }
 }
 
 /**
@@ -111,6 +131,8 @@ function withoutOurs(groups: unknown[], cmd: string): unknown[] {
  * file, creating it if missing. Idempotent; replaces a stale Oort entry in
  * place; never removes or reorders anyone else's hooks. Writes atomically and
  * keeps a one-time backup of the original at `<settingsPath>.oort-backup`.
+ * Refuses (file untouched) settings that are not JSON, or whose `hooks` or
+ * hook event values have the wrong shape.
  */
 export function installHooks(settingsPath: string, cmd: string): { changed: boolean } {
   const { settings, existed, mode } = readSettings(settingsPath);
@@ -130,7 +152,7 @@ export function installHooks(settingsPath: string, cmd: string): { changed: bool
       const hs: unknown[] = [];
       let touched = false;
       for (const h of g['hooks'] as unknown[]) {
-        if (!isOurs(h, cmd)) {
+        if (!isOurs(h, cmd, event)) {
           hs.push(h);
         } else if (!placed) {
           hs.push(want);
@@ -141,7 +163,7 @@ export function installHooks(settingsPath: string, cmd: string): { changed: bool
         }
       }
       if (!touched) next.push(g);
-      else if (hs.length > 0) next.push({ ...(g as Group), hooks: hs });
+      else if (hs.length > 0) next.push({ ...g, hooks: hs });
     }
     if (!placed) next.push({ hooks: [want] });
     hooks[event] = next;
@@ -153,27 +175,39 @@ export function installHooks(settingsPath: string, cmd: string): { changed: bool
 }
 
 /**
- * Removes only Oort's entries. A group, event array or `hooks` object left
- * empty by the removal is removed too. A missing file is left missing.
+ * Removes only Oort's entries. A group left empty by the removal goes too; an
+ * event array or `hooks` object left empty goes only if Oort created it (it is
+ * absent from the pre-install backup). A missing file is left missing.
  */
 export function uninstallHooks(settingsPath: string, cmd: string): { changed: boolean } {
   if (!fs.existsSync(settingsPath)) return { changed: false };
   const { settings, existed, mode } = readSettings(settingsPath);
   if (!isObject(settings['hooks'])) return { changed: false };
   const hooks: Json = { ...settings['hooks'] };
+  const kept = preexisting(settingsPath);
   let removed = false;
   for (const event of HOOK_EVENTS) {
     const groups = hooks[event];
     if (!Array.isArray(groups)) continue;
-    const next = withoutOurs(groups, cmd);
+    const next: unknown[] = [];
+    for (const g of groups) {
+      if (!isObject(g) || !Array.isArray(g['hooks'])) {
+        next.push(g);
+        continue;
+      }
+      const hs = g['hooks'] as unknown[];
+      const left = hs.filter((h) => !isOurs(h, cmd, event));
+      if (left.length === hs.length) next.push(g);
+      else if (left.length > 0) next.push({ ...g, hooks: left });
+    }
     if (next.length === groups.length && next.every((g, i) => g === groups[i])) continue;
     removed = true;
-    if (next.length === 0) delete hooks[event];
+    if (next.length === 0 && !kept.events.has(event)) delete hooks[event];
     else hooks[event] = next;
   }
   if (!removed) return { changed: false };
   const updated: Json = { ...settings, hooks };
-  if (Object.keys(hooks).length === 0) delete updated['hooks'];
+  if (Object.keys(hooks).length === 0 && !kept.hooks) delete updated['hooks'];
   writeSettings(settingsPath, updated, existed, mode);
   return { changed: true };
 }

@@ -163,7 +163,7 @@ describe('drainQueue', () => {
     }
     expect(fs.readFileSync(path.join(t.home, 'queue', `${SESSION}.jsonl`), 'utf8')).toBe(before);
     expect(readLog(t.home).map((l) => l.outcome)).toEqual(
-      Array(3).fill('drain skipped: missing adapters'),
+      Array(3).fill('drain-skipped:missing-adapters'),
     );
   });
 

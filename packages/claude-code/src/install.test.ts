@@ -78,7 +78,8 @@ describe('installHooks', () => {
       hooks: {
         Stop: [
           USER_STOP,
-          { hooks: [{ type: 'command', command: 'oort hook Stop --legacy', timeout: 30 }] },
+          // Same command from another install path, stale timeout.
+          { hooks: [{ type: 'command', command: '/usr/local/bin/oort hook Stop', timeout: 30 }] },
         ],
         UserPromptSubmit: [
           {
@@ -158,5 +159,82 @@ describe('installHooks', () => {
     expect(uninstallHooks(link, 'oort')).toEqual({ changed: true });
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
     expect(read(real)).toEqual({ model: 'opus' });
+  });
+
+  it('install.leaves-user-wrapper-hooks', () => {
+    const wrappers = [
+      { type: 'command', command: 'cd ~/x && oort hook Stop --my-flag' },
+      { type: 'command', command: 'oort hook Stop --verbose' },
+      { type: 'command', command: 'OORT_HOME=/tmp/o oort hook Stop' },
+      { type: 'command', command: 'echo oort hook Stop' },
+    ];
+    const original = {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: 'command', command: '/old/path/oort hook Stop', timeout: 99 },
+              ...wrappers,
+            ],
+          },
+        ],
+        // An Oort command under the wrong event is not ours to manage there.
+        SessionStart: [{ hooks: [{ type: 'command', command: 'oort hook Stop' }] }],
+      },
+    };
+    const file = settingsFile(original);
+    installHooks(file, '/opt/oort/bin/oort');
+    const hooks = read(file)['hooks'] as Record<string, { hooks: unknown[] }[]>;
+    // The stale Oort entry is replaced in place; every wrapper survives, in order.
+    expect(hooks['Stop']?.[0]?.hooks).toEqual([
+      { type: 'command', command: '/opt/oort/bin/oort hook Stop', timeout: 5 },
+      ...wrappers,
+    ]);
+    expect(hooks['SessionStart']?.[0]).toEqual(original.hooks.SessionStart[0]);
+    uninstallHooks(file, '/opt/oort/bin/oort');
+    const after = read(file)['hooks'] as Record<string, { hooks: unknown[] }[]>;
+    expect(after['Stop']).toEqual([{ hooks: wrappers }]);
+    expect(after['SessionStart']).toEqual(original.hooks.SessionStart);
+  });
+
+  it('install.uninstall-keeps-preexisting-containers', () => {
+    const original = { hooks: { Stop: [], SessionStart: [] }, model: 'opus' };
+    const file = settingsFile(original);
+    installHooks(file, 'oort');
+    expect(uninstallHooks(file, 'oort')).toEqual({ changed: true });
+    expect(read(file)).toEqual(original);
+
+    const emptyHooks = settingsFile({ hooks: {}, model: 'opus' });
+    const text = fs.readFileSync(emptyHooks, 'utf8');
+    installHooks(emptyHooks, 'oort');
+    uninstallHooks(emptyHooks, 'oort');
+    expect(fs.readFileSync(emptyHooks, 'utf8')).toBe(text);
+  });
+
+  it('install.refuses-non-array-event', () => {
+    const file = settingsFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const body = JSON.stringify({ hooks: { Stop: { note: 'user data' } } });
+    fs.writeFileSync(file, body);
+    expect(() => installHooks(file, 'oort')).toThrow(/hooks\.Stop.*not an array/);
+    expect(() => uninstallHooks(file, 'oort')).toThrow(/hooks\.Stop.*not an array/);
+    expect(fs.readFileSync(file, 'utf8')).toBe(body);
+    expect(fs.existsSync(`${file}.oort-backup`)).toBe(false);
+  });
+
+  it('install.quotes-cmd-with-space', () => {
+    const file = settingsFile();
+    const cmd = "/Users/me/My Tools/it's/oort";
+    installHooks(file, cmd);
+    const hooks = read(file)['hooks'] as Record<string, { hooks: { command: string }[] }[]>;
+    const quoted = `'/Users/me/My Tools/it'\\''s/oort'`;
+    expect(hooks['Stop']?.[0]?.hooks[0]?.command).toBe(`${quoted} hook Stop`);
+    expect(installHooks(file, cmd)).toEqual({ changed: false });
+    expect(uninstallHooks(file, cmd)).toEqual({ changed: true });
+    expect(read(file)).toEqual({});
+    // A plain path is left unquoted.
+    installHooks(file, '~/bin/oort-1.2');
+    const plain = read(file)['hooks'] as Record<string, { hooks: { command: string }[] }[]>;
+    expect(plain['Stop']?.[0]?.hooks[0]?.command).toBe('~/bin/oort-1.2 hook Stop');
   });
 });
