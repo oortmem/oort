@@ -48,7 +48,7 @@ describe('drainQueue', () => {
       deps,
     );
     const r = await drainQueue(deps);
-    expect(r).toEqual({ processed: 4, failed: 0, remaining: 0 });
+    expect(r).toEqual({ processed: 5, failed: 0, remaining: 0 });
     expect(fs.existsSync(path.join(t.home, 'queue', `${SESSION}.jsonl`))).toBe(false);
     const stored = await deps.store.list({
       orgId: 'local',
@@ -56,19 +56,20 @@ describe('drainQueue', () => {
       agentId: 'claude-code',
       projectIds: [null],
     });
-    expect(stored).toHaveLength(4);
+    expect(stored).toHaveLength(5);
     expect(stored.every((m) => m.source.harness === 'claude-code')).toBe(true);
     expect(stored.map((m) => m.source.turnRef).sort()).toEqual([
       'a-0001c',
       'a-0002',
       'a-0003b',
       'a-0014',
+      'a-0015',
     ]);
     expect(fs.existsSync(lockFile(t))).toBe(false);
     expect(readLog(t.home).at(-1)).toMatchObject({
       event: 'drain',
       outcome: 'ok',
-      counts: { processed: 4, failed: 0, remaining: 0 },
+      counts: { processed: 5, failed: 0, remaining: 0 },
     });
   });
 

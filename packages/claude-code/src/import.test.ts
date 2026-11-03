@@ -68,7 +68,7 @@ describe('importTranscripts', () => {
     const r = await importTranscripts({ projectsDir: dir, estimateOnly: true }, deps);
     expect(r).toEqual({
       sessions: 2,
-      observations: 8,
+      observations: 10,
       estimatedTokens: expectedTokens(t),
       skippedUnresolved: 0,
     });
@@ -94,7 +94,7 @@ describe('importTranscripts', () => {
       { projectsDir: dir, estimateOnly: true, since: new Date('2025-01-01T00:00:00Z') },
       makeDeps(t),
     );
-    expect(r).toMatchObject({ sessions: 1, observations: 4 });
+    expect(r).toMatchObject({ sessions: 1, observations: 5 });
   });
 
   it('import.oldest-first', async () => {
@@ -102,13 +102,13 @@ describe('importTranscripts', () => {
     const calls = newCalls();
     const deps = makeDeps(t, { calls });
     const r = await importTranscripts({ projectsDir: projects(t), estimateOnly: false }, deps);
-    expect(r).toMatchObject({ sessions: 2, observations: 8, outcomes: { added: 8 } });
-    expect(r.results).toHaveLength(8);
+    expect(r).toMatchObject({ sessions: 2, observations: 10, outcomes: { added: 10 } });
+    expect(r.results).toHaveLength(10);
     const at = calls.written.map((o) => o.at);
     expect(at).toEqual([...at].sort());
     expect(calls.written.map((o) => o.sessionId)).toEqual([
-      ...Array<string>(4).fill(OTHER),
-      ...Array<string>(4).fill(SESSION),
+      ...Array<string>(5).fill(OTHER),
+      ...Array<string>(5).fill(SESSION),
     ]);
   });
 
@@ -117,8 +117,8 @@ describe('importTranscripts', () => {
     const dir = projects(t);
     const deps = makeDeps(t);
     await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
-    expect(await deps.store.getCursor(`claude-code:${SESSION}`)).toBe('a-0014');
-    expect(await deps.store.getCursor(`claude-code:${OTHER}`)).toBe('o-a-0014');
+    expect(await deps.store.getCursor(`claude-code:${SESSION}`)).toBe('a-0015');
+    expect(await deps.store.getCursor(`claude-code:${OTHER}`)).toBe('o-a-0015');
     await handleStop(
       {
         transcript_path: path.join(dir, '-synthetic-project-a', `${SESSION}.jsonl`),
@@ -140,7 +140,7 @@ describe('importTranscripts', () => {
     const deps = makeDeps(t);
     await deps.store.setCursor(`claude-code:${SESSION}`, 'a-0001c');
     const r = await importTranscripts({ projectsDir: projects(t), estimateOnly: true }, deps);
-    expect(r).toMatchObject({ sessions: 2, observations: 7 });
+    expect(r).toMatchObject({ sessions: 2, observations: 9 });
   });
 
   it('import.scrubs-before-observe', async () => {
@@ -152,7 +152,7 @@ describe('importTranscripts', () => {
       { projectsDir: projects(t), estimateOnly: false },
       { ...deps, now: () => now },
     );
-    expect(calls.written).toHaveLength(8);
+    expect(calls.written).toHaveLength(10);
     expect(JSON.stringify(calls.written)).not.toContain(AWS_KEY);
     expect(JSON.stringify(calls.written)).toContain('[REDACTED:aws-access-key]');
 
@@ -191,7 +191,7 @@ describe('importTranscripts', () => {
     expect(
       (await importTranscripts({ projectsDir: projects(t), estimateOnly: true }, deps))
         .observations,
-    ).toBe(8);
+    ).toBe(10);
   });
 
   /**
@@ -219,14 +219,14 @@ describe('importTranscripts', () => {
     const dir = unresolved(t);
     const deps = makeDeps(t);
     const est = await importTranscripts({ projectsDir: dir, estimateOnly: true }, deps);
-    expect(est).toMatchObject({ sessions: 2, observations: 8, skippedUnresolved: 2 });
+    expect(est).toMatchObject({ sessions: 2, observations: 10, skippedUnresolved: 2 });
 
     const r = await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
-    expect(r).toMatchObject({ sessions: 2, observations: 8, skippedUnresolved: 2 });
+    expect(r).toMatchObject({ sessions: 2, observations: 10, skippedUnresolved: 2 });
     expect(await deps.store.list(GLOBAL_ONLY, { validOnly: false })).toEqual([]);
     const pid = projectIdFor(t.cwd);
     const stored = await deps.store.list(scopeOf(t), { validOnly: false });
-    expect(stored).toHaveLength(8);
+    expect(stored).toHaveLength(10);
     expect(stored.every((m: Memory) => m.scope.projectId === pid)).toBe(true);
     expect(await deps.store.getCursor(`claude-code:${GONE}`)).toBeNull();
     expect(await deps.store.getCursor(`claude-code:${PLAIN}`)).toBeNull();
@@ -240,11 +240,11 @@ describe('importTranscripts', () => {
       { projectsDir: dir, estimateOnly: false, includeUnresolved: true },
       deps,
     );
-    expect(r).toMatchObject({ sessions: 4, observations: 16, skippedUnresolved: 0 });
+    expect(r).toMatchObject({ sessions: 4, observations: 20, skippedUnresolved: 0 });
     const global = await deps.store.list(GLOBAL_ONLY, { validOnly: false });
-    expect(global).toHaveLength(8);
+    expect(global).toHaveLength(10);
     expect(global.every((m: Memory) => m.scope.projectId === undefined)).toBe(true);
-    expect(await deps.store.getCursor(`claude-code:${GONE}`)).toBe('a-0014');
+    expect(await deps.store.getCursor(`claude-code:${GONE}`)).toBe('a-0015');
   });
 
   it('import.private-project-keeps-project-id', async () => {
@@ -259,7 +259,7 @@ describe('importTranscripts', () => {
     const pid = projectIdFor(t.cwd);
     expect(pid).toBeDefined();
     const stored = await deps.store.list(scopeOf(t), { validOnly: false });
-    expect(stored).toHaveLength(8);
+    expect(stored).toHaveLength(10);
     expect(stored.every((m: Memory) => m.scope.projectId === pid)).toBe(true);
     // Invisible from global scope and from any other project, even on an exact lexical match.
     const elsewhere = { ...LOCAL, projectIds: [null, 'p-other'] };

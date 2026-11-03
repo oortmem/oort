@@ -21,9 +21,16 @@ describe('parseTranscript', () => {
       'assistant',
       'user',
       'assistant',
+      // Four harness-only rows (slash command, its output, `!` shell mode) are
+      // empty user turns; the real prompt after them joins them.
+      'user',
+      'user',
+      'user',
+      'user',
       'user',
       'assistant',
-      // The reply to a background task report: its user row was harness-only.
+      // A background task report (harness-only, so empty) and Claude's reply.
+      'user',
       'assistant',
     ]);
     for (const t of ts) {
@@ -167,7 +174,7 @@ describe('parseTranscript', () => {
 describe('turnsToObservations', () => {
   it('parser.pairs-user-and-assistant-at-assistant-time', () => {
     const obs = turnsToObservations(turns());
-    expect(obs).toHaveLength(4);
+    expect(obs).toHaveLength(5);
     expect(obs[0]).toEqual({
       userText: 'Which port does the auth service listen on in this repo?',
       assistantText: 'The auth service listens on port 4471, set in src/auth.ts.',
@@ -181,7 +188,7 @@ describe('turnsToObservations', () => {
     });
     // The parser does not scrub; that happens before anything is queued or observed.
     expect(obs[1]?.userText).toContain(AWS_KEY);
-    expect(obs.map((o) => o.turnRef)).toEqual(['a-0001c', 'a-0002', 'a-0003b', 'a-0014']);
+    expect(obs.map((o) => o.turnRef)).toEqual(['a-0001c', 'a-0002', 'a-0003b', 'a-0014', 'a-0015']);
   });
 
   it('parser.joins-consecutive-user-turns-and-drops-unpaired', () => {
@@ -271,23 +278,111 @@ describe('harness blocks', () => {
 
   it('parser.drops-turn-that-is-only-harness-output', () => {
     const ts = turns();
-    expect(ts.some((t) => t.uuid.startsWith('h-') || t.uuid.startsWith('t-'))).toBe(false);
-    // The reply to the task report is not merged into the previous assistant turn.
-    expect(ts.at(-2)?.uuid).toBe('a-0014');
-    expect(ts.at(-1)).toMatchObject({ role: 'assistant', uuid: 'a-0015' });
-    expect(turnsToObservations(ts).map((o) => o.turnRef)).not.toContain('a-0015');
+    // Harness-only rows leave empty user turns: no harness text survives.
+    for (const t of ts.filter((x) => x.uuid.startsWith('h-') || x.uuid.startsWith('t-'))) {
+      expect(t).toMatchObject({ role: 'user', text: '' });
+    }
 
-    // A slash command row before a real prompt adds nothing to the prompt.
     const jsonl = [
+      // A slash command row before a real prompt adds nothing to the prompt.
       row('user', 'c1', '<command-name>/clear</command-name>\n<command-args></command-args>'),
       row('user', 'u2', 'what is the deploy region?'),
       row('assistant', 'a2', 'eu-north-1'),
+      // Both sides empty after stripping: a task report answered only by Oort's echoed block.
       row('user', 'n3', '<task-notification>\nfinished\n</task-notification>'),
-      row('assistant', 'a3', 'noted'),
+      row('assistant', 'a3', '<oort-memory>\n- [semantic, today] echoed\n</oort-memory>'),
+      // Harness rows that nothing answers.
+      row('user', 'b4', '<bash-input>ls</bash-input>'),
+      row('user', 'b5', '<bash-stdout>README.md</bash-stdout><bash-stderr></bash-stderr>'),
     ].join('\n');
     const obs = turnsToObservations(parseTranscript(jsonl));
     expect(obs).toEqual([
       expect.objectContaining({ userText: 'what is the deploy region?', turnRef: 'a2' }),
+    ]);
+  });
+
+  it('parser.keeps-reply-to-harness-row-with-empty-user-text', () => {
+    const obs = turnsToObservations(turns());
+    expect(obs.at(-1)).toEqual({
+      userText: '',
+      assistantText: 'The background check finished cleanly.',
+      toolSummaries: [],
+      sessionId: SESSION,
+      turnRef: 'a-0015',
+      at: '2026-10-01T09:05:01.000Z',
+    });
+    // The reply before it is not merged into, or confused with, this one.
+    expect(obs.at(-2)?.turnRef).toBe('a-0014');
+
+    // With tool calls; a tool_result row that also carries a system reminder
+    // stays part of the turn rather than starting a new one.
+    const rows = [
+      {
+        type: 'user',
+        uuid: 'n1',
+        parentUuid: null,
+        timestamp: 't1',
+        sessionId: 's',
+        cwd: '/',
+        message: {
+          role: 'user',
+          content: '<task-notification>\n<status>completed</status>\n</task-notification>',
+        },
+      },
+      {
+        type: 'assistant',
+        uuid: 'a1',
+        parentUuid: 'n1',
+        timestamp: 't2',
+        sessionId: 's',
+        cwd: '/',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'x', name: 'Read', input: { file_path: 'report.md' } }],
+        },
+      },
+      {
+        type: 'user',
+        uuid: 'r1',
+        parentUuid: 'a1',
+        timestamp: 't3',
+        sessionId: 's',
+        cwd: '/',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'x', content: 'all green' },
+            { type: 'text', text: '<system-reminder>hidden</system-reminder>' },
+          ],
+        },
+      },
+      {
+        type: 'assistant',
+        uuid: 'a2',
+        parentUuid: 'r1',
+        timestamp: 't4',
+        sessionId: 's',
+        cwd: '/',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'The report says all checks passed.' }],
+        },
+      },
+    ];
+    const ts = parseTranscript(rows.map((r) => JSON.stringify(r)).join('\n'));
+    expect(ts.map((t) => [t.role, t.uuid])).toEqual([
+      ['user', 'n1'],
+      ['assistant', 'a2'],
+    ]);
+    expect(turnsToObservations(ts)).toEqual([
+      {
+        userText: '',
+        assistantText: 'The report says all checks passed.',
+        toolSummaries: ['Read({"file_path":"report.md"})', 'result: all green'],
+        sessionId: 's',
+        turnRef: 'a2',
+        at: 't4',
+      },
     ]);
   });
 });

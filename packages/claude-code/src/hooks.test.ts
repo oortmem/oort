@@ -258,12 +258,13 @@ describe('Stop', () => {
       'a-0002',
       'a-0003b',
       'a-0014',
+      'a-0015',
     ]);
-    expect(await deps.store.getCursor(key)).toBe('a-0014');
+    expect(await deps.store.getCursor(key)).toBe('a-0015');
 
     // Nothing new: nothing queued, cursor unchanged.
     await handleStop(stopInput(t, transcript), deps);
-    expect(queueLines(t.home)).toHaveLength(4);
+    expect(queueLines(t.home)).toHaveLength(5);
 
     const more = [
       {
@@ -290,12 +291,12 @@ describe('Stop', () => {
     fs.appendFileSync(transcript, more.map((r) => JSON.stringify(r)).join('\n') + '\n');
     await handleStop(stopInput(t, transcript), deps);
     const lines = queueLines(t.home);
-    expect(lines).toHaveLength(5);
-    expect(lines[4]).toMatchObject({
+    expect(lines).toHaveLength(6);
+    expect(lines[5]).toMatchObject({
       obs: { turnRef: 'a-0004', assistantText: 'In docs/auth.md.' },
     });
     expect(await deps.store.getCursor(key)).toBe('a-0004');
-    expect(readLog(t.home).map((l) => l.counts['queued'])).toEqual([4, 0, 1]);
+    expect(readLog(t.home).map((l) => l.counts['queued'])).toEqual([5, 0, 1]);
   });
 
   it('hook.stop-reprocesses-grown-turn', async () => {
@@ -652,7 +653,7 @@ describe('runHook', () => {
     await runHook('Stop', JSON.stringify(stopInput(t, transcript)), deps);
     expect(await runHook('drain', '', deps)).toEqual({ stdout: '', exitCode: 0 });
     expect(queueLines(t.home)).toEqual([]);
-    expect(deps.calls.write).toBe(4);
+    expect(deps.calls.write).toBe(5);
   });
 });
 

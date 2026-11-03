@@ -157,15 +157,11 @@ function messageRow(line: string): Row | undefined {
  *   turn's summaries as `"result: <first 200 chars>"`; mixed rows contribute
  *   their results to the previous turn and their text to a new user turn;
  * - `HARNESS_TAGS` blocks and `<oort-memory>` are stripped from user text, and
- *   `<oort-memory>` from assistant text; a user row left empty yields no turn,
- *   and the assistant reply to it is a turn of its own with no user turn before
- *   it, so it yields no observation either.
+ *   `<oort-memory>` from assistant text; a user row holding only harness output
+ *   becomes a user turn with empty text, so the reply to it is a turn of its own.
  */
 export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
   const out: DetailedTurn[] = [];
-  // Set by a user row that held only harness output: what Claude says next
-  // answers the harness, not the previous prompt, so it starts a new turn.
-  let boundary = false;
   for (const line of jsonl.split('\n')) {
     const row = messageRow(line);
     if (row === undefined) continue;
@@ -199,12 +195,10 @@ export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
 
     if (role === 'user') {
       if (results.length > 0 && prev !== undefined) prev.turn.toolSummaries.push(...results);
-      if (text.length === 0) {
-        // Only harness output (or Oort's own block): no turn, no observation.
-        if (raw.length > 0) boundary = true;
-        continue;
-      }
-      boundary = false;
+      // A tool-result row (even one carrying a system reminder) stays part of the turn.
+      if (text.length === 0 && (raw.length === 0 || results.length > 0)) continue;
+      // A row of only harness output becomes an empty user turn: what Claude says
+      // next answers the harness, not the previous prompt.
       out.push({
         turn: {
           uuid,
@@ -221,7 +215,7 @@ export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
       continue;
     }
 
-    if (prev?.turn.role === 'assistant' && !boundary) {
+    if (prev?.turn.role === 'assistant') {
       const t = prev.turn;
       if (text.length > 0) t.text = t.text.length > 0 ? `${t.text}\n${text}` : text;
       t.toolSummaries.push(...summaries);
@@ -230,7 +224,6 @@ export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
       prev.rowUuids.push(uuid);
       continue;
     }
-    boundary = false;
     out.push({
       turn: {
         uuid,
@@ -262,7 +255,9 @@ export interface PairedObservation {
  * One observation per user→assistant pair, at the assistant turn's timestamp.
  * Consecutive user turns (an interrupted prompt and its retry) are joined; an
  * assistant turn without a user turn before it, and a trailing unanswered user
- * turn, yield nothing.
+ * turn, yield nothing. A reply to harness-only rows (a background task report,
+ * say) is observed with `userText: ""`: no text is invented for the user. When
+ * both sides are empty after stripping, the pair yields nothing.
  */
 export function pairTurns(turns: Turn[]): PairedObservation[] {
   const out: PairedObservation[] = [];
@@ -273,9 +268,17 @@ export function pairTurns(turns: Turn[]): PairedObservation[] {
       return;
     }
     if (pending.length === 0) return;
+    const userText = pending
+      .map((u) => u.text)
+      .filter((x) => x.length > 0)
+      .join('\n');
+    if (userText.length === 0 && t.text.length === 0) {
+      pending = [];
+      return;
+    }
     out.push({
       obs: {
-        userText: pending.map((u) => u.text).join('\n'),
+        userText,
         assistantText: t.text,
         toolSummaries: [...pending.flatMap((u) => u.toolSummaries), ...t.toolSummaries],
         sessionId: t.sessionId,
