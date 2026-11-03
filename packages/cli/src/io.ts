@@ -21,8 +21,8 @@ export interface Io {
   readStdin(capMs?: number): Promise<string>;
   /** Prints `question` on stdout and reads one line from stdin. */
   ask(question: string): Promise<string>;
-  /** Starts a detached `oort hook drain` and does not wait for it. */
-  spawnDrain(): void;
+  /** Starts a detached `oort hook drain` in `cwd` and does not wait for it. */
+  spawnDrain(cwd: string): void;
   /** Writes the hook's stdout, then exits 0 as soon as the write is flushed. */
   hookExit(stdout: string): void;
 }
@@ -32,7 +32,17 @@ export function binPath(): string {
   return fileURLToPath(new URL('./main.js', import.meta.url));
 }
 
-export function processIo(entry: string | undefined): Io {
+/**
+ * The bin's `Io`. stdout errors are handled here: a closed pipe (`oort export
+ * | head`) exits 0 quietly, any other write failure exits 1 with one line. In
+ * hook mode every stdout error exits 0, since a hook must never fail.
+ */
+export function processIo(entry: string | undefined, opts: { hook?: boolean } = {}): Io {
+  process.stdout.on('error', (e: NodeJS.ErrnoException) => {
+    if (opts.hook === true || e.code === 'EPIPE') process.exit(0);
+    process.stderr.write(`oort: cannot write to stdout (${e.code ?? e.name})\n`);
+    process.exit(1);
+  });
   return {
     cwd: process.cwd(),
     env: process.env,
@@ -63,8 +73,9 @@ export function processIo(entry: string | undefined): Io {
         rl.close();
       }
     },
-    spawnDrain() {
+    spawnDrain(cwd) {
       const child = spawn(process.execPath, [fs.realpathSync(binPath()), 'hook', 'drain'], {
+        cwd,
         detached: true,
         stdio: 'ignore',
         env: process.env,
@@ -75,7 +86,6 @@ export function processIo(entry: string | undefined): Io {
     hookExit(stdout) {
       const exit = (): never => process.exit(0);
       if (stdout.length === 0) exit();
-      process.stdout.on('error', exit);
       process.stdout.write(stdout, exit);
     },
   };

@@ -2,8 +2,10 @@
 
 `oort export` writes the memories visible from the current project as
 [JSON Lines](https://jsonlines.org/) (UTF-8, one JSON value per line, each line
-ending in `\n`). Output goes to stdout, or with `--out <file>` to a file created
-owner-only (`0600`). This format is the basis for import and migration (CON-36).
+ending in `\n`). Output goes to stdout, or with `--out <file>` to a new file
+created owner-only (`0600`). An existing file is refused unless `--force` is
+given, and a symlink is never written through. `--json` is accepted and changes
+nothing. This format is the basis for import and migration (CON-36).
 
 ## What is exported
 

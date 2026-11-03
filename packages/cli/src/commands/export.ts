@@ -44,7 +44,10 @@ const scopeKey = (s: Scope): string => JSON.stringify(Object.entries(s).sort());
  * `oort export [--out <file>]`: the v1 export format, a manifest line and one
  * JSON line per memory (every tier and validity state) visible from the cwd.
  */
-export async function exportCommand(opts: { out?: string }, ctx: Ctx): Promise<number> {
+export async function exportCommand(
+  opts: { out?: string; force?: boolean },
+  ctx: Ctx,
+): Promise<number> {
   return withWired(ctx, async (w) => {
     const listed = await w.store.list(filterFor(w.scope), { validOnly: false });
     // Oldest first, so an importer replays supersede chains in order.
@@ -67,7 +70,7 @@ export async function exportCommand(opts: { out?: string }, ctx: Ctx): Promise<n
       ctx.io.out(data);
     } else {
       const file = path.resolve(ctx.io.cwd, opts.out);
-      writeOwnerOnly(file, data);
+      writeOwnerOnly(file, data, opts.force === true);
       ctx.io.out(`Exported ${memories.length} memories to ${file}\n`);
     }
     return 0;

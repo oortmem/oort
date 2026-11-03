@@ -1,6 +1,6 @@
 import { HOOK_TIMEOUTS, createHookLogger, runHook, type HookEvent } from '@oortmem/claude-code';
 import { resolveHome, type MemoryStore } from '@oortmem/core';
-import type { Ctx } from '../util.js';
+import { echo, type Ctx } from '../util.js';
 import type { Wired } from '../wire.js';
 
 export const HOOK_COMMAND_EVENTS: readonly HookEvent[] = [
@@ -95,7 +95,7 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
   try {
     if (!isEvent(event)) {
       io.err(
-        `oort hook: unknown event "${event}"; expected one of ${HOOK_COMMAND_EVENTS.join(', ')}.\n`,
+        `oort hook: unknown event ${echo(event)}; expected one of ${HOOK_COMMAND_EVENTS.join(', ')}.\n`,
       );
       log(ctx, undefined, event, 'unknown-event');
     } else {
@@ -104,7 +104,17 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         env: io.env,
         ...(event !== 'drain' && { busyTimeoutMs: HOOK_BUSY_TIMEOUT_MS }),
       });
-      const { harnessLog, unavailable: _u, close: _c, scope: _s, store, ...engine } = w;
+      for (const warning of w.warnings) log(ctx, w, event, `config:${warning.code}`);
+      const home = w.config.home;
+      const {
+        harnessLog,
+        unavailable: _u,
+        close: _c,
+        scope: _s,
+        warnings: _w,
+        store,
+        ...engine
+      } = w;
       // The scope is left out: each handler derives it from the session's cwd.
       const out = await runHook(event, stdin, {
         ...engine,
@@ -112,7 +122,9 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
           busy = true;
         }),
         log: harnessLog,
-        spawnDrain: () => io.spawnDrain(),
+        // The drain runs in the home directory, so it resolves the home config only:
+        // project config never affects the write path.
+        spawnDrain: () => io.spawnDrain(home),
       });
       stdout = out.stdout;
       // The drain is detached and nothing waits on it, so it closes the store cleanly.

@@ -1,14 +1,26 @@
 import * as fs from 'node:fs';
-import type {
-  DecisionController,
-  Embedder,
-  Memory,
-  MemoryStore,
-  MemoryWriter,
-  ScopeFilter,
+import {
+  scopeMatches,
+  scrub,
+  type DecisionController,
+  type Embedder,
+  type Memory,
+  type MemoryStore,
+  type MemoryWriter,
+  type ScopeFilter,
 } from '@oortmem/core';
 import type { Io } from './io.js';
 import type { WireFn, Wired } from './wire.js';
+
+/**
+ * A user argument as echoed in a message: scrubbed, clipped to 24 characters,
+ * quoted and escaped, so a pasted secret or memory text never comes back
+ * (a 20-character AWS key would fit the clip, hence the scrub).
+ */
+export function echo(arg: string): string {
+  const clean = scrub(arg).text;
+  return JSON.stringify(clean.length > 24 ? `${clean.slice(0, 23)}…` : clean);
+}
 
 /** A refusal or usage problem: the message is printed and the CLI exits 2. */
 export class Refusal extends Error {
@@ -26,6 +38,7 @@ export interface Ctx {
 /** Wires for the cwd, runs `fn`, and always closes the store. */
 export async function withWired<T>(ctx: Ctx, fn: (w: Wired) => Promise<T>): Promise<T> {
   const w = await ctx.wire(ctx.io.cwd, { env: ctx.io.env });
+  for (const warning of w.warnings) ctx.io.err(`oort: ${warning.message}\n`);
   try {
     return await fn(w);
   } finally {
@@ -116,8 +129,9 @@ export function withoutEmbedding<T extends Memory>(m: T): Omit<T, 'embedding'> {
 }
 
 /**
- * The memory `ref` names: an exact id (read unscoped, as ids come from scoped
- * listings), or a unique prefix of one visible from `filter`.
+ * The memory `ref` names, if it is visible from `filter`: an exact id, or a
+ * unique prefix of one. A memory of another scope is refused exactly like a
+ * missing one, so ids from other projects reveal nothing.
  */
 export async function findMemory(
   store: MemoryStore,
@@ -125,14 +139,16 @@ export async function findMemory(
   ref: string,
 ): Promise<Memory> {
   const exact = await store.get(ref);
-  if (exact !== null) return exact;
-  const matches = (await store.list(filter, { validOnly: false })).filter((m) =>
-    m.id.startsWith(ref),
-  );
+  if (exact !== null && scopeMatches(exact.scope, filter)) return exact;
+  const matches =
+    exact !== null
+      ? []
+      : (await store.list(filter, { validOnly: false })).filter((m) => m.id.startsWith(ref));
   if (matches.length === 1 && matches[0] !== undefined) return matches[0];
-  if (matches.length > 1)
-    throw new Refusal(`"${ref}" matches ${matches.length} memories; give more of the id.`);
-  throw new Refusal(`No memory with id "${ref}".`);
+  if (matches.length > 1) {
+    throw new Refusal(`${echo(ref)} matches ${matches.length} memories; give more of the id.`);
+  }
+  throw new Refusal(`No such memory in this project: ${echo(ref)}.`);
 }
 
 /** Asks y/N on a terminal; refuses when stdin is not a terminal and `--yes` was not given. */
@@ -149,9 +165,38 @@ export async function confirm(
   return answer === 'y' || answer === 'yes';
 }
 
-/** Writes `data` to `file`, created or truncated, owner-only (0600). */
-export function writeOwnerOnly(file: string, data: string): void {
-  const fd = fs.openSync(file, 'w', 0o600);
+const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+
+/**
+ * Writes `data` to a new file, owner-only (0600). An existing file is refused
+ * unless `force`, and a symlink is never followed (even with `force`).
+ */
+export function writeOwnerOnly(file: string, data: string, force = false): void {
+  let st: fs.Stats | undefined;
+  try {
+    st = fs.lstatSync(file);
+  } catch {
+    st = undefined;
+  }
+  if (st?.isSymbolicLink() === true) {
+    throw new Refusal(`${echo(file)} is a symlink; refusing to write through it.`);
+  }
+  if (st !== undefined && !force) {
+    throw new Refusal(`${echo(file)} already exists; pass --force to overwrite it.`);
+  }
+  const { O_WRONLY, O_CREAT, O_EXCL, O_TRUNC } = fs.constants;
+  const flags = O_WRONLY | O_CREAT | NOFOLLOW | (force ? O_TRUNC : O_EXCL);
+  let fd: number;
+  try {
+    fd = fs.openSync(file, flags, 0o600);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    // Created or swapped for a symlink since the lstat.
+    if (code === 'EEXIST' || code === 'ELOOP') {
+      throw new Refusal(`${echo(file)} changed while writing; not written.`);
+    }
+    throw e;
+  }
   try {
     if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
     fs.writeSync(fd, data);

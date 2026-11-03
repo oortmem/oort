@@ -1,10 +1,11 @@
 import * as fs from 'node:fs';
+import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import Database from 'better-sqlite3';
 import { execa } from 'execa';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { OortConfig, projectIdFor } from '@oortmem/core';
+import { OortConfig, projectIdFor, type Memory } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import { memory, syntheticKey, tmpdir, writeTranscript } from '../test/helpers.js';
 
@@ -34,6 +35,17 @@ function sandbox(): Sandbox {
     cwd,
     env: { PATH: process.env['PATH'] ?? '', HOME: home, OORT_HOME: oortHome },
   };
+}
+
+async function seed(s: Sandbox, memories: Memory[]): Promise<void> {
+  const store = await openSqliteStore({
+    path: path.join(s.oortHome, 'oort.sqlite'),
+    coldDir: path.join(s.oortHome, 'cold'),
+    dimension: 512,
+    log: () => {},
+  });
+  await store.upsertMany(memories);
+  await store.close();
 }
 
 interface RunOptions {
@@ -223,13 +235,60 @@ describe('oort bin', () => {
     expect(log).toContain('"outcome":"degraded:busy"');
   });
 
-  it('cli.hook-exits-promptly-with-slow-adapters', (ctx) => {
-    // @oortmem/embed-voyage and @oortmem/rerank-voyage post to a fixed api.voyageai.com
-    // endpoint (options: apiKey, model, dimension, fetch) and have no base-URL option,
-    // so the built bin cannot be pointed at a local never-responding server without a
-    // production test seam. cli.hook-slow-adapters-in-process covers the same path
-    // with a never-resolving embedder injected through wire().
-    ctx.skip('voyage adapters have no base-URL option; covered in-process');
+  it('cli.hook-exits-promptly-with-slow-adapters', async () => {
+    const s = sandbox();
+    await seed(s, [memory({ embedding: new Int8Array(512).fill(3) })]);
+    const preload = path.join(import.meta.dirname, '..', 'test', 'preload-never-fetch.mjs');
+    const r = await oort(s, ['hook', 'UserPromptSubmit'], {
+      env: {
+        ...s.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+        VOYAGE_API_KEY: syntheticKey('voyage'),
+      },
+      input: JSON.stringify({
+        session_id: 's-slow',
+        cwd: s.cwd,
+        hook_event_name: 'UserPromptSubmit',
+        prompt: 'which port does the auth service listen on?',
+      }),
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.durationMs).toBeLessThan(3500);
+    // The embed never answers; the lexical fallback still injects context.
+    const out = JSON.parse(r.stdout) as { hookSpecificOutput: { additionalContext: string } };
+    expect(out.hookSpecificOutput.additionalContext).toContain('port 5582');
+    const log = fs.readFileSync(path.join(s.oortHome, 'logs', 'hooks.log'), 'utf8');
+    expect(log).toContain('"timeout"');
+  });
+
+  it('cli.epipe-exits-quietly', async () => {
+    const s = sandbox();
+    await seed(
+      s,
+      Array.from({ length: 600 }, (_, i) =>
+        memory({
+          text: `fact number ${i} `.repeat(20),
+          embedding: new Int8Array(512).fill(i % 100),
+        }),
+      ),
+    );
+    // Like `oort export | head -n 1`: the reader closes after the first line.
+    const child = spawn(BIN, ['export'], {
+      cwd: s.cwd,
+      env: s.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+    let first = '';
+    child.stdout.on('data', (d: Buffer) => {
+      first += d.toString();
+      if (first.includes('\n')) child.stdout.destroy();
+    });
+    const code = await new Promise<number | null>((resolve) => child.on('exit', resolve));
+    expect(first.split('\n')[0]).toMatch(/^\{"oort":"export"/);
+    expect(stderr).toBe('');
+    expect(code).toBe(0);
   });
 
   it('cli.install-refuses-without-bin', async () => {

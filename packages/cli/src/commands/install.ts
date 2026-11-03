@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { HOOK_EVENTS, installHooks, uninstallHooks } from '@oortmem/claude-code';
 import { binPath } from '../io.js';
-import { Refusal, type Ctx } from '../util.js';
+import { Refusal, echo, type Ctx } from '../util.js';
 
 // pnpm 11 removed `pnpm link --global`; `pnpm add -g .` links the package directory instead.
 const HOW_TO_INSTALL =
@@ -62,7 +62,7 @@ export async function installCommand(
   ctx: Ctx,
 ): Promise<number> {
   if (harness !== 'claude-code') {
-    throw new Refusal(`unknown harness "${harness}"; Phase 1 supports claude-code.`);
+    throw new Refusal(`unknown harness ${echo(harness)}; Phase 1 supports claude-code.`);
   }
   const cmd = hookCommandPath(ctx.io.entry);
   const file = settingsFile(opts.project === true, ctx);

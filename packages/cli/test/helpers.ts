@@ -29,6 +29,8 @@ export interface FakeIo extends Io {
   hookStdout: string | undefined;
   hookExits: number;
   spawned: number;
+  /** The cwd of each `spawnDrain`. */
+  spawnCwds: string[];
   asked: string[];
 }
 
@@ -49,6 +51,7 @@ export function fakeIo(opts: {
     hookStdout: undefined,
     hookExits: 0,
     spawned: 0,
+    spawnCwds: [],
     asked: [],
     out(t) {
       io.stdout += t;
@@ -63,8 +66,9 @@ export function fakeIo(opts: {
       io.asked.push(q);
       return opts.answer ?? '';
     },
-    spawnDrain() {
+    spawnDrain(cwd) {
       io.spawned++;
+      io.spawnCwds.push(cwd);
     },
     hookExit(stdout) {
       io.hookExits++;
@@ -148,13 +152,15 @@ export function harness(opts: { adapters?: boolean } = {}): Harness {
               write: new MissingCredentialError('ANTHROPIC_API_KEY', 'writer.apiKey'),
             },
         harnessLog: createHookLogger(home),
+        warnings: [],
         close: async () => {},
         ...(keyed && { embed: fakeEmbedder, decide: fakeDecide, write: fakeWriter }),
       };
       return w;
     },
     async run(args, ioOpts = {}) {
-      const io = fakeIo({ cwd, env: { OORT_HOME: home }, ...ioOpts });
+      // HOME is the temp root too, so nothing can reach the real ~/.claude or ~/.oort.
+      const io = fakeIo({ cwd, env: { HOME: root, OORT_HOME: home }, ...ioOpts });
       const code = await runCli(args, io, h.wire);
       return { code, io };
     },

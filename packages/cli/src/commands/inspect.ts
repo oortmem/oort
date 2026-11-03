@@ -1,7 +1,14 @@
 import { filterFor } from '@oortmem/claude-code';
-import { activation, type Memory, type MemoryStore } from '@oortmem/core';
+import {
+  activation,
+  scopeMatches,
+  type Memory,
+  type MemoryStore,
+  type ScopeFilter,
+} from '@oortmem/core';
 import {
   Refusal,
+  echo,
   age,
   clip,
   findMemory,
@@ -36,33 +43,53 @@ const link = (m: Memory): ChainLink => ({
   text: m.text,
 });
 
-/** The supersede chain through `m`, oldest first: `supersedes` back, `supersededBy` forward. */
-export async function supersedeChain(store: MemoryStore, m: Memory): Promise<ChainLink[]> {
+/**
+ * The supersede chain through `m`, oldest first: `supersedes` back,
+ * `supersededBy` forward. Links outside `filter` (another project's memory,
+ * from before observe kept chains in one scope) are walked through but not
+ * returned; `hidden` counts them.
+ */
+export async function supersedeChain(
+  store: MemoryStore,
+  m: Memory,
+  filter: ScopeFilter,
+): Promise<{ links: ChainLink[]; hidden: number }> {
   const seen = new Set([m.id]);
+  let hidden = 0;
+  const walk = async (
+    start: string | null,
+    next: (x: Memory) => string | null,
+    add: (l: ChainLink) => void,
+  ): Promise<void> => {
+    for (let id = start; id !== null && !seen.has(id);) {
+      seen.add(id);
+      const x = await store.get(id);
+      if (x === null) break;
+      if (scopeMatches(x.scope, filter)) add(link(x));
+      else hidden++;
+      id = next(x);
+    }
+  };
   const back: ChainLink[] = [];
-  for (let id = m.supersedes; id !== null && !seen.has(id);) {
-    seen.add(id);
-    const prior = await store.get(id);
-    if (prior === null) break;
-    back.unshift(link(prior));
-    id = prior.supersedes;
-  }
   const forward: ChainLink[] = [];
-  for (let id = m.supersededBy; id !== null && !seen.has(id);) {
-    seen.add(id);
-    const next = await store.get(id);
-    if (next === null) break;
-    forward.push(link(next));
-    id = next.supersededBy;
-  }
-  return [...back, link(m), ...forward];
+  await walk(
+    m.supersedes,
+    (x) => x.supersedes,
+    (l) => back.unshift(l),
+  );
+  await walk(
+    m.supersededBy,
+    (x) => x.supersededBy,
+    (l) => forward.push(l),
+  );
+  return { links: [...back, link(m), ...forward], hidden };
 }
 
 function limitOf(raw: string | undefined): number {
   if (raw === undefined) return 50;
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0)
-    throw new Refusal(`--limit "${raw}" is not a positive integer.`);
+    throw new Refusal(`--limit ${echo(raw)} is not a positive integer.`);
   return n;
 }
 
@@ -94,9 +121,10 @@ export async function inspectCommand(
       return 0;
     }
     const m = await findMemory(w.store, filter, id);
-    const chain = await supersedeChain(w.store, m);
+    const { links: chain, hidden } = await supersedeChain(w.store, m, filter);
     if (opts.json === true) {
-      ctx.io.out(`${JSON.stringify({ memory: withoutEmbedding(m), chain }, null, 2)}\n`);
+      const out = { memory: withoutEmbedding(m), chain, hiddenLinks: hidden };
+      ctx.io.out(`${JSON.stringify(out, null, 2)}\n`);
       return 0;
     }
     const a = activation(m.accessLog, m.salience, now, w.config.activation);
@@ -142,6 +170,11 @@ export async function inspectCommand(
         ]),
       ),
     );
+    if (hidden > 0) {
+      ctx.io.out(
+        `${hidden} linked ${hidden === 1 ? 'memory' : 'memories'} in another scope (not shown)\n`,
+      );
+    }
     return 0;
   });
 }

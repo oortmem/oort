@@ -14,7 +14,7 @@ import { pinCommand } from './commands/pin.js';
 import { recallCommand } from './commands/recall.js';
 import { statsCommand } from './commands/stats.js';
 import type { Io } from './io.js';
-import { Refusal, type Ctx } from './util.js';
+import { Refusal, echo, type Ctx } from './util.js';
 import { wire as defaultWire, type WireFn } from './wire.js';
 
 function program(ctx: Ctx, setCode: (code: number) => void): Command {
@@ -29,7 +29,12 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .version(VERSION)
     .option('--debug', 'print stack traces for unexpected errors')
     .exitOverride()
-    .configureOutput({ writeOut: (s) => ctx.io.out(s), writeErr: (s) => ctx.io.err(s) })
+    .configureOutput({
+      writeOut: (s) => ctx.io.out(s),
+      writeErr: (s) => ctx.io.err(s),
+      // Commander quotes the offending argument ('…'); clip it like our own refusals.
+      outputError: (s, write) => write(s.replace(/'([^'\n]{25,})'/g, (_m, a: string) => echo(a))),
+    })
     .showHelpAfterError('(run `oort --help` for usage)');
 
   p.command('init')
@@ -133,7 +138,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
           },
         ) => {
           if (harness !== 'claude-code') {
-            throw new Refusal(`unknown harness "${harness}"; Phase 1 supports claude-code.`);
+            throw new Refusal(`unknown harness ${echo(harness)}; Phase 1 supports claude-code.`);
           }
           return importCommand(o, ctx);
         },
@@ -142,8 +147,10 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
 
   p.command('export')
     .description('write every visible memory in the v1 export format (docs/export-format.md)')
-    .option('--out <file>', 'write to this file (0600) instead of stdout')
-    .action(run((o: { out?: string }) => exportCommand(o, ctx)));
+    .option('--out <file>', 'write to a new file (0600) instead of stdout')
+    .option('--force', 'with --out, overwrite an existing file (never a symlink)')
+    .option('--json', 'accepted for compatibility; the format is always JSON Lines')
+    .action(run((o: { out?: string; force?: boolean }) => exportCommand(o, ctx)));
 
   return p;
 }

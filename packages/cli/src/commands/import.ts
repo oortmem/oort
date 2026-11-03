@@ -1,7 +1,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { importTranscripts } from '@oortmem/claude-code';
-import { Refusal, confirm, writePath, withWired, type Ctx } from '../util.js';
+import { Refusal, confirm, echo, writePath, withWired, type Ctx } from '../util.js';
 
 export interface ImportCommandOptions {
   since?: string;
@@ -16,7 +16,7 @@ const UNIT_MS = { h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 } as const;
 /** `30d`, `12h`, `2w` → the instant that long before `now`. */
 export function parseSince(raw: string, now: Date): Date {
   const m = /^(\d+)([hdw])$/.exec(raw.trim());
-  if (m === null) throw new Refusal(`--since "${raw}" must look like 12h, 30d or 2w.`);
+  if (m === null) throw new Refusal(`--since ${echo(raw)} must look like 12h, 30d or 2w.`);
   return new Date(now.getTime() - Number(m[1]) * UNIT_MS[m[2] as keyof typeof UNIT_MS]);
 }
 

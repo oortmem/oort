@@ -1,6 +1,8 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   MissingCredentialError,
+  OortConfig,
   localScope,
   projectIdFor,
   resolveConfig,
@@ -29,7 +31,18 @@ export interface Wired {
   /** Why each absent adapter is absent (usually a `MissingCredentialError`). */
   unavailable: Partial<Record<AdapterRole, Error>>;
   harnessLog: HookLogger;
+  /**
+   * Config problems worked around while wiring, as short tokens
+   * (`embed-dimension-ignored`). Commands print each message on stderr; hooks log the code.
+   */
+  warnings: WireWarning[];
   close(): Promise<void>;
+}
+
+export interface WireWarning {
+  code: 'embed-dimension-ignored';
+  /** One line for stderr; holds config values only. */
+  message: string;
 }
 
 export interface WireOptions {
@@ -111,6 +124,16 @@ async function load<T>(
   }
 }
 
+/** `embed.dimension` as the home config (or the default) sets it, ignoring any project config. */
+function homeDimension(home: string): number {
+  const file = path.join(home, 'config.json');
+  // resolveConfig has already validated this file.
+  const raw = fs.existsSync(file)
+    ? (JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>)
+    : {};
+  return OortConfig.shape.embed.parse(raw['embed']).dimension;
+}
+
 /**
  * Builds the engine for `cwd`: resolved config, the cwd's project scope, the
  * SQLite store under `$OORT_HOME`, and each adapter whose key is set. A
@@ -119,7 +142,21 @@ async function load<T>(
  */
 export const wire: WireFn = async (cwd, opts = {}) => {
   const env = opts.env ?? process.env;
-  const config = resolveConfig(cwd, env);
+  let config = resolveConfig(cwd, env);
+  const warnings: WireWarning[] = [];
+  // One store serves every project, so its dimension is the home config's: a
+  // project config cannot change it (the store would refuse to open, or embed
+  // vectors it cannot hold).
+  if (config.sources['embed'] === 'project') {
+    const dimension = homeDimension(config.home);
+    if (dimension !== config.embed.dimension) {
+      warnings.push({
+        code: 'embed-dimension-ignored',
+        message: `project config embed.dimension ${config.embed.dimension} ignored; the store uses ${dimension} from the home config.`,
+      });
+      config = { ...config, embed: { ...config.embed, dimension } };
+    }
+  }
   const scope = localScope(projectIdFor(cwd));
   const store = await openSqliteStore({
     path: path.join(config.home, 'oort.sqlite'),
@@ -134,6 +171,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     store,
     unavailable: {},
     harnessLog: createHookLogger(config.home),
+    warnings,
     close: () => store.close(),
   };
   const embed = await load(EMBED, config, env, async (apiKey) =>

@@ -47,6 +47,7 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
     const projectFile = path.join(root, 'oort.config.json');
     const body = `${JSON.stringify({ project: { private: false } }, null, 2)}\n`;
     io.out(
+      // 0644: the project file is meant to be committed and holds no secrets.
       createExclusive(projectFile, body, 0o644)
         ? `Created ${projectFile}\n`
         : `Kept existing ${projectFile}\n`,

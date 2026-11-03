@@ -16,7 +16,8 @@ export async function runRecall(
   now: Date,
 ): Promise<RecallResult> {
   if (asOf !== undefined && Number.isNaN(Date.parse(asOf))) {
-    throw new Refusal(`--as-of "${asOf}" is not an ISO date or timestamp.`);
+    // The value is not echoed: it is free text the user typed.
+    throw new Refusal('--as-of is not an ISO date or timestamp.');
   }
   return recall(
     { text, scope: filterFor(w.scope), ...(asOf !== undefined && { asOf }) },

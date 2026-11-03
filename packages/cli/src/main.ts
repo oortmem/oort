@@ -16,7 +16,7 @@ if (hook) {
 try {
   const { runCli } = await import('./program.js');
   const { processIo } = await import('./io.js');
-  const code = await runCli(args, processIo(evalMode ? undefined : process.argv[1]));
+  const code = await runCli(args, processIo(evalMode ? undefined : process.argv[1], { hook }));
   process.exitCode = hook ? 0 : code;
 } catch (e) {
   if (hook) process.exit(0);

@@ -3,7 +3,9 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { localScope, type Embedder, type Memory } from '@oortmem/core';
-import { AWS_KEY, harness, memory, writeTranscript } from '../test/helpers.js';
+import { AWS_KEY, fakeIo, harness, memory, tmpdir, writeTranscript } from '../test/helpers.js';
+import { runCli } from './program.js';
+import { wire } from './wire.js';
 
 const readLines = (file: string): Record<string, unknown>[] =>
   fs
@@ -157,6 +159,61 @@ describe('oort inspect', () => {
     expect(list.io.stdout.split('\n')[0]).toMatch(/^id\s+type\s+tier\s+activation\s+age\s+text$/);
 
     expect((await h.run(['inspect', 'ffffffff-nope'])).code).toBe(2);
+  });
+});
+
+describe('scope boundaries', () => {
+  const elsewhere = localScope('other-1234abcd');
+
+  it('cli.inspect-hides-out-of-scope-chain', async () => {
+    const h = harness(); // the cwd's scope is global
+    const g = memory({ text: 'global port 4000', validFrom: '2026-09-01T00:00:00.000Z' });
+    const p = memory({
+      text: 'project-only port 5000',
+      scope: elsewhere,
+      validFrom: '2026-09-10T00:00:00.000Z',
+    });
+    // A chain that crosses scopes (written before observe kept chains in one scope).
+    await h.store.upsertMany([
+      {
+        ...g,
+        validTo: p.validFrom,
+        expiredAt: p.validFrom,
+        endReason: 'superseded',
+        supersededBy: p.id,
+      },
+      { ...p, supersedes: g.id },
+    ]);
+    const text = await h.run(['inspect', g.id]);
+    expect(text.code).toBe(0);
+    expect(text.io.stdout).not.toContain(p.id.slice(0, 8));
+    expect(text.io.stdout).not.toContain('project-only');
+    expect(text.io.stdout).toContain('1 linked memory in another scope (not shown)');
+
+    const json = await h.run(['inspect', g.id, '--json']);
+    const parsed = JSON.parse(json.io.stdout) as { chain: { id: string }[]; hiddenLinks: number };
+    expect(parsed.chain.map((l) => l.id)).toEqual([g.id]);
+    expect(parsed.hiddenLinks).toBe(1);
+    // The shown record's own supersededBy still names the id; nothing of its content leaks.
+    expect(json.io.stdout).not.toContain('project-only');
+  });
+
+  it('cli.pin-forget-refuse-out-of-scope-id', async () => {
+    const h = harness();
+    const p = memory({ text: 'another project fact', scope: elsewhere });
+    await h.store.upsert(p);
+    for (const args of [
+      ['inspect', p.id],
+      ['pin', p.id],
+      ['unpin', p.id],
+      ['forget', p.id, '--yes'],
+    ]) {
+      const r = await h.run(args);
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(r.io.stderr).toMatch(/no such memory in this project/i);
+      expect(r.io.stdout).not.toContain('another project fact');
+    }
+    expect(await h.store.get(p.id)).toEqual(p);
   });
 });
 
@@ -320,6 +377,67 @@ describe('oort export', () => {
   });
 });
 
+describe('oort export --out', () => {
+  it('cli.export-out-refuses-existing-and-symlinks', async () => {
+    const h = harness();
+    await h.store.upsert(memory());
+    fs.mkdirSync(h.home, { recursive: true });
+    const file = path.join(h.root, 'out.jsonl');
+    fs.writeFileSync(file, 'keep me');
+    const refused = await h.run(['export', '--out', file]);
+    expect(refused.code).toBe(2);
+    expect(refused.io.stderr).toMatch(/--force/);
+    expect(fs.readFileSync(file, 'utf8')).toBe('keep me');
+    const forced = await h.run(['export', '--json', '--out', file, '--force']);
+    expect(forced.code).toBe(0);
+    expect(fs.readFileSync(file, 'utf8')).toMatch(/^\{"oort":"export"/);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+
+    // A symlink is never followed, even with --force.
+    const target = path.join(h.root, 'target.txt');
+    fs.writeFileSync(target, 'untouched');
+    const link = path.join(h.root, 'link.jsonl');
+    fs.symlinkSync(target, link);
+    for (const args of [
+      ['--out', link],
+      ['--out', link, '--force'],
+    ]) {
+      const r = await h.run(['export', ...args]);
+      expect(r.code).toBe(2);
+      expect(r.io.stderr).toMatch(/symlink/);
+    }
+    expect(fs.readFileSync(target, 'utf8')).toBe('untouched');
+  });
+});
+
+describe('refusal messages', () => {
+  it('cli.refusals-clip-echoed-arguments', async () => {
+    const h = harness();
+    const long = `sk-${'x'.repeat(60)}`;
+    const cases = [
+      ['inspect', long],
+      ['inspect', '--limit', long],
+      ['import', 'claude-code', '--since', long],
+      ['import', long],
+      ['install', long],
+      ['recall', 'q', '--as-of', long],
+      [long],
+    ];
+    for (const args of cases) {
+      const r = await h.run(args);
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(r.io.stderr).not.toContain('x'.repeat(24));
+    }
+    const asOf = await h.run(['recall', 'q', '--as-of', 'not-a-date']);
+    expect(asOf.io.stderr).not.toContain('not-a-date');
+    // A short secret fits the clip, so echoes are scrubbed too.
+    const key = await h.run(['inspect', AWS_KEY]);
+    expect(key.code).toBe(2);
+    expect(key.io.stderr).not.toContain(AWS_KEY);
+    expect(key.io.stderr).toContain('[REDACTED:');
+  });
+});
+
 describe('docs/export-format.md', () => {
   it('cli.export-doc-states-limitations', () => {
     const doc = fs.readFileSync(
@@ -417,6 +535,8 @@ describe('oort hook (in process)', () => {
     expect(r.code).toBe(0);
     expect(r.io.hookStdout).toBe('');
     expect(r.io.spawned).toBe(1);
+    // The drain runs in OORT_HOME, so only the home config shapes the write path.
+    expect(r.io.spawnCwds).toEqual([h.home]);
   });
 
   it('cli.hook-store-busy-timeout', async () => {
@@ -542,6 +662,40 @@ describe('oort import (in process)', () => {
     ).toBeGreaterThan(0);
 
     expect((await h.run(['import', 'claude-code', '--since', 'soon'])).code).toBe(2);
+  });
+});
+
+describe('wire', () => {
+  it('cli.wire-ignores-project-embed-dimension', async () => {
+    const root = tmpdir();
+    const home = path.join(root, 'oort-home');
+    const cwd = path.join(root, 'project');
+    fs.mkdirSync(cwd);
+    fs.writeFileSync(
+      path.join(cwd, 'oort.config.json'),
+      JSON.stringify({
+        embed: { provider: 'voyage', model: 'voyage-3.5-lite', dimension: 256, dtype: 'int8' },
+      }),
+    );
+    const env = { HOME: root, OORT_HOME: home };
+    const w = await wire(cwd, { env });
+    try {
+      expect(w.config.embed.dimension).toBe(512);
+      expect(w.warnings.map((x) => x.code)).toEqual(['embed-dimension-ignored']);
+      await w.store.upsert(memory({ embedding: new Int8Array(512) }));
+    } finally {
+      await w.close();
+    }
+
+    // Commands warn once on stderr; hooks log one line instead.
+    const cmd = fakeIo({ cwd, env });
+    expect(await runCli(['stats'], cmd, wire)).toBe(0);
+    expect(cmd.stderr.match(/embed\.dimension 256 ignored/g)).toHaveLength(1);
+    const hook = fakeIo({ cwd, env, stdin: JSON.stringify({ session_id: 's', cwd }) });
+    expect(await runCli(['hook', 'SessionStart'], hook, wire)).toBe(0);
+    expect(hook.stderr).toBe('');
+    const log = readLines(path.join(home, 'logs', 'hooks.log'));
+    expect(log.map((l) => l['outcome'])).toContain('config:embed-dimension-ignored');
   });
 });
 
