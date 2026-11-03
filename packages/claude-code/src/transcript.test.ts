@@ -472,6 +472,22 @@ describe('tool summaries and stripping cost', () => {
     );
   });
 
+  it('parser.scrubs-escaped-values-and-domain-users', () => {
+    // A literal backslash escape inside a value never ends it, and a Windows
+    // domain user keeps its password redacted. Assembled at runtime.
+    const B = '\\';
+    const pw = 'Passw0rd' + '2024';
+    for (const [input, secret] of [
+      [{ command: `export DB_PASSWORD=ab9${B}tcd${'Tail77'} && run` }, 'cdTail77'],
+      [{ command: `export DB_PASSWORD=ab9${B}ncd${'Tail77'} && run` }, 'cdTail77'],
+      [{ command: `curl --ntlm -u CORP${B}jdoe:${pw} https://x/` }, pw],
+    ] as const) {
+      const [use] = summaries(input, 'ok');
+      expect(use).toContain('[REDACTED:');
+      expect(leaks(use ?? '', secret)).toEqual([]);
+    }
+  });
+
   it('parser.strip-is-linear', () => {
     const row = (type: string, uuid: string, text: string) =>
       JSON.stringify({

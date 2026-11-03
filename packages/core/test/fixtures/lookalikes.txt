@@ -261,3 +261,21 @@ SKU SK-1234 in stock
 {"command":"git log --oneline\nnpm test\nnode_modules/.bin/tsc --noEmit"}
 {"text":"tokens used:\n  input_tokens: 1234\n  output_tokens: 567"}
 {"command":"echo done\r\nrm -rf dist\f"}
+{"content":"{\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.json\",\n    \"test\": \"vitest run\",\n    \"lint\": \"eslint . --max-warnings 0\"\n  }\n}"}
+{"error":"TypeError: Cannot read properties of undefined (reading 'token')\n    at getUserToken (/app/src/auth/session.ts:42:17)\n    at processTicksAndRejections (node:internal/process/task_queues:95:5)"}
+{"text":"don\u2019t forget the user\u2019s settings \u2014 it\u2019s fine"}
+{"path":"C:\\Users\\me\\Documents\\notes\\todo.txt"}
+{"pattern":"\\d+\\s*[A-Za-z_][A-Za-z0-9_]*\\b"}
+{"tb":"Traceback (most recent call last):\n  File \"/usr/lib/python3.12/site-packages/requests/sessions.py\", line 589, in request\n    resp = self.send(prep, **send_kwargs)\nrequests.exceptions.ConnectionError: HTTPSConnectionPool"}
+{"content":"DB_HOST=localhost\nDB_PORT=5432\nLOG_LEVEL=debug\nNODE_ENV=production"}
+{"content":"services:\n  web:\n    image: node:22-alpine\n    environment:\n      - NODE_ENV=production\n    ports:\n      - \"3000:3000\""}
+{"content":"import { useAuthenticatedUserProfileSettingsQuery } from './hooks';\nuseAuthenticatedUserProfileSettingsQuery();"}
+{"q":"SELECT id, token_count FROM usage\nWHERE user_id = 42\nORDER BY created_at DESC"}
+{"out":"commit 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b\nAuthor: Dev <dev@example.com>\n\n    fix: handle token refresh"}
+{"tsv":"id\tname\temail\n1\tAlice\talice@example.com\n2\tBob\tbob@example.com"}
+{"command":"cat <<'EOF' > config.yml\nlog_level: info\nmax_tokens: 4096\ntemperature: 0.7\nEOF"}
+{"text":"He said \"the token expired\" yesterday\nso we re-ran login"}
+{"url":"https://example.com/a/b\nhttps://cdn.example.com/assets/HeroBanner.4f8a2c1e.webp"}
+{"path":"C:\\Users\\me\\AppData\\Local\\Temp\\tmpAbCdEfGhIjKl\\build\\output.log"}
+{"text":"Reset your token:\nexpires in 5 minutes"}
+docker run -u 1000:1000 -v C:\data:/data node:22

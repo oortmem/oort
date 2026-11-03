@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Observation } from './adapters.js';
-import { scrub, scrubObservation } from './scrub.js';
+import { RULE_KINDS, scrub, scrubObservation } from './scrub.js';
 
 // Synthetic credentials are assembled at runtime so no full key literal appears in source.
 const AWS_AKID = 'AKIA' + 'IOSFODNN7EXAMPLE';
@@ -281,7 +281,8 @@ describe('scrub', () => {
       [`{"c":"${B}u00e9${aws}"}`, `{"c":"${B}u00e9${R('aws-access-key')}"}`],
       [
         `{"command":"export A=1${B}nDB_PASSWORD=${pw}${B}necho ok"}`,
-        `{"command":"export A=1${B}nDB_PASSWORD=${R('env-secret')}${B}necho ok"}`,
+        // An escape never ends a secret value: over-redaction beats a leaked tail.
+        `{"command":"export A=1${B}nDB_PASSWORD=${R('env-secret')} ok"}`,
       ],
       [
         `{"c":"a${B}n${'kT9+vQ2/Lm8Xp4Rz+Wd6'}${'Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq'}${B}nb"}`,
@@ -292,6 +293,95 @@ describe('scrub', () => {
     ];
     expect(cases.map(([i]) => scrub(i).text)).toEqual(cases.map(([, o]) => o));
     for (const [i] of cases) expect(scrub(scrub(i).text).text).toBe(scrub(i).text);
+  });
+
+  /**
+   * Every rule, after every JSON escape: caught under its own kind, no secret
+   * window survives, and the escape itself stays. Samples are assembled at
+   * runtime; there must be one per rule. Deferred: basic-auth-arg is bounded
+   * only by the start, whitespace or `\n` `\r` `\t`.
+   */
+  it('scrub.every-rule-bounded-after-every-escape', () => {
+    const A = 'Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7cDe0fGh2jKm';
+    const hex = '0123456789abcdef';
+    const S = (text: string, secret = text): { text: string; secret: string } => ({ text, secret });
+    const samples: Record<string, { text: string; secret: string }[]> = {
+      'pem-private-key': [
+        S(
+          `-----BEGIN RSA ${'PRIVATE'} KEY-----MIIEowIBAAKCAQEA${A}-----END RSA ${'PRIVATE'} KEY-----`,
+          A,
+        ),
+      ],
+      'aws-access-key': [S('AK' + 'IA' + 'Q7XZB3KMP9RTW2LN')],
+      'aws-secret-key': [
+        S(
+          'aws_secret_' + 'access_key=' + 'wJalrXUtnFEMI/K7MDENG/bPxRfiCY' + 'EXAMPLEKEY',
+          'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+        ),
+      ],
+      'github-token': [S('gh' + 'p_' + A.slice(0, 36)), S('github' + '_pat_' + A.slice(0, 30))],
+      'anthropic-key': [S('sk-' + 'ant-api03-' + A.slice(0, 40))],
+      'stripe-key': [S('sk_' + 'live_' + A.slice(0, 24))],
+      'typesafe-key': [S('ts_' + 'live_' + A.slice(0, 20))],
+      'shopify-key': [S('shp' + 'at_' + hex + hex)],
+      'digitalocean-token': [S('dop' + '_v1_' + hex.repeat(4))],
+      'mailgun-key': [S('key' + '-' + hex + hex)],
+      'gitlab-token': [S('gl' + 'pat-' + A.slice(0, 20))],
+      'square-token': [S('sq0' + 'atp-' + A.slice(0, 22))],
+      'slack-token': [S('xo' + 'xb-1234567890-' + A.slice(0, 24))],
+      'npm-token': [S('np' + 'm_' + A.slice(0, 36))],
+      'huggingface-token': [S('h' + 'f_' + A.slice(0, 34))],
+      'twilio-sid': [
+        S(
+          'account sid ' + 'AC' + '3f9b2c7e1a4d5068b9c2e7f1a3d5b6c8',
+          '3f9b2c7e1a4d5068b9c2e7f1a3d5b6c8',
+        ),
+      ],
+      'twilio-key': [S('SK' + '8e2f4a6c1b3d5e7f9a0b2c4d6e8f1a3b')],
+      'slack-webhook': [
+        S(
+          'https://hooks.slack.com/services/' + 'T00000000/B00000000/' + A.slice(0, 24),
+          A.slice(0, 24),
+        ),
+      ],
+      'openai-key': [S('sk-' + 'proj-' + A.slice(0, 40))],
+      'voyage-key': [S('pa' + '-' + A.slice(0, 30))],
+      jwt: [S('ey' + 'JhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.' + A.slice(0, 32))],
+      'url-credentials': [
+        S('https://admin:' + 'Hunter2Pass' + '@db.example.com/x', 'Hunter2Pass'),
+        S('https://' + A.slice(0, 32) + '@o1.ingest.sentry.io/1', A.slice(0, 32)),
+      ],
+      'basic-auth-arg': [S('-u deploy:' + 'S3cr3tP@ss2024', 'S3cr3tP@ss2024')],
+      'auth-header': [S('Authorization: Bearer ' + 'abc123tokenvalue', 'abc123tokenvalue')],
+      'env-secret': [S('DB_PASSWORD=' + 'hunter2' + 'hunter2', 'hunter2hunter2')],
+      'high-entropy': [S('kT9+vQ2/Lm8Xp4Rz+Wd6' + 'Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq')],
+    };
+    const perKind = (kinds: readonly string[]): Record<string, number> =>
+      Object.fromEntries(
+        [...new Set(kinds)].sort().map((k) => [k, kinds.filter((x) => x === k).length]),
+      );
+    expect(perKind(Object.entries(samples).flatMap(([k, v]) => v.map(() => k)))).toEqual(
+      perKind(RULE_KINDS),
+    );
+    const B = '\\';
+    const failures: string[] = [];
+    for (const [kind, list] of Object.entries(samples)) {
+      for (const { text: tok, secret } of list) {
+        for (const e of ['n', 't', 'r', '"', B, '/', 'b', 'f', 'u00e9']) {
+          if (kind === 'basic-auth-arg' && !['n', 't', 'r'].includes(e)) continue;
+          const text = `{"c":"echo hi${B}${e}${tok}${B}nnext"}`;
+          const out = scrub(text).text;
+          const ok =
+            out.includes(`[REDACTED:${kind}]`) &&
+            !out.includes(secret) &&
+            survivingWindow(secret, out) === undefined &&
+            out.includes(`${B}${e}`) &&
+            scrub(out).text === out;
+          if (!ok) failures.push(`${kind} \\${e}: ${out}`);
+        }
+      }
+    }
+    expect(failures).toEqual([]);
   });
 
   /**
@@ -311,6 +401,15 @@ describe('scrub', () => {
       ['session_id=sess_9fK2mQ7xL4pR8tZ1', 'session_id=sess_9fK2mQ7xL4pR8tZ1'],
       ['x 9fKq2LmZ8xRt4VbN7wPy3HsJ6cD1eG.', 'x 9fKq2LmZ8xRt4VbN7wPy3HsJ6cD1eG.'],
       ['passwordHash: $2b$10$abc', 'passwordHash: $2b$10$abc'],
+      // A value is never cut at an escape, so prose and code on the next line go too.
+      [
+        '{"text":"Enter your\\npassword: then press enter"}',
+        '{"text":"Enter your\\npassword: [REDACTED:env-secret] press enter"}',
+      ],
+      [
+        '{"text":"```ts\\nconst apiKey = process.env.API_KEY;\\nconst tokenizer = new Tokenizer();\\n```"}',
+        '{"text":"```ts\\nconst apiKey = [REDACTED:env-secret] tokenizer = new Tokenizer();\\n```"}',
+      ],
       // Code with a credential-named variable: the expression goes too.
       ['const tokenValue = parseToken(raw);', 'const tokenValue = [REDACTED:env-secret]'],
       ['dict(password=pw,host=db1)', 'dict(password=[REDACTED:env-secret])'],
@@ -351,6 +450,9 @@ describe('scrub', () => {
       's3://bucket/uploads/',
       '/Users/mjnong/Desktop/',
       'C:/Users/Me/AppData/',
+      'C:\\Users\\Me\\AppData\\',
+      'C:\\keys\\',
+      'C:\\\\Users\\\\Me\\\\',
     ];
     const suffixes = ['', '/data.bin', '.json', '/x'];
     const maxMiss: Record<number, number> = { 32: 0.1, 40: 0.05, 44: 0.03, 64: 0.01, 88: 0.01 };

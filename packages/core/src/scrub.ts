@@ -38,6 +38,13 @@ interface Rule {
    * inflate the secret ratio.
    */
   hit?: Hit;
+  /**
+   * The rule writes its own escape-aware boundary (or needs none), so
+   * `escapeBounded` leaves it alone instead of failing on its lookbehind.
+   */
+  ownBoundary?: true;
+  /** After a rejected match, try again one char later rather than past the match. */
+  retry?: true;
 }
 
 const tag = (kind: string): string => `${MARK}${kind}]`;
@@ -137,36 +144,46 @@ const COUNT_VALUE =
 const ESC_TAIL = String.raw`(?:[nrtbf"\\/]|u[0-9A-Fa-f]{4})`;
 /** Just after an escape: a token may start here even though the last char is a letter. */
 const AFTER_ESC = String.raw`(?<=\\${ESC_TAIL})`;
-/** The letter of an escape (`n` in `\n`) never starts a token. */
-const NOT_ESC_LETTER = String.raw`(?!(?<=\\)[nrtbfu])`;
+/** A JSON escape anywhere: what a value's count prefix stops at. */
+const ESC_ANY = new RegExp(String.raw`\\${ESC_TAIL}`);
 /**
- * Escapes that end a value (`PASSWORD=x\necho`): the control characters and
- * `\"`. `\\` and `\/` do not, since a password may hold a backslash or slash,
- * and nor does `\u` above U+001F (an escaped `é`).
+ * Control escapes a bare value may not start with: `token:\nexpires` has no
+ * value on its line. Inside a value no escape ends it: over-redaction beats a
+ * leaked tail (`DB_PASSWORD=abc\ndef123` goes whole).
  */
-const VALUE_END_ESC = String.raw`\\(?:[nrtbf"]|u00[01][0-9A-Fa-f])`;
+const VALUE_START_ESC = String.raw`\\(?:[nrtbf"]|u00[01][0-9A-Fa-f])`;
 
 /**
  * Gives a rule that starts with `\b` or a negative lookbehind an escape-aware
- * left boundary: the old boundary (never on an escape's letter), or just after
- * an escape. Rules with other starts are returned unchanged.
+ * left boundary: the old boundary, or just after an escape. Both readings of
+ * `\npm_…` are kept: as plain text the vendor prefix starts on the `n`, as
+ * JSON just after it, and the regex tries both positions. A rule starting with
+ * any other lookbehind must say it bounds itself (`ownBoundary`), or loading
+ * the module fails rather than leaving the rule silently unbounded.
  */
 function escapeBounded(rule: Rule): Rule {
-  const lead = /^(?:\\b|\(\?<![^()]*\))/.exec(rule.re.source)?.[0];
-  if (lead === undefined) return rule;
-  const src = `(?:${lead}${NOT_ESC_LETTER}|${AFTER_ESC})${rule.re.source.slice(lead.length)}`;
-  return { ...rule, re: new RegExp(src, rule.re.flags) };
+  if (rule.ownBoundary === true) return rule;
+  const src = rule.re.source;
+  const lead = /^(?:\\b|\(\?<![^()]*\))/.exec(src)?.[0];
+  if (lead === undefined) {
+    if (src.startsWith('(?<')) throw new Error(`scrub: cannot bound rule ${rule.kind}: ${src}`);
+    return rule;
+  }
+  return {
+    ...rule,
+    re: new RegExp(`(?:${lead}|${AFTER_ESC})${src.slice(lead.length)}`, rule.re.flags),
+  };
 }
 
 /**
  * A value: double-quoted (escapes allowed), single-quoted, escaped-quoted
  * (JSON inside a JSON string), an array of strings, or bare. A bare value may
  * hold `, } ] )`: one ends it only when followed by whitespace, a quote,
- * another delimiter, a value-ending escape or the end; such an escape ends it too. A bracket followed by space, a quote, a
+ * another delimiter or the end; a JSON escape never ends it (see VALUE_START_ESC). A bracket followed by space, a quote, a
  * bracket or a digit opens a structure, which is left to the keys inside it.
  */
 const ENV_VALUE = new RegExp(
-  String.raw`"(?:[^"\\\n]|\\.)*"|"[^"\n]*"|'[^'\n]*'|\\"[^"\\\n]*\\"|\[[ \t]*(?:"[^"\n]*"|'[^'\n]*')(?:[ \t]*,[ \t]*(?:"[^"\n]*"|'[^'\n]*'))*[ \t]*\]|(?![[{](?:[\s"'[\]{}\d]|$))(?:(?!${VALUE_END_ESC})(?:[^\s"',}\])]|[,}\])](?![\s"',}\])]|$|${VALUE_END_ESC})))+`,
+  String.raw`"(?:[^"\\\n]|\\.)*"|"[^"\n]*"|'[^'\n]*'|\\"[^"\\\n]*\\"|\[[ \t]*(?:"[^"\n]*"|'[^'\n]*')(?:[ \t]*,[ \t]*(?:"[^"\n]*"|'[^'\n]*'))*[ \t]*\]|(?![[{](?:[\s"'[\]{}\d]|$)|${VALUE_START_ESC})(?:\\"|[^\s"',}\])]|[,}\])](?![\s"',}\])]|$))+`,
   'y',
 );
 
@@ -205,7 +222,9 @@ function envSecret(head: string, offset: number, text: string): Replacement | nu
   }
   if (value === '') return null;
   // A plural `tokens` value is a count, or quoted text with spaces (`"Hello world"`).
-  if (level === 'unless-count' && (COUNT_VALUE.test(value) || (quote !== '' && /\s/.test(value)))) {
+  // The count is read up to the first escape: `input_tokens: 1234\n…` stays a count.
+  const count = value.split(ESC_ANY)[0] ?? value;
+  if (level === 'unless-count' && (COUNT_VALUE.test(count) || (quote !== '' && /\s/.test(value)))) {
     return null;
   }
   return { out: `${head}${quote}${tag('env-secret')}${quote}`, removed: value.length, length };
@@ -320,6 +339,42 @@ function classify(p: string, before: string): Piece {
  * base64 has `=` only at its end.
  */
 function highEntropy(full: string, offset: number, text: string): Replacement | null {
+  // After a backslash the token may begin with an escape's own char (`n` in
+  // `\n`, `/` in `\/`, `u00e9` in `\u00e9`). Both readings are judged and either
+  // one being a key redacts. Inside a JSON string the escape reading comes
+  // first (the escape survives); in plain text (`C:\keys\r…`) the whole token
+  // does, so no key char is left beside the marker.
+  const esc = escapeAt(full, offset, text);
+  if (esc === undefined) return readToken(full, offset, text);
+  const asJson = (): Replacement | null => {
+    const rest = readToken(full.slice(esc.length), offset + esc.length, text);
+    return rest === null ? null : { out: esc + rest.out, removed: rest.removed };
+  };
+  return inJsonString(text, offset - 1)
+    ? (asJson() ?? readToken(full, offset, text))
+    : (readToken(full, offset, text) ?? asJson());
+}
+
+/** The escape a token starts with, if an odd run of backslashes precedes it. */
+function escapeAt(full: string, offset: number, text: string): string | undefined {
+  let n = 0;
+  while (offset - 1 - n >= 0 && text[offset - 1 - n] === '\\') n++;
+  if (n % 2 === 0) return undefined;
+  return /^(?:[nrtbf/]|u[0-9A-Fa-f]{4})/.exec(full)?.[0];
+}
+
+/** Is `at` inside a JSON string: an odd number of unescaped quotes before it on its line? */
+function inJsonString(text: string, at: number): boolean {
+  const from = Math.max(0, at - 4096, text.lastIndexOf('\n', at) + 1);
+  const quotes =
+    text
+      .slice(from, at)
+      .replace(/\\[\s\S]/g, '')
+      .split('"').length - 1;
+  return quotes % 2 === 1;
+}
+
+function readToken(full: string, offset: number, text: string): Replacement | null {
   const trail = /\.*$/.exec(full)?.[0] ?? '';
   const m = full.slice(0, full.length - trail.length);
   const name = /^[A-Za-z_][A-Za-z0-9_]*=(?=[^=])/.exec(m)?.[0] ?? '';
@@ -482,6 +537,7 @@ const RULES: Rule[] = (
     { kind: 'twilio-key', re: /(?<![A-Za-z0-9_-])SK[0-9a-f]{32}\b/g },
     {
       kind: 'slack-webhook',
+      ownBoundary: true,
       // The path is the credential; the host stays.
       re: /(?<=https:\/\/hooks\.slack\.com\/services\/)T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+/g,
     },
@@ -503,6 +559,7 @@ const RULES: Rule[] = (
     },
     {
       kind: 'url-credentials',
+      ownBoundary: true,
       // Only `user:password@` is redacted; scheme and host survive. The user may
       // be empty and the password may hold `@`: it runs to the last `@` of the authority.
       re: /(?<=\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]*:[^\s/]+(?=@[^@\s/]*(?:[/\s]|$))/gi,
@@ -510,16 +567,18 @@ const RULES: Rule[] = (
     },
     {
       kind: 'url-credentials',
+      ownBoundary: true,
       // A user-only userinfo of 20+ token characters is a key (Sentry DSN, a
       // token used as a git username); short names like `user@` stay.
       re: /(?<=\b[a-z][a-z0-9+.-]*:\/\/)[A-Za-z0-9_-]{20,}(?=@[^@\s/]*(?:[/\s]|$))/gi,
     },
     {
       kind: 'basic-auth-arg',
+      ownBoundary: true,
       // `curl -u user:password`: the flag and the user stay. A numeric value is a
       // group id (`docker run -u 1000:1000`).
       re: new RegExp(
-        String.raw`(?<=(?:^|\s|\\[nrt])(?:-u[ \t]+|--user[ \t=]+)[^\s:\\]+:)(?:(?!${VALUE_END_ESC})\S)+`,
+        String.raw`(?<=(?:^|\s|\\[nrt])(?:-u[ \t]+|--user[ \t=]+)(?:[^\s:\\]|\\.)+:)\S+`,
         'g',
       ),
       hit: (m) =>
@@ -529,8 +588,9 @@ const RULES: Rule[] = (
     },
     {
       kind: 'auth-header',
+      ownBoundary: true,
       re: new RegExp(
-        String.raw`["']?(?:\b${NOT_ESC_LETTER}|${AFTER_ESC})(?:authorization|x-api-key|api-key|x-auth-token)["']?[ \t]*[:=][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']{0,2})?(?:(?!${VALUE_END_ESC})[^\s"'])+`,
+        String.raw`["']?(?:\b|${AFTER_ESC})(?:authorization|x-api-key|api-key|x-auth-token)["']?[ \t]*[:=][ \t]*["']?(?:(?:bearer|basic|token|digest)[ \t]+["']{0,2})?[^\s"']+`,
         'gi',
       ),
       hit: keepName(
@@ -540,6 +600,7 @@ const RULES: Rule[] = (
     },
     {
       kind: 'env-secret',
+      retry: true,
       // Any identifier-ish key containing a keyword, up to its `=` or `:`; `envKey`
       // decides whether the keyword sits on a real boundary and `envSecret` reads
       // the value. The lookahead keeps this linear.
@@ -556,6 +617,9 @@ const RULES: Rule[] = (
   ] satisfies Rule[]
 ).map(escapeBounded);
 
+/** The kind of every rule, in order (one entry per rule): for tests and introspection. */
+export const RULE_KINDS: readonly string[] = RULES.map((r) => r.kind);
+
 interface Scrubbed {
   text: string;
   redactions: Redaction[];
@@ -566,14 +630,19 @@ function run(input: string): Scrubbed {
   let text = input;
   let removed = 0;
   const counts = new Map<string, number>();
-  for (const { kind, re, hit } of RULES) {
+  for (const { kind, re, hit, retry } of RULES) {
     let out = '';
     let from = 0;
     re.lastIndex = 0;
     for (let m = re.exec(text); m !== null; m = re.exec(text)) {
       const r =
         hit === undefined ? { out: tag(kind), removed: m[0].length } : hit(m[0], m.index, text);
-      if (r === null) continue;
+      if (r === null) {
+        // A rejected key (`napiKey`, as the plain-text reading of `\napiKey`)
+        // must not hide the one starting a char later.
+        if (retry === true) re.lastIndex = m.index + 1;
+        continue;
+      }
       out += text.slice(from, m.index) + r.out;
       from = m.index + (r.length ?? m[0].length);
       re.lastIndex = from;
