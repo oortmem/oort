@@ -325,9 +325,8 @@ function build(
   };
 }
 
-/** Facts are the semantic memories; this share of them sit in supersede chains. */
+/** About this share of all memories sit in supersede chains (members of A to B to C). */
 const CHAIN_SHARE = 0.05;
-const SEMANTIC_SHARE = 0.4;
 
 function chainStatements(rng: Rng, subject: string): string[] {
   const kind = rng.int(3);
@@ -349,7 +348,7 @@ function chainStatements(rng: Rng, subject: string): string[] {
 /**
  * `n` deterministic synthetic developer memories: all four types, 40 to 500
  * characters, 512-d int8 embeddings derived from the text, access logs spread
- * over a year, 10% pinned, and 5% of the facts in A to B to C supersede chains.
+ * over a year, 10% pinned, and 5% of the memories in A to B to C supersede chains (facts).
  * Spread across five projects and global. The same `(n, seed)` always yields
  * the same memories.
  */
@@ -363,7 +362,7 @@ export function generateMemories(n: number, seed: number, opts: { now?: Date } =
   const tag = `m${seed}`;
   const out: Memory[] = [];
 
-  const chains = Math.floor((n * SEMANTIC_SHARE * CHAIN_SHARE) / 3);
+  const chains = Math.floor((n * CHAIN_SHARE) / 3);
   for (let c = 0; c < chains; c++) {
     const subject = `${rng.pick(SERVICES)}-${c}`;
     const statements = chainStatements(rng, subject);

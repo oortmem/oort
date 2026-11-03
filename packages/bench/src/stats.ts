@@ -44,3 +44,28 @@ export function collectGarbage(): void {
 }
 
 export const rssMb = (): number => toMb(process.memoryUsage().rss);
+
+export interface Latency {
+  /** Samples pooled across the repeated runs. */
+  samples: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  /** The lowest and highest p95 among the repeated runs. */
+  p95MinMs: number;
+  p95MaxMs: number;
+}
+
+/** p50/p95/p99 of the pooled samples, and the spread of p95 across the runs. */
+export function summarize(runs: number[][]): Latency {
+  const pooled = runs.flat();
+  const p95s = runs.map((r) => percentile(r, 95));
+  return {
+    samples: pooled.length,
+    p50Ms: percentile(pooled, 50),
+    p95Ms: percentile(pooled, 95),
+    p99Ms: percentile(pooled, 99),
+    p95MinMs: Math.min(...p95s),
+    p95MaxMs: Math.max(...p95s),
+  };
+}

@@ -8,18 +8,63 @@ export const FIXTURE_COUNT = 1500;
 
 const DAY_MS = 86_400_000;
 
-/** Words that appear in no generated memory, for the abstention rows. */
-const ABSENT = [
-  'zorblax quuxification',
-  'flibbertigibbet wombat',
-  'xylophone marmalade',
-  'gryphon obelisk',
+/**
+ * Abstention queries made of ordinary words that the corpus uses ("service",
+ * "the", "for", "team") but about things it never mentions. A lexical any-token
+ * match returns something for each, so these measure the false-positive rate
+ * honestly instead of using nonsense words.
+ */
+const ABSTAIN = [
+  'auth service rollback plan for the billing team',
+  'who approved the quarterly budget for the search gateway',
+  'the incident escalation policy for the notify relay',
+  'media proxy vendor contract renewal for the legal team',
 ];
 
+const SYNONYMS: Record<string, string> = {
+  listens: 'serves',
+  installs: 'fetches',
+  dependencies: 'packages',
+  failed: 'broke',
+  rolled: 'reverted',
+  refactored: 'reworked',
+  prefers: 'likes',
+  deploy: 'release',
+  tests: 'checks',
+  configured: 'wired',
+  development: 'dev',
+  integration: 'end-to-end',
+  decision: 'choice',
+};
+
+/** A query in other words: identifiers dropped, synonyms swapped, word order reversed. */
+function paraphrase(stub: string): string {
+  return stub
+    .split(/\s+/)
+    .map((w) => w.toLowerCase().replace(/[^a-z0-9._/-]/g, ''))
+    .filter((w) => w.length >= 3 && !/[0-9./_-]/.test(w))
+    .map((w) => SYNONYMS[w] ?? w)
+    .reverse()
+    .slice(0, 6)
+    .join(' ');
+}
+
+/** `auth-service-3` to "auth service": the subject in natural words. */
+const naturalSubject = (id: string): string => id.replace(/-\d+$/, '').replaceAll('-', ' ');
+
+function chainQuestion(tail: Memory, subject: string, when: string): string {
+  const who = naturalSubject(subject);
+  if (tail.text.includes('listens on port')) return `which port does the ${who} listen on ${when}`;
+  if (tail.text.includes('installs dependencies'))
+    return `which package manager does the ${who} use ${when}`;
+  return `which library does the ${who} use to validate requests ${when}`;
+}
+
 /**
- * The 20 demo rows over the synthetic store: 6 single-fact, 4 knowledge-update
- * (superseded versions must not come back), 3 temporal (as-of an earlier date),
- * 3 multi-session and 4 abstention. Deterministic for a given memory list.
+ * The 20 demo rows over the synthetic store: 6 single-fact (exact, partial and
+ * paraphrased), 4 knowledge-update and 3 temporal (the subject in natural words,
+ * not the chain id), 3 multi-session and 4 abstention. A smoke test of the
+ * eval pipeline, not a quality benchmark. Deterministic for a given memory list.
  */
 export function buildFixtureRows(memories: Memory[]): EvalRow[] {
   const rng = createRng(FIXTURE_SEED);
@@ -51,9 +96,31 @@ export function buildFixtureRows(memories: Memory[]): EvalRow[] {
       (m) => m.type === 'semantic' && !inChain(m) && (df.get(rareTokens(m)[0] ?? '') ?? 99) <= 2,
     ),
   );
-  for (const m of plain.slice(0, 6)) {
+  // single-fact: 2 exact (the four rarest words), 2 partial (the rarest, an identifier,
+  // left out) and 2 paraphrased (synonyms, no identifiers, reversed word order).
+  const loose = shuffled(
+    memories.filter((m) => m.type === 'semantic' && !inChain(m) && !plain.includes(m)),
+  );
+  const exact = plain.slice(0, 2);
+  const partial = plain.slice(2, 4);
+  const reworded = loose.slice(0, 2);
+  for (const m of exact) {
     rows.push({
       question: rareTokens(m).slice(0, 4).join(' '),
+      expectedMemoryIds: [m.id],
+      category: 'single-fact',
+    });
+  }
+  for (const m of partial) {
+    rows.push({
+      question: rareTokens(m).slice(1, 4).join(' '),
+      expectedMemoryIds: [m.id],
+      category: 'single-fact',
+    });
+  }
+  for (const m of reworded) {
+    rows.push({
+      question: paraphrase(m.stub),
       expectedMemoryIds: [m.id],
       category: 'single-fact',
     });
@@ -77,7 +144,7 @@ export function buildFixtureRows(memories: Memory[]): EvalRow[] {
     const chain = chainOf(head);
     const tail = chain[chain.length - 1] as Memory;
     rows.push({
-      question: `${head.entities[0]} current configuration`,
+      question: chainQuestion(tail, head.entities[0] ?? '', 'now'),
       expectedMemoryIds: [tail.id],
       notExpectedMemoryIds: chain.slice(0, -1).map((m) => m.id),
       category: 'knowledge-update',
@@ -89,7 +156,11 @@ export function buildFixtureRows(memories: Memory[]): EvalRow[] {
     const chain = chainOf(head);
     const middle = chain[1] as Memory;
     rows.push({
-      question: `${head.entities[0]} configuration`,
+      question: chainQuestion(
+        chain[chain.length - 1] as Memory,
+        head.entities[0] ?? '',
+        'back then',
+      ),
       expectedMemoryIds: [middle.id],
       notExpectedMemoryIds: chain.filter((m) => m.id !== middle.id).map((m) => m.id),
       asOf: new Date(Date.parse(middle.validFrom) + DAY_MS).toISOString(),
@@ -114,6 +185,7 @@ export function buildFixtureRows(memories: Memory[]): EvalRow[] {
     });
   }
 
-  for (const q of ABSENT) rows.push({ question: q, expectedMemoryIds: [], category: 'abstention' });
+  for (const q of ABSTAIN)
+    rows.push({ question: q, expectedMemoryIds: [], category: 'abstention' });
   return rows;
 }

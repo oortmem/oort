@@ -26,7 +26,7 @@ export function renderReport(r: EvalReport): string {
     'Group',
     'Rows',
     ...r.ks.map((k) => `recall@${k}`),
-    'MRR',
+    'MRR@10',
     'Stale-leak',
     'Abstain FP',
   ];

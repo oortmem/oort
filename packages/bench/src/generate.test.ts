@@ -40,12 +40,11 @@ describe('generate.shape', () => {
     expect(pinned).toBeLessThan(0.14);
   });
 
-  it('puts about 5% of the facts in valid A to B to C supersede chains', () => {
+  it('puts about 5% of the memories in valid A to B to C supersede chains', () => {
     const byId = new Map(ms.map((m) => [m.id, m]));
     const inChain = ms.filter((m) => m.supersedes !== null || m.supersededBy !== null);
-    const facts = ms.filter((m) => m.type === 'semantic').length;
-    expect(inChain.length / facts).toBeGreaterThan(0.03);
-    expect(inChain.length / facts).toBeLessThan(0.08);
+    expect(inChain.length / ms.length).toBeGreaterThan(0.04);
+    expect(inChain.length / ms.length).toBeLessThan(0.06);
     const heads = ms.filter((m) => m.supersedes === null && m.supersededBy !== null);
     expect(heads.length).toBeGreaterThan(0);
     for (const a of heads) {

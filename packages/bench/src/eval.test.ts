@@ -4,7 +4,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { localScope, type Memory } from '@oortmem/core';
-import { makeMemory } from '@oortmem/core/store-conformance';
+import { makeMemory, vec } from '@oortmem/core/store-conformance';
+import Database from 'better-sqlite3';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import { loadEvalRows, runEval, type EvalRow } from './eval.js';
 import { buildFixtureRows, FIXTURE_COUNT, FIXTURE_SEED } from './fixture.js';
@@ -47,6 +48,10 @@ async function handBuiltStore(): Promise<{ dbPath: string; coldDir: string }> {
     mem('m2', 'billing worker uses pnpm for installs'),
     mem('m3', 'deploy runs on fridays via github actions'),
     mem('m4', 'database migrations live in db/migrations'),
+    // Same words, ordered by salience, so the lowest-salience one ranks third.
+    mem('m5', 'rollback runbook for releases', { salience: 0.9 }),
+    mem('m6', 'rollback runbook for releases', { salience: 0.5 }),
+    mem('m7', 'rollback runbook for releases', { salience: 0.1 }),
   ]);
   await store.close();
   return { dbPath, coldDir };
@@ -75,6 +80,7 @@ const ROWS: EvalRow[] = [
     asOf: '2025-06-01T00:00:00.000Z',
     category: 'temporal',
   },
+  { question: 'rollback runbook', expectedMemoryIds: ['m7'], category: 'multi-session' },
   { question: 'kubernetes zeppelin', expectedMemoryIds: [], category: 'abstention' },
   { question: 'auth port', expectedMemoryIds: [], category: 'abstention' },
 ];
@@ -91,12 +97,13 @@ describe('eval', () => {
       now: new Date(NOW),
     });
     const all = report.groups['overall'];
-    expect(all?.rows).toBe(7);
-    // Five rows have expected ids: recall@5 = (1 + 1 + 0.5 + 1 + 0) / 5.
-    expect(all?.recallAt[5]).toBeCloseTo(0.7);
-    expect(all?.recallAt[10]).toBeCloseTo(0.7);
-    // First expected hit at rank 1, 1, 1, 1, none.
-    expect(all?.mrr).toBeCloseTo(0.8);
+    expect(all?.rows).toBe(8);
+    // Six rows have expected ids: recall@5 = (1 + 1 + 0.5 + 1 + 0 + 1) / 6.
+    expect(all?.recallAt[5]).toBeCloseTo(0.75);
+    expect(all?.recallAt[10]).toBeCloseTo(0.75);
+    // First expected hit at rank 1, 1, 1, 1, none, 3: MRR@10 = (4 + 0 + 1/3) / 6.
+    expect(all?.mrr).toBeCloseTo(13 / 18);
+    expect(report.groups['multi-session']?.mrr).toBeCloseTo(1 / 3);
     // Three rows list not-expected ids; only the wrong as-of one leaks m0.
     expect(all?.staleLeak).toBeCloseTo(1 / 3);
     // Of two abstention rows, only "auth port" returns something.
@@ -145,31 +152,111 @@ describe('eval', () => {
   });
 
   it('eval.never-writes-live-store', async () => {
-    const { dbPath, coldDir } = await handBuiltStore();
-    const dir = path.dirname(dbPath);
+    const dir = fs.mkdtempSync(path.join(root, 'live-'));
+    const dbPath = path.join(dir, 'oort.sqlite');
+    const coldDir = path.join(dir, 'cold');
+    const store = await openSqliteStore({ path: dbPath, coldDir, dimension: DIM, log: () => {} });
+    await store.upsertMany([mem('w1', 'warm memory about caching')]);
+    // A cold memory the row below hydrates: on a live store that is a write.
+    await store.coldPut(
+      mem('c1', 'zeppelin hydration marker', { embedding: vec(1, 2, 3, 4), tier: 'cold' }),
+    );
+    // A second connection keeps the WAL (and shm) alive after the store closes.
+    const other = new Database(dbPath);
+    other.prepare('SELECT count(*) FROM memories').get();
+    await store.close();
+    const wal = `${dbPath}-wal`;
+    expect(fs.existsSync(wal) && fs.statSync(wal).size > 0, 'a non-empty WAL must exist').toBe(
+      true,
+    );
+    const blobs = fs.readdirSync(coldDir).filter((f) => f.endsWith('.zst'));
+    expect(blobs).toHaveLength(1);
+
+    /** Contents of the db, the WAL and every cold blob (the shm is only read-marks, shared by readers). */
     const snapshot = (): string => {
       const h = createHash('sha256');
-      for (const f of fs.readdirSync(dir).sort()) {
-        const p = path.join(dir, f);
-        if (fs.statSync(p).isFile()) h.update(f).update(fs.readFileSync(p));
-        else for (const g of fs.readdirSync(p).sort()) h.update(`${f}/${g}`);
+      for (const f of [dbPath, wal]) h.update(path.basename(f)).update(fs.readFileSync(f));
+      for (const f of fs.readdirSync(coldDir).sort()) {
+        h.update(f).update(fs.readFileSync(path.join(coldDir, f)));
       }
       return h.digest('hex');
     };
+    const lock = (mode: 'ro' | 'rw'): void => {
+      const [d, f] = mode === 'ro' ? [0o500, 0o400] : [0o700, 0o600];
+      for (const x of [dir, coldDir]) fs.chmodSync(x, d);
+      for (const x of fs.readdirSync(dir)) {
+        if (x !== 'cold') fs.chmodSync(path.join(dir, x), f);
+      }
+      for (const x of fs.readdirSync(coldDir)) fs.chmodSync(path.join(coldDir, x), f);
+    };
     const before = snapshot();
-    const mtimeBefore = fs.statSync(dbPath).mtimeMs;
-    // Recall records accesses; the run must do that on a copy only.
-    const report = await runEval({
-      rows: ROWS,
+    lock('ro');
+    let after = '';
+    try {
+      // Any write to the live directory now throws.
+      expect(() => fs.writeFileSync(path.join(dir, 'probe'), 'x')).toThrow();
+      const report = await runEval({
+        rows: [
+          { question: 'zeppelin hydration', expectedMemoryIds: ['c1'] },
+          { question: 'caching', expectedMemoryIds: ['w1'] },
+        ],
+        storePath: dbPath,
+        coldDir,
+        dimension: DIM,
+        ks: [5, 10],
+        now: new Date(NOW),
+      });
+      // The cold memory was found (hydrated on the copy), so the run did real work.
+      expect(report.groups['overall']?.recallAt[10]).toBe(1);
+      after = snapshot();
+    } finally {
+      lock('rw');
+      other.close();
+    }
+    expect(after).toBe(before);
+    expect(fs.readdirSync(coldDir).filter((f) => f.endsWith('.zst'))).toEqual(blobs);
+  });
+
+  it('eval.warns-about-missing-cold-blobs', async () => {
+    const dir = fs.mkdtempSync(path.join(root, 'missing-'));
+    const dbPath = path.join(dir, 'oort.sqlite');
+    const coldDir = path.join(dir, 'cold');
+    const store = await openSqliteStore({ path: dbPath, coldDir, dimension: DIM, log: () => {} });
+    await store.coldPut(
+      mem('c1', 'zeppelin hydration marker', { embedding: vec(1, 2, 3, 4), tier: 'cold' }),
+    );
+    await store.close();
+    for (const f of fs.readdirSync(coldDir))
+      if (f.endsWith('.zst')) fs.rmSync(path.join(coldDir, f));
+    const warnings: string[] = [];
+    await runEval({
+      rows: [{ question: 'zeppelin', expectedMemoryIds: ['c1'] }],
       storePath: dbPath,
       coldDir,
       dimension: DIM,
-      ks: [5, 10],
       now: new Date(NOW),
+      warn: (m) => warnings.push(m),
     });
-    expect(report.groups['overall']?.rows).toBe(7);
-    expect(snapshot()).toBe(before);
-    expect(fs.statSync(dbPath).mtimeMs).toBe(mtimeBefore);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/1 cold blob/);
+    expect(warnings[0]).not.toContain('c1');
+  });
+
+  it('eval.abstain-threshold', async () => {
+    const { dbPath, coldDir } = await handBuiltStore();
+    const rows: EvalRow[] = [
+      { question: 'auth port', expectedMemoryIds: [], category: 'abstention' },
+    ];
+    const base = { rows, storePath: dbPath, coldDir, dimension: DIM, now: new Date(NOW) };
+    // No threshold: any returned memory is a false positive.
+    expect((await runEval(base)).groups['abstention']?.abstainFp).toBe(1);
+    // Fused scores here are small (RRF plus 0.1 x activation); a high cut-off suppresses them.
+    expect((await runEval({ ...base, abstainThreshold: 10 })).groups['abstention']?.abstainFp).toBe(
+      0,
+    );
+    expect(
+      (await runEval({ ...base, abstainThreshold: -10 })).groups['abstention']?.abstainFp,
+    ).toBe(1);
   });
 
   it('eval.fixture-in-sync', () => {

@@ -1,20 +1,20 @@
-{"question":"2026-04-28 connection pooling keeps","expectedMemoryIds":["m7-1474"],"category":"single-fact"}
-{"question":"2611 report-builder development listens","expectedMemoryIds":["m7-1216"],"category":"single-fact"}
-{"question":"1849 notify-relay development listens","expectedMemoryIds":["m7-1259"],"category":"single-fact"}
-{"question":"8669 notify-relay development listens","expectedMemoryIds":["m7-60"],"category":"single-fact"}
-{"question":"2093 edge-router development listens","expectedMemoryIds":["m7-209"],"category":"single-fact"}
-{"question":"6424 auth-service development listens","expectedMemoryIds":["m7-1037"],"category":"single-fact"}
-{"question":"search-gateway-9 current configuration","expectedMemoryIds":["m7-29"],"notExpectedMemoryIds":["m7-27","m7-28"],"category":"knowledge-update"}
-{"question":"ingest-worker-7 current configuration","expectedMemoryIds":["m7-23"],"notExpectedMemoryIds":["m7-21","m7-22"],"category":"knowledge-update"}
-{"question":"queue-runner-5 current configuration","expectedMemoryIds":["m7-17"],"notExpectedMemoryIds":["m7-15","m7-16"],"category":"knowledge-update"}
-{"question":"auth-service-3 current configuration","expectedMemoryIds":["m7-11"],"notExpectedMemoryIds":["m7-9","m7-10"],"category":"knowledge-update"}
-{"question":"report-builder-6 configuration","expectedMemoryIds":["m7-19"],"notExpectedMemoryIds":["m7-18","m7-20"],"asOf":"2026-03-05T00:48:30.410Z","category":"temporal"}
-{"question":"search-gateway-4 configuration","expectedMemoryIds":["m7-13"],"notExpectedMemoryIds":["m7-12","m7-14"],"asOf":"2026-02-27T00:19:09.147Z","category":"temporal"}
-{"question":"profile-store-2 configuration","expectedMemoryIds":["m7-7"],"notExpectedMemoryIds":["m7-6","m7-8"],"asOf":"2026-05-29T16:33:03.780Z","category":"temporal"}
-{"question":"2026-05-04","expectedMemoryIds":["m7-1483","m7-339"],"category":"multi-session"}
+{"question":"8204 queue-runner development listens","expectedMemoryIds":["m7-1124"],"category":"single-fact"}
+{"question":"2026-08-15 refresh token keeps","expectedMemoryIds":["m7-269"],"category":"single-fact"}
+{"question":"feature flags class","expectedMemoryIds":["m7-439"],"category":"single-fact"}
+{"question":"approach descriptors leaked","expectedMemoryIds":["m7-281"],"category":"single-fact"}
+{"question":"every shared and wired client esbuild","expectedMemoryIds":["m7-200"],"category":"single-fact"}
+{"question":"lockfile the pins and npm with","expectedMemoryIds":["m7-520"],"category":"single-fact"}
+{"question":"which library does the sync daemon use to validate requests now","expectedMemoryIds":["m7-74"],"notExpectedMemoryIds":["m7-72","m7-73"],"category":"knowledge-update"}
+{"question":"which library does the notify relay use to validate requests now","expectedMemoryIds":["m7-62"],"notExpectedMemoryIds":["m7-60","m7-61"],"category":"knowledge-update"}
+{"question":"which library does the queue runner use to validate requests now","expectedMemoryIds":["m7-47"],"notExpectedMemoryIds":["m7-45","m7-46"],"category":"knowledge-update"}
+{"question":"which library does the audit logger use to validate requests now","expectedMemoryIds":["m7-59"],"notExpectedMemoryIds":["m7-57","m7-58"],"category":"knowledge-update"}
+{"question":"which library does the search gateway use to validate requests back then","expectedMemoryIds":["m7-28"],"notExpectedMemoryIds":["m7-27","m7-29"],"asOf":"2026-06-06T19:00:27.721Z","category":"temporal"}
+{"question":"which package manager does the report builder use back then","expectedMemoryIds":["m7-49"],"notExpectedMemoryIds":["m7-48","m7-50"],"asOf":"2026-05-11T19:31:02.610Z","category":"temporal"}
+{"question":"which port does the edge router listen on back then","expectedMemoryIds":["m7-25"],"notExpectedMemoryIds":["m7-24","m7-26"],"asOf":"2026-04-07T04:51:25.315Z","category":"temporal"}
+{"question":"2026-07-04","expectedMemoryIds":["m7-936","m7-436"],"category":"multi-session"}
 {"question":"2026-06-09","expectedMemoryIds":["m7-276","m7-857"],"category":"multi-session"}
-{"question":"2026-05-28","expectedMemoryIds":["m7-119","m7-793"],"category":"multi-session"}
-{"question":"zorblax quuxification","expectedMemoryIds":[],"category":"abstention"}
-{"question":"flibbertigibbet wombat","expectedMemoryIds":[],"category":"abstention"}
-{"question":"xylophone marmalade","expectedMemoryIds":[],"category":"abstention"}
-{"question":"gryphon obelisk","expectedMemoryIds":[],"category":"abstention"}
+{"question":"2026-04-13","expectedMemoryIds":["m7-281","m7-613"],"category":"multi-session"}
+{"question":"auth service rollback plan for the billing team","expectedMemoryIds":[],"category":"abstention"}
+{"question":"who approved the quarterly budget for the search gateway","expectedMemoryIds":[],"category":"abstention"}
+{"question":"the incident escalation policy for the notify relay","expectedMemoryIds":[],"category":"abstention"}
+{"question":"media proxy vendor contract renewal for the legal team","expectedMemoryIds":[],"category":"abstention"}

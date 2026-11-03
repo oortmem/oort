@@ -1,19 +1,41 @@
-import { expect, it } from 'vitest';
-import { measureConsolidate, measureRss } from './bench.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { measureConsolidate, measureRss, RSS_NOTE_MB, type ConsolidateRun } from './bench.js';
 
 it('bench.synthetic-10k-under-150mb', { retry: 1 }, async () => {
+  expect(
+    typeof (globalThis as { gc?: unknown }).gc,
+    'global.gc is missing: the bench vitest project must run with --expose-gc (execArgv in vitest.config.ts)',
+  ).toBe('function');
   const r = await measureRss({ count: 10_000, seed: 1 });
   expect(r.memories).toBe(10_000);
+  const note = `RSS delta: ${r.lexicalDeltaMb.toFixed(1)} MB after 100 lexical recalls, ${r.denseDeltaMb.toFixed(1)} MB after 100 more dense recalls`;
+  if (r.deltaMb > RSS_NOTE_MB) {
+    console.warn(`regression note: ${note}; above ${RSS_NOTE_MB} MB (the bound is 150 MB)`);
+  } else {
+    console.info(note);
+  }
   expect(r.deltaMb).toBeLessThan(150);
 });
 
-// KNOWN FAILURE, reported to the controller (do not raise the bound): the first
-// 10k consolidate takes about 70 s, 98% of it in 5,207 `coldPut` calls at about
-// 13 ms each (the zstd encode is 0.13 ms; the rest is blob fsync + rename + a
-// WAL commit per eviction). `it.fails` keeps `pnpm verify` green while the
-// bound stays at 30 s; it turns red once consolidate is fast enough, which is
-// the cue to change this back to a plain `it`.
-it.fails('bench.consolidate-10k-under-30s', async () => {
-  const r = await measureConsolidate({ count: 10_000, seed: 1 });
-  expect(r.firstMs).toBeLessThan(30_000);
+describe('consolidate on 10k memories', () => {
+  let run: ConsolidateRun;
+  beforeAll(async () => {
+    run = await measureConsolidate({ count: 10_000, seed: 1 });
+  });
+
+  it('bench.consolidate-10k-completes', () => {
+    expect(run.evicted).toBeGreaterThan(0);
+    expect(Number.isFinite(run.firstMs)).toBe(true);
+    expect(run.secondMs).toBeLessThan(run.firstMs);
+  });
+
+  // KNOWN FAILURE, reported to the controller (the bound must not be raised): a
+  // first 10k consolidate takes about 60 to 70 s, 98% of it in about 5,100
+  // `coldPut` calls at about 12 ms each (the zstd encode is 0.13 ms; the rest
+  // is per-blob fsync, rename and a WAL commit). Only the timing assertion is
+  // `it.fails`, so a crash or a wrong result still fails the run. It turns red
+  // once consolidate is fast enough: change it to a plain `it` then.
+  it.fails('bench.consolidate-10k-under-30s', () => {
+    expect(run.firstMs).toBeLessThan(30_000);
+  });
 });

@@ -98,7 +98,7 @@ export interface GroupMetrics {
   rows: number;
   /** Mean over rows with expected ids of the fraction of them in the top k; null when none. */
   recallAt: Record<number, number | null>;
-  /** Mean reciprocal rank of the first expected id in the top results; null when no row has expected ids. */
+  /** MRR@10: mean reciprocal rank of the first expected id in the top 10; null when no row has expected ids. */
   mrr: number | null;
   /** Fraction of rows listing not-expected ids where any appears in the top 10; null when none list any. */
   staleLeak: number | null;
@@ -122,10 +122,17 @@ export interface RowOutcome {
 const mean = (xs: number[]): number | null =>
   xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length;
 
+/** Each row with the outcome recall gave it. */
+function paired(rows: EvalRow[], outcomes: RowOutcome[]): { r: EvalRow; o: RowOutcome }[] {
+  return rows.map((r, i) => ({ r, o: outcomes[i] as RowOutcome }));
+}
+
+/** MRR is taken over the top results only: fixed at 10, whatever `--k` asks for. */
+const MRR_WINDOW = 10;
+
 function groupMetrics(rows: EvalRow[], outcomes: RowOutcome[], ks: number[]): GroupMetrics {
-  const withExpected = rows
-    .map((r, i) => ({ r, o: outcomes[i] as RowOutcome }))
-    .filter((x) => x.r.expectedMemoryIds.length > 0);
+  const all = paired(rows, outcomes);
+  const withExpected = all.filter((x) => x.r.expectedMemoryIds.length > 0);
   const recallAt: Record<number, number | null> = {};
   for (const k of ks) {
     recallAt[k] = mean(
@@ -138,23 +145,21 @@ function groupMetrics(rows: EvalRow[], outcomes: RowOutcome[], ks: number[]): Gr
   const mrr = mean(
     withExpected.map(({ r, o }) => {
       const want = new Set(r.expectedMemoryIds);
-      const rank = o.ids.findIndex((id) => want.has(id));
+      const rank = o.ids.slice(0, MRR_WINDOW).findIndex((id) => want.has(id));
       return rank < 0 ? 0 : 1 / (rank + 1);
     }),
   );
-  const leakRows = rows
-    .map((r, i) => ({ r, o: outcomes[i] as RowOutcome }))
-    .filter((x) => (x.r.notExpectedMemoryIds ?? []).length > 0);
   const staleLeak = mean(
-    leakRows.map(({ r, o }) => {
-      const top = new Set(o.ids.slice(0, 10));
-      return (r.notExpectedMemoryIds ?? []).some((id) => top.has(id)) ? 1 : 0;
-    }),
+    all
+      .filter((x) => (x.r.notExpectedMemoryIds ?? []).length > 0)
+      .map(({ r, o }) => {
+        const top = new Set(o.ids.slice(0, 10));
+        return (r.notExpectedMemoryIds ?? []).some((id) => top.has(id)) ? 1 : 0;
+      }),
   );
-  const abstain = rows
-    .map((r, i) => ({ r, o: outcomes[i] as RowOutcome }))
-    .filter((x) => x.r.category === 'abstention');
-  const abstainFp = mean(abstain.map(({ o }) => (o.aboveThreshold > 0 ? 1 : 0)));
+  const abstainFp = mean(
+    all.filter((x) => x.r.category === 'abstention').map(({ o }) => (o.aboveThreshold > 0 ? 1 : 0)),
+  );
   return { rows: rows.length, recallAt, mrr, staleLeak, abstainFp };
 }
 
@@ -199,27 +204,58 @@ export interface RunEvalOptions {
    */
   abstainThreshold?: number;
   scope?: ScopeFilter;
+  /** Receives one-line warnings (counts only); defaults to stderr. */
+  warn?: (message: string) => void;
+}
+
+/** The copy must be writable (hydration writes) even when the live directory is read-only. */
+function makeWritable(dir: string): void {
+  fs.chmodSync(dir, 0o700);
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) makeWritable(p);
+    else fs.chmodSync(p, 0o600);
+  }
 }
 
 /**
- * Copies the store (database, WAL and shared-memory files, cold blobs) into a
- * temp directory and returns it. `recall` appends access records, so eval
- * only ever opens the copy: the live files are read, never written.
+ * Snapshots the store into a temp directory and returns it. The database is
+ * read through a read-only connection and written with SQLite's online backup,
+ * so the copy is transaction-consistent even while another process writes
+ * (copying the main file and WAL separately could tear). The cold blobs are
+ * copied after it. `recall` appends access records, so eval only ever opens
+ * the copy: the live files are read, never written.
  */
-function copyStore(
+async function copyStore(
   storePath: string,
   coldDir: string,
-): { dbPath: string; coldDir: string; dir: string } {
+  warn: (message: string) => void,
+): Promise<{ dbPath: string; coldDir: string; dir: string }> {
   if (!fs.existsSync(storePath)) throw new Error(`store not found: ${storePath}`);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-eval-'));
   const dbPath = path.join(dir, 'oort.sqlite');
+  const copiedCold = path.join(dir, 'cold');
   try {
-    for (const suffix of ['', '-wal', '-shm']) {
-      if (fs.existsSync(`${storePath}${suffix}`))
-        fs.copyFileSync(`${storePath}${suffix}`, `${dbPath}${suffix}`);
+    const live = new Database(storePath, { readonly: true, fileMustExist: true });
+    try {
+      await live.backup(dbPath);
+    } finally {
+      live.close();
     }
-    const copiedCold = path.join(dir, 'cold');
-    if (fs.existsSync(coldDir)) fs.cpSync(coldDir, copiedCold, { recursive: true });
+    if (fs.existsSync(coldDir)) {
+      fs.cpSync(coldDir, copiedCold, { recursive: true });
+      makeWritable(copiedCold);
+    }
+    const copy = new Database(dbPath, { readonly: true });
+    try {
+      const names = copy.prepare<[], { path: string }>('SELECT path FROM cold_index').all();
+      const missing = names.filter((r) => !fs.existsSync(path.join(copiedCold, r.path))).length;
+      if (missing > 0) {
+        warn(`eval: ${missing} cold blob(s) named by the store are missing from ${coldDir}`);
+      }
+    } finally {
+      copy.close();
+    }
     return { dbPath, coldDir: copiedCold, dir };
   } catch (e) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -274,7 +310,11 @@ function discoverScope(dbPath: string): ScopeFilter {
 export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
   const ks = [...new Set([...(opts.ks ?? [5, 10]), 10])].sort((a, b) => a - b);
   const maxK = Math.max(...ks);
-  const copy = copyStore(opts.storePath, opts.coldDir);
+  const copy = await copyStore(
+    opts.storePath,
+    opts.coldDir,
+    opts.warn ?? ((m) => process.stderr.write(`${m}\n`)),
+  );
   const store = await openSqliteStore({
     path: copy.dbPath,
     coldDir: copy.coldDir,
