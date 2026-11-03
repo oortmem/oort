@@ -5,6 +5,7 @@ import type {
   MemoryStore,
   MemoryWriter,
   Observation,
+  ReconcileAction,
   ReconcileDecision,
   ScopeFilter,
 } from './adapters.js';
@@ -55,18 +56,24 @@ export async function observe(
   const text = `${obs.userText}\n${obs.assistantText}`;
 
   if (g.shouldStore < GATE_THRESHOLD) {
-    const [hit] = await store.lexical(`${obs.userText} ${obs.assistantText}`, filter, 1);
-    if (hit === undefined) return { outcome: 'skipped', decisions: g.decisions };
-    await store.recordAccess([hit.id], now);
-    return { outcome: 'reinforced', memoryId: hit.id, decisions: g.decisions };
+    // Lexical search ignores validity, so look past superseded rows for a live one.
+    const hits = await store.lexical(`${obs.userText} ${obs.assistantText}`, filter, 3);
+    for (const hit of hits) {
+      const m = await store.get(hit.id);
+      if (m === null || m.validTo !== null) continue;
+      await store.recordAccess([m.id], now);
+      return { outcome: 'reinforced', memoryId: m.id, decisions: g.decisions };
+    }
+    return { outcome: 'skipped', decisions: g.decisions };
   }
 
   const [vec] = await embed.embed([text], 'document');
   if (vec === undefined) throw new Error('embedder returned no vector for the observation');
 
+  // Stores ignore temporal validity, so over-fetch to keep superseded rows from crowding out the head.
   const [dense, lexical] = await Promise.all([
-    store.dense(vec, filter, CANDIDATES),
-    store.lexical(text, filter, CANDIDATES),
+    store.dense(vec, filter, CANDIDATES * 2),
+    store.lexical(text, filter, CANDIDATES * 2),
   ]);
   const ids = [...new Set([...dense, ...lexical].map((h) => h.id))];
   const candidates: Memory[] = [];
@@ -79,19 +86,21 @@ export async function observe(
   const rs = await decide.reconcile(obs, candidates);
   const decisions = [...g.decisions, ...rs.flatMap((r) => r.decisions)];
 
-  let best: ReconcileDecision | undefined;
+  let best: (ReconcileDecision & { action: Exclude<ReconcileAction, 'NOOP'> }) | undefined;
   for (const r of rs) {
-    if (r.action !== 'NOOP' && (best === undefined || r.probability > best.probability)) best = r;
+    if (r.action === 'NOOP') continue;
+    if (best === undefined || r.probability > best.probability) best = { ...r, action: r.action };
   }
   if (best === undefined) return { outcome: 'skipped', decisions };
 
   if (best.action === 'REINFORCE') {
-    if (best.candidateId === null) return { outcome: 'skipped', decisions };
-    await store.recordAccess([best.candidateId], now);
-    return { outcome: 'reinforced', memoryId: best.candidateId, decisions };
+    const target = candidates.find((c) => c.id === best.candidateId);
+    if (target === undefined) return { outcome: 'skipped', decisions };
+    await store.recordAccess([target.id], now);
+    return { outcome: 'reinforced', memoryId: target.id, decisions };
   }
 
-  let action: 'ADD' | 'UPDATE' | 'SUPERSEDE' = best.action === 'NOOP' ? 'ADD' : best.action;
+  let action: 'ADD' | 'UPDATE' | 'SUPERSEDE' = best.action;
   const prior = action === 'ADD' ? undefined : candidates.find((c) => c.id === best.candidateId);
   if (action !== 'ADD' && prior === undefined) action = 'ADD';
 
