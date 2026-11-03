@@ -39,39 +39,68 @@ describe('activation', () => {
 
   it('activation.compaction-preserves-order', () => {
     const base = new Date('2025-12-01T00:00:00.000Z');
-    const build = (n: number): AccessLog => {
-      let log: AccessLog = { count: 0, recent: [], compactedSum: 0, compactedAt: null };
-      for (let i = 0; i < n; i++) log = appendAccess(log, new Date(base.getTime() + i * HOUR));
-      return log;
-    };
+    const stamps = (n: number): Date[] =>
+      Array.from({ length: n }, (_, i) => new Date(base.getTime() + i * HOUR));
+    const build = (n: number): AccessLog =>
+      stamps(n).reduce<AccessLog>((l, t) => appendAccess(l, t, p), {
+        count: 0,
+        recent: [],
+        compactedSum: 0,
+        compactedAt: null,
+      });
+    const exact = (n: number, at: Date): number =>
+      Math.log(
+        stamps(n).reduce(
+          (s, t) => s + Math.max((at.getTime() - t.getTime()) / HOUR, 1 / 60) ** -p.d,
+          0,
+        ),
+      );
     const at = new Date('2025-12-10T00:00:00.000Z');
-    const a40 = build(40);
-    const a41 = build(41);
-    expect(a40.recent.length).toBeLessThanOrEqual(32);
-    expect(a41.count).toBe(41);
-    expect(activation(a41, 0, at, p)).toBeGreaterThan(activation(a40, 0, at, p));
 
-    // Compacting one log must not change its ranking against an uncompacted one.
-    const uncompacted = build(32);
-    const compacted = build(33);
-    expect(compacted.compactedSum).toBeGreaterThan(0);
-    expect(activation(compacted, 0, at, p)).toBeGreaterThan(activation(uncompacted, 0, at, p));
+    // (c) fold boundaries
+    const l32 = build(32);
+    expect(l32.recent.length).toBe(32);
+    expect(l32.compactedSum).toBe(0);
+    const l33 = build(33);
+    expect(l33.recent.length).toBe(17);
+    expect(l33.count).toBe(33);
 
-    // Frequent-recent vs sparse-old.
-    const frequent = build(40);
-    const sparse = mk([24 * 30, 24 * 31, 24 * 32]);
-    const t = new Date(base.getTime() + 40 * HOUR + 2 * HOUR);
-    const sparseAt: AccessLog = {
-      ...sparse,
-      recent: [0, 1, 2].map((i) => new Date(base.getTime() - (30 + i) * 24 * HOUR).toISOString()),
+    // (a) compacted approximates the exact sum, one fold and two folds
+    const l40 = build(40);
+    const l50 = build(50);
+    expect(Math.abs(activation(l40, 0, at, p) - exact(40, at))).toBeLessThan(0.15);
+    expect(Math.abs(activation(l50, 0, at, p) - exact(50, at))).toBeLessThan(0.15);
+    expect(activation(build(41), 0, at, p)).toBeGreaterThan(activation(l40, 0, at, p));
+    expect(activation(l33, 0, at, p)).toBeGreaterThan(activation(l32, 0, at, p));
+
+    // (b) frequent-recent vs sparse-old
+    const t = new Date(base.getTime() + 52 * HOUR);
+    const sparse: AccessLog = {
+      count: 3,
+      recent: [30, 31, 32].map((d) => new Date(base.getTime() - d * 24 * HOUR).toISOString()),
+      compactedSum: 0,
+      compactedAt: null,
     };
-    expect(activation(frequent, 0, t, p)).toBeGreaterThan(activation(sparseAt, 0, t, p));
+    expect(activation(l50, 0, t, p)).toBeGreaterThan(activation(sparse, 0, t, p));
+  });
+
+  it('appendAccess advances mean age across repeated folds', () => {
+    const base = new Date('2025-12-01T00:00:00.000Z');
+    let log: AccessLog = { count: 0, recent: [], compactedSum: 0, compactedAt: null };
+    const ages: number[] = [];
+    for (let i = 0; i < 50; i++) {
+      const prev = log.compactedAt;
+      log = appendAccess(log, new Date(base.getTime() + i * HOUR), p);
+      if (log.compactedAt !== prev) ages.push(log.compactedMeanAgeHours ?? 0);
+    }
+    expect(ages.length).toBe(2);
+    expect(ages[1]).toBeGreaterThan(ages[0] ?? Infinity);
   });
 
   it('appendAccess does not mutate its input', () => {
     const log = mk([1, 2]);
     const snapshot = structuredClone(log);
-    appendAccess(log, now);
+    appendAccess(log, now, p);
     expect(log).toEqual(snapshot);
   });
 });

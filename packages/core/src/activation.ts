@@ -51,9 +51,7 @@ export function activation(
   const nowMs = now.getTime();
   let sum = reagedCompacted(log, nowMs, p.d);
   for (const iso of log.recent) sum += ageHours(Date.parse(iso), nowMs) ** -p.d;
-  if (log.count === 0 && log.recent.length === 0 && log.compactedSum === 0) {
-    sum = EMPTY_LOG_AGE_HOURS ** -p.d;
-  }
+  if (!(sum > 0)) sum = EMPTY_LOG_AGE_HOURS ** -p.d;
   return Math.log(sum) + p.ws * salience;
 }
 
@@ -62,11 +60,7 @@ export function activation(
  * held, the oldest 16 are folded into `compactedSum` (evaluated at `at`),
  * together with the previously compacted sum re-aged to `at`.
  */
-export function appendAccess(
-  log: AccessLog,
-  at: Date,
-  p: Pick<ActivationParams, 'd'> = { d: 0.5 },
-): AccessLog {
+export function appendAccess(log: AccessLog, at: Date, p: Pick<ActivationParams, 'd'>): AccessLog {
   const recent = [...log.recent, at.toISOString()];
   const next: AccessLog = { ...log, count: log.count + 1, recent };
   if (recent.length <= MAX_RECENT) return next;
@@ -74,7 +68,10 @@ export function appendAccess(
   const atMs = at.getTime();
   const folded = recent.splice(0, FOLD_COUNT);
   const oldSum = reagedCompacted(log, atMs, p.d);
-  const oldH = Math.max(log.compactedMeanAgeHours ?? 0, MIN_AGE_HOURS);
+  // The old mean age was measured at the previous compactedAt; advance it to `at`.
+  const delta =
+    log.compactedAt === null ? 0 : Math.max((atMs - Date.parse(log.compactedAt)) / HOUR_MS, 0);
+  const oldH = Math.max(log.compactedMeanAgeHours ?? 0, MIN_AGE_HOURS) + delta;
   let foldSum = 0;
   let foldAgeWeighted = 0;
   for (const iso of folded) {

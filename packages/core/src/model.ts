@@ -12,6 +12,10 @@ export interface AccessLog {
   count: number;
   /** ISO timestamps, at most 32. */
   recent: string[];
+  /**
+   * Sum of t^-d over compacted accesses. Only valid for the `d` it was folded
+   * with: callers must pass the same `d` to `appendAccess` and `activation`.
+   */
   compactedSum: number;
   compactedAt: string | null;
   /**
