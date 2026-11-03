@@ -435,3 +435,80 @@ Left to the builder: exact layout at desktop widths (the references are phone
 frames), cluster layout algorithm (a force layout seeded by project, then entity
 co-occurrence), Tauri plugin set, and how the desktop app stores the cloud API key
 (OS keychain via Tauri).
+
+## 14. Data lifecycle, billing states, export, deletion, and legal (added 2026-11-03)
+
+Marcus's requirement: a cloud customer who misses a payment or stops paying must be
+able to export their data or regain access by resuming payment; deletion must be
+real and GDPR-compliant; terms of service, terms of use, privacy policy and related
+documents must exist. These are product rules, designed now so Phase 3 builds them in.
+
+### 14.1 Principles
+
+- **Export is never gated.** A customer can export everything they own at any time,
+  in any billing state short of "deleted", through the API, the CLI (`oort export
+  --cloud`), and the console. Export includes memories (text, stub, entities, type,
+  salience, validity window, supersede links, decisions), access logs, cold blobs
+  (decompressed), per-customer scopes, and account metadata, as a documented JSON
+  Lines format plus a manifest, importable into a self-hosted Oort with `oort import
+  oort-export`. In `zero-knowledge` mode the export is ciphertext plus the customer's
+  own key material reference; the CLI decrypts locally.
+- **Resuming payment restores everything instantly** at any point before deletion.
+  Nothing is thrown away while the account is in a recoverable state.
+- **Deletion is cryptographic first, physical second.** Deleting a customer or an
+  org destroys the DEK (and the KEK grant for BYOK), which makes every copy of the
+  data, including backups, unreadable at once; physical purge of ciphertext and
+  backups follows on a fixed schedule and is confirmed to the customer.
+- **No surprise deletion.** Every state transition that moves toward deletion sends
+  notice to the account owners with the date it will happen and how to stop it.
+
+### 14.2 Billing states (proposed defaults, Marcus to set the numbers)
+
+| State | Entered when | Reads | Writes | Export | Console | Exit |
+| --- | --- | --- | --- | --- | --- | --- |
+| `active` | paid | yes | yes | yes | yes | payment fails → `grace` |
+| `grace` (14 days) | payment fails | yes | yes | yes | yes, with banner | payment succeeds → `active`; day 14 → `read-only` |
+| `read-only` (60 days) | grace expires | yes | no (`402 Payment Required` with a link) | yes | yes | payment → `active`; day 74 → `suspended` |
+| `suspended` (30 days) | read-only expires | no (`402`) | no | yes | export and billing only | payment → `active`; day 104 → `pending-deletion` |
+| `pending-deletion` (7 days) | suspended expires, or owner requests deletion | no | no | yes | export and cancel-deletion only | cancel → `active` (if paid) or `suspended`; day 111 → `deleted` |
+| `deleted` | window expires | no | no | no | account closed | none; DEK destroyed, purge schedule starts |
+
+Free developer tier accounts have no payment and skip to `read-only` only on
+abuse or inactivity rules defined later. Enterprise contracts override the table.
+*Window lengths are my proposal; they are configuration, not code.*
+
+### 14.3 Deletion and GDPR
+
+- **Right to erasure.** An owner can delete a single customer scope, a project, an
+  org, or the whole account. Customer-scope deletion (the B2B2C case: our customer's
+  end-user asks to be forgotten) is an API call and a console action that destroys
+  that customer's DEK immediately; the API returns a deletion receipt with a
+  timestamp and the purge deadline.
+- **Purge schedule.** Ciphertext rows and cold blobs are physically deleted within
+  30 days; backup snapshots containing them expire within 90 days; the receipt
+  states both. These numbers go into the privacy policy.
+- **Roles.** For account data (owners, billing, keys) Oort is the data controller.
+  For memory content Oort is a data processor on behalf of the customer, who is the
+  controller for their end-users' data; this needs a Data Processing Agreement with
+  standard contractual clauses, a subprocessor list (Convex, MongoDB Atlas,
+  Cloudflare, Voyage AI, TypeSafe AI, Anthropic, the payment provider), and an EU
+  hosting option before any EU customer in `managed` mode. `zero-knowledge` mode
+  reduces but does not remove the processor role (we still store ciphertext and
+  metadata).
+- **Data subject requests.** Access, rectification, erasure and portability map to
+  `inspect`/`export`, `forget`/`observe`, delete, and export respectively; the
+  console exposes them per customer scope so our customers can serve their users.
+- **Audit.** Every deletion, export, key destruction and billing-state transition
+  is written to an append-only audit log kept for the legal retention period even
+  after account deletion (it contains identifiers and timestamps, never memory
+  text).
+
+### 14.4 Legal documents (Infra & brand; lawyer review required)
+
+Terms of Service (cloud), Terms of Use / Acceptable Use Policy, Privacy Policy
+(with the purge schedule and subprocessors), Data Processing Agreement with SCCs,
+Cookie notice for the console and site, Security overview (encryption modes,
+BYOK, zero-knowledge caveats), SLA for Pro and Enterprise, and the open-source
+license notice (Apache 2.0) with a trademark policy for the Oort name and mark.
+Drafts are produced by us from reputable templates; a lawyer reviews before launch;
+nothing in this section is legal advice.
