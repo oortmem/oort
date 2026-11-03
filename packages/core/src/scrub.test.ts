@@ -165,8 +165,10 @@ describe('scrub', () => {
   /**
    * Serialised text often has no real newline for a megabyte: deciding whether
    * a token sits inside a JSON string must not rescan the line for each token.
+   * A scaling check, not a wall-clock bound (those flake under load): 4x the
+   * input must cost well under 16x, the quadratic ratio.
    */
-  it('scrub.linear-on-long-serialised-lines', () => {
+  it('scrub.linear-on-long-serialised-lines', { timeout: 60_000 }, () => {
     const rnd = prng(17);
     const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
     const rand = (n: number, al: string): string => {
@@ -175,13 +177,13 @@ describe('scrub', () => {
       return s;
     };
     const MB = 1_000_000;
-    const lines = (line: () => string): string => {
+    const lines = (line: () => string) => (size: number) => {
       let s = '';
-      while (s.length < MB) s += `${line()}\n`;
-      return JSON.stringify({ content: s.slice(0, MB) });
+      while (s.length < size) s += `${line()}\n`;
+      return JSON.stringify({ content: s.slice(0, size) });
     };
-    const inputs: [string, string][] = [
-      ['\\n + 32-char tokens', `{"x":"${`\\n${'a'.repeat(32)} `.repeat(MB / 35)}"}`],
+    const inputs: [string, (size: number) => string][] = [
+      ['\\n + 32-char tokens', (size) => `{"x":"${`\\n${'a'.repeat(32)} `.repeat(size / 35)}"}`],
       ['76-col base64', lines(() => rand(76, b64))],
       ['sha256sum', lines(() => `${rand(64, '0123456789abcdef')}  src/file.ts`)],
       [
@@ -189,10 +191,21 @@ describe('scrub', () => {
         lines(() => `github.com/someorg/somepackage/v2 v2.3.${rnd(9)} h1:${rand(43, b64)}=`),
       ],
     ];
-    for (const [label, text] of inputs) {
-      const t = performance.now();
-      scrub(text);
-      expect(performance.now() - t, label).toBeLessThan(200);
+    const median = (text: string): number => {
+      const ms: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        const t = performance.now();
+        scrub(text);
+        ms.push(performance.now() - t);
+      }
+      return ms.sort((a, b) => a - b)[1] as number;
+    };
+    for (const [label, make] of inputs) {
+      const small = make(MB / 2);
+      const large = make(2 * MB);
+      scrub(small); // warm up
+      const ratio = median(large) / median(small);
+      expect(ratio, `${label}: t(2 MB) / t(0.5 MB)`).toBeLessThan(6);
     }
   });
 
