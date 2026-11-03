@@ -148,11 +148,11 @@ describe('fusion', () => {
     for (let a = -20; a <= 20; a += 0.5) {
       const b = activationBoost(a);
       expect(b).toBeGreaterThanOrEqual(1);
-      expect(b).toBeLessThanOrEqual(1.5);
+      expect(b).toBeLessThanOrEqual(1 + ACTIVATION_BOOST);
     }
     expect(sigmoid(-1000)).toBe(0);
     expect(sigmoid(1000)).toBe(1);
-    // End to end: fused / rrf stays in [1, 1.5] for a cold and a hot memory.
+    // End to end: fused / rrf stays in [1, 1 + ACTIVATION_BOOST] for a cold and a hot memory.
     const hot = makeMemory({
       id: 'hot',
       validFrom: START,
@@ -168,8 +168,28 @@ describe('fusion', () => {
     const cold = makeMemory({ id: 'cold', validFrom: START });
     for (const o of fuse([hits('hot', 'cold')], byId(hot, cold), NOW, { activation: P })) {
       expect(o.score / o.rrf).toBeGreaterThanOrEqual(1);
-      expect(o.score / o.rrf).toBeLessThanOrEqual(1.5);
+      expect(o.score / o.rrf).toBeLessThanOrEqual(1 + ACTIVATION_BOOST);
     }
+  });
+
+  it('fusion.lexical-top-hit-falls-at-most-three-places', () => {
+    const hotLog = {
+      count: 32,
+      recent: Array.from({ length: 32 }, (_, k) =>
+        new Date(NOW.getTime() - (k + 1) * 1000).toISOString(),
+      ),
+      compactedSum: 0,
+      compactedAt: null,
+    };
+    const first = makeMemory({ id: 'p1', salience: 0, validFrom: START });
+    const rest = Array.from({ length: 9 }, (_, k) =>
+      makeMemory({ id: `p${k + 2}`, salience: 1, validFrom: START, accessLog: hotLog }),
+    );
+    expect(sigmoid(activation(first.accessLog, first.salience, NOW, P))).toBeLessThan(0.05);
+    expect(sigmoid(activation(rest[0]!.accessLog, 1, NOW, P))).toBeGreaterThan(0.95);
+    const ids = ['p1', ...rest.map((m) => m.id)];
+    const out = fuse([hits(...ids)], byId(first, ...rest), NOW, { activation: P });
+    expect(out.findIndex((r) => r.id === 'p1')).toBeLessThanOrEqual(3);
   });
 
   it('drops-ids-missing-from-memories', () => {

@@ -3,10 +3,10 @@ import type { Hit } from './adapters.js';
 import { isCurrent, type Memory } from './model.js';
 
 /**
- * Weight of the activation boost in `fuse`: fused = rrf * (1 + ACTIVATION_BOOST * sigmoid(A)),
- * so activation scales relevance by at most 1.5x and only reorders near-ties.
+ * Weight of the activation boost: fused = rrf * (1 + ACTIVATION_BOOST * sigmoid(A)). With one RRF
+ * list (k=60) ranks 1 and r differ by (r-1)/61, so a band of B reorders about 61*B ranks (about 3).
  */
-export const ACTIVATION_BOOST = 0.5;
+export const ACTIVATION_BOOST = 0.05;
 
 /** Logistic function, stable for large |x| (returns exactly 0 or 1 without overflow). */
 export function sigmoid(x: number): number {
