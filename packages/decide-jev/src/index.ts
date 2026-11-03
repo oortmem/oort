@@ -1,0 +1,243 @@
+import {
+  APIConnectionError,
+  APITimeoutError,
+  AuthenticationError,
+  InternalServerError,
+  PermissionDeniedError,
+  RateLimitError,
+  TypeSafeClient,
+  choice,
+  noul,
+  score,
+} from '@typesafe-ai/sdk';
+import {
+  MissingCredentialError,
+  type Decision,
+  type DecisionController,
+  type GateDecision,
+  type Memory,
+  type MemoryType,
+  type Observation,
+  type ReconcileAction,
+  type ReconcileDecision,
+} from '@oortmem/core';
+import {
+  NOVEL_CRITERIA,
+  NOVEL_INSTRUCTIONS,
+  RECONCILE_CRITERIA,
+  SALIENCE_INSTRUCTIONS,
+  SALIENCE_LEVELS,
+  SALIENCE_NAMES,
+  SHOULD_STORE_INSTRUCTIONS,
+  TYPE_INSTRUCTIONS,
+  reconcileInstructions,
+} from './questions.js';
+
+/** The slice of the TypeSafe client this adapter uses; inject a stub in tests. */
+export interface SystemOneClient {
+  systemOne(req: {
+    state: unknown;
+    questions: Record<string, unknown>;
+    model?: string;
+  }): Promise<{ answers: Record<string, any> }>; // eslint-disable-line @typescript-eslint/no-explicit-any
+}
+
+export type DecideErrorKind =
+  'auth' | 'rate-limit' | 'server' | 'network' | 'timeout' | 'bad-response';
+
+/** A failed Jev call. The message never includes state, observation text, candidate text or the key. */
+export class DecideError extends Error {
+  readonly kind: DecideErrorKind;
+  readonly status: number | undefined;
+
+  constructor(kind: DecideErrorKind, status?: number) {
+    super(`Jev decision call failed (${kind}${status === undefined ? '' : `, HTTP ${status}`})`);
+    this.name = 'DecideError';
+    this.kind = kind;
+    this.status = status;
+  }
+}
+
+function fromStatus(status: number): DecideError {
+  if (status === 401 || status === 403) return new DecideError('auth', status);
+  if (status === 429) return new DecideError('rate-limit', status);
+  if (status >= 500) return new DecideError('server', status);
+  return new DecideError('bad-response', status);
+}
+
+/** Maps anything the SDK or client throws to a DecideError, dropping its message and cause. */
+function wrap(e: unknown): DecideError {
+  if (e instanceof DecideError) return e;
+  if (e instanceof AuthenticationError || e instanceof PermissionDeniedError) {
+    return new DecideError('auth', e.status);
+  }
+  if (e instanceof RateLimitError) return new DecideError('rate-limit', e.status);
+  if (e instanceof InternalServerError) return new DecideError('server', e.status);
+  if (e instanceof APITimeoutError) return new DecideError('timeout');
+  if (e instanceof APIConnectionError) return new DecideError('network');
+  if (typeof e === 'object' && e !== null) {
+    const status = (e as { status?: unknown }).status;
+    if (typeof status === 'number') return fromStatus(status);
+    const name = (e as { name?: unknown }).name;
+    if (name === 'TimeoutError' || name === 'AbortError') return new DecideError('timeout');
+  }
+  return new DecideError('network');
+}
+
+const bad = (): DecideError => new DecideError('bad-response');
+
+function isObj(x: unknown): x is Record<string, unknown> {
+  return typeof x === 'object' && x !== null;
+}
+const isProb = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
+
+function noulOf(answers: Record<string, unknown>, id: string): number {
+  const a = answers[id];
+  if (!isObj(a) || a['type'] !== 'noul' || !isProb(a['noul'])) throw bad();
+  return a['noul'];
+}
+
+function scoreOf(
+  answers: Record<string, unknown>,
+  id: string,
+): { score: number; probabilities: Record<string, unknown> } {
+  const a = answers[id];
+  if (!isObj(a) || a['type'] !== 'score' || !isProb(a['score']) || !isObj(a['probabilities'])) {
+    throw bad();
+  }
+  return { score: a['score'], probabilities: a['probabilities'] };
+}
+
+const ACTIONS = new Set<string>(['NOOP', 'REINFORCE', 'ADD', 'UPDATE', 'SUPERSEDE']);
+
+function choiceOf(
+  answers: Record<string, unknown>,
+  id: string,
+): { action: ReconcileAction; probability: number } {
+  const a = answers[id];
+  if (!isObj(a) || a['type'] !== 'choice' || !isObj(a['probabilities'])) throw bad();
+  const c = a['choice'];
+  if (typeof c !== 'string' || !ACTIONS.has(c)) throw bad();
+  const p = a['probabilities'][c];
+  if (!isProb(p)) throw bad();
+  return { action: c as ReconcileAction, probability: p };
+}
+
+const clamp = (x: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, x));
+
+const MEMORY_TYPES: MemoryType[] = ['semantic', 'episodic', 'procedural', 'preference'];
+
+function obsState(obs: Observation) {
+  return { user: obs.userText, assistant: obs.assistantText, tools: obs.toolSummaries, at: obs.at };
+}
+
+export interface JevDeciderOptions {
+  /** Defaults to `process.env.TYPESAFE_API_KEY`. Ignored when `client` is given. */
+  apiKey?: string;
+  client?: SystemOneClient;
+  model?: string;
+}
+
+/** System One controller backed by TypeSafe's Jev model. One `systemOne` call per stage. */
+export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
+  let client = opts.client;
+  if (client === undefined) {
+    const apiKey = opts.apiKey ?? process.env['TYPESAFE_API_KEY'];
+    if (apiKey === undefined || apiKey === '') {
+      throw new MissingCredentialError('TYPESAFE_API_KEY', 'decide.apiKey');
+    }
+    client = new TypeSafeClient({ apiKey }) as unknown as SystemOneClient;
+  }
+  const c = client;
+
+  async function ask(state: unknown, questions: Record<string, unknown>) {
+    try {
+      const req = { state, questions, ...(opts.model === undefined ? {} : { model: opts.model }) };
+      const res = await c.systemOne(req);
+      if (!isObj(res) || !isObj(res.answers)) throw bad();
+      return res.answers as Record<string, unknown>;
+    } catch (e) {
+      throw wrap(e);
+    }
+  }
+
+  return {
+    async gate(obs: Observation): Promise<GateDecision> {
+      const questions: Record<string, unknown> = {
+        should_store: noul(SHOULD_STORE_INSTRUCTIONS),
+        salience: score(SALIENCE_INSTRUCTIONS, [...SALIENCE_LEVELS]),
+      };
+      for (const t of MEMORY_TYPES) questions[`type_${t}`] = noul(TYPE_INSTRUCTIONS[t]);
+
+      const answers = await ask(obsState(obs), questions);
+      const decisions: Decision[] = [];
+      const yesNo = (question: string, p: number) =>
+        decisions.push({
+          stage: 'gate',
+          question,
+          answer: p >= 0.5 ? 'yes' : 'no',
+          probability: p,
+        });
+
+      const shouldStore = noulOf(answers, 'should_store');
+      yesNo('should_store', shouldStore);
+
+      const sal = scoreOf(answers, 'salience');
+      const s = clamp(sal.score, 0, 3);
+      const level = Math.round(s);
+      const lp = sal.probabilities[String(level)];
+      if (!isProb(lp)) throw bad();
+      decisions.push({
+        stage: 'gate',
+        question: 'salience',
+        answer: SALIENCE_NAMES[level]!,
+        probability: lp,
+      });
+
+      const types: Partial<Record<MemoryType, number>> = {};
+      for (const t of MEMORY_TYPES) {
+        const p = noulOf(answers, `type_${t}`);
+        types[t] = p;
+        yesNo(`type_${t}`, p);
+      }
+      return { shouldStore, salience: 0.1 + 0.3 * s, types, decisions };
+    },
+
+    async reconcile(obs: Observation, candidates: Memory[]): Promise<ReconcileDecision[]> {
+      const one = (
+        question: string,
+        candidateId: string | null,
+        a: ReturnType<typeof choiceOf>,
+      ) => ({
+        candidateId,
+        action: a.action,
+        probability: a.probability,
+        decisions: [{ stage: 'reconcile', question, answer: a.action, probability: a.probability }],
+      });
+
+      if (candidates.length === 0) {
+        const answers = await ask(
+          { observation: obsState(obs), candidates: [] },
+          { novel: choice(NOVEL_INSTRUCTIONS, NOVEL_CRITERIA) },
+        );
+        return [one('novel', null, choiceOf(answers, 'novel'))];
+      }
+
+      const questions: Record<string, unknown> = {};
+      candidates.forEach((_, i) => {
+        questions[`c${i}`] = choice(reconcileInstructions(i), RECONCILE_CRITERIA);
+      });
+      const state = {
+        observation: obsState(obs),
+        candidates: candidates.map((m) => ({
+          id: m.id,
+          text: m.text,
+          type: m.type,
+          validFrom: m.validFrom,
+        })),
+      };
+      const answers = await ask(state, questions);
+      return candidates.map((m, i) => one(`c${i}`, m.id, choiceOf(answers, `c${i}`)));
+    },
+  };
+}
