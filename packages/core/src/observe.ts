@@ -11,6 +11,7 @@ import type {
 } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
 import type { Decision, Memory, Scope } from './model.js';
+import { scrubObservation } from './scrub.js';
 
 export interface ObserveResult {
   outcome: 'skipped' | 'reinforced' | 'added' | 'updated' | 'superseded';
@@ -41,14 +42,18 @@ function filterFor(scope: Scope): ScopeFilter {
 }
 
 /**
- * The asynchronous write path: gate, look up related memories, reconcile, and
+ * The asynchronous write path: scrub secrets, gate, look up related memories, reconcile, and
  * only then author the memory. Every decision is recorded on the stored memory.
  */
 export async function observe(
-  obs: Observation,
+  raw: Observation,
   scope: Scope,
   deps: ObserveDeps,
 ): Promise<ObserveResult> {
+  // Secrets are scrubbed before any adapter, or the store, sees the text.
+  const scrubbed = scrubObservation(raw);
+  if (scrubbed.dropped) return { outcome: 'skipped', reason: 'secret', decisions: [] };
+  const obs = scrubbed.obs;
   const { store, embed, decide, write } = deps;
   const now = deps.now ?? new Date();
   const filter = filterFor(scope);

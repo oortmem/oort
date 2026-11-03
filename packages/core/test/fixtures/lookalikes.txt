@@ -1,0 +1,20 @@
+commit 3f786850e387550fdab836ed7e6dc881de23001b fixed the bug
+merged a94a8fe5ccb19ba61c4c0873d391e987982fbbd3 into main
+request id 550e8400-e29b-41d4-a716-446655440000 logged
+trace 123e4567-e89b-12d3-a456-426614174000
+short id a1b2c3d and 9f2e7b
+see https://example.com/docs/getting-started?ref=readme for details
+proxy at http://localhost:3000/@types/node serves types
+upgrade from 1.2.3-beta.4+build.5 to 2.0.0
+engine ^20.11.0 || >=22.0.0
+tiny base64 dGVzdC1zdHJpbmc= decodes fine
+The Authorization header is required on every request
+Authorization is handled by the gateway
+API_KEY=
+export SECRET_TOKEN=
+a key starting sk-abc is too short
+also sk- alone and sk-ant- alone are not keys
+pneumonoultramicroscopicsilicovolcanoconiosis is a long word
+internationalization-and-localization-considerations-for-teams
+ssh git@github.com:org/repo.git works
+the token budget per turn is 4096 tokens

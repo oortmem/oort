@@ -310,4 +310,59 @@ describe('observe', () => {
     expect(p.spy.filters.every((f) => JSON.stringify(f.projectIds) === '["p",null]')).toBe(true);
     expect(p.spy.filters.length).toBeGreaterThan(0);
   });
+
+  it('observe.never-sends-secret-to-adapters', async () => {
+    const key = 'sk-ant-api03-Zk3Qx9Lm2Vb7Nc4Rt8Yp1Wd6';
+    const { deps, spy } = setup(gate(0.9), [rec(null, 'ADD')]);
+    const guard = (v: unknown): void => {
+      if (JSON.stringify(v).includes(key)) throw new Error('secret reached an adapter');
+    };
+    const wrapped: ObserveDeps = {
+      ...deps,
+      embed: {
+        dimension: 4,
+        embed(texts, kind) {
+          guard(texts);
+          return deps.embed.embed(texts, kind);
+        },
+      },
+      decide: {
+        async gate(o) {
+          guard(o);
+          return deps.decide.gate(o);
+        },
+        async reconcile(o, c) {
+          guard([o, c]);
+          return deps.decide.reconcile(o, c);
+        },
+      },
+      write: {
+        async write(o, a, p) {
+          guard(o);
+          return deps.write.write(o, a, p);
+        },
+      },
+    };
+    const res = await observe(
+      {
+        ...obs(`use auth key ${key} for the service, remember this long preference text`),
+        toolSummaries: [`env ANTHROPIC=${key}`],
+      },
+      localScope(),
+      wrapped,
+    );
+    expect(res.outcome).toBe('added');
+    expect(spy.write).toHaveLength(1);
+  });
+
+  it('observe.drops-mostly-secret-turn', async () => {
+    const { deps, spy } = setup(gate(0.9), [rec(null, 'ADD')]);
+    const pem = `-----BEGIN PRIVATE KEY-----\n${'A1b2C3d4E5f6G7h8'.repeat(80).slice(0, 1146)}\n-----END PRIVATE KEY-----`;
+    const res = await observe(obs(`${pem} ok`), localScope(), deps);
+    expect(res).toEqual({ outcome: 'skipped', reason: 'secret', decisions: [] });
+    expect(spy.embed).toBe(0);
+    expect(spy.reconcile).toEqual([]);
+    expect(spy.write).toEqual([]);
+    expect(spy.filters).toEqual([]);
+  });
 });
