@@ -1,0 +1,213 @@
+import type { Embedder, Hit, MemoryStore, Reranker, ScopeFilter } from './adapters.js';
+import type { ResolvedConfig } from './config.js';
+import { activation } from './activation.js';
+import { fuse } from './fusion.js';
+import type { Memory } from './model.js';
+
+export interface RecallQuery {
+  text: string;
+  scope: ScopeFilter;
+  budgetChars?: number;
+  /** ISO timestamp: recall what was true then. */
+  asOf?: string;
+}
+
+export interface RecalledMemory extends Memory {
+  explanation: {
+    lexicalRank?: number;
+    denseRank?: number;
+    fused: number;
+    reranked?: number;
+    activation: number;
+    hydrated: boolean;
+  };
+}
+
+export type Degradation = 'no-embedder' | 'no-reranker' | 'embed-failed' | 'rerank-failed';
+
+export interface RecallResult {
+  memories: RecalledMemory[];
+  /** Reserved for the hook layer (gate decision); `recall` never sets it. */
+  skipped?: string;
+  degraded?: Degradation[];
+  timings: Record<string, number>;
+}
+
+export interface RecallDeps {
+  store: MemoryStore;
+  embed?: Embedder;
+  rerank?: Reranker;
+  config: ResolvedConfig;
+  now?: Date;
+}
+
+const clock = (): number => performance.now();
+
+/**
+ * Hybrid recall: lexical + dense first stage, cold hydration, activation-aware
+ * fusion, optional rerank. Adapter failures degrade, never throw.
+ */
+export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallResult> {
+  const { store, config } = deps;
+  const now = deps.now ?? new Date();
+  const t0 = clock();
+  const degraded: Degradation[] = [];
+  const timings: Record<string, number> = {
+    gateMs: 0,
+    embedMs: 0,
+    lexicalMs: 0,
+    denseMs: 0,
+    hydrateMs: 0,
+    fuseMs: 0,
+    rerankMs: 0,
+    totalMs: 0,
+  };
+
+  let vector: Int8Array | undefined;
+  if (!deps.embed) {
+    degraded.push('no-embedder');
+  } else {
+    const t = clock();
+    try {
+      vector = (await deps.embed.embed([q.text], 'query'))[0];
+      if (vector === undefined) degraded.push('embed-failed');
+    } catch {
+      degraded.push('embed-failed');
+    }
+    timings['embedMs'] = clock() - t;
+  }
+
+  const timed = async <T>(key: string, p: () => Promise<T>): Promise<T> => {
+    const t = clock();
+    try {
+      return await p();
+    } finally {
+      timings[key] = clock() - t;
+    }
+  };
+  const v = vector;
+  const [lexical, dense] = await Promise.all([
+    timed('lexicalMs', () => store.lexical(q.text, q.scope, config.recall.lexicalK)),
+    v === undefined
+      ? Promise.resolve<Hit[]>([])
+      : timed('denseMs', () => store.dense(v, q.scope, config.recall.denseK)),
+  ]);
+
+  const ids = [...new Set([...lexical, ...dense].map((h) => h.id))];
+  const coldIds = new Set([...lexical, ...dense].filter((h) => h.tier === 'cold').map((h) => h.id));
+
+  const th = clock();
+  const hydratedIds = new Set<string>();
+  const loaded = await Promise.all(
+    ids.map(async (id): Promise<Memory | null> => {
+      const live = await store.get(id);
+      if (live === null) return null;
+      if (live.tier !== 'cold' && !coldIds.has(id)) return live;
+      const blob = await store.coldGet(id);
+      if (!blob?.embedding) return live;
+      const hydrated: Memory = {
+        ...live,
+        text: blob.text,
+        stub: blob.stub,
+        entities: blob.entities,
+        embedding: blob.embedding,
+        tier: 'warm',
+      };
+      await store.upsert(hydrated);
+      hydratedIds.add(id);
+      return hydrated;
+    }),
+  );
+  timings['hydrateMs'] = clock() - th;
+
+  const memories = new Map<string, Memory>();
+  for (const m of loaded) if (m !== null) memories.set(m.id, m);
+
+  const tf = clock();
+  const fused = fuse([lexical, dense], memories, now, {
+    activation: config.activation,
+    ...(q.asOf !== undefined ? { asOf: q.asOf } : {}),
+  });
+  timings['fuseMs'] = clock() - tf;
+
+  let ordered = fused.slice(0, config.recall.rerankK);
+  const rerankScores = new Map<string, number>();
+  if (!deps.rerank) {
+    degraded.push('no-reranker');
+  } else if (ordered.length > 0) {
+    const tr = clock();
+    try {
+      const docs = ordered.map((f) => ({ id: f.id, text: memories.get(f.id)?.text ?? '' }));
+      const reranked = await deps.rerank.rerank(q.text, docs, config.recall.returnK);
+      const byId = new Map(ordered.map((f) => [f.id, f]));
+      const next: typeof ordered = [];
+      for (const r of reranked) {
+        const f = byId.get(r.id);
+        if (f === undefined) continue;
+        rerankScores.set(r.id, r.score);
+        next.push(f);
+        byId.delete(r.id);
+      }
+      ordered = next;
+    } catch {
+      degraded.push('rerank-failed');
+      rerankScores.clear();
+    }
+    timings['rerankMs'] = clock() - tr;
+  }
+
+  const out: RecalledMemory[] = [];
+  for (const f of ordered.slice(0, config.recall.returnK)) {
+    const m = memories.get(f.id);
+    if (m === undefined) continue;
+    const lr = lexical.findIndex((h) => h.id === f.id);
+    const dr = dense.findIndex((h) => h.id === f.id);
+    const rs = rerankScores.get(f.id);
+    out.push({
+      ...m,
+      explanation: {
+        ...(lr >= 0 ? { lexicalRank: lr + 1 } : {}),
+        ...(dr >= 0 ? { denseRank: dr + 1 } : {}),
+        fused: f.score,
+        ...(rs !== undefined ? { reranked: rs } : {}),
+        activation: activation(m.accessLog, m.salience, now, config.activation),
+        hydrated: hydratedIds.has(f.id),
+      },
+    });
+  }
+
+  await store.recordAccess(
+    out.map((m) => m.id),
+    now,
+  );
+  timings['totalMs'] = clock() - t0;
+  return { memories: out, ...(degraded.length > 0 ? { degraded } : {}), timings };
+}
+
+function age(validFrom: string, now: Date): string {
+  const days = Math.max(0, Math.floor((now.getTime() - Date.parse(validFrom)) / 86_400_000));
+  if (days < 1) return 'today';
+  if (days < 2) return 'yesterday';
+  if (days < 7) return `${days}d ago`;
+  if (days < 30) return `${Math.floor(days / 7)}w ago`;
+  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
+}
+
+/** Render recalled memories as an `<oort-memory>` block, whole lines only, within `budgetChars`. */
+export function formatForInjection(r: RecallResult, budgetChars: number, now = new Date()): string {
+  if (r.memories.length === 0) return '';
+  const open = '<oort-memory>\n';
+  const close = '\n</oort-memory>';
+  let total = open.length + close.length;
+  const lines: string[] = [];
+  for (const m of r.memories) {
+    const line = `- [${m.type}, ${age(m.validFrom, now)}] ${m.text}`;
+    const cost = line.length + (lines.length > 0 ? 1 : 0);
+    if (total + cost > budgetChars) break;
+    lines.push(line);
+    total += cost;
+  }
+  if (lines.length === 0) return '';
+  return open + lines.join('\n') + close;
+}
