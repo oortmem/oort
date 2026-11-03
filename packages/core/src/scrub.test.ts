@@ -132,6 +132,7 @@ describe('scrub', () => {
     expect(out.secretRatio).toBeCloseTo(40 / 47, 5);
   });
 
+  // `secretRatio` is not clamped, so these bounds can fail.
   it('scrub.ratio-never-exceeds-one', () => {
     const quoted = SECRETS.map((s) => s.text.split(s.secret).join(`"${s.secret}"`)).join('\n');
     const once = scrub(quoted);
@@ -228,6 +229,23 @@ describe('scrub', () => {
       }
       if (parses) expect(() => JSON.parse(out), out).not.toThrow();
     }
+  });
+
+  it('scrub.lone-backslash-keeps-following-delimiter', () => {
+    // A plain-text backslash is not an escape: the delimiter after it still ends the value.
+    const B = '\\';
+    const v = 'abc9' + 'xyz';
+    const cases: [string, string][] = [
+      [`PASSWORD=${v}${B}, next=1`, 'PASSWORD=[REDACTED:env-secret], next=1'],
+      [`(PASSWORD=${v}${B}) next`, '(PASSWORD=[REDACTED:env-secret]) next'],
+      [`[token=${v}${B}] x`, '[token=[REDACTED:env-secret]] x'],
+      [`{token=${v}${B}} x`, '{token=[REDACTED:env-secret]} x'],
+    ];
+    for (const [input, want] of cases) expect(scrub(input).text, input).toBe(want);
+    // JSON escapes of a backslash or a quote stay part of the value.
+    expect(scrub(`{"c":"PASSWORD=ab${B}"c9${B}${B}"}`).text).toBe(
+      '{"c":"PASSWORD=[REDACTED:env-secret]"}',
+    );
   });
 
   it('scrub.escape-bounded-rejects-unrewritable-lookbehind', () => {

@@ -182,11 +182,13 @@ export function escapeBounded(rule: Rule): Rule {
  * A value: double-quoted (escapes allowed), single-quoted, escaped-quoted
  * (JSON inside a JSON string), an array of strings, or bare. A bare value may
  * hold `, } ] )`: one ends it only when followed by whitespace, a quote,
- * another delimiter or the end; a JSON escape never ends it (see VALUE_START_ESC). A bracket followed by space, a quote, a
- * bracket or a digit opens a structure, which is left to the keys inside it.
+ * another delimiter or the end. A JSON escape of a backslash or a quote (`\\`, `\"`) never
+ * ends it (see VALUE_START_ESC); any other backslash is a plain character, so it never
+ * swallows the delimiter after it. A bracket followed by space, a quote, a bracket or a digit
+ * opens a structure, which is left to the keys inside it.
  */
 const ENV_VALUE = new RegExp(
-  String.raw`"(?:[^"\\\n]|\\.)*"|"[^"\n]*"|'[^'\n]*'|\\"[^"\\\n]*\\"|\[[ \t]*(?:"[^"\n]*"|'[^'\n]*')(?:[ \t]*,[ \t]*(?:"[^"\n]*"|'[^'\n]*'))*[ \t]*\]|(?![[{](?:[\s"'[\]{}\d]|$)|${VALUE_START_ESC})(?:\\[^\s]|[^\s"',}\])]|[,}\])](?![\s"',}\])]|$))+`,
+  String.raw`"(?:[^"\\\n]|\\.)*"|"[^"\n]*"|'[^'\n]*'|\\"[^"\\\n]*\\"|\[[ \t]*(?:"[^"\n]*"|'[^'\n]*')(?:[ \t]*,[ \t]*(?:"[^"\n]*"|'[^'\n]*'))*[ \t]*\]|(?![[{](?:[\s"'[\]{}\d]|$)|${VALUE_START_ESC})(?:\\[\\"]|[^\s"',}\])]|[,}\])](?![\s"',}\])]|$))+`,
   'y',
 );
 
@@ -691,7 +693,9 @@ export function scrub(text: string): ScrubResult {
   return {
     text: r.text,
     redactions: r.redactions,
-    secretRatio: text.length === 0 ? 0 : Math.min(1, r.removed / text.length),
+    // Not clamped: `removed` counts characters of the input, so the ratio is at
+    // most 1 by construction, and `scrub.ratio-never-exceeds-one` checks it.
+    secretRatio: text.length === 0 ? 0 : r.removed / text.length,
   };
 }
 
