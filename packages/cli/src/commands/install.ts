@@ -1,0 +1,86 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { HOOK_EVENTS, installHooks, uninstallHooks } from '@oortmem/claude-code';
+import { binPath } from '../io.js';
+import { Refusal, type Ctx } from '../util.js';
+
+// pnpm 11 removed `pnpm link --global`; `pnpm add -g .` links the package directory instead.
+const HOW_TO_INSTALL =
+  'Install the CLI first, then run `oort install claude-code` through it: ' +
+  'from the oort repo, `pnpm build && cd packages/cli && pnpm add -g .`, or install the oort package globally.';
+
+/** True when `p` lies in a directory a package runner uses for throwaway installs. */
+function ephemeral(p: string): boolean {
+  const segments = p.split(path.sep);
+  if (segments.includes('_npx') || segments.includes('dlx')) return true;
+  const tmp = fs.realpathSync(os.tmpdir());
+  return p === tmp || p.startsWith(tmp + path.sep);
+}
+
+/**
+ * The command written into settings.json: the realpath of this package's
+ * executable `dist/main.js`, and only when the CLI was started as that file.
+ * Anything else (`node src/...`, `node -e`, a package runner's cache) would
+ * write a hook that breaks once the process is gone, so it is refused.
+ */
+export function hookCommandPath(entry: string | undefined, expected = binPath()): string {
+  if (entry === undefined) throw new Refusal(`oort is not running as its bin. ${HOW_TO_INSTALL}`);
+  let real: string;
+  let bin: string;
+  try {
+    real = fs.realpathSync(entry);
+    bin = fs.realpathSync(expected);
+  } catch {
+    throw new Refusal(`oort is not running as its bin. ${HOW_TO_INSTALL}`);
+  }
+  if (real !== bin)
+    throw new Refusal(`oort is not running as its bin (${real}). ${HOW_TO_INSTALL}`);
+  if (ephemeral(real)) {
+    throw new Refusal(
+      `oort is running from a temporary package cache (${real}). ${HOW_TO_INSTALL}`,
+    );
+  }
+  try {
+    fs.accessSync(real, fs.constants.X_OK);
+  } catch {
+    throw new Refusal(`${real} is not executable. ${HOW_TO_INSTALL}`);
+  }
+  return real;
+}
+
+function settingsFile(project: boolean, ctx: Ctx): string {
+  if (project) return path.join(ctx.io.cwd, '.claude', 'settings.json');
+  return path.join(ctx.io.env['HOME'] || os.homedir(), '.claude', 'settings.json');
+}
+
+/** `oort install claude-code [--project]` / `oort uninstall claude-code [--project]` */
+export async function installCommand(
+  action: 'install' | 'uninstall',
+  harness: string,
+  opts: { project?: boolean },
+  ctx: Ctx,
+): Promise<number> {
+  if (harness !== 'claude-code') {
+    throw new Refusal(`unknown harness "${harness}"; Phase 1 supports claude-code.`);
+  }
+  const cmd = hookCommandPath(ctx.io.entry);
+  const file = settingsFile(opts.project === true, ctx);
+  const events = HOOK_EVENTS.join(', ');
+  if (action === 'install') {
+    const { changed } = installHooks(file, cmd);
+    ctx.io.out(
+      changed
+        ? `Installed Oort hooks (${events}) in ${file}:\n${HOOK_EVENTS.map((e) => `  ${cmd} hook ${e}`).join('\n')}\n`
+        : `Oort hooks are already installed in ${file}; nothing changed.\n`,
+    );
+  } else {
+    const { changed } = uninstallHooks(file, cmd);
+    ctx.io.out(
+      changed
+        ? `Removed Oort hooks (${events}) from ${file}.\n`
+        : `No Oort hooks found in ${file}; nothing changed.\n`,
+    );
+  }
+  return 0;
+}

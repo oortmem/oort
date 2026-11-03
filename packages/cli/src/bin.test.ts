@@ -1,0 +1,282 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { execa } from 'execa';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { OortConfig, projectIdFor } from '@oortmem/core';
+import { openSqliteStore } from '@oortmem/store-sqlite';
+import { memory, syntheticKey, tmpdir, writeTranscript } from '../test/helpers.js';
+
+/** The built bin; these tests run it as a real process, so build first. */
+const BIN = path.join(import.meta.dirname, '..', 'dist', 'main.js');
+
+interface Sandbox {
+  root: string;
+  /** A temp HOME, never the real one. */
+  home: string;
+  oortHome: string;
+  cwd: string;
+  env: Record<string, string>;
+}
+
+function sandbox(): Sandbox {
+  const root = tmpdir('oort-bin-');
+  const home = path.join(root, 'home');
+  const oortHome = path.join(home, '.oort');
+  const cwd = path.join(root, 'work');
+  fs.mkdirSync(home);
+  fs.mkdirSync(cwd);
+  return {
+    root,
+    home,
+    oortHome,
+    cwd,
+    env: { PATH: process.env['PATH'] ?? '', HOME: home, OORT_HOME: oortHome },
+  };
+}
+
+interface RunOptions {
+  cwd?: string;
+  env?: Record<string, string>;
+  /** Written to stdin (which is otherwise /dev/null, as for a non-interactive run). */
+  input?: string;
+}
+
+function oort(s: Sandbox, args: string[], opts: RunOptions = {}) {
+  return execa(BIN, args, {
+    cwd: opts.cwd ?? s.cwd,
+    env: opts.env ?? s.env,
+    extendEnv: false,
+    reject: false,
+    timeout: 20_000,
+    ...(opts.input !== undefined ? { input: opts.input } : { stdin: 'ignore' as const }),
+  });
+}
+
+beforeAll(() => {
+  if (!fs.existsSync(BIN))
+    throw new Error(`${BIN} is missing: run \`pnpm --filter oort build\` first`);
+});
+
+describe('oort bin', () => {
+  it('cli.init-creates-config', async () => {
+    const s = sandbox();
+    const r = await oort(s, ['init']);
+    expect(r.exitCode).toBe(0);
+    const file = path.join(s.oortHome, 'config.json');
+    expect(r.stdout).toContain(`Created ${file}`);
+    expect(fs.statSync(s.oortHome).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(OortConfig.parse({}));
+    for (const v of ['VOYAGE_API_KEY', 'TYPESAFE_API_KEY', 'ANTHROPIC_API_KEY']) {
+      expect(r.stdout).toContain(`export ${v}=`);
+    }
+
+    // Never overwritten.
+    fs.writeFileSync(file, '{"recall":{"returnK":3}}\n');
+    const again = await oort(s, ['init']);
+    expect(again.exitCode).toBe(0);
+    expect(again.stdout).toContain('Kept existing');
+    expect(fs.readFileSync(file, 'utf8')).toBe('{"recall":{"returnK":3}}\n');
+
+    // --project writes the project file at the git root.
+    fs.mkdirSync(path.join(s.cwd, '.git'));
+    fs.mkdirSync(path.join(s.cwd, 'sub'));
+    const proj = await oort(s, ['init', '--project'], { cwd: path.join(s.cwd, 'sub') });
+    expect(proj.exitCode).toBe(0);
+    const projectFile = path.join(s.cwd, 'oort.config.json');
+    expect(proj.stdout).toContain(projectFile);
+    expect(JSON.parse(fs.readFileSync(projectFile, 'utf8'))).toEqual({
+      project: { private: false },
+    });
+  });
+
+  it('cli.recall-without-key-names-fix', async () => {
+    const s = sandbox();
+    const store = await openSqliteStore({
+      path: path.join(s.oortHome, 'oort.sqlite'),
+      coldDir: path.join(s.oortHome, 'cold'),
+      dimension: 512,
+      log: () => {},
+    });
+    await store.upsert(memory({ embedding: new Int8Array(512).fill(3) }));
+    await store.close();
+
+    const r = await oort(s, ['recall', 'which port does the auth service listen on']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('<oort-memory>');
+    expect(r.stdout).toContain('port 5582');
+    expect(r.stderr).toContain('VOYAGE_API_KEY');
+    expect(r.stderr).toContain('embed.apiKey');
+    expect(r.stderr.trim().split('\n')).toHaveLength(1);
+    expect(r.stderr).not.toContain('5582');
+
+    const json = await oort(s, ['recall', 'auth service port', '--json']);
+    expect(json.exitCode).toBe(0);
+    const parsed = JSON.parse(json.stdout) as {
+      memories: { explanation: unknown }[];
+      degraded: string[];
+    };
+    expect(parsed.degraded).toEqual(['no-embedder', 'no-reranker']);
+    expect(parsed.memories[0]?.explanation).toMatchObject({ lexicalRank: 1, hydrated: false });
+  });
+
+  it('cli.import-estimate-asks-before-running', async () => {
+    const s = sandbox();
+    fs.mkdirSync(path.join(s.cwd, '.git'));
+    const projects = path.join(s.home, '.claude', 'projects');
+    writeTranscript(projects, s.cwd);
+    const env = {
+      ...s.env,
+      VOYAGE_API_KEY: syntheticKey('voyage'),
+      TYPESAFE_API_KEY: syntheticKey('typesafe'),
+      ANTHROPIC_API_KEY: syntheticKey('anthropic'),
+    };
+
+    const r = await oort(s, ['import', 'claude-code', '--since', '3650d'], { env });
+    expect(r.exitCode).toBe(2);
+    expect(r.stdout).toMatch(/sessions\s+1\n/);
+    expect(r.stdout).toMatch(/observations\s+[1-9]/);
+    expect(r.stdout).toMatch(/estimated tokens\s+[1-9]/);
+    expect(r.stdout).toMatch(/skipped \(unresolved\)\s+0/);
+    expect(r.stderr).toMatch(/not a terminal.*--yes/);
+    for (const k of Object.values(env))
+      if (k.startsWith('test-')) expect(r.stdout + r.stderr).not.toContain(k);
+
+    const est = await oort(s, ['import', 'claude-code', '--estimate-only'], { env });
+    expect(est.exitCode).toBe(0);
+    expect(est.stdout).toBe(r.stdout.replace(/ since \S+:/, ':'));
+
+    // Nothing was observed.
+    const store = await openSqliteStore({
+      path: path.join(s.oortHome, 'oort.sqlite'),
+      coldDir: path.join(s.oortHome, 'cold'),
+      dimension: 512,
+      log: () => {},
+    });
+    const all = await store.list(
+      {
+        orgId: 'local',
+        customerId: 'self',
+        agentId: 'claude-code',
+        projectIds: [null, projectIdFor(s.cwd) ?? null],
+      },
+      { validOnly: false },
+    );
+    await store.close();
+    expect(all).toEqual([]);
+
+    // Without keys the import refuses after the estimate, naming each fix.
+    const keyless = await oort(s, ['import', 'claude-code', '--yes']);
+    expect(keyless.exitCode).toBe(2);
+    expect(keyless.stdout).toMatch(/observations\s+[1-9]/);
+    expect(keyless.stderr).toContain('export TYPESAFE_API_KEY=');
+  });
+
+  it('cli.hook-exit-zero-on-garbage-stdin', async () => {
+    const s = sandbox();
+    const r = await oort(s, ['hook', 'UserPromptSubmit'], { input: '{not json \\u0000 \x00\xff' });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.durationMs).toBeLessThan(1000);
+    const log = fs.readFileSync(path.join(s.oortHome, 'logs', 'hooks.log'), 'utf8');
+    expect(log).toContain('"outcome":"invalid-input"');
+
+    const unknown = await oort(s, ['hook', 'NoSuchEvent'], { input: '{}' });
+    expect(unknown.exitCode).toBe(0);
+    expect(unknown.stdout).toBe('');
+  });
+
+  it('cli.hook-exits-promptly-with-slow-adapters', (ctx) => {
+    // @oortmem/embed-voyage and @oortmem/rerank-voyage post to a fixed api.voyageai.com
+    // endpoint (options: apiKey, model, dimension, fetch) and have no base-URL option,
+    // so the built bin cannot be pointed at a local never-responding server without a
+    // production test seam. cli.hook-slow-adapters-in-process covers the same path
+    // with a never-resolving embedder injected through wire().
+    ctx.skip('voyage adapters have no base-URL option; covered in-process');
+  });
+
+  it('cli.install-refuses-without-bin', async () => {
+    const s = sandbox();
+    const settings = path.join(s.home, '.claude', 'settings.json');
+
+    // Not started as the bin: `node -e "import(...)"`.
+    const evalRun = await execa(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `await import(${JSON.stringify(pathToFileURL(BIN).href)})`,
+        'install',
+        'claude-code',
+      ],
+      { cwd: s.cwd, env: s.env, extendEnv: false, reject: false, stdin: 'ignore' },
+    );
+    expect(evalRun.exitCode).toBe(2);
+    expect(evalRun.stderr).toContain('pnpm build && cd packages/cli && pnpm add -g .');
+    expect(evalRun.stderr).toMatch(/not running as its bin/);
+    expect(fs.existsSync(settings)).toBe(false);
+
+    // A copy in a temporary package cache, as `npx oort` would run it.
+    const cache = path.join(s.root, '_npx', 'abc123', 'node_modules', 'oort');
+    fs.mkdirSync(cache, { recursive: true });
+    fs.cpSync(path.dirname(BIN), path.join(cache, 'dist'), { recursive: true });
+    fs.copyFileSync(
+      path.join(path.dirname(BIN), '..', 'package.json'),
+      path.join(cache, 'package.json'),
+    );
+    fs.symlinkSync(
+      path.join(path.dirname(BIN), '..', 'node_modules'),
+      path.join(cache, 'node_modules'),
+    );
+    const cached = await execa(path.join(cache, 'dist', 'main.js'), ['install', 'claude-code'], {
+      cwd: s.cwd,
+      env: s.env,
+      extendEnv: false,
+      reject: false,
+      stdin: 'ignore',
+    });
+    expect(cached.exitCode).toBe(2);
+    expect(cached.stderr).toMatch(/temporary package cache/);
+    expect(fs.existsSync(settings)).toBe(false);
+  });
+
+  it('cli.install-uninstall-roundtrip', async () => {
+    const s = sandbox();
+    const settings = path.join(s.home, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(settings), { recursive: true });
+    const original = {
+      theme: 'dark',
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo done' }] }] },
+    };
+    fs.writeFileSync(settings, JSON.stringify(original, null, 2));
+    const bin = fs.realpathSync(BIN);
+
+    const r = await oort(s, ['install', 'claude-code']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain(settings);
+    const installed = JSON.parse(fs.readFileSync(settings, 'utf8')) as {
+      theme: string;
+      hooks: Record<string, { hooks: { command: string }[] }[]>;
+    };
+    expect(installed.theme).toBe('dark');
+    for (const event of ['UserPromptSubmit', 'Stop', 'SessionStart']) {
+      const commands = (installed.hooks[event] ?? []).flatMap((g) => g.hooks.map((x) => x.command));
+      expect(commands).toContain(`${bin} hook ${event}`);
+    }
+    expect(JSON.stringify(installed)).not.toContain('npx');
+    expect(installed.hooks['Stop']?.[0]?.hooks[0]?.command).toBe('echo done');
+
+    const again = await oort(s, ['install', 'claude-code']);
+    expect(again.stdout).toMatch(/already installed/);
+
+    const un = await oort(s, ['uninstall', 'claude-code']);
+    expect(un.exitCode).toBe(0);
+    expect(JSON.parse(fs.readFileSync(settings, 'utf8'))).toEqual(original);
+
+    // --project targets <cwd>/.claude/settings.json.
+    const proj = await oort(s, ['install', 'claude-code', '--project']);
+    expect(proj.exitCode).toBe(0);
+    expect(fs.existsSync(path.join(s.cwd, '.claude', 'settings.json'))).toBe(true);
+  });
+});

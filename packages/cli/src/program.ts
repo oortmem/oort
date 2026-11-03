@@ -1,0 +1,176 @@
+import { Command, CommanderError } from 'commander';
+import { VERSION } from '@oortmem/core';
+import { consolidateCommand } from './commands/consolidate.js';
+import { explainCommand } from './commands/explain.js';
+import { exportCommand } from './commands/export.js';
+import { forgetCommand } from './commands/forget.js';
+import { hookCommand } from './commands/hook.js';
+import { importCommand } from './commands/import.js';
+import { initCommand } from './commands/init.js';
+import { inspectCommand } from './commands/inspect.js';
+import { installCommand } from './commands/install.js';
+import { observeCommand } from './commands/observe.js';
+import { pinCommand } from './commands/pin.js';
+import { recallCommand } from './commands/recall.js';
+import { statsCommand } from './commands/stats.js';
+import type { Io } from './io.js';
+import { Refusal, type Ctx } from './util.js';
+import { wire as defaultWire, type WireFn } from './wire.js';
+
+function program(ctx: Ctx, setCode: (code: number) => void): Command {
+  const run =
+    <A extends unknown[]>(fn: (...args: A) => Promise<number | void>) =>
+    async (...args: A): Promise<void> => {
+      const code = await fn(...args);
+      if (typeof code === 'number') setCode(code);
+    };
+  const p = new Command('oort')
+    .description('Oort: tiered memory for coding agents.')
+    .version(VERSION)
+    .option('--debug', 'print stack traces for unexpected errors')
+    .exitOverride()
+    .configureOutput({ writeOut: (s) => ctx.io.out(s), writeErr: (s) => ctx.io.err(s) })
+    .showHelpAfterError('(run `oort --help` for usage)');
+
+  p.command('init')
+    .description('write ~/.oort/config.json with defaults (never overwrites)')
+    .option('--project', 'also write oort.config.json at the git root')
+    .action(run((o: { project?: boolean }) => initCommand(o, ctx)));
+
+  p.command('install')
+    .description('install the Claude Code hooks')
+    .argument('<harness>', 'claude-code')
+    .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
+    .action(run((h: string, o: { project?: boolean }) => installCommand('install', h, o, ctx)));
+
+  p.command('uninstall')
+    .description('remove the Claude Code hooks')
+    .argument('<harness>', 'claude-code')
+    .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
+    .action(run((h: string, o: { project?: boolean }) => installCommand('uninstall', h, o, ctx)));
+
+  p.command('hook')
+    .description('run a Claude Code hook (reads the hook JSON on stdin; always exits 0)')
+    .argument('<event>', 'UserPromptSubmit | Stop | SessionStart | drain')
+    .allowExcessArguments()
+    .action(run((event: string) => hookCommand(event, ctx)));
+
+  p.command('recall')
+    .description('recall memories for a query, as injected into the prompt')
+    .argument('<text>')
+    .option('--json', 'print the full RecallResult as JSON')
+    .option('--as-of <iso>', 'recall what was true at this time')
+    .action(run((t: string, o: { json?: boolean; asOf?: string }) => recallCommand(t, o, ctx)));
+
+  p.command('explain')
+    .description("recall with each stage's ranks and scores")
+    .argument('<query>')
+    .action(run((q: string) => explainCommand(q, ctx)));
+
+  p.command('observe')
+    .description('run the write path on one observation (JSON on stdin, or --user/--assistant)')
+    .option('--user <text>', 'the user turn')
+    .option('--assistant <text>', 'the assistant turn')
+    .option('--dry-run', 'only report what the scrubber would redact; touches nothing')
+    .action(
+      run((o: { user?: string; assistant?: string; dryRun?: boolean }) => observeCommand(o, ctx)),
+    );
+
+  p.command('inspect')
+    .description('list current memories, or show one in full with its supersede chain')
+    .argument('[id]', 'memory id or unique prefix')
+    .option('--json', 'print JSON')
+    .option('--limit <n>', 'rows to list', '50')
+    .action(
+      run((id: string | undefined, o: { json?: boolean; limit?: string }) =>
+        inspectCommand(id, o, ctx),
+      ),
+    );
+
+  p.command('stats')
+    .description('counts per tier and validity, store sizes, queue, memory use')
+    .option('--json', 'print JSON')
+    .action(run((o: { json?: boolean }) => statsCommand(o, ctx)));
+
+  p.command('consolidate')
+    .description('expire, re-tier and evict memories')
+    .action(run(() => consolidateCommand(ctx)));
+
+  p.command('forget')
+    .description('delete a memory everywhere')
+    .argument('<id>', 'memory id or unique prefix')
+    .option('--yes', 'do not ask')
+    .action(run((id: string, o: { yes?: boolean }) => forgetCommand(id, o, ctx)));
+
+  p.command('pin')
+    .description('pin a memory (never sent to cold)')
+    .argument('<id>', 'memory id or unique prefix')
+    .action(run((id: string) => pinCommand(id, true, ctx)));
+
+  p.command('unpin')
+    .description('unpin a memory')
+    .argument('<id>', 'memory id or unique prefix')
+    .action(run((id: string) => pinCommand(id, false, ctx)));
+
+  p.command('import')
+    .description('import existing Claude Code transcripts (estimates first, then asks)')
+    .argument('<harness>', 'claude-code')
+    .option('--since <age>', 'only transcripts modified within this age: 12h, 30d, 2w')
+    .option('--yes', 'do not ask before importing')
+    .option('--estimate-only', 'print the estimate and stop')
+    .option('--include-unresolved', 'import sessions whose project is gone as global memories')
+    .option('--projects-dir <dir>', 'Claude Code projects directory (default ~/.claude/projects)')
+    .action(
+      run(
+        async (
+          harness: string,
+          o: {
+            since?: string;
+            yes?: boolean;
+            estimateOnly?: boolean;
+            includeUnresolved?: boolean;
+            projectsDir?: string;
+          },
+        ) => {
+          if (harness !== 'claude-code') {
+            throw new Refusal(`unknown harness "${harness}"; Phase 1 supports claude-code.`);
+          }
+          return importCommand(o, ctx);
+        },
+      ),
+    );
+
+  p.command('export')
+    .description('write every visible memory in the v1 export format (docs/export-format.md)')
+    .option('--out <file>', 'write to this file (0600) instead of stdout')
+    .action(run((o: { out?: string }) => exportCommand(o, ctx)));
+
+  return p;
+}
+
+/**
+ * Runs the CLI on `args` (user arguments, without node and the script) and
+ * resolves the exit code: 0 success, 1 unexpected error (message only; the
+ * stack with --debug), 2 refusal or usage problem. Never prints a key: error
+ * messages come from our own refusals or from adapters that never include one.
+ */
+export async function runCli(args: string[], io: Io, wire: WireFn = defaultWire): Promise<number> {
+  let code = 0;
+  const p = program({ io, wire }, (c) => {
+    code = c;
+  });
+  try {
+    await p.parseAsync(args, { from: 'user' });
+    return code;
+  } catch (e) {
+    if (e instanceof CommanderError) return e.exitCode === 0 ? 0 : 2;
+    if (e instanceof Refusal) {
+      io.err(`oort: ${e.message}\n`);
+      return 2;
+    }
+    const err = e instanceof Error ? e : new Error(String(e));
+    io.err(`oort: ${err.message}\n`);
+    if (args.includes('--debug') && err.stack !== undefined) io.err(`${err.stack}\n`);
+    return 1;
+  }
+}
