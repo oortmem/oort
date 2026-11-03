@@ -6,7 +6,7 @@
 
 **Architecture:** A pnpm/TypeScript monorepo. `@oortmem/core` owns the memory model, the activation math, the `recall`/`observe`/`consolidate` pipelines, and the five adapter contracts (`MemoryStore`, `Embedder`, `Reranker`, `DecisionController`, `MemoryWriter`). Each adapter is its own package; only the `*-voyage`, `decide-jev` and `writer` packages make network calls. `@oortmem/claude-code` turns hook stdin into pipeline calls and parses transcripts; the `oort` CLI wires everything from `oort.config.json`. Phase 1 hooks run in-process (no daemon); the daemon is Phase 2.
 
-**Tech Stack:** Node 22+ (developed on 26), pnpm 10+, TypeScript 5.x strict, vitest, oxlint, prettier, zod, better-sqlite3 13 + sqlite-vec 0.1.x, `node:zlib` zstd, `voyageai` 0.4, `@typesafe-ai/sdk` 0.7, `ai` 7 + `@ai-sdk/anthropic` 4, commander.
+**Tech Stack:** Node 22+ (developed on 26), pnpm 12, TypeScript 7.x strict (the native compiler; 5.9 is the fallback if a tool cannot load it), vitest 5 (root `vitest.config.ts` with `test.projects`), oxlint, prettier, zod, better-sqlite3 13 + sqlite-vec 0.1.x, `node:zlib` zstd, `voyageai` 0.4, `@typesafe-ai/sdk` 0.7, `ai` 7 + `@ai-sdk/anthropic` 4, commander.
 
 **Spec:** `docs/superpowers/specs/2026-11-03-oort-memory-engine-design.md`
 
@@ -39,7 +39,7 @@
 ### Task 1: Monorepo scaffold
 
 **Files:**
-- Create: `package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `vitest.workspace.ts`, `.oxlintrc.json`, `.prettierrc`, `.gitignore`, `LICENSE`, `README.md`, `packages/core/package.json`, `packages/core/tsconfig.json`, `packages/core/src/index.ts`, `packages/core/src/index.test.ts`
+- Create: `package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `vitest.config.ts`, `.oxlintrc.json`, `.prettierrc`, `.gitignore`, `LICENSE`, `README.md`, `packages/core/package.json`, `packages/core/tsconfig.json`, `packages/core/src/index.ts`, `packages/core/src/index.test.ts`
 
 **Interfaces:**
 - Produces: workspace scripts `build`, `test`, `typecheck`, `lint`, `format`, `format:check`, `verify`; a package template every later task copies.
