@@ -468,6 +468,22 @@ describe('oort import (in process)', () => {
 });
 
 describe('oort usage', () => {
+  it('cli.workspace-name-unique', () => {
+    // `pnpm --filter oort` must select the CLI only, so no other workspace package may be named oort.
+    const repo = path.join(import.meta.dirname, '..', '..', '..');
+    const name = (dir: string): unknown =>
+      (JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name?: unknown })
+        .name;
+    expect(name(repo)).toBe('oort-workspace');
+    const packages = fs
+      .readdirSync(path.join(repo, 'packages'))
+      .map((d) => path.join(repo, 'packages', d));
+    const named = packages.filter(
+      (d) => fs.existsSync(path.join(d, 'package.json')) && name(d) === 'oort',
+    );
+    expect(named).toEqual([path.join(repo, 'packages', 'cli')]);
+  });
+
   it('cli.usage-errors-exit-2', async () => {
     const h = harness();
     expect((await h.run(['no-such-command'])).code).toBe(2);
