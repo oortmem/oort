@@ -28,7 +28,8 @@ interface Replacement {
 
 type Hit = (match: string, offset: number, text: string) => Replacement | null;
 
-interface Rule {
+/** One scrubbing rule (exported for tests of `escapeBounded`). */
+export interface ScrubRule {
   kind: string;
   re: RegExp;
   /**
@@ -46,6 +47,8 @@ interface Rule {
   /** After a rejected match, try again one char later rather than past the match. */
   retry?: true;
 }
+
+type Rule = ScrubRule;
 
 const tag = (kind: string): string => `${MARK}${kind}]`;
 
@@ -161,7 +164,7 @@ const VALUE_START_ESC = String.raw`\\(?:[nrtbf"]|u00[01][0-9A-Fa-f])`;
  * any other lookbehind must say it bounds itself (`ownBoundary`), or loading
  * the module fails rather than leaving the rule silently unbounded.
  */
-function escapeBounded(rule: Rule): Rule {
+export function escapeBounded(rule: Rule): Rule {
   if (rule.ownBoundary === true) return rule;
   const src = rule.re.source;
   const lead = /^(?:\\b|\(\?<![^()]*\))/.exec(src)?.[0];
@@ -183,7 +186,7 @@ function escapeBounded(rule: Rule): Rule {
  * bracket or a digit opens a structure, which is left to the keys inside it.
  */
 const ENV_VALUE = new RegExp(
-  String.raw`"(?:[^"\\\n]|\\.)*"|"[^"\n]*"|'[^'\n]*'|\\"[^"\\\n]*\\"|\[[ \t]*(?:"[^"\n]*"|'[^'\n]*')(?:[ \t]*,[ \t]*(?:"[^"\n]*"|'[^'\n]*'))*[ \t]*\]|(?![[{](?:[\s"'[\]{}\d]|$)|${VALUE_START_ESC})(?:\\"|[^\s"',}\])]|[,}\])](?![\s"',}\])]|$))+`,
+  String.raw`"(?:[^"\\\n]|\\.)*"|"[^"\n]*"|'[^'\n]*'|\\"[^"\\\n]*\\"|\[[ \t]*(?:"[^"\n]*"|'[^'\n]*')(?:[ \t]*,[ \t]*(?:"[^"\n]*"|'[^'\n]*'))*[ \t]*\]|(?![[{](?:[\s"'[\]{}\d]|$)|${VALUE_START_ESC})(?:\\[^\s]|[^\s"',}\])]|[,}\])](?![\s"',}\])]|$))+`,
   'y',
 );
 
@@ -363,15 +366,39 @@ function escapeAt(full: string, offset: number, text: string): string | undefine
   return /^(?:[nrtbf/]|u[0-9A-Fa-f]{4})/.exec(full)?.[0];
 }
 
+/**
+ * Quote parity per position, built once per text in one pass: `1` where an odd
+ * number of unescaped quotes (after an even run of backslashes) precede it on
+ * its line. Serialised text can be one megabyte with no real newline, so
+ * rescanning the line for every token would be quadratic.
+ */
+let parityOf: { text: string; odd: Uint8Array } | undefined;
+
+function quoteParity(text: string): Uint8Array {
+  const odd = new Uint8Array(text.length + 1);
+  let inside = 0;
+  let slashes = 0;
+  for (let i = 0; i < text.length; i++) {
+    odd[i] = inside;
+    const c = text.charCodeAt(i);
+    if (c === 10) {
+      inside = 0;
+      slashes = 0;
+    } else if (c === 92) {
+      slashes++;
+    } else {
+      if (c === 34 && slashes % 2 === 0) inside ^= 1;
+      slashes = 0;
+    }
+  }
+  odd[text.length] = inside;
+  return odd;
+}
+
 /** Is `at` inside a JSON string: an odd number of unescaped quotes before it on its line? */
 function inJsonString(text: string, at: number): boolean {
-  const from = Math.max(0, at - 4096, text.lastIndexOf('\n', at) + 1);
-  const quotes =
-    text
-      .slice(from, at)
-      .replace(/\\[\s\S]/g, '')
-      .split('"').length - 1;
-  return quotes % 2 === 1;
+  if (parityOf?.text !== text) parityOf = { text, odd: quoteParity(text) };
+  return parityOf.odd[at] === 1;
 }
 
 function readToken(full: string, offset: number, text: string): Replacement | null {
@@ -651,6 +678,7 @@ function run(input: string): Scrubbed {
     }
     text = out + text.slice(from);
   }
+  parityOf = undefined; // do not keep the last text alive
   return { text, redactions: [...counts].map(([kind, count]) => ({ kind, count })), removed };
 }
 

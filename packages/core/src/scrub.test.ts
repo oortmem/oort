@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Observation } from './adapters.js';
-import { RULE_KINDS, scrub, scrubObservation } from './scrub.js';
+import { RULE_KINDS, escapeBounded, scrub, scrubObservation } from './scrub.js';
 
 // Synthetic credentials are assembled at runtime so no full key literal appears in source.
 const AWS_AKID = 'AKIA' + 'IOSFODNN7EXAMPLE';
@@ -138,13 +138,14 @@ describe('scrub', () => {
     expect(once.secretRatio).toBeLessThanOrEqual(1);
     expect(scrub(once.text).secretRatio).toBe(0);
     for (const { text, secret } of SECRETS) {
-      // Already quoted, inside escaped JSON, or a URL userinfo: a bare quote there
+      // Already quoted, inside escaped JSON, a URL userinfo or after a backslash: a bare quote there
       // makes the input invalid rather than the secret quoted.
       if (
         text.includes(`"${secret}"`) ||
         text.includes('\\"') ||
         text.includes(`://${secret}@`) ||
-        text.includes(`/services/${secret}`)
+        text.includes(`/services/${secret}`) ||
+        text.includes(`\\${secret}`)
       ) {
         continue;
       }
@@ -159,6 +160,72 @@ describe('scrub', () => {
     const t = performance.now();
     scrub(big);
     expect(performance.now() - t).toBeLessThan(100);
+  });
+
+  /**
+   * Serialised text often has no real newline for a megabyte: deciding whether
+   * a token sits inside a JSON string must not rescan the line for each token.
+   */
+  it('scrub.linear-on-long-serialised-lines', () => {
+    const rnd = prng(17);
+    const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const rand = (n: number, al: string): string => {
+      let s = '';
+      for (let i = 0; i < n; i++) s += al[rnd(al.length)];
+      return s;
+    };
+    const MB = 1_000_000;
+    const lines = (line: () => string): string => {
+      let s = '';
+      while (s.length < MB) s += `${line()}\n`;
+      return JSON.stringify({ content: s.slice(0, MB) });
+    };
+    const inputs: [string, string][] = [
+      ['\\n + 32-char tokens', `{"x":"${`\\n${'a'.repeat(32)} `.repeat(MB / 35)}"}`],
+      ['76-col base64', lines(() => rand(76, b64))],
+      ['sha256sum', lines(() => `${rand(64, '0123456789abcdef')}  src/file.ts`)],
+      [
+        'go.sum',
+        lines(() => `github.com/someorg/somepackage/v2 v2.3.${rnd(9)} h1:${rand(43, b64)}=`),
+      ],
+    ];
+    for (const [label, text] of inputs) {
+      const t = performance.now();
+      scrub(text);
+      expect(performance.now() - t, label).toBeLessThan(200);
+    }
+  });
+
+  it('scrub.bare-value-keeps-json-closing-quote', () => {
+    const B = '\\';
+    const v = 'abc9' + 'xyz';
+    for (const input of [
+      `{"c":"PASSWORD=${v}${B}${B}"}`,
+      `{"c":"token=${v}${B}${B}","d":"x"}`,
+      `set PASSWORD=C:${B}${B}tmp${v}${B}${B}`,
+    ]) {
+      const out = scrub(input).text;
+      expect(out, input).toContain('[REDACTED:env-secret]');
+      expect(out, input).not.toContain(v);
+      let parses = true;
+      try {
+        JSON.parse(input);
+      } catch {
+        parses = false;
+      }
+      if (parses) expect(() => JSON.parse(out), out).not.toThrow();
+    }
+  });
+
+  it('scrub.escape-bounded-rejects-unrewritable-lookbehind', () => {
+    expect(() => escapeBounded({ kind: 'synthetic', re: /(?<=x:)\w+/g })).toThrow(/cannot bound/);
+    expect(() => escapeBounded({ kind: 'synthetic', re: /(?<!(?:a|b))\w+/g })).toThrow(
+      /cannot bound/,
+    );
+    expect(() =>
+      escapeBounded({ kind: 'synthetic', re: /(?<=x:)\w+/g, ownBoundary: true }),
+    ).not.toThrow();
+    expect(escapeBounded({ kind: 'synthetic', re: /\bab\w+/g }).re.source).toContain('(?<=\\\\');
   });
 
   it('scrub.keeps-path-redacts-key-in-it', () => {
