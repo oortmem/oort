@@ -20,7 +20,7 @@
 - Tier names in identifiers are `hot` | `warm` | `cold`. No astro names in code.
 - Store location: `~/.oort/oort.sqlite` and `~/.oort/cold/`; overridable with `OORT_HOME`.
 - Config: `oort.config.json` in the project root (walk up from cwd), then `~/.oort/config.json`, then defaults. Project `private: true` keeps that project's memories out of every other project's recall.
-- Embedding default: `voyage-3.5-lite`, `outputDimension: 512`, `outputDtype: "int8"` for both documents and queries. Reranker default: `rerank-3-lite`, `topK: 10`. Writer default: Anthropic `claude-haiku-4-5` through the AI SDK (model id is config). All three are config, never hard-coded in the pipeline.
+- Embedding default: `voyage-3.5-lite`, `outputDimension: 512`, `outputDtype: "int8"` for both documents and queries. Reranker default: `rerank-3-lite`, `topK: 10`. Writer default: Anthropic `claude-haiku-5-5` through the AI SDK (model id is config). All three are config, never hard-coded in the pipeline.
 - Activation: `A = ln(Σ t_j^-d) + w_s·S`, `d = 0.5`, `w_s = 1.0`, `t_j` in hours with a floor of `1/60`. Thresholds: `hotTopN = 50`, `coldBelow = -2.0`. All config.
 - Recall candidate counts: 50 lexical, 50 dense, rerank top 30, return ≤ 10. Default injection budget 1500 tokens (≈ 6000 chars).
 - Every stored memory records `source.decisions[]` (stage, question, answer, probability).

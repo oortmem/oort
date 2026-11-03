@@ -25,9 +25,9 @@ const decide = z.strictObject({ provider: z.string().default('jev') }).default({
 const writer = z
   .strictObject({
     provider: z.string().default('anthropic'),
-    model: z.string().default('claude-haiku-4-5'),
+    model: z.string().default('claude-haiku-5-5'),
   })
-  .default({ provider: 'anthropic', model: 'claude-haiku-4-5' });
+  .default({ provider: 'anthropic', model: 'claude-haiku-5-5' });
 
 const activation = z
   .strictObject({
