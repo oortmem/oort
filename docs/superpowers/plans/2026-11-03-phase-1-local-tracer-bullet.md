@@ -151,13 +151,26 @@
 - [ ] **Step 1: Failing tests**: `scrub.redacts-all-fixture-secrets` (every line of `secrets.txt` contains `[REDACTED:` after scrub and none of the original secret substrings), `scrub.leaves-lookalikes` (every line of `lookalikes.txt` is byte-identical: commit SHAs, UUIDs, short hex ids, ordinary URLs, version strings), `scrub.idempotent`, `scrub.keeps-surrounding-text`, `observe.never-sends-secret-to-adapters` (fake embedder/decider/writer throw if their input contains the planted key; observe succeeds with the redacted text), `observe.drops-mostly-secret-turn`.
 - [ ] **Step 2 → 5.** Commit `feat(core): secret scrubbing at the observation boundary`.
 
+### Task 6c: Temporal validity hardening (from `docs/research/2026-11-03-temporal-knowledge.md`)
+
+**Files:**
+- Modify: `packages/core/src/model.ts` (add `expiredAt: string | null`, `endReason: "superseded" | "corrected" | "expired" | null`, `lastConfirmedAt: string | null`), `fusion.ts`, `observe.ts`, `memory-store.ts`, `store-conformance.ts`, and their tests.
+
+**Interfaces:**
+- Produces: `isCurrent(m: Memory, at: Date): boolean` in `model.ts` = `m.expiredAt === null && m.validFrom <= at && (m.validTo === null || at < m.validTo)`; `MemoryStore.list(scope, { validOnly })` and `fuse()` use `isCurrent(m, now)` (or `asOf`) instead of `validTo === null`.
+- `observe()` SUPERSEDE/UPDATE: the prior is closed at the new fact's `validFrom` (`prior.validTo = newMemory.validFrom`, `prior.expiredAt = now`, `prior.endReason = "superseded"`), not at `obs.at` when they differ. Out-of-order guard: if the new fact's `validFrom` is earlier than the prior's `validFrom`, the NEW memory is stored already closed (`validTo = prior.validFrom`, `expiredAt = now`, `endReason = "superseded"`, `supersededBy = prior.id`) and the prior stays current. REINFORCE sets `lastConfirmedAt = now`.
+- A memory may be stored with a future `validTo` (explicit expiry) and remains current until then; consolidation (Task 7) sets `expiredAt = now`, `endReason = "expired"` once `validTo` has passed.
+
+- [ ] **Step 1: Failing tests**: `model.isCurrent-future-validTo-is-current`, `model.isCurrent-past-validTo-is-not`, `fusion.keeps-future-expiry`, `observe.supersede-closes-prior-at-new-validFrom`, `observe.out-of-order-older-fact-closes-itself` (prior current, new memory stored closed, chain links both ways), `observe.reinforce-sets-lastConfirmedAt`, `consolidate.expires-past-validTo` (in Task 7), conformance `list-valid-only-uses-isCurrent` (a future-validTo memory is listed; a past-validTo one is not).
+- [ ] **Step 2 → 5.** Commit `feat(core): bitemporal validity, out-of-order supersede guard, lastConfirmedAt`.
+
 ### Task 7: `consolidate`
 
 **Files:**
 - Create: `packages/core/src/consolidate.ts`, test.
 
 **Interfaces:**
-- Produces: `consolidate(scope: ScopeFilter, deps: { store: MemoryStore; config: ResolvedConfig; now?: Date }): Promise<{ promoted: string[]; demoted: string[]; evicted: string[] }>` — recompute activation for every valid memory, rank, assign `tierFor`, `setTier` on change, `coldPut` + drop embedding for new cold, and demote superseded memories straight to cold.
+- Produces: `consolidate(scope: ScopeFilter, deps: { store: MemoryStore; config: ResolvedConfig; now?: Date }): Promise<{ promoted: string[]; demoted: string[]; evicted: string[]; expired: string[] }>` — first mark memories whose `validTo` has passed as `expiredAt = now`, `endReason = "expired"` (Task 6c); then recompute activation for every current memory, rank, assign `tierFor`, `setTier` on change, `coldPut` + drop embedding for new cold, and demote superseded and expired memories straight to cold.
 
 - [ ] **Step 1: Failing tests**: `consolidate.top-n-hot`, `consolidate.stale-goes-cold-and-keeps-stub`, `consolidate.pinned-never-cold`, `consolidate.superseded-goes-cold`, `consolidate.idempotent`.
 - [ ] **Step 2 → 5.** Commit `feat(core): consolidation job`.
