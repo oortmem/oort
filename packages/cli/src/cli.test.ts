@@ -855,6 +855,44 @@ describe('wire', () => {
     expect(none.io.stderr).toContain('pass --id');
   });
 
+  it('cli.project-link-guards-repo-supplied-id', async () => {
+    const root = tmpdir();
+    const env = { HOME: root, OORT_HOME: path.join(root, 'oort-home') };
+    const run = async (cwd: string, args: string[]) => {
+      const io = fakeIo({ cwd, env });
+      return { code: await runCli(args, io, wire), io };
+    };
+    const repoWith = (name: string): string => {
+      const dir = path.join(root, name);
+      fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'oort.config.json'),
+        JSON.stringify({ project: { id: 'private-payments' } }),
+      );
+      return dir;
+    };
+    const mine = repoWith('mine');
+    expect((await run(mine, ['project', 'link'])).code).toBe(0);
+    // Relinking the same repository is fine.
+    expect((await run(mine, ['project', 'link'])).code).toBe(0);
+
+    // A cloned repository naming the same id cannot join that scope silently.
+    const cloned = repoWith('cloned');
+    const refused = await run(cloned, ['project', 'link']);
+    expect(refused.code).toBe(2);
+    expect(refused.io.stderr).toContain(mine);
+    expect(refused.io.stderr).toContain('--id');
+    const links = JSON.parse(
+      fs.readFileSync(path.join(env.OORT_HOME, 'project-links.json'), 'utf8'),
+    ) as { links: Record<string, string> };
+    expect(Object.keys(links.links)).toEqual([mine]);
+
+    // The user's explicit --id is always accepted.
+    const explicit = await run(cloned, ['project', 'link', '--id', 'private-payments']);
+    expect(explicit.code).toBe(0);
+    expect(explicit.io.stdout).toBe(`Linked ${cloned} to project "cfg:private-payments"\n`);
+  });
+
   it('cli.wire-ignores-project-embed-dimension', async () => {
     const root = tmpdir();
     const home = path.join(root, 'oort-home');

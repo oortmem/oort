@@ -117,6 +117,59 @@ describe('scope', () => {
     expect(projectRootFor(other)).toBe(other);
   });
 
+  it('scope.forged-worktree-pointer-through-symlink-falls-back', () => {
+    // The re-review's layout: lexical `..` from the forged gitdir path lands on the victim,
+    // while the realpath lands on a fake main repo that passes both checks.
+    const base = tmp();
+    const victim = path.join(base, 'private');
+    fs.mkdirSync(path.join(victim, '.git'), { recursive: true });
+    const evil = path.join(base, 'evil');
+    const fakeGitdir = path.join(evil, 'fake', '.git', 'worktrees', 'x');
+    fs.mkdirSync(fakeGitdir, { recursive: true });
+    fs.symlinkSync('.', path.join(evil, 'fake', 'private')); // fake/private -> fake
+    fs.symlinkSync(path.join(evil, 'fake', '.git', 'worktrees'), path.join(evil, 'L'));
+    fs.writeFileSync(path.join(fakeGitdir, 'commondir'), '../../../private/.git\n');
+    const wt = path.join(evil, 'wt');
+    fs.mkdirSync(path.join(wt, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(fakeGitdir, 'gitdir'), `${path.join(wt, '.git')}\n`);
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${path.join(evil, 'L', 'x')}\n`);
+    const home = path.join(base, 'home');
+    linkProject(home, projectRootFor(victim) ?? victim, 'secret');
+
+    const cwd = path.join(wt, 'sub');
+    expect(projectRootFor(cwd)).not.toBe(victim);
+    expect(projectIdFor(cwd)).not.toBe(projectIdFor(victim));
+    expect(resolveProjectId(cwd, home)).not.toBe('cfg:secret');
+    expect(resolveProjectId(cwd, home)).not.toBe(resolveProjectId(victim, home));
+    expect(resolveProjectId(victim, home)).toBe('cfg:secret');
+  });
+
+  it('scope.symlinked-main-checkout-and-worktree-share-id', () => {
+    const real = tmp();
+    const main = repo();
+    // The same main checkout reached through a symlinked parent.
+    const via = path.join(real, 'via');
+    fs.symlinkSync(path.dirname(main), via);
+    const mainViaLink = path.join(via, path.basename(main));
+    // A legitimate worktree whose `.git` file names the main repo through the symlink.
+    const gitdir = path.join(mainViaLink, '.git', 'worktrees', 'wt');
+    fs.mkdirSync(gitdir, { recursive: true });
+    fs.writeFileSync(path.join(gitdir, 'commondir'), '../..\n');
+    const wt = path.join(tmp(), 'wt');
+    fs.mkdirSync(wt);
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${gitdir}\n`);
+    fs.writeFileSync(path.join(gitdir, 'gitdir'), `${path.join(wt, '.git')}\n`);
+
+    const id = projectIdFor(main);
+    expect(projectIdFor(mainViaLink)).toBe(id);
+    expect(projectIdFor(wt)).toBe(id);
+    expect(projectRootFor(mainViaLink)).toBe(main);
+    // The binding is keyed on the realpathed main root: linked one way, found every way.
+    const home = path.join(real, 'home');
+    linkProject(home, projectRootFor(mainViaLink) ?? '', 'oort');
+    for (const cwd of [main, mainViaLink, wt]) expect(resolveProjectId(cwd, home)).toBe('cfg:oort');
+  });
+
   it('scope.repo-config-id-ignored-without-trust-binding', () => {
     const home = tmp();
     const main = repo();

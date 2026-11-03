@@ -3,6 +3,7 @@ import {
   configuredProjectId,
   linkProject,
   projectRootFor,
+  readProjectLinks,
   resolveHome,
   unlinkProject,
 } from '@oortmem/core';
@@ -22,7 +23,8 @@ function rootOrRefuse(ctx: Ctx, action: string): string {
  * `project.id` in `oort.config.json`. The binding lives in
  * `$OORT_HOME/project-links.json` (0600); without it a repository file's
  * `project.id` is ignored, since a cloned repository could name another
- * project's scope.
+ * project's scope. For the same reason a repository-supplied id already bound
+ * to another root is refused; an explicit `--id` is the user's own choice.
  */
 export async function projectLinkCommand(opts: { id?: string }, ctx: Ctx): Promise<number> {
   const root = rootOrRefuse(ctx, 'link');
@@ -37,8 +39,19 @@ export async function projectLinkCommand(opts: { id?: string }, ctx: Ctx): Promi
   if (id === undefined || id === '') {
     throw new Refusal('no project.id in oort.config.json; pass --id <id>.');
   }
+  const home = resolveHome(ctx.io.env);
+  if (opts.id === undefined) {
+    // The id came from the repository: it must not join another repository's scope unasked.
+    const other = Object.entries(readProjectLinks(home)).find(([r, v]) => v === id && r !== root);
+    if (other !== undefined) {
+      throw new Refusal(
+        `project.id ${echo(id)} from oort.config.json is already linked to ${other[0]}. ` +
+          `To share that project's memories here, pass --id ${echo(id)} explicitly.`,
+      );
+    }
+  }
   try {
-    linkProject(resolveHome(ctx.io.env), root, id);
+    linkProject(home, root, id);
   } catch (e) {
     if (e instanceof RangeError) throw new Refusal(`--id ${echo(id)}: ${e.message}.`);
     throw e;
