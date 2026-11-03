@@ -14,7 +14,9 @@
     "lint": "oxlint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "verify": "pnpm format:check && pnpm lint && pnpm build && pnpm typecheck && pnpm test"
+    "verify": "pnpm format:check && pnpm lint && pnpm build && pnpm typecheck && pnpm test",
+    "bench": "pnpm --filter @oortmem/bench run bench",
+    "eval": "pnpm --filter @oortmem/bench run eval --"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
