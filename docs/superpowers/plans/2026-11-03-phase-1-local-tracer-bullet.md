@@ -80,10 +80,10 @@
 **Interfaces:**
 - Produces:
   - `activation(log: AccessLog, salience: number, now: Date, p: { d: number; ws: number }): number`
-  - `recordAccess(log: AccessLog, at: Date): AccessLog` (append; when `recent.length > 32`, fold the oldest 16 into `compactedSum` as `Σ t^-d` evaluated at `compactedAt`, which `activation` re-ages)
+  - `appendAccess(log: AccessLog, at: Date): AccessLog` (append; when `recent.length > 32`, fold the oldest 16 into `compactedSum` as `Σ t^-d` evaluated at `compactedAt`, which `activation` re-ages)
   - `tierFor(a: number, rank: number, pinned: boolean, p: { hotTopN: number; coldBelow: number }): Tier`
 
-- [ ] **Step 1: Failing tests**: `activation.recent-beats-old` (one access 1 h ago > one access 100 h ago), `activation.frequency-adds` (five accesses > one access, same ages), `activation.salience-weight` (same log, salience 1 vs 0 differs by exactly `ws`), `activation.compaction-preserves-order` (ranking of two logs unchanged after `recordAccess` compacts one of them), `tierFor.pinned-is-hot`, `tierFor.below-threshold-is-cold`.
+- [ ] **Step 1: Failing tests**: `activation.recent-beats-old` (one access 1 h ago > one access 100 h ago), `activation.frequency-adds` (five accesses > one access, same ages), `activation.salience-weight` (same log, salience 1 vs 0 differs by exactly `ws`), `activation.compaction-preserves-order` (ranking of two logs unchanged after `appendAccess` compacts one of them), `tierFor.pinned-is-hot`, `tierFor.below-threshold-is-cold`.
 - [ ] **Step 2: Run → FAIL. Step 3: Implement. Step 4: Run → PASS. Step 5: Commit** `feat(core): ACT-R activation and tier assignment`.
 
 ### Task 4: Adapter contracts, in-memory store, fusion
@@ -137,6 +137,19 @@
 
 - [ ] **Step 1: Failing tests** with fake decide/write/embed: `observe.skips-low-salience`, `observe.reinforce-increments-access`, `observe.add-stores-warm`, `observe.high-salience-is-hot`, `observe.supersede-chain` (A→B→C; `list(validOnly)` returns only C; C.supersedes = B, B.supersededBy = C), `observe.records-decisions`.
 - [ ] **Step 2 → 5.** Commit `feat(core): observe pipeline with reconciliation`.
+
+### Task 6b: Secret scrubbing at the observation boundary
+
+**Files:**
+- Create: `packages/core/src/scrub.ts`, `packages/core/src/scrub.test.ts`, fixtures `packages/core/test/fixtures/secrets.txt` and `packages/core/test/fixtures/lookalikes.txt`
+- Modify: `packages/core/src/observe.ts` (call `scrub` first)
+
+**Interfaces:**
+- Produces: `scrub(text: string): { text: string; redactions: { kind: string; count: number }[]; secretRatio: number }` and `scrubObservation(obs: Observation): { obs: Observation; dropped: boolean; redactions: ... }`. `dropped` is true when `secretRatio > 0.5`. Kinds: `aws-access-key`, `aws-secret-key`, `github-token`, `anthropic-key`, `openai-key`, `voyage-key`, `typesafe-key`, `stripe-key`, `jwt`, `pem-private-key`, `url-credentials`, `auth-header`, `env-secret`, `high-entropy` (base64/hex ≥ 32 chars with Shannon entropy ≥ 4.0 bits/char). Replacement is `[REDACTED:<kind>]`. Pure code, no dependencies, no network.
+- `observe()` runs `scrubObservation` before the gate; a dropped observation returns `{ outcome: "skipped", reason: "secret", decisions: [] }` and never reaches any adapter.
+
+- [ ] **Step 1: Failing tests**: `scrub.redacts-all-fixture-secrets` (every line of `secrets.txt` contains `[REDACTED:` after scrub and none of the original secret substrings), `scrub.leaves-lookalikes` (every line of `lookalikes.txt` is byte-identical: commit SHAs, UUIDs, short hex ids, ordinary URLs, version strings), `scrub.idempotent`, `scrub.keeps-surrounding-text`, `observe.never-sends-secret-to-adapters` (fake embedder/decider/writer throw if their input contains the planted key; observe succeeds with the redacted text), `observe.drops-mostly-secret-turn`.
+- [ ] **Step 2 → 5.** Commit `feat(core): secret scrubbing at the observation boundary`.
 
 ### Task 7: `consolidate`
 
