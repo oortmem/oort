@@ -53,10 +53,29 @@ export interface Memory {
   accessLog: AccessLog;
   validFrom: string;
   validTo: string | null;
+  /** When the system stopped believing this fact (transaction time); null while believed. */
+  expiredAt: string | null;
+  endReason: 'superseded' | 'corrected' | 'expired' | null;
+  /** Last time an observation re-confirmed this fact. */
+  lastConfirmedAt: string | null;
   supersedes: string | null;
   supersededBy: string | null;
   source: MemorySource;
   embedding?: Int8Array;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * True when the system still believes `m` (`expiredAt === null`) and `at` lies
+ * in its validity interval: `validFrom <= at` (inclusive), `at < validTo`
+ * (exclusive; a null `validTo` is open-ended, so a future expiry is still current).
+ */
+export function isCurrent(m: Memory, at: Date): boolean {
+  const t = at.getTime();
+  return (
+    m.expiredAt === null &&
+    Date.parse(m.validFrom) <= t &&
+    (m.validTo === null || t < Date.parse(m.validTo))
+  );
 }

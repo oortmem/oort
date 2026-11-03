@@ -208,6 +208,79 @@ describe('observe', () => {
     expect(A?.validTo).toBe('2026-01-02T00:00:00.000Z');
   });
 
+  it('observe.supersede-closes-prior-at-new-validFrom', async () => {
+    let next: ReconcileDecision[] = [rec(null, 'ADD')];
+    const { store, deps } = setup(gate(0.9), () => next);
+    const a = await observe(
+      obs('auth on port 3000', '2026-01-01T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    next = [rec(a.memoryId ?? null, 'SUPERSEDE')];
+    // Observed at `now` (2026-01-01) but the fact starts later.
+    const b = await observe(
+      obs('auth on port 4000', '2026-01-05T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    const [A, B] = await Promise.all([a, b].map((r) => store.get(r.memoryId ?? '')));
+    expect(A).toMatchObject({
+      validTo: B?.validFrom,
+      expiredAt: '2026-01-01T00:00:00.000Z',
+      endReason: 'superseded',
+      supersededBy: B?.id,
+    });
+    expect(B).toMatchObject({ validTo: null, expiredAt: null, endReason: null });
+    expect(b.decisions.at(-1)).toMatchObject({ stage: 'temporal', answer: 'in-order' });
+  });
+
+  it('observe.out-of-order-older-fact-closes-itself', async () => {
+    let next: ReconcileDecision[] = [rec(null, 'ADD')];
+    const { store, deps } = setup(gate(0.9), () => next);
+    const a = await observe(
+      obs('auth on port 4000', '2026-01-05T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    next = [rec(a.memoryId ?? null, 'SUPERSEDE')];
+    const b = await observe(
+      obs('auth on port 3000', '2026-01-02T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    expect(b.outcome).toBe('superseded');
+    const [A, B] = await Promise.all([a, b].map((r) => store.get(r.memoryId ?? '')));
+    expect(A).toMatchObject({ validTo: null, expiredAt: null, endReason: null, supersedes: B?.id });
+    expect(B).toMatchObject({
+      validTo: A?.validFrom,
+      expiredAt: '2026-01-01T00:00:00.000Z',
+      endReason: 'superseded',
+      supersededBy: A?.id,
+      supersedes: null,
+    });
+    expect((await store.list(FILTER)).map((m) => m.id)).toEqual([a.memoryId]);
+    expect(b.decisions.at(-1)).toMatchObject({
+      stage: 'temporal',
+      question: 'order',
+      answer: 'out-of-order',
+      probability: 1,
+    });
+  });
+
+  it('observe.reinforce-sets-lastConfirmedAt', async () => {
+    const gateSide = setup(gate(0.1), []);
+    await gateSide.store.upsert(makeMemory({ id: 'X', text: 'auth runs on port 4000' }));
+    await observe(obs('auth runs on port 4000'), localScope(), gateSide.deps);
+    expect((await gateSide.store.get('X'))?.lastConfirmedAt).toBe('2026-01-01T00:00:00.000Z');
+
+    const rec2 = setup(gate(0.9), [rec('Y', 'REINFORCE')]);
+    await rec2.store.upsert(
+      makeMemory({ id: 'Y', text: 'auth runs on port 4000', embedding: vec(100, 0, 0, 0) }),
+    );
+    await observe(obs('auth runs on port 4000'), localScope(), rec2.deps);
+    expect((await rec2.store.get('Y'))?.lastConfirmedAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+
   it('observe.records-decisions', async () => {
     const { store, deps } = setup(gate(0.9), [rec(null, 'ADD', 0.7), rec(null, 'NOOP', 0.2)]);
     const res = await observe(obs('auth moved'), localScope(), deps);

@@ -1,6 +1,6 @@
 import { activation, type ActivationParams } from './activation.js';
 import type { Hit } from './adapters.js';
-import type { Memory } from './model.js';
+import { isCurrent, type Memory } from './model.js';
 
 /** Weight of activation relative to the RRF score in `fuse`. */
 const ACTIVATION_WEIGHT = 0.1;
@@ -29,13 +29,13 @@ export function rrf(lists: Hit[][], k = 60): Map<string, number> {
 }
 
 /**
- * Valid now (`validTo === null`), or, with `asOf`, valid at that instant:
- * `validFrom <= asOf < validTo`.
+ * Current now (`isCurrent(m, now)`), or, with `asOf`, valid in the world at
+ * that instant. As-of ignores `expiredAt`: it asks what was true then, not
+ * what the system currently believes.
  */
-function isValid(m: Memory, asOf: string | undefined): boolean {
-  if (asOf === undefined) return m.validTo === null;
-  const t = Date.parse(asOf);
-  return Date.parse(m.validFrom) <= t && (m.validTo === null || Date.parse(m.validTo) > t);
+function isValid(m: Memory, now: Date, asOf: string | undefined): boolean {
+  if (asOf === undefined) return isCurrent(m, now);
+  return isCurrent({ ...m, expiredAt: null }, new Date(asOf));
 }
 
 /**
@@ -52,7 +52,7 @@ export function fuse(
   const out: { id: string; score: number }[] = [];
   for (const [id, base] of rrf(hits)) {
     const m = memories.get(id);
-    if (m === undefined || !isValid(m, p.asOf)) continue;
+    if (m === undefined || !isValid(m, now, p.asOf)) continue;
     const a = activation(m.accessLog, m.salience, now, p.activation);
     out.push({ id, score: base + ACTIVATION_WEIGHT * a });
   }

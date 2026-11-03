@@ -32,6 +32,20 @@ export interface ObserveDeps {
   harness?: string;
 }
 
+/**
+ * Still believed and not yet ended at `now`. Unlike `isCurrent` it ignores
+ * `validFrom`: a fact observed with a start in the future is still a live
+ * candidate for reinforcement or supersession.
+ */
+function isLive(m: Memory, now: Date): boolean {
+  return m.expiredAt === null && (m.validTo === null || Date.parse(m.validTo) > now.getTime());
+}
+
+async function confirm(store: MemoryStore, id: string, nowIso: string): Promise<void> {
+  const m = await store.get(id);
+  if (m !== null) await store.upsert({ ...m, lastConfirmedAt: nowIso });
+}
+
 const GATE_THRESHOLD = 0.5;
 const HOT_SALIENCE = 0.8;
 const CANDIDATES = 5;
@@ -65,8 +79,9 @@ export async function observe(
     const hits = await store.lexical(`${obs.userText} ${obs.assistantText}`, filter, 3);
     for (const hit of hits) {
       const m = await store.get(hit.id);
-      if (m === null || m.validTo !== null) continue;
+      if (m === null || !isLive(m, now)) continue;
       await store.recordAccess([m.id], now);
+      await confirm(store, m.id, now.toISOString());
       return { outcome: 'reinforced', memoryId: m.id, decisions: g.decisions };
     }
     return { outcome: 'skipped', decisions: g.decisions };
@@ -84,7 +99,7 @@ export async function observe(
   const candidates: Memory[] = [];
   for (const id of ids) {
     const m = await store.get(id);
-    if (m !== null && m.validTo === null) candidates.push(m);
+    if (m !== null && isLive(m, now)) candidates.push(m);
     if (candidates.length === CANDIDATES) break;
   }
 
@@ -102,6 +117,7 @@ export async function observe(
     const target = candidates.find((c) => c.id === best.candidateId);
     if (target === undefined) return { outcome: 'skipped', decisions };
     await store.recordAccess([target.id], now);
+    await confirm(store, target.id, now.toISOString());
     return { outcome: 'reinforced', memoryId: target.id, decisions };
   }
 
@@ -125,6 +141,9 @@ export async function observe(
     accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
     validFrom: obs.at,
     validTo: null,
+    expiredAt: null,
+    endReason: null,
+    lastConfirmedAt: null,
     supersedes: prior?.id ?? null,
     supersededBy: null,
     embedding: vec,
@@ -140,9 +159,40 @@ export async function observe(
     createdAt: iso,
     updatedAt: iso,
   };
-  await store.upsert(memory);
   if (prior !== undefined) {
-    await store.upsert({ ...prior, validTo: obs.at, supersededBy: id, updatedAt: iso });
+    const inOrder = Date.parse(prior.validFrom) <= Date.parse(memory.validFrom);
+    const temporal: Decision = {
+      stage: 'temporal',
+      question: 'order',
+      answer: inOrder ? 'in-order' : 'out-of-order',
+      probability: 1,
+    };
+    if (inOrder) {
+      // Close the prior where the new fact starts, not where we observed it.
+      await store.upsert(memory);
+      await store.upsert({
+        ...prior,
+        validTo: memory.validFrom,
+        expiredAt: iso,
+        endReason: 'superseded',
+        supersededBy: id,
+        updatedAt: iso,
+      });
+    } else {
+      // The "new" fact is older than the prior: it slots in before it, already closed.
+      await store.upsert({
+        ...memory,
+        validTo: prior.validFrom,
+        expiredAt: iso,
+        endReason: 'superseded',
+        supersededBy: prior.id,
+        supersedes: prior.supersedes,
+      });
+      await store.upsert({ ...prior, supersedes: id, updatedAt: iso });
+    }
+    decisions.push(temporal);
+  } else {
+    await store.upsert(memory);
   }
 
   const outcome = action === 'ADD' ? 'added' : action === 'UPDATE' ? 'updated' : 'superseded';

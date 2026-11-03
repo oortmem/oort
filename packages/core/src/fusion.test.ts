@@ -64,14 +64,25 @@ describe('fusion', () => {
     expect(at('2026-10-31T00:00:00.000Z')).toEqual([]);
   });
 
+  it('fusion.keeps-future-expiry', () => {
+    const m = makeMemory({
+      id: 'soon',
+      validFrom: '2026-11-01T00:00:00.000Z',
+      validTo: '2026-12-01T00:00:00.000Z',
+    });
+    const out = fuse([hits('soon')], byId(m), NOW, { activation: P });
+    expect(out.map((r) => r.id)).toEqual(['soon']);
+  });
+
   it('adds-a-tenth-of-activation', () => {
     const recent = '2026-11-03T11:00:00.000Z';
     const hot = makeMemory({
       id: 'hot',
       salience: 0.9,
+      validFrom: '2026-11-01T00:00:00.000Z',
       accessLog: { count: 1, recent: [recent], compactedSum: 0, compactedAt: null },
     });
-    const cold = makeMemory({ id: 'cold', salience: 0.1 });
+    const cold = makeMemory({ id: 'cold', salience: 0.1, validFrom: '2026-11-01T00:00:00.000Z' });
     // `cold` ranks first in the only list, but `hot` has far higher activation.
     const out = fuse([hits('cold', 'hot')], byId(hot, cold), NOW, { activation: P });
     const expected = (m: Memory, rank: number) =>
@@ -83,7 +94,7 @@ describe('fusion', () => {
   });
 
   it('drops-ids-missing-from-memories', () => {
-    const a = makeMemory({ id: 'a' });
+    const a = makeMemory({ id: 'a', validFrom: '2026-11-01T00:00:00.000Z' });
     const out = fuse([hits('ghost', 'a')], byId(a), NOW, { activation: P });
     expect(out.map((r) => r.id)).toEqual(['a']);
   });

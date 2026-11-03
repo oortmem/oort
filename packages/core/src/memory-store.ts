@@ -1,6 +1,6 @@
 import { appendAccess } from './activation.js';
 import { scopeMatches, type Hit, type MemoryStore, type ScopeFilter } from './adapters.js';
-import type { Memory, Tier } from './model.js';
+import { isCurrent, type Memory, type Tier } from './model.js';
 
 export interface MemoryStoreOptions {
   /**
@@ -9,6 +9,8 @@ export interface MemoryStoreOptions {
    * only valid for one `d`; pass the same `d` the engine's activation uses.
    */
   d?: number;
+  /** Clock for `list`'s validity filter; defaults to `new Date()`. */
+  now?: () => Date;
 }
 
 /**
@@ -58,6 +60,7 @@ function rank(scored: { m: Memory; score: number }[], k: number): Hit[] {
  */
 export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   const d = opts.d ?? 0.5;
+  const clock = opts.now ?? (() => new Date());
   const main = new Map<string, Memory>();
   const cold = new Map<string, Memory>();
   const cursors = new Map<string, string>();
@@ -136,8 +139,9 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     async list(scope, listOpts = {}) {
       open();
       const validOnly = listOpts.validOnly ?? true;
+      const now = clock();
       return scoped(scope)
-        .filter((m) => !validOnly || m.validTo === null)
+        .filter((m) => !validOnly || isCurrent(m, now))
         .filter((m) => listOpts.tier === undefined || m.tier === listOpts.tier)
         .sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt))
         .map((m) => structuredClone(m));

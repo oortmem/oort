@@ -97,7 +97,7 @@ export interface MemoryStore {
   recordAccess(ids: string[], at: Date): Promise<void>;
   /**
    * Scoped listing, newest `updatedAt` first. `validOnly` defaults to true
-   * (only `validTo === null`); `tier` restricts to one tier.
+   * (only memories for which `isCurrent(m, now)` holds); `tier` restricts to one tier.
    */
   list(scope: ScopeFilter, opts?: { tier?: Tier; validOnly?: boolean }): Promise<Memory[]>;
   /**

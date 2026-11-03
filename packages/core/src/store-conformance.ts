@@ -32,6 +32,9 @@ export function makeMemory(overrides: Partial<Memory> & { id: string }): Memory 
     accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
     validFrom: now,
     validTo: null,
+    expiredAt: null,
+    endReason: null,
+    lastConfirmedAt: null,
     supersedes: null,
     supersededBy: null,
     source: { harness: 'test', decisions: [] },
@@ -268,6 +271,26 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
         'old',
       ]);
       expect(ids(await store.list(LOCAL, { tier: 'hot' }))).toEqual(['old']);
+    });
+
+    it('list-valid-only-uses-isCurrent', async () => {
+      await store.upsert(makeMemory({ id: 'future', validTo: '2999-01-01T00:00:00.000Z' }));
+      await store.upsert(
+        makeMemory({
+          id: 'past',
+          validFrom: '2000-01-01T00:00:00.000Z',
+          validTo: '2000-06-01T00:00:00.000Z',
+        }),
+      );
+      await store.upsert(
+        makeMemory({ id: 'expired', expiredAt: '2026-11-01T00:00:00.000Z', endReason: 'expired' }),
+      );
+      expect(ids(await store.list(LOCAL)).sort()).toEqual(['future']);
+      expect(ids(await store.list(LOCAL, { validOnly: false })).sort()).toEqual([
+        'expired',
+        'future',
+        'past',
+      ]);
     });
 
     it('close-is-idempotent', async () => {
