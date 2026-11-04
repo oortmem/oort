@@ -76,11 +76,11 @@ an error message is scrubbed and clipped to 24 characters.
 
 | Variable | Effect |
 | --- | --- |
-| `VOYAGE_API_KEY`, `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY` | Your own vendor keys. Each wins over the Keychain item of the same provider. |
-| `OORT_API_KEY` | Your Oort Pro key. It wins over Keychain item `oort.oort`. |
+| `VOYAGE_API_KEY`, `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY` | Your own vendor keys. Each wins over the stored key (Keychain item or `credentials.json` entry) of the same provider. |
+| `OORT_API_KEY` | Your Oort Pro key. It wins over the stored `oort` key (Keychain item `oort.oort`). |
 | `OORT_RELAY_URL` | The Oort Pro relay root, for local development against `wrangler dev` (default `https://relay.oortcloud.dev`). https only, or http to `localhost`, `127.0.0.1` or `[::1]`. |
 | `OORT_SITE_URL` | The site `oort login` signs in at, for local development (default `https://oortcloud.dev`). The same rule applies. |
-| `OORT_NO_KEYCHAIN=1` | Switches the Keychain off for every command (see `oort keys`). |
+| `OORT_NO_KEYCHAIN=1` | Switches stored keys (Keychain and `credentials.json`) off for every command (see `oort keys`). |
 | `OORT_HOME` | The store directory (default `~/.oort`). |
 | `NO_COLOR`, `FORCE_COLOR` | See Colour above. |
 
@@ -122,7 +122,7 @@ The steps:
      each missing key. With `--yes` it only prints the commands.
    - **Oort Pro.** No vendor keys, $19 a month. Setup runs `oort login`
      right there (see below): the browser sign-in, the match code, and the
-     wait for approval. If the sign-in fails, expires or the Keychain is off,
+     wait for approval. If the sign-in fails, expires or key storage is off,
      setup says why and carries on without it. `--yes --keys pro` signs in
      without a question: it prints the URL and waits.
    - **Skip.** Recall works lexical-only until keys are set.
@@ -159,8 +159,8 @@ The steps:
 | --- | --- |
 | Claude Code hooks in `~/.claude/settings.json` | `oort uninstall claude-code` |
 | An MCP entry in a host's config | `oort disconnect <host>` |
-| A key in the Keychain | `oort keys rm <provider>` |
-| The Oort Pro key (`oort.oort`) | `oort logout`, then revoke the key at oortcloud.dev/account |
+| A key in the Keychain or `credentials.json` | `oort keys rm <provider>` |
+| The Oort Pro key (`oort.oort`, or its `credentials.json` entry) | `oort logout`, then revoke the key at oortcloud.dev/account |
 | A global install (`npm i -g oortmem`) | `npm rm -g oortmem` |
 | Imported sessions | review with `oort inspect`, remove with `oort forget <id>` |
 | A new store in `~/.oort` | `rm -r ~/.oort` (deletes every memory) |
@@ -400,7 +400,7 @@ plus global memories.
 ## Keys: `oort keys`
 
 ```sh
-oort keys set voyage      # macOS Keychain prompts for the value, hidden
+oort keys set voyage      # prompts for the value, hidden (Keychain on macOS, credentials.json elsewhere)
 oort keys list [--json]   # where each key comes from: env, keychain or missing
 oort keys rm voyage
 ```
@@ -408,15 +408,27 @@ oort keys rm voyage
 The providers are `voyage` (`VOYAGE_API_KEY`), `typesafe`
 (`TYPESAFE_API_KEY`), `anthropic` (`ANTHROPIC_API_KEY`) and `oort`
 (`OORT_API_KEY`, the Oort Pro key that `oort login` stores). A set, non-empty
-environment variable wins over the Keychain. `keys list` prints where each key
-comes from; with `--json` it prints
+environment variable wins over the stored key. `keys list` prints where each key
+comes from (`keychain` means the stored key, in either place below); with `--json` it prints
 `[{ "provider", "envVar", "source" }]`. It never prints a value. A missing
 `oort` row points at `oort login`. `oort keys set oort` also works, for a key
 you created on the account page.
 
-`OORT_NO_KEYCHAIN=1` switches the Keychain off for every command: nothing runs
-`/usr/bin/security`, and `keys set`, `keys rm`, `login` and `logout` refuse
-while it is set. See `docs/claude-code.md` for why `ANTHROPIC_API_KEY` should
+Where keys are stored:
+
+- **macOS:** the Keychain, as `oort.<provider>` items through `/usr/bin/security`.
+- **Linux and Windows:** `$OORT_HOME/credentials.json` (default
+  `~/.oort/credentials.json`), `{ "version": 1, "keys": { "<provider>": "..." } }`,
+  with the file at mode 600 and its directory at 700. Oort refuses to read or
+  write the file when its mode is wider than 600 (POSIX): it says so and gives
+  the fix, `chmod 600 <file>`, and `oort doctor` reports it as a failure. Keys
+  are only read from it, never printed. `oort keys set` prompts with the input
+  hidden, or reads one line from a pipe. Windows has no POSIX modes, so the
+  file relies on your user profile's permissions.
+
+`OORT_NO_KEYCHAIN=1` switches stored keys off for every command: nothing runs
+`/usr/bin/security`, nothing reads `credentials.json`, and `keys set`,
+`keys rm`, `login` and `logout` refuse while it is set. See `docs/claude-code.md` for why `ANTHROPIC_API_KEY` should
 stay out of your shell profile.
 
 ## Oort Pro: `oort login` / `oort logout`
@@ -445,9 +457,10 @@ memories stay on your machine. Subscribe at https://oortcloud.dev/account.
 4. On approval the site mints a key named "CLI on <date>" and hands it over
    once. The session id is single use: a second poll gets 410 `used`.
    `oort login` stores the key as Keychain item `oort.oort` through
-   `security -i` on stdin (never in argv), reads it back to confirm, and
-   prints which roles now go through the relay. It never prints the key or
-   its prefix.
+   `security -i` on stdin (never in argv) on macOS, or in
+   `$OORT_HOME/credentials.json` (mode 600) on Linux and Windows, reads it
+   back to confirm, and prints which roles now go through the relay. It never
+   prints the key or its prefix.
 
 | Outcome | Exit | What it says |
 | --- | --- | --- |
@@ -455,14 +468,15 @@ memories stay on your machine. Subscribe at https://oortcloud.dev/account.
 | Expired (410 `expired`, or 10 minutes passed) | 1 | Run `oort login` again |
 | Already used (410 `used`) | 1 | Run `oort login` again |
 | Ctrl-C | 1 | Cancelled; nothing was stored |
-| The Keychain did not keep the key | 1 | Nothing saved; the unused "CLI on <date>" key can be revoked at oortcloud.dev/account |
-| `OORT_NO_KEYCHAIN=1`, or not macOS | 2 | Refused before anything starts: create a key at oortcloud.dev/account and `export OORT_API_KEY=...` instead |
+| The Keychain or credentials file did not keep the key | 1 | Nothing saved; the unused "CLI on <date>" key can be revoked at oortcloud.dev/account |
+| `OORT_NO_KEYCHAIN=1`, or a system with neither the Keychain nor `credentials.json` | 2 | Refused before anything starts: create a key at oortcloud.dev/account and `export OORT_API_KEY=...` instead |
 
-Signing in again replaces the Keychain item; the old key keeps working until
+Signing in again replaces the stored key; the old key keeps working until
 you revoke it. Neither command sends your email address or any other account
 detail: the browser session does the sign-in.
 
-`oort logout` removes Keychain item `oort.oort`. It does not revoke the key
+`oort logout` removes the stored Oort key (Keychain item `oort.oort`, or its
+`credentials.json` entry). It does not revoke the key
 on the server: revoke it at oortcloud.dev/account. If `OORT_API_KEY` is set, it
 says so, since that key would still be used.
 
@@ -479,7 +493,7 @@ Every adapter role picks its key on its own:
 - **A vendor key always wins**, per role. With only `VOYAGE_API_KEY` set and
   an Oort key, embed and rerank call Voyage directly and decide and write go
   through the relay.
-- **The Oort key** is `OORT_API_KEY`, then Keychain `oort.oort`. It is sent as
+- **The Oort key** is `OORT_API_KEY`, then the stored key (Keychain `oort.oort`, or `credentials.json`). It is sent as
   `Authorization: Bearer oort_sk_...` to every route.
 - **The relay** is `https://relay.oortcloud.dev`, or `OORT_RELAY_URL` for
   local development against `wrangler dev` (for example
@@ -496,6 +510,10 @@ Every adapter role picks its key on its own:
   and exits 1; `oort recall` degrades to lexical-only and prints it on stderr;
   the MCP `recall` tool puts it in `note`; hooks log it and carry on, as they do
   for any adapter error.
+- **No retry on the cap.** A 429 with a `Retry-After` header (the 10-second
+  limit) is retried once, as with any adapter. A 429 without one is the
+  monthly cap, which waiting does not clear: it is not retried, and the relay's
+  own message (which pool, and when it resets) is the line you see.
 
 `oort keys list` and `oort doctor` show which key serves each role.
 
@@ -506,21 +524,22 @@ oort doctor [--json]
 ```
 
 `oort doctor` checks everything Oort depends on and prints a fix for each
-problem. It reads only: it never creates the store, writes a config or calls
-the network.
+problem. It reads only: it never creates the store or writes a config. Its one
+network call is `GET <relay>/health`, made only when a role goes through Oort
+Pro, with no key and a 3 second timeout.
 
 | Group | Checks | A problem and its fix |
 | --- | --- | --- |
-| `keys` | Per role, the key that wins: your own (env or Keychain) or Oort Pro (env or Keychain), presence only. | No key: `oort keys set <provider>, or oort login (Oort Pro)`. A model the relay does not serve: use the default model, or set the vendor key. |
+| `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort keys set <provider>, or oort login (Oort Pro)`. A model the relay does not serve: use the default model, or set the vendor key. |
 | `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, for this bin. | Missing, from another path, or a command that is not executable: `oort install claude-code`. Unparseable settings: fix the JSON, then `oort install claude-code`. |
 | `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
 | `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Readable by others: `chmod 700 ~/.oort`. |
-| `relay` | The relay URL in use, when a role goes through Oort Pro. | An invalid `OORT_RELAY_URL`: unset it. |
+| `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
 
 Each check has a status: `✓` ok, `!` warn, `✗` fail, `·` info and `?`
-unknown. Relay reachability is always `unknown` for now: the relay has no
-health endpoint, so doctor does not probe it. A failed check makes doctor exit
-1; warnings alone exit 0.
+unknown. A relay that does not answer `/health` is a warning, not a failure:
+Oort still works locally, and recall falls back to lexical-only. A failed check
+makes doctor exit 1; warnings alone exit 0.
 
 ```
 oort doctor · 1 to fix
@@ -557,9 +576,6 @@ project's memories. See `docs/claude-code.md`.
 
 ## Planned (not in this build)
 
-- A relay health check in `oort doctor`, once the relay has a health endpoint.
-- `oort login` on Linux and Windows, once Oort keeps keys outside the macOS
-  Keychain (CON-55). Until then, export `OORT_API_KEY`.
 - `oort connect vscode --profile <id>` for a named VS Code profile.
 - ChatGPT and claude.ai web or mobile: need the remote MCP URL that comes with
   Oort Cloud.
