@@ -406,7 +406,7 @@ export async function setupCommand(
           p.info(
             ctx.keychain.supported
               ? `  then run: oort keys set ${k}`
-              : `  then export ${PROVIDER_ENV[k]}=... (the Keychain is macOS-only for now)`,
+              : `  then export ${PROVIDER_ENV[k]}=... (${ctx.io.env['OORT_NO_KEYCHAIN'] === '1' ? 'OORT_NO_KEYCHAIN=1 is set' : 'the Keychain is macOS-only for now'})`,
           );
         }
       }

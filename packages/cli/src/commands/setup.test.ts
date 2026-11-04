@@ -150,6 +150,7 @@ describe('oort setup', () => {
     expect(r.io.stdout).toContain('https://docs.voyageai.com/docs/api-key-and-installation');
     expect(r.io.stdout).toContain('https://platform.claude.com/settings/keys');
     expect(r.io.stdout).toContain('export TYPESAFE_API_KEY=');
+    expect(r.io.stdout).toContain('macOS-only');
     expect(r.io.stdout).toMatch(/recalled/i);
     for (const id of ids) expect(await h.store.get(id)).toBeNull();
   });
