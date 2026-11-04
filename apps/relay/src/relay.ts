@@ -66,9 +66,9 @@ export const COUNTERS = [
 export type Counter = (typeof COUNTERS)[number];
 
 /**
- * Monthly hard caps per plan and account. saves and recalls are Structure A in
- * docs/research/2026-11-04-pricing.md and `rates.managed.Pro` in apps/site/src/lib/oort-data.ts
- * (a test keeps them equal). The other three bound what each route can cost.
+ * Monthly hard caps per plan and account. saves and recalls match the published Pro plan,
+ * `rates.managed.Pro` in apps/site/src/lib/oort-data.ts (a test keeps them equal). The other
+ * three bound what each route can cost.
  */
 export const PLAN_LIMITS = {
   pro: {
