@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { LegalPage, Contact, GeneralContact, VatLine } from '@/components/site/LegalPage';
 import { legal } from '@/lib/legal';
-import { rates } from '@/lib/oort-data';
+import { proPriceLine, rates } from '@/lib/oort-data';
 
 export const Route = createFileRoute('/legal/terms-of-service')({
   head: () => ({
@@ -57,10 +57,10 @@ function Page() {
 
       <h2>3. Price, billing and tax</h2>
       <p>
-        Oort Pro costs <strong>${pro.price} a month</strong>, plus VAT or sales tax where it
-        applies, which Checkout shows before you pay. Stripe charges it in advance each month, from
-        the day you subscribe, until you cancel. We may change the price with at least 30 days'
-        notice by email before your next renewal, and you can cancel before the new price applies.
+        Oort Pro costs <strong>{proPriceLine}</strong>. Where VAT applies it is part of that price,
+        and Checkout shows it before you pay. Stripe charges it in advance each month, from the day
+        you subscribe, until you cancel. We may change the price with at least 30 days' notice by
+        email before your next renewal, and you can cancel before the new price applies.
       </p>
 
       <h2>4. Included use and limits</h2>
@@ -69,9 +69,9 @@ function Page() {
         <strong>
           {n(pro.saves)} saves and {n(pro.recalls)} recalls
         </strong>
-        . A save is one call that writes a memory. A recall is one search call (one rerank, or one
-        search embedding). When you reach either amount, that part of Pro stops until the 1st of the
-        next month. Nothing extra is charged: extra use is not billed today.
+        . A save is one call that writes a memory. A recall is one search, counted once however many
+        provider calls it makes. When you reach either amount, that part of Pro stops until the 1st
+        of the next month. Nothing extra is charged: extra use is not billed today.
       </p>
       <p>
         Each key may send up to 60 requests every 10 seconds. The relay accepts only the models and

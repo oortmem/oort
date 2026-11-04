@@ -52,7 +52,10 @@ describe('legal pages for Oort Pro', () => {
   it('Terms of service cover the subscription, cancel any time and the 14-day withdrawal', async () => {
     const text = await page(TermsOfService);
     expect(text).toMatch(/Oort Pro terms of service/);
-    expect(text).toMatch(/\$19 a month/);
+    expect(text).toContain('$19/month, VAT included where applicable');
+    expect(text).not.toMatch(/plus VAT|plus tax|sales tax/);
+    expect(text).toMatch(/A recall is one search/);
+    expect(text).not.toMatch(/one rerank/);
     expect(text).toMatch(/cancel any time/i);
     expect(text).toMatch(/14 days/);
     expect(text).toMatch(/start right away/);

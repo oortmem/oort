@@ -45,6 +45,7 @@ describe('account page', () => {
     expect(
       screen.getByText(/Pro: no API keys needed; your memories stay on your machine/),
     ).toBeTruthy();
+    expect(screen.getByText(/\$19\/month, VAT included where applicable/)).toBeTruthy();
   });
 
   it('offers Manage billing and hides Subscribe while Pro is active', () => {

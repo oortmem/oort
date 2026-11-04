@@ -11,6 +11,7 @@ import {
   estimateMonthlyCost,
   plans,
   proLine,
+  proPriceLine,
   tiers,
 } from '@/lib/oort-data';
 
@@ -21,7 +22,7 @@ export const Route = createFileRoute('/pricing')({
       {
         name: 'description',
         content:
-          'Open source and free to self-host. Hosted Free, Pro $19 a month, Team $99 a month. Prices are a launch proposal.',
+          'Open source and free to self-host. Hosted Free, Pro $19/month (VAT included where applicable), Team $99 a month. Prices are a launch proposal.',
       },
       { property: 'og:title', content: 'Oort Cloud pricing' },
       {
@@ -55,7 +56,9 @@ function Pricing() {
           Hosted Oort Cloud is not open yet. Today you run the open source engine on your own
           machine, with your own keys or with Oort Pro.
         </p>
-        <p className="mt-3 max-w-xl text-base font-medium">{proLine}.</p>
+        <p className="mt-3 max-w-xl text-base font-medium">
+          {proLine}. {proPriceLine}.
+        </p>
 
         <div className="mt-12 grid gap-4 md:grid-cols-3">
           {tiers.map((t) => (
@@ -179,7 +182,7 @@ function Pricing() {
           card.
         </p>
         <p className="mt-2 max-w-3xl text-xs text-muted-foreground">
-          Oort Pro ($19 a month) works with the engine on your machine: Oort makes the Voyage,
+          Oort Pro ({proPriceLine}) works with the engine on your machine: Oort makes the Voyage,
           TypeSafe and Anthropic calls for you, so you need no keys of your own. Pro stops at 25,000
           saves and 50,000 recalls a month; extra use is not billed yet. The warm and cold storage
           amounts apply to hosted Oort Cloud, which is <PlannedBadge />. Your own keys pricing is

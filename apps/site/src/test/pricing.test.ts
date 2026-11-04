@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { estimateMonthlyCost, plans, planCost, proLine, rates } from '@/lib/oort-data';
+import {
+  estimateMonthlyCost,
+  plans,
+  planCost,
+  proLine,
+  proPriceLine,
+  rates,
+} from '@/lib/oort-data';
 
 const usage = (saves: number, recalls: number, warmGb: number, coldGb: number) => ({
   saves,
@@ -26,6 +33,9 @@ describe('plan table', () => {
     expect(plans.find((p) => p.name === 'Pro')?.features[0]).toBe(
       'No API keys needed; your memories stay on your machine',
     );
+  });
+  it('states the Pro price with VAT included', () => {
+    expect(proPriceLine).toBe('$19/month, VAT included where applicable');
   });
   it('shows the same Pro saves and recalls the relay enforces', () => {
     const pro = plans.find((p) => p.name === 'Pro')!;

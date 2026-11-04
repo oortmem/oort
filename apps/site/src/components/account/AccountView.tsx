@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Check, Copy, KeyRound } from 'lucide-react';
 import { PlannedBadge } from '@/components/site/PlannedBadge';
+import { proLine, proPriceLine } from '@/lib/oort-data';
 import type { Overview } from '@/server/account';
 
 const STATUS: Record<string, string> = {
@@ -131,8 +132,7 @@ export function AccountView({
           ) : null}
         </dl>
         <p className="mt-4 text-sm text-muted-foreground">
-          Pro: no API keys needed; your memories stay on your machine. $19 a month, cancel any time
-          in Manage billing.
+          {proLine}. {proPriceLine}. Cancel any time in Manage billing.
         </p>
         <div className="mt-5 flex flex-wrap gap-3">
           {!o.entitled ? (

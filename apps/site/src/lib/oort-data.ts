@@ -158,6 +158,9 @@ export function estimateMonthlyCost(u: Usage, opts: { byok?: boolean } = {}) {
 /** Shown plainly on the pricing and account pages. */
 export const proLine = 'Pro: no API keys needed; your memories stay on your machine';
 
+/** Pro's consumer price line (the Stripe price is tax-inclusive). */
+export const proPriceLine = '$19/month, VAT included where applicable';
+
 export const plans = [
   {
     name: 'Open Source',
