@@ -1,0 +1,14 @@
+{
+  "name": "oort",
+  "version": "0.1.0",
+  "description": "Oort memory for Claude Code: recalls relevant facts before each prompt, saves what matters after each turn, and adds the Oort memory tools and skill.",
+  "author": {
+    "name": "Oort",
+    "email": "hello@oortcloud.dev",
+    "url": "https://oortcloud.dev"
+  },
+  "homepage": "https://oortcloud.dev/docs/quickstart",
+  "repository": "https://github.com/oortmem/oort",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "mcp", "recall", "oort"]
+}

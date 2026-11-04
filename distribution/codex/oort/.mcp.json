@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "oort": {
+      "type": "stdio",
+      "command": "oort",
+      "args": ["mcp"]
+    }
+  }
+}
