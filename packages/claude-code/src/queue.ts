@@ -188,6 +188,19 @@ export interface DrainResult {
 }
 
 /**
+ * A stable id for a queued turn: `<sessionId>:<transcript turn>` when both are known, else the
+ * queue line's own id (kept across retries, since a failed line stays in its file).
+ */
+export function turnRefOf(line: {
+  id: string;
+  obs: { sessionId?: string; turnRef?: string };
+}): string {
+  return line.obs.sessionId !== undefined && line.obs.turnRef !== undefined
+    ? `${line.obs.sessionId}:${line.obs.turnRef}`
+    : line.id;
+}
+
+/**
  * Observes queued lines, oldest file first, at most 50 per run, under the
  * drain lock. A line that observed is removed; one whose observe threw keeps
  * its place with `attempts + 1`, and moves to `dead/` at the third failure.
@@ -197,8 +210,11 @@ export async function drainQueue(deps: HookDeps): Promise<DrainResult> {
   const t0 = performance.now();
   const dir = queueDir(deps.config.home);
   const logBase = { event: 'drain', session: null, project: null } as const;
-  const { embed, decide, write } = deps;
-  if (embed === undefined || decide === undefined || write === undefined) {
+  const { embed, decide, write, remote } = deps;
+  if (
+    remote === undefined &&
+    (embed === undefined || decide === undefined || write === undefined)
+  ) {
     const remaining = countLines(dir);
     deps.log.write({
       ...logBase,
@@ -236,6 +252,7 @@ export async function drainQueue(deps: HookDeps): Promise<DrainResult> {
   let budget = DRAIN_MAX_PER_RUN;
   let consecutive = 0;
   let deadCount = 0;
+  let held = false;
   const deadIds: string[] = [];
   try {
     fs.writeSync(lock, `${process.pid}\n`);
@@ -268,18 +285,30 @@ export async function drainQueue(deps: HookDeps): Promise<DrainResult> {
         }
         budget--;
         try {
-          await observe(line.obs, line.scope, {
-            store: deps.store,
-            embed,
-            decide,
-            write,
-            config: deps.config,
-            now: deps.now?.() ?? new Date(),
-            harness: 'claude-code',
-          });
+          if (remote !== undefined) {
+            await remote.observe(line.obs, line.scope.projectId, turnRefOf(line));
+          } else {
+            await observe(line.obs, line.scope, {
+              store: deps.store,
+              embed: embed as NonNullable<typeof embed>,
+              decide: decide as NonNullable<typeof decide>,
+              write: write as NonNullable<typeof write>,
+              config: deps.config,
+              now: deps.now?.() ?? new Date(),
+              harness: 'claude-code',
+            });
+          }
           processed++;
           consecutive = 0;
-        } catch {
+        } catch (e) {
+          if ((e as { holdQueue?: unknown } | null)?.holdQueue === true) {
+            // The account cannot save right now (signed out, no plan, a limit, an outage): keep
+            // this line and the rest exactly as they are and try again on a later drain.
+            held = true;
+            keep.push(raw);
+            budget = 0;
+            continue;
+          }
           failed++;
           consecutive++;
           const next = JSON.stringify({ ...line, attempts: line.attempts + 1 });
@@ -336,7 +365,7 @@ export async function drainQueue(deps: HookDeps): Promise<DrainResult> {
   const remaining = countLines(dir);
   deps.log.write({
     ...logBase,
-    outcome: 'ok',
+    outcome: held ? 'held' : 'ok',
     counts: { processed, failed, remaining },
     timings: { totalMs: performance.now() - t0 },
   });

@@ -34,10 +34,20 @@ import { createKeychain, type KeychainReader } from './keychain.js';
 import { RELAY_MODELS, RELAY_PATHS, relayUrl, viaRelay, type OortRelayError } from './relay.js';
 import { echo } from './util.js';
 
+import { cloudUrl, createCloudClient, readCloudSettings, type CloudClient } from './cloud.js';
 export type { AdapterRole } from './credentials.js';
 
 export interface Wired {
   config: ResolvedConfig;
+  /**
+   * Which store this machine uses (`~/.oort/cloud.json`). In `cloud` mode memories live in Oort
+   * Cloud: `cloud` is the API client and no vendor adapter is loaded (the cloud calls the models).
+   * The local store still holds the hooks' cursors and queue.
+   */
+  mode?: 'local' | 'cloud';
+  cloud?: CloudClient;
+  /** Why cloud mode has no client (no Oort key, a bad OORT_CLOUD_URL). */
+  cloudProblem?: string;
   scope: Scope;
   store: MemoryStore;
   embed?: Embedder;
@@ -64,7 +74,11 @@ export interface Wired {
 }
 
 export interface WireWarning {
-  code: 'embed-dimension-ignored' | 'project-id-untrusted' | 'keychain-unreadable';
+  code:
+    | 'embed-dimension-ignored'
+    | 'project-id-untrusted'
+    | 'keychain-unreadable'
+    | 'cloud-unavailable';
   /** One line for stderr; holds config values only. */
   message: string;
 }
@@ -87,6 +101,8 @@ export interface WireOptions {
    * so it neither reads the TypeSafe and Anthropic keys nor imports their SDKs (CON-57).
    */
   roles?: readonly AdapterRole[];
+  /** Per-request timeout for the Oort Cloud client (the hooks pass their budget). */
+  cloudTimeoutMs?: number;
 }
 
 export type WireFn = (cwd: string, opts?: WireOptions) => Promise<Wired>;
@@ -292,6 +308,28 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     warnings,
     close: () => store.close(),
   };
+  const settings = readCloudSettings(config.home);
+  if (settings.store === 'cloud') {
+    out.mode = 'cloud';
+    const url = cloudUrl(env);
+    const key = await lookup('oort');
+    if ('error' in url) out.cloudProblem = url.error;
+    else if (key === undefined)
+      out.cloudProblem =
+        'cloud mode needs the Oort key: run `oort login` (or `oort cloud use --local`).';
+    else
+      out.cloud = createCloudClient({
+        url: url.url,
+        key: key.key,
+        ...fetchOpt,
+        ...(opts.cloudTimeoutMs !== undefined && { timeoutMs: opts.cloudTimeoutMs }),
+      });
+    if (out.cloudProblem !== undefined)
+      warnings.push({ code: 'cloud-unavailable', message: out.cloudProblem });
+    // The cloud runs the models with Oort's keys: no vendor adapter, no vendor key read.
+    return out;
+  }
+  out.mode = 'local';
   const want = new Set<AdapterRole>(opts.roles ?? ROLES);
   // The selected adapters load in parallel; key reads are cached per provider, so a shared key
   // (Voyage for embed and rerank) is still read once.

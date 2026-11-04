@@ -1,5 +1,6 @@
 import { filterFor, grantFor } from '@oortmem/claude-code';
-import { clip, confirm, findMemory, short, withWired, type Ctx } from '../util.js';
+import { findCloudMemory } from '../cloud.js';
+import { clip, cloudOf, confirm, findMemory, short, withWired, type Ctx } from '../util.js';
 
 /** `oort forget <id> [--yes]`: deletes a memory everywhere (main record and cold copy). */
 export async function forgetCommand(
@@ -8,7 +9,11 @@ export async function forgetCommand(
   ctx: Ctx,
 ): Promise<number> {
   return withWired(ctx, async (w) => {
-    const m = await findMemory(w.store, filterFor(w.scope), id);
+    const cloud = cloudOf(w);
+    const m =
+      cloud !== undefined
+        ? await findCloudMemory(cloud, id)
+        : await findMemory(w.store, filterFor(w.scope), id);
     const ok = await confirm(
       ctx.io,
       `Forget ${short(m.id)} "${clip(m.text, 60)}"?`,
@@ -19,7 +24,8 @@ export async function forgetCommand(
       ctx.io.out('Kept.\n');
       return 0;
     }
-    await w.store.forget(grantFor(w.scope), m.id);
+    if (cloud !== undefined) await cloud.forget(m.id);
+    else await w.store.forget(grantFor(w.scope), m.id);
     ctx.io.out(`Forgot ${m.id}.\n`);
     return 0;
   });

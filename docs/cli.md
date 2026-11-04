@@ -533,6 +533,49 @@ Every adapter role picks its key on its own:
 
 `oort keys list` and `oort doctor` show which key serves each role.
 
+## Oort Cloud: `oort cloud`
+
+```sh
+oort cloud use [--local]
+oort cloud status [--json]
+oort cloud import [--dry-run] [--yes]
+oort cloud export [--out <file>] [--force]
+```
+
+With Oort Pro your memories can live in Oort Cloud (stored in the EU) instead of on this machine.
+Then the Claude Code hooks, `oort mcp` and the memory commands read and save in your account, and
+the dashboard on oortcloud.dev shows them.
+
+- `oort cloud use` checks your account and switches this machine to the cloud. It needs
+  `oort login` and an active Pro plan. `oort cloud use --local` switches back. The setting lives in
+  `~/.oort/cloud.json`, never in a repository file, so a cloned repository cannot change where your
+  memories go.
+- `oort cloud import` uploads the local store (every project) in the v1 export format, in requests
+  of at most 500 memories (the API takes up to 1,000 lines a call and says where to continue, which
+  the CLI follows). It shows the size first and asks before it uploads (`--yes` skips the
+  question, `--dry-run` only shows it). It is resumable: if the network drops, run it again and it
+  continues where it stopped. It is also safe to run twice: the cloud skips memories it already
+  has. Embeddings of the same model and dimension are reused; others are made again in the cloud.
+- `oort cloud export` downloads every memory in your account, so you can always go back to local.
+  It works in every billing state, including after Pro lapses.
+- `oort cloud status` shows the store, the account and plan, the cloud's memory count and import
+  progress.
+
+In cloud mode:
+
+| Command or hook | What happens |
+| --- | --- |
+| `recall`, `explain`, `inspect`, `pin`, `unpin`, `forget`, `stats`, `export`, `observe` | Call the API for this project (plus account-wide memories). Short ids need at least 8 characters; the API looks them up and refuses a prefix that matches more than one memory. |
+| UserPromptSubmit, SessionStart | Recall from the cloud within the hook's time limit (SessionStart: pinned memories, then the hot tier). On a timeout or any error they inject nothing and still exit 0. |
+| Stop | Unchanged: queues the new turns on this machine and starts a drain. It never calls the network. |
+| The drain | Sends queued turns to the cloud, each with a `turnRef` (`<session>:<turn>`), so a drain that crashes after a save and runs again does not save the turn twice. If the account cannot save (signed out, no plan, a limit, an outage), the turns stay queued and are sent on a later run. |
+| `oort mcp` | The same seven tools, answered by the cloud. |
+| `consolidate`, `import claude-code` | Refused: the cloud consolidates itself, and transcript import writes to the local store (import locally, then `oort cloud import`). |
+
+No vendor key is read in cloud mode: Oort Cloud calls the models. `OORT_CLOUD_URL` points the CLI
+at another API (https, or http to localhost for `wrangler dev`). Errors are one line with the fix,
+and never contain your key.
+
 ## `oort doctor`
 
 ```sh
@@ -594,4 +637,4 @@ project's memories. See `docs/claude-code.md`.
 
 - `oort connect vscode --profile <id>` for a named VS Code profile.
 - ChatGPT and claude.ai web or mobile: need the remote MCP URL that comes with
-  Oort Cloud.
+  Oort Cloud (CON-42).

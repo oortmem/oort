@@ -38,6 +38,22 @@ only for a single command when you need to: `ANTHROPIC_API_KEY=... oort observe 
 
 Set `OORT_NO_KEYCHAIN=1` to make Oort ignore the Keychain entirely.
 
+## Oort Cloud mode
+
+After `oort cloud use` (Oort Pro), the hooks recall from and save to your Oort Cloud account
+instead of `~/.oort/oort.sqlite`. Nothing else changes for Claude Code:
+
+- UserPromptSubmit and SessionStart ask the cloud and inject what it returns. A cloud timeout or
+  error injects nothing (the hook log shows `degraded: ["cloud-timeout"]` or `["cloud-error"]`);
+  the hook never falls back to the local store.
+- SessionStart injects your pinned memories, then the hot tier.
+- Stop still only queues turns locally and starts the drain. The drain sends them to the cloud and
+  keeps them queued while the account cannot save. Each turn carries a stable `turnRef`, so a retry
+  after a crash never saves it twice.
+- The hook log keeps counts and timings only, never prompt or memory text.
+
+See `docs/cli.md` for `oort cloud import`, which uploads the memories you already have.
+
 ## When Oort injects nothing
 
 Recall abstains when nothing stored answers the prompt. The hook then injects nothing, and the

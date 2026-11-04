@@ -1,5 +1,6 @@
 import { HOOK_TIMEOUTS, createHookLogger, runHook, type HookEvent } from '@oortmem/claude-code';
 import { resolveHome, type MemoryStore } from '@oortmem/core';
+import { cloudRemote } from '../cloud-remote.js';
 import { echo, type Ctx } from '../util.js';
 import type { AdapterRole, Wired } from '../wire.js';
 
@@ -114,6 +115,8 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
       const wireStart = performance.now();
       w = await ctx.wire(inputCwd(stdin) ?? io.cwd, {
         env: io.env,
+        // Oort Cloud: a recall must answer inside the hook's own budget.
+        cloudTimeoutMs: event === 'drain' ? 30_000 : 1400,
         // The drain serves every project's queue: home config only, whatever lies above OORT_HOME.
         ...(event === 'drain' ? { projectConfig: false } : { busyTimeoutMs: HOOK_BUSY_TIMEOUT_MS }),
         roles: HOOK_ROLES[event],
@@ -129,6 +132,9 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         scope: _s,
         warnings: _w,
         store,
+        mode: _m,
+        cloud: _cl,
+        cloudProblem: _cp,
         ...engine
       } = w;
       // The scope is left out: each handler derives it from the session's cwd.
@@ -141,6 +147,7 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         // The drain runs in the home directory, so it resolves the home config only:
         // project config never affects the write path.
         spawnDrain: () => io.spawnDrain(home),
+        ...(w.mode === 'cloud' && { remote: cloudRemote(w.cloud, w.cloudProblem) }),
       });
       stdout = out.stdout;
       // The drain is detached and nothing waits on it, so it closes the store cleanly.

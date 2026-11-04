@@ -13,6 +13,7 @@ import {
 import type { LoginDeps } from './commands/login.js';
 import type { Io } from './io.js';
 import type { Keychain } from './keychain.js';
+import type { CloudClient } from './cloud.js';
 import type { WireFn, Wired } from './wire.js';
 
 /**
@@ -46,6 +47,16 @@ export interface Ctx {
 /** The scope a command reads, for header lines: `project <id>` or `global`. */
 export function scopeLabel(w: Pick<Wired, 'scope'>): string {
   return w.scope.projectId === undefined ? 'global' : `project ${w.scope.projectId}`;
+}
+
+/**
+ * The Oort Cloud client when this machine uses the cloud store, undefined in local mode. In cloud
+ * mode without a client (no Oort key, a bad URL) it refuses with the reason.
+ */
+export function cloudOf(w: Wired): CloudClient | undefined {
+  if (w.mode !== 'cloud') return undefined;
+  if (w.cloud === undefined) throw new Refusal(w.cloudProblem ?? 'Oort Cloud is not set up.');
+  return w.cloud;
 }
 
 /** Wires for the cwd, runs `fn`, and always closes the store. */

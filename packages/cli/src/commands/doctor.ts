@@ -6,6 +6,7 @@ import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '..
 import { ROLES, ROLE_VENDOR, keyLookup, routeFor, type AdapterRole } from '../credentials.js';
 import { describeProblem, inspectCredentialsFile } from '../credentials-file.js';
 import { PROVIDER_ENV } from '../keychain.js';
+import { OortCloudError, cloudUrl, createCloudClient, readCloudSettings } from '../cloud.js';
 import { RELAY_MODELS, relayUrl } from '../relay.js';
 import { uiFor, type Ui } from '../ui.js';
 import { Refusal, echo, tilde, withWired, type Ctx } from '../util.js';
@@ -15,7 +16,7 @@ import { hookCommandPath, settingsFile } from './install.js';
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info' | 'unknown';
 
 export interface Check {
-  group: 'keys' | 'hooks' | 'mcp' | 'store' | 'relay';
+  group: 'keys' | 'hooks' | 'mcp' | 'store' | 'relay' | 'cloud';
   name: string;
   status: CheckStatus;
   /** One line; never a key or a memory. */
@@ -368,6 +369,77 @@ async function relayChecks(ctx: Ctx, relayed: boolean): Promise<Check[]> {
   ];
 }
 
+/** Oort Cloud: which store this machine uses, and in cloud mode whether the account answers. */
+async function cloudChecks(ctx: Ctx): Promise<Check[]> {
+  const settings = readCloudSettings(resolveHome(ctx.io.env));
+  const u = cloudUrl(ctx.io.env);
+  if (settings.store !== 'cloud') {
+    return [
+      {
+        group: 'cloud',
+        name: 'store',
+        status: 'info',
+        detail: 'local store on this machine',
+        fix: 'oort cloud use, to keep memories in Oort Cloud (Oort Pro)',
+      },
+    ];
+  }
+  if ('error' in u) {
+    return [
+      {
+        group: 'cloud',
+        name: 'store',
+        status: 'fail',
+        detail: u.error,
+        fix: 'unset OORT_CLOUD_URL (or set it to an https URL, or http://localhost for wrangler dev)',
+      },
+    ];
+  }
+  const key = await keyLookup(ctx.io.env, ctx.keychain.read)('oort');
+  if (key === undefined) {
+    return [
+      {
+        group: 'cloud',
+        name: 'store',
+        status: 'fail',
+        detail: 'cloud mode is on, but there is no Oort key: hooks inject nothing and saves wait',
+        fix: 'oort login (or oort cloud use --local)',
+      },
+    ];
+  }
+  const client = createCloudClient({
+    url: u.url,
+    key: key.key,
+    timeoutMs: PROBE_TIMEOUT_MS,
+    ...(ctx.fetch !== undefined && { fetch: ctx.fetch }),
+  });
+  try {
+    const me = await client.whoami();
+    return [
+      {
+        group: 'cloud',
+        name: 'store',
+        status: 'ok',
+        detail: `Oort Cloud (${u.url}), account ${me.account}, plan ${me.plan}`,
+      },
+    ];
+  } catch (e) {
+    const err = e instanceof OortCloudError ? e : new OortCloudError('network', 0);
+    return [
+      {
+        group: 'cloud',
+        name: 'store',
+        status: err.kind === 'network' || err.kind === 'busy' ? 'warn' : 'fail',
+        detail: err.message,
+        fix:
+          err.kind === 'network' || err.kind === 'busy'
+            ? 'check your network; saves wait in the local queue meanwhile'
+            : 'oort login, or oort cloud use --local',
+      },
+    ];
+  }
+}
+
 const GLYPH: Record<CheckStatus, string> = {
   ok: '✓',
   warn: '!',
@@ -403,6 +475,7 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
     ...mcpChecks(ctx, cmd),
     ...(await storeChecks(ctx)),
     ...(await relayChecks(ctx, keys.relayed)),
+    ...(await cloudChecks(ctx)),
   ];
   const ok = !checks.some((c) => c.status === 'fail');
   if (opts.json === true) {
@@ -412,7 +485,7 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
   const ui = uiFor(ctx.io);
   const problems = checks.filter((c) => c.status === 'warn' || c.status === 'fail').length;
   ctx.io.out(ui.header('doctor', problems === 0 ? 'no problems' : `${problems} to fix`));
-  for (const group of ['keys', 'hooks', 'mcp', 'store', 'relay'] as const) {
+  for (const group of ['keys', 'hooks', 'mcp', 'store', 'relay', 'cloud'] as const) {
     const rows = checks.filter((c) => c.group === group);
     ctx.io.out(`${ui.bold(group)}\n`);
     ctx.io.out(

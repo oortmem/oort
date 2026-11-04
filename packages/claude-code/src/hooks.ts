@@ -11,6 +11,7 @@ import {
   type RecallQuery,
   type RecallResult,
   type Grant,
+  type Memory,
   type RecalledMemory,
   type Scope,
   type ScopeFilter,
@@ -123,28 +124,51 @@ export async function handleUserPromptSubmit(
     const degraded: string[] = [];
     const t = performance.now();
     let result: RecallResult;
-    const full = recall(q, {
-      store,
-      config,
-      now,
-      ...(deps.embed !== undefined && { embed: deps.embed }),
-      ...(deps.rerank !== undefined && { rerank: deps.rerank }),
-    });
-    // The full recall may lose the race and fail later; nobody awaits it then.
-    full.catch(() => {});
-    try {
-      const r = await withTimeout(full, RECALL_TIMEOUT_MS);
-      if (r === TIMEOUT) {
-        degraded.push('timeout');
-        result = await recall(q, { store, config, now });
-      } else {
-        result = r;
+    if (deps.remote !== undefined) {
+      // Oort Cloud: the cloud recalls. A timeout or an error injects nothing, never a local guess.
+      const remote = deps.remote.recall({
+        text: input.prompt,
+        ...(scope.projectId !== undefined && { projectId: scope.projectId }),
+      });
+      remote.catch(() => {});
+      let r: RecallResult | typeof TIMEOUT | undefined;
+      try {
+        r = await withTimeout(remote, RECALL_TIMEOUT_MS);
+      } catch {
+        r = undefined;
       }
-    } catch {
-      degraded.push('error');
-      result = await recall(q, { store, config, now });
+      entry.timings['recallMs'] = performance.now() - t;
+      if (r === TIMEOUT || r === undefined) {
+        entry.degraded = [r === TIMEOUT ? 'cloud-timeout' : 'cloud-error'];
+        entry.counts = { memories: 0, chars: 0 };
+        entry.outcome = 'empty';
+        return EMPTY;
+      }
+      result = r;
+    } else {
+      const full = recall(q, {
+        store,
+        config,
+        now,
+        ...(deps.embed !== undefined && { embed: deps.embed }),
+        ...(deps.rerank !== undefined && { rerank: deps.rerank }),
+      });
+      // The full recall may lose the race and fail later; nobody awaits it then.
+      full.catch(() => {});
+      try {
+        const r = await withTimeout(full, RECALL_TIMEOUT_MS);
+        if (r === TIMEOUT) {
+          degraded.push('timeout');
+          result = await recall(q, { store, config, now });
+        } else {
+          result = r;
+        }
+      } catch {
+        degraded.push('error');
+        result = await recall(q, { store, config, now });
+      }
+      entry.timings['recallMs'] = performance.now() - t;
     }
-    entry.timings['recallMs'] = performance.now() - t;
     // Per-stage timings from recall (numbers only), so slow stages show in the log (CON-57).
     for (const [k, ms] of Object.entries(result.timings)) {
       if (k !== 'totalMs' && k !== 'gateMs') entry.timings[k] = ms;
@@ -243,7 +267,21 @@ export async function handleSessionStart(
     entry.project = scope.projectId ?? null;
     const now = deps.now?.() ?? new Date();
     const { config } = deps;
-    const current = await deps.store.list(grantFor(scope));
+    let current: Memory[];
+    if (deps.remote !== undefined) {
+      try {
+        current = await deps.remote.sessionMemories(
+          scope.projectId !== undefined ? { projectId: scope.projectId } : {},
+        );
+      } catch {
+        entry.degraded = ['cloud-error'];
+        entry.counts = { memories: 0, chars: 0 };
+        entry.outcome = 'empty';
+        return EMPTY;
+      }
+    } else {
+      current = await deps.store.list(grantFor(scope));
+    }
     const picked: RecalledMemory[] = current
       .filter((m) => m.pinned || m.tier === 'hot')
       .map((m) => ({

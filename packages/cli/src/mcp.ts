@@ -5,6 +5,7 @@ import { VERSION, activation, isCurrent, scrub, type Memory, localGrant } from '
 import { supersedeChain } from './commands/inspect.js';
 import { runRecall } from './commands/recall.js';
 import { rememberFacts } from './remember.js';
+import { OortCloudError, findCloudMemory, type CloudClient } from './cloud.js';
 import { Refusal, findMemory, fixed } from './util.js';
 import type { Wired } from './wire.js';
 
@@ -63,7 +64,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           why: why.join(', ') || 'activation',
         };
       });
-      const lexicalOnly = w.embed === undefined || w.rerank === undefined;
+      const lexicalOnly = w.mode !== 'cloud' && (w.embed === undefined || w.rerank === undefined);
       const refused = w.relayErrors?.at(-1);
       return {
         memories,
@@ -174,10 +175,145 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
   };
 }
 
+/**
+ * Oort Cloud as an MCP memory backend: the same seven tools, answered by the API for this
+ * machine's project (plus account-wide memories). Recall goes through `runRecall`, which already
+ * calls the cloud in cloud mode.
+ */
+export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): MemoryBackend {
+  const w = deps.wired;
+  const client = deps.client;
+  const now = deps.now ?? (() => new Date());
+  const project = w.scope.projectId;
+  const local = localBackend(deps);
+  return {
+    recall: local.recall,
+
+    async remember({ facts, type }) {
+      // The same turn the local engine observes for a fact, sent to the cloud's write path.
+      const hint = type === undefined ? '' : ` (a ${type} fact)`;
+      const results = [];
+      for (const [i, fact] of facts.entries()) {
+        const r = await client.observe({
+          ...(project !== undefined && { project }),
+          observation: {
+            user: `Remember this${hint}: ${fact}`,
+            assistant: `Noted: ${fact}`,
+            at: now().toISOString(),
+          },
+        });
+        const first = r.memories[0];
+        results.push({
+          fact: i,
+          outcome: r.outcome as 'added',
+          ...(first?.id !== undefined && { id: first.id }),
+          ...(r.outcome === 'skipped' && { reason: 'not durable' }),
+        });
+      }
+      return { results };
+    },
+
+    async forget({ id }) {
+      const m = await findCloudMemory(client, id);
+      await client.forget(m.id);
+      return { forgotten: m.id };
+    },
+
+    async pin({ id, pinned }) {
+      const m = await findCloudMemory(client, id);
+      if (m.pinned === pinned) return { id: m.id, pinned, changed: false };
+      await client.pin(m.id, pinned);
+      return { id: m.id, pinned, changed: true };
+    },
+
+    async explain({ id }) {
+      const at = now();
+      const m = (await findCloudMemory(client, id)) as Memory;
+      const chain: Record<string, unknown>[] = [];
+      let hidden = 0;
+      for (const linkId of [m.supersedes, m.supersededBy]) {
+        if (linkId === null) continue;
+        try {
+          const l = await client.get(linkId);
+          chain.push({
+            id: l.id,
+            text: clean(l.text),
+            valid_from: l.validFrom,
+            valid_to: l.validTo,
+            end_reason: l.endReason,
+          });
+        } catch (e) {
+          if (e instanceof OortCloudError && e.kind === 'not-found') hidden++;
+          else throw e;
+        }
+      }
+      return {
+        memory: {
+          id: m.id,
+          text: clean(m.text),
+          type: m.type,
+          tier: m.tier,
+          pinned: m.pinned,
+          status: status(m, at),
+          valid_from: m.validFrom,
+          valid_to: m.validTo,
+          salience: m.salience,
+          activation: Number(fixed(activation(m.accessLog, m.salience, at, w.config.activation))),
+          source: m.source.harness,
+          created_at: m.createdAt,
+        },
+        decisions: m.source.decisions,
+        chain,
+        ...(hidden > 0 && { hidden_links: hidden }),
+      };
+    },
+
+    async listRecent({ since, limit }) {
+      const at = now();
+      const from = since === undefined ? -Infinity : Date.parse(since);
+      const r = await client.list({ ...(project !== undefined && { project }), limit: 100 });
+      const memories = (r.memories as Memory[])
+        .filter((m) => Date.parse(m.updatedAt) >= from)
+        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+        .slice(0, limit)
+        .map((m) => ({
+          id: m.id,
+          text: clean(m.text),
+          type: m.type,
+          tier: m.tier,
+          status: status(m, at),
+          valid_from: m.validFrom,
+          updated_at: m.updatedAt,
+        }));
+      return { memories };
+    },
+
+    async whoami() {
+      const me = await client.whoami();
+      return {
+        mode: 'cloud',
+        account: me.account,
+        plan: me.plan,
+        note: 'Memories live in Oort Cloud (EU) for this account.',
+        project: project ?? null,
+        scope: project === undefined ? 'global' : 'project, plus global memories',
+        version: VERSION,
+      };
+    },
+  };
+}
+
 /** A new server instance with the seven tools; `serveStdio` calls this once per connection. */
 export function createOortServer(deps: OortServerDeps): McpServer {
+  const w = deps.wired;
+  if (w.mode === 'cloud' && w.cloud === undefined) {
+    throw new Refusal(w.cloudProblem ?? 'Oort Cloud is not set up.');
+  }
   return createMcpServer({
-    backend: localBackend(deps),
+    backend:
+      w.mode === 'cloud' && w.cloud !== undefined
+        ? cloudBackend({ ...deps, client: w.cloud })
+        : localBackend(deps),
     version: VERSION,
     isRefusal: (e) => e instanceof Refusal,
   });
