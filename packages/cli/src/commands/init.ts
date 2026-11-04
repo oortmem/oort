@@ -66,8 +66,15 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
     if (io.env[k.envVar]) continue;
     if ((await ctx.keychain.read(k.provider)) === undefined) missing.push(k);
   }
+  const oort =
+    Boolean(io.env['OORT_API_KEY']) ||
+    (missing.length > 0 && (await ctx.keychain.read('oort')) !== undefined);
   if (missing.length === 0) {
     io.out('All keys are set.\n');
+  } else if (oort) {
+    io.out(
+      `Oort Pro key found: ${missing.map((k) => k.provider).join(', ')} go through the Oort Pro relay; your own keys win where set.\n`,
+    );
   } else {
     io.out('Missing keys (recall works lexical-only without them):\n');
     for (const k of missing) {
@@ -78,6 +85,7 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
     io.out(
       'Do not export ANTHROPIC_API_KEY globally if you also use Claude Code on a subscription: it would bill the API instead.\n',
     );
+    io.out('Or skip vendor keys with Oort Pro: run `oort login`.\n');
   }
   return 0;
 }

@@ -125,4 +125,14 @@ describe('oort init with the Keychain', () => {
     expect(io.stdout).toContain('oort keys set typesafe');
     expect(io.stdout).toContain('oort keys set anthropic');
   });
+
+  it('init.an-oort-key-covers-the-missing-vendor-keys', async () => {
+    const { kc } = fakeKeychain({ 'oort.oort': ['oort', 'sk', planted()].join('_') });
+    const h = harness();
+    const { io } = await h.run(['init'], {}, kc);
+    expect(io.stdout).toContain('Oort Pro');
+    expect(io.stdout).not.toContain('Missing keys');
+    const none = await harness().run(['init'], {}, fakeKeychain({}).kc);
+    expect(none.io.stdout).toContain('oort login');
+  });
 });
