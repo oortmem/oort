@@ -12,6 +12,12 @@ export default defineConfig({
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
   resolve: {
-    alias: { '@': path.resolve(import.meta.dirname, './src') },
+    alias: {
+      '@': path.resolve(import.meta.dirname, './src'),
+      'cloudflare:workers': path.resolve(
+        import.meta.dirname,
+        './src/test/cloudflare-workers-stub.ts',
+      ),
+    },
   },
 });
