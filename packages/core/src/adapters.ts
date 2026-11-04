@@ -105,6 +105,16 @@ export interface GuardedWriteResult {
  * silent no-op), so a caller learns nothing about records it cannot see.
  * Callers never post-filter.
  */
+/** Filters and shape for `MemoryStore.list`. */
+export interface ListOptions {
+  tier?: Tier;
+  validOnly?: boolean;
+  /** true: pinned memories only. */
+  pinned?: boolean;
+  /** false: skip reading embeddings (default true). */
+  embeddings?: boolean;
+}
+
 export interface MemoryStore {
   /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
@@ -151,9 +161,11 @@ export interface MemoryStore {
   /**
    * Listing within `grant.read`, newest `updatedAt` first. `validOnly`
    * defaults to true (only memories for which `isCurrent(m, now)` holds);
-   * `tier` restricts to one tier.
+   * `tier` restricts to one tier and `pinned: true` to pinned memories (both
+   * filtered in the store). `embeddings: false` leaves `embedding` unset, for
+   * callers that read only text and metadata.
    */
-  list(grant: Grant, opts?: { tier?: Tier; validOnly?: boolean }): Promise<Memory[]>;
+  list(grant: Grant, opts?: ListOptions): Promise<Memory[]>;
   /**
    * Marks each snapshot's record expired: sets `expiredAt = at`, and
    * `endReason = "expired"` where it is null. No other field is written.

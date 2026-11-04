@@ -1,9 +1,16 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AWS_KEY, SESSION, fixtureText } from '../test/helpers.js';
 import {
   HARNESS_TAGS,
   OORT_MEMORY_TAG,
   parseTranscript,
+  parseTranscriptDetailed,
+  readTranscriptFrom,
+  resumeOffset,
+  selectAfterCursor,
   turnsToObservations,
 } from './transcript.js';
 
@@ -556,5 +563,70 @@ describe('tool summaries and stripping cost', () => {
     const legit =
       'why does  system-reminder show up?\n\n\n\nalso a < b and <bash-stdout without close';
     expect(parseTranscript(row('user', 'u', legit))[0]?.text).toBe(legit);
+  });
+});
+
+describe('incremental read (CON-51)', () => {
+  const row = (type: 'user' | 'assistant', uuid: string, text: string): string =>
+    JSON.stringify({
+      type,
+      uuid,
+      parentUuid: null,
+      timestamp: '2026-10-01T10:00:00.000Z',
+      sessionId: SESSION,
+      cwd: CWD,
+      message: { role: type, content: type === 'user' ? text : [{ type: 'text', text }] },
+    });
+  // Multi-byte text before the offsets: they must count bytes, not characters.
+  const rows = [
+    row('user', 'u1', 'Hvor ligger ørreden? 🐟'),
+    row('assistant', 'a1', 'I bækken, æøå. 🌊'),
+    JSON.stringify({ type: 'file-history-snapshot', blob: 'ü'.repeat(100) }),
+    row('user', 'u2', 'And the second question — ½?'),
+    row('user', 'u2b', 'Retry: the second question'),
+    row('assistant', 'a2', 'Second answer.'),
+  ];
+  const text = rows.join('\n') + '\n';
+
+  it('transcript.offsets-are-byte-offsets-of-each-turns-first-row', () => {
+    const detailed = parseTranscriptDetailed(text);
+    const bytes = Buffer.from(text, 'utf8');
+    for (const d of detailed) {
+      const line = bytes.subarray(d.offset).toString('utf8').split('\n')[0] ?? '';
+      expect(JSON.parse(line).uuid).toBe(d.rowUuids[0]);
+    }
+    // With a base, offsets are shifted by it.
+    expect(parseTranscriptDetailed(text, 1000).map((d) => d.offset)).toEqual(
+      detailed.map((d) => d.offset + 1000),
+    );
+  });
+
+  it('transcript.resume-offset-starts-at-the-user-turns-before-the-cursor', () => {
+    const detailed = parseTranscriptDetailed(text);
+    // a2 answers u2 and its retry u2b: the resume point is u2, so the pair is re-read whole.
+    expect(resumeOffset(detailed, 'a2')).toBe(detailed[2]?.offset);
+    expect(resumeOffset(detailed, 'a1')).toBe(0);
+    expect(resumeOffset(detailed, 'missing')).toBeUndefined();
+  });
+
+  it('transcript.read-from-the-resume-offset-selects-like-a-full-read', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-tail-'));
+    const file = path.join(dir, 't.jsonl');
+    fs.writeFileSync(file, text);
+    const at = resumeOffset(parseTranscriptDetailed(text), 'a1') as number;
+    fs.appendFileSync(
+      file,
+      [row('user', 'u3', 'Third?'), row('assistant', 'a3', 'Third.')].join('\n') + '\n',
+    );
+    const full = fs.readFileSync(file, 'utf8');
+    const tail = readTranscriptFrom(file, at);
+    expect(tail.base).toBe(at);
+    expect(tail.bytes).toBe(Buffer.byteLength(full) - at);
+    const fromTail = selectAfterCursor(parseTranscriptDetailed(tail.text, tail.base), 'a1');
+    const fromFull = selectAfterCursor(parseTranscriptDetailed(full), 'a1');
+    expect(fromTail).toEqual(fromFull);
+    expect(fromTail.fresh.map((o) => o.turnRef)).toEqual(['a2', 'a3']);
+    // Past the end (a truncated file): read whole, from 0.
+    expect(readTranscriptFrom(file, 10 ** 9)).toMatchObject({ base: 0, text: full });
   });
 });

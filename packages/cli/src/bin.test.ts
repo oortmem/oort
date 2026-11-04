@@ -212,6 +212,48 @@ describe('oort bin', () => {
     expect(unknown.stdout).toBe('');
   });
 
+  it('cli.hook-loads-only-the-hook-path (CON-51)', async () => {
+    const s = sandbox();
+    // Records every module the bin resolves, written out when the process exits.
+    const recorder = path.join(s.root, 'record.mjs');
+    const loaded = path.join(s.root, 'loaded.txt');
+    fs.writeFileSync(
+      recorder,
+      [
+        "import { registerHooks } from 'node:module';",
+        "import { writeFileSync } from 'node:fs';",
+        'const seen = [];',
+        'registerHooks({ resolve(s, c, next) { const r = next(s, c); seen.push(r.url); return r; } });',
+        "process.on('exit', () => writeFileSync(process.env.LOADED, seen.join('\\n')));",
+      ].join('\n'),
+    );
+    const input = JSON.stringify({ session_id: 's1', cwd: s.cwd, source: 'startup' });
+    const r = await execa(
+      process.execPath,
+      ['--import', pathToFileURL(recorder).href, BIN, 'hook', 'SessionStart'],
+      {
+        cwd: s.cwd,
+        env: { ...s.env, LOADED: loaded },
+        extendEnv: false,
+        reject: false,
+        timeout: 20_000,
+        input,
+      },
+    );
+    expect(r.exitCode).toBe(0);
+    const urls = fs.readFileSync(loaded, 'utf8').split('\n');
+    expect(urls.some((u) => u.endsWith('/commands/hook.js'))).toBe(true);
+    // No argument parser and no other command: their imports are what a hook used to pay for.
+    for (const u of urls) {
+      expect(u).not.toMatch(
+        /\/commander\/|\/program\.js$|\/commands\/(?!hook\.js$)|modelcontextprotocol/,
+      );
+    }
+    expect(fs.readFileSync(path.join(s.oortHome, 'logs', 'hooks.log'), 'utf8')).toContain(
+      '"event":"SessionStart"',
+    );
+  });
+
   it('cli.hook-yields-when-store-locked', async () => {
     const s = sandbox();
     const dbPath = path.join(s.oortHome, 'oort.sqlite');

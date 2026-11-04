@@ -19,7 +19,14 @@ import {
 import type { HookDeps } from './deps.js';
 import type { HookLogEntry } from './log.js';
 import { drainQueue, enqueueObservations, hasPendingQueue } from './queue.js';
-import { parseTranscriptDetailed, selectAfterCursor } from './transcript.js';
+import {
+  parseTranscriptDetailed,
+  readTranscriptFrom,
+  resumeOffset,
+  selectAfterCursor,
+  type DetailedTurn,
+  type TranscriptRead,
+} from './transcript.js';
 
 /**
  * Claude Code hook handlers (https://code.claude.com/docs/en/hooks). Every
@@ -47,6 +54,25 @@ const EMPTY: HookOutput = { stdout: '', exitCode: 0 };
 const TIMEOUT = Symbol('timeout');
 
 export const cursorKey = (session: string): string => `claude-code:${session}`;
+/** Where the Stop hook resumes reading a session's transcript: `{ cursor, offset }` as JSON. */
+export const offsetKey = (session: string): string => `claude-code-offset:${session}`;
+
+function parseSavedOffset(raw: string | null): { cursor: string; offset: number } | undefined {
+  if (raw === null) return undefined;
+  try {
+    const v = JSON.parse(raw) as { cursor?: unknown; offset?: unknown };
+    if (
+      typeof v.cursor === 'string' &&
+      Number.isSafeInteger(v.offset) &&
+      (v.offset as number) >= 0
+    ) {
+      return { cursor: v.cursor, offset: v.offset as number };
+    }
+  } catch {
+    // A damaged value only costs one full read.
+  }
+  return undefined;
+}
 
 function scopeFor(cwd: string, deps: HookDeps): Scope {
   return deps.scope ?? localScope(resolveProjectId(cwd, deps.config.home));
@@ -212,22 +238,44 @@ export async function handleStop(
     }
     const scope = scopeFor(input.cwd, deps);
     entry.project = scope.projectId ?? null;
-    let text: string;
+    const key = cursorKey(input.session_id);
+    const grant = grantFor(scope);
+    const [cursor, savedRaw] = await Promise.all([
+      deps.store.getCursor(grant, key),
+      deps.store.getCursor(grant, offsetKey(input.session_id)),
+    ]);
+    // Read from the saved offset when it was saved for this very cursor (CON-51); anything else
+    // (no offset yet, a cursor moved by import) reads the whole transcript, as before.
+    const saved = parseSavedOffset(savedRaw);
+    const from = saved !== undefined && saved.cursor === cursor ? saved.offset : 0;
+    const t = performance.now();
+    let read: TranscriptRead;
+    let detailed: DetailedTurn[];
+    let sel: ReturnType<typeof selectAfterCursor>;
     try {
-      text = fs.readFileSync(input.transcript_path, 'utf8');
+      read = readTranscriptFrom(input.transcript_path, from);
+      let bytesRead = read.bytes;
+      detailed = parseTranscriptDetailed(read.text, read.base);
+      sel = selectAfterCursor(detailed, cursor);
+      if (read.base > 0 && !sel.cursorFound) {
+        // The file changed under the offset (rewritten or rotated): read it all.
+        read = readTranscriptFrom(input.transcript_path, 0);
+        bytesRead += read.bytes;
+        detailed = parseTranscriptDetailed(read.text, read.base);
+        sel = selectAfterCursor(detailed, cursor);
+      }
+      entry.counts = { bytesRead };
     } catch {
       entry.outcome = 'no-transcript';
       return EMPTY;
     }
-    const t = performance.now();
-    const detailed = parseTranscriptDetailed(text);
     entry.timings['parseMs'] = performance.now() - t;
+    if (read.base > 0) entry.counts['incremental'] = 1;
+    else if (from > 0) entry.counts['offsetStale'] = 1;
 
-    const key = cursorKey(input.session_id);
-    const grant = grantFor(scope);
-    const sel = selectAfterCursor(detailed, await deps.store.getCursor(grant, key));
+    entry.counts['turns'] = detailed.length;
+    entry.counts['observations'] = sel.fresh.length;
     let fresh = sel.fresh;
-    entry.counts = { turns: detailed.length, observations: fresh.length };
     // Compaction or rotation dropped the cursor's row; take only the newest turns.
     if (!sel.cursorFound) entry.counts['cursorMissing'] = 1;
     if (fresh.length > STOP_MAX_OBSERVATIONS) {
@@ -246,6 +294,18 @@ export async function handleStop(
     entry.counts['dropped'] = dropped;
     const last = fresh.at(-1)?.turnRef;
     if (last !== undefined) await deps.store.setCursor(grant, key, last);
+    // The next Stop starts where this cursor's pair starts (written only when it moved).
+    const anchor = last ?? (sel.cursorFound ? cursor : null);
+    const offset = anchor === null ? undefined : resumeOffset(detailed, anchor);
+    if (anchor !== null && offset !== undefined) {
+      if (saved?.cursor !== anchor || saved.offset !== offset) {
+        await deps.store.setCursor(
+          grant,
+          offsetKey(input.session_id),
+          JSON.stringify({ cursor: anchor, offset }),
+        );
+      }
+    }
     if (queued > 0 || hasPendingQueue(deps.config.home)) {
       try {
         deps.spawnDrain?.();
@@ -280,7 +340,13 @@ export async function handleSessionStart(
         return EMPTY;
       }
     } else {
-      current = await deps.store.list(grantFor(scope));
+      // Two indexed queries, whatever the store holds, and no embeddings (CON-51).
+      const grant = grantFor(scope);
+      const [hot, pinned] = await Promise.all([
+        deps.store.list(grant, { tier: 'hot', embeddings: false }),
+        deps.store.list(grant, { pinned: true, embeddings: false }),
+      ]);
+      current = [...new Map([...pinned, ...hot].map((m) => [m.id, m])).values()];
     }
     const picked: RecalledMemory[] = current
       .filter((m) => m.pinned || m.tier === 'hot')

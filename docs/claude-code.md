@@ -89,6 +89,14 @@ lexical-only recall. Each hook log line records `wireMs` (config, store and keys
 stages (`embedMs`, `lexicalMs`, `denseMs`, `hydrateMs`, `fuseMs`, `rerankMs`), as numbers only, and
 counts `embedSkipped` and `rerankSkipped` when recall saved a round trip.
 
+`oort hook <event>` loads only the hook command and the wiring, not the rest of the CLI. The
+`Stop` hook reads the transcript from where the previous `Stop` left off: it re-reads the last
+pair it processed (to find its cursor) and whatever came after, so its cost per turn does not grow
+with the session. Its log line counts `bytesRead`, and `incremental` when it read from a saved
+offset. When the file was truncated or rewritten under that offset, it reads the whole transcript
+once and counts `offsetStale`. `SessionStart` makes two store queries (hot, then pinned), however
+many memories there are.
+
 Most of a recall's time is two calls to Voyage: embedding the prompt and reranking the results.
 Three settings under `recall` cut them:
 

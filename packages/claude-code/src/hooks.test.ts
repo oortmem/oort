@@ -451,7 +451,8 @@ describe('Stop', () => {
     expect(performance.now() - t0).toBeLessThan(2000);
     expect(out).toEqual({ stdout: '', exitCode: 0 });
     expect(deps.calls).toMatchObject({ embed: 0, gate: 0, reconcile: 0, write: 0 });
-    expect(calls.sort()).toEqual(['getCursor', 'setCursor']);
+    // The cursor and the transcript offset (CON-51): read both, write both.
+    expect(calls.sort()).toEqual(['getCursor', 'getCursor', 'setCursor', 'setCursor']);
     expect(spawned).toBe(1);
   });
 
@@ -474,17 +475,18 @@ describe('Stop', () => {
     expect(mode(path.join(t.home, 'queue', `${SESSION}.jsonl`))).toBe(0o600);
   });
 
-  function manyPairs(t: TempHome, n: number): string {
+  /** `n` user/assistant pairs from index `from`, as JSONL rows ending in a newline. */
+  function pairRows(t: TempHome, from: number, n: number, session = SESSION, tag = ''): string {
     const rows: string[] = [];
-    for (let i = 0; i < n; i++) {
-      const ts = new Date(Date.UTC(2026, 9, 1, 12, 0, i)).toISOString();
+    for (let i = from; i < from + n; i++) {
+      const ts = new Date(Date.UTC(2026, 9, 1, 12, 0, 0, i)).toISOString();
       rows.push(
         JSON.stringify({
           type: 'user',
-          uuid: `u${i}`,
-          parentUuid: i === 0 ? null : `a${i - 1}`,
+          uuid: `${tag}u${i}`,
+          parentUuid: i === 0 ? null : `${tag}a${i - 1}`,
           timestamp: ts,
-          sessionId: SESSION,
+          sessionId: session,
           cwd: t.cwd,
           message: { role: 'user', content: `question number ${i}` },
         }),
@@ -492,17 +494,24 @@ describe('Stop', () => {
       rows.push(
         JSON.stringify({
           type: 'assistant',
-          uuid: `a${i}`,
-          parentUuid: `u${i}`,
+          uuid: `${tag}a${i}`,
+          parentUuid: `${tag}u${i}`,
           timestamp: ts,
-          sessionId: SESSION,
+          sessionId: session,
           cwd: t.cwd,
           message: { role: 'assistant', content: [{ type: 'text', text: `answer number ${i}` }] },
         }),
       );
     }
-    return writeTranscript(path.join(t.root, 'p'), t.cwd, SESSION, rows.join('\n') + '\n');
+    return rows.join('\n') + '\n';
   }
+
+  function manyPairs(t: TempHome, n: number, session = SESSION, tag = ''): string {
+    return writeTranscript(path.join(t.root, 'p'), t.cwd, session, pairRows(t, 0, n, session, tag));
+  }
+
+  const refs = (t: TempHome, session = SESSION): string[] =>
+    queueLines(t.home, session).map((l) => (l['obs'] as { turnRef: string }).turnRef);
 
   it('hook.stop-caps-at-20', async () => {
     const t = tempHome();
@@ -523,6 +532,126 @@ describe('Stop', () => {
     await handleStop(stopInput(t, transcript), deps);
     expect(queueLines(t.home)).toHaveLength(20);
     expect(readLog(t.home)[0]?.counts).toMatchObject({ cursorMissing: 1, queued: 20, capped: 5 });
+  });
+
+  it('hook.stop-reads-only-the-new-tail (CON-51)', async () => {
+    // Two transcripts, one 50 times longer, plus a bulky non-message row: after the first Stop,
+    // each turn costs the same bytes in both.
+    const tails: number[] = [];
+    for (const n of [100, 5000]) {
+      const t = tempHome();
+      const filler = JSON.stringify({ type: 'file-history-snapshot', blob: 'x'.repeat(1 << 20) });
+      const transcript = writeTranscript(
+        path.join(t.root, 'p'),
+        t.cwd,
+        SESSION,
+        `${filler}\n${pairRows(t, 0, n)}`,
+      );
+      const deps = makeDeps(t);
+      await handleStop(stopInput(t, transcript), deps);
+      const size = fs.statSync(transcript).size;
+      for (const i of [n, n + 1]) {
+        fs.appendFileSync(transcript, pairRows(t, i, 1));
+        await handleStop(stopInput(t, transcript), deps);
+      }
+      const [first, second, third] = readLog(t.home);
+      expect(first?.counts).toMatchObject({ bytesRead: size, queued: 20 });
+      expect(first?.counts['incremental']).toBeUndefined();
+      expect(second?.counts).toMatchObject({ incremental: 1, observations: 1, queued: 1 });
+      expect(third?.counts).toMatchObject({ incremental: 1, observations: 1, queued: 1 });
+      expect(refs(t).slice(-2)).toEqual([`a${n}`, `a${n + 1}`]);
+      tails.push(second?.counts['bytesRead'] ?? -1, third?.counts['bytesRead'] ?? -1);
+    }
+    // The previous pair (re-read to find the cursor) plus the new one.
+    for (const b of tails) expect(b).toBeLessThan(1500);
+    // Same bytes per turn at 100 and 5000 pairs, give or take the longer turn numbers.
+    for (const k of [0, 1]) expect(Math.abs(tails[k + 2]! - tails[k]!)).toBeLessThan(64);
+  });
+
+  it('hook.stop-incremental-read-keeps-the-offset-per-session (CON-51)', async () => {
+    const t = tempHome();
+    const deps = makeDeps(t);
+    const sessions = ['sess-a', 'sess-b'];
+    const files = sessions.map((s, k) => manyPairs(t, 10 + k * 40, s, `${s}-`));
+    const input = (k: number) => ({ ...stopInput(t, files[k]!), session_id: sessions[k]! });
+    for (const k of [0, 1]) await handleStop(input(k), deps);
+    for (const k of [1, 0]) {
+      fs.appendFileSync(files[k]!, pairRows(t, 100, 1, sessions[k], `${sessions[k]}-`));
+      await handleStop(input(k), deps);
+    }
+    const log = readLog(t.home);
+    expect(
+      log.slice(2).map((l) => [l.session, l.counts['incremental'], l.counts['queued']]),
+    ).toEqual([
+      ['sess-b', 1, 1],
+      ['sess-a', 1, 1],
+    ]);
+    expect(refs(t, 'sess-a').at(-1)).toBe('sess-a-a100');
+    expect(refs(t, 'sess-b').at(-1)).toBe('sess-b-a100');
+  });
+
+  it('hook.stop-truncated-transcript-falls-back-to-a-full-read (CON-51)', async () => {
+    const t = tempHome();
+    const transcript = manyPairs(t, 30);
+    const deps = makeDeps(t);
+    await handleStop(stopInput(t, transcript), deps);
+    // Rewritten shorter than the saved offset (a rotation or a new file at the same path).
+    fs.writeFileSync(transcript, pairRows(t, 0, 3, SESSION, 'new-'));
+    await handleStop(stopInput(t, transcript), deps);
+    const second = readLog(t.home)[1];
+    expect(second?.counts).toMatchObject({ offsetStale: 1, cursorMissing: 1, queued: 3 });
+    expect(second?.counts['bytesRead']).toBe(fs.statSync(transcript).size);
+    expect(refs(t).slice(-3)).toEqual(['new-a0', 'new-a1', 'new-a2']);
+    // From here on it is incremental again.
+    fs.appendFileSync(transcript, pairRows(t, 3, 1, SESSION, 'new-'));
+    await handleStop(stopInput(t, transcript), deps);
+    expect(readLog(t.home)[2]?.counts).toMatchObject({ incremental: 1, queued: 1 });
+  });
+
+  it('hook.stop-rewritten-transcript-falls-back-to-a-full-read (CON-51)', async () => {
+    const t = tempHome();
+    const transcript = manyPairs(t, 30);
+    const deps = makeDeps(t);
+    await handleStop(stopInput(t, transcript), deps);
+    // Longer than before, but different content: the saved offset no longer leads to the cursor.
+    fs.writeFileSync(transcript, pairRows(t, 0, 60, SESSION, 'z-'));
+    await handleStop(stopInput(t, transcript), deps);
+    const second = readLog(t.home)[1];
+    expect(second?.counts).toMatchObject({ offsetStale: 1, cursorMissing: 1, queued: 20 });
+    expect(refs(t).at(-1)).toBe('z-a59');
+  });
+
+  it('hook.stop-ignores-an-offset-saved-for-another-cursor (CON-51)', async () => {
+    const t = tempHome();
+    const transcript = manyPairs(t, 30);
+    const deps = makeDeps(t);
+    await handleStop(stopInput(t, transcript), deps);
+    // Something else (an import) moved the cursor back: the offset was saved for a29.
+    await deps.store.setCursor(TG, `claude-code:${SESSION}`, 'a25');
+    await handleStop(stopInput(t, transcript), deps);
+    const second = readLog(t.home)[1];
+    expect(second?.counts['incremental']).toBeUndefined();
+    expect(second?.counts).toMatchObject({ queued: 4 });
+    expect(refs(t).slice(-4)).toEqual(['a26', 'a27', 'a28', 'a29']);
+  });
+
+  it('hook.stop-a-half-written-row-is-read-on-the-next-stop (CON-51)', async () => {
+    const t = tempHome();
+    const transcript = manyPairs(t, 5);
+    const deps = makeDeps(t);
+    await handleStop(stopInput(t, transcript), deps);
+    const next = pairRows(t, 5, 1);
+    const cut = next.length - 20;
+    fs.appendFileSync(transcript, next.slice(0, cut));
+    await handleStop(stopInput(t, transcript), deps);
+    fs.appendFileSync(transcript, next.slice(cut));
+    await handleStop(stopInput(t, transcript), deps);
+    expect(readLog(t.home).map((l) => [l.counts['incremental'], l.counts['queued']])).toEqual([
+      [undefined, 5],
+      [1, 0],
+      [1, 1],
+    ]);
+    expect(refs(t).at(-1)).toBe('a5');
   });
 
   it('hook.stop-never-observes-injected-oort-memory', async () => {
@@ -668,6 +797,40 @@ describe('SessionStart', () => {
       outcome: 'injected',
       counts: { memories: 2 },
     });
+  });
+
+  it('hook.session-start-asks-the-store-for-hot-and-pinned-only (CON-51)', async () => {
+    const t = tempHome();
+    const warm = Array.from({ length: 40 }, (_, i) =>
+      makeMemory({ id: `w${i}`, tier: 'warm', text: `WARM ${i}`, embedding: vec(1, 2, 3, 4) }),
+    );
+    const deps = await withMemories(
+      t,
+      ...warm,
+      makeMemory({ id: 'hot', tier: 'hot', text: 'HOT: tests run with pnpm verify' }),
+      makeMemory({ id: 'both', tier: 'hot', pinned: true, text: 'BOTH: hot and pinned' }),
+      makeMemory({ id: 'pinned', tier: 'warm', pinned: true, text: 'PINNED: never push' }),
+    );
+    const asked: unknown[] = [];
+    const store: MemoryStore = {
+      ...deps.store,
+      list: (grant, opts) => {
+        asked.push(opts);
+        return deps.store.list(grant, opts);
+      },
+    };
+    const out = await handleSessionStart({ cwd: t.cwd, session_id: SESSION }, { ...deps, store });
+    // Two queries however many memories there are, and no embedding is read.
+    expect(asked).toEqual([
+      { tier: 'hot', embeddings: false },
+      { pinned: true, embeddings: false },
+    ]);
+    const ctx = context(out.stdout, 'SessionStart');
+    expect(ctx.match(/BOTH/g)).toHaveLength(1);
+    expect(ctx).toContain('HOT: tests run');
+    expect(ctx).toContain('PINNED: never push');
+    expect(ctx).not.toContain('WARM');
+    expect(readLog(t.home)[0]?.counts).toMatchObject({ memories: 3 });
   });
 
   it('hook.session-start-respects-half-budget', async () => {

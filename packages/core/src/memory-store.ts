@@ -247,8 +247,13 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       return scoped(grant.read)
         .filter((m) => !validOnly || isCurrent(m, now))
         .filter((m) => listOpts.tier === undefined || m.tier === listOpts.tier)
+        .filter((m) => listOpts.pinned !== true || m.pinned)
         .sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt))
-        .map((m) => structuredClone(m));
+        .map((m) => {
+          if (listOpts.embeddings !== false) return structuredClone(m);
+          const { embedding: _e, ...rest } = m;
+          return structuredClone(rest);
+        });
     },
 
     expireMany,
