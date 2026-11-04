@@ -62,7 +62,7 @@ describe('legal pages for Oort Pro', () => {
     expect(text).toMatch(/lose the right of withdrawal once the service has started/);
     expect(text).toMatch(/refund the unused part/);
     expect(text).toMatch(/25,000 saves and 50,000 recalls/);
-    expect(text).not.toMatch(/VAT number/);
+    expect(text).toMatch(/VAT number: SE960505691101/);
   });
 
   it('the site terms of use are the site terms and link to the Pro terms', async () => {
