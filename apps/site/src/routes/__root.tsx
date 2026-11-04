@@ -1,3 +1,4 @@
+import { ClerkProvider } from '@clerk/tanstack-react-start';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   Outlet,
@@ -11,6 +12,7 @@ import {
 import type { ReactNode } from 'react';
 
 import { beaconScripts, beaconToken } from '../lib/analytics';
+import { clerkEnabled, clerkPublishableKey } from '../lib/clerk';
 import appCss from '../styles.css?url';
 
 function NotFoundComponent() {
@@ -102,7 +104,17 @@ function RootShell({ children }: { children: ReactNode }) {
         <HeadContent />
       </head>
       <body>
-        {children}
+        {clerkEnabled ? (
+          <ClerkProvider
+            publishableKey={clerkPublishableKey}
+            signInUrl="/signin"
+            signUpUrl="/signup"
+          >
+            {children}
+          </ClerkProvider>
+        ) : (
+          children
+        )}
         <Scripts />
       </body>
     </html>

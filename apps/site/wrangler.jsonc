@@ -2,6 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "oort-site",
   "compatibility_date": "2026-11-01",
+  // nodejs_compat also fills process.env from vars and secrets, which Clerk reads.
   "compatibility_flags": ["nodejs_compat"],
   "main": "@tanstack/react-start/server-entry",
   "observability": { "enabled": true },
@@ -13,5 +14,20 @@
       "database_id": "f0ea3ef8-02b1-4ef7-89ba-7ac6ce5798a8",
       "migrations_dir": "migrations",
     },
+    {
+      // Oort Pro accounts, shared with apps/relay. The schema lives in apps/relay/migrations.
+      "binding": "ACCOUNTS_DB",
+      "database_name": "oort-accounts",
+      // Placeholder. Replace with the id printed by `wrangler d1 create oort-accounts`
+      // (the same id goes in apps/relay/wrangler.jsonc).
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../relay/migrations",
+    },
   ],
+  // Secrets, set with `wrangler secret put <NAME>` (see README). Never put values here.
+  //   CLERK_SECRET_KEY
+  //   STRIPE_SECRET_KEY
+  //   STRIPE_WEBHOOK_SECRET
+  //   STRIPE_PRICE_PRO
+  // VITE_CLERK_PUBLISHABLE_KEY is public and is read at build time (see README).
 }

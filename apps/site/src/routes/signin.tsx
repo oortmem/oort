@@ -1,93 +1,37 @@
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
-import { useState } from 'react';
-import { Github } from 'lucide-react';
+import { SignIn } from '@clerk/tanstack-react-start';
+import { createFileRoute } from '@tanstack/react-router';
+import { AuthShell, NotConfigured } from '@/components/account/AuthShell';
+import { clerkEnabled, safeRedirect } from '@/lib/clerk';
+
+type Search = { redirect_url?: string };
 
 export const Route = createFileRoute('/signin')({
+  validateSearch: (s: Record<string, unknown>): Search =>
+    typeof s['redirect_url'] === 'string' ? { redirect_url: safeRedirect(s['redirect_url']) } : {},
   head: () => ({
     meta: [
-      { title: 'Sign in | Oort Cloud console demo' },
-      {
-        name: 'description',
-        content: 'Demo sign-in for the Oort Cloud console. No account is created.',
-      },
-      { property: 'og:title', content: 'Sign in to Oort Cloud' },
-      { property: 'og:description', content: 'Access your Oort Cloud memory console.' },
+      { title: 'Sign in | Oort' },
+      { name: 'description', content: 'Sign in to your Oort account to manage Oort Pro.' },
+      { name: 'robots', content: 'noindex' },
     ],
   }),
-  component: SignIn,
+  component: SignInPage,
 });
 
-function SignIn() {
-  const nav = useNavigate();
-  const [mode, setMode] = useState<'in' | 'up'>('in');
-  const go = (e?: React.FormEvent) => {
-    e?.preventDefault();
-    nav({ to: '/dashboard' });
-  };
+function SignInPage() {
+  const { redirect_url } = Route.useSearch();
+  const to = safeRedirect(redirect_url);
   return (
-    <div className="starfield grid min-h-screen place-items-center px-4">
-      <div className="iris-border w-full max-w-sm rounded-3xl bg-card p-8">
-        <div className="mx-auto mb-6 size-16 animate-breathe rounded-full bg-[radial-gradient(circle_at_35%_35%,var(--photon-glow),var(--photon)_60%,transparent_75%)] glow-photon" />
-        <h1 className="text-center text-2xl font-semibold">
-          {mode === 'in' ? 'Welcome back' : 'Create your cloud'}
-        </h1>
-        <p className="mt-1 text-center text-sm text-muted-foreground">Oort Cloud console</p>
-        <p className="mt-3 rounded-xl border border-ember/40 bg-ember/10 px-3 py-2 text-center text-xs text-ember">
-          Demo. No account is created.
-        </p>
-        <button
-          onClick={() => go()}
-          className="mt-6 flex w-full items-center justify-center gap-2 rounded-full border border-border py-2.5 text-sm hover:bg-secondary"
-        >
-          <Github className="size-4" /> Continue with GitHub
-        </button>
-        <button
-          onClick={() => go()}
-          className="mt-2 w-full rounded-full border border-border py-2.5 text-sm hover:bg-secondary"
-        >
-          Continue with Google
-        </button>
-        <button
-          onClick={() => go()}
-          className="mt-2 w-full rounded-full border border-border py-2.5 text-sm hover:bg-secondary"
-        >
-          Enterprise SSO
-        </button>
-        <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
-          <span className="h-px flex-1 bg-border" />
-          or
-          <span className="h-px flex-1 bg-border" />
-        </div>
-        <form onSubmit={go} className="space-y-3">
-          <input
-            type="email"
-            required
-            placeholder="you@company.com"
-            className="w-full rounded-xl border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-ring"
-          />
-          <input
-            type="password"
-            required
-            placeholder="Password"
-            className="w-full rounded-xl border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-ring"
-          />
-          <button className="w-full rounded-full bg-primary py-2.5 text-sm font-semibold text-primary-foreground">
-            {mode === 'in' ? 'Sign in' : 'Create account'}
-          </button>
-        </form>
-        <p className="mt-5 text-center text-sm text-muted-foreground">
-          {mode === 'in' ? 'New to Oort?' : 'Have an account?'}{' '}
-          <button
-            onClick={() => setMode(mode === 'in' ? 'up' : 'in')}
-            className="text-foreground underline"
-          >
-            {mode === 'in' ? 'Create one' : 'Sign in'}
-          </button>
-        </p>
-        <p className="mt-3 text-center text-xs text-muted-foreground">
-          <Link to="/">← back to site</Link>
-        </p>
-      </div>
-    </div>
+    <AuthShell>
+      {clerkEnabled ? (
+        <SignIn
+          routing="hash"
+          signUpUrl={`/signup?redirect_url=${encodeURIComponent(to)}`}
+          fallbackRedirectUrl={to}
+        />
+      ) : (
+        <NotConfigured what="Sign-in" />
+      )}
+    </AuthShell>
   );
 }

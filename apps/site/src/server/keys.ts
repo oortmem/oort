@@ -23,3 +23,12 @@ export async function hashKey(key: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+/**
+ * A short code shown on the approve page so the user can check it matches the terminal.
+ * The CLI computes the same: SHA-256 of "oort-cli-code:" + session id, first 8 hex, as XXXX-XXXX.
+ */
+export async function cliCode(sessionId: string): Promise<string> {
+  const h = (await hashKey(`oort-cli-code:${sessionId}`)).toUpperCase();
+  return `${h.slice(0, 4)}-${h.slice(4, 8)}`;
+}

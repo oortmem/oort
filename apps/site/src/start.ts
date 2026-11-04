@@ -1,3 +1,4 @@
+import { clerkMiddleware } from '@clerk/tanstack-react-start/server';
 import { createStart, createCsrfMiddleware, createMiddleware } from '@tanstack/react-start';
 
 import { renderErrorPage } from './lib/error-page';
@@ -24,6 +25,16 @@ const csrfMiddleware = createCsrfMiddleware({
   filter: (ctx) => ctx.handlerType === 'serverFn',
 });
 
+// Clerk reads CLERK_SECRET_KEY from process.env (filled from Worker secrets by nodejs_compat) and
+// throws on every request without it, so it is only installed once the secret is set. Until then
+// the site works and the account pages say accounts are not set up.
+const clerkConfigured = () =>
+  typeof process !== 'undefined' && Boolean(process.env?.['CLERK_SECRET_KEY']);
+
 export const startInstance = createStart(() => ({
-  requestMiddleware: [errorMiddleware, csrfMiddleware],
+  requestMiddleware: [
+    errorMiddleware,
+    csrfMiddleware,
+    ...(clerkConfigured() ? [clerkMiddleware()] : []),
+  ],
 }));

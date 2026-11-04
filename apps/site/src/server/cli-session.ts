@@ -61,11 +61,4 @@ export async function handleCliPoll(
   return reply(200, { status: 'approved', key: k.key, prefix: k.prefix });
 }
 
-/**
- * A short code shown on the approve page so the user can check it matches the terminal.
- * The CLI computes the same: SHA-256 of "oort-cli-code:" + session id, first 8 hex, as XXXX-XXXX.
- */
-export async function cliCode(sessionId: string): Promise<string> {
-  const h = (await hashKey(`oort-cli-code:${sessionId}`)).toUpperCase();
-  return `${h.slice(0, 4)}-${h.slice(4, 8)}`;
-}
+export { cliCode } from './keys';

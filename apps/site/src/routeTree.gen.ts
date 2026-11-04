@@ -16,12 +16,17 @@ import { Route as EnterpriseRouteImport } from './routes/enterprise'
 import { Route as ExplorerRouteImport } from './routes/explorer'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as SigninRouteImport } from './routes/signin'
+import { Route as SignupRouteImport } from './routes/signup'
+import { Route as AccountIndexRouteImport } from './routes/account/index'
+import { Route as AccountCliRouteImport } from './routes/account/cli'
 import { Route as ApiWaitlistRouteImport } from './routes/api/waitlist'
 import { Route as LegalAcceptableUseRouteImport } from './routes/legal/acceptable-use'
 import { Route as LegalCookiesRouteImport } from './routes/legal/cookies'
 import { Route as LegalPrivacyRouteImport } from './routes/legal/privacy'
 import { Route as LegalSubprocessorsRouteImport } from './routes/legal/subprocessors'
 import { Route as LegalTermsRouteImport } from './routes/legal/terms'
+import { Route as ApiStripeWebhookRouteImport } from './routes/api/stripe/webhook'
+import { Route as ApiCliSessionIdRouteImport } from './routes/api/cli/session/$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -58,6 +63,21 @@ const SigninRoute = SigninRouteImport.update({
   path: '/signin',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountIndexRoute = AccountIndexRouteImport.update({
+  id: '/account/',
+  path: '/account/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountCliRoute = AccountCliRouteImport.update({
+  id: '/account/cli',
+  path: '/account/cli',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiWaitlistRoute = ApiWaitlistRouteImport.update({
   id: '/api/waitlist',
   path: '/api/waitlist',
@@ -88,6 +108,16 @@ const LegalTermsRoute = LegalTermsRouteImport.update({
   path: '/legal/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiStripeWebhookRoute = ApiStripeWebhookRouteImport.update({
+  id: '/api/stripe/webhook',
+  path: '/api/stripe/webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCliSessionIdRoute = ApiCliSessionIdRouteImport.update({
+  id: '/api/cli/session/$id',
+  path: '/api/cli/session/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -97,12 +127,17 @@ export interface FileRoutesByFullPath {
   '/explorer': typeof ExplorerRoute
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
+  '/signup': typeof SignupRoute
+  '/account/cli': typeof AccountCliRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/legal/acceptable-use': typeof LegalAcceptableUseRoute
   '/legal/cookies': typeof LegalCookiesRoute
   '/legal/privacy': typeof LegalPrivacyRoute
   '/legal/subprocessors': typeof LegalSubprocessorsRoute
   '/legal/terms': typeof LegalTermsRoute
+  '/account/': typeof AccountIndexRoute
+  '/api/stripe/webhook': typeof ApiStripeWebhookRoute
+  '/api/cli/session/$id': typeof ApiCliSessionIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -112,12 +147,17 @@ export interface FileRoutesByTo {
   '/explorer': typeof ExplorerRoute
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
+  '/signup': typeof SignupRoute
+  '/account/cli': typeof AccountCliRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/legal/acceptable-use': typeof LegalAcceptableUseRoute
   '/legal/cookies': typeof LegalCookiesRoute
   '/legal/privacy': typeof LegalPrivacyRoute
   '/legal/subprocessors': typeof LegalSubprocessorsRoute
   '/legal/terms': typeof LegalTermsRoute
+  '/account': typeof AccountIndexRoute
+  '/api/stripe/webhook': typeof ApiStripeWebhookRoute
+  '/api/cli/session/$id': typeof ApiCliSessionIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -128,12 +168,17 @@ export interface FileRoutesById {
   '/explorer': typeof ExplorerRoute
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
+  '/signup': typeof SignupRoute
+  '/account/cli': typeof AccountCliRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/legal/acceptable-use': typeof LegalAcceptableUseRoute
   '/legal/cookies': typeof LegalCookiesRoute
   '/legal/privacy': typeof LegalPrivacyRoute
   '/legal/subprocessors': typeof LegalSubprocessorsRoute
   '/legal/terms': typeof LegalTermsRoute
+  '/account/': typeof AccountIndexRoute
+  '/api/stripe/webhook': typeof ApiStripeWebhookRoute
+  '/api/cli/session/$id': typeof ApiCliSessionIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -145,12 +190,17 @@ export interface FileRouteTypes {
     | '/explorer'
     | '/pricing'
     | '/signin'
+    | '/signup'
+    | '/account/cli'
     | '/api/waitlist'
     | '/legal/acceptable-use'
     | '/legal/cookies'
     | '/legal/privacy'
     | '/legal/subprocessors'
     | '/legal/terms'
+    | '/account/'
+    | '/api/stripe/webhook'
+    | '/api/cli/session/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -160,12 +210,17 @@ export interface FileRouteTypes {
     | '/explorer'
     | '/pricing'
     | '/signin'
+    | '/signup'
+    | '/account/cli'
     | '/api/waitlist'
     | '/legal/acceptable-use'
     | '/legal/cookies'
     | '/legal/privacy'
     | '/legal/subprocessors'
     | '/legal/terms'
+    | '/account'
+    | '/api/stripe/webhook'
+    | '/api/cli/session/$id'
   id:
     | '__root__'
     | '/'
@@ -175,12 +230,17 @@ export interface FileRouteTypes {
     | '/explorer'
     | '/pricing'
     | '/signin'
+    | '/signup'
+    | '/account/cli'
     | '/api/waitlist'
     | '/legal/acceptable-use'
     | '/legal/cookies'
     | '/legal/privacy'
     | '/legal/subprocessors'
     | '/legal/terms'
+    | '/account/'
+    | '/api/stripe/webhook'
+    | '/api/cli/session/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -191,12 +251,17 @@ export interface RootRouteChildren {
   ExplorerRoute: typeof ExplorerRoute
   PricingRoute: typeof PricingRoute
   SigninRoute: typeof SigninRoute
+  SignupRoute: typeof SignupRoute
+  AccountCliRoute: typeof AccountCliRoute
   ApiWaitlistRoute: typeof ApiWaitlistRoute
   LegalAcceptableUseRoute: typeof LegalAcceptableUseRoute
   LegalCookiesRoute: typeof LegalCookiesRoute
   LegalPrivacyRoute: typeof LegalPrivacyRoute
   LegalSubprocessorsRoute: typeof LegalSubprocessorsRoute
   LegalTermsRoute: typeof LegalTermsRoute
+  AccountIndexRoute: typeof AccountIndexRoute
+  ApiStripeWebhookRoute: typeof ApiStripeWebhookRoute
+  ApiCliSessionIdRoute: typeof ApiCliSessionIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -250,6 +315,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SigninRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account/': {
+      id: '/account/'
+      path: '/account'
+      fullPath: '/account/'
+      preLoaderRoute: typeof AccountIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account/cli': {
+      id: '/account/cli'
+      path: '/account/cli'
+      fullPath: '/account/cli'
+      preLoaderRoute: typeof AccountCliRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/waitlist': {
       id: '/api/waitlist'
       path: '/api/waitlist'
@@ -292,6 +378,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LegalTermsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/stripe/webhook': {
+      id: '/api/stripe/webhook'
+      path: '/api/stripe/webhook'
+      fullPath: '/api/stripe/webhook'
+      preLoaderRoute: typeof ApiStripeWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/cli/session/$id': {
+      id: '/api/cli/session/$id'
+      path: '/api/cli/session/$id'
+      fullPath: '/api/cli/session/$id'
+      preLoaderRoute: typeof ApiCliSessionIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -303,12 +403,17 @@ const rootRouteChildren: RootRouteChildren = {
   ExplorerRoute: ExplorerRoute,
   PricingRoute: PricingRoute,
   SigninRoute: SigninRoute,
+  SignupRoute: SignupRoute,
+  AccountCliRoute: AccountCliRoute,
   ApiWaitlistRoute: ApiWaitlistRoute,
   LegalAcceptableUseRoute: LegalAcceptableUseRoute,
   LegalCookiesRoute: LegalCookiesRoute,
   LegalPrivacyRoute: LegalPrivacyRoute,
   LegalSubprocessorsRoute: LegalSubprocessorsRoute,
   LegalTermsRoute: LegalTermsRoute,
+  AccountIndexRoute: AccountIndexRoute,
+  ApiStripeWebhookRoute: ApiStripeWebhookRoute,
+  ApiCliSessionIdRoute: ApiCliSessionIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
