@@ -22,7 +22,9 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 
 const outputSchema = z.object({
   text: z.string().min(1).max(600),
-  stub: z.string().min(1).max(200),
+  // The stub target is 200 chars (LIMITS, the prompt's 35 tokens); up to 600 is accepted
+  // and cut at a word boundary in `scrubbed`, because a retry did not reliably shorten it.
+  stub: z.string().min(1).max(600),
   entities: z.array(z.string().min(1).max(60)).max(12),
   type: z.enum(['semantic', 'episodic', 'procedural', 'preference']),
 });
@@ -165,7 +167,7 @@ function scrubbed(o: WriterOutput): {
 } {
   return {
     text: scrubField(o.text, 600),
-    stub: scrubField(o.stub, 200),
+    stub: fit(scrubField(o.stub, 200), 200),
     entities: o.entities.filter((x) => scrub(x).text === x),
     type: o.type,
   };

@@ -73,7 +73,7 @@ describe('aiSdkWriter', () => {
   });
 
   it('writer.rejects-overlong-stub', async () => {
-    const model = mock({ ...good, stub: 'x'.repeat(201) });
+    const model = mock({ ...good, stub: 'x'.repeat(601) });
     const err = await aiSdkWriter({ model })
       .write(obs, 'ADD')
       .catch((e: unknown) => e);
@@ -82,14 +82,28 @@ describe('aiSdkWriter', () => {
     expect(model.doGenerateCalls).toHaveLength(2);
   });
 
+  it('writer.fits-moderately-long-stub-without-retry', async () => {
+    // Haiku 5.5 overshot the 200-char stub twice in a row on real transcripts (dogfood,
+    // 2026-11-04), which failed the whole observation. A stub up to 600 chars is cut to
+    // 200 at a word boundary instead; only a runaway stub is still rejected.
+    const long = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ');
+    expect(long.length).toBeGreaterThan(200);
+    const model = mock({ ...good, stub: long });
+    const out = await aiSdkWriter({ model }).write(obs, 'ADD');
+    expect(out.stub.length).toBeLessThanOrEqual(200);
+    expect(long.startsWith(out.stub)).toBe(true);
+    expect(long[out.stub.length]).toBe(' ');
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
   it('writer.retry-recovers', async () => {
-    const model = mock({ ...good, stub: 'x'.repeat(201) }, good);
+    const model = mock({ ...good, stub: 'x'.repeat(601) }, good);
     await expect(aiSdkWriter({ model }).write(obs, 'ADD')).resolves.toEqual(good);
     expect(model.doGenerateCalls).toHaveLength(2);
   });
 
   it('writer.retry-message-names-field', async () => {
-    const model = mock({ ...good, stub: 'x'.repeat(201) }, good);
+    const model = mock({ ...good, stub: 'x'.repeat(601) }, good);
     await aiSdkWriter({ model }).write(obs, 'ADD');
     const first = promptText(model.doGenerateCalls[0]!);
     const second = promptText(model.doGenerateCalls[1]!);
