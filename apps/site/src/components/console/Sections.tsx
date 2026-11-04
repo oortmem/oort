@@ -268,9 +268,9 @@ export function UsageSection() {
         </div>
       </div>
       <div className={card}>
-        <p className={label}>Pro cost estimator</p>
+        <p className={label}>Cost estimator (launch proposal)</p>
         <label className="mt-4 block text-xs text-muted-foreground">
-          Retrievals / mo: <span className="font-mono text-foreground">{r.toLocaleString()}</span>
+          Recalls / mo: <span className="font-mono text-foreground">{r.toLocaleString()}</span>
         </label>
         <input
           type="range"
@@ -282,7 +282,7 @@ export function UsageSection() {
           className="w-full accent-[var(--photon)]"
         />
         <label className="mt-3 block text-xs text-muted-foreground">
-          Writes / mo: <span className="font-mono text-foreground">{w.toLocaleString()}</span>
+          Saves / mo: <span className="font-mono text-foreground">{w.toLocaleString()}</span>
         </label>
         <input
           type="range"
@@ -294,7 +294,13 @@ export function UsageSection() {
           className="w-full accent-[var(--photon)]"
         />
         <p className="mt-5 font-mono text-3xl">
-          ${estimateMonthlyCost(r, w, 4, 40).toLocaleString()}
+          $
+          {estimateMonthlyCost({
+            saves: w,
+            recalls: r,
+            warmGb: 4,
+            coldGb: 40,
+          }).monthly.toLocaleString()}
         </p>
         <p className="text-xs text-muted-foreground">with 4 GB warm · 40 GB cold</p>
       </div>

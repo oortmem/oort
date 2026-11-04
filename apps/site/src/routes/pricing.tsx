@@ -2,67 +2,29 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { Check } from 'lucide-react';
 import { SiteNav, SiteFooter } from '@/components/site/SiteNav';
-import { plans, tiers, estimateMonthlyCost, flatVectorCost } from '@/lib/oort-data';
-
-const plain: Record<
-  string,
-  { who: string; use: string; recent: string; old: string; features: string[] }
-> = {
-  'Open Source': {
-    who: 'Run it yourself, free forever.',
-    use: 'No limits',
-    recent: 'On your own machines',
-    old: 'On your own machines',
-    features: [
-      'Full code, free to use',
-      'Works on your laptop or servers',
-      'Desktop app to explore memories',
-    ],
-  },
-  Developer: {
-    who: 'For trying things out.',
-    use: '50,000 recalls a month',
-    recent: '1 GB included',
-    old: '10 GB included',
-    features: ['We host it for you', 'Smarter, more relevant answers', 'Community help'],
-  },
-  Pro: {
-    who: 'For products with real users.',
-    use: '500,000 recalls a month',
-    recent: '$0.25 per GB',
-    old: '$0.03 per GB',
-    features: [
-      "Each customer's memories locked separately",
-      'Pay only for extra use',
-      'See how memory is used',
-    ],
-  },
-  Enterprise: {
-    who: 'For large teams and millions of customers.',
-    use: '10 million recalls a month',
-    recent: '$0.18 per GB',
-    old: '$0.02 per GB',
-    features: [
-      'Use your own encryption keys',
-      'Your own private setup',
-      'Guaranteed uptime and security reviews',
-    ],
-  },
-};
+import { PlannedBadge } from '@/components/site/PlannedBadge';
+import {
+  byokOverage,
+  byokPlans,
+  byokPrice,
+  estimateMonthlyCost,
+  plans,
+  tiers,
+} from '@/lib/oort-data';
 
 export const Route = createFileRoute('/pricing')({
   head: () => ({
     meta: [
-      { title: 'Pricing — Oort Cloud' },
+      { title: 'Pricing | Oort Cloud' },
       {
         name: 'description',
         content:
-          'Free and open source forever. Managed Oort Cloud from $0, Pro $49/month, Enterprise $999/month with BYOK.',
+          'Open source and free to self-host. Hosted Free, Pro $19 a month, Team $99 a month. Prices are a launch proposal.',
       },
       { property: 'og:title', content: 'Oort Cloud pricing' },
       {
         property: 'og:description',
-        content: 'Pay for what your app recalls. Old memories cost almost nothing.',
+        content: 'Pay for saves and recalls. Old memories cost almost nothing to keep.',
       },
     ],
   }),
@@ -70,20 +32,25 @@ export const Route = createFileRoute('/pricing')({
 });
 
 function Pricing() {
-  const [gb, setGb] = useState(200);
-  const [ret, setRet] = useState(2_000_000);
-  const warm = Math.round(gb * 0.15);
-  const cold = gb - warm;
-  const oort = estimateMonthlyCost(ret, ret / 5, warm, cold);
-  const flat = flatVectorCost(gb);
+  const [byok, setByok] = useState(false);
+  const [gb, setGb] = useState(20);
+  const [recalls, setRecalls] = useState(100_000);
+  const [saves, setSaves] = useState(50_000);
+  const warm = Math.round(gb * 0.15 * 100) / 100;
+  const cold = Math.round((gb - warm) * 100) / 100;
+  const est = estimateMonthlyCost({ saves, recalls, warmGb: warm, coldGb: cold }, { byok });
   return (
     <div className="min-h-screen">
       <SiteNav />
       <section className="mx-auto max-w-7xl px-6 py-20">
-        <h1 className="text-5xl font-semibold">Pay for what you recall.</h1>
+        <h1 className="text-5xl font-semibold">Pay for what you save and recall.</h1>
         <p className="mt-4 max-w-xl text-muted-foreground">
-          You pay for how often your app remembers something. Fresh memories cost a little, old ones
-          almost nothing.
+          A save is one thing your agent asks Oort to remember. A recall is one search for memories.
+          Fresh memories cost a little, old ones almost nothing. Smart rerank runs when it helps, so
+          you do not pay for it on every recall.
+        </p>
+        <p className="mt-3 max-w-xl text-sm text-muted-foreground">
+          Hosted Oort Cloud is not open yet. The open source engine is the way to start today.
         </p>
 
         <div className="mt-12 grid gap-4 md:grid-cols-3">
@@ -102,50 +69,86 @@ function Pricing() {
                 {t.key === 'hot'
                   ? 'Included in every plan.'
                   : t.key === 'warm'
-                    ? 'Small monthly cost per GB.'
-                    : 'Costs almost nothing to keep.'}
+                    ? 'Warm storage is the included managed tier by default. Extra is $0.50 per GB a month.'
+                    : 'Costs almost nothing to keep: $0.03 per GB a month beyond the included amount.'}
               </p>
             </div>
           ))}
         </div>
-        <div className="mt-12 grid gap-5 md:grid-cols-2 lg:grid-cols-4">
-          {plans.map((p) => (
-            <div
-              key={p.name}
-              className={`flex flex-col rounded-2xl border border-border bg-card p-7 ${p.featured ? 'iris-border glow-photon' : ''}`}
-            >
-              <p className="font-mono text-xs uppercase text-muted-foreground">{p.name}</p>
-              <p className="mt-4">
-                <span className="text-4xl font-semibold">{p.price}</span>{' '}
-                <span className="text-sm text-muted-foreground">{p.unit}</span>
-              </p>
-              <p className="mt-2 text-sm text-muted-foreground">{plain[p.name]?.who}</p>
-              <p className="mt-4 text-sm">{plain[p.name]?.use}</p>
-              <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-                <p>
-                  <span className="text-warm">Kuiper Belt</span> · {plain[p.name]?.recent}
-                </p>
-                <p>
-                  <span className="text-cold">Oort Cloud</span> · {plain[p.name]?.old}
-                </p>
-              </div>
-              <ul className="mt-6 flex-1 space-y-2 text-sm">
-                {(plain[p.name]?.features ?? p.features).map((f) => (
-                  <li key={f} className="flex gap-2">
-                    <Check className="mt-0.5 size-4 text-photon-glow" />
-                    {f}
-                  </li>
-                ))}
-              </ul>
-              <Link
-                to={p.name === 'Enterprise' ? '/enterprise' : '/signin'}
-                className={`mt-8 rounded-full py-2.5 text-center text-sm font-medium ${p.featured ? 'bg-primary text-primary-foreground' : 'border border-border'}`}
+
+        <div className="mt-12 flex flex-wrap items-center gap-4 rounded-2xl border border-border bg-card/60 p-5">
+          <button
+            role="switch"
+            aria-checked={byok}
+            aria-label="Bring your own keys"
+            onClick={() => setByok(!byok)}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition ${byok ? 'bg-primary' : 'bg-secondary'}`}
+          >
+            <span
+              className={`absolute top-0.5 size-5 rounded-full bg-foreground transition-all ${byok ? 'left-[22px]' : 'left-0.5'}`}
+            />
+          </button>
+          <div className="flex-1 text-sm">
+            <p className="font-medium">Bring your own keys</p>
+            <p className="text-muted-foreground">
+              You supply your own Voyage, TypeSafe and Anthropic keys and pay those providers
+              directly. Oort then charges only for storage and orchestration, so the plans cost less
+              and include more.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-5 md:grid-cols-2 lg:grid-cols-5">
+          {plans.map((p) => {
+            const key = p.name as keyof typeof byokPlans;
+            const useByok = byok && p.name in byokPlans;
+            const price = useByok ? byokPrice[key] : p.price;
+            const included = useByok ? byokPlans[key] : p.included;
+            const over = useByok && key !== 'Free' ? byokOverage[key] : undefined;
+            const features = useByok
+              ? [
+                  ...(over ? [over] : []),
+                  ...p.features.filter((f) => !f.startsWith('Extra use') && !f.startsWith('Same')),
+                ]
+              : p.features;
+            return (
+              <div
+                key={p.name}
+                className={`flex flex-col rounded-2xl border border-border bg-card p-6 ${p.featured ? 'iris-border glow-photon' : ''}`}
               >
-                {p.cta}
-              </Link>
-            </div>
-          ))}
+                <p className="font-mono text-xs uppercase text-muted-foreground">{p.name}</p>
+                <p className="mt-4">
+                  <span className="text-3xl font-semibold">{price}</span>{' '}
+                  <span className="text-sm text-muted-foreground">{p.unit}</span>
+                </p>
+                <p className="mt-2 text-sm text-muted-foreground">{p.who}</p>
+                <ul className="mt-4 space-y-0.5 text-sm">
+                  {included.map((x) => (
+                    <li key={x}>{x}</li>
+                  ))}
+                </ul>
+                <ul className="mt-5 flex-1 space-y-2 text-sm">
+                  {features.map((f) => (
+                    <li key={f} className="flex gap-2">
+                      <Check className="mt-0.5 size-4 shrink-0 text-photon-glow" />
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+                <Link
+                  to={p.name === 'Enterprise' ? '/enterprise' : '/signin'}
+                  className={`mt-8 rounded-full py-2.5 text-center text-sm font-medium ${p.featured ? 'bg-primary text-primary-foreground' : 'border border-border'}`}
+                >
+                  {p.cta}
+                </Link>
+              </div>
+            );
+          })}
         </div>
+        <p className="mt-4 text-xs text-muted-foreground">
+          Prices are a launch proposal. Free is a hard stop: it never bills and never asks for a
+          card.
+        </p>
 
         <div className="mt-20 rounded-2xl border border-border bg-card p-8">
           <h2 className="text-2xl font-semibold">What would it cost?</h2>
@@ -155,39 +158,58 @@ function Pricing() {
                 How much your app remembers: <span className="font-mono">{gb} GB</span>
                 <input
                   type="range"
-                  min={10}
-                  max={2000}
+                  min={1}
+                  max={500}
                   value={gb}
                   onChange={(e) => setGb(+e.target.value)}
                   className="mt-2 w-full accent-[var(--photon)]"
                 />
               </label>
               <label className="block text-sm">
-                Times it recalls something each month:{' '}
-                <span className="font-mono">{ret.toLocaleString()}</span>
+                Saves each month: <span className="font-mono">{saves.toLocaleString()}</span>
                 <input
                   type="range"
-                  min={100000}
-                  max={20000000}
-                  step={100000}
-                  value={ret}
-                  onChange={(e) => setRet(+e.target.value)}
+                  min={1000}
+                  max={5_000_000}
+                  step={1000}
+                  value={saves}
+                  onChange={(e) => setSaves(+e.target.value)}
+                  className="mt-2 w-full accent-[var(--photon)]"
+                />
+              </label>
+              <label className="block text-sm">
+                Recalls each month: <span className="font-mono">{recalls.toLocaleString()}</span>
+                <input
+                  type="range"
+                  min={1000}
+                  max={10_000_000}
+                  step={1000}
+                  value={recalls}
+                  onChange={(e) => setRecalls(+e.target.value)}
                   className="mt-2 w-full accent-[var(--photon)]"
                 />
               </label>
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="rounded-xl border border-border p-5">
-                <p className="text-xs text-muted-foreground">A typical memory database</p>
-                <p className="mt-2 font-mono text-3xl">${flat.toLocaleString()}</p>
-              </div>
+            <div className="space-y-4">
               <div className="rounded-xl border border-photon p-5 glow-photon">
-                <p className="text-xs text-muted-foreground">Oort Pro (estimate)</p>
-                <p className="mt-2 font-mono text-3xl">${Math.round(oort).toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground">
+                  Estimate: {est.plan} plan{byok ? ', your own keys' : ''}
+                </p>
+                <p className="mt-2 font-mono text-3xl">${est.monthly.toLocaleString()}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {est.overage > 0
+                    ? `Includes $${est.overage.toLocaleString()} of extra use and storage.`
+                    : 'Fits inside what the plan includes.'}
+                </p>
               </div>
-              <p className="col-span-2 text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 We assume about 15% stays in the Kuiper Belt and the rest rests quietly in the Oort
-                Cloud.
+                Cloud. {byok ? 'Your own provider bills are extra. ' : ''}Prices are a launch
+                proposal.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Private deployment, SOC 2 and an uptime SLA are <PlannedBadge />, so they are not
+                part of any price here.
               </p>
             </div>
           </div>

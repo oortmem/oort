@@ -21,12 +21,13 @@ export const tiers = [
     key: 'hot' as Tier,
     name: 'Photosphere',
     label: 'Hot · in the moment',
-    latency: '< 15 ms',
-    precision: 'int8 in RAM',
-    store: 'Reactive tables / local memory',
+    latency: 'No search needed',
+    latencyTarget: 'Target: under 15 ms',
+    precision: '512-dim int8 vectors',
+    store: 'Recent and pinned memories, kept ready',
     pitch:
-      'Everything happening right now — what was just said, what the person likes, what they pinned. Always in reach, never searched for.',
-    body: 'Active session context, persona facts and pinned rules. Injected with zero search.',
+      'Everything happening right now: what was just said, what the person likes, what they pinned. Always in reach, never searched for.',
+    body: 'Active session context, persona facts and pinned rules.',
     recall: 'Instant',
     space: "Only what's in use",
   },
@@ -34,12 +35,13 @@ export const tiers = [
     key: 'warm' as Tier,
     name: 'Kuiper Belt',
     label: 'Warm · remembered',
-    latency: '30–80 ms',
-    precision: 'Matryoshka 512d · binary quantized',
-    store: 'Document store + BM25',
+    latency: 'Keyword p95 4.9 ms · vector p95 19.8 ms',
+    latencyTarget: 'Target: 30 to 80 ms',
+    precision: '512-dim int8 vectors (binary quantization is Planned)',
+    store: 'SQLite with FTS5 (BM25) keyword index plus vectors',
     pitch:
-      'The important parts of past conversations, kept as short, clear summaries. Found in a blink — nothing you share gets lost.',
-    body: 'Distilled facts and episodic summaries searched by hybrid lexical + dense recall.',
+      'The important parts of past conversations, kept as short, clear facts. Found in a blink, and each one can explain why it was recalled.',
+    body: 'Distilled facts searched by keyword and vector together.',
     recall: 'In a blink',
     space: 'Compact',
   },
@@ -47,82 +49,185 @@ export const tiers = [
     key: 'cold' as Tier,
     name: 'Oort Cloud',
     label: 'Cold · long ago',
-    latency: '80–180 ms',
-    precision: '0 bits in RAM (elision stub)',
-    store: 'Object storage + zstd dictionary',
+    latency: 'Not measured separately yet',
+    latencyTarget: 'Target: 80 to 180 ms',
+    precision: 'No vector kept (text, stub and entities stay)',
+    store: 'zstd-compressed blob (object storage in the cloud is Planned)',
     pitch:
-      'Older wishes and history, safely tucked away and out of the way. Bring one back in a moment whenever it matters again.',
-    body: 'Vectors evicted entirely. A 35-token stub hydrates the full memory on demand in < 3 ms.',
+      'Older history, safely tucked away and out of the way. The text stays, the heavy vector goes, and it comes back when it matters again.',
+    body: 'Text, a short stub and entities are kept. The vector is dropped and the rest is compressed.',
     recall: 'In a moment',
     space: 'Dormant',
   },
 ];
+
+/**
+ * Measured on a laptop with the local SQLite engine and 10,000 memories.
+ * Vector recall used a stand-in embedder, so it excludes the embedding API round trip.
+ */
+export const measured = [
+  { value: '4.9 ms', label: 'keyword recall, p95', setup: 'SQLite FTS5, 10,000 memories, laptop' },
+  {
+    value: '19.8 ms',
+    label: 'vector recall, p95',
+    setup: '10,000 memories, laptop, stand-in embedder. Excludes the embedding API round trip.',
+  },
+  {
+    value: '+27 MB',
+    label: 'process memory',
+    setup: 'For 10,000 memories, local SQLite engine, laptop',
+  },
+  {
+    value: '4.6 MB',
+    label: 'for 4,572 cold memories on disk',
+    setup: 'Text, stub and entities, zstd-compressed, local SQLite engine',
+  },
+];
+
+export type BillingMode = 'managed' | 'byok';
+export type PaidPlan = 'Pro' | 'Team';
+export type PlanName = 'Free' | PaidPlan;
+
+export type Usage = { saves: number; recalls: number; warmGb: number; coldGb: number };
+
+type Allowance = { price: number; saves: number; recalls: number; warmGb: number; coldGb: number };
+
+/**
+ * Structure A (we run the models) and Structure B (you bring your own keys)
+ * from docs/research/2026-11-04-pricing.md. Prices are a launch proposal.
+ */
+export const rates = {
+  managed: {
+    Free: { price: 0, saves: 5_000, recalls: 10_000, warmGb: 0.1, coldGb: 1 },
+    Pro: { price: 19, saves: 25_000, recalls: 50_000, warmGb: 1, coldGb: 20 },
+    Team: { price: 99, saves: 150_000, recalls: 300_000, warmGb: 5, coldGb: 100 },
+    overagePer1k: { saves: 0.2, recalls: 0.12 },
+  },
+  byok: {
+    Free: { price: 0, saves: 25_000, recalls: 50_000, warmGb: 0.1, coldGb: 1 },
+    Pro: { price: 9, saves: 100_000, recalls: 250_000, warmGb: 1, coldGb: 20 },
+    Team: { price: 39, saves: 500_000, recalls: 1_250_000, warmGb: 5, coldGb: 100 },
+    overagePer1k: { saves: 0.03, recalls: 0.02 },
+  },
+  storagePerGbMonth: { warm: 0.5, cold: 0.03 },
+} as const satisfies {
+  managed: Record<PlanName, Allowance> & { overagePer1k: { saves: number; recalls: number } };
+  byok: Record<PlanName, Allowance> & { overagePer1k: { saves: number; recalls: number } };
+  storagePerGbMonth: { warm: number; cold: number };
+};
+
+const cents = (n: number) => Math.round(n * 100) / 100;
+
+/** Free is a hard stop, so it only applies when the usage fits inside it. */
+export function fitsFree(u: Usage, byok = false) {
+  const f = rates[byok ? 'byok' : 'managed'].Free;
+  return (
+    u.saves <= f.saves && u.recalls <= f.recalls && u.warmGb <= f.warmGb && u.coldGb <= f.coldGb
+  );
+}
+
+/** Monthly cost of a paid plan for a usage profile: base price plus overage. */
+export function planCost(plan: PaidPlan, u: Usage, byok = false) {
+  const r = rates[byok ? 'byok' : 'managed'];
+  const p = r[plan];
+  const over =
+    (Math.max(0, u.saves - p.saves) / 1000) * r.overagePer1k.saves +
+    (Math.max(0, u.recalls - p.recalls) / 1000) * r.overagePer1k.recalls +
+    Math.max(0, u.warmGb - p.warmGb) * rates.storagePerGbMonth.warm +
+    Math.max(0, u.coldGb - p.coldGb) * rates.storagePerGbMonth.cold;
+  return cents(p.price + over);
+}
+
+/** Cheapest plan that can serve the usage, with the overage part split out. */
+export function estimateMonthlyCost(u: Usage, opts: { byok?: boolean } = {}) {
+  const byok = opts.byok ?? false;
+  if (fitsFree(u, byok)) return { plan: 'Free' as PlanName, monthly: 0, overage: 0 };
+  const pro = planCost('Pro', u, byok);
+  const team = planCost('Team', u, byok);
+  const plan: PaidPlan = team < pro ? 'Team' : 'Pro';
+  const monthly = plan === 'Team' ? team : pro;
+  const base = rates[byok ? 'byok' : 'managed'][plan].price;
+  return { plan: plan as PlanName, monthly, overage: cents(monthly - base) };
+}
 
 export const plans = [
   {
     name: 'Open Source',
     price: '$0',
     unit: 'self-hosted',
-    ops: 'Unlimited (bring your own keys)',
-    warm: 'Self-hosted',
-    cold: 'Self-hosted',
+    who: 'Run it yourself. Free and open source.',
+    included: ['Unlimited, you bring your own keys', 'Your own machines, SQLite engine'],
     features: [
-      'Apache 2.0 SDK (TS + Python)',
-      'Local sqlite-vec + zstd engine',
-      'Desktop Explorer app',
+      'Apache 2.0 engine and CLI (TypeScript)',
+      'Local SQLite engine with zstd cold blobs',
+      'Python SDK (Planned)',
+      'Desktop Explorer app (Planned)',
     ],
     cta: 'Get the code',
   },
   {
-    name: 'Developer',
+    name: 'Free',
     price: '$0',
-    unit: '/ month',
-    ops: '50k retrievals · 10k writes',
-    warm: '1 GB included',
-    cold: '10 GB included',
-    features: ['Managed hot tier', 'Hybrid rerank', 'Community support'],
+    unit: 'hosted, no card',
+    who: 'For trying things out. Stops at the limit, never bills.',
+    included: ['5,000 saves', '10,000 recalls', '100 MB warm', '1 GB cold'],
+    features: ['Hard stop at the limits', 'No card needed', 'Smart rerank runs when it helps'],
     cta: 'Start free',
   },
   {
     name: 'Pro',
-    price: '$49',
+    price: '$19',
     unit: '/ month',
-    ops: '500k retrievals · 100k writes',
-    warm: '$0.25 / GB-month',
-    cold: '$0.03 / GB-month',
-    features: ['Per-customer encryption', 'Usage-based overage', 'Activation analytics'],
+    who: 'For products with real users.',
+    included: ['25,000 saves', '50,000 recalls', '1 GB warm', '20 GB cold'],
+    features: [
+      'Extra use: $0.20 per 1k saves, $0.12 per 1k recalls',
+      'Extra storage: $0.50 per GB warm, $0.03 per GB cold',
+      'Smart rerank runs when it helps',
+    ],
     cta: 'Go Pro',
     featured: true,
   },
   {
-    name: 'Enterprise',
-    price: '$999',
+    name: 'Team',
+    price: '$99',
     unit: '/ month',
-    ops: '10M retrievals · 2M writes',
-    warm: '$0.18 / GB-month',
-    cold: '$0.02 / GB-month',
-    features: ['BYOK / customer KMS', 'Dedicated VPC', '99.99% SLA, SOC 2'],
-    cta: 'Talk to sales',
+    who: 'For bigger products and teams.',
+    included: ['150,000 saves', '300,000 recalls', '5 GB warm', '100 GB cold'],
+    features: [
+      'Same overage rates as Pro',
+      'Warm storage on the managed tier',
+      'Smart rerank runs when it helps',
+    ],
+    cta: 'Choose Team',
+  },
+  {
+    name: 'Enterprise',
+    price: 'Talk to us',
+    unit: '',
+    who: 'For large teams and millions of customers.',
+    included: ['Contract limits'],
+    features: [
+      'Bring your own keys',
+      'Private deployment (Planned)',
+      'SOC 2 and an uptime SLA (Planned, not available today)',
+    ],
+    cta: 'Talk to us',
   },
 ];
 
-/** Estimated monthly Oort Pro cost for a usage profile. */
-export function estimateMonthlyCost(
-  retrievals: number,
-  writes: number,
-  warmGb: number,
-  coldGb: number,
-) {
-  const base = 49;
-  const extraR = (Math.max(0, retrievals - 500_000) / 1000) * 0.06;
-  const extraW = (Math.max(0, writes - 100_000) / 1000) * 0.1;
-  return Math.round((base + extraR + extraW + warmGb * 0.25 + coldGb * 0.03) * 100) / 100;
-}
+/** Same plans at the bring-your-own-keys rates (Structure B). */
+export const byokPlans = {
+  Free: ['25,000 saves', '50,000 recalls', '100 MB warm', '1 GB cold'],
+  Pro: ['100,000 saves', '250,000 recalls', '1 GB warm', '20 GB cold'],
+  Team: ['500,000 saves', '1,250,000 recalls', '5 GB warm', '100 GB cold'],
+} as const;
 
-/** Flat FP32 vector DB baseline: everything stays in hot RAM. */
-export function flatVectorCost(totalGb: number) {
-  return Math.round(totalGb * 6 * 100) / 100;
-}
+export const byokPrice = { Free: '$0', Pro: '$9', Team: '$39' } as const;
+export const byokOverage = {
+  Pro: 'Extra use: $0.03 per 1k saves, $0.02 per 1k recalls',
+  Team: 'Extra use: $0.03 per 1k saves, $0.02 per 1k recalls',
+} as const;
 
 export const tierClass: Record<Tier, string> = {
   hot: 'bg-hot',
