@@ -12,3 +12,4 @@ dist/
 .dev.vars
 .nitro
 dist-ssr
+.npmrc

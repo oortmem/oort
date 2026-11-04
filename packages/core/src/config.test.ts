@@ -22,7 +22,11 @@ describe('config', () => {
     });
     expect(c.rerank).toEqual({ provider: 'voyage', model: 'rerank-3-lite', topK: 10 });
     expect(c.decide).toEqual({ provider: 'jev' });
-    expect(c.writer).toEqual({ provider: 'anthropic', model: 'claude-haiku-5-5' });
+    expect(c.writer).toEqual({
+      provider: 'anthropic',
+      model: 'claude-haiku-5-5',
+      maxMemoriesPerObservation: 5,
+    });
     expect(c.activation).toEqual({ d: 0.5, ws: 1.0, hotTopN: 50, coldBelow: -2.0 });
     expect(c.recall).toEqual({
       lexicalK: 50,

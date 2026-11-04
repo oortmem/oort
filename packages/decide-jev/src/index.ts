@@ -34,7 +34,9 @@ import {
   SALIENCE_NAMES,
   SHOULD_STORE_INSTRUCTIONS,
   TYPE_INSTRUCTIONS,
+  novelManyInstructions,
   reconcileInstructions,
+  reconcileManyInstructions,
 } from './questions.js';
 
 /** The slice of the TypeSafe client this adapter uses; inject a stub in tests. */
@@ -319,5 +321,76 @@ export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
       const answers = await ask(state, questions);
       return candidates.map((m, i) => one(`c${i}`, m.id, choiceOf(answers, `c${i}`)));
     },
+
+    async reconcileMany(items) {
+      // One call for several facts, split where one request would outgrow the size cap.
+      const out: ReconcileDecision[][] = [];
+      let chunk: number[] = [];
+      const flush = async () => {
+        if (chunk.length === 0) return;
+        out.push(...(await reconcileChunk(chunk.map((j) => items[j]!))));
+        chunk = [];
+      };
+      for (let j = 0; j < items.length; j++) {
+        const next = [...chunk, j].map((k) => items[k]!);
+        if (chunk.length > 0 && requestBytes(manyRequest(next)) > MANY_REQUEST_MAX_BYTES)
+          await flush();
+        chunk.push(j);
+      }
+      await flush();
+      return out;
+    },
   };
+
+  async function reconcileChunk(
+    items: { obs: Observation; candidates: Memory[] }[],
+  ): Promise<ReconcileDecision[][]> {
+    const { state, questions } = manyRequest(items);
+    const answers = await ask(state, questions);
+    return items.map((it, j) => {
+      const one = (question: string, candidateId: string | null) => {
+        const a = choiceOf(answers, question);
+        return {
+          candidateId,
+          action: a.action,
+          probability: a.probability,
+          decisions: [
+            { stage: 'reconcile', question, answer: a.action, probability: a.probability },
+          ],
+        };
+      };
+      if (it.candidates.length === 0) return [one(`f${j}_novel`, null)];
+      return it.candidates.map((m, i) => one(`f${j}_c${i}`, m.id));
+    });
+  }
+}
+
+/** Keeps a batched reconcile body under the relay's 56 KB, with room for the request envelope. */
+const MANY_REQUEST_MAX_BYTES = 48 * 1024;
+
+const requestBytes = (r: unknown): number => new TextEncoder().encode(JSON.stringify(r)).byteLength;
+
+function manyRequest(items: { obs: Observation; candidates: Memory[] }[]) {
+  const questions: Record<string, unknown> = {};
+  items.forEach((it, j) => {
+    if (it.candidates.length === 0) {
+      questions[`f${j}_novel`] = choice(novelManyInstructions(j), NOVEL_CRITERIA);
+    } else {
+      it.candidates.forEach((_, i) => {
+        questions[`f${j}_c${i}`] = choice(reconcileManyInstructions(j, i), RECONCILE_CRITERIA);
+      });
+    }
+  });
+  const state = {
+    facts: items.map((it) => ({
+      observation: obsState(it.obs),
+      candidates: it.candidates.map((m) => ({
+        id: m.id,
+        text: truncateUtf8(m.text, CANDIDATE_TEXT_MAX_BYTES),
+        type: m.type,
+        validFrom: m.validFrom,
+      })),
+    })),
+  };
+  return { state, questions };
 }

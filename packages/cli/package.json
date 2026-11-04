@@ -1,8 +1,30 @@
 {
   "name": "oortmem",
-  "version": "0.0.0",
-  "description": "Oort: tiered agent memory for coding agents (command line).",
+  "version": "0.1.0",
+  "description": "Oort: memory for AI coding agents. The oort command line, MCP server and agent connectors.",
+  "keywords": [
+    "oort",
+    "agent-memory",
+    "ai-agents",
+    "llm-memory",
+    "cli",
+    "mcp",
+    "claude-code",
+    "codex",
+    "cursor"
+  ],
+  "homepage": "https://oortcloud.dev",
+  "bugs": {
+    "url": "https://github.com/oortmem/oort/issues",
+    "email": "hello@oortcloud.dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oortmem/oort.git",
+    "directory": "packages/cli"
+  },
   "license": "Apache-2.0",
+  "author": "Oort <hello@oortcloud.dev>",
   "type": "module",
   "engines": {
     "node": ">=22.15.0"
@@ -12,7 +34,10 @@
     "oortmem": "dist/main.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/main.js', 0o755)\"",

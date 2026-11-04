@@ -2,12 +2,14 @@ import { randomUUID } from 'node:crypto';
 import type {
   DecisionController,
   Embedder,
+  GateDecision,
   MemoryStore,
   MemoryWriter,
   Observation,
   ReconcileAction,
   ReconcileDecision,
   ScopeFilter,
+  WrittenMemory,
 } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
 import { localGrant, type Grant } from './grant.js';
@@ -16,12 +18,42 @@ import type { Decision, Memory, Scope } from './model.js';
 import { scrubObservation } from './scrub.js';
 import { tokenizeLexical } from './tokenize.js';
 
+export type MemoryOutcomeKind = 'skipped' | 'reinforced' | 'added' | 'updated' | 'superseded';
+
+/** What happened to one memory the turn produced. */
+export interface MemoryOutcome {
+  outcome: MemoryOutcomeKind;
+  memoryId?: string;
+  reason?: string;
+}
+
 export interface ObserveResult {
-  outcome: 'skipped' | 'reinforced' | 'added' | 'updated' | 'superseded';
+  /** The turn's headline: the first memory that was not skipped, else `skipped`. */
+  outcome: MemoryOutcomeKind;
   memoryId?: string;
   decisions: Decision[];
   /** Why the observation was skipped, when a stage other than the gate decided so. */
   reason?: string;
+  /** One entry per memory the turn produced, in the writer's order (one for a single-memory writer). */
+  memories: MemoryOutcome[];
+  /** `memories` counted by outcome. */
+  counts: Partial<Record<MemoryOutcomeKind, number>>;
+}
+
+function countOf(ms: MemoryOutcome[]): ObserveResult['counts'] {
+  const counts: ObserveResult['counts'] = {};
+  for (const m of ms) counts[m.outcome] = (counts[m.outcome] ?? 0) + 1;
+  return counts;
+}
+
+/** A one-memory result (the gate, a secret, or the single-memory path). */
+function single(m: MemoryOutcome, decisions: Decision[]): ObserveResult {
+  return {
+    ...m,
+    decisions,
+    memories: [m],
+    counts: countOf([m]),
+  };
 }
 
 export interface ObserveDeps {
@@ -81,73 +113,86 @@ function filterFor(scope: Scope): ScopeFilter {
   return { orgId: scope.orgId, customerId: scope.customerId, agentId: scope.agentId, projectIds };
 }
 
-/**
- * The asynchronous write path: scrub secrets, gate, look up related memories, reconcile, and
- * only then author the memory. Every decision is recorded on the stored memory.
- */
-export async function observe(
-  raw: Observation,
-  scope: Scope,
-  deps: ObserveDeps,
-): Promise<ObserveResult> {
-  // Secrets are scrubbed before any adapter, or the store, sees the text.
-  const scrubbed = scrubObservation(raw);
-  if (scrubbed.dropped) return { outcome: 'skipped', reason: 'secret', decisions: [] };
-  // Capped after scrubbing (a secret is never cut in half) and before the gate or writer see it.
-  const obs = capObservation(scrubbed.obs);
-  const { store, embed, decide, write } = deps;
-  const now = deps.now ?? new Date();
-  const grant = localGrant(filterFor(scope));
-  const g = await decide.gate(obs);
-  const text = `${obs.userText}\n${obs.assistantText}`;
-
-  if (g.shouldStore < GATE_THRESHOLD) {
-    // Lexical search ignores validity, so look past superseded rows for a live one.
-    const turnText = `${obs.userText} ${obs.assistantText}`;
-    const turn = new Set(tokenizeLexical(turnText));
-    const hits = await store.lexical(grant, turnText, 3);
-    for (const hit of hits) {
-      const m = await store.get(grant, hit.id);
-      if (m === null || !isLive(m, now) || !strongMatch(turn, m)) continue;
-      // Activation only: `lastConfirmedAt` is reserved for a decided REINFORCE.
-      await store.recordAccess(grant, [m.id], now);
-      return { outcome: 'reinforced', memoryId: m.id, decisions: g.decisions };
-    }
-    return { outcome: 'skipped', decisions: g.decisions };
-  }
-
-  const [vec] = await embed.embed([text], 'document');
-  if (vec === undefined) throw new Error('embedder returned no vector for the observation');
-
+/** Live candidates for `text`: dense and lexical neighbours, over-fetched past superseded rows. */
+async function candidatesFor(
+  store: MemoryStore,
+  text: string,
+  v: Int8Array,
+  grant: Grant,
+  now: Date,
+): Promise<Memory[]> {
   // Stores ignore temporal validity, so over-fetch to keep superseded rows from crowding out the head.
   const [dense, lexical] = await Promise.all([
-    store.dense(grant, vec, CANDIDATES * 2),
+    store.dense(grant, v, CANDIDATES * 2),
     store.lexical(grant, text, CANDIDATES * 2),
   ]);
   const ids = [...new Set([...dense, ...lexical].map((h) => h.id))];
-  const candidates: Memory[] = [];
+  const out: Memory[] = [];
   for (const id of ids) {
     const m = await store.get(grant, id);
-    if (m !== null && isLive(m, now)) candidates.push(m);
-    if (candidates.length === CANDIDATES) break;
+    if (m !== null && isLive(m, now)) out.push(m);
+    if (out.length === CANDIDATES) break;
   }
+  return out;
+}
 
-  const rs = await decide.reconcile(obs, candidates);
-  const decisions = [...g.decisions, ...rs.flatMap((r) => r.decisions)];
-
+/** The highest-probability decision that is not NOOP, or undefined. */
+function bestOf(
+  rs: ReconcileDecision[],
+): (ReconcileDecision & { action: Exclude<ReconcileAction, 'NOOP'> }) | undefined {
   let best: (ReconcileDecision & { action: Exclude<ReconcileAction, 'NOOP'> }) | undefined;
   for (const r of rs) {
     if (r.action === 'NOOP') continue;
     if (best === undefined || r.probability > best.probability) best = { ...r, action: r.action };
   }
-  if (best === undefined) return { outcome: 'skipped', decisions };
+  return best;
+}
+
+interface ApplyArgs {
+  obs: Observation;
+  scope: Scope;
+  /** What the store lets this observation read and write (its project plus global). */
+  grant: Grant;
+  deps: ObserveDeps;
+  now: Date;
+  salience: number;
+  candidates: Memory[];
+  rs: ReconcileDecision[];
+  /** Decisions recorded so far (gate, reconcile); extended with this memory's own. */
+  decisions: Decision[];
+  embedding: Int8Array;
+  /** Authors the memory once the action and prior are known. */
+  author: (action: 'ADD' | 'UPDATE' | 'SUPERSEDE', prior?: Memory) => Promise<WrittenMemory>;
+  /** Priors already ended by an earlier memory of this turn (the multi path). */
+  claimed?: Set<string>;
+  /** All candidates NOOP means a new fact, not a skip (the multi path: the writer kept it). */
+  noopMeansNew?: boolean;
+}
+
+/** Applies one reconcile decision: reinforce, or write and link a new memory. */
+async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
+  const { obs, scope, grant, deps, now, candidates, decisions } = a;
+  const { store } = deps;
+  let best = bestOf(a.rs);
+  if (best === undefined && a.noopMeansNew === true && a.rs.length > 0) {
+    // Every candidate is unrelated. The writer already said this is a fact worth keeping,
+    // so it is new, not noise: a store almost always has *some* nearest neighbour.
+    decisions.push({
+      stage: 'reconcile',
+      question: 'all-unrelated',
+      answer: 'ADD',
+      probability: 1,
+    });
+    best = { candidateId: null, action: 'ADD', probability: 1, decisions: [] };
+  }
+  if (best === undefined) return { outcome: 'skipped' };
 
   if (best.action === 'REINFORCE') {
     const target = candidates.find((c) => c.id === best.candidateId);
-    if (target === undefined) return { outcome: 'skipped', decisions };
+    if (target === undefined) return { outcome: 'skipped' };
     await store.recordAccess(grant, [target.id], now);
     await confirm(store, grant, target.id, now.toISOString());
-    return { outcome: 'reinforced', memoryId: target.id, decisions };
+    return { outcome: 'reinforced', memoryId: target.id };
   }
 
   let action: 'ADD' | 'UPDATE' | 'SUPERSEDE' = best.action;
@@ -164,9 +209,25 @@ export async function observe(
     });
     prior = undefined;
   }
+  if (prior !== undefined && a.claimed?.has(prior.id) === true) {
+    // An earlier memory of this turn already ended this prior: this one stands on its own.
+    decisions.push({
+      stage: 'write',
+      question: 'prior-claimed',
+      answer: 'add-instead',
+      probability: 1,
+    });
+    prior = undefined;
+  }
+  if (prior !== undefined && a.claimed !== undefined) {
+    // Re-read: the snapshot was taken before this turn wrote anything.
+    const fresh = await store.get(grant, prior.id);
+    prior = fresh !== null && isLive(fresh, now) ? fresh : undefined;
+  }
   if (action !== 'ADD' && prior === undefined) action = 'ADD';
+  if (prior !== undefined) a.claimed?.add(prior.id);
 
-  const w = await write.write(obs, action, prior);
+  const w = await a.author(action, prior);
   const id = randomUUID();
   const iso = now.toISOString();
   // Temporal order of the new fact against the one it replaces. `deep` means it is
@@ -181,16 +242,14 @@ export async function observe(
     pred = await store.get(grant, prior.supersedes);
   }
   const deep = pred !== null && Date.parse(validFrom) < Date.parse(pred.validFrom);
-  const temporal: Decision | undefined =
-    prior === undefined
-      ? undefined
-      : {
-          stage: 'temporal',
-          question: 'order',
-          answer: inOrder ? 'in-order' : deep ? 'out-of-order-deep' : 'out-of-order',
-          probability: 1,
-        };
-  if (temporal !== undefined) decisions.push(temporal);
+  if (prior !== undefined) {
+    decisions.push({
+      stage: 'temporal',
+      question: 'order',
+      answer: inOrder ? 'in-order' : deep ? 'out-of-order-deep' : 'out-of-order',
+      probability: 1,
+    });
+  }
 
   const memory: Memory = {
     id,
@@ -199,9 +258,9 @@ export async function observe(
     text: w.text,
     stub: w.stub,
     entities: w.entities,
-    salience: g.salience,
+    salience: a.salience,
     pinned: false,
-    tier: g.salience >= HOT_SALIENCE ? 'hot' : 'warm',
+    tier: a.salience >= HOT_SALIENCE ? 'hot' : 'warm',
     accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
     validFrom,
     validTo: null,
@@ -210,7 +269,7 @@ export async function observe(
     lastConfirmedAt: null,
     supersedes: prior?.id ?? null,
     supersededBy: null,
-    embedding: vec,
+    embedding: a.embedding,
     source: {
       harness: deps.harness ?? 'unknown',
       ...(obs.sessionId !== undefined && { sessionId: obs.sessionId }),
@@ -274,5 +333,162 @@ export async function observe(
   }
 
   const outcome = action === 'ADD' ? 'added' : action === 'UPDATE' ? 'updated' : 'superseded';
-  return { outcome, memoryId: id, decisions };
+  return { outcome, memoryId: id };
+}
+
+/** The same fact twice (whitespace and case aside) is written once. */
+function dedupe(ms: WrittenMemory[]): WrittenMemory[] {
+  const seen = new Set<string>();
+  return ms.filter((m) => {
+    const k = m.text.trim().replace(/\s+/g, ' ').toLowerCase();
+    if (k === '' || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/** A fact as the decision controller sees it: the claim stands in for the turn. */
+function factObservation(obs: Observation, m: WrittenMemory): Observation {
+  return { ...obs, userText: m.text, assistantText: '', toolSummaries: [] };
+}
+
+/**
+ * The asynchronous write path: scrub secrets, gate, look up related memories, reconcile, and
+ * only then author the memory. Every decision is recorded on the stored memory.
+ *
+ * With a writer that has `writeMany` (CON-56), the order is: gate, then one writer call that
+ * splits the turn into 1 to `writer.maxMemoriesPerObservation` facts, one embed call for all of
+ * them, candidates per fact (all gathered before anything is stored, so facts of one turn never
+ * reconcile against each other), one reconcile per fact (or one `reconcileMany` call), and each
+ * fact applied on its own. A prior is ended by at most one fact of the turn.
+ */
+export async function observe(
+  raw: Observation,
+  scope: Scope,
+  deps: ObserveDeps,
+): Promise<ObserveResult> {
+  // Secrets are scrubbed before any adapter, or the store, sees the text.
+  const scrubbed = scrubObservation(raw);
+  if (scrubbed.dropped) return single({ outcome: 'skipped', reason: 'secret' }, []);
+  // Capped after scrubbing (a secret is never cut in half) and before the gate or writer see it.
+  const obs = capObservation(scrubbed.obs);
+  const { store, embed, decide, write } = deps;
+  const now = deps.now ?? new Date();
+  const grant = localGrant(filterFor(scope));
+  const g = await decide.gate(obs);
+  const text = `${obs.userText}\n${obs.assistantText}`;
+
+  if (g.shouldStore < GATE_THRESHOLD) {
+    // Lexical search ignores validity, so look past superseded rows for a live one.
+    const turnText = `${obs.userText} ${obs.assistantText}`;
+    const turn = new Set(tokenizeLexical(turnText));
+    const hits = await store.lexical(grant, turnText, 3);
+    for (const hit of hits) {
+      const m = await store.get(grant, hit.id);
+      if (m === null || !isLive(m, now) || !strongMatch(turn, m)) continue;
+      // Activation only: `lastConfirmedAt` is reserved for a decided REINFORCE.
+      await store.recordAccess(grant, [m.id], now);
+      return single({ outcome: 'reinforced', memoryId: m.id }, g.decisions);
+    }
+    return single({ outcome: 'skipped' }, g.decisions);
+  }
+
+  if (write.writeMany !== undefined) return observeMany(obs, scope, grant, deps, g, now);
+
+  const [vec] = await embed.embed([text], 'document');
+  if (vec === undefined) throw new Error('embedder returned no vector for the observation');
+  const candidates = await candidatesFor(store, text, vec, grant, now);
+  const rs = await decide.reconcile(obs, candidates);
+  const decisions = [...g.decisions, ...rs.flatMap((r) => r.decisions)];
+  const r = await apply({
+    obs,
+    scope,
+    grant,
+    deps,
+    now,
+    salience: g.salience,
+    candidates,
+    rs,
+    decisions,
+    embedding: vec,
+    author: (action, prior) => write.write(obs, action, prior),
+  });
+  return single(r, decisions);
+}
+
+async function observeMany(
+  obs: Observation,
+  scope: Scope,
+  grant: Grant,
+  deps: ObserveDeps,
+  g: GateDecision,
+  now: Date,
+): Promise<ObserveResult> {
+  const { store, embed, decide } = deps;
+  const max = deps.config.writer.maxMemoriesPerObservation;
+  const written = dedupe(await deps.write.writeMany!(obs, max)).slice(0, max);
+  if (written.length === 0) return single({ outcome: 'skipped', reason: 'no-facts' }, g.decisions);
+
+  const vecs = await embed.embed(
+    written.map((m) => m.text),
+    'document',
+  );
+  if (vecs.length !== written.length)
+    throw new Error('embedder returned the wrong number of vectors');
+  // Every fact's candidates come from the store as it was before this turn wrote anything.
+  const facts = await Promise.all(
+    written.map(async (m, i) => ({
+      m,
+      v: vecs[i]!,
+      obs: factObservation(obs, m),
+      candidates: await candidatesFor(store, m.text, vecs[i]!, grant, now),
+    })),
+  );
+  const rss =
+    decide.reconcileMany !== undefined
+      ? await decide.reconcileMany(facts.map((f) => ({ obs: f.obs, candidates: f.candidates })))
+      : await facts.reduce<Promise<ReconcileDecision[][]>>(
+          async (acc, f) => [...(await acc), await decide.reconcile(f.obs, f.candidates)],
+          Promise.resolve([]),
+        );
+  if (rss.length !== facts.length)
+    throw new Error('reconcileMany returned the wrong number of answers');
+
+  const claimed = new Set<string>();
+  const memories: MemoryOutcome[] = [];
+  const all: Decision[] = [...g.decisions];
+  for (const [i, f] of facts.entries()) {
+    const rs = rss[i]!;
+    const decisions: Decision[] = [
+      ...g.decisions,
+      { stage: 'write', question: 'fact', answer: `${i + 1}/${facts.length}`, probability: 1 },
+      ...rs.flatMap((r) => r.decisions),
+    ];
+    memories.push(
+      await apply({
+        obs,
+        scope,
+        grant,
+        deps,
+        now,
+        salience: g.salience,
+        candidates: f.candidates,
+        rs,
+        decisions,
+        embedding: f.v,
+        author: async () => f.m,
+        claimed,
+        noopMeansNew: true,
+      }),
+    );
+    all.push(...decisions.slice(g.decisions.length));
+  }
+  const head = memories.find((m) => m.outcome !== 'skipped') ?? memories[0]!;
+  return {
+    outcome: head.outcome,
+    ...(head.memoryId !== undefined && { memoryId: head.memoryId }),
+    decisions: all,
+    memories,
+    counts: countOf(memories),
+  };
 }

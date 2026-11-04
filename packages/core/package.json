@@ -1,11 +1,34 @@
 {
   "name": "@oortmem/core",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Oort core: the tiered hot, warm and cold memory engine for AI agents (types, scoring, recall, consolidation).",
+  "keywords": [
+    "oort",
+    "agent-memory",
+    "ai-agents",
+    "llm-memory",
+    "memory",
+    "engine",
+    "tiered",
+    "recall"
+  ],
+  "homepage": "https://oortcloud.dev",
+  "bugs": {
+    "url": "https://github.com/oortmem/oort/issues",
+    "email": "hello@oortcloud.dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oortmem/oort.git",
+    "directory": "packages/core"
+  },
   "license": "Apache-2.0",
+  "author": "Oort <hello@oortcloud.dev>",
   "type": "module",
   "engines": {
     "node": ">=22.15.0"
   },
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -19,8 +42,14 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.typecheck.json"

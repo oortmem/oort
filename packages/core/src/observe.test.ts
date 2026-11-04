@@ -722,7 +722,13 @@ describe('observe', () => {
     const { deps, spy } = setup(gate(0.9), [rec(null, 'ADD')]);
     const pem = `-----BEGIN PRIVATE KEY-----\n${'A1b2C3d4E5f6G7h8'.repeat(80).slice(0, 1146)}\n-----END PRIVATE KEY-----`; // nosemgrep: synthetic test credential, not a real secret
     const res = await observe(obs(`${pem} ok`), localScope(), deps);
-    expect(res).toEqual({ outcome: 'skipped', reason: 'secret', decisions: [] });
+    expect(res).toEqual({
+      outcome: 'skipped',
+      reason: 'secret',
+      decisions: [],
+      memories: [{ outcome: 'skipped', reason: 'secret' }],
+      counts: { skipped: 1 },
+    });
     expect(spy.embed).toBe(0);
     expect(spy.reconcile).toEqual([]);
     expect(spy.write).toEqual([]);
