@@ -296,6 +296,29 @@ describe('jevDecider', () => {
     }
   });
 
+  it('base-url-routes-the-sdk-through-the-relay', async () => {
+    const calls: { url: string; headers: Headers }[] = [];
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), headers: new Headers(init?.headers) });
+      return new Response(JSON.stringify({ error: 'Oort Pro is not active' }), {
+        status: 402,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    const relayKey = ['oort', 'sk', 'test0123456789'].join('_');
+    const d = jevDecider({
+      apiKey: relayKey,
+      baseURL: 'https://relay.example.test/v1/typesafe',
+      fetch: fetchFn,
+    });
+    const err = (await d.gate(obs).catch((x: unknown) => x)) as DecideError;
+    expect(err).toBeInstanceOf(DecideError);
+    expect(err.status).toBe(402);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls[0]!.url).toBe('https://relay.example.test/v1/typesafe/v1/systemone');
+    expect(calls[0]!.headers.get('authorization')).toBe(`Bearer ${relayKey}`);
+  });
+
   it('network.import-makes-no-call', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
       throw new Error('network call at import');

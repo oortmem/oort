@@ -136,6 +136,14 @@ export interface JevDeciderOptions {
   apiKey?: string;
   client?: SystemOneClient;
   model?: string;
+  /**
+   * The TypeSafe SDK's `baseURL` (its default is `https://api.typesafe.ai`, or
+   * `TYPESAFE_BASE_URL`). The Oort Pro relay is `https://relay.oortcloud.dev/v1/typesafe`,
+   * with an Oort key as `apiKey` (the SDK sends `Authorization: Bearer`). Ignored with `client`.
+   */
+  baseURL?: string;
+  /** The SDK's fetch, for tests. Ignored with `client`. */
+  fetch?: typeof fetch;
 }
 
 /** System One controller backed by TypeSafe's Jev model. One `systemOne` call per stage. */
@@ -146,7 +154,11 @@ export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
     if (apiKey === undefined || apiKey === '') {
       throw new MissingCredentialError('TYPESAFE_API_KEY', 'decide.apiKey');
     }
-    client = new TypeSafeClient({ apiKey }) as unknown as SystemOneClient;
+    client = new TypeSafeClient({
+      apiKey,
+      ...(opts.baseURL !== undefined && { baseURL: opts.baseURL }),
+      ...(opts.fetch !== undefined && { fetch: opts.fetch }),
+    }) as unknown as SystemOneClient;
   }
   const c = client;
 
