@@ -19,5 +19,9 @@ export function safeRedirect(v: unknown, fallback = '/account'): string {
     return fallback;
   }
   if (u.origin !== PLACEHOLDER_ORIGIN) return fallback;
-  return `${u.pathname}${u.search}${u.hash}`;
+  // Dot segments can collapse to a protocol-relative path ("/.//evil.example" resolves to
+  // "//evil.example"), and an encoded slash or backslash could be decoded into one later.
+  if (/%2f|%5c/i.test(u.pathname)) return fallback;
+  const out = `${u.pathname}${u.search}${u.hash}`;
+  return /^\/(?![/\\])/.test(out) ? out : fallback;
 }

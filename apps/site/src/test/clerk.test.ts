@@ -15,6 +15,9 @@ describe('safeRedirect', () => {
       '/\t/evil.example',
       '/\n/evil.example',
       '/%09/x\u0000',
+      '/.//evil.example',
+      '/a/..//evil.example',
+      '/%2F%2Fevil.example',
       'account',
       42,
     ]) {
