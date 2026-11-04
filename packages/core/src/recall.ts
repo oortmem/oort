@@ -4,6 +4,12 @@ import { activation } from './activation.js';
 import { fuse } from './fusion.js';
 import { scrub } from './scrub.js';
 import type { Memory } from './model.js';
+import {
+  CONFIDENT_COVERAGE,
+  CONFIDENT_COVERAGE_GAP,
+  informativeTokens,
+  queryCoverage,
+} from './relevance.js';
 
 export interface RecallQuery {
   text: string;
@@ -22,6 +28,10 @@ export interface RecalledMemory extends Memory {
     /** Raw reciprocal-rank-fusion score. */
     rrf: number;
     reranked?: number;
+    /** Share of the query's informative words this memory contains, 0 to 1. */
+    coverage: number;
+    /** Dense (cosine) similarity to the query, when the dense search found it. */
+    dense?: number;
     activation: number;
     hydrated: boolean;
   };
@@ -44,6 +54,12 @@ export interface RecallResult {
   /** Reserved for the hook layer (gate decision); `recall` never sets it. */
   skipped?: string;
   degraded?: Degradation[];
+  /** Candidates were found, but none was relevant enough: the answer is "no relevant memories". */
+  abstained?: true;
+  /** What the relevance gate did, when it dropped anything. */
+  gate?: { by: 'rerank' | 'coverage'; threshold: number; dropped: number };
+  /** Rerank was available but not called, because fusion already had a clear answer. */
+  rerankSkipped?: 'confident';
   timings: Record<string, number>;
 }
 
@@ -81,6 +97,20 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     totalMs: 0,
   };
 
+  const timed = async <T>(key: string, p: () => Promise<T>): Promise<T> => {
+    const t = clock();
+    try {
+      return await p();
+    } finally {
+      timings[key] = clock() - t;
+    }
+  };
+
+  // The lexical search does not need the query vector, so it runs while the query embeds.
+  const lexicalP = timed('lexicalMs', () => store.lexical(text, q.scope, config.recall.lexicalK));
+  // A failed embed must not leave the lexical promise unobserved.
+  lexicalP.catch(() => {});
+
   let vector: Int8Array | undefined;
   if (!deps.embed) {
     degraded.push('no-embedder');
@@ -95,17 +125,9 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     timings['embedMs'] = clock() - t;
   }
 
-  const timed = async <T>(key: string, p: () => Promise<T>): Promise<T> => {
-    const t = clock();
-    try {
-      return await p();
-    } finally {
-      timings[key] = clock() - t;
-    }
-  };
   const v = vector;
   const [lexical, dense] = await Promise.all([
-    timed('lexicalMs', () => store.lexical(text, q.scope, config.recall.lexicalK)),
+    lexicalP,
     v === undefined
       ? Promise.resolve<Hit[]>([])
       : timed('denseMs', () =>
@@ -162,10 +184,24 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   });
   timings['fuseMs'] = clock() - tf;
 
+  const queryTokens = informativeTokens(text);
+  const coverage = new Map<string, number>();
+  for (const f of fused) {
+    const m = memories.get(f.id);
+    if (m !== undefined) coverage.set(f.id, queryCoverage(queryTokens, m));
+  }
+  const denseScore = new Map(dense.map((h) => [h.id, h.score]));
+
   let ordered = fused.slice(0, config.recall.rerankK);
   const rerankScores = new Map<string, number>();
+  let rerankSkipped: RecallResult['rerankSkipped'];
   if (!deps.rerank) {
     degraded.push('no-reranker');
+  } else if (
+    config.recall.skipRerankWhenConfident &&
+    isConfident(ordered, lexical, dense, coverage)
+  ) {
+    rerankSkipped = 'confident';
   } else if (ordered.length > 0) {
     const tr = clock();
     try {
@@ -193,13 +229,29 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     timings['rerankMs'] = clock() - tr;
   }
 
+  // Relevance gate (CON-45): a reranker score when there is one, else query-word coverage or a
+  // strong dense match. A threshold of 0 switches that test off.
+  const { minRerankScore, minCoverage, minDenseScore } = config.recall;
+  const candidates = ordered.slice(0, config.recall.returnK);
+  const byRerank = rerankScores.size > 0;
+  const relevant = (id: string): boolean => {
+    const rs = rerankScores.get(id);
+    if (rs !== undefined) return rs >= minRerankScore;
+    if (minCoverage === 0) return true;
+    if ((coverage.get(id) ?? 0) >= minCoverage) return true;
+    return minDenseScore > 0 && (denseScore.get(id) ?? -1) >= minDenseScore;
+  };
+  const kept = candidates.filter((f) => relevant(f.id));
+  const dropped = candidates.length - kept.length;
+
   const out: RecalledMemory[] = [];
-  for (const f of ordered.slice(0, config.recall.returnK)) {
+  for (const f of kept) {
     const m = memories.get(f.id);
     if (m === undefined) continue;
     const lr = lexical.findIndex((h) => h.id === f.id);
     const dr = dense.findIndex((h) => h.id === f.id);
     const rs = rerankScores.get(f.id);
+    const ds = denseScore.get(f.id);
     out.push({
       ...m,
       explanation: {
@@ -208,6 +260,8 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         fused: f.score,
         rrf: f.rrf,
         ...(rs !== undefined ? { reranked: rs } : {}),
+        coverage: coverage.get(f.id) ?? 0,
+        ...(ds !== undefined ? { dense: ds } : {}),
         activation: activation(m.accessLog, m.salience, now, config.activation),
         hydrated: hydratedIds.has(f.id),
       },
@@ -219,7 +273,45 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     now,
   );
   timings['totalMs'] = clock() - t0;
-  return { memories: out, ...(degraded.length > 0 ? { degraded } : {}), timings };
+  return {
+    memories: out,
+    ...(degraded.length > 0 ? { degraded } : {}),
+    ...(out.length === 0 && candidates.length > 0 ? { abstained: true as const } : {}),
+    ...(dropped > 0
+      ? {
+          gate: {
+            by: byRerank ? ('rerank' as const) : ('coverage' as const),
+            threshold: byRerank ? minRerankScore : minCoverage,
+            dropped,
+          },
+        }
+      : {}),
+    ...(rerankSkipped !== undefined ? { rerankSkipped } : {}),
+    timings,
+  };
+}
+
+/**
+ * Fusion is confident when the lexical top result is also the fused top, contains most of the
+ * query's words, and the runner-up is clearly weaker on them. It must also be among the dense
+ * top 3, unless it contains every query word. Rerank would only confirm it, at the cost of a
+ * network round trip (CON-57).
+ */
+function isConfident(
+  ordered: { id: string }[],
+  lexical: Hit[],
+  dense: Hit[],
+  coverage: Map<string, number>,
+): boolean {
+  const top = ordered[0];
+  if (top === undefined || lexical[0]?.id !== top.id) return false;
+  const topCov = coverage.get(top.id) ?? 0;
+  if (topCov < CONFIDENT_COVERAGE) return false;
+  const denseAgrees = dense.slice(0, 3).some((h) => h.id === top.id);
+  if (!denseAgrees && topCov < 1) return false;
+  const second = ordered[1];
+  if (second === undefined) return true;
+  return (coverage.get(second.id) ?? 0) <= topCov - CONFIDENT_COVERAGE_GAP;
 }
 
 function age(validFrom: string, now: Date): string {

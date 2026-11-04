@@ -203,6 +203,8 @@ export interface RunEvalOptions {
    * fused score exceeds this. Unset: any returned memory counts.
    */
   abstainThreshold?: number;
+  /** Apply recall's relevance gate (default true). False sets its thresholds to 0, for comparison. */
+  gate?: boolean;
   scope?: ScopeFilter;
   /** Receives one-line warnings (counts only); defaults to stderr. */
   warn?: (message: string) => void;
@@ -268,7 +270,7 @@ async function copyStore(
  * scoping): the (org, customer, agent) with the most memories, over all of its
  * project ids and global. Read from the temp copy.
  */
-function discoverScope(dbPath: string): ScopeFilter {
+export function discoverScope(dbPath: string): ScopeFilter {
   const db = new Database(dbPath, { readonly: true });
   try {
     const rows = db
@@ -325,7 +327,12 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
     const base = resolveConfig(copy.dir, { OORT_HOME: copy.dir }, { projectConfig: false });
     const config = {
       ...base,
-      recall: { ...base.recall, returnK: maxK, rerankK: Math.max(base.recall.rerankK, maxK) },
+      recall: {
+        ...base.recall,
+        returnK: maxK,
+        rerankK: Math.max(base.recall.rerankK, maxK),
+        ...(opts.gate === false && { minRerankScore: 0, minCoverage: 0, minDenseScore: 0 }),
+      },
     };
     // Rows must not influence each other: recall's access records would raise the
     // activation of everything an earlier row returned. The copy is discarded

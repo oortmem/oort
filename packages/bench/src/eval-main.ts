@@ -13,7 +13,7 @@ import { seedStore } from './seed.js';
 
 const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>] [--k 5,10]
                  [--min-recall10 <0..1>] [--dimension <n>] [--dense] [--now <iso>]
-                 [--abstain-threshold <n>] [--json]
+                 [--abstain-threshold <n>] [--no-gate] [--json]
        pnpm eval --demo [--json]    synthetic 1500-memory store + the bundled 20-row fixture
 
 Runs recall for each row against a temp copy of the store (the live store is never written).`;
@@ -58,6 +58,7 @@ async function main(): Promise<number> {
       dense: { type: 'boolean', default: false },
       now: { type: 'string' },
       'abstain-threshold': { type: 'string' },
+      'no-gate': { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
       demo: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
@@ -122,6 +123,7 @@ async function main(): Promise<number> {
       ks,
       ...(now !== undefined ? { now } : {}),
       ...(dense ? { embed: fakeEmbedder(dimension) } : {}),
+      ...(values['no-gate'] && { gate: false }),
       ...(values['abstain-threshold'] !== undefined
         ? { abstainThreshold: Number(values['abstain-threshold']) }
         : {}),

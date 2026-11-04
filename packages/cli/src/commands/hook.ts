@@ -1,7 +1,7 @@
 import { HOOK_TIMEOUTS, createHookLogger, runHook, type HookEvent } from '@oortmem/claude-code';
 import { resolveHome, type MemoryStore } from '@oortmem/core';
 import { echo, type Ctx } from '../util.js';
-import type { Wired } from '../wire.js';
+import type { AdapterRole, Wired } from '../wire.js';
 
 export const HOOK_COMMAND_EVENTS: readonly HookEvent[] = [
   'UserPromptSubmit',
@@ -75,6 +75,17 @@ function inputCwd(stdin: string): string | undefined {
  * records `degraded:busy`. A deadline exits 0 with empty stdout should
  * anything hang.
  */
+/**
+ * The adapters each event needs. UserPromptSubmit only recalls; Stop and SessionStart call no
+ * model; the drain writes memories. Loading fewer adapters skips their key reads and SDK imports.
+ */
+const HOOK_ROLES: Record<HookEvent, readonly AdapterRole[]> = {
+  UserPromptSubmit: ['embed', 'rerank'],
+  SessionStart: [],
+  Stop: [],
+  drain: ['embed', 'rerank', 'decide', 'write'],
+};
+
 export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
   const { io } = ctx;
   let exited = false;
@@ -100,11 +111,15 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
       log(ctx, undefined, event, 'unknown-event');
     } else {
       const stdin = event === 'drain' ? '' : await io.readStdin(HOOK_STDIN_CAP_MS);
+      const wireStart = performance.now();
       w = await ctx.wire(inputCwd(stdin) ?? io.cwd, {
         env: io.env,
         // The drain serves every project's queue: home config only, whatever lies above OORT_HOME.
         ...(event === 'drain' ? { projectConfig: false } : { busyTimeoutMs: HOOK_BUSY_TIMEOUT_MS }),
+        roles: HOOK_ROLES[event],
       });
+      // Config, store open and key lookup (env, then the keychain): the hook log records it (CON-57).
+      const wireMs = performance.now() - wireStart;
       for (const warning of w.warnings) log(ctx, w, event, `config:${warning.code}`);
       const home = w.config.home;
       const {
@@ -122,7 +137,7 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         store: busyAware(store, () => {
           busy = true;
         }),
-        log: harnessLog,
+        log: { write: (e) => harnessLog.write({ ...e, timings: { ...e.timings, wireMs } }) },
         // The drain runs in the home directory, so it resolves the home config only:
         // project config never affects the write path.
         spawnDrain: () => io.spawnDrain(home),
