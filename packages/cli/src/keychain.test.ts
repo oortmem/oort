@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { createKeychain, type KeychainDeps } from './keychain.js';
+import { createKeychain, keychainFor, type KeychainDeps } from './keychain.js';
 
-type Call = { file: string; args: string[] };
+type Call = { file: string; args: string[]; input?: string };
 
 function rig(over: Partial<KeychainDeps> = {}): {
   calls: Call[];
@@ -19,6 +19,10 @@ function rig(over: Partial<KeychainDeps> = {}): {
     },
     spawnInherit: async (file, args) => {
       calls.push({ file, args });
+      return 0;
+    },
+    spawnWithInput: async (file, args, input) => {
+      calls.push({ file, args, input });
       return 0;
     },
     warn: (m) => warnings.push(m),
@@ -59,6 +63,31 @@ describe('keychain', () => {
     });
   });
 
+  it('keychain.store-sends-the-value-on-stdin-never-in-argv', async () => {
+    const { calls, kc } = rig();
+    const key = ['oort', 'sk', 'AbC-123_xyz0123456789'].join('_');
+    expect(await kc.store('oort', key)).toBe(0);
+    expect(calls).toEqual([
+      {
+        file: '/usr/bin/security',
+        args: ['-i'],
+        input: `add-generic-password -U -a "alice" -s "oort.oort" -w "${key}"\n`,
+      },
+    ]);
+    expect(calls[0]!.args.join(' ')).not.toContain(key);
+  });
+
+  it('keychain.store-refuses-values-it-cannot-quote', async () => {
+    for (const bad of ['', 'a"b', 'a\\b', 'a\nb', 'a b']) {
+      const { calls, kc } = rig();
+      expect(await kc.store('oort', bad)).toBe(1);
+      expect(calls).toEqual([]);
+    }
+    const { calls, kc } = rig({ user: 'ev"il' });
+    expect(await kc.store('oort', 'oort_sk_abc')).toBe(1);
+    expect(calls).toEqual([]);
+  });
+
   it('keychain.missing-item-is-undefined-without-warning', async () => {
     const { warnings, kc } = rig({
       execFile: async () => {
@@ -82,10 +111,44 @@ describe('keychain', () => {
     expect(warnings[0]).not.toContain(planted);
   });
 
-  it('keychain.not-macos-never-spawns', async () => {
-    const { calls, kc } = rig({ platform: 'linux' });
+  it('keychain.unsupported-platform-never-spawns', async () => {
+    const { calls, kc } = rig({ platform: 'none' });
     expect(kc.supported).toBe(false);
     expect(await kc.read('voyage')).toBeUndefined();
     expect(calls).toEqual([]);
+  });
+});
+
+describe('keychainFor', () => {
+  it('keychain.oort-no-keychain-switches-every-command-off', async () => {
+    const calls: string[][] = [];
+    const deps: KeychainDeps = {
+      platform: 'darwin',
+      execFile: async (_f, args) => {
+        calls.push(args);
+        return { stdout: 'x\n' };
+      },
+      spawnInherit: async (_f, args) => {
+        calls.push(args);
+        return 0;
+      },
+    };
+    const off = keychainFor({ OORT_NO_KEYCHAIN: '1' }, deps);
+    expect(off.supported).toBe(false);
+    expect(await off.read('voyage')).toBeUndefined();
+    expect(await off.set('voyage')).toBe(1);
+    expect(await off.store('oort', 'oort_sk_abc')).toBe(1);
+    expect(calls).toEqual([]);
+    const on = keychainFor({}, deps);
+    expect(on.supported).toBe(true);
+    expect(await on.read('voyage')).toBe('x');
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('keychain test guard', () => {
+  it('keychain.refuses-real-security-under-vitest', async () => {
+    const kc = createKeychain({ platform: 'darwin', user: 'alice', warn: () => {} });
+    await expect(kc.read('voyage')).rejects.toThrow(/refusing to run \/usr\/bin\/security/);
   });
 });

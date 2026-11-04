@@ -2,8 +2,11 @@ import * as fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import Database from 'better-sqlite3';
 import { execa } from 'execa';
+import { fakeSite } from '../test/fake-site.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { OortConfig, projectIdFor, type Memory } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
@@ -297,6 +300,49 @@ describe('oort bin', () => {
     expect(code).toBe(0);
   });
 
+  it('cli.doctor-json-reports-every-group-and-creates-nothing', async () => {
+    const s = sandbox();
+    const r = await oort(s, ['doctor', '--json']);
+    expect(r.exitCode).toBe(0);
+    const report = JSON.parse(r.stdout) as { ok: boolean; checks: { group: string }[] };
+    expect(report.ok).toBe(true);
+    expect([...new Set(report.checks.map((c) => c.group))]).toEqual([
+      'keys',
+      'hooks',
+      'mcp',
+      'store',
+      'relay',
+    ]);
+    expect(fs.existsSync(s.oortHome)).toBe(false);
+  });
+
+  it('cli.login-refuses-before-any-request-while-the-keychain-is-off', async () => {
+    const s = sandbox();
+    const site = await fakeSite({ approveAtPoll: 1 });
+    try {
+      const r = await execa(BIN, ['login'], {
+        cwd: s.cwd,
+        env: { ...s.env, OORT_SITE_URL: site.url },
+        extendEnv: false,
+        reject: false,
+        stdin: 'ignore',
+      });
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).toContain('OORT_NO_KEYCHAIN=1');
+      expect(site.polls).toEqual([]);
+      const out = await execa(BIN, ['logout'], {
+        cwd: s.cwd,
+        env: s.env,
+        extendEnv: false,
+        reject: false,
+        stdin: 'ignore',
+      });
+      expect(out.exitCode).toBe(2);
+    } finally {
+      await site.close();
+    }
+  });
+
   it('cli.install-refuses-without-bin', async () => {
     const s = sandbox();
     const settings = path.join(s.home, '.claude', 'settings.json');
@@ -314,12 +360,12 @@ describe('oort bin', () => {
       { cwd: s.cwd, env: s.env, extendEnv: false, reject: false, stdin: 'ignore' },
     );
     expect(evalRun.exitCode).toBe(2);
-    expect(evalRun.stderr).toContain('pnpm build && cd packages/cli && pnpm add -g .');
+    expect(evalRun.stderr).toContain('npm i -g oortmem');
     expect(evalRun.stderr).toMatch(/not running as its bin/);
     expect(fs.existsSync(settings)).toBe(false);
 
-    // A copy in a temporary package cache, as `npx oort` would run it.
-    const cache = path.join(s.root, '_npx', 'abc123', 'node_modules', 'oort');
+    // A copy in a temporary package cache, as `npx oortmem` would run it.
+    const cache = path.join(s.root, '_npx', 'abc123', 'node_modules', 'oortmem');
     fs.mkdirSync(cache, { recursive: true });
     fs.cpSync(path.dirname(BIN), path.join(cache, 'dist'), { recursive: true });
     fs.copyFileSync(
@@ -379,5 +425,121 @@ describe('oort bin', () => {
     const proj = await oort(s, ['install', 'claude-code', '--project']);
     expect(proj.exitCode).toBe(0);
     expect(fs.existsSync(path.join(s.cwd, '.claude', 'settings.json'))).toBe(true);
+  });
+
+  it('cli.mcp-stdio-serves-tools-scoped-to-the-start-directory', async () => {
+    const s = sandbox();
+    const repo = path.join(s.root, 'repo');
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+    // A repository file cannot choose the scope without `oort project link`.
+    fs.writeFileSync(path.join(repo, 'oort.config.json'), '{"project":{"id":"stolen"}}\n');
+    const derived = projectIdFor(repo);
+
+    const whoami = async (args: string[], cwd: string): Promise<Record<string, unknown>> => {
+      const transport = new StdioClientTransport({
+        command: BIN,
+        args,
+        cwd,
+        env: s.env,
+        stderr: 'pipe',
+      });
+      let stderr = '';
+      transport.stderr?.on('data', (d: Buffer) => (stderr += d.toString()));
+      const client = new Client({ name: 'oort-bin-test', version: '0.0.0' });
+      await client.connect(transport);
+      try {
+        const { tools } = await client.listTools();
+        expect(tools).toHaveLength(7);
+        const r = await client.callTool({ name: 'whoami', arguments: {} });
+        const content = r.content as { text: string }[];
+        const recall = await client.callTool({ name: 'recall', arguments: { query: 'anything' } });
+        expect(recall.isError).not.toBe(true);
+        return { ...(JSON.parse(content[0]?.text ?? '{}') as object), stderr };
+      } finally {
+        await client.close();
+      }
+    };
+
+    const fromCwd = await whoami(['mcp'], repo);
+    expect(fromCwd['project']).toBe(derived);
+    expect(fromCwd['project']).not.toContain('stolen');
+    expect(fromCwd['stderr']).toContain('oort project link');
+
+    const fromFlag = await whoami(['mcp', '--project', repo], s.cwd);
+    expect(fromFlag['project']).toBe(derived);
+
+    const global = await whoami(['mcp'], s.cwd);
+    expect(global['project']).toBeNull();
+  });
+
+  it('cli.connect-disconnect-roundtrip', async () => {
+    const s = sandbox();
+    const bin = fs.realpathSync(BIN);
+    const cursor = path.join(s.home, '.cursor', 'mcp.json');
+    fs.mkdirSync(path.dirname(cursor), { recursive: true });
+    const original = '{\n  "mcpServers": {\n    "github": { "command": "gh-mcp" }\n  }\n}\n';
+    fs.writeFileSync(cursor, original);
+    const codex = path.join(s.home, '.codex', 'config.toml');
+
+    const r = await oort(s, ['connect', 'cursor', 'codex']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('oort connect cursor');
+    expect(r.stdout).toContain('+ mcpServers.oort.command');
+    expect(r.stdout).toContain('+ mcp_servers.oort.args');
+    expect(r.stdout).toContain('~/.cursor/mcp.json.oort-backup');
+    expect(r.stdout).toContain('oort disconnect cursor');
+    const entry = (
+      JSON.parse(fs.readFileSync(cursor, 'utf8')) as { mcpServers: Record<string, unknown> }
+    ).mcpServers['oort'];
+    expect(entry).toEqual({
+      type: 'stdio',
+      command: bin,
+      args: ['mcp', '--project', '${workspaceFolder}'],
+    });
+    expect(fs.readFileSync(codex, 'utf8')).toContain(`command = ${JSON.stringify(bin)}`);
+
+    const again = await oort(s, ['connect', 'cursor']);
+    expect(again.exitCode).toBe(0);
+    expect(again.stdout).toMatch(/already connected/);
+
+    const un = await oort(s, ['disconnect', 'cursor', 'codex']);
+    expect(un.exitCode).toBe(0);
+    expect(fs.readFileSync(cursor, 'utf8')).toBe(original);
+    expect(fs.readFileSync(codex, 'utf8')).toBe('');
+  });
+
+  it('cli.setup-yes-connects-and-runs-the-demo', async () => {
+    const s = sandbox();
+    fs.mkdirSync(path.join(s.home, '.claude'));
+    fs.mkdirSync(path.join(s.home, '.codex'));
+    const r = await oort(s, [
+      'setup',
+      '--yes',
+      '--agents',
+      'claude-code,codex',
+      '--keys',
+      'byo',
+      '--import',
+      'skip',
+    ]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).not.toContain('\u001b[');
+    expect(r.stdout).toContain('6/6 Done');
+    expect(r.stdout).toMatch(/recalled it/);
+    const bin = fs.realpathSync(BIN);
+    expect(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8')).toContain(
+      `${bin} hook Stop`,
+    );
+    expect(fs.readFileSync(path.join(s.home, '.codex', 'config.toml'), 'utf8')).toContain(bin);
+    // Nothing from the demo is left in the store.
+    const db = new Database(path.join(s.oortHome, 'oort.sqlite'), { readonly: true });
+    const n = db.prepare('select count(*) as n from memories').get() as { n: number };
+    db.close();
+    expect(n.n).toBe(0);
+
+    // Without --yes and without a terminal it never prompts.
+    const refused = await oort(s, ['setup']);
+    expect(refused.exitCode).toBe(2);
+    expect(refused.stderr).toContain('--yes');
   });
 });

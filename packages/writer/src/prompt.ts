@@ -1,4 +1,4 @@
-import type { Memory, Observation } from '@oortmem/core';
+import { capUtf8, type Memory, type Observation } from '@oortmem/core';
 
 /** HTML-escapes data so it cannot close its own section. */
 const esc = (s: string): string =>
@@ -19,12 +19,39 @@ export const WRITER_SYSTEM_PROMPT = [
   '8. Never include secrets, credentials or [REDACTED:...] markers in the output; if the only content is a secret, describe that a credential was configured without its value.',
 ].join('\n');
 
+/**
+ * The Oort Pro relay takes at most 128 KB per Anthropic request. Escaping (`<` becomes `&lt;`) and
+ * JSON quoting can multiply the text, so the prompt is measured as it will be sent (as a JSON
+ * string, plus room for the system prompt and the rest of the request) and the observation
+ * text, already capped at 32 KB a side by the engine, is cut further when it would not fit.
+ */
+const PROMPT_JSON_BUDGET_BYTES = 120 * 1024;
+const encoder = new TextEncoder();
+const jsonBytes = (s: string): number => encoder.encode(JSON.stringify(s)).byteLength;
+
 /** The user message: the observation and, for UPDATE or SUPERSEDE, the prior memory. */
 export function buildWriterPrompt(
   obs: Observation,
   action: 'ADD' | 'UPDATE' | 'SUPERSEDE',
   prior?: Memory,
 ): string {
+  let limit = 32 * 1024;
+  for (;;) {
+    const prompt = render(
+      {
+        ...obs,
+        userText: capUtf8(obs.userText, limit),
+        assistantText: capUtf8(obs.assistantText, limit),
+      },
+      action,
+      prior,
+    );
+    if (limit <= 1024 || jsonBytes(prompt) <= PROMPT_JSON_BUDGET_BYTES) return prompt;
+    limit = Math.floor(limit * 0.75);
+  }
+}
+
+function render(obs: Observation, action: 'ADD' | 'UPDATE' | 'SUPERSEDE', prior?: Memory): string {
   const tools =
     obs.toolSummaries.length === 0 ? '' : obs.toolSummaries.map((t) => `- ${esc(t)}`).join('\n');
   const parts = [

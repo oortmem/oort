@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   scopeMatches,
   scrub,
@@ -9,6 +10,7 @@ import {
   type MemoryWriter,
   type ScopeFilter,
 } from '@oortmem/core';
+import type { LoginDeps } from './commands/login.js';
 import type { Io } from './io.js';
 import type { Keychain } from './keychain.js';
 import type { WireFn, Wired } from './wire.js';
@@ -35,6 +37,15 @@ export interface Ctx {
   io: Io;
   wire: WireFn;
   keychain: Keychain;
+  /** The network and browser `oort login` uses; tests inject a fake site. */
+  login?: LoginDeps;
+  /** The network `oort doctor` probes the relay with; tests inject a fake. */
+  fetch?: typeof fetch;
+}
+
+/** The scope a command reads, for header lines: `project <id>` or `global`. */
+export function scopeLabel(w: Pick<Wired, 'scope'>): string {
+  return w.scope.projectId === undefined ? 'global' : `project ${w.scope.projectId}`;
 }
 
 /** Wires for the cwd, runs `fn`, and always closes the store. */
@@ -67,12 +78,23 @@ export function writePath(
 
 /** One stderr hint when recall runs without its dense or rerank stage. */
 export function degradedHint(io: Io, w: Wired, degraded: string[] | undefined): void {
-  if (w.embed === undefined || w.rerank === undefined) {
+  // A relay refusal (Oort Pro) is the reason, and it has its own fix.
+  const refused = w.relayErrors?.at(-1);
+  if (refused !== undefined) {
+    io.err(`oort: recall degraded. ${refused.message}\n`);
+  } else if (w.embed === undefined || w.rerank === undefined) {
     const why = w.unavailable.embed ?? w.unavailable.rerank;
     io.err(`oort: lexical-only recall. ${why?.message ?? ''}\n`);
   } else if (degraded !== undefined && degraded.length > 0) {
     io.err(`oort: recall degraded (${degraded.join(', ')}).\n`);
   }
+}
+
+/** `p` with the home directory shown as `~`, for human-facing output. */
+export function tilde(p: string, home: string): string {
+  if (home === '' || home === path.sep) return p;
+  if (p === home) return '~';
+  return p.startsWith(home + path.sep) ? `~${p.slice(home.length)}` : p;
 }
 
 /** Compact age: 45s, 12m, 3h, 5d, 7mo, 2y. */
@@ -97,17 +119,6 @@ export const short = (id: string): string => id.slice(0, 8);
 
 export const fixed = (x: number | undefined, digits = 2): string =>
   x === undefined ? '-' : x.toFixed(digits);
-
-/** Left-aligned columns separated by two spaces; the last column is not padded. */
-export function table(headers: string[], rows: string[][]): string {
-  const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? '').length)));
-  const line = (cells: string[]): string =>
-    cells
-      .map((c, i) => (i === cells.length - 1 ? c : c.padEnd(widths[i] ?? 0)))
-      .join('  ')
-      .trimEnd();
-  return [line(headers), ...rows.map(line)].join('\n') + '\n';
-}
 
 /** A memory as JSON-safe data: the embedding becomes base64 of its int8 bytes. */
 export function toJson(m: Memory): Record<string, unknown> {

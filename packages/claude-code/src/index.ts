@@ -29,5 +29,12 @@ export {
   type DrainResult,
   type QueueLine,
 } from './queue.js';
-export { HOOK_EVENTS, HOOK_TIMEOUTS, installHooks, uninstallHooks } from './install.js';
+export {
+  HOOK_EVENTS,
+  HOOK_TIMEOUTS,
+  hookStatus,
+  installHooks,
+  uninstallHooks,
+  type HookEventStatus,
+} from './install.js';
 export { importTranscripts, type ImportOptions, type ImportResult } from './import.js';

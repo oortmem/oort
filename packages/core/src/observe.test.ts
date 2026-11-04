@@ -156,6 +156,38 @@ function obs(userText: string, at = '2026-01-01T00:00:00.000Z'): Observation {
 }
 
 describe('observe', () => {
+  it('observe.caps-text-before-gate-and-writer', async () => {
+    const { deps } = setup(gate(0.9), [rec(null, 'ADD')]);
+    const seen: Observation[] = [];
+    const big = '日本語😀 '.repeat(20_000);
+    const res = await observe({ ...obs(big), assistantText: big }, localScope(), {
+      ...deps,
+      decide: {
+        async gate(o) {
+          seen.push(o);
+          return gate(0.9);
+        },
+        async reconcile(o) {
+          seen.push(o);
+          return [rec(null, 'ADD')];
+        },
+      },
+      write: {
+        async write(o) {
+          seen.push(o);
+          return { text: 'x', stub: 'x', entities: [], type: 'semantic' };
+        },
+      },
+    });
+    expect(res.outcome).toBe('added');
+    expect(seen).toHaveLength(3);
+    for (const o of seen) {
+      expect(new TextEncoder().encode(o.userText).length).toBeLessThanOrEqual(32 * 1024);
+      expect(new TextEncoder().encode(o.assistantText).length).toBeLessThanOrEqual(32 * 1024);
+      expect(o.userText).toMatch(/\[… \d+ bytes omitted …\]/);
+    }
+  });
+
   it('observe.skips-low-salience', async () => {
     const { store, deps } = setup(gate(0.1), []);
     const res = await observe(obs('hello there'), localScope(), deps);

@@ -151,6 +151,22 @@ describe('voyageReranker', () => {
     ).rejects.toMatchObject({ kind: 'bad-response' });
   });
 
+  it('rerank.base-url-routes-through-the-relay', async () => {
+    const s = stub(() => json({ data: [{ index: 0, relevance_score: 0.5 }] }));
+    const relayKey = ['oort', 'sk', 'test0123456789'].join('_');
+    const r = voyageReranker({
+      apiKey: relayKey,
+      model: 'rerank-3-lite',
+      baseUrl: 'https://relay.example.test/v1/voyage',
+      fetch: s.fn,
+    });
+    await r.rerank('q', docs, 1);
+    expect(s.calls[0]!.url).toBe('https://relay.example.test/v1/voyage/rerank');
+    expect((s.calls[0]!.init.headers as Record<string, string>)['Authorization']).toBe(
+      `Bearer ${relayKey}`,
+    );
+  });
+
   it('network.import-makes-no-call', async () => {
     const orig = globalThis.fetch;
     globalThis.fetch = (() => {
@@ -162,5 +178,44 @@ describe('voyageReranker', () => {
     } finally {
       globalThis.fetch = orig;
     }
+  });
+
+  it('rerank.relay-cap-429-without-retry-after-is-not-retried-and-keeps-the-relay-message', async () => {
+    const message = 'You have used the 50,000 recalls included in Oort Pro this month.';
+    const s = stub(() => json({ error: message }, 429));
+    const r = voyageReranker({ apiKey: 'k', model: 'm', relay: true, fetch: s.fn });
+    await expect(r.rerank('q', docs, 1)).rejects.toMatchObject({
+      kind: 'rate-limit',
+      status: 429,
+      message,
+      relayMessage: message,
+    });
+    expect(s.calls).toHaveLength(1);
+  });
+
+  it('rerank.relay-429-with-retry-after-keeps-the-single-retry', async () => {
+    const ok = { data: [{ index: 1, relevance_score: 0.5 }] };
+    const s = stub((n) => (n === 1 ? json({ error: 'x' }, 429, { 'retry-after': '0' }) : json(ok)));
+    const r = voyageReranker({ apiKey: 'k', model: 'm', relay: true, fetch: s.fn });
+    expect(await r.rerank('q', docs, 1)).toEqual([{ id: 'b', score: 0.5 }]);
+    expect(s.calls).toHaveLength(2);
+  });
+
+  it('rerank.sends-only-document-text-within-the-relay-caps', async () => {
+    const s = stub(() => json({ data: [{ index: 0, relevance_score: 0.5 }] }));
+    const r = voyageReranker({ apiKey: 'k', model: 'rerank-3-lite', fetch: s.fn });
+    const long = '日本語😀 '.repeat(5000);
+    await r.rerank(long, [{ id: 'a', text: long, extra: 'not sent' } as never, ...docs], 1);
+    const body = s.calls[0]!.body;
+    const bytes = (v: string) => new TextEncoder().encode(v).length;
+    expect(Object.keys(body).sort()).toEqual(
+      ['documents', 'model', 'query', 'top_k', 'truncation'].sort(),
+    );
+    expect(bytes(body['query'] as string)).toBeLessThanOrEqual(2048);
+    const sent = body['documents'] as string[];
+    expect(sent.every((d) => typeof d === 'string')).toBe(true);
+    expect(bytes(sent[0]!)).toBeLessThanOrEqual(4096);
+    expect(sent[0]).not.toContain('\uFFFD');
+    expect(sent.slice(1)).toEqual(['alpha', 'beta', 'gamma']);
   });
 });

@@ -1,6 +1,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { importTranscripts } from '@oortmem/claude-code';
+import { uiFor } from '../ui.js';
 import { Refusal, confirm, echo, writePath, withWired, type Ctx } from '../util.js';
 
 export interface ImportCommandOptions {
@@ -9,6 +10,11 @@ export interface ImportCommandOptions {
   estimateOnly?: boolean;
   includeUnresolved?: boolean;
   projectsDir?: string;
+  /**
+   * Asks before importing, given the estimate (the setup wizard's prompt);
+   * by default a y/N question on the terminal, or `--yes`.
+   */
+  confirmWith?: (estimate: { observations: number; estimatedTokens: number }) => Promise<boolean>;
 }
 
 const UNIT_MS = { h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 } as const;
@@ -39,6 +45,7 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
       includeUnresolved: opts.includeUnresolved === true,
     };
     const est = await importTranscripts({ ...base, estimateOnly: true }, deps);
+    ctx.io.out(uiFor(ctx.io).header('import claude-code', 'estimate first, then asks'));
     ctx.io.out(
       [
         `Claude Code transcripts in ${projectsDir}${since !== undefined ? ` since ${since.toISOString()}` : ''}:`,
@@ -51,12 +58,15 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
     );
     if (opts.estimateOnly === true || est.observations === 0) return 0;
     writePath(w, 'oort import claude-code');
-    const go = await confirm(
-      ctx.io,
-      'Proceed?',
-      opts.yes === true,
-      `import ${est.observations} observations`,
-    );
+    const go =
+      opts.confirmWith !== undefined
+        ? await opts.confirmWith(est)
+        : await confirm(
+            ctx.io,
+            'Proceed?',
+            opts.yes === true,
+            `import ${est.observations} observations`,
+          );
     if (!go) {
       ctx.io.out('Nothing imported.\n');
       return 0;

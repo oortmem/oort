@@ -1,5 +1,7 @@
 import { Command, CommanderError } from 'commander';
 import { VERSION } from '@oortmem/core';
+import { connectCommand } from './commands/connect.js';
+import { doctorCommand } from './commands/doctor.js';
 import { consolidateCommand } from './commands/consolidate.js';
 import { explainCommand } from './commands/explain.js';
 import { exportCommand } from './commands/export.js';
@@ -8,15 +10,18 @@ import { hookCommand } from './commands/hook.js';
 import { importCommand } from './commands/import.js';
 import { initCommand } from './commands/init.js';
 import { keysListCommand, keysRmCommand, keysSetCommand } from './commands/keys.js';
+import { loginCommand, logoutCommand, type LoginDeps } from './commands/login.js';
 import { inspectCommand } from './commands/inspect.js';
 import { installCommand } from './commands/install.js';
+import { mcpCommand } from './commands/mcp.js';
 import { observeCommand } from './commands/observe.js';
 import { pinCommand } from './commands/pin.js';
 import { projectLinkCommand, projectUnlinkCommand } from './commands/project.js';
 import { recallCommand } from './commands/recall.js';
+import { setupCommand, type SetupOptions } from './commands/setup.js';
 import { statsCommand } from './commands/stats.js';
 import type { Io } from './io.js';
-import { createKeychain, type Keychain } from './keychain.js';
+import { keychainFor, type Keychain } from './keychain.js';
 import { Refusal, echo, type Ctx } from './util.js';
 import { wire as defaultWire, type WireFn } from './wire.js';
 
@@ -40,6 +45,19 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     })
     .showHelpAfterError('(run `oort --help` for usage)');
 
+  p.command('setup')
+    .description('interactive setup: agents, keys, connect, import, a quick check')
+    .option('--yes', 'never ask: take every choice from the flags (detected agents by default)')
+    .option('--agents <list>', 'detected, none, or a comma list: claude-code,codex,cursor,…')
+    .option('--keys <mode>', 'byo, pro or skip')
+    .option('--import <age>', 'skip, or import Claude Code sessions from this age: 14d, 30d')
+    .option('--no-demo', 'skip the remember, recall and forget check')
+    .option(
+      '--install-global',
+      'under npx: run `npm i -g oortmem` first (agents need a stable path)',
+    )
+    .action(run((o: SetupOptions) => setupCommand(o, ctx)));
+
   p.command('init')
     .description('write ~/.oort/config.json with defaults (never overwrites)')
     .option('--project', 'also write oort.config.json at the git root')
@@ -57,11 +75,36 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
     .action(run((h: string, o: { project?: boolean }) => installCommand('uninstall', h, o, ctx)));
 
+  p.command('connect')
+    .description('add the oort MCP server to an agent host (backs up the file, prints the diff)')
+    .argument('<hosts...>', 'claude-desktop, claude-code, codex, cursor, gemini or vscode')
+    .option('--dry-run', 'print the diff without writing')
+    .action(
+      run((hosts: string[], o: { dryRun?: boolean }) => connectCommand('connect', hosts, o, ctx)),
+    );
+
+  p.command('disconnect')
+    .description("remove the oort MCP server from an agent host's config")
+    .argument('<hosts...>', 'claude-desktop, claude-code, codex, cursor, gemini or vscode')
+    .option('--dry-run', 'print the diff without writing')
+    .action(
+      run((hosts: string[], o: { dryRun?: boolean }) =>
+        connectCommand('disconnect', hosts, o, ctx),
+      ),
+    );
+
   p.command('hook')
     .description('run a Claude Code hook (reads the hook JSON on stdin; always exits 0)')
     .argument('<event>', 'UserPromptSubmit | Stop | SessionStart | drain')
     .allowExcessArguments()
     .action(run((event: string) => hookCommand(event, ctx)));
+
+  p.command('mcp')
+    .description(
+      'run the local MCP server on stdin/stdout (agent hosts start it; see `oort connect`)',
+    )
+    .option('--project <dir>', 'scope to this directory instead of the one the host starts it in')
+    .action(run((o: { project?: string }) => mcpCommand(o, ctx)));
 
   p.command('recall')
     .description('recall memories for a query, as injected into the prompt')
@@ -73,7 +116,8 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
   p.command('explain')
     .description("recall with each stage's ranks and scores")
     .argument('<query>')
-    .action(run((q: string) => explainCommand(q, ctx)));
+    .option('--json', 'print each memory with its ranks and scores, and the timings, as JSON')
+    .action(run((q: string, o: { json?: boolean }) => explainCommand(q, o, ctx)));
 
   p.command('observe')
     .description('run the write path on one observation (JSON on stdin, or --user/--assistant)')
@@ -133,22 +177,43 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description("remove this repository's binding (back to the derived id)")
     .action(run(() => projectUnlinkCommand(ctx)));
 
+  p.command('doctor')
+    .description(
+      'check keys, hooks, MCP connectors, the store and the relay, with a fix per problem',
+    )
+    .option('--json', 'print every check as JSON')
+    .action(run((o: { json?: boolean }) => doctorCommand(o, ctx)));
+
+  p.command('login')
+    .description(
+      'sign in to Oort Pro in the browser and keep the Oort key in the Keychain (macOS) or credentials.json',
+    )
+    .option('--no-browser', 'print the sign-in URL instead of opening the browser')
+    .action(run((o: { browser?: boolean }) => loginCommand(o, ctx)));
+
+  p.command('logout')
+    .description('remove the stored Oort key (it does not revoke the key)')
+    .action(run(() => logoutCommand(ctx)));
+
   const keys = p
     .command('keys')
-    .description('provider keys in the macOS Keychain (voyage, typesafe, anthropic)');
+    .description(
+      'provider keys in the macOS Keychain, or credentials.json elsewhere (voyage, typesafe, anthropic, oort)',
+    );
   keys
     .command('set')
-    .description('store a key; the Keychain prompts for it (never in argv or history)')
-    .argument('<provider>', 'voyage, typesafe or anthropic')
+    .description('store a key; it is prompted for with the input hidden (never in argv or history)')
+    .argument('<provider>', 'voyage, typesafe, anthropic or oort')
     .action(run((provider: string) => keysSetCommand(provider, ctx)));
   keys
     .command('list')
     .description('where each key comes from: keychain, env or missing (never the value)')
-    .action(run(() => keysListCommand(ctx)));
+    .option('--json', 'print JSON')
+    .action(run((o: { json?: boolean }) => keysListCommand(o, ctx)));
   keys
     .command('rm')
-    .description('delete a key from the Keychain')
-    .argument('<provider>', 'voyage, typesafe or anthropic')
+    .description('delete a stored key')
+    .argument('<provider>', 'voyage, typesafe, anthropic or oort')
     .action(run((provider: string) => keysRmCommand(provider, ctx)));
 
   p.command('import')
@@ -199,10 +264,14 @@ export async function runCli(
   args: string[],
   io: Io,
   wire: WireFn = defaultWire,
-  keychain: Keychain = createKeychain({ warn: (m) => io.err(`oort: ${m}\n`) }),
+  keychain: Keychain = keychainFor(io.env, {
+    warn: (m) => io.err(`oort: ${m}\n`),
+    promptSecret: (q) => io.askSecret(q),
+  }),
+  deps: { login?: LoginDeps; fetch?: typeof fetch } = {},
 ): Promise<number> {
   let code = 0;
-  const p = program({ io, wire, keychain }, (c) => {
+  const p = program({ io, wire, keychain, ...deps }, (c) => {
     code = c;
   });
   try {

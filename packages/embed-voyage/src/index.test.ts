@@ -251,6 +251,37 @@ describe('voyageEmbedder', () => {
     expect(err.message).not.toContain(secretText);
   });
 
+  it('embed.base-url-routes-through-the-relay', async () => {
+    const s = stub(echo(4));
+    const relayKey = ['oort', 'sk', 'test0123456789'].join('_');
+    const e = voyageEmbedder({
+      ...base,
+      apiKey: relayKey,
+      baseUrl: 'https://relay.example.test/v1/voyage/',
+      fetch: s.fn,
+    });
+    await e.embed(['a'], 'query');
+    const c = s.calls[0]!;
+    expect(c.url).toBe('https://relay.example.test/v1/voyage/embeddings');
+    expect((c.init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${relayKey}`);
+  });
+
+  it('embed.base-url-defaults-to-voyage', async () => {
+    const s = stub(echo(4));
+    await voyageEmbedder({ ...base, fetch: s.fn }).embed(['a'], 'query');
+    expect(s.calls[0]!.url).toBe('https://api.voyageai.com/v1/embeddings');
+  });
+
+  it('embed.http-status-is-kept-on-the-error', async () => {
+    const s = stub(() => json({ error: 'x' }, 402));
+    const err = (await voyageEmbedder({ ...base, fetch: s.fn })
+      .embed(['a'], 'query')
+      .catch((x: unknown) => x)) as VoyageError;
+    expect(err).toBeInstanceOf(VoyageError);
+    expect(err.status).toBe(402);
+    expect(s.calls).toHaveLength(1);
+  });
+
   it('network.import-makes-no-call', async () => {
     const orig = globalThis.fetch;
     globalThis.fetch = (() => {
@@ -262,5 +293,59 @@ describe('voyageEmbedder', () => {
     } finally {
       globalThis.fetch = orig;
     }
+  });
+
+  it('embed.relay-cap-429-without-retry-after-is-not-retried-and-keeps-the-relay-message', async () => {
+    const message = 'You have used the 50,000 recalls included in Oort Pro this month.';
+    const s = stub(() => json({ error: message }, 429));
+    const err = await voyageEmbedder({ ...base, relay: true, fetch: s.fn })
+      .embed(['a'], 'query')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(VoyageError);
+    expect(err).toMatchObject({ kind: 'rate-limit', status: 429, relayMessage: message });
+    expect((err as Error).message).toBe(message);
+    expect(s.calls).toHaveLength(1);
+  });
+
+  it('embed.relay-429-with-retry-after-keeps-the-single-retry', async () => {
+    const s = stub((c, n) =>
+      n === 1 ? json({ error: 'slow down' }, 429, { 'retry-after': '0' }) : echo(4)(c),
+    );
+    const out = await voyageEmbedder({ ...base, relay: true, fetch: s.fn }).embed(['a'], 'query');
+    expect(out).toHaveLength(1);
+    expect(s.calls).toHaveLength(2);
+    const always = stub(() => json({ error: 'slow down' }, 429, { 'retry-after': '0' }));
+    await expect(
+      voyageEmbedder({ ...base, relay: true, fetch: always.fn }).embed(['a'], 'query'),
+    ).rejects.toMatchObject({ kind: 'rate-limit', relayMessage: 'slow down' });
+    expect(always.calls).toHaveLength(2);
+  });
+
+  it('embed.direct-429-without-retry-after-still-retries-and-never-echoes-a-vendor-body', async () => {
+    const s = stub(() => json({ error: 'vendor secret body' }, 429));
+    const err = await voyageEmbedder({ ...base, fetch: s.fn })
+      .embed(['a'], 'query')
+      .catch((e: unknown) => e);
+    expect(s.calls).toHaveLength(2);
+    expect((err as Error).message).not.toContain('vendor secret body');
+    expect((err as VoyageError).relayMessage).toBeUndefined();
+  });
+
+  it('embed.cuts-each-input-to-8-kb-on_a_character_boundary', async () => {
+    const s = stub((call) =>
+      json({
+        data: (call.body['input'] as string[]).map((_, index) => ({
+          index,
+          embedding: Array.from({ length: 4 }, () => 1),
+        })),
+      }),
+    );
+    const e = voyageEmbedder({ apiKey: 'k', model: 'voyage-3.5-lite', dimension: 4, fetch: s.fn });
+    const long = '日本語😀 '.repeat(8000);
+    await e.embed([long, 'short'], 'document');
+    const input = s.calls[0]!.body['input'] as string[];
+    expect(new TextEncoder().encode(input[0]!).length).toBeLessThanOrEqual(8192);
+    expect(input[0]).not.toContain('\uFFFD');
+    expect(input[1]).toBe('short');
   });
 });

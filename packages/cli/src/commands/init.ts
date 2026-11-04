@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { OortConfig, ensurePrivateDir, findGitRoot, resolveHome } from '@oortmem/core';
+import { uiFor } from '../ui.js';
 import { Refusal, type Ctx } from '../util.js';
 
 /** Each key and what needs it. */
@@ -41,6 +42,7 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
   const home = resolveHome(io.env);
   ensurePrivateDir(home);
   const file = path.join(home, 'config.json');
+  io.out(uiFor(io).header('init', home));
   const defaults = `${JSON.stringify(OortConfig.parse({}), null, 2)}\n`;
   io.out(createExclusive(file, defaults, 0o600) ? `Created ${file}\n` : `Kept existing ${file}\n`);
 
@@ -64,8 +66,15 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
     if (io.env[k.envVar]) continue;
     if ((await ctx.keychain.read(k.provider)) === undefined) missing.push(k);
   }
+  const oort =
+    Boolean(io.env['OORT_API_KEY']) ||
+    (missing.length > 0 && (await ctx.keychain.read('oort')) !== undefined);
   if (missing.length === 0) {
     io.out('All keys are set.\n');
+  } else if (oort) {
+    io.out(
+      `Oort Pro key found: ${missing.map((k) => k.provider).join(', ')} go through the Oort Pro relay; your own keys win where set.\n`,
+    );
   } else {
     io.out('Missing keys (recall works lexical-only without them):\n');
     for (const k of missing) {
@@ -76,6 +85,7 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
     io.out(
       'Do not export ANTHROPIC_API_KEY globally if you also use Claude Code on a subscription: it would bill the API instead.\n',
     );
+    io.out('Or skip vendor keys with Oort Pro: run `oort login`.\n');
   }
   return 0;
 }

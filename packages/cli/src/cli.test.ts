@@ -159,7 +159,9 @@ describe('oort inspect', () => {
     const list = await h.run(['inspect']);
     expect(list.io.stdout).toContain(c.id.slice(0, 8));
     expect(list.io.stdout).not.toContain(a.id.slice(0, 8));
-    expect(list.io.stdout.split('\n')[0]).toMatch(/^id\s+type\s+tier\s+activation\s+age\s+text$/);
+    // One header line, then the table (its header row first).
+    expect(list.io.stdout.split('\n')[0]).toMatch(/^oort inspect · /);
+    expect(list.io.stdout.split('\n')[1]).toMatch(/^id\s+type\s+tier\s+activation\s+age\s+text$/);
 
     expect((await h.run(['inspect', 'ffffffff-nope'])).code).toBe(2);
   });
@@ -562,7 +564,10 @@ describe('oort forget, pin', () => {
     await h.store.upsert(memory({ validTo: '2026-10-02T00:00:00.000Z' }));
     const r = await h.run(['consolidate']);
     expect(r.code).toBe(0);
-    expect(r.io.stdout).toBe('promoted 0\ndemoted 1\nevicted 1\nexpired 1\nskipped 0\n');
+    // Updated deliberately for the ui module: one header line, then aligned rows.
+    expect(r.io.stdout).toBe(
+      'oort consolidate · global\npromoted  0\ndemoted   1\nevicted   1\nexpired   1\nskipped   0\n',
+    );
   });
 });
 
@@ -931,7 +936,8 @@ describe('wire', () => {
 
 describe('oort usage', () => {
   it('cli.workspace-name-unique', () => {
-    // `pnpm --filter oort` must select the CLI only, so no other workspace package may be named oort.
+    // Published as `oortmem` (`oort` is taken on npm). `pnpm --filter oortmem` must select the
+    // CLI only, so no other workspace package may be named oortmem.
     const repo = path.join(import.meta.dirname, '..', '..', '..');
     const name = (dir: string): unknown =>
       (JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name?: unknown })
@@ -941,9 +947,16 @@ describe('oort usage', () => {
       .readdirSync(path.join(repo, 'packages'))
       .map((d) => path.join(repo, 'packages', d));
     const named = packages.filter(
-      (d) => fs.existsSync(path.join(d, 'package.json')) && name(d) === 'oort',
+      (d) => fs.existsSync(path.join(d, 'package.json')) && name(d) === 'oortmem',
     );
     expect(named).toEqual([path.join(repo, 'packages', 'cli')]);
+  });
+
+  it('cli.bins-oort-and-oortmem-run-the-same-file', () => {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8'),
+    ) as { bin?: Record<string, string> };
+    expect(pkg.bin).toEqual({ oort: 'dist/main.js', oortmem: 'dist/main.js' });
   });
 
   it('cli.engines-require-zstd-node', () => {

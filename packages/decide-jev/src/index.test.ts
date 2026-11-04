@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MissingCredentialError, type Memory, type Observation } from '@oortmem/core';
-import { DecideError, jevDecider, type SystemOneClient } from './index.js';
+import { DecideError, RELAY_MODEL, jevDecider, type SystemOneClient } from './index.js';
 
 type Req = Parameters<SystemOneClient['systemOne']>[0];
 type Answers = Record<string, unknown>;
@@ -296,6 +296,120 @@ describe('jevDecider', () => {
     }
   });
 
+  it('base-url-routes-the-sdk-through-the-relay', async () => {
+    const calls: { url: string; headers: Headers }[] = [];
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), headers: new Headers(init?.headers) });
+      return new Response(JSON.stringify({ error: 'Oort Pro is not active' }), {
+        status: 402,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    const relayKey = ['oort', 'sk', 'test0123456789'].join('_');
+    const d = jevDecider({
+      apiKey: relayKey,
+      baseURL: 'https://relay.example.test/v1/typesafe',
+      fetch: fetchFn,
+    });
+    const err = (await d.gate(obs).catch((x: unknown) => x)) as DecideError;
+    expect(err).toBeInstanceOf(DecideError);
+    expect(err.status).toBe(402);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls[0]!.url).toBe('https://relay.example.test/v1/typesafe/v1/systemone');
+    expect(calls[0]!.headers.get('authorization')).toBe(`Bearer ${relayKey}`);
+  });
+
+  describe('relay mode', () => {
+    const cap = 'You have used the 25,000 saves included in Oort Pro this month.';
+    const relayKey = ['oort', 'sk', 'test0123456789'].join('_');
+    const reply = (body: unknown, status: number, headers: Record<string, string> = {}) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json', ...headers },
+      });
+    const decider = (fn: typeof fetch) =>
+      jevDecider({
+        apiKey: relayKey,
+        baseURL: 'https://relay.example.test/v1/typesafe',
+        relay: true,
+        fetch: fn,
+      });
+
+    it('cap-429-without-retry-after-is-not-retried-and-keeps-the-message', async () => {
+      let n = 0;
+      const f = (async () => (n++, reply({ error: cap }, 429))) as typeof fetch;
+      const err = (await decider(f)
+        .gate(obs)
+        .catch((x: unknown) => x)) as DecideError;
+      expect(err).toBeInstanceOf(DecideError);
+      expect(err).toMatchObject({ kind: 'rate-limit', status: 429, relayMessage: cap });
+      expect(err.message).toBe(cap);
+      expect(n).toBe(1);
+    });
+
+    it('429-with-retry-after-is-retried-once', async () => {
+      let n = 0;
+      const f = (async () => (
+        n++,
+        reply({ error: 'slow down' }, 429, { 'retry-after': '0' })
+      )) as typeof fetch;
+      await expect(decider(f).gate(obs)).rejects.toMatchObject({
+        kind: 'rate-limit',
+        relayMessage: 'slow down',
+      });
+      expect(n).toBe(2);
+    });
+
+    it('direct-429-keeps-the-sdk-retries-and-never-echoes-a-vendor-body', async () => {
+      let n = 0;
+      const f = (async () => (
+        n++,
+        reply({ error: 'vendor secret' }, 429, { 'retry-after': '0' })
+      )) as typeof fetch;
+      const d = jevDecider({ apiKey: 'ts-direct', baseURL: 'https://x.test', fetch: f });
+      const err = (await d.gate(obs).catch((x: unknown) => x)) as DecideError;
+      expect(n).toBeGreaterThan(1);
+      expect(err.message).not.toContain('vendor secret');
+      expect(err.relayMessage).toBeUndefined();
+    });
+
+    it('sends-plain-json-with-the-pinned-model-the-relay-accepts', async () => {
+      const sent: { headers: Headers; body: string }[] = [];
+      const f = (async (_u: string | URL | Request, init?: RequestInit) => {
+        const req = new Request('https://x.test', init);
+        sent.push({ headers: req.headers, body: await req.text() });
+        return reply({ error: 'stop' }, 402);
+      }) as typeof fetch;
+      const before = process.env['TYPESAFE_DEFAULT_MODEL'];
+      process.env['TYPESAFE_DEFAULT_MODEL'] = 'jev-preview';
+      try {
+        // A big observation: the SDK would zstd-compress anything of 1 KB or more.
+        await decider(f)
+          .gate({ ...obs, assistantText: 'x'.repeat(4000) })
+          .catch(() => undefined);
+      } finally {
+        if (before === undefined) delete process.env['TYPESAFE_DEFAULT_MODEL'];
+        else process.env['TYPESAFE_DEFAULT_MODEL'] = before;
+      }
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.headers.get('content-encoding')).toBeNull();
+      expect(sent[0]!.headers.get('content-type')).toBe('application/json');
+      const body = JSON.parse(sent[0]!.body) as Record<string, unknown>;
+      expect(Object.keys(body).sort()).toEqual(['model', 'questions', 'state']);
+      expect(body['model']).toBe(RELAY_MODEL);
+    });
+
+    it('5xx-keeps-the-sdk-retries', async () => {
+      let n = 0;
+      const f = (async () => (
+        n++,
+        reply({ error: 'x' }, 503, { 'retry-after': '0' })
+      )) as typeof fetch;
+      await expect(decider(f).gate(obs)).rejects.toMatchObject({ kind: 'server' });
+      expect(n).toBe(3);
+    });
+  });
+
   it('network.import-makes-no-call', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
       throw new Error('network call at import');
@@ -306,6 +420,39 @@ describe('jevDecider', () => {
       expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
+    }
+  });
+});
+
+describe('request size caps', () => {
+  const big = '日本語😀🙂 émoji '.repeat(12_000); // about 200 KB
+  const bytes = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
+
+  it('keeps a gate request under 56 KB for a 200 KB observation', async () => {
+    const { client, calls } = stub(() => gateAnswers());
+    await jevDecider({ client }).gate({
+      ...obs,
+      userText: big,
+      assistantText: big,
+      toolSummaries: Array.from({ length: 50 }, () => 'x'.repeat(4000)),
+    });
+    expect(bytes(calls[0])).toBeLessThan(56 * 1024);
+    const state = calls[0]!.state as { user: string; assistant: string };
+    expect(new TextEncoder().encode(state.user).length).toBeLessThanOrEqual(16 * 1024);
+    expect(state.user).toMatch(/\[… \d+ bytes omitted …\]/);
+    expect(state.user).not.toContain('\uFFFD');
+  });
+
+  it('keeps a reconcile request under 56 KB with five 20 KB candidates', async () => {
+    const { client, calls } = stub((req) =>
+      Object.fromEntries(Object.keys(req.questions).map((k) => [k, choiceA('NOOP', { NOOP: 1 })])),
+    );
+    const cands = Array.from({ length: 5 }, (_, i) => mem(`m${i}`, big.slice(0, 20_000)));
+    await jevDecider({ client }).reconcile({ ...obs, userText: big, assistantText: big }, cands);
+    expect(bytes(calls[0])).toBeLessThan(56 * 1024);
+    const state = calls[0]!.state as { candidates: { text: string }[] };
+    for (const c of state.candidates) {
+      expect(new TextEncoder().encode(c.text).length).toBeLessThanOrEqual(1024);
     }
   });
 });

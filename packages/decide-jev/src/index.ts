@@ -12,6 +12,10 @@ import {
 } from '@typesafe-ai/sdk';
 import {
   MissingCredentialError,
+  TOOL_SUMMARIES_MAX,
+  TOOL_SUMMARY_MAX_BYTES,
+  capUtf8,
+  truncateUtf8,
   type Decision,
   type DecisionController,
   type GateDecision,
@@ -49,14 +53,38 @@ export type DecideErrorKind =
 export class DecideError extends Error {
   readonly kind: DecideErrorKind;
   readonly status: number | undefined;
+  /** The Oort Pro relay's own message for a refusal (relay mode only); never a vendor body. */
+  readonly relayMessage: string | undefined;
 
-  constructor(kind: DecideErrorKind, status?: number) {
-    super(`Jev decision call failed (${kind}${status === undefined ? '' : `, HTTP ${status}`})`);
+  constructor(kind: DecideErrorKind, status?: number, relayMessage?: string) {
+    super(
+      relayMessage ??
+        `Jev decision call failed (${kind}${status === undefined ? '' : `, HTTP ${status}`})`,
+    );
     this.name = 'DecideError';
     this.kind = kind;
     this.status = status;
+    this.relayMessage = relayMessage;
   }
 }
+
+/** The `error` string of a relay refusal body, cleaned and cut short; undefined for anything else. */
+function relayMessageOf(body: unknown): string | undefined {
+  const msg = (body as { error?: unknown } | null)?.error;
+  if (typeof msg !== 'string') return undefined;
+  const clean = msg.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  return clean === '' ? undefined : clean.slice(0, 400);
+}
+
+/**
+ * The Jev model the Oort Pro relay serves (`MODELS.decide` in apps/relay/src/relay.ts): the SDK's
+ * own default. Relay mode pins it, so `TYPESAFE_DEFAULT_MODEL` cannot pick a model the relay refuses.
+ */
+export const RELAY_MODEL = 'jev-latest';
+
+/** HTTP statuses the SDK retries on its own in relay mode: its default set, minus 429. */
+const RELAY_RETRY_STATUSES = new Set([408, ...Array.from({ length: 100 }, (_, i) => 500 + i)]);
+const MAX_RETRY_AFTER_MS = 5_000;
 
 function fromStatus(status: number): DecideError {
   if (status === 401 || status === 403) return new DecideError('auth', status);
@@ -66,8 +94,11 @@ function fromStatus(status: number): DecideError {
 }
 
 /** Maps anything the SDK or client throws to a DecideError, dropping its message and cause. */
-function wrap(e: unknown): DecideError {
+function wrap(e: unknown, relay = false): DecideError {
   if (e instanceof DecideError) return e;
+  if (e instanceof RateLimitError && relay) {
+    return new DecideError('rate-limit', e.status, relayMessageOf(e.body));
+  }
   if (e instanceof AuthenticationError || e instanceof PermissionDeniedError) {
     return new DecideError('auth', e.status);
   }
@@ -127,8 +158,22 @@ const clamp = (x: number, lo: number, hi: number): number => Math.min(hi, Math.m
 
 const MEMORY_TYPES: MemoryType[] = ['semantic', 'episodic', 'procedural', 'preference'];
 
+/**
+ * Keeps one Jev request body well under the relay's 64 KB limit (56 KB with the questions):
+ * user and assistant text 16 KB each (head and tail), a candidate memory's text 1 KB.
+ */
+const STATE_TEXT_MAX_BYTES = 16 * 1024;
+const CANDIDATE_TEXT_MAX_BYTES = 1024;
+
 function obsState(obs: Observation) {
-  return { user: obs.userText, assistant: obs.assistantText, tools: obs.toolSummaries, at: obs.at };
+  return {
+    user: capUtf8(obs.userText, STATE_TEXT_MAX_BYTES),
+    assistant: capUtf8(obs.assistantText, STATE_TEXT_MAX_BYTES),
+    tools: obs.toolSummaries
+      .slice(0, TOOL_SUMMARIES_MAX)
+      .map((t) => truncateUtf8(t, TOOL_SUMMARY_MAX_BYTES)),
+    at: obs.at,
+  };
 }
 
 export interface JevDeciderOptions {
@@ -136,6 +181,20 @@ export interface JevDeciderOptions {
   apiKey?: string;
   client?: SystemOneClient;
   model?: string;
+  /**
+   * The TypeSafe SDK's `baseURL` (its default is `https://api.typesafe.ai`, or
+   * `TYPESAFE_BASE_URL`). The Oort Pro relay is `https://relay.oortcloud.dev/v1/typesafe`,
+   * with an Oort key as `apiKey` (the SDK sends `Authorization: Bearer`). Ignored with `client`.
+   */
+  baseURL?: string;
+  /** The SDK's fetch, for tests. Ignored with `client`. */
+  fetch?: typeof fetch;
+  /**
+   * The calls go through the Oort Pro relay. A 429 with `Retry-After` is retried once, as
+   * before; a 429 without it (the monthly cap) is not retried, and the relay's message is kept on
+   * the error as `relayMessage`.
+   */
+  relay?: boolean;
 }
 
 /** System One controller backed by TypeSafe's Jev model. One `systemOne` call per stage. */
@@ -146,18 +205,39 @@ export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
     if (apiKey === undefined || apiKey === '') {
       throw new MissingCredentialError('TYPESAFE_API_KEY', 'decide.apiKey');
     }
-    client = new TypeSafeClient({ apiKey }) as unknown as SystemOneClient;
+    client = new TypeSafeClient({
+      apiKey,
+      ...(opts.baseURL !== undefined && { baseURL: opts.baseURL }),
+      ...(opts.fetch !== undefined && { fetch: opts.fetch }),
+      // The SDK would retry every 429 (twice); here a cap 429 must not be retried. It keeps its
+      // retries for 408 and 5xx, and `ask` makes the one retry for a 429 with Retry-After.
+      // The relay checks the body, so it takes only plain JSON (no zstd) and its pinned model.
+      ...(opts.relay === true && {
+        retry: { httpStatuses: RELAY_RETRY_STATUSES },
+        compression: false,
+        defaultModel: RELAY_MODEL,
+      }),
+    }) as unknown as SystemOneClient;
   }
   const c = client;
 
   async function ask(state: unknown, questions: Record<string, unknown>) {
     try {
       const req = { state, questions, ...(opts.model === undefined ? {} : { model: opts.model }) };
-      const res = await c.systemOne(req);
+      let res: Awaited<ReturnType<SystemOneClient['systemOne']>>;
+      try {
+        res = await c.systemOne(req);
+      } catch (e) {
+        const wait =
+          e instanceof RateLimitError && opts.relay === true ? e.retryAfterMs : undefined;
+        if (wait === undefined) throw e;
+        await new Promise((r) => setTimeout(r, Math.min(wait, MAX_RETRY_AFTER_MS)));
+        res = await c.systemOne(req);
+      }
       if (!isObj(res) || !isObj(res.answers)) throw bad();
       return res.answers as Record<string, unknown>;
     } catch (e) {
-      throw wrap(e);
+      throw wrap(e, opts.relay === true);
     }
   }
 
@@ -231,7 +311,7 @@ export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
         observation: obsState(obs),
         candidates: candidates.map((m) => ({
           id: m.id,
-          text: m.text,
+          text: truncateUtf8(m.text, CANDIDATE_TEXT_MAX_BYTES),
           type: m.type,
           validFrom: m.validFrom,
         })),

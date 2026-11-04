@@ -1,5 +1,8 @@
 # Using Oort with Claude Code
 
+`oort setup` installs the hooks below and can also connect the MCP server
+(`oort connect claude-code`). Every command and flag is in `docs/cli.md`.
+
 ## Provider keys
 
 Oort reads three provider keys. For each, an environment variable wins when it

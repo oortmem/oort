@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { APICallError, RetryError } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { MockLanguageModelV4 } from 'ai/test';
-import { MissingCredentialError, type Memory, type Observation } from '@oortmem/core';
+import {
+  MissingCredentialError,
+  capObservation,
+  type Memory,
+  type Observation,
+} from '@oortmem/core';
 import {
   WRITER_SYSTEM_PROMPT,
   WriterError,
@@ -319,6 +324,121 @@ describe('anthropicWriter', () => {
     }
   });
 
+  it('writer.anthropic-routes-through-the-relay-with-a-bearer-token', async () => {
+    const calls: { url: string; headers: Headers }[] = [];
+    const fakeFetch = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), headers: new Headers(init?.headers) });
+      return new Response(
+        JSON.stringify({
+          id: 'msg_1',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-haiku-5-5',
+          content: [{ type: 'text', text: JSON.stringify(good) }],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 10, output_tokens: 20 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    // Fail loudly instead of reaching the real API if the option is ignored.
+    const net = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      throw new Error('real network');
+    });
+    const saved = process.env['ANTHROPIC_API_KEY'];
+    delete process.env['ANTHROPIC_API_KEY'];
+    try {
+      const token = ['oort', 'sk', 'test0123456789'].join('_');
+      const w = anthropicWriter({
+        authToken: token,
+        baseURL: 'https://relay.example.test/v1/anthropic/v1',
+        fetch: fakeFetch,
+      });
+      await expect(w.write(obs, 'ADD')).resolves.toEqual(good);
+      expect(calls[0]!.url).toBe('https://relay.example.test/v1/anthropic/v1/messages');
+      expect(calls[0]!.headers.get('authorization')).toBe(`Bearer ${token}`);
+      expect(calls[0]!.headers.get('x-api-key')).toBeNull();
+      expect(net).not.toHaveBeenCalled();
+    } finally {
+      net.mockRestore();
+      if (saved !== undefined) process.env['ANTHROPIC_API_KEY'] = saved;
+    }
+  });
+
+  describe('relay mode', () => {
+    const token = ['oort', 'sk', 'test0123456789'].join('_');
+    const cap = 'You have used the 25,000 saves included in Oort Pro this month.';
+    const okBody = {
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      model: 'claude-haiku-5-5',
+      content: [{ type: 'text', text: JSON.stringify(good) }],
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 10, output_tokens: 20 },
+    };
+    const json = (b: unknown, status: number, headers: Record<string, string> = {}) =>
+      new Response(JSON.stringify(b), {
+        status,
+        headers: { 'content-type': 'application/json', ...headers },
+      });
+    const relayWriter = (fn: typeof fetch) =>
+      anthropicWriter({
+        authToken: token,
+        baseURL: 'https://relay.example.test/v1/anthropic/v1',
+        relay: true,
+        fetch: fn,
+      });
+
+    it('writer.relay-cap-429-without-retry-after-is-not-retried-and-keeps-the-message', async () => {
+      let n = 0;
+      const f = (async () => (n++, json({ error: cap }, 429))) as typeof fetch;
+      await expect(relayWriter(f).write(obs, 'ADD')).rejects.toMatchObject({
+        name: 'WriterError',
+        kind: 'rate-limit',
+        status: 429,
+        message: cap,
+        relayMessage: cap,
+      });
+      expect(n).toBe(1);
+    });
+
+    it('writer.relay-429-with-retry-after-is-retried-once', async () => {
+      let n = 0;
+      const ok = (async () =>
+        ++n === 1
+          ? json({ error: 'slow' }, 429, { 'retry-after': '0' })
+          : json(okBody, 200)) as typeof fetch;
+      await expect(relayWriter(ok).write(obs, 'ADD')).resolves.toEqual(good);
+      expect(n).toBe(2);
+      n = 0;
+      const always = (async () => (
+        n++,
+        json({ error: 'slow' }, 429, { 'retry-after': '0' })
+      )) as typeof fetch;
+      await expect(relayWriter(always).write(obs, 'ADD')).rejects.toMatchObject({
+        kind: 'rate-limit',
+        relayMessage: 'slow',
+      });
+      expect(n).toBe(2);
+    });
+
+    it('writer.direct-429-without-retry-after-keeps-the-sdk-retries-and-no-vendor-body', async () => {
+      let n = 0;
+      const f = (async () => (
+        n++,
+        json({ error: 'vendor secret' }, 429, { 'retry-after': '0' })
+      )) as typeof fetch;
+      const w = anthropicWriter({ apiKey: 'sk-ant-synthetic0123456789', fetch: f });
+      const err = await w.write(obs, 'ADD').catch((e: unknown) => e);
+      expect(n).toBeGreaterThan(1);
+      expect((err as WriterError).message).not.toContain('vendor secret');
+      expect((err as WriterError).relayMessage).toBeUndefined();
+    });
+  });
+
   it('writer.anthropic-constructs-with-key', () => {
     const key = 'sk-' + 'ant-' + 'synthetic0123456789';
     expect(typeof anthropicWriter({ apiKey: key }).write).toBe('function');
@@ -402,5 +522,35 @@ describe('network', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('request size', () => {
+  const body = (o: Observation) =>
+    JSON.stringify({
+      system: WRITER_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: buildWriterPrompt(o, 'SUPERSEDE', prior) }],
+    });
+  const bytes = (v: string) => new TextEncoder().encode(v).length;
+
+  it.each([
+    ['multilingual', '日本語😀 émoji '.repeat(20_000)],
+    ['markup (escapes four-fold)', '<&>'.repeat(60_000)],
+    ['quotes and newlines (escape in JSON)', '"\n'.repeat(60_000)],
+  ])('fits in 128 KB with a 32 KB-per-side %s observation', (_n, text) => {
+    const o = capObservation({
+      userText: text,
+      assistantText: text,
+      toolSummaries: Array.from({ length: 40 }, () => '<'.repeat(4000)),
+      at: '2026-11-03T10:00:00.000Z',
+    });
+    const b = body(o);
+    expect(bytes(b)).toBeLessThan(128 * 1024);
+    const p = buildWriterPrompt(o, 'SUPERSEDE', prior);
+    for (const tag of ['<user>', '</user>', '<assistant>', '</assistant>', '</observation>']) {
+      expect(p).toContain(tag);
+    }
+    expect(p).toContain('<prior_memory');
+    expect(p).not.toContain('\uFFFD');
   });
 });
