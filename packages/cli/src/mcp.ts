@@ -131,11 +131,14 @@ export function createOortServer(deps: OortServerDeps): McpServer {
           };
         });
         const lexicalOnly = w.embed === undefined || w.rerank === undefined;
+        const refused = w.relayErrors?.at(-1);
         return ok({
           memories,
-          ...(lexicalOnly && {
-            note: 'lexical-only recall: no Voyage key (run `oort keys set voyage`).',
-          }),
+          ...(refused !== undefined
+            ? { note: `recall degraded: ${refused.message}` }
+            : lexicalOnly && {
+                note: 'lexical-only recall: no Voyage key (run `oort keys set voyage`, or `oort login` for Oort Pro).',
+              }),
         });
       }),
   );
@@ -317,6 +320,13 @@ export function createOortServer(deps: OortServerDeps): McpServer {
             decide: w.decide !== undefined,
             write: w.write !== undefined,
           },
+          // Per role: `oort-pro` (through the relay), `own-key` or `missing`. Never a key.
+          keys: Object.fromEntries(
+            Object.values(w.routes ?? {}).map((r) => [
+              r.role,
+              r.via === 'oort' ? 'oort-pro' : r.via === 'vendor' ? 'own-key' : 'missing',
+            ]),
+          ),
         }),
       ),
   );

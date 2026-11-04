@@ -17,10 +17,19 @@ import {
 import { createHookLogger, type HookLogger } from '@oortmem/claude-code';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import type { Env } from './io.js';
-import { createKeychain, type KeychainReader, type Provider } from './keychain.js';
+import {
+  keyLookup,
+  routeFor,
+  summary,
+  type AdapterRole,
+  type RoleRoute,
+  type RouteSummary,
+} from './credentials.js';
+import { createKeychain, type KeychainReader } from './keychain.js';
+import { RELAY_MODELS, RELAY_PATHS, relayUrl, viaRelay, type OortRelayError } from './relay.js';
 import { echo } from './util.js';
 
-export type AdapterRole = 'embed' | 'rerank' | 'decide' | 'write';
+export type { AdapterRole } from './credentials.js';
 
 export interface Wired {
   config: ResolvedConfig;
@@ -32,6 +41,13 @@ export interface Wired {
   write?: MemoryWriter;
   /** Why each absent adapter is absent (usually a `MissingCredentialError`). */
   unavailable: Partial<Record<AdapterRole, Error>>;
+  /** Which key serves each role (never the key itself). Absent in test doubles. */
+  routes?: Record<AdapterRole, RouteSummary>;
+  /**
+   * Relay refusals (401, 402, 429) seen by adapters routed through Oort Pro,
+   * newest last, so a command that degraded quietly (recall) can say why.
+   */
+  relayErrors?: OortRelayError[];
   harnessLog: HookLogger;
   /**
    * Config problems worked around while wiring, as short tokens
@@ -59,58 +75,71 @@ export interface WireOptions {
    * empty. Defaults to the macOS Keychain; tests inject a double.
    */
   keychain?: KeychainReader;
+  /** The fetch every adapter uses (default: the global one); tests inject a fake. */
+  fetch?: typeof fetch;
 }
 
 export type WireFn = (cwd: string, opts?: WireOptions) => Promise<Wired>;
 
 interface Spec {
+  role: AdapterRole;
   configKey: 'embed' | 'rerank' | 'decide' | 'writer';
   provider: string;
-  /** The keychain item (`oort.<keychain>`). */
-  keychain: Provider;
   envVar: string;
   pkg: string;
+  /** The models the relay serves for this role (any, when absent). */
+  relayModels?: readonly string[];
 }
 
 const EMBED: Spec = {
+  role: 'embed',
   configKey: 'embed',
   provider: 'voyage',
-  keychain: 'voyage',
   envVar: 'VOYAGE_API_KEY',
   pkg: '@oortmem/embed-voyage',
+  relayModels: RELAY_MODELS.embed,
 };
 const RERANK: Spec = {
+  role: 'rerank',
   configKey: 'rerank',
   provider: 'voyage',
-  keychain: 'voyage',
   envVar: 'VOYAGE_API_KEY',
   pkg: '@oortmem/rerank-voyage',
+  relayModels: RELAY_MODELS.rerank,
 };
 const DECIDE: Spec = {
+  role: 'decide',
   configKey: 'decide',
   provider: 'jev',
-  keychain: 'typesafe',
   envVar: 'TYPESAFE_API_KEY',
   pkg: '@oortmem/decide-jev',
 };
 const WRITE: Spec = {
+  role: 'write',
   configKey: 'writer',
   provider: 'anthropic',
-  keychain: 'anthropic',
   envVar: 'ANTHROPIC_API_KEY',
   pkg: '@oortmem/writer',
+  relayModels: RELAY_MODELS.write,
 };
+
+/** How an adapter reaches its vendor: directly, or through the relay root `relay`. */
+type Reach = { key: string; relay?: string };
 
 /**
  * One adapter, or why it is unavailable. `make` (which imports the adapter
- * package) only runs when the provider is supported and a key is found (env,
- * then keychain), so a keyless run never loads a network client.
+ * package) only runs when the provider is supported and a key is found, so a
+ * keyless run never loads a network client. With no vendor key and an Oort
+ * key, the adapter goes through the relay, and its 401, 402 and 429 become
+ * an `OortRelayError`.
  */
-async function load<T>(
+async function load<T extends object>(
   spec: Spec,
   config: ResolvedConfig,
-  keyOf: (spec: Spec) => Promise<string | undefined>,
-  make: (apiKey: string) => Promise<T>,
+  route: RoleRoute,
+  relay: { url: string } | { error: string },
+  onRelayError: (e: OortRelayError) => void,
+  make: (reach: Reach) => Promise<T>,
 ): Promise<{ ok: T } | { error: Error }> {
   const provider = config[spec.configKey].provider;
   if (provider !== spec.provider) {
@@ -120,12 +149,25 @@ async function load<T>(
       ),
     };
   }
-  const apiKey = await keyOf(spec);
-  if (apiKey === undefined || apiKey === '') {
+  if (route.via === 'none') {
     return { error: new MissingCredentialError(spec.envVar, `${spec.configKey}.apiKey`) };
   }
+  let reach: Reach = { key: route.key };
+  if (route.via === 'oort') {
+    if ('error' in relay) return { error: new Error(relay.error) };
+    const model = (config[spec.configKey] as { model?: string }).model;
+    if (spec.relayModels !== undefined && !spec.relayModels.includes(model ?? '')) {
+      return {
+        error: new Error(
+          `${spec.configKey}.model ${echo(model ?? '')} is not served by Oort Pro (it serves ${spec.relayModels.join(', ')}); use that model, or set ${spec.envVar}.`,
+        ),
+      };
+    }
+    reach = { key: route.key, relay: relay.url };
+  }
   try {
-    return { ok: await make(apiKey) };
+    const adapter = await make(reach);
+    return { ok: reach.relay === undefined ? adapter : viaRelay(adapter, onRelayError) };
   } catch (e) {
     if (e instanceof MissingCredentialError) return { error: e };
     if ((e as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND') {
@@ -199,47 +241,66 @@ export const wire: WireFn = async (cwd, opts = {}) => {
       : createKeychain({
           warn: (message) => warnings.push({ code: 'keychain-unreadable', message }),
         }).read);
-  const reads = new Map<Provider, Promise<string | undefined>>();
-  const keyOf = async (spec: Spec): Promise<string | undefined> => {
-    const fromEnv = env[spec.envVar];
-    if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
-    let read = reads.get(spec.keychain);
-    if (read === undefined) {
-      read = reader(spec.keychain).then((v) => (v === '' ? undefined : v));
-      reads.set(spec.keychain, read);
-    }
-    return read;
+  const lookup = keyLookup(env, reader);
+  const relay = relayUrl(env);
+  const relayErrors: OortRelayError[] = [];
+  const onRelayError = (e: OortRelayError): void => void relayErrors.push(e);
+  const routes = {} as Record<AdapterRole, RouteSummary>;
+  const routeOf = async (spec: Spec): Promise<RoleRoute> => {
+    const r = await routeFor(spec.role, lookup);
+    routes[spec.role] = summary(r);
+    return r;
   };
+  const fetchOpt = opts.fetch === undefined ? {} : { fetch: opts.fetch };
   const out: Wired = {
     config,
     scope,
     store,
     unavailable: {},
+    routes,
+    relayErrors,
     harnessLog: createHookLogger(config.home),
     warnings,
     close: () => store.close(),
   };
-  const embed = await load(EMBED, config, keyOf, async (apiKey) =>
+  const embed = await load(EMBED, config, await routeOf(EMBED), relay, onRelayError, async (r) =>
     (await import('@oortmem/embed-voyage')).voyageEmbedder({
-      apiKey,
+      apiKey: r.key,
       model: config.embed.model,
       dimension: config.embed.dimension,
+      ...(r.relay !== undefined && { baseUrl: `${r.relay}${RELAY_PATHS.voyage}` }),
+      ...fetchOpt,
     }),
   );
   if ('ok' in embed) out.embed = embed.ok;
   else out.unavailable.embed = embed.error;
-  const rerank = await load(RERANK, config, keyOf, async (apiKey) =>
-    (await import('@oortmem/rerank-voyage')).voyageReranker({ apiKey, model: config.rerank.model }),
+  const rerank = await load(RERANK, config, await routeOf(RERANK), relay, onRelayError, async (r) =>
+    (await import('@oortmem/rerank-voyage')).voyageReranker({
+      apiKey: r.key,
+      model: config.rerank.model,
+      ...(r.relay !== undefined && { baseUrl: `${r.relay}${RELAY_PATHS.voyage}` }),
+      ...fetchOpt,
+    }),
   );
   if ('ok' in rerank) out.rerank = rerank.ok;
   else out.unavailable.rerank = rerank.error;
-  const decide = await load(DECIDE, config, keyOf, async (apiKey) =>
-    (await import('@oortmem/decide-jev')).jevDecider({ apiKey }),
+  const decide = await load(DECIDE, config, await routeOf(DECIDE), relay, onRelayError, async (r) =>
+    (await import('@oortmem/decide-jev')).jevDecider({
+      apiKey: r.key,
+      ...(r.relay !== undefined && { baseURL: `${r.relay}${RELAY_PATHS.typesafe}` }),
+      ...fetchOpt,
+    }),
   );
   if ('ok' in decide) out.decide = decide.ok;
   else out.unavailable.decide = decide.error;
-  const write = await load(WRITE, config, keyOf, async (apiKey) =>
-    (await import('@oortmem/writer')).anthropicWriter({ apiKey, model: config.writer.model }),
+  const write = await load(WRITE, config, await routeOf(WRITE), relay, onRelayError, async (r) =>
+    (await import('@oortmem/writer')).anthropicWriter({
+      ...(r.relay === undefined
+        ? { apiKey: r.key }
+        : { authToken: r.key, baseURL: `${r.relay}${RELAY_PATHS.anthropic}` }),
+      model: config.writer.model,
+      ...fetchOpt,
+    }),
   );
   if ('ok' in write) out.write = write.ok;
   else out.unavailable.write = write.error;

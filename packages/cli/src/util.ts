@@ -73,7 +73,11 @@ export function writePath(
 
 /** One stderr hint when recall runs without its dense or rerank stage. */
 export function degradedHint(io: Io, w: Wired, degraded: string[] | undefined): void {
-  if (w.embed === undefined || w.rerank === undefined) {
+  // A relay refusal (Oort Pro) is the reason, and it has its own fix.
+  const refused = w.relayErrors?.at(-1);
+  if (refused !== undefined) {
+    io.err(`oort: recall degraded. ${refused.message}\n`);
+  } else if (w.embed === undefined || w.rerank === undefined) {
     const why = w.unavailable.embed ?? w.unavailable.rerank;
     io.err(`oort: lexical-only recall. ${why?.message ?? ''}\n`);
   } else if (degraded !== undefined && degraded.length > 0) {
