@@ -28,6 +28,14 @@ export interface FakeCloud {
   refuse?: { status: number; code: string; message: string };
   /** Never answers a recall (for hook timeouts). */
   hangRecall?: boolean;
+  /** The plan has lapsed: every route answers 402 except export, which works in every state. */
+  lapsed?: boolean;
+  /** Stores the next observe, then drops the connection before answering (a crash mid-request). */
+  dropAfterObserve?: boolean;
+  /** Answers already given per turnRef: a repeat gets the same answer with `duplicate: true`. */
+  turns: Map<string, Record<string, unknown>>;
+  /** Every `from` sent to /v1/import, in order. */
+  importFroms: number[];
   key: string;
 }
 
@@ -60,6 +68,7 @@ export function fakeMemory(over: Partial<FakeMemory> & { id?: string } = {}): Fa
     supersedes: null,
     supersededBy: null,
     source: { harness: 'oort-cloud', decisions: [] },
+    activation: -1.5,
     createdAt: iso,
     updatedAt: iso,
     ...over,
@@ -72,6 +81,8 @@ export function fakeCloud(key: string): FakeCloud {
     seen: [],
     observed: [],
     imports: 0,
+    turns: new Map(),
+    importFroms: [],
     key,
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
       const req = new Request(input, init);
@@ -85,6 +96,9 @@ export function fakeCloud(key: string): FakeCloud {
       }
       if (c.refuse !== undefined) return err(c.refuse.status, c.refuse.code, c.refuse.message);
       const p = url.pathname;
+      if (c.lapsed === true && p !== '/v1/export') {
+        return err(402, 'payment_required', 'Oort Pro is not active on this account.');
+      }
       const project = (m: FakeMemory, want: string | null | undefined): boolean =>
         want === undefined || want === null
           ? true
@@ -112,6 +126,11 @@ export function fakeCloud(key: string): FakeCloud {
         const b = (await req.json()) as Record<string, unknown>;
         c.observed.push(b);
         const o = b['observation'] as { user: string };
+        const ref = typeof b['turnRef'] === 'string' ? b['turnRef'] : undefined;
+        if (ref !== undefined && ref.length > 128)
+          return err(400, 'bad_request', 'turnRef too long');
+        const seenTurn = ref === undefined ? undefined : c.turns.get(ref);
+        if (seenTurn !== undefined) return Response.json({ ...seenTurn, duplicate: true });
         const m = fakeMemory({
           text: o.user,
           ...(typeof b['project'] === 'string' && {
@@ -124,17 +143,24 @@ export function fakeCloud(key: string): FakeCloud {
           }),
         });
         c.memories.set(m.id, m);
-        return Response.json({
+        const answer = {
           outcome: 'added',
           memories: [{ id: m.id, action: 'added' }],
           counts: { added: 1 },
-        });
+        };
+        if (ref !== undefined) c.turns.set(ref, answer);
+        if (c.dropAfterObserve === true) {
+          c.dropAfterObserve = false;
+          throw new TypeError('fetch failed'); // saved, but the answer never arrives
+        }
+        return Response.json(answer);
       }
       if (p === '/v1/memories') {
         const q = url.searchParams;
         const all = [...c.memories.values()]
           .filter((m) => project(m, q.get('project')))
-          .filter((m) => q.get('tier') === null || m.tier === q.get('tier'));
+          .filter((m) => q.get('tier') === null || m.tier === q.get('tier'))
+          .filter((m) => q.get('pinned') === null || m.pinned === (q.get('pinned') === 'true'));
         const limit = Math.min(Number(q.get('limit') ?? '50'), CONTRACT.limits.listLimit);
         const start = q.get('cursor') === null ? 0 : Number.parseInt(q.get('cursor') ?? '0', 36);
         const page = all.slice(start, start + limit);
@@ -146,9 +172,21 @@ export function fakeCloud(key: string): FakeCloud {
       }
       const idMatch = /^\/v1\/memories\/([^/]+)(\/(pin|unpin))?$/.exec(p);
       if (idMatch !== null) {
-        const id = decodeURIComponent(idMatch[1] ?? '');
-        const m = c.memories.get(id);
+        const ref = decodeURIComponent(idMatch[1] ?? '');
+        let m = c.memories.get(ref);
+        if (
+          m === undefined &&
+          ref.length >= 8 &&
+          idMatch[3] === undefined &&
+          req.method === 'GET'
+        ) {
+          const hits = [...c.memories.values()].filter((x) => x.id.startsWith(ref));
+          if (hits.length > 1)
+            return err(409, 'ambiguous', `${hits.length} memories start with this prefix.`);
+          m = hits[0];
+        }
         if (m === undefined) return err(404, 'not_found', 'No such memory.');
+        const id = m.id;
         if (idMatch[3] !== undefined) {
           c.memories.set(id, { ...m, pinned: idMatch[3] === 'pin' });
           return new Response(null, { status: 204 });
@@ -188,14 +226,17 @@ export function fakeCloud(key: string): FakeCloud {
           return err(413, 'too_large', 'Send at most 10 MB per request.');
         }
         const lines = text.split('\n').filter((l) => l.length > 0);
+        const from = Number(url.searchParams.get('from') ?? '0');
+        c.importFroms.push(from);
         const manifest = JSON.parse(lines[0] ?? '{}') as { oort?: string; version?: number };
         if (manifest.oort !== 'export' || manifest.version !== 1) {
           return err(400, 'bad_request', 'The first line must be an Oort export manifest.');
         }
         let imported = 0;
         let skipped = 0;
-        const end = Math.min(lines.length, 1 + CONTRACT.limits.importLinesPerCall);
-        for (let i = 1; i < end; i++) {
+        const begin = from === 0 ? 1 : from;
+        const end = Math.min(lines.length, begin + CONTRACT.limits.importLinesPerCall);
+        for (let i = begin; i < end; i++) {
           const m = JSON.parse(lines[i] as string) as FakeMemory;
           if (c.memories.has(m.id)) skipped++;
           else {

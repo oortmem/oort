@@ -101,6 +101,7 @@ export type CloudErrorKind =
   | 'rate-limit'
   | 'too-large'
   | 'not-found'
+  | 'ambiguous-prefix'
   | 'bad-request'
   | 'busy'
   | 'network';
@@ -140,7 +141,7 @@ function messageFor(kind: CloudErrorKind, status: number, api?: string): string 
     case 'unauthorized':
       return `Oort Cloud rejected the Oort key (HTTP ${status}): it is unknown or revoked. Run \`oort login\` again.`;
     case 'payment-required':
-      return `Oort Pro is not active on this account (HTTP 402). Subscribe or update billing at ${ACCOUNT_URL}, or run \`oort cloud use --local\`.`;
+      return `Oort Pro is not active on this account (HTTP 402). Subscribe or update billing at ${ACCOUNT_URL}, or run \`oort cloud use --local\`. \`oort cloud export\` still works.`;
     case 'not-enabled':
       return 'Oort Cloud is not enabled for this account yet (HTTP 403). Your memories stay on this machine; run `oort cloud use --local`.';
     case 'rate-limit':
@@ -149,6 +150,8 @@ function messageFor(kind: CloudErrorKind, status: number, api?: string): string 
       return `Oort Cloud refused a request that is too large (HTTP 413)${api !== undefined ? `: ${api}` : '.'}`;
     case 'not-found':
       return 'No such memory in Oort Cloud.';
+    case 'ambiguous-prefix':
+      return 'That id prefix matches more than one memory in Oort Cloud; give more of the id.';
     case 'bad-request':
       return `Oort Cloud refused the request (HTTP ${status})${api !== undefined ? `: ${api}` : '.'}`;
     case 'busy':
@@ -164,6 +167,7 @@ export function cloudErrorKind(status: number, code?: string): CloudErrorKind {
   if (status === 402) return 'payment-required';
   if (status === 403) return code === 'cloud_not_enabled' ? 'not-enabled' : 'unauthorized';
   if (status === 404) return 'not-found';
+  if (status === 409 && code === 'ambiguous') return 'ambiguous-prefix';
   if (status === 413) return 'too-large';
   if (status === 429) return 'rate-limit';
   if (status >= 500) return 'busy';
@@ -194,6 +198,8 @@ export interface CloudObserveResult {
   outcome: string;
   memories: { id?: string; action: string }[];
   counts: Record<string, number>;
+  /** The turnRef was seen before: the turn is already saved and nothing was done. */
+  duplicate?: true;
 }
 
 export interface CloudImportResult {
@@ -207,23 +213,33 @@ export interface CloudClient {
   readonly url: string;
   whoami(): Promise<{ account: string; plan: string; via: string }>;
   recall(q: { text: string; project?: string; k?: number; asOf?: string }): Promise<RecallResult>;
-  observe(b: { project?: string; observation: CloudObservation }): Promise<CloudObserveResult>;
+  /** `turnRef` makes a retry safe: the API saves each turn once and answers `duplicate`. */
+  observe(b: {
+    project?: string;
+    observation: CloudObservation;
+    turnRef?: string;
+  }): Promise<CloudObserveResult>;
   list(q?: {
     project?: string;
     tier?: Tier;
     type?: string;
     q?: string;
+    pinned?: boolean;
     cursor?: string;
     limit?: number;
   }): Promise<{ memories: CloudMemory[]; next?: string }>;
-  get(id: string): Promise<CloudMemory>;
+  /** By id, or by a unique prefix of at least 8 characters (409 `ambiguous` when several match). */
+  get(ref: string): Promise<CloudMemory>;
   forget(id: string): Promise<void>;
   pin(id: string, pinned: boolean): Promise<void>;
   stats(): Promise<CloudStats>;
   /** The v1 export, as JSON Lines text. */
   exportText(): Promise<string>;
-  /** Posts export lines (the first is the manifest); `next` is where to resume when set. */
-  importLines(lines: string[]): Promise<CloudImportResult>;
+  /**
+   * Posts export lines (the first is the manifest). One call imports at most 1,000 lines; when
+   * `next` is set, post the same lines again with `from = next` to continue.
+   */
+  importLines(lines: string[], from?: number): Promise<CloudImportResult>;
 }
 
 export interface CloudClientOptions {
@@ -306,43 +322,29 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
     },
     stats: () => json('GET', '/v1/stats'),
     exportText: async () => (await call('GET', '/v1/export')).text(),
-    importLines: async (lines) =>
+    importLines: async (lines, from = 0) =>
       (await (
-        await call('POST', '/v1/import?from=0', { text: lines.map((l) => `${l}\n`).join('') })
+        await call('POST', `/v1/import?from=${from}`, {
+          text: lines.map((l) => `${l}\n`).join(''),
+        })
       ).json()) as CloudImportResult,
   };
 }
 
+/** The shortest id prefix the API looks up (it answers 404 below this). */
+export const MIN_ID_PREFIX = 8;
+
 /**
- * A memory by id or unique id prefix (what `oort inspect` prints). The API matches exact ids, so a
- * prefix is looked up by listing; a prefix shorter than 4 characters is refused.
+ * A memory by id or unique id prefix (what `oort inspect` prints), looked up by the API itself:
+ * a prefix that matches several memories is refused with a clear message.
  */
-export async function findCloudMemory(
-  client: CloudClient,
-  ref: string,
-  project: string | undefined,
-): Promise<CloudMemory> {
+export async function findCloudMemory(client: CloudClient, ref: string): Promise<CloudMemory> {
   try {
     return await client.get(ref);
   } catch (e) {
-    if (!(e instanceof OortCloudError) || e.kind !== 'not-found') throw e;
+    if (e instanceof OortCloudError && e.kind === 'not-found' && ref.length < MIN_ID_PREFIX) {
+      throw new Refusal(`Give at least ${MIN_ID_PREFIX} characters of the memory id.`);
+    }
+    throw e;
   }
-  if (ref.length < 4) throw new Refusal('Give at least 4 characters of the memory id.');
-  const matches: CloudMemory[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < 100; page++) {
-    const r = await client.list({
-      ...(project !== undefined && { project }),
-      ...(cursor !== undefined && { cursor }),
-      limit: 100,
-    });
-    for (const m of r.memories) if (m.id.startsWith(ref)) matches.push(m);
-    if (r.next === undefined) break;
-    cursor = r.next;
-  }
-  if (matches.length === 1 && matches[0] !== undefined) return matches[0];
-  if (matches.length > 1) {
-    throw new Refusal(`That id prefix matches ${matches.length} memories; give more of the id.`);
-  }
-  throw new Refusal('No such memory in Oort Cloud for this project.');
 }

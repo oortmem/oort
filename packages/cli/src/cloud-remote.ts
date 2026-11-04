@@ -1,8 +1,18 @@
 import type { RemoteMemory } from '@oortmem/claude-code';
 import type { Memory } from '@oortmem/core';
+import { createHash } from 'node:crypto';
 import { OortCloudError, type CloudClient } from './cloud.js';
 
-/** Hot or pinned memories SessionStart injects, at most this many from the API's first page. */
+/** The API's turnRef cap; a longer ref is replaced by its hash (still stable across retries). */
+const TURN_REF_MAX = 128;
+
+export function cloudTurnRef(ref: string): string {
+  return ref.length <= TURN_REF_MAX && /^[\x20-\x7e]+$/.test(ref)
+    ? ref
+    : createHash('sha256').update(ref).digest('hex');
+}
+
+/** Pinned and hot memories SessionStart injects: at most this many of each from the API. */
 const SESSION_LIMIT = 100;
 
 /**
@@ -27,17 +37,27 @@ export function cloudRemote(client: CloudClient | undefined, problem?: string): 
     recall: ({ text, projectId }) =>
       client.recall({ text, ...(projectId !== undefined && { project: projectId }), k: 10 }),
     sessionMemories: async ({ projectId }) => {
-      const r = await client.list({
-        ...(projectId !== undefined && { project: projectId }),
-        tier: 'hot',
-        limit: SESSION_LIMIT,
-      });
-      return r.memories as Memory[];
+      const project = projectId !== undefined && { project: projectId };
+      // Pinned first (any tier), then the hot tier; a memory in both appears once.
+      const [pinned, hot] = await Promise.all([
+        client.list({ ...project, pinned: true, limit: SESSION_LIMIT }),
+        client.list({ ...project, tier: 'hot', limit: SESSION_LIMIT }),
+      ]);
+      const seen = new Set<string>();
+      const out: Memory[] = [];
+      for (const m of [...pinned.memories, ...hot.memories]) {
+        if (seen.has(m.id)) continue;
+        seen.add(m.id);
+        out.push(m as Memory);
+      }
+      return out;
     },
-    observe: async (obs, projectId) => {
+    observe: async (obs, projectId, turnRef) => {
       try {
+        // A repeat of the same turnRef answers `duplicate: true`: already saved, so success.
         await client.observe({
           ...(projectId !== undefined && { project: projectId }),
+          ...(turnRef !== undefined && { turnRef: cloudTurnRef(turnRef) }),
           observation: {
             user: obs.userText,
             assistant: obs.assistantText,

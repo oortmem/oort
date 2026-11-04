@@ -551,11 +551,13 @@ the dashboard on oortcloud.dev shows them.
   `~/.oort/cloud.json`, never in a repository file, so a cloned repository cannot change where your
   memories go.
 - `oort cloud import` uploads the local store (every project) in the v1 export format, in requests
-  of at most 500 memories. It shows the size first and asks before it uploads (`--yes` skips the
+  of at most 500 memories (the API takes up to 1,000 lines a call and says where to continue, which
+  the CLI follows). It shows the size first and asks before it uploads (`--yes` skips the
   question, `--dry-run` only shows it). It is resumable: if the network drops, run it again and it
   continues where it stopped. It is also safe to run twice: the cloud skips memories it already
   has. Embeddings of the same model and dimension are reused; others are made again in the cloud.
 - `oort cloud export` downloads every memory in your account, so you can always go back to local.
+  It works in every billing state, including after Pro lapses.
 - `oort cloud status` shows the store, the account and plan, the cloud's memory count and import
   progress.
 
@@ -563,10 +565,10 @@ In cloud mode:
 
 | Command or hook | What happens |
 | --- | --- |
-| `recall`, `explain`, `inspect`, `pin`, `unpin`, `forget`, `stats`, `export`, `observe` | Call the API for this project (plus account-wide memories). Short ids work as in local mode. |
-| UserPromptSubmit, SessionStart | Recall from the cloud within the hook's time limit. On a timeout or any error they inject nothing and still exit 0. |
+| `recall`, `explain`, `inspect`, `pin`, `unpin`, `forget`, `stats`, `export`, `observe` | Call the API for this project (plus account-wide memories). Short ids need at least 8 characters; the API looks them up and refuses a prefix that matches more than one memory. |
+| UserPromptSubmit, SessionStart | Recall from the cloud within the hook's time limit (SessionStart: pinned memories, then the hot tier). On a timeout or any error they inject nothing and still exit 0. |
 | Stop | Unchanged: queues the new turns on this machine and starts a drain. It never calls the network. |
-| The drain | Sends queued turns to the cloud. If the account cannot save (signed out, no plan, a limit, an outage), the turns stay queued and are sent on a later run. |
+| The drain | Sends queued turns to the cloud, each with a `turnRef` (`<session>:<turn>`), so a drain that crashes after a save and runs again does not save the turn twice. If the account cannot save (signed out, no plan, a limit, an outage), the turns stay queued and are sent on a later run. |
 | `oort mcp` | The same seven tools, answered by the cloud. |
 | `consolidate`, `import claude-code` | Refused: the cloud consolidates itself, and transcript import writes to the local store (import locally, then `oort cloud import`). |
 

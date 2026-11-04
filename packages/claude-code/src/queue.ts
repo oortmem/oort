@@ -188,6 +188,19 @@ export interface DrainResult {
 }
 
 /**
+ * A stable id for a queued turn: `<sessionId>:<transcript turn>` when both are known, else the
+ * queue line's own id (kept across retries, since a failed line stays in its file).
+ */
+export function turnRefOf(line: {
+  id: string;
+  obs: { sessionId?: string; turnRef?: string };
+}): string {
+  return line.obs.sessionId !== undefined && line.obs.turnRef !== undefined
+    ? `${line.obs.sessionId}:${line.obs.turnRef}`
+    : line.id;
+}
+
+/**
  * Observes queued lines, oldest file first, at most 50 per run, under the
  * drain lock. A line that observed is removed; one whose observe threw keeps
  * its place with `attempts + 1`, and moves to `dead/` at the third failure.
@@ -273,7 +286,7 @@ export async function drainQueue(deps: HookDeps): Promise<DrainResult> {
         budget--;
         try {
           if (remote !== undefined) {
-            await remote.observe(line.obs, line.scope.projectId);
+            await remote.observe(line.obs, line.scope.projectId, turnRefOf(line));
           } else {
             await observe(line.obs, line.scope, {
               store: deps.store,

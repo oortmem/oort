@@ -46,8 +46,10 @@ instead of `~/.oort/oort.sqlite`. Nothing else changes for Claude Code:
 - UserPromptSubmit and SessionStart ask the cloud and inject what it returns. A cloud timeout or
   error injects nothing (the hook log shows `degraded: ["cloud-timeout"]` or `["cloud-error"]`);
   the hook never falls back to the local store.
+- SessionStart injects your pinned memories, then the hot tier.
 - Stop still only queues turns locally and starts the drain. The drain sends them to the cloud and
-  keeps them queued while the account cannot save.
+  keeps them queued while the account cannot save. Each turn carries a stable `turnRef`, so a retry
+  after a crash never saves it twice.
 - The hook log keeps counts and timings only, never prompt or memory text.
 
 See `docs/cli.md` for `oort cloud import`, which uploads the memories you already have.

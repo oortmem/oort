@@ -6,7 +6,7 @@ import { makeMemory } from '@oortmem/core/store-conformance';
 import { SESSION, makeDeps, queueLines, readLog, tempHome } from '../test/helpers.js';
 import type { RemoteMemory } from './deps.js';
 import { RECALL_TIMEOUT_MS, handleSessionStart, handleUserPromptSubmit } from './hooks.js';
-import { drainQueue, enqueueObservations } from './queue.js';
+import { drainQueue, enqueueObservations, turnRefOf } from './queue.js';
 
 const CLOUD_MEMORY = makeMemory({
   id: 'm-cloud',
@@ -26,10 +26,14 @@ function result(memories: Memory[]): RecallResult {
 }
 
 /** A remote that answers from fixed data and records every call. */
-function fakeRemote(over: Partial<RemoteMemory> = {}): RemoteMemory & { seen: string[] } {
+function fakeRemote(
+  over: Partial<RemoteMemory> = {},
+): RemoteMemory & { seen: string[]; refs: (string | undefined)[] } {
   const seen: string[] = [];
+  const refs: (string | undefined)[] = [];
   return {
     seen,
+    refs,
     recall: async (q) => {
       seen.push(`recall:${q.projectId ?? 'global'}`);
       return result([CLOUD_MEMORY]);
@@ -38,8 +42,9 @@ function fakeRemote(over: Partial<RemoteMemory> = {}): RemoteMemory & { seen: st
       seen.push(`session:${q.projectId ?? 'global'}`);
       return [{ ...CLOUD_MEMORY, pinned: true }];
     },
-    observe: async (o, projectId) => {
+    observe: async (o, projectId, turnRef) => {
       seen.push(`observe:${o.turnRef ?? '?'}:${projectId ?? 'global'}`);
+      refs.push(turnRef);
     },
     ...over,
   };
@@ -147,6 +152,21 @@ describe('hooks in cloud mode (CON-76)', () => {
     const r = await drainQueue(deps);
     expect(r).toEqual({ processed: 2, failed: 0, remaining: 0 });
     expect(remote.seen).toEqual(['observe:a1:global', 'observe:a2:global']);
+  });
+
+  it('remote.drain-sends-a-stable-turn-ref-per-turn', async () => {
+    const t = tempHome();
+    const { sessionId: _drop, ...noSession } = obs(2);
+    enqueueObservations(t.config.home, SESSION, localScope(), [obs(1), noSession]);
+    const remote = fakeRemote();
+    const deps = makeDeps(t, { remote, embed: undefined, decide: undefined, write: undefined });
+    await drainQueue(deps);
+    const [first, second] = remote.refs;
+    expect(first).toBe(turnRefOf({ id: 'x', obs: obs(1) }));
+    expect(first).toMatch(/:a1$/);
+    // Without a session id the queue line's own id is the ref (it survives retries).
+    expect(second).toBeTruthy();
+    expect(second).not.toMatch(/:a2$/);
   });
 
   it('remote.drain-holds-the-queue-on-account-refusals', async () => {

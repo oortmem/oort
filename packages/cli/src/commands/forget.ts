@@ -12,7 +12,7 @@ export async function forgetCommand(
     const cloud = cloudOf(w);
     const m =
       cloud !== undefined
-        ? await findCloudMemory(cloud, id, w.scope.projectId)
+        ? await findCloudMemory(cloud, id)
         : await findMemory(w.store, filterFor(w.scope), id);
     const ok = await confirm(
       ctx.io,

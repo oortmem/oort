@@ -214,13 +214,13 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
     },
 
     async forget({ id }) {
-      const m = await findCloudMemory(client, id, project);
+      const m = await findCloudMemory(client, id);
       await client.forget(m.id);
       return { forgotten: m.id };
     },
 
     async pin({ id, pinned }) {
-      const m = await findCloudMemory(client, id, project);
+      const m = await findCloudMemory(client, id);
       if (m.pinned === pinned) return { id: m.id, pinned, changed: false };
       await client.pin(m.id, pinned);
       return { id: m.id, pinned, changed: true };
@@ -228,7 +228,7 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
 
     async explain({ id }) {
       const at = now();
-      const m = (await findCloudMemory(client, id, project)) as Memory;
+      const m = (await findCloudMemory(client, id)) as Memory;
       const chain: Record<string, unknown>[] = [];
       let hidden = 0;
       for (const linkId of [m.supersedes, m.supersededBy]) {

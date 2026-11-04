@@ -193,7 +193,7 @@ export async function inspectCommand(
     }
     const m =
       cloud !== undefined
-        ? ((await findCloudMemory(cloud, id, project)) as Memory)
+        ? ((await findCloudMemory(cloud, id)) as Memory)
         : await findMemory(w.store, filter, id);
     const { links: chain, hidden } =
       cloud !== undefined ? await cloudChain(cloud, m) : await supersedeChain(w.store, m, filter);

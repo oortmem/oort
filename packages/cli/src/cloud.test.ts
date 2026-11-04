@@ -10,9 +10,11 @@ import {
   OortCloudError,
   cloudErrorKind,
   cloudUrl,
+  createCloudClient,
   readCloudSettings,
   writeCloudSettings,
 } from './cloud.js';
+import { uploadChunk } from './commands/cloud.js';
 import { createKeychain } from './keychain.js';
 import { runCli } from './program.js';
 import { wire as realWire, type WireFn } from './wire.js';
@@ -431,5 +433,112 @@ describe('oort cloud commands (CON-76)', () => {
     const l = await local.run(['doctor', '--json']);
     const c3 = (JSON.parse(l.io.stdout) as { checks: { group: string; status: string }[] }).checks;
     expect(c3.find((c) => c.group === 'cloud')).toMatchObject({ status: 'info' });
+  });
+});
+
+describe('cloud API follow-ups (CON-76, oortcloud PR #3)', () => {
+  const stopThenQueue = async (e: Env): Promise<void> => {
+    const transcript = writeTranscript(path.join(e.root, 'claude-projects'), e.cwd);
+    await e.run(['hook', 'Stop'], {
+      stdin: JSON.stringify({ session_id: 'sess-1', cwd: e.cwd, transcript_path: transcript }),
+    });
+  };
+  const queued = (e: Env): string[] =>
+    fs.readdirSync(path.join(e.home, 'queue')).filter((f) => f.endsWith('.jsonl'));
+
+  it('drain.crash-after-the-post-then-rerun-saves-the-turn-once', async () => {
+    const e = setup('cloud');
+    await stopThenQueue(e);
+    // The cloud saves the turn, then the connection drops before the answer arrives.
+    e.cloud.dropAfterObserve = true;
+    await e.run(['hook', 'drain']);
+    expect(e.cloud.memories.size).toBe(1);
+    expect(queued(e).length).toBe(1); // held: the drain never heard back
+    await e.run(['hook', 'drain']);
+    expect(queued(e).length).toBe(0); // the duplicate answer counts as saved
+    const refs = e.cloud.observed.map((b) => b['turnRef']);
+    expect(refs.every((r) => typeof r === 'string' && r.length > 0 && r.length <= 128)).toBe(true);
+    // One POST was repeated; every turn is stored exactly once.
+    expect(e.cloud.observed.length).toBe(e.cloud.memories.size + 1);
+    expect(new Set(refs).size).toBe(e.cloud.memories.size);
+    expect(refs[0]).toMatch(/^[^:]+:[^:]+$/); // <sessionId>:<transcript turn>
+  });
+
+  it('import.follows-next-when-a-chunk-has-more-than-1000-lines', async () => {
+    const e = setup('local');
+    const client = createCloudClient({ url: DEFAULT_CLOUD_URL, key: e.key, fetch: e.cloud.fetch });
+    const header = JSON.stringify({ oort: 'export', version: 1 });
+    const lines = Array.from({ length: 2_500 }, (_, i) =>
+      JSON.stringify(fakeMemory({ id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}` })),
+    );
+    const progress: number[] = [];
+    const r = await uploadChunk(client, header, lines, (n) => progress.push(n));
+    expect(r).toMatchObject({ imported: 2_500, skipped: 0, calls: 3 });
+    expect(e.cloud.importFroms).toEqual([0, 1001, 2001]);
+    expect(progress).toEqual([1000, 2000, 2500]);
+    expect(e.cloud.memories.size).toBe(2_500);
+  });
+
+  it('import.refuses-when-the-api-stops-making-progress', async () => {
+    const stuck = {
+      importLines: async () => ({ imported: 0, skipped: 0, reembedded: 0, next: 1 }),
+    } as unknown as Parameters<typeof uploadChunk>[0];
+    await expect(uploadChunk(stuck, '{}', ['a', 'b'], () => {})).rejects.toThrow('progress');
+  });
+
+  it('session-start.injects-pinned-and-hot-memories', async () => {
+    const e = setup('cloud');
+    const pinned = fakeMemory({
+      text: 'Pinned rule: always run pnpm verify.',
+      tier: 'cold',
+      pinned: true,
+    });
+    const hot = fakeMemory({ text: 'Hot fact: the relay listens on 8787.', tier: 'hot' });
+    const cold = fakeMemory({ text: 'Cold fact: nobody needs this today.', tier: 'cold' });
+    for (const m of [pinned, hot, cold]) e.cloud.memories.set(m.id as string, m);
+    const r = await e.run(['hook', 'SessionStart'], {
+      stdin: JSON.stringify({ session_id: 's1', cwd: e.cwd }),
+    });
+    expect(r.code).toBe(0);
+    const out = r.io.hookStdout ?? '';
+    expect(out).toContain('always run pnpm verify');
+    expect(out).toContain('relay listens on 8787');
+    expect(out).not.toContain('nobody needs this');
+  });
+
+  it('inspect.prefix-is-looked-up-by-the-api', async () => {
+    const e = setup('cloud');
+    const a = '12345678-aaaa-4333-8444-555555555555';
+    const b = '12345678-bbbb-4333-8444-555555555555';
+    for (const id of [a, b]) e.cloud.memories.set(id, fakeMemory({ id }));
+    const ambiguous = await e.run(['inspect', '12345678']);
+    expect(ambiguous.code).toBe(2);
+    expect(ambiguous.io.stderr).toContain('more than one memory');
+    const short = await e.run(['inspect', '1234']);
+    expect(short.code).toBe(2);
+    expect(short.io.stderr).toContain('at least 8 characters');
+    const one = await e.run(['inspect', '12345678-a']);
+    expect(one.code, one.io.stderr).toBe(0);
+    expect(one.io.stdout).toContain(a);
+    // No listing: one GET per lookup.
+    expect(e.cloud.seen.filter((s) => s === 'GET /v1/memories')).toEqual([]);
+  });
+
+  it('export.works-when-the-plan-has-lapsed', async () => {
+    const e = setup('cloud');
+    await seed(e, 'cloud');
+    e.cloud.lapsed = true;
+    const out = path.join(e.root, 'backup.jsonl');
+    const c = await e.run(['cloud', 'export', '--out', out]);
+    expect(c.code, c.io.stderr).toBe(0);
+    expect(fs.readFileSync(out, 'utf8')).toContain(MEMORY_ID);
+    const x = await e.run(['export']);
+    expect(x.code, x.io.stderr).toBe(0);
+    expect(x.io.stdout).toContain(MEMORY_ID);
+    // Everything else is refused, and the refusal points at export.
+    const r = await e.run(['recall', 'auth service port']);
+    expect(r.code).toBe(2);
+    expect(r.io.stderr).toContain('not active');
+    expect(r.io.stderr).toContain('oort cloud export');
   });
 });

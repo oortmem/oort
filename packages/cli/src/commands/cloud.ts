@@ -84,6 +84,39 @@ function chunks(lines: string[], from: number): { start: number; lines: string[]
   return out;
 }
 
+/**
+ * Uploads one chunk. The API imports at most 1,000 lines a call and answers `next` (an index into
+ * the posted lines) when it stopped early; the same lines are posted again with `from = next`
+ * until it is done. `progress` gets how many of the chunk's lines are in after each call.
+ */
+export async function uploadChunk(
+  client: CloudClient,
+  header: string,
+  lines: string[],
+  progress: (inChunk: number) => void,
+): Promise<{ imported: number; skipped: number; reembedded: number; calls: number }> {
+  const body = [header, ...lines];
+  const total = { imported: 0, skipped: 0, reembedded: 0, calls: 0 };
+  let from = 0;
+  for (;;) {
+    const r = await client.importLines(body, from);
+    total.calls++;
+    total.imported += r.imported;
+    total.skipped += r.skipped;
+    total.reembedded += r.reembedded;
+    if (r.next === undefined) {
+      progress(lines.length);
+      return total;
+    }
+    // Line 0 is the manifest, so line `next` of the body is line `next - 1` of the chunk.
+    if (!Number.isInteger(r.next) || r.next <= Math.max(from, 1) || r.next > lines.length) {
+      throw new Refusal('Oort Cloud stopped making progress on the import; run it again later.');
+    }
+    progress(r.next - 1);
+    from = r.next;
+  }
+}
+
 const fingerprintOf = (lines: string[]): string => {
   const id = (l: string | undefined): string =>
     l === undefined ? '' : ((JSON.parse(l) as { id?: string }).id ?? '');
@@ -228,22 +261,16 @@ export async function cloudImportCommand(
     let skipped = 0;
     let reembedded = 0;
     for (const c of plan) {
-      // The API processes up to 1,000 lines a call; `next` says where it stopped in this chunk.
-      let offset = 0;
-      while (offset < c.lines.length) {
-        const part = c.lines.slice(offset);
-        const r = await client.importLines([header, ...part]);
-        imported += r.imported;
-        skipped += r.skipped;
-        reembedded += r.reembedded;
-        const consumed = r.next === undefined ? part.length : Math.max(1, r.next - 1);
-        offset += consumed;
-        done = c.start + offset;
+      const r = await uploadChunk(client, header, c.lines, (inChunk) => {
+        done = c.start + inChunk;
         writeCloudSettings(w.config.home, {
           ...readCloudSettings(w.config.home),
           import: { fingerprint, done, total: lines.length, updatedAt: new Date().toISOString() },
         });
-      }
+      });
+      imported += r.imported;
+      skipped += r.skipped;
+      reembedded += r.reembedded;
       ctx.io.out(`  uploaded ${done}/${lines.length}\n`);
     }
     ctx.io.out(

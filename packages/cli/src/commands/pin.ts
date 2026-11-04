@@ -7,7 +7,7 @@ export async function pinCommand(id: string, pinned: boolean, ctx: Ctx): Promise
   return withWired(ctx, async (w) => {
     const cloud = cloudOf(w);
     if (cloud !== undefined) {
-      const c = await findCloudMemory(cloud, id, w.scope.projectId);
+      const c = await findCloudMemory(cloud, id);
       if (c.pinned === pinned) {
         ctx.io.out(`${c.id} is already ${pinned ? 'pinned' : 'unpinned'}.\n`);
         return 0;

@@ -15,6 +15,7 @@
       "path": "/v1/observe",
       "request": {
         "project": "string?",
+        "turnRef": "string?",
         "observation": {
           "user": "string",
           "assistant": "string",
@@ -23,12 +24,12 @@
           "tools": "string[]?"
         }
       },
-      "response": ["outcome", "memories", "counts"]
+      "response": ["outcome", "memories", "counts", "duplicate?"]
     },
     {
       "method": "GET",
       "path": "/v1/memories",
-      "query": ["project", "tier", "type", "q", "cursor", "limit"],
+      "query": ["project", "tier", "type", "q", "cursor", "limit", "pinned"],
       "response": ["memories", "next?"]
     },
     { "method": "GET", "path": "/v1/memories/:id", "response": "memory" },
@@ -40,7 +41,12 @@
       "path": "/v1/stats",
       "response": ["tiers", "memories", "databaseBytes", "lastConsolidatedAt"]
     },
-    { "method": "GET", "path": "/v1/export", "contentType": "application/x-ndjson" },
+    {
+      "method": "GET",
+      "path": "/v1/export",
+      "contentType": "application/x-ndjson",
+      "billing": "any"
+    },
     {
       "method": "POST",
       "path": "/v1/import",
@@ -58,6 +64,7 @@
       "stub",
       "entities",
       "salience",
+      "activation",
       "pinned",
       "tier",
       "accessLog",
@@ -82,6 +89,7 @@
     "403:cloud_not_enabled": "not-enabled",
     "403": "unauthorized",
     "404": "not-found",
+    "409:ambiguous": "ambiguous-prefix",
     "413": "too-large",
     "429": "rate-limit",
     "503": "busy"

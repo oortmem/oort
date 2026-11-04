@@ -26,7 +26,11 @@ export interface RemoteMemory {
    * Saves one turn. A rejection with `holdQueue: true` (sign-in, plan, rate limit, outage) keeps
    * the line queued untouched and stops the drain run; any other rejection counts as an attempt.
    */
-  observe(obs: Observation, projectId?: string): Promise<void>;
+  /**
+   * Saves one turn. `turnRef` is stable for the turn across retries, so a drain that crashes after
+   * the save and runs again cannot save it twice.
+   */
+  observe(obs: Observation, projectId?: string, turnRef?: string): Promise<void>;
 }
 
 export interface HookDeps {
