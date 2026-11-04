@@ -5,7 +5,7 @@ import { Logo } from './Logo';
 
 const links = [
   { to: '/architecture', label: 'Architecture' },
-  { to: '/explorer', label: 'Explorer App' },
+  { to: '/explorer', label: 'Explorer' },
   { to: '/enterprise', label: 'Enterprise' },
   { to: '/pricing', label: 'Pricing' },
 ] as const;
@@ -45,10 +45,10 @@ export function SiteNav() {
         </nav>
         <div className="flex items-center gap-2">
           <a
-            href="https://github.com"
+            href="https://github.com/oortmem/oort"
             className={`hidden items-center gap-1.5 rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground hover:text-foreground lg:flex ${scrolled ? 'lg:hidden' : ''}`}
           >
-            <Github className="size-3.5" /> 12.4k
+            <Github className="size-3.5" /> GitHub
           </a>
           <Link
             to="/signin"
@@ -79,8 +79,8 @@ export function SiteFooter() {
         <div className="space-y-3">
           <Logo compact />
           <p className="text-sm text-muted-foreground">
-            Infinite agent memory. Zero RAM bloat. Open source, encrypted, tiered like the human
-            mind.
+            Memory that stays correct as facts change, at a cost that stays flat as history grows.
+            Open source and tiered hot, warm and cold.
           </p>
         </div>
         {[
@@ -88,15 +88,15 @@ export function SiteFooter() {
             'Product',
             [
               ['/architecture', 'Architecture'],
-              ['/explorer', 'Explorer App'],
+              ['/explorer', 'Explorer (Concept)'],
               ['/pricing', 'Pricing'],
             ],
           ],
           [
             'Business',
             [
-              ['/enterprise', 'Enterprise scale'],
-              ['/dashboard', 'Cloud console'],
+              ['/enterprise', 'Enterprise scenario'],
+              ['/dashboard', 'Console demo'],
             ],
           ],
           [
@@ -124,7 +124,7 @@ export function SiteFooter() {
         ))}
       </div>
       <div className="border-t border-border py-6 text-center font-mono text-xs text-muted-foreground">
-        npx @oortmem/cli init · oortcloud.dev
+        oort install claude-code · npm publishing is coming · oortcloud.dev
       </div>
     </footer>
   );

@@ -6,21 +6,25 @@ import { OortSpiral, type SpiralApi, type Tier } from '@/components/oort/OortSpi
 import { HeroWish } from '@/components/site/HeroWish';
 import { PhoneExplorer } from '@/components/oort/PhoneExplorer';
 import { Reveal, DriftBand } from '@/components/site/Reveal';
-import { tiers } from '@/lib/oort-data';
+import { PlannedBadge } from '@/components/site/PlannedBadge';
+import { measured, tiers } from '@/lib/oort-data';
 
 export const Route = createFileRoute('/')({
   head: () => ({
     meta: [
-      { title: 'Oort Cloud — Infinite agent memory, zero RAM bloat' },
+      { title: 'Oort Cloud: agent memory that stays correct as facts change' },
       {
         name: 'description',
         content:
-          'Open-source memory for AI agents. What matters stays close, what grows old tucks away — and nothing ever gets lost.',
+          'Open-source memory for AI agents. It stays correct as facts change, costs stay flat as history grows, and every recall can explain itself.',
       },
-      { property: 'og:title', content: 'Oort Cloud — Infinite agent memory, zero RAM bloat' },
+      {
+        property: 'og:title',
+        content: 'Oort Cloud: agent memory that stays correct as facts change',
+      },
       {
         property: 'og:description',
-        content: 'Tiered, encrypted, open-source memory for AI agents.',
+        content: 'Tiered, open-source memory for AI agents with explainable recall.',
       },
     ],
   }),
@@ -31,7 +35,7 @@ const icons = { hot: Flame, warm: Zap, cold: Snowflake };
 
 function Home() {
   const [copied, setCopied] = useState(false);
-  const cmd = 'npx @oortmem/cli init';
+  const cmd = 'oort install claude-code';
   const [y, setY] = useState(0);
   const api = useRef<SpiralApi | null>(null);
   const [stats, setStats] = useState({ recalls: 0, hot: 0, last: [] as number[] });
@@ -47,11 +51,17 @@ function Home() {
     ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]
     : null;
   const [word, setWord] = useState(0);
-  const words = ['shopping agents', 'support copilots', 'tutors', 'companions'];
+  const words = [
+    'your coding agent',
+    'Claude and ChatGPT',
+    'support copilots',
+    'shopping agents',
+    'tutors',
+  ];
   useEffect(() => {
     const on = () => setY(window.scrollY);
     window.addEventListener('scroll', on, { passive: true });
-    const t = setInterval(() => setWord((w) => (w + 1) % 4), 2400);
+    const t = setInterval(() => setWord((w) => (w + 1) % words.length), 2400);
     return () => {
       window.removeEventListener('scroll', on);
       clearInterval(t);
@@ -77,11 +87,11 @@ function Home() {
             <span className="inline-block rounded-full border border-border px-3 py-1 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
               Open-source agent memory
             </span>
-            <h1 className="text-5xl font-semibold leading-[1.02] md:text-7xl">
-              Infinite agent memory.
+            <h1 className="text-5xl font-semibold leading-[1.02] md:text-6xl">
+              Memory that stays correct as facts change.
               <br />
               <span className="bg-gradient-to-r from-photon-glow via-starlight to-ember bg-clip-text text-transparent">
-                Zero RAM bloat.
+                At a cost that stays flat as history grows.
               </span>
             </h1>
             <p className="font-mono text-sm text-muted-foreground">
@@ -91,8 +101,12 @@ function Home() {
               </span>
             </p>
             <p className="max-w-lg text-lg text-muted-foreground">
-              What you use stays close. What you forget drifts out to the cold cloud — and comes
-              back in milliseconds. Try it: add a memory, or tap any star to recall it.
+              Facts that change are closed out, not overwritten, so old answers do not leak. Old
+              history moves to cheap storage. Every recall can explain why it was picked. Try the
+              demo: add a memory, or tap any star to recall it.
+            </p>
+            <p className="font-mono text-xs text-muted-foreground">
+              Works with Claude Code today. Other assistants are <PlannedBadge />
             </p>
             <HeroWish api={api} />
             <dl className="flex gap-6 font-mono text-xs text-muted-foreground" aria-live="polite">
@@ -101,14 +115,13 @@ function Home() {
                 <dd className="text-base text-foreground">{stats.recalls}</dd>
               </div>
               <div>
-                <dt>p95</dt>
+                <dt>p95 (demo)</dt>
                 <dd className="text-base text-foreground">{p95 ? `${p95} ms` : '—'}</dd>
               </div>
-              <div>
-                <dt>RAM saved</dt>
-                <dd className="text-base text-photon-glow">86%</dd>
-              </div>
             </dl>
+            <p className="-mt-4 font-mono text-[11px] text-muted-foreground">
+              Hero counters are a demo animation, not a benchmark. Measured numbers are below.
+            </p>
             <div className="flex flex-wrap items-center gap-3">
               <Link
                 to="/dashboard"
@@ -132,43 +145,55 @@ function Home() {
                 )}
               </button>
             </div>
+            <p className="font-mono text-[11px] text-muted-foreground">
+              The CLI is not on npm yet. Publishing is coming. For now, build it from{' '}
+              <a href="https://github.com/oortmem/oort" className="underline underline-offset-4">
+                the repo
+              </a>
+              .
+            </p>
             <Link
               to="/explorer"
               className="inline-block text-sm text-muted-foreground underline-offset-4 hover:underline"
             >
-              Try the Explorer companion app →
+              See the Explorer concept →
             </Link>
           </div>
         </div>
       </section>
 
       <section className="border-y border-border bg-card/40">
-        <div className="mx-auto grid max-w-7xl grid-cols-2 gap-6 px-6 py-10 md:grid-cols-4">
-          {[
-            ['< 100 ms', 'recall that feels instant'],
-            ['83–96%', 'lighter on memory'],
-            ['> 92%', 'old memories still found'],
-            ['6–8×', 'smaller long-term storage'],
-          ].map(([v, l], i) => (
-            <Reveal key={l} delay={i * 100}>
-              <p className="font-mono text-3xl">{v}</p>
-              <p className="text-sm text-muted-foreground">{l}</p>
-            </Reveal>
-          ))}
+        <div className="mx-auto max-w-7xl px-6 py-10">
+          <p className="font-mono text-xs uppercase tracking-widest text-photon-glow">
+            Measured, not promised
+          </p>
+          <div className="mt-6 grid grid-cols-2 gap-6 md:grid-cols-4">
+            {measured.map((m, i) => (
+              <Reveal key={m.label} delay={i * 100}>
+                <p className="font-mono text-3xl">{m.value}</p>
+                <p className="text-sm text-muted-foreground">{m.label}</p>
+                <p className="mt-1 text-[11px] leading-snug text-muted-foreground/80">{m.setup}</p>
+              </Reveal>
+            ))}
+          </div>
+          <p className="mt-6 text-[11px] text-muted-foreground/80">
+            Measured on a laptop with the local SQLite engine and 10,000 memories. Hosted numbers
+            are not measured yet.
+          </p>
         </div>
       </section>
 
       <section className="mx-auto max-w-7xl px-6 pt-24">
         <Reveal>
           <p className="font-mono text-xs uppercase tracking-widest text-photon-glow">
-            Watch it forget, gracefully
+            Watch memory move between tiers <PlannedBadge kind="Demo" className="ml-2" />
           </p>
           <h2 className="mt-3 max-w-2xl text-4xl font-semibold">
-            Every memory cools on its own schedule.
+            Consolidation moves memories between tiers.
           </h2>
           <p className="mt-3 max-w-xl text-muted-foreground">
-            Untouched facts drift outward and freeze. Recall one and it snaps straight back to the
-            hot core.
+            Untouched facts drift outward and go cold. Recall one and it comes back to the hot core.
+            This is an illustration, not live data.
           </p>
           <div className="mt-10">
             <DriftBand />
@@ -179,7 +204,7 @@ function Home() {
       <section className="mx-auto max-w-7xl px-6 py-24">
         <p className="font-mono text-xs uppercase tracking-widest text-photon-glow">Three orbits</p>
         <h2 className="mt-3 max-w-2xl text-4xl font-semibold">
-          Memory that heats up when used and freezes when forgotten.
+          Hot is ready, warm is searchable, cold is cheap.
         </h2>
         <div className="mt-12 grid gap-5 md:grid-cols-3">
           {tiers.map((t, i) => {
@@ -214,19 +239,19 @@ function Home() {
         <div className="mx-auto grid max-w-7xl items-center gap-14 px-6 py-24 lg:grid-cols-2">
           <Reveal className="space-y-5">
             <p className="font-mono text-xs uppercase tracking-widest text-photon-glow">
-              Oort Explorer
+              Oort Explorer <PlannedBadge className="ml-2" />
             </p>
             <h2 className="text-4xl font-semibold">See your memory as a sky.</h2>
             <p className="text-muted-foreground">
-              Ask in plain words and dive. Memories form constellations by topic, timelines trace
-              how ideas evolved, and anything you no longer want can be erased cryptographically in
-              one tap.
+              A planned app for exploring what your agent remembers. Memories form constellations by
+              topic and timelines show how facts changed. The demo below uses sample data. Today you
+              can inspect and forget memories from the CLI.
             </p>
             <Link
               to="/explorer"
               className="inline-block rounded-full border border-border px-5 py-2.5 text-sm hover:bg-secondary"
             >
-              Open the interactive demo
+              Open the concept demo
             </Link>
           </Reveal>
           <Reveal delay={150}>
@@ -239,29 +264,58 @@ function Home() {
         <div className="mx-auto grid max-w-7xl gap-10 px-6 py-24 md:grid-cols-2">
           <div>
             <Lock className="size-6 text-photon-glow" />
-            <h2 className="mt-4 text-4xl font-semibold">Every customer gets their own key.</h2>
+            <h2 className="mt-4 text-4xl font-semibold">
+              Privacy you can check today, more on the way.
+            </h2>
             <p className="mt-4 text-muted-foreground">
-              Built for customer-facing agents. Every person's memories are encrypted on their own
-              key, personal details stay hidden even from us, and one tap erases a person's hot,
-              warm and frozen memories for good.
+              Built for personal and customer-facing agents. Today, secrets are scrubbed before they
+              are saved and any single memory can be forgotten. Stronger controls are planned and
+              labelled below.
             </p>
           </div>
           <ul className="space-y-3 font-mono text-sm">
-            {[
-              "Each customer's memories encrypted separately",
-              'Bring your own keys — AWS, Google Cloud or Azure',
-              'Sensitive details filtered without being readable',
-              'Nothing left behind after erasure',
-              'Full erasure in one tap',
-            ].map((x) => (
+            {(
+              [
+                ['Secrets scrubbed before they are saved', false],
+                ['Forget any memory with oort forget', false],
+                ["Each customer's memories encrypted separately", true],
+                ['Bring your own keys: AWS, Google Cloud or Azure', true],
+                ['Erase everything a person left, cryptographically', true],
+                ['SOC 2 audit', true],
+              ] as const
+            ).map(([x, planned]) => (
               <li
                 key={x}
                 className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3"
               >
-                <Check className="size-4 text-photon-glow" /> {x}
+                <Check className="size-4 shrink-0 text-photon-glow" />
+                <span className="flex-1">{x}</span>
+                {planned && <PlannedBadge />}
               </li>
             ))}
           </ul>
+        </div>
+      </section>
+
+      <section className="border-t border-border">
+        <div className="mx-auto max-w-7xl px-6 py-24">
+          <p className="font-mono text-xs uppercase tracking-widest text-photon-glow">Roadmap</p>
+          <h2 className="mt-3 max-w-2xl text-4xl font-semibold">What is not built yet.</h2>
+          <div className="mt-10 grid gap-5 md:grid-cols-3">
+            {(
+              [
+                ['Python SDK', 'Planned', 'The engine and CLI are TypeScript today.'],
+                ['Desktop Explorer', 'Planned', 'A Tauri app to explore and edit memory.'],
+                ['iOS and Android companion', 'Concept', 'The phone demos show the idea only.'],
+              ] as const
+            ).map(([t, k, d]) => (
+              <div key={t} className="rounded-2xl border border-border bg-card p-6">
+                <PlannedBadge kind={k} />
+                <h3 className="mt-3 font-semibold">{t}</h3>
+                <p className="mt-2 text-sm text-muted-foreground">{d}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -269,14 +323,15 @@ function Home() {
         <div className="pointer-events-none absolute left-1/2 top-1/2 size-[520px] -translate-x-1/2 -translate-y-1/2 animate-orbit-slow rounded-full border border-dashed border-border" />
         <h2 className="text-4xl font-semibold">Running millions of customers?</h2>
         <p className="mx-auto mt-4 max-w-xl text-muted-foreground">
-          See how a global retailer runs personal shopping agents for 50M members on Oort.
+          Picture a retailer with 50M members and a personal shopping agent for each. Here is how
+          that could run on Oort. It is a hypothetical scenario, not a customer.
         </p>
         <div className="mt-8 flex justify-center gap-3">
           <Link
             to="/enterprise"
             className="rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground"
           >
-            Enterprise architecture
+            See the scenario
           </Link>
           <Link to="/pricing" className="rounded-full border border-border px-6 py-3 text-sm">
             See pricing
