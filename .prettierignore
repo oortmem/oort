@@ -5,7 +5,3 @@ LICENSE
 docs
 .superpowers
 .worktrees
-apps/site/src/routeTree.gen.ts
-apps/site/.output
-apps/site/.tanstack
-apps/site/.wrangler

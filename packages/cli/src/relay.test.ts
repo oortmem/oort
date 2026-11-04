@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { Observation } from '@oortmem/core';
 import { fakeIo, tmpdir } from '../test/helpers.js';
@@ -14,6 +13,7 @@ import {
   relayUrl,
 } from './relay.js';
 import { wire as realWire, type WireOptions } from './wire.js';
+import CONTRACT from '../test/relay-contract.json' with { type: 'json' };
 
 /** Assembled at runtime so no key literal sits in a source file. */
 const oortKey = (): string => ['oort', 'sk', `test${Date.now()}`.padEnd(43, 'A')].join('_');
@@ -271,16 +271,13 @@ describe('the oort provider', () => {
   });
 
   it('pro.relay-models-match-the-relay', async () => {
-    const relay = (await import(
-      pathToFileURL(
-        path.join(import.meta.dirname, '..', '..', '..', 'apps', 'relay', 'src', 'relay.ts'),
-      ).href
-    )) as { MODELS: Record<string, readonly string[]> };
-    expect([...RELAY_MODELS.embed]).toEqual([...(relay.MODELS['embed'] ?? [])]);
-    expect([...RELAY_MODELS.rerank]).toEqual([...(relay.MODELS['rerank'] ?? [])]);
-    expect([...RELAY_MODELS.write]).toEqual([...(relay.MODELS['messages'] ?? [])]);
+    // The relay lives in the private oortmem/oortcloud repo; both sides test against this contract.
+    expect([...RELAY_MODELS.embed]).toEqual(CONTRACT.models.embed);
+    expect([...RELAY_MODELS.rerank]).toEqual(CONTRACT.models.rerank);
+    expect([...RELAY_MODELS.write]).toEqual(CONTRACT.models.messages);
     const { RELAY_MODEL } = await import('@oortmem/decide-jev');
-    expect([RELAY_MODEL]).toEqual([...(relay.MODELS['decide'] ?? [])]);
+    expect([RELAY_MODEL]).toEqual(CONTRACT.models.decide);
+    expect(DEFAULT_RELAY_URL).toBe(CONTRACT.relayUrl);
   });
 });
 
@@ -331,74 +328,37 @@ describe('relay refusals in commands and hooks', () => {
   });
 });
 
-describe('contract with apps/relay', () => {
-  /** The relay's own modules, loaded by path (they live outside this package's tsconfig). */
-  async function relayModules() {
-    const src = path.join(import.meta.dirname, '..', '..', '..', 'apps', 'relay', 'src');
-    const load = async <T>(f: string): Promise<T> =>
-      (await import(pathToFileURL(path.join(src, f)).href)) as T;
-    const relay = await load<{
-      handleRelay: (
-        req: Request,
-        env: unknown,
-        ctx: { waitUntil(p: Promise<unknown>): void },
-        deps: { fetch: typeof fetch; now?: () => Date },
-      ) => Promise<Response>;
-    }>('relay.ts');
-    const keys = await load<{ hashKey: (k: string) => Promise<string> }>('keys.ts');
-    const d1 = await load<{
-      sqliteD1: () => {
-        prepare(sql: string): { bind(...v: unknown[]): { run(): Promise<unknown> } };
-      };
-    }>('test/d1-sqlite.ts');
-    return { ...relay, ...keys, ...d1 };
-  }
-
-  it('pro.adapters-speak-the-relay-routes-and-the-relay-uses-its-own-keys', async () => {
-    const { handleRelay, hashKey, sqliteD1 } = await relayModules();
+describe('contract with the relay (relay-contract.json)', () => {
+  it('pro.adapters-speak-the-relay-routes-with-the-oort-key', async () => {
     const key = oortKey();
-    const ours = {
-      VOYAGE_API_KEY: vendorKey('our-voyage'),
-      TYPESAFE_API_KEY: vendorKey('our-typesafe'),
-      ANTHROPIC_API_KEY: vendorKey('our-anthropic'),
-    };
-    const db = sqliteD1();
-    const now = new Date('2026-11-04T12:00:00Z');
-    await db
-      .prepare(
-        'INSERT INTO accounts (id, clerk_user_id, plan, status, created_at) VALUES (?, ?, ?, ?, ?)',
-      )
-      .bind('acc_1', 'user_1', 'pro', 'active', now.toISOString())
-      .run();
-    await db
-      .prepare(
-        'INSERT INTO api_keys (id, account_id, prefix, hash, name, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      )
-      .bind('key_1', 'acc_1', key.slice(0, 12), await hashKey(key), 'CLI', now.toISOString())
-      .run();
-    let rateOk = true;
-    const relayEnv = {
-      DB: db,
-      RATE_LIMITER: { limit: async () => ({ success: rateOk }) },
-      AUTH_LIMITER: { limit: async () => ({ success: true }) },
-      ...ours,
-    };
-    const upstream: { url: string; headers: Headers }[] = [];
-    // The vendors, faked: each answers in its documented shape.
-    const vendors = (async (input: string | URL | Request, init?: RequestInit) => {
+    const seen: { path: string; model: unknown; auth: string | null }[] = [];
+    let refuse: number | undefined;
+    // A stand-in relay that enforces the pinned contract, then answers like the vendors do.
+    const relay = (async (input: string | URL | Request, init?: RequestInit) => {
       const req = new Request(input, init);
-      upstream.push({ url: req.url, headers: req.headers });
-      if (req.url.endsWith('/v1/embeddings')) {
-        // Only this body is read: the TypeSafe SDK zstd-compresses bodies of 1 KB and up.
-        const input = (JSON.parse(await req.text()) as { input: string[] }).input;
+      const url = new URL(req.url);
+      expect(url.origin).toBe(CONTRACT.relayUrl);
+      expect(CONTRACT.routes).toContain(url.pathname);
+      expect(req.headers.get('authorization')).toBe(`Bearer ${key}`);
+      if (refuse !== undefined) return Response.json({ error: 'refused' }, { status: refuse });
+      const raw = await req.arrayBuffer();
+      let model: unknown;
+      try {
+        model = (JSON.parse(new TextDecoder().decode(raw)) as { model?: unknown }).model;
+      } catch {
+        model = undefined; // the TypeSafe SDK may compress its body; the relay pins that model
+      }
+      seen.push({ path: url.pathname, model, auth: req.headers.get('authorization') });
+      if (url.pathname.endsWith('/embeddings')) {
+        const n = (JSON.parse(new TextDecoder().decode(raw)) as { input: string[] }).input.length;
         return Response.json({
-          data: input.map((_, index) => ({ index, embedding: Array(512).fill(1) })),
+          data: Array.from({ length: n }, (_, index) => ({ index, embedding: Array(512).fill(1) })),
         });
       }
-      if (req.url.endsWith('/v1/rerank')) {
+      if (url.pathname.endsWith('/rerank')) {
         return Response.json({ data: [{ index: 0, relevance_score: 0.7 }] });
       }
-      if (req.url.endsWith('/v1/systemone')) {
+      if (url.pathname.endsWith('/systemone')) {
         const noul = (p: number) => ({ type: 'noul', noul: p });
         return Response.json({
           answers: {
@@ -433,19 +393,8 @@ describe('contract with apps/relay', () => {
         usage: { input_tokens: 1, output_tokens: 1 },
       });
     }) as typeof fetch;
-    const pending: Promise<unknown>[] = [];
-    const viaRelay = (async (input: string | URL | Request, init?: RequestInit) => {
-      const res = await handleRelay(
-        new Request(input, init),
-        relayEnv,
-        { waitUntil: (p) => void pending.push(p) },
-        { fetch: vendors, now: () => now },
-      );
-      await Promise.all(pending.splice(0));
-      return res;
-    }) as typeof fetch;
 
-    const w = await wired(env({ OORT_API_KEY: key }), { fetch: viaRelay });
+    const w = await wired(env({ OORT_API_KEY: key }), { fetch: relay });
     const [vec] = (await w.embed?.embed(['q'], 'query')) ?? [];
     expect(vec?.length).toBe(512);
     expect(await w.rerank?.rerank('q', [{ id: 'a', text: 'a' }], 1)).toEqual([
@@ -453,29 +402,18 @@ describe('contract with apps/relay', () => {
     ]);
     expect((await w.decide?.gate(obs))?.shouldStore).toBeCloseTo(0.9);
     expect((await w.write?.write(obs, 'ADD'))?.text).toBe('The service deploys on port 8443.');
-    expect(upstream.map((u) => u.url)).toEqual([
-      'https://api.voyageai.com/v1/embeddings',
-      'https://api.voyageai.com/v1/rerank',
-      'https://api.typesafe.ai/v1/systemone',
-      'https://api.anthropic.com/v1/messages',
-    ]);
-    for (const u of upstream) {
-      const sent = `${u.headers.get('authorization') ?? ''} ${u.headers.get('x-api-key') ?? ''}`;
-      expect(sent).not.toContain(key);
-    }
+    expect(seen.map((s) => s.path)).toEqual(CONTRACT.routes);
+    const byPath = Object.fromEntries(seen.map((s) => [s.path, s.model]));
+    expect(CONTRACT.models.embed).toContain(byPath['/v1/voyage/embeddings']);
+    expect(CONTRACT.models.rerank).toContain(byPath['/v1/voyage/rerank']);
+    expect(CONTRACT.models.messages).toContain(byPath['/v1/anthropic/v1/messages']);
 
-    // The relay's refusals reach the CLI as OortRelayError.
-    rateOk = false;
-    const limited = await w.embed?.embed(['q'], 'query').catch((e: unknown) => e);
-    expect((limited as OortRelayError).kind).toBe('rate-limit');
-    rateOk = true;
-    await db.prepare("UPDATE accounts SET status = 'canceled'").bind().run();
-    const unpaid = await w.write?.write(obs, 'ADD').catch((e: unknown) => e);
-    expect((unpaid as OortRelayError).kind).toBe('payment-required');
-    await db.prepare('UPDATE api_keys SET revoked_at = ?').bind(now.toISOString()).run();
-    const revoked = await w.decide?.gate(obs).catch((e: unknown) => e);
-    expect((revoked as OortRelayError).kind).toBe('unauthorized');
+    // The relay's refusals reach the CLI as OortRelayError, with the contract's kinds.
+    for (const [status, kind] of Object.entries(CONTRACT.refusals)) {
+      refuse = Number(status);
+      const err = await w.write?.write(obs, 'ADD').catch((e: unknown) => e);
+      expect((err as OortRelayError).kind).toBe(kind);
+    }
     await w.close();
-    // Voyage waits out the relay's Retry-After (capped at 5 s) once before the 429 sticks.
   }, 20_000);
 });

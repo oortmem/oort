@@ -95,7 +95,7 @@ flowchart LR
 | [`@oortmem/rerank-voyage`](packages/rerank-voyage) | Reranking through Voyage AI                                                                    |
 | [`@oortmem/claude-code`](packages/claude-code)     | Claude Code hooks and transcript import                                                        |
 
-`apps/` holds the website and the Oort Pro relay. They are not published and the engine does not depend on them.
+This repo is the open-source engine and CLI only. The hosted side (oortcloud.dev and the Oort Pro relay) is a separate service; the engine and CLI reach it only over HTTPS when you use Oort Pro.
 
 ## Keys, or Oort Pro
 

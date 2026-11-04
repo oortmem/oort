@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fakeSite, type FakeSite } from '../../test/fake-site.js';
 import { fakeIo, memoryKeychain, tmpdir } from '../../test/helpers.js';
@@ -8,6 +7,7 @@ import { createKeychain, type Keychain } from '../keychain.js';
 import { runCli } from '../program.js';
 import type { WireFn } from '../wire.js';
 import { challengeOf, newSecret, thisSystem, type LoginDeps } from './login.js';
+import CONTRACT from '../../test/relay-contract.json' with { type: 'json' };
 
 const noWire: WireFn = async () => {
   throw new Error('login must not open the store');
@@ -104,28 +104,13 @@ describe('oort login', () => {
     expect(r.io.stdout + r.io.stderr).not.toContain(s.sessions[0]!.challenge);
   });
 
-  it('login.challenge-is-the-sites-challenge', async () => {
-    const keys = (await import(
-      pathToFileURL(
-        path.join(
-          import.meta.dirname,
-          '..',
-          '..',
-          '..',
-          '..',
-          'apps',
-          'site',
-          'src',
-          'server',
-          'keys.ts',
-        ),
-      ).href
-    )) as { challengeOf: (secret: string) => Promise<string | null> };
-    for (let i = 0; i < 5; i++) {
-      const raw = newSecret();
-      expect(raw).toHaveLength(32);
-      expect(await keys.challengeOf(Buffer.from(raw).toString('base64url'))).toBe(challengeOf(raw));
+  it('login.challenge-is-the-sites-challenge', () => {
+    // The site (private oortmem/oortcloud) tests its challengeOf against the same vectors.
+    for (const v of CONTRACT.loginChallenge.vectors) {
+      expect(challengeOf(Buffer.from(v.secret, 'base64url'))).toBe(v.challenge);
     }
+    const raw = newSecret();
+    expect(raw).toHaveLength(32);
   });
 
   it('login.reports-this-computers-os-and-host-name', async () => {

@@ -1,0 +1,42 @@
+{
+  "$comment": "The contract between the open-source CLI (oortmem/oort) and the hosted relay and site (oortmem/oortcloud). Both repos test themselves against this file; keep the two copies identical.",
+  "relayUrl": "https://relay.oortcloud.dev",
+  "routes": [
+    "/v1/voyage/embeddings",
+    "/v1/voyage/rerank",
+    "/v1/typesafe/v1/systemone",
+    "/v1/anthropic/v1/messages"
+  ],
+  "models": {
+    "embed": ["voyage-3.5-lite"],
+    "rerank": ["rerank-3-lite", "rerank-2.5-lite"],
+    "messages": ["claude-haiku-5-5"],
+    "decide": ["jev-latest"]
+  },
+  "refusals": {
+    "401": "unauthorized",
+    "402": "payment-required",
+    "429": "rate-limit"
+  },
+  "loginChallenge": {
+    "$comment": "The CLI keeps 32 random bytes S, sends base64url(S) when polling; the site stores base64url(SHA-256(S)).",
+    "vectors": [
+      {
+        "secret": "e4YSBKvMKvedu_7lTYiLAQxSA6W7JYXUr2hyWX1jwrQ",
+        "challenge": "PBAnIkU26VPhHht0wWTnIFBEFGxYfpsSwTInsvORz7c"
+      },
+      {
+        "secret": "epuAL7yIPE4hG8jhyCx63NcEDNb5MJd6tSnpZUSU_ok",
+        "challenge": "Jj59nF_Q8TzwMcnPPEcDoOUN3yxVqTy759991zkwNq8"
+      },
+      {
+        "secret": "I5OeePa-iKtNCv71GRFn2v7NnYd-3gpsMD-uLzeGw8g",
+        "challenge": "C6HiKvIdKGDl-ETnEPK5VD_yoInQcUErhEXrptWxVag"
+      },
+      {
+        "secret": "PEzVs9m0eiZu4etDSpNAN2h3T0qSGsc1fjof6bcDj1I",
+        "challenge": "VOmkLAbzkYhNkqnGgotX9aeiDlLmHsPyOcfJRql0Kw4"
+      }
+    ]
+  }
+}

@@ -1,4 +1,0 @@
-# Copy to .dev.vars (git-ignored) for `wrangler dev`. Use test or throwaway keys locally.
-VOYAGE_API_KEY=pa-replace-me
-TYPESAFE_API_KEY=replace-me
-ANTHROPIC_API_KEY=sk-ant-replace-me
