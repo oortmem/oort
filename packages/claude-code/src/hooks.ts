@@ -35,8 +35,8 @@ export interface HookOutput {
   exitCode: 0;
 }
 
-/** Full recall gets this long before the hook falls back to lexical-only recall. */
-export const RECALL_TIMEOUT_MS = 2500;
+/** Full recall gets this long before the hook falls back to lexical-only recall (CON-57: was 2.5 s). */
+export const RECALL_TIMEOUT_MS = 1500;
 /** At most this many observations are queued per Stop (the newest). */
 export const STOP_MAX_OBSERVATIONS = 20;
 /** Claude Code moves a longer `additionalContext` to a file and injects only a preview. */
@@ -145,6 +145,10 @@ export async function handleUserPromptSubmit(
       result = await recall(q, { store, config, now });
     }
     entry.timings['recallMs'] = performance.now() - t;
+    // Per-stage timings from recall (numbers only), so slow stages show in the log (CON-57).
+    for (const [k, ms] of Object.entries(result.timings)) {
+      if (k !== 'totalMs' && k !== 'gateMs') entry.timings[k] = ms;
+    }
     degraded.push(...(result.degraded ?? []));
     entry.degraded = [...new Set(degraded)];
     const text = formatForInjection(
@@ -152,8 +156,16 @@ export async function handleUserPromptSubmit(
       Math.min(config.recall.budgetChars, CONTEXT_MAX_CHARS),
       now,
     );
-    entry.counts = { memories: result.memories.length, chars: text.length };
-    entry.outcome = text.length > 0 ? 'injected' : 'empty';
+    entry.counts = {
+      memories: result.memories.length,
+      chars: text.length,
+      ...(result.abstained === true && { abstained: 1 }),
+      ...(result.gate !== undefined && { gateDropped: result.gate.dropped }),
+      ...(result.rerankSkipped !== undefined && { rerankSkipped: 1 }),
+    };
+    // Abstained: candidates were found but none was relevant enough, so nothing is injected.
+    entry.outcome =
+      text.length > 0 ? 'injected' : result.abstained === true ? 'abstained' : 'empty';
     return contextOutput('UserPromptSubmit', text);
   });
 }
@@ -238,6 +250,7 @@ export async function handleSessionStart(
         explanation: {
           fused: 0,
           rrf: 0,
+          coverage: 0,
           activation: activation(m.accessLog, m.salience, now, config.activation),
           hydrated: false,
         },

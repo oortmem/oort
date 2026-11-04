@@ -10,6 +10,7 @@ export * from './memory-store.js';
 export * from './tokenize.js';
 export * from './gate.js';
 export * from './recall.js';
+export * from './relevance.js';
 export * from './observe.js';
 export * from './scrub.js';
 export * from './cap.js';

@@ -101,6 +101,22 @@ describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
     expect(r.memories[0]?.why).toMatch(/lexical/);
   });
 
+  it('mcp.recall-says-plainly-when-nothing-is-relevant', async () => {
+    // Lexical-only: the harness's fake embedder gives every text the same vector.
+    const { client, h } = await connect(era, { adapters: false });
+    await h.store.upsert(TG, memory());
+    // "auth" matches, but nothing stored is about a rollback plan or a budget.
+    const found = await client.callTool({
+      name: 'recall',
+      arguments: { query: 'what is the rollback plan for the auth migration budget' },
+    });
+    expect(found.isError).not.toBe(true);
+    const r = json<{ memories: unknown[]; abstained?: boolean; note?: string }>(found);
+    expect(r.memories).toEqual([]);
+    expect(r.abstained).toBe(true);
+    expect(r.note).toMatch(/no relevant memories/i);
+  });
+
   it('mcp.forget-requires-an-id', async () => {
     const { client, h } = await connect(era);
     const { tools } = await client.listTools();

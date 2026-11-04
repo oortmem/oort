@@ -8,6 +8,7 @@ import { ACKNOWLEDGMENTS, shouldRecall } from './gate.js';
 import { createMemoryStore } from './memory-store.js';
 import type { Memory } from './model.js';
 import { formatForInjection, recall, type RecallResult } from './recall.js';
+import { informativeTokens, queryCoverage } from './relevance.js';
 import { makeMemory, seedCold, vec } from './store-conformance.js';
 import { TG } from './store-conformance.js';
 import { localGrant } from './grant.js';
@@ -179,7 +180,8 @@ describe('recall', () => {
     const rerank: Reranker = { rerank: () => Promise.reject(new Error('boom')) };
     const r = await recall(
       { text: 'auth port 8080', scope: SCOPE },
-      { store, embed, rerank, config },
+      // Rerank is forced on: a clear lexical match would otherwise skip it.
+      { store, embed, rerank, config: withRecall({ skipRerankWhenConfident: false }) },
     );
     expect(r.degraded).toEqual(['embed-failed', 'rerank-failed']);
     expect(r.memories.map((m) => m.id)).toEqual(['a']);
@@ -233,7 +235,10 @@ describe('recall', () => {
     ]);
     const plain = await recall({ text: 'auth port 8080', scope: SCOPE }, { store, config });
     const rerank: Reranker = { rerank: async () => [] };
-    const r = await recall({ text: 'auth port 8080', scope: SCOPE }, { store, rerank, config });
+    const r = await recall(
+      { text: 'auth port 8080', scope: SCOPE },
+      { store, rerank, config: withRecall({ skipRerankWhenConfident: false }) },
+    );
     expect(r.memories.map((m) => m.id)).toEqual(plain.memories.map((m) => m.id));
     expect(r.memories).toHaveLength(2);
     expect(r.degraded).toContain('rerank-empty');
@@ -308,6 +313,192 @@ describe('recall', () => {
   });
 });
 
+const withRecall = (over: Partial<typeof config.recall>) => ({
+  ...config,
+  recall: { ...config.recall, ...over },
+});
+
+/** A reranker that scores each document by a lookup on its id, counting calls. */
+function scoredReranker(scores: Record<string, number>): Reranker & { calls: number } {
+  const r = {
+    calls: 0,
+    async rerank(_q: string, docs: { id: string; text: string }[]) {
+      r.calls++;
+      return docs
+        .map((d) => ({ id: d.id, score: scores[d.id] ?? 0 }))
+        .sort((a, b) => b.score - a.score);
+    },
+  };
+  return r;
+}
+
+describe('relevance', () => {
+  it('relevance.stopwords-and-question-words-do-not-count', () => {
+    expect([...informativeTokens('which library does the queue runner use for auth?')]).toEqual([
+      'library',
+      'queue',
+      'runner',
+      'auth',
+    ]);
+    // Joined tokens also count by their parts.
+    expect(informativeTokens('auth-service-8080')).toEqual(
+      new Set(['auth-service-8080', 'auth', 'service', '8080']),
+    );
+  });
+
+  it('relevance.coverage-is-the-share-of-query-words-a-memory-contains', () => {
+    const m = makeMemory({ id: 'a', text: 'the queue runner validates input with zod' });
+    expect(queryCoverage(informativeTokens('queue runner zod'), m)).toBe(1);
+    expect(queryCoverage(informativeTokens('queue billing rollback zod'), m)).toBe(0.5);
+    expect(queryCoverage(informativeTokens('the for which'), m)).toBe(0);
+  });
+});
+
+describe('relevance gate (CON-45)', () => {
+  it('gate.abstains-when-every-rerank-score-is-weak', async () => {
+    const store = await setup([
+      makeMemory({ id: 'a', text: 'auth port 8080' }),
+      makeMemory({ id: 'b', text: 'auth port 9090' }),
+    ]);
+    const rerank = scoredReranker({ a: 0.05, b: 0.1 });
+    const r = await recall({ text: 'auth port', scope: SCOPE }, { store, rerank, config });
+    expect(r.memories).toEqual([]);
+    expect(r.abstained).toBe(true);
+    expect(r.gate).toEqual({ by: 'rerank', threshold: config.recall.minRerankScore, dropped: 2 });
+  });
+
+  it('gate.keeps-only-memories-above-the-rerank-threshold', async () => {
+    const store = await setup([
+      makeMemory({ id: 'a', text: 'auth port 8080' }),
+      makeMemory({ id: 'b', text: 'auth port 9090' }),
+    ]);
+    const rerank = scoredReranker({ a: 0.9, b: 0.1 });
+    const r = await recall({ text: 'auth port', scope: SCOPE }, { store, rerank, config });
+    expect(r.memories.map((m) => m.id)).toEqual(['a']);
+    expect(r.abstained).toBeUndefined();
+    expect(r.gate?.dropped).toBe(1);
+  });
+
+  it('gate.without-a-reranker-uses-query-word-coverage', async () => {
+    const store = await setup([
+      makeMemory({ id: 'full', text: 'the billing worker retries webhooks three times' }),
+      makeMemory({ id: 'weak', text: 'the search worker caches results' }),
+    ]);
+    const r = await recall(
+      { text: 'billing worker webhooks retries', scope: SCOPE },
+      { store, config },
+    );
+    expect(r.memories.map((m) => m.id)).toEqual(['full']);
+    expect(r.memories[0]?.explanation.coverage).toBe(1);
+    expect(r.gate).toEqual({ by: 'coverage', threshold: config.recall.minCoverage, dropped: 1 });
+
+    const none = await recall(
+      { text: 'who approved the quarterly budget for the search gateway', scope: SCOPE },
+      { store, config },
+    );
+    expect(none.memories).toEqual([]);
+    expect(none.abstained).toBe(true);
+  });
+
+  it('gate.strong-dense-match-passes-without-shared-words', async () => {
+    const store = await setup([
+      makeMemory({ id: 'p', text: 'we shipped the login rewrite', embedding: vec(100, 0, 0, 0) }),
+    ]);
+    const embed = fakeEmbedder([['authentication', vec(100, 0, 0, 0)]]);
+    const r = await recall(
+      { text: 'authentication overhaul', scope: SCOPE },
+      { store, embed, config },
+    );
+    expect(r.memories.map((m) => m.id)).toEqual(['p']);
+    expect(r.memories[0]?.explanation.coverage).toBe(0);
+  });
+
+  it('gate.zero-thresholds-switch-it-off', async () => {
+    const store = await setup([makeMemory({ id: 'weak', text: 'the search worker caches' })]);
+    const off = withRecall({ minCoverage: 0, minRerankScore: 0, minDenseScore: 0 });
+    const r = await recall(
+      { text: 'search budget approval policy', scope: SCOPE },
+      { store, config: off },
+    );
+    expect(r.memories.map((m) => m.id)).toEqual(['weak']);
+    expect(r.gate).toBeUndefined();
+  });
+});
+
+describe('conditional rerank (CON-57)', () => {
+  const both = vec(100, 0, 0, 0);
+  async function agreed(): Promise<{ store: MemoryStore; embed: Embedder }> {
+    const store = await setup([
+      makeMemory({ id: 'top', text: 'auth listens on port 8080', embedding: both }),
+      makeMemory({ id: 'other', text: 'auth notes', embedding: vec(0, 100, 0, 0) }),
+    ]);
+    return { store, embed: fakeEmbedder([['8080', both]]) };
+  }
+
+  it('rerank.skipped-when-fusion-is-confident', async () => {
+    const { store, embed } = await agreed();
+    const rerank = scoredReranker({ top: 0.9, other: 0.9 });
+    const r = await recall(
+      { text: 'auth port 8080 listens', scope: SCOPE },
+      { store, embed, rerank, config },
+    );
+    expect(rerank.calls).toBe(0);
+    expect(r.rerankSkipped).toBe('confident');
+    expect(r.memories[0]?.id).toBe('top');
+    expect(r.memories[0]?.explanation.reranked).toBeUndefined();
+  });
+
+  it('rerank.runs-when-fusion-is-close', async () => {
+    const v = vec(100, 0, 0, 0);
+    const store = await setup([
+      makeMemory({ id: 'a', text: 'auth port 8080 on staging', embedding: v }),
+      makeMemory({ id: 'b', text: 'auth port 8080 on prod', embedding: vec(99, 5, 0, 0) }),
+    ]);
+    const embed = fakeEmbedder([['8080', v]]);
+    const rerank = scoredReranker({ a: 0.4, b: 0.9 });
+    const r = await recall(
+      { text: 'auth port 8080', scope: SCOPE },
+      { store, embed, rerank, config },
+    );
+    expect(rerank.calls).toBe(1);
+    expect(r.rerankSkipped).toBeUndefined();
+    expect(r.memories.map((m) => m.id)).toEqual(['b', 'a']);
+  });
+
+  it('rerank.always-runs-when-the-switch-is-off', async () => {
+    const { store, embed } = await agreed();
+    const rerank = scoredReranker({ top: 0.9 });
+    await recall(
+      { text: 'auth port 8080 listens', scope: SCOPE },
+      { store, embed, rerank, config: withRecall({ skipRerankWhenConfident: false }) },
+    );
+    expect(rerank.calls).toBe(1);
+  });
+
+  it('recall.lexical-runs-while-the-query-embeds', async () => {
+    const store = await setup([makeMemory({ id: 'a', text: 'auth port 8080' })]);
+    let lexicalStarted = false;
+    let lexicalBeforeEmbed = false;
+    const spy: MemoryStore = {
+      ...store,
+      lexical: (...args) => {
+        lexicalStarted = true;
+        return store.lexical(...args);
+      },
+    };
+    const embed: Embedder = {
+      dimension: 4,
+      async embed() {
+        await new Promise((r) => setTimeout(r, 20));
+        lexicalBeforeEmbed = lexicalStarted;
+        return [vec(100, 0, 0, 0)];
+      },
+    };
+    await recall({ text: 'auth port 8080', scope: SCOPE }, { store: spy, embed, config });
+    expect(lexicalBeforeEmbed).toBe(true);
+  });
+});
+
 describe('format', () => {
   const now = new Date('2026-11-03T12:00:00Z');
   const mk = (
@@ -321,7 +512,7 @@ describe('format', () => {
       text,
       validFrom: new Date(now.getTime() - daysAgo * DAY).toISOString(),
     }),
-    explanation: { fused: 0, rrf: 0, activation: 0, hydrated: false },
+    explanation: { fused: 0, rrf: 0, coverage: 0, activation: 0, hydrated: false },
   });
 
   it('format.empty', () => {

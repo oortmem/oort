@@ -47,8 +47,32 @@ const recall = z
     rerankK: z.number().int().positive().default(30),
     returnK: z.number().int().positive().default(10),
     budgetChars: z.number().int().positive().default(6000),
+    /**
+     * Relevance gate (CON-45). A reranked memory needs at least this reranker score, from 0 to 1.
+     * Provisional until calibrated with real scores (`pnpm --filter @oortmem/bench run calibrate`).
+     */
+    minRerankScore: z.number().min(0).max(1).default(0.35),
+    /**
+     * Without a rerank score, a memory needs this share of the query's informative words, or a
+     * dense similarity of at least `minDenseScore`. Calibrated on the bench eval fixture.
+     */
+    minCoverage: z.number().min(0).max(1).default(0.5),
+    /** Dense (cosine) similarity that lets a memory through without shared words. Provisional. */
+    minDenseScore: z.number().min(0).max(1).default(0.6),
+    /** Skip the rerank call when lexical and dense agree on a clear top result (CON-57). */
+    skipRerankWhenConfident: z.boolean().default(true),
   })
-  .default({ lexicalK: 50, denseK: 50, rerankK: 30, returnK: 10, budgetChars: 6000 });
+  .default({
+    lexicalK: 50,
+    denseK: 50,
+    rerankK: 30,
+    returnK: 10,
+    budgetChars: 6000,
+    minRerankScore: 0.35,
+    minCoverage: 0.5,
+    minDenseScore: 0.6,
+    skipRerankWhenConfident: true,
+  });
 
 const project = z
   .strictObject({

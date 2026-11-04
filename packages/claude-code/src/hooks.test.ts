@@ -21,7 +21,13 @@ import {
   writeTranscript,
   type TempHome,
 } from '../test/helpers.js';
-import { handleSessionStart, handleStop, handleUserPromptSubmit, runHook } from './hooks.js';
+import {
+  RECALL_TIMEOUT_MS,
+  handleSessionStart,
+  handleStop,
+  handleUserPromptSubmit,
+  runHook,
+} from './hooks.js';
 import { createHookLogger } from './log.js';
 import { TG } from '@oortmem/core/store-conformance';
 
@@ -123,6 +129,31 @@ describe('UserPromptSubmit', () => {
     expect(readLog(t.home)[0]?.outcome).toBe('empty');
   });
 
+  it('hook.prompt-injects-nothing-when-recall-abstains', async () => {
+    const t = tempHome();
+    const deps = await withMemories(t, PORT_MEMORY);
+    // "auth" matches, but the memory says nothing about a rollback plan or a budget.
+    const out = await handleUserPromptSubmit(
+      prompt(t, 'what is the rollback plan for the auth migration budget?'),
+      deps,
+    );
+    expect(out).toEqual({ stdout: '', exitCode: 0 });
+    const [line] = readLog(t.home);
+    expect(line?.outcome).toBe('abstained');
+    expect(line?.counts).toMatchObject({ memories: 0, abstained: 1, gateDropped: 1 });
+  });
+
+  it('hook.log-records-per-stage-timings', async () => {
+    const t = tempHome();
+    const deps = await withMemories(t, PORT_MEMORY);
+    await handleUserPromptSubmit(prompt(t, 'which port does the auth service use?'), deps);
+    const [line] = readLog(t.home);
+    for (const k of ['embedMs', 'lexicalMs', 'denseMs', 'hydrateMs', 'fuseMs', 'rerankMs']) {
+      expect(typeof line?.timings[k]).toBe('number');
+    }
+    expect(typeof line?.timings['recallMs']).toBe('number');
+  });
+
   it('hook.degrades-without-network', async () => {
     const t = tempHome();
     const deps = await withMemories(t, PORT_MEMORY);
@@ -132,6 +163,8 @@ describe('UserPromptSubmit', () => {
     };
     const out = await handleUserPromptSubmit(prompt(t, 'which port does the auth service use?'), {
       ...deps,
+      // Rerank is forced on: one memory holding every prompt word would otherwise skip it.
+      config: { ...deps.config, recall: { ...deps.config.recall, skipRerankWhenConfident: false } },
       embed: down,
       rerank: { rerank: () => Promise.reject(new Error('ECONNREFUSED')) },
     });
@@ -167,10 +200,11 @@ describe('UserPromptSubmit', () => {
     });
     let settled = false;
     void pending.then(() => (settled = true));
-    await vi.advanceTimersByTimeAsync(2499);
+    await vi.advanceTimersByTimeAsync(RECALL_TIMEOUT_MS - 1);
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     const out = await pending;
+    expect(RECALL_TIMEOUT_MS).toBe(1500);
     expect(out.exitCode).toBe(0);
     expect(context(out.stdout, 'UserPromptSubmit')).toContain('port 4471');
     // The lexical retry used neither the embedder nor the reranker.

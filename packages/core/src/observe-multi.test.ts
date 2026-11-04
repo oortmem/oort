@@ -166,12 +166,14 @@ describe('observe with a multi-memory writer (CON-56)', () => {
     expect(spy.write).toBe(0);
     expect(spy.embeds).toHaveLength(1);
     expect(spy.embeds[0]).toHaveLength(3);
-    const stored = await store.list(localGrant({
-      orgId: scope.orgId,
-      customerId: scope.customerId,
-      agentId: scope.agentId,
-      projectIds: [null],
-    }));
+    const stored = await store.list(
+      localGrant({
+        orgId: scope.orgId,
+        customerId: scope.customerId,
+        agentId: scope.agentId,
+        projectIds: [null],
+      }),
+    );
     expect(stored.map((m) => m.text).sort()).toEqual([
       'CI on main is green.',
       'pnpm is the package manager.',

@@ -132,6 +132,14 @@ export function createOortServer(deps: OortServerDeps): McpServer {
         });
         const lexicalOnly = w.embed === undefined || w.rerank === undefined;
         const refused = w.relayErrors?.at(-1);
+        if (result.abstained === true) {
+          // Candidates were found, but none answers the question: say so rather than hand over noise.
+          return ok({
+            memories: [],
+            abstained: true,
+            note: 'No relevant memories: nothing stored answers this. Answer without memory.',
+          });
+        }
         return ok({
           memories,
           ...(refused !== undefined

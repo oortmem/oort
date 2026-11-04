@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { localScope, tokenizeLexical, type Memory } from '@oortmem/core';
 import { makeMemory, seedCold, vec } from '@oortmem/core/store-conformance';
@@ -9,7 +10,9 @@ import Database from 'better-sqlite3';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import { loadEvalRows, runEval, type EvalRow } from './eval.js';
 import { buildFixtureRows, FIXTURE_COUNT, FIXTURE_SEED } from './fixture.js';
-import { generateMemories } from './generate.js';
+import { fakeEmbedder } from './fake-embed.js';
+import { GENERATOR_NOW, generateMemories } from './generate.js';
+import { seedStore } from './seed.js';
 import { TG } from '@oortmem/core/store-conformance';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-bench-eval-'));
@@ -261,6 +264,38 @@ describe('eval', () => {
       (await runEval({ ...base, abstainThreshold: -10 })).groups['abstention']?.abstainFp,
     ).toBe(1);
   });
+
+  it('eval.relevance-gate-on-the-demo-fixture', async () => {
+    // CON-45 acceptance: abstention false positives at most 0.1, single-fact recall@5 down by at
+    // most 0.05 against no gate. Lexical-only and with the fake dense path.
+    const dir = fs.mkdtempSync(path.join(root, 'demo-'));
+    const dbPath = path.join(dir, 'oort.sqlite');
+    const coldDir = path.join(dir, 'cold');
+    const store = await openSqliteStore({ path: dbPath, coldDir, dimension: 512, log: () => {} });
+    await seedStore(store, generateMemories(FIXTURE_COUNT, FIXTURE_SEED));
+    await store.close();
+    const { rows } = loadEvalRows(
+      fs.readFileSync(fileURLToPath(new URL('../eval/fixture.jsonl', import.meta.url)), 'utf8'),
+    );
+    for (const embed of [undefined, fakeEmbedder(512)]) {
+      const base = {
+        rows,
+        storePath: dbPath,
+        coldDir,
+        now: GENERATOR_NOW,
+        ...(embed !== undefined && { embed }),
+      };
+      const gated = await runEval(base);
+      const open = await runEval({ ...base, gate: false });
+      expect(open.groups['abstention']?.abstainFp).toBe(1);
+      expect(gated.groups['abstention']?.abstainFp).toBeLessThanOrEqual(0.1);
+      const r5 = (r: typeof gated) => r.groups['single-fact']?.recallAt[5] ?? 0;
+      expect(r5(gated)).toBeGreaterThanOrEqual(r5(open) - 0.05);
+      expect(gated.groups['overall']?.recallAt[5]).toBeGreaterThanOrEqual(
+        (open.groups['overall']?.recallAt[5] ?? 0) - 0.05,
+      );
+    }
+  }, 60_000);
 
   it('fixture.single-fact-questions-have-unique-answers', () => {
     const memories = generateMemories(FIXTURE_COUNT, FIXTURE_SEED);
