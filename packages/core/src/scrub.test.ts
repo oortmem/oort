@@ -192,20 +192,22 @@ describe('scrub', () => {
         lines(() => `github.com/someorg/somepackage/v2 v2.3.${rnd(9)} h1:${rand(43, b64)}=`),
       ],
     ];
-    const median = (text: string): number => {
-      const ms: number[] = [];
-      for (let i = 0; i < 3; i++) {
+    // The fastest of five runs: contention only ever adds time, so the minimum is
+    // the estimate least distorted by a busy machine (a median of three was not).
+    const fastest = (text: string): number => {
+      let best = Infinity;
+      for (let i = 0; i < 5; i++) {
         const t = performance.now();
         scrub(text);
-        ms.push(performance.now() - t);
+        best = Math.min(best, performance.now() - t);
       }
-      return ms.sort((a, b) => a - b)[1] as number;
+      return best;
     };
     for (const [label, make] of inputs) {
       const small = make(MB / 2);
       const large = make(2 * MB);
       scrub(small); // warm up
-      const ratio = median(large) / median(small);
+      const ratio = fastest(large) / fastest(small);
       expect(ratio, `${label}: t(2 MB) / t(0.5 MB)`).toBeLessThan(6);
     }
   });
