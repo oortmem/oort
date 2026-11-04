@@ -110,6 +110,11 @@ function Arch() {
           ))}
         </div>
 
+        <p className="mt-6 text-sm text-muted-foreground">
+          Tiers say how warm a memory is. Planned spaces (Star, Constellation, Galaxy, Planet) say
+          whose it is. <PlannedBadge />
+        </p>
+
         <div className="mt-16 grid gap-6 md:grid-cols-2">
           {[
             ['UserPromptSubmit · read hook', 'Runs before the prompt is sent', readSteps],

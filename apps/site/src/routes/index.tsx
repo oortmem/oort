@@ -298,6 +298,40 @@ function Home() {
         </div>
       </section>
 
+      <section className="border-t border-border bg-card/40">
+        <div className="mx-auto max-w-7xl px-6 py-24">
+          <p className="font-mono text-xs uppercase tracking-widest text-photon-glow">
+            Shared memory <PlannedBadge className="ml-2" />
+          </p>
+          <h2 className="mt-3 max-w-2xl text-4xl font-semibold">
+            From one Star to a whole Galaxy.
+          </h2>
+          <p className="mt-3 max-w-2xl text-muted-foreground">
+            Tiers say how warm a memory is. These names say whose it is. Memory sharing between
+            agents is planned and not built yet.
+          </p>
+          <div className="mt-10 grid gap-5 md:grid-cols-2 lg:grid-cols-5">
+            {(
+              [
+                ['Star', "One agent's own memory."],
+                ['Constellation', 'A team of agents sharing memory.'],
+                ['Galaxy', "The organisation's shared memory."],
+                ['Planet', "An end user's own memory. It belongs to that person."],
+                [
+                  'Uplink',
+                  "A Star's finding joins its Constellation, with a record of where it came from. A person's private facts never uplink without permission.",
+                ],
+              ] as const
+            ).map(([t, d]) => (
+              <div key={t} className="rounded-2xl border border-border bg-card p-6">
+                <h3 className="font-semibold">{t}</h3>
+                <p className="mt-2 text-sm text-muted-foreground">{d}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section className="border-t border-border">
         <div className="mx-auto max-w-7xl px-6 py-24">
           <p className="font-mono text-xs uppercase tracking-widest text-photon-glow">Roadmap</p>
