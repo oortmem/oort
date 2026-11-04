@@ -13,6 +13,7 @@ import type { ReactNode } from 'react';
 
 import { beaconScripts, beaconToken } from '../lib/analytics';
 import { clerkEnabled, clerkPublishableKey } from '../lib/clerk';
+import { logStatus } from '../lib/log';
 import appCss from '../styles.css?url';
 
 function NotFoundComponent() {
@@ -37,8 +38,9 @@ function NotFoundComponent() {
   );
 }
 
-function ErrorComponent({ error, reset }: ErrorComponentProps) {
-  console.error(error);
+function ErrorComponent({ reset }: ErrorComponentProps) {
+  // Status only: the error itself can hold request data (it also renders on the server).
+  logStatus(500);
   const router = useRouter();
 
   return (

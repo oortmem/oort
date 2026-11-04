@@ -42,7 +42,8 @@ function Page() {
         <li>
           <strong>Oort Pro keys and usage.</strong> For each key: the first 12 characters, a one-way
           hash of the key, the name you gave it, and when it was created, last used and revoked. For
-          each month: how many saves and recalls you used. Numbers only, no content.
+          each month: how many saves and recalls you used, and how many embedding inputs, rerank
+          calls and Jev calls the relay passed on. Numbers only, no content.
         </li>
         <li>
           <strong>CLI sign-in.</strong> When you run <code>oort login</code>, we keep a one-way hash
@@ -52,8 +53,11 @@ function Page() {
           hourly job deletes each request once it is an hour old.
         </li>
         <li>
-          <strong>Request logs.</strong> For a sample of relay requests, Cloudflare records the
-          time, the path, the status and how long it took. Never the body.
+          <strong>Requests and logs.</strong> Cloudflare runs our website and the relay, so it
+          necessarily sees your IP address, browser details and approximate location to answer each
+          request. We have turned off Cloudflare&apos;s request logs for both. Our own code logs
+          only a status code and how long a request took: no IP address, path, headers or content.
+          We do not store your IP address anywhere.
         </li>
         <li>
           <strong>Aggregate visit counts.</strong> When switched on, Cloudflare Web Analytics counts
@@ -67,8 +71,10 @@ function Page() {
         </li>
       </ul>
       <p>
-        To stop abuse we count requests per IP address in memory for about a minute on the
-        early-access form, and per key on the relay. Those counts are never saved.
+        To stop abuse we count requests for about a minute: per IP address on the early-access form
+        and when <code>oort login</code> starts a sign-in, per key and per account on the relay, and
+        failed relay sign-ins per IP address. The counters live in memory or in Cloudflare&apos;s
+        rate limiter and expire on their own; we never save them.
       </p>
 
       <h2>What leaves your machine with Oort Pro</h2>
@@ -135,7 +141,10 @@ function Page() {
         </li>
         <li>Invoices and payment records: 7 years, as Swedish bookkeeping law requires.</li>
         <li>CLI sign-in requests: at most about two hours.</li>
-        <li>Request logs and aggregate analytics: as long as Cloudflare keeps them, then gone.</li>
+        <li>
+          Status-and-timing logs and aggregate analytics: as long as Cloudflare keeps them, then
+          gone.
+        </li>
       </ul>
 
       <h2>Your rights</h2>
