@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { Github } from 'lucide-react';
 import { Logo } from './Logo';
+import { legal } from '@/lib/legal';
 
 const links = [
   { to: '/architecture', label: 'Architecture' },
@@ -134,7 +135,7 @@ export function SiteFooter() {
         ))}
       </div>
       <div className="border-t border-border py-6 text-center font-mono text-xs text-muted-foreground">
-        oort install claude-code · npm publishing is coming · oortcloud.dev
+        oort install claude-code · npm publishing is coming · oortcloud.dev · {legal.generalEmail}
       </div>
     </footer>
   );

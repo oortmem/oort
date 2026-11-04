@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { LegalPage, Contact } from '@/components/site/LegalPage';
+import { LegalPage, Contact, GeneralContact, VatLine } from '@/components/site/LegalPage';
 import { legal } from '@/lib/legal';
 
 export const Route = createFileRoute('/legal/terms')({
@@ -12,12 +12,15 @@ export const Route = createFileRoute('/legal/terms')({
 function Page() {
   void legal;
   void Contact;
+  void GeneralContact;
   return (
     <LegalPage title="Terms of use">
       <p>
         These terms cover your use of the Oort website, run by <strong>{legal.entity}</strong>,{' '}
-        {legal.address}, {legal.country}. Questions: <Contact />.
+        {legal.address}, {legal.country}. Questions: <GeneralContact />. Privacy and data requests:{' '}
+        <Contact />.
       </p>
+      <VatLine />
       <h2>The site</h2>
       <p>
         The site describes Oort, an open-source agent memory engine. Some pages are demos with

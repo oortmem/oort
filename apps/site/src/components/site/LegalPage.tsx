@@ -27,3 +27,12 @@ export function LegalPage({ title, children }: { title: string; children: ReactN
 export function Contact() {
   return <strong>{legal.contactEmail}</strong>;
 }
+
+export function GeneralContact() {
+  return <strong>{legal.generalEmail}</strong>;
+}
+
+/** Shown only once a VAT number is set. */
+export function VatLine() {
+  return legal.vatNumber ? <p>VAT number: {legal.vatNumber}</p> : null;
+}

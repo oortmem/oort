@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { LegalPage, Contact } from '@/components/site/LegalPage';
+import { LegalPage, Contact, VatLine } from '@/components/site/LegalPage';
 import { legal } from '@/lib/legal';
 
 export const Route = createFileRoute('/legal/privacy')({
@@ -22,6 +22,7 @@ function Page() {
         <strong>{legal.entity}</strong>, {legal.address}, {legal.country}. We are the controller of
         the data described here. Contact us at <Contact />.
       </p>
+      <VatLine />
       <h2>What we collect</h2>
       <ul>
         <li>
@@ -32,10 +33,6 @@ function Page() {
           <strong>Aggregate visit counts.</strong> When switched on, Cloudflare Web Analytics counts
           page views without cookies and without following you across sites. We see totals, not
           people.
-        </li>
-        <li>
-          <strong>Fonts.</strong> The typeface loads from Google Fonts, which sees your IP address
-          when a page loads.
         </li>
         <li>
           <strong>Nothing else.</strong> The sign-in page and the console are demos. They create no
@@ -62,7 +59,9 @@ function Page() {
       <p>
         You can ask for access to your data, correction, erasure, or to object to its use, and you
         can withdraw consent. To remove your email, write to <Contact /> from that address and we
-        will delete it. You can also complain to your local data protection supervisory authority.
+        will delete it. You can also complain to the Swedish supervisory authority,{' '}
+        {legal.authority.name}, at <a href={legal.authority.url}>{legal.authority.url}</a>, or to
+        the authority in your own country.
       </p>
       <h2>Who receives it, and transfers</h2>
       <p>
