@@ -5,6 +5,9 @@
   // nodejs_compat also fills process.env from vars and secrets, which Clerk reads.
   "compatibility_flags": ["nodejs_compat"],
   "main": "@tanstack/react-start/server-entry",
+  // Custom domain, attached on deploy (the oortcloud.dev zone is on this account). www comes later
+  // as a redirect rule; Clerk production is bound to oortcloud.dev.
+  "routes": [{ "pattern": "oortcloud.dev", "custom_domain": true }],
   // Invocation logs are off: they would record every request's URL, headers (IP and user agent
   // included) and the `cf` location object. The site's own code logs only a status and duration
   // on a server error (src/lib/log.ts), so the privacy notice's "no IP address" holds.
@@ -12,7 +15,6 @@
   "d1_databases": [
     {
       "binding": "DB",
-      // Placeholder. Replace with the id printed by `wrangler d1 create oort-site-waitlist`.
       "database_name": "oort-site-waitlist",
       "database_id": "f0ea3ef8-02b1-4ef7-89ba-7ac6ce5798a8",
       "migrations_dir": "migrations",
@@ -21,9 +23,8 @@
       // Oort Pro accounts, shared with apps/relay. The schema lives in apps/relay/migrations.
       "binding": "ACCOUNTS_DB",
       "database_name": "oort-accounts",
-      // Placeholder. Replace with the id printed by `wrangler d1 create oort-accounts`
-      // (the same id goes in apps/relay/wrangler.jsonc).
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      // Shared with apps/relay/wrangler.jsonc (binding DB).
+      "database_id": "00342070-8563-4ea0-8950-0c67233106d0",
       "migrations_dir": "../relay/migrations",
     },
   ],

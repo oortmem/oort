@@ -19,9 +19,8 @@
     {
       "binding": "DB",
       "database_name": "oort-accounts",
-      // Placeholder. Replace with the id printed by `wrangler d1 create oort-accounts`,
-      // and use the same id in apps/site/wrangler.jsonc (binding ACCOUNTS_DB).
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      // Shared with apps/site/wrangler.jsonc (binding ACCOUNTS_DB).
+      "database_id": "00342070-8563-4ea0-8950-0c67233106d0",
       "migrations_dir": "migrations",
     },
   ],
