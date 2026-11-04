@@ -1,11 +1,33 @@
 {
   "name": "@oortmem/claude-code",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Oort for Claude Code: hooks that recall and save memories, and transcript import.",
+  "keywords": [
+    "oort",
+    "agent-memory",
+    "ai-agents",
+    "llm-memory",
+    "claude-code",
+    "hooks",
+    "anthropic"
+  ],
+  "homepage": "https://oortcloud.dev",
+  "bugs": {
+    "url": "https://github.com/oortmem/oort/issues",
+    "email": "hello@oortcloud.dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oortmem/oort.git",
+    "directory": "packages/claude-code"
+  },
   "license": "Apache-2.0",
+  "author": "Oort <hello@oortcloud.dev>",
   "type": "module",
   "engines": {
     "node": ">=22.15.0"
   },
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -15,8 +37,14 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.typecheck.json"
