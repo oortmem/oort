@@ -41,7 +41,8 @@ import { Route as LegalSubprocessorsRouteImport } from './routes/legal/subproces
 import { Route as LegalTermsRouteImport } from './routes/legal/terms'
 import { Route as LegalTermsOfServiceRouteImport } from './routes/legal/terms-of-service'
 import { Route as ApiStripeWebhookRouteImport } from './routes/api/stripe/webhook'
-import { Route as ApiCliSessionIdRouteImport } from './routes/api/cli/session/$id'
+import { Route as ApiCliSessionIndexRouteImport } from './routes/api/cli/session/index'
+import { Route as ApiCliSessionPollRouteImport } from './routes/api/cli/session/poll'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -203,9 +204,14 @@ const ApiStripeWebhookRoute = ApiStripeWebhookRouteImport.update({
   path: '/api/stripe/webhook',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiCliSessionIdRoute = ApiCliSessionIdRouteImport.update({
-  id: '/api/cli/session/$id',
-  path: '/api/cli/session/$id',
+const ApiCliSessionIndexRoute = ApiCliSessionIndexRouteImport.update({
+  id: '/api/cli/session/',
+  path: '/api/cli/session/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCliSessionPollRoute = ApiCliSessionPollRouteImport.update({
+  id: '/api/cli/session/poll',
+  path: '/api/cli/session/poll',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -242,7 +248,8 @@ export interface FileRoutesByFullPath {
   '/account/': typeof AccountIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
-  '/api/cli/session/$id': typeof ApiCliSessionIdRoute
+  '/api/cli/session/poll': typeof ApiCliSessionPollRoute
+  '/api/cli/session/': typeof ApiCliSessionIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -277,7 +284,8 @@ export interface FileRoutesByTo {
   '/account': typeof AccountIndexRoute
   '/docs': typeof DocsIndexRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
-  '/api/cli/session/$id': typeof ApiCliSessionIdRoute
+  '/api/cli/session/poll': typeof ApiCliSessionPollRoute
+  '/api/cli/session': typeof ApiCliSessionIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -313,7 +321,8 @@ export interface FileRoutesById {
   '/account/': typeof AccountIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
-  '/api/cli/session/$id': typeof ApiCliSessionIdRoute
+  '/api/cli/session/poll': typeof ApiCliSessionPollRoute
+  '/api/cli/session/': typeof ApiCliSessionIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -350,7 +359,8 @@ export interface FileRouteTypes {
     | '/account/'
     | '/docs/'
     | '/api/stripe/webhook'
-    | '/api/cli/session/$id'
+    | '/api/cli/session/poll'
+    | '/api/cli/session/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -385,7 +395,8 @@ export interface FileRouteTypes {
     | '/account'
     | '/docs'
     | '/api/stripe/webhook'
-    | '/api/cli/session/$id'
+    | '/api/cli/session/poll'
+    | '/api/cli/session'
   id:
     | '__root__'
     | '/'
@@ -420,7 +431,8 @@ export interface FileRouteTypes {
     | '/account/'
     | '/docs/'
     | '/api/stripe/webhook'
-    | '/api/cli/session/$id'
+    | '/api/cli/session/poll'
+    | '/api/cli/session/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -456,7 +468,8 @@ export interface RootRouteChildren {
   AccountIndexRoute: typeof AccountIndexRoute
   DocsIndexRoute: typeof DocsIndexRoute
   ApiStripeWebhookRoute: typeof ApiStripeWebhookRoute
-  ApiCliSessionIdRoute: typeof ApiCliSessionIdRoute
+  ApiCliSessionPollRoute: typeof ApiCliSessionPollRoute
+  ApiCliSessionIndexRoute: typeof ApiCliSessionIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -685,11 +698,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiStripeWebhookRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/cli/session/$id': {
-      id: '/api/cli/session/$id'
-      path: '/api/cli/session/$id'
-      fullPath: '/api/cli/session/$id'
-      preLoaderRoute: typeof ApiCliSessionIdRouteImport
+    '/api/cli/session/': {
+      id: '/api/cli/session/'
+      path: '/api/cli/session'
+      fullPath: '/api/cli/session/'
+      preLoaderRoute: typeof ApiCliSessionIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/cli/session/poll': {
+      id: '/api/cli/session/poll'
+      path: '/api/cli/session/poll'
+      fullPath: '/api/cli/session/poll'
+      preLoaderRoute: typeof ApiCliSessionPollRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -728,7 +748,8 @@ const rootRouteChildren: RootRouteChildren = {
   AccountIndexRoute: AccountIndexRoute,
   DocsIndexRoute: DocsIndexRoute,
   ApiStripeWebhookRoute: ApiStripeWebhookRoute,
-  ApiCliSessionIdRoute: ApiCliSessionIdRoute,
+  ApiCliSessionPollRoute: ApiCliSessionPollRoute,
+  ApiCliSessionIndexRoute: ApiCliSessionIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

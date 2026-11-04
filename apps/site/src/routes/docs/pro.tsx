@@ -51,8 +51,11 @@ function Page() {
         <Step title="Sign in from your terminal.">
           <Cmd>oort login</Cmd>
           <p>
-            Your browser opens oortcloud.dev. Check that the code on the page matches the code in
-            your terminal, then choose Approve. Oort stores your Oort key in the Keychain.
+            Your terminal shows a code like <code>BCDF-GHJK</code> and your browser opens
+            oortcloud.dev/account/cli. Type the code there. The page shows when the request started,
+            roughly where it came from and which computer asked. Only approve if you just ran{' '}
+            <code>oort login</code> yourself: never approve a code someone sent you. Oort then stores
+            your Oort key in the Keychain (or <code>credentials.json</code> on Linux and Windows).
           </p>
         </Step>
         <Step title="Restart your agents.">

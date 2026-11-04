@@ -24,6 +24,15 @@
       "migrations_dir": "../relay/migrations",
     },
   ],
+  // `oort login` sessions started per IP: 10 a minute (src/routes/api/cli/session/index.ts).
+  // The IP is the counter's key only and is never stored. namespace_id is unique to the account.
+  "ratelimits": [
+    {
+      "name": "CLI_SESSION_LIMITER",
+      "namespace_id": "4103",
+      "simple": { "limit": 10, "period": 60 },
+    },
+  ],
   // Secrets, set with `wrangler secret put <NAME>` (see README). Never put values here.
   //   CLERK_SECRET_KEY
   //   STRIPE_SECRET_KEY

@@ -4,12 +4,17 @@ import {
   approveCli,
   createKey,
   getOverview,
+  lookupCli,
   openPortal,
   revokeKey,
   startCheckout,
   type AccountDeps,
 } from './account';
 import { toResult } from './result';
+import { createRateLimiter } from './waitlist';
+
+// Typed `oort login` codes per account: 10 a minute, per isolate and in memory only.
+const codeAttempts = createRateLimiter(10, 60_000);
 
 /**
  * Server functions for /account and /account/cli. Each one builds its dependencies on the
@@ -33,6 +38,7 @@ async function accountDeps(): Promise<AccountDeps> {
     },
     origin: new URL(getRequest().url).origin,
     pricePro: env.STRIPE_PRICE_PRO ?? '',
+    allowCodeAttempt: (accountId) => codeAttempts(accountId, Date.now()),
   };
 }
 
@@ -80,8 +86,12 @@ export const openPortalFn = createServerFn({ method: 'POST' }).handler(() =>
   toResult(async () => openPortal(await billingDeps())),
 );
 
+const codeOf = (d: unknown) => String((d as { code?: unknown } | null)?.code ?? '');
+
+export const lookupCliFn = createServerFn({ method: 'POST' })
+  .validator((d: unknown) => ({ code: codeOf(d) }))
+  .handler(({ data }) => toResult(async () => lookupCli(await accountDeps(), data.code)));
+
 export const approveCliFn = createServerFn({ method: 'POST' })
-  .validator((d: unknown) => ({
-    session: String((d as { session?: unknown } | null)?.session ?? ''),
-  }))
-  .handler(({ data }) => toResult(async () => approveCli(await accountDeps(), data.session)));
+  .validator((d: unknown) => ({ code: codeOf(d) }))
+  .handler(({ data }) => toResult(async () => approveCli(await accountDeps(), data.code)));

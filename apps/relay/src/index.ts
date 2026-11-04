@@ -1,3 +1,4 @@
+import { pruneCliSessions } from './prune.js';
 import { handleRelay, type RelayEnv, type WaitUntilLike } from './relay.js';
 
 export default {
@@ -10,5 +11,14 @@ export default {
     const res = await handleRelay(request, env, ctx);
     console.log(JSON.stringify({ status: res.status, ms: Date.now() - started }));
     return res;
+  },
+
+  /** The hourly cron in wrangler.jsonc: prunes old `oort login` requests. */
+  async scheduled(
+    controller: { scheduledTime: number; cron: string },
+    env: RelayEnv,
+    ctx: WaitUntilLike,
+  ): Promise<void> {
+    ctx.waitUntil(pruneCliSessions(env.DB, new Date(controller.scheduledTime)));
   },
 };

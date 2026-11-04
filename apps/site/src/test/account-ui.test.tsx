@@ -4,8 +4,7 @@ import { AccountView, statusLabel, type AccountActions } from '@/components/acco
 import { NotConfigured } from '@/components/account/AuthShell';
 import { CliApprove } from '@/components/account/CliApprove';
 import { clerkEnabled } from '@/lib/clerk';
-import type { Overview } from '@/server/account';
-import { cliCode } from '@/server/keys';
+import type { CliRequestView, Overview } from '@/server/account';
 
 const overview = (over: Partial<Overview> = {}): Overview => ({
   plan: 'free',
@@ -145,51 +144,96 @@ describe('account page', () => {
 });
 
 describe('CLI approve page', () => {
-  const SESSION = 'Zm9vYmFyYmF6cXV4cXV1eGNvcmdlZ3JhdWx0Z2FycGx5';
+  const view = (over: Partial<CliRequestView> = {}): CliRequestView => ({
+    code: 'BCDF-GHJK',
+    createdAt: '2026-11-04T10:00:00.000Z',
+    country: 'SE',
+    os: 'macOS',
+    host: 'marcus-mbp',
+    keyLimitReached: false,
+    ...over,
+  });
+  const found = (over: Partial<CliRequestView> = {}) =>
+    vi.fn(async (_code: string) => ({ ok: true as const, value: view(over) }));
 
-  it('shows the code the terminal shows and the key name it will create', async () => {
-    render(<CliApprove session={SESSION} entitled today="2026-11-04" approve={async () => null} />);
-    const expected = await cliCode(SESSION);
-    await waitFor(() => expect(screen.getByTestId('cli-code').textContent).toMatch(expected));
+  const enter = (code = 'bcdf ghjk') => {
+    fireEvent.change(screen.getByLabelText('Code'), { target: { value: code } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  };
+
+  it('asks for the code from the terminal; the page has none of its own', () => {
+    render(<CliApprove entitled today="2026-11-04" lookup={found()} approve={async () => null} />);
+    expect(screen.getByLabelText('Code')).toBeTruthy();
+    expect(screen.queryByTestId('cli-code')).toBeNull();
+  });
+
+  it('shows when, where from and which computer, with the warning, before Approve', async () => {
+    const lookup = found();
+    render(<CliApprove entitled today="2026-11-04" lookup={lookup} approve={async () => null} />);
+    enter();
+    expect(
+      await screen.findByText(/Only approve if you just ran oort login yourself/),
+    ).toBeTruthy();
+    expect(lookup).toHaveBeenCalledWith('bcdf ghjk');
+    expect(screen.getByTestId('cli-code').textContent).toBe('BCDF-GHJK');
+    expect(screen.getByTestId('cli-country').textContent).toBe('Sweden');
+    expect(screen.getByTestId('cli-host').textContent).toBe('marcus-mbp');
+    expect(screen.getByTestId('cli-os').textContent).toBe('macOS');
     expect(screen.getByText(/CLI on 2026-11-04/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
   });
 
-  it('approves, then tells the user to go back to the terminal', async () => {
-    const approve = vi.fn(async () => null);
-    render(<CliApprove session={SESSION} entitled today="2026-11-04" approve={approve} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+  it('approves the code that was looked up, then sends the user back to the terminal', async () => {
+    const approve = vi.fn(async (_code: string) => null);
+    render(<CliApprove entitled today="2026-11-04" lookup={found()} approve={approve} />);
+    enter();
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
     expect(await screen.findByText(/Go back to your terminal/)).toBeTruthy();
-    expect(approve).toHaveBeenCalledOnce();
+    expect(approve).toHaveBeenCalledWith('BCDF-GHJK');
   });
 
-  it('shows a refusal and lets the user try again', async () => {
+  it('shows a refusal for an unknown code and lets the user type again', async () => {
+    const lookup = vi.fn(async () => ({
+      ok: false as const,
+      error: 'No pending sign-in request has that code.',
+    }));
+    render(<CliApprove entitled today="2026-11-04" lookup={lookup} approve={async () => null} />);
+    enter('BCDF-GHJX');
+    expect((await screen.findByRole('alert')).textContent).toMatch(/No pending/);
+    expect(screen.getByLabelText('Code')).toBeTruthy();
+  });
+
+  it('shows an approve refusal', async () => {
     render(
       <CliApprove
-        session={SESSION}
         entitled
         today="2026-11-04"
+        lookup={found()}
         approve={async () => 'This sign-in request expired. Run oort login again.'}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    enter();
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
     expect((await screen.findByRole('alert')).textContent).toMatch(/expired/);
   });
 
-  it('warns when the account has no Pro yet', () => {
+  it('warns when the account has no Pro yet, and blocks Approve at the key limit', async () => {
     render(
       <CliApprove
-        session={SESSION}
         entitled={false}
         today="2026-11-04"
+        lookup={found({ keyLimitReached: true, country: null, host: null })}
         approve={async () => null}
       />,
     );
-    expect(screen.getByText(/does not have Oort Pro yet/)).toBeTruthy();
-  });
-
-  it('handles a link without a session', () => {
-    render(<CliApprove session="" entitled today="2026-11-04" approve={async () => null} />);
-    expect(screen.getByRole('alert').textContent).toMatch(/no sign-in request/);
+    enter();
+    expect(await screen.findByText(/does not have Oort Pro yet/)).toBeTruthy();
+    expect(screen.getByText(/most live keys/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(screen.getByTestId('cli-country').textContent).toBe('Unknown');
+    expect(screen.getByTestId('cli-host').textContent).toBe('Not reported');
   });
 });
 

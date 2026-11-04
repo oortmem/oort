@@ -46,7 +46,10 @@ function Page() {
         </li>
         <li>
           <strong>CLI sign-in.</strong> When you run <code>oort login</code>, we keep a one-way hash
-          of the sign-in request and its times for up to a day.
+          of the request's secret, a short code, when it started and was approved, the country
+          Cloudflare reports for the request (not the IP address), and the operating system and
+          computer name the CLI sends, so the approve page can show you which computer asked. An
+          hourly job deletes each request once it is an hour old.
         </li>
         <li>
           <strong>Request logs.</strong> For a sample of relay requests, Cloudflare records the
@@ -131,7 +134,7 @@ function Page() {
           after you ask us to close it.
         </li>
         <li>Invoices and payment records: 7 years, as Swedish bookkeeping law requires.</li>
-        <li>CLI sign-in requests: up to one day.</li>
+        <li>CLI sign-in requests: at most about two hours.</li>
         <li>Request logs and aggregate analytics: as long as Cloudflare keeps them, then gone.</li>
       </ul>
 

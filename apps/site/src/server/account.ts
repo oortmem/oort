@@ -1,7 +1,7 @@
 import type Stripe from 'stripe';
 import { rates } from '@/lib/oort-data';
 import type { D1DatabaseLike } from './d1';
-import { generateKey, hashKey, keyPrefix } from './keys';
+import { formatUserCode, generateKey, hashKey, keyPrefix, normalizeUserCode } from './keys';
 import type { StripeLike } from './stripe';
 
 /**
@@ -30,6 +30,11 @@ export interface AccountDeps {
   getAuth: () => Promise<{ userId: string | null }>;
   stripe: () => StripeLike;
   now?: () => Date;
+  /**
+   * A budget for typing CLI user codes, per account (RFC 8628 §5.1): false refuses the attempt.
+   * Default: always allowed.
+   */
+  allowCodeAttempt?: (accountId: string) => boolean;
   /** Site origin for Stripe return URLs, e.g. https://oortcloud.dev */
   origin: string;
   pricePro: string;
@@ -40,7 +45,6 @@ export const PRO_LIMITS = { saves: rates.managed.Pro.saves, recalls: rates.manag
 export const ENTITLED_STATUSES: readonly string[] = ['active', 'trialing'];
 export const MAX_LIVE_KEYS = 20;
 export const CLI_SESSION_TTL_MS = 10 * 60_000;
-export const SESSION_ID = /^[A-Za-z0-9_-]{32,128}$/;
 
 interface AccountRow {
   id: string;
@@ -103,23 +107,48 @@ async function requireAccount(d: AccountDeps): Promise<AccountRow> {
   return created;
 }
 
-/** Inserts a new key for an account and returns it. Only the hash and prefix are stored. */
+/**
+ * Inserts a new key for an account and returns it, or null when the account already has
+ * MAX_LIVE_KEYS live keys. The count and the insert are one statement, so two requests at once
+ * cannot both pass the limit. Only the hash and prefix are stored.
+ */
 export async function mintKey(
   db: D1DatabaseLike,
   accountId: string,
   name: string,
   now: Date,
-): Promise<{ id: string; key: string; prefix: string; name: string }> {
+): Promise<{ id: string; key: string; prefix: string; name: string } | null> {
   const key = generateKey();
   const id = crypto.randomUUID();
   const prefix = keyPrefix(key);
-  await db
+  const r = await db
     .prepare(
-      'INSERT INTO api_keys (id, account_id, prefix, hash, name, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      `INSERT INTO api_keys (id, account_id, prefix, hash, name, created_at)
+       SELECT ?, ?, ?, ?, ?, ?
+        WHERE (SELECT COUNT(*) FROM api_keys WHERE account_id = ? AND revoked_at IS NULL) < ?`,
     )
-    .bind(id, accountId, prefix, await hashKey(key), name, now.toISOString())
+    .bind(
+      id,
+      accountId,
+      prefix,
+      await hashKey(key),
+      name,
+      now.toISOString(),
+      accountId,
+      MAX_LIVE_KEYS,
+    )
     .run();
-  return { id, key, prefix, name };
+  return r.meta.changes === 1 ? { id, key, prefix, name } : null;
+}
+
+export const KEY_LIMIT_MESSAGE = `You can have up to ${MAX_LIVE_KEYS} live keys. Revoke one first.`;
+
+async function liveKeys(db: D1DatabaseLike, accountId: string): Promise<number> {
+  const r = await db
+    .prepare('SELECT COUNT(*) AS n FROM api_keys WHERE account_id = ? AND revoked_at IS NULL')
+    .bind(accountId)
+    .first<{ n: number }>();
+  return r?.n ?? 0;
 }
 
 export async function getOverview(d: AccountDeps): Promise<Overview> {
@@ -159,14 +188,9 @@ export async function createKey(d: AccountDeps, rawName: string) {
   if (name.length < 1 || name.length > 60) {
     throw new AccountError('Give the key a name of 1 to 60 characters.');
   }
-  const live = await d.db
-    .prepare('SELECT COUNT(*) AS n FROM api_keys WHERE account_id = ? AND revoked_at IS NULL')
-    .bind(a.id)
-    .first<{ n: number }>();
-  if ((live?.n ?? 0) >= MAX_LIVE_KEYS) {
-    throw new AccountError(`You can have up to ${MAX_LIVE_KEYS} live keys. Revoke one first.`);
-  }
-  return mintKey(d.db, a.id, name, nowOf(d));
+  const k = await mintKey(d.db, a.id, name, nowOf(d));
+  if (!k) throw new AccountError(KEY_LIMIT_MESSAGE);
+  return k;
 }
 
 export async function revokeKey(d: AccountDeps, keyId: string): Promise<{ revoked: boolean }> {
@@ -269,36 +293,104 @@ export async function openPortal(d: AccountDeps): Promise<{ url: string }> {
   return { url: s.url };
 }
 
-/** The signed-in user approves an `oort login` session. The key is minted when the CLI polls. */
-export async function approveCli(d: AccountDeps, sessionId: string): Promise<{ approved: true }> {
-  const a = await requireAccount(d);
-  if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) {
-    throw new AccountError('This CLI session link is not valid. Run oort login again.');
+interface CliRow {
+  user_code: string;
+  created_at: string;
+  country: string | null;
+  client_os: string | null;
+  client_host: string | null;
+  account_id: string | null;
+  approved_at: string | null;
+  consumed_at: string | null;
+}
+
+/** What the approve page shows about a sign-in request, so the user can tell it is theirs. */
+export interface CliRequestView {
+  code: string;
+  createdAt: string;
+  country: string | null;
+  os: string | null;
+  host: string | null;
+  /** The account already has MAX_LIVE_KEYS live keys, so approving would not give the CLI one. */
+  keyLimitReached: boolean;
+}
+
+const CODE_NOT_FOUND =
+  'No pending sign-in request has that code. Check the code in your terminal, or run oort login again.';
+
+/** The request behind a typed code, checked as the approve step will check it. */
+async function pendingRequest(d: AccountDeps, accountId: string, typed: unknown): Promise<CliRow> {
+  if (d.allowCodeAttempt && !d.allowCodeAttempt(accountId)) {
+    throw new AccountError('Too many codes tried. Wait a minute, then try again.');
   }
-  const id = await hashKey(sessionId);
-  const now = nowOf(d);
-  await d.db
-    .prepare('INSERT INTO cli_sessions (id, created_at) VALUES (?, ?) ON CONFLICT (id) DO NOTHING')
-    .bind(id, now.toISOString())
-    .run();
+  const code = normalizeUserCode(typed);
+  if (!code) {
+    throw new AccountError('Type the 8-letter code your terminal shows, like BCDF-GHJK.');
+  }
   const row = await d.db
-    .prepare('SELECT created_at, account_id, consumed_at FROM cli_sessions WHERE id = ?')
-    .bind(id)
-    .first<{ created_at: string; account_id: string | null; consumed_at: string | null }>();
-  if (!row || row.consumed_at !== null) {
+    .prepare(
+      'SELECT user_code, created_at, country, client_os, client_host, account_id, approved_at, consumed_at FROM cli_sessions WHERE user_code = ?',
+    )
+    .bind(code)
+    .first<CliRow>();
+  if (!row) throw new AccountError(CODE_NOT_FOUND);
+  if (row.consumed_at !== null) {
     throw new AccountError('This sign-in request was already used. Run oort login again.');
   }
-  if (now.getTime() - Date.parse(row.created_at) > CLI_SESSION_TTL_MS) {
+  if (nowOf(d).getTime() - Date.parse(row.created_at) > CLI_SESSION_TTL_MS) {
     throw new AccountError('This sign-in request expired. Run oort login again.');
   }
-  if (row.account_id !== null && row.account_id !== a.id) {
-    throw new AccountError('This sign-in request was already approved by another account.');
+  if (row.approved_at !== null) {
+    throw new AccountError(
+      row.account_id === accountId
+        ? 'You already approved this sign-in request. Go back to your terminal.'
+        : CODE_NOT_FOUND,
+    );
   }
-  await d.db
+  return row;
+}
+
+/** Step 1 of the approve page: the user typed the code from their terminal. */
+export async function lookupCli(d: AccountDeps, typed: unknown): Promise<CliRequestView> {
+  const a = await requireAccount(d);
+  const row = await pendingRequest(d, a.id, typed);
+  return {
+    code: formatUserCode(row.user_code),
+    createdAt: row.created_at,
+    country: row.country,
+    os: row.client_os,
+    host: row.client_host,
+    keyLimitReached: (await liveKeys(d.db, a.id)) >= MAX_LIVE_KEYS,
+  };
+}
+
+/**
+ * Step 2: the signed-in user approves the `oort login` request with that code. The key is minted
+ * when the CLI collects it. Approval is one conditional update, so it happens at most once.
+ */
+export async function approveCli(d: AccountDeps, typed: unknown): Promise<{ approved: true }> {
+  const a = await requireAccount(d);
+  const row = await pendingRequest(d, a.id, typed);
+  if ((await liveKeys(d.db, a.id)) >= MAX_LIVE_KEYS) {
+    throw new AccountError(
+      `This account already has ${MAX_LIVE_KEYS} live keys. Revoke one on your account page, then approve again.`,
+    );
+  }
+  const now = nowOf(d);
+  const r = await d.db
     .prepare(
-      'UPDATE cli_sessions SET account_id = ?, approved_at = ? WHERE id = ? AND consumed_at IS NULL',
+      `UPDATE cli_sessions SET account_id = ?, approved_at = ?
+        WHERE user_code = ? AND approved_at IS NULL AND consumed_at IS NULL AND created_at > ?`,
     )
-    .bind(a.id, now.toISOString(), id)
+    .bind(
+      a.id,
+      now.toISOString(),
+      row.user_code,
+      new Date(now.getTime() - CLI_SESSION_TTL_MS).toISOString(),
+    )
     .run();
+  if (r.meta.changes !== 1) {
+    throw new AccountError('This sign-in request is no longer pending. Run oort login again.');
+  }
   return { approved: true };
 }

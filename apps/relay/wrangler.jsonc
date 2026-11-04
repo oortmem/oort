@@ -13,6 +13,8 @@
     "enabled": true,
     "logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 0.1 },
   },
+  // Hourly: delete `oort login` requests (cli_sessions) older than an hour (src/prune.ts).
+  "triggers": { "crons": ["17 * * * *"] },
   "d1_databases": [
     {
       "binding": "DB",

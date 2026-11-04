@@ -45,6 +45,7 @@ describe('one oort-accounts schema for site and relay', () => {
       '0001_accounts.sql',
       '0002_cli_sessions.sql',
       '0003_usage_counters.sql',
+      '0004_cli_login.sql',
     ]);
   });
 

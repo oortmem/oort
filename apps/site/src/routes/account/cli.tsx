@@ -1,18 +1,14 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { AuthShell, NotConfigured } from '@/components/account/AuthShell';
 import { CliApprove } from '@/components/account/CliApprove';
-import { approveCliFn, getOverviewFn, getSessionFn } from '@/server/account-fns';
+import { approveCliFn, getOverviewFn, getSessionFn, lookupCliFn } from '@/server/account-fns';
 
-type Search = { session: string };
-
+// The page carries no session id: the user types the code their terminal shows (review I3, I4).
 export const Route = createFileRoute('/account/cli')({
-  validateSearch: (s: Record<string, unknown>): Search => ({
-    session: typeof s['session'] === 'string' ? s['session'] : '',
-  }),
-  beforeLoad: async ({ location }) => {
+  beforeLoad: async () => {
     const s = await getSessionFn();
     if (s.configured && !s.signedIn) {
-      throw redirect({ to: '/signin', search: { redirect_url: location.href } });
+      throw redirect({ to: '/signin', search: { redirect_url: '/account/cli' } });
     }
     return { configured: s.configured };
   },
@@ -25,7 +21,6 @@ export const Route = createFileRoute('/account/cli')({
 
 function CliPage() {
   const data = Route.useLoaderData();
-  const { session } = Route.useSearch();
   return (
     <AuthShell wide>
       {data === null ? (
@@ -33,11 +28,11 @@ function CliPage() {
       ) : (
         <div className="iris-border rounded-3xl bg-card p-8">
           <CliApprove
-            session={session}
             entitled={data.ok && data.value.entitled}
             today={new Date().toISOString().slice(0, 10)}
-            approve={async () => {
-              const r = await approveCliFn({ data: { session } });
+            lookup={(code) => lookupCliFn({ data: { code } })}
+            approve={async (code) => {
+              const r = await approveCliFn({ data: { code } });
               return r.ok ? null : r.error;
             }}
           />

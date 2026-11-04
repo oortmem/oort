@@ -37,13 +37,20 @@ To delete someone on request: `wrangler d1 execute DB --remote --command "DELETE
 - `/account`: plan and status, Subscribe to Pro (Stripe Checkout, subscription mode, automatic
   tax, billing address required, terms of service consent), Manage billing (Stripe Customer
   Portal), API keys (shown once, listed by prefix, revocable) and this month's saves and recalls.
-- `/account/cli?session=<id>`: approves an `oort login` request. It shows a code the CLI can
-  match: SHA-256 of `oort-cli-code:<id>`, first 8 hex characters, upper case, as `XXXX-XXXX`.
-- `GET /api/cli/session/:id`: polled by `oort login`. 202 `{status:"pending"}` until approved,
-  then 200 `{status:"approved", key, prefix}` once with a new key named `CLI on <YYYY-MM-DD>`,
-  then 410 `{status:"used"}`. 410 `{status:"expired"}` 10 minutes after the first poll or
-  approval. 400 for an id that is not 32 to 128 base64url characters. Only a SHA-256 of the
-  session id is stored.
+- `POST /api/cli/session`: `oort login` starts here (RFC 8628 style), sending
+  `{challenge, os, host}` where challenge = base64url(SHA-256(S)) of a 32-byte secret S the CLI
+  keeps. 201 `{status, user_code, verification_uri, expires_in, interval}`; the user code is 8
+  letters from `BCDFGHJKLMNPQRSTVWXZ`, shown `XXXX-XXXX`. Rate-limited per IP
+  (`CLI_SESSION_LIMITER`, 10 a minute; the IP is never stored). The row keeps the challenge, the
+  code, the time, the two-letter country from `request.cf` and the reported OS and host.
+- `/account/cli`: no id in the URL. The signed-in user types the code, sees the request's start
+  time, country, OS and host with "Only approve if you just ran oort login yourself", and
+  approves. Approval is one conditional update. Typed codes are limited per account.
+- `POST /api/cli/session/poll` `{secret: S}`: read-only until approved. 202 `{status:"pending"}`,
+  then 200 `{status:"approved", key, prefix}` once (an atomic `UPDATE ... RETURNING` claim, then
+  a key named `CLI on <YYYY-MM-DD>` minted within the 20 live-key limit), then 410 `used`. 410
+  `expired` 10 minutes after the session started, 404 for a secret that started nothing, 409
+  `key_limit` at 20 live keys. The relay's hourly cron deletes requests older than an hour.
 - `POST /api/stripe/webhook`: verified with `constructEventAsync` and SubtleCrypto, idempotent
   through `stripe_events`. Handles `checkout.session.completed`,
   `customer.subscription.created|updated|deleted` and `invoice.payment_failed`, re-reads the live
