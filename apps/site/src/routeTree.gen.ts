@@ -17,6 +17,7 @@ import { Route as ExplorerRouteImport } from './routes/explorer'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as SignupRouteImport } from './routes/signup'
+import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as AccountIndexRouteImport } from './routes/account/index'
 import { Route as AccountCliRouteImport } from './routes/account/cli'
 import { Route as ApiWaitlistRouteImport } from './routes/api/waitlist'
@@ -82,6 +83,11 @@ const SigninRoute = SigninRouteImport.update({
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
   path: '/signup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
+  id: '/sitemap.xml',
+  path: '/sitemap.xml',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AccountIndexRoute = AccountIndexRouteImport.update({
@@ -224,6 +230,7 @@ export interface FileRoutesByFullPath {
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
   '/signup': typeof SignupRoute
+  '/sitemap.xml': typeof SitemapDotxmlRoute
   '/account/cli': typeof AccountCliRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/docs/chatgpt-and-claude-web': typeof DocsChatgptAndClaudeWebRoute
@@ -260,6 +267,7 @@ export interface FileRoutesByTo {
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
   '/signup': typeof SignupRoute
+  '/sitemap.xml': typeof SitemapDotxmlRoute
   '/account/cli': typeof AccountCliRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/docs/chatgpt-and-claude-web': typeof DocsChatgptAndClaudeWebRoute
@@ -297,6 +305,7 @@ export interface FileRoutesById {
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
   '/signup': typeof SignupRoute
+  '/sitemap.xml': typeof SitemapDotxmlRoute
   '/account/cli': typeof AccountCliRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/docs/chatgpt-and-claude-web': typeof DocsChatgptAndClaudeWebRoute
@@ -335,6 +344,7 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/signin'
     | '/signup'
+    | '/sitemap.xml'
     | '/account/cli'
     | '/api/waitlist'
     | '/docs/chatgpt-and-claude-web'
@@ -371,6 +381,7 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/signin'
     | '/signup'
+    | '/sitemap.xml'
     | '/account/cli'
     | '/api/waitlist'
     | '/docs/chatgpt-and-claude-web'
@@ -407,6 +418,7 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/signin'
     | '/signup'
+    | '/sitemap.xml'
     | '/account/cli'
     | '/api/waitlist'
     | '/docs/chatgpt-and-claude-web'
@@ -444,6 +456,7 @@ export interface RootRouteChildren {
   PricingRoute: typeof PricingRoute
   SigninRoute: typeof SigninRoute
   SignupRoute: typeof SignupRoute
+  SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   AccountCliRoute: typeof AccountCliRoute
   ApiWaitlistRoute: typeof ApiWaitlistRoute
   DocsChatgptAndClaudeWebRoute: typeof DocsChatgptAndClaudeWebRoute
@@ -528,6 +541,13 @@ declare module '@tanstack/react-router' {
       path: '/signup'
       fullPath: '/signup'
       preLoaderRoute: typeof SignupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sitemap.xml': {
+      id: '/sitemap.xml'
+      path: '/sitemap.xml'
+      fullPath: '/sitemap.xml'
+      preLoaderRoute: typeof SitemapDotxmlRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/account/': {
@@ -724,6 +744,7 @@ const rootRouteChildren: RootRouteChildren = {
   PricingRoute: PricingRoute,
   SigninRoute: SigninRoute,
   SignupRoute: SignupRoute,
+  SitemapDotxmlRoute: SitemapDotxmlRoute,
   AccountCliRoute: AccountCliRoute,
   ApiWaitlistRoute: ApiWaitlistRoute,
   DocsChatgptAndClaudeWebRoute: DocsChatgptAndClaudeWebRoute,

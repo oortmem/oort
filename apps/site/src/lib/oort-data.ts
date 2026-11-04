@@ -93,8 +93,10 @@ export type Usage = { saves: number; recalls: number; warmGb: number; coldGb: nu
 type Allowance = { price: number; saves: number; recalls: number; warmGb: number; coldGb: number };
 
 /**
- * Structure A (we run the models) and Structure B (you bring your own keys)
- * from docs/research/2026-11-04-pricing.md. Prices are a launch proposal.
+ * Hosted Oort Cloud (Planned): Structure A (we run the models) and Structure B (you bring
+ * your own keys) from docs/research/2026-11-04-pricing.md. These numbers are a proposal and drive
+ * the hosted estimator only. Oort Pro today is $19 flat and stops at its limits (see `plans`);
+ * the relay enforces `managed.Pro.saves` and `managed.Pro.recalls`.
  */
 export const rates = {
   managed: {
@@ -161,47 +163,57 @@ export const proLine = 'Pro: no API keys needed; your memories stay on your mach
 /** Pro's consumer price line (the Stripe price is tax-inclusive). */
 export const proPriceLine = '$19/month, VAT included where applicable';
 
+export type PlanStatus = 'live' | 'planned';
+
+/**
+ * What you can buy today comes first: the open source engine and Oort Pro (the engine on your
+ * machine plus our relay). Hosted Oort Cloud plans are Planned and their numbers are a proposal.
+ */
 export const plans = [
   {
     name: 'Open Source',
+    status: 'live',
     price: '$0',
     unit: 'self-hosted',
     who: 'Run it yourself. Free and open source.',
-    included: ['Unlimited, you bring your own keys', 'Your own machines, SQLite engine'],
+    included: ['Unlimited, you bring your own keys', 'Your own machine, SQLite engine'],
     features: [
       'Apache 2.0 engine and CLI (TypeScript)',
       'Local SQLite engine with zstd cold blobs',
       'Python SDK (Planned)',
-      'Desktop Explorer app (Planned)',
+      'Desktop app (Planned)',
     ],
     cta: 'Get the code',
   },
   {
-    name: 'Free',
-    price: '$0',
-    unit: 'hosted, no card',
-    who: 'For trying things out. Stops at the limit, never bills.',
-    included: ['5,000 saves', '10,000 recalls', '100 MB warm', '1 GB cold'],
-    features: ['Hard stop at the limits', 'No card needed', 'Smart rerank runs when it helps'],
-    cta: 'Get early access',
-  },
-  {
     name: 'Pro',
+    status: 'live',
     price: '$19',
     unit: '/ month',
-    who: 'For products with real users.',
-    included: ['25,000 saves', '50,000 recalls', '1 GB warm', '20 GB cold'],
+    who: 'The open source engine, with no API keys to manage.',
+    included: ['25,000 saves a month', '50,000 recalls a month'],
     features: [
       'No API keys needed; your memories stay on your machine',
-      'Extra use: $0.20 per 1k saves, $0.12 per 1k recalls',
-      'Extra storage: $0.50 per GB warm, $0.03 per GB cold',
-      'Smart rerank runs when it helps',
+      'Stops at the monthly limits. Extra use is never billed.',
+      'Cancel any time, in one click',
+      'Refund of the unused part on request within 14 days',
     ],
     cta: 'Get Pro',
     featured: true,
   },
   {
+    name: 'Free',
+    status: 'planned',
+    price: '$0',
+    unit: 'hosted, no card',
+    who: 'For trying hosted memory. Stops at the limit, never bills.',
+    included: ['5,000 saves', '10,000 recalls', '100 MB warm', '1 GB cold'],
+    features: ['Hard stop at the limits', 'No card needed', 'Smart rerank runs when it helps'],
+    cta: 'Join the waitlist',
+  },
+  {
     name: 'Team',
+    status: 'planned',
     price: '$99',
     unit: '/ month',
     who: 'For bigger products and teams.',
@@ -212,10 +224,11 @@ export const plans = [
       'Shared org memory (Planned)',
       'Priority support',
     ],
-    cta: 'Get early access',
+    cta: 'Join the waitlist',
   },
   {
     name: 'Enterprise',
+    status: 'planned',
     price: 'Talk to us',
     unit: '',
     who: 'For large teams and millions of customers.',
@@ -227,18 +240,26 @@ export const plans = [
     ],
     cta: 'Talk to us',
   },
-];
+] satisfies {
+  name: string;
+  status: PlanStatus;
+  price: string;
+  unit: string;
+  who: string;
+  included: string[];
+  features: string[];
+  cta: string;
+  featured?: boolean;
+}[];
 
-/** Same plans at the bring-your-own-keys rates (Structure B). */
+/** Hosted plans at the bring-your-own-keys rates (Structure B, Planned). */
 export const byokPlans = {
   Free: ['25,000 saves', '50,000 recalls', '100 MB warm', '1 GB cold'],
-  Pro: ['100,000 saves', '250,000 recalls', '1 GB warm', '20 GB cold'],
   Team: ['500,000 saves', '1,250,000 recalls', '5 GB warm', '100 GB cold'],
 } as const;
 
-export const byokPrice = { Free: '$0', Pro: '$9', Team: '$39' } as const;
+export const byokPrice = { Free: '$0', Team: '$39' } as const;
 export const byokOverage = {
-  Pro: 'Extra use: $0.03 per 1k saves, $0.02 per 1k recalls',
   Team: 'Extra use: $0.03 per 1k saves, $0.02 per 1k recalls',
 } as const;
 

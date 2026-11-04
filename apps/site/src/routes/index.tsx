@@ -1,14 +1,13 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, Copy, Lock, Zap, Snowflake, Flame } from 'lucide-react';
 import { SiteNav, SiteFooter } from '@/components/site/SiteNav';
-import { OortSpiral, type SpiralApi, type Tier } from '@/components/oort/OortSpiral';
-import { HeroWish } from '@/components/site/HeroWish';
-import { PhoneExplorer } from '@/components/oort/PhoneExplorer';
+import { OortSpiral } from '@/components/oort/OortSpiral';
 import { Reveal, DriftBand } from '@/components/site/Reveal';
 import { WaitlistForm } from '@/components/site/WaitlistForm';
 import { PlannedBadge } from '@/components/site/PlannedBadge';
 import { measured, tiers } from '@/lib/oort-data';
+import { homeJsonLd, jsonLdScript } from '@/lib/seo';
 
 export const Route = createFileRoute('/')({
   head: () => ({
@@ -28,6 +27,7 @@ export const Route = createFileRoute('/')({
         content: 'Tiered, open-source memory for AI agents with explainable recall.',
       },
     ],
+    scripts: [{ type: 'application/ld+json', children: jsonLdScript(homeJsonLd) }],
   }),
   component: Home,
 });
@@ -38,35 +38,10 @@ function Home() {
   const [copied, setCopied] = useState(false);
   const cmd = 'oort install claude-code';
   const [y, setY] = useState(0);
-  const api = useRef<SpiralApi | null>(null);
-  const [stats, setStats] = useState({ recalls: 0, hot: 0, last: [] as number[] });
-  const onRecall = (tier: Tier, ms: number, _source: 'click' | 'auto') => {
-    setStats((s) => ({
-      recalls: s.recalls + 1,
-      hot: s.hot + (tier === 'photo' ? 1 : 0),
-      last: [...s.last, ms].slice(-20),
-    }));
-  };
-  const sorted = [...stats.last].sort((a, b) => a - b);
-  const p95 = sorted.length
-    ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]
-    : null;
-  const [word, setWord] = useState(0);
-  const words = [
-    'your coding agent',
-    'Claude and ChatGPT',
-    'support copilots',
-    'shopping agents',
-    'tutors',
-  ];
   useEffect(() => {
     const on = () => setY(window.scrollY);
     window.addEventListener('scroll', on, { passive: true });
-    const t = setInterval(() => setWord((w) => (w + 1) % words.length), 2400);
-    return () => {
-      window.removeEventListener('scroll', on);
-      clearInterval(t);
-    };
+    return () => window.removeEventListener('scroll', on);
   }, []);
   return (
     <div className="min-h-screen">
@@ -81,54 +56,26 @@ function Home() {
           className="absolute inset-0"
           style={{ transform: `translateY(${y * 0.2}px)`, opacity: Math.max(0, 1 - y / 900) }}
         >
-          <OortSpiral apiRef={api} onRecall={onRecall} />
+          <OortSpiral />
         </div>
-        <div className="pointer-events-none relative mx-auto grid min-h-[760px] max-w-7xl items-start gap-10 px-6 pt-20 pb-[340px] lg:min-h-[820px] lg:pb-28 lg:grid-cols-2 lg:items-center lg:py-28">
+        <div className="pointer-events-none relative mx-auto grid min-h-[680px] max-w-7xl items-start gap-10 px-6 pt-20 pb-[320px] lg:min-h-[760px] lg:grid-cols-2 lg:items-center lg:py-28">
           <div className="pointer-events-auto space-y-8 animate-rise">
-            <span className="inline-block rounded-full border border-border px-3 py-1 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
-              Open-source agent memory
-            </span>
-            <h1 className="text-5xl font-semibold leading-[1.02] md:text-6xl">
+            <h1 className="text-5xl font-semibold leading-[1.02] text-balance md:text-6xl">
               Memory that stays correct as facts change.
               <br />
               <span className="bg-gradient-to-r from-photon-glow via-starlight to-ember bg-clip-text text-transparent">
                 At a cost that stays flat as history grows.
               </span>
             </h1>
-            <p className="font-mono text-sm text-muted-foreground">
-              Memory for{' '}
-              <span key={word} className="inline-block animate-rise text-foreground">
-                {words[word]}
-              </span>
-            </p>
-            <p className="max-w-lg text-lg text-muted-foreground">
-              Facts that change are closed out, not overwritten, so old answers do not leak. Old
-              history moves to cheap storage. Every recall can explain why it was picked. Try the
-              demo: add a memory, or tap any star to recall it.
-            </p>
-            <p className="font-mono text-xs text-muted-foreground">
-              Works with Claude Code today. Other assistants are <PlannedBadge />
-            </p>
-            <HeroWish api={api} />
-            <dl className="flex gap-6 font-mono text-xs text-muted-foreground" aria-live="polite">
-              <div>
-                <dt>recalls</dt>
-                <dd className="text-base text-foreground">{stats.recalls}</dd>
-              </div>
-              <div>
-                <dt>p95 (demo)</dt>
-                <dd className="text-base text-foreground">{p95 ? `${p95} ms` : '-'}</dd>
-              </div>
-            </dl>
-            <p className="-mt-4 font-mono text-[11px] text-muted-foreground">
-              Hero counters are a demo animation, not a benchmark. Measured numbers are below.
+            <p className="max-w-md text-lg text-pretty text-muted-foreground">
+              Open-source memory for AI agents. Every recall can explain why it was picked.
             </p>
             <div className="flex flex-wrap items-center gap-3">
               <Link
-                to="/dashboard"
+                to="/docs/quickstart"
                 className="rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground glow-photon"
               >
-                Dive into the console
+                Get started
               </Link>
               <button
                 onClick={() => {
@@ -136,6 +83,7 @@ function Home() {
                   setCopied(true);
                   setTimeout(() => setCopied(false), 1500);
                 }}
+                aria-label={`Copy ${cmd}`}
                 className="flex items-center gap-3 rounded-full border border-border bg-card px-5 py-3 font-mono text-sm"
               >
                 <span className="text-photon-glow">$</span> {cmd}
@@ -146,28 +94,20 @@ function Home() {
                 )}
               </button>
             </div>
-            <p className="font-mono text-[11px] text-muted-foreground">
-              The CLI is not on npm yet. Publishing is coming. For now, build it from{' '}
-              <a href="https://github.com/oortmem/oort" className="underline underline-offset-4">
-                the repo
-              </a>
-              .
-            </p>
-            <div className="flex flex-wrap gap-x-6 gap-y-2">
-              <Link
-                to="/docs/quickstart"
-                className="inline-block text-sm text-foreground underline decoration-photon-glow/60 underline-offset-4 hover:decoration-photon-glow"
-              >
-                Read the setup guide →
-              </Link>
-              <Link
-                to="/explorer"
-                className="inline-block text-sm text-muted-foreground underline-offset-4 hover:underline"
-              >
-                See the Explorer concept →
-              </Link>
-            </div>
           </div>
+        </div>
+      </section>
+
+      <section className="border-b border-border">
+        <div className="mx-auto max-w-7xl px-6 py-8 text-sm text-muted-foreground">
+          <p>
+            Works with Claude Code, Claude Desktop, Codex, Cursor, VS Code and Gemini CLI today.
+            ChatGPT and claude.ai on the web are <PlannedBadge />. The CLI is not on npm yet, so{' '}
+            <Link to="/docs/quickstart" className="underline underline-offset-4">
+              build it from the repo
+            </Link>{' '}
+            for now.
+          </p>
         </div>
       </section>
 
@@ -241,31 +181,6 @@ function Home() {
               </Reveal>
             );
           })}
-        </div>
-      </section>
-
-      <section className="border-t border-border">
-        <div className="mx-auto grid max-w-7xl items-center gap-14 px-6 py-24 lg:grid-cols-2">
-          <Reveal className="space-y-5">
-            <p className="font-mono text-xs uppercase tracking-widest text-photon-glow">
-              Oort Explorer <PlannedBadge className="ml-2" />
-            </p>
-            <h2 className="text-4xl font-semibold">See your memory as a sky.</h2>
-            <p className="text-muted-foreground">
-              A planned app for exploring what your agent remembers. Memories form constellations by
-              topic and timelines show how facts changed. The demo below uses sample data. Today you
-              can inspect and forget memories from the CLI.
-            </p>
-            <Link
-              to="/explorer"
-              className="inline-block rounded-full border border-border px-5 py-2.5 text-sm hover:bg-secondary"
-            >
-              Open the concept demo
-            </Link>
-          </Reveal>
-          <Reveal delay={150}>
-            <PhoneExplorer initial="space" />
-          </Reveal>
         </div>
       </section>
 
@@ -348,8 +263,12 @@ function Home() {
             {(
               [
                 ['Python SDK', 'Planned', 'The engine and CLI are TypeScript today.'],
-                ['Desktop Explorer', 'Planned', 'A Tauri app to explore and edit memory.'],
-                ['iOS and Android companion', 'Concept', 'The phone demos show the idea only.'],
+                ['Desktop app', 'Planned', 'An app to explore and edit what your agent remembers.'],
+                [
+                  'Hosted Oort Cloud',
+                  'Planned',
+                  'Memory hosted for you, for products with many users.',
+                ],
               ] as const
             ).map(([t, k, d]) => (
               <div key={t} className="rounded-2xl border border-border bg-card p-6">
@@ -369,7 +288,7 @@ function Home() {
           Picture a retailer with 50M members and a personal shopping agent for each. Here is how
           that could run on Oort. It is a hypothetical scenario, not a customer.
         </p>
-        <div className="mt-8 flex justify-center gap-3">
+        <div className="mt-8 flex flex-wrap justify-center gap-3">
           <Link
             to="/enterprise"
             className="rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground"
@@ -379,12 +298,14 @@ function Home() {
           <Link to="/pricing" className="rounded-full border border-border px-6 py-3 text-sm">
             See pricing
           </Link>
+          <Link to="/dashboard" className="rounded-full border border-border px-6 py-3 text-sm">
+            See the console demo
+          </Link>
         </div>
       </section>
 
       <section id="early-access" className="border-t border-border">
         <div className="mx-auto max-w-7xl px-6 py-20">
-          <h2 className="mb-6 text-3xl font-semibold">Hosted Oort Cloud is not open yet.</h2>
           <WaitlistForm source="home" />
         </div>
       </section>

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   estimateMonthlyCost,
@@ -16,17 +18,28 @@ const usage = (saves: number, recalls: number, warmGb: number, coldGb: number) =
 });
 
 describe('plan table', () => {
-  it('lists Open Source, Free, Pro, Team and Enterprise in that order', () => {
-    expect(plans.map((p) => p.name)).toEqual(['Open Source', 'Free', 'Pro', 'Team', 'Enterprise']);
+  it('lists what you can buy today first: Open Source and Pro, then the hosted plans', () => {
+    expect(plans.map((p) => p.name)).toEqual(['Open Source', 'Pro', 'Free', 'Team', 'Enterprise']);
+    expect(plans.filter((p) => p.status === 'live').map((p) => p.name)).toEqual([
+      'Open Source',
+      'Pro',
+    ]);
   });
-  it('prices them $0, $0, $19, $99 and "Talk to us"', () => {
-    expect(plans.map((p) => p.price)).toEqual(['$0', '$0', '$19', '$99', 'Talk to us']);
+  it('marks every hosted Oort Cloud plan as Planned', () => {
+    expect(plans.filter((p) => p.status === 'planned').map((p) => p.name)).toEqual([
+      'Free',
+      'Team',
+      'Enterprise',
+    ]);
   });
-  it('sells Pro with Get Pro, and keeps Free and Team on early access', () => {
+  it('prices them $0, $19, $0, $99 and "Talk to us"', () => {
+    expect(plans.map((p) => p.price)).toEqual(['$0', '$19', '$0', '$99', 'Talk to us']);
+  });
+  it('sells Pro with Get Pro, and sends hosted Free and Team to the waitlist', () => {
     const cta = Object.fromEntries(plans.map((p) => [p.name, p.cta]));
     expect(cta['Pro']).toBe('Get Pro');
-    expect(cta['Free']).toBe('Get early access');
-    expect(cta['Team']).toBe('Get early access');
+    expect(cta['Free']).toBe('Join the waitlist');
+    expect(cta['Team']).toBe('Join the waitlist');
   });
   it('says plainly that Pro needs no API keys and keeps memories local', () => {
     expect(proLine).toBe('Pro: no API keys needed; your memories stay on your machine');
@@ -39,8 +52,18 @@ describe('plan table', () => {
   });
   it('shows the same Pro saves and recalls the relay enforces', () => {
     const pro = plans.find((p) => p.name === 'Pro')!;
-    expect(pro.included).toContain(`${rates.managed.Pro.saves.toLocaleString('en-US')} saves`);
-    expect(pro.included).toContain(`${rates.managed.Pro.recalls.toLocaleString('en-US')} recalls`);
+    expect(pro.included).toContain(
+      `${rates.managed.Pro.saves.toLocaleString('en-US')} saves a month`,
+    );
+    expect(pro.included).toContain(
+      `${rates.managed.Pro.recalls.toLocaleString('en-US')} recalls a month`,
+    );
+  });
+  it('promises Pro no hosted storage and no overage: it stops at the limits', () => {
+    const pro = JSON.stringify(plans.find((p) => p.name === 'Pro'));
+    expect(pro).not.toMatch(/GB|warm|cold|Extra use:|Extra storage/);
+    expect(pro).toMatch(/Stops at the monthly limits/);
+    expect(pro).toMatch(/Cancel any time/);
   });
   it('labels SOC 2, SLA and private deployment as Planned', () => {
     const all = plans.flatMap((p) => p.features);
@@ -51,7 +74,18 @@ describe('plan table', () => {
   });
 });
 
-describe('estimateMonthlyCost, we run the models', () => {
+describe('pricing page copy', () => {
+  const page = readFileSync(join(import.meta.dirname, '../routes/pricing.tsx'), 'utf8');
+  it('no longer calls every price a launch proposal', () => {
+    expect(page).not.toMatch(/Prices are a launch\s+proposal/);
+  });
+  it('frames the estimator as hosted Oort Cloud, which is Planned', () => {
+    expect(page).toMatch(/What would hosted Oort Cloud cost\?/);
+    expect(page).toMatch(/Oort Pro today is \$19 a\s+month flat/);
+  });
+});
+
+describe('estimateMonthlyCost, hosted Oort Cloud proposal, we run the models', () => {
   it('Free when usage fits the hard-stop limits', () => {
     expect(estimateMonthlyCost(usage(5_000, 10_000, 0.1, 1))).toEqual({
       plan: 'Free',
@@ -100,7 +134,7 @@ describe('estimateMonthlyCost, we run the models', () => {
   });
 });
 
-describe('estimateMonthlyCost, bring your own keys', () => {
+describe('estimateMonthlyCost, hosted Oort Cloud proposal, bring your own keys', () => {
   it('Free BYO fits 25k saves and 50k recalls', () => {
     expect(estimateMonthlyCost(usage(25_000, 50_000, 0.1, 1), { byok: true }).plan).toBe('Free');
     expect(estimateMonthlyCost(usage(25_001, 50_000, 0.1, 1), { byok: true }).plan).toBe('Pro');

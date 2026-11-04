@@ -14,6 +14,7 @@ import type { ReactNode } from 'react';
 import { beaconScripts, beaconToken } from '../lib/analytics';
 import { clerkEnabled, clerkPublishableKey } from '../lib/clerk';
 import { logStatus } from '../lib/log';
+import { SITE_ORIGIN, canonicalUrl } from '../lib/seo';
 import appCss from '../styles.css?url';
 
 function NotFoundComponent() {
@@ -75,24 +76,41 @@ function ErrorComponent({ reset }: ErrorComponentProps) {
 }
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
-  head: () => ({
-    meta: [
-      { charSet: 'utf-8' },
-      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'Oort Cloud: tiered memory for AI agents' },
-      {
-        name: 'description',
-        content: 'Open-source agent memory engine with hot, warm and cold tiers.',
-      },
-      { property: 'og:type', content: 'website' },
-      { name: 'twitter:card', content: 'summary_large_image' },
-    ],
-    scripts: beaconScripts(beaconToken),
-    links: [
-      { rel: 'stylesheet', href: appCss },
-      { rel: 'icon', href: '/favicon.png', type: 'image/png' },
-    ],
-  }),
+  head: ({ matches }) => {
+    // The deepest match is the page being served; its pathname has no query string.
+    const url = canonicalUrl(matches?.at(-1)?.pathname ?? '/');
+    const image = `${SITE_ORIGIN}/og.png`;
+    return {
+      meta: [
+        { charSet: 'utf-8' },
+        { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+        { title: 'Oort Cloud: tiered memory for AI agents' },
+        {
+          name: 'description',
+          content: 'Open-source memory for AI agents, with hot, warm and cold tiers.',
+        },
+        { name: 'theme-color', content: '#0b0d17' },
+        { property: 'og:type', content: 'website' },
+        { property: 'og:site_name', content: 'Oort' },
+        { property: 'og:url', content: url },
+        { property: 'og:image', content: image },
+        { property: 'og:image:width', content: '1200' },
+        { property: 'og:image:height', content: '630' },
+        { property: 'og:image:alt', content: 'Oort: open-source memory engine for AI agents' },
+        { name: 'twitter:card', content: 'summary_large_image' },
+        { name: 'twitter:image', content: image },
+      ],
+      scripts: beaconScripts(beaconToken),
+      links: [
+        { rel: 'stylesheet', href: appCss },
+        { rel: 'canonical', href: url },
+        { rel: 'icon', href: '/favicon.ico', sizes: '32x32' },
+        { rel: 'icon', href: '/icon-192.png', type: 'image/png', sizes: '192x192' },
+        { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
+        { rel: 'manifest', href: '/site.webmanifest' },
+      ],
+    };
+  },
   shellComponent: RootShell,
   component: RootComponent,
   notFoundComponent: NotFoundComponent,

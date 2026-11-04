@@ -6,6 +6,10 @@ export const Route = createFileRoute('/legal/acceptable-use')({
   head: () => ({
     meta: [
       { title: 'Acceptable use (draft) | Oort Cloud' },
+      {
+        name: 'description',
+        content: 'What you may and may not do with Oort, Oort Pro and the relay.',
+      },
       { name: 'robots', content: 'noindex' },
     ],
   }),
