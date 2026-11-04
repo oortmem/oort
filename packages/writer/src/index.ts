@@ -219,12 +219,38 @@ export function aiSdkWriter(opts: {
   };
 }
 
+export interface AnthropicWriterOptions {
+  /** Sent as `x-api-key`. Defaults to `process.env.ANTHROPIC_API_KEY`; ignored with `authToken`. */
+  apiKey?: string;
+  /**
+   * Sent as `Authorization: Bearer` instead of `apiKey`. The Oort Pro relay takes the Oort key
+   * this way (it accepts `x-api-key` too).
+   */
+  authToken?: string;
+  /**
+   * The API root, including `/v1` (default `https://api.anthropic.com/v1`). The Oort Pro relay
+   * is `https://relay.oortcloud.dev/v1/anthropic/v1`.
+   */
+  baseURL?: string;
+  model?: string;
+  /** For tests. */
+  fetch?: typeof fetch;
+}
+
 /** Anthropic-backed writer. Throws MissingCredentialError at construction when no key is available. */
-export function anthropicWriter(opts: { apiKey?: string; model?: string } = {}): MemoryWriter {
+export function anthropicWriter(opts: AnthropicWriterOptions = {}): MemoryWriter {
+  const extra = {
+    ...(opts.baseURL !== undefined && { baseURL: opts.baseURL }),
+    ...(opts.fetch !== undefined && { fetch: opts.fetch }),
+  };
+  if (opts.authToken !== undefined && opts.authToken !== '') {
+    const anthropic = createAnthropic({ authToken: opts.authToken, ...extra });
+    return aiSdkWriter({ model: anthropic(opts.model ?? DEFAULT_MODEL) });
+  }
   const apiKey = opts.apiKey ?? process.env['ANTHROPIC_API_KEY'];
   if (apiKey === undefined || apiKey === '') {
     throw new MissingCredentialError('ANTHROPIC_API_KEY', 'writer.apiKey');
   }
-  const anthropic = createAnthropic({ apiKey });
+  const anthropic = createAnthropic({ apiKey, ...extra });
   return aiSdkWriter({ model: anthropic(opts.model ?? DEFAULT_MODEL) });
 }

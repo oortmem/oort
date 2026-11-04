@@ -319,6 +319,48 @@ describe('anthropicWriter', () => {
     }
   });
 
+  it('writer.anthropic-routes-through-the-relay-with-a-bearer-token', async () => {
+    const calls: { url: string; headers: Headers }[] = [];
+    const fakeFetch = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), headers: new Headers(init?.headers) });
+      return new Response(
+        JSON.stringify({
+          id: 'msg_1',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-haiku-5-5',
+          content: [{ type: 'text', text: JSON.stringify(good) }],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 10, output_tokens: 20 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    // Fail loudly instead of reaching the real API if the option is ignored.
+    const net = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      throw new Error('real network');
+    });
+    const saved = process.env['ANTHROPIC_API_KEY'];
+    delete process.env['ANTHROPIC_API_KEY'];
+    try {
+      const token = ['oort', 'sk', 'test0123456789'].join('_');
+      const w = anthropicWriter({
+        authToken: token,
+        baseURL: 'https://relay.example.test/v1/anthropic/v1',
+        fetch: fakeFetch,
+      });
+      await expect(w.write(obs, 'ADD')).resolves.toEqual(good);
+      expect(calls[0]!.url).toBe('https://relay.example.test/v1/anthropic/v1/messages');
+      expect(calls[0]!.headers.get('authorization')).toBe(`Bearer ${token}`);
+      expect(calls[0]!.headers.get('x-api-key')).toBeNull();
+      expect(net).not.toHaveBeenCalled();
+    } finally {
+      net.mockRestore();
+      if (saved !== undefined) process.env['ANTHROPIC_API_KEY'] = saved;
+    }
+  });
+
   it('writer.anthropic-constructs-with-key', () => {
     const key = 'sk-' + 'ant-' + 'synthetic0123456789';
     expect(typeof anthropicWriter({ apiKey: key }).write).toBe('function');
