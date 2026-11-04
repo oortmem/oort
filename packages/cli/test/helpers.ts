@@ -44,6 +44,8 @@ export function fakeIo(opts: {
   /** stdout is a terminal (colour on unless NO_COLOR). */
   stdoutTTY?: boolean;
   answer?: string;
+  /** What `askSecret` returns. */
+  secret?: string;
 }): FakeIo {
   const io: FakeIo = {
     cwd: opts.cwd,
@@ -70,6 +72,10 @@ export function fakeIo(opts: {
     async ask(q) {
       io.asked.push(q);
       return opts.answer ?? '';
+    },
+    async askSecret(q) {
+      io.asked.push(q);
+      return opts.secret ?? '';
     },
     spawnDrain(cwd) {
       io.spawned++;

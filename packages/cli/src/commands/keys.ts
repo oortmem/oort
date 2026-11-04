@@ -8,21 +8,30 @@ function providerArg(arg: string, ctx: Ctx): Provider {
     throw new Refusal(`unknown provider; expected one of ${PROVIDERS.join(', ')}.`);
   }
   if (ctx.io.env['OORT_NO_KEYCHAIN'] === '1') {
-    throw new Refusal('OORT_NO_KEYCHAIN=1 is set; unset it to use the Keychain.');
+    throw new Refusal('OORT_NO_KEYCHAIN=1 is set; unset it to use stored keys.');
   }
   if (!ctx.keychain.supported) {
     throw new Refusal(
-      'the Keychain is macOS-only for now (CON-55); export the key as an environment variable instead.',
+      'this system has no place to keep keys (the Keychain is macOS, credentials.json is Linux and Windows); export the key as an environment variable instead.',
     );
   }
   return arg;
 }
 
-/** `oort keys set <provider>`: `security` prompts for the value, so it never touches argv or us. */
+/**
+ * `oort keys set <provider>`: the value is prompted for with the input hidden (by `security` on
+ * macOS, by us for credentials.json), so it never touches argv or the terminal history.
+ */
 export async function keysSetCommand(arg: string, ctx: Ctx): Promise<number> {
   const provider = providerArg(arg, ctx);
   const code = await ctx.keychain.set(provider);
-  if (code === 0) ctx.io.out(`Stored ${provider} in the Keychain (oort.${provider}).\n`);
+  if (code === 0) {
+    ctx.io.out(
+      ctx.keychain.kind === 'file'
+        ? `Stored ${provider} in ${ctx.keychain.where(provider)} (mode 600).\n`
+        : `Stored ${provider} in the Keychain (oort.${provider}).\n`,
+    );
+  }
   return code === 0 ? 0 : 1;
 }
 
@@ -30,7 +39,7 @@ export async function keysSetCommand(arg: string, ctx: Ctx): Promise<number> {
 export async function keysRmCommand(arg: string, ctx: Ctx): Promise<number> {
   const provider = providerArg(arg, ctx);
   const code = await ctx.keychain.remove(provider);
-  if (code === 0) ctx.io.out(`Removed ${provider} from the Keychain.\n`);
+  if (code === 0) ctx.io.out(`Removed ${provider} from ${ctx.keychain.label}.\n`);
   return code === 0 ? 0 : 1;
 }
 

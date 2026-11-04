@@ -4,6 +4,7 @@ import { filterFor, hookStatus } from '@oortmem/claude-code';
 import { resolveConfig, resolveHome } from '@oortmem/core';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
 import { ROLES, ROLE_VENDOR, keyLookup, routeFor, type AdapterRole } from '../credentials.js';
+import { describeProblem, inspectCredentialsFile } from '../credentials-file.js';
 import { PROVIDER_ENV } from '../keychain.js';
 import { RELAY_MODELS, relayUrl } from '../relay.js';
 import { uiFor, type Ui } from '../ui.js';
@@ -54,7 +55,7 @@ async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean 
     const where = (source: 'env' | 'keychain', provider: string): string =>
       source === 'env'
         ? PROVIDER_ENV[provider as keyof typeof PROVIDER_ENV]
-        : `Keychain oort.${provider}`;
+        : ctx.keychain.where(provider as keyof typeof PROVIDER_ENV);
     if (r.via === 'vendor') {
       checks.push({
         group: 'keys',
@@ -95,6 +96,20 @@ async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean 
       status: 'ok',
       detail: `Oort Pro (${where(r.source, 'oort')}), through the relay`,
     });
+  }
+  if (ctx.keychain.kind === 'file') {
+    const file = ctx.keychain.where('oort');
+    const state = inspectCredentialsFile(file);
+    const problem = describeProblem(file, state);
+    if (problem !== undefined) {
+      checks.push({
+        group: 'keys',
+        name: 'credentials',
+        status: 'fail',
+        detail: problem.split(' Fix:')[0] ?? problem,
+        fix: state.state === 'wide' ? `chmod 600 ${file}` : `fix or delete ${file}`,
+      });
+    }
   }
   return { checks, relayed };
 }

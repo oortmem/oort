@@ -266,7 +266,7 @@ describe('oort setup', () => {
         { yes: true, agents: 'none', keys: 'pro', import: 'skip', demo: false },
         {},
         undefined,
-        createKeychain({ platform: 'linux' }),
+        createKeychain({ platform: 'none' }),
         { siteUrl: site.url },
       );
       expect(off.code).toBe(0);

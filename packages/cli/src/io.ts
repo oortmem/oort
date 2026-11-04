@@ -23,6 +23,8 @@ export interface Io {
   readStdin(capMs?: number): Promise<string>;
   /** Prints `question` on stdout and reads one line from stdin. */
   ask(question: string): Promise<string>;
+  /** Like `ask`, with the typed input hidden on a terminal; a pipe supplies one line. Never echoed. */
+  askSecret(question: string): Promise<string>;
   /** Starts a detached `oort hook drain` in `cwd` and does not wait for it. */
   spawnDrain(cwd: string): void;
   /** Writes the hook's stdout, then exits 0 as soon as the write is flushed. */
@@ -75,6 +77,46 @@ export function processIo(entry: string | undefined, opts: { hook?: boolean } = 
       } finally {
         rl.close();
       }
+    },
+    askSecret(question) {
+      const stdin = process.stdin;
+      if (!stdin.isTTY) {
+        return new Promise((resolve) => {
+          let buf = '';
+          const finish = (): void => {
+            stdin.off('data', onData).off('end', finish).off('error', finish);
+            stdin.pause();
+            resolve((buf.split(/\r?\n/, 1)[0] ?? '').trim());
+          };
+          const onData = (c: Buffer): void => {
+            buf += c.toString('utf8');
+            if (/\n/.test(buf)) finish();
+          };
+          stdin.on('data', onData).on('end', finish).on('error', finish);
+        });
+      }
+      process.stdout.write(question);
+      return new Promise((resolve) => {
+        let buf = '';
+        const done = (value: string): void => {
+          stdin.off('data', onData);
+          stdin.setRawMode(false);
+          stdin.pause();
+          process.stdout.write('\n');
+          resolve(value);
+        };
+        const onData = (chunk: Buffer): void => {
+          for (const ch of chunk.toString('utf8')) {
+            if (ch === '\r' || ch === '\n' || ch === '\u0004') return done(buf.trim());
+            if (ch === '\u0003') return done(''); // Ctrl-C: nothing is stored
+            if (ch === '\u007f' || ch === '\b') buf = buf.slice(0, -1);
+            else if (ch >= ' ') buf += ch;
+          }
+        };
+        stdin.setRawMode(true);
+        stdin.resume();
+        stdin.on('data', onData);
+      });
     },
     spawnDrain(cwd) {
       const child = spawn(process.execPath, [fs.realpathSync(binPath()), 'hook', 'drain'], {

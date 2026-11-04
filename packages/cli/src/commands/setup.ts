@@ -404,7 +404,7 @@ export async function setupCommand(
     if (keys === 'have-pro') {
       p.info(
         ui.ok(
-          `Oort Pro key found (${oortSource === 'env' ? 'OORT_API_KEY' : 'Keychain oort.oort'}): ${
+          `Oort Pro key found (${oortSource === 'env' ? 'OORT_API_KEY' : ctx.keychain.where('oort')}): ${
             missing.length === 0
               ? 'your own keys still win for every role.'
               : `${missing.join(', ')} go${missing.length === 1 ? 'es' : ''} through the Oort Pro relay; your own keys win where set.`
@@ -425,7 +425,10 @@ export async function setupCommand(
         }
         if (outcome.ok) {
           done.push({
-            what: 'stored the Oort Pro key in the Keychain (oort.oort)',
+            what:
+              ctx.keychain.kind === 'file'
+                ? `stored the Oort Pro key in ${ctx.keychain.where('oort')}`
+                : 'stored the Oort Pro key in the Keychain (oort.oort)',
             undo: 'oort logout (then revoke the key at oortcloud.dev/account)',
           });
         } else {
@@ -439,23 +442,30 @@ export async function setupCommand(
         p.info(`${ui.bold(help.label)} for ${help.needs}: get a key at ${help.url}`);
         if (interactive && ctx.keychain.supported) {
           if (
-            answered(await p.confirm(`Store your ${help.label} key in the Keychain now?`, true))
+            answered(
+              await p.confirm(`Store your ${help.label} key in ${ctx.keychain.label} now?`, true),
+            )
           ) {
             const code = await ctx.keychain.set(k);
             if (code === 0) {
               done.push({
-                what: `stored ${k} in the Keychain (oort.${k})`,
+                what:
+                  ctx.keychain.kind === 'file'
+                    ? `stored ${k} in ${ctx.keychain.where(k)}`
+                    : `stored ${k} in the Keychain (oort.${k})`,
                 undo: `oort keys rm ${k}`,
               });
             } else {
-              p.info(ui.warn(`the Keychain did not store it; run \`oort keys set ${k}\` later`));
+              p.info(
+                ui.warn(`${ctx.keychain.label} did not store it; run \`oort keys set ${k}\` later`),
+              );
             }
           }
         } else {
           p.info(
             ctx.keychain.supported
               ? `  then run: oort keys set ${k}`
-              : `  then export ${PROVIDER_ENV[k]}=... (${ctx.io.env['OORT_NO_KEYCHAIN'] === '1' ? 'OORT_NO_KEYCHAIN=1 is set' : 'the Keychain is macOS-only for now'})`,
+              : `  then export ${PROVIDER_ENV[k]}=... (${ctx.io.env['OORT_NO_KEYCHAIN'] === '1' ? 'OORT_NO_KEYCHAIN=1 is set' : 'no key store here: the Keychain is macOS-only, credentials.json is for Linux and Windows'})`,
           );
         }
       }

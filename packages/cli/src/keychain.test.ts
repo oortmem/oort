@@ -111,8 +111,8 @@ describe('keychain', () => {
     expect(warnings[0]).not.toContain(planted);
   });
 
-  it('keychain.not-macos-never-spawns', async () => {
-    const { calls, kc } = rig({ platform: 'linux' });
+  it('keychain.unsupported-platform-never-spawns', async () => {
+    const { calls, kc } = rig({ platform: 'none' });
     expect(kc.supported).toBe(false);
     expect(await kc.read('voyage')).toBeUndefined();
     expect(calls).toEqual([]);

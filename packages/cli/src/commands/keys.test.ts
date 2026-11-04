@@ -7,7 +7,7 @@ const planted = (): string => ['sk', 'test', String(Date.now())].join('-');
 function fakeKeychain(items: Record<string, string>, supported = true) {
   const calls: string[][] = [];
   const kc = createKeychain({
-    platform: supported ? 'darwin' : 'linux',
+    platform: supported ? 'darwin' : 'none',
     user: 'alice',
     execFile: async (_f, args) => {
       calls.push(args);

@@ -192,7 +192,7 @@ describe('oort login', () => {
     expect(off.code).toBe(2);
     expect(off.io.stderr).toContain('OORT_NO_KEYCHAIN=1');
     expect(off.io.stderr).toContain('OORT_API_KEY');
-    const linux = await login(s, { keychain: createKeychain({ platform: 'linux' }) });
+    const linux = await login(s, { keychain: createKeychain({ platform: 'none' }) });
     expect(linux.code).toBe(2);
     expect(linux.io.stderr).toContain('macOS Keychain');
     expect(s.polls).toEqual([]);

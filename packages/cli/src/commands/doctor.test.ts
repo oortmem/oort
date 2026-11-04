@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installHooks } from '@oortmem/claude-code';
 import { harness, memory, memoryKeychain, type Harness } from '../../test/helpers.js';
 import { connectHost } from '../connectors.js';
-import type { Keychain } from '../keychain.js';
+import { createKeychain, type Keychain } from '../keychain.js';
 import { hostContext } from './connect.js';
 
 interface Check {
@@ -279,5 +279,24 @@ describe('oort doctor', () => {
     const d = await doctor(h, {}, undefined, relay.fetchFn);
     expect(d.check('relay', 'relay')?.status).toBe('info');
     expect(relay.seen).toHaveLength(0);
+  });
+
+  it('doctor.a-credentials-file-wider-than-0600-fails-with-chmod', async () => {
+    if (process.platform === 'win32') return;
+    const h = harness();
+    const file = path.join(h.home, 'credentials.json');
+    fs.mkdirSync(h.home, { recursive: true });
+    fs.writeFileSync(file, '{"version":1,"keys":{}}', { mode: 0o600 });
+    fs.chmodSync(file, 0o644);
+    const kc = createKeychain({ platform: 'linux', env: { OORT_HOME: h.home }, warn: () => {} });
+    const d = await doctor(h, {}, kc);
+    expect(d.check('keys', 'credentials')).toMatchObject({
+      status: 'fail',
+      fix: `chmod 600 ${file}`,
+    });
+    expect(d.human.code).toBe(1);
+    fs.chmodSync(file, 0o600);
+    const ok = await doctor(h, {}, kc);
+    expect(ok.check('keys', 'credentials')).toBeUndefined();
   });
 });

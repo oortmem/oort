@@ -239,6 +239,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     (env['OORT_NO_KEYCHAIN'] === '1'
       ? async () => undefined
       : createKeychain({
+          env,
           warn: (message) => warnings.push({ code: 'keychain-unreadable', message }),
         }).read);
   const lookup = keyLookup(env, reader);

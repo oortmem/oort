@@ -15,7 +15,8 @@ import { Refusal, type Ctx } from '../util.js';
  * 3. `GET /api/cli/session/<id>` answers 202 until a signed-in user approves,
  *    then 200 `{ status, key, prefix }` once, and 410 `used` or `expired`
  *    (10 minutes after the session started) after that; 400 for a bad id.
- * The key goes to Keychain item `oort.oort` and is never printed.
+ * The key goes to Keychain item `oort.oort` (macOS) or `credentials.json` (Linux, Windows) and is
+ * never printed.
  */
 
 export const DEFAULT_SITE_URL = 'https://oortcloud.dev';
@@ -101,14 +102,14 @@ const defaultSleep = (ms: number, signal: AbortSignal): Promise<void> =>
     signal.addEventListener('abort', done, { once: true });
   });
 
-/** Why the Keychain cannot hold the key here, or undefined when it can. */
+/** Why no key store can hold the key here, or undefined when one can. */
 export function keychainBlocker(ctx: Ctx): string | undefined {
   const fallback = `create a key at ${ACCOUNT_URL} and export OORT_API_KEY=... instead`;
   if (ctx.io.env['OORT_NO_KEYCHAIN'] === '1') {
     return `OORT_NO_KEYCHAIN=1 is set, so oort login has nowhere to keep the key; unset it, or ${fallback}.`;
   }
   if (!ctx.keychain.supported) {
-    return `oort login keeps the key in the macOS Keychain, which this system does not have yet (CON-55); ${fallback}.`;
+    return `oort login keeps the key in the macOS Keychain or, on Linux and Windows, in credentials.json; this system has neither; ${fallback}.`;
   }
   return undefined;
 }
@@ -263,10 +264,16 @@ async function keep(
     return {
       ok: false,
       reason: 'failed',
-      message: `The Keychain did not store the key, so nothing was saved. The key the site made for this sign-in ("CLI on <date>") is unused: ${REVOKE_HINT}.`,
+      message: `${ctx.keychain.kind === 'file' ? 'Oort could not store the key in credentials.json (see the line above)' : 'The Keychain did not store the key'}, so nothing was saved. The key the site made for this sign-in ("CLI on <date>") is unused: ${REVOKE_HINT}.`,
     };
   }
-  say(ui.ok('Signed in to Oort Pro. The key is in the Keychain as oort.oort.'));
+  say(
+    ui.ok(
+      ctx.keychain.kind === 'file'
+        ? `Signed in to Oort Pro. The key is in ${ctx.keychain.where('oort')} (mode 600).`
+        : 'Signed in to Oort Pro. The key is in the Keychain as oort.oort.',
+    ),
+  );
   const routes = await routeSummaries(keyLookup(ctx.io.env, ctx.keychain.read));
   const relayed = Object.values(routes).filter((r) => r.via === 'oort');
   const own = Object.values(routes).filter((r) => r.via === 'vendor');
@@ -288,7 +295,11 @@ async function keep(
     ),
   );
   if (ctx.io.env['OORT_API_KEY']) {
-    say(ui.warn('OORT_API_KEY is set in this environment and wins over the Keychain item.'));
+    say(
+      ui.warn(
+        `OORT_API_KEY is set in this environment and wins over ${ctx.keychain.kind === 'file' ? 'the stored key' : 'the Keychain item'}.`,
+      ),
+    );
   }
   return { ok: true };
 }
@@ -303,27 +314,29 @@ export async function loginCommand(opts: { browser?: boolean }, ctx: Ctx): Promi
   return 1;
 }
 
-/** `oort logout`: removes Keychain item `oort.oort`. It never revokes the key server-side. */
+/** `oort logout`: removes the stored Oort key (Keychain item `oort.oort`, or its credentials.json entry). It never revokes the key server-side. */
 export async function logoutCommand(ctx: Ctx): Promise<number> {
   const blocker = keychainBlocker(ctx);
   if (blocker !== undefined) {
     throw new Refusal(
       ctx.io.env['OORT_NO_KEYCHAIN'] === '1'
-        ? 'OORT_NO_KEYCHAIN=1 is set; unset it to remove the Keychain item.'
-        : 'the Keychain is macOS-only for now (CON-55); unset OORT_API_KEY to stop using Oort Pro.',
+        ? 'OORT_NO_KEYCHAIN=1 is set; unset it to remove the stored key.'
+        : 'this system has no stored key to remove (the Keychain is macOS, credentials.json is Linux and Windows); unset OORT_API_KEY to stop using Oort Pro.',
     );
   }
   const ui = uiFor(ctx.io);
   const had = (await ctx.keychain.read('oort')) !== undefined;
   const code = had ? await ctx.keychain.remove('oort') : 0;
   if (code !== 0) {
-    ctx.io.err('oort: the Keychain did not remove oort.oort.\n');
+    ctx.io.err(`oort: ${ctx.keychain.label} did not remove the Oort key.\n`);
     return 1;
   }
   ctx.io.out(
     had
-      ? `${ui.ok('Removed the Oort key from the Keychain (oort.oort).')} It still works until you ${REVOKE_HINT}.\n`
-      : 'No Oort key in the Keychain (oort.oort); nothing changed.\n',
+      ? `${ui.ok(ctx.keychain.kind === 'file' ? `Removed the Oort key from ${ctx.keychain.where('oort')}.` : 'Removed the Oort key from the Keychain (oort.oort).')} It still works until you ${REVOKE_HINT}.\n`
+      : ctx.keychain.kind === 'file'
+        ? `No Oort key in ${ctx.keychain.where('oort')}; nothing changed.\n`
+        : 'No Oort key in the Keychain (oort.oort); nothing changed.\n',
   );
   if (ctx.io.env['OORT_API_KEY']) {
     ctx.io.out(
