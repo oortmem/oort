@@ -13,7 +13,8 @@ oort setup
 ```
 
 Or run `npx oortmem setup`. The npm package is `oortmem`, because `oort` is
-taken on npm; the command is still `oort`. From a clone of the repo, use
+taken on npm. It installs two names for the same bin, `oort` and `oortmem`;
+the docs use `oort`. From a clone of the repo, use
 `pnpm build && cd packages/cli && pnpm add -g .` instead.
 
 `oort setup` walks through six steps: it detects your agents, chooses keys,
@@ -22,8 +23,10 @@ changed and how to undo it. Every step can be skipped.
 
 The connect step writes the realpath of the installed `oort` bin into agent
 config files. A copy in a temporary package cache (`npx`, `pnpm dlx`) or a temp
-directory is refused, because that path disappears once the run ends. Install
-the CLI first.
+directory is never written, because that path disappears once the run ends,
+and neither is `npx -y oortmem`, which is slow to start and needs the network.
+Under `npx oortmem setup`, setup offers to run `npm i -g oortmem` first and
+then writes the global install's path (see the connect step below).
 
 ## Conventions
 
@@ -47,7 +50,7 @@ non-empty) turns it off and wins over everything else. `FORCE_COLOR=1` turns it
 on for a pipe, `FORCE_COLOR=0` turns it off, and `TERM=dumb` turns it off.
 
 **`--json`.** These commands print data rather than a report: `recall`,
-`explain`, `inspect`, `stats` and `keys list`. With `--json` they print JSON
+`explain`, `inspect`, `stats`, `keys list` and `doctor`. With `--json` they print JSON
 only: no header and no colour. `export` always prints JSON Lines (see
 `docs/export-format.md`). `observe` prints its result as JSON.
 
@@ -59,12 +62,27 @@ only: no header and no colour. `export` always prints JSON Lines (see
 | `1` | Unexpected error. Only the message is printed; add `--debug` for the stack. |
 | `2` | Refusal or usage problem, such as a bad flag, missing keys, a file Oort will not edit, or a non-terminal session that would need a prompt. |
 
+`oort doctor` exits 1 when one of its checks fails, and `oort login` exits 1
+when the sign-in expires, was already used or is cancelled.
+
 **Never blocks a script.** A command that would ask a question refuses (exit 2)
 when stdin is not a terminal, and names the flag to pass instead (`--yes` for
 `forget`, `import` and `setup`). `oort hook` always exits 0.
 
 **Secrets.** No command prints a key, not even a prefix. An argument echoed in
 an error message is scrubbed and clipped to 24 characters.
+
+**Environment.**
+
+| Variable | Effect |
+| --- | --- |
+| `VOYAGE_API_KEY`, `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY` | Your own vendor keys. Each wins over the Keychain item of the same provider. |
+| `OORT_API_KEY` | Your Oort Pro key. It wins over Keychain item `oort.oort`. |
+| `OORT_RELAY_URL` | The Oort Pro relay root, for local development against `wrangler dev` (default `https://relay.oortcloud.dev`). https only, or http to `localhost`, `127.0.0.1` or `[::1]`. |
+| `OORT_SITE_URL` | The site `oort login` signs in at, for local development (default `https://oortcloud.dev`). The same rule applies. |
+| `OORT_NO_KEYCHAIN=1` | Switches the Keychain off for every command (see `oort keys`). |
+| `OORT_HOME` | The store directory (default `~/.oort`). |
+| `NO_COLOR`, `FORCE_COLOR` | See Colour above. |
 
 ## `oort setup`
 
@@ -80,6 +98,7 @@ oort setup --yes --agents claude-code,codex --keys byo --import skip
 | `--keys <mode>` | `byo`, `pro` or `skip`. | `byo` |
 | `--import <age>` | `skip`, or an age such as `14d`, `30d`, `12h` or `2w`. | `skip` |
 | `--no-demo` | Skip the remember, recall and forget check. | the check runs |
+| `--install-global` | Under `npx`: run `npm i -g oortmem` before connecting. | no install |
 
 On a terminal, a flag answers its question and the other steps still ask. When
 stdin or stdout is not a terminal and `--yes` is missing, setup prompts for
@@ -101,13 +120,27 @@ The steps:
 
      On a macOS terminal it then offers to run `oort keys set <provider>` for
      each missing key. With `--yes` it only prints the commands.
-   - **Oort Pro (coming in this release).** For now this says that
-     `oort login` lands shortly, and setup continues without keys.
+   - **Oort Pro.** No vendor keys, $19 a month. Setup runs `oort login`
+     right there (see below): the browser sign-in, the match code, and the
+     wait for approval. If the sign-in fails, expires or the Keychain is off,
+     setup says why and carries on without it. `--yes --keys pro` signs in
+     without a question: it prints the URL and waits.
    - **Skip.** Recall works lexical-only until keys are set.
+
+   Setup also shows whether an Oort key exists (`OORT_API_KEY` or Keychain
+   `oort.oort`). If one does, this step asks nothing: the key already covers
+   every role without a vendor key.
 3. **Connect.** Claude Code gets the hooks (`oort install claude-code`). Every
    other agent gets the MCP entry (`oort connect <host>`). On a terminal, setup
    first shows the dry-run diff for every agent and asks once before writing
-   any of them. An agent whose file Oort will not edit (invalid JSON, or an
+   any of them.
+
+   Under `npx oortmem setup` the running copy is temporary, so setup first
+   looks for a global install (`<npm prefix -g>/bin/oort`) and uses its path
+   if there is one. Otherwise it asks whether to run `npm i -g oortmem`, or,
+   with `--yes`, runs it only with `--install-global`. Without the install it
+   skips connecting and says which command to run. The npx path itself is
+   never written, and neither is `npx -y oortmem`. An agent whose file Oort will not edit (invalid JSON, or an
    `oort` entry you wrote yourself) is reported and skipped, and the others
    still connect.
 4. **Import.** This step appears only when `~/.claude/projects` exists. It
@@ -127,6 +160,8 @@ The steps:
 | Claude Code hooks in `~/.claude/settings.json` | `oort uninstall claude-code` |
 | An MCP entry in a host's config | `oort disconnect <host>` |
 | A key in the Keychain | `oort keys rm <provider>` |
+| The Oort Pro key (`oort.oort`) | `oort logout`, then revoke the key at oortcloud.dev/account |
+| A global install (`npm i -g oortmem`) | `npm rm -g oortmem` |
 | Imported sessions | review with `oort inspect`, remove with `oort forget <id>` |
 | A new store in `~/.oort` | `rm -r ~/.oort` (deletes every memory) |
 
@@ -142,17 +177,29 @@ oort disconnect cursor
 ```
 
 These commands add or remove one MCP server entry named `oort` in each host's
-user-level config. The entry runs the installed bin, with `args` set to
-`["mcp"]`.
+user-level config. The entry runs the installed bin as `oort mcp`. Cursor and
+VS Code also get `--project ${workspaceFolder}`, which they replace with the
+open workspace's folder; the other hosts get no arguments beyond `mcp`.
 
 | Host | File (macOS; Linux and Windows below) | Key | Entry |
 | --- | --- | --- | --- |
 | `claude-code` | `~/.claude.json` (user scope) | `mcpServers.oort` | `{"type":"stdio","command":"<bin>","args":["mcp"]}` |
 | `claude-desktop` | `~/Library/Application Support/Claude/claude_desktop_config.json` | `mcpServers.oort` | `{"command":"<bin>","args":["mcp"]}` |
 | `codex` | `~/.codex/config.toml`, or `$CODEX_HOME/config.toml` | `[mcp_servers.oort]` | `command = "<bin>"`, `args = ["mcp"]` |
-| `cursor` | `~/.cursor/mcp.json` | `mcpServers.oort` | `{"type":"stdio","command":"<bin>","args":["mcp"]}` |
+| `cursor` | `~/.cursor/mcp.json` | `mcpServers.oort` | `{"type":"stdio","command":"<bin>","args":["mcp","--project","${workspaceFolder}"]}` |
 | `gemini` | `~/.gemini/settings.json` | `mcpServers.oort` | `{"command":"<bin>","args":["mcp"]}` |
-| `vscode` | `~/Library/Application Support/Code/User/mcp.json` | `servers.oort` | `{"type":"stdio","command":"<bin>","args":["mcp"]}` |
+| `vscode` | `~/Library/Application Support/Code/User/mcp.json` | `servers.oort` | `{"type":"stdio","command":"<bin>","args":["mcp","--project","${workspaceFolder}"]}` |
+
+**Claude Code through its CLI.** Claude Code rewrites `~/.claude.json`
+itself, so a running Claude Code could overwrite a direct edit. When `claude`
+is on `PATH` (macOS and Linux), `oort connect claude-code` therefore runs
+`claude mcp add --scope user oort -- <bin> mcp`, and `oort disconnect
+claude-code` runs `claude mcp remove --scope user oort`. Oort still reads the
+file first: it refuses an `oort` entry it did not write, prints the diff and
+makes the backups. A stale entry from an older path is removed, then added
+again. Afterwards Oort checks that the file holds the expected entry; the
+`env: {}` that `claude` adds counts as the same entry. When `claude` is not on
+`PATH`, Oort edits `~/.claude.json` directly, as for the other hosts.
 
 Paths on the other platforms:
 - **Claude Desktop.** `%APPDATA%\Claude\claude_desktop_config.json` on
@@ -160,8 +207,8 @@ Paths on the other platforms:
 - **VS Code.** `%APPDATA%\Code\User\mcp.json` on Windows, and
   `~/.config/Code/User/mcp.json` on Linux. This is the default profile. A
   named profile keeps its own `mcp.json` under `User/profiles/<id>/`, which
-  `oort connect` does not edit. Use "MCP: Open User Configuration" in that
-  profile and paste the entry.
+  `oort connect` does not edit, and there is no `--profile` option yet. Use
+  "MCP: Open User Configuration" in that profile and paste the entry.
 
 Sources, read on 2026-11-04:
 - Claude Code: https://code.claude.com/docs/en/mcp (scopes, `~/.claude.json`).
@@ -193,7 +240,10 @@ What every run does:
   A symlinked config (from a dotfiles repo) stays a symlink: its target is
   written. A file's mode is kept, and a new file is created 0600.
 - **Never take over your entry.** Oort changes an `oort` entry only if it
-  wrote that entry itself, from this install path or an older one. Anything
+  wrote that entry itself, from this install path or an older one (an `oort`
+  or `oortmem` bin, a package's `oort/dist/main.js` or `oortmem/dist/main.js`,
+  or the `["mcp"]` args that Cursor and VS Code entries had before
+  `--project ${workspaceFolder}`). Anything
   else named `oort`, such as a remote URL or extra args, is yours. `connect`
   and `disconnect` then refuse (exit 2) and leave the file untouched. So do an
   unparseable file and a Codex `oort` entry written as an inline table.
@@ -206,13 +256,15 @@ Code with "MCP: List Servers".
 
 ### Scope
 
-The server's memory scope is the project of the directory the host starts it
-in, plus global memories:
-- **VS Code** starts stdio servers in the workspace folder (documented).
+The server's memory scope is a project, plus global memories:
+- **Cursor and VS Code** fill in `--project ${workspaceFolder}` with the open
+  workspace's folder. If a host passes the placeholder through unfilled, or
+  empty because no folder is open, `oort mcp` says so on stderr and uses the
+  directory it was started in.
 - **Claude Desktop** does not start servers in a project, so its scope is
   usually global.
-- **Claude Code, Codex, Gemini CLI and Cursor** start the server in a
-  directory they choose, usually your project.
+- **Claude Code, Codex and Gemini CLI** start the server in a directory they
+  choose, usually your project.
 
 To pin one project, add it to `args`:
 
@@ -272,7 +324,7 @@ Tools:
 | `pin` | `id`, `pinned` (boolean) | write, not destructive, idempotent | `{ id, pinned, changed }` |
 | `explain` | `id` | read-only, idempotent | the memory, its stored decisions, and its supersede chain |
 | `list_recent` | `since?` (ISO), `limit?` (1–50, default 20) | read-only, idempotent | memories by `updated_at`, newest first, each with `status` (`current`, `superseded` or `expired`) |
-| `whoami` | none | read-only, idempotent | `mode: "local"`, `project`, `version`, which adapters are available; no account or email |
+| `whoami` | none | read-only, idempotent | `mode: "local"`, `project`, `version`, which adapters are available, and per role whether it uses `oort-pro`, an `own-key` or is `missing`; no account or email |
 
 Every tool sets `openWorldHint: false` and has a `title`.
 
@@ -282,8 +334,19 @@ assistant turn "Noted: <fact>". The path is scrub, gate, reconcile and the
 writer. Secrets are therefore scrubbed, and a fact that is only a secret is
 skipped. A duplicate fact reinforces the existing memory, and a contradicting
 one supersedes it; the old fact is kept with its validity closed. The tool
-needs all three keys. Without them it returns an error that names
-`oort keys set`, and `recall` keeps working, lexical-only.
+needs all three roles of the write path (embed, decide and write), from your
+own keys or Oort Pro. Without them it returns an error that names
+`oort keys set`, and `recall` keeps working, lexical-only. Through Oort Pro,
+a relay refusal (402, 429) comes back as the tool error, and `recall`'s
+`note` names it.
+
+**Global memories.** `remember` runs in the server's project, but the
+candidates it reconciles against include global memories, as every write does.
+So a fact that repeats a global memory reinforces that global memory (its
+activation and `lastConfirmedAt`) instead of adding a project copy. This is
+intended: one fact stays one memory. A fact that would update or supersede a
+global memory never changes it; it becomes a new memory of the project
+instead, and the decision log records `cross-scope-target`.
 
 The server instructions:
 
@@ -306,11 +369,15 @@ These commands add or remove the `UserPromptSubmit`, `Stop` and
 `SessionStart` hooks in `~/.claude/settings.json`, or in
 `<cwd>/.claude/settings.json` with `--project`. The hooks run
 `<bin> hook <event>`. The first change keeps a one-time backup at
-`settings.json.oort-backup`. Only exact Oort entries are touched; a wrapper
-such as `cd x && oort hook Stop` is left alone. See `docs/claude-code.md`.
+`settings.json.oort-backup`. Only exact Oort entries are touched: `<bin> hook
+<event>` for this bin, or an older one (a bare `oort` bin, or a package's
+`oort/dist/main.js` or `oortmem/dist/main.js`), which is replaced in place. A
+wrapper such as `cd x && oort hook Stop` is left alone. See
+`docs/claude-code.md`.
 
 `oort connect claude-code` is separate. It adds the MCP server to
-`~/.claude.json`, so the tools are available too.
+`~/.claude.json` (through `claude mcp add` when `claude` is on `PATH`), so the
+tools are available too.
 
 ## Memory commands
 
@@ -339,15 +406,135 @@ oort keys rm voyage
 ```
 
 The providers are `voyage` (`VOYAGE_API_KEY`), `typesafe`
-(`TYPESAFE_API_KEY`) and `anthropic` (`ANTHROPIC_API_KEY`). A set, non-empty
+(`TYPESAFE_API_KEY`), `anthropic` (`ANTHROPIC_API_KEY`) and `oort`
+(`OORT_API_KEY`, the Oort Pro key that `oort login` stores). A set, non-empty
 environment variable wins over the Keychain. `keys list` prints where each key
 comes from; with `--json` it prints
-`[{ "provider", "envVar", "source" }]`. It never prints a value.
+`[{ "provider", "envVar", "source" }]`. It never prints a value. A missing
+`oort` row points at `oort login`. `oort keys set oort` also works, for a key
+you created on the account page.
 
 `OORT_NO_KEYCHAIN=1` switches the Keychain off for every command: nothing runs
-`/usr/bin/security`, and `keys set` and `keys rm` refuse while it is set. See
-`docs/claude-code.md` for why `ANTHROPIC_API_KEY` should stay out of your
-shell profile.
+`/usr/bin/security`, and `keys set`, `keys rm`, `login` and `logout` refuse
+while it is set. See `docs/claude-code.md` for why `ANTHROPIC_API_KEY` should
+stay out of your shell profile.
+
+## Oort Pro: `oort login` / `oort logout`
+
+```sh
+oort login [--no-browser]
+oort logout
+```
+
+Oort Pro ($19 a month) means no vendor keys: one Oort key reaches Voyage,
+TypeSafe and Anthropic through the relay at `relay.oortcloud.dev`, and your
+memories stay on your machine. Subscribe at https://oortcloud.dev/account.
+
+`oort login` signs this machine in:
+1. It makes a random session id (32 bytes, base64url) and opens
+   `https://oortcloud.dev/account/cli?session=<id>` in your browser (`open`
+   on macOS, `xdg-open` on Linux). If the browser does not start, if stdin or
+   stdout is not a terminal, or with `--no-browser`, it prints the URL instead.
+2. It prints a match code, `XXXX-XXXX`: the first 8 hex digits, upper case,
+   of SHA-256 of `oort-cli-code:` plus the session id. The page shows the same
+   code. Approve only if they match.
+3. It polls `GET https://oortcloud.dev/api/cli/session/<id>` every 2 seconds
+   (backing off to 5 while the site or the network struggles) until you
+   approve, the request expires (10 minutes) or you press Ctrl-C. It never
+   asks a question, so it also runs without a terminal.
+4. On approval the site mints a key named "CLI on <date>" and hands it over
+   once. The session id is single use: a second poll gets 410 `used`.
+   `oort login` stores the key as Keychain item `oort.oort` through
+   `security -i` on stdin (never in argv), reads it back to confirm, and
+   prints which roles now go through the relay. It never prints the key or
+   its prefix.
+
+| Outcome | Exit | What it says |
+| --- | --- | --- |
+| Approved and stored | 0 | Signed in; which roles use the relay; undo is `oort logout` |
+| Expired (410 `expired`, or 10 minutes passed) | 1 | Run `oort login` again |
+| Already used (410 `used`) | 1 | Run `oort login` again |
+| Ctrl-C | 1 | Cancelled; nothing was stored |
+| The Keychain did not keep the key | 1 | Nothing saved; the unused "CLI on <date>" key can be revoked at oortcloud.dev/account |
+| `OORT_NO_KEYCHAIN=1`, or not macOS | 2 | Refused before anything starts: create a key at oortcloud.dev/account and `export OORT_API_KEY=...` instead |
+
+Signing in again replaces the Keychain item; the old key keeps working until
+you revoke it. Neither command sends your email address or any other account
+detail: the browser session does the sign-in.
+
+`oort logout` removes Keychain item `oort.oort`. It does not revoke the key
+on the server: revoke it at oortcloud.dev/account. If `OORT_API_KEY` is set, it
+says so, since that key would still be used.
+
+### The `oort` provider
+
+Every adapter role picks its key on its own:
+
+| Role | Your own key | Through Oort Pro |
+| --- | --- | --- |
+| `embed`, `rerank` | `VOYAGE_API_KEY` or `oort.voyage` | `POST <relay>/v1/voyage/embeddings`, `/v1/voyage/rerank` |
+| `decide` | `TYPESAFE_API_KEY` or `oort.typesafe` | `POST <relay>/v1/typesafe/v1/systemone` |
+| `write` | `ANTHROPIC_API_KEY` or `oort.anthropic` | `POST <relay>/v1/anthropic/v1/messages` |
+
+- **A vendor key always wins**, per role. With only `VOYAGE_API_KEY` set and
+  an Oort key, embed and rerank call Voyage directly and decide and write go
+  through the relay.
+- **The Oort key** is `OORT_API_KEY`, then Keychain `oort.oort`. It is sent as
+  `Authorization: Bearer oort_sk_...` to every route.
+- **The relay** is `https://relay.oortcloud.dev`, or `OORT_RELAY_URL` for
+  local development against `wrangler dev` (for example
+  `OORT_RELAY_URL=http://localhost:8787`). Anything but https, or http to a
+  loopback host, is refused, and the roles that would use it are unavailable.
+- **Models.** The relay serves `voyage-3.5-lite`, `rerank-3-lite` or
+  `rerank-2.5-lite`, and `claude-haiku-5-5`, the defaults. A role configured
+  with another model is unavailable through Oort Pro, with a message that
+  names the served model and the vendor key to set instead.
+- **Refusals.** A relay 402 (subscription not active), 429 (60 requests per 10
+  seconds, or the month's 25,000 saves or 50,000 recalls used up) or 401 (key
+  unknown or revoked) becomes one line with the fix and
+  https://oortcloud.dev/account, never a stack trace. `oort observe` prints it
+  and exits 1; `oort recall` degrades to lexical-only and prints it on stderr;
+  the MCP `recall` tool puts it in `note`; hooks log it and carry on, as they do
+  for any adapter error.
+
+`oort keys list` and `oort doctor` show which key serves each role.
+
+## `oort doctor`
+
+```sh
+oort doctor [--json]
+```
+
+`oort doctor` checks everything Oort depends on and prints a fix for each
+problem. It reads only: it never creates the store, writes a config or calls
+the network.
+
+| Group | Checks | A problem and its fix |
+| --- | --- | --- |
+| `keys` | Per role, the key that wins: your own (env or Keychain) or Oort Pro (env or Keychain), presence only. | No key: `oort keys set <provider>, or oort login (Oort Pro)`. A model the relay does not serve: use the default model, or set the vendor key. |
+| `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, for this bin. | Missing, from another path, or a command that is not executable: `oort install claude-code`. Unparseable settings: fix the JSON, then `oort install claude-code`. |
+| `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
+| `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Readable by others: `chmod 700 ~/.oort`. |
+| `relay` | The relay URL in use, when a role goes through Oort Pro. | An invalid `OORT_RELAY_URL`: unset it. |
+
+Each check has a status: `✓` ok, `!` warn, `✗` fail, `·` info and `?`
+unknown. Relay reachability is always `unknown` for now: the relay has no
+health endpoint, so doctor does not probe it. A failed check makes doctor exit
+1; warnings alone exit 0.
+
+```
+oort doctor · 1 to fix
+keys
+  ✓ embed   own voyage key (Keychain oort.voyage)
+  ✓ write   Oort Pro (Keychain oort.oort), through the relay
+...
+mcp
+  ✗ cursor  Oort's entry in ~/.cursor/mcp.json runs a command that is not an executable file
+            fix: oort connect cursor
+```
+
+With `--json` it prints `{ "ok": boolean, "checks": [{ "group", "name",
+"status", "detail", "fix"? }] }` and nothing else.
 
 ## Projects: `oort project`
 
@@ -370,9 +557,9 @@ project's memories. See `docs/claude-code.md`.
 
 ## Planned (not in this build)
 
-- `oort login` / `oort logout`: sign in to Oort Pro at oortcloud.dev and store
-  the Oort key in the Keychain as `oort.oort`.
-- `oort doctor`: checks keys (presence only), hooks, connectors, store health
-  and relay reachability, with a fix for each failure.
+- A relay health check in `oort doctor`, once the relay has a health endpoint.
+- `oort login` on Linux and Windows, once Oort keeps keys outside the macOS
+  Keychain (CON-55). Until then, export `OORT_API_KEY`.
+- `oort connect vscode --profile <id>` for a named VS Code profile.
 - ChatGPT and claude.ai web or mobile: need the remote MCP URL that comes with
   Oort Cloud.
