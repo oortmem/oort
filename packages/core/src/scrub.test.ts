@@ -275,8 +275,8 @@ describe('scrub', () => {
     // The short component on each side of a key goes with it: base64 contains
     // `/`, so `blobs` or `data` could be the key's own edge chunk.
     expect(out.text).toBe('/home/me/.cache/[REDACTED:high-entropy].bin');
-    expect(scrub('/Users/mjnong/Library/Application_Support/Code/User').text).toBe(
-      '/Users/mjnong/Library/Application_Support/Code/User',
+    expect(scrub('/Users/alex/Library/Application_Support/Code/User').text).toBe(
+      '/Users/alex/Library/Application_Support/Code/User',
     );
   });
 
@@ -555,7 +555,7 @@ describe('scrub', () => {
       '~/',
       'https://api.example.com/v1/keys/',
       's3://bucket/uploads/',
-      '/Users/mjnong/Desktop/',
+      '/Users/alex/Desktop/',
       'C:/Users/Me/AppData/',
       'C:\\Users\\Me\\AppData\\',
       'C:\\keys\\',

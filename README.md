@@ -1,11 +1,125 @@
-# Oort
+<p align="center">
+  <a href="https://oortcloud.dev">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/brand/readme/hero-dark.svg" />
+      <source media="(prefers-color-scheme: light)" srcset="assets/brand/readme/hero-light.svg" />
+      <img src="assets/brand/readme/hero-dark.svg" width="100%" alt="Oort. Memory that stays correct as facts change. At a cost that stays flat as history grows." />
+    </picture>
+  </a>
+</p>
 
-Oort is an open-source memory engine for AI agents. It tiers memory into hot, warm, and cold storage so agents keep recent context close and older knowledge cheap to retain. It is local-first, with a hosted cloud to follow later.
+<p align="center">
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-0095ff?style=flat-square" /></a>
+  <img alt="npm: coming soon" src="https://img.shields.io/badge/npm-coming%20soon-979fab?style=flat-square" />
+  <a href="https://oortcloud.dev"><img alt="oortcloud.dev" src="https://img.shields.io/badge/site-oortcloud.dev-49cffc?style=flat-square" /></a>
+  <img alt="Node 22.15 or newer" src="https://img.shields.io/badge/node-%E2%89%A522.15-f8a13f?style=flat-square" />
+</p>
 
-To get started, run `pnpm install && pnpm verify`. That installs dependencies and runs formatting, lint, build, typecheck, and tests across every package.
+<p align="center">
+  <b>Open-source memory for AI agents.</b><br />
+  Old facts are closed out, not overwritten. Old history moves to cheap storage.<br />
+  Every recall can explain why it was picked.
+</p>
 
-To use the `oort` CLI, install it with `npm i -g oortmem` and run `oort setup`, or start with `npx oortmem setup`, which offers the global install first. From a clone of this repo: `pnpm build && cd packages/cli && pnpm add -g .`. It connects Claude Code (hooks) and Claude Desktop, Codex, Cursor, Gemini CLI or VS Code (the local MCP server). Every command is in [docs/cli.md](docs/cli.md).
+---
 
-A project's `oort.config.json` shapes recall in that project, but not the write path: queued turns are observed by a background drain that runs in `~/.oort` and reads only `~/.oort/config.json`. The store's `embed.dimension` likewise always comes from the home config; a different project value is ignored with a warning.
+## Why Oort
 
-Memories are scoped to a project: by default its id is derived from the main repository root, so a git worktree shares memories with its main checkout. A `project.id` in `oort.config.json` is ignored until you trust it, because that file comes with the repository and a cloned repo could use it to name another project's memories. Run `oort project link` in the repository to bind it to the configured id (or `oort project link --id <id>`), and `oort project unlink` to go back. `link` refuses a configured id that another repository is already linked to, unless you pass it with `--id`; the binding lives in `~/.oort/project-links.json` and the scope becomes `cfg:<id>`.
+Agents forget between sessions, and the usual fix is a vector store that only grows. That has two problems. Stale facts keep winning ("lives in Berlin" outranks "moved to Lisbon"), and the bill grows with every message you ever stored.
+
+Oort keeps memory the way a solar system keeps matter:
+
+| Tier | Name            | What lives there                                                       | Recall                           |
+| ---- | --------------- | ---------------------------------------------------------------------- | -------------------------------- |
+| Hot  | **Photosphere** | What just happened, and anything pinned                                | Instant, never searched for      |
+| Warm | **Kuiper Belt** | Short distilled facts from past sessions, fully indexed                | A few milliseconds               |
+| Cold | **Oort Cloud**  | Older history, zstd-compressed. The text stays, the heavy vector goes. | Comes back when it matters again |
+
+When a fact changes, the old one is marked superseded and kept for history. Recall only returns what is true now, unless you ask for `--as-of` a date.
+
+## Quickstart
+
+npm publishing is coming. Until then, build the CLI from this repo (Node 22.15 or newer, pnpm 12):
+
+```sh
+git clone https://github.com/oortmem/oort && cd oort
+pnpm install && pnpm build
+cd packages/cli && pnpm add -g .
+```
+
+Then connect your agent. `oort setup` detects your agents, asks how you want to provide keys, connects them and runs a quick check. Every step can be skipped.
+
+```sh
+oort setup
+oort recall "where does the user live"
+oort explain "where does the user live"   # each stage's rank and score
+```
+
+Once published, this becomes `npm i -g oortmem && oort setup`. Every command and flag is in [docs/cli.md](docs/cli.md).
+
+## Works with
+
+Claude Code (hooks, plus the MCP server), Claude Desktop, Codex, Cursor, Gemini CLI, VS Code, and any MCP client over stdio. `oort connect <host>` writes the config, backs up the old file and prints the diff. [Claude Code guide](docs/claude-code.md).
+
+## How it works
+
+```mermaid
+flowchart LR
+  T[Agent turn] --> S[Scrub secrets]
+  S --> W[Writer: distil short facts]
+  W --> G{Decide: add, update,<br/>supersede or skip}
+  G --> H[(Photosphere<br/>hot)]
+  H -- consolidate --> K[(Kuiper Belt<br/>warm)]
+  K -- age out --> C[(Oort Cloud<br/>cold, zstd)]
+  Q[Recall query] --> F[Lexical + vector<br/>validity filter]
+  F --> R[Fuse and rerank,<br/>freshness breaks ties]
+  K --> F
+  C -. hydrate .-> F
+  R --> A[Memory block<br/>for the prompt]
+```
+
+- **Write path.** Every turn is scrubbed of secrets first. A small writer model distils it into short facts, and a decision model compares each fact with what is already stored: add it, update it, supersede the old one, or skip it.
+- **Read path.** Keyword (SQLite FTS5) and vector (sqlite-vec) search run together. Facts that are no longer valid are filtered out before ranking. Results are fused, reranked when it helps, and freshness only breaks ties, so a newer fact never beats a better match.
+- **Local first.** Everything lives in `~/.oort` on your machine, in one SQLite file plus compressed cold blobs. Nothing is hosted.
+
+## Packages
+
+| Package                                            | What it does                                                                                   |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [`oortmem`](packages/cli)                          | The `oort` command line: setup, connectors, the local MCP server, recall, import and export    |
+| [`@oortmem/core`](packages/core)                   | The engine: secret scrubbing, the write gate, hybrid recall, fusion, tiering and project scope |
+| [`@oortmem/store-sqlite`](packages/store-sqlite)   | Storage on SQLite with FTS5 and sqlite-vec, and zstd cold blobs                                |
+| [`@oortmem/writer`](packages/writer)               | Turns conversation turns into short, self-contained facts                                      |
+| [`@oortmem/decide-jev`](packages/decide-jev)       | Add, update, supersede or skip decisions, using TypeSafe Jev                                   |
+| [`@oortmem/embed-voyage`](packages/embed-voyage)   | Embeddings through Voyage AI                                                                   |
+| [`@oortmem/rerank-voyage`](packages/rerank-voyage) | Reranking through Voyage AI                                                                    |
+| [`@oortmem/claude-code`](packages/claude-code)     | Claude Code hooks and transcript import                                                        |
+
+`apps/` holds the website and the Oort Pro relay. They are not published and the engine does not depend on them.
+
+## Keys, or Oort Pro
+
+Oort calls three model services: Voyage AI (embeddings and rerank), TypeSafe (decisions) and Anthropic (the writer). Bring your own keys with `oort keys set`. They stay in the macOS Keychain, or in a `0600` credentials file on Linux and Windows.
+
+Or use **Oort Pro**: $19/month, VAT included where applicable. No API keys needed, and your memories stay on your machine. Run `oort login` and the engine reaches the same services through our relay, which stores no content. [Pricing](https://oortcloud.dev/pricing).
+
+## Projects and trust
+
+Memories are scoped to a project. By default its id comes from the main repository root, so a git worktree shares memories with its main checkout. A `project.id` in a repo's `oort.config.json` is ignored until you run `oort project link`, because a cloned repo could otherwise use it to read another project's memories. Details in [docs/cli.md](docs/cli.md#projects-oort-project).
+
+## Develop
+
+```sh
+pnpm install
+pnpm verify   # public-repo check, format, lint, build, typecheck and every test
+```
+
+The export format is documented in [docs/export-format.md](docs/export-format.md).
+
+## Security
+
+Please report vulnerabilities to **security@oortcloud.dev**, not in a public issue.
+
+## License
+
+[Apache 2.0](LICENSE). Made in Gothenburg, Sweden.

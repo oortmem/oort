@@ -40,8 +40,8 @@ Set `OORT_NO_KEYCHAIN=1` to make Oort ignore the Keychain entirely.
 
 ## Phase 1 baseline (dogfood, 2026-11-04)
 
-First real run on Marcus's machine (Apple Silicon laptop, heavily loaded: load
-average 50 to 150 from emulators running at the same time). Keys from the Keychain.
+First real run, on an Apple Silicon laptop under heavy load (load average 50 to
+150 from other work running at the same time). Keys from the Keychain.
 
 | Measure | Value |
 | --- | --- |
@@ -61,7 +61,7 @@ the observation (now cut at a word boundary up to 600 chars).
 Open findings:
 - The hook's recall latency (~0.6 s) is above the design's 300 ms budget;
   most of it is two network calls. Measure embed vs rerank and consider
-  skipping rerank when fusion is confident (pricing note, recommendation 3).
+  skipping rerank when fusion is confident.
 - 13% unwritable: the writer should be able to return more than one memory
   per observation instead of overflowing one.
 - The superseded share (69%) is high; check that status updates are not

@@ -19,7 +19,7 @@ internationalization-and-localization-considerations-for-teams
 ssh git@github.com:org/repo.git works
 the token budget per turn is 4096 tokens
 see https://github.com/org/repo/commit/3f786850e387550fdab836ed7e6dc881de23001b for it
-open /Users/mjnong/repos/oort/packages/core/src/scrubObservation now
+open /Users/alex/repos/oort/packages/core/src/scrubObservation now
 packages/core/src/memory-store/HybridRetriever/RankFusion2
 call getUserProfileSettingsForAccount_v2 first
 config max_tokens: 1024
@@ -29,11 +29,11 @@ pip package sk-learn-is-not-the-package-name
 TOKEN_COUNT=4096
 "integrity": "sha512-Ia8uUyRAYLaYPq9wuxduycBaPWQKpcywU6NgAFDUcQ+pkYLvjAFsvzB8JXGNANySSQQ26DseSAaslkbuaLpOQB=="
 integrity sha256-wU6ROOLKKFPDbOuA4OAkoho9EcW0kZvdZO2TM9hRYZb=
-/Users/mjnong/Desktop/Screenshots/Screenshot_2024_11_03/Image
-/Users/mjnong/Downloads/Invoice-2024-11/Receipts/Q4
-/Users/mjnong/Documents/Work/Q3/Notes/Draft/A/B/C
-/Users/mjnong/Projects/MyApp2024/Build/Output/Release9/Win64
-/Users/mjnong/Library/Application_Support/Code/User/Settings2024/Backup3
+/Users/alex/Desktop/Screenshots/Screenshot_2024_11_03/Image
+/Users/alex/Downloads/Invoice-2024-11/Receipts/Q4
+/Users/alex/Documents/Work/Q3/Notes/Draft/A/B/C
+/Users/alex/Projects/MyApp2024/Build/Output/Release9/Win64
+/Users/alex/Library/Application_Support/Code/User/Settings2024/Backup3
 packages/Core/Src/Memory/HybridRetriever2/RankFusion3V2
 gs://my-bucket/Exports/2024/Q3/Run7/Part0001ABCDEF
 {"input_tokens": 1234, "output_tokens": 567}
@@ -90,7 +90,7 @@ node_modules/.vite/deps/chunk-BKL9XQ2M.js
 node_modules/.vite/deps/react-dom_client.js?v=3a1b2c4d
 file:///Users/me/proj/node_modules/.pnpm/esbuild@0.21.5/node_modules/esbuild/lib/main.js
 at Object.<anonymous> (/Users/me/proj/src/components/UserProfile/UserProfileCard.test.tsx:42:13)
-/Users/mjnong/repos/oort/.worktrees/phase-1/packages/core/src/scrub.ts
+/Users/alex/repos/oort/.worktrees/phase-1/packages/core/src/scrub.ts
 dQw4w9WgXcQ
 youtu.be/dQw4w9WgXcQ?si=AbCdEfGh12345678
 Successfully built 3f2a1b9c8d7e  sha256:9c7e2b1d0f4a6e8c
@@ -110,7 +110,7 @@ C:/WINDOWS/SYSTEM32/DRIVERS/ETC/HOSTS
 /mnt/c/Users/JD/AppData/X1/Y22/Z333
 /Users/JD/A1/B2/C3/D4/E5/F6/G7/H8
 /opt/X1/Y2/Z3abc/Q4/R5/S6/T7
-/Users/mjnong/.oort/cold/AbC123/XyZ987/blob.zst
+/Users/alex/.oort/cold/AbC123/XyZ987/blob.zst
 /var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/
 /proc/12345/fd/67/net/tcp6
 /sys/class/net/eth0/statistics/rx_bytes
@@ -133,7 +133,7 @@ from torch.nn.functional import scaled_dot_product_attention
 see node_modules/.pnpm/vitest@2.1.4_@types+node@22.9.0/node_modules
 ~/.ssh/id_ed25519.pub
 ~/.config/gcloud/application_default_credentials.json
-mjnong@users.noreply.github.com
+alex@users.noreply.github.com
 sentry.io/organizations/acme/issues/4567891234
 docker.io/library/postgres:16.4-bookworm
 ghcr.io/acme/oort-core:v0.3.1-rc.2
@@ -146,7 +146,7 @@ TestScrubRedactsKeysInPathsWithoutLeaks
 v20.11.1-darwin-arm64.tar.gz
 E2E_TEST_TIMEOUT_MS_FOR_CI=120000
 ENABLE_EXPERIMENTAL_FEATURE_FLAGS_V2=true
-/private/tmp/claude-501/-Users-mjnong-repos/b6974d38-d78e-478f-bfed-6be3c182ce0b/scratchpad
+/private/tmp/example-501/-Users-alex-repos/0f1e2d3c-4b5a-4978-8a9b-0c1d2e3f4a5b/scratchpad
 Library/Developer/Xcode/DerivedData/MyApp-fhqxyzabcdefghijklmnopqrstuv/Build
 ~/Library/Developer/Xcode/DerivedData/MyApp-ahbqwertzuiopasdfghjklyxcv/Build
 Bearer abc
@@ -196,13 +196,13 @@ call handleRequestV2Timeout30sRetry3 now
 call parseHttp2ResponseHeadersForUtf8Decoding now
 open /Volumes/Backup2024/Photos/Album2023/Edited/Final/Export3 now
 cd /Applications/Xcode/Contents/Developer/Platforms/iPhoneOS
-open /Users/mjnong/repos/oort/packages/core/src/scrub.ts
+open /Users/alex/repos/oort/packages/core/src/scrub.ts
 tail /var/log/syslog
 ls /tmp/x
 vi /etc/nginx/nginx.conf
 dir C:\Users\me\AppData\Local\Temp\abc
 POST https://api.example.com/v1/orgs/ACME/keys/rotate
-open /Users/mjnong/Library/Application_Support/Code/User/settings
+open /Users/alex/Library/Application_Support/Code/User/settings
 open /Users/MJ/Library/Caches/Google/Chrome/Default/Cache2024
 see /opt/homebrew/Cellar/python3/3_12_1/Frameworks/Python
 node_modules/@types/node/ts5_6/compatibility/disposable
@@ -214,20 +214,20 @@ https://github.com/org/repo/blob/main/packages/core/src/scrubObservation
 https://example.com/download/release/v2/MyApp-Setup-x64-2024
 ./src/Generated/Proto/V2/UserServiceGrpcPb2Client
 open /home/ubuntu/Projects/WebApp2/Dist/Assets/Bundle3/Main9
-/Users/mjnong/repos/oort/packages/core/src/scrub.ts
-open /Users/mjnong/Library/Mobile_Documents/iCloud/Desktop/Photos
-cd /Users/mjnong/Code/MyProject/Packages/Web/Src/Components
-cd /Users/mjnong/repos/oort/packages/core/src
+/Users/alex/repos/oort/packages/core/src/scrub.ts
+open /Users/alex/Library/Mobile_Documents/iCloud/Desktop/Photos
+cd /Users/alex/Code/MyProject/Packages/Web/Src/Components
+cd /Users/alex/repos/oort/packages/core/src
 image@sha256:a3f1a3f1a3f1a3f19c7e2b1d0f4a6e8c9c7e2b1d0f4a6e8c9c7e2b1d0f4a6e8c
 secret digest sha256:a3f1a3f1a3f1a3f19c7e2b1d0f4a6e8c9c7e2b1d0f4a6e8c9c7e2b1d0f4a6e8c
 SHA512-Ia8uUyRAYLaYPq9wuxduycBaPWQKpcywU6NgAFDUcQ+pkYLvjAFsvzB8JXGNANySSQQ26DseSAaslkbuaLpOQB==
 call handleRequestV2Timeout30sRetry3Ms now
 cd /Volumes/Backup2024/Photos/Album2023/Edited/Final/Export3
-open /Users/mjnong/Library/Application_Support/Code/User/Settings2024/Backup3
-open /Users/mjnong/Projects/MyApp2024/Build/Output/Release9/Win64
-open /Users/mjnong/Documents/Work/Q3/Notes/Draft/A/B/C
-open /Users/mjnong/Desktop/Screenshots/Screenshot_2024_11_03/Image
-open /Users/mjnong/Downloads/Invoice-2024-11/Receipts/Q4
+open /Users/alex/Library/Application_Support/Code/User/Settings2024/Backup3
+open /Users/alex/Projects/MyApp2024/Build/Output/Release9/Win64
+open /Users/alex/Documents/Work/Q3/Notes/Draft/A/B/C
+open /Users/alex/Desktop/Screenshots/Screenshot_2024_11_03/Image
+open /Users/alex/Downloads/Invoice-2024-11/Receipts/Q4
 x-ratelimit-reset-tokens: 6m0s
 "tokens": "Hello world"
 total_tokens: ~4k
@@ -249,9 +249,9 @@ monkey-patched-module-for-tests
 SKU SK-1234 in stock
 {"text":"line one\nline two\n\nline three"}
 {"description":"Run the tests\nthen commit the result\n"}
-{"file_path":"\/Users\/mjnong\/repos\/oort\/packages\/core\/src\/scrub.ts"}
+{"file_path":"\/Users\/alex\/repos\/oort\/packages\/core\/src\/scrub.ts"}
 {"command":"cat src/components/UserProfile/UserProfileCard.test.tsx\nls -la packages/core/src"}
-{"file_path":"/Users/mjnong/repos/oort/.worktrees/phase-1/packages/core/src/scrub.ts","limit":200}
+{"file_path":"/Users/alex/repos/oort/.worktrees/phase-1/packages/core/src/scrub.ts","limit":200}
 {"text":"caf\u00e9 r\u00e9sum\u00e9 na\u00efve d\u00e9j\u00e0 vu"}
 {"text":"\u00c9cole normale sup\u00e9rieure"}
 {"command":"npm run build\n\ttsc -p tsconfig.json\n\tvitest run"}
