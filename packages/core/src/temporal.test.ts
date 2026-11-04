@@ -102,6 +102,13 @@ describe('temporalIntent', () => {
     }
   });
 
+  it('temporal.intent-history-words-in-other-senses-stay-current', () => {
+    for (const q of ['which script is used to deploy', 'git history cleanup script']) {
+      expect(temporalIntent(q, AT).mode, q).toBe('current');
+    }
+    expect(temporalIntent('we used to deploy with fly', AT).mode).toBe('history');
+  });
+
   it('temporal.intent-as-of-a-past-date', () => {
     const r = temporalIntent('which port did auth service 0 use on 2 April 2026', AT);
     expect(r.mode).toBe('as-of');

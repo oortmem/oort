@@ -150,6 +150,17 @@ describe('jevDecider', () => {
     });
   });
 
+  it('gate.a-missing-volatile-answer-is-not-an-error', async () => {
+    const s = stub(() => {
+      const a = gateAnswers();
+      delete a['volatile'];
+      return a;
+    });
+    const g = await jevDecider({ client: s.client }).gate(obs);
+    expect(g.volatile).toBeUndefined();
+    expect(g.decisions.some((d) => d.question === 'volatile')).toBe(false);
+  });
+
   it('reconcile.asks-change-of-state-versus-correction-in-one-question', async () => {
     const s = stub(() => ({ c0: choiceA('CORRECT', probs({ CORRECT: 0.7 })) }));
     const out = await jevDecider({ client: s.client }).reconcile(obs, [mem('a', 'A')]);

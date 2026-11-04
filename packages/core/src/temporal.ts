@@ -110,8 +110,13 @@ export interface TemporalIntent {
 
 const KNOWN =
   /\b(what\s+did\s+(we|i|you)\s+(think|believe|know|assume)|believed|we\s+thought|we\s+knew|known\s+at)\b/i;
+/**
+ * History cues. "Used to" counts only as a habit ("we used to deploy with fly"), not the passive
+ * "is used to deploy"; "history" only as "history of …" or a question ending in it, not "git
+ * history cleanup".
+ */
 const HISTORY =
-  /\b(history\s+of|history|over\s+time|has\s+changed|have\s+changed|changed|used\s+to|previously|in\s+the\s+past|all\s+versions|earlier\s+versions|before\s*(?=[?.!]*\s*$))/i;
+  /\b(history\s+of|history\s*(?=[?.!]*\s*$)|over\s+time|changed|(?<!\b(?:is|are|was|were|be|been|being|gets?|got)\s+)used\s+to|previously|in\s+the\s+past|all\s+versions|earlier\s+versions|before\s*(?=[?.!]*\s*$))/i;
 /** A preposition left dangling once the date it introduced is removed. */
 const DANGLING = /\b(on|in|at|as\s+of|by|during|since)\s*$/i;
 

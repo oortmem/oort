@@ -32,18 +32,16 @@ export async function revalidateCommand(opts: { json?: boolean }, ctx: Ctx): Pro
     } else {
       current = await w.store.list(localGrant(filterFor(w.scope)));
     }
+    // A cloud copy without decisions cannot be judged, so it is left out rather than guessed.
     const stale = current
-      .filter((m) => m.source?.decisions !== undefined)
-      .filter((m) => isStale({ ...m, embedding: null } as Memory, now, days))
-      .sort(
-        (a, b) => Date.parse(lastConfirmed(a as Memory)) - Date.parse(lastConfirmed(b as Memory)),
-      );
+      .filter((m) => Array.isArray(m.source?.decisions) && isStale(m, now, days))
+      .sort((a, b) => Date.parse(lastConfirmed(a)) - Date.parse(lastConfirmed(b)));
     if (opts.json === true) {
       const rows = stale.map((m) => ({
         id: m.id,
         type: m.type,
         text: m.text,
-        lastConfirmed: lastConfirmed(m as Memory),
+        lastConfirmed: lastConfirmed(m),
       }));
       ctx.io.out(`${JSON.stringify(rows, null, 2)}\n`);
       return 0;
@@ -64,7 +62,7 @@ export async function revalidateCommand(opts: { json?: boolean }, ctx: Ctx): Pro
         stale.map((m) => [
           short(m.id),
           m.type,
-          `${age(lastConfirmed(m as Memory), now)} ago`,
+          `${age(lastConfirmed(m), now)} ago`,
           clip(m.text, 80),
         ]),
       ),

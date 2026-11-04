@@ -294,6 +294,10 @@ export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
         yesNo(`type_${t}`, p);
       }
       // Recorded on the memory: recall marks a volatile fact that has not been confirmed lately.
+      // A hint, not a requirement: an answer without it (an older relay) still gates.
+      if (answers['volatile'] === undefined) {
+        return { shouldStore, salience: 0.1 + 0.3 * s, types, decisions };
+      }
       const volatile = noulOf(answers, 'volatile');
       yesNo('volatile', volatile);
       return { shouldStore, salience: 0.1 + 0.3 * s, types, volatile, decisions };
