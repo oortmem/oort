@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { filterFor, queueDir } from '@oortmem/claude-code';
 import { isCurrent, type Tier, localGrant } from '@oortmem/core';
 import { uiFor } from '../ui.js';
-import { scopeLabel, withWired, type Ctx } from '../util.js';
+import { cloudOf, scopeLabel, withWired, type Ctx } from '../util.js';
 
 export interface Stats {
   scope: { projectId: string | null };
@@ -65,6 +65,38 @@ const mb = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 /** `oort stats [--json]`: counts for the memories visible from the cwd, and on-disk sizes. */
 export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<number> {
   return withWired(ctx, async (w) => {
+    const cloud = cloudOf(w);
+    if (cloud !== undefined) {
+      const c = await cloud.stats();
+      const queue = queueDir(w.config.home);
+      const out = {
+        store: 'cloud' as const,
+        url: cloud.url,
+        ...c,
+        queue: { pending: jsonlLines(queue), deadLetters: jsonlLines(path.join(queue, 'dead')) },
+      };
+      if (opts.json === true) {
+        ctx.io.out(`${JSON.stringify(out, null, 2)}\n`);
+        return 0;
+      }
+      const ui = uiFor(ctx.io);
+      const t = (tier: Tier): string => `${ui.tierName(tier)} ${c.tiers[tier]}`;
+      ctx.io.out(ui.header('stats', 'Oort Cloud'));
+      ctx.io.out(
+        ui.kv([
+          ['store', `Oort Cloud (${cloud.url})`],
+          ['memories', String(c.memories)],
+          ['tiers', `${t('hot')}, ${t('warm')}, ${t('cold')}`],
+          ['database', mb(c.databaseBytes)],
+          ['consolidated', c.lastConsolidatedAt ?? 'not yet'],
+          [
+            'queue',
+            `${out.queue.pending} pending upload, ${out.queue.deadLetters} dead-lettered (this machine)`,
+          ],
+        ]),
+      );
+      return 0;
+    }
     const now = new Date();
     const all = await w.store.list(localGrant(filterFor(w.scope)), { validOnly: false });
     const tiers: Record<Tier, number> = { hot: 0, warm: 0, cold: 0 };

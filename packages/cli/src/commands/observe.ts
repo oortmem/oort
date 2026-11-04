@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { observe, scrubObservation, type Observation } from '@oortmem/core';
-import { Refusal, writePath, withWired, type Ctx } from '../util.js';
+import { Refusal, cloudOf, writePath, withWired, type Ctx } from '../util.js';
 
 export interface ObserveOptions {
   user?: string;
@@ -72,6 +72,21 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
     return 0;
   }
   return withWired(ctx, async (w) => {
+    const cloud = cloudOf(w);
+    if (cloud !== undefined) {
+      const result = await cloud.observe({
+        ...(w.scope.projectId !== undefined && { project: w.scope.projectId }),
+        observation: {
+          user: obs.userText,
+          assistant: obs.assistantText,
+          at: obs.at,
+          ...(obs.sessionId !== undefined && { session: obs.sessionId }),
+          ...(obs.toolSummaries.length > 0 && { tools: obs.toolSummaries }),
+        },
+      });
+      ctx.io.out(`${JSON.stringify(result, null, 2)}\n`);
+      return 0;
+    }
     const adapters = writePath(w, 'oort observe');
     const result = await observe(obs, w.scope, {
       store: w.store,

@@ -22,6 +22,12 @@ import { setupCommand, type SetupOptions } from './commands/setup.js';
 import { statsCommand } from './commands/stats.js';
 import type { Io } from './io.js';
 import { keychainFor, type Keychain } from './keychain.js';
+import {
+  cloudExportCommand,
+  cloudImportCommand,
+  cloudStatusCommand,
+  cloudUseCommand,
+} from './commands/cloud.js';
 import { Refusal, echo, type Ctx } from './util.js';
 import { wire as defaultWire, type WireFn } from './wire.js';
 
@@ -176,6 +182,32 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .command('unlink')
     .description("remove this repository's binding (back to the derived id)")
     .action(run(() => projectUnlinkCommand(ctx)));
+
+  const cloud = p
+    .command('cloud')
+    .description('Oort Cloud (Oort Pro): keep memories in your account instead of on this machine');
+  cloud
+    .command('use')
+    .description('use Oort Cloud for hooks, MCP and every command (needs oort login and Pro)')
+    .option('--local', 'switch back to the local store on this machine')
+    .action(run((o: { local?: boolean }) => cloudUseCommand(o, ctx)));
+  cloud
+    .command('status')
+    .description('which store this machine uses, the account, and import progress')
+    .option('--json', 'print JSON')
+    .action(run((o: { json?: boolean }) => cloudStatusCommand(o, ctx)));
+  cloud
+    .command('import')
+    .description('upload the local store to Oort Cloud (resumable; safe to run again)')
+    .option('--dry-run', 'show what would be uploaded and stop')
+    .option('--yes', 'do not ask before uploading')
+    .action(run((o: { dryRun?: boolean; yes?: boolean }) => cloudImportCommand(o, ctx)));
+  cloud
+    .command('export')
+    .description('download every memory in your Oort Cloud account (v1 export format)')
+    .option('--out <file>', 'write to a new file (0600) instead of stdout')
+    .option('--force', 'with --out, overwrite an existing file (never a symlink)')
+    .action(run((o: { out?: string; force?: boolean }) => cloudExportCommand(o, ctx)));
 
   p.command('doctor')
     .description(

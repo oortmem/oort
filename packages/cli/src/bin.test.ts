@@ -314,6 +314,7 @@ describe('oort bin', () => {
       'mcp',
       'store',
       'relay',
+      'cloud',
     ]);
     expect(fs.existsSync(s.oortHome)).toBe(false);
   });

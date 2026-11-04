@@ -3,6 +3,7 @@ import { formatForInjection, recall, type RecallResult } from '@oortmem/core';
 import { uiFor } from '../ui.js';
 import {
   Refusal,
+  cloudOf,
   degradedHint,
   scopeLabel,
   shapeLinks,
@@ -28,6 +29,15 @@ export async function runRecall(
     // The value is not echoed: it is free text the user typed.
     throw new Refusal('--as-of is not an ISO date or timestamp.');
   }
+  const cloud = cloudOf(w);
+  if (cloud !== undefined) {
+    return cloud.recall({
+      text,
+      ...(w.scope.projectId !== undefined && { project: w.scope.projectId }),
+      ...(asOf !== undefined && { asOf }),
+      k: 10,
+    });
+  }
   return recall(
     { text, scope: filterFor(w.scope), ...(asOf !== undefined && { asOf }) },
     {
@@ -48,7 +58,11 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
     degradedHint(ctx.io, w, result.degraded);
     if (opts.json === true) {
       const filter = filterFor(w.scope);
-      const shaped = await Promise.all(result.memories.map((m) => shapeLinks(w.store, filter, m)));
+      // Cloud memories arrive already shaped for this account.
+      const shaped =
+        w.mode === 'cloud'
+          ? result.memories
+          : await Promise.all(result.memories.map((m) => shapeLinks(w.store, filter, m)));
       const plain = { ...result, memories: shaped.map(withoutEmbedding) };
       ctx.io.out(`${JSON.stringify(plain, null, 2)}\n`);
     } else {

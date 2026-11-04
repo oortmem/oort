@@ -38,6 +38,11 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
     opts.projectsDir ?? path.join(home, '.claude', 'projects'),
   );
   return withWired(ctx, async (w) => {
+    if (w.mode === 'cloud') {
+      throw new Refusal(
+        'transcript import writes to the local store: run it with `oort cloud use --local`, then `oort cloud import`.',
+      );
+    }
     const deps = { ...w, log: w.harnessLog };
     const base = {
       projectsDir,

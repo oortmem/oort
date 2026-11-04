@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { filterFor } from '@oortmem/claude-code';
 import { localGrant, type Grant, type Memory, type MemoryStore, type Scope } from '@oortmem/core';
-import { shapeLinks, toJson, withWired, writeOwnerOnly, type Ctx } from '../util.js';
+import { cloudOf, shapeLinks, toJson, withWired, writeOwnerOnly, type Ctx } from '../util.js';
 
 /** Version of the export format documented in docs/export-format.md. */
 export const EXPORT_VERSION = 1;
@@ -15,7 +15,12 @@ export interface ExportManifest {
 }
 
 /** A cold memory's main record has only its stub indexed; the cold copy holds the full text and embedding. */
-async function decoded(m: Memory, store: MemoryStore, grant: Grant, ctx: Ctx): Promise<Memory> {
+export async function decoded(
+  m: Memory,
+  store: MemoryStore,
+  grant: Grant,
+  ctx: Ctx,
+): Promise<Memory> {
   if (m.tier !== 'cold') return m;
   let blob: Memory | null;
   try {
@@ -38,7 +43,7 @@ async function decoded(m: Memory, store: MemoryStore, grant: Grant, ctx: Ctx): P
   };
 }
 
-const scopeKey = (s: Scope): string => JSON.stringify(Object.entries(s).sort());
+export const scopeKey = (s: Scope): string => JSON.stringify(Object.entries(s).sort());
 
 /**
  * `oort export [--out <file>]`: the v1 export format, a manifest line and one
@@ -49,6 +54,19 @@ export async function exportCommand(
   ctx: Ctx,
 ): Promise<number> {
   return withWired(ctx, async (w) => {
+    const cloud = cloudOf(w);
+    if (cloud !== undefined) {
+      // The whole account, in the same v1 format: `oort cloud export` is how you leave the cloud.
+      const data = await cloud.exportText();
+      const memories = Math.max(0, data.split('\n').filter((l) => l.length > 0).length - 1);
+      if (opts.out === undefined) ctx.io.out(data);
+      else {
+        const file = path.resolve(ctx.io.cwd, opts.out);
+        writeOwnerOnly(file, data, opts.force === true);
+        ctx.io.out(`Exported ${memories} memories from Oort Cloud to ${file}\n`);
+      }
+      return 0;
+    }
     const filter = filterFor(w.scope);
     const grant = localGrant(filter);
     const listed = await w.store.list(grant, { validOnly: false });

@@ -6,9 +6,11 @@ import {
   type MemoryStore,
   type ScopeFilter,
 } from '@oortmem/core';
+import { OortCloudError, findCloudMemory, type CloudClient } from '../cloud.js';
 import { uiFor } from '../ui.js';
 import {
   Refusal,
+  cloudOf,
   echo,
   age,
   clip,
@@ -92,6 +94,49 @@ export async function supersedeChain(
   return { links: [...back, link(m), ...forward], hidden };
 }
 
+/** The supersede chain through `m` in Oort Cloud: links the account cannot read count as hidden. */
+async function cloudChain(
+  client: CloudClient,
+  m: Memory,
+): Promise<{ links: ChainLink[]; hidden: number }> {
+  const seen = new Set([m.id]);
+  let hidden = 0;
+  const walk = async (
+    start: string | null,
+    next: (x: Memory) => string | null,
+    add: (l: ChainLink) => void,
+  ): Promise<void> => {
+    for (let id = start; id !== null && !seen.has(id);) {
+      seen.add(id);
+      let x: Memory;
+      try {
+        x = (await client.get(id)) as Memory;
+      } catch (e) {
+        if (e instanceof OortCloudError && e.kind === 'not-found') {
+          hidden++;
+          break;
+        }
+        throw e;
+      }
+      add(link(x));
+      id = next(x);
+    }
+  };
+  const back: ChainLink[] = [];
+  const forward: ChainLink[] = [];
+  await walk(
+    m.supersedes,
+    (x) => x.supersedes,
+    (l) => back.unshift(l),
+  );
+  await walk(
+    m.supersededBy,
+    (x) => x.supersededBy,
+    (l) => forward.push(l),
+  );
+  return { links: [...back, link(m), ...forward], hidden };
+}
+
 function limitOf(raw: string | undefined): number {
   if (raw === undefined) return 50;
   const n = Number(raw);
@@ -110,10 +155,23 @@ export async function inspectCommand(
   return withWired(ctx, async (w) => {
     const now = new Date();
     const filter = filterFor(w.scope);
+    const cloud = cloudOf(w);
+    const project = w.scope.projectId;
     if (id === undefined) {
-      const current = (await w.store.list(localGrant(filter))).slice(0, limit);
+      const current =
+        cloud !== undefined
+          ? ((
+              await cloud.list({
+                ...(project !== undefined && { project }),
+                limit: Math.min(limit, 100),
+              })
+            ).memories as Memory[])
+          : (await w.store.list(localGrant(filter))).slice(0, limit);
       if (opts.json === true) {
-        const shaped = await Promise.all(current.map((m) => shapeLinks(w.store, filter, m)));
+        const shaped =
+          cloud !== undefined
+            ? current
+            : await Promise.all(current.map((m) => shapeLinks(w.store, filter, m)));
         ctx.io.out(`${JSON.stringify(shaped.map(withoutEmbedding), null, 2)}\n`);
         return 0;
       }
@@ -133,10 +191,16 @@ export async function inspectCommand(
       ctx.io.out(ui.table(['id', 'type', 'tier', 'activation', 'age', 'text'], rows));
       return 0;
     }
-    const m = await findMemory(w.store, filter, id);
-    const { links: chain, hidden } = await supersedeChain(w.store, m, filter);
+    const m =
+      cloud !== undefined
+        ? ((await findCloudMemory(cloud, id, project)) as Memory)
+        : await findMemory(w.store, filter, id);
+    const { links: chain, hidden } =
+      cloud !== undefined ? await cloudChain(cloud, m) : await supersedeChain(w.store, m, filter);
     if (opts.json === true) {
-      const memory = withoutEmbedding(await shapeLinks(w.store, filter, m));
+      const memory = withoutEmbedding(
+        cloud !== undefined ? m : await shapeLinks(w.store, filter, m),
+      );
       const out = { memory, chain, hiddenLinks: hidden };
       ctx.io.out(`${JSON.stringify(out, null, 2)}\n`);
       return 0;
