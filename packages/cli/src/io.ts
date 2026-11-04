@@ -15,6 +15,8 @@ export interface Io {
   /** The script the CLI was started as (`process.argv[1]`); undefined under `node -e`. */
   entry: string | undefined;
   stdinIsTTY: boolean;
+  /** Whether stdout is a terminal (colour is off when it is not); absent means no. */
+  stdoutIsTTY?: boolean;
   out(text: string): void;
   err(text: string): void;
   /** All of stdin, or what arrived within `capMs`. */
@@ -48,6 +50,7 @@ export function processIo(entry: string | undefined, opts: { hook?: boolean } = 
     env: process.env,
     entry,
     stdinIsTTY: process.stdin.isTTY === true,
+    stdoutIsTTY: process.stdout.isTTY === true,
     out: (text) => void process.stdout.write(text),
     err: (text) => void process.stderr.write(text),
     readStdin(capMs) {
