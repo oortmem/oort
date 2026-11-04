@@ -10,6 +10,7 @@ import {
 } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 
+import { beaconScripts, beaconToken } from '../lib/analytics';
 import appCss from '../styles.css?url';
 
 function NotFoundComponent() {
@@ -82,6 +83,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { property: 'og:type', content: 'website' },
       { name: 'twitter:card', content: 'summary_large_image' },
     ],
+    scripts: beaconScripts(beaconToken),
     links: [
       { rel: 'stylesheet', href: appCss },
       { rel: 'preconnect', href: 'https://fonts.googleapis.com' },

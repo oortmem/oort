@@ -6,6 +6,8 @@ import { defineConfig } from 'vite';
 import tsConfigPaths from 'vite-tsconfig-paths';
 
 export default defineConfig({
+  // Cloudflare Web Analytics token. Unset means no beacon is added.
+  define: { __CF_BEACON_TOKEN__: JSON.stringify(process.env['CF_BEACON_TOKEN'] ?? '') },
   plugins: [
     cloudflare({ viteEnvironment: { name: 'ssr' } }),
     tsConfigPaths(),
