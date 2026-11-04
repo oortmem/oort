@@ -66,11 +66,19 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
       .map(([k, n]) => `${k} ${n}`)
       .join(', ');
     ctx.io.out(`Imported ${r.observations} observations: ${outcomes || 'nothing new'}.\n`);
+    const skippedWhy = Object.entries(r.unwritable ?? {});
+    if (skippedWhy.length > 0) {
+      ctx.io.out(
+        `Skipped as unwritable (a retry would fail the same way): ${skippedWhy.map(([k, n]) => `${k} x${n}`).join('; ')}\n`,
+      );
+    }
     const failed = Object.keys(r.failedSessions ?? {}).length;
     if (failed > 0) {
       ctx.io.out(
         `${failed} session(s) stopped at a failed observation; re-run the import to retry them.\n`,
       );
+      const reasons = new Set(Object.values(r.failedSessions ?? {}).map((f) => f.reason));
+      ctx.io.out(`Reason: ${[...reasons].join('; ')}\n`);
     }
     return 0;
   });

@@ -303,6 +303,55 @@ describe('importTranscripts', () => {
     expect(await deps.store.lexical('auth service port', elsewhere, 10)).toEqual([]);
   });
 
+  it('import.failure-reason-names-the-error-never-its-message', async () => {
+    const t = tempHome();
+    const dir = projects(t);
+    const base = makeDeps(t, { calls: newCalls() });
+    const secret = ['observation', 'text', String(Date.now())].join('-');
+    const write: MemoryWriter = {
+      async write() {
+        throw Object.assign(new Error(secret), { name: 'WriterError', kind: 'auth', status: 401 });
+      },
+    };
+    const r = await importTranscripts(
+      { projectsDir: dir, estimateOnly: false },
+      { ...base, write },
+    );
+    const reasons = Object.values(r.failedSessions ?? {}).map((f) => f.reason);
+    expect(reasons.length).toBeGreaterThan(0);
+    expect(reasons.every((x) => x === 'WriterError (auth, HTTP 401)')).toBe(true);
+    expect(JSON.stringify(r)).not.toContain(secret);
+  });
+
+  it('import.permanent-writer-failure-skips-and-continues', async () => {
+    const t = tempHome();
+    const dir = projects(t);
+    const calls = newCalls();
+    const base = makeDeps(t, { calls });
+    // The model's output for this one observation never fits the schema: retrying the
+    // session later would fail the same way, so it is skipped and the session goes on.
+    const write: MemoryWriter = {
+      async write(obs, action, prior) {
+        if (obs.turnRef === 'o-a-0002')
+          throw Object.assign(new Error('x'), { name: 'WriterOutputError', fields: ['text'] });
+        return base.write!.write(obs, action, prior);
+      },
+    };
+    const r = await importTranscripts(
+      { projectsDir: dir, estimateOnly: false },
+      { ...base, write },
+    );
+    expect(r.outcomes).toEqual({ added: 9, unwritable: 1 });
+    expect(r.failedSessions).toBeUndefined();
+    expect(r.unwritable).toEqual({ 'WriterOutputError (fields: text)': 1 });
+    // A re-run attempts nothing: the cursor moved past the skipped observation.
+    const again = await importTranscripts(
+      { projectsDir: dir, estimateOnly: false },
+      { ...base, write },
+    );
+    expect(again.observations).toBe(0);
+  });
+
   it('import.cursor-stops-at-first-failure', async () => {
     const t = tempHome();
     const dir = projects(t);
@@ -318,7 +367,7 @@ describe('importTranscripts', () => {
     const deps = { ...base, write };
     const r = await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
     expect(r.outcomes).toEqual({ added: 6, failed: 1 });
-    expect(r.failedSessions).toEqual({ [OTHER]: { failed: 1, notAttempted: 3 } });
+    expect(r.failedSessions).toEqual({ [OTHER]: { failed: 1, notAttempted: 3, reason: 'Error' } });
     expect(calls.written.map((o) => o.turnRef)).toEqual([
       'o-a-0001c',
       'a-0001c',

@@ -52,7 +52,36 @@ export interface ImportResult {
    * and the session's later observations were not attempted (the Stop hook or
    * a later import picks them up).
    */
-  failedSessions?: Record<string, { failed: number; notAttempted: number }>;
+  failedSessions?: Record<string, { failed: number; notAttempted: number; reason: string }>;
+  /**
+   * Observations skipped because the failure is permanent for that input (the
+   * writer's output never fits the schema, or the model refused or truncated),
+   * keyed by `failureReason`. Their sessions continue and the cursor passes them.
+   */
+  unwritable?: Record<string, number>;
+}
+
+/** A failure a re-run would repeat for the same observation: skip it rather than stop the session. */
+function isPermanent(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  if (e.name === 'WriterOutputError') return true;
+  return e.name === 'WriterError' && (e as { kind?: unknown }).kind === 'bad-response';
+}
+
+/**
+ * Why an observation failed, from the error's class and the typed fields our
+ * adapters set (`kind`, `status`, `fields`). Never the message: a provider's
+ * message may echo the observation it was given.
+ */
+export function failureReason(e: unknown): string {
+  if (!(e instanceof Error)) return 'non-error thrown';
+  const { kind, status, fields } = e as { kind?: unknown; status?: unknown; fields?: unknown };
+  const parts: string[] = [];
+  if (typeof kind === 'string') parts.push(kind);
+  if (typeof status === 'number') parts.push(`HTTP ${status}`);
+  if (Array.isArray(fields) && fields.every((f) => typeof f === 'string'))
+    parts.push(`fields: ${fields.join(', ')}`);
+  return parts.length === 0 ? e.name : `${e.name} (${parts.join(', ')})`;
 }
 
 /** Fixed per-call writer overhead (system prompt, schema), in tokens. */
@@ -208,8 +237,18 @@ export async function importTranscripts(
   const evalFile = path.join(deps.config.home, 'eval', `import-${day}.jsonl`);
   const results: ObserveResult[] = [];
   const outcomes: Record<string, number> = {};
-  const failedSessions: Record<string, { failed: number; notAttempted: number }> = {};
+  const failedSessions: Record<string, { failed: number; notAttempted: number; reason: string }> =
+    {};
+  const unwritable: Record<string, number> = {};
   const done = new Map<string, number>();
+  // Only forward within a session, and only past observations that are finished with.
+  const advance = async (item: (typeof items)[number]): Promise<void> => {
+    const prev = done.get(item.session) ?? -1;
+    if (item.pos > prev && item.obs.turnRef !== undefined) {
+      await deps.store.setCursor(cursorKey(item.session), item.obs.turnRef);
+      done.set(item.session, item.pos);
+    }
+  };
   for (const item of items) {
     const stopped = failedSessions[item.session];
     if (stopped !== undefined) {
@@ -228,9 +267,16 @@ export async function importTranscripts(
         now: deps.now?.() ?? new Date(),
         harness: 'claude-code',
       });
-    } catch {
+    } catch (e) {
+      if (isPermanent(e)) {
+        outcomes['unwritable'] = (outcomes['unwritable'] ?? 0) + 1;
+        const why = failureReason(e);
+        unwritable[why] = (unwritable[why] ?? 0) + 1;
+        await advance(item);
+        continue;
+      }
       outcomes['failed'] = (outcomes['failed'] ?? 0) + 1;
-      failedSessions[item.session] = { failed: 1, notAttempted: 0 };
+      failedSessions[item.session] = { failed: 1, notAttempted: 0, reason: failureReason(e) };
       continue;
     }
     results.push(r);
@@ -244,17 +290,13 @@ export async function importTranscripts(
       };
       appendPrivateFile(evalFile, `${JSON.stringify(row)}\n`);
     }
-    // Only past observations that succeeded, and only forward within a session.
-    const prev = done.get(item.session) ?? -1;
-    if (item.pos > prev && item.obs.turnRef !== undefined) {
-      await deps.store.setCursor(cursorKey(item.session), item.obs.turnRef);
-      done.set(item.session, item.pos);
-    }
+    await advance(item);
   }
   return {
     ...summary,
     results,
     outcomes,
     ...(Object.keys(failedSessions).length > 0 && { failedSessions }),
+    ...(Object.keys(unwritable).length > 0 && { unwritable }),
   };
 }
