@@ -10,6 +10,7 @@ import {
   byokPrice,
   estimateMonthlyCost,
   plans,
+  proLine,
   tiers,
 } from '@/lib/oort-data';
 
@@ -51,8 +52,10 @@ function Pricing() {
           you do not pay for it on every recall.
         </p>
         <p className="mt-3 max-w-xl text-sm text-muted-foreground">
-          Hosted Oort Cloud is not open yet. The open source engine is the way to start today.
+          Hosted Oort Cloud is not open yet. Today you run the open source engine on your own
+          machine, with your own keys or with Oort Pro.
         </p>
+        <p className="mt-3 max-w-xl text-base font-medium">{proLine}.</p>
 
         <div className="mt-12 grid gap-4 md:grid-cols-3">
           {tiers.map((t) => (
@@ -150,12 +153,21 @@ function Pricing() {
                   >
                     {p.cta}
                   </Link>
+                ) : p.name === 'Pro' && !byok ? (
+                  // Sign in first (the account page redirects), then straight on to Checkout.
+                  <Link
+                    to="/account"
+                    search={{ subscribe: 'pro' }}
+                    className="press mt-8 rounded-full bg-primary py-2.5 text-center text-sm font-medium text-primary-foreground"
+                  >
+                    {p.cta}
+                  </Link>
                 ) : (
                   <a
                     href="#early-access"
                     className={`mt-8 rounded-full py-2.5 text-center text-sm font-medium ${p.featured ? 'bg-primary text-primary-foreground' : 'border border-border'}`}
                   >
-                    {p.cta}
+                    {p.name === 'Pro' ? 'Get early access' : p.cta}
                   </a>
                 )}
               </div>
@@ -165,6 +177,13 @@ function Pricing() {
         <p className="mt-4 text-xs text-muted-foreground">
           Prices are a launch proposal. Free is a hard stop: it never bills and never asks for a
           card.
+        </p>
+        <p className="mt-2 max-w-3xl text-xs text-muted-foreground">
+          Oort Pro ($19 a month) works with the engine on your machine: Oort makes the Voyage,
+          TypeSafe and Anthropic calls for you, so you need no keys of your own. Pro stops at 25,000
+          saves and 50,000 recalls a month; extra use is not billed yet. The warm and cold storage
+          amounts apply to hosted Oort Cloud, which is <PlannedBadge />. Your own keys pricing is
+          for hosted Oort Cloud too.
         </p>
 
         <div className="mt-16">

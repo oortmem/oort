@@ -155,6 +155,9 @@ export function estimateMonthlyCost(u: Usage, opts: { byok?: boolean } = {}) {
   return { plan: plan as PlanName, monthly, overage: cents(monthly - base) };
 }
 
+/** Shown plainly on the pricing and account pages. */
+export const proLine = 'Pro: no API keys needed; your memories stay on your machine';
+
 export const plans = [
   {
     name: 'Open Source',
@@ -186,11 +189,12 @@ export const plans = [
     who: 'For products with real users.',
     included: ['25,000 saves', '50,000 recalls', '1 GB warm', '20 GB cold'],
     features: [
+      'No API keys needed; your memories stay on your machine',
       'Extra use: $0.20 per 1k saves, $0.12 per 1k recalls',
       'Extra storage: $0.50 per GB warm, $0.03 per GB cold',
       'Smart rerank runs when it helps',
     ],
-    cta: 'Get early access',
+    cta: 'Get Pro',
     featured: true,
   },
   {

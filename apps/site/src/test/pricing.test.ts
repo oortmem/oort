@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimateMonthlyCost, plans, planCost } from '@/lib/oort-data';
+import { estimateMonthlyCost, plans, planCost, proLine, rates } from '@/lib/oort-data';
 
 const usage = (saves: number, recalls: number, warmGb: number, coldGb: number) => ({
   saves,
@@ -14,6 +14,23 @@ describe('plan table', () => {
   });
   it('prices them $0, $0, $19, $99 and "Talk to us"', () => {
     expect(plans.map((p) => p.price)).toEqual(['$0', '$0', '$19', '$99', 'Talk to us']);
+  });
+  it('sells Pro with Get Pro, and keeps Free and Team on early access', () => {
+    const cta = Object.fromEntries(plans.map((p) => [p.name, p.cta]));
+    expect(cta['Pro']).toBe('Get Pro');
+    expect(cta['Free']).toBe('Get early access');
+    expect(cta['Team']).toBe('Get early access');
+  });
+  it('says plainly that Pro needs no API keys and keeps memories local', () => {
+    expect(proLine).toBe('Pro: no API keys needed; your memories stay on your machine');
+    expect(plans.find((p) => p.name === 'Pro')?.features[0]).toBe(
+      'No API keys needed; your memories stay on your machine',
+    );
+  });
+  it('shows the same Pro saves and recalls the relay enforces', () => {
+    const pro = plans.find((p) => p.name === 'Pro')!;
+    expect(pro.included).toContain(`${rates.managed.Pro.saves.toLocaleString('en-US')} saves`);
+    expect(pro.included).toContain(`${rates.managed.Pro.recalls.toLocaleString('en-US')} recalls`);
   });
   it('labels SOC 2, SLA and private deployment as Planned', () => {
     const all = plans.flatMap((p) => p.features);
