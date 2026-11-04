@@ -2,9 +2,22 @@
 export const clerkPublishableKey: string = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? '';
 export const clerkEnabled = clerkPublishableKey.startsWith('pk_');
 
-/** Where to go after sign-in. Only same-site paths are allowed, so the link cannot send people away. */
+const PLACEHOLDER_ORIGIN = 'https://oortcloud.invalid';
+
+/**
+ * Where to go after sign-in. Only same-site paths are allowed, so the link cannot send people
+ * away. The value is resolved as a URL the way a browser would (which drops tabs and newlines, so
+ * `/\t/evil.example` would be protocol-relative) and must keep the site's own origin.
+ */
 export function safeRedirect(v: unknown, fallback = '/account'): string {
   if (typeof v !== 'string' || v.length > 512) return fallback;
-  if (!v.startsWith('/') || v.startsWith('//') || v.startsWith('/\\')) return fallback;
-  return v;
+  if (!v.startsWith('/') || /[\u0000-\u001f\u007f\\]/.test(v)) return fallback;
+  let u: URL;
+  try {
+    u = new URL(v, PLACEHOLDER_ORIGIN);
+  } catch {
+    return fallback;
+  }
+  if (u.origin !== PLACEHOLDER_ORIGIN) return fallback;
+  return `${u.pathname}${u.search}${u.hash}`;
 }
