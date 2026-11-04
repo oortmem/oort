@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
+import * as os from 'node:os';
 import { keyLookup, routeSummaries } from '../credentials.js';
 import type { Env } from '../io.js';
 import { ACCOUNT_URL, REVOKE_HINT } from '../relay.js';
@@ -7,14 +8,16 @@ import { uiFor, type Ui } from '../ui.js';
 import { Refusal, type Ctx } from '../util.js';
 
 /**
- * `oort login`: the browser sign-in that `apps/site` serves.
- * 1. A random session id (32 bytes, base64url: 43 characters) stays in this
- *    process and in the browser tab it opens, `/account/cli?session=<id>`.
- * 2. Both show the code SHA-256("oort-cli-code:" + id), first 8 hex upper case,
- *    as `XXXX-XXXX`, so the user can check the page belongs to this terminal.
- * 3. `GET /api/cli/session/<id>` answers 202 until a signed-in user approves,
- *    then 200 `{ status, key, prefix }` once, and 410 `used` or `expired`
- *    (10 minutes after the session started) after that; 400 for a bad id.
+ * `oort login`: the browser sign-in that `apps/site` serves, RFC 8628 style.
+ * 1. A secret S (32 random bytes) stays in this process. `POST /api/cli/session` sends only
+ *    h = base64url(SHA-256(S)), with this computer's OS and host name, and gets back a short
+ *    user code.
+ * 2. The user opens `/account/cli` (no secret in the URL), types the code, checks the request's
+ *    time, country, OS and host, and approves.
+ * 3. `POST /api/cli/session/poll` with S in the body answers 202 until approved, then 200
+ *    `{ status, key, prefix }` once, and 410 `used` or `expired` (10 minutes after the session
+ *    started) after that; 404 for a session the site does not know, 409 `key_limit` when the
+ *    account already has its maximum of live keys.
  * The key goes to Keychain item `oort.oort` (macOS) or `credentials.json` (Linux, Windows) and is
  * never printed.
  */
@@ -23,6 +26,8 @@ export const DEFAULT_SITE_URL = 'https://oortcloud.dev';
 /** The site's session lifetime (CLI_SESSION_TTL_MS in apps/site). */
 export const SESSION_TTL_MS = 10 * 60_000;
 const KEY_SHAPE = /^oort_sk_[A-Za-z0-9_-]{16,256}$/;
+/** The site's user code as shown: 8 letters of BCDFGHJKLMNPQRSTVWXZ, XXXX-XXXX. */
+const USER_CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/;
 const FIRST_DELAY_MS = 2000;
 const MAX_DELAY_MS = 5000;
 
@@ -35,7 +40,10 @@ export interface LoginDeps {
   now?: () => number;
   /** Aborts the wait (Ctrl-C). Default: SIGINT while polling. */
   signal?: AbortSignal;
-  sessionId?: () => string;
+  /** The 32 secret bytes S. */
+  secret?: () => Uint8Array;
+  /** What the approve page shows about this computer. */
+  system?: () => { os: string; host: string };
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -59,12 +67,18 @@ export function siteUrl(env: Env): string {
   return `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
 }
 
-export const newSessionId = (): string => randomBytes(32).toString('base64url');
+/** S: 32 random bytes, kept in this process only. */
+export const newSecret = (): Uint8Array => randomBytes(32);
 
-/** The code the approve page shows for `sessionId` (cliCode in apps/site). */
-export function matchCode(sessionId: string): string {
-  const h = createHash('sha256').update(`oort-cli-code:${sessionId}`).digest('hex').toUpperCase();
-  return `${h.slice(0, 4)}-${h.slice(4, 8)}`;
+/** h = base64url(SHA-256(S)), the only thing about S the site sees before the poll. */
+export const challengeOf = (secret: Uint8Array): string =>
+  createHash('sha256').update(secret).digest('base64url');
+
+const OS_NAMES: Record<string, string> = { darwin: 'macOS', linux: 'Linux', win32: 'Windows' };
+
+/** This computer, as the approve page shows it: OS and host name, nothing else. */
+export function thisSystem(): { os: string; host: string } {
+  return { os: OS_NAMES[process.platform] ?? process.platform, host: os.hostname().slice(0, 64) };
 }
 
 /** The platform's opener, without a shell; false when it cannot start. */
@@ -137,9 +151,40 @@ export async function runLogin(
   const doFetch = deps.fetch ?? globalThis.fetch;
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? defaultSleep;
-  const id = (deps.sessionId ?? newSessionId)();
-  const approve = `${site}/account/cli?session=${id}`;
-  const poll = `${site}/api/cli/session/${id}`;
+  const secretBytes = (deps.secret ?? newSecret)();
+  const secret = Buffer.from(secretBytes).toString('base64url');
+  const approve = `${site}/account/cli`;
+  const poll = `${site}/api/cli/session/poll`;
+  const failed = (message: string): LoginOutcome => ({ ok: false, reason: 'failed', message });
+
+  let started: Response;
+  try {
+    started = await doFetch(`${site}/api/cli/session`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        challenge: challengeOf(secretBytes),
+        ...(deps.system ?? thisSystem)(),
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    return failed(`Could not reach ${site}. Check your network, then run \`oort login\` again.`);
+  }
+  const startBody = (await started.json().catch(() => ({}))) as { user_code?: unknown };
+  const code = startBody.user_code;
+  if (started.status === 429) {
+    return failed(
+      'The site has had too many sign-in requests from this network. Wait a minute, then run `oort login` again.',
+    );
+  }
+  if (started.status !== 201 || typeof code !== 'string' || !USER_CODE.test(code)) {
+    return failed(
+      started.status >= 500
+        ? `The site answered HTTP ${started.status}. Run \`oort login\` again later.`
+        : 'The site rejected this sign-in request. Update oortmem, then run `oort login` again.',
+    );
+  }
 
   const terminal = ctx.io.stdinIsTTY && ctx.io.stdoutIsTTY === true;
   const opened =
@@ -148,14 +193,14 @@ export async function runLogin(
       : false;
   say(
     opened
-      ? `Opened ${site}/account/cli in your browser. Sign in there and approve this terminal.`
-      : `Open this URL in a browser, sign in and approve this terminal:\n  ${approve}`,
+      ? `Opened ${approve} in your browser. Sign in there and enter the code below.`
+      : `Open this page in a browser, sign in and enter the code below:\n  ${approve}`,
   );
   say(
     ui.kv([
       [
         'code',
-        `${ui.bold(matchCode(id))}  ${ui.dim('the page shows the same code; approve only if it matches')}`,
+        `${ui.bold(code)}  ${ui.dim('type it on the page; approve only if you started this login yourself')}`,
       ],
     ]),
   );
@@ -179,8 +224,11 @@ export async function runLogin(
       if (signal.aborted) return cancelled();
       let res: Response | undefined;
       try {
+        // S goes in the body, never in a URL.
         res = await doFetch(poll, {
-          headers: { accept: 'application/json' },
+          method: 'POST',
+          headers: { accept: 'application/json', 'content-type': 'application/json' },
+          body: JSON.stringify({ secret }),
           signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
         });
       } catch {
@@ -216,13 +264,18 @@ export async function runLogin(
                 message: 'This sign-in request expired. Run `oort login` again.',
               };
         }
+        if (res.status === 409) {
+          return failed(
+            `This account already has the most live keys it can have, so no key was made. Revoke a key at ${ACCOUNT_URL}, then run \`oort login\` again.`,
+          );
+        }
+        if (res.status === 404) {
+          return failed('The site does not know this sign-in request. Run `oort login` again.');
+        }
         if (res.status === 400) {
-          return {
-            ok: false,
-            reason: 'failed',
-            message:
-              'The site rejected this sign-in request. Update oortmem, then run `oort login` again.',
-          };
+          return failed(
+            'The site rejected this sign-in request. Update oortmem, then run `oort login` again.',
+          );
         }
         if (res.status !== 202 && res.status !== 429 && res.status < 500) {
           return {

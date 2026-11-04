@@ -215,7 +215,9 @@ describe('oort setup', () => {
       expect(p.asked.length).toBe(4);
       expect(site.polls.length).toBe(2);
       expect(k.items['oort.oort']).toBe(site.minted);
-      expect(p.said).toContain(`/account/cli?session=${site.polls[0]}`);
+      expect(p.said).toContain(`${site.url}/account/cli`);
+      expect(p.said).toContain(site.sessions[0]!.code);
+      expect(p.said).not.toContain(site.polls[0]!);
       expect(p.said).toContain('Signed in to Oort Pro');
       expect(p.said).toMatch(/oort logout/);
       expect(p.said).toMatch(/oort disconnect cursor/);
@@ -241,7 +243,8 @@ describe('oort setup', () => {
       expect(r.code).toBe(0);
       expect(r.io.asked).toEqual([]);
       expect(k.items['oort.oort']).toBe(site.minted);
-      expect(r.io.stdout).toContain('?session=');
+      expect(r.io.stdout).toContain(`${site.url}/account/cli`);
+      expect(r.io.stdout).toContain(site.sessions[0]!.code);
       expect(r.io.stdout).toContain('oort logout');
     } finally {
       await site.close();

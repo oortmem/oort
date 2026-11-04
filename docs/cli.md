@@ -121,10 +121,10 @@ The steps:
      On a macOS terminal it then offers to run `oort keys set <provider>` for
      each missing key. With `--yes` it only prints the commands.
    - **Oort Pro.** No vendor keys, $19 a month. Setup runs `oort login`
-     right there (see below): the browser sign-in, the match code, and the
-     wait for approval. If the sign-in fails, expires or key storage is off,
+     right there (see below): the browser sign-in, the code you type on the
+     page, and the wait for approval. If the sign-in fails, expires or key storage is off,
      setup says why and carries on without it. `--yes --keys pro` signs in
-     without a question: it prints the URL and waits.
+     without a question: it prints the page and the code, and waits.
    - **Skip.** Recall works lexical-only until keys are set.
 
    Setup also shows whether an Oort key exists (`OORT_API_KEY` or Keychain
@@ -442,38 +442,49 @@ Oort Pro ($19 a month) means no vendor keys: one Oort key reaches Voyage,
 TypeSafe and Anthropic through the relay at `relay.oortcloud.dev`, and your
 memories stay on your machine. Subscribe at https://oortcloud.dev/account.
 
-`oort login` signs this machine in:
-1. It makes a random session id (32 bytes, base64url) and opens
-   `https://oortcloud.dev/account/cli?session=<id>` in your browser (`open`
-   on macOS, `xdg-open` on Linux). If the browser does not start, if stdin or
-   stdout is not a terminal, or with `--no-browser`, it prints the URL instead.
-2. It prints a match code, `XXXX-XXXX`: the first 8 hex digits, upper case,
-   of SHA-256 of `oort-cli-code:` plus the session id. The page shows the same
-   code. Approve only if they match.
-3. It polls `GET https://oortcloud.dev/api/cli/session/<id>` every 2 seconds
-   (backing off to 5 while the site or the network struggles) until you
-   approve, the request expires (10 minutes) or you press Ctrl-C. It never
-   asks a question, so it also runs without a terminal.
-4. On approval the site mints a key named "CLI on <date>" and hands it over
-   once. The session id is single use: a second poll gets 410 `used`.
-   `oort login` stores the key as Keychain item `oort.oort` through
-   `security -i` on stdin (never in argv) on macOS, or in
-   `$OORT_HOME/credentials.json` (mode 600) on Linux and Windows, reads it
-   back to confirm, and prints which roles now go through the relay. It never
-   prints the key or its prefix.
+`oort login` signs this machine in, in the style of the OAuth device flow
+(RFC 8628):
+1. It makes a secret S (32 random bytes) that never leaves this process
+   except in the poll body, and starts a session with
+   `POST https://oortcloud.dev/api/cli/session`, sending only
+   h = base64url(SHA-256(S)) and this computer's OS and host name. The site
+   answers with a user code, `XXXX-XXXX` (8 letters, consonants only).
+2. It opens `https://oortcloud.dev/account/cli` in your browser (`open` on
+   macOS, `xdg-open` on Linux) and prints the code. The page URL carries
+   nothing secret. If the browser does not start, if stdin or stdout is not a
+   terminal, or with `--no-browser`, it prints the page address instead.
+3. On the page you type the code. The page shows when the request started,
+   the approximate country it came from, and the OS and host name the CLI
+   reported, with the warning "Only approve if you just ran oort login
+   yourself". If someone sent you a code, do not approve it.
+4. It polls `POST https://oortcloud.dev/api/cli/session/poll` with S in the
+   body (never in a URL) every 2 seconds (backing off to 5 while the site or
+   the network struggles) until you approve, the request expires (10
+   minutes) or you press Ctrl-C. It never asks a question, so it also runs
+   without a terminal.
+5. On approval the site mints a key named "CLI on <date>" and hands it over
+   once, to whoever holds S. A second poll gets 410 `used`. `oort login`
+   stores the key as Keychain item `oort.oort` through `security -i` on stdin
+   (never in argv) on macOS, or in `$OORT_HOME/credentials.json` (mode 600)
+   on Linux and Windows, reads it back to confirm, and prints which roles now
+   go through the relay. It never prints the key or its prefix.
 
 | Outcome | Exit | What it says |
 | --- | --- | --- |
 | Approved and stored | 0 | Signed in; which roles use the relay; undo is `oort logout` |
 | Expired (410 `expired`, or 10 minutes passed) | 1 | Run `oort login` again |
 | Already used (410 `used`) | 1 | Run `oort login` again |
+| The account has its maximum of 20 live keys (409) | 1 | Revoke a key at https://oortcloud.dev/account, then run `oort login` again |
+| Too many sign-in requests from this network (429) | 1 | Wait a minute, then run `oort login` again |
 | Ctrl-C | 1 | Cancelled; nothing was stored |
 | The Keychain or credentials file did not keep the key | 1 | Nothing saved; the unused "CLI on <date>" key can be revoked at oortcloud.dev/account |
 | `OORT_NO_KEYCHAIN=1`, or a system with neither the Keychain nor `credentials.json` | 2 | Refused before anything starts: create a key at oortcloud.dev/account and `export OORT_API_KEY=...` instead |
 
 Signing in again replaces the stored key; the old key keeps working until
 you revoke it. Neither command sends your email address or any other account
-detail: the browser session does the sign-in.
+detail: the browser session does the sign-in. The OS and host name are sent so
+the page can show you which computer asked; the site deletes the request
+within about two hours.
 
 `oort logout` removes the stored Oort key (Keychain item `oort.oort`, or its
 `credentials.json` entry). It does not revoke the key

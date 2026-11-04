@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -6,7 +7,7 @@ import { fakeIo, memoryKeychain, tmpdir } from '../../test/helpers.js';
 import { createKeychain, type Keychain } from '../keychain.js';
 import { runCli } from '../program.js';
 import type { WireFn } from '../wire.js';
-import { matchCode, newSessionId, type LoginDeps } from './login.js';
+import { challengeOf, newSecret, thisSystem, type LoginDeps } from './login.js';
 
 const noWire: WireFn = async () => {
   throw new Error('login must not open the store');
@@ -69,12 +70,12 @@ describe('oort login', () => {
     expect(r.code).toBe(0);
     expect(s.minted).toBeDefined();
     expect(k.items['oort.oort']).toBe(s.minted);
-    const id = s.polls[0] ?? '';
-    expect(id).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(s.polls).toEqual([id, id, id]);
-    // Not a terminal: the URL is printed, no browser, no question.
-    expect(r.io.stdout).toContain(`${s.url}/account/cli?session=${id}`);
-    expect(r.io.stdout).toContain(matchCode(id));
+    const secret = s.polls[0] ?? '';
+    expect(secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(s.polls).toEqual([secret, secret, secret]);
+    // Not a terminal: the page URL and the code are printed, no browser, no question.
+    expect(r.io.stdout).toContain(`${s.url}/account/cli`);
+    expect(r.io.stdout).toContain(s.sessions[0]!.code);
     expect(r.io.stdout).toContain('oort.oort');
     expect(r.io.stdout).toContain('revoke it at oortcloud.dev/account');
     expect(r.io.asked).toEqual([]);
@@ -83,7 +84,27 @@ describe('oort login', () => {
     expect(r.sleeps).toEqual([2000, 2000]);
   });
 
-  it('login.match-code-is-the-sites-code', async () => {
+  it('login.the-secret-never-leaves-in-a-url-or-on-screen-and-only-its-hash-starts-the-session', async () => {
+    const s = await site({ approveAtPoll: 1 });
+    const r = await login(s, { keychain: memoryKeychain().kc });
+    expect(r.code).toBe(0);
+    const secret = s.polls[0]!;
+    // The session started with h = base64url(SHA-256(S)) over the raw bytes, not S.
+    expect(s.sessions[0]!.challenge).toBe(
+      createHash('sha256').update(Buffer.from(secret, 'base64url')).digest('base64url'),
+    );
+    expect(s.sessions[0]!.challenge).toBe(challengeOf(Buffer.from(secret, 'base64url')));
+    expect(s.requests.map((q) => `${q.method} ${q.path}`)).toEqual([
+      'POST /api/cli/session',
+      'POST /api/cli/session/poll',
+    ]);
+    expect(s.requests[0]!.body).not.toContain(secret);
+    for (const q of s.requests) expect(q.path).not.toContain(secret);
+    expect(r.io.stdout + r.io.stderr).not.toContain(secret);
+    expect(r.io.stdout + r.io.stderr).not.toContain(s.sessions[0]!.challenge);
+  });
+
+  it('login.challenge-is-the-sites-challenge', async () => {
     const keys = (await import(
       pathToFileURL(
         path.join(
@@ -99,15 +120,25 @@ describe('oort login', () => {
           'keys.ts',
         ),
       ).href
-    )) as { cliCode: (id: string) => Promise<string> };
+    )) as { challengeOf: (secret: string) => Promise<string | null> };
     for (let i = 0; i < 5; i++) {
-      const id = newSessionId();
-      expect(matchCode(id)).toMatch(/^[0-9A-F]{4}-[0-9A-F]{4}$/);
-      expect(matchCode(id)).toBe(await keys.cliCode(id));
+      const raw = newSecret();
+      expect(raw).toHaveLength(32);
+      expect(await keys.challengeOf(Buffer.from(raw).toString('base64url'))).toBe(challengeOf(raw));
     }
   });
 
-  it('login.opens-the-browser-on-a-terminal-and-prints-the-url-when-it-cannot', async () => {
+  it('login.reports-this-computers-os-and-host-name', async () => {
+    const s = await site({ approveAtPoll: 1 });
+    await login(s, {
+      keychain: memoryKeychain().kc,
+      deps: { system: () => ({ os: 'Linux', host: 'build-box' }) },
+    });
+    expect(s.sessions[0]).toMatchObject({ os: 'Linux', host: 'build-box' });
+    expect(['macOS', 'Linux', 'Windows']).toContain(thisSystem().os);
+  });
+
+  it('login.opens-the-page-without-a-secret-on-a-terminal-and-prints-it-when-it-cannot', async () => {
     const s = await site({ approveAtPoll: 1 });
     const opened: string[] = [];
     const ok = await login(s, {
@@ -116,9 +147,9 @@ describe('oort login', () => {
       deps: { openBrowser: async (u) => (opened.push(u), true) },
     });
     expect(ok.code).toBe(0);
-    expect(opened).toEqual([`${s.url}/account/cli?session=${s.polls[0]}`]);
-    expect(ok.io.stdout).not.toContain('?session=');
+    expect(opened).toEqual([`${s.url}/account/cli`]);
     expect(ok.io.stdout).toContain('Opened');
+    expect(ok.io.stdout).toContain(s.sessions[0]!.code);
 
     const failed = await login(s, {
       keychain: memoryKeychain().kc,
@@ -126,7 +157,7 @@ describe('oort login', () => {
       deps: { openBrowser: async () => false },
     });
     expect(failed.code).toBe(0);
-    expect(failed.io.stdout).toContain(`/account/cli?session=${s.polls.at(-1)}`);
+    expect(failed.io.stdout).toContain(`Open this page in a browser`);
 
     const flag = await login(s, {
       args: ['login', '--no-browser'],
@@ -134,24 +165,40 @@ describe('oort login', () => {
       tty: true,
     });
     expect(flag.code).toBe(0);
-    expect(flag.io.stdout).toContain('?session=');
+    expect(flag.io.stdout).toContain(`${s.url}/account/cli`);
   });
 
-  it('login.expired-and-used-requests-stop-with-the-fix-and-store-nothing', async () => {
-    const expired = await site({ ttlMs: -1 });
+  it('login.expired-used-unknown-and-key-limit-stop-with-the-fix-and-store-nothing', async () => {
     const k = memoryKeychain();
-    const r = await login(expired, { keychain: k.kc });
-    expect(r.code).toBe(1);
-    expect(r.io.stderr).toContain('expired. Run `oort login` again.');
-    expect(k.items).toEqual({});
+    const expired = await login(await site({ ttlMs: -1 }), { keychain: k.kc });
+    expect(expired.code).toBe(1);
+    expect(expired.io.stderr).toContain('expired. Run `oort login` again.');
 
-    const used = await site();
-    const id = newSessionId();
-    used.approve(id);
-    await fetch(`${used.url}/api/cli/session/${id}`); // someone else took the key
-    const r2 = await login(used, { keychain: k.kc, deps: { sessionId: () => id } });
-    expect(r2.code).toBe(1);
-    expect(r2.io.stderr).toContain('already used');
+    const limit = await login(await site({ approveAtPoll: 1, keyLimit: true }), { keychain: k.kc });
+    expect(limit.code).toBe(1);
+    expect(limit.io.stderr).toContain('most live keys');
+    expect(limit.io.stderr).toContain('Revoke a key at https://oortcloud.dev/account');
+
+    const busy = await login(await site({ createStatus: 429 }), { keychain: k.kc });
+    expect(busy.code).toBe(1);
+    expect(busy.io.stderr).toContain('too many sign-in requests');
+
+    const unknown = await login(await site({ failFirst: { polls: 1, status: 404 } }), {
+      keychain: k.kc,
+    });
+    expect(unknown.code).toBe(1);
+    expect(unknown.io.stderr).toContain('does not know this sign-in request');
+    expect(k.items).toEqual({});
+  });
+
+  it('login.a-site-that-cannot-be-reached-stops-before-polling', async () => {
+    const k = memoryKeychain();
+    const r = await login(undefined, {
+      keychain: k.kc,
+      env: { OORT_SITE_URL: 'http://127.0.0.1:9' },
+    });
+    expect(r.code).toBe(1);
+    expect(r.io.stderr).toContain('Could not reach');
     expect(k.items).toEqual({});
   });
 
