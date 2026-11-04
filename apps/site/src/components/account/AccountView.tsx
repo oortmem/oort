@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Check, Copy, KeyRound } from 'lucide-react';
-import { PlannedBadge } from '@/components/site/PlannedBadge';
 import { proLine, proPriceLine } from '@/lib/oort-data';
 import type { Overview } from '@/server/account';
 
@@ -175,9 +174,8 @@ export function AccountView({
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
           An Oort key lets the Oort engine on your computer use Pro instead of your own Voyage,
-          TypeSafe and Anthropic keys. CLI support for it,{' '}
-          <code className="font-mono">oort login</code>, is <PlannedBadge /> for the next CLI
-          release.
+          TypeSafe and Anthropic keys. Run <code className="font-mono">oort login</code> to create
+          one from the CLI, or create a key here.
         </p>
 
         {fresh ? (

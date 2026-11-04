@@ -56,9 +56,6 @@ async function renderIn(node: React.JSX.Element) {
 const EM_DASH = String.fromCharCode(0x2014);
 const CLI_MD = readFileSync(join(import.meta.dirname, '../../../../docs/cli.md'), 'utf8');
 
-/** Commands being added in parallel to the CLI (docs/cli.md lists them as Planned for now). */
-const PARALLEL = ['login', 'logout', 'doctor'];
-
 /** Parents whose second word must be one cli.md names (`keys set`, `connect cursor`). */
 const NESTED = ['keys', 'project', 'connect', 'disconnect', 'install', 'uninstall', 'import'];
 
@@ -161,7 +158,7 @@ describe('docs commands', () => {
       for (const [first, second] of commandsIn(code.join('\n'))) {
         seen += 1;
         const shown = `oort ${first}${second ? ` ${second}` : ''} on ${r.url}`;
-        expect(top.has(first) || PARALLEL.includes(first), shown).toBe(true);
+        expect(top.has(first), shown).toBe(true);
         if (NESTED.includes(first) && second) {
           expect(nested.get(first)?.has(second), shown).toBe(true);
         }
@@ -210,6 +207,9 @@ describe('docs content', () => {
     const t = await text('/docs/quickstart');
     expect(t).toContain('npm i -g oortmem');
     expect(t).toContain('npx oortmem setup');
+    expect(t).toContain(
+      'Under npx, setup first offers to install oortmem globally, so your agent configs point at a stable path.',
+    );
     expect(t).toContain('oort setup');
   });
 

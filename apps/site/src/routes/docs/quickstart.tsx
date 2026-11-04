@@ -64,6 +64,10 @@ function Page() {
 
       <p>Prefer one line? This runs the same wizard:</p>
       <Cmd>npx oortmem setup</Cmd>
+      <p>
+        Under npx, setup first offers to install <code>oortmem</code> globally, so your agent
+        configs point at a stable path.
+      </p>
 
       <h2>What setup changed</h2>
       <p>Setup lists every change at the end, with the command that undoes it.</p>

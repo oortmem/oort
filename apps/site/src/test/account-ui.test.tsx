@@ -48,6 +48,13 @@ describe('account page', () => {
     expect(screen.getByText(/\$19\/month, VAT included where applicable/)).toBeTruthy();
   });
 
+  it('names oort login without a Planned label', () => {
+    render(<AccountView overview={overview()} actions={actions()} />);
+    const keys = screen.getByRole('heading', { name: /API keys/i }).closest('section')!;
+    expect(keys.textContent).toContain('oort login');
+    expect(keys.textContent).not.toMatch(/planned/i);
+  });
+
   it('offers Manage billing and hides Subscribe while Pro is active', () => {
     render(
       <AccountView
