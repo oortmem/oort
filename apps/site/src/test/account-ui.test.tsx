@@ -44,7 +44,7 @@ describe('account page', () => {
     expect(screen.queryByRole('button', { name: 'Manage billing' })).toBeNull();
     expect(
       screen.getByText(/Pro: no API keys needed; your memories stay on your machine/),
-    ).toBeInTheDocument();
+    ).toBeTruthy();
   });
 
   it('offers Manage billing and hides Subscribe while Pro is active', () => {
@@ -54,17 +54,16 @@ describe('account page', () => {
         actions={actions()}
       />,
     );
-    expect(screen.getByRole('button', { name: 'Manage billing' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manage billing' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Subscribe to Pro' })).toBeNull();
-    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.getByText('Active')).toBeTruthy();
   });
 
   it("shows this month's saves and recalls against the plan limits", () => {
     render(<AccountView overview={overview()} actions={actions()} />);
-    expect(screen.getByText('1,200 / 25,000')).toBeInTheDocument();
-    expect(screen.getByText('3,400 / 50,000')).toBeInTheDocument();
-    expect(screen.getByRole('progressbar', { name: 'Saves' })).toHaveAttribute(
-      'aria-valuenow',
+    expect(screen.getByText('1,200 / 25,000')).toBeTruthy();
+    expect(screen.getByText('3,400 / 50,000')).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: 'Saves' }).getAttribute('aria-valuenow')).toBe(
       '1200',
     );
   });
@@ -89,12 +88,12 @@ describe('account page', () => {
         actions={actions()}
       />,
     );
-    expect(screen.getByText('oort_sk_OLD1…')).toBeInTheDocument();
+    expect(screen.getByText('oort_sk_OLD1…')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Key name'), { target: { value: 'Work' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create key' }));
     const box = await screen.findByTestId('new-key');
-    expect(box).toHaveTextContent('oort_sk_FULLSECRETKEY');
-    expect(box).toHaveTextContent('only time it is shown');
+    expect(box.textContent).toMatch('oort_sk_FULLSECRETKEY');
+    expect(box.textContent).toMatch('only time it is shown');
     fireEvent.click(screen.getByRole('button', { name: /Copy/ }));
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(
@@ -143,15 +142,15 @@ describe('CLI approve page', () => {
   it('shows the code the terminal shows and the key name it will create', async () => {
     render(<CliApprove session={SESSION} entitled today="2026-11-04" approve={async () => null} />);
     const expected = await cliCode(SESSION);
-    await waitFor(() => expect(screen.getByTestId('cli-code')).toHaveTextContent(expected));
-    expect(screen.getByText(/CLI on 2026-11-04/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('cli-code').textContent).toMatch(expected));
+    expect(screen.getByText(/CLI on 2026-11-04/)).toBeTruthy();
   });
 
   it('approves, then tells the user to go back to the terminal', async () => {
     const approve = vi.fn(async () => null);
     render(<CliApprove session={SESSION} entitled today="2026-11-04" approve={approve} />);
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    expect(await screen.findByText(/Go back to your terminal/)).toBeInTheDocument();
+    expect(await screen.findByText(/Go back to your terminal/)).toBeTruthy();
     expect(approve).toHaveBeenCalledOnce();
   });
 
@@ -165,7 +164,7 @@ describe('CLI approve page', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/expired/);
+    expect((await screen.findByRole('alert')).textContent).toMatch(/expired/);
   });
 
   it('warns when the account has no Pro yet', () => {
@@ -177,12 +176,12 @@ describe('CLI approve page', () => {
         approve={async () => null}
       />,
     );
-    expect(screen.getByText(/does not have Oort Pro yet/)).toBeInTheDocument();
+    expect(screen.getByText(/does not have Oort Pro yet/)).toBeTruthy();
   });
 
   it('handles a link without a session', () => {
     render(<CliApprove session="" entitled today="2026-11-04" approve={async () => null} />);
-    expect(screen.getByRole('alert')).toHaveTextContent(/no sign-in request/);
+    expect(screen.getByRole('alert').textContent).toMatch(/no sign-in request/);
   });
 });
 
@@ -190,6 +189,6 @@ describe('without a Clerk publishable key', () => {
   it('turns sign-in off and says so plainly', () => {
     expect(clerkEnabled).toBe(false);
     render(<NotConfigured what="Sign-in" />);
-    expect(screen.getByRole('heading')).toHaveTextContent('Sign-in is not set up in this build');
+    expect(screen.getByRole('heading').textContent).toMatch('Sign-in is not set up in this build');
   });
 });
