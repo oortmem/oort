@@ -16,6 +16,12 @@ import { Route as EnterpriseRouteImport } from './routes/enterprise'
 import { Route as ExplorerRouteImport } from './routes/explorer'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as SigninRouteImport } from './routes/signin'
+import { Route as ApiWaitlistRouteImport } from './routes/api/waitlist'
+import { Route as LegalAcceptableUseRouteImport } from './routes/legal/acceptable-use'
+import { Route as LegalCookiesRouteImport } from './routes/legal/cookies'
+import { Route as LegalPrivacyRouteImport } from './routes/legal/privacy'
+import { Route as LegalSubprocessorsRouteImport } from './routes/legal/subprocessors'
+import { Route as LegalTermsRouteImport } from './routes/legal/terms'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -52,6 +58,36 @@ const SigninRoute = SigninRouteImport.update({
   path: '/signin',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiWaitlistRoute = ApiWaitlistRouteImport.update({
+  id: '/api/waitlist',
+  path: '/api/waitlist',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LegalAcceptableUseRoute = LegalAcceptableUseRouteImport.update({
+  id: '/legal/acceptable-use',
+  path: '/legal/acceptable-use',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LegalCookiesRoute = LegalCookiesRouteImport.update({
+  id: '/legal/cookies',
+  path: '/legal/cookies',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LegalPrivacyRoute = LegalPrivacyRouteImport.update({
+  id: '/legal/privacy',
+  path: '/legal/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LegalSubprocessorsRoute = LegalSubprocessorsRouteImport.update({
+  id: '/legal/subprocessors',
+  path: '/legal/subprocessors',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LegalTermsRoute = LegalTermsRouteImport.update({
+  id: '/legal/terms',
+  path: '/legal/terms',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -61,6 +97,12 @@ export interface FileRoutesByFullPath {
   '/explorer': typeof ExplorerRoute
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
+  '/legal/acceptable-use': typeof LegalAcceptableUseRoute
+  '/legal/cookies': typeof LegalCookiesRoute
+  '/legal/privacy': typeof LegalPrivacyRoute
+  '/legal/subprocessors': typeof LegalSubprocessorsRoute
+  '/legal/terms': typeof LegalTermsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -70,6 +112,12 @@ export interface FileRoutesByTo {
   '/explorer': typeof ExplorerRoute
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
+  '/legal/acceptable-use': typeof LegalAcceptableUseRoute
+  '/legal/cookies': typeof LegalCookiesRoute
+  '/legal/privacy': typeof LegalPrivacyRoute
+  '/legal/subprocessors': typeof LegalSubprocessorsRoute
+  '/legal/terms': typeof LegalTermsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -80,6 +128,12 @@ export interface FileRoutesById {
   '/explorer': typeof ExplorerRoute
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
+  '/legal/acceptable-use': typeof LegalAcceptableUseRoute
+  '/legal/cookies': typeof LegalCookiesRoute
+  '/legal/privacy': typeof LegalPrivacyRoute
+  '/legal/subprocessors': typeof LegalSubprocessorsRoute
+  '/legal/terms': typeof LegalTermsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,6 +145,12 @@ export interface FileRouteTypes {
     | '/explorer'
     | '/pricing'
     | '/signin'
+    | '/api/waitlist'
+    | '/legal/acceptable-use'
+    | '/legal/cookies'
+    | '/legal/privacy'
+    | '/legal/subprocessors'
+    | '/legal/terms'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -100,6 +160,12 @@ export interface FileRouteTypes {
     | '/explorer'
     | '/pricing'
     | '/signin'
+    | '/api/waitlist'
+    | '/legal/acceptable-use'
+    | '/legal/cookies'
+    | '/legal/privacy'
+    | '/legal/subprocessors'
+    | '/legal/terms'
   id:
     | '__root__'
     | '/'
@@ -109,6 +175,12 @@ export interface FileRouteTypes {
     | '/explorer'
     | '/pricing'
     | '/signin'
+    | '/api/waitlist'
+    | '/legal/acceptable-use'
+    | '/legal/cookies'
+    | '/legal/privacy'
+    | '/legal/subprocessors'
+    | '/legal/terms'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -119,6 +191,12 @@ export interface RootRouteChildren {
   ExplorerRoute: typeof ExplorerRoute
   PricingRoute: typeof PricingRoute
   SigninRoute: typeof SigninRoute
+  ApiWaitlistRoute: typeof ApiWaitlistRoute
+  LegalAcceptableUseRoute: typeof LegalAcceptableUseRoute
+  LegalCookiesRoute: typeof LegalCookiesRoute
+  LegalPrivacyRoute: typeof LegalPrivacyRoute
+  LegalSubprocessorsRoute: typeof LegalSubprocessorsRoute
+  LegalTermsRoute: typeof LegalTermsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -172,6 +250,48 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SigninRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/waitlist': {
+      id: '/api/waitlist'
+      path: '/api/waitlist'
+      fullPath: '/api/waitlist'
+      preLoaderRoute: typeof ApiWaitlistRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/legal/acceptable-use': {
+      id: '/legal/acceptable-use'
+      path: '/legal/acceptable-use'
+      fullPath: '/legal/acceptable-use'
+      preLoaderRoute: typeof LegalAcceptableUseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/legal/cookies': {
+      id: '/legal/cookies'
+      path: '/legal/cookies'
+      fullPath: '/legal/cookies'
+      preLoaderRoute: typeof LegalCookiesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/legal/privacy': {
+      id: '/legal/privacy'
+      path: '/legal/privacy'
+      fullPath: '/legal/privacy'
+      preLoaderRoute: typeof LegalPrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/legal/subprocessors': {
+      id: '/legal/subprocessors'
+      path: '/legal/subprocessors'
+      fullPath: '/legal/subprocessors'
+      preLoaderRoute: typeof LegalSubprocessorsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/legal/terms': {
+      id: '/legal/terms'
+      path: '/legal/terms'
+      fullPath: '/legal/terms'
+      preLoaderRoute: typeof LegalTermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -183,6 +303,12 @@ const rootRouteChildren: RootRouteChildren = {
   ExplorerRoute: ExplorerRoute,
   PricingRoute: PricingRoute,
   SigninRoute: SigninRoute,
+  ApiWaitlistRoute: ApiWaitlistRoute,
+  LegalAcceptableUseRoute: LegalAcceptableUseRoute,
+  LegalCookiesRoute: LegalCookiesRoute,
+  LegalPrivacyRoute: LegalPrivacyRoute,
+  LegalSubprocessorsRoute: LegalSubprocessorsRoute,
+  LegalTermsRoute: LegalTermsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

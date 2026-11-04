@@ -2,6 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { Check } from 'lucide-react';
 import { SiteNav, SiteFooter } from '@/components/site/SiteNav';
+import { WaitlistForm } from '@/components/site/WaitlistForm';
 import { PlannedBadge } from '@/components/site/PlannedBadge';
 import {
   byokOverage,
@@ -135,12 +136,28 @@ function Pricing() {
                     </li>
                   ))}
                 </ul>
-                <Link
-                  to={p.name === 'Enterprise' ? '/enterprise' : '/signin'}
-                  className={`mt-8 rounded-full py-2.5 text-center text-sm font-medium ${p.featured ? 'bg-primary text-primary-foreground' : 'border border-border'}`}
-                >
-                  {p.cta}
-                </Link>
+                {p.name === 'Open Source' ? (
+                  <a
+                    href="https://github.com/oortmem/oort"
+                    className="mt-8 rounded-full border border-border py-2.5 text-center text-sm font-medium"
+                  >
+                    {p.cta}
+                  </a>
+                ) : p.name === 'Enterprise' ? (
+                  <Link
+                    to="/enterprise"
+                    className="mt-8 rounded-full border border-border py-2.5 text-center text-sm font-medium"
+                  >
+                    {p.cta}
+                  </Link>
+                ) : (
+                  <a
+                    href="#early-access"
+                    className={`mt-8 rounded-full py-2.5 text-center text-sm font-medium ${p.featured ? 'bg-primary text-primary-foreground' : 'border border-border'}`}
+                  >
+                    {p.cta}
+                  </a>
+                )}
               </div>
             );
           })}
@@ -149,6 +166,10 @@ function Pricing() {
           Prices are a launch proposal. Free is a hard stop: it never bills and never asks for a
           card.
         </p>
+
+        <div className="mt-16">
+          <WaitlistForm source="pricing" id="early-access" />
+        </div>
 
         <div className="mt-20 rounded-2xl border border-border bg-card p-8">
           <h2 className="text-2xl font-semibold">What would it cost?</h2>

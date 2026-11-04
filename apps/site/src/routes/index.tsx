@@ -6,6 +6,7 @@ import { OortSpiral, type SpiralApi, type Tier } from '@/components/oort/OortSpi
 import { HeroWish } from '@/components/site/HeroWish';
 import { PhoneExplorer } from '@/components/oort/PhoneExplorer';
 import { Reveal, DriftBand } from '@/components/site/Reveal';
+import { WaitlistForm } from '@/components/site/WaitlistForm';
 import { PlannedBadge } from '@/components/site/PlannedBadge';
 import { measured, tiers } from '@/lib/oort-data';
 
@@ -336,6 +337,13 @@ function Home() {
           <Link to="/pricing" className="rounded-full border border-border px-6 py-3 text-sm">
             See pricing
           </Link>
+        </div>
+      </section>
+
+      <section id="early-access" className="border-t border-border">
+        <div className="mx-auto max-w-7xl px-6 py-20">
+          <h2 className="mb-6 text-3xl font-semibold">Hosted Oort Cloud is not open yet.</h2>
+          <WaitlistForm source="home" />
         </div>
       </section>
 
