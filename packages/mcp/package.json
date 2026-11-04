@@ -1,0 +1,62 @@
+{
+  "name": "@oortmem/mcp",
+  "version": "0.1.0",
+  "description": "Oort's MCP server definition: the memory tools, their schemas and annotations, the server instructions and a skill, served over any memory backend.",
+  "keywords": [
+    "oort",
+    "agent-memory",
+    "ai-agents",
+    "llm-memory",
+    "mcp",
+    "model-context-protocol"
+  ],
+  "homepage": "https://oortcloud.dev",
+  "bugs": {
+    "url": "https://github.com/oortmem/oort/issues",
+    "email": "hello@oortcloud.dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oortmem/oort.git",
+    "directory": "packages/mcp"
+  },
+  "license": "Apache-2.0",
+  "author": "Oort <hello@oortcloud.dev>",
+  "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./skill/SKILL.md": "./skill/oort-memory/SKILL.md"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "skill",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.typecheck.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "@oortmem/core": "workspace:*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "vitest": "^5.0.5"
+  }
+}

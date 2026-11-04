@@ -48,7 +48,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           v="${VERSION#v}"
-          for name in core store-sqlite writer decide-jev embed-voyage rerank-voyage claude-code; do
+          for name in core store-sqlite writer decide-jev embed-voyage rerank-voyage claude-code mcp; do
             pkg="@oortmem/$name"; file="$RUNNER_TEMP/pack/oortmem-$name-$v.tgz"
             if npm view "$pkg@$v" version >/dev/null 2>&1; then echo "skip $pkg@$v (already published)"; continue; fi
             npm publish "$file" --access public --provenance

@@ -1,7 +1,7 @@
 # Releasing to npm
 
-Eight packages publish from `packages/*`: `oortmem` (the CLI) and `@oortmem/core`, `store-sqlite`,
-`writer`, `decide-jev`, `embed-voyage`, `rerank-voyage` and `claude-code`. `@oortmem/bench` is
+Nine packages publish from `packages/*`: `oortmem` (the CLI) and `@oortmem/core`, `store-sqlite`,
+`writer`, `decide-jev`, `embed-voyage`, `rerank-voyage`, `claude-code` and `mcp`. `@oortmem/bench` is
 private. All share one version.
 
 Releases run in GitHub Actions (`.github/workflows/release.yml`) with **npm trusted publishing**:
@@ -26,7 +26,7 @@ runs in the GitHub environment `npm`, which needs Marcus's approval before it ca
 3. **Trust the workflow** for each package (npm 11.5.1 or later):
 
    ```sh
-   scripts/npm-trust.sh           # runs `npm trust github` for all eight packages
+   scripts/npm-trust.sh           # runs `npm trust github` for all nine packages
    ```
 
    Or on npmjs.com: each package → Settings → Trusted Publisher → GitHub Actions, with
@@ -39,7 +39,9 @@ runs in the GitHub environment `npm`, which needs Marcus's approval before it ca
 
 ```sh
 git checkout main && git pull
-# Bump every package to the same version, e.g. 0.1.1, and VERSION in packages/core/src/index.ts:
+# Bump every package to the same version, e.g. 0.1.1, VERSION in packages/core/src/index.ts, and the
+# version in distribution/*/oort plugin.json files, distribution/claude-desktop/manifest.json and
+# .claude-plugin/marketplace.json (release-check fails the run if any differ):
 pnpm -r --filter './packages/*' exec npm version 0.1.1 --no-git-tag-version
 # commit through a PR, merge it, then tag main:
 git tag v0.1.1 && git push origin v0.1.1

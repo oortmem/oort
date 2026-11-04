@@ -94,6 +94,10 @@ flowchart LR
 | [`@oortmem/embed-voyage`](packages/embed-voyage)   | Embeddings through Voyage AI                                                                   |
 | [`@oortmem/rerank-voyage`](packages/rerank-voyage) | Reranking through Voyage AI                                                                    |
 | [`@oortmem/claude-code`](packages/claude-code)     | Claude Code hooks and transcript import                                                        |
+| [`@oortmem/mcp`](packages/mcp)                     | The MCP tools, schemas, instructions and skill, served over any memory backend                 |
+
+Install bundles for Claude Desktop, Claude Code, Codex, Cursor and Gemini CLI are in
+[`distribution/`](distribution).
 
 This repo is the open-source engine and CLI only. The hosted side (oortcloud.dev and the Oort Pro relay) is a separate service; the engine and CLI reach it only over HTTPS when you use Oort Pro.
 
