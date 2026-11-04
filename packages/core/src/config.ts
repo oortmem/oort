@@ -26,8 +26,10 @@ const writer = z
   .strictObject({
     provider: z.string().default('anthropic'),
     model: z.string().default('claude-haiku-5-5'),
+    /** A turn becomes at most this many memories, one fact each (CON-56). */
+    maxMemoriesPerObservation: z.number().int().min(1).max(10).default(5),
   })
-  .default({ provider: 'anthropic', model: 'claude-haiku-5-5' });
+  .default({ provider: 'anthropic', model: 'claude-haiku-5-5', maxMemoriesPerObservation: 5 });
 
 const activation = z
   .strictObject({

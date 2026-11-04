@@ -554,3 +554,83 @@ describe('request size', () => {
     expect(p).not.toContain('\uFFFD');
   });
 });
+
+describe('aiSdkWriter.writeMany (CON-56)', () => {
+  const second = {
+    text: 'The team uses pnpm 12 for the monorepo.',
+    stub: 'pnpm 12 monorepo. pnpm',
+    entities: ['pnpm'],
+    type: 'semantic',
+  };
+  const raw = (text: string, unified: 'length' | 'stop') => ({
+    content: [{ type: 'text' as const, text }],
+    finishReason: { unified, raw: undefined },
+    usage,
+    warnings: [],
+  });
+
+  it('writer.many-returns-each-memory', async () => {
+    const model = mock({ memories: [good, second] });
+    const out = await aiSdkWriter({ model }).writeMany!(obs, 5);
+    expect(out).toEqual([good, second]);
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(model.doGenerateCalls[0]?.maxOutputTokens).toBe(2048);
+  });
+
+  it('writer.many-prompt-asks-to-split-with-the-cap', async () => {
+    const model = mock({ memories: [good] });
+    await aiSdkWriter({ model }).writeMany!(obs, 3);
+    const sent = promptText(model.doGenerateCalls[0]!);
+    expect(sent).toContain('at most 3 memories');
+    expect(sent).toMatch(/one fact per memory/i);
+  });
+
+  it('writer.many-overlong-single-fact-splits-on-retry', async () => {
+    const long = { ...good, text: `${'The deploy runbook says '.repeat(30)}port 8443.` };
+    const model = mock({ memories: [long] }, { memories: [good, second] });
+    const out = await aiSdkWriter({ model }).writeMany!(obs, 5);
+    expect(out).toEqual([good, second]);
+    expect(model.doGenerateCalls).toHaveLength(2);
+    const retry = promptText(model.doGenerateCalls[1]!);
+    expect(retry).toContain('memories[0].text');
+    expect(retry).toMatch(/split/i);
+  });
+
+  it('writer.many-enforces-the-cap', async () => {
+    const six = Array.from({ length: 6 }, (_, i) => ({ ...good, text: `Fact number ${i}.` }));
+    const model = mock({ memories: six });
+    const e = await aiSdkWriter({ model }).writeMany!(obs, 5).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(WriterOutputError);
+    expect((e as WriterOutputError).fields).toEqual(['memories']);
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it('writer.many-invalid-twice-is-an-output-error-without-text', async () => {
+    const model = mock({ memories: [] }, { memories: [] });
+    const e = await aiSdkWriter({ model }).writeMany!(obs, 5).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(WriterOutputError);
+    expect((e as Error).message).not.toContain('8443');
+  });
+
+  it('writer.many-truncated-output-retries-once-asking-for-fewer', async () => {
+    let i = 0;
+    const model = new MockLanguageModelV4({
+      doGenerate: async () =>
+        i++ === 0
+          ? raw('{"memories":[{"text":"From 2026-11-04 dep', 'length')
+          : reply({ memories: [good] }),
+    });
+    const out = await aiSdkWriter({ model }).writeMany!(obs, 5);
+    expect(out).toEqual([good]);
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(promptText(model.doGenerateCalls[1]!)).toMatch(/cut off/);
+  });
+
+  it('writer.many-scrubs-every-memory', async () => {
+    const awsKey = ['AKIA', 'IOSFODNN7EXAMPLE'].join('');
+    const leaky = { ...second, text: `The key is ${awsKey} for staging.` };
+    const model = mock({ memories: [good, leaky] });
+    const out = await aiSdkWriter({ model }).writeMany!(obs, 5);
+    expect(out[1]?.text).not.toContain(awsKey);
+  });
+});

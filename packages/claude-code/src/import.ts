@@ -280,12 +280,14 @@ export async function importTranscripts(
       continue;
     }
     results.push(r);
-    outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1;
-    if (r.outcome === 'added' && r.memoryId !== undefined) {
+    // A turn can become several memories (CON-56): count and log each one.
+    for (const m of r.memories) {
+      outcomes[m.outcome] = (outcomes[m.outcome] ?? 0) + 1;
+      if (m.outcome !== 'added' || m.memoryId === undefined) continue;
       const row = {
-        memoryId: r.memoryId,
+        memoryId: m.memoryId,
         question: '',
-        expectedMemoryIds: [r.memoryId],
+        expectedMemoryIds: [m.memoryId],
         asOf: item.obs.at,
       };
       appendPrivateFile(evalFile, `${JSON.stringify(row)}\n`);
