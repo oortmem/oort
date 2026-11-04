@@ -251,6 +251,37 @@ describe('voyageEmbedder', () => {
     expect(err.message).not.toContain(secretText);
   });
 
+  it('embed.base-url-routes-through-the-relay', async () => {
+    const s = stub(echo(4));
+    const relayKey = ['oort', 'sk', 'test0123456789'].join('_');
+    const e = voyageEmbedder({
+      ...base,
+      apiKey: relayKey,
+      baseUrl: 'https://relay.example.test/v1/voyage/',
+      fetch: s.fn,
+    });
+    await e.embed(['a'], 'query');
+    const c = s.calls[0]!;
+    expect(c.url).toBe('https://relay.example.test/v1/voyage/embeddings');
+    expect((c.init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${relayKey}`);
+  });
+
+  it('embed.base-url-defaults-to-voyage', async () => {
+    const s = stub(echo(4));
+    await voyageEmbedder({ ...base, fetch: s.fn }).embed(['a'], 'query');
+    expect(s.calls[0]!.url).toBe('https://api.voyageai.com/v1/embeddings');
+  });
+
+  it('embed.http-status-is-kept-on-the-error', async () => {
+    const s = stub(() => json({ error: 'x' }, 402));
+    const err = (await voyageEmbedder({ ...base, fetch: s.fn })
+      .embed(['a'], 'query')
+      .catch((x: unknown) => x)) as VoyageError;
+    expect(err).toBeInstanceOf(VoyageError);
+    expect(err.status).toBe(402);
+    expect(s.calls).toHaveLength(1);
+  });
+
   it('network.import-makes-no-call', async () => {
     const orig = globalThis.fetch;
     globalThis.fetch = (() => {

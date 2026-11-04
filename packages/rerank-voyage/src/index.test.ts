@@ -151,6 +151,22 @@ describe('voyageReranker', () => {
     ).rejects.toMatchObject({ kind: 'bad-response' });
   });
 
+  it('rerank.base-url-routes-through-the-relay', async () => {
+    const s = stub(() => json({ data: [{ index: 0, relevance_score: 0.5 }] }));
+    const relayKey = ['oort', 'sk', 'test0123456789'].join('_');
+    const r = voyageReranker({
+      apiKey: relayKey,
+      model: 'rerank-3-lite',
+      baseUrl: 'https://relay.example.test/v1/voyage',
+      fetch: s.fn,
+    });
+    await r.rerank('q', docs, 1);
+    expect(s.calls[0]!.url).toBe('https://relay.example.test/v1/voyage/rerank');
+    expect((s.calls[0]!.init.headers as Record<string, string>)['Authorization']).toBe(
+      `Bearer ${relayKey}`,
+    );
+  });
+
   it('network.import-makes-no-call', async () => {
     const orig = globalThis.fetch;
     globalThis.fetch = (() => {

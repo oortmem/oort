@@ -3,7 +3,8 @@ import { VoyageError, postJson } from './http.js';
 
 export { VoyageError, type VoyageErrorKind } from './http.js';
 
-const ENDPOINT = 'https://api.voyageai.com/v1/embeddings';
+/** The Voyage API root; the Oort Pro relay serves the same routes under its own root. */
+export const VOYAGE_BASE_URL = 'https://api.voyageai.com/v1';
 const BATCH = 128;
 
 export interface VoyageEmbedderOptions {
@@ -11,6 +12,12 @@ export interface VoyageEmbedderOptions {
   apiKey?: string;
   model: string;
   dimension: number;
+  /**
+   * API root, default `VOYAGE_BASE_URL`. The Oort Pro relay is
+   * `https://relay.oortcloud.dev/v1/voyage` (with an Oort key as `apiKey`, sent as
+   * `Authorization: Bearer`, as Voyage expects too).
+   */
+  baseUrl?: string;
   fetch?: typeof fetch;
 }
 
@@ -39,6 +46,7 @@ export function voyageEmbedder(opts: VoyageEmbedderOptions): Embedder {
   const apiKey = opts.apiKey ?? process.env['VOYAGE_API_KEY'];
   if (!apiKey) throw new MissingCredentialError('VOYAGE_API_KEY', 'embed.apiKey');
   const doFetch = opts.fetch ?? globalThis.fetch;
+  const endpoint = `${(opts.baseUrl ?? VOYAGE_BASE_URL).replace(/\/+$/, '')}/embeddings`;
   const { model, dimension } = opts;
 
   return {
@@ -47,7 +55,7 @@ export function voyageEmbedder(opts: VoyageEmbedderOptions): Embedder {
       const out: Int8Array[] = [];
       for (let i = 0; i < texts.length; i += BATCH) {
         const input = texts.slice(i, i + BATCH);
-        const res = (await postJson(doFetch, ENDPOINT, apiKey, {
+        const res = (await postJson(doFetch, endpoint, apiKey, {
           input,
           model,
           input_type: kind,

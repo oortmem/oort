@@ -3,12 +3,19 @@ import { VoyageError, postJson } from './http.js';
 
 export { VoyageError, type VoyageErrorKind } from './http.js';
 
-const ENDPOINT = 'https://api.voyageai.com/v1/rerank';
+/** The Voyage API root; the Oort Pro relay serves the same routes under its own root. */
+export const VOYAGE_BASE_URL = 'https://api.voyageai.com/v1';
 
 export interface VoyageRerankerOptions {
   /** Defaults to `process.env.VOYAGE_API_KEY`. */
   apiKey?: string;
   model: string;
+  /**
+   * API root, default `VOYAGE_BASE_URL`. The Oort Pro relay is
+   * `https://relay.oortcloud.dev/v1/voyage` (with an Oort key as `apiKey`, sent as
+   * `Authorization: Bearer`, as Voyage expects too).
+   */
+  baseUrl?: string;
   fetch?: typeof fetch;
 }
 
@@ -16,11 +23,12 @@ export function voyageReranker(opts: VoyageRerankerOptions): Reranker {
   const apiKey = opts.apiKey ?? process.env['VOYAGE_API_KEY'];
   if (!apiKey) throw new MissingCredentialError('VOYAGE_API_KEY', 'rerank.apiKey');
   const doFetch = opts.fetch ?? globalThis.fetch;
+  const endpoint = `${(opts.baseUrl ?? VOYAGE_BASE_URL).replace(/\/+$/, '')}/rerank`;
 
   return {
     async rerank(query, docs, topK) {
       if (docs.length === 0) return [];
-      const res = (await postJson(doFetch, ENDPOINT, apiKey, {
+      const res = (await postJson(doFetch, endpoint, apiKey, {
         query,
         documents: docs.map((d) => d.text),
         model: opts.model,
