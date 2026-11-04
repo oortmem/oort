@@ -319,6 +319,71 @@ describe('jevDecider', () => {
     expect(calls[0]!.headers.get('authorization')).toBe(`Bearer ${relayKey}`);
   });
 
+  describe('relay mode', () => {
+    const cap = 'You have used the 25,000 saves included in Oort Pro this month.';
+    const relayKey = ['oort', 'sk', 'test0123456789'].join('_');
+    const reply = (body: unknown, status: number, headers: Record<string, string> = {}) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json', ...headers },
+      });
+    const decider = (fn: typeof fetch) =>
+      jevDecider({
+        apiKey: relayKey,
+        baseURL: 'https://relay.example.test/v1/typesafe',
+        relay: true,
+        fetch: fn,
+      });
+
+    it('cap-429-without-retry-after-is-not-retried-and-keeps-the-message', async () => {
+      let n = 0;
+      const f = (async () => (n++, reply({ error: cap }, 429))) as typeof fetch;
+      const err = (await decider(f)
+        .gate(obs)
+        .catch((x: unknown) => x)) as DecideError;
+      expect(err).toBeInstanceOf(DecideError);
+      expect(err).toMatchObject({ kind: 'rate-limit', status: 429, relayMessage: cap });
+      expect(err.message).toBe(cap);
+      expect(n).toBe(1);
+    });
+
+    it('429-with-retry-after-is-retried-once', async () => {
+      let n = 0;
+      const f = (async () => (
+        n++,
+        reply({ error: 'slow down' }, 429, { 'retry-after': '0' })
+      )) as typeof fetch;
+      await expect(decider(f).gate(obs)).rejects.toMatchObject({
+        kind: 'rate-limit',
+        relayMessage: 'slow down',
+      });
+      expect(n).toBe(2);
+    });
+
+    it('direct-429-keeps-the-sdk-retries-and-never-echoes-a-vendor-body', async () => {
+      let n = 0;
+      const f = (async () => (
+        n++,
+        reply({ error: 'vendor secret' }, 429, { 'retry-after': '0' })
+      )) as typeof fetch;
+      const d = jevDecider({ apiKey: 'ts-direct', baseURL: 'https://x.test', fetch: f });
+      const err = (await d.gate(obs).catch((x: unknown) => x)) as DecideError;
+      expect(n).toBeGreaterThan(1);
+      expect(err.message).not.toContain('vendor secret');
+      expect(err.relayMessage).toBeUndefined();
+    });
+
+    it('5xx-keeps-the-sdk-retries', async () => {
+      let n = 0;
+      const f = (async () => (
+        n++,
+        reply({ error: 'x' }, 503, { 'retry-after': '0' })
+      )) as typeof fetch;
+      await expect(decider(f).gate(obs)).rejects.toMatchObject({ kind: 'server' });
+      expect(n).toBe(3);
+    });
+  });
+
   it('network.import-makes-no-call', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
       throw new Error('network call at import');
