@@ -300,6 +300,22 @@ describe('oort bin', () => {
     expect(code).toBe(0);
   });
 
+  it('cli.doctor-json-reports-every-group-and-creates-nothing', async () => {
+    const s = sandbox();
+    const r = await oort(s, ['doctor', '--json']);
+    expect(r.exitCode).toBe(0);
+    const report = JSON.parse(r.stdout) as { ok: boolean; checks: { group: string }[] };
+    expect(report.ok).toBe(true);
+    expect([...new Set(report.checks.map((c) => c.group))]).toEqual([
+      'keys',
+      'hooks',
+      'mcp',
+      'store',
+      'relay',
+    ]);
+    expect(fs.existsSync(s.oortHome)).toBe(false);
+  });
+
   it('cli.login-refuses-before-any-request-while-the-keychain-is-off', async () => {
     const s = sandbox();
     const site = await fakeSite({ approveAtPoll: 1 });

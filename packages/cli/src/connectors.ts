@@ -680,3 +680,69 @@ export function disconnectHost(
     ? tomlChange('disconnect', file, cmd, opts)
     : jsonChange(host, 'disconnect', file, cmd, opts);
 }
+
+export interface HostStatus {
+  host: Host;
+  file: string;
+  /**
+   * `connected`: Oort's entry for this bin. `outdated`: Oort's entry, from
+   * another install path or an older version. `broken`: Oort's entry, whose
+   * command is not an executable file. `absent`: no `oort` entry (or no
+   * file). `foreign`: an `oort` entry Oort did not write. `invalid`: the file
+   * cannot be read as its format.
+   */
+  state: 'connected' | 'outdated' | 'broken' | 'absent' | 'foreign' | 'invalid';
+  /** Why the file is `invalid` (holds no config values). */
+  message?: string;
+}
+
+const executable = (file: string): boolean => {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+};
+
+/** Read-only: the state of `host`'s `oort` entry, for `oort doctor`. `cmd` is this bin, if known. */
+export function inspectHost(host: Host, hc: HostContext, cmd?: string): HostStatus {
+  const file = hostConfigPath(host, hc);
+  const status = (state: HostStatus['state'], message?: string): HostStatus => ({
+    host,
+    file,
+    state,
+    ...(message !== undefined && { message }),
+  });
+  let loaded: Loaded;
+  try {
+    loaded = load(file);
+  } catch (e) {
+    return status(
+      'invalid',
+      `${file} cannot be read (${(e as NodeJS.ErrnoException).code ?? 'error'}).`,
+    );
+  }
+  if (!loaded.existed) return status('absent');
+  let cfg: Json;
+  try {
+    cfg = (host === 'codex' ? readToml(file) : readJson(file))(loaded.text);
+  } catch (e) {
+    if (e instanceof Refusal) return status('invalid', e.message);
+    throw e;
+  }
+  const servers = cfg[serversKey(host)];
+  if (servers !== undefined && !isObject(servers)) {
+    return status(
+      'invalid',
+      `${file}: "${serversKey(host)}" is not ${host === 'codex' ? 'a table' : 'an object'}.`,
+    );
+  }
+  const entry = servers?.[SERVER_NAME];
+  if (entry === undefined) return status('absent');
+  const command = isObject(entry) && typeof entry['command'] === 'string' ? entry['command'] : '';
+  // Without this bin's path, only an oort-looking path counts as ours (never "\0").
+  if (!isOurs(host, entry, cmd ?? '\u0000')) return status('foreign');
+  if (!executable(command)) return status('broken');
+  return status(same(entry, serverEntry(host, cmd ?? command)) ? 'connected' : 'outdated');
+}

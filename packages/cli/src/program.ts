@@ -1,6 +1,7 @@
 import { Command, CommanderError } from 'commander';
 import { VERSION } from '@oortmem/core';
 import { connectCommand } from './commands/connect.js';
+import { doctorCommand } from './commands/doctor.js';
 import { consolidateCommand } from './commands/consolidate.js';
 import { explainCommand } from './commands/explain.js';
 import { exportCommand } from './commands/export.js';
@@ -175,6 +176,13 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .command('unlink')
     .description("remove this repository's binding (back to the derived id)")
     .action(run(() => projectUnlinkCommand(ctx)));
+
+  p.command('doctor')
+    .description(
+      'check keys, hooks, MCP connectors, the store and the relay, with a fix per problem',
+    )
+    .option('--json', 'print every check as JSON')
+    .action(run((o: { json?: boolean }) => doctorCommand(o, ctx)));
 
   p.command('login')
     .description('sign in to Oort Pro in the browser and keep the Oort key in the Keychain')
