@@ -1,0 +1,31 @@
+{
+  "name": "@oortmem/decide-jev",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.typecheck.json"
+  },
+  "dependencies": {
+    "@oortmem/core": "workspace:*",
+    "@typesafe-ai/sdk": "0.7.0"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
+  }
+}

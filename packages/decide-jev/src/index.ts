@@ -1,0 +1,323 @@
+import {
+  APIConnectionError,
+  APITimeoutError,
+  AuthenticationError,
+  InternalServerError,
+  PermissionDeniedError,
+  RateLimitError,
+  TypeSafeClient,
+  choice,
+  noul,
+  score,
+} from '@typesafe-ai/sdk';
+import {
+  MissingCredentialError,
+  TOOL_SUMMARIES_MAX,
+  TOOL_SUMMARY_MAX_BYTES,
+  capUtf8,
+  truncateUtf8,
+  type Decision,
+  type DecisionController,
+  type GateDecision,
+  type Memory,
+  type MemoryType,
+  type Observation,
+  type ReconcileAction,
+  type ReconcileDecision,
+} from '@oortmem/core';
+import {
+  NOVEL_CRITERIA,
+  NOVEL_INSTRUCTIONS,
+  RECONCILE_CRITERIA,
+  SALIENCE_INSTRUCTIONS,
+  SALIENCE_LEVELS,
+  SALIENCE_NAMES,
+  SHOULD_STORE_INSTRUCTIONS,
+  TYPE_INSTRUCTIONS,
+  reconcileInstructions,
+} from './questions.js';
+
+/** The slice of the TypeSafe client this adapter uses; inject a stub in tests. */
+export interface SystemOneClient {
+  systemOne(req: {
+    state: unknown;
+    questions: Record<string, unknown>;
+    model?: string;
+  }): Promise<{ answers: Record<string, any> }>; // eslint-disable-line @typescript-eslint/no-explicit-any
+}
+
+export type DecideErrorKind =
+  'auth' | 'rate-limit' | 'server' | 'network' | 'timeout' | 'bad-response';
+
+/** A failed Jev call. The message never includes state, observation text, candidate text or the key. */
+export class DecideError extends Error {
+  readonly kind: DecideErrorKind;
+  readonly status: number | undefined;
+  /** The Oort Pro relay's own message for a refusal (relay mode only); never a vendor body. */
+  readonly relayMessage: string | undefined;
+
+  constructor(kind: DecideErrorKind, status?: number, relayMessage?: string) {
+    super(
+      relayMessage ??
+        `Jev decision call failed (${kind}${status === undefined ? '' : `, HTTP ${status}`})`,
+    );
+    this.name = 'DecideError';
+    this.kind = kind;
+    this.status = status;
+    this.relayMessage = relayMessage;
+  }
+}
+
+/** The `error` string of a relay refusal body, cleaned and cut short; undefined for anything else. */
+function relayMessageOf(body: unknown): string | undefined {
+  const msg = (body as { error?: unknown } | null)?.error;
+  if (typeof msg !== 'string') return undefined;
+  const clean = msg.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  return clean === '' ? undefined : clean.slice(0, 400);
+}
+
+/**
+ * The Jev model the Oort Pro relay serves (`MODELS.decide` in apps/relay/src/relay.ts): the SDK's
+ * own default. Relay mode pins it, so `TYPESAFE_DEFAULT_MODEL` cannot pick a model the relay refuses.
+ */
+export const RELAY_MODEL = 'jev-latest';
+
+/** HTTP statuses the SDK retries on its own in relay mode: its default set, minus 429. */
+const RELAY_RETRY_STATUSES = new Set([408, ...Array.from({ length: 100 }, (_, i) => 500 + i)]);
+const MAX_RETRY_AFTER_MS = 5_000;
+
+function fromStatus(status: number): DecideError {
+  if (status === 401 || status === 403) return new DecideError('auth', status);
+  if (status === 429) return new DecideError('rate-limit', status);
+  if (status >= 500) return new DecideError('server', status);
+  return new DecideError('bad-response', status);
+}
+
+/** Maps anything the SDK or client throws to a DecideError, dropping its message and cause. */
+function wrap(e: unknown, relay = false): DecideError {
+  if (e instanceof DecideError) return e;
+  if (e instanceof RateLimitError && relay) {
+    return new DecideError('rate-limit', e.status, relayMessageOf(e.body));
+  }
+  if (e instanceof AuthenticationError || e instanceof PermissionDeniedError) {
+    return new DecideError('auth', e.status);
+  }
+  if (e instanceof RateLimitError) return new DecideError('rate-limit', e.status);
+  if (e instanceof InternalServerError) return new DecideError('server', e.status);
+  if (e instanceof APITimeoutError) return new DecideError('timeout');
+  if (e instanceof APIConnectionError) return new DecideError('network');
+  if (typeof e === 'object' && e !== null) {
+    const status = (e as { status?: unknown }).status;
+    if (typeof status === 'number') return fromStatus(status);
+    const name = (e as { name?: unknown }).name;
+    if (name === 'TimeoutError' || name === 'AbortError') return new DecideError('timeout');
+  }
+  return new DecideError('network');
+}
+
+const bad = (): DecideError => new DecideError('bad-response');
+
+function isObj(x: unknown): x is Record<string, unknown> {
+  return typeof x === 'object' && x !== null;
+}
+const isProb = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
+
+function noulOf(answers: Record<string, unknown>, id: string): number {
+  const a = answers[id];
+  if (!isObj(a) || a['type'] !== 'noul' || !isProb(a['noul'])) throw bad();
+  return a['noul'];
+}
+
+function scoreOf(
+  answers: Record<string, unknown>,
+  id: string,
+): { score: number; probabilities: Record<string, unknown> } {
+  const a = answers[id];
+  if (!isObj(a) || a['type'] !== 'score' || !isProb(a['score']) || !isObj(a['probabilities'])) {
+    throw bad();
+  }
+  return { score: a['score'], probabilities: a['probabilities'] };
+}
+
+const ACTIONS = new Set<string>(['NOOP', 'REINFORCE', 'ADD', 'UPDATE', 'SUPERSEDE']);
+
+function choiceOf(
+  answers: Record<string, unknown>,
+  id: string,
+): { action: ReconcileAction; probability: number } {
+  const a = answers[id];
+  if (!isObj(a) || a['type'] !== 'choice' || !isObj(a['probabilities'])) throw bad();
+  const c = a['choice'];
+  if (typeof c !== 'string' || !ACTIONS.has(c)) throw bad();
+  const p = a['probabilities'][c];
+  if (!isProb(p)) throw bad();
+  return { action: c as ReconcileAction, probability: p };
+}
+
+const clamp = (x: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, x));
+
+const MEMORY_TYPES: MemoryType[] = ['semantic', 'episodic', 'procedural', 'preference'];
+
+/**
+ * Keeps one Jev request body well under the relay's 64 KB limit (56 KB with the questions):
+ * user and assistant text 16 KB each (head and tail), a candidate memory's text 1 KB.
+ */
+const STATE_TEXT_MAX_BYTES = 16 * 1024;
+const CANDIDATE_TEXT_MAX_BYTES = 1024;
+
+function obsState(obs: Observation) {
+  return {
+    user: capUtf8(obs.userText, STATE_TEXT_MAX_BYTES),
+    assistant: capUtf8(obs.assistantText, STATE_TEXT_MAX_BYTES),
+    tools: obs.toolSummaries
+      .slice(0, TOOL_SUMMARIES_MAX)
+      .map((t) => truncateUtf8(t, TOOL_SUMMARY_MAX_BYTES)),
+    at: obs.at,
+  };
+}
+
+export interface JevDeciderOptions {
+  /** Defaults to `process.env.TYPESAFE_API_KEY`. Ignored when `client` is given. */
+  apiKey?: string;
+  client?: SystemOneClient;
+  model?: string;
+  /**
+   * The TypeSafe SDK's `baseURL` (its default is `https://api.typesafe.ai`, or
+   * `TYPESAFE_BASE_URL`). The Oort Pro relay is `https://relay.oortcloud.dev/v1/typesafe`,
+   * with an Oort key as `apiKey` (the SDK sends `Authorization: Bearer`). Ignored with `client`.
+   */
+  baseURL?: string;
+  /** The SDK's fetch, for tests. Ignored with `client`. */
+  fetch?: typeof fetch;
+  /**
+   * The calls go through the Oort Pro relay. A 429 with `Retry-After` is retried once, as
+   * before; a 429 without it (the monthly cap) is not retried, and the relay's message is kept on
+   * the error as `relayMessage`.
+   */
+  relay?: boolean;
+}
+
+/** System One controller backed by TypeSafe's Jev model. One `systemOne` call per stage. */
+export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
+  let client = opts.client;
+  if (client === undefined) {
+    const apiKey = opts.apiKey ?? process.env['TYPESAFE_API_KEY'];
+    if (apiKey === undefined || apiKey === '') {
+      throw new MissingCredentialError('TYPESAFE_API_KEY', 'decide.apiKey');
+    }
+    client = new TypeSafeClient({
+      apiKey,
+      ...(opts.baseURL !== undefined && { baseURL: opts.baseURL }),
+      ...(opts.fetch !== undefined && { fetch: opts.fetch }),
+      // The SDK would retry every 429 (twice); here a cap 429 must not be retried. It keeps its
+      // retries for 408 and 5xx, and `ask` makes the one retry for a 429 with Retry-After.
+      // The relay checks the body, so it takes only plain JSON (no zstd) and its pinned model.
+      ...(opts.relay === true && {
+        retry: { httpStatuses: RELAY_RETRY_STATUSES },
+        compression: false,
+        defaultModel: RELAY_MODEL,
+      }),
+    }) as unknown as SystemOneClient;
+  }
+  const c = client;
+
+  async function ask(state: unknown, questions: Record<string, unknown>) {
+    try {
+      const req = { state, questions, ...(opts.model === undefined ? {} : { model: opts.model }) };
+      let res: Awaited<ReturnType<SystemOneClient['systemOne']>>;
+      try {
+        res = await c.systemOne(req);
+      } catch (e) {
+        const wait =
+          e instanceof RateLimitError && opts.relay === true ? e.retryAfterMs : undefined;
+        if (wait === undefined) throw e;
+        await new Promise((r) => setTimeout(r, Math.min(wait, MAX_RETRY_AFTER_MS)));
+        res = await c.systemOne(req);
+      }
+      if (!isObj(res) || !isObj(res.answers)) throw bad();
+      return res.answers as Record<string, unknown>;
+    } catch (e) {
+      throw wrap(e, opts.relay === true);
+    }
+  }
+
+  return {
+    async gate(obs: Observation): Promise<GateDecision> {
+      const questions: Record<string, unknown> = {
+        should_store: noul(SHOULD_STORE_INSTRUCTIONS),
+        salience: score(SALIENCE_INSTRUCTIONS, [...SALIENCE_LEVELS]),
+      };
+      for (const t of MEMORY_TYPES) questions[`type_${t}`] = noul(TYPE_INSTRUCTIONS[t]);
+
+      const answers = await ask(obsState(obs), questions);
+      const decisions: Decision[] = [];
+      const yesNo = (question: string, p: number) =>
+        decisions.push({
+          stage: 'gate',
+          question,
+          answer: p >= 0.5 ? 'yes' : 'no',
+          probability: p,
+        });
+
+      const shouldStore = noulOf(answers, 'should_store');
+      yesNo('should_store', shouldStore);
+
+      const sal = scoreOf(answers, 'salience');
+      const s = clamp(sal.score, 0, 3);
+      const level = Math.round(s);
+      const lp = sal.probabilities[String(level)];
+      if (!isProb(lp)) throw bad();
+      decisions.push({
+        stage: 'gate',
+        question: 'salience',
+        answer: SALIENCE_NAMES[level]!,
+        probability: lp,
+      });
+
+      const types: Partial<Record<MemoryType, number>> = {};
+      for (const t of MEMORY_TYPES) {
+        const p = noulOf(answers, `type_${t}`);
+        types[t] = p;
+        yesNo(`type_${t}`, p);
+      }
+      return { shouldStore, salience: 0.1 + 0.3 * s, types, decisions };
+    },
+
+    async reconcile(obs: Observation, candidates: Memory[]): Promise<ReconcileDecision[]> {
+      const one = (
+        question: string,
+        candidateId: string | null,
+        a: ReturnType<typeof choiceOf>,
+      ) => ({
+        candidateId,
+        action: a.action,
+        probability: a.probability,
+        decisions: [{ stage: 'reconcile', question, answer: a.action, probability: a.probability }],
+      });
+
+      if (candidates.length === 0) {
+        const answers = await ask(
+          { observation: obsState(obs), candidates: [] },
+          { novel: choice(NOVEL_INSTRUCTIONS, NOVEL_CRITERIA) },
+        );
+        return [one('novel', null, choiceOf(answers, 'novel'))];
+      }
+
+      const questions: Record<string, unknown> = {};
+      candidates.forEach((_, i) => {
+        questions[`c${i}`] = choice(reconcileInstructions(i), RECONCILE_CRITERIA);
+      });
+      const state = {
+        observation: obsState(obs),
+        candidates: candidates.map((m) => ({
+          id: m.id,
+          text: truncateUtf8(m.text, CANDIDATE_TEXT_MAX_BYTES),
+          type: m.type,
+          validFrom: m.validFrom,
+        })),
+      };
+      const answers = await ask(state, questions);
+      return candidates.map((m, i) => one(`c${i}`, m.id, choiceOf(answers, `c${i}`)));
+    },
+  };
+}

@@ -1,0 +1,7 @@
+# Copy to .dev.vars (git-ignored) for `pnpm dev`. Only the publishable key below is real: it is
+# the public key of the Clerk development instance "Oort". Fill the rest with test-mode values.
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_ZGVjaWRpbmctZ29zaGF3ay0yMTAxLmNsZXJrLmFjY291bnRzLmRldiQ
+CLERK_SECRET_KEY=sk_test_replace_me
+STRIPE_SECRET_KEY=sk_test_replace_me
+STRIPE_WEBHOOK_SECRET=whsec_replace_me
+STRIPE_PRICE_PRO=price_replace_me

@@ -6,7 +6,7 @@
 
 **Architecture:** A pnpm/TypeScript monorepo. `@oortmem/core` owns the memory model, the activation math, the `recall`/`observe`/`consolidate` pipelines, and the five adapter contracts (`MemoryStore`, `Embedder`, `Reranker`, `DecisionController`, `MemoryWriter`). Each adapter is its own package; only the `*-voyage`, `decide-jev` and `writer` packages make network calls. `@oortmem/claude-code` turns hook stdin into pipeline calls and parses transcripts; the `oort` CLI wires everything from `oort.config.json`. Phase 1 hooks run in-process (no daemon); the daemon is Phase 2.
 
-**Tech Stack:** Node 22+ (developed on 26), pnpm 10+, TypeScript 5.x strict, vitest, oxlint, prettier, zod, better-sqlite3 13 + sqlite-vec 0.1.x, `node:zlib` zstd, `voyageai` 0.4, `@typesafe-ai/sdk` 0.7, `ai` 7 + `@ai-sdk/anthropic` 4, commander.
+**Tech Stack:** Node 22+ (developed on 26), pnpm 12, TypeScript 7.x strict (the native compiler; 5.9 is the fallback if a tool cannot load it), vitest 5 (root `vitest.config.ts` with `test.projects`), oxlint, prettier, zod, better-sqlite3 13 + sqlite-vec 0.1.x, `node:zlib` zstd, `voyageai` 0.4, `@typesafe-ai/sdk` 0.7, `ai` 7 + `@ai-sdk/anthropic` 4, commander.
 
 **Spec:** `docs/superpowers/specs/2026-11-03-oort-memory-engine-design.md`
 
@@ -14,13 +14,13 @@
 
 - License: Apache 2.0 on every package; `LICENSE` at the repo root, `"license": "Apache-2.0"` in every `package.json`.
 - Package names: `@oortmem/<name>`; the CLI package is `oort` with bin `oort`.
-- Engines: `"node": ">=22.12.0"`. ESM only (`"type": "module"`).
+- Engines: `"node": ">=22.15.0"` (`node:zlib` zstd, used for cold blobs, arrived in 22.15.0). ESM only (`"type": "module"`).
 - No `@smeltjs/*` dependency anywhere. Code adapted from Smelt carries a one-line attribution comment at the top of the file.
 - Zero network calls from `core`, `store-sqlite`, `claude-code`, `cli` (except through injected adapters). Only `embed-voyage`, `rerank-voyage`, `decide-jev`, `writer` may import a network client.
 - Tier names in identifiers are `hot` | `warm` | `cold`. No astro names in code.
 - Store location: `~/.oort/oort.sqlite` and `~/.oort/cold/`; overridable with `OORT_HOME`.
 - Config: `oort.config.json` in the project root (walk up from cwd), then `~/.oort/config.json`, then defaults. Project `private: true` keeps that project's memories out of every other project's recall.
-- Embedding default: `voyage-3.5-lite`, `outputDimension: 512`, `outputDtype: "int8"` for both documents and queries. Reranker default: `rerank-3-lite`, `topK: 10`. Writer default: Anthropic `claude-haiku-4-5` through the AI SDK (model id is config). All three are config, never hard-coded in the pipeline.
+- Embedding default: `voyage-3.5-lite`, `outputDimension: 512`, `outputDtype: "int8"` for both documents and queries. Reranker default: `rerank-3-lite`, `topK: 10`. Writer default: Anthropic `claude-haiku-5-5` through the AI SDK (model id is config). All three are config, never hard-coded in the pipeline.
 - Activation: `A = ln(Σ t_j^-d) + w_s·S`, `d = 0.5`, `w_s = 1.0`, `t_j` in hours with a floor of `1/60`. Thresholds: `hotTopN = 50`, `coldBelow = -2.0`. All config.
 - Recall candidate counts: 50 lexical, 50 dense, rerank top 30, return ≤ 10. Default injection budget 1500 tokens (≈ 6000 chars).
 - Every stored memory records `source.decisions[]` (stage, question, answer, probability).
@@ -39,7 +39,7 @@
 ### Task 1: Monorepo scaffold
 
 **Files:**
-- Create: `package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `vitest.workspace.ts`, `.oxlintrc.json`, `.prettierrc`, `.gitignore`, `LICENSE`, `README.md`, `packages/core/package.json`, `packages/core/tsconfig.json`, `packages/core/src/index.ts`, `packages/core/src/index.test.ts`
+- Create: `package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `vitest.config.ts`, `.oxlintrc.json`, `.prettierrc`, `.gitignore`, `LICENSE`, `README.md`, `packages/core/package.json`, `packages/core/tsconfig.json`, `packages/core/src/index.ts`, `packages/core/src/index.test.ts`
 
 **Interfaces:**
 - Produces: workspace scripts `build`, `test`, `typecheck`, `lint`, `format`, `format:check`, `verify`; a package template every later task copies.
@@ -80,10 +80,10 @@
 **Interfaces:**
 - Produces:
   - `activation(log: AccessLog, salience: number, now: Date, p: { d: number; ws: number }): number`
-  - `recordAccess(log: AccessLog, at: Date): AccessLog` (append; when `recent.length > 32`, fold the oldest 16 into `compactedSum` as `Σ t^-d` evaluated at `compactedAt`, which `activation` re-ages)
+  - `appendAccess(log: AccessLog, at: Date, p: { d: number }): AccessLog` (append; `d` is required because `compactedSum` is only valid for the `d` it was folded with; when `recent.length > 32`, fold the oldest 16 into `compactedSum` as `Σ t^-d` evaluated at `compactedAt`, which `activation` re-ages)
   - `tierFor(a: number, rank: number, pinned: boolean, p: { hotTopN: number; coldBelow: number }): Tier`
 
-- [ ] **Step 1: Failing tests**: `activation.recent-beats-old` (one access 1 h ago > one access 100 h ago), `activation.frequency-adds` (five accesses > one access, same ages), `activation.salience-weight` (same log, salience 1 vs 0 differs by exactly `ws`), `activation.compaction-preserves-order` (ranking of two logs unchanged after `recordAccess` compacts one of them), `tierFor.pinned-is-hot`, `tierFor.below-threshold-is-cold`.
+- [ ] **Step 1: Failing tests**: `activation.recent-beats-old` (one access 1 h ago > one access 100 h ago), `activation.frequency-adds` (five accesses > one access, same ages), `activation.salience-weight` (same log, salience 1 vs 0 differs by exactly `ws`), `activation.compaction-preserves-order` (ranking of two logs unchanged after `appendAccess` compacts one of them), `tierFor.pinned-is-hot`, `tierFor.below-threshold-is-cold`.
 - [ ] **Step 2: Run → FAIL. Step 3: Implement. Step 4: Run → PASS. Step 5: Commit** `feat(core): ACT-R activation and tier assignment`.
 
 ### Task 4: Adapter contracts, in-memory store, fusion
@@ -138,13 +138,39 @@
 - [ ] **Step 1: Failing tests** with fake decide/write/embed: `observe.skips-low-salience`, `observe.reinforce-increments-access`, `observe.add-stores-warm`, `observe.high-salience-is-hot`, `observe.supersede-chain` (A→B→C; `list(validOnly)` returns only C; C.supersedes = B, B.supersededBy = C), `observe.records-decisions`.
 - [ ] **Step 2 → 5.** Commit `feat(core): observe pipeline with reconciliation`.
 
+### Task 6b: Secret scrubbing at the observation boundary
+
+**Files:**
+- Create: `packages/core/src/scrub.ts`, `packages/core/src/scrub.test.ts`, fixtures `packages/core/test/fixtures/secrets.txt` and `packages/core/test/fixtures/lookalikes.txt`
+- Modify: `packages/core/src/observe.ts` (call `scrub` first)
+
+**Interfaces:**
+- Produces: `scrub(text: string): { text: string; redactions: { kind: string; count: number }[]; secretRatio: number }` and `scrubObservation(obs: Observation): { obs: Observation; dropped: boolean; redactions: ... }`. `dropped` is true when `secretRatio > 0.5`. Kinds: `aws-access-key`, `aws-secret-key`, `github-token`, `anthropic-key`, `openai-key`, `voyage-key`, `typesafe-key`, `stripe-key`, `jwt`, `pem-private-key`, `url-credentials`, `auth-header`, `env-secret`, `high-entropy` (base64/hex ≥ 32 chars with Shannon entropy ≥ 4.0 bits/char). Replacement is `[REDACTED:<kind>]`. Pure code, no dependencies, no network.
+- `observe()` runs `scrubObservation` before the gate; a dropped observation returns `{ outcome: "skipped", reason: "secret", decisions: [] }` and never reaches any adapter.
+
+- [ ] **Step 1: Failing tests**: `scrub.redacts-all-fixture-secrets` (every line of `secrets.txt` contains `[REDACTED:` after scrub and none of the original secret substrings), `scrub.leaves-lookalikes` (every line of `lookalikes.txt` is byte-identical: commit SHAs, UUIDs, short hex ids, ordinary URLs, version strings), `scrub.idempotent`, `scrub.keeps-surrounding-text`, `observe.never-sends-secret-to-adapters` (fake embedder/decider/writer throw if their input contains the planted key; observe succeeds with the redacted text), `observe.drops-mostly-secret-turn`.
+- [ ] **Step 2 → 5.** Commit `feat(core): secret scrubbing at the observation boundary`.
+
+### Task 6c: Temporal validity hardening (from `docs/research/2026-11-03-temporal-knowledge.md`)
+
+**Files:**
+- Modify: `packages/core/src/model.ts` (add `expiredAt: string | null`, `endReason: "superseded" | "corrected" | "expired" | null`, `lastConfirmedAt: string | null`), `fusion.ts`, `observe.ts`, `memory-store.ts`, `store-conformance.ts`, and their tests.
+
+**Interfaces:**
+- Produces: `isCurrent(m: Memory, at: Date): boolean` in `model.ts` = `m.expiredAt === null && m.validFrom <= at && (m.validTo === null || at < m.validTo)`; `MemoryStore.list(scope, { validOnly })` and `fuse()` use `isCurrent(m, now)` (or `asOf`) instead of `validTo === null`.
+- `observe()` SUPERSEDE/UPDATE: the prior is closed at the new fact's `validFrom` (`prior.validTo = newMemory.validFrom`, `prior.expiredAt = now`, `prior.endReason = "superseded"`), not at `obs.at` when they differ. Out-of-order guard: if the new fact's `validFrom` is earlier than the prior's `validFrom`, the NEW memory is stored already closed (`validTo = prior.validFrom`, `expiredAt = now`, `endReason = "superseded"`, `supersededBy = prior.id`) and the prior stays current. REINFORCE sets `lastConfirmedAt = now`.
+- A memory may be stored with a future `validTo` (explicit expiry) and remains current until then; consolidation (Task 7) sets `expiredAt = now`, `endReason = "expired"` once `validTo` has passed.
+
+- [ ] **Step 1: Failing tests**: `model.isCurrent-future-validTo-is-current`, `model.isCurrent-past-validTo-is-not`, `fusion.keeps-future-expiry`, `observe.supersede-closes-prior-at-new-validFrom`, `observe.out-of-order-older-fact-closes-itself` (prior current, new memory stored closed, chain links both ways), `observe.reinforce-sets-lastConfirmedAt`, `consolidate.expires-past-validTo` (in Task 7), conformance `list-valid-only-uses-isCurrent` (a future-validTo memory is listed; a past-validTo one is not).
+- [ ] **Step 2 → 5.** Commit `feat(core): bitemporal validity, out-of-order supersede guard, lastConfirmedAt`.
+
 ### Task 7: `consolidate`
 
 **Files:**
 - Create: `packages/core/src/consolidate.ts`, test.
 
 **Interfaces:**
-- Produces: `consolidate(scope: ScopeFilter, deps: { store: MemoryStore; config: ResolvedConfig; now?: Date }): Promise<{ promoted: string[]; demoted: string[]; evicted: string[] }>` — recompute activation for every valid memory, rank, assign `tierFor`, `setTier` on change, `coldPut` + drop embedding for new cold, and demote superseded memories straight to cold.
+- Produces: `consolidate(scope: ScopeFilter, deps: { store: MemoryStore; config: ResolvedConfig; now?: Date }): Promise<{ promoted: string[]; demoted: string[]; evicted: string[]; expired: string[] }>` — first mark memories whose `validTo` has passed as `expiredAt = now`, `endReason = "expired"` (Task 6c); then recompute activation for every current memory, rank, assign `tierFor`, `setTier` on change, `coldPut` + drop embedding for new cold, and demote superseded and expired memories straight to cold.
 
 - [ ] **Step 1: Failing tests**: `consolidate.top-n-hot`, `consolidate.stale-goes-cold-and-keeps-stub`, `consolidate.pinned-never-cold`, `consolidate.superseded-goes-cold`, `consolidate.idempotent`.
 - [ ] **Step 2 → 5.** Commit `feat(core): consolidation job`.

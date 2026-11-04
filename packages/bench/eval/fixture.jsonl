@@ -1,0 +1,20 @@
+{"question":"8204 queue-runner development listens","expectedMemoryIds":["m7-1124"],"category":"single-fact"}
+{"question":"2026-08-15 refresh token keeps","expectedMemoryIds":["m7-269"],"category":"single-fact"}
+{"question":"2026-09-08 flags class","expectedMemoryIds":["m7-439"],"category":"single-fact"}
+{"question":"2026-04-13 descriptors leaked","expectedMemoryIds":["m7-281"],"category":"single-fact"}
+{"question":"than rather ioredis with pooling connection","expectedMemoryIds":["m7-1009"],"category":"single-fact"}
+{"question":"polling than rather zod with refresh","expectedMemoryIds":["m7-113"],"category":"single-fact"}
+{"question":"which library does the sync daemon use to validate requests now","expectedMemoryIds":["m7-74"],"notExpectedMemoryIds":["m7-72","m7-73"],"category":"knowledge-update"}
+{"question":"which library does the notify relay use to validate requests now","expectedMemoryIds":["m7-62"],"notExpectedMemoryIds":["m7-60","m7-61"],"category":"knowledge-update"}
+{"question":"which library does the queue runner use to validate requests now","expectedMemoryIds":["m7-47"],"notExpectedMemoryIds":["m7-45","m7-46"],"category":"knowledge-update"}
+{"question":"which library does the audit logger use to validate requests now","expectedMemoryIds":["m7-59"],"notExpectedMemoryIds":["m7-57","m7-58"],"category":"knowledge-update"}
+{"question":"which library does the search gateway use to validate requests back then","expectedMemoryIds":["m7-28"],"notExpectedMemoryIds":["m7-27","m7-29"],"asOf":"2026-06-06T19:00:27.721Z","category":"temporal"}
+{"question":"which package manager does the report builder use back then","expectedMemoryIds":["m7-49"],"notExpectedMemoryIds":["m7-48","m7-50"],"asOf":"2026-05-11T19:31:02.610Z","category":"temporal"}
+{"question":"which port does the edge router listen on back then","expectedMemoryIds":["m7-25"],"notExpectedMemoryIds":["m7-24","m7-26"],"asOf":"2026-04-07T04:51:25.315Z","category":"temporal"}
+{"question":"2026-07-04","expectedMemoryIds":["m7-936","m7-436"],"category":"multi-session"}
+{"question":"2026-06-09","expectedMemoryIds":["m7-276","m7-857"],"category":"multi-session"}
+{"question":"2026-04-13","expectedMemoryIds":["m7-281","m7-613"],"category":"multi-session"}
+{"question":"auth service rollback plan for the billing team","expectedMemoryIds":[],"category":"abstention"}
+{"question":"who approved the quarterly budget for the search gateway","expectedMemoryIds":[],"category":"abstention"}
+{"question":"the incident escalation policy for the notify relay","expectedMemoryIds":[],"category":"abstention"}
+{"question":"media proxy vendor contract renewal for the legal team","expectedMemoryIds":[],"category":"abstention"}

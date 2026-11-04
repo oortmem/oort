@@ -1,0 +1,52 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "oort-site",
+  "compatibility_date": "2026-11-01",
+  // nodejs_compat also fills process.env from vars and secrets, which Clerk reads.
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "@tanstack/react-start/server-entry",
+  // Invocation logs are off: they would record every request's URL, headers (IP and user agent
+  // included) and the `cf` location object. The site's own code logs only a status and duration
+  // on a server error (src/lib/log.ts), so the privacy notice's "no IP address" holds.
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      // Placeholder. Replace with the id printed by `wrangler d1 create oort-site-waitlist`.
+      "database_name": "oort-site-waitlist",
+      "database_id": "f0ea3ef8-02b1-4ef7-89ba-7ac6ce5798a8",
+      "migrations_dir": "migrations",
+    },
+    {
+      // Oort Pro accounts, shared with apps/relay. The schema lives in apps/relay/migrations.
+      "binding": "ACCOUNTS_DB",
+      "database_name": "oort-accounts",
+      // Placeholder. Replace with the id printed by `wrangler d1 create oort-accounts`
+      // (the same id goes in apps/relay/wrangler.jsonc).
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../relay/migrations",
+    },
+  ],
+  // `oort login` sessions started per IP: 10 a minute (src/routes/api/cli/session/index.ts).
+  // The IP is the counter's key only and is never stored. namespace_id is unique to the account.
+  "ratelimits": [
+    {
+      "name": "CLI_SESSION_LIMITER",
+      "namespace_id": "4103",
+      "simple": { "limit": 10, "period": 60 },
+    },
+    {
+      // Typed `oort login` codes: 10 a minute per account and 10 a minute per IP
+      // (src/server/account.ts codeAttemptGuard).
+      "name": "CODE_ATTEMPT_LIMITER",
+      "namespace_id": "4104",
+      "simple": { "limit": 10, "period": 60 },
+    },
+  ],
+  // Secrets, set with `wrangler secret put <NAME>` (see README). Never put values here.
+  //   CLERK_SECRET_KEY
+  //   STRIPE_SECRET_KEY
+  //   STRIPE_WEBHOOK_SECRET
+  //   STRIPE_PRICE_PRO
+  // VITE_CLERK_PUBLISHABLE_KEY is public and is read at build time (see README).
+}

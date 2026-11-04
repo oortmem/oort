@@ -1,0 +1,10 @@
+{
+  "ignorePatterns": [
+    "dist",
+    "node_modules",
+    "apps/site/src/routeTree.gen.ts",
+    ".output",
+    ".tanstack",
+    ".wrangler"
+  ]
+}

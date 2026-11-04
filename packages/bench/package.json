@@ -1,0 +1,28 @@
+{
+  "name": "@oortmem/bench",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "bench": "tsc -p tsconfig.json && node --expose-gc dist/bench-main.js",
+    "eval": "tsc -p tsconfig.json && node dist/eval-main.js",
+    "fixture": "tsc -p tsconfig.json && node dist/make-fixture.js"
+  },
+  "dependencies": {
+    "@oortmem/core": "workspace:*",
+    "@oortmem/embed-voyage": "workspace:*",
+    "@oortmem/rerank-voyage": "workspace:*",
+    "@oortmem/store-sqlite": "workspace:*",
+    "better-sqlite3": "13.0.3"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5",
+    "@types/better-sqlite3": "9.6.0"
+  }
+}

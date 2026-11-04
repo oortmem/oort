@@ -1,0 +1,697 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import Database from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
+import {
+  appendAccess,
+  isCurrent,
+  tokenizeLexical,
+  type AccessLog,
+  type GuardedWriteResult,
+  type Hit,
+  type Memory,
+  type MemorySource,
+  type MemoryStore,
+  type Scope,
+  type ScopeFilter,
+  type Tier,
+} from '@oortmem/core';
+import {
+  chmodIfExists,
+  openBlobDir,
+  prepareDbDir,
+  withCleanupFailures,
+  withPrivateUmask,
+} from './blobs.js';
+import { ColdBlobCorruptError, createColdCodec } from './cold.js';
+import { applySchema } from './schema.js';
+
+export {
+  ColdBlobCorruptError,
+  createColdCodec,
+  type ColdCodec,
+  type ColdCodecOptions,
+} from './cold.js';
+
+export interface SqliteStoreOptions {
+  /**
+   * The SQLite database file. A missing directory is created owner-only; an
+   * existing one is left as is (with a warning when group or others can read it).
+   */
+  path: string;
+  /** Directory for cold blobs; created owner-only, or tightened to 0700. */
+  coldDir: string;
+  /** Embedding dimension. Fixed at first open; a later open with another value is refused. */
+  dimension: number;
+  /**
+   * ACT-R decay used when folding access logs in `recordAccess`; pass the same
+   * `d` the engine's activation uses. Defaults to 0.5.
+   */
+  d?: number;
+  /** Clock for `list`'s validity filter; defaults to `new Date()`. */
+  now?: () => Date;
+  /**
+   * How long a write (and the open, which checks the schema in a write
+   * transaction) waits for another connection's write lock before failing
+   * with `SQLITE_BUSY`. Defaults to 5000. The wait is synchronous and blocks
+   * the event loop, so latency-bound callers (hooks) pass a short one.
+   */
+  busyTimeoutMs?: number;
+  /**
+   * One-line maintenance notices (orphan sweeps, permissions, corrupt cold
+   * blobs). They carry counts, directory paths or memory ids, never memory
+   * content. Defaults to stderr.
+   */
+  log?: (message: string) => void;
+}
+
+/** sqlite-vec's upper bound on `k` in a KNN query. */
+const MAX_KNN = 4096;
+
+interface MemoryRow {
+  rid: number;
+  id: string;
+  org_id: string;
+  customer_id: string;
+  agent_id: string;
+  project_id: string | null;
+  scope_extra: string | null;
+  type: Memory['type'];
+  text: string;
+  stub: string;
+  entities: string;
+  salience: number;
+  pinned: number;
+  tier: Tier;
+  access_log: string;
+  valid_from: string;
+  valid_to: string | null;
+  expired_at: string | null;
+  end_reason: Memory['endReason'];
+  last_confirmed_at: string | null;
+  supersedes: string | null;
+  superseded_by: string | null;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+type RowParams = Omit<MemoryRow, 'rid'>;
+
+/** An FTS5 query matching any token, each quoted as a phrase so no input is parsed as syntax. */
+function matchQuery(q: string): string | null {
+  const unique = [...new Set(tokenizeLexical(q))];
+  if (unique.length === 0) return null;
+  return unique.map((t) => `"${t.replaceAll('"', '""')}"`).join(' OR ');
+}
+
+function indexed(text: string): string {
+  return tokenizeLexical(text).join(' ');
+}
+
+/** The vec0 partition for a scope's (org, customer, agent). */
+function scopeKey(orgId: string, customerId: string, agentId: string): string {
+  return JSON.stringify([orgId, customerId, agentId]);
+}
+
+/** vec0 metadata cannot be NULL, so global (no project) gets its own key. */
+function projectKey(projectId: string | null | undefined): string {
+  return projectId === null || projectId === undefined ? 'g' : `p:${projectId}`;
+}
+
+function toBytes(v: Int8Array): Buffer {
+  return Buffer.from(v.buffer, v.byteOffset, v.byteLength);
+}
+
+function toRow(m: Memory): RowParams {
+  const { orgId, customerId, agentId, projectId, ...extra } = m.scope;
+  return {
+    id: m.id,
+    org_id: orgId,
+    customer_id: customerId,
+    agent_id: agentId,
+    project_id: projectId ?? null,
+    scope_extra: Object.keys(extra).length === 0 ? null : JSON.stringify(extra),
+    type: m.type,
+    text: m.text,
+    stub: m.stub,
+    entities: JSON.stringify(m.entities),
+    salience: m.salience,
+    pinned: m.pinned ? 1 : 0,
+    tier: m.tier,
+    access_log: JSON.stringify(m.accessLog),
+    valid_from: m.validFrom,
+    valid_to: m.validTo,
+    expired_at: m.expiredAt,
+    end_reason: m.endReason,
+    last_confirmed_at: m.lastConfirmedAt,
+    supersedes: m.supersedes,
+    superseded_by: m.supersededBy,
+    source: JSON.stringify(m.source),
+    created_at: m.createdAt,
+    updated_at: m.updatedAt,
+  };
+}
+
+function fromRow(r: MemoryRow, embedding: Int8Array | undefined): Memory {
+  const scope: Scope = {
+    orgId: r.org_id,
+    customerId: r.customer_id,
+    agentId: r.agent_id,
+    ...(r.project_id !== null && { projectId: r.project_id }),
+    ...(r.scope_extra !== null && (JSON.parse(r.scope_extra) as object)),
+  };
+  const m: Memory = {
+    id: r.id,
+    scope,
+    type: r.type,
+    text: r.text,
+    stub: r.stub,
+    entities: JSON.parse(r.entities) as string[],
+    salience: r.salience,
+    pinned: r.pinned !== 0,
+    tier: r.tier,
+    accessLog: JSON.parse(r.access_log) as AccessLog,
+    validFrom: r.valid_from,
+    validTo: r.valid_to,
+    expiredAt: r.expired_at,
+    endReason: r.end_reason,
+    lastConfirmedAt: r.last_confirmed_at,
+    supersedes: r.supersedes,
+    supersededBy: r.superseded_by,
+    source: JSON.parse(r.source) as MemorySource,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+  if (embedding !== undefined) m.embedding = embedding;
+  return m;
+}
+
+const COLUMNS: (keyof RowParams)[] = [
+  'id',
+  'org_id',
+  'customer_id',
+  'agent_id',
+  'project_id',
+  'scope_extra',
+  'type',
+  'text',
+  'stub',
+  'entities',
+  'salience',
+  'pinned',
+  'tier',
+  'access_log',
+  'valid_from',
+  'valid_to',
+  'expired_at',
+  'end_reason',
+  'last_confirmed_at',
+  'supersedes',
+  'superseded_by',
+  'source',
+  'created_at',
+  'updated_at',
+];
+
+/** Scope predicate over `memories` aliased `m`; bound with `scopeParams`. */
+const SCOPE_SQL = `m.org_id = @org AND m.customer_id = @customer AND m.agent_id = @agent
+  AND (m.project_id IN (SELECT value FROM json_each(@projects)) OR (@global AND m.project_id IS NULL))`;
+
+function scopeParams(s: ScopeFilter) {
+  return {
+    org: s.orgId,
+    customer: s.customerId,
+    agent: s.agentId,
+    projects: JSON.stringify(s.projectIds.filter((p): p is string => p !== null)),
+    global: s.projectIds.includes(null) ? 1 : 0,
+  };
+}
+
+/**
+ * Opens (creating if needed) a SQLite-backed `MemoryStore`: rows in `memories`,
+ * lexical search through FTS5, dense search through sqlite-vec (int8, cosine),
+ * cold copies as zstd blobs under `coldDir`. Safe to open from several
+ * processes at once (WAL, a busy timeout (5 s by default), IMMEDIATE write
+ * transactions).
+ * Every method is async per the contract; the work underneath is synchronous.
+ */
+export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryStore> {
+  const { dimension } = opts;
+  if (!Number.isInteger(dimension) || dimension <= 0) {
+    throw new RangeError(`sqlite store: dimension must be a positive integer, got ${dimension}`);
+  }
+  const busyTimeoutMs = opts.busyTimeoutMs ?? 5000;
+  if (!Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0) {
+    throw new RangeError(
+      `sqlite store: busyTimeoutMs must be a non-negative integer, got ${busyTimeoutMs}`,
+    );
+  }
+  const d = opts.d ?? 0.5;
+  const clock = opts.now ?? (() => new Date());
+  const log = opts.log ?? ((message: string) => process.stderr.write(`${message}\n`));
+  const dbPath = path.resolve(opts.path);
+  const coldDir = path.resolve(opts.coldDir);
+  prepareDbDir(path.dirname(dbPath), log);
+  const blobs = openBlobDir(coldDir, log);
+  if (!fs.existsSync(dbPath)) fs.closeSync(fs.openSync(dbPath, 'a', 0o600));
+
+  const db = withPrivateUmask(() => {
+    const conn = new Database(dbPath);
+    try {
+      conn.pragma(`busy_timeout = ${busyTimeoutMs}`);
+      conn.pragma('journal_mode = WAL');
+      conn.pragma('foreign_keys = ON');
+      sqliteVec.load(conn);
+      applySchema(conn, dimension);
+      return conn;
+    } catch (e) {
+      conn.close();
+      throw e;
+    }
+  });
+  try {
+    if (process.platform !== 'win32') {
+      for (const suffix of ['', '-wal', '-shm']) chmodIfExists(`${dbPath}${suffix}`, 0o600);
+    }
+    blobs.sweep(
+      new Set(
+        db
+          .prepare<[], { path: string }>('SELECT path FROM cold_index')
+          .all()
+          .map((r) => r.path),
+      ),
+    );
+  } catch (e) {
+    db.close();
+    throw e;
+  }
+
+  const codec = createColdCodec({ dimension });
+
+  const q = {
+    upsertRow: db.prepare<[RowParams], { rid: number }>(
+      `INSERT INTO memories (${COLUMNS.join(', ')}) VALUES (${COLUMNS.map((c) => `@${c}`).join(', ')})
+       ON CONFLICT (id) DO UPDATE SET ${COLUMNS.filter((c) => c !== 'id')
+         .map((c) => `${c} = excluded.${c}`)
+         .join(', ')}
+       RETURNING rid`,
+    ),
+    getRow: db.prepare<[string], MemoryRow>('SELECT * FROM memories WHERE id = ?'),
+    deleteRow: db.prepare<[string], { rid: number }>(
+      'DELETE FROM memories WHERE id = ? RETURNING rid',
+    ),
+    setTierRow: db.prepare<[Tier, string], Pick<MemoryRow, 'rid' | 'text' | 'stub' | 'entities'>>(
+      'UPDATE memories SET tier = ? WHERE id = ? RETURNING rid, text, stub, entities',
+    ),
+    // Guarded writes: each applies only while the row matches the caller's snapshot.
+    setTierIfUnchanged: db.prepare<
+      [{ id: string; tier: Tier; updatedAt: string; was: Tier }],
+      Pick<MemoryRow, 'rid' | 'text' | 'stub' | 'entities'>
+    >(
+      `UPDATE memories SET tier = @tier
+       WHERE id = @id AND updated_at = @updatedAt AND tier = @was
+       RETURNING rid, text, stub, entities`,
+    ),
+    expireIfUnchanged: db.prepare<
+      [{ id: string; at: string; updatedAt: string; was: Tier }],
+      { rid: number }
+    >(
+      `UPDATE memories SET expired_at = @at, end_reason = COALESCE(end_reason, 'expired')
+       WHERE id = @id AND updated_at = @updatedAt AND tier = @was AND expired_at IS NULL
+       RETURNING rid`,
+    ),
+    getAccess: db.prepare<[string], { access_log: string }>(
+      'SELECT access_log FROM memories WHERE id = ?',
+    ),
+    setAccess: db.prepare<[string, string]>('UPDATE memories SET access_log = ? WHERE id = ?'),
+    list: db.prepare<[ReturnType<typeof scopeParams> & { tier: Tier | null }], MemoryRow>(
+      `SELECT * FROM memories m WHERE ${SCOPE_SQL} AND (@tier IS NULL OR m.tier = @tier)
+       ORDER BY m.rid`,
+    ),
+    lexical: db.prepare<
+      [ReturnType<typeof scopeParams> & { match: string; k: number }],
+      { id: string; tier: Tier; rank: number }
+    >(
+      `SELECT m.id AS id, m.tier AS tier, bm25(memories_fts) AS rank
+       FROM memories_fts JOIN memories m ON m.rid = memories_fts.rowid
+       WHERE memories_fts MATCH @match AND ${SCOPE_SQL}
+       ORDER BY rank, m.updated_at DESC, m.id
+       LIMIT @k`,
+    ),
+    dense: db.prepare<
+      [
+        ReturnType<typeof scopeParams> & {
+          v: Buffer;
+          k: number;
+          scopeKey: string;
+          projectKeys: string;
+        },
+      ],
+      { id: string; distance: number; tier: Tier }
+    >(
+      `WITH knn AS (
+         SELECT id, distance FROM memories_vec
+         WHERE embedding MATCH vec_int8(@v) AND k = @k AND scope_key = @scopeKey
+           AND project_key IN (SELECT value FROM json_each(@projectKeys)) AND tier != 'cold'
+       )
+       SELECT knn.id AS id, knn.distance AS distance, m.tier AS tier
+       FROM knn JOIN memories m ON m.id = knn.id
+       WHERE m.tier != 'cold' AND ${SCOPE_SQL}
+       ORDER BY knn.distance, m.updated_at DESC, m.id`,
+    ),
+    ftsDelete: db.prepare<[number]>('DELETE FROM memories_fts WHERE rowid = ?'),
+    ftsInsert: db.prepare<[number, string, string, string]>(
+      'INSERT INTO memories_fts (rowid, text, stub, entities) VALUES (?, ?, ?, ?)',
+    ),
+    vecGet: db.prepare<[string], { embedding: Buffer }>(
+      'SELECT embedding FROM memories_vec WHERE id = ?',
+    ),
+    vecDelete: db.prepare<[string]>('DELETE FROM memories_vec WHERE id = ?'),
+    vecInsert: db.prepare<[string, Buffer, string, string, Tier]>(
+      `INSERT INTO memories_vec (id, embedding, scope_key, project_key, tier)
+       VALUES (?, vec_int8(?), ?, ?, ?)`,
+    ),
+    vecSetTier: db.prepare<[Tier, string]>('UPDATE memories_vec SET tier = ? WHERE id = ?'),
+    coldPath: db.prepare<[string], { path: string }>('SELECT path FROM cold_index WHERE id = ?'),
+    coldInsert: db.prepare<[string, string]>(
+      `INSERT INTO cold_index (id, path) VALUES (?, ?)
+       ON CONFLICT (id) DO UPDATE SET path = excluded.path`,
+    ),
+    coldDelete: db.prepare<[string], { path: string }>(
+      'DELETE FROM cold_index WHERE id = ? RETURNING path',
+    ),
+    getCursor: db.prepare<[string], { value: string }>('SELECT value FROM cursors WHERE key = ?'),
+    setCursor: db.prepare<[string, string]>(
+      `INSERT INTO cursors (key, value) VALUES (?, ?)
+       ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+    ),
+  };
+
+  let closed = false;
+
+  function open(): void {
+    if (closed) throw new Error('sqlite store is closed');
+  }
+
+  function checkDimension(v: Int8Array, what: string): void {
+    if (v.length !== dimension) {
+      throw new RangeError(
+        `${what}: vector has ${v.length} dimensions, store dimension is ${dimension}`,
+      );
+    }
+  }
+
+  function embeddingOf(id: string): Int8Array | undefined {
+    const row = q.vecGet.get(id);
+    if (row === undefined) return undefined;
+    const b = row.embedding;
+    return Int8Array.from(new Int8Array(b.buffer, b.byteOffset, b.byteLength));
+  }
+
+  /** The FTS row for a memory; cold rows index stub and entities only. */
+  function writeFts(rid: number, tier: Tier, text: string, stub: string, entities: string[]) {
+    q.ftsDelete.run(rid);
+    q.ftsInsert.run(
+      rid,
+      tier === 'cold' ? '' : indexed(text),
+      indexed(stub),
+      indexed(entities.join(' ')),
+    );
+  }
+
+  /**
+   * Writes one memory's row, FTS row and vec row. Call inside a transaction.
+   * Returns the blob to unlink after commit when a non-cold write dropped the cold copy.
+   */
+  function writeMemory(m: Memory): string[] {
+    if (m.embedding !== undefined) checkDimension(m.embedding, `upsert ${m.id}`);
+    const row = q.upsertRow.get(toRow(m));
+    if (row === undefined) throw new Error(`upsert ${m.id}: no row returned`);
+    writeFts(row.rid, m.tier, m.text, m.stub, m.entities);
+    q.vecDelete.run(m.id);
+    if (m.embedding !== undefined) {
+      const s = m.scope;
+      q.vecInsert.run(
+        m.id,
+        toBytes(m.embedding),
+        scopeKey(s.orgId, s.customerId, s.agentId),
+        projectKey(s.projectId),
+        m.tier,
+      );
+    }
+    if (m.tier === 'cold') return [];
+    const dropped = q.coldDelete.get(m.id);
+    return dropped === undefined ? [] : [dropped.path];
+  }
+
+  /**
+   * Unlinks blobs no committed row references any more. The commit landed, so
+   * an unlink failure must not fail the call; what is left is unreferenced and
+   * the next open's sweep removes it.
+   */
+  function removeAfterCommit(files: string[]): void {
+    const failures = blobs.removeAll(files);
+    if (failures.length > 0) {
+      log(
+        `oort store: could not remove ${failures.length} unreferenced cold blob(s); the next open sweeps them`,
+      );
+    }
+  }
+
+  const writeAll = db.transaction((ms: Memory[]) => ms.flatMap(writeMemory));
+
+  function upsertMany(ms: Memory[]): void {
+    // The rows are gone once the transaction commits; only then unlink exactly
+    // the blob each one named (unique per coldPut, so never another write's).
+    removeAfterCommit(writeAll.immediate(ms));
+  }
+
+  const forgetTx = db.transaction((id: string): string | undefined => {
+    const row = q.deleteRow.get(id);
+    if (row !== undefined) q.ftsDelete.run(row.rid);
+    q.vecDelete.run(id);
+    return q.coldDelete.get(id)?.path;
+  });
+
+  const recordAccessTx = db.transaction((ids: string[], at: Date) => {
+    for (const id of ids) {
+      const row = q.getAccess.get(id);
+      if (row === undefined) continue;
+      const log = appendAccess(JSON.parse(row.access_log) as AccessLog, at, { d });
+      q.setAccess.run(JSON.stringify(log), id);
+    }
+  });
+
+  /** Rewrites the derived rows (vec tier metadata, FTS) after a tier change. */
+  function afterTierChange(
+    id: string,
+    tier: Tier,
+    row: Pick<MemoryRow, 'rid' | 'text' | 'stub' | 'entities'>,
+  ): void {
+    q.vecSetTier.run(tier, id);
+    writeFts(row.rid, tier, row.text, row.stub, JSON.parse(row.entities) as string[]);
+  }
+
+  const setTierTx = db.transaction(
+    (id: string, tier: Tier, snapshot?: Pick<Memory, 'updatedAt' | 'tier'>): boolean => {
+      const row =
+        snapshot === undefined
+          ? q.setTierRow.get(tier, id)
+          : q.setTierIfUnchanged.get({
+              id,
+              tier,
+              updatedAt: snapshot.updatedAt,
+              was: snapshot.tier,
+            });
+      if (row === undefined) return false;
+      afterTierChange(id, tier, row);
+      return true;
+    },
+  );
+
+  const expireManyTx = db.transaction((ms: Memory[], at: string): string[] =>
+    ms
+      .filter(
+        (m) =>
+          q.expireIfUnchanged.get({ id: m.id, at, updatedAt: m.updatedAt, was: m.tier }) ===
+          undefined,
+      )
+      .map((m) => m.id),
+  );
+
+  /**
+   * Demotes `ms[i]`'s row to cold with `files[i]` as its cold copy, for every i
+   * whose row still matches its snapshot, all in one transaction. Only the
+   * tier, the derived rows (vec, FTS) and the cold index change. Returns the
+   * indices skipped by the guard and the blobs replaced, both to unlink after commit.
+   */
+  const coldPutManyTx = db.transaction(
+    (ms: Memory[], files: string[]): { skipped: number[]; previous: string[] } => {
+      const skipped: number[] = [];
+      const previous: string[] = [];
+      for (const [i, m] of ms.entries()) {
+        const row = q.setTierIfUnchanged.get({
+          id: m.id,
+          tier: 'cold',
+          updatedAt: m.updatedAt,
+          was: m.tier,
+        });
+        if (row === undefined) {
+          skipped.push(i);
+          continue;
+        }
+        writeFts(row.rid, 'cold', row.text, row.stub, JSON.parse(row.entities) as string[]);
+        q.vecDelete.run(m.id);
+        const old = q.coldPath.get(m.id)?.path;
+        if (old !== undefined) previous.push(old);
+        q.coldInsert.run(m.id, files[i] as string);
+      }
+      return { skipped, previous };
+    },
+  );
+
+  /**
+   * Writes new uniquely named blobs, then commits every guarded row change in
+   * one IMMEDIATE transaction. Previously committed blobs are untouched until
+   * that commit succeeds and removed after; a failed commit removes only the
+   * new blobs, and so does a skipped entry once the commit is done.
+   */
+  async function coldPutMany(snapshots: Memory[]): Promise<GuardedWriteResult> {
+    open();
+    const skipped: string[] = [];
+    const ms: Memory[] = [];
+    for (const m of new Map(snapshots.map((x) => [x.id, x])).values()) {
+      if (m.embedding !== undefined) checkDimension(m.embedding, `coldPut ${m.id}`);
+      // A cold snapshot has no embedding to keep: nothing to write.
+      if (m.tier === 'cold') skipped.push(m.id);
+      else ms.push(m);
+    }
+    if (ms.length === 0) return { skipped };
+    const files = await blobs.writeMany(ms.map((m) => ({ id: m.id, data: codec.encode(m) })));
+    let tx: { skipped: number[]; previous: string[] };
+    try {
+      tx = coldPutManyTx.immediate(ms, files);
+    } catch (e) {
+      throw withCleanupFailures(e, blobs.removeAll(files));
+    }
+    for (const i of tx.skipped) skipped.push((ms[i] as Memory).id);
+    removeAfterCommit([...tx.skipped.map((k) => files[k] as string), ...tx.previous]);
+    return { skipped };
+  }
+
+  return {
+    async upsert(m) {
+      open();
+      upsertMany([m]);
+    },
+
+    async upsertMany(ms) {
+      open();
+      upsertMany(ms);
+    },
+
+    async get(id) {
+      open();
+      const row = q.getRow.get(id);
+      return row === undefined ? null : fromRow(row, embeddingOf(id));
+    },
+
+    async forget(id) {
+      open();
+      const file = forgetTx.immediate(id);
+      if (file !== undefined) blobs.remove(file);
+    },
+
+    /** BM25 over normalised tokens, any-token match; `score` is -bm25 (higher is better). */
+    async lexical(text, scope, k) {
+      open();
+      const match = matchQuery(text);
+      if (match === null || k <= 0 || scope.projectIds.length === 0) return [];
+      return q.lexical
+        .all({ ...scopeParams(scope), match, k: Math.floor(k) })
+        .map((r): Hit => ({ id: r.id, score: -r.rank, tier: r.tier }));
+    },
+
+    /** KNN filtered inside vec0 by scope partition and project/tier metadata; `score` is cosine similarity. */
+    async dense(v, scope, k) {
+      open();
+      checkDimension(v, 'dense');
+      if (k <= 0 || scope.projectIds.length === 0) return [];
+      return q.dense
+        .all({
+          ...scopeParams(scope),
+          v: toBytes(v),
+          k: Math.min(Math.floor(k), MAX_KNN),
+          scopeKey: scopeKey(scope.orgId, scope.customerId, scope.agentId),
+          projectKeys: JSON.stringify(scope.projectIds.map(projectKey)),
+        })
+        .map((r): Hit => ({ id: r.id, score: 1 - r.distance, tier: r.tier }));
+    },
+
+    async recordAccess(ids, at) {
+      open();
+      recordAccessTx.immediate(ids, at);
+    },
+
+    async list(scope, listOpts = {}) {
+      open();
+      if (scope.projectIds.length === 0) return [];
+      const validOnly = listOpts.validOnly ?? true;
+      const now = clock();
+      return q.list
+        .all({ ...scopeParams(scope), tier: listOpts.tier ?? null })
+        .map((r) => fromRow(r, embeddingOf(r.id)))
+        .filter((m) => !validOnly || isCurrent(m, now))
+        .sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt));
+    },
+
+    async expireMany(snapshots, at) {
+      open();
+      const ms = [...new Map(snapshots.map((m) => [m.id, m])).values()];
+      if (ms.length === 0) return { skipped: [] };
+      return { skipped: expireManyTx.immediate(ms, at.toISOString()) };
+    },
+
+    coldPut: (m) => coldPutMany([m]),
+
+    coldPutMany,
+
+    /** A missing or corrupt blob (logged by id) reads as no cold copy. */
+    async coldGet(id) {
+      open();
+      const row = q.coldPath.get(id);
+      if (row === undefined) return null;
+      const blob = blobs.read(row.path);
+      if (blob === null) return null;
+      try {
+        return codec.decode(blob);
+      } catch (e) {
+        if (!(e instanceof ColdBlobCorruptError)) throw e;
+        log(`oort store: cold blob for memory ${id} is corrupt; ignoring it`);
+        return null;
+      }
+    },
+
+    async setTier(id, tier, snapshot) {
+      open();
+      return setTierTx.immediate(id, tier, snapshot);
+    },
+
+    async getCursor(key) {
+      open();
+      return q.getCursor.get(key)?.value ?? null;
+    },
+
+    async setCursor(key, value) {
+      open();
+      q.setCursor.run(key, value);
+    },
+
+    async close() {
+      if (closed) return;
+      closed = true;
+      db.close();
+    },
+  };
+}

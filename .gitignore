@@ -6,3 +6,9 @@ dist/
 .env.*
 .worktrees/
 .superpowers/
+.output
+.tanstack
+.wrangler
+.dev.vars
+.nitro
+dist-ssr
