@@ -12,6 +12,10 @@ import {
 } from '@typesafe-ai/sdk';
 import {
   MissingCredentialError,
+  TOOL_SUMMARIES_MAX,
+  TOOL_SUMMARY_MAX_BYTES,
+  capUtf8,
+  truncateUtf8,
   type Decision,
   type DecisionController,
   type GateDecision,
@@ -154,8 +158,22 @@ const clamp = (x: number, lo: number, hi: number): number => Math.min(hi, Math.m
 
 const MEMORY_TYPES: MemoryType[] = ['semantic', 'episodic', 'procedural', 'preference'];
 
+/**
+ * Keeps one Jev request body well under the relay's 64 KB limit (56 KB with the questions):
+ * user and assistant text 16 KB each (head and tail), a candidate memory's text 1 KB.
+ */
+const STATE_TEXT_MAX_BYTES = 16 * 1024;
+const CANDIDATE_TEXT_MAX_BYTES = 1024;
+
 function obsState(obs: Observation) {
-  return { user: obs.userText, assistant: obs.assistantText, tools: obs.toolSummaries, at: obs.at };
+  return {
+    user: capUtf8(obs.userText, STATE_TEXT_MAX_BYTES),
+    assistant: capUtf8(obs.assistantText, STATE_TEXT_MAX_BYTES),
+    tools: obs.toolSummaries
+      .slice(0, TOOL_SUMMARIES_MAX)
+      .map((t) => truncateUtf8(t, TOOL_SUMMARY_MAX_BYTES)),
+    at: obs.at,
+  };
 }
 
 export interface JevDeciderOptions {
@@ -293,7 +311,7 @@ export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
         observation: obsState(obs),
         candidates: candidates.map((m) => ({
           id: m.id,
-          text: m.text,
+          text: truncateUtf8(m.text, CANDIDATE_TEXT_MAX_BYTES),
           type: m.type,
           validFrom: m.validFrom,
         })),

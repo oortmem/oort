@@ -10,6 +10,7 @@ import type {
   ScopeFilter,
 } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
+import { capObservation } from './cap.js';
 import type { Decision, Memory, Scope } from './model.js';
 import { scrubObservation } from './scrub.js';
 import { tokenizeLexical } from './tokenize.js';
@@ -86,7 +87,8 @@ export async function observe(
   // Secrets are scrubbed before any adapter, or the store, sees the text.
   const scrubbed = scrubObservation(raw);
   if (scrubbed.dropped) return { outcome: 'skipped', reason: 'secret', decisions: [] };
-  const obs = scrubbed.obs;
+  // Capped after scrubbing (a secret is never cut in half) and before the gate or writer see it.
+  const obs = capObservation(scrubbed.obs);
   const { store, embed, decide, write } = deps;
   const now = deps.now ?? new Date();
   const filter = filterFor(scope);

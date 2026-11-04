@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { APICallError, RetryError } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { MockLanguageModelV4 } from 'ai/test';
-import { MissingCredentialError, type Memory, type Observation } from '@oortmem/core';
+import {
+  MissingCredentialError,
+  capObservation,
+  type Memory,
+  type Observation,
+} from '@oortmem/core';
 import {
   WRITER_SYSTEM_PROMPT,
   WriterError,
@@ -517,5 +522,35 @@ describe('network', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('request size', () => {
+  const body = (o: Observation) =>
+    JSON.stringify({
+      system: WRITER_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: buildWriterPrompt(o, 'SUPERSEDE', prior) }],
+    });
+  const bytes = (v: string) => new TextEncoder().encode(v).length;
+
+  it.each([
+    ['multilingual', '日本語😀 émoji '.repeat(20_000)],
+    ['markup (escapes four-fold)', '<&>'.repeat(60_000)],
+    ['quotes and newlines (escape in JSON)', '"\n'.repeat(60_000)],
+  ])('fits in 128 KB with a 32 KB-per-side %s observation', (_n, text) => {
+    const o = capObservation({
+      userText: text,
+      assistantText: text,
+      toolSummaries: Array.from({ length: 40 }, () => '<'.repeat(4000)),
+      at: '2026-11-03T10:00:00.000Z',
+    });
+    const b = body(o);
+    expect(bytes(b)).toBeLessThan(128 * 1024);
+    const p = buildWriterPrompt(o, 'SUPERSEDE', prior);
+    for (const tag of ['<user>', '</user>', '<assistant>', '</assistant>', '</observation>']) {
+      expect(p).toContain(tag);
+    }
+    expect(p).toContain('<prior_memory');
+    expect(p).not.toContain('\uFFFD');
   });
 });

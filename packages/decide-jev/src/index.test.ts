@@ -423,3 +423,36 @@ describe('jevDecider', () => {
     }
   });
 });
+
+describe('request size caps', () => {
+  const big = '日本語😀🙂 émoji '.repeat(12_000); // about 200 KB
+  const bytes = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
+
+  it('keeps a gate request under 56 KB for a 200 KB observation', async () => {
+    const { client, calls } = stub(() => gateAnswers());
+    await jevDecider({ client }).gate({
+      ...obs,
+      userText: big,
+      assistantText: big,
+      toolSummaries: Array.from({ length: 50 }, () => 'x'.repeat(4000)),
+    });
+    expect(bytes(calls[0])).toBeLessThan(56 * 1024);
+    const state = calls[0]!.state as { user: string; assistant: string };
+    expect(new TextEncoder().encode(state.user).length).toBeLessThanOrEqual(16 * 1024);
+    expect(state.user).toMatch(/\[… \d+ bytes omitted …\]/);
+    expect(state.user).not.toContain('\uFFFD');
+  });
+
+  it('keeps a reconcile request under 56 KB with five 20 KB candidates', async () => {
+    const { client, calls } = stub((req) =>
+      Object.fromEntries(Object.keys(req.questions).map((k) => [k, choiceA('NOOP', { NOOP: 1 })])),
+    );
+    const cands = Array.from({ length: 5 }, (_, i) => mem(`m${i}`, big.slice(0, 20_000)));
+    await jevDecider({ client }).reconcile({ ...obs, userText: big, assistantText: big }, cands);
+    expect(bytes(calls[0])).toBeLessThan(56 * 1024);
+    const state = calls[0]!.state as { candidates: { text: string }[] };
+    for (const c of state.candidates) {
+      expect(new TextEncoder().encode(c.text).length).toBeLessThanOrEqual(1024);
+    }
+  });
+});
