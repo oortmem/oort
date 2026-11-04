@@ -67,7 +67,7 @@ const recall = z
      */
     lexicalFirst: z.boolean().default(true),
     /** Longest wait for the reranker, in ms; past it the fused order is used. 0 waits forever. */
-    rerankBudgetMs: z.number().int().min(0).default(150),
+    rerankBudgetMs: z.number().int().min(0).default(400),
     /** How long a query embedding is reused, in seconds. 0 turns the cache off. */
     queryCacheTtlSec: z.number().int().min(0).default(600),
   })
@@ -82,7 +82,7 @@ const recall = z
     minDenseScore: 0.6,
     skipRerankWhenConfident: true,
     lexicalFirst: true,
-    rerankBudgetMs: 150,
+    rerankBudgetMs: 400,
     queryCacheTtlSec: 600,
   });
 

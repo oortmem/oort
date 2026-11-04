@@ -39,7 +39,7 @@ describe('config', () => {
       minDenseScore: 0.6,
       skipRerankWhenConfident: true,
       lexicalFirst: true,
-      rerankBudgetMs: 150,
+      rerankBudgetMs: 400,
       queryCacheTtlSec: 600,
     });
     expect(c.project).toEqual({ private: false });
