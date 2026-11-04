@@ -39,6 +39,8 @@ export interface Ctx {
   keychain: Keychain;
   /** The network and browser `oort login` uses; tests inject a fake site. */
   login?: LoginDeps;
+  /** The network `oort doctor` probes the relay with; tests inject a fake. */
+  fetch?: typeof fetch;
 }
 
 /** The scope a command reads, for header lines: `project <id>` or `global`. */

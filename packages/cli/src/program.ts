@@ -261,7 +261,7 @@ export async function runCli(
   io: Io,
   wire: WireFn = defaultWire,
   keychain: Keychain = keychainFor(io.env, { warn: (m) => io.err(`oort: ${m}\n`) }),
-  deps: { login?: LoginDeps } = {},
+  deps: { login?: LoginDeps; fetch?: typeof fetch } = {},
 ): Promise<number> {
   let code = 0;
   const p = program({ io, wire, keychain, ...deps }, (c) => {

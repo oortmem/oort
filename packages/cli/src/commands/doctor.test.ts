@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as http from 'node:http';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installHooks } from '@oortmem/claude-code';
@@ -31,14 +32,29 @@ function storeFile(h: Harness): void {
   fs.writeFileSync(path.join(h.home, 'oort.sqlite'), '');
 }
 
-async function doctor(h: Harness, env: Record<string, string> = {}, keychain?: Keychain) {
+const realFetch = globalThis.fetch;
+
+/** The relay's /health as a fake: every request it saw, and what it answers. */
+function fakeRelay(answer: () => Response | Promise<Response> = () => Response.json({ ok: true })) {
+  const seen: { url: string; headers: Headers }[] = [];
+  const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+    const req = new Request(input, init);
+    seen.push({ url: req.url, headers: req.headers });
+    return answer();
+  }) as typeof fetch;
+  return { seen, fetchFn };
+}
+
+async function doctor(
+  h: Harness,
+  env: Record<string, string> = {},
+  keychain?: Keychain,
+  fetchFn: typeof fetch = fakeRelay().fetchFn,
+) {
   const kc = keychain ?? memoryKeychain().kc;
-  const human = await h.run(['doctor'], { env: { HOME: h.root, OORT_HOME: h.home, ...env } }, kc);
-  const json = await h.run(
-    ['doctor', '--json'],
-    { env: { HOME: h.root, OORT_HOME: h.home, ...env } },
-    kc,
-  );
+  const io = { env: { HOME: h.root, OORT_HOME: h.home, ...env } };
+  const human = await h.run(['doctor'], io, kc, { fetch: fetchFn });
+  const json = await h.run(['doctor', '--json'], io, kc, { fetch: fetchFn });
   const report = JSON.parse(json.io.stdout) as { ok: boolean; checks: Check[] };
   return {
     human,
@@ -50,7 +66,7 @@ async function doctor(h: Harness, env: Record<string, string> = {}, keychain?: K
 
 let net: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
-  // Doctor makes no request: the relay has no health endpoint to ask.
+  // Doctor reaches the relay only through the injected fetch, never the real one.
   net = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
     throw new Error('doctor must not use the network');
   });
@@ -84,8 +100,9 @@ describe('oort doctor', () => {
     expect(d.check('mcp', 'codex')).toMatchObject({ status: 'info' });
     expect(d.check('store', 'store')).toMatchObject({ status: 'ok' });
     expect(d.check('store', 'store')?.detail).toMatch(/1 memor/);
-    expect(d.check('relay', 'relay')).toMatchObject({ status: 'unknown' });
+    expect(d.check('relay', 'relay')).toMatchObject({ status: 'ok' });
     expect(d.check('relay', 'relay')?.detail).toContain('https://relay.oortcloud.dev');
+    expect(d.check('relay', 'relay')?.detail).toContain('reachable');
     expect(d.human.io.stdout.split('\n')[0]).toMatch(/^oort doctor/);
     expect(d.human.io.stdout + d.json.io.stdout).not.toContain(key);
     expect(d.human.io.stdout + d.json.io.stdout).not.toContain('test-voyage-key-for-doctor');
@@ -166,5 +183,101 @@ describe('oort doctor', () => {
     const model = await doctor(h, { OORT_API_KEY: oortKey() });
     expect(model.check('keys', 'write')).toMatchObject({ status: 'fail' });
     expect(model.check('keys', 'write')?.detail).toContain('not served by Oort Pro');
+  });
+
+  it('doctor.relay-health-reachable-sends-no-key-and-asks-/health-only', async () => {
+    const h = harness();
+    const key = oortKey();
+    const relay = fakeRelay();
+    const d = await doctor(h, { OORT_API_KEY: key }, undefined, relay.fetchFn);
+    expect(d.check('relay', 'relay')).toMatchObject({ status: 'ok' });
+    expect(d.check('relay', 'relay')?.detail).toMatch(/\breachable\b/);
+    expect(relay.seen.map((r) => r.url)).toEqual([
+      'https://relay.oortcloud.dev/health',
+      'https://relay.oortcloud.dev/health',
+    ]);
+    for (const r of relay.seen) {
+      expect(r.headers.get('authorization')).toBeNull();
+      expect(r.headers.get('x-api-key')).toBeNull();
+    }
+    expect(d.human.io.stdout + d.json.io.stdout).not.toContain(key);
+  });
+
+  it('doctor.relay-health-unreachable-is-a-warning-with-a-fix', async () => {
+    const h = harness();
+    for (const answer of [
+      () => Response.json({ error: 'x' }, { status: 503 }),
+      () => Response.json({ nope: 1 }),
+      () => new Response('<html>', { status: 200 }),
+      () => {
+        throw new TypeError('fetch failed');
+      },
+    ]) {
+      const d = await doctor(h, { OORT_API_KEY: oortKey() }, undefined, fakeRelay(answer).fetchFn);
+      expect(d.check('relay', 'relay')).toMatchObject({ status: 'warn' });
+      expect(d.check('relay', 'relay')?.detail).toContain('unreachable');
+      expect(d.check('relay', 'relay')?.fix).toBeDefined();
+      expect(d.human.code).toBe(0);
+    }
+  });
+
+  it('doctor.relay-health-times-out-after-3s', async () => {
+    const h = harness();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let aborted = false;
+      const hang = (async (_u: unknown, init?: RequestInit) =>
+        new Promise((_, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            aborted = true;
+            reject(new DOMException('aborted', 'AbortError'));
+          });
+        })) as typeof fetch;
+      const pending = h.run(
+        ['doctor', '--json'],
+        { env: { HOME: h.root, OORT_HOME: h.home, OORT_API_KEY: oortKey() } },
+        memoryKeychain().kc,
+        { fetch: hang },
+      );
+      await vi.advanceTimersByTimeAsync(2_900);
+      expect(aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(aborted).toBe(true);
+      const out = JSON.parse((await pending).io.stdout) as { checks: Check[] };
+      const relay = out.checks.find((c) => c.group === 'relay');
+      expect(relay).toMatchObject({ status: 'warn' });
+      expect(relay?.detail).toContain('3 s');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('doctor.relay-health-against-a-local-fake-server', async () => {
+    const h = harness();
+    const server = http.createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(req.url === '/health' ? '{"ok":true}' : '{}');
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const { port } = server.address() as { port: number };
+      const d = await doctor(
+        h,
+        { OORT_API_KEY: oortKey(), OORT_RELAY_URL: `http://127.0.0.1:${port}` },
+        undefined,
+        realFetch,
+      );
+      expect(d.check('relay', 'relay')).toMatchObject({ status: 'ok' });
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
+  });
+
+  it('doctor.relay-health-is-not-probed-when-no-role-uses-the-relay', async () => {
+    const h = harness();
+    const relay = fakeRelay();
+    const d = await doctor(h, {}, undefined, relay.fetchFn);
+    expect(d.check('relay', 'relay')?.status).toBe('info');
+    expect(relay.seen).toHaveLength(0);
   });
 });

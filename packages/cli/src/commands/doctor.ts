@@ -294,8 +294,29 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
   return checks;
 }
 
-/** The relay: its URL, and that reachability is not checked (it has no health endpoint). */
-function relayChecks(ctx: Ctx, relayed: boolean): Check[] {
+const PROBE_TIMEOUT_MS = 3000;
+
+/** GET `<relay>/health` with no credentials; true only for 200 `{"ok":true}`. */
+async function probeRelay(url: string, doFetch: typeof fetch): Promise<boolean> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const res = await doFetch(`${url}/health`, { signal: abort.signal, redirect: 'error' });
+    if (!res.ok) {
+      void res.body?.cancel().catch(() => undefined);
+      return false;
+    }
+    const body: unknown = await res.json();
+    return (body as { ok?: unknown } | null)?.ok === true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The relay: its URL, and, when a role goes through it, whether `/health` answers within 3 s. */
+async function relayChecks(ctx: Ctx, relayed: boolean): Promise<Check[]> {
   const r = relayUrl(ctx.io.env);
   if ('error' in r) {
     return [
@@ -318,13 +339,17 @@ function relayChecks(ctx: Ctx, relayed: boolean): Check[] {
       },
     ];
   }
+  const up = await probeRelay(r.url, ctx.fetch ?? globalThis.fetch);
   return [
-    {
-      group: 'relay',
-      name: 'relay',
-      status: 'unknown',
-      detail: `${r.url}: reachability not checked; the relay has no health endpoint yet`,
-    },
+    up
+      ? { group: 'relay', name: 'relay', status: 'ok', detail: `${r.url} reachable` }
+      : {
+          group: 'relay',
+          name: 'relay',
+          status: 'warn',
+          detail: `${r.url} unreachable (no healthy answer from /health within 3 s)`,
+          fix: 'check your network and proxy; if it persists, see status at oortcloud.dev, or set your own keys with oort keys set <provider>',
+        },
   ];
 }
 
@@ -362,7 +387,7 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
     ...hookChecks(ctx, cmd, home),
     ...mcpChecks(ctx, cmd),
     ...(await storeChecks(ctx)),
-    ...relayChecks(ctx, keys.relayed),
+    ...(await relayChecks(ctx, keys.relayed)),
   ];
   const ok = !checks.some((c) => c.status === 'fail');
   if (opts.json === true) {

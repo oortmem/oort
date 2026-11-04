@@ -15,6 +15,7 @@ import {
   type MemoryWriter,
 } from '@oortmem/core';
 import type { Io } from '../src/io.js';
+import type { LoginDeps } from '../src/commands/login.js';
 import { createKeychain, type Keychain } from '../src/keychain.js';
 import { runCli } from '../src/program.js';
 import type { WireFn, Wired } from '../src/wire.js';
@@ -94,6 +95,7 @@ export interface Harness {
     args: string[],
     io?: Partial<Parameters<typeof fakeIo>[0]>,
     keychain?: Keychain,
+    deps?: { login?: LoginDeps; fetch?: typeof fetch },
   ): Promise<{ code: number; io: FakeIo }>;
 }
 
@@ -163,10 +165,10 @@ export function harness(opts: { adapters?: boolean } = {}): Harness {
       };
       return w;
     },
-    async run(args, ioOpts = {}, keychain = createKeychain({ platform: 'none' })) {
+    async run(args, ioOpts = {}, keychain = createKeychain({ platform: 'none' }), deps = {}) {
       // HOME is the temp root too, so nothing can reach the real ~/.claude or ~/.oort.
       const io = fakeIo({ cwd, env: { HOME: root, OORT_HOME: home }, ...ioOpts });
-      const code = await runCli(args, io, h.wire, keychain);
+      const code = await runCli(args, io, h.wire, keychain, deps);
       return { code, io };
     },
   };
