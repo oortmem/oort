@@ -87,11 +87,15 @@ export function isVisible(m: Memory, now: Date, v: TemporalView): boolean {
     case 'known-at': {
       const x = v.knownAt === undefined ? now.getTime() : t(v.knownAt);
       const retractedLater = m.expiredAt !== null && t(m.expiredAt) > x;
+      // Only a supersession or correction sets an end later than the fact was written, so only
+      // then was the end unknown at X. An end the fact stated itself (or expiry) always counts.
+      const endLearnedLater =
+        retractedLater && (m.endReason === 'superseded' || m.endReason === 'corrected');
       return (
         t(m.createdAt) <= x &&
         (m.expiredAt === null || retractedLater) &&
         t(m.validFrom) <= x &&
-        (m.validTo === null || t(m.validTo) > x || retractedLater)
+        (m.validTo === null || t(m.validTo) > x || endLearnedLater)
       );
     }
     case 'history':

@@ -54,7 +54,7 @@ export const inputSchemas = {
       .enum(RECALL_MODES)
       .optional()
       .describe(
-        'current, as-of (with as_of), history (every version, oldest first) or known-at (with known_at). Omit it to let Oort read the mode from the query.',
+        'current, as-of (requires as_of), history (every version, oldest first) or known-at (requires known_at). Omit it to let Oort read the mode from the query.',
       ),
     limit: z.number().int().min(1).max(10).default(5),
   }),

@@ -4,7 +4,7 @@ import { filterFor, grantFor } from '@oortmem/claude-code';
 import { VERSION, activation, isCurrent, scrub, type Memory, localGrant } from '@oortmem/core';
 import { supersedeChain } from './commands/inspect.js';
 import { timeMode } from './commands/explain.js';
-import { runRecall, temporalView, type TemporalView } from './commands/recall.js';
+import { runRecall, viewIgnored, type TemporalView } from './commands/recall.js';
 import { rememberFacts } from './remember.js';
 import { OortCloudError, findCloudMemory, type CloudClient } from './cloud.js';
 import { Refusal, findMemory, fixed } from './util.js';
@@ -27,31 +27,39 @@ function status(m: Memory, now: Date): 'current' | 'superseded' | 'expired' | 'n
   return 'not yet valid';
 }
 
-/** The MCP recall arguments as a view: `mode` names it, `as_of` and `known_at` date it. */
+/**
+ * The MCP recall arguments as a view. `mode` names it and must come with its own date
+ * (`as-of` with `as_of`, `known-at` with `known_at`, `current` and `history` with neither);
+ * without `mode`, one date picks the view and none lets the query decide.
+ */
 function viewOf(
   mode: 'current' | 'as-of' | 'history' | 'known-at' | undefined,
   asOf: string | undefined,
   knownAt: string | undefined,
 ): TemporalView {
-  if (mode === 'current') {
-    if (asOf !== undefined || knownAt !== undefined) {
-      throw new MemoryToolError('mode "current" takes no as_of or known_at.');
-    }
-    return { mode: 'current' };
+  const iso = (x: string) => new Date(x).toISOString();
+  if (asOf !== undefined && knownAt !== undefined) {
+    throw new MemoryToolError('Use as_of or known_at, not both.');
   }
-  if (mode === 'history' && (asOf !== undefined || knownAt !== undefined)) {
-    throw new MemoryToolError('Use one of as_of, known_at and mode "history".');
-  }
-  try {
-    return temporalView({
-      ...(asOf !== undefined && { asOf }),
-      ...(knownAt !== undefined && { knownAt }),
-      history: mode === 'history',
-    });
-  } catch (e) {
-    if (e instanceof Refusal)
-      throw new MemoryToolError(e.message.replace(/--([a-z]+)-([a-z]+)/g, '$1_$2'));
-    throw e;
+  switch (mode) {
+    case undefined:
+      if (asOf !== undefined) return { mode: 'as-of', asOf: iso(asOf) };
+      if (knownAt !== undefined) return { mode: 'known-at', knownAt: iso(knownAt) };
+      return {};
+    case 'as-of':
+      if (asOf === undefined) throw new MemoryToolError('mode "as-of" needs as_of.');
+      if (knownAt !== undefined)
+        throw new MemoryToolError('mode "as-of" takes as_of, not known_at.');
+      return { mode, asOf: iso(asOf) };
+    case 'known-at':
+      if (knownAt === undefined) throw new MemoryToolError('mode "known-at" needs known_at.');
+      return { mode, knownAt: iso(knownAt) };
+    case 'current':
+    case 'history':
+      if (asOf !== undefined || knownAt !== undefined) {
+        throw new MemoryToolError(`mode "${mode}" takes no as_of or known_at.`);
+      }
+      return { mode };
   }
 }
 
@@ -67,7 +75,9 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
   const filter = filterFor(w.scope);
   return {
     async recall({ query, as_of, known_at, mode, limit }) {
-      const result = await runRecall(w, query, viewOf(mode, as_of, known_at), now());
+      const view = viewOf(mode, as_of, known_at);
+      const result = await runRecall(w, query, view, now());
+      const ignored = viewIgnored(view, result);
       if (result.abstained === true) {
         // Candidates were found, but none answers the question: say so rather than hand over noise.
         return {
@@ -105,6 +115,11 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           : lexicalOnly && {
               note: 'lexical-only recall: no Voyage key (run `oort keys set voyage`, or `oort login` for Oort Pro).',
             }),
+        // Last, so a store that ignored the requested time mode is the note the agent reads.
+        ...(ignored && {
+          mode_unsupported: true as const,
+          note: `This memory store did not report the time mode, so "${view.mode}" may not have been applied: these may be current facts.`,
+        }),
       };
     },
 

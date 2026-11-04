@@ -542,3 +542,18 @@ describe('cloud API follow-ups (CON-76, oortcloud PR #3)', () => {
     expect(r.io.stderr).toContain('oort cloud export');
   });
 });
+
+describe('cloud mode, time modes (review 12)', () => {
+  it('cloud.recall-warns-when-the-api-ignores-a-requested-mode', async () => {
+    const e = setup('cloud');
+    await seed(e, 'cloud');
+    const asked = await e.run(['recall', 'auth service port 5582', '--history']);
+    expect(asked.code, asked.io.stderr).toBe(0);
+    expect(asked.io.stderr).toContain('did not report the time mode');
+    const plain = await e.run(['recall', 'auth service port 5582']);
+    expect(plain.io.stderr).not.toContain('time mode');
+    const explain = await e.run(['explain', 'auth service port 5582', '--as-of', '2026-04-01']);
+    expect(explain.io.stdout).toContain('mode: not reported');
+    expect(explain.io.stderr).toContain('did not report the time mode');
+  });
+});

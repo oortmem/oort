@@ -2,21 +2,44 @@ import * as chrono from 'chrono-node';
 
 /**
  * Time handling in code, never in a model (CON-34): relative expressions are resolved with
- * chrono-node against the observation's own timestamp, in UTC, at day precision.
+ * chrono-node against the observation's own timestamp, at day precision, in the turn's UTC
+ * offset when its timestamp carries one, else in UTC.
  */
 
 const DAY_MS = 86_400_000;
+const MIN_MS = 60_000;
 
-const ref = (at: Date) => ({ instant: at, timezone: 'UTC' as const });
+/** chrono's reference: the instant, and the offset in minutes east of UTC. */
+const ref = (at: Date, offset = 0) => ({ instant: at, timezone: offset });
 
-const startOfDay = (d: Date): Date =>
-  new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+/** Midnight of `d`'s day in the given offset, as an instant. */
+const startOfDay = (d: Date, offset = 0): Date => {
+  const local = new Date(d.getTime() + offset * MIN_MS);
+  return new Date(
+    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - offset * MIN_MS,
+  );
+};
 const endOfDay = (d: Date): Date => new Date(startOfDay(d).getTime() + DAY_MS - 1);
-const ymd = (d: Date): string => d.toISOString().slice(0, 10);
+/** `d`'s calendar day in the given offset. */
+const ymd = (d: Date, offset = 0): string =>
+  new Date(d.getTime() + offset * MIN_MS).toISOString().slice(0, 10);
+
+/**
+ * The UTC offset, in minutes, an ISO timestamp states (`+02:00` is 120, `Z` is 0), or
+ * undefined when it states none.
+ */
+export function utcOffset(iso: string): number | undefined {
+  const m = /(?:([+-])(\d{2}):?(\d{2})|Z)$/i.exec(iso.trim());
+  if (m === null) return undefined;
+  if (m[1] === undefined) return 0;
+  return (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3]));
+}
 
 /** Words right before a date that make it the fact's end ("until Friday") or start ("since"). */
 const UNTIL = /\b(until|till|through|thru|expires?|expiring|ends?(\s+on)?)\s*$/;
 const FROM = /\b(since|from|starting|starts|as\s+of|effective|beginning|begins)\s*$/;
+/** Start cues that announce something ahead: they take the coming reading. */
+const AHEAD = /\b(starting|starts|beginning|begins)\s*$/;
 const CUE_PREFIX =
   /^(.*?\b(?:until|till|through|thru|expires?|expiring|ends?|since|from|starting|starts|as\s+of|effective|beginning|begins))\b/;
 
@@ -37,24 +60,49 @@ export interface FactInterval {
 
 /**
  * The validity bounds a written memory states about itself, resolved against `at` (the turn's
- * time). "Until Friday" ends the fact after that Friday; "starting next week" and "since last
- * Monday" start it then. A plain date ("on 2026-11-03 we chose pnpm") dates an event and sets no
- * bound. An end at or before the start is dropped.
+ * time) in `offset` minutes east of UTC. "Until Friday" ends the fact after that Friday, and an
+ * end in the past is kept (the fact is stored already ended). "Starting next week" looks ahead,
+ * "since last Monday" looks back, and "as of", "effective" or "from" take the closer reading
+ * within a week, else the past one. "From Monday to Friday" is a schedule, not a start. A plain
+ * date ("on 2026-11-03 we chose pnpm") dates an event and sets no bound. An end at or before a
+ * stated start contradicts it and is dropped.
  */
-export function factInterval(text: string, at: Date): FactInterval {
+export function factInterval(text: string, at: Date, offset = 0): FactInterval {
   const out: FactInterval = {};
-  // Ends and announced starts look forward ("until Friday" is the coming one); "since" looks back.
-  const forward = chrono.parse(text, ref(at), { forwardDate: true });
-  const backward = chrono.parse(text, ref(at), { forwardDate: false });
+  const forward = chrono.parse(text, ref(at, offset), { forwardDate: true });
+  const backward = chrono.parse(text, ref(at, offset), { forwardDate: false });
+  const day = (d: Date) => startOfDay(d, offset);
   for (const r of forward) {
     const lead = leadIn(text, r);
     if (out.validTo === undefined && UNTIL.test(lead)) {
       const d = (r.end ?? r.start).date();
-      out.validTo = new Date(startOfDay(d).getTime() + DAY_MS).toISOString();
+      out.validTo = new Date(day(d).getTime() + DAY_MS).toISOString();
     } else if (out.validFrom === undefined && FROM.test(lead)) {
-      const since = /\bsince\s*$/.test(lead);
-      const b = since ? (backward.find((x) => x.index === r.index) ?? r) : r;
-      out.validFrom = startOfDay(b.start.date()).toISOString();
+      const weekdayOnly = (c: chrono.ParsedComponents) =>
+        c.isCertain('weekday') && !c.isCertain('day');
+      if (r.end !== null && r.end !== undefined && weekdayOnly(r.start) && weekdayOnly(r.end)) {
+        continue; // "from Monday to Friday": a recurring schedule
+      }
+      const back = backward.find((x) => x.index === r.index) ?? r;
+      let pick: chrono.ParsedResult;
+      if (/\bsince\s*$/.test(lead)) pick = back;
+      else if (AHEAD.test(lead) || /\bnext\b/i.test(r.text)) pick = r;
+      else {
+        // "As of Monday" on a Wednesday is two days ago: the closer reading within a week.
+        const dist = (x: chrono.ParsedResult) => Math.abs(x.start.date().getTime() - at.getTime());
+        const near = dist(r) <= dist(back) ? r : back;
+        pick = dist(near) <= 7 * DAY_MS ? near : back;
+      }
+      out.validFrom = day(pick.start.date()).toISOString();
+      if (
+        r.end !== null &&
+        r.end !== undefined &&
+        out.validTo === undefined &&
+        /\bfrom\s*$/.test(lead)
+      ) {
+        // "From 2026-11-01 to 2026-11-20": both bounds.
+        out.validTo = new Date(day(r.end.date()).getTime() + DAY_MS).toISOString();
+      }
     }
   }
   if (
@@ -71,28 +119,46 @@ const RELATIVE =
   /\b(yesterday|today|tonight|tomorrow|ago|last\s+\w+|next\s+\w+|this\s+(morning|afternoon|evening|week|month))\b/gi;
 const ISO_DAY = /\b(\d{4}-\d{2}-\d{2})\b/g;
 
+/** Furthest a written day may sit from the turn's relative day and still count as a slip. */
+const SLIP_DAYS = 2;
+
+export interface WriterDateCheck {
+  text: string;
+  /** The written day was replaced by the resolved one. */
+  fixed?: { from: string; to: string };
+  /** The written day differs from the resolved one but was kept (a stated or distant date). */
+  mismatch?: { written: string; resolved: string };
+}
+
 /**
  * Checks the writer's absolute date against the turn. When the turn names exactly one relative
- * day ("yesterday") and the written fact carries exactly one ISO day, that day must be chrono's
- * reading of the relative one; a different day is replaced and reported in `fixed`. Anything
- * ambiguous is left as written.
+ * day ("yesterday") and the written fact carries exactly one ISO day, that day should be
+ * chrono's reading of the relative one. It is replaced only when it looks like an arithmetic
+ * slip: within two days of the reading, and not a date the turn itself states. Otherwise the
+ * difference is reported in `mismatch` and the text is kept ("Today we agreed the cutover is
+ * 2026-12-01" is about the cutover, not today).
  */
 export function checkWriterDate(
   turnText: string,
   factText: string,
   at: Date,
-): { text: string; fixed?: { from: string; to: string } } {
+  offset = 0,
+): WriterDateCheck {
   const relatives = turnText.match(RELATIVE) ?? [];
   const days = [...new Set(factText.match(ISO_DAY) ?? [])];
   if (relatives.length !== 1 || days.length !== 1) return { text: factText };
   const isRelative = new RegExp(RELATIVE.source, 'i');
   const parsed = chrono
-    .parse(turnText, ref(at), { forwardDate: false })
+    .parse(turnText, ref(at, offset), { forwardDate: false })
     .filter((r) => isRelative.test(r.text));
   if (parsed.length !== 1) return { text: factText };
-  const resolved = ymd(parsed[0]!.start.date());
+  const resolved = ymd(parsed[0]!.start.date(), offset);
   const written = days[0]!;
   if (resolved === written) return { text: factText };
+  const apart = Math.abs(Date.parse(resolved) - Date.parse(written)) / DAY_MS;
+  if (apart > SLIP_DAYS || turnText.includes(written)) {
+    return { text: factText, mismatch: { written, resolved } };
+  }
   return { text: factText.split(written).join(resolved), fixed: { from: written, to: resolved } };
 }
 
@@ -111,12 +177,16 @@ export interface TemporalIntent {
 const KNOWN =
   /\b(what\s+did\s+(we|i|you)\s+(think|believe|know|assume)|believed|we\s+thought|we\s+knew|known\s+at)\b/i;
 /**
- * History cues. "Used to" counts only as a habit ("we used to deploy with fly"), not the passive
- * "is used to deploy"; "history" only as "history of …" or a question ending in it, not "git
- * history cleanup".
+ * History questions, anchored and question-shaped: "how has X changed", "history of X", "what
+ * did X used to be", "what was X before", "which … previously". A prompt that only contains
+ * such words ("fix the test, the config changed") is an instruction about now.
  */
-const HISTORY =
-  /\b(history\s+of|history\s*(?=[?.!]*\s*$)|over\s+time|changed|(?<!\b(?:is|are|was|were|be|been|being|gets?|got)\s+)used\s+to|previously|in\s+the\s+past|all\s+versions|earlier\s+versions|before\s*(?=[?.!]*\s*$))/i;
+const HISTORY_QUESTIONS = [
+  /^\s*how\s+(has|have|did)\b[^.;!,]*\bchange[sd]?\b[^.;!,]*\??\s*$/i,
+  /^\s*((what|what's)\s+(is|was)?\s*the\s+)?history\s+of\b[^.;!,]*\??\s*$/i,
+  /^\s*(what|which)\b[^.;!,]*\b(used?\s+to\s+be|before|previously|in\s+the\s+past|over\s+time)\s*\??\s*$/i,
+];
+const isHistoryQuestion = (q: string): boolean => HISTORY_QUESTIONS.some((re) => re.test(q));
 /** A preposition left dangling once the date it introduced is removed. */
 const DANGLING = /\b(on|in|at|as\s+of|by|during|since)\s*$/i;
 
@@ -131,18 +201,23 @@ function without(query: string, part: string, dangling = false): string {
 
 /**
  * A cheap read of a query's temporal intent, in code: "what did we believe … on <day>" is
- * known-at that day; history words ("changed", "used to", "previously") ask for the chain; a past
- * day ("on 2 April 2026", "in March") is as-of that day; anything else, including "now" and
- * future days, is the current state. A date with no year that reads as the future means the last
- * one ("in March" asked in November is this year's March).
+ * known-at that day; an anchored history question ("how has X changed") asks for the chain; a
+ * past day with a cue ("on 2 April 2026", "in March", "yesterday") is as-of that day; anything
+ * else, including "now", coming weekdays and other future days, is the current state. A month
+ * and day with no year that reads more than 30 days ahead means the last one ("in March" asked
+ * in November is this year's March).
  */
 export function temporalIntent(query: string, now: Date): TemporalIntent {
   const r = chrono.parse(query, ref(now), { forwardDate: false })[0];
   let day: Date | undefined;
   if (r !== undefined) {
     let d = r.start.date();
-    const relative = /\b(next|this|coming|tomorrow|tonight|in\s+\d+)\b/i.test(r.text);
-    if (d.getTime() > now.getTime() && !r.start.isCertain('year') && !relative) {
+    const c = r.start;
+    const relative =
+      /\b(next|this|coming|tomorrow|tonight|in\s+\d+)\b/i.test(r.text) ||
+      (c.isCertain('weekday') && !c.isCertain('day'));
+    const explicitMonth = c.isCertain('month') && !c.isCertain('year') && !relative;
+    if (explicitMonth && d.getTime() > now.getTime() + 30 * DAY_MS) {
       d = new Date(Date.UTC(d.getUTCFullYear() - 1, d.getUTCMonth(), d.getUTCDate(), 12));
     }
     // "This week" or "today" asks about the present, even when chrono dates it a few days back.
@@ -165,10 +240,8 @@ export function temporalIntent(query: string, now: Date): TemporalIntent {
       query,
     );
   }
-  if (HISTORY.test(rest)) {
-    const words = new RegExp(HISTORY.source, 'gi');
-    return withText({ mode: 'history' }, without(rest.replace(words, ' '), ''), query);
-  }
+  // History keeps every word: "changed" or "before" may be what the memory itself says.
+  if (isHistoryQuestion(query)) return { mode: 'history' };
   if (day !== undefined) {
     return withText({ mode: 'as-of', asOf: endOfDay(day).toISOString() }, rest, query);
   }

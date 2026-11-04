@@ -22,7 +22,8 @@ import {
   type ObserveDeps,
 } from './observe.js';
 import { localScope } from './scope.js';
-import { makeMemory, vec } from './store-conformance.js';
+import { makeMemory, seedCold, vec } from './store-conformance.js';
+import { recall } from './recall.js';
 import { TG } from './store-conformance.js';
 import { localGrant, type GrantFilter } from './grant.js';
 
@@ -892,5 +893,161 @@ describe('observe: dates and the REFINE / SUPERSEDE / CORRECT split (CON-34, CON
       createdAt: '2026-01-05T00:00:00.000Z',
     });
     expect((await store.list(localGrant(FILTER))).map((m) => m.id)).toEqual([b.memoryId]);
+  });
+
+  describe('review fixes', () => {
+    const run = (text: string, iso: string, extra: Partial<Observation> = {}) => ({
+      o: { ...obs(text, iso), ...extra },
+      now: { now: new Date(iso) },
+    });
+
+    it('observe.a-stated-date-is-logged-not-rewritten (review 1)', async () => {
+      const { store, deps } = setup(gate(0.9), [rec(null, 'ADD')]);
+      const write: MemoryWriter = {
+        async write() {
+          return {
+            text: 'The cutover is 2026-12-01.',
+            stub: 'cutover',
+            entities: [],
+            type: 'semantic',
+          };
+        },
+      };
+      const { o, now } = run('Today we agreed the cutover is 2026-12-01', WED);
+      const res = await observe(o, localScope(), { ...deps, write, ...now });
+      const m = await store.get(TG, res.memoryId ?? '');
+      expect(m?.text).toBe('The cutover is 2026-12-01.');
+      expect(m?.source.decisions).toContainEqual({
+        stage: 'temporal',
+        question: 'writer-date',
+        answer: 'kept 2026-12-01 (turn reads 2026-11-04)',
+        probability: 1,
+      });
+    });
+
+    it('observe.refine-of-a-cold-memory-survives-recall (review 4)', async () => {
+      const { store, deps } = setup(gate(0.9), [rec('C', 'REFINE')]);
+      await seedCold(
+        store,
+        makeMemory({
+          id: 'C',
+          text: 'auth on port 3000',
+          stub: 'auth port',
+          embedding: vec(100, 0, 0, 0),
+          validFrom: '2025-12-01T00:00:00.000Z',
+        }),
+      );
+      expect((await store.get(TG, 'C'))?.tier).toBe('cold');
+      await observe(obs('auth on port 3000 over TLS'), localScope(), deps);
+      const after = await store.get(TG, 'C');
+      expect(after).toMatchObject({ tier: 'warm', text: 'claim: auth on port 3000 over TLS' });
+      expect(await store.coldGet(TG, 'C')).toBeNull();
+      const r = await recall(
+        { text: 'auth port TLS', scope: FILTER, mode: 'current' },
+        { store, config, now: new Date('2026-01-02T00:00:00.000Z') },
+      );
+      expect(r.memories.find((m) => m.id === 'C')?.text).toBe('claim: auth on port 3000 over TLS');
+    });
+
+    it('observe.correct-and-refine-honour-the-text-bounds (review 6)', async () => {
+      const prior = () =>
+        makeMemory({
+          id: 'P',
+          text: 'auth on port 3000',
+          embedding: vec(100, 0, 0, 0),
+          validFrom: '2026-01-01T00:00:00.000Z',
+          validTo: '2026-06-01T00:00:00.000Z',
+        });
+      const corrected = setup(gate(0.9), [rec('P', 'CORRECT')]);
+      await corrected.store.upsert(TG, prior());
+      const c = await observe(
+        obs('auth was on port 3001 since 2025-12-15', '2026-01-05T00:00:00.000Z'),
+        localScope(),
+        corrected.deps,
+      );
+      // Its own start; no end in the text, so the prior's end stands.
+      expect(await corrected.store.get(TG, c.memoryId ?? '')).toMatchObject({
+        validFrom: '2025-12-15T00:00:00.000Z',
+        validTo: '2026-06-01T00:00:00.000Z',
+      });
+
+      const refined = setup(gate(0.9), [rec('P', 'REFINE')]);
+      await refined.store.upsert(TG, prior());
+      await observe(
+        obs('auth on port 3000 over TLS since 2025-12-20', '2026-01-05T00:00:00.000Z'),
+        localScope(),
+        refined.deps,
+      );
+      expect(await refined.store.get(TG, 'P')).toMatchObject({
+        validFrom: '2025-12-20T00:00:00.000Z',
+        validTo: '2026-06-01T00:00:00.000Z',
+      });
+    });
+
+    it('observe.a-past-end-stores-the-fact-already-ended (review 7)', async () => {
+      const { store, deps } = setup(gate(0.9), [rec(null, 'ADD')]);
+      const { o, now } = run('the deploy freeze ran until yesterday', WED);
+      const res = await observe(o, localScope(), { ...deps, ...now });
+      expect(await store.get(TG, res.memoryId ?? '')).toMatchObject({
+        validFrom: '2026-11-03T00:00:00.000Z',
+        validTo: '2026-11-04T00:00:00.000Z',
+      });
+    });
+
+    it('observe.since-before-the-prior-makes-the-update-current (review 8)', async () => {
+      let next: ReconcileDecision[] = [rec(null, 'ADD')];
+      const { store, deps } = setup(gate(0.9), () => next);
+      const a = await observe(obs('auth on port 3000', '2026-11-01T00:00:00.000Z'), localScope(), {
+        ...deps,
+        now: new Date('2026-11-01T00:00:00.000Z'),
+      });
+      next = [rec(a.memoryId ?? null, 'SUPERSEDE')];
+      const { o, now } = run('since 2026-10-20 auth listens on port 4000', WED);
+      const b = await observe(o, localScope(), { ...deps, ...now });
+      const [A, B] = await Promise.all([a, b].map((r) => store.get(TG, r.memoryId ?? '')));
+      expect(B).toMatchObject({
+        validFrom: '2026-10-20T00:00:00.000Z',
+        validTo: null,
+        expiredAt: null,
+        supersedes: A?.id,
+      });
+      expect(A).toMatchObject({
+        validTo: A?.validFrom,
+        expiredAt: WED,
+        endReason: 'superseded',
+        supersededBy: B?.id,
+      });
+      expect((await store.list(localGrant(FILTER))).map((m) => m.id)).toEqual([b.memoryId]);
+    });
+
+    it('observe.refine-stamps-the-turn-and-appends-only-new-decisions (review 9)', async () => {
+      let next: ReconcileDecision[] = [rec(null, 'ADD')];
+      const { store, deps } = setup(gate(0.9), () => next);
+      const a = await observe(obs('auth on port 3000'), localScope(), deps);
+      for (const turn of ['t2', 't3']) {
+        next = [rec(a.memoryId ?? null, 'REFINE')];
+        await observe({ ...obs(`auth on port 3000 ${turn}`), turnRef: turn }, localScope(), deps);
+      }
+      const m = await store.get(TG, a.memoryId ?? '');
+      expect(m?.source.turnRef).toBe('t3');
+      const count = (q: string) => m?.source.decisions.filter((d) => d.question === q).length;
+      // The gate's decision is not copied again on each refine; each refine adds its own.
+      expect(count('store?')).toBe(1);
+      expect(count('previous-text')).toBe(2);
+      expect(m?.source.decisions).toHaveLength(3 + 2 * 3);
+    });
+
+    it('observe.relative-dates-use-the-turn-offset (review 11)', async () => {
+      const { store, deps } = setup(gate(0.9), [rec(null, 'ADD')]);
+      const at = '2026-11-04T23:30:00-05:00';
+      const res = await observe(obs('auth on port 8080 until tomorrow', at), localScope(), {
+        ...deps,
+        now: new Date(at),
+      });
+      expect(await store.get(TG, res.memoryId ?? '')).toMatchObject({
+        validFrom: '2026-11-05T04:30:00.000Z',
+        validTo: '2026-11-06T05:00:00.000Z',
+      });
+    });
   });
 });

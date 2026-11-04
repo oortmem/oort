@@ -19,8 +19,10 @@ export interface RecalledFact {
 
 export interface RecallOutput {
   memories: RecalledFact[];
-  /** The time mode the recall used, e.g. `current`, `as-of 2026-04-02 (from the query)`. */
+  /** The time mode the recall used, e.g. `current` or `as-of 2026-04-02`. */
   mode?: string;
+  /** A mode was asked for, but the backend reported none (it may not have applied it). */
+  mode_unsupported?: true;
   /** True when candidates existed but none answers the question. */
   abstained?: boolean;
   /** A short, user-safe note (degraded recall, missing keys). */
