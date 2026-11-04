@@ -45,7 +45,14 @@ const commandFor = (cmd: string, event: InstalledEvent): string =>
 function isOurs(h: unknown, cmd: string, event: InstalledEvent): boolean {
   if (!isObject(h) || h['type'] !== 'command' || typeof h['command'] !== 'string') return false;
   const c = h['command'];
-  return c === commandFor(cmd, event) || new RegExp(`^(?:\\S*/)?oort hook ${event}$`).test(c);
+  return (
+    c === commandFor(cmd, event) ||
+    new RegExp(`^(?:\\S*/)?oort hook ${event}$`).test(c) ||
+    // A package's bin, as `oort install` writes it: `<prefix>/oort(mem)/dist/main.js`.
+    new RegExp(
+      `^(?:'[^']*/oort(?:mem)?/dist/main\\.js'|[^'\\s]*/oort(?:mem)?/dist/main\\.js) hook ${event}$`,
+    ).test(c)
+  );
 }
 
 function desired(cmd: string, event: InstalledEvent): Handler {
@@ -210,4 +217,56 @@ export function uninstallHooks(settingsPath: string, cmd: string): { changed: bo
   if (Object.keys(hooks).length === 0 && !kept.hooks) delete updated['hooks'];
   writeSettings(settingsPath, updated, existed, mode);
   return { changed: true };
+}
+
+export interface HookEventStatus {
+  event: InstalledEvent;
+  /**
+   * `current`: `<cmd> hook <event>` for this bin. `stale`: Oort's entry from
+   * another install path. `found`: Oort's entry, with no bin to compare
+   * against. `missing`: no Oort entry (a wrapper such as `cd x && oort hook
+   * Stop` is the user's own and does not count).
+   */
+  state: 'current' | 'stale' | 'found' | 'missing';
+  /** The bin the entry runs, unquoted, for `stale` and `found`. */
+  command?: string;
+}
+
+/** The bin part of `<bin> hook <event>`, with shellQuote's quoting undone. */
+function binOf(command: string, event: InstalledEvent): string {
+  const bin = command.slice(0, -` hook ${event}`.length);
+  return bin.startsWith("'") && bin.endsWith("'") ? bin.slice(1, -1).replaceAll(`'\\''`, "'") : bin;
+}
+
+/**
+ * Read-only: which of Oort's hooks the settings file holds, for `oort
+ * doctor`. Throws, like `installHooks`, on settings that are not JSON or have
+ * the wrong shape.
+ */
+export function hookStatus(
+  settingsPath: string,
+  cmd?: string,
+): { exists: boolean; events: HookEventStatus[] } {
+  const { settings, existed } = readSettings(settingsPath);
+  const hooks = isObject(settings['hooks']) ? settings['hooks'] : {};
+  const events = HOOK_EVENTS.map((event): HookEventStatus => {
+    const groups = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
+    for (const g of groups) {
+      if (!isObject(g) || !Array.isArray(g['hooks'])) continue;
+      for (const h of g['hooks'] as unknown[]) {
+        if (!isOurs(h, cmd ?? 'oort', event)) continue;
+        const command = (h as { command: string }).command;
+        if (cmd !== undefined && command === commandFor(cmd, event)) {
+          return { event, state: 'current' };
+        }
+        return {
+          event,
+          state: cmd === undefined ? 'found' : 'stale',
+          command: binOf(command, event),
+        };
+      }
+    }
+    return { event, state: 'missing' };
+  });
+  return { exists: existed, events };
 }

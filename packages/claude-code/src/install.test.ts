@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { tempHome } from '../test/helpers.js';
-import { installHooks, uninstallHooks } from './install.js';
+import { hookStatus, installHooks, uninstallHooks } from './install.js';
 
 function settingsFile(content?: unknown): string {
   const t = tempHome();
@@ -236,5 +236,73 @@ describe('installHooks', () => {
     installHooks(file, '~/bin/oort-1.2');
     const plain = read(file)['hooks'] as Record<string, { hooks: { command: string }[] }[]>;
     expect(plain['Stop']?.[0]?.hooks[0]?.command).toBe('~/bin/oort-1.2 hook Stop');
+  });
+});
+
+describe('hookStatus', () => {
+  it('install.status-reports-each-event-presence-only', () => {
+    const file = settingsFile();
+    expect(hookStatus(file, '/opt/bin/oort')).toEqual({
+      exists: false,
+      events: [
+        { event: 'UserPromptSubmit', state: 'missing' },
+        { event: 'Stop', state: 'missing' },
+        { event: 'SessionStart', state: 'missing' },
+      ],
+    });
+    installHooks(file, '/opt/bin/oort');
+    expect(hookStatus(file, '/opt/bin/oort').events.map((e) => e.state)).toEqual([
+      'current',
+      'current',
+      'current',
+    ]);
+    // Installed from another path: still Oort's, but stale for this bin.
+    const other = hookStatus(file, '/new/place/oort');
+    expect(other.exists).toBe(true);
+    expect(other.events[0]).toEqual({
+      event: 'UserPromptSubmit',
+      state: 'stale',
+      command: '/opt/bin/oort',
+    });
+    // Without a bin to compare against, the installed command is reported as found.
+    expect(hookStatus(file).events[1]).toEqual({
+      event: 'Stop',
+      state: 'found',
+      command: '/opt/bin/oort',
+    });
+  });
+
+  it('install.status-ignores-wrappers-and-throws-on-bad-json', () => {
+    const file = settingsFile({
+      hooks: {
+        Stop: [
+          { hooks: [{ type: 'command', command: 'cd x && oort hook Stop' }] },
+          { hooks: [{ type: 'command', command: 'cd x && /p/oortmem/dist/main.js hook Stop' }] },
+        ],
+      },
+    });
+    expect(hookStatus(file, 'oort').events[1]?.state).toBe('missing');
+    expect(hookStatus(file).events[1]?.state).toBe('missing');
+    fs.writeFileSync(file, '{ not json');
+    expect(() => hookStatus(file, 'oort')).toThrow(/not valid JSON/);
+  });
+
+  it('install.a-moved-package-bin-is-stale-and-replaced-in-place', () => {
+    const file = settingsFile();
+    const a = '/a/lib/node_modules/oortmem/dist/main.js';
+    const b = '/b/lib/node_modules/oortmem/dist/main.js';
+    installHooks(file, a);
+    expect(hookStatus(file, b).events[0]).toEqual({
+      event: 'UserPromptSubmit',
+      state: 'stale',
+      command: a,
+    });
+    expect(hookStatus(file).events[0]?.state).toBe('found');
+    installHooks(file, b);
+    const hooks = read(file)['hooks'] as Record<string, { hooks: { command: string }[] }[]>;
+    expect(hooks['Stop']).toEqual([
+      { hooks: [{ type: 'command', command: `${b} hook Stop`, timeout: 5 }] },
+    ]);
+    expect(uninstallHooks(file, '/c/oortmem/dist/main.js')).toEqual({ changed: true });
   });
 });
