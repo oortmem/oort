@@ -2,6 +2,8 @@ import * as fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import Database from 'better-sqlite3';
 import { execa } from 'execa';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -379,5 +381,50 @@ describe('oort bin', () => {
     const proj = await oort(s, ['install', 'claude-code', '--project']);
     expect(proj.exitCode).toBe(0);
     expect(fs.existsSync(path.join(s.cwd, '.claude', 'settings.json'))).toBe(true);
+  });
+
+  it('cli.mcp-stdio-serves-tools-scoped-to-the-start-directory', async () => {
+    const s = sandbox();
+    const repo = path.join(s.root, 'repo');
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+    // A repository file cannot choose the scope without `oort project link`.
+    fs.writeFileSync(path.join(repo, 'oort.config.json'), '{"project":{"id":"stolen"}}\n');
+    const derived = projectIdFor(repo);
+
+    const whoami = async (args: string[], cwd: string): Promise<Record<string, unknown>> => {
+      const transport = new StdioClientTransport({
+        command: BIN,
+        args,
+        cwd,
+        env: s.env,
+        stderr: 'pipe',
+      });
+      let stderr = '';
+      transport.stderr?.on('data', (d: Buffer) => (stderr += d.toString()));
+      const client = new Client({ name: 'oort-bin-test', version: '0.0.0' });
+      await client.connect(transport);
+      try {
+        const { tools } = await client.listTools();
+        expect(tools).toHaveLength(7);
+        const r = await client.callTool({ name: 'whoami', arguments: {} });
+        const content = r.content as { text: string }[];
+        const recall = await client.callTool({ name: 'recall', arguments: { query: 'anything' } });
+        expect(recall.isError).not.toBe(true);
+        return { ...(JSON.parse(content[0]?.text ?? '{}') as object), stderr };
+      } finally {
+        await client.close();
+      }
+    };
+
+    const fromCwd = await whoami(['mcp'], repo);
+    expect(fromCwd['project']).toBe(derived);
+    expect(fromCwd['project']).not.toContain('stolen');
+    expect(fromCwd['stderr']).toContain('oort project link');
+
+    const fromFlag = await whoami(['mcp', '--project', repo], s.cwd);
+    expect(fromFlag['project']).toBe(derived);
+
+    const global = await whoami(['mcp'], s.cwd);
+    expect(global['project']).toBeNull();
   });
 });

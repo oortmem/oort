@@ -21,13 +21,22 @@ const ObservationInput = z.strictObject({
     .optional(),
 });
 
+/** One turn as an Observation, the way `oort observe --user --assistant` builds it. */
+export function turnObservation(
+  userText: string,
+  assistantText: string,
+  at = new Date().toISOString(),
+): Observation {
+  return { userText, assistantText, toolSummaries: [], at };
+}
+
 async function readObservation(opts: ObserveOptions, ctx: Ctx): Promise<Observation> {
   const at = new Date().toISOString();
   if (opts.user !== undefined || opts.assistant !== undefined) {
     if (opts.user === undefined || opts.assistant === undefined) {
       throw new Refusal('--user and --assistant go together.');
     }
-    return { userText: opts.user, assistantText: opts.assistant, toolSummaries: [], at };
+    return turnObservation(opts.user, opts.assistant, at);
   }
   if (ctx.io.stdinIsTTY) {
     throw new Refusal('pipe an Observation as JSON on stdin, or pass --user and --assistant.');

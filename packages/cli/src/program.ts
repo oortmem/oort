@@ -10,6 +10,7 @@ import { initCommand } from './commands/init.js';
 import { keysListCommand, keysRmCommand, keysSetCommand } from './commands/keys.js';
 import { inspectCommand } from './commands/inspect.js';
 import { installCommand } from './commands/install.js';
+import { mcpCommand } from './commands/mcp.js';
 import { observeCommand } from './commands/observe.js';
 import { pinCommand } from './commands/pin.js';
 import { projectLinkCommand, projectUnlinkCommand } from './commands/project.js';
@@ -62,6 +63,13 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<event>', 'UserPromptSubmit | Stop | SessionStart | drain')
     .allowExcessArguments()
     .action(run((event: string) => hookCommand(event, ctx)));
+
+  p.command('mcp')
+    .description(
+      'run the local MCP server on stdin/stdout (agent hosts start it; see `oort connect`)',
+    )
+    .option('--project <dir>', 'scope to this directory instead of the one the host starts it in')
+    .action(run((o: { project?: string }) => mcpCommand(o, ctx)));
 
   p.command('recall')
     .description('recall memories for a query, as injected into the prompt')
