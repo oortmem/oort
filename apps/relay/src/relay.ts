@@ -53,8 +53,10 @@ const ENTITLED = new Set(['active', 'trialing']);
 
 export const MODELS = {
   embed: ['voyage-3.5-lite'],
-  // The engine default is rerank-3-lite (packages/core config); rerank-2.5-lite is the
-  // previous lite model. Only lite models are allowed.
+  // Both lite rerank models are allowed: rerank-3-lite is the engine default in
+  // packages/core/src/config.ts, so Pro users get it unless they change their config, and
+  // rerank-2.5-lite is the previous lite model that the launch spec names and older configs use.
+  // Non-lite models (rerank-2.5, rerank-3) cost several times more and stay blocked.
   rerank: ['rerank-3-lite', 'rerank-2.5-lite'],
   messages: ['claude-haiku-5-5'],
 } as const;
@@ -115,7 +117,9 @@ function checkRerank(b: Record<string, unknown>): Check {
   if (docs.length > MAX_RERANK_DOCUMENTS) {
     return { error: `Send at most ${MAX_RERANK_DOCUMENTS} documents per rerank call.` };
   }
-  return { meter: 'recalls', pool: 'recalls' };
+  // One engine recall is counted once, by its query embedding. The rerank in the same recall is
+  // not counted, but it stops at the recall cap like the rest of the recall.
+  return { meter: null, pool: 'recalls' };
 }
 
 function checkMessages(b: Record<string, unknown>): Check {

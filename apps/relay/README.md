@@ -18,12 +18,12 @@ Do not deploy from a worktree.
 All routes are `POST` and need `Authorization: Bearer oort_sk_...` (`x-api-key: oort_sk_...` is also
 accepted, for the Anthropic SDK's default header).
 
-| Route                       | Upstream                                 | Allowed                                                                                        |
-| --------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `/v1/voyage/embeddings`     | `https://api.voyageai.com/v1/embeddings` | model `voyage-3.5-lite`, at most 128 inputs                                                    |
-| `/v1/voyage/rerank`         | `https://api.voyageai.com/v1/rerank`     | model `rerank-3-lite` (the engine default) or `rerank-2.5-lite`, at most 100 documents         |
-| `/v1/typesafe/v1/systemone` | `https://api.typesafe.ai/v1/systemone`   | only this path (the one `@typesafe-ai/sdk` 0.7.0 calls); JSON or multipart, plain or zstd body |
-| `/v1/anthropic/v1/messages` | `https://api.anthropic.com/v1/messages`  | model `claude-haiku-5-5`, `max_tokens` 1 to 2048, no `tools`, `tool_choice`, `mcp_servers`     |
+| Route                       | Upstream                                 | Allowed                                                                                                         |
+| --------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `/v1/voyage/embeddings`     | `https://api.voyageai.com/v1/embeddings` | model `voyage-3.5-lite`, at most 128 inputs                                                                     |
+| `/v1/voyage/rerank`         | `https://api.voyageai.com/v1/rerank`     | model `rerank-3-lite` (the engine default) or `rerank-2.5-lite` (the earlier lite model), at most 100 documents |
+| `/v1/typesafe/v1/systemone` | `https://api.typesafe.ai/v1/systemone`   | only this path (the one `@typesafe-ai/sdk` 0.7.0 calls); JSON or multipart, plain or zstd body                  |
+| `/v1/anthropic/v1/messages` | `https://api.anthropic.com/v1/messages`  | model `claude-haiku-5-5`, `max_tokens` 1 to 2048, no `tools`, `tool_choice`, `mcp_servers`                      |
 
 Every body is capped at 256 KB (413 above that). Client base URLs:
 
@@ -45,7 +45,9 @@ Every body is capped at 256 KB (413 above that). Client base URLs:
   the cap the relay returns 429 with a plain message. There is no overage billing yet.
   - One Anthropic call is one save. Jev calls and document embeddings are part of a save: they are
     not counted, but they stop at the save cap.
-  - One rerank call, or one embedding call with `input_type: "query"`, is one recall.
+  - One embedding call with `input_type: "query"` is one recall. That is the one call every engine
+    recall makes, so one recall counts once. Rerank calls are not counted, but they are
+    rate-limited, allow-listed and stop at the recall cap.
 - **Metering.** Counters live in D1 `usage(account_id, month, saves, recalls)` and are incremented
   with `ctx.waitUntil` after a 2xx upstream response, together with `api_keys.last_used_at`.
 

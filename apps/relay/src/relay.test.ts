@@ -465,12 +465,19 @@ describe('metering', () => {
     expect(await s.usage()).toEqual({ saves: 2, recalls: 0 });
   });
 
-  it('counts a rerank call and a query embedding as one recall each', async () => {
+  it('counts one engine recall once: the query embedding is the recall, the rerank is not', async () => {
+    const s = setup();
+    await s.seed();
+    await s.send('/v1/voyage/embeddings', embedBody(1, 'query'));
+    await s.send('/v1/voyage/rerank', rerankBody());
+    expect(await s.usage()).toEqual({ saves: 0, recalls: 1 });
+  });
+
+  it('does not count a rerank call on its own', async () => {
     const s = setup();
     await s.seed();
     await s.send('/v1/voyage/rerank', rerankBody());
-    await s.send('/v1/voyage/embeddings', embedBody(1, 'query'));
-    expect(await s.usage()).toEqual({ saves: 0, recalls: 2 });
+    expect(await s.usage()).toBeNull();
   });
 
   it('does not count document embeddings or Jev calls', async () => {
