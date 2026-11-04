@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-0095ff?style=flat-square" /></a>
-  <img alt="npm: coming soon" src="https://img.shields.io/badge/npm-coming%20soon-979fab?style=flat-square" />
+  <a href="https://www.npmjs.com/package/oortmem"><img alt="npm: oortmem" src="https://img.shields.io/npm/v/oortmem?style=flat-square&color=0095ff" /></a>
   <a href="https://oortcloud.dev"><img alt="oortcloud.dev" src="https://img.shields.io/badge/site-oortcloud.dev-49cffc?style=flat-square" /></a>
   <img alt="Node 22.15 or newer" src="https://img.shields.io/badge/node-%E2%89%A522.15-f8a13f?style=flat-square" />
 </p>
@@ -39,15 +39,11 @@ When a fact changes, the old one is marked superseded and kept for history. Reca
 
 ## Quickstart
 
-npm publishing is coming. Until then, build the CLI from this repo (Node 22.15 or newer, pnpm 12):
+Install the CLI (Node 22.15 or newer), then connect your agent. `oort setup` detects your agents, asks how you want to provide keys, connects them and runs a quick check. Every step can be skipped.
 
 ```sh
-git clone https://github.com/oortmem/oort && cd oort
-pnpm install && pnpm build
-cd packages/cli && pnpm add -g .
+npm install -g oortmem
 ```
-
-Then connect your agent. `oort setup` detects your agents, asks how you want to provide keys, connects them and runs a quick check. Every step can be skipped.
 
 ```sh
 oort setup
@@ -55,7 +51,7 @@ oort recall "where does the user live"
 oort explain "where does the user live"   # each stage's rank and score
 ```
 
-Once published, this becomes `npm i -g oortmem && oort setup`. Every command and flag is in [docs/cli.md](docs/cli.md).
+Every command and flag is in [docs/cli.md](docs/cli.md). To build from source instead: `git clone https://github.com/oortmem/oort && cd oort && pnpm install && pnpm build && cd packages/cli && pnpm add -g .` (pnpm 12).
 
 ## Works with
 
