@@ -1,8 +1,10 @@
 import { filterFor } from '@oortmem/claude-code';
 import { formatForInjection, recall, type RecallResult } from '@oortmem/core';
+import { uiFor } from '../ui.js';
 import {
   Refusal,
   degradedHint,
+  scopeLabel,
   shapeLinks,
   withoutEmbedding,
   withWired,
@@ -51,6 +53,9 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
       ctx.io.out(`${JSON.stringify(plain, null, 2)}\n`);
     } else {
       const block = formatForInjection(result, w.config.recall.budgetChars, now);
+      const ui = uiFor(ctx.io);
+      const n = result.memories.length;
+      ctx.io.out(ui.header('recall', `${n} ${n === 1 ? 'memory' : 'memories'}`, scopeLabel(w)));
       if (block.length > 0) ctx.io.out(`${block}\n`);
       else ctx.io.err('oort: no memories matched.\n');
     }

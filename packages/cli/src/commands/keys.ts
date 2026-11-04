@@ -1,4 +1,5 @@
 import { PROVIDERS, PROVIDER_ENV, isProvider, type Provider } from '../keychain.js';
+import { uiFor } from '../ui.js';
 import { Refusal, type Ctx } from '../util.js';
 
 function providerArg(arg: string, ctx: Ctx): Provider {
@@ -30,14 +31,35 @@ export async function keysRmCommand(arg: string, ctx: Ctx): Promise<number> {
   return code === 0 ? 0 : 1;
 }
 
-/** `oort keys list`: where each key would come from; presence only, never a value or prefix. */
-export async function keysListCommand(ctx: Ctx): Promise<number> {
+export type KeySource = 'env' | 'keychain' | 'missing';
+
+/** Where `provider`'s key would come from (env first, then the Keychain); never the value. */
+export async function keySource(provider: Provider, ctx: Ctx): Promise<KeySource> {
+  const fromEnv = ctx.io.env[PROVIDER_ENV[provider]];
+  if (fromEnv !== undefined && fromEnv !== '') return 'env';
+  return (await ctx.keychain.read(provider)) !== undefined ? 'keychain' : 'missing';
+}
+
+/** `oort keys list [--json]`: where each key would come from; presence only, never a value or prefix. */
+export async function keysListCommand(opts: { json?: boolean }, ctx: Ctx): Promise<number> {
+  const rows: { provider: Provider; envVar: string; source: KeySource }[] = [];
   for (const provider of PROVIDERS) {
-    const fromEnv = ctx.io.env[PROVIDER_ENV[provider]];
-    let source = 'missing';
-    if (fromEnv !== undefined && fromEnv !== '') source = 'env';
-    else if ((await ctx.keychain.read(provider)) !== undefined) source = 'keychain';
-    ctx.io.out(`${provider}: ${source}\n`);
+    rows.push({ provider, envVar: PROVIDER_ENV[provider], source: await keySource(provider, ctx) });
   }
+  if (opts.json === true) {
+    ctx.io.out(`${JSON.stringify(rows, null, 2)}\n`);
+    return 0;
+  }
+  const ui = uiFor(ctx.io);
+  const where = (r: (typeof rows)[number]): string =>
+    r.source === 'env'
+      ? r.envVar
+      : r.source === 'keychain'
+        ? `oort.${r.provider}`
+        : `oort keys set ${r.provider}`;
+  const shown = (s: KeySource): string =>
+    (s === 'missing' ? ui.yellow : ui.green)(s.padEnd('keychain'.length));
+  ctx.io.out(ui.header('keys list'));
+  ctx.io.out(ui.kv(rows.map((r) => [r.provider, `${shown(r.source)}  ${ui.dim(where(r))}`])));
   return 0;
 }

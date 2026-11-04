@@ -2,7 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { filterFor, queueDir } from '@oortmem/claude-code';
 import { isCurrent, type Tier } from '@oortmem/core';
-import { withWired, type Ctx } from '../util.js';
+import { uiFor } from '../ui.js';
+import { scopeLabel, withWired, type Ctx } from '../util.js';
 
 export interface Stats {
   scope: { projectId: string | null };
@@ -96,17 +97,23 @@ export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<
       return 0;
     }
     const v = stats.validity;
+    const ui = uiFor(ctx.io);
+    const t = (tier: Tier): string => `${ui.tierName(tier)} ${tiers[tier]}`;
+    ctx.io.out(ui.header('stats', scopeLabel(w)));
     ctx.io.out(
-      [
-        `scope       ${stats.scope.projectId ?? 'global'} (+ global memories)`,
-        `tiers       hot ${tiers.hot}, warm ${tiers.warm}, cold ${tiers.cold}`,
-        `validity    current ${v.current}, superseded ${v.superseded}, expired ${v.expired}` +
-          (v.notYetValid > 0 ? `, not yet valid ${v.notYetValid}` : ''),
-        `sqlite      ${mb(stats.sqliteBytes)} (${db}, including -wal)`,
-        `cold        ${mb(stats.coldBytes)}`,
-        `queue       ${stats.queue.pending} pending, ${stats.queue.deadLetters} dead-lettered`,
-        `rss         ${mb(stats.rssBytes)}`,
-      ].join('\n') + '\n',
+      ui.kv([
+        ['scope', `${stats.scope.projectId ?? 'global'} (+ global memories)`],
+        ['tiers', `${t('hot')}, ${t('warm')}, ${t('cold')}`],
+        [
+          'validity',
+          `current ${v.current}, superseded ${v.superseded}, expired ${v.expired}` +
+            (v.notYetValid > 0 ? `, not yet valid ${v.notYetValid}` : ''),
+        ],
+        ['sqlite', `${mb(stats.sqliteBytes)} ${ui.dim(`(${db}, including -wal)`)}`],
+        ['cold', mb(stats.coldBytes)],
+        ['queue', `${stats.queue.pending} pending, ${stats.queue.deadLetters} dead-lettered`],
+        ['rss', mb(stats.rssBytes)],
+      ]),
     );
     return 0;
   });

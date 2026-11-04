@@ -159,7 +159,9 @@ describe('oort inspect', () => {
     const list = await h.run(['inspect']);
     expect(list.io.stdout).toContain(c.id.slice(0, 8));
     expect(list.io.stdout).not.toContain(a.id.slice(0, 8));
-    expect(list.io.stdout.split('\n')[0]).toMatch(/^id\s+type\s+tier\s+activation\s+age\s+text$/);
+    // One header line, then the table (its header row first).
+    expect(list.io.stdout.split('\n')[0]).toMatch(/^oort inspect · /);
+    expect(list.io.stdout.split('\n')[1]).toMatch(/^id\s+type\s+tier\s+activation\s+age\s+text$/);
 
     expect((await h.run(['inspect', 'ffffffff-nope'])).code).toBe(2);
   });
@@ -562,7 +564,10 @@ describe('oort forget, pin', () => {
     await h.store.upsert(memory({ validTo: '2026-10-02T00:00:00.000Z' }));
     const r = await h.run(['consolidate']);
     expect(r.code).toBe(0);
-    expect(r.io.stdout).toBe('promoted 0\ndemoted 1\nevicted 1\nexpired 1\nskipped 0\n');
+    // Updated deliberately for the ui module: one header line, then aligned rows.
+    expect(r.io.stdout).toBe(
+      'oort consolidate · global\npromoted  0\ndemoted   1\nevicted   1\nexpired   1\nskipped   0\n',
+    );
   });
 });
 

@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { OortConfig, ensurePrivateDir, findGitRoot, resolveHome } from '@oortmem/core';
+import { uiFor } from '../ui.js';
 import { Refusal, type Ctx } from '../util.js';
 
 /** Each key and what needs it. */
@@ -41,6 +42,7 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
   const home = resolveHome(io.env);
   ensurePrivateDir(home);
   const file = path.join(home, 'config.json');
+  io.out(uiFor(io).header('init', home));
   const defaults = `${JSON.stringify(OortConfig.parse({}), null, 2)}\n`;
   io.out(createExclusive(file, defaults, 0o600) ? `Created ${file}\n` : `Kept existing ${file}\n`);
 

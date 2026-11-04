@@ -37,6 +37,11 @@ export interface Ctx {
   keychain: Keychain;
 }
 
+/** The scope a command reads, for header lines: `project <id>` or `global`. */
+export function scopeLabel(w: Pick<Wired, 'scope'>): string {
+  return w.scope.projectId === undefined ? 'global' : `project ${w.scope.projectId}`;
+}
+
 /** Wires for the cwd, runs `fn`, and always closes the store. */
 export async function withWired<T>(ctx: Ctx, fn: (w: Wired) => Promise<T>): Promise<T> {
   const w = await ctx.wire(ctx.io.cwd, { env: ctx.io.env });
@@ -97,17 +102,6 @@ export const short = (id: string): string => id.slice(0, 8);
 
 export const fixed = (x: number | undefined, digits = 2): string =>
   x === undefined ? '-' : x.toFixed(digits);
-
-/** Left-aligned columns separated by two spaces; the last column is not padded. */
-export function table(headers: string[], rows: string[][]): string {
-  const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? '').length)));
-  const line = (cells: string[]): string =>
-    cells
-      .map((c, i) => (i === cells.length - 1 ? c : c.padEnd(widths[i] ?? 0)))
-      .join('  ')
-      .trimEnd();
-  return [line(headers), ...rows.map(line)].join('\n') + '\n';
-}
 
 /** A memory as JSON-safe data: the embedding becomes base64 of its int8 bytes. */
 export function toJson(m: Memory): Record<string, unknown> {

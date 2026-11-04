@@ -73,7 +73,8 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
   p.command('explain')
     .description("recall with each stage's ranks and scores")
     .argument('<query>')
-    .action(run((q: string) => explainCommand(q, ctx)));
+    .option('--json', 'print each memory with its ranks and scores, and the timings, as JSON')
+    .action(run((q: string, o: { json?: boolean }) => explainCommand(q, o, ctx)));
 
   p.command('observe')
     .description('run the write path on one observation (JSON on stdin, or --user/--assistant)')
@@ -144,7 +145,8 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
   keys
     .command('list')
     .description('where each key comes from: keychain, env or missing (never the value)')
-    .action(run(() => keysListCommand(ctx)));
+    .option('--json', 'print JSON')
+    .action(run((o: { json?: boolean }) => keysListCommand(o, ctx)));
   keys
     .command('rm')
     .description('delete a key from the Keychain')

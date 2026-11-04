@@ -6,6 +6,7 @@ import {
   type MemoryStore,
   type ScopeFilter,
 } from '@oortmem/core';
+import { uiFor } from '../ui.js';
 import {
   Refusal,
   echo,
@@ -13,9 +14,9 @@ import {
   clip,
   findMemory,
   fixed,
+  scopeLabel,
   shapeLinks,
   short,
-  table,
   withoutEmbedding,
   withWired,
   type Ctx,
@@ -111,15 +112,20 @@ export async function inspectCommand(
         ctx.io.out(`${JSON.stringify(shaped.map(withoutEmbedding), null, 2)}\n`);
         return 0;
       }
+      const ui = uiFor(ctx.io);
       const rows = current.map((m) => [
         short(m.id),
         m.type,
-        m.tier,
+        ui.tier(m.tier),
         fixed(activation(m.accessLog, m.salience, now, w.config.activation)),
         age(m.validFrom, now),
         clip(m.text, 60),
       ]);
-      ctx.io.out(table(['id', 'type', 'tier', 'activation', 'age', 'text'], rows));
+      const n = current.length;
+      ctx.io.out(
+        ui.header('inspect', `${n} current ${n === 1 ? 'memory' : 'memories'}`, scopeLabel(w)),
+      );
+      ctx.io.out(ui.table(['id', 'type', 'tier', 'activation', 'age', 'text'], rows));
       return 0;
     }
     const m = await findMemory(w.store, filter, id);
@@ -131,37 +137,40 @@ export async function inspectCommand(
       return 0;
     }
     const a = activation(m.accessLog, m.salience, now, w.config.activation);
-    const lines = [
-      `id          ${m.id}`,
-      `type        ${m.type}`,
-      `tier        ${m.tier}${m.pinned ? ' (pinned)' : ''}`,
-      `scope       ${JSON.stringify(m.scope)}`,
-      `salience    ${fixed(m.salience)}`,
-      `activation  ${fixed(a)} (${m.accessLog.count} accesses)`,
-      `valid       ${m.validFrom} → ${m.validTo ?? 'open'}`,
-      `expired     ${m.expiredAt ?? 'no'}${m.endReason !== null ? ` (${m.endReason})` : ''}`,
-      `confirmed   ${m.lastConfirmedAt ?? 'never'}`,
-      `created     ${m.createdAt}`,
-      `updated     ${m.updatedAt}`,
-      `source      ${m.source.harness}${m.source.sessionId !== undefined ? ` session ${m.source.sessionId}` : ''}${m.source.turnRef !== undefined ? ` turn ${m.source.turnRef}` : ''}`,
-      `embedding   ${m.embedding !== undefined ? `${m.embedding.length} dims` : 'none'}`,
-      `stub        ${m.stub}`,
-      `entities    ${m.entities.join(', ') || '-'}`,
-      '',
-      m.text,
-      '',
-      'decisions',
-    ];
-    ctx.io.out(`${lines.join('\n')}\n`);
+    const ui = uiFor(ctx.io);
+    ctx.io.out(ui.header('inspect', short(m.id), scopeLabel(w)));
     ctx.io.out(
-      table(
+      ui.kv([
+        ['id', m.id],
+        ['type', m.type],
+        ['tier', `${ui.tier(m.tier)}${m.pinned ? ' (pinned)' : ''}`],
+        ['scope', JSON.stringify(m.scope)],
+        ['salience', fixed(m.salience)],
+        ['activation', `${fixed(a)} (${m.accessLog.count} accesses)`],
+        ['valid', `${m.validFrom} → ${m.validTo ?? 'open'}`],
+        ['expired', `${m.expiredAt ?? 'no'}${m.endReason !== null ? ` (${m.endReason})` : ''}`],
+        ['confirmed', m.lastConfirmedAt ?? 'never'],
+        ['created', m.createdAt],
+        ['updated', m.updatedAt],
+        [
+          'source',
+          `${m.source.harness}${m.source.sessionId !== undefined ? ` session ${m.source.sessionId}` : ''}${m.source.turnRef !== undefined ? ` turn ${m.source.turnRef}` : ''}`,
+        ],
+        ['embedding', m.embedding !== undefined ? `${m.embedding.length} dims` : 'none'],
+        ['stub', m.stub],
+        ['entities', m.entities.join(', ') || '-'],
+      ]),
+    );
+    ctx.io.out(`\n${m.text}\n\n${ui.bold('decisions')}\n`);
+    ctx.io.out(
+      ui.table(
         ['stage', 'question', 'answer', 'p'],
         m.source.decisions.map((d) => [d.stage, d.question, d.answer, fixed(d.probability, 3)]),
       ),
     );
-    ctx.io.out('\nsupersede chain (oldest first)\n');
+    ctx.io.out(`\n${ui.bold('supersede chain')} ${ui.dim('(oldest first)')}\n`);
     ctx.io.out(
-      table(
+      ui.table(
         ['', 'id', 'valid from', 'valid to', 'end', 'text'],
         chain.map((c) => [
           c.id === m.id ? '*' : '',

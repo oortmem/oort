@@ -1,6 +1,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { importTranscripts } from '@oortmem/claude-code';
+import { uiFor } from '../ui.js';
 import { Refusal, confirm, echo, writePath, withWired, type Ctx } from '../util.js';
 
 export interface ImportCommandOptions {
@@ -39,6 +40,7 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
       includeUnresolved: opts.includeUnresolved === true,
     };
     const est = await importTranscripts({ ...base, estimateOnly: true }, deps);
+    ctx.io.out(uiFor(ctx.io).header('import claude-code', 'estimate first, then asks'));
     ctx.io.out(
       [
         `Claude Code transcripts in ${projectsDir}${since !== undefined ? ` since ${since.toISOString()}` : ''}:`,

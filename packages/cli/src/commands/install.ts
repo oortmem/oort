@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { HOOK_EVENTS, installHooks, uninstallHooks } from '@oortmem/claude-code';
 import { binPath } from '../io.js';
+import { uiFor } from '../ui.js';
 import { Refusal, echo, type Ctx } from '../util.js';
 
 // pnpm 11 removed `pnpm link --global`; `pnpm add -g .` links the package directory instead.
@@ -67,6 +68,7 @@ export async function installCommand(
   const cmd = hookCommandPath(ctx.io.entry);
   const file = settingsFile(opts.project === true, ctx);
   const events = HOOK_EVENTS.join(', ');
+  ctx.io.out(uiFor(ctx.io).header(`${action} claude-code`, 'hooks'));
   if (action === 'install') {
     const { changed } = installHooks(file, cmd);
     ctx.io.out(

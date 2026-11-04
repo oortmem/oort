@@ -36,7 +36,22 @@ describe('oort keys', () => {
       kc,
     );
     expect(r.code).toBe(0);
-    expect(r.io.stdout).toBe('voyage: keychain\ntypesafe: env\nanthropic: missing\n');
+    // Updated deliberately for the ui module: one header line, then aligned rows.
+    expect(r.io.stdout).toBe(
+      'oort keys list\nvoyage     keychain  oort.voyage\ntypesafe   env       TYPESAFE_API_KEY\nanthropic  missing   oort keys set anthropic\n',
+    );
+    const json = await h.run(
+      ['keys', 'list', '--json'],
+      { env: { VOYAGE_API_KEY: '', TYPESAFE_API_KEY: key2 } },
+      kc,
+    );
+    expect(JSON.parse(json.io.stdout)).toEqual([
+      { provider: 'voyage', envVar: 'VOYAGE_API_KEY', source: 'keychain' },
+      { provider: 'typesafe', envVar: 'TYPESAFE_API_KEY', source: 'env' },
+      { provider: 'anthropic', envVar: 'ANTHROPIC_API_KEY', source: 'missing' },
+    ]);
+    expect(json.io.stdout).not.toContain(key);
+    expect(json.io.stdout).not.toContain(key2);
     expect(r.io.stdout + r.io.stderr).not.toContain(key);
     expect(r.io.stdout + r.io.stderr).not.toContain(key2);
   });

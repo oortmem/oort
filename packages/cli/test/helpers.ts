@@ -40,6 +40,8 @@ export function fakeIo(opts: {
   env?: Record<string, string>;
   stdin?: string;
   tty?: boolean;
+  /** stdout is a terminal (colour on unless NO_COLOR). */
+  stdoutTTY?: boolean;
   answer?: string;
 }): FakeIo {
   const io: FakeIo = {
@@ -47,6 +49,7 @@ export function fakeIo(opts: {
     env: opts.env ?? {},
     entry: undefined,
     stdinIsTTY: opts.tty ?? false,
+    stdoutIsTTY: opts.stdoutTTY ?? false,
     stdout: '',
     stderr: '',
     hookStdout: undefined,
