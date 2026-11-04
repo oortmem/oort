@@ -8,12 +8,36 @@ export type VoyageErrorKind =
 export class VoyageError extends Error {
   readonly status: number | undefined;
   readonly kind: VoyageErrorKind;
+  /** The Oort Pro relay's own message for a refusal (relay mode only); never a vendor body. */
+  readonly relayMessage: string | undefined;
 
-  constructor(kind: VoyageErrorKind, message: string, status?: number) {
+  constructor(kind: VoyageErrorKind, message: string, status?: number, relayMessage?: string) {
     super(message);
     this.name = 'VoyageError';
     this.kind = kind;
     this.status = status;
+    this.relayMessage = relayMessage;
+  }
+}
+
+export interface PostOptions {
+  /**
+   * The URL is the Oort Pro relay. A 429 without `Retry-After` is the monthly cap, which waiting
+   * does not clear, so it is not retried; the relay's message is kept on the error.
+   */
+  relay?: boolean;
+}
+
+/** The `error` string of a relay refusal, cleaned and cut short; undefined for anything else. */
+async function relayMessageOf(res: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = JSON.parse(await res.text());
+    const msg = (body as { error?: unknown } | null)?.error;
+    if (typeof msg !== 'string') return undefined;
+    const clean = msg.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+    return clean === '' ? undefined : clean.slice(0, 400);
+  } catch {
+    return undefined;
   }
 }
 
@@ -38,12 +62,16 @@ function classify(status: number): VoyageError {
   return new VoyageError('bad-response', `Voyage request failed (HTTP ${status})`, status);
 }
 
-/** POST JSON with a 10 s timeout and one retry on 429/5xx. Returns the parsed body. */
+/**
+ * POST JSON with a 10 s timeout and one retry on 429/5xx (but see `PostOptions.relay`).
+ * Returns the parsed body.
+ */
 export async function postJson(
   fetchFn: typeof fetch,
   url: string,
   apiKey: string,
   body: unknown,
+  opts: PostOptions = {},
 ): Promise<unknown> {
   const payload = JSON.stringify(body);
   for (let attempt = 0; ; attempt++) {
@@ -69,10 +97,15 @@ export async function postJson(
         throw new VoyageError('bad-response', 'Voyage returned a non-JSON response', res.status);
       }
     }
-    if (attempt === 0 && (res.status === 429 || res.status >= 500)) {
+    const cap = opts.relay === true && res.status === 429 && !res.headers.has('retry-after');
+    if (!cap && attempt === 0 && (res.status === 429 || res.status >= 500)) {
       void res.body?.cancel().catch(() => undefined); // free the connection; never block on it
       await new Promise((r) => setTimeout(r, retryDelay(res)));
       continue;
+    }
+    if (opts.relay === true && res.status === 429) {
+      const msg = await relayMessageOf(res);
+      throw new VoyageError('rate-limit', msg ?? 'Voyage rate limit (HTTP 429)', 429, msg);
     }
     throw classify(res.status);
   }

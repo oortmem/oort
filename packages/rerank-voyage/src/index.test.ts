@@ -179,4 +179,25 @@ describe('voyageReranker', () => {
       globalThis.fetch = orig;
     }
   });
+
+  it('rerank.relay-cap-429-without-retry-after-is-not-retried-and-keeps-the-relay-message', async () => {
+    const message = 'You have used the 50,000 recalls included in Oort Pro this month.';
+    const s = stub(() => json({ error: message }, 429));
+    const r = voyageReranker({ apiKey: 'k', model: 'm', relay: true, fetch: s.fn });
+    await expect(r.rerank('q', docs, 1)).rejects.toMatchObject({
+      kind: 'rate-limit',
+      status: 429,
+      message,
+      relayMessage: message,
+    });
+    expect(s.calls).toHaveLength(1);
+  });
+
+  it('rerank.relay-429-with-retry-after-keeps-the-single-retry', async () => {
+    const ok = { data: [{ index: 1, relevance_score: 0.5 }] };
+    const s = stub((n) => (n === 1 ? json({ error: 'x' }, 429, { 'retry-after': '0' }) : json(ok)));
+    const r = voyageReranker({ apiKey: 'k', model: 'm', relay: true, fetch: s.fn });
+    expect(await r.rerank('q', docs, 1)).toEqual([{ id: 'b', score: 0.5 }]);
+    expect(s.calls).toHaveLength(2);
+  });
 });

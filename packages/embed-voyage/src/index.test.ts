@@ -294,4 +294,40 @@ describe('voyageEmbedder', () => {
       globalThis.fetch = orig;
     }
   });
+
+  it('embed.relay-cap-429-without-retry-after-is-not-retried-and-keeps-the-relay-message', async () => {
+    const message = 'You have used the 50,000 recalls included in Oort Pro this month.';
+    const s = stub(() => json({ error: message }, 429));
+    const err = await voyageEmbedder({ ...base, relay: true, fetch: s.fn })
+      .embed(['a'], 'query')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(VoyageError);
+    expect(err).toMatchObject({ kind: 'rate-limit', status: 429, relayMessage: message });
+    expect((err as Error).message).toBe(message);
+    expect(s.calls).toHaveLength(1);
+  });
+
+  it('embed.relay-429-with-retry-after-keeps-the-single-retry', async () => {
+    const s = stub((c, n) =>
+      n === 1 ? json({ error: 'slow down' }, 429, { 'retry-after': '0' }) : echo(4)(c),
+    );
+    const out = await voyageEmbedder({ ...base, relay: true, fetch: s.fn }).embed(['a'], 'query');
+    expect(out).toHaveLength(1);
+    expect(s.calls).toHaveLength(2);
+    const always = stub(() => json({ error: 'slow down' }, 429, { 'retry-after': '0' }));
+    await expect(
+      voyageEmbedder({ ...base, relay: true, fetch: always.fn }).embed(['a'], 'query'),
+    ).rejects.toMatchObject({ kind: 'rate-limit', relayMessage: 'slow down' });
+    expect(always.calls).toHaveLength(2);
+  });
+
+  it('embed.direct-429-without-retry-after-still-retries-and-never-echoes-a-vendor-body', async () => {
+    const s = stub(() => json({ error: 'vendor secret body' }, 429));
+    const err = await voyageEmbedder({ ...base, fetch: s.fn })
+      .embed(['a'], 'query')
+      .catch((e: unknown) => e);
+    expect(s.calls).toHaveLength(2);
+    expect((err as Error).message).not.toContain('vendor secret body');
+    expect((err as VoyageError).relayMessage).toBeUndefined();
+  });
 });

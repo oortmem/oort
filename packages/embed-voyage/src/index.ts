@@ -18,6 +18,11 @@ export interface VoyageEmbedderOptions {
    * `Authorization: Bearer`, as Voyage expects too).
    */
   baseUrl?: string;
+  /**
+   * `baseUrl` is the Oort Pro relay: a 429 without `Retry-After` (the monthly cap) is not
+   * retried, and the relay's message is kept on the error as `relayMessage`.
+   */
+  relay?: boolean;
   fetch?: typeof fetch;
 }
 
@@ -46,6 +51,7 @@ export function voyageEmbedder(opts: VoyageEmbedderOptions): Embedder {
   const apiKey = opts.apiKey ?? process.env['VOYAGE_API_KEY'];
   if (!apiKey) throw new MissingCredentialError('VOYAGE_API_KEY', 'embed.apiKey');
   const doFetch = opts.fetch ?? globalThis.fetch;
+  const post = { relay: opts.relay === true };
   const endpoint = `${(opts.baseUrl ?? VOYAGE_BASE_URL).replace(/\/+$/, '')}/embeddings`;
   const { model, dimension } = opts;
 
@@ -55,14 +61,20 @@ export function voyageEmbedder(opts: VoyageEmbedderOptions): Embedder {
       const out: Int8Array[] = [];
       for (let i = 0; i < texts.length; i += BATCH) {
         const input = texts.slice(i, i + BATCH);
-        const res = (await postJson(doFetch, endpoint, apiKey, {
-          input,
-          model,
-          input_type: kind,
-          output_dimension: dimension,
-          output_dtype: 'int8',
-          truncation: true,
-        })) as { data?: { index: number; embedding: unknown }[] } | null;
+        const res = (await postJson(
+          doFetch,
+          endpoint,
+          apiKey,
+          {
+            input,
+            model,
+            input_type: kind,
+            output_dimension: dimension,
+            output_dtype: 'int8',
+            truncation: true,
+          },
+          post,
+        )) as { data?: { index: number; embedding: unknown }[] } | null;
         const data = res?.data;
         if (!Array.isArray(data) || data.length !== input.length) {
           throw new VoyageError(

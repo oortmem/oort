@@ -16,6 +16,11 @@ export interface VoyageRerankerOptions {
    * `Authorization: Bearer`, as Voyage expects too).
    */
   baseUrl?: string;
+  /**
+   * `baseUrl` is the Oort Pro relay: a 429 without `Retry-After` (the monthly cap) is not
+   * retried, and the relay's message is kept on the error as `relayMessage`.
+   */
+  relay?: boolean;
   fetch?: typeof fetch;
 }
 
@@ -23,18 +28,25 @@ export function voyageReranker(opts: VoyageRerankerOptions): Reranker {
   const apiKey = opts.apiKey ?? process.env['VOYAGE_API_KEY'];
   if (!apiKey) throw new MissingCredentialError('VOYAGE_API_KEY', 'rerank.apiKey');
   const doFetch = opts.fetch ?? globalThis.fetch;
+  const post = { relay: opts.relay === true };
   const endpoint = `${(opts.baseUrl ?? VOYAGE_BASE_URL).replace(/\/+$/, '')}/rerank`;
 
   return {
     async rerank(query, docs, topK) {
       if (docs.length === 0) return [];
-      const res = (await postJson(doFetch, endpoint, apiKey, {
-        query,
-        documents: docs.map((d) => d.text),
-        model: opts.model,
-        top_k: topK,
-        truncation: true,
-      })) as { data?: { index: number; relevance_score: number }[] } | null;
+      const res = (await postJson(
+        doFetch,
+        endpoint,
+        apiKey,
+        {
+          query,
+          documents: docs.map((d) => d.text),
+          model: opts.model,
+          top_k: topK,
+          truncation: true,
+        },
+        post,
+      )) as { data?: { index: number; relevance_score: number }[] } | null;
       const data = res?.data;
       if (!Array.isArray(data)) {
         throw new VoyageError('bad-response', 'Voyage returned an unexpected rerank response');
