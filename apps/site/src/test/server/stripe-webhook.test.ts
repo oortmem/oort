@@ -210,6 +210,40 @@ describe('POST /api/stripe/webhook', () => {
     expect(n?.n).toBe(0);
   });
 
+  it('derives plan and status from all of the customer subscriptions, best first', async () => {
+    const s = await setup();
+    s.st.subs['sub_1'] = { ...sub('canceled'), id: 'sub_1' };
+    s.st.subs['sub_2'] = { ...sub('active', 'price_pro_test', 1_799_000_000), id: 'sub_2' };
+    s.st.subs['sub_3'] = { ...sub('past_due'), id: 'sub_3' };
+    s.st.subs['sub_x'] = { ...sub('active'), id: 'sub_x', customer: 'cus_other' };
+    await s.send({
+      id: 'evt_all',
+      type: 'customer.subscription.deleted',
+      data: { object: { id: 'sub_1', customer: 'cus_1' } },
+    });
+    expect(await s.account()).toMatchObject({
+      plan: 'pro',
+      status: 'active',
+      current_period_end: new Date(1_799_000_000 * 1000).toISOString(),
+    });
+    expect(s.st.calls).toContainEqual({
+      method: 'subscriptions.list',
+      params: { customer: 'cus_1', status: 'all', limit: 100 },
+    });
+  });
+
+  it('a live Pro subscription wins over an active one to another price', async () => {
+    const s = await setup();
+    s.st.subs['sub_1'] = sub('active', 'price_something_else');
+    s.st.subs['sub_2'] = { ...sub('trialing'), id: 'sub_2' };
+    await s.send({
+      id: 'evt_mix',
+      type: 'customer.subscription.updated',
+      data: { object: { id: 'sub_1', customer: 'cus_1' } },
+    });
+    expect(await s.account()).toMatchObject({ plan: 'pro', status: 'trialing' });
+  });
+
   it('acknowledges and records other event types without acting', async () => {
     const s = await setup();
     const res = await s.send({ id: 'evt_9', type: 'charge.succeeded', data: { object: {} } });

@@ -10,6 +10,7 @@ export const T0 = new Date('2026-11-04T10:00:00Z');
 export function fakeStripe(subs: Record<string, SubscriptionLike> = {}) {
   const calls: { method: string; params: unknown }[] = [];
   let n = 0;
+  let openSessions: { id: string; customer: string }[] = [];
   const stripe: StripeLike = {
     customers: {
       async create(params) {
@@ -21,7 +22,18 @@ export function fakeStripe(subs: Record<string, SubscriptionLike> = {}) {
       sessions: {
         async create(params) {
           calls.push({ method: 'checkout.sessions.create', params });
+          const id = `cs_test_${++n}`;
+          openSessions.push({ id, customer: String(params.customer ?? '') });
           return { url: 'https://checkout.stripe.com/c/pay/cs_test_1' };
+        },
+        async list(params) {
+          calls.push({ method: 'checkout.sessions.list', params });
+          return { data: openSessions.filter((x) => x.customer === params.customer) };
+        },
+        async expire(id) {
+          calls.push({ method: 'checkout.sessions.expire', params: id });
+          openSessions = openSessions.filter((x) => x.id !== id);
+          return { id, status: 'expired' };
         },
       },
     },
@@ -40,9 +52,15 @@ export function fakeStripe(subs: Record<string, SubscriptionLike> = {}) {
         if (!s) throw new Error('No such subscription');
         return s;
       },
+      async list(params) {
+        calls.push({ method: 'subscriptions.list', params });
+        const of = (x: SubscriptionLike) =>
+          typeof x.customer === 'string' ? x.customer : x.customer.id;
+        return { data: Object.values(subs).filter((x) => of(x) === params.customer) };
+      },
     },
   };
-  return { stripe, calls, subs };
+  return { stripe, calls, subs, openSessions: () => openSessions };
 }
 
 export function deps(over: Partial<AccountDeps> & { userId?: string | null } = {}) {

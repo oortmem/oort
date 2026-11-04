@@ -25,6 +25,12 @@ export interface StripeLike {
   checkout: {
     sessions: {
       create(params: Stripe.Checkout.SessionCreateParams): Promise<{ url: string | null }>;
+      list(params: {
+        customer: string;
+        status: 'open';
+        limit: number;
+      }): Promise<{ data: { id: string }[] }>;
+      expire(id: string): Promise<unknown>;
     };
   };
   billingPortal: {
@@ -32,7 +38,15 @@ export interface StripeLike {
       create(params: { customer: string; return_url: string }): Promise<{ url: string }>;
     };
   };
-  subscriptions: { retrieve(id: string): Promise<SubscriptionLike> };
+  subscriptions: {
+    retrieve(id: string): Promise<SubscriptionLike>;
+    /** Every subscription of one customer, ended ones included. */
+    list(params: {
+      customer: string;
+      status: 'all';
+      limit: number;
+    }): Promise<{ data: SubscriptionLike[] }>;
+  };
 }
 
 /**
@@ -49,10 +63,19 @@ export async function createStripe(secretKey: string): Promise<{
   return {
     stripe: {
       customers: { create: (p) => s.customers.create(p) },
-      checkout: { sessions: { create: (p) => s.checkout.sessions.create(p) } },
+      checkout: {
+        sessions: {
+          create: (p) => s.checkout.sessions.create(p),
+          list: async (p) => ({ data: (await s.checkout.sessions.list(p)).data }),
+          expire: (id) => s.checkout.sessions.expire(id),
+        },
+      },
       billingPortal: { sessions: { create: (p) => s.billingPortal.sessions.create(p) } },
       subscriptions: {
         retrieve: async (id) => (await s.subscriptions.retrieve(id)) as unknown as SubscriptionLike,
+        list: async (p) => ({
+          data: (await s.subscriptions.list(p)).data as unknown as SubscriptionLike[],
+        }),
       },
     },
     verify: async (payload, signature, secret) =>

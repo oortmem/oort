@@ -27,42 +27,80 @@ const obj = (x: unknown): Record<string, unknown> =>
 const idOf = (x: unknown): string | null =>
   typeof x === 'string' ? x : typeof obj(x)['id'] === 'string' ? (obj(x)['id'] as string) : null;
 
-async function syncSubscription(subId: string, d: WebhookDeps): Promise<void> {
-  // Read the live subscription rather than the event payload, so late or replayed events
-  // cannot roll the status back.
-  const sub: SubscriptionLike = await d.stripe.subscriptions.retrieve(subId);
-  const customer = idOf(sub.customer);
-  if (!customer) throw new Error('subscription without customer');
-  const hasPro = sub.items.data.some((i) => i.price.id === d.pricePro);
-  const plan = hasPro && !ENDED.has(sub.status) ? 'pro' : 'free';
+/** Lower is better: the subscription that decides the account's plan and status. */
+const RANK: Record<string, number> = {
+  active: 0,
+  trialing: 1,
+  past_due: 2,
+  unpaid: 3,
+  incomplete: 4,
+  paused: 5,
+  canceled: 8,
+  incomplete_expired: 9,
+};
+const rank = (s: SubscriptionLike) => RANK[s.status] ?? 7;
+
+function periodEndOf(sub: SubscriptionLike): number | null {
   const ends = [sub.current_period_end, ...sub.items.data.map((i) => i.current_period_end)].filter(
     (n): n is number => typeof n === 'number',
   );
-  const periodEnd = ends.length > 0 ? new Date(Math.max(...ends) * 1000).toISOString() : null;
+  return ends.length > 0 ? Math.max(...ends) : null;
+}
+
+/** The best subscription: live before ended, then the later period end. */
+function best(subs: SubscriptionLike[]): SubscriptionLike | undefined {
+  return [...subs].sort(
+    (a, b) => rank(a) - rank(b) || (periodEndOf(b) ?? 0) - (periodEndOf(a) ?? 0),
+  )[0];
+}
+
+/**
+ * Recomputes the account from every subscription of the customer, not from the one the event is
+ * about: a past_due or cancelled old subscription must never hide a newer active one. The hinted
+ * subscription is read directly as well, in case the list lags behind.
+ */
+async function syncCustomer(
+  customerHint: string | null,
+  subHint: string | null,
+  d: WebhookDeps,
+): Promise<void> {
+  const hinted = subHint ? await d.stripe.subscriptions.retrieve(subHint) : undefined;
+  const customer = customerHint ?? (hinted ? idOf(hinted.customer) : null);
+  if (!customer) throw new Error('event without customer');
+  const listed = (await d.stripe.subscriptions.list({ customer, status: 'all', limit: 100 })).data;
+  const subs = hinted ? [hinted, ...listed.filter((x) => x.id !== hinted.id)] : listed;
+
+  const pro = subs.filter((x) => x.items.data.some((i) => i.price.id === d.pricePro));
+  const chosen = best(pro) ?? best(subs);
+  const plan = chosen && pro.includes(chosen) && !ENDED.has(chosen.status) ? 'pro' : 'free';
+  const status = chosen?.status ?? 'none';
+  const end = chosen ? periodEndOf(chosen) : null;
+  const periodEnd = end === null ? null : new Date(end * 1000).toISOString();
+
   const r = await d.db
     .prepare(
       'UPDATE accounts SET plan = ?, status = ?, current_period_end = ? WHERE stripe_customer_id = ?',
     )
-    .bind(plan, sub.status, periodEnd, customer)
+    .bind(plan, status, periodEnd, customer)
     .run();
-  const accountId = sub.metadata?.['account_id'];
+  const accountId = subs.map((x) => x.metadata?.['account_id']).find((x) => x);
   if (r.meta.changes === 0 && accountId) {
     await d.db
       .prepare(
         'UPDATE accounts SET stripe_customer_id = ?, plan = ?, status = ?, current_period_end = ? WHERE id = ? AND stripe_customer_id IS NULL',
       )
-      .bind(customer, plan, sub.status, periodEnd, accountId)
+      .bind(customer, plan, status, periodEnd, accountId)
       .run();
   }
 }
 
 async function apply(event: StripeEventLike, d: WebhookDeps): Promise<void> {
   const o = obj(event.data.object);
+  const customer = idOf(o['customer']);
   switch (event.type) {
     case 'checkout.session.completed': {
       const accountId =
         typeof o['client_reference_id'] === 'string' ? o['client_reference_id'] : null;
-      const customer = idOf(o['customer']);
       if (accountId && customer) {
         await d.db
           .prepare(
@@ -72,20 +110,20 @@ async function apply(event: StripeEventLike, d: WebhookDeps): Promise<void> {
           .run();
       }
       const sub = idOf(o['subscription']);
-      if (sub) await syncSubscription(sub, d);
+      if (sub || customer) await syncCustomer(customer, sub, d);
       return;
     }
     case 'customer.subscription.created':
     case 'customer.subscription.updated':
     case 'customer.subscription.deleted': {
       const sub = idOf(o);
-      if (sub) await syncSubscription(sub, d);
+      if (sub || customer) await syncCustomer(customer, sub, d);
       return;
     }
     case 'invoice.payment_failed': {
       const parent = obj(obj(o['parent'])['subscription_details']);
       const sub = idOf(parent['subscription']) ?? idOf(o['subscription']);
-      if (sub) await syncSubscription(sub, d);
+      if (sub || customer) await syncCustomer(customer, sub, d);
       return;
     }
   }

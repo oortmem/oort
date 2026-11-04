@@ -185,6 +185,50 @@ describe('billing', () => {
     expect(s.stripe.calls).toHaveLength(0);
   });
 
+  it('sends the user to the Portal while any subscription has not ended', async () => {
+    for (const status of ['past_due', 'unpaid', 'incomplete', 'paused']) {
+      const s = deps();
+      await startCheckout(s.d);
+      s.stripe.subs['sub_1'] = {
+        id: 'sub_1',
+        customer: 'cus_1',
+        status,
+        items: { data: [{ price: { id: 'price_pro_test' } }] },
+      };
+      const before = s.stripe.calls.filter((c) => c.method === 'checkout.sessions.create').length;
+      expect(await startCheckout(s.d), status).toEqual({
+        url: 'https://billing.stripe.com/p/session/test_1',
+        portal: true,
+      });
+      expect(s.stripe.calls.filter((c) => c.method === 'checkout.sessions.create')).toHaveLength(
+        before,
+      );
+    }
+  });
+
+  it('starts Checkout again once every subscription has ended', async () => {
+    const s = deps();
+    await startCheckout(s.d);
+    s.stripe.subs['sub_1'] = {
+      id: 'sub_1',
+      customer: 'cus_1',
+      status: 'canceled',
+      items: { data: [{ price: { id: 'price_pro_test' } }] },
+    };
+    expect((await startCheckout(s.d)).url).toContain('checkout.stripe.com');
+  });
+
+  it('expires an open Checkout from another tab before starting a new one', async () => {
+    const s = deps();
+    await startCheckout(s.d);
+    expect(s.stripe.openSessions()).toHaveLength(1);
+    const first = s.stripe.openSessions()[0]!.id;
+    await startCheckout(s.d);
+    expect(s.stripe.calls).toContainEqual({ method: 'checkout.sessions.expire', params: first });
+    expect(s.stripe.openSessions()).toHaveLength(1);
+    expect(s.stripe.openSessions()[0]!.id).not.toBe(first);
+  });
+
   it('opens the Customer Portal for the account customer', async () => {
     const s = deps();
     await startCheckout(s.d);

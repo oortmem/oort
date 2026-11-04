@@ -197,12 +197,41 @@ async function ensureCustomer(d: AccountDeps, a: AccountRow): Promise<string> {
   return row?.stripe_customer_id ?? c.id;
 }
 
-export async function startCheckout(d: AccountDeps): Promise<{ url: string }> {
+const ENDED_SUBSCRIPTIONS: readonly string[] = ['canceled', 'incomplete_expired'];
+
+/**
+ * Checkout for a new Pro subscription. While the customer has any subscription that has not
+ * ended (past_due, unpaid, incomplete...), a second one would bill twice, so the user is sent to
+ * the Customer Portal instead (`portal: true`). Open Checkout sessions from other tabs are
+ * expired first, so only the newest one can complete.
+ */
+export async function startCheckout(d: AccountDeps): Promise<{ url: string; portal?: true }> {
   const a = await requireAccount(d);
   if (isEntitled(a)) {
     throw new AccountError('You already have Oort Pro. Use Manage billing to change it.');
   }
   if (!d.pricePro) throw new AccountError('Billing is not set up yet.');
+  if (a.stripe_customer_id) {
+    const stripe = d.stripe();
+    const subs = await stripe.subscriptions.list({
+      customer: a.stripe_customer_id,
+      status: 'all',
+      limit: 100,
+    });
+    if (subs.data.some((x) => !ENDED_SUBSCRIPTIONS.includes(x.status))) {
+      const p = await stripe.billingPortal.sessions.create({
+        customer: a.stripe_customer_id,
+        return_url: `${d.origin}/account`,
+      });
+      return { url: p.url, portal: true };
+    }
+    const open = await stripe.checkout.sessions.list({
+      customer: a.stripe_customer_id,
+      status: 'open',
+      limit: 10,
+    });
+    for (const cs of open.data) await stripe.checkout.sessions.expire(cs.id);
+  }
   const customer = await ensureCustomer(d, a);
   const params: Stripe.Checkout.SessionCreateParams = {
     mode: 'subscription',
