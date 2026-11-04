@@ -1,6 +1,7 @@
 import { activation, tierFor } from './activation.js';
 import type { MemoryStore, ScopeFilter } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
+import { localGrant, type Grant } from './grant.js';
 import { isCurrent, type Memory, type Tier } from './model.js';
 
 export interface ConsolidateResult {
@@ -50,6 +51,7 @@ export async function consolidate(
   deps: { store: MemoryStore; config: ResolvedConfig; now?: Date },
 ): Promise<ConsolidateResult> {
   const { store, config } = deps;
+  const grant = localGrant(scope);
   const now = deps.now ?? new Date();
   const result: ConsolidateResult = {
     promoted: [],
@@ -60,17 +62,17 @@ export async function consolidate(
   };
 
   // 1. Expire.
-  const due = (await store.list(scope, { validOnly: false })).filter(
+  const due = (await store.list(grant, { validOnly: false })).filter(
     (m) => m.validTo !== null && m.expiredAt === null && Date.parse(m.validTo) <= now.getTime(),
   );
   if (due.length > 0) {
-    const skipped = new Set((await store.expireMany(due, now)).skipped);
+    const skipped = new Set((await store.expireMany(grant, due, now)).skipped);
     for (const m of due) if (!skipped.has(m.id)) result.expired.push(m.id);
     result.skipped += skipped.size;
   }
 
   // 2. Rank and assign current memories.
-  const current = (await store.list(scope, { validOnly: true })).filter((m) => isCurrent(m, now));
+  const current = (await store.list(grant, { validOnly: true })).filter((m) => isCurrent(m, now));
   const scored = current.map((m) => ({
     m,
     a: activation(m.accessLog, m.salience, now, config.activation),
@@ -88,7 +90,7 @@ export async function consolidate(
     if (m.tier === 'cold') continue; // never promote out of cold here
     if (target === 'cold') {
       evictions.push(m);
-    } else if (await store.setTier(m.id, target, m)) {
+    } else if (await store.setTier(grant, m.id, target, m)) {
       (RANK[target] > RANK[m.tier] ? result.promoted : result.demoted).push(m.id);
     } else {
       result.skipped++;
@@ -96,24 +98,25 @@ export async function consolidate(
   }
 
   // 3. Non-current memories go straight to cold (unless pinned or already cold).
-  for (const m of await store.list(scope, { validOnly: false })) {
+  for (const m of await store.list(grant, { validOnly: false })) {
     if (currentIds.has(m.id) || m.pinned || m.tier === 'cold') continue;
     evictions.push(m);
   }
-  await evictAll(store, evictions, result);
+  await evictAll(store, grant, evictions, result);
 
   return result;
 }
 
 async function evictAll(
   store: MemoryStore,
+  grant: Grant,
   evictions: Memory[],
   result: ConsolidateResult,
 ): Promise<void> {
   for (let i = 0; i < evictions.length; i += COLD_EVICT_BATCH) {
     const batch = evictions.slice(i, i + COLD_EVICT_BATCH);
     // Each entry is the snapshot it was chosen from: the store's guard checks it.
-    const skipped = new Set((await store.coldPutMany(batch)).skipped);
+    const skipped = new Set((await store.coldPutMany(grant, batch)).skipped);
     for (const m of batch) {
       if (skipped.has(m.id)) continue;
       result.demoted.push(m.id);

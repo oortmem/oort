@@ -19,7 +19,7 @@ import { openSqliteStore } from '@oortmem/store-sqlite';
 import { fakeEmbedder } from './fake-embed.js';
 import { EMBEDDING_DIMENSION, GENERATOR_NOW, generateMemories } from './generate.js';
 import { createRng } from './prng.js';
-import { ALL_SCOPE, seedStore } from './seed.js';
+import { ALL_GRANT, ALL_SCOPE, seedStore } from './seed.js';
 import {
   collectGarbage,
   dirBytes,
@@ -490,7 +490,7 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchResult> {
     const sqliteAfter = fileBytes(env.dbPath) + fileBytes(`${env.dbPath}-wal`);
     const coldAfter = dirBytes(env.coldDir);
 
-    const all = await env.store.list(ALL_SCOPE, { validOnly: false });
+    const all = await env.store.list(ALL_GRANT, { validOnly: false });
     const tiers: Record<Tier, number> = { hot: 0, warm: 0, cold: 0 };
     for (const m of all) tiers[m.tier]++;
 
@@ -515,7 +515,7 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchResult> {
       );
       coldTimes.push(performance.now() - t);
       // Recall hydrates every cold candidate, returned or not; the target is hydrated when it left cold.
-      if ((await env.store.get(m.id))?.tier !== 'cold') {
+      if ((await env.store.get(ALL_GRANT, m.id))?.tier !== 'cold') {
         hydrated++;
         hydrateTimes.push(r.timings['hydrateMs'] ?? 0);
       }

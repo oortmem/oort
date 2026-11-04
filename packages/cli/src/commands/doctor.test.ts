@@ -7,6 +7,7 @@ import { harness, memory, memoryKeychain, type Harness } from '../../test/helper
 import { connectHost } from '../connectors.js';
 import { createKeychain, type Keychain } from '../keychain.js';
 import { hostContext } from './connect.js';
+import { TG } from '@oortmem/core/store-conformance';
 
 interface Check {
   group: string;
@@ -85,7 +86,7 @@ describe('oort doctor', () => {
     const hc = hostContext({ io: { env: { HOME: h.root } } } as never);
     connectHost('cursor', hc, bin);
     storeFile(h);
-    await h.store.upsert(memory());
+    await h.store.upsert(TG, memory());
     const key = oortKey();
     const k = memoryKeychain({ 'oort.voyage': 'test-voyage-key-for-doctor' });
     const d = await doctor(h, { OORT_API_KEY: key }, k.kc);

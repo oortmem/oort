@@ -11,7 +11,7 @@ import {
   type Scope,
 } from '@oortmem/core';
 import type { HookDeps } from './deps.js';
-import { cursorKey } from './hooks.js';
+import { cursorKey, grantFor } from './hooks.js';
 import { parseTranscriptDetailed, selectAfterCursor } from './transcript.js';
 
 export interface ImportOptions {
@@ -191,7 +191,10 @@ export async function importTranscripts(
     const cwd = detailed.find((d) => d.turn.cwd.length > 0)?.turn.cwd;
     const projectId = resolveProject(cwd, deps.config.home);
     const scope = localScope(projectId);
-    const { fresh } = selectAfterCursor(detailed, await deps.store.getCursor(cursorKey(session)));
+    const { fresh } = selectAfterCursor(
+      detailed,
+      await deps.store.getCursor(grantFor(scope), cursorKey(session)),
+    );
     const mine: Item[] = [];
     for (const raw of fresh) {
       const s = scrubObservation(raw);
@@ -245,7 +248,7 @@ export async function importTranscripts(
   const advance = async (item: (typeof items)[number]): Promise<void> => {
     const prev = done.get(item.session) ?? -1;
     if (item.pos > prev && item.obs.turnRef !== undefined) {
-      await deps.store.setCursor(cursorKey(item.session), item.obs.turnRef);
+      await deps.store.setCursor(grantFor(item.scope), cursorKey(item.session), item.obs.turnRef);
       done.set(item.session, item.pos);
     }
   };

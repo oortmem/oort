@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { filterFor, queueDir } from '@oortmem/claude-code';
-import { isCurrent, type Tier } from '@oortmem/core';
+import { isCurrent, type Tier, localGrant } from '@oortmem/core';
 import { uiFor } from '../ui.js';
 import { scopeLabel, withWired, type Ctx } from '../util.js';
 
@@ -66,7 +66,7 @@ const mb = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<number> {
   return withWired(ctx, async (w) => {
     const now = new Date();
-    const all = await w.store.list(filterFor(w.scope), { validOnly: false });
+    const all = await w.store.list(localGrant(filterFor(w.scope)), { validOnly: false });
     const tiers: Record<Tier, number> = { hot: 0, warm: 0, cold: 0 };
     const validity = { current: 0, superseded: 0, expired: 0, notYetValid: 0 };
     for (const m of all) {

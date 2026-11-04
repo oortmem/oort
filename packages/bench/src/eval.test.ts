@@ -10,6 +10,7 @@ import { openSqliteStore } from '@oortmem/store-sqlite';
 import { loadEvalRows, runEval, type EvalRow } from './eval.js';
 import { buildFixtureRows, FIXTURE_COUNT, FIXTURE_SEED } from './fixture.js';
 import { generateMemories } from './generate.js';
+import { TG } from '@oortmem/core/store-conformance';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-bench-eval-'));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -36,7 +37,7 @@ async function handBuiltStore(): Promise<{ dbPath: string; coldDir: string }> {
   const dbPath = path.join(dir, 'oort.sqlite');
   const coldDir = path.join(dir, 'cold');
   const store = await openSqliteStore({ path: dbPath, coldDir, dimension: DIM, log: () => {} });
-  await store.upsertMany([
+  await store.upsertMany(TG, [
     mem('m0', 'auth service listens on port 3000', {
       validFrom: '2025-01-01T00:00:00.000Z',
       validTo: '2026-01-01T00:00:00.000Z',
@@ -156,7 +157,7 @@ describe('eval', () => {
     const dbPath = path.join(dir, 'oort.sqlite');
     const coldDir = path.join(dir, 'cold');
     const store = await openSqliteStore({ path: dbPath, coldDir, dimension: DIM, log: () => {} });
-    await store.upsertMany([mem('w1', 'warm memory about caching')]);
+    await store.upsertMany(TG, [mem('w1', 'warm memory about caching')]);
     // A cold memory the row below hydrates: on a live store that is a write.
     await seedCold(
       store,

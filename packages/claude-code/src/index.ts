@@ -13,6 +13,7 @@ export {
 export {
   cursorKey,
   filterFor,
+  grantFor,
   handleSessionStart,
   handleStop,
   handleUserPromptSubmit,

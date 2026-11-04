@@ -23,6 +23,7 @@ import {
 } from '../test/helpers.js';
 import { handleSessionStart, handleStop, handleUserPromptSubmit, runHook } from './hooks.js';
 import { createHookLogger } from './log.js';
+import { TG } from '@oortmem/core/store-conformance';
 
 const PORT_MEMORY = makeMemory({
   id: 'm-port',
@@ -34,7 +35,7 @@ const PORT_MEMORY = makeMemory({
 
 async function withMemories(t: TempHome, ...ms: ReturnType<typeof makeMemory>[]) {
   const deps = makeDeps(t);
-  for (const m of ms) await deps.store.upsert(m);
+  for (const m of ms) await deps.store.upsert(TG, m);
   return deps;
 }
 
@@ -289,7 +290,7 @@ describe('Stop', () => {
     });
     expect(out).toEqual({ stdout: '', exitCode: 0 });
     expect(queueLines(t.home)).toEqual([]);
-    expect(await deps.store.getCursor(`claude-code:${SESSION}`)).toBeNull();
+    expect(await deps.store.getCursor(TG, `claude-code:${SESSION}`)).toBeNull();
     expect(spawned).toBe(0);
     expect(readLog(t.home)[0]?.outcome).toBe('skipped:stop-hook-active');
   });
@@ -309,7 +310,7 @@ describe('Stop', () => {
       'a-0014',
       'a-0015',
     ]);
-    expect(await deps.store.getCursor(key)).toBe('a-0015');
+    expect(await deps.store.getCursor(TG, key)).toBe('a-0015');
 
     // Nothing new: nothing queued, cursor unchanged.
     await handleStop(stopInput(t, transcript), deps);
@@ -344,7 +345,7 @@ describe('Stop', () => {
     expect(lines[5]).toMatchObject({
       obs: { turnRef: 'a-0004', assistantText: 'In docs/auth.md.' },
     });
-    expect(await deps.store.getCursor(key)).toBe('a-0004');
+    expect(await deps.store.getCursor(TG, key)).toBe('a-0004');
     expect(readLog(t.home).map((l) => l.counts['queued'])).toEqual([5, 0, 1]);
   });
 
@@ -373,7 +374,7 @@ describe('Stop', () => {
     );
     const deps = makeDeps(t);
     await handleStop(stopInput(t, transcript), deps);
-    expect(await deps.store.getCursor(`claude-code:${SESSION}`)).toBe('a1a');
+    expect(await deps.store.getCursor(TG, `claude-code:${SESSION}`)).toBe('a1a');
     // The transcript lagged: the rest of the turn lands after the first Stop.
     fs.appendFileSync(
       transcript,
@@ -388,7 +389,7 @@ describe('Stop', () => {
     const lines = queueLines(t.home);
     expect(lines).toHaveLength(2);
     expect(lines[1]).toMatchObject({ obs: { turnRef: 'a1b', assistantText: 'It is 4471.' } });
-    expect(await deps.store.getCursor(`claude-code:${SESSION}`)).toBe('a1b');
+    expect(await deps.store.getCursor(TG, `claude-code:${SESSION}`)).toBe('a1b');
   });
 
   it('hook.stop-never-calls-adapters', async () => {
@@ -466,7 +467,7 @@ describe('Stop', () => {
     await handleStop(stopInput(t, transcript), deps);
     const refs = queueLines(t.home).map((l) => (l['obs'] as { turnRef: string }).turnRef);
     expect(refs).toEqual(Array.from({ length: 20 }, (_, i) => `a${i + 10}`));
-    expect(await deps.store.getCursor(`claude-code:${SESSION}`)).toBe('a29');
+    expect(await deps.store.getCursor(TG, `claude-code:${SESSION}`)).toBe('a29');
     expect(readLog(t.home)[0]?.counts).toMatchObject({ observations: 30, queued: 20, capped: 10 });
   });
 
@@ -474,7 +475,7 @@ describe('Stop', () => {
     const t = tempHome();
     const transcript = manyPairs(t, 25);
     const deps = makeDeps(t);
-    await deps.store.setCursor(`claude-code:${SESSION}`, 'rotated-away');
+    await deps.store.setCursor(TG, `claude-code:${SESSION}`, 'rotated-away');
     await handleStop(stopInput(t, transcript), deps);
     expect(queueLines(t.home)).toHaveLength(20);
     expect(readLog(t.home)[0]?.counts).toMatchObject({ cursorMissing: 1, queued: 20, capped: 5 });

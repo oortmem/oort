@@ -11,6 +11,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { OortConfig, projectIdFor, type Memory } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import { memory, syntheticKey, tmpdir, writeTranscript } from '../test/helpers.js';
+import { TG } from '@oortmem/core/store-conformance';
+import { localGrant } from '@oortmem/core';
 
 /** The built bin; these tests run it as a real process, so build first. */
 const BIN = path.join(import.meta.dirname, '..', 'dist', 'main.js');
@@ -53,7 +55,7 @@ async function seed(s: Sandbox, memories: Memory[]): Promise<void> {
     dimension: 512,
     log: () => {},
   });
-  await store.upsertMany(memories);
+  await store.upsertMany(TG, memories);
   await store.close();
 }
 
@@ -121,7 +123,7 @@ describe('oort bin', () => {
       dimension: 512,
       log: () => {},
     });
-    await store.upsert(memory({ embedding: new Int8Array(512).fill(3) }));
+    await store.upsert(TG, memory({ embedding: new Int8Array(512).fill(3) }));
     await store.close();
 
     const r = await oort(s, ['recall', 'which port does the auth service listen on']);
@@ -178,12 +180,12 @@ describe('oort bin', () => {
       log: () => {},
     });
     const all = await store.list(
-      {
+      localGrant({
         orgId: 'local',
         customerId: 'self',
         agentId: 'claude-code',
         projectIds: [null, projectIdFor(s.cwd) ?? null],
-      },
+      }),
       { validOnly: false },
     );
     await store.close();
@@ -219,7 +221,7 @@ describe('oort bin', () => {
       dimension: 512,
       log: () => {},
     });
-    await store.upsert(memory({ embedding: new Int8Array(512).fill(3) }));
+    await store.upsert(TG, memory({ embedding: new Int8Array(512).fill(3) }));
     await store.close();
     // Another process (say, a drain) holds the write lock for the whole hook run.
     const holder = new Database(dbPath);

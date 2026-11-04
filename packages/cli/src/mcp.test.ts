@@ -4,6 +4,7 @@ import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AWS_KEY, harness, memory, type Harness } from '../test/helpers.js';
 import { INSTRUCTIONS, TOOL_NAMES, createOortServer } from './mcp.js';
+import { TG } from '@oortmem/core/store-conformance';
 
 type Era = 'legacy' | 'modern';
 
@@ -86,7 +87,7 @@ describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
     expect(outcome.results).toHaveLength(1);
     expect(outcome.results[0]?.outcome).toBe('added');
     const id = outcome.results[0]?.id ?? '';
-    const stored = await h.store.get(id);
+    const stored = await h.store.get(TG, id);
     expect(stored?.source.harness).toBe('mcp');
     expect(stored?.text).toContain('port 5582');
 
@@ -106,16 +107,16 @@ describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
     const forget = tools.find((t) => t.name === 'forget');
     expect(forget?.inputSchema.required).toEqual(['id']);
     const m = memory();
-    await h.store.upsert(m);
+    await h.store.upsert(TG, m);
     const missing = await client
       .callTool({ name: 'forget', arguments: {} })
       .then((r) => r.isError === true)
       .catch(() => true);
     expect(missing).toBe(true);
-    expect(await h.store.get(m.id)).not.toBeNull();
+    expect(await h.store.get(TG, m.id)).not.toBeNull();
     const done = await client.callTool({ name: 'forget', arguments: { id: m.id } });
     expect(done.isError).not.toBe(true);
-    expect(await h.store.get(m.id)).toBeNull();
+    expect(await h.store.get(TG, m.id)).toBeNull();
     // A second forget of the same id changes nothing and says so.
     const again = await client.callTool({ name: 'forget', arguments: { id: m.id } });
     expect(again.isError).toBe(true);
@@ -166,7 +167,7 @@ describe('oort mcp tools', () => {
     const { client, h } = await connect('legacy');
     const old = memory({ text: 'The auth service listens on port 4000.' });
     const m = memory({ supersedes: old.id });
-    await h.store.upsertMany([
+    await h.store.upsertMany(TG, [
       {
         ...old,
         validTo: m.validFrom,
@@ -179,7 +180,7 @@ describe('oort mcp tools', () => {
 
     const pinned = await client.callTool({ name: 'pin', arguments: { id: m.id, pinned: true } });
     expect(pinned.isError).not.toBe(true);
-    expect((await h.store.get(m.id))?.pinned).toBe(true);
+    expect((await h.store.get(TG, m.id))?.pinned).toBe(true);
     const again = await client.callTool({ name: 'pin', arguments: { id: m.id, pinned: true } });
     expect(json<{ changed: boolean }>(again).changed).toBe(false);
 
@@ -208,13 +209,13 @@ describe('oort mcp tools', () => {
       text: 'another project fact',
       scope: { orgId: 'local', customerId: 'self', agentId: 'claude-code', projectId: 'p' },
     });
-    await h.store.upsert(other);
+    await h.store.upsert(TG, other);
     for (const name of ['forget', 'explain', 'pin']) {
       const args = name === 'pin' ? { id: other.id, pinned: true } : { id: other.id };
       const r = await client.callTool({ name, arguments: args });
       expect(r.isError, name).toBe(true);
       expect(text(r), name).not.toContain('another project fact');
     }
-    expect(await h.store.get(other.id)).not.toBeNull();
+    expect(await h.store.get(TG, other.id)).not.toBeNull();
   });
 });

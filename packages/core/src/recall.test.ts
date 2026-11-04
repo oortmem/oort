@@ -9,6 +9,8 @@ import { createMemoryStore } from './memory-store.js';
 import type { Memory } from './model.js';
 import { formatForInjection, recall, type RecallResult } from './recall.js';
 import { makeMemory, seedCold, vec } from './store-conformance.js';
+import { TG } from './store-conformance.js';
+import { localGrant } from './grant.js';
 
 const SCOPE: ScopeFilter = {
   orgId: 'local',
@@ -32,7 +34,7 @@ function fakeEmbedder(table: [string, Int8Array][]): Embedder {
 
 async function setup(memories: Memory[]): Promise<MemoryStore> {
   const store = createMemoryStore({ d: config.activation.d });
-  for (const m of memories) await store.upsert(m);
+  for (const m of memories) await store.upsert(TG, m);
   return store;
 }
 
@@ -96,7 +98,7 @@ describe('recall', () => {
     expect(r.memories).toHaveLength(1);
     expect(r.memories[0]?.text).toBe('full text about quokka migration');
     expect(r.memories[0]?.explanation.hydrated).toBe(true);
-    const live = await store.get('c');
+    const live = await store.get(TG, 'c');
     expect(live?.tier).toBe('warm');
     expect(live?.embedding).toBeDefined();
   });
@@ -112,7 +114,7 @@ describe('recall', () => {
     const r = await recall({ text: 'quokka', scope: SCOPE }, { store: lost, config });
     expect(r.memories.map((m) => m.id)).toEqual(['c']);
     expect(r.memories[0]?.explanation.hydrated).toBe(false);
-    const live = await store.get('c');
+    const live = await store.get(TG, 'c');
     expect(live?.tier).toBe('cold');
     expect(live?.embedding).toBeUndefined();
   });
@@ -145,9 +147,9 @@ describe('recall', () => {
     ]);
     const lexicalQueries: string[] = [];
     const store: MemoryStore = Object.create(inner) as MemoryStore;
-    store.lexical = (q, scope, k) => {
+    store.lexical = (grant, q, k) => {
       lexicalQueries.push(q);
-      return inner.lexical(q, scope, k);
+      return inner.lexical(grant, q, k);
     };
     const r = await recall(
       { text: `rotate the credential ${key}`, scope: SCOPE },
@@ -215,7 +217,7 @@ describe('recall', () => {
       expect(h.memories[0]?.explanation.hydrated).toBe(false);
       expect(h.degraded).toContain('hydrate-failed');
     }
-    expect((await store.get('c'))?.tier).toBe('cold');
+    expect((await store.get(TG, 'c'))?.tier).toBe('cold');
 
     // The lexical store is the floor: its failure still rejects.
     const noLexical: MemoryStore = { ...store, lexical: () => Promise.reject(new Error('fts')) };
@@ -265,8 +267,8 @@ describe('recall', () => {
       makeMemory({ id: 'miss', text: 'database schema' }),
     ]);
     await recall({ text: 'auth port', scope: SCOPE }, { store, config });
-    expect((await store.get('hit'))?.accessLog.count).toBe(1);
-    expect((await store.get('miss'))?.accessLog.count).toBe(0);
+    expect((await store.get(TG, 'hit'))?.accessLog.count).toBe(1);
+    expect((await store.get(TG, 'miss'))?.accessLog.count).toBe(0);
   });
 
   it('recall.reranker-reorders', async () => {

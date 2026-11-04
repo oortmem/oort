@@ -2,6 +2,7 @@ import type { Embedder, Hit, MemoryStore, Reranker, ScopeFilter } from './adapte
 import type { ResolvedConfig } from './config.js';
 import { activation } from './activation.js';
 import { fuse } from './fusion.js';
+import { localGrant } from './grant.js';
 import { scrub } from './scrub.js';
 import type { Memory } from './model.js';
 
@@ -65,6 +66,8 @@ const clock = (): number => performance.now();
  */
 export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallResult> {
   const { store, config } = deps;
+  // The store enforces scope; recall reads and hydrates only inside q.scope.
+  const grant = localGrant(q.scope);
   // Scrub once: the query text reaches embedders and rerankers, which may be remote.
   const text = scrub(q.text).text;
   const now = deps.now ?? new Date();
@@ -105,11 +108,11 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   };
   const v = vector;
   const [lexical, dense] = await Promise.all([
-    timed('lexicalMs', () => store.lexical(text, q.scope, config.recall.lexicalK)),
+    timed('lexicalMs', () => store.lexical(grant, text, config.recall.lexicalK)),
     v === undefined
       ? Promise.resolve<Hit[]>([])
       : timed('denseMs', () =>
-          store.dense(v, q.scope, config.recall.denseK).catch((): Hit[] => {
+          store.dense(grant, v, config.recall.denseK).catch((): Hit[] => {
             degraded.push('dense-failed');
             return [];
           }),
@@ -124,11 +127,11 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   let hydrateFailed = false;
   const loaded = await Promise.all(
     ids.map(async (id): Promise<Memory | null> => {
-      const live = await store.get(id);
+      const live = await store.get(grant, id);
       if (live === null) return null;
       if (live.tier !== 'cold' && !coldIds.has(id)) return live;
       try {
-        const blob = await store.coldGet(id);
+        const blob = await store.coldGet(grant, id);
         // A lost or torn blob: the memory stays cold, lexical-only.
         // TODO(Phase 2): re-embed on hydration when an embedder is present.
         if (!blob?.embedding) return live;
@@ -140,7 +143,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
           embedding: blob.embedding,
           tier: 'warm',
         };
-        await store.upsert(hydrated);
+        await store.upsert(grant, hydrated);
         hydratedIds.add(id);
         return hydrated;
       } catch {
@@ -215,6 +218,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   }
 
   await store.recordAccess(
+    grant,
     out.map((m) => m.id),
     now,
   );

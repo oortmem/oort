@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { filterFor, hookStatus } from '@oortmem/claude-code';
-import { resolveConfig, resolveHome } from '@oortmem/core';
+import { resolveConfig, resolveHome, localGrant } from '@oortmem/core';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
 import { ROLES, ROLE_VENDOR, keyLookup, routeFor, type AdapterRole } from '../credentials.js';
 import { describeProblem, inspectCredentialsFile } from '../credentials-file.js';
@@ -276,7 +276,7 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
   const checks: Check[] = [];
   try {
     const count = await withWired(ctx, async (w) => {
-      const all = await w.store.list(filterFor(w.scope), { validOnly: false });
+      const all = await w.store.list(localGrant(filterFor(w.scope)), { validOnly: false });
       return all.length;
     });
     checks.push({

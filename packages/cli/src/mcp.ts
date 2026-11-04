@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { filterFor } from '@oortmem/claude-code';
-import { VERSION, activation, isCurrent, scrub, type Memory } from '@oortmem/core';
+import { filterFor, grantFor } from '@oortmem/claude-code';
+import { VERSION, activation, isCurrent, scrub, type Memory, localGrant } from '@oortmem/core';
 import { supersedeChain } from './commands/inspect.js';
 import { runRecall } from './commands/recall.js';
 import { FACT_MAX_CHARS, REMEMBER_MAX_FACTS, rememberFacts } from './remember.js';
@@ -193,7 +193,7 @@ export function createOortServer(deps: OortServerDeps): McpServer {
     ({ id }) =>
       guard(async () => {
         const m = await findMemory(w.store, filter, id);
-        await w.store.forget(m.id);
+        await w.store.forget(grantFor(w.scope), m.id);
         return ok({ forgotten: m.id });
       }),
   );
@@ -216,7 +216,7 @@ export function createOortServer(deps: OortServerDeps): McpServer {
       guard(async () => {
         const m = await findMemory(w.store, filter, id);
         if (m.pinned === pinned) return ok({ id: m.id, pinned, changed: false });
-        await w.store.upsert({ ...m, pinned, updatedAt: now().toISOString() });
+        await w.store.upsert(grantFor(w.scope), { ...m, pinned, updatedAt: now().toISOString() });
         return ok({ id: m.id, pinned, changed: true });
       }),
   );
@@ -278,7 +278,7 @@ export function createOortServer(deps: OortServerDeps): McpServer {
       guard(async () => {
         const at = now();
         const from = since === undefined ? -Infinity : Date.parse(since);
-        const all = await w.store.list(filter, { validOnly: false });
+        const all = await w.store.list(localGrant(filter), { validOnly: false });
         const memories = all
           .filter((m) => Date.parse(m.updatedAt) >= from)
           .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))

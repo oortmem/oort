@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { harness, memory } from '../test/helpers.js';
+import { TG } from '@oortmem/core/store-conformance';
 
 const ESC = '\u001b[';
 
@@ -7,7 +8,7 @@ describe('consistent output', () => {
   it('output.one-header-line-for-humans-none-for-json', async () => {
     const h = harness();
     const m = memory({ tier: 'hot' });
-    await h.store.upsert(m);
+    await h.store.upsert(TG, m);
     const human: string[][] = [
       ['stats'],
       ['inspect'],
@@ -44,7 +45,7 @@ describe('consistent output', () => {
   it('output.explain-json-has-ranks-and-timings', async () => {
     const h = harness();
     const m = memory();
-    await h.store.upsert(m);
+    await h.store.upsert(TG, m);
     const r = await h.run(['explain', 'auth service port', '--json']);
     const out = JSON.parse(r.io.stdout) as {
       memories: { rank: number; id: string; tier: string; explanation: { lexicalRank?: number } }[];
@@ -58,7 +59,7 @@ describe('consistent output', () => {
 
   it('output.tiers-coloured-on-a-terminal-unless-no-color', async () => {
     const h = harness();
-    await h.store.upsertMany([memory({ tier: 'hot' }), memory({ tier: 'cold' })]);
+    await h.store.upsertMany(TG, [memory({ tier: 'hot' }), memory({ tier: 'cold' })]);
     const tty = await h.run(['inspect'], { stdoutTTY: true });
     expect(tty.io.stdout).toContain(ESC);
     expect(tty.io.stdout).toContain('● hot');

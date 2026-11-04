@@ -1,4 +1,4 @@
-import { filterFor } from '@oortmem/claude-code';
+import { filterFor, grantFor } from '@oortmem/claude-code';
 import { clip, confirm, findMemory, short, withWired, type Ctx } from '../util.js';
 
 /** `oort forget <id> [--yes]`: deletes a memory everywhere (main record and cold copy). */
@@ -19,7 +19,7 @@ export async function forgetCommand(
       ctx.io.out('Kept.\n');
       return 0;
     }
-    await w.store.forget(m.id);
+    await w.store.forget(grantFor(w.scope), m.id);
     ctx.io.out(`Forgot ${m.id}.\n`);
     return 0;
   });

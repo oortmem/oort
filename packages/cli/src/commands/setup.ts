@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as clack from '@clack/prompts';
-import { HOOK_EVENTS, installHooks } from '@oortmem/claude-code';
+import { grantFor, HOOK_EVENTS, installHooks } from '@oortmem/claude-code';
 import {
   localScope,
   recall,
@@ -10,6 +10,7 @@ import {
   type Memory,
   type Scope,
   type ScopeFilter,
+  localGrant,
 } from '@oortmem/core';
 import {
   HOSTS,
@@ -265,6 +266,8 @@ async function demo(w: Wired, ui: Ui): Promise<string> {
     agentId: scope.agentId,
     projectIds: [projectId],
   };
+  // The demo reads and writes only its throwaway project.
+  const grant = localGrant(filter);
   const fact = 'The Oort setup demo word is nebula.';
   const lines: string[] = [];
   try {
@@ -277,7 +280,7 @@ async function demo(w: Wired, ui: Ui): Promise<string> {
         e instanceof Refusal
           ? 'directly (no keys yet, so the write path was skipped)'
           : `directly (${(e as Error).message})`;
-      await w.store.upsert(directMemory(fact, scope, new Date()));
+      await w.store.upsert(grant, directMemory(fact, scope, new Date()));
     }
     lines.push(ui.ok(`remembered "${fact}" ${via}`));
     const r = await recall(
@@ -297,8 +300,8 @@ async function demo(w: Wired, ui: Ui): Promise<string> {
       lines.push(ui.warn('recall did not find it; run `oort explain "demo word"` to see why'));
     }
   } finally {
-    const left = await w.store.list(filter, { validOnly: false });
-    for (const m of left) await w.store.forget(m.id);
+    const left = await w.store.list(grant, { validOnly: false });
+    for (const m of left) await w.store.forget(grant, m.id);
     lines.push(ui.ok(`forgot it: the throwaway scope ${projectId} is empty again`));
   }
   return lines.join('\n');

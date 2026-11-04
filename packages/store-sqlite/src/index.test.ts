@@ -14,6 +14,8 @@ import {
   vec,
 } from '@oortmem/core/store-conformance';
 import { ColdBlobCorruptError, createColdCodec, openSqliteStore } from './index.js';
+import { TG } from '@oortmem/core/store-conformance';
+import { localGrant } from '@oortmem/core';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-store-sqlite-'));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -61,14 +63,20 @@ describe('sqlite store', () => {
     const text = 'Staging deploys use the vault path secret/teams/payments-blue';
     const embedding = vec(9, 9, 9, 9);
     await store.upsert(
+      TG,
       makeMemory({ id: 'private', text, embedding, scope: localScope('p-private') }),
     );
-    await store.upsert(makeMemory({ id: 'other', text, embedding, scope: localScope('p-other') }));
+    await store.upsert(
+      TG,
+      makeMemory({ id: 'other', text, embedding, scope: localScope('p-other') }),
+    );
     const filter: ScopeFilter = { ...LOCAL, projectIds: [null, 'p-other'] };
-    expect(ids(await store.lexical(text, filter, 10))).toEqual(['other']);
-    expect(ids(await store.lexical('secret/teams/payments-blue', filter, 10))).toEqual(['other']);
-    expect(ids(await store.dense(embedding, filter, 10))).toEqual(['other']);
-    expect(ids(await store.list(filter))).toEqual(['other']);
+    expect(ids(await store.lexical(localGrant(filter), text, 10))).toEqual(['other']);
+    expect(ids(await store.lexical(localGrant(filter), 'secret/teams/payments-blue', 10))).toEqual([
+      'other',
+    ]);
+    expect(ids(await store.dense(localGrant(filter), embedding, 10))).toEqual(['other']);
+    expect(ids(await store.list(localGrant(filter)))).toEqual(['other']);
     await store.close();
   });
 
@@ -91,13 +99,13 @@ describe('sqlite store', () => {
     const m = makeMemory({ id: 'm1', text: 'persisted claim', embedding: vec(3, -1, 4, -1) });
     const at = new Date('2026-11-03T09:00:00.000Z');
     const a = await openSqliteStore(optsIn(dir));
-    await a.upsert(m);
-    await a.recordAccess(['m1'], at);
-    await a.setCursor('import:s1', '7');
+    await a.upsert(TG, m);
+    await a.recordAccess(TG, ['m1'], at);
+    await a.setCursor(TG, 'import:s1', '7');
     await a.close();
 
     const b = await openSqliteStore(optsIn(dir));
-    const got = await b.get('m1');
+    const got = await b.get(TG, 'm1');
     expect(got?.embedding).toEqual(vec(3, -1, 4, -1));
     expect(got?.accessLog).toEqual({
       count: 1,
@@ -106,16 +114,16 @@ describe('sqlite store', () => {
       compactedAt: null,
     });
     expect(got).toEqual({ ...m, accessLog: got?.accessLog });
-    expect(await b.getCursor('import:s1')).toBe('7');
-    expect(ids(await b.dense(vec(3, -1, 4, -1), LOCAL, 10))).toEqual(['m1']);
-    expect(ids(await b.lexical('persisted', LOCAL, 10))).toEqual(['m1']);
+    expect(await b.getCursor(TG, 'import:s1')).toBe('7');
+    expect(ids(await b.dense(localGrant(LOCAL), vec(3, -1, 4, -1), 10))).toEqual(['m1']);
+    expect(ids(await b.lexical(localGrant(LOCAL), 'persisted', 10))).toEqual(['m1']);
     await b.close();
   });
 
   it('store.fts-handles-operator-input', async () => {
     const store = await openSqliteStore(optsIn(freshDir()));
-    await store.upsert(makeMemory({ id: 'foo', text: 'the foo flag is on' }));
-    await store.upsert(makeMemory({ id: 'quote', text: 'a"b in a string' }));
+    await store.upsert(TG, makeMemory({ id: 'foo', text: 'the foo flag is on' }));
+    await store.upsert(TG, makeMemory({ id: 'quote', text: 'a"b in a string' }));
     const inputs = [
       '"foo" OR bar*',
       'a"b',
@@ -129,23 +137,25 @@ describe('sqlite store', () => {
       '---',
     ];
     for (const q of inputs) {
-      await expect(store.lexical(q, LOCAL, 10)).resolves.toBeInstanceOf(Array);
+      await expect(store.lexical(localGrant(LOCAL), q, 10)).resolves.toBeInstanceOf(Array);
     }
-    expect(ids(await store.lexical('"foo" OR bar*', LOCAL, 10))).toEqual(['foo']);
-    expect(ids(await store.lexical('a"b', LOCAL, 10))).toContain('quote');
-    expect(await store.lexical('---', LOCAL, 10)).toEqual([]);
+    expect(ids(await store.lexical(localGrant(LOCAL), '"foo" OR bar*', 10))).toEqual(['foo']);
+    expect(ids(await store.lexical(localGrant(LOCAL), 'a"b', 10))).toContain('quote');
+    expect(await store.lexical(localGrant(LOCAL), '---', 10)).toEqual([]);
     await store.close();
   });
 
   it('store.lexical-or-semantics-ranks-more-matches-first', async () => {
     const store = await openSqliteStore(optsIn(freshDir()));
-    await store.upsert(makeMemory({ id: 'one', text: 'redis cache warmed' }));
-    await store.upsert(makeMemory({ id: 'two', text: 'redis cache eviction policy' }));
-    await store.upsert(makeMemory({ id: 'none', text: 'nothing relevant here' }));
-    const hits = await store.lexical('redis eviction policy', LOCAL, 10);
+    await store.upsert(TG, makeMemory({ id: 'one', text: 'redis cache warmed' }));
+    await store.upsert(TG, makeMemory({ id: 'two', text: 'redis cache eviction policy' }));
+    await store.upsert(TG, makeMemory({ id: 'none', text: 'nothing relevant here' }));
+    const hits = await store.lexical(localGrant(LOCAL), 'redis eviction policy', 10);
     expect(ids(hits)).toEqual(['two', 'one']);
     expect(hits[0]?.score).toBeGreaterThan(hits[1]?.score ?? Infinity);
-    expect(ids(await store.lexical('redis eviction policy', LOCAL, 1))).toEqual(['two']);
+    expect(ids(await store.lexical(localGrant(LOCAL), 'redis eviction policy', 1))).toEqual([
+      'two',
+    ]);
     await store.close();
   });
 
@@ -154,11 +164,12 @@ describe('sqlite store', () => {
     // Ten out-of-scope rows sit nearer the query than the one in-scope row.
     for (let i = 0; i < 10; i++) {
       await store.upsert(
+        TG,
         makeMemory({ id: `far-${i}`, embedding: vec(100, i, 0, 0), scope: localScope('p2') }),
       );
     }
-    await store.upsert(makeMemory({ id: 'mine', embedding: vec(10, 100, 0, 0) }));
-    expect(ids(await store.dense(vec(100, 0, 0, 0), LOCAL, 1))).toEqual(['mine']);
+    await store.upsert(TG, makeMemory({ id: 'mine', embedding: vec(10, 100, 0, 0) }));
+    expect(ids(await store.dense(localGrant(LOCAL), vec(100, 0, 0, 0), 1))).toEqual(['mine']);
     await store.close();
   });
 
@@ -170,34 +181,34 @@ describe('sqlite store', () => {
       stub: 'crossing stub',
       embedding: vec(1, 2, 3, 4),
     });
-    await store.upsert(m);
-    await store.setTier('m1', 'cold');
-    expect(await store.lexical('zebra-crossing', LOCAL, 10)).toEqual([]);
-    expect(await store.lexical('crossing', LOCAL, 10)).toEqual([
+    await store.upsert(TG, m);
+    await store.setTier(TG, 'm1', 'cold');
+    expect(await store.lexical(localGrant(LOCAL), 'zebra-crossing', 10)).toEqual([]);
+    expect(await store.lexical(localGrant(LOCAL), 'crossing', 10)).toEqual([
       expect.objectContaining({ id: 'm1', tier: 'cold' }),
     ]);
-    expect(await store.dense(vec(1, 2, 3, 4), LOCAL, 10)).toEqual([]);
-    expect(await store.get('m1')).toEqual({ ...m, tier: 'cold' });
+    expect(await store.dense(localGrant(LOCAL), vec(1, 2, 3, 4), 10)).toEqual([]);
+    expect(await store.get(TG, 'm1')).toEqual({ ...m, tier: 'cold' });
 
-    await store.setTier('m1', 'warm');
-    expect(ids(await store.lexical('zebra-crossing', LOCAL, 10))).toEqual(['m1']);
-    expect(ids(await store.dense(vec(1, 2, 3, 4), LOCAL, 10))).toEqual(['m1']);
+    await store.setTier(TG, 'm1', 'warm');
+    expect(ids(await store.lexical(localGrant(LOCAL), 'zebra-crossing', 10))).toEqual(['m1']);
+    expect(ids(await store.dense(localGrant(LOCAL), vec(1, 2, 3, 4), 10))).toEqual(['m1']);
     await store.close();
   });
 
   it('store.upsert-many-is-atomic', async () => {
     const store = await openSqliteStore(optsIn(freshDir()));
     const before = makeMemory({ id: 'a', text: 'original' });
-    await store.upsert(before);
+    await store.upsert(TG, before);
     const err = await rejection(
-      store.upsertMany([
+      store.upsertMany(TG, [
         { ...before, text: 'changed' },
         makeMemory({ id: 'b', embedding: vec(1, 2, 3, 4, 5) }),
       ]),
     );
     expect(err).toBeInstanceOf(RangeError);
-    expect(await store.get('a')).toEqual(before);
-    expect(await store.get('b')).toBeNull();
+    expect(await store.get(TG, 'a')).toEqual(before);
+    expect(await store.get(TG, 'b')).toBeNull();
     await store.close();
   });
 
@@ -211,15 +222,15 @@ describe('sqlite store', () => {
     // Hydrating (a warm upsert) drops the blob; the next eviction writes a new one.
     await seedCold(store, makeMemory({ id: 'c1', text: 'second', embedding: vec(4, 3, 2, 1) }));
     expect(blobFiles(dir)).toHaveLength(1);
-    expect((await store.coldGet('c1'))?.text).toBe('second');
+    expect((await store.coldGet(TG, 'c1'))?.text).toBe('second');
 
-    await store.forget('c1');
+    await store.forget(TG, 'c1');
     expect(blobFiles(dir)).toEqual([]);
 
     // Ids that are not safe file names never escape the cold directory.
     const odd = makeMemory({ id: '../Escape/ME', embedding: vec(1, 2, 3, 4) });
     await seedCold(store, odd);
-    expect((await store.coldGet(odd.id))?.embedding).toEqual(vec(1, 2, 3, 4));
+    expect((await store.coldGet(TG, odd.id))?.embedding).toEqual(vec(1, 2, 3, 4));
     expect(blobFiles(dir)).toEqual([
       expect.stringMatching(/^~[0-9a-f]{64}\.\d+-[0-9a-f]{8}\.zst$/),
     ]);
@@ -231,11 +242,11 @@ describe('sqlite store', () => {
     const dir = freshDir();
     const store = await openSqliteStore(optsIn(dir));
     const err = await rejection(
-      store.coldPut(makeMemory({ id: 'g1', embedding: vec(1, 2, 3, 4, 5, 6, 7) })),
+      store.coldPut(TG, makeMemory({ id: 'g1', embedding: vec(1, 2, 3, 4, 5, 6, 7) })),
     );
     expect(err).toBeInstanceOf(RangeError);
     expect((err as Error).message).toContain('7');
-    expect(await store.get('g1')).toBeNull();
+    expect(await store.get(TG, 'g1')).toBeNull();
     expect(blobFiles(dir)).toEqual([]);
     await store.close();
   });
@@ -255,9 +266,9 @@ describe('sqlite store', () => {
         blobFiles(dir).find((f) => f.startsWith(`${id}.`))!,
       );
       fs.writeFileSync(file, damage(fs.readFileSync(file)));
-      expect(await store.coldGet(id)).toBeNull();
+      expect(await store.coldGet(TG, id)).toBeNull();
       // The main record is untouched: hydration falls back to it.
-      expect((await store.get(id))?.tier).toBe('cold');
+      expect((await store.get(TG, id))?.tier).toBe('cold');
     }
     expect(messages).toEqual([
       'oort store: cold blob for memory truncated is corrupt; ignoring it',
@@ -276,8 +287,8 @@ describe('sqlite store', () => {
     m: Memory,
   ): Promise<Memory> {
     await seedCold(store, m);
-    await store.setTier(m.id, 'warm');
-    const live = await store.get(m.id);
+    await store.setTier(TG, m.id, 'warm');
+    const live = await store.get(TG, m.id);
     if (live === null) throw new Error(`lost ${m.id}`);
     return live;
   }
@@ -294,12 +305,12 @@ describe('sqlite store', () => {
     raw.exec(`CREATE TRIGGER fail_cold BEFORE UPDATE ON cold_index
       BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
     raw.close();
-    const err = await rejection(store.coldPut({ ...live, embedding: vec(4, 3, 2, 1) }));
+    const err = await rejection(store.coldPut(TG, { ...live, embedding: vec(4, 3, 2, 1) }));
     expect((err as Error).message).toContain('injected failure');
 
     expect(blobFiles(dir)).toEqual(before);
-    expect(await store.coldGet('c1')).toEqual(first);
-    expect(await store.get('c1')).toEqual(live);
+    expect(await store.coldGet(TG, 'c1')).toEqual(first);
+    expect(await store.get(TG, 'c1')).toEqual(live);
     await store.close();
   });
 
@@ -310,7 +321,7 @@ describe('sqlite store', () => {
     const c1 = await warmWithPreviousBlob(store, first);
     const c2 = makeMemory({ id: 'c2', embedding: vec(1, 1, 1, 1) });
     const c3 = makeMemory({ id: 'c3', embedding: vec(2, 2, 2, 2) });
-    await store.upsertMany([c2, c3]);
+    await store.upsertMany(TG, [c2, c3]);
     const before = blobFiles(dir);
 
     // Fail the third row's cold_index write, after the first two were written in the transaction.
@@ -318,15 +329,17 @@ describe('sqlite store', () => {
     raw.exec(`CREATE TRIGGER fail_cold BEFORE INSERT ON cold_index
       WHEN NEW.id = 'c3' BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
     raw.close();
-    const err = await rejection(store.coldPutMany([c2, { ...c1, embedding: vec(4, 3, 2, 1) }, c3]));
+    const err = await rejection(
+      store.coldPutMany(TG, [c2, { ...c1, embedding: vec(4, 3, 2, 1) }, c3]),
+    );
     expect((err as Error).message).toContain('injected failure');
 
     expect(blobFiles(dir)).toEqual(before);
-    expect(await store.coldGet('c1')).toEqual(first);
-    expect(await store.get('c1')).toEqual(c1);
-    expect(await store.get('c2')).toEqual(c2);
-    expect(await store.coldGet('c2')).toBeNull();
-    expect(await store.get('c3')).toEqual(c3);
+    expect(await store.coldGet(TG, 'c1')).toEqual(first);
+    expect(await store.get(TG, 'c1')).toEqual(c1);
+    expect(await store.get(TG, 'c2')).toEqual(c2);
+    expect(await store.coldGet(TG, 'c2')).toBeNull();
+    expect(await store.get(TG, 'c3')).toEqual(c3);
     await store.close();
   });
 
@@ -342,17 +355,17 @@ describe('sqlite store', () => {
       makeMemory({ id: 'c2', embedding: vec(1, 2, 3, 4) }),
     );
     const c3 = makeMemory({ id: 'c3', embedding: vec(1, 1, 1, 1) });
-    await store.upsert(c3);
+    await store.upsert(TG, c3);
     const previous = blobFiles(dir);
     expect(previous).toHaveLength(2);
     const again = vec(4, 3, 2, 1);
     expect(
-      await store.coldPutMany([{ ...c1, embedding: again }, { ...c2, embedding: again }, c3]),
+      await store.coldPutMany(TG, [{ ...c1, embedding: again }, { ...c2, embedding: again }, c3]),
     ).toEqual({ skipped: [] });
     const now = blobFiles(dir);
     expect(now).toHaveLength(3);
     for (const f of previous) expect(now).not.toContain(f);
-    expect((await store.coldGet('c1'))?.embedding).toEqual(again);
+    expect((await store.coldGet(TG, 'c1'))?.embedding).toEqual(again);
     await store.close();
   });
 
@@ -361,18 +374,18 @@ describe('sqlite store', () => {
     const store = await openSqliteStore(optsIn(dir));
     const kept = makeMemory({ id: 'kept', embedding: vec(1, 2, 3, 4) });
     const raced = makeMemory({ id: 'raced', embedding: vec(4, 3, 2, 1) });
-    await store.upsertMany([kept, raced]);
+    await store.upsertMany(TG, [kept, raced]);
     // `raced` changes after the snapshot was read: its blob is written, then skipped.
     const later = {
       ...raced,
       validTo: new Date().toISOString(),
       updatedAt: '2999-01-01T00:00:00.000Z',
     };
-    await store.upsert(later);
-    expect(await store.coldPutMany([kept, raced])).toEqual({ skipped: ['raced'] });
+    await store.upsert(TG, later);
+    expect(await store.coldPutMany(TG, [kept, raced])).toEqual({ skipped: ['raced'] });
     expect(blobFiles(dir)).toEqual([expect.stringMatching(/^kept\./)]);
-    expect(await store.get('raced')).toEqual(later);
-    expect(await store.coldGet('raced')).toBeNull();
+    expect(await store.get(TG, 'raced')).toEqual(later);
+    expect(await store.coldGet(TG, 'raced')).toBeNull();
     await store.close();
   });
 
@@ -384,8 +397,8 @@ describe('sqlite store', () => {
     const fromA = { ...m, embedding: vec(1, 1, 1, 1) };
     const fromB = { ...m, embedding: vec(2, 2, 2, 2) };
     for (let i = 0; i < 20; i++) {
-      await a.upsert(m); // warm again: drops the last round's cold copy
-      const results = await Promise.all([a.coldPut(fromA), b.coldPut(fromB)]);
+      await a.upsert(TG, m); // warm again: drops the last round's cold copy
+      const results = await Promise.all([a.coldPut(TG, fromA), b.coldPut(TG, fromB)]);
       // Both read the same snapshot; exactly one eviction lands, the other is skipped.
       expect(results.flatMap((r) => r.skipped)).toEqual(['c1']);
     }
@@ -397,7 +410,7 @@ describe('sqlite store', () => {
     const messages: string[] = [];
     const store = await openSqliteStore({ ...optsIn(dir), log: (x) => messages.push(x) }); // sweeps
     expect(messages).toEqual([]); // the skipped blobs were unlinked, not left for the sweep
-    const got = await store.coldGet('c1');
+    const got = await store.coldGet(TG, 'c1');
     expect([fromA, fromB]).toContainEqual(got);
     expect(got?.embedding).toHaveLength(CONFORMANCE_DIMENSION);
     expect(blobFiles(dir)).toHaveLength(1);
@@ -415,7 +428,7 @@ describe('sqlite store', () => {
       const busy = expect.objectContaining({ code: expect.stringMatching(/^SQLITE_BUSY/) });
       // A write on an open handle gives up after ~250 ms instead of the 5 s default.
       let t = performance.now();
-      await expect(open.upsert(makeMemory({ id: 'w' }))).rejects.toEqual(busy);
+      await expect(open.upsert(TG, makeMemory({ id: 'w' }))).rejects.toEqual(busy);
       let ms = performance.now() - t;
       expect(ms).toBeGreaterThanOrEqual(200);
       expect(ms).toBeLessThan(750);
@@ -426,13 +439,13 @@ describe('sqlite store', () => {
       expect(ms).toBeGreaterThanOrEqual(200);
       expect(ms).toBeLessThan(750);
       // Reads never wait on a writer under WAL.
-      expect(await open.list(LOCAL, { validOnly: false })).toEqual([]);
+      expect(await open.list(localGrant(LOCAL), { validOnly: false })).toEqual([]);
     } finally {
       holder.exec('ROLLBACK');
       holder.close();
     }
-    await open.upsert(makeMemory({ id: 'w' }));
-    expect(await open.get('w')).not.toBeNull();
+    await open.upsert(TG, makeMemory({ id: 'w' }));
+    expect(await open.get(TG, 'w')).not.toBeNull();
     await open.close();
     await expect(openSqliteStore({ ...opts, busyTimeoutMs: -1 })).rejects.toThrow(RangeError);
   });
@@ -451,7 +464,7 @@ describe('sqlite store', () => {
     const errors = (await Promise.all([run('W1'), run('W2')])).flat();
     expect(errors).toEqual([]);
     const store = await openSqliteStore(opts);
-    expect(await store.list(LOCAL, { validOnly: false })).toHaveLength(400);
+    expect(await store.list(localGrant(LOCAL), { validOnly: false })).toHaveLength(400);
     await store.close();
   });
 
@@ -491,7 +504,7 @@ describe('sqlite store', () => {
     expect(messages).toEqual([
       'oort store: removed 1 orphan cold blob(s) and 1 stale temp file(s)',
     ]);
-    expect((await store.coldGet('kept'))?.embedding).toEqual(vec(1, 2, 3, 4));
+    expect((await store.coldGet(TG, 'kept'))?.embedding).toEqual(vec(1, 2, 3, 4));
     await store.close();
 
     // Nothing left to sweep: no notice.
@@ -531,7 +544,7 @@ describe('sqlite store', () => {
       dimension: CONFORMANCE_DIMENSION,
       log: (m) => messages.push(m),
     });
-    await store.upsert(makeMemory({ id: 'm1', embedding: vec(1, 2, 3, 4) }));
+    await store.upsert(TG, makeMemory({ id: 'm1', embedding: vec(1, 2, 3, 4) }));
     await seedCold(store, makeMemory({ id: 'c1', embedding: vec(1, 2, 3, 4) }));
     const mode = (p: string) => (fs.statSync(p).mode & 0o777).toString(8);
     expect(mode(project)).toBe('755');
@@ -566,10 +579,10 @@ describe('sqlite store', () => {
     const dir = freshDir();
     const a = await openSqliteStore(optsIn(dir));
     const b = await openSqliteStore(optsIn(dir));
-    await a.upsert(makeMemory({ id: 'm1', text: 'written by a', embedding: vec(1, 1, 1, 1) }));
-    await b.recordAccess(['m1'], new Date('2026-11-03T10:00:00.000Z'));
-    expect((await a.get('m1'))?.accessLog.count).toBe(1);
-    expect(ids(await b.lexical('written', LOCAL, 10))).toEqual(['m1']);
+    await a.upsert(TG, makeMemory({ id: 'm1', text: 'written by a', embedding: vec(1, 1, 1, 1) }));
+    await b.recordAccess(TG, ['m1'], new Date('2026-11-03T10:00:00.000Z'));
+    expect((await a.get(TG, 'm1'))?.accessLog.count).toBe(1);
+    expect(ids(await b.lexical(localGrant(LOCAL), 'written', 10))).toEqual(['m1']);
     await a.close();
     await b.close();
   });
