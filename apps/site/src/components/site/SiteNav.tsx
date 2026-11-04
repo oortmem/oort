@@ -75,7 +75,7 @@ export function SiteNav() {
 export function SiteFooter() {
   return (
     <footer className="border-t border-border">
-      <div className="mx-auto grid max-w-7xl gap-10 px-6 py-14 md:grid-cols-4">
+      <div className="mx-auto grid max-w-7xl gap-10 px-6 py-14 md:grid-cols-5">
         <div className="space-y-3">
           <Logo compact />
           <p className="text-sm text-muted-foreground">
@@ -97,6 +97,16 @@ export function SiteFooter() {
             [
               ['/enterprise', 'Enterprise scenario'],
               ['/dashboard', 'Console demo'],
+            ],
+          ],
+          [
+            'Legal',
+            [
+              ['/legal/privacy', 'Privacy'],
+              ['/legal/terms', 'Terms of use'],
+              ['/legal/acceptable-use', 'Acceptable use'],
+              ['/legal/cookies', 'Cookies'],
+              ['/legal/subprocessors', 'Subprocessors'],
             ],
           ],
           [

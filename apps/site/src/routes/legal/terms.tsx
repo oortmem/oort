@@ -1,0 +1,55 @@
+import { createFileRoute } from '@tanstack/react-router';
+import { LegalPage, Contact } from '@/components/site/LegalPage';
+import { legal } from '@/lib/legal';
+
+export const Route = createFileRoute('/legal/terms')({
+  head: () => ({
+    meta: [{ title: 'Terms of use (draft) | Oort Cloud' }, { name: 'robots', content: 'noindex' }],
+  }),
+  component: Page,
+});
+
+function Page() {
+  void legal;
+  void Contact;
+  return (
+    <LegalPage title="Terms of use">
+      <p>
+        These terms cover your use of the Oort website, run by <strong>{legal.entity}</strong>,{' '}
+        {legal.address}, {legal.country}. Questions: <Contact />.
+      </p>
+      <h2>The site</h2>
+      <p>
+        The site describes Oort, an open-source agent memory engine. Some pages are demos with
+        sample data (the console, the sign-in page and the Explorer concept). Features marked
+        Planned or Concept are not built yet. Prices are a launch proposal and may change.
+      </p>
+      <h2>Open source software</h2>
+      <p>
+        The Oort code is licensed under Apache 2.0 in its repository. That license, not these terms,
+        governs the code.
+      </p>
+      <h2>Your use of the site</h2>
+      <p>
+        Use the site lawfully and follow the{' '}
+        <a href="/legal/acceptable-use">acceptable use policy</a>. Do not try to break, overload or
+        probe it.
+      </p>
+      <h2>No warranty</h2>
+      <p>
+        The site and demos are provided as they are. To the extent the law allows, we are not liable
+        for loss from using them. Nothing here limits liability that cannot be limited by law.
+      </p>
+      <h2>Changes and law</h2>
+      <p>
+        We may update these terms and will change the date above. They are governed by the law of{' '}
+        {legal.country}.
+      </p>
+      <h2>Hosted service</h2>
+      <p>
+        Terms of service and a data processing agreement for hosted Oort Cloud will be published
+        before it opens. They are not part of these terms.
+      </p>
+    </LegalPage>
+  );
+}
