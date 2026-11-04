@@ -139,6 +139,31 @@ describe('fusion', () => {
     expect(knownAt('2026-11-04T00:00:00.000Z')).toEqual(['right']);
   });
 
+  it('fusion.known-at-hides-a-fact-after-its-own-end (review 10)', () => {
+    // "Freeze until 11-02", expired by consolidation on 11-03: its end was known from the start.
+    const freeze = makeMemory({
+      id: 'freeze',
+      validFrom: START,
+      validTo: '2026-11-02T00:00:00.000Z',
+      createdAt: START,
+      expiredAt: '2026-11-03T06:00:00.000Z',
+      endReason: 'expired',
+    });
+    const bounded = makeMemory({
+      id: 'bounded',
+      validFrom: START,
+      validTo: '2026-11-02T00:00:00.000Z',
+      createdAt: START,
+    });
+    const at = (x: string) =>
+      fuse([hits('freeze', 'bounded')], byId(freeze, bounded), NOW, {
+        activation: P,
+        view: { mode: 'known-at', knownAt: x },
+      }).map((r) => r.id);
+    expect(at('2026-11-02T12:00:00.000Z')).toEqual([]);
+    expect(at('2026-11-01T12:00:00.000Z')).toEqual(['freeze', 'bounded']);
+  });
+
   it('fusion.history-keeps-every-version-but-corrected-ones', () => {
     const old = makeMemory({
       id: 'old',

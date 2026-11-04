@@ -3,7 +3,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AWS_KEY, harness, memory, type Harness } from '../test/helpers.js';
-import { INSTRUCTIONS, TOOL_NAMES, createOortServer } from './mcp.js';
+import { INSTRUCTIONS, TOOL_NAMES, createOortServer, localBackend } from './mcp.js';
+import type { CloudClient } from './cloud.js';
 import { TG } from '@oortmem/core/store-conformance';
 
 type Era = 'legacy' | 'modern';
@@ -159,6 +160,28 @@ describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
     expect(both.isError).toBe(true);
   });
 
+  it('mcp.recall-mode-needs-its-own-date (review 12)', async () => {
+    const { client } = await connect(era, { adapters: false });
+    for (const args of [
+      { mode: 'as-of' },
+      { mode: 'known-at' },
+      { mode: 'as-of', known_at: '2026-04-01' },
+      { mode: 'known-at', as_of: '2026-04-01' },
+      { as_of: '2026-04-01', known_at: '2026-04-01' },
+    ]) {
+      const r = await client.callTool({
+        name: 'recall',
+        arguments: { query: 'auth service port', ...args },
+      });
+      expect(r.isError, JSON.stringify(args)).toBe(true);
+    }
+    const ok = await client.callTool({
+      name: 'recall',
+      arguments: { query: 'auth service port', mode: 'as-of', as_of: '2026-04-01' },
+    });
+    expect(ok.isError).not.toBe(true);
+  });
+
   it('mcp.forget-requires-an-id', async () => {
     const { client, h } = await connect(era);
     const { tools } = await client.listTools();
@@ -275,5 +298,22 @@ describe('oort mcp tools', () => {
       expect(text(r), name).not.toContain('another project fact');
     }
     expect(await h.store.get(TG, other.id)).not.toBeNull();
+  });
+});
+
+describe('oort mcp over a cloud that does not report the time mode (review 12)', () => {
+  it('mcp.recall-says-when-a-requested-mode-was-not-applied', async () => {
+    const h = harness({ adapters: false });
+    const w = await h.wire(h.cwd);
+    const m = memory();
+    const cloud = {
+      recall: async () => ({ memories: [{ ...m, explanation: {} }], timings: {} }),
+    } as unknown as CloudClient;
+    const backend = localBackend({ wired: { ...w, mode: 'cloud', cloud } });
+    const asked = await backend.recall({ query: 'auth service port', mode: 'history', limit: 5 });
+    expect(asked).toMatchObject({ mode_unsupported: true, mode: 'not reported' });
+    const plain = await backend.recall({ query: 'auth service port', limit: 5 });
+    expect(plain.mode_unsupported).toBeUndefined();
+    await w.store.close();
   });
 });

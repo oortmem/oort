@@ -1,11 +1,18 @@
 import { uiFor } from '../ui.js';
 import { age, clip, degradedHint, fixed, scopeLabel, short, withWired, type Ctx } from '../util.js';
 import type { RecallResult } from '@oortmem/core';
-import { runRecall, temporalView, type TemporalFlags } from './recall.js';
+import {
+  runRecall,
+  temporalView,
+  viewIgnored,
+  viewIgnoredWarning,
+  type TemporalFlags,
+} from './recall.js';
 
 /** The temporal view in a few words: `current`, `as-of 2026-04-01`. */
 export function timeMode(t: RecallResult['temporal']): string {
-  if (t === undefined) return 'current';
+  // A backend that reports no view (an older cloud API) gets no claim either way.
+  if (t === undefined) return 'not reported';
   const at = t.asOf ?? t.knownAt;
   return at === undefined ? t.mode : `${t.mode} ${at.slice(0, 10)}`;
 }
@@ -26,6 +33,7 @@ export async function explainCommand(
     const now = new Date();
     const result = await runRecall(w, query, view, now);
     degradedHint(ctx.io, w, result.degraded);
+    if (viewIgnored(view, result)) ctx.io.err(viewIgnoredWarning(view));
     if (opts.json === true) {
       const memories = result.memories.map((m, i) => ({
         rank: i + 1,
