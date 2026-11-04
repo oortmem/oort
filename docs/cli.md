@@ -682,6 +682,12 @@ A repository's `oort.config.json` can name a `project.id`. That id is ignored
 until you link it, because a cloned repository could otherwise read another
 project's memories. See `docs/claude-code.md`.
 
+The derived id comes from the main repository root, resolved the way the
+operating system sees it: symlinks followed and the case as stored on disk. A
+repository reached through a symlink, or typed with other capitalisation on
+macOS, is one project. A worktree whose main checkout was moved or deleted
+gets an id of its own until `git worktree repair` reconnects it.
+
 ## Other commands
 
 - `oort init [--project]` writes `~/.oort/config.json` with the defaults, and

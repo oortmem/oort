@@ -4,7 +4,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  canonicalPath,
   CONFIGURED_ID_PREFIX,
+  findGitRoot,
   linkProject,
   localScope,
   PROJECT_LINKS_FILE,
@@ -16,8 +18,30 @@ import {
 } from './scope.js';
 
 function tmp(): string {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'oort-scope-')));
+  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'oort-scope-')));
 }
+
+/** `p` with its last component's case swapped, or undefined when the swap changes nothing. */
+function recased(p: string): string | undefined {
+  const base = path.basename(p);
+  const swapped = [...base]
+    .map((c) => (c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()))
+    .join('');
+  return swapped === base ? undefined : path.join(path.dirname(p), swapped);
+}
+
+/** Whether the temp directory's filesystem ignores case (APFS and HFS+ defaults, NTFS). */
+const caseInsensitiveTmp = ((): boolean => {
+  const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-CaseProbe-'));
+  try {
+    const other = recased(probe);
+    return other !== undefined && fs.existsSync(other);
+  } finally {
+    fs.rmSync(probe, { recursive: true, force: true });
+  }
+})();
+/** Why the case tests skip on a case-sensitive filesystem. */
+const CASE_SKIP = 'on a case-sensitive one, two spellings are two directories';
 
 describe('scope', () => {
   it('projectIdFor-git-root', () => {
@@ -243,6 +267,127 @@ describe('scope', () => {
       expect(configured).not.toBe(projectIdFor(main));
       expect(configured?.includes(':')).toBe(true);
     }
+  });
+
+  it('scope.canonical-path-normalises-symlinks-case-and-missing-paths', () => {
+    const base = tmp();
+    const real = path.join(base, 'RealDir');
+    fs.mkdirSync(path.join(real, 'Sub'), { recursive: true });
+    fs.symlinkSync(real, path.join(base, 'alias'));
+    // A symlink resolves to its target; an existing path keeps its on-disk spelling.
+    expect(canonicalPath(path.join(base, 'alias', 'Sub'))).toBe(path.join(real, 'Sub'));
+    expect(canonicalPath(real)).toBe(real);
+    // Relative input is resolved first; a path that does not exist comes back resolved, not thrown.
+    const missing = path.join(base, 'gone', 'x');
+    expect(canonicalPath(missing)).toBe(missing);
+    expect(canonicalPath(path.join(missing, '..', 'y'))).toBe(path.join(base, 'gone', 'y'));
+  });
+
+  it.skipIf(!caseInsensitiveTmp)(
+    `scope.canonical-path-folds-case (case-insensitive fs only: ${CASE_SKIP})`,
+    () => {
+      const base = tmp();
+      const real = path.join(base, 'MixedCase');
+      fs.mkdirSync(path.join(real, 'Inner'), { recursive: true });
+      // Whatever case was typed, the result is the spelling on disk.
+      expect(canonicalPath(path.join(base, 'mixedcase', 'inner'))).toBe(path.join(real, 'Inner'));
+      expect(canonicalPath(path.join(base, 'MIXEDCASE'))).toBe(real);
+    },
+  );
+
+  it.skipIf(!caseInsensitiveTmp)(
+    `scope.repo-reached-with-different-case-has-one-id (case-insensitive fs only: ${CASE_SKIP})`,
+    () => {
+      const main = repo('CaseRepo');
+      fs.mkdirSync(path.join(main, 'src'));
+      const wt = worktreeOf(main, 'CaseWt');
+      const id = projectIdFor(main);
+      const lowerMain = recased(main) ?? '';
+      const lowerWt = recased(wt) ?? '';
+      expect(fs.existsSync(lowerMain)).toBe(true);
+      // The main checkout and its worktree, each typed with the wrong case, map to one id.
+      expect(projectRootFor(path.join(lowerMain, 'src'))).toBe(main);
+      expect(projectIdFor(path.join(lowerMain, 'src'))).toBe(id);
+      expect(findGitRoot(lowerWt)).toBe(wt);
+      expect(projectIdFor(path.join(lowerWt, 'src'))).toBe(id);
+      // A binding made through one spelling applies through the other.
+      const home = path.join(tmp(), 'home');
+      linkProject(home, lowerMain, 'cased');
+      for (const cwd of [main, lowerMain, wt, lowerWt]) {
+        expect(resolveProjectId(cwd, home)).toBe('cfg:cased');
+      }
+      expect(unlinkProject(home, main)).toBe(true);
+    },
+  );
+
+  it('scope.symlinked-cwd-walks-from-its-real-path', () => {
+    const base = tmp();
+    const outer = path.join(base, 'outer');
+    fs.mkdirSync(path.join(outer, '.git'), { recursive: true });
+    const inner = path.join(base, 'inner');
+    fs.mkdirSync(path.join(inner, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(inner, 'pkg', 'src'), { recursive: true });
+    // A symlink inside `outer` leading into `inner`: a lexical walk would stop at `outer`.
+    const inside = path.join(outer, 'vendored');
+    fs.symlinkSync(path.join(inner, 'pkg'), inside);
+    expect(findGitRoot(inside)).toBe(inner);
+    expect(findGitRoot(path.join(inside, 'src'))).toBe(inner);
+    expect(projectIdFor(path.join(inside, 'src'))).toBe(projectIdFor(inner));
+    expect(projectIdFor(inside)).not.toBe(projectIdFor(outer));
+    // A symlink from outside any repository still finds the repository it leads into.
+    const loose = path.join(base, 'loose');
+    fs.mkdirSync(loose);
+    fs.symlinkSync(path.join(inner, 'pkg', 'src'), path.join(loose, 'here'));
+    expect(findGitRoot(path.join(loose, 'here'))).toBe(inner);
+    expect(projectRootFor(path.join(loose, 'here'))).toBe(inner);
+    // A cwd that no longer exists is walked as written, never thrown on.
+    expect(findGitRoot(path.join(inner, 'deleted', 'dir'))).toBe(inner);
+  });
+
+  it('scope.stale-worktree-with-moved-or-deleted-main-falls-back-to-own-root', () => {
+    for (const fate of ['moved', 'deleted', 'replaced by an unrelated repo'] as const) {
+      const main = repo('origin-main');
+      const wt = worktreeOf(main, 'feature');
+      const originalId = projectIdFor(main);
+      expect(projectIdFor(wt), fate).toBe(originalId);
+      if (fate === 'moved') {
+        fs.renameSync(main, path.join(tmp(), 'origin-main'));
+      } else {
+        fs.rmSync(main, { recursive: true, force: true });
+      }
+      if (fate === 'replaced by an unrelated repo') {
+        // Someone else's repository now sits at the old path, with its own worktree of the same name.
+        fs.mkdirSync(path.join(main, '.git'), { recursive: true });
+        worktreeOf(main, 'feature');
+      }
+      const resolution = resolveProject(path.join(wt, 'src'), path.join(tmp(), 'home'));
+      expect(resolution.root, fate).toBe(wt);
+      expect(resolution.projectId, fate).toBe(projectIdFor(wt));
+      expect(resolution.projectId, fate).toMatch(/^feature-[0-9a-f]{8}$/);
+      if (fate === 'replaced by an unrelated repo') {
+        expect(resolution.projectId, fate).not.toBe(projectIdFor(main));
+      }
+    }
+  });
+
+  it('scope.recreated-worktree-path-matches-git (stale admin dir, documented)', () => {
+    // Decision (CON-53): a worktree deleted without `git worktree prune` leaves its admin dir,
+    // and a checkout recreated at exactly that path with the same `.git` file shares the main
+    // repo's id. Git itself treats that directory as the worktree (it reads the main repo's
+    // objects and refs from there), so Oort trusts it the same way. See `mainRootOf`.
+    const main = repo('kept-main');
+    const wt = worktreeOf(main, 'gone');
+    const dotGit = fs.readFileSync(path.join(wt, '.git'), 'utf8');
+    fs.rmSync(wt, { recursive: true, force: true });
+    expect(fs.existsSync(path.join(main, '.git', 'worktrees', 'gone', 'gitdir'))).toBe(true);
+    fs.mkdirSync(wt);
+    fs.writeFileSync(path.join(wt, '.git'), dotGit);
+    expect(projectRootFor(wt)).toBe(main);
+    // A checkout recreated anywhere else is still refused by the back-pointer.
+    const elsewhere = path.join(tmp(), 'gone');
+    fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere, '.git'), dotGit);
+    expect(projectRootFor(elsewhere)).toBe(elsewhere);
   });
 
   it('localScope', () => {
