@@ -330,4 +330,22 @@ describe('voyageEmbedder', () => {
     expect((err as Error).message).not.toContain('vendor secret body');
     expect((err as VoyageError).relayMessage).toBeUndefined();
   });
+
+  it('embed.cuts-each-input-to-8-kb-on_a_character_boundary', async () => {
+    const s = stub((call) =>
+      json({
+        data: (call.body['input'] as string[]).map((_, index) => ({
+          index,
+          embedding: Array.from({ length: 4 }, () => 1),
+        })),
+      }),
+    );
+    const e = voyageEmbedder({ apiKey: 'k', model: 'voyage-3.5-lite', dimension: 4, fetch: s.fn });
+    const long = '日本語😀 '.repeat(8000);
+    await e.embed([long, 'short'], 'document');
+    const input = s.calls[0]!.body['input'] as string[];
+    expect(new TextEncoder().encode(input[0]!).length).toBeLessThanOrEqual(8192);
+    expect(input[0]).not.toContain('\uFFFD');
+    expect(input[1]).toBe('short');
+  });
 });

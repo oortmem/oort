@@ -1,4 +1,4 @@
-import { MissingCredentialError, type Embedder } from '@oortmem/core';
+import { MissingCredentialError, truncateUtf8, type Embedder } from '@oortmem/core';
 import { VoyageError, postJson } from './http.js';
 
 export { VoyageError, type VoyageErrorKind } from './http.js';
@@ -6,6 +6,8 @@ export { VoyageError, type VoyageErrorKind } from './http.js';
 /** The Voyage API root; the Oort Pro relay serves the same routes under its own root. */
 export const VOYAGE_BASE_URL = 'https://api.voyageai.com/v1';
 const BATCH = 128;
+/** The Oort Pro relay refuses an input over 8 KB; Voyage truncates by tokens anyway. */
+const INPUT_MAX_BYTES = 8 * 1024;
 
 export interface VoyageEmbedderOptions {
   /** Defaults to `process.env.VOYAGE_API_KEY`. */
@@ -60,7 +62,7 @@ export function voyageEmbedder(opts: VoyageEmbedderOptions): Embedder {
     async embed(texts, kind) {
       const out: Int8Array[] = [];
       for (let i = 0; i < texts.length; i += BATCH) {
-        const input = texts.slice(i, i + BATCH);
+        const input = texts.slice(i, i + BATCH).map((t) => truncateUtf8(t, INPUT_MAX_BYTES));
         const res = (await postJson(
           doFetch,
           endpoint,

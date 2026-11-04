@@ -200,4 +200,22 @@ describe('voyageReranker', () => {
     expect(await r.rerank('q', docs, 1)).toEqual([{ id: 'b', score: 0.5 }]);
     expect(s.calls).toHaveLength(2);
   });
+
+  it('rerank.sends-only-document-text-within-the-relay-caps', async () => {
+    const s = stub(() => json({ data: [{ index: 0, relevance_score: 0.5 }] }));
+    const r = voyageReranker({ apiKey: 'k', model: 'rerank-3-lite', fetch: s.fn });
+    const long = '日本語😀 '.repeat(5000);
+    await r.rerank(long, [{ id: 'a', text: long, extra: 'not sent' } as never, ...docs], 1);
+    const body = s.calls[0]!.body;
+    const bytes = (v: string) => new TextEncoder().encode(v).length;
+    expect(Object.keys(body).sort()).toEqual(
+      ['documents', 'model', 'query', 'top_k', 'truncation'].sort(),
+    );
+    expect(bytes(body['query'] as string)).toBeLessThanOrEqual(2048);
+    const sent = body['documents'] as string[];
+    expect(sent.every((d) => typeof d === 'string')).toBe(true);
+    expect(bytes(sent[0]!)).toBeLessThanOrEqual(4096);
+    expect(sent[0]).not.toContain('\uFFFD');
+    expect(sent.slice(1)).toEqual(['alpha', 'beta', 'gamma']);
+  });
 });

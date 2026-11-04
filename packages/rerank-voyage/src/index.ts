@@ -1,10 +1,13 @@
-import { MissingCredentialError, type Reranker } from '@oortmem/core';
+import { MissingCredentialError, truncateUtf8, type Reranker } from '@oortmem/core';
 import { VoyageError, postJson } from './http.js';
 
 export { VoyageError, type VoyageErrorKind } from './http.js';
 
 /** The Voyage API root; the Oort Pro relay serves the same routes under its own root. */
 export const VOYAGE_BASE_URL = 'https://api.voyageai.com/v1';
+/** The Oort Pro relay refuses a longer query (2 KB) or document (4 KB); Voyage truncates by tokens anyway. */
+const QUERY_MAX_BYTES = 2 * 1024;
+const DOCUMENT_MAX_BYTES = 4 * 1024;
 
 export interface VoyageRerankerOptions {
   /** Defaults to `process.env.VOYAGE_API_KEY`. */
@@ -39,8 +42,8 @@ export function voyageReranker(opts: VoyageRerankerOptions): Reranker {
         endpoint,
         apiKey,
         {
-          query,
-          documents: docs.map((d) => d.text),
+          query: truncateUtf8(query, QUERY_MAX_BYTES),
+          documents: docs.map((d) => truncateUtf8(d.text, DOCUMENT_MAX_BYTES)),
           model: opts.model,
           top_k: topK,
           truncation: true,
