@@ -57,6 +57,8 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
       const n = result.memories.length;
       ctx.io.out(ui.header('recall', `${n} ${n === 1 ? 'memory' : 'memories'}`, scopeLabel(w)));
       if (block.length > 0) ctx.io.out(`${block}\n`);
+      else if (result.abstained === true)
+        ctx.io.err('oort: no relevant memories (matches were below the relevance threshold).\n');
       else ctx.io.err('oort: no memories matched.\n');
     }
     return 0;

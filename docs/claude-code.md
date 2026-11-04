@@ -38,6 +38,41 @@ only for a single command when you need to: `ANTHROPIC_API_KEY=... oort observe 
 
 Set `OORT_NO_KEYCHAIN=1` to make Oort ignore the Keychain entirely.
 
+## When Oort injects nothing
+
+Recall abstains when nothing stored answers the prompt. The hook then injects nothing, and the
+hook log line has `outcome: "abstained"`. `oort recall` prints "no relevant memories", and the MCP
+`recall` tool returns no memories with a note that says so.
+
+The relevance gate, under `recall` in `~/.oort/config.json`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `minRerankScore` | 0.3 | A reranked memory needs at least this Voyage rerank score (0 to 1). Provisional: calibrate it with your keys, see below. |
+| `minCoverage` | 0.5 | Without a rerank score, a memory needs this share of the prompt's informative words (stopwords and question words do not count). Set from the bench eval fixture. |
+| `minDenseScore` | 0.6 | Without a rerank score, a dense similarity this high also lets a memory through, for paraphrases. Provisional. |
+| `skipRerankWhenConfident` | true | Skip the rerank call when the top result is clear: it is the lexical top, holds most of the prompt's words, the runner-up is clearly weaker, and it is near the top of the dense search too unless it holds every word. |
+
+Set a threshold to 0 to switch that test off.
+
+To calibrate the provisional thresholds with real scores:
+
+```sh
+VOYAGE_API_KEY="$(security find-generic-password -a "$USER" -s oort.voyage -w)" \
+  pnpm --filter @oortmem/bench run calibrate
+```
+
+With a labelled eval file for your own store it also suggests `minDenseScore`:
+`... run calibrate -- --store ~/.oort/oort.sqlite --eval my-eval.jsonl`.
+
+## Hook latency
+
+The `UserPromptSubmit` hook loads only the embed and rerank adapters, so it reads one key and
+imports no TypeSafe or Anthropic SDK. The lexical search runs while the prompt embeds. Full recall
+gets 1.5 s before the hook falls back to lexical-only recall. Each hook log line records
+`wireMs` (config, store and keys) and the recall stages (`embedMs`, `lexicalMs`, `denseMs`,
+`hydrateMs`, `fuseMs`, `rerankMs`), as numbers only.
+
 ## Phase 1 baseline (dogfood, 2026-11-04)
 
 First real run, on an Apple Silicon laptop under heavy load (load average 50 to
@@ -60,8 +95,8 @@ the observation (now cut at a word boundary up to 600 chars).
 
 Open findings:
 - The hook's recall latency (~0.6 s) is above the design's 300 ms budget;
-  most of it is two network calls. Measure embed vs rerank and consider
-  skipping rerank when fusion is confident.
+  most of it is two network calls. Addressed by CON-57 (see Hook latency);
+  re-measure on the next dogfood run.
 - 13% unwritable: the writer should be able to return more than one memory
   per observation instead of overflowing one.
 - The superseded share (69%) is high; check that status updates are not
