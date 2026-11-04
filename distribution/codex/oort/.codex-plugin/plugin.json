@@ -1,0 +1,15 @@
+{
+  "name": "oort",
+  "version": "0.1.0",
+  "description": "Oort memory for Codex: recalls relevant facts before each prompt and adds the Oort memory tools and skill.",
+  "author": {
+    "name": "Oort",
+    "email": "hello@oortcloud.dev",
+    "url": "https://oortcloud.dev"
+  },
+  "homepage": "https://oortcloud.dev/docs/codex",
+  "repository": "https://github.com/oortmem/oort",
+  "license": "Apache-2.0",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json"
+}

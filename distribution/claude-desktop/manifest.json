@@ -1,0 +1,87 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/dist/mcpb-manifest.schema.json",
+  "manifest_version": "0.3",
+  "name": "oort",
+  "display_name": "Oort memory",
+  "version": "0.1.0",
+  "description": "Long-term memory for Claude: recall facts you chose to keep, remember decisions and preferences, forget on request.",
+  "long_description": "Oort keeps facts across conversations on your own computer: decisions, preferences and project details. Claude can recall them, save new ones you state or confirm, explain why a memory exists, and forget it permanently. Memories stay on this machine. Use your own Voyage, TypeSafe and Anthropic keys, or an Oort Pro key so you need none.",
+  "author": {
+    "name": "Oort",
+    "email": "hello@oortcloud.dev",
+    "url": "https://oortcloud.dev"
+  },
+  "homepage": "https://oortcloud.dev/docs/claude-desktop",
+  "documentation": "https://oortcloud.dev/docs/claude-desktop",
+  "support": "https://github.com/oortmem/oort/issues",
+  "repository": { "type": "git", "url": "https://github.com/oortmem/oort.git" },
+  "license": "Apache-2.0",
+  "icon": "icon.png",
+  "keywords": ["memory", "recall", "oort"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/node_modules/oortmem/dist/main.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/node_modules/oortmem/dist/main.js", "mcp"],
+      "env": {
+        "OORT_HOME": "${user_config.oort_home}",
+        "OORT_API_KEY": "${user_config.oort_api_key}",
+        "VOYAGE_API_KEY": "${user_config.voyage_api_key}",
+        "TYPESAFE_API_KEY": "${user_config.typesafe_api_key}",
+        "ANTHROPIC_API_KEY": "${user_config.anthropic_api_key}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "recall", "description": "Search saved memories for facts relevant to a question." },
+    { "name": "remember", "description": "Save one to five facts the user stated or confirmed." },
+    { "name": "forget", "description": "Permanently delete one memory." },
+    { "name": "pin", "description": "Keep a memory always available, or release it." },
+    { "name": "explain", "description": "Show why a memory was stored and what it replaced." },
+    { "name": "list_recent", "description": "List recently saved or changed memories." },
+    { "name": "whoami", "description": "Describe this Oort connection." }
+  ],
+  "user_config": {
+    "oort_home": {
+      "type": "directory",
+      "title": "Memory folder",
+      "description": "Where Oort keeps your memories. Share it with the oort command line by keeping the default.",
+      "default": "${HOME}/.oort",
+      "required": false
+    },
+    "oort_api_key": {
+      "type": "string",
+      "title": "Oort Pro key (optional)",
+      "description": "With Oort Pro you need no other keys. Create one at oortcloud.dev/account.",
+      "sensitive": true,
+      "required": false
+    },
+    "voyage_api_key": {
+      "type": "string",
+      "title": "Voyage AI key (optional)",
+      "description": "For search by meaning. Leave empty to use Oort Pro, or keyword search only.",
+      "sensitive": true,
+      "required": false
+    },
+    "typesafe_api_key": {
+      "type": "string",
+      "title": "TypeSafe key (optional)",
+      "description": "For deciding what to keep when saving. Leave empty to use Oort Pro.",
+      "sensitive": true,
+      "required": false
+    },
+    "anthropic_api_key": {
+      "type": "string",
+      "title": "Anthropic key (optional)",
+      "description": "For writing saved facts. Leave empty to use Oort Pro.",
+      "sensitive": true,
+      "required": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin"],
+    "runtimes": { "node": ">=22.15.0" }
+  }
+}

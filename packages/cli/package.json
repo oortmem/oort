@@ -50,6 +50,7 @@
     "@oortmem/core": "workspace:*",
     "@oortmem/decide-jev": "workspace:*",
     "@oortmem/embed-voyage": "workspace:*",
+    "@oortmem/mcp": "workspace:*",
     "@oortmem/rerank-voyage": "workspace:*",
     "@oortmem/store-sqlite": "workspace:*",
     "@oortmem/writer": "workspace:*",

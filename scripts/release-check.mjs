@@ -13,6 +13,15 @@ for (const dir of readdirSync('packages')) {
   if (pkg.private) continue;
   if (pkg.version !== want) bad.push(`${pkg.name} is ${pkg.version}`);
 }
+for (const file of [
+  'distribution/claude-code/oort/.claude-plugin/plugin.json',
+  'distribution/codex/oort/.codex-plugin/plugin.json',
+  'distribution/claude-desktop/manifest.json',
+  '.claude-plugin/marketplace.json',
+]) {
+  const v = JSON.parse(readFileSync(file, 'utf8')).version;
+  if (v !== want) bad.push(`${file} is ${v}`);
+}
 const core = readFileSync('packages/core/src/index.ts', 'utf8').match(/VERSION\s*=\s*'([^']+)'/);
 if (core?.[1] !== want) bad.push(`core VERSION is ${core?.[1] ?? 'missing'}`);
 if (bad.length) {

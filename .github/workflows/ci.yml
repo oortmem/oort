@@ -27,3 +27,5 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
+      - name: Build the Claude Desktop bundle (not published)
+        run: pnpm bundle:mcpb

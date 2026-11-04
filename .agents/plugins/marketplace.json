@@ -1,0 +1,13 @@
+{
+  "name": "oortmem",
+  "plugins": [
+    {
+      "name": "oort",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/oortmem/oort.git",
+        "path": "distribution/codex/oort"
+      }
+    }
+  ]
+}

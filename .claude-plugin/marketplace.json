@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "oortmem",
+  "version": "0.1.0",
+  "description": "Oort: open-source memory for AI agents.",
+  "owner": {
+    "name": "Oort",
+    "email": "hello@oortcloud.dev"
+  },
+  "plugins": [
+    {
+      "name": "oort",
+      "description": "Memory for Claude Code: recall before each prompt, save after each turn, plus the Oort memory tools.",
+      "source": "./distribution/claude-code/oort",
+      "category": "productivity"
+    }
+  ]
+}

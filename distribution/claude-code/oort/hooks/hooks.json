@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "oort hook UserPromptSubmit" }] }
+    ],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "oort hook Stop" }] }],
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "oort hook SessionStart" }] }]
+  }
+}
