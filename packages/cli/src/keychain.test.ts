@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createKeychain, type KeychainDeps } from './keychain.js';
+import { createKeychain, keychainFor, type KeychainDeps } from './keychain.js';
 
 type Call = { file: string; args: string[] };
 
@@ -87,5 +87,31 @@ describe('keychain', () => {
     expect(kc.supported).toBe(false);
     expect(await kc.read('voyage')).toBeUndefined();
     expect(calls).toEqual([]);
+  });
+});
+
+describe('keychainFor', () => {
+  it('keychain.oort-no-keychain-switches-every-command-off', async () => {
+    const calls: string[][] = [];
+    const deps: KeychainDeps = {
+      platform: 'darwin',
+      execFile: async (_f, args) => {
+        calls.push(args);
+        return { stdout: 'x\n' };
+      },
+      spawnInherit: async (_f, args) => {
+        calls.push(args);
+        return 0;
+      },
+    };
+    const off = keychainFor({ OORT_NO_KEYCHAIN: '1' }, deps);
+    expect(off.supported).toBe(false);
+    expect(await off.read('voyage')).toBeUndefined();
+    expect(await off.set('voyage')).toBe(1);
+    expect(calls).toEqual([]);
+    const on = keychainFor({}, deps);
+    expect(on.supported).toBe(true);
+    expect(await on.read('voyage')).toBe('x');
+    expect(calls).toHaveLength(1);
   });
 });

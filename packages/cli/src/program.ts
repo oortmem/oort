@@ -18,7 +18,7 @@ import { projectLinkCommand, projectUnlinkCommand } from './commands/project.js'
 import { recallCommand } from './commands/recall.js';
 import { statsCommand } from './commands/stats.js';
 import type { Io } from './io.js';
-import { createKeychain, type Keychain } from './keychain.js';
+import { keychainFor, type Keychain } from './keychain.js';
 import { Refusal, echo, type Ctx } from './util.js';
 import { wire as defaultWire, type WireFn } from './wire.js';
 
@@ -228,7 +228,7 @@ export async function runCli(
   args: string[],
   io: Io,
   wire: WireFn = defaultWire,
-  keychain: Keychain = createKeychain({ warn: (m) => io.err(`oort: ${m}\n`) }),
+  keychain: Keychain = keychainFor(io.env, { warn: (m) => io.err(`oort: ${m}\n`) }),
 ): Promise<number> {
   let code = 0;
   const p = program({ io, wire, keychain }, (c) => {

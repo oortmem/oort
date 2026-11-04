@@ -43,6 +43,18 @@ export interface Keychain {
 
 const service = (p: Provider): string => `oort.${p}`;
 
+/**
+ * The CLI's Keychain for this environment: switched off entirely by
+ * `OORT_NO_KEYCHAIN=1` (as `wire` already is), so no command, including
+ * `keys list`, `init` and `setup`, ever runs `security` then.
+ */
+export function keychainFor(
+  env: Record<string, string | undefined>,
+  deps: KeychainDeps = {},
+): Keychain {
+  return createKeychain(env['OORT_NO_KEYCHAIN'] === '1' ? { ...deps, platform: 'disabled' } : deps);
+}
+
 const defaultExecFile: NonNullable<KeychainDeps['execFile']> = (file, args) =>
   new Promise((resolve, reject) => {
     nodeExecFile(file, args, { encoding: 'utf8' }, (err, stdout) =>

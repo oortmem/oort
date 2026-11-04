@@ -7,6 +7,9 @@ function providerArg(arg: string, ctx: Ctx): Provider {
     // The argument is not echoed: someone may have pasted a key here.
     throw new Refusal(`unknown provider; expected one of ${PROVIDERS.join(', ')}.`);
   }
+  if (ctx.io.env['OORT_NO_KEYCHAIN'] === '1') {
+    throw new Refusal('OORT_NO_KEYCHAIN=1 is set; unset it to use the Keychain.');
+  }
   if (!ctx.keychain.supported) {
     throw new Refusal(
       'the Keychain is macOS-only for now (CON-55); export the key as an environment variable instead.',
