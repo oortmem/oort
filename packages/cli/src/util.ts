@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   scopeMatches,
   scrub,
@@ -78,6 +79,13 @@ export function degradedHint(io: Io, w: Wired, degraded: string[] | undefined): 
   } else if (degraded !== undefined && degraded.length > 0) {
     io.err(`oort: recall degraded (${degraded.join(', ')}).\n`);
   }
+}
+
+/** `p` with the home directory shown as `~`, for human-facing output. */
+export function tilde(p: string, home: string): string {
+  if (home === '' || home === path.sep) return p;
+  if (p === home) return '~';
+  return p.startsWith(home + path.sep) ? `~${p.slice(home.length)}` : p;
 }
 
 /** Compact age: 45s, 12m, 3h, 5d, 7mo, 2y. */

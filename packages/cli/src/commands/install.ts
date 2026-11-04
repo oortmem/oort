@@ -50,7 +50,8 @@ export function hookCommandPath(entry: string | undefined, expected = binPath())
   return real;
 }
 
-function settingsFile(project: boolean, ctx: Ctx): string {
+/** The Claude Code settings file the hooks go in: user scope, or `<cwd>/.claude` with `project`. */
+export function settingsFile(project: boolean, ctx: Ctx): string {
   if (project) return path.join(ctx.io.cwd, '.claude', 'settings.json');
   return path.join(ctx.io.env['HOME'] || os.homedir(), '.claude', 'settings.json');
 }

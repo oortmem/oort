@@ -10,7 +10,7 @@ import {
   type HostContext,
 } from '../connectors.js';
 import { uiFor, type Ui } from '../ui.js';
-import { Refusal, echo, type Ctx } from '../util.js';
+import { Refusal, echo, tilde, type Ctx } from '../util.js';
 import { hookCommandPath } from './install.js';
 
 /** Where the host starts stdio servers, which decides the memory scope. */
@@ -48,9 +48,16 @@ export function hostArgs(args: string[]): Host[] {
 }
 
 /** The lines a change prints: header, key diff, what was written and how to undo it. */
-export function describeChange(ui: Ui, c: Change, cmd: string, dryRun = false): string {
+export function describeChange(
+  ui: Ui,
+  c: Change,
+  cmd: string,
+  opts: { dryRun?: boolean; home?: string } = {},
+): string {
   const label = HOST_LABEL[c.host];
-  let out = ui.header(`${c.action} ${c.host}`, c.file);
+  const dryRun = opts.dryRun === true;
+  const show = (p: string): string => tilde(p, opts.home ?? '');
+  let out = ui.header(`${c.action} ${c.host}`, show(c.file));
   if (!c.changed) {
     out +=
       c.action === 'connect'
@@ -64,13 +71,15 @@ export function describeChange(ui: Ui, c: Change, cmd: string, dryRun = false): 
   if (dryRun) return `${out}${ui.dim('(dry run: nothing written)')}\n`;
   const rows: [string, string][] = [];
   if (c.action === 'connect') {
-    out += `${ui.ok(`${c.created ? 'Created' : 'Updated'} ${c.file}: ${label} starts \`${cmd} mcp\`.`)}\n`;
+    out += `${ui.ok(`${c.created ? 'Created' : 'Updated'} ${show(c.file)}: ${label} starts \`${cmd} mcp\`.`)}\n`;
     rows.push(['scope', scopeNote(c.host)], ['next', RELOAD[c.host]]);
   } else {
-    out += `${ui.ok(`Removed the oort entry from ${c.file}.`)}\n`;
+    out += `${ui.ok(`Removed the oort entry from ${show(c.file)}.`)}\n`;
   }
-  if (c.backup !== undefined) rows.push(['backup', `${c.backup} (before Oort first changed it)`]);
-  if (c.previous !== undefined) rows.push(['previous', `${c.previous} (just before this change)`]);
+  if (c.backup !== undefined)
+    rows.push(['backup', `${show(c.backup)} (before Oort first changed it)`]);
+  if (c.previous !== undefined)
+    rows.push(['previous', `${show(c.previous)} (just before this change)`]);
   rows.push([
     'undo',
     c.action === 'connect' ? `oort disconnect ${c.host}` : `oort connect ${c.host}`,
@@ -102,7 +111,7 @@ export async function connectCommand(
       action === 'connect'
         ? connectHost(host, hc, cmd, { dryRun })
         : disconnectHost(host, hc, cmd, { dryRun });
-    ctx.io.out(describeChange(ui, c, cmd, dryRun));
+    ctx.io.out(describeChange(ui, c, cmd, { dryRun, home: hc.home }));
   }
   return 0;
 }

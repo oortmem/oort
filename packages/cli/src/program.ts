@@ -16,6 +16,7 @@ import { observeCommand } from './commands/observe.js';
 import { pinCommand } from './commands/pin.js';
 import { projectLinkCommand, projectUnlinkCommand } from './commands/project.js';
 import { recallCommand } from './commands/recall.js';
+import { setupCommand, type SetupOptions } from './commands/setup.js';
 import { statsCommand } from './commands/stats.js';
 import type { Io } from './io.js';
 import { keychainFor, type Keychain } from './keychain.js';
@@ -41,6 +42,15 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
       outputError: (s, write) => write(s.replace(/'([^'\n]*)'/g, (_m, a: string) => echo(a))),
     })
     .showHelpAfterError('(run `oort --help` for usage)');
+
+  p.command('setup')
+    .description('interactive setup: agents, keys, connect, import, a quick check')
+    .option('--yes', 'never ask: take every choice from the flags (detected agents by default)')
+    .option('--agents <list>', 'detected, none, or a comma list: claude-code,codex,cursor,…')
+    .option('--keys <mode>', 'byo, pro or skip')
+    .option('--import <age>', 'skip, or import Claude Code sessions from this age: 14d, 30d')
+    .option('--no-demo', 'skip the remember, recall and forget check')
+    .action(run((o: SetupOptions) => setupCommand(o, ctx)));
 
   p.command('init')
     .description('write ~/.oort/config.json with defaults (never overwrites)')

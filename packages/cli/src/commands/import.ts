@@ -10,6 +10,11 @@ export interface ImportCommandOptions {
   estimateOnly?: boolean;
   includeUnresolved?: boolean;
   projectsDir?: string;
+  /**
+   * Asks before importing, given the estimate (the setup wizard's prompt);
+   * by default a y/N question on the terminal, or `--yes`.
+   */
+  confirmWith?: (estimate: { observations: number; estimatedTokens: number }) => Promise<boolean>;
 }
 
 const UNIT_MS = { h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 } as const;
@@ -53,12 +58,15 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
     );
     if (opts.estimateOnly === true || est.observations === 0) return 0;
     writePath(w, 'oort import claude-code');
-    const go = await confirm(
-      ctx.io,
-      'Proceed?',
-      opts.yes === true,
-      `import ${est.observations} observations`,
-    );
+    const go =
+      opts.confirmWith !== undefined
+        ? await opts.confirmWith(est)
+        : await confirm(
+            ctx.io,
+            'Proceed?',
+            opts.yes === true,
+            `import ${est.observations} observations`,
+          );
     if (!go) {
       ctx.io.out('Nothing imported.\n');
       return 0;

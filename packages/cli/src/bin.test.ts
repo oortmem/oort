@@ -442,7 +442,7 @@ describe('oort bin', () => {
     expect(r.stdout).toContain('oort connect cursor');
     expect(r.stdout).toContain('+ mcpServers.oort.command');
     expect(r.stdout).toContain('+ mcp_servers.oort.args');
-    expect(r.stdout).toContain(`${cursor}.oort-backup`);
+    expect(r.stdout).toContain('~/.cursor/mcp.json.oort-backup');
     expect(r.stdout).toContain('oort disconnect cursor');
     const entry = (
       JSON.parse(fs.readFileSync(cursor, 'utf8')) as { mcpServers: Record<string, unknown> }
@@ -458,5 +458,40 @@ describe('oort bin', () => {
     expect(un.exitCode).toBe(0);
     expect(fs.readFileSync(cursor, 'utf8')).toBe(original);
     expect(fs.readFileSync(codex, 'utf8')).toBe('');
+  });
+
+  it('cli.setup-yes-connects-and-runs-the-demo', async () => {
+    const s = sandbox();
+    fs.mkdirSync(path.join(s.home, '.claude'));
+    fs.mkdirSync(path.join(s.home, '.codex'));
+    const r = await oort(s, [
+      'setup',
+      '--yes',
+      '--agents',
+      'claude-code,codex',
+      '--keys',
+      'byo',
+      '--import',
+      'skip',
+    ]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).not.toContain('\u001b[');
+    expect(r.stdout).toContain('6/6 Done');
+    expect(r.stdout).toMatch(/recalled it/);
+    const bin = fs.realpathSync(BIN);
+    expect(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8')).toContain(
+      `${bin} hook Stop`,
+    );
+    expect(fs.readFileSync(path.join(s.home, '.codex', 'config.toml'), 'utf8')).toContain(bin);
+    // Nothing from the demo is left in the store.
+    const db = new Database(path.join(s.oortHome, 'oort.sqlite'), { readonly: true });
+    const n = db.prepare('select count(*) as n from memories').get() as { n: number };
+    db.close();
+    expect(n.n).toBe(0);
+
+    // Without --yes and without a terminal it never prompts.
+    const refused = await oort(s, ['setup']);
+    expect(refused.exitCode).toBe(2);
+    expect(refused.stderr).toContain('--yes');
   });
 });
