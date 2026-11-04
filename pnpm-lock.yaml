@@ -182,6 +182,15 @@ importers:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@26.6.6)(jsdom@20.0.3(supports-color@10.2.2))(vite@8.1.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0))
 
+  apps/relay:
+    devDependencies:
+      vitest:
+        specifier: ^5.0.5
+        version: 5.0.5(@types/node@26.6.6)(jsdom@20.0.3(supports-color@10.2.2))(vite@8.1.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0))
+      wrangler:
+        specifier: ^4.156.2
+        version: 4.156.2(@types/node@26.6.6)
+
   apps/site:
     dependencies:
       '@fontsource-variable/geist':
