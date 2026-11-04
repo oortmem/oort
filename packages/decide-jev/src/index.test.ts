@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MissingCredentialError, type Memory, type Observation } from '@oortmem/core';
-import { DecideError, jevDecider, type SystemOneClient } from './index.js';
+import { DecideError, RELAY_MODEL, jevDecider, type SystemOneClient } from './index.js';
 
 type Req = Parameters<SystemOneClient['systemOne']>[0];
 type Answers = Record<string, unknown>;
@@ -371,6 +371,32 @@ describe('jevDecider', () => {
       expect(n).toBeGreaterThan(1);
       expect(err.message).not.toContain('vendor secret');
       expect(err.relayMessage).toBeUndefined();
+    });
+
+    it('sends-plain-json-with-the-pinned-model-the-relay-accepts', async () => {
+      const sent: { headers: Headers; body: string }[] = [];
+      const f = (async (_u: string | URL | Request, init?: RequestInit) => {
+        const req = new Request('https://x.test', init);
+        sent.push({ headers: req.headers, body: await req.text() });
+        return reply({ error: 'stop' }, 402);
+      }) as typeof fetch;
+      const before = process.env['TYPESAFE_DEFAULT_MODEL'];
+      process.env['TYPESAFE_DEFAULT_MODEL'] = 'jev-preview';
+      try {
+        // A big observation: the SDK would zstd-compress anything of 1 KB or more.
+        await decider(f)
+          .gate({ ...obs, assistantText: 'x'.repeat(4000) })
+          .catch(() => undefined);
+      } finally {
+        if (before === undefined) delete process.env['TYPESAFE_DEFAULT_MODEL'];
+        else process.env['TYPESAFE_DEFAULT_MODEL'] = before;
+      }
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.headers.get('content-encoding')).toBeNull();
+      expect(sent[0]!.headers.get('content-type')).toBe('application/json');
+      const body = JSON.parse(sent[0]!.body) as Record<string, unknown>;
+      expect(Object.keys(body).sort()).toEqual(['model', 'questions', 'state']);
+      expect(body['model']).toBe(RELAY_MODEL);
     });
 
     it('5xx-keeps-the-sdk-retries', async () => {

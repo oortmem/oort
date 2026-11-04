@@ -72,6 +72,12 @@ function relayMessageOf(body: unknown): string | undefined {
   return clean === '' ? undefined : clean.slice(0, 400);
 }
 
+/**
+ * The Jev model the Oort Pro relay serves (`MODELS.decide` in apps/relay/src/relay.ts): the SDK's
+ * own default. Relay mode pins it, so `TYPESAFE_DEFAULT_MODEL` cannot pick a model the relay refuses.
+ */
+export const RELAY_MODEL = 'jev-latest';
+
 /** HTTP statuses the SDK retries on its own in relay mode: its default set, minus 429. */
 const RELAY_RETRY_STATUSES = new Set([408, ...Array.from({ length: 100 }, (_, i) => 500 + i)]);
 const MAX_RETRY_AFTER_MS = 5_000;
@@ -187,7 +193,12 @@ export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
       ...(opts.fetch !== undefined && { fetch: opts.fetch }),
       // The SDK would retry every 429 (twice); here a cap 429 must not be retried. It keeps its
       // retries for 408 and 5xx, and `ask` makes the one retry for a 429 with Retry-After.
-      ...(opts.relay === true && { retry: { httpStatuses: RELAY_RETRY_STATUSES } }),
+      // The relay checks the body, so it takes only plain JSON (no zstd) and its pinned model.
+      ...(opts.relay === true && {
+        retry: { httpStatuses: RELAY_RETRY_STATUSES },
+        compression: false,
+        defaultModel: RELAY_MODEL,
+      }),
     }) as unknown as SystemOneClient;
   }
   const c = client;
