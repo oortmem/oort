@@ -9,10 +9,13 @@ export { FACT_MAX_CHARS, REMEMBER_MAX_FACTS } from '@oortmem/mcp';
 export interface RememberResult {
   /** The fact's position in the request, from 0. */
   fact: number;
-  outcome: 'added' | 'reinforced' | 'updated' | 'superseded' | 'skipped';
-  /** The memory written or reinforced. */
+  outcome: 'added' | 'reinforced' | 'updated' | 'superseded' | 'corrected' | 'skipped';
+  /** The memory written, rewritten or reinforced. */
   id?: string;
-  /** For `superseded`: the memory the new one replaced (kept, with its validity closed). */
+  /**
+   * For `superseded`: the memory the new one replaced (kept, with its validity closed). For
+   * `corrected`: the memory found wrong (kept for `known-at` reads, retracted everywhere else).
+   */
   supersedes?: string;
   /** For `skipped`: `secret`, `not durable`, or the write path's own reason. */
   reason?: string;
@@ -46,7 +49,7 @@ export async function rememberFacts(
     });
     const out: RememberResult = { fact: i, outcome: r.outcome };
     if (r.memoryId !== undefined) out.id = r.memoryId;
-    if (r.outcome === 'superseded' && r.memoryId !== undefined) {
+    if ((r.outcome === 'superseded' || r.outcome === 'corrected') && r.memoryId !== undefined) {
       const prior = (await w.store.get(grantFor(w.scope), r.memoryId))?.supersedes;
       if (prior !== null && prior !== undefined) out.supersedes = prior;
     }

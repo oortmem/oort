@@ -23,7 +23,7 @@ export const FACT_MAX_CHARS = 500;
 /** The first paragraph stands alone (hosts may keep only the first 512 characters). */
 export const INSTRUCTIONS = [
   "Oort is the user's own long-term memory, which they connected on purpose. `recall` searches facts the user chose to keep from earlier sessions: decisions, preferences, project details. Use it when the user refers to earlier work, or when their past context would change the answer; skip it for self-contained questions. Use `remember` only for durable facts the user stated or confirmed, one standalone sentence each, never secrets or credentials. `forget` deletes permanently.",
-  'Memories belong to the project directory this server was started in, plus global ones. `recall` returns only facts that are current; pass `as_of` to ask what was true at an earlier time. A newer fact can supersede an older one: the older one stays visible to `explain` but stops being recalled. Batch the facts of one decision into a single `remember` call. Ids from `recall` and `list_recent` feed `forget`, `pin` and `explain`.',
+  'Memories belong to the project directory this server was started in, plus global ones. `recall` returns facts that are current; pass `as_of` for what was true at an earlier time, `mode: "history"` for every version of a fact, or `known_at` for what was believed then. Without them Oort reads the mode from the query, and the result says which it used. A newer fact can supersede an older one: the older one stays visible to `explain` and history. A fact marked stale may be outdated; confirm it with the user. Batch the facts of one decision into a single `remember` call. Ids from `recall` and `list_recent` feed `forget`, `pin` and `explain`.',
 ].join('\n\n');
 
 const Id = z.string().trim().min(1).max(64).describe('A memory id from recall or list_recent');
@@ -40,10 +40,22 @@ const Fact = z
 
 export const MEMORY_TYPES = ['semantic', 'episodic', 'procedural', 'preference'] as const;
 
+/** The temporal views `recall` reads (CON-34). */
+export const RECALL_MODES = ['current', 'as-of', 'history', 'known-at'] as const;
+
 export const inputSchemas = {
   recall: z.object({
     query: z.string().trim().min(1).max(500).describe('What to look for, in plain words'),
     as_of: IsoTime.optional().describe('Recall what was true at this time instead of now'),
+    known_at: IsoTime.optional().describe(
+      'Recall what was believed at this time, including facts corrected since',
+    ),
+    mode: z
+      .enum(RECALL_MODES)
+      .optional()
+      .describe(
+        'current, as-of (with as_of), history (every version, oldest first) or known-at (with known_at). Omit it to let Oort read the mode from the query.',
+      ),
     limit: z.number().int().min(1).max(10).default(5),
   }),
   remember: z.object({
@@ -94,7 +106,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'recall',
     title: 'Recall memories',
     description:
-      "Search the user's saved memories for facts relevant to a question. Returns up to 10 current facts with their date and why each matched.",
+      "Search the user's saved memories for facts relevant to a question. Returns up to 10 facts with their dates, why each matched, and the time mode used.",
     annotations: read('Recall memories'),
   },
   {

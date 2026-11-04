@@ -241,12 +241,12 @@ describe('observe', () => {
       now: new Date('2026-01-02T00:00:00.000Z'),
     });
     expect(b.outcome).toBe('superseded');
-    next = [rec(b.memoryId ?? null, 'UPDATE')];
+    next = [rec(b.memoryId ?? null, 'SUPERSEDE')];
     const c = await observe(obs('auth on port 5000', '2026-01-03T00:00:00.000Z'), localScope(), {
       ...deps,
       now: new Date('2026-01-03T00:00:00.000Z'),
     });
-    expect(c.outcome).toBe('updated');
+    expect(c.outcome).toBe('superseded');
     expect(spy.reconcile[2]?.map((m) => m.id)).toEqual([b.memoryId]);
 
     const valid = await store.list(localGrant(FILTER), { validOnly: true });
@@ -616,7 +616,7 @@ describe('observe', () => {
   });
 
   it('observe.project-observation-never-supersedes-global', async () => {
-    for (const action of ['SUPERSEDE', 'UPDATE'] as const) {
+    for (const action of ['SUPERSEDE', 'UPDATE', 'REFINE', 'CORRECT'] as const) {
       const { store, deps, spy } = setup(gate(0.9), [rec('G', action)]);
       const global = makeMemory({
         id: 'G',
@@ -733,5 +733,164 @@ describe('observe', () => {
     expect(spy.reconcile).toEqual([]);
     expect(spy.write).toEqual([]);
     expect(spy.filters).toEqual([]);
+  });
+});
+
+describe('observe: dates and the REFINE / SUPERSEDE / CORRECT split (CON-34, CON-49)', () => {
+  // A Wednesday.
+  const WED = '2026-11-04T10:00:00.000Z';
+  const at = (iso: string) => ({ now: new Date(iso) });
+
+  it('observe.until-in-the-fact-sets-validTo', async () => {
+    const { store, deps } = setup(gate(0.9), [rec(null, 'ADD')]);
+    const res = await observe(obs('auth listens on port 8080 until Friday', WED), localScope(), {
+      ...deps,
+      ...at(WED),
+    });
+    expect(await store.get(TG, res.memoryId ?? '')).toMatchObject({
+      validFrom: WED,
+      validTo: '2026-11-07T00:00:00.000Z',
+      expiredAt: null,
+    });
+    expect(res.decisions).toContainEqual(
+      expect.objectContaining({ stage: 'temporal', question: 'interval' }),
+    );
+  });
+
+  it('observe.starting-next-week-starts-the-fact-and-closes-the-prior-then', async () => {
+    let next: ReconcileDecision[] = [rec(null, 'ADD')];
+    const { store, deps } = setup(gate(0.9), () => next);
+    const a = await observe(obs('auth on port 3000', '2026-11-01T00:00:00.000Z'), localScope(), {
+      ...deps,
+      ...at('2026-11-01T00:00:00.000Z'),
+    });
+    next = [rec(a.memoryId ?? null, 'SUPERSEDE')];
+    const b = await observe(obs('starting next week auth moves to port 4000', WED), localScope(), {
+      ...deps,
+      ...at(WED),
+    });
+    const [A, B] = await Promise.all([a, b].map((r) => store.get(TG, r.memoryId ?? '')));
+    expect(B?.validFrom).toBe('2026-11-11T00:00:00.000Z');
+    // The prior stays current until the new fact starts.
+    expect(A).toMatchObject({
+      validTo: '2026-11-11T00:00:00.000Z',
+      expiredAt: null,
+      endReason: 'superseded',
+    });
+  });
+
+  it('observe.a-wrong-writer-date-is-fixed-from-the-turn', async () => {
+    const { store, deps } = setup(gate(0.9), [rec(null, 'ADD')]);
+    const write: MemoryWriter = {
+      async write() {
+        return {
+          text: 'On 2026-11-02 the auth service moved to port 4000.',
+          stub: 'auth port',
+          entities: [],
+          type: 'episodic',
+        };
+      },
+    };
+    const res = await observe(obs('yesterday auth moved to port 4000', WED), localScope(), {
+      ...deps,
+      write,
+      ...at(WED),
+    });
+    const m = await store.get(TG, res.memoryId ?? '');
+    expect(m?.text).toBe('On 2026-11-03 the auth service moved to port 4000.');
+    expect(m?.source.decisions).toContainEqual({
+      stage: 'temporal',
+      question: 'writer-date',
+      answer: '2026-11-02 -> 2026-11-03',
+      probability: 1,
+    });
+  });
+
+  it('observe.refine-updates-the-memory-in-place', async () => {
+    let next: ReconcileDecision[] = [rec(null, 'ADD')];
+    const { store, deps, spy } = setup(gate(0.9), () => next);
+    const a = await observe(
+      obs('auth on port 3000', '2026-01-01T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    next = [rec(a.memoryId ?? null, 'REFINE', 0.8)];
+    const b = await observe(
+      obs('auth on port 3000 over TLS', '2026-01-02T00:00:00.000Z'),
+      localScope(),
+      {
+        ...deps,
+        ...at('2026-01-02T00:00:00.000Z'),
+      },
+    );
+    expect(b).toMatchObject({ outcome: 'updated', memoryId: a.memoryId });
+    expect(spy.write.at(-1)).toMatchObject({ action: 'UPDATE', prior: { id: a.memoryId } });
+    const all = await store.list(localGrant(FILTER));
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({
+      id: a.memoryId,
+      text: 'claim: auth on port 3000 over TLS',
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: null,
+      expiredAt: null,
+      lastConfirmedAt: '2026-01-02T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    });
+    expect(all[0]?.source.decisions).toContainEqual({
+      stage: 'refine',
+      question: 'previous-text',
+      answer: 'claim: auth on port 3000',
+      probability: 0.8,
+    });
+  });
+
+  it('observe.update-is-the-legacy-name-for-refine', async () => {
+    let next: ReconcileDecision[] = [rec(null, 'ADD')];
+    const { store, deps } = setup(gate(0.9), () => next);
+    const a = await observe(obs('auth on port 3000'), localScope(), deps);
+    next = [rec(a.memoryId ?? null, 'UPDATE')];
+    const b = await observe(obs('auth on port 3000 over TLS'), localScope(), deps);
+    expect(b).toMatchObject({ outcome: 'updated', memoryId: a.memoryId });
+    expect(await store.list(localGrant(FILTER))).toHaveLength(1);
+  });
+
+  it('observe.correct-expires-the-prior-and-keeps-its-interval', async () => {
+    let next: ReconcileDecision[] = [rec(null, 'ADD')];
+    const { store, deps, spy } = setup(gate(0.9), () => next);
+    const a = await observe(
+      obs('auth on port 3000', '2026-01-01T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    next = [rec(a.memoryId ?? null, 'CORRECT')];
+    const b = await observe(
+      obs('auth was always on port 3001', '2026-01-05T00:00:00.000Z'),
+      localScope(),
+      {
+        ...deps,
+        ...at('2026-01-05T00:00:00.000Z'),
+      },
+    );
+    expect(b.outcome).toBe('corrected');
+    expect(spy.write.at(-1)).toMatchObject({ action: 'SUPERSEDE', prior: { id: a.memoryId } });
+    const [A, B] = await Promise.all([a, b].map((r) => store.get(TG, r.memoryId ?? '')));
+    // Transaction time ends; the valid interval is left as it was.
+    expect(A).toMatchObject({
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: null,
+      expiredAt: '2026-01-05T00:00:00.000Z',
+      endReason: 'corrected',
+      supersededBy: B?.id,
+    });
+    // The correction takes the prior's place in valid time.
+    expect(B).toMatchObject({
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: null,
+      expiredAt: null,
+      endReason: null,
+      supersedes: A?.id,
+      createdAt: '2026-01-05T00:00:00.000Z',
+    });
+    expect((await store.list(localGrant(FILTER))).map((m) => m.id)).toEqual([b.memoryId]);
   });
 });

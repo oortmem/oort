@@ -45,6 +45,7 @@ function gateAnswers(over: Answers = {}): Answers {
     type_episodic: noulA(0.2),
     type_procedural: noulA(0.3),
     type_preference: noulA(0.8),
+    volatile: noulA(0.7),
     ...over,
   };
 }
@@ -62,8 +63,10 @@ const probs = (o: Partial<Record<string, number>> = {}) => ({
   NOOP: 0.05,
   REINFORCE: 0.05,
   ADD: 0.05,
-  UPDATE: 0.05,
+  REFINE: 0.05,
   SUPERSEDE: 0.05,
+  CORRECT: 0.05,
+  UPDATE: 0.05,
   ...o,
 });
 
@@ -74,7 +77,7 @@ describe('jevDecider', () => {
     expect(g.shouldStore).toBe(0.9);
     expect(g.salience).toBeCloseTo(0.7);
     expect(g.types).toEqual({ semantic: 0.1, episodic: 0.2, procedural: 0.3, preference: 0.8 });
-    expect(g.decisions).toHaveLength(6);
+    expect(g.decisions).toHaveLength(7);
     expect(g.decisions[0]).toEqual({
       stage: 'gate',
       question: 'should_store',
@@ -131,6 +134,48 @@ describe('jevDecider', () => {
       'type_preference',
       'type_procedural',
       'type_semantic',
+      'volatile',
+    ]);
+  });
+
+  it('gate.records-volatile', async () => {
+    const s = stub(() => gateAnswers({ volatile: noulA(0.8) }));
+    const g = await jevDecider({ client: s.client }).gate(obs);
+    expect(g.volatile).toBe(0.8);
+    expect(g.decisions.at(-1)).toEqual({
+      stage: 'gate',
+      question: 'volatile',
+      answer: 'yes',
+      probability: 0.8,
+    });
+  });
+
+  it('gate.a-missing-volatile-answer-is-not-an-error', async () => {
+    const s = stub(() => {
+      const a = gateAnswers();
+      delete a['volatile'];
+      return a;
+    });
+    const g = await jevDecider({ client: s.client }).gate(obs);
+    expect(g.volatile).toBeUndefined();
+    expect(g.decisions.some((d) => d.question === 'volatile')).toBe(false);
+  });
+
+  it('reconcile.asks-change-of-state-versus-correction-in-one-question', async () => {
+    const s = stub(() => ({ c0: choiceA('CORRECT', probs({ CORRECT: 0.7 })) }));
+    const out = await jevDecider({ client: s.client }).reconcile(obs, [mem('a', 'A')]);
+    expect(out[0]).toMatchObject({ candidateId: 'a', action: 'CORRECT', probability: 0.7 });
+    // Still one call with one choice per candidate: the split costs no extra question.
+    expect(s.calls).toHaveLength(1);
+    const q = s.calls[0]!.questions as Record<string, { criteria: Record<string, string> }>;
+    expect(Object.keys(q)).toEqual(['c0']);
+    expect(Object.keys(q['c0']!.criteria)).toEqual([
+      'NOOP',
+      'REINFORCE',
+      'REFINE',
+      'SUPERSEDE',
+      'CORRECT',
+      'ADD',
     ]);
   });
 

@@ -74,11 +74,15 @@ const rec = (
  * Jev, faked by subject: a fact supersedes a candidate that shares its first word (its
  * subject), and is unrelated (NOOP) to everything else. With no candidates it is novel.
  */
-function bySubject(fact: Observation, candidates: Memory[]): ReconcileDecision[] {
+function bySubject(
+  fact: Observation,
+  candidates: Memory[],
+  same: ReconcileDecision['action'] = 'SUPERSEDE',
+): ReconcileDecision[] {
   if (candidates.length === 0) return [rec(null, 'ADD')];
   const subject = fact.userText.split(' ')[0];
   return candidates.map((c) =>
-    c.text.split(' ')[0] === subject ? rec(c.id, 'SUPERSEDE', 0.95) : rec(c.id, 'NOOP', 0.9),
+    c.text.split(' ')[0] === subject ? rec(c.id, same, 0.95) : rec(c.id, 'NOOP', 0.9),
   );
 }
 
@@ -94,7 +98,13 @@ interface Spy {
 
 function deps(
   facts: WrittenMemory[],
-  opts: { batched?: boolean; seed?: Memory[]; scope?: Scope } = {},
+  opts: {
+    batched?: boolean;
+    seed?: Memory[];
+    scope?: Scope;
+    /** What the fake Jev answers for a candidate about the same subject. */
+    same?: ReconcileDecision['action'];
+  } = {},
 ): {
   spy: Spy;
   run: () => ReturnType<typeof observe>;
@@ -116,13 +126,13 @@ function deps(
     async reconcile(o, candidates) {
       spy.reconcile.push(o.userText);
       spy.shown.push(candidates.map((c) => c.id));
-      return bySubject(o, candidates);
+      return bySubject(o, candidates, opts.same);
     },
     ...(opts.batched === true && {
       async reconcileMany(items: { obs: Observation; candidates: Memory[] }[]) {
         spy.reconcileMany++;
         for (const it of items) spy.shown.push(it.candidates.map((c) => c.id));
-        return items.map((it) => bySubject(it.obs, it.candidates));
+        return items.map((it) => bySubject(it.obs, it.candidates, opts.same));
       },
     }),
   };
@@ -329,5 +339,46 @@ describe('observe with a multi-memory writer (CON-56)', () => {
         expect((await store.get(TG, m.memoryId))?.scope).toEqual(a);
       }
     }
+  });
+
+  it('observe.multi.refine-correct-and-reinforce', async () => {
+    const seed = () => [
+      makeMemory({
+        id: 'ci-red',
+        scope,
+        text: 'CI on main is red.',
+        embedding: vec(100, 0, 0, 0),
+        validFrom: '2026-11-01T00:00:00.000Z',
+      }),
+    ];
+    const one = [fact('CI on main is green.')];
+
+    const refined = deps(one, { seed: seed(), same: 'REFINE', batched: true });
+    expect((await refined.run()).memories).toEqual([{ outcome: 'updated', memoryId: 'ci-red' }]);
+    expect(await refined.store.get(TG, 'ci-red')).toMatchObject({
+      text: 'CI on main is green.',
+      lastConfirmedAt: NOW.toISOString(),
+    });
+
+    const corrected = deps(one, { seed: seed(), same: 'CORRECT' });
+    const c = await corrected.run();
+    expect(c.memories[0]?.outcome).toBe('corrected');
+    expect(await corrected.store.get(TG, 'ci-red')).toMatchObject({
+      expiredAt: NOW.toISOString(),
+      endReason: 'corrected',
+      validTo: null,
+    });
+    expect(await corrected.store.get(TG, c.memories[0]!.memoryId!)).toMatchObject({
+      validFrom: '2026-11-01T00:00:00.000Z',
+      supersedes: 'ci-red',
+    });
+
+    // A decided REINFORCE on the multi path confirms the memory too.
+    const reinforced = deps(one, { seed: seed(), same: 'REINFORCE' });
+    expect((await reinforced.run()).memories[0]).toEqual({
+      outcome: 'reinforced',
+      memoryId: 'ci-red',
+    });
+    expect((await reinforced.store.get(TG, 'ci-red'))?.lastConfirmedAt).toBe(NOW.toISOString());
   });
 });

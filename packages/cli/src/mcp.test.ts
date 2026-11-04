@@ -117,6 +117,48 @@ describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
     expect(r.note).toMatch(/no relevant memories/i);
   });
 
+  it('mcp.recall-takes-a-temporal-mode', async () => {
+    const { client, h } = await connect(era, { adapters: false });
+    await h.store.upsertMany(TG, [
+      memory({
+        id: 'v1',
+        createdAt: '2026-03-01T00:00:00.000Z',
+        validTo: '2026-05-01T00:00:00.000Z',
+        expiredAt: '2026-05-01T00:00:00.000Z',
+        endReason: 'superseded',
+        supersededBy: 'v2',
+      }),
+      memory({
+        id: 'v2',
+        text: 'The auth service listens on port 6000.',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        supersedes: 'v1',
+      }),
+    ]);
+    type Out = { memories: { id: string; valid_to?: string | null }[]; mode: string };
+    const call = async (args: Record<string, unknown>) =>
+      json<Out>(
+        await client.callTool({
+          name: 'recall',
+          arguments: { query: 'auth service port', ...args },
+        }),
+      );
+    expect(await call({})).toMatchObject({ mode: 'current', memories: [{ id: 'v2' }] });
+    const history = await call({ mode: 'history' });
+    expect(history.mode).toBe('history');
+    expect(history.memories.map((m) => m.id)).toEqual(['v1', 'v2']);
+    expect(history.memories[0]?.valid_to).toBe('2026-05-01T00:00:00.000Z');
+    expect(await call({ known_at: '2026-04-01' })).toMatchObject({
+      mode: 'known-at 2026-04-01',
+      memories: [{ id: 'v1' }],
+    });
+    const both = await client.callTool({
+      name: 'recall',
+      arguments: { query: 'auth service port', mode: 'history', as_of: '2026-04-01' },
+    });
+    expect(both.isError).toBe(true);
+  });
+
   it('mcp.forget-requires-an-id', async () => {
     const { client, h } = await connect(era);
     const { tools } = await client.listTools();

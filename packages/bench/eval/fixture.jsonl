@@ -4,13 +4,16 @@
 {"question":"2026-03-28 rate class","expectedMemoryIds":["m7-853"],"category":"single-fact"}
 {"question":"than rather ioredis with migrations schema","expectedMemoryIds":["m7-389"],"category":"single-fact"}
 {"question":"than rather ioredis with limiting rate","expectedMemoryIds":["m7-1346"],"category":"single-fact"}
-{"question":"which package manager does the edge router use now","expectedMemoryIds":["m7-32"],"notExpectedMemoryIds":["m7-30","m7-31"],"category":"knowledge-update"}
-{"question":"which library does the sync daemon use to validate requests now","expectedMemoryIds":["m7-14"],"notExpectedMemoryIds":["m7-12","m7-13"],"category":"knowledge-update"}
-{"question":"which port does the auth service listen on now","expectedMemoryIds":["m7-68"],"notExpectedMemoryIds":["m7-66","m7-67"],"category":"knowledge-update"}
-{"question":"which package manager does the media proxy use now","expectedMemoryIds":["m7-50"],"notExpectedMemoryIds":["m7-48","m7-49"],"category":"knowledge-update"}
-{"question":"which package manager does the billing api use back then","expectedMemoryIds":["m7-46"],"notExpectedMemoryIds":["m7-45","m7-47"],"asOf":"2026-04-23T17:29:09.314Z","category":"temporal"}
-{"question":"which port does the report builder listen on back then","expectedMemoryIds":["m7-52"],"notExpectedMemoryIds":["m7-51","m7-53"],"asOf":"2026-02-28T17:15:32.520Z","category":"temporal"}
-{"question":"which port does the auth service listen on back then","expectedMemoryIds":["m7-1"],"notExpectedMemoryIds":["m7-0","m7-2"],"asOf":"2026-04-02T16:02:44.017Z","category":"temporal"}
+{"question":"which package manager does edge-router-10 use now","expectedMemoryIds":["m7-32"],"notExpectedMemoryIds":["m7-30","m7-31"],"category":"knowledge-update"}
+{"question":"which library does sync-daemon-4 use to validate requests now","expectedMemoryIds":["m7-14"],"notExpectedMemoryIds":["m7-12","m7-13"],"category":"knowledge-update"}
+{"question":"which port does auth-service-22 listen on now","expectedMemoryIds":["m7-68"],"notExpectedMemoryIds":["m7-66","m7-67"],"category":"knowledge-update"}
+{"question":"which package manager does media-proxy-16 use now","expectedMemoryIds":["m7-50"],"notExpectedMemoryIds":["m7-48","m7-49"],"category":"knowledge-update"}
+{"question":"which package manager does billing-api-15 use back then","expectedMemoryIds":["m7-46"],"notExpectedMemoryIds":["m7-45","m7-47"],"asOf":"2026-04-23T17:29:09.314Z","category":"temporal"}
+{"question":"which port does report-builder-17 listen on back then","expectedMemoryIds":["m7-52"],"notExpectedMemoryIds":["m7-51","m7-53"],"asOf":"2026-02-28T17:15:32.520Z","category":"temporal"}
+{"question":"which port does auth-service-0 listen on back then","expectedMemoryIds":["m7-1"],"notExpectedMemoryIds":["m7-0","m7-2"],"asOf":"2026-04-02T16:02:44.017Z","category":"temporal"}
+{"question":"on 8 February 2026, which port did media-proxy-2 listen on","expectedMemoryIds":["m7-7"],"notExpectedMemoryIds":["m7-6","m7-8"],"category":"temporal"}
+{"question":"on 16 March 2026, which port did media-proxy-23 listen on","expectedMemoryIds":["m7-70"],"notExpectedMemoryIds":["m7-69","m7-71"],"category":"temporal"}
+{"question":"how has the port of sync-daemon-18 changed over time","expectedMemoryIds":["m7-54","m7-55","m7-56"],"category":"temporal"}
 {"question":"2026-09-16","expectedMemoryIds":["m7-393","m7-1205"],"category":"multi-session"}
 {"question":"2026-01-21","expectedMemoryIds":["m7-521","m7-530"],"category":"multi-session"}
 {"question":"2026-06-13","expectedMemoryIds":["m7-989","m7-330"],"category":"multi-session"}

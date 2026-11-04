@@ -70,6 +70,11 @@ const recall = z
     rerankBudgetMs: z.number().int().min(0).default(400),
     /** How long a query embedding is reused, in seconds. 0 turns the cache off. */
     queryCacheTtlSec: z.number().int().min(0).default(600),
+    /**
+     * Days after which a volatile memory (a status, a current version) that nobody confirmed is
+     * marked "may be outdated" when injected, and listed by `oort revalidate`. 0 turns it off.
+     */
+    staleAfterDays: z.number().int().min(0).default(30),
   })
   .default({
     lexicalK: 50,
@@ -84,6 +89,7 @@ const recall = z
     lexicalFirst: true,
     rerankBudgetMs: 400,
     queryCacheTtlSec: 600,
+    staleAfterDays: 30,
   });
 
 const project = z

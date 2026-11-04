@@ -41,6 +41,7 @@ describe('config', () => {
       lexicalFirst: true,
       rerankBudgetMs: 400,
       queryCacheTtlSec: 600,
+      staleAfterDays: 30,
     });
     expect(c.project).toEqual({ private: false });
     expect(c.sources['embed']).toBe('default');

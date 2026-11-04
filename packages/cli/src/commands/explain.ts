@@ -1,16 +1,30 @@
 import { uiFor } from '../ui.js';
 import { age, clip, degradedHint, fixed, scopeLabel, short, withWired, type Ctx } from '../util.js';
-import { runRecall } from './recall.js';
+import type { RecallResult } from '@oortmem/core';
+import { runRecall, temporalView, type TemporalFlags } from './recall.js';
 
-/** `oort explain "<query>" [--json]`: recall, with each stage's rank and score per memory. */
+/** The temporal view in a few words: `current`, `as-of 2026-04-01`. */
+export function timeMode(t: RecallResult['temporal']): string {
+  if (t === undefined) return 'current';
+  const at = t.asOf ?? t.knownAt;
+  return at === undefined ? t.mode : `${t.mode} ${at.slice(0, 10)}`;
+}
+
+/** The header line: `mode: as-of 2026-04-01 (from the query)`. */
+export function modeLabel(t: RecallResult['temporal']): string {
+  return `mode: ${timeMode(t)}${t?.inferred === true ? ' (from the query)' : ''}`;
+}
+
+/** `oort explain "<query>" [--json] [temporal flags]`: recall, with each stage's rank and score. */
 export async function explainCommand(
   query: string,
-  opts: { json?: boolean },
+  opts: { json?: boolean } & TemporalFlags,
   ctx: Ctx,
 ): Promise<number> {
+  const view = temporalView(opts);
   return withWired(ctx, async (w) => {
     const now = new Date();
-    const result = await runRecall(w, query, undefined, now);
+    const result = await runRecall(w, query, view, now);
     degradedHint(ctx.io, w, result.degraded);
     if (opts.json === true) {
       const memories = result.memories.map((m, i) => ({
@@ -24,6 +38,7 @@ export async function explainCommand(
       }));
       const out = {
         memories,
+        ...(result.temporal !== undefined && { temporal: result.temporal }),
         timings: result.timings,
         ...(result.degraded !== undefined && { degraded: result.degraded }),
       };
@@ -55,6 +70,7 @@ export async function explainCommand(
         'explain',
         `${result.memories.length} memories in ${fixed(t['totalMs'], 1)} ms`,
         scopeLabel(w),
+        modeLabel(result.temporal),
         ...(result.degraded !== undefined ? [`degraded: ${result.degraded.join(', ')}`] : []),
       ),
     );

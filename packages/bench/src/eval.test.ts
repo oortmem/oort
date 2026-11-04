@@ -294,6 +294,11 @@ describe('eval', () => {
       expect(gated.groups['overall']?.recallAt[5]).toBeGreaterThanOrEqual(
         (open.groups['overall']?.recallAt[5] ?? 0) - 0.05,
       );
+      // CON-34: changed facts and questions about time (0.25 and 0.00 before, both paths; now
+      // 1.00 and 1.00 lexical-only, 0.50 and 1.00 with the fake dense path).
+      expect(gated.groups['knowledge-update']?.recallAt[5]).toBeGreaterThanOrEqual(0.5);
+      expect(gated.groups['temporal']?.recallAt[5]).toBeGreaterThanOrEqual(0.75);
+      expect(gated.groups['temporal']?.staleLeak).toBe(0);
     }
   }, 60_000);
 
@@ -315,10 +320,31 @@ describe('eval', () => {
     }
   });
 
+  it('fixture.chain-questions-name-their-chain', () => {
+    const memories = generateMemories(FIXTURE_COUNT, FIXTURE_SEED);
+    const byId = new Map(memories.map((m) => [m.id, m]));
+    const rows = buildFixtureRows(memories);
+    const chained = rows.filter(
+      (r) => r.category === 'knowledge-update' || r.category === 'temporal',
+    );
+    expect(chained).toHaveLength(10);
+    for (const r of chained) {
+      // The subject is named as the memories name it, so the question has one chain as its answer.
+      const subject = byId.get(r.expectedMemoryIds[0]!)?.entities[0] ?? '';
+      expect(r.question, r.question).toContain(subject);
+    }
+    const temporal = rows.filter((r) => r.category === 'temporal');
+    // Two dated questions carry no asOf: recall reads the day from the words.
+    expect(
+      temporal.filter((r) => r.asOf === undefined && /\d{4}$|\d{4},/.test(r.question)),
+    ).toHaveLength(2);
+    expect(temporal.filter((r) => r.question.includes('changed over time'))).toHaveLength(1);
+  });
+
   it('eval.fixture-in-sync', () => {
     const file = new URL('../eval/fixture.jsonl', import.meta.url);
     const expected = buildFixtureRows(generateMemories(FIXTURE_COUNT, FIXTURE_SEED));
-    expect(expected).toHaveLength(20);
+    expect(expected).toHaveLength(23);
     expect(loadEvalRows(fs.readFileSync(file, 'utf8')).rows).toEqual(expected);
   });
 });

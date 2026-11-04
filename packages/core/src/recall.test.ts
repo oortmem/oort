@@ -707,3 +707,173 @@ describe('recall latency (CON-57)', () => {
     expect(r.memories[0]?.explanation.reranked).toBe(0.9);
   });
 });
+
+describe('recall modes (CON-34)', () => {
+  const now = new Date('2026-11-04T10:00:00.000Z');
+  const VOLATILE = { stage: 'gate', question: 'volatile', answer: 'yes', probability: 0.8 };
+  const chain = (): Memory[] => [
+    makeMemory({
+      id: 'v1',
+      text: 'auth service port 3000',
+      validFrom: '2026-03-01T00:00:00.000Z',
+      validTo: '2026-05-01T00:00:00.000Z',
+      expiredAt: '2026-05-01T00:00:00.000Z',
+      endReason: 'superseded',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      supersededBy: 'v2',
+    }),
+    makeMemory({
+      // Shares no words with the query: only the chain walk finds it.
+      id: 'v2',
+      text: 'moved to 4000 behind the gateway',
+      validFrom: '2026-05-01T00:00:00.000Z',
+      validTo: '2026-08-01T00:00:00.000Z',
+      expiredAt: '2026-08-01T00:00:00.000Z',
+      endReason: 'superseded',
+      createdAt: '2026-05-01T00:00:00.000Z',
+      supersedes: 'v1',
+      supersededBy: 'v3',
+    }),
+    makeMemory({
+      id: 'v3',
+      text: 'auth service port 8080',
+      validFrom: '2026-08-01T00:00:00.000Z',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      supersedes: 'v2',
+    }),
+  ];
+
+  it('recall.mode-defaults-to-current-and-is-reported', async () => {
+    const store = await setup(chain());
+    const r = await recall({ text: 'auth service port', scope: SCOPE }, { store, config, now });
+    expect(r.memories.map((m) => m.id)).toEqual(['v3']);
+    expect(r.temporal).toEqual({ mode: 'current', inferred: true });
+  });
+
+  it('recall.a-dated-question-reads-as-of-that-day', async () => {
+    const store = await setup(chain());
+    const r = await recall(
+      { text: 'which port did the auth service use on 2 April 2026', scope: SCOPE },
+      { store, config, now },
+    );
+    expect(r.memories.map((m) => m.id)).toEqual(['v1']);
+    expect(r.temporal).toEqual({
+      mode: 'as-of',
+      asOf: '2026-04-02T23:59:59.999Z',
+      inferred: true,
+    });
+  });
+
+  it('recall.an-explicit-mode-wins-over-the-question', async () => {
+    const store = await setup(chain());
+    const r = await recall(
+      { text: 'auth service port on 2 April 2026', scope: SCOPE, mode: 'current' },
+      { store, config, now },
+    );
+    expect(r.memories.map((m) => m.id)).toEqual(['v3']);
+    expect(r.temporal).toEqual({ mode: 'current', inferred: false });
+  });
+
+  it('recall.history-walks-the-supersede-chain-oldest-first', async () => {
+    const wrong = makeMemory({
+      id: 'wrong',
+      text: 'auth service port 9999',
+      validFrom: '2026-03-01T00:00:00.000Z',
+      expiredAt: '2026-03-02T00:00:00.000Z',
+      endReason: 'corrected',
+    });
+    const store = await setup([...chain(), wrong]);
+    const r = await recall(
+      { text: 'auth service port', scope: SCOPE, mode: 'history' },
+      { store, config, now },
+    );
+    expect(r.memories.map((m) => m.id)).toEqual(['v1', 'v2', 'v3']);
+    expect(r.memories[1]?.explanation.chain).toBe(true);
+    expect(r.memories[0]?.explanation.chain).toBeUndefined();
+    expect(r.temporal).toEqual({ mode: 'history', inferred: false });
+  });
+
+  it('recall.history-is-inferred-from-the-question', async () => {
+    const store = await setup(chain());
+    const r = await recall(
+      { text: 'how has the auth service port changed over time', scope: SCOPE },
+      { store, config, now },
+    );
+    expect(r.temporal?.mode).toBe('history');
+    expect(r.memories.map((m) => m.id)).toEqual(['v1', 'v2', 'v3']);
+  });
+
+  it('recall.known-at-includes-what-was-later-corrected', async () => {
+    const wrong = makeMemory({
+      id: 'wrong',
+      text: 'billing runs on stripe',
+      validFrom: '2026-03-01T00:00:00.000Z',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      expiredAt: '2026-06-01T00:00:00.000Z',
+      endReason: 'corrected',
+      supersededBy: 'right',
+    });
+    const right = makeMemory({
+      id: 'right',
+      text: 'billing runs on paddle',
+      validFrom: '2026-03-01T00:00:00.000Z',
+      createdAt: '2026-06-01T00:00:00.000Z',
+      supersedes: 'wrong',
+    });
+    const store = await setup([wrong, right]);
+    const then = await recall(
+      {
+        text: 'billing runs on',
+        scope: SCOPE,
+        mode: 'known-at',
+        knownAt: '2026-04-01T00:00:00.000Z',
+      },
+      { store, config, now },
+    );
+    expect(then.memories.map((m) => m.id)).toEqual(['wrong']);
+    const asOf = await recall(
+      { text: 'billing runs on', scope: SCOPE, asOf: '2026-04-01T00:00:00.000Z' },
+      { store, config, now },
+    );
+    expect(asOf.memories.map((m) => m.id)).toEqual(['right']);
+  });
+
+  it('recall.flags-a-stale-volatile-memory', async () => {
+    const old = new Date(now.getTime() - 60 * DAY).toISOString();
+    const mk = (id: string, text: string, over: Partial<Memory>) => {
+      const m = makeMemory({ id, text, validFrom: old, ...over });
+      return over.source === undefined ? m : { ...m, source: { ...m.source, ...over.source } };
+    };
+    const store = await setup([
+      mk('stale', 'release train status is blocked', {
+        source: { harness: 't', decisions: [VOLATILE] },
+      }),
+      mk('fresh', 'release train owner is the platform team', {
+        lastConfirmedAt: new Date(now.getTime() - 2 * DAY).toISOString(),
+        source: { harness: 't', decisions: [VOLATILE] },
+      }),
+      mk('stable', 'release train uses semantic versioning', {}),
+    ]);
+    const r = await recall({ text: 'release train', scope: SCOPE }, { store, config, now });
+    const stale = Object.fromEntries(r.memories.map((m) => [m.id, m.explanation.stale === true]));
+    expect(stale).toEqual({ stale: true, fresh: false, stable: false });
+    const block = formatForInjection(r, 6000, now);
+    expect(block).toContain(
+      'release train status is blocked (may be outdated; last confirmed 2mo ago)',
+    );
+    expect(block).not.toContain('platform team (may be outdated');
+  });
+
+  it('format.a-version-that-is-not-current-shows-its-interval', () => {
+    const [v1] = chain();
+    const r: RecallResult = {
+      memories: [
+        { ...v1!, explanation: { fused: 0, rrf: 0, coverage: 0, activation: 0, hydrated: false } },
+      ],
+      timings: {},
+    };
+    expect(formatForInjection(r, 6000, now)).toBe(
+      '<oort-memory>\n- [semantic, 2026-03-01 to 2026-05-01] auth service port 3000\n</oort-memory>',
+    );
+  });
+});

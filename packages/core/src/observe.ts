@@ -16,9 +16,29 @@ import { localGrant, type Grant } from './grant.js';
 import { capObservation } from './cap.js';
 import type { Decision, Memory, Scope } from './model.js';
 import { scrubObservation } from './scrub.js';
+import { checkWriterDate, factInterval } from './temporal.js';
 import { tokenizeLexical } from './tokenize.js';
 
-export type MemoryOutcomeKind = 'skipped' | 'reinforced' | 'added' | 'updated' | 'superseded';
+export type MemoryOutcomeKind =
+  'skipped' | 'reinforced' | 'added' | 'updated' | 'superseded' | 'corrected';
+
+/** The actions that write: UPDATE is read as REFINE. */
+type WriteAction = 'ADD' | 'REFINE' | 'SUPERSEDE' | 'CORRECT';
+
+/** How the writer is asked to author each action; its interface predates REFINE and CORRECT. */
+const WRITER_ACTION = {
+  ADD: 'ADD',
+  REFINE: 'UPDATE',
+  SUPERSEDE: 'SUPERSEDE',
+  CORRECT: 'SUPERSEDE',
+} as const;
+
+const OUTCOME = {
+  ADD: 'added',
+  REFINE: 'updated',
+  SUPERSEDE: 'superseded',
+  CORRECT: 'corrected',
+} as const;
 
 /** What happened to one memory the turn produced. */
 export interface MemoryOutcome {
@@ -195,7 +215,7 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     return { outcome: 'reinforced', memoryId: target.id };
   }
 
-  let action: 'ADD' | 'UPDATE' | 'SUPERSEDE' = best.action;
+  let action: WriteAction = best.action === 'UPDATE' ? 'REFINE' : best.action;
   let prior = action === 'ADD' ? undefined : candidates.find((c) => c.id === best.candidateId);
   if (prior !== undefined && (prior.scope.projectId ?? null) !== (scope.projectId ?? null)) {
     // Candidates include global memories. A project's observation must not end or
@@ -210,7 +230,7 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     prior = undefined;
   }
   if (prior !== undefined && a.claimed?.has(prior.id) === true) {
-    // An earlier memory of this turn already ended this prior: this one stands on its own.
+    // An earlier memory of this turn already ended or rewrote this prior: this one stands on its own.
     decisions.push({
       stage: 'write',
       question: 'prior-claimed',
@@ -227,15 +247,118 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   if (action !== 'ADD' && prior === undefined) action = 'ADD';
   if (prior !== undefined) a.claimed?.add(prior.id);
 
-  const w = await a.author(action, prior);
+  const w = dated(obs, await a.author(WRITER_ACTION[action], prior), now, decisions);
   const id = randomUUID();
   const iso = now.toISOString();
+  const writeDecision: Decision = {
+    stage: 'write',
+    question: 'action',
+    answer: action,
+    probability: best.probability,
+  };
+
+  // The fact's own bounds ("until Friday", "starting next week"), resolved in code against the
+  // turn's time. A turn with no usable timestamp starts now: an empty or unparseable validFrom
+  // would make the memory never current (and consolidation would evict it).
+  const turnAt = Number.isNaN(Date.parse(obs.at)) ? now : new Date(obs.at);
+  const bounds = factInterval(w.text, turnAt);
+  if (bounds.validFrom !== undefined || bounds.validTo !== undefined) {
+    decisions.push({
+      stage: 'temporal',
+      question: 'interval',
+      answer: `${bounds.validFrom ?? 'turn'} .. ${bounds.validTo ?? 'open'}`,
+      probability: 1,
+    });
+  }
+  const validFrom = bounds.validFrom ?? (Number.isNaN(Date.parse(obs.at)) ? iso : obs.at);
+  const validTo =
+    bounds.validTo !== undefined && Date.parse(bounds.validTo) > Date.parse(validFrom)
+      ? bounds.validTo
+      : null;
+
+  if (action === 'REFINE' && prior !== undefined) {
+    // Same fact, more detail: rewrite in place. The earlier wording stays in the decisions.
+    await store.upsert(grant, {
+      ...prior,
+      type: w.type,
+      text: w.text,
+      stub: w.stub,
+      entities: w.entities,
+      embedding: a.embedding,
+      salience: Math.max(prior.salience, a.salience),
+      validTo: validTo ?? prior.validTo,
+      lastConfirmedAt: iso,
+      updatedAt: iso,
+      source: {
+        ...prior.source,
+        decisions: [
+          ...prior.source.decisions,
+          ...decisions,
+          {
+            stage: 'refine',
+            question: 'previous-text',
+            answer: prior.text,
+            probability: best.probability,
+          },
+          writeDecision,
+        ],
+      },
+    });
+    return { outcome: 'updated', memoryId: prior.id };
+  }
+
+  const base: Memory = {
+    id,
+    scope,
+    type: w.type,
+    text: w.text,
+    stub: w.stub,
+    entities: w.entities,
+    salience: a.salience,
+    pinned: false,
+    tier: a.salience >= HOT_SALIENCE ? 'hot' : 'warm',
+    accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
+    validFrom,
+    validTo,
+    expiredAt: null,
+    endReason: null,
+    lastConfirmedAt: null,
+    supersedes: prior?.id ?? null,
+    supersededBy: null,
+    embedding: a.embedding,
+    source: {
+      harness: deps.harness ?? 'unknown',
+      ...(obs.sessionId !== undefined && { sessionId: obs.sessionId }),
+      ...(obs.turnRef !== undefined && { turnRef: obs.turnRef }),
+      decisions: [],
+    },
+    createdAt: iso,
+    updatedAt: iso,
+  };
+  const withDecisions = (m: Memory): Memory => ({
+    ...m,
+    source: { ...m.source, decisions: [...decisions, writeDecision] },
+  });
+
+  if (action === 'CORRECT' && prior !== undefined) {
+    // The prior was never true: retract it in transaction time and put the correction in its
+    // place in valid time. Its valid interval is left alone, so as-of reads skip it by reason.
+    await store.upsertMany(grant, [
+      withDecisions({ ...base, validFrom: prior.validFrom, validTo: prior.validTo }),
+      {
+        ...prior,
+        expiredAt: iso,
+        endReason: 'corrected',
+        supersededBy: id,
+        updatedAt: iso,
+      },
+    ]);
+    return { outcome: 'corrected', memoryId: id };
+  }
+
   // Temporal order of the new fact against the one it replaces. `deep` means it is
   // also older than the prior's own predecessor; chains are re-slotted at most one
   // step back (deeper out-of-order chains are a Phase 2 concern).
-  // A turn with no usable timestamp starts now: an empty or unparseable validFrom
-  // would make the memory never current (and consolidation would evict it).
-  const validFrom = Number.isNaN(Date.parse(obs.at)) ? iso : obs.at;
   const inOrder = prior === undefined || Date.parse(prior.validFrom) <= Date.parse(validFrom);
   let pred: Memory | null = null;
   if (prior !== undefined && !inOrder && prior.supersedes !== null) {
@@ -250,39 +373,9 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
       probability: 1,
     });
   }
+  const memory = withDecisions(base);
 
-  const memory: Memory = {
-    id,
-    scope,
-    type: w.type,
-    text: w.text,
-    stub: w.stub,
-    entities: w.entities,
-    salience: a.salience,
-    pinned: false,
-    tier: a.salience >= HOT_SALIENCE ? 'hot' : 'warm',
-    accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
-    validFrom,
-    validTo: null,
-    expiredAt: null,
-    endReason: null,
-    lastConfirmedAt: null,
-    supersedes: prior?.id ?? null,
-    supersededBy: null,
-    embedding: a.embedding,
-    source: {
-      harness: deps.harness ?? 'unknown',
-      ...(obs.sessionId !== undefined && { sessionId: obs.sessionId }),
-      ...(obs.turnRef !== undefined && { turnRef: obs.turnRef }),
-      decisions: [
-        ...decisions,
-        { stage: 'write', question: 'action', answer: action, probability: best.probability },
-      ],
-    },
-    createdAt: iso,
-    updatedAt: iso,
-  };
-  // A supersede, update or out-of-order insert changes several records; they land
+  // A supersede or out-of-order insert changes several records; they land
   // together in one atomic write so a crash cannot leave a half-linked chain.
   if (prior === undefined) {
     await store.upsert(grant, memory);
@@ -332,8 +425,29 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     ]);
   }
 
-  const outcome = action === 'ADD' ? 'added' : action === 'UPDATE' ? 'updated' : 'superseded';
-  return { outcome, memoryId: id };
+  return { outcome: OUTCOME[action], memoryId: id };
+}
+
+/**
+ * The writer's absolute date checked against the turn (CON-34): when the turn says "yesterday"
+ * and the fact carries one ISO day, that day is chrono's reading, not the model's arithmetic.
+ */
+function dated(
+  obs: Observation,
+  w: WrittenMemory,
+  now: Date,
+  decisions: Decision[],
+): WrittenMemory {
+  const at = Number.isNaN(Date.parse(obs.at)) ? now : new Date(obs.at);
+  const r = checkWriterDate(`${obs.userText}\n${obs.assistantText}`, w.text, at);
+  if (r.fixed === undefined) return w;
+  decisions.push({
+    stage: 'temporal',
+    question: 'writer-date',
+    answer: `${r.fixed.from} -> ${r.fixed.to}`,
+    probability: 1,
+  });
+  return { ...w, text: r.text, stub: w.stub.split(r.fixed.from).join(r.fixed.to) };
 }
 
 /** The same fact twice (whitespace and case aside) is written once. */

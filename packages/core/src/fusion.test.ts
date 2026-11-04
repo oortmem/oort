@@ -90,6 +90,77 @@ describe('fusion', () => {
     expect(fuse(list, byId(m), NOW, { activation: P })).toEqual([]);
   });
 
+  it('fusion.asOf-skips-a-corrected-fact', () => {
+    // A corrected fact was never true, so no instant in valid time shows it.
+    const wrong = makeMemory({
+      id: 'wrong',
+      validFrom: START,
+      expiredAt: '2026-11-03T00:00:00.000Z',
+      endReason: 'corrected',
+    });
+    const right = makeMemory({ id: 'right', validFrom: START });
+    const list = [hits('wrong', 'right')];
+    const asOf = '2026-11-02T00:00:00.000Z';
+    expect(fuse(list, byId(wrong, right), NOW, { activation: P, asOf }).map((r) => r.id)).toEqual([
+      'right',
+    ]);
+  });
+
+  it('fusion.known-at-shows-what-was-believed-then', () => {
+    // Believed from 11-01, found wrong on 11-03; the correction was recorded on 11-03.
+    const wrong = makeMemory({
+      id: 'wrong',
+      validFrom: START,
+      createdAt: START,
+      expiredAt: '2026-11-03T00:00:00.000Z',
+      endReason: 'corrected',
+    });
+    const right = makeMemory({
+      id: 'right',
+      validFrom: START,
+      createdAt: '2026-11-03T00:00:00.000Z',
+    });
+    // Superseded on 11-03 (recorded then), so on 11-02 it was still believed current.
+    const old = makeMemory({
+      id: 'old',
+      validFrom: START,
+      validTo: '2026-11-03T00:00:00.000Z',
+      createdAt: START,
+      expiredAt: '2026-11-03T00:00:00.000Z',
+      endReason: 'superseded',
+    });
+    const list = [hits('wrong', 'right', 'old')];
+    const ms = byId(wrong, right, old);
+    const knownAt = (at: string) =>
+      fuse(list, ms, NOW, { activation: P, view: { mode: 'known-at', knownAt: at } }).map(
+        (r) => r.id,
+      );
+    expect(knownAt('2026-11-02T00:00:00.000Z')).toEqual(['wrong', 'old']);
+    expect(knownAt('2026-11-04T00:00:00.000Z')).toEqual(['right']);
+  });
+
+  it('fusion.history-keeps-every-version-but-corrected-ones', () => {
+    const old = makeMemory({
+      id: 'old',
+      validFrom: START,
+      validTo: '2026-11-02T00:00:00.000Z',
+      expiredAt: '2026-11-02T00:00:00.000Z',
+      endReason: 'superseded',
+    });
+    const cur = makeMemory({ id: 'cur', validFrom: '2026-11-02T00:00:00.000Z' });
+    const wrong = makeMemory({
+      id: 'wrong',
+      validFrom: START,
+      expiredAt: '2026-11-02T00:00:00.000Z',
+      endReason: 'corrected',
+    });
+    const out = fuse([hits('old', 'cur', 'wrong')], byId(old, cur, wrong), NOW, {
+      activation: P,
+      view: { mode: 'history' },
+    });
+    expect(out.map((r) => r.id)).toEqual(['old', 'cur']);
+  });
+
   // Activation is a multiplicative boost (band 0.05), not additive: single-list RRF ranks differ
   // by (r-1)/61, so the band reorders at most ~3 ranks.
   it('fusion.multiplies-rrf-by-bounded-activation-boost', () => {
