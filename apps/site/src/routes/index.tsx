@@ -153,12 +153,20 @@ function Home() {
               </a>
               .
             </p>
-            <Link
-              to="/explorer"
-              className="inline-block text-sm text-muted-foreground underline-offset-4 hover:underline"
-            >
-              See the Explorer concept →
-            </Link>
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
+              <Link
+                to="/docs/quickstart"
+                className="inline-block text-sm text-foreground underline decoration-photon-glow/60 underline-offset-4 hover:decoration-photon-glow"
+              >
+                Read the setup guide →
+              </Link>
+              <Link
+                to="/explorer"
+                className="inline-block text-sm text-muted-foreground underline-offset-4 hover:underline"
+              >
+                See the Explorer concept →
+              </Link>
+            </div>
           </div>
         </div>
       </section>

@@ -13,6 +13,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { docsPages } from '@/lib/docs';
 import { routeTree } from '@/routeTree.gen';
+import { SiteFooter, SiteNav } from '@/components/site/SiteNav';
 
 type RouteModule = { Route: { options: { component?: unknown } } };
 
@@ -38,6 +39,17 @@ async function page(mod: RouteModule) {
   });
   const r = render(<RouterProvider router={router} />);
   await screen.findAllByRole('heading', { level: 1 });
+  return r.container;
+}
+
+async function renderIn(node: React.JSX.Element) {
+  const root = createRootRoute({ component: () => node });
+  const router = createRouter({
+    routeTree: root,
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  });
+  const r = render(<RouterProvider router={router} />);
+  await screen.findAllByRole('link');
   return r.container;
 }
 
@@ -249,5 +261,27 @@ describe('docs content', () => {
       expect(await text(url)).toContain('"--project", "${workspaceFolder}"');
       cleanup();
     }
+  });
+});
+
+describe('docs in the site chrome', () => {
+  it('the nav links to the docs', async () => {
+    await renderIn(<SiteNav />);
+    expect(screen.getByRole('link', { name: 'Docs' }).getAttribute('href')).toBe('/docs');
+  });
+
+  it('the footer lists the guides', async () => {
+    await renderIn(<SiteFooter />);
+    expect(screen.getByRole('link', { name: 'Quickstart' }).getAttribute('href')).toBe(
+      '/docs/quickstart',
+    );
+    expect(screen.getByRole('link', { name: 'Troubleshooting' }).getAttribute('href')).toBe(
+      '/docs/troubleshooting',
+    );
+  });
+
+  it('the home hero links to the setup guide', () => {
+    const home = readFileSync(join(import.meta.dirname, '../routes/index.tsx'), 'utf8');
+    expect(home).toMatch(/to="\/docs\/quickstart"[\s\S]{0,200}Read the setup guide/);
   });
 });

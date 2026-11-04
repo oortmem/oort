@@ -5,6 +5,7 @@ import { Logo } from './Logo';
 import { legal } from '@/lib/legal';
 
 const links = [
+  { to: '/docs', label: 'Docs' },
   { to: '/architecture', label: 'Architecture' },
   { to: '/explorer', label: 'Explorer' },
   { to: '/enterprise', label: 'Enterprise' },
@@ -76,7 +77,7 @@ export function SiteNav() {
 export function SiteFooter() {
   return (
     <footer className="border-t border-border">
-      <div className="mx-auto grid max-w-7xl gap-10 px-6 py-14 md:grid-cols-5">
+      <div className="mx-auto grid max-w-7xl gap-10 px-6 py-14 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
         <div className="space-y-3">
           <Logo compact />
           <p className="text-sm text-muted-foreground">
@@ -85,6 +86,17 @@ export function SiteFooter() {
           </p>
         </div>
         {[
+          [
+            'Docs',
+            [
+              ['/docs/quickstart', 'Quickstart'],
+              ['/docs', 'All setup guides'],
+              ['/docs/frameworks', 'Agent frameworks'],
+              ['/docs/pro', 'Oort Pro'],
+              ['/docs/privacy', 'What leaves your machine'],
+              ['/docs/troubleshooting', 'Troubleshooting'],
+            ],
+          ],
           [
             'Product',
             [
