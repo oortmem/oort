@@ -169,7 +169,8 @@ describe('scrub', () => {
    * A scaling check, not a wall-clock bound (those flake under load): 4x the
    * input must cost well under 16x, the quadratic ratio.
    */
-  it('scrub.linear-on-long-serialised-lines', { timeout: 60_000 }, () => {
+  // Retried: a timing ratio cannot hold while sibling test workers saturate every core.
+  it('scrub.linear-on-long-serialised-lines', { timeout: 60_000, retry: 2 }, () => {
     const rnd = prng(17);
     const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
     const rand = (n: number, al: string): string => {

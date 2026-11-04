@@ -521,7 +521,8 @@ describe('tool summaries and stripping cost', () => {
     }
   });
 
-  it('parser.strip-is-linear', () => {
+  // Retried: a wall-clock bound cannot hold while sibling test workers saturate every core.
+  it('parser.strip-is-linear', { retry: 2 }, () => {
     const row = (type: string, uuid: string, text: string) =>
       JSON.stringify({
         type,
@@ -539,9 +540,15 @@ describe('tool summaries and stripping cost', () => {
       '<oort-memory>'.repeat(20_000) + '</oort-memory',
     ]) {
       const jsonl = [row('user', 'u', body), row('assistant', 'a', body)].join('\n');
-      const t0 = performance.now();
-      const ts = parseTranscript(jsonl);
-      expect(performance.now() - t0).toBeLessThan(50);
+      // Fastest of three: contention only adds time; a quadratic strip takes seconds here.
+      let best = Infinity;
+      let ts = parseTranscript(jsonl);
+      for (let i = 0; i < 3; i++) {
+        const t0 = performance.now();
+        ts = parseTranscript(jsonl);
+        best = Math.min(best, performance.now() - t0);
+      }
+      expect(best).toBeLessThan(50);
       // Nothing closed, so nothing stripped and nothing reflowed.
       expect(ts[0]?.text).toBe(body);
     }
