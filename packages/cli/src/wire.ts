@@ -268,7 +268,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
       apiKey: r.key,
       model: config.embed.model,
       dimension: config.embed.dimension,
-      ...(r.relay !== undefined && { baseUrl: `${r.relay}${RELAY_PATHS.voyage}` }),
+      ...(r.relay !== undefined && { baseUrl: `${r.relay}${RELAY_PATHS.voyage}`, relay: true }),
       ...fetchOpt,
     }),
   );
@@ -278,7 +278,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     (await import('@oortmem/rerank-voyage')).voyageReranker({
       apiKey: r.key,
       model: config.rerank.model,
-      ...(r.relay !== undefined && { baseUrl: `${r.relay}${RELAY_PATHS.voyage}` }),
+      ...(r.relay !== undefined && { baseUrl: `${r.relay}${RELAY_PATHS.voyage}`, relay: true }),
       ...fetchOpt,
     }),
   );
@@ -287,7 +287,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
   const decide = await load(DECIDE, config, await routeOf(DECIDE), relay, onRelayError, async (r) =>
     (await import('@oortmem/decide-jev')).jevDecider({
       apiKey: r.key,
-      ...(r.relay !== undefined && { baseURL: `${r.relay}${RELAY_PATHS.typesafe}` }),
+      ...(r.relay !== undefined && { baseURL: `${r.relay}${RELAY_PATHS.typesafe}`, relay: true }),
       ...fetchOpt,
     }),
   );
@@ -297,7 +297,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     (await import('@oortmem/writer')).anthropicWriter({
       ...(r.relay === undefined
         ? { apiKey: r.key }
-        : { authToken: r.key, baseURL: `${r.relay}${RELAY_PATHS.anthropic}` }),
+        : { authToken: r.key, baseURL: `${r.relay}${RELAY_PATHS.anthropic}`, relay: true }),
       model: config.writer.model,
       ...fetchOpt,
     }),

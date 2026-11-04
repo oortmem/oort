@@ -184,6 +184,24 @@ describe('the oort provider', () => {
     expect((e as Error).message).toContain(ACCOUNT_URL);
   });
 
+  it('pro.cap-429-is-not-retried-by-any-adapter-and-shows-the-relay-message', async () => {
+    const cap = 'You have used the 50,000 recalls included in Oort Pro this month.';
+    const seen: string[] = [];
+    const capped = (async (input: string | URL | Request) => {
+      seen.push(new Request(input).url);
+      return Response.json({ error: cap }, { status: 429 });
+    }) as typeof fetch;
+    const w = await wired(env({ OORT_API_KEY: oortKey() }), { fetch: capped });
+    const errors = await callAll(w);
+    await w.close();
+    expect(seen).toHaveLength(4); // one request per role, no retry
+    for (const [role, e] of Object.entries(errors)) {
+      expect(e, role).toBeInstanceOf(OortRelayError);
+      expect((e as Error).message, role).toContain(cap);
+      expect((e as Error).message, role).toContain('429');
+    }
+  });
+
   it('pro.relay-url-must-be-https-or-loopback', async () => {
     expect(relayUrl({})).toEqual({ url: DEFAULT_RELAY_URL });
     expect(relayUrl({ OORT_RELAY_URL: '' })).toEqual({ url: DEFAULT_RELAY_URL });

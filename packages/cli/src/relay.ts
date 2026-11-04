@@ -62,13 +62,19 @@ export class OortRelayError extends Error {
   readonly kind: RelayErrorKind;
   readonly status: number;
 
-  constructor(kind: RelayErrorKind, status: number) {
+  /**
+   * `relayMessage` is the relay's own line for a 429 (the monthly cap says which pool and when it
+   * resets), as the adapters keep it; without one the message is the generic 429 text.
+   */
+  constructor(kind: RelayErrorKind, status: number, relayMessage?: string) {
     super(
-      kind === 'payment-required'
-        ? `Oort Pro is not active on this account (HTTP 402). Subscribe or update billing at ${ACCOUNT_URL}, or set your own keys with \`oort keys set <provider>\`.`
-        : kind === 'rate-limit'
-          ? `Oort Pro limit reached (HTTP 429): too many requests in 10 seconds, or this month's included saves or recalls are used up. Usage is at ${ACCOUNT_URL}.`
-          : `The relay rejected the Oort key (HTTP 401): it is unknown or revoked. Run \`oort login\` again, or create a key at ${ACCOUNT_URL}.`,
+      kind === 'rate-limit' && relayMessage !== undefined
+        ? `Oort Pro limit reached (HTTP 429): ${relayMessage}${relayMessage.includes(ACCOUNT_URL) ? '' : ` Usage is at ${ACCOUNT_URL}.`}`
+        : kind === 'payment-required'
+          ? `Oort Pro is not active on this account (HTTP 402). Subscribe or update billing at ${ACCOUNT_URL}, or set your own keys with \`oort keys set <provider>\`.`
+          : kind === 'rate-limit'
+            ? `Oort Pro limit reached (HTTP 429): too many requests in 10 seconds, or this month's included saves or recalls are used up. Usage is at ${ACCOUNT_URL}.`
+            : `The relay rejected the Oort key (HTTP 401): it is unknown or revoked. Run \`oort login\` again, or create a key at ${ACCOUNT_URL}.`,
     );
     this.name = 'OortRelayError';
     this.kind = kind;
@@ -81,7 +87,10 @@ export function relayErrorOf(e: unknown): OortRelayError | undefined {
   if (e instanceof OortRelayError) return e;
   const status = (e as { status?: unknown } | null)?.status;
   if (status === 402) return new OortRelayError('payment-required', 402);
-  if (status === 429) return new OortRelayError('rate-limit', 429);
+  if (status === 429) {
+    const msg = (e as { relayMessage?: unknown }).relayMessage;
+    return new OortRelayError('rate-limit', 429, typeof msg === 'string' ? msg : undefined);
+  }
   if (status === 401 || status === 403) return new OortRelayError('unauthorized', status);
   return undefined;
 }
