@@ -35,6 +35,16 @@ export function reconcileInstructions(i: number): string {
   return `How does the new observation relate to the existing memory at \`candidates[${i}]\`? Judge only this one memory.`;
 }
 
+/** `reconcileInstructions` for fact `j` of a batched request (CON-56). */
+export function reconcileManyInstructions(j: number, i: number): string {
+  return `How does the new fact at \`facts[${j}].observation\` relate to the existing memory at \`facts[${j}].candidates[${i}]\`? Judge only this fact and this one memory.`;
+}
+
+/** `NOVEL_INSTRUCTIONS` for fact `j` of a batched request. */
+export function novelManyInstructions(j: number): string {
+  return `Does the new fact at \`facts[${j}].observation\` contain information worth storing as a new memory?`;
+}
+
 export const RECONCILE_CRITERIA = {
   NOOP: 'unrelated: the observation is about something else',
   REINFORCE: 'restates or confirms the memory with no new information',

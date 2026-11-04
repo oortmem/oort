@@ -352,6 +352,34 @@ describe('importTranscripts', () => {
     expect(again.observations).toBe(0);
   });
 
+  it('import.counts-each-memory-of-a-split-turn', async () => {
+    const t = tempHome();
+    const base = makeDeps(t, { calls: newCalls() });
+    // A writer that splits every turn into two separate facts (CON-56).
+    const write: MemoryWriter = {
+      write: (obs, action, prior) => base.write!.write(obs, action, prior),
+      async writeMany(obs) {
+        const tag = obs.turnRef ?? 'turn';
+        return [
+          { text: `First fact of ${tag}.`, stub: `first ${tag}`, entities: [], type: 'semantic' },
+          { text: `Second fact of ${tag}.`, stub: `second ${tag}`, entities: [], type: 'semantic' },
+        ];
+      },
+    };
+    const now = new Date('2026-11-03T12:00:00Z');
+    const r = await importTranscripts(
+      { projectsDir: projects(t), estimateOnly: false },
+      { ...base, write, now: () => now },
+    );
+    expect(r.observations).toBe(10);
+    expect(r.outcomes).toEqual({ added: 20 });
+    const rows = fs
+      .readFileSync(path.join(t.home, 'eval', 'import-2026-11-03.jsonl'), 'utf8')
+      .trim()
+      .split('\n');
+    expect(rows).toHaveLength(20);
+  });
+
   it('import.cursor-stops-at-first-failure', async () => {
     const t = tempHome();
     const dir = projects(t);

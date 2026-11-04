@@ -63,6 +63,35 @@ Open findings:
   most of it is two network calls. Measure embed vs rerank and consider
   skipping rerank when fusion is confident.
 - 13% unwritable: the writer should be able to return more than one memory
-  per observation instead of overflowing one.
+  per observation instead of overflowing one. Addressed by CON-56 (below);
+  the share after the change needs a re-run of the import.
 - The superseded share (69%) is high; check that status updates are not
-  superseding unrelated facts.
+  superseding unrelated facts. Addressed by CON-56 (below); re-measure with the
+  same re-run.
+
+## One turn, several memories (CON-56)
+
+The writer splits a turn into 1 to `writer.maxMemoriesPerObservation` memories
+(default 5), one fact each, each under the old limits (text up to 600
+characters). A turn with one long fact is split rather than skipped. A turn is
+`unwritable` only when the writer's answer fails twice, now with the split.
+
+Each memory is then handled on its own:
+
+1. One embed call covers every memory of the turn. Each memory stores the
+   embedding of its own text, not the whole turn's.
+2. Related memories are looked up per memory, all before anything from the
+   turn is stored, so two facts from one turn never replace each other.
+3. Jev judges each memory against its own related memories. Through the Jev
+   adapter this is one call for the whole turn (`reconcileMany`), split only if
+   the request would pass the relay's size limit.
+4. A memory whose related memories are all unrelated is added as new. A prior
+   memory is ended by at most one memory of the turn.
+
+Calls per stored turn: one gate call, one writer call (two on a retry), one
+embed call with up to 5 inputs, and one reconcile call. Before, it was the
+same, with one embed input. Through Oort Pro, embed inputs count toward the
+monthly embed allowance, so a split turn uses up to 5.
+
+`oort import` counts each memory: its summary and the eval file show one entry
+per memory, not per turn. `oort observe` lists them under `memories`.

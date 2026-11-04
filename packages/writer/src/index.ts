@@ -10,10 +10,26 @@ import {
   type LanguageModel,
 } from 'ai';
 import { z } from 'zod';
-import { MissingCredentialError, scrub, type MemoryType, type MemoryWriter } from '@oortmem/core';
-import { WRITER_SYSTEM_PROMPT, buildWriterPrompt } from './prompt.js';
+import {
+  MissingCredentialError,
+  scrub,
+  type MemoryType,
+  type MemoryWriter,
+  type WrittenMemory,
+} from '@oortmem/core';
+import {
+  WRITER_MANY_SYSTEM_PROMPT,
+  WRITER_SYSTEM_PROMPT,
+  buildWriterManyPrompt,
+  buildWriterPrompt,
+} from './prompt.js';
 
-export { WRITER_SYSTEM_PROMPT, buildWriterPrompt };
+export {
+  WRITER_MANY_SYSTEM_PROMPT,
+  WRITER_SYSTEM_PROMPT,
+  buildWriterManyPrompt,
+  buildWriterPrompt,
+};
 
 /** Default Anthropic model for `anthropicWriter` (Claude Haiku 5.5). */
 const DEFAULT_MODEL = 'claude-haiku-5-5';
@@ -30,6 +46,9 @@ const outputSchema = z.object({
 });
 
 type WriterOutput = z.infer<typeof outputSchema>;
+
+/** `writeMany`'s answer: 1 to `max` memories, each within the single-memory limits. */
+const manySchema = (max: number) => z.object({ memories: z.array(outputSchema).min(1).max(max) });
 
 /** Human-readable limit per field, used in the corrective retry message. */
 const LIMITS: Record<string, string> = {
@@ -146,7 +165,7 @@ function throwIfUnusable(e: unknown): void {
 }
 
 /** Names the schema fields that failed, from the raw model text if it parses; never returns text. */
-function failingFields(e: unknown): string[] {
+function failingFields(e: unknown, schema: z.ZodType = outputSchema): string[] {
   let raw: string | undefined;
   if (NoObjectGeneratedError.isInstance(e)) raw = e.text;
   else if (TypeValidationError.isInstance(e)) {
@@ -154,13 +173,10 @@ function failingFields(e: unknown): string[] {
   }
   if (raw !== undefined) {
     try {
-      const r = outputSchema.safeParse(JSON.parse(raw));
+      const r = schema.safeParse(JSON.parse(raw));
       if (!r.success) {
         const fields = new Set<string>();
-        for (const issue of r.error.issues) {
-          const head = issue.path[0];
-          fields.add(typeof head === 'string' ? head : 'output');
-        }
+        for (const issue of r.error.issues) fields.add(fieldName(issue.path));
         return [...fields];
       }
     } catch {
@@ -168,6 +184,34 @@ function failingFields(e: unknown): string[] {
     }
   }
   return ['output'];
+}
+
+/** `text`, or `memories[2].text` for a field inside the `writeMany` array. */
+function fieldName(p: readonly PropertyKey[]): string {
+  if (p.length === 0) return 'output';
+  if (p[0] !== 'memories') return typeof p[0] === 'string' ? p[0] : 'output';
+  if (p.length === 1 || typeof p[1] !== 'number') return 'memories';
+  return typeof p[2] === 'string' ? `memories[${p[1]}].${p[2]}` : `memories[${p[1]}]`;
+}
+
+/** The limit for a field name as `fieldName` writes it. */
+function limitOf(f: string, max: number): string | undefined {
+  if (f === 'memories') return `memories must hold 1 to ${max} items`;
+  const leaf = f.replace(/^memories\[\d+\]\.?/, '');
+  return LIMITS[leaf];
+}
+
+function correctionMany(fields: string[], max: number): string {
+  const named = fields.map(
+    (f) =>
+      limitOf(f, max) ??
+      'the output must be one JSON object {"memories": [...]} matching the schema',
+  );
+  return (
+    `Your previous answer failed validation on: ${fields.join(', ')}. Limits: ${named.join('; ')}. ` +
+    `Write the memories again within these limits. When a memory's text would be longer than 600 ` +
+    `characters, split it into two or more memories, one fact each, at most ${max} in total.`
+  );
 }
 
 function correction(fields: string[]): string {
@@ -219,11 +263,19 @@ export function aiSdkWriter(opts: {
   const maxOutputTokens = opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
   async function attempt(messages: { role: 'user'; content: string }[]): Promise<WriterOutput> {
+    return generate(messages, WRITER_SYSTEM_PROMPT, outputSchema);
+  }
+
+  async function generate<T>(
+    messages: { role: 'user'; content: string }[],
+    system: string,
+    schema: z.ZodType<T>,
+  ): Promise<T> {
     const { output } = await generateText({
       model: opts.model,
-      system: WRITER_SYSTEM_PROMPT,
+      system,
       messages,
-      output: Output.object({ schema: outputSchema }),
+      output: Output.object({ schema }),
       // No sampling parameters: Claude Haiku 5.5 rejects non-default values, and the defaults suit this task.
       providerOptions: { anthropic: { thinking: { type: 'disabled' } } },
       maxOutputTokens,
@@ -253,6 +305,42 @@ export function aiSdkWriter(opts: {
         if (!isSchemaFailure(e)) throw wrap(e, opts.relay === true);
         throwIfUnusable(e);
         throw new WriterOutputError(failingFields(e));
+      }
+    },
+
+    async writeMany(obs, max): Promise<WrittenMemory[]> {
+      const cap = Math.max(1, Math.floor(max));
+      const schema = manySchema(cap);
+      const user = { role: 'user' as const, content: buildWriterManyPrompt(obs, cap) };
+      const run = async (extra?: string) =>
+        (
+          await generate(
+            extra === undefined ? [user] : [user, { role: 'user', content: extra }],
+            WRITER_MANY_SYSTEM_PROMPT,
+            schema,
+          )
+        ).memories.map(scrubbed);
+      let retry: string;
+      try {
+        return await run();
+      } catch (e) {
+        if (!isSchemaFailure(e)) throw wrap(e, opts.relay === true);
+        if (NoObjectGeneratedError.isInstance(e) && e.finishReason === 'length') {
+          // Several memories can outgrow the token budget: ask once for fewer, shorter ones.
+          retry =
+            `Your previous answer was cut off before it finished. Write fewer, shorter memories: ` +
+            `at most ${Math.max(1, Math.ceil(cap / 2))}, each text well under 600 characters.`;
+        } else {
+          throwIfUnusable(e);
+          retry = correctionMany(failingFields(e, schema), cap);
+        }
+      }
+      try {
+        return await run(retry);
+      } catch (e) {
+        if (!isSchemaFailure(e)) throw wrap(e, opts.relay === true);
+        throwIfUnusable(e);
+        throw new WriterOutputError(failingFields(e, schema));
       }
     },
   };

@@ -456,3 +456,64 @@ describe('request size caps', () => {
     }
   });
 });
+
+describe('reconcileMany (CON-56)', () => {
+  const fact = (text: string) => ({ ...obs, userText: text, assistantText: '', toolSummaries: [] });
+
+  it('reconcileMany.one-call-for-every-fact', async () => {
+    const s = stub(() => ({
+      f0_c0: choiceA('SUPERSEDE', probs({ SUPERSEDE: 0.8 })),
+      f0_c1: choiceA('NOOP', probs({ NOOP: 0.8 })),
+      f1_novel: choiceA('ADD', { ADD: 0.9, NOOP: 0.1 }),
+    }));
+    const out = await jevDecider({ client: s.client }).reconcileMany!([
+      {
+        obs: fact('CI on main is green.'),
+        candidates: [mem('ci', 'CI on main is red.'), mem('x', 'X')],
+      },
+      { obs: fact('release 1.2 shipped.'), candidates: [] },
+    ]);
+    expect(s.calls).toHaveLength(1);
+    expect(out.map((rs) => rs.map((r) => [r.candidateId, r.action]))).toEqual([
+      [
+        ['ci', 'SUPERSEDE'],
+        ['x', 'NOOP'],
+      ],
+      [[null, 'ADD']],
+    ]);
+    const q = s.calls[0]!.questions as Record<string, { instructions: string }>;
+    expect(q['f0_c1']!.instructions).toContain('`facts[0].candidates[1]`');
+    expect(q['f0_c1']!.instructions).toContain('`facts[0].observation`');
+    expect(q['f1_novel']!.instructions).toContain('`facts[1].observation`');
+    const state = s.calls[0]!.state as { facts: { observation: { user: string } }[] };
+    expect(state.facts.map((f) => f.observation.user)).toEqual([
+      'CI on main is green.',
+      'release 1.2 shipped.',
+    ]);
+  });
+
+  it('reconcileMany.empty-is-no-call', async () => {
+    const s = stub(() => ({}));
+    expect(await jevDecider({ client: s.client }).reconcileMany!([])).toEqual([]);
+    expect(s.calls).toHaveLength(0);
+  });
+
+  it('reconcileMany.splits-a-request-that-would-pass-the-size-cap', async () => {
+    const big = 'x'.repeat(20 * 1024);
+    const five = Array.from({ length: 5 }, (_, i) => mem(`m${i}`, big));
+    const s = stub((req) =>
+      Object.fromEntries(
+        Object.keys(req.questions).map((k) => [k, choiceA('NOOP', probs({ NOOP: 0.8 }))]),
+      ),
+    );
+    const out = await jevDecider({ client: s.client }).reconcileMany!(
+      // Each fact's state is capped at 16 KB a side, so five large facts need several calls.
+      Array.from({ length: 5 }, (_, j) => ({ obs: fact(`fact ${j} ${big}`), candidates: five })),
+    );
+    expect(out).toHaveLength(5);
+    expect(s.calls.length).toBeGreaterThan(1);
+    for (const c of s.calls) {
+      expect(new TextEncoder().encode(JSON.stringify(c)).byteLength).toBeLessThan(56 * 1024);
+    }
+  });
+});

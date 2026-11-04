@@ -20,6 +20,28 @@ export const WRITER_SYSTEM_PROMPT = [
 ].join('\n');
 
 /**
+ * The rules for `writeMany`: the same as `WRITER_SYSTEM_PROMPT`, except that one turn becomes
+ * one or more memories, one fact each (CON-56).
+ */
+export const WRITER_MANY_SYSTEM_PROMPT = WRITER_SYSTEM_PROMPT.replace(
+  '1. Write one self-contained claim that is true without the conversation around it.',
+  [
+    '1. Split the turn into separate memories, one fact per memory, up to the number the message allows. Each memory is a self-contained claim that is true without the conversation around it and without the other memories.',
+    '1a. Never repeat a fact in two memories, and never merge unrelated facts into one memory. Facts about the same thing stay together in one memory.',
+    "1b. Keep each memory's text under 600 characters. When a fact needs more, split it into smaller facts instead of shortening away detail.",
+  ].join('\n'),
+);
+
+/** The user message for `writeMany`: the observation and the memory cap. */
+export function buildWriterManyPrompt(obs: Observation, max: number): string {
+  const base = buildWriterPrompt(obs, 'ADD');
+  return base.replace(
+    /Write the memory for this observation\.$/,
+    `Write at most ${max} memories for this observation, one fact per memory, as {"memories": [...]}.`,
+  );
+}
+
+/**
  * The Oort Pro relay takes at most 128 KB per Anthropic request. Escaping (`<` becomes `&lt;`) and
  * JSON quoting can multiply the text, so the prompt is measured as it will be sent (as a JSON
  * string, plus room for the system prompt and the rest of the request) and the observation

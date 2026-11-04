@@ -183,6 +183,21 @@ export interface Reranker {
 export interface DecisionController {
   gate(obs: Observation): Promise<GateDecision>;
   reconcile(obs: Observation, candidates: Memory[]): Promise<ReconcileDecision[]>;
+  /**
+   * `reconcile` for several facts in one call, in order: the result at index i answers
+   * `items[i]`. Optional; observe falls back to one `reconcile` per fact.
+   */
+  reconcileMany?(
+    items: { obs: Observation; candidates: Memory[] }[],
+  ): Promise<ReconcileDecision[][]>;
+}
+
+/** One memory as the writer authors it. */
+export interface WrittenMemory {
+  text: string;
+  stub: string;
+  entities: string[];
+  type: MemoryType;
 }
 
 /** System Two: authors the de-contextualised claim and its stub in one call. */
@@ -191,5 +206,10 @@ export interface MemoryWriter {
     obs: Observation,
     action: 'ADD' | 'UPDATE' | 'SUPERSEDE',
     prior?: Memory,
-  ): Promise<{ text: string; stub: string; entities: string[]; type: MemoryType }>;
+  ): Promise<WrittenMemory>;
+  /**
+   * The observation as 1 to `max` separate memories, one fact each, in one call. Optional;
+   * when present, observe writes first and reconciles each memory on its own (CON-56).
+   */
+  writeMany?(obs: Observation, max: number): Promise<WrittenMemory[]>;
 }
