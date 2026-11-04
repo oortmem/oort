@@ -66,6 +66,36 @@ async function callAll(w: Awaited<ReturnType<typeof wired>>): Promise<Record<str
   return out;
 }
 
+describe('wire roles (CON-57)', () => {
+  it('wire.loads-only-the-roles-asked-for', async () => {
+    const read: string[] = [];
+    const w = await realWire(tmpdir(), {
+      env: env(),
+      keychain: async (p) => {
+        read.push(p);
+        return `test-${p}-key`;
+      },
+      roles: ['embed', 'rerank'],
+    });
+    // UserPromptSubmit needs embed and rerank only: no TypeSafe or Anthropic key read, no SDK loaded.
+    expect(w.embed).toBeDefined();
+    expect(w.rerank).toBeDefined();
+    expect(w.decide).toBeUndefined();
+    expect(w.write).toBeUndefined();
+    expect(read).toEqual(['voyage']);
+    expect(Object.keys(w.routes ?? {}).sort()).toEqual(['embed', 'rerank']);
+    await w.close();
+  });
+
+  it('wire.loads-every-role-by-default', async () => {
+    const w = await wired(
+      env({ VOYAGE_API_KEY: 'v', TYPESAFE_API_KEY: 't', ANTHROPIC_API_KEY: 'a' }),
+    );
+    expect([w.embed, w.rerank, w.decide, w.write].every((x) => x !== undefined)).toBe(true);
+    await w.close();
+  });
+});
+
 describe('the oort provider', () => {
   it('pro.oort-key-routes-every-role-through-the-relay', async () => {
     const key = oortKey();

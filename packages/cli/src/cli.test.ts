@@ -593,6 +593,15 @@ describe('oort hook (in process)', () => {
     expect(out.hookSpecificOutput.additionalContext).toContain('port 5582');
   });
 
+  it('cli.hook-log-records-wiring-time', async () => {
+    const h = harness();
+    await h.store.upsert(memory());
+    await h.run(['hook', 'UserPromptSubmit'], { stdin: prompt(h.cwd) });
+    const [line] = readLines(path.join(h.home, 'logs', 'hooks.log'));
+    // Wiring reads the config and the keys (the keychain), so a slow keychain shows here.
+    expect(typeof (line?.['timings'] as Record<string, unknown>)['wireMs']).toBe('number');
+  });
+
   it('cli.hook-exit-zero-when-wire-throws', async () => {
     const h = harness();
     h.wire = async () => {

@@ -21,6 +21,7 @@ import {
   keyLookup,
   routeFor,
   summary,
+  ROLES,
   type AdapterRole,
   type RoleRoute,
   type RouteSummary,
@@ -77,6 +78,11 @@ export interface WireOptions {
   keychain?: KeychainReader;
   /** The fetch every adapter uses (default: the global one); tests inject a fake. */
   fetch?: typeof fetch;
+  /**
+   * The adapters to load (default: all four). A hook that only recalls asks for embed and rerank,
+   * so it neither reads the TypeSafe and Anthropic keys nor imports their SDKs (CON-57).
+   */
+  roles?: readonly AdapterRole[];
 }
 
 export type WireFn = (cwd: string, opts?: WireOptions) => Promise<Wired>;
@@ -264,46 +270,100 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     warnings,
     close: () => store.close(),
   };
-  const embed = await load(EMBED, config, await routeOf(EMBED), relay, onRelayError, async (r) =>
-    (await import('@oortmem/embed-voyage')).voyageEmbedder({
-      apiKey: r.key,
-      model: config.embed.model,
-      dimension: config.embed.dimension,
-      ...(r.relay !== undefined && { baseUrl: `${r.relay}${RELAY_PATHS.voyage}`, relay: true }),
-      ...fetchOpt,
-    }),
-  );
-  if ('ok' in embed) out.embed = embed.ok;
-  else out.unavailable.embed = embed.error;
-  const rerank = await load(RERANK, config, await routeOf(RERANK), relay, onRelayError, async (r) =>
-    (await import('@oortmem/rerank-voyage')).voyageReranker({
-      apiKey: r.key,
-      model: config.rerank.model,
-      ...(r.relay !== undefined && { baseUrl: `${r.relay}${RELAY_PATHS.voyage}`, relay: true }),
-      ...fetchOpt,
-    }),
-  );
-  if ('ok' in rerank) out.rerank = rerank.ok;
-  else out.unavailable.rerank = rerank.error;
-  const decide = await load(DECIDE, config, await routeOf(DECIDE), relay, onRelayError, async (r) =>
-    (await import('@oortmem/decide-jev')).jevDecider({
-      apiKey: r.key,
-      ...(r.relay !== undefined && { baseURL: `${r.relay}${RELAY_PATHS.typesafe}`, relay: true }),
-      ...fetchOpt,
-    }),
-  );
-  if ('ok' in decide) out.decide = decide.ok;
-  else out.unavailable.decide = decide.error;
-  const write = await load(WRITE, config, await routeOf(WRITE), relay, onRelayError, async (r) =>
-    (await import('@oortmem/writer')).anthropicWriter({
-      ...(r.relay === undefined
-        ? { apiKey: r.key }
-        : { authToken: r.key, baseURL: `${r.relay}${RELAY_PATHS.anthropic}`, relay: true }),
-      model: config.writer.model,
-      ...fetchOpt,
-    }),
-  );
-  if ('ok' in write) out.write = write.ok;
-  else out.unavailable.write = write.error;
+  const want = new Set<AdapterRole>(opts.roles ?? ROLES);
+  // The selected adapters load in parallel; key reads are cached per provider, so a shared key
+  // (Voyage for embed and rerank) is still read once.
+  await Promise.all([
+    want.has('embed') &&
+      (async () => {
+        const embed = await load(
+          EMBED,
+          config,
+          await routeOf(EMBED),
+          relay,
+          onRelayError,
+          async (r) =>
+            (await import('@oortmem/embed-voyage')).voyageEmbedder({
+              apiKey: r.key,
+              model: config.embed.model,
+              dimension: config.embed.dimension,
+              ...(r.relay !== undefined && {
+                baseUrl: `${r.relay}${RELAY_PATHS.voyage}`,
+                relay: true,
+              }),
+              ...fetchOpt,
+            }),
+        );
+        if ('ok' in embed) out.embed = embed.ok;
+        else out.unavailable.embed = embed.error;
+      })(),
+    want.has('rerank') &&
+      (async () => {
+        const rerank = await load(
+          RERANK,
+          config,
+          await routeOf(RERANK),
+          relay,
+          onRelayError,
+          async (r) =>
+            (await import('@oortmem/rerank-voyage')).voyageReranker({
+              apiKey: r.key,
+              model: config.rerank.model,
+              ...(r.relay !== undefined && {
+                baseUrl: `${r.relay}${RELAY_PATHS.voyage}`,
+                relay: true,
+              }),
+              ...fetchOpt,
+            }),
+        );
+        if ('ok' in rerank) out.rerank = rerank.ok;
+        else out.unavailable.rerank = rerank.error;
+      })(),
+    want.has('decide') &&
+      (async () => {
+        const decide = await load(
+          DECIDE,
+          config,
+          await routeOf(DECIDE),
+          relay,
+          onRelayError,
+          async (r) =>
+            (await import('@oortmem/decide-jev')).jevDecider({
+              apiKey: r.key,
+              ...(r.relay !== undefined && {
+                baseURL: `${r.relay}${RELAY_PATHS.typesafe}`,
+                relay: true,
+              }),
+              ...fetchOpt,
+            }),
+        );
+        if ('ok' in decide) out.decide = decide.ok;
+        else out.unavailable.decide = decide.error;
+      })(),
+    want.has('write') &&
+      (async () => {
+        const write = await load(
+          WRITE,
+          config,
+          await routeOf(WRITE),
+          relay,
+          onRelayError,
+          async (r) =>
+            (await import('@oortmem/writer')).anthropicWriter({
+              ...(r.relay === undefined
+                ? { apiKey: r.key }
+                : { authToken: r.key, baseURL: `${r.relay}${RELAY_PATHS.anthropic}`, relay: true }),
+              model: config.writer.model,
+              ...fetchOpt,
+            }),
+        );
+        if ('ok' in write) out.write = write.ok;
+        else out.unavailable.write = write.error;
+      })(),
+  ]);
+  // Routes are reported in role order, whatever order the parallel loads finished in.
+  const ordered = {} as Record<AdapterRole, RouteSummary>;
+  for (const role of ROLES) if (routes[role] !== undefined) ordered[role] = routes[role];
+  out.routes = ordered;
   return out;
 };
