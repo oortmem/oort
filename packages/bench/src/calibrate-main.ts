@@ -111,7 +111,8 @@ async function main(): Promise<number> {
       process.stdout.write(
         `${name}: suggested ${c.suggested} (keeps ${(c.keptAtSuggested * 100).toFixed(0)}% of ` +
           `${c.positives} answerable rows, ${(c.falsePositiveAtSuggested * 100).toFixed(0)}% of ` +
-          `${c.negatives} abstention rows still answered)\n`,
+          `${c.negatives} abstention rows still answered; lowest answerable ` +
+          `${c.lowestAnswerable?.toFixed(3) ?? 'n/a'}, highest abstention ${c.highestAbstention?.toFixed(3) ?? 'n/a'})\n`,
       );
     };
     show('recall.minRerankScore', rerankSamples);

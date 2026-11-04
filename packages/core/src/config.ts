@@ -49,7 +49,7 @@ const recall = z
      * Relevance gate (CON-45). A reranked memory needs at least this reranker score, from 0 to 1.
      * Provisional until calibrated with real scores (`pnpm --filter @oortmem/bench run calibrate`).
      */
-    minRerankScore: z.number().min(0).max(1).default(0.3),
+    minRerankScore: z.number().min(0).max(1).default(0.35),
     /**
      * Without a rerank score, a memory needs this share of the query's informative words, or a
      * dense similarity of at least `minDenseScore`. Calibrated on the bench eval fixture.
@@ -66,7 +66,7 @@ const recall = z
     rerankK: 30,
     returnK: 10,
     budgetChars: 6000,
-    minRerankScore: 0.3,
+    minRerankScore: 0.35,
     minCoverage: 0.5,
     minDenseScore: 0.6,
     skipRerankWhenConfident: true,

@@ -18,6 +18,10 @@ export interface CalibrationResult {
   suggested: number;
   /** Share of positive rows that keep at least one expected memory at `suggested`. */
   keptAtSuggested: number;
+  /** The lowest best-expected score among answerable rows: the margin below the threshold. */
+  lowestAnswerable: number | undefined;
+  /** The highest top score among abstention rows: the margin above it. */
+  highestAbstention: number | undefined;
   /** Share of abstention rows still answered at `suggested`. */
   falsePositiveAtSuggested: number;
 }
@@ -45,6 +49,9 @@ export function suggestThreshold(
     suggested: Number(suggested.toFixed(2)),
     keptAtSuggested: pos.length === 0 ? 1 : kept / pos.length,
     falsePositiveAtSuggested: neg.length === 0 ? 0 : fp / neg.length,
+    lowestAnswerable:
+      pos.length === 0 ? undefined : Math.min(...pos.map((s) => Math.max(...s.expected))),
+    highestAbstention: negTops[0],
   };
 }
 

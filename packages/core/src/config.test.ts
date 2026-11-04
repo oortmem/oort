@@ -30,7 +30,7 @@ describe('config', () => {
       rerankK: 30,
       returnK: 10,
       budgetChars: 6000,
-      minRerankScore: 0.3,
+      minRerankScore: 0.35,
       minCoverage: 0.5,
       minDenseScore: 0.6,
       skipRerankWhenConfident: true,
