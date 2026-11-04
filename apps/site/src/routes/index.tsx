@@ -39,7 +39,7 @@ function Home() {
   const [y, setY] = useState(0);
   const api = useRef<SpiralApi | null>(null);
   const [stats, setStats] = useState({ recalls: 0, hot: 0, last: [] as number[] });
-  const onRecall = (tier: Tier, ms: number, source: 'click' | 'auto') => {
+  const onRecall = (tier: Tier, ms: number, _source: 'click' | 'auto') => {
     setStats((s) => ({
       recalls: s.recalls + 1,
       hot: s.hot + (tier === 'photo' ? 1 : 0),

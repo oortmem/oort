@@ -6,7 +6,7 @@ const SUGGESTIONS = ['Prefers window seats', 'Allergic to wool', 'Birthday is in
 /** Hero input dock: type a memory, it lands in the hot core of the spiral. */
 export function HeroWish({ api }: { api: React.MutableRefObject<SpiralApi | null> }) {
   const [text, setText] = useState('');
-  const send = (t: string, source: 'typed' | 'suggestion') => {
+  const send = (t: string, _source: 'typed' | 'suggestion') => {
     const v = t.trim();
     if (!v) return;
     api.current?.add(v.slice(0, 40));

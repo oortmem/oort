@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Copy, Plus, RotateCw, Search, Trash2, Check } from 'lucide-react';
+import { Copy, Plus, RotateCw, Trash2, Check } from 'lucide-react';
 import { PlannedBadge } from '@/components/site/PlannedBadge';
-import { clusters, timeline, tierClass, estimateMonthlyCost, type Tier } from '@/lib/oort-data';
+import { estimateMonthlyCost } from '@/lib/oort-data';
 
 export { StarMapSection } from './StarMap';
 export { OrganisationSection } from './Organisation';
