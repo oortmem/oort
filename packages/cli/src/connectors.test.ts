@@ -137,7 +137,10 @@ describe.each<Host>([...HOSTS])('oort connect %s', (host) => {
     const after = read(host, file);
     const entry = servers(host, after)['oort'] as Record<string, unknown>;
     expect(entry['command']).toBe(CMD);
-    expect(entry['args']).toEqual(['mcp']);
+    // Cursor and VS Code fill in ${workspaceFolder}, so the scope is the open workspace.
+    expect(entry['args']).toEqual(
+      host === 'cursor' || host === 'vscode' ? ['mcp', '--project', '${workspaceFolder}'] : ['mcp'],
+    );
     if (['cursor', 'vscode', 'claude-code'].includes(host)) expect(entry['type']).toBe('stdio');
     // Everything else is untouched.
     const { oort: _o, ...rest } = servers(host, after);
@@ -188,6 +191,27 @@ describe.each<Host>([...HOSTS])('oort connect %s', (host) => {
     expect((servers(host, read(host, file))['oort'] as { command: string }).command).toBe(CMD);
     disconnectHost(host, hc, CMD);
     expect(read(host, file)).toEqual({});
+  });
+
+  it(`connect.${host}-updates-an-entry-from-before-the-workspace-folder-args`, () => {
+    if (host !== 'cursor' && host !== 'vscode') return;
+    const hc = context();
+    const file = hostConfigPath(host, hc);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const key = host === 'vscode' ? 'servers' : 'mcpServers';
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ [key]: { oort: { type: 'stdio', command: CMD, args: ['mcp'] } } }),
+    );
+    const c = connectHost(host, hc, CMD);
+    expect(c.changed).toBe(true);
+    expect(c.diff.join('\n')).toMatch(/args/);
+    expect((servers(host, read(host, file))['oort'] as { args: string[] }).args).toEqual([
+      'mcp',
+      '--project',
+      '${workspaceFolder}',
+    ]);
+    expect(disconnectHost(host, hc, CMD).changed).toBe(true);
   });
 
   it(`connect.${host}-replaces-a-stale-oort-entry-and-refuses-a-foreign-one`, () => {

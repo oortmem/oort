@@ -475,7 +475,11 @@ describe('oort bin', () => {
     const entry = (
       JSON.parse(fs.readFileSync(cursor, 'utf8')) as { mcpServers: Record<string, unknown> }
     ).mcpServers['oort'];
-    expect(entry).toEqual({ type: 'stdio', command: bin, args: ['mcp'] });
+    expect(entry).toEqual({
+      type: 'stdio',
+      command: bin,
+      args: ['mcp', '--project', '${workspaceFolder}'],
+    });
     expect(fs.readFileSync(codex, 'utf8')).toContain(`command = ${JSON.stringify(bin)}`);
 
     const again = await oort(s, ['connect', 'cursor']);

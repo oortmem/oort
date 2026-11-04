@@ -15,7 +15,9 @@ import { hookCommandPath } from './install.js';
 
 /** Where the host starts stdio servers, which decides the memory scope. */
 function scopeNote(host: Host): string {
-  if (host === 'vscode') return 'the workspace folder VS Code starts it in, plus global memories';
+  if (host === 'vscode' || host === 'cursor') {
+    return `the open workspace folder (${HOST_LABEL[host]} fills in --project \${workspaceFolder}), plus global memories`;
+  }
   if (host === 'claude-desktop')
     return 'the directory Claude Desktop starts it in (not a project, so usually global)';
   return `the directory ${HOST_LABEL[host]} starts it in (usually your project), plus global memories; add "--project", "<dir>" to its args to pin one`;

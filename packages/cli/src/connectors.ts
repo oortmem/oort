@@ -118,13 +118,30 @@ export function detectHosts(hc: HostContext): Host[] {
 const serversKey = (host: Host): string =>
   host === 'codex' ? 'mcp_servers' : host === 'vscode' ? 'servers' : 'mcpServers';
 
+/**
+ * The placeholder Cursor and VS Code replace with the open workspace's folder
+ * (both document `${workspaceFolder}` in `mcp.json`), so the server's scope is
+ * that workspace's project. The other hosts get no extra args.
+ */
+export const WORKSPACE_FOLDER = '${workspaceFolder}';
+
+const takesWorkspaceFolder = (host: Host): boolean => host === 'cursor' || host === 'vscode';
+
 /** The entry `oort connect` writes: the bin's realpath, started as `oort mcp`. */
 export function serverEntry(host: Host, cmd: string): Record<string, unknown> {
-  const base = { command: cmd, args: ['mcp'] };
+  const base = {
+    command: cmd,
+    args: takesWorkspaceFolder(host) ? ['mcp', '--project', WORKSPACE_FOLDER] : ['mcp'],
+  };
   // Cursor and VS Code document `type` as required; Claude Code writes it for stdio servers.
   return host === 'cursor' || host === 'vscode' || host === 'claude-code'
     ? { type: 'stdio', ...base }
     : base;
+}
+
+/** Entries earlier versions wrote, still recognised as Oort's own (and replaced on connect). */
+function olderEntries(host: Host, cmd: string): Record<string, unknown>[] {
+  return takesWorkspaceFolder(host) ? [{ ...serverEntry(host, cmd), args: ['mcp'] }] : [];
 }
 
 type Json = Record<string, unknown>;
@@ -145,7 +162,10 @@ function isOurs(host: Host, v: unknown, cmd: string): boolean {
     /(?:^|[\\/])oort(?:mem)?$/.test(c) ||
     /[\\/]oort(?:mem)?[\\/]dist[\\/]main\.js$/.test(c);
   if (!oortPath) return false;
-  return isDeepStrictEqual({ ...v, command: cmd }, serverEntry(host, cmd));
+  const mine = { ...v, command: cmd };
+  return [serverEntry(host, cmd), ...olderEntries(host, cmd)].some((e) =>
+    isDeepStrictEqual(mine, e),
+  );
 }
 
 export interface Change {

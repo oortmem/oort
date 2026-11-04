@@ -30,7 +30,13 @@ export async function mcpCommand(
   serve: ServeFn = serveProcessStdio,
 ): Promise<number> {
   let cwd = ctx.io.cwd;
-  if (opts.project !== undefined) {
+  if (opts.project !== undefined && (opts.project === '' || /\$\{[^}]*\}/.test(opts.project))) {
+    // `connect` writes `--project ${workspaceFolder}` for Cursor and VS Code; a host that
+    // leaves it as is (or empty, with no folder open) gets the directory it started us in.
+    ctx.io.err(
+      `oort: the host did not fill in --project ${echo(opts.project)}; using the directory it started oort in.\n`,
+    );
+  } else if (opts.project !== undefined) {
     cwd = path.resolve(ctx.io.cwd, opts.project);
     if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) {
       throw new Refusal(`--project ${echo(opts.project)} is not a directory.`);
