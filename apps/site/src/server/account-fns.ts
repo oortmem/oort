@@ -2,6 +2,7 @@ import { createServerFn } from '@tanstack/react-start';
 import {
   AccountError,
   approveCli,
+  codeAttemptGuard,
   createKey,
   getOverview,
   lookupCli,
@@ -13,8 +14,8 @@ import {
 import { toResult } from './result';
 import { createRateLimiter } from './waitlist';
 
-// Typed `oort login` codes per account: 10 a minute, per isolate and in memory only.
-const codeAttempts = createRateLimiter(10, 60_000);
+// Only for a build without the CODE_ATTEMPT_LIMITER binding (local development).
+const localCodeAttempts = createRateLimiter(10, 60_000);
 
 /**
  * Server functions for /account and /account/cli. Each one builds its dependencies on the
@@ -38,7 +39,11 @@ async function accountDeps(): Promise<AccountDeps> {
     },
     origin: new URL(getRequest().url).origin,
     pricePro: env.STRIPE_PRICE_PRO ?? '',
-    allowCodeAttempt: (accountId) => codeAttempts(accountId, Date.now()),
+    allowCodeAttempt: codeAttemptGuard(
+      env.CODE_ATTEMPT_LIMITER,
+      getRequest().headers.get('cf-connecting-ip') ?? 'unknown',
+      (key) => localCodeAttempts(key, Date.now()),
+    ),
   };
 }
 

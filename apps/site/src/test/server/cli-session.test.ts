@@ -1,7 +1,14 @@
 // @vitest-environment node
 import { createHash, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { MAX_LIVE_KEYS, approveCli, createKey, getOverview, lookupCli } from '@/server/account';
+import {
+  MAX_LIVE_KEYS,
+  approveCli,
+  codeAttemptGuard,
+  createKey,
+  getOverview,
+  lookupCli,
+} from '@/server/account';
 import { handleCliCreate, handleCliPoll } from '@/server/cli-session';
 import { challengeOf, hashKey, normalizeUserCode } from '@/server/keys';
 import { deps, T0 } from './fakes';
@@ -239,6 +246,33 @@ describe('oort login: approving and collecting', () => {
     await expect(lookupCli(s.d, 'BCDF-GHJK')).rejects.toThrow(/no pending/i);
     await expect(lookupCli(s.d, 'BCDF-GHJK')).rejects.toThrow(/no pending/i);
     await expect(lookupCli(s.d, 'BCDF-GHJK')).rejects.toThrow(/too many/i);
+  });
+
+  it('counts typed codes in the limiter binding, per account and per IP', async () => {
+    const keys: string[] = [];
+    const refuse = new Set<string>();
+    const limiter = {
+      limit: async ({ key }: { key: string }) => (keys.push(key), { success: !refuse.has(key) }),
+    };
+    const local = () => {
+      throw new Error('the in-memory fallback must not be used with a binding');
+    };
+    const guard = codeAttemptGuard(limiter, '203.0.113.9', local);
+    expect(await guard('acc_1')).toBe(true);
+    expect(keys.sort()).toEqual(['code-account:acc_1', 'code-ip:203.0.113.9']);
+    refuse.add('code-ip:203.0.113.9');
+    expect(await guard('acc_2')).toBe(false); // another account, same IP
+    refuse.clear();
+    refuse.add('code-account:acc_1');
+    expect(await guard('acc_1')).toBe(false); // same account, another IP is still refused
+    expect(await guard('acc_3')).toBe(true);
+  });
+
+  it('falls back to memory only when there is no binding', async () => {
+    let n = 0;
+    const guard = codeAttemptGuard(undefined, 'ip', () => n++ < 2);
+    expect(await guard('a')).toBe(true);
+    expect(await guard('a')).toBe(false);
   });
 
   it('holds MAX_LIVE_KEYS: the page refuses, and so does the poll', async () => {

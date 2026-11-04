@@ -35,6 +35,13 @@
       "namespace_id": "4103",
       "simple": { "limit": 10, "period": 60 },
     },
+    {
+      // Typed `oort login` codes: 10 a minute per account and 10 a minute per IP
+      // (src/server/account.ts codeAttemptGuard).
+      "name": "CODE_ATTEMPT_LIMITER",
+      "namespace_id": "4104",
+      "simple": { "limit": 10, "period": 60 },
+    },
   ],
   // Secrets, set with `wrangler secret put <NAME>` (see README). Never put values here.
   //   CLERK_SECRET_KEY

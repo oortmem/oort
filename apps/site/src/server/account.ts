@@ -31,10 +31,10 @@ export interface AccountDeps {
   stripe: () => StripeLike;
   now?: () => Date;
   /**
-   * A budget for typing CLI user codes, per account (RFC 8628 §5.1): false refuses the attempt.
-   * Default: always allowed.
+   * A budget for typing CLI user codes (RFC 8628 §5.1): false refuses the attempt. See
+   * `codeAttemptGuard` for the production one (per account and per IP). Default: always allowed.
    */
-  allowCodeAttempt?: (accountId: string) => boolean;
+  allowCodeAttempt?: (accountId: string) => boolean | Promise<boolean>;
   /** Site origin for Stripe return URLs, e.g. https://oortcloud.dev */
   origin: string;
   pricePro: string;
@@ -315,12 +315,38 @@ export interface CliRequestView {
   keyLimitReached: boolean;
 }
 
+/** The slice of a Workers Rate Limiting binding this uses. */
+export interface LimiterLike {
+  limit(o: { key: string }): Promise<{ success: boolean }>;
+}
+
+/**
+ * The budget for typed `oort login` codes: counted in a Workers Rate Limiting binding (shared
+ * across isolates), once per account and once per IP, and refused when either is spent. The IP
+ * is the counter's key only and is never stored. `local` is the in-memory fallback for a build
+ * without the binding (local development).
+ */
+export function codeAttemptGuard(
+  limiter: LimiterLike | undefined,
+  ip: string,
+  local: (key: string) => boolean,
+): (accountId: string) => Promise<boolean> {
+  return async (accountId) => {
+    if (!limiter) return local(`account:${accountId}`) && local(`ip:${ip}`);
+    const [byAccount, byIp] = await Promise.all([
+      limiter.limit({ key: `code-account:${accountId}` }),
+      limiter.limit({ key: `code-ip:${ip}` }),
+    ]);
+    return byAccount.success && byIp.success;
+  };
+}
+
 const CODE_NOT_FOUND =
   'No pending sign-in request has that code. Check the code in your terminal, or run oort login again.';
 
 /** The request behind a typed code, checked as the approve step will check it. */
 async function pendingRequest(d: AccountDeps, accountId: string, typed: unknown): Promise<CliRow> {
-  if (d.allowCodeAttempt && !d.allowCodeAttempt(accountId)) {
+  if (d.allowCodeAttempt && !(await d.allowCodeAttempt(accountId))) {
     throw new AccountError('Too many codes tried. Wait a minute, then try again.');
   }
   const code = normalizeUserCode(typed);
