@@ -1,5 +1,5 @@
 {
-  "name": "oort",
+  "name": "oortmem",
   "version": "0.0.0",
   "description": "Oort: tiered agent memory for coding agents (command line).",
   "license": "Apache-2.0",
@@ -8,7 +8,8 @@
     "node": ">=22.15.0"
   },
   "bin": {
-    "oort": "dist/main.js"
+    "oort": "dist/main.js",
+    "oortmem": "dist/main.js"
   },
   "files": [
     "dist"

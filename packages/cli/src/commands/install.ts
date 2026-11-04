@@ -7,9 +7,9 @@ import { uiFor } from '../ui.js';
 import { Refusal, echo, type Ctx } from '../util.js';
 
 // pnpm 11 removed `pnpm link --global`; `pnpm add -g .` links the package directory instead.
-const HOW_TO_INSTALL =
-  'Install the CLI first, then run `oort install claude-code` through it: ' +
-  'from the oort repo, `pnpm build && cd packages/cli && pnpm add -g .`, or install the oort package globally.';
+export const HOW_TO_INSTALL =
+  'Install the CLI globally first, with `npm i -g oortmem` (from the oort repo: ' +
+  '`pnpm build && cd packages/cli && pnpm add -g .`), then run this again as `oort`.';
 
 /** True when `p` lies in a directory a package runner uses for throwaway installs. */
 function ephemeral(p: string): boolean {

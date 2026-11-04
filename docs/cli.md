@@ -8,9 +8,13 @@ Memories stay on your machine, in `~/.oort` (or `$OORT_HOME`).
 ## Start here
 
 ```sh
-pnpm build && cd packages/cli && pnpm add -g .   # from the oort repo, until the package is published
+npm i -g oortmem    # installs the `oort` command (and `oortmem`, the same bin)
 oort setup
 ```
+
+Or run `npx oortmem setup`. The npm package is `oortmem`, because `oort` is
+taken on npm; the command is still `oort`. From a clone of the repo, use
+`pnpm build && cd packages/cli && pnpm add -g .` instead.
 
 `oort setup` walks through six steps: it detects your agents, chooses keys,
 connects the agents, offers an import, runs a quick check, and lists what

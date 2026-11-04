@@ -936,7 +936,8 @@ describe('wire', () => {
 
 describe('oort usage', () => {
   it('cli.workspace-name-unique', () => {
-    // `pnpm --filter oort` must select the CLI only, so no other workspace package may be named oort.
+    // Published as `oortmem` (`oort` is taken on npm). `pnpm --filter oortmem` must select the
+    // CLI only, so no other workspace package may be named oortmem.
     const repo = path.join(import.meta.dirname, '..', '..', '..');
     const name = (dir: string): unknown =>
       (JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name?: unknown })
@@ -946,9 +947,16 @@ describe('oort usage', () => {
       .readdirSync(path.join(repo, 'packages'))
       .map((d) => path.join(repo, 'packages', d));
     const named = packages.filter(
-      (d) => fs.existsSync(path.join(d, 'package.json')) && name(d) === 'oort',
+      (d) => fs.existsSync(path.join(d, 'package.json')) && name(d) === 'oortmem',
     );
     expect(named).toEqual([path.join(repo, 'packages', 'cli')]);
+  });
+
+  it('cli.bins-oort-and-oortmem-run-the-same-file', () => {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8'),
+    ) as { bin?: Record<string, string> };
+    expect(pkg.bin).toEqual({ oort: 'dist/main.js', oortmem: 'dist/main.js' });
   });
 
   it('cli.engines-require-zstd-node', () => {

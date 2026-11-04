@@ -316,12 +316,12 @@ describe('oort bin', () => {
       { cwd: s.cwd, env: s.env, extendEnv: false, reject: false, stdin: 'ignore' },
     );
     expect(evalRun.exitCode).toBe(2);
-    expect(evalRun.stderr).toContain('pnpm build && cd packages/cli && pnpm add -g .');
+    expect(evalRun.stderr).toContain('npm i -g oortmem');
     expect(evalRun.stderr).toMatch(/not running as its bin/);
     expect(fs.existsSync(settings)).toBe(false);
 
-    // A copy in a temporary package cache, as `npx oort` would run it.
-    const cache = path.join(s.root, '_npx', 'abc123', 'node_modules', 'oort');
+    // A copy in a temporary package cache, as `npx oortmem` would run it.
+    const cache = path.join(s.root, '_npx', 'abc123', 'node_modules', 'oortmem');
     fs.mkdirSync(cache, { recursive: true });
     fs.cpSync(path.dirname(BIN), path.join(cache, 'dist'), { recursive: true });
     fs.copyFileSync(

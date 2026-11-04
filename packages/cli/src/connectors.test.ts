@@ -194,6 +194,9 @@ describe.each<Host>([...HOSTS])('oort connect %s', (host) => {
     const hc = context();
     const file = hostConfigPath(host, hc);
     connectHost(host, hc, '/old/place/node_modules/oort/dist/main.js');
+    expect(connectHost(host, hc, '/older/lib/node_modules/oortmem/dist/main.js').changed).toBe(
+      true,
+    );
     const moved = connectHost(host, hc, CMD);
     expect(moved.changed).toBe(true);
     expect(moved.diff.join('\n')).toMatch(/~ .*oort\.command/);

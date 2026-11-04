@@ -133,14 +133,17 @@ const isObject = (v: unknown): v is Json =>
 
 /**
  * Ours: exactly what `serverEntry` writes, for this install path or any
- * older one (an `oort` bin, or a package's `oort/dist/main.js`). Anything
+ * older one (an `oort` or `oortmem` bin, or a package's `oort/dist/main.js` or
+ * `oortmem/dist/main.js`). Anything
  * else under the name `oort` (a URL, extra args, env) is the user's own.
  */
 function isOurs(host: Host, v: unknown, cmd: string): boolean {
   if (!isObject(v) || typeof v['command'] !== 'string') return false;
   const c = v['command'];
   const oortPath =
-    c === cmd || /(?:^|[\\/])oort$/.test(c) || /[\\/]oort[\\/]dist[\\/]main\.js$/.test(c);
+    c === cmd ||
+    /(?:^|[\\/])oort(?:mem)?$/.test(c) ||
+    /[\\/]oort(?:mem)?[\\/]dist[\\/]main\.js$/.test(c);
   if (!oortPath) return false;
   return isDeepStrictEqual({ ...v, command: cmd }, serverEntry(host, cmd));
 }
