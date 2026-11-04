@@ -10,9 +10,10 @@ import {
   writeTranscript,
   type Harness,
 } from '../../test/helpers.js';
+import { Refusal } from '../util.js';
 import type { LoginDeps } from './login.js';
 import type { WireFn } from '../wire.js';
-import { setupCommand, type Choice, type Prompter } from './setup.js';
+import { setupCommand, type Choice, type Prompter, type SetupDeps } from './setup.js';
 
 const CMD = '/opt/oort/node_modules/oort/dist/main.js';
 
@@ -81,6 +82,7 @@ function setupHarness(opts: { adapters?: boolean } = {}) {
     prompter?: Prompter,
     keychain: Keychain = createKeychain({ platform: 'none' }),
     login?: { siteUrl: string; deps?: LoginDeps },
+    more: Partial<SetupDeps> = {},
   ) => {
     const fio = fakeIo({
       cwd: h.cwd,
@@ -99,7 +101,7 @@ function setupHarness(opts: { adapters?: boolean } = {}) {
         keychain,
         login: { sleep: async () => {}, openBrowser: async () => false, ...login?.deps },
       },
-      { bin: () => CMD, ...(prompter !== undefined && { prompter }) },
+      { bin: () => CMD, ...(prompter !== undefined && { prompter }), ...more },
     );
     return { code, io: fio };
   };
@@ -336,5 +338,97 @@ describe('oort setup', () => {
     expect(r.code).toBe(0);
     expect(stored).toEqual(['oort.voyage', 'oort.anthropic']);
     expect(p.said).toContain('oort keys rm voyage');
+  });
+
+  describe('under npx', () => {
+    const NPX = '/Users/x/.npm/_npx/0a1b2c/node_modules/oortmem/dist/main.js';
+    const GLOBAL = '/opt/homebrew/lib/node_modules/oortmem/dist/main.js';
+    /** The bin as npx runs it (refused as temporary), and an npm that installs on request. */
+    function npx(installed = false) {
+      const calls: string[] = [];
+      let have = installed;
+      const deps: Partial<SetupDeps> = {
+        bin: () => {
+          throw new Refusal(`oort is running from a temporary package cache (${NPX}).`);
+        },
+        fromPackageCache: () => true,
+        globalInstall: {
+          bin: () => (have ? GLOBAL : undefined),
+          install: async () => {
+            calls.push('npm i -g oortmem');
+            have = true;
+            return 0;
+          },
+        },
+      };
+      return { deps, calls };
+    }
+    const cursorFile = (h: Harness): string => path.join(h.root, '.cursor', 'mcp.json');
+
+    it('setup.npx-offers-the-global-install-then-writes-its-stable-path', async () => {
+      const { h, run } = setupHarness();
+      fs.mkdirSync(path.join(h.root, '.cursor'));
+      const n = npx();
+      // agents; keys: skip; install globally: yes; write: yes; demo: no.
+      const p = scripted([['cursor'], 'skip', true, true, false]);
+      const r = await run(
+        { import: 'skip' },
+        { tty: true, stdoutTTY: true },
+        p,
+        undefined,
+        undefined,
+        n.deps,
+      );
+      expect(r.code).toBe(0);
+      expect(p.asked.some((q) => q.includes('npm i -g oortmem'))).toBe(true);
+      expect(n.calls).toEqual(['npm i -g oortmem']);
+      const text = fs.readFileSync(cursorFile(h), 'utf8');
+      expect(text).toContain(GLOBAL);
+      expect(text).not.toContain('_npx');
+      expect(text).not.toContain('npx');
+      expect(p.said).toContain('npm rm -g oortmem');
+    });
+
+    it('setup.npx-with-yes-installs-only-with-the-flag', async () => {
+      const { h, run } = setupHarness();
+      fs.mkdirSync(path.join(h.root, '.cursor'));
+      const n = npx();
+      const flags = { yes: true, agents: 'cursor', keys: 'skip', import: 'skip', demo: false };
+      const skipped = await run(flags, {}, undefined, undefined, undefined, n.deps);
+      expect(skipped.code).toBe(0);
+      expect(n.calls).toEqual([]);
+      expect(skipped.io.stdout).toContain('npm i -g oortmem');
+      expect(skipped.io.stdout).toContain('--install-global');
+      expect(fs.existsSync(cursorFile(h))).toBe(false);
+
+      const ran = await run(
+        { ...flags, installGlobal: true },
+        {},
+        undefined,
+        undefined,
+        undefined,
+        n.deps,
+      );
+      expect(ran.code).toBe(0);
+      expect(n.calls).toEqual(['npm i -g oortmem']);
+      expect(fs.readFileSync(cursorFile(h), 'utf8')).toContain(GLOBAL);
+    });
+
+    it('setup.npx-reuses-an-existing-global-install', async () => {
+      const { h, run } = setupHarness();
+      fs.mkdirSync(path.join(h.root, '.cursor'));
+      const n = npx(true);
+      const r = await run(
+        { yes: true, agents: 'cursor', keys: 'skip', import: 'skip', demo: false },
+        {},
+        undefined,
+        undefined,
+        undefined,
+        n.deps,
+      );
+      expect(r.code).toBe(0);
+      expect(n.calls).toEqual([]);
+      expect(fs.readFileSync(cursorFile(h), 'utf8')).toContain(GLOBAL);
+    });
   });
 });

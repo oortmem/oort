@@ -51,6 +51,10 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--keys <mode>', 'byo, pro or skip')
     .option('--import <age>', 'skip, or import Claude Code sessions from this age: 14d, 30d')
     .option('--no-demo', 'skip the remember, recall and forget check')
+    .option(
+      '--install-global',
+      'under npx: run `npm i -g oortmem` first (agents need a stable path)',
+    )
     .action(run((o: SetupOptions) => setupCommand(o, ctx)));
 
   p.command('init')

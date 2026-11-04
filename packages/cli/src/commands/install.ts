@@ -1,3 +1,4 @@
+import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -12,7 +13,7 @@ export const HOW_TO_INSTALL =
   '`pnpm build && cd packages/cli && pnpm add -g .`), then run this again as `oort`.';
 
 /** True when `p` lies in a directory a package runner uses for throwaway installs. */
-function ephemeral(p: string): boolean {
+export function ephemeral(p: string): boolean {
   const segments = p.split(path.sep);
   if (segments.includes('_npx') || segments.includes('dlx')) return true;
   const tmp = fs.realpathSync(os.tmpdir());
@@ -86,4 +87,52 @@ export async function installCommand(
     );
   }
   return 0;
+}
+
+/** This process runs from a package runner's cache (`npx oortmem`, `pnpm dlx`). */
+export function fromPackageCache(): boolean {
+  try {
+    return ephemeral(fs.realpathSync(binPath()));
+  } catch {
+    return false;
+  }
+}
+
+/** The global `oortmem` install `oort setup` offers when it runs under npx. */
+export interface GlobalInstall {
+  /** The realpath of the globally installed bin, when there is a usable one. */
+  bin(): string | undefined;
+  /** Runs `npm i -g oortmem` with the terminal attached; resolves its exit code. */
+  install(): Promise<number>;
+}
+
+/** `npm i -g oortmem`, and `<npm prefix -g>/bin/oort` as the stable path (not on Windows yet). */
+export function npmGlobalInstall(env: Record<string, string | undefined>): GlobalInstall {
+  const childEnv = env as NodeJS.ProcessEnv;
+  return {
+    bin() {
+      if (process.platform === 'win32') return undefined;
+      const r = spawnSync('npm', ['prefix', '-g'], {
+        encoding: 'utf8',
+        env: childEnv,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 30_000,
+      });
+      if (r.status !== 0 || typeof r.stdout !== 'string') return undefined;
+      const link = path.join(r.stdout.trim(), 'bin', 'oort');
+      try {
+        const real = hookCommandPath(link, link);
+        return /[\\/]oortmem[\\/]dist[\\/]main\.js$/.test(real) ? real : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    install() {
+      return new Promise((resolve) => {
+        spawn('npm', ['i', '-g', 'oortmem'], { stdio: 'inherit', env: childEnv })
+          .once('error', () => resolve(1))
+          .once('close', (code) => resolve(code ?? 1));
+      });
+    },
+  };
 }

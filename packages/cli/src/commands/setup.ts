@@ -26,7 +26,13 @@ import { Refusal, echo, tilde, withWired, type Ctx } from '../util.js';
 import type { Wired } from '../wire.js';
 import { describeChange, hostArgs, hostContext } from './connect.js';
 import { importCommand, parseSince } from './import.js';
-import { hookCommandPath, settingsFile } from './install.js';
+import {
+  fromPackageCache,
+  hookCommandPath,
+  npmGlobalInstall,
+  settingsFile,
+  type GlobalInstall,
+} from './install.js';
 import { keySource } from './keys.js';
 import { keychainBlocker, runLogin } from './login.js';
 
@@ -40,6 +46,8 @@ export interface SetupOptions {
   import?: string;
   /** false with `--no-demo`. */
   demo?: boolean;
+  /** Under npx with `--yes`: run `npm i -g oortmem` first, so agents get a stable path. */
+  installGlobal?: boolean;
 }
 
 export interface Choice<T extends string> {
@@ -71,6 +79,10 @@ export interface SetupDeps {
   prompter?: Prompter;
   /** The command written into host configs (default: the realpath of this bin, refused when temporary). */
   bin?: () => string;
+  /** Whether this run comes from a package runner's cache (npx); default: from the bin's path. */
+  fromPackageCache?: () => boolean;
+  /** The global install offered under npx (default: npm). */
+  globalInstall?: GlobalInstall;
 }
 
 const STEPS = 6;
@@ -203,6 +215,7 @@ function nonInteractiveHelp(detected: Host[]): string {
     '  --keys    byo (report missing keys and where to get them), pro (oort login: Oort Pro, no vendor keys), or skip',
     '  --import  skip (the default) or an age such as 14d: imports Claude Code transcripts, using the writer',
     '  --no-demo skip the remember, recall and forget check',
+    '  --install-global  under npx: run `npm i -g oortmem` first, so agents start a stable `oort`',
   ].join('\n');
 }
 
@@ -471,7 +484,43 @@ export async function setupCommand(
         cmd = (deps.bin ?? (() => hookCommandPath(ctx.io.entry)))();
       } catch (e) {
         if (!(e instanceof Refusal)) throw e;
-        p.info(ui.warn(`Skipped: ${e.message}`));
+        if ((deps.fromPackageCache ?? fromPackageCache)()) {
+          // npx's copy vanishes after the run, so agents must start a global install. Never
+          // the cache path, and never `npx -y oortmem` (slow, and it needs the network).
+          const global = deps.globalInstall ?? npmGlobalInstall(ctx.io.env);
+          cmd = global.bin();
+          if (cmd !== undefined) {
+            p.info(ui.ok(`Using the global oortmem install: ${cmd}`));
+          } else {
+            const why =
+              'You are running oort through npx, whose copy disappears after this run, so agents need `oort` installed globally.';
+            const want = interactive
+              ? answered(await p.confirm(`${why} Install it now with \`npm i -g oortmem\`?`, true))
+              : opts.installGlobal === true;
+            if (!want) {
+              p.info(
+                ui.warn(
+                  `Skipped connecting. ${why} Run \`npm i -g oortmem\`, then \`oort setup\`${interactive ? '' : ' (or pass --install-global)'}.`,
+                ),
+              );
+            } else if ((await global.install()) !== 0 || (cmd = global.bin()) === undefined) {
+              cmd = undefined;
+              p.info(
+                ui.warn(
+                  'Skipped connecting: `npm i -g oortmem` did not leave an `oort` bin; install it yourself, then run `oort setup`.',
+                ),
+              );
+            } else {
+              p.info(ui.ok(`Installed oortmem globally: ${cmd}`));
+              done.push({
+                what: 'installed oortmem globally (npm i -g oortmem)',
+                undo: 'npm rm -g oortmem',
+              });
+            }
+          }
+        } else {
+          p.info(ui.warn(`Skipped: ${e.message}`));
+        }
       }
       if (cmd !== undefined) {
         const bin = cmd;
