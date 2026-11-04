@@ -58,8 +58,12 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
     );
   }
 
-  // Keychain items are not probed here (init only checks the environment); `oort keys list` shows both.
-  const missing = KEYS.filter((k) => !io.env[k.envVar]);
+  // Same order as `wire`: the environment, then the Keychain. Presence only; values are dropped.
+  const missing: (typeof KEYS)[number][] = [];
+  for (const k of KEYS) {
+    if (io.env[k.envVar]) continue;
+    if ((await ctx.keychain.read(k.provider)) === undefined) missing.push(k);
+  }
   if (missing.length === 0) {
     io.out('All keys are set.\n');
   } else {

@@ -69,3 +69,28 @@ describe('oort keys', () => {
     expect(r.io.stderr).toContain('macOS');
   });
 });
+
+describe('oort init with the Keychain', () => {
+  it('init.counts-keychain-keys-as-set', async () => {
+    const key = planted();
+    const { kc } = fakeKeychain({
+      'oort.voyage': key,
+      'oort.typesafe': key,
+      'oort.anthropic': key,
+    });
+    const h = harness();
+    const { code, io } = await h.run(['init'], {}, kc);
+    expect(code).toBe(0);
+    expect(io.stdout).toContain('All keys are set.');
+    expect(io.stdout).not.toContain(key);
+  });
+
+  it('init.reports-only-keys-missing-from-env-and-keychain', async () => {
+    const { kc } = fakeKeychain({ 'oort.voyage': planted() });
+    const h = harness();
+    const { io } = await h.run(['init'], {}, kc);
+    expect(io.stdout).not.toContain('VOYAGE_API_KEY');
+    expect(io.stdout).toContain('oort keys set typesafe');
+    expect(io.stdout).toContain('oort keys set anthropic');
+  });
+});
