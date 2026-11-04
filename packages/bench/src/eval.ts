@@ -7,6 +7,8 @@ import {
   resolveConfig,
   type Embedder,
   type MemoryStore,
+  type Reranker,
+  type ResolvedConfig,
   type ScopeFilter,
 } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
@@ -205,6 +207,10 @@ export interface RunEvalOptions {
   abstainThreshold?: number;
   /** Apply recall's relevance gate (default true). False sets its thresholds to 0, for comparison. */
   gate?: boolean;
+  /** Recall settings to override for this run, for comparisons (for example `lexicalFirst`). */
+  recall?: Partial<ResolvedConfig['recall']>;
+  /** Rerank with this reranker (default: none). */
+  rerank?: Reranker;
   scope?: ScopeFilter;
   /** Receives one-line warnings (counts only); defaults to stderr. */
   warn?: (message: string) => void;
@@ -332,6 +338,7 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
         returnK: maxK,
         rerankK: Math.max(base.recall.rerankK, maxK),
         ...(opts.gate === false && { minRerankScore: 0, minCoverage: 0, minDenseScore: 0 }),
+        ...opts.recall,
       },
     };
     // Rows must not influence each other: recall's access records would raise the
@@ -347,6 +354,7 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
           store: evalStore,
           config,
           ...(opts.embed !== undefined ? { embed: opts.embed } : {}),
+          ...(opts.rerank !== undefined ? { rerank: opts.rerank } : {}),
           ...(opts.now !== undefined ? { now: opts.now } : {}),
         },
       );

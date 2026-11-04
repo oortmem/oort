@@ -48,7 +48,7 @@ export function rrf(lists: Hit[][], k = 60): Map<string, number> {
  * that instant. As-of ignores `expiredAt`: it asks what was true then, not
  * what the system currently believes.
  */
-function isValid(m: Memory, now: Date, asOf: string | undefined): boolean {
+export function isValid(m: Memory, now: Date, asOf: string | undefined): boolean {
   if (asOf === undefined) return isCurrent(m, now);
   return isCurrent({ ...m, expiredAt: null }, new Date(asOf));
 }

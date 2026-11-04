@@ -68,10 +68,23 @@ With a labelled eval file for your own store it also suggests `minDenseScore`:
 ## Hook latency
 
 The `UserPromptSubmit` hook loads only the embed and rerank adapters, so it reads one key and
-imports no TypeSafe or Anthropic SDK. The lexical search runs while the prompt embeds. Full recall
-gets 1.5 s before the hook falls back to lexical-only recall. Each hook log line records
-`wireMs` (config, store and keys) and the recall stages (`embedMs`, `lexicalMs`, `denseMs`,
-`hydrateMs`, `fuseMs`, `rerankMs`), as numbers only.
+imports no TypeSafe or Anthropic SDK. Full recall gets 1.5 s before the hook falls back to
+lexical-only recall. Each hook log line records `wireMs` (config, store and keys) and the recall
+stages (`embedMs`, `lexicalMs`, `denseMs`, `hydrateMs`, `fuseMs`, `rerankMs`), as numbers only, and
+counts `embedSkipped` and `rerankSkipped` when recall saved a round trip.
+
+Most of a recall's time is two calls to Voyage: embedding the prompt and reranking the results.
+Three settings under `recall` cut them:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `lexicalFirst` | true | Run the lexical search first. When its top result holds every informative word of the prompt (at least two of them), is current, and the runner-up holds clearly fewer, the prompt is not embedded at all. |
+| `rerankBudgetMs` | 400 | The longest wait for the reranker. Past it, recall uses the fused order, logs `rerank-timeout`, and the relevance gate falls back to word coverage and dense similarity. 0 waits as long as the reranker takes. |
+| `queryCacheTtlSec` | 600 | How long a prompt's embedding is reused. The cache is in memory and on disk under `~/.oort/cache/query-embed` (files are named by a SHA-256 hash; no prompt text is stored). 0 turns it off. |
+
+From Europe a warm Voyage rerank took 200 to 300 ms when measured on 2026-11-04, so the 400 ms
+default lets normal reranks finish and only cuts off slow outliers. Lower it (150 ms is the spec's
+target) to trade rerank quality for latency, or set it to 0 to always wait.
 
 ## Phase 1 baseline (dogfood, 2026-11-04)
 

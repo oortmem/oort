@@ -1,7 +1,7 @@
 import type { Embedder, Hit, MemoryStore, Reranker, ScopeFilter } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
 import { activation } from './activation.js';
-import { fuse } from './fusion.js';
+import { fuse, isValid } from './fusion.js';
 import { localGrant } from './grant.js';
 import { scrub } from './scrub.js';
 import type { Memory } from './model.js';
@@ -47,6 +47,8 @@ export type Degradation =
   | 'rerank-empty'
   /** The store's dense search failed: lexical-only. */
   | 'dense-failed'
+  /** The reranker did not answer within `recall.rerankBudgetMs`: the fused order stands. */
+  | 'rerank-timeout'
   /** Reading or promoting a cold copy failed: those memories stay cold, unhydrated. */
   | 'hydrate-failed';
 
@@ -61,6 +63,8 @@ export interface RecallResult {
   gate?: { by: 'rerank' | 'coverage'; threshold: number; dropped: number };
   /** Rerank was available but not called, because fusion already had a clear answer. */
   rerankSkipped?: 'confident';
+  /** The query was not embedded, because the lexical search already had a clear answer. */
+  embedSkipped?: 'lexical-confident';
   timings: Record<string, number>;
 }
 
@@ -109,15 +113,34 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     }
   };
 
-  // The lexical search does not need the query vector, so it runs while the query embeds.
+  const queryTokens = informativeTokens(text);
+  // Memories read while deciding, reused below so nothing is read twice.
+  const prefetched = new Map<string, Memory | null>();
+  const read = async (id: string): Promise<Memory | null> => {
+    if (prefetched.has(id)) return prefetched.get(id) ?? null;
+    const m = await store.get(grant, id);
+    prefetched.set(id, m);
+    return m;
+  };
+
   const lexicalP = timed('lexicalMs', () => store.lexical(grant, text, config.recall.lexicalK));
   // A failed embed must not leave the lexical promise unobserved.
   lexicalP.catch(() => {});
 
+  // Lexical first (CON-57): when the lexical answer is already clear, skip the embedding round
+  // trip. Otherwise the lexical search has run while nothing else waited on it.
+  let embedSkipped: RecallResult['embedSkipped'];
+  if (deps.embed && config.recall.lexicalFirst) {
+    const first = await lexicalP;
+    if (await lexicalIsConfident(first, queryTokens, read, now, q.asOf)) {
+      embedSkipped = 'lexical-confident';
+    }
+  }
+
   let vector: Int8Array | undefined;
   if (!deps.embed) {
     degraded.push('no-embedder');
-  } else {
+  } else if (embedSkipped === undefined) {
     const t = clock();
     try {
       vector = (await deps.embed.embed([text], 'query'))[0];
@@ -149,7 +172,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   let hydrateFailed = false;
   const loaded = await Promise.all(
     ids.map(async (id): Promise<Memory | null> => {
-      const live = await store.get(grant, id);
+      const live = await read(id);
       if (live === null) return null;
       if (live.tier !== 'cold' && !coldIds.has(id)) return live;
       try {
@@ -187,7 +210,6 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   });
   timings['fuseMs'] = clock() - tf;
 
-  const queryTokens = informativeTokens(text);
   const coverage = new Map<string, number>();
   for (const f of fused) {
     const m = memories.get(f.id);
@@ -209,7 +231,11 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     const tr = clock();
     try {
       const docs = ordered.map((f) => ({ id: f.id, text: memories.get(f.id)?.text ?? '' }));
-      const reranked = await deps.rerank.rerank(text, docs, config.recall.returnK);
+      const reranked = await withBudget(
+        deps.rerank.rerank(text, docs, config.recall.returnK),
+        config.recall.rerankBudgetMs,
+      );
+      if (reranked === TIMED_OUT) throw RERANK_TIMEOUT;
       const byId = new Map(ordered.map((f) => [f.id, f]));
       const next: typeof ordered = [];
       for (const r of reranked) {
@@ -225,8 +251,8 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
       } else {
         ordered = next;
       }
-    } catch {
-      degraded.push('rerank-failed');
+    } catch (e) {
+      degraded.push(e === RERANK_TIMEOUT ? 'rerank-timeout' : 'rerank-failed');
       rerankScores.clear();
     }
     timings['rerankMs'] = clock() - tr;
@@ -291,8 +317,54 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         }
       : {}),
     ...(rerankSkipped !== undefined ? { rerankSkipped } : {}),
+    ...(embedSkipped !== undefined ? { embedSkipped } : {}),
     timings,
   };
+}
+
+const TIMED_OUT = Symbol('timed-out');
+const RERANK_TIMEOUT = new Error('rerank-timeout');
+
+/** `p`, or `TIMED_OUT` after `ms` (0: no limit). A late result is dropped, never rejected. */
+async function withBudget<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  if (ms <= 0) return p;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  p.catch(() => {});
+  try {
+    return await Promise.race([
+      p,
+      new Promise<typeof TIMED_OUT>((res) => {
+        timer = setTimeout(() => res(TIMED_OUT), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * The lexical answer is clear enough to skip the query embedding when the query has at least two
+ * informative words, the top lexical hit is valid now (or at `asOf`) and holds every one of them,
+ * and the next hit holds clearly fewer. Dense search could only confirm such a result.
+ */
+async function lexicalIsConfident(
+  lexical: Hit[],
+  queryTokens: Set<string>,
+  read: (id: string) => Promise<Memory | null>,
+  now: Date,
+  asOf: string | undefined,
+): Promise<boolean> {
+  if (queryTokens.size < 2) return false;
+  const top = lexical[0];
+  if (top === undefined) return false;
+  const m = await read(top.id);
+  if (m === null || !isValid(m, now, asOf)) return false;
+  if (queryCoverage(queryTokens, m) < 1) return false;
+  const next = lexical[1];
+  if (next === undefined) return true;
+  const n = await read(next.id);
+  if (n === null) return true;
+  return queryCoverage(queryTokens, n) <= 1 - CONFIDENT_COVERAGE_GAP;
 }
 
 /**

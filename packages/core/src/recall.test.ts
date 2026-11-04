@@ -180,8 +180,13 @@ describe('recall', () => {
     const rerank: Reranker = { rerank: () => Promise.reject(new Error('boom')) };
     const r = await recall(
       { text: 'auth port 8080', scope: SCOPE },
-      // Rerank is forced on: a clear lexical match would otherwise skip it.
-      { store, embed, rerank, config: withRecall({ skipRerankWhenConfident: false }) },
+      // Rerank and the embed are forced on: a clear lexical match would otherwise skip both.
+      {
+        store,
+        embed,
+        rerank,
+        config: withRecall({ skipRerankWhenConfident: false, lexicalFirst: false }),
+      },
     );
     expect(r.degraded).toEqual(['embed-failed', 'rerank-failed']);
     expect(r.memories.map((m) => m.id)).toEqual(['a']);
@@ -199,7 +204,8 @@ describe('recall', () => {
     };
     const r = await recall(
       { text: 'auth port 8080', scope: SCOPE },
-      { store: busy, embed, config },
+      // The embed is forced on: lexical-first would skip it for this clear match.
+      { store: busy, embed, config: withRecall({ lexicalFirst: false }) },
     );
     expect(r.memories.map((m) => m.id)).toEqual(['a']);
     expect(r.degraded).toContain('dense-failed');
@@ -494,7 +500,10 @@ describe('conditional rerank (CON-57)', () => {
         return [vec(100, 0, 0, 0)];
       },
     };
-    await recall({ text: 'auth port 8080', scope: SCOPE }, { store: spy, embed, config });
+    await recall(
+      { text: 'auth port 8080', scope: SCOPE },
+      { store: spy, embed, config: withRecall({ lexicalFirst: false }) },
+    );
     expect(lexicalBeforeEmbed).toBe(true);
   });
 });
@@ -566,5 +575,135 @@ describe('format', () => {
     expect(out).not.toContain(key);
     expect(out).toContain('deploy with key [REDACTED:');
     expect(out).toContain('via the quokka pipeline');
+  });
+});
+
+describe('recall latency (CON-57)', () => {
+  const counting = (inner: Embedder): Embedder & { calls: number } => {
+    const e = {
+      calls: 0,
+      dimension: inner.dimension,
+      async embed(texts: string[], kind: 'query' | 'document') {
+        e.calls++;
+        return inner.embed(texts, kind);
+      },
+    };
+    return e;
+  };
+  const twoMemories = (): Memory[] => [
+    makeMemory({
+      id: 'clear',
+      text: 'the billing worker retries failed invoices nightly',
+      embedding: vec(0, 100, 0, 0),
+    }),
+    makeMemory({
+      id: 'weak',
+      text: 'the billing page has a new logo',
+      embedding: vec(100, 0, 0, 0),
+    }),
+  ];
+  const withRecall = (over: Partial<typeof config.recall>) => ({
+    ...config,
+    recall: { ...config.recall, ...over },
+  });
+
+  it('latency.lexical-first-skips-the-embed-when-lexical-is-confident', async () => {
+    const store = await setup(twoMemories());
+    const embed = counting(fakeEmbedder([]));
+    const r = await recall(
+      { text: 'billing worker retries failed invoices', scope: SCOPE },
+      { store, embed, config },
+    );
+    expect(embed.calls).toBe(0);
+    expect(r.embedSkipped).toBe('lexical-confident');
+    expect(r.memories[0]?.id).toBe('clear');
+    expect(r.degraded ?? []).not.toContain('no-embedder');
+  });
+
+  it('latency.lexical-first-embeds-when-lexical-is-not-confident', async () => {
+    const store = await setup(twoMemories());
+    const embed = counting(fakeEmbedder([]));
+    // "billing" matches both memories equally: no clear lexical winner.
+    const r = await recall({ text: 'billing changes', scope: SCOPE }, { store, embed, config });
+    expect(embed.calls).toBe(1);
+    expect(r.embedSkipped).toBeUndefined();
+  });
+
+  it('latency.lexical-first-needs-two-informative-words', async () => {
+    const store = await setup(twoMemories());
+    const embed = counting(fakeEmbedder([]));
+    await recall({ text: 'invoices', scope: SCOPE }, { store, embed, config });
+    expect(embed.calls).toBe(1);
+  });
+
+  it('latency.lexical-first-can-be-switched-off', async () => {
+    const store = await setup(twoMemories());
+    const embed = counting(fakeEmbedder([]));
+    const r = await recall(
+      { text: 'billing worker retries failed invoices', scope: SCOPE },
+      { store, embed, config: withRecall({ lexicalFirst: false }) },
+    );
+    expect(embed.calls).toBe(1);
+    expect(r.embedSkipped).toBeUndefined();
+  });
+
+  it('latency.lexical-first-ignores-a-superseded-top-hit', async () => {
+    const store = await setup([
+      makeMemory({
+        id: 'old',
+        text: 'the billing worker retries failed invoices nightly',
+        validTo: new Date(Date.now() - DAY).toISOString(),
+        embedding: vec(0, 100, 0, 0),
+      }),
+    ]);
+    const embed = counting(fakeEmbedder([]));
+    await recall(
+      { text: 'billing worker retries failed invoices', scope: SCOPE },
+      { store, embed, config },
+    );
+    expect(embed.calls).toBe(1);
+  });
+
+  it('latency.rerank-past-its-budget-uses-the-fused-order', async () => {
+    const store = await setup(twoMemories());
+    const slow: Reranker = {
+      rerank: (_q, docs) =>
+        new Promise((res) =>
+          setTimeout(() => res(docs.map((d, i) => ({ id: d.id, score: 0.9 - i / 10 }))), 300),
+        ),
+    };
+    const r = await recall(
+      { text: 'billing changes this week', scope: SCOPE },
+      {
+        store,
+        embed: fakeEmbedder([]),
+        rerank: slow,
+        config: withRecall({ rerankBudgetMs: 40, skipRerankWhenConfident: false }),
+      },
+    );
+    expect(r.degraded).toContain('rerank-timeout');
+    expect(r.memories.every((m) => m.explanation.reranked === undefined)).toBe(true);
+    expect(r.timings['rerankMs']).toBeLessThan(200);
+  });
+
+  it('latency.rerank-budget-zero-waits-for-the-reranker', async () => {
+    const store = await setup(twoMemories());
+    const slow: Reranker = {
+      rerank: (_q, docs) =>
+        new Promise((res) =>
+          setTimeout(() => res(docs.map((d) => ({ id: d.id, score: 0.9 }))), 60),
+        ),
+    };
+    const r = await recall(
+      { text: 'billing changes this week', scope: SCOPE },
+      {
+        store,
+        embed: fakeEmbedder([]),
+        rerank: slow,
+        config: withRecall({ rerankBudgetMs: 0, skipRerankWhenConfident: false }),
+      },
+    );
+    expect(r.degraded ?? []).not.toContain('rerank-timeout');
+    expect(r.memories[0]?.explanation.reranked).toBe(0.9);
   });
 });
