@@ -20,6 +20,20 @@ import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AccountIndexRouteImport } from './routes/account/index'
 import { Route as AccountCliRouteImport } from './routes/account/cli'
 import { Route as ApiWaitlistRouteImport } from './routes/api/waitlist'
+import { Route as DocsIndexRouteImport } from './routes/docs/index'
+import { Route as DocsChatgptAndClaudeWebRouteImport } from './routes/docs/chatgpt-and-claude-web'
+import { Route as DocsClaudeDesktopRouteImport } from './routes/docs/claude-desktop'
+import { Route as DocsCodexRouteImport } from './routes/docs/codex'
+import { Route as DocsCursorRouteImport } from './routes/docs/cursor'
+import { Route as DocsFrameworksRouteImport } from './routes/docs/frameworks'
+import { Route as DocsGeminiCliRouteImport } from './routes/docs/gemini-cli'
+import { Route as DocsMcpClientsRouteImport } from './routes/docs/mcp-clients'
+import { Route as DocsOwnKeysRouteImport } from './routes/docs/own-keys'
+import { Route as DocsPrivacyRouteImport } from './routes/docs/privacy'
+import { Route as DocsProRouteImport } from './routes/docs/pro'
+import { Route as DocsQuickstartRouteImport } from './routes/docs/quickstart'
+import { Route as DocsTroubleshootingRouteImport } from './routes/docs/troubleshooting'
+import { Route as DocsVscodeRouteImport } from './routes/docs/vscode'
 import { Route as LegalAcceptableUseRouteImport } from './routes/legal/acceptable-use'
 import { Route as LegalCookiesRouteImport } from './routes/legal/cookies'
 import { Route as LegalPrivacyRouteImport } from './routes/legal/privacy'
@@ -84,6 +98,76 @@ const ApiWaitlistRoute = ApiWaitlistRouteImport.update({
   path: '/api/waitlist',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsIndexRoute = DocsIndexRouteImport.update({
+  id: '/docs/',
+  path: '/docs/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsChatgptAndClaudeWebRoute = DocsChatgptAndClaudeWebRouteImport.update({
+  id: '/docs/chatgpt-and-claude-web',
+  path: '/docs/chatgpt-and-claude-web',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsClaudeDesktopRoute = DocsClaudeDesktopRouteImport.update({
+  id: '/docs/claude-desktop',
+  path: '/docs/claude-desktop',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsCodexRoute = DocsCodexRouteImport.update({
+  id: '/docs/codex',
+  path: '/docs/codex',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsCursorRoute = DocsCursorRouteImport.update({
+  id: '/docs/cursor',
+  path: '/docs/cursor',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsFrameworksRoute = DocsFrameworksRouteImport.update({
+  id: '/docs/frameworks',
+  path: '/docs/frameworks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsGeminiCliRoute = DocsGeminiCliRouteImport.update({
+  id: '/docs/gemini-cli',
+  path: '/docs/gemini-cli',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsMcpClientsRoute = DocsMcpClientsRouteImport.update({
+  id: '/docs/mcp-clients',
+  path: '/docs/mcp-clients',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsOwnKeysRoute = DocsOwnKeysRouteImport.update({
+  id: '/docs/own-keys',
+  path: '/docs/own-keys',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsPrivacyRoute = DocsPrivacyRouteImport.update({
+  id: '/docs/privacy',
+  path: '/docs/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsProRoute = DocsProRouteImport.update({
+  id: '/docs/pro',
+  path: '/docs/pro',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsQuickstartRoute = DocsQuickstartRouteImport.update({
+  id: '/docs/quickstart',
+  path: '/docs/quickstart',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsTroubleshootingRoute = DocsTroubleshootingRouteImport.update({
+  id: '/docs/troubleshooting',
+  path: '/docs/troubleshooting',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsVscodeRoute = DocsVscodeRouteImport.update({
+  id: '/docs/vscode',
+  path: '/docs/vscode',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LegalAcceptableUseRoute = LegalAcceptableUseRouteImport.update({
   id: '/legal/acceptable-use',
   path: '/legal/acceptable-use',
@@ -136,6 +220,19 @@ export interface FileRoutesByFullPath {
   '/signup': typeof SignupRoute
   '/account/cli': typeof AccountCliRoute
   '/api/waitlist': typeof ApiWaitlistRoute
+  '/docs/chatgpt-and-claude-web': typeof DocsChatgptAndClaudeWebRoute
+  '/docs/claude-desktop': typeof DocsClaudeDesktopRoute
+  '/docs/codex': typeof DocsCodexRoute
+  '/docs/cursor': typeof DocsCursorRoute
+  '/docs/frameworks': typeof DocsFrameworksRoute
+  '/docs/gemini-cli': typeof DocsGeminiCliRoute
+  '/docs/mcp-clients': typeof DocsMcpClientsRoute
+  '/docs/own-keys': typeof DocsOwnKeysRoute
+  '/docs/privacy': typeof DocsPrivacyRoute
+  '/docs/pro': typeof DocsProRoute
+  '/docs/quickstart': typeof DocsQuickstartRoute
+  '/docs/troubleshooting': typeof DocsTroubleshootingRoute
+  '/docs/vscode': typeof DocsVscodeRoute
   '/legal/acceptable-use': typeof LegalAcceptableUseRoute
   '/legal/cookies': typeof LegalCookiesRoute
   '/legal/privacy': typeof LegalPrivacyRoute
@@ -143,6 +240,7 @@ export interface FileRoutesByFullPath {
   '/legal/terms': typeof LegalTermsRoute
   '/legal/terms-of-service': typeof LegalTermsOfServiceRoute
   '/account/': typeof AccountIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/api/cli/session/$id': typeof ApiCliSessionIdRoute
 }
@@ -157,6 +255,19 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/account/cli': typeof AccountCliRoute
   '/api/waitlist': typeof ApiWaitlistRoute
+  '/docs/chatgpt-and-claude-web': typeof DocsChatgptAndClaudeWebRoute
+  '/docs/claude-desktop': typeof DocsClaudeDesktopRoute
+  '/docs/codex': typeof DocsCodexRoute
+  '/docs/cursor': typeof DocsCursorRoute
+  '/docs/frameworks': typeof DocsFrameworksRoute
+  '/docs/gemini-cli': typeof DocsGeminiCliRoute
+  '/docs/mcp-clients': typeof DocsMcpClientsRoute
+  '/docs/own-keys': typeof DocsOwnKeysRoute
+  '/docs/privacy': typeof DocsPrivacyRoute
+  '/docs/pro': typeof DocsProRoute
+  '/docs/quickstart': typeof DocsQuickstartRoute
+  '/docs/troubleshooting': typeof DocsTroubleshootingRoute
+  '/docs/vscode': typeof DocsVscodeRoute
   '/legal/acceptable-use': typeof LegalAcceptableUseRoute
   '/legal/cookies': typeof LegalCookiesRoute
   '/legal/privacy': typeof LegalPrivacyRoute
@@ -164,6 +275,7 @@ export interface FileRoutesByTo {
   '/legal/terms': typeof LegalTermsRoute
   '/legal/terms-of-service': typeof LegalTermsOfServiceRoute
   '/account': typeof AccountIndexRoute
+  '/docs': typeof DocsIndexRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/api/cli/session/$id': typeof ApiCliSessionIdRoute
 }
@@ -179,6 +291,19 @@ export interface FileRoutesById {
   '/signup': typeof SignupRoute
   '/account/cli': typeof AccountCliRoute
   '/api/waitlist': typeof ApiWaitlistRoute
+  '/docs/chatgpt-and-claude-web': typeof DocsChatgptAndClaudeWebRoute
+  '/docs/claude-desktop': typeof DocsClaudeDesktopRoute
+  '/docs/codex': typeof DocsCodexRoute
+  '/docs/cursor': typeof DocsCursorRoute
+  '/docs/frameworks': typeof DocsFrameworksRoute
+  '/docs/gemini-cli': typeof DocsGeminiCliRoute
+  '/docs/mcp-clients': typeof DocsMcpClientsRoute
+  '/docs/own-keys': typeof DocsOwnKeysRoute
+  '/docs/privacy': typeof DocsPrivacyRoute
+  '/docs/pro': typeof DocsProRoute
+  '/docs/quickstart': typeof DocsQuickstartRoute
+  '/docs/troubleshooting': typeof DocsTroubleshootingRoute
+  '/docs/vscode': typeof DocsVscodeRoute
   '/legal/acceptable-use': typeof LegalAcceptableUseRoute
   '/legal/cookies': typeof LegalCookiesRoute
   '/legal/privacy': typeof LegalPrivacyRoute
@@ -186,6 +311,7 @@ export interface FileRoutesById {
   '/legal/terms': typeof LegalTermsRoute
   '/legal/terms-of-service': typeof LegalTermsOfServiceRoute
   '/account/': typeof AccountIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/api/cli/session/$id': typeof ApiCliSessionIdRoute
 }
@@ -202,6 +328,19 @@ export interface FileRouteTypes {
     | '/signup'
     | '/account/cli'
     | '/api/waitlist'
+    | '/docs/chatgpt-and-claude-web'
+    | '/docs/claude-desktop'
+    | '/docs/codex'
+    | '/docs/cursor'
+    | '/docs/frameworks'
+    | '/docs/gemini-cli'
+    | '/docs/mcp-clients'
+    | '/docs/own-keys'
+    | '/docs/privacy'
+    | '/docs/pro'
+    | '/docs/quickstart'
+    | '/docs/troubleshooting'
+    | '/docs/vscode'
     | '/legal/acceptable-use'
     | '/legal/cookies'
     | '/legal/privacy'
@@ -209,6 +348,7 @@ export interface FileRouteTypes {
     | '/legal/terms'
     | '/legal/terms-of-service'
     | '/account/'
+    | '/docs/'
     | '/api/stripe/webhook'
     | '/api/cli/session/$id'
   fileRoutesByTo: FileRoutesByTo
@@ -223,6 +363,19 @@ export interface FileRouteTypes {
     | '/signup'
     | '/account/cli'
     | '/api/waitlist'
+    | '/docs/chatgpt-and-claude-web'
+    | '/docs/claude-desktop'
+    | '/docs/codex'
+    | '/docs/cursor'
+    | '/docs/frameworks'
+    | '/docs/gemini-cli'
+    | '/docs/mcp-clients'
+    | '/docs/own-keys'
+    | '/docs/privacy'
+    | '/docs/pro'
+    | '/docs/quickstart'
+    | '/docs/troubleshooting'
+    | '/docs/vscode'
     | '/legal/acceptable-use'
     | '/legal/cookies'
     | '/legal/privacy'
@@ -230,6 +383,7 @@ export interface FileRouteTypes {
     | '/legal/terms'
     | '/legal/terms-of-service'
     | '/account'
+    | '/docs'
     | '/api/stripe/webhook'
     | '/api/cli/session/$id'
   id:
@@ -244,6 +398,19 @@ export interface FileRouteTypes {
     | '/signup'
     | '/account/cli'
     | '/api/waitlist'
+    | '/docs/chatgpt-and-claude-web'
+    | '/docs/claude-desktop'
+    | '/docs/codex'
+    | '/docs/cursor'
+    | '/docs/frameworks'
+    | '/docs/gemini-cli'
+    | '/docs/mcp-clients'
+    | '/docs/own-keys'
+    | '/docs/privacy'
+    | '/docs/pro'
+    | '/docs/quickstart'
+    | '/docs/troubleshooting'
+    | '/docs/vscode'
     | '/legal/acceptable-use'
     | '/legal/cookies'
     | '/legal/privacy'
@@ -251,6 +418,7 @@ export interface FileRouteTypes {
     | '/legal/terms'
     | '/legal/terms-of-service'
     | '/account/'
+    | '/docs/'
     | '/api/stripe/webhook'
     | '/api/cli/session/$id'
   fileRoutesById: FileRoutesById
@@ -266,6 +434,19 @@ export interface RootRouteChildren {
   SignupRoute: typeof SignupRoute
   AccountCliRoute: typeof AccountCliRoute
   ApiWaitlistRoute: typeof ApiWaitlistRoute
+  DocsChatgptAndClaudeWebRoute: typeof DocsChatgptAndClaudeWebRoute
+  DocsClaudeDesktopRoute: typeof DocsClaudeDesktopRoute
+  DocsCodexRoute: typeof DocsCodexRoute
+  DocsCursorRoute: typeof DocsCursorRoute
+  DocsFrameworksRoute: typeof DocsFrameworksRoute
+  DocsGeminiCliRoute: typeof DocsGeminiCliRoute
+  DocsMcpClientsRoute: typeof DocsMcpClientsRoute
+  DocsOwnKeysRoute: typeof DocsOwnKeysRoute
+  DocsPrivacyRoute: typeof DocsPrivacyRoute
+  DocsProRoute: typeof DocsProRoute
+  DocsQuickstartRoute: typeof DocsQuickstartRoute
+  DocsTroubleshootingRoute: typeof DocsTroubleshootingRoute
+  DocsVscodeRoute: typeof DocsVscodeRoute
   LegalAcceptableUseRoute: typeof LegalAcceptableUseRoute
   LegalCookiesRoute: typeof LegalCookiesRoute
   LegalPrivacyRoute: typeof LegalPrivacyRoute
@@ -273,6 +454,7 @@ export interface RootRouteChildren {
   LegalTermsRoute: typeof LegalTermsRoute
   LegalTermsOfServiceRoute: typeof LegalTermsOfServiceRoute
   AccountIndexRoute: typeof AccountIndexRoute
+  DocsIndexRoute: typeof DocsIndexRoute
   ApiStripeWebhookRoute: typeof ApiStripeWebhookRoute
   ApiCliSessionIdRoute: typeof ApiCliSessionIdRoute
 }
@@ -356,6 +538,104 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiWaitlistRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/docs/': {
+      id: '/docs/'
+      path: '/docs'
+      fullPath: '/docs/'
+      preLoaderRoute: typeof DocsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/chatgpt-and-claude-web': {
+      id: '/docs/chatgpt-and-claude-web'
+      path: '/docs/chatgpt-and-claude-web'
+      fullPath: '/docs/chatgpt-and-claude-web'
+      preLoaderRoute: typeof DocsChatgptAndClaudeWebRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/claude-desktop': {
+      id: '/docs/claude-desktop'
+      path: '/docs/claude-desktop'
+      fullPath: '/docs/claude-desktop'
+      preLoaderRoute: typeof DocsClaudeDesktopRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/codex': {
+      id: '/docs/codex'
+      path: '/docs/codex'
+      fullPath: '/docs/codex'
+      preLoaderRoute: typeof DocsCodexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/cursor': {
+      id: '/docs/cursor'
+      path: '/docs/cursor'
+      fullPath: '/docs/cursor'
+      preLoaderRoute: typeof DocsCursorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/frameworks': {
+      id: '/docs/frameworks'
+      path: '/docs/frameworks'
+      fullPath: '/docs/frameworks'
+      preLoaderRoute: typeof DocsFrameworksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/gemini-cli': {
+      id: '/docs/gemini-cli'
+      path: '/docs/gemini-cli'
+      fullPath: '/docs/gemini-cli'
+      preLoaderRoute: typeof DocsGeminiCliRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/mcp-clients': {
+      id: '/docs/mcp-clients'
+      path: '/docs/mcp-clients'
+      fullPath: '/docs/mcp-clients'
+      preLoaderRoute: typeof DocsMcpClientsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/own-keys': {
+      id: '/docs/own-keys'
+      path: '/docs/own-keys'
+      fullPath: '/docs/own-keys'
+      preLoaderRoute: typeof DocsOwnKeysRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/privacy': {
+      id: '/docs/privacy'
+      path: '/docs/privacy'
+      fullPath: '/docs/privacy'
+      preLoaderRoute: typeof DocsPrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/pro': {
+      id: '/docs/pro'
+      path: '/docs/pro'
+      fullPath: '/docs/pro'
+      preLoaderRoute: typeof DocsProRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/quickstart': {
+      id: '/docs/quickstart'
+      path: '/docs/quickstart'
+      fullPath: '/docs/quickstart'
+      preLoaderRoute: typeof DocsQuickstartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/troubleshooting': {
+      id: '/docs/troubleshooting'
+      path: '/docs/troubleshooting'
+      fullPath: '/docs/troubleshooting'
+      preLoaderRoute: typeof DocsTroubleshootingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/vscode': {
+      id: '/docs/vscode'
+      path: '/docs/vscode'
+      fullPath: '/docs/vscode'
+      preLoaderRoute: typeof DocsVscodeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/legal/acceptable-use': {
       id: '/legal/acceptable-use'
       path: '/legal/acceptable-use'
@@ -426,6 +706,19 @@ const rootRouteChildren: RootRouteChildren = {
   SignupRoute: SignupRoute,
   AccountCliRoute: AccountCliRoute,
   ApiWaitlistRoute: ApiWaitlistRoute,
+  DocsChatgptAndClaudeWebRoute: DocsChatgptAndClaudeWebRoute,
+  DocsClaudeDesktopRoute: DocsClaudeDesktopRoute,
+  DocsCodexRoute: DocsCodexRoute,
+  DocsCursorRoute: DocsCursorRoute,
+  DocsFrameworksRoute: DocsFrameworksRoute,
+  DocsGeminiCliRoute: DocsGeminiCliRoute,
+  DocsMcpClientsRoute: DocsMcpClientsRoute,
+  DocsOwnKeysRoute: DocsOwnKeysRoute,
+  DocsPrivacyRoute: DocsPrivacyRoute,
+  DocsProRoute: DocsProRoute,
+  DocsQuickstartRoute: DocsQuickstartRoute,
+  DocsTroubleshootingRoute: DocsTroubleshootingRoute,
+  DocsVscodeRoute: DocsVscodeRoute,
   LegalAcceptableUseRoute: LegalAcceptableUseRoute,
   LegalCookiesRoute: LegalCookiesRoute,
   LegalPrivacyRoute: LegalPrivacyRoute,
@@ -433,6 +726,7 @@ const rootRouteChildren: RootRouteChildren = {
   LegalTermsRoute: LegalTermsRoute,
   LegalTermsOfServiceRoute: LegalTermsOfServiceRoute,
   AccountIndexRoute: AccountIndexRoute,
+  DocsIndexRoute: DocsIndexRoute,
   ApiStripeWebhookRoute: ApiStripeWebhookRoute,
   ApiCliSessionIdRoute: ApiCliSessionIdRoute,
 }
