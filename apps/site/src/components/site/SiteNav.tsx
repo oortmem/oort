@@ -7,7 +7,6 @@ import { legal } from '@/lib/legal';
 const links = [
   { to: '/docs', label: 'Docs' },
   { to: '/architecture', label: 'Architecture' },
-  { to: '/explorer', label: 'Explorer' },
   { to: '/enterprise', label: 'Enterprise' },
   { to: '/pricing', label: 'Pricing' },
 ] as const;
@@ -59,10 +58,10 @@ export function SiteNav() {
             Sign in
           </Link>
           <Link
-            to="/dashboard"
+            to="/docs/quickstart"
             className="press rounded-full bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground"
           >
-            Launch console
+            Get started
           </Link>
         </div>
         <span
@@ -101,7 +100,6 @@ export function SiteFooter() {
             'Product',
             [
               ['/architecture', 'Architecture'],
-              ['/explorer', 'Explorer (Concept)'],
               ['/pricing', 'Pricing'],
             ],
           ],

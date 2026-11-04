@@ -280,8 +280,11 @@ describe('docs in the site chrome', () => {
     );
   });
 
-  it('the home hero links to the setup guide', () => {
+  it('the home hero and the nav lead with Get started, linking to the quickstart', () => {
     const home = readFileSync(join(import.meta.dirname, '../routes/index.tsx'), 'utf8');
-    expect(home).toMatch(/to="\/docs\/quickstart"[\s\S]{0,200}Read the setup guide/);
+    expect(home).toMatch(/to="\/docs\/quickstart"[\s\S]{0,200}Get started/);
+    const nav = readFileSync(join(import.meta.dirname, '../components/site/SiteNav.tsx'), 'utf8');
+    expect(nav).toMatch(/to="\/docs\/quickstart"[\s\S]{0,200}Get started/);
+    expect(nav).not.toMatch(/Launch console/);
   });
 });

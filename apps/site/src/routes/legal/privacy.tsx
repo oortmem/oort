@@ -6,6 +6,11 @@ export const Route = createFileRoute('/legal/privacy')({
   head: () => ({
     meta: [
       { title: 'Privacy notice (draft) | Oort Cloud' },
+      {
+        name: 'description',
+        content:
+          'What Oort collects, why, where it is kept and how to get it deleted. Your memories stay on your machine.',
+      },
       { name: 'robots', content: 'noindex' },
     ],
   }),

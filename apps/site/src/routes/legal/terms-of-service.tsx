@@ -7,6 +7,11 @@ export const Route = createFileRoute('/legal/terms-of-service')({
   head: () => ({
     meta: [
       { title: 'Oort Pro terms of service (draft) | Oort Cloud' },
+      {
+        name: 'description',
+        content:
+          'The Oort Pro subscription terms: price, limits, cancelling and the 14-day withdrawal right.',
+      },
       { name: 'robots', content: 'noindex' },
     ],
   }),

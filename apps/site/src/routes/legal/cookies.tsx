@@ -4,7 +4,14 @@ import { legal } from '@/lib/legal';
 
 export const Route = createFileRoute('/legal/cookies')({
   head: () => ({
-    meta: [{ title: 'Cookies (draft) | Oort Cloud' }, { name: 'robots', content: 'noindex' }],
+    meta: [
+      { title: 'Cookies (draft) | Oort Cloud' },
+      {
+        name: 'description',
+        content: 'The cookies oortcloud.dev sets, why, and how to turn them off.',
+      },
+      { name: 'robots', content: 'noindex' },
+    ],
   }),
   component: Page,
 });

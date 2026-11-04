@@ -4,7 +4,15 @@ import { legal } from '@/lib/legal';
 
 export const Route = createFileRoute('/legal/subprocessors')({
   head: () => ({
-    meta: [{ title: 'Subprocessors (draft) | Oort Cloud' }, { name: 'robots', content: 'noindex' }],
+    meta: [
+      { title: 'Subprocessors (draft) | Oort Cloud' },
+      {
+        name: 'description',
+        content:
+          'The companies that process data for Oort: Cloudflare, Clerk, Stripe, Voyage AI, TypeSafe and Anthropic.',
+      },
+      { name: 'robots', content: 'noindex' },
+    ],
   }),
   component: Page,
 });

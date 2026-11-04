@@ -4,7 +4,14 @@ import { legal } from '@/lib/legal';
 
 export const Route = createFileRoute('/legal/terms')({
   head: () => ({
-    meta: [{ title: 'Terms of use (draft) | Oort Cloud' }, { name: 'robots', content: 'noindex' }],
+    meta: [
+      { title: 'Terms of use (draft) | Oort Cloud' },
+      {
+        name: 'description',
+        content: 'The terms for using oortcloud.dev and the open-source Oort software.',
+      },
+      { name: 'robots', content: 'noindex' },
+    ],
   }),
   component: Page,
 });
@@ -21,9 +28,9 @@ function Page() {
       <h2>The site</h2>
       <p>
         The site describes Oort, an open-source agent memory engine, and is where you manage an Oort
-        account. Some pages are demos with sample data (the console and the Explorer concept).
-        Features marked Planned or Concept are not built yet. Prices are a launch proposal and may
-        change.
+        account. The console demo uses sample data. Features marked Planned or Concept are not built
+        yet. The Oort Pro price is set out in the Oort Pro terms. Prices shown for hosted Oort
+        Cloud, which is Planned, are a proposal and may change.
       </p>
       <h2>Open source software</h2>
       <p>
