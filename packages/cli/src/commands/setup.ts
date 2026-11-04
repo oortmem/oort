@@ -28,6 +28,7 @@ import { describeChange, hostArgs, hostContext } from './connect.js';
 import { importCommand, parseSince } from './import.js';
 import { hookCommandPath, settingsFile } from './install.js';
 import { keySource } from './keys.js';
+import { keychainBlocker, runLogin } from './login.js';
 
 export interface SetupOptions {
   yes?: boolean;
@@ -153,11 +154,11 @@ function clackPrompter(): Prompter {
   };
 }
 
-type KeysMode = 'byo' | 'pro' | 'skip';
+type KeysMode = 'byo' | 'pro' | 'skip' | 'have-pro';
 
 interface Plan {
   agents?: Host[];
-  keys?: KeysMode;
+  keys?: Exclude<KeysMode, 'have-pro'>;
   /** An age (`14d`) or `skip`. */
   import?: string;
   demo: boolean;
@@ -199,7 +200,7 @@ function nonInteractiveHelp(detected: Host[]): string {
     'setup never prompts when stdin is not a terminal. Pass --yes and your choices, for example:',
     `  oort setup --yes --agents ${agents} --keys byo --import skip`,
     `  --agents  detected (the default with --yes), none, or a comma list of: ${HOSTS.join(', ')}`,
-    '  --keys    byo (report missing keys and where to get them), pro, or skip',
+    '  --keys    byo (report missing keys and where to get them), pro (oort login: Oort Pro, no vendor keys), or skip',
     '  --import  skip (the default) or an age such as 14d: imports Claude Code transcripts, using the writer',
     '  --no-demo skip the remember, recall and forget check',
   ].join('\n');
@@ -354,35 +355,70 @@ export async function setupCommand(
     const sources = new Map<Vendor, string>();
     for (const provider of VENDORS) sources.set(provider, await keySource(provider, ctx));
     const missing = VENDORS.filter((k) => sources.get(k) === 'missing');
+    const oortSource = await keySource('oort', ctx);
     p.info(
-      ui.kv(
-        VENDORS.map((k) => [
-          k,
-          sources.get(k) === 'missing' ? ui.yellow('missing') : ui.green(sources.get(k) ?? ''),
-        ]),
-      ),
+      ui.kv([
+        ...VENDORS.map(
+          (k) =>
+            [
+              k,
+              sources.get(k) === 'missing' ? ui.yellow('missing') : ui.green(sources.get(k) ?? ''),
+            ] as const,
+        ),
+        ['oort', oortSource === 'missing' ? ui.dim('missing') : ui.green(oortSource)],
+      ]),
     );
-    const keys =
-      plan.keys ??
-      answered(
-        await p.select<KeysMode>(
-          'How should Oort reach its model providers?',
-          [
-            { value: 'byo', label: 'Bring my own keys', hint: 'Voyage, TypeSafe, Anthropic' },
-            {
-              value: 'pro',
-              label: 'Oort Pro (coming in this release)',
-              hint: 'no keys, $19/month',
-            },
-            { value: 'skip', label: 'Skip for now', hint: 'recall works lexical-only' },
-          ],
-          missing.length === 0 ? 'skip' : 'byo',
+    // An Oort key already covers every role without a vendor key: nothing to choose.
+    const keys: KeysMode =
+      oortSource !== 'missing'
+        ? 'have-pro'
+        : (plan.keys ??
+          answered(
+            await p.select<KeysMode>(
+              'How should Oort reach its model providers?',
+              [
+                {
+                  value: 'pro',
+                  label: 'Oort Pro',
+                  hint: 'no keys, $19/month; signs in at oortcloud.dev (oort login)',
+                },
+                { value: 'byo', label: 'Bring my own keys', hint: 'Voyage, TypeSafe, Anthropic' },
+                { value: 'skip', label: 'Skip for now', hint: 'recall works lexical-only' },
+              ],
+              missing.length === 0 ? 'skip' : 'byo',
+            ),
+          ));
+    if (keys === 'have-pro') {
+      p.info(
+        ui.ok(
+          `Oort Pro key found (${oortSource === 'env' ? 'OORT_API_KEY' : 'Keychain oort.oort'}): ${
+            missing.length === 0
+              ? 'your own keys still win for every role.'
+              : `${missing.join(', ')} go${missing.length === 1 ? 'es' : ''} through the Oort Pro relay; your own keys win where set.`
+          }`,
         ),
       );
-    if (keys === 'pro') {
-      p.info(
-        'Oort Pro (no keys, $19/month) arrives in this release: `oort login` signs you in at oortcloud.dev and lands shortly. Continuing without it for now.',
-      );
+    } else if (keys === 'pro') {
+      const blocker = keychainBlocker(ctx);
+      if (blocker !== undefined) {
+        p.info(ui.warn(`Oort Pro sign-in skipped: ${blocker}`));
+      } else {
+        let outcome;
+        try {
+          outcome = await runLogin(ctx, (t) => p.info(t), ui);
+        } catch (e) {
+          if (!(e instanceof Refusal)) throw e;
+          outcome = { ok: false as const, message: e.message };
+        }
+        if (outcome.ok) {
+          done.push({
+            what: 'stored the Oort Pro key in the Keychain (oort.oort)',
+            undo: 'oort logout (then revoke the key at oortcloud.dev/account)',
+          });
+        } else {
+          p.info(ui.warn(`${outcome.message} Setup continues without Oort Pro.`));
+        }
+      }
     } else if (keys === 'byo') {
       if (missing.length === 0) p.info(ui.ok('All three keys are set.'));
       for (const k of missing) {
@@ -418,7 +454,9 @@ export async function setupCommand(
         );
       }
     } else {
-      p.info('Skipped. Recall works lexical-only until keys are set (`oort keys set <provider>`).');
+      p.info(
+        'Skipped. Recall works lexical-only until keys are set (`oort keys set <provider>`, or `oort login` for Oort Pro).',
+      );
     }
 
     // 3. Connect.
