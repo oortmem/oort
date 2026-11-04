@@ -163,8 +163,11 @@ describe('UserPromptSubmit', () => {
     };
     const out = await handleUserPromptSubmit(prompt(t, 'which port does the auth service use?'), {
       ...deps,
-      // Rerank is forced on: one memory holding every prompt word would otherwise skip it.
-      config: { ...deps.config, recall: { ...deps.config.recall, skipRerankWhenConfident: false } },
+      // Rerank and the embed are forced on: one memory holding every prompt word would skip both.
+      config: {
+        ...deps.config,
+        recall: { ...deps.config.recall, skipRerankWhenConfident: false, lexicalFirst: false },
+      },
       embed: down,
       rerank: { rerank: () => Promise.reject(new Error('ECONNREFUSED')) },
     });
@@ -190,6 +193,8 @@ describe('UserPromptSubmit', () => {
     let reranked = 0;
     const pending = handleUserPromptSubmit(prompt(t, 'which port does the auth service use?'), {
       ...deps,
+      // The embed is forced on: lexical-first would skip it for this one clear memory.
+      config: { ...deps.config, recall: { ...deps.config.recall, lexicalFirst: false } },
       embed: hanging,
       rerank: {
         async rerank(_q, docs) {
@@ -240,7 +245,12 @@ describe('UserPromptSubmit', () => {
     expect(context(out.stdout, 'UserPromptSubmit')).toContain('port 4471');
     expect(readLog(t.home)[0]?.degraded).toContain('error');
 
-    out = await handleUserPromptSubmit(prompt(t, ask), { ...deps, store: flaky('dense') });
+    // The embed is forced on, so the dense search runs: lexical-first would skip it here.
+    out = await handleUserPromptSubmit(prompt(t, ask), {
+      ...deps,
+      store: flaky('dense'),
+      config: { ...deps.config, recall: { ...deps.config.recall, lexicalFirst: false } },
+    });
     expect(context(out.stdout, 'UserPromptSubmit')).toContain('port 4471');
     expect(readLog(t.home)[1]?.degraded).toContain('dense-failed');
     expect(readLog(t.home)[1]?.degraded).not.toContain('error');

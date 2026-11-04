@@ -3,6 +3,9 @@ import * as path from 'node:path';
 import {
   MissingCredentialError,
   OortConfig,
+  cachingEmbedder,
+  layeredEmbeddingCache,
+  memoryEmbeddingCache,
   localScope,
   resolveProject,
   resolveConfig,
@@ -26,6 +29,7 @@ import {
   type RoleRoute,
   type RouteSummary,
 } from './credentials.js';
+import { diskEmbeddingCache } from './embed-cache-disk.js';
 import { createKeychain, type KeychainReader } from './keychain.js';
 import { RELAY_MODELS, RELAY_PATHS, relayUrl, viaRelay, type OortRelayError } from './relay.js';
 import { echo } from './util.js';
@@ -204,6 +208,24 @@ async function load<T extends object>(
   }
 }
 
+/**
+ * Query embeddings are reused for `recall.queryCacheTtlSec` (CON-57): in memory for a long-lived
+ * process (`oort mcp`), and on disk under `$OORT_HOME/cache/query-embed` for the hooks, which are
+ * a new process per prompt. Keys are hashes; no query text is stored.
+ */
+function withQueryCache(embed: Embedder, config: ResolvedConfig): Embedder {
+  const ttlMs = config.recall.queryCacheTtlSec * 1000;
+  if (ttlMs <= 0) return embed;
+  const cache = layeredEmbeddingCache(
+    memoryEmbeddingCache({ ttlMs }),
+    diskEmbeddingCache(path.join(config.home, 'cache', 'query-embed'), { ttlMs }),
+  );
+  return cachingEmbedder(embed, cache, {
+    model: config.embed.model,
+    dimension: config.embed.dimension,
+  });
+}
+
 /** `embed.dimension` as the home config (or the default) sets it, ignoring any project config. */
 function homeDimension(home: string): number {
   const file = path.join(home, 'config.json');
@@ -332,7 +354,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
               ...fetchOpt,
             }),
         );
-        if ('ok' in embed) out.embed = embed.ok;
+        if ('ok' in embed) out.embed = withQueryCache(embed.ok, config);
         else out.unavailable.embed = embed.error;
       })(),
     want.has('rerank') &&

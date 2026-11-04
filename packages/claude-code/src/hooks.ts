@@ -186,6 +186,7 @@ export async function handleUserPromptSubmit(
       ...(result.abstained === true && { abstained: 1 }),
       ...(result.gate !== undefined && { gateDropped: result.gate.dropped }),
       ...(result.rerankSkipped !== undefined && { rerankSkipped: 1 }),
+      ...(result.embedSkipped !== undefined && { embedSkipped: 1 }),
     };
     // Abstained: candidates were found but none was relevant enough, so nothing is injected.
     entry.outcome =
