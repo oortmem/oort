@@ -14,7 +14,11 @@ with seven tools: `recall`, `remember`, `forget`, `pin`, `explain`, `list_recent
 - Their past context would change the answer: a stack, a convention, a preference, a decision.
 - Skip it for self-contained questions. A recall that finds nothing relevant returns
   `abstained: true`; answer without memory then, and do not mention Oort.
-- Use `as_of` for questions about the past ("what did we use in March").
+- Questions about time: `as_of` for what was true then ("what did we use in March"),
+  `mode: "history"` for how a fact changed, `known_at` for what was believed then. Oort also
+  reads these from the query; the result's `mode` says which it used.
+- A recalled fact with `stale: true` is volatile and has not been confirmed lately. Check it with
+  the user before relying on it, and `remember` the answer.
 
 ## When to remember
 

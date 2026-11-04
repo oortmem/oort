@@ -50,7 +50,7 @@ non-empty) turns it off and wins over everything else. `FORCE_COLOR=1` turns it
 on for a pipe, `FORCE_COLOR=0` turns it off, and `TERM=dumb` turns it off.
 
 **`--json`.** These commands print data rather than a report: `recall`,
-`explain`, `inspect`, `stats`, `keys list` and `doctor`. With `--json` they print JSON
+`explain`, `revalidate`, `inspect`, `stats`, `keys list` and `doctor`. With `--json` they print JSON
 only: no header and no colour. `export` always prints JSON Lines (see
 `docs/export-format.md`). `observe` prints its result as JSON.
 
@@ -318,8 +318,8 @@ Tools:
 
 | Tool | Input | Annotations | Returns |
 | --- | --- | --- | --- |
-| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `limit?` (1–10, default 5) | read-only, idempotent | current facts: `id`, `text`, `type`, `tier`, `valid_from`, `why` (for example `lexical #1, dense #2, rerank 0.91`); a `note` when recall is lexical-only |
-| `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`) | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded` or `skipped`), `id`, `supersedes`, `reason` (`secret`, `not durable`) |
+| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of`, `history`, `known-at`), `limit?` (1–10, default 5) | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`); `mode`, the time mode used (for example `as-of 2026-04-02`); a `note` when recall is lexical-only |
+| `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`) | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
 | `forget` | `id` (required) | destructive, idempotent | `{ forgotten: id }` |
 | `pin` | `id`, `pinned` (boolean) | write, not destructive, idempotent | `{ id, pinned, changed }` |
 | `explain` | `id` | read-only, idempotent | the memory, its stored decisions, and its supersede chain |
@@ -353,7 +353,8 @@ The server instructions:
 > Oort is the user's own long-term memory, which they connected on purpose. `recall` searches facts the user chose to keep from earlier sessions: decisions, preferences, project details. Use it when the user refers to earlier work, or when their past context would change the answer; skip it for self-contained questions. Use `remember` only for durable facts the user stated or confirmed, one standalone sentence each, never secrets or credentials. `forget` deletes permanently.
 
 The first paragraph above stands alone in under 512 characters. A second
-paragraph covers scope, `as_of`, supersession, batching facts and ids.
+paragraph covers scope, the time modes (`as_of`, `mode: "history"`, `known_at`), supersession,
+stale facts, batching facts and ids.
 
 The server is wired once at start-up. A key you set while it runs is picked
 up the next time the host restarts it.
@@ -383,8 +384,9 @@ tools are available too.
 
 | Command | What it does | Flags |
 | --- | --- | --- |
-| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block). | `--json` (the full RecallResult, without embeddings), `--as-of <iso>` |
-| `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation and hydrated. | `--json` (rank, id, type, tier, validFrom, text, explanation; timings; degraded) |
+| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block). | `--json` (the full RecallResult, without embeddings), `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)) |
+| `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation and hydrated. The header names the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (rank, id, type, tier, validFrom, text, explanation; temporal; timings; degraded), `--as-of`, `--known-at`, `--history` |
+| `oort revalidate` | Lists volatile facts (a status, a current version, an owner) that nobody confirmed within `recall.staleAfterDays`, oldest first. | `--json` (id, type, text, lastConfirmed) |
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
 | `oort stats` | Counts per tier and validity, store and cold sizes, the hook queue and memory use. | `--json` |
 | `oort observe` | Runs the write path on one turn, from JSON on stdin or from `--user` with `--assistant`. | `--dry-run` (reports scrubbing only) |
@@ -396,6 +398,38 @@ tools are available too.
 
 Ids are full ids or unique prefixes. Every command reads the cwd's project
 plus global memories.
+
+### Time: recall modes
+
+Every memory has a valid time (`validFrom` to `validTo`: when the fact held in the world) and a
+transaction time (`createdAt` to `expiredAt`: when Oort believed it). A recall reads one slice:
+
+| Mode | Flag | What it returns |
+| --- | --- | --- |
+| `current` | (default) | What is true now and still believed. |
+| `as-of` | `--as-of <iso>` | What was true at that time, using everything learned since. A corrected fact never shows: it was never true. |
+| `history` | `--history` | Every version of the matching facts, along the supersede chain, oldest first. Versions found only by walking the chain have `explanation.chain`. |
+| `known-at` | `--known-at <iso>` | What Oort believed at that time, including facts corrected later. |
+
+Without a flag the mode comes from the query, in code (chrono-node, no model call): "on 2 April
+2026" or "in March" is as-of the end of that day, "how has … changed" or "used to" is history,
+"what did we believe … on <day>" is known-at. A bare date with no "on", "in" or "as of" stays a
+keyword ("2026-05-16 pooling" finds the memory that mentions it). The temporal words are left out
+of the search. `--json` reports the view under `temporal` (`inferred: true` when it came from the
+query). Validity is a filter; recency only breaks ties in the ranking.
+
+A fact can end two ways. **Superseded**: the situation changed, so the old fact gets `validTo`
+(the new fact's start) and `endReason: superseded`. **Corrected**: the old fact was wrong from the
+start, so it gets `expiredAt` (when Oort learned) and `endReason: corrected`, and the correction
+takes its valid interval. A fact that only gains detail is **refined** in place; its earlier
+wording stays in its decisions. Dates in a fact ("until Friday", "starting next week", "since
+last Monday") set its interval, resolved against the turn's time, and a date the writer got wrong
+("yesterday" written as the wrong day) is fixed from the turn.
+
+**Volatile facts.** The write gate marks facts likely to change within weeks (a status, a current
+version, an owner, a deadline). One not confirmed within `recall.staleAfterDays` (default 30; 0
+turns it off) is injected with "(may be outdated; last confirmed 2mo ago)" and listed by `oort
+revalidate`. Confirming it in a session clears the mark.
 
 ## Keys: `oort keys`
 

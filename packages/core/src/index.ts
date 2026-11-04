@@ -13,6 +13,8 @@ export * from './gate.js';
 export * from './recall.js';
 export * from './relevance.js';
 export * from './observe.js';
+export * from './temporal.js';
+export * from './volatile.js';
 export * from './scrub.js';
 export * from './cap.js';
 export * from './consolidate.js';

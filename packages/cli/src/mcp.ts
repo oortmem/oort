@@ -1,9 +1,10 @@
 import type { McpServer } from '@modelcontextprotocol/server';
-import { createMcpServer, type MemoryBackend } from '@oortmem/mcp';
+import { MemoryToolError, createMcpServer, type MemoryBackend } from '@oortmem/mcp';
 import { filterFor, grantFor } from '@oortmem/claude-code';
 import { VERSION, activation, isCurrent, scrub, type Memory, localGrant } from '@oortmem/core';
 import { supersedeChain } from './commands/inspect.js';
-import { runRecall } from './commands/recall.js';
+import { timeMode } from './commands/explain.js';
+import { runRecall, temporalView, type TemporalView } from './commands/recall.js';
 import { rememberFacts } from './remember.js';
 import { OortCloudError, findCloudMemory, type CloudClient } from './cloud.js';
 import { Refusal, findMemory, fixed } from './util.js';
@@ -26,6 +27,34 @@ function status(m: Memory, now: Date): 'current' | 'superseded' | 'expired' | 'n
   return 'not yet valid';
 }
 
+/** The MCP recall arguments as a view: `mode` names it, `as_of` and `known_at` date it. */
+function viewOf(
+  mode: 'current' | 'as-of' | 'history' | 'known-at' | undefined,
+  asOf: string | undefined,
+  knownAt: string | undefined,
+): TemporalView {
+  if (mode === 'current') {
+    if (asOf !== undefined || knownAt !== undefined) {
+      throw new MemoryToolError('mode "current" takes no as_of or known_at.');
+    }
+    return { mode: 'current' };
+  }
+  if (mode === 'history' && (asOf !== undefined || knownAt !== undefined)) {
+    throw new MemoryToolError('Use one of as_of, known_at and mode "history".');
+  }
+  try {
+    return temporalView({
+      ...(asOf !== undefined && { asOf }),
+      ...(knownAt !== undefined && { knownAt }),
+      history: mode === 'history',
+    });
+  } catch (e) {
+    if (e instanceof Refusal)
+      throw new MemoryToolError(e.message.replace(/--([a-z]+)-([a-z]+)/g, '$1_$2'));
+    throw e;
+  }
+}
+
 export interface OortServerDeps {
   wired: Wired;
   now?: () => Date;
@@ -37,8 +66,8 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
   const now = deps.now ?? (() => new Date());
   const filter = filterFor(w.scope);
   return {
-    async recall({ query, as_of, limit }) {
-      const result = await runRecall(w, query, as_of, now());
+    async recall({ query, as_of, known_at, mode, limit }) {
+      const result = await runRecall(w, query, viewOf(mode, as_of, known_at), now());
       if (result.abstained === true) {
         // Candidates were found, but none answers the question: say so rather than hand over noise.
         return {
@@ -61,13 +90,16 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           type: m.type,
           tier: m.tier,
           valid_from: m.validFrom,
-          why: why.join(', ') || 'activation',
+          ...(!isCurrent(m, now()) && { valid_to: m.validTo }),
+          ...(e.stale === true && { stale: true as const }),
+          why: why.join(', ') || (e.chain === true ? 'history chain' : 'activation'),
         };
       });
       const lexicalOnly = w.mode !== 'cloud' && (w.embed === undefined || w.rerank === undefined);
       const refused = w.relayErrors?.at(-1);
       return {
         memories,
+        mode: timeMode(result.temporal),
         ...(refused !== undefined
           ? { note: `recall degraded: ${refused.message}` }
           : lexicalOnly && {

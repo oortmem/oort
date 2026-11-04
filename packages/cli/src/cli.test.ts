@@ -1070,3 +1070,89 @@ describe('wire keychain', () => {
     await w.close();
   });
 });
+
+describe('temporal recall (CON-34)', () => {
+  const chain = () => {
+    const v1 = memory({
+      id: 'v1',
+      text: 'The auth service listens on port 5582.',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      validTo: '2026-05-01T00:00:00.000Z',
+      expiredAt: '2026-05-01T00:00:00.000Z',
+      endReason: 'superseded',
+      supersededBy: 'v2',
+    });
+    const v2 = memory({
+      id: 'v2',
+      text: 'The auth service listens on port 6000.',
+      createdAt: '2026-05-01T00:00:00.000Z',
+      supersedes: 'v1',
+    });
+    return [v1, v2];
+  };
+  const ids = (stdout: string) =>
+    (JSON.parse(stdout) as { memories: { id: string }[] }).memories.map((m) => m.id);
+
+  it('cli.recall-mode-flags', async () => {
+    const h = harness({ adapters: false });
+    await h.store.upsertMany(TG, chain());
+    const q = 'auth service port';
+    const now = await h.run(['recall', q, '--json']);
+    expect(ids(now.io.stdout)).toEqual(['v2']);
+    expect(JSON.parse(now.io.stdout).temporal).toEqual({ mode: 'current', inferred: true });
+    expect(ids((await h.run(['recall', q, '--json', '--history'])).io.stdout)).toEqual([
+      'v1',
+      'v2',
+    ]);
+    expect(ids((await h.run(['recall', q, '--json', '--as-of', '2026-04-01'])).io.stdout)).toEqual([
+      'v1',
+    ]);
+    const knownAt = await h.run(['recall', q, '--json', '--known-at', '2026-04-01']);
+    expect(ids(knownAt.io.stdout)).toEqual(['v1']);
+    expect(JSON.parse(knownAt.io.stdout).temporal).toMatchObject({ mode: 'known-at' });
+    // One view at a time; a bad date is refused without echoing it.
+    expect((await h.run(['recall', q, '--history', '--as-of', '2026-04-01'])).code).toBe(2);
+    const bad = await h.run(['recall', q, '--known-at', 'someday']);
+    expect(bad.code).toBe(2);
+    expect(bad.io.stderr).not.toContain('someday');
+  });
+
+  it('cli.explain-shows-the-mode', async () => {
+    const h = harness({ adapters: false });
+    await h.store.upsertMany(TG, chain());
+    const plain = await h.run(['explain', 'auth service port']);
+    expect(plain.io.stdout).toContain('mode: current (from the query)');
+    const history = await h.run(['explain', 'auth service port', '--history']);
+    expect(history.io.stdout).toContain('mode: history');
+    const json = await h.run(['explain', 'auth service port', '--json', '--as-of', '2026-04-01']);
+    expect(JSON.parse(json.io.stdout).temporal).toMatchObject({ mode: 'as-of', inferred: false });
+  });
+
+  it('cli.revalidate-lists-stale-volatile-facts', async () => {
+    const h = harness({ adapters: false });
+    const volatile = { stage: 'gate', question: 'volatile', answer: 'yes', probability: 0.8 };
+    await h.store.upsertMany(TG, [
+      memory({
+        id: 'stale',
+        text: 'Release 1.3 is blocked on the auth migration.',
+        source: { harness: 'claude-code', decisions: [volatile] },
+      }),
+      memory({ id: 'stable', text: 'The repo uses pnpm workspaces.' }),
+      memory({
+        id: 'gone',
+        text: 'Release 1.2 is blocked on CI.',
+        expiredAt: '2026-10-02T00:00:00.000Z',
+        endReason: 'superseded',
+        source: { harness: 'claude-code', decisions: [volatile] },
+      }),
+    ]);
+    const json = await h.run(['revalidate', '--json']);
+    expect(json.code).toBe(0);
+    const rows = JSON.parse(json.io.stdout) as { id: string; lastConfirmed: string }[];
+    expect(rows.map((r) => r.id)).toEqual(['stale']);
+    expect(rows[0]?.lastConfirmed).toBe('2026-10-01T00:00:00.000Z');
+    const text = await h.run(['revalidate']);
+    expect(text.io.stdout).toContain('Release 1.3 is blocked');
+    expect(text.io.stdout).not.toContain('pnpm workspaces');
+  });
+});

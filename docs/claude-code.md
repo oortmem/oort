@@ -159,3 +159,41 @@ monthly embed allowance, so a split turn uses up to 5.
 
 `oort import` counts each memory: its summary and the eval file show one entry
 per memory, not per turn. `oort observe` lists them under `memories`.
+
+## Facts that change over time (CON-34, CON-49)
+
+Jev answers one question per related memory, as before, now with six choices: unrelated,
+reinforce, refine (same fact, more detail), supersede (the situation changed), correct (the old
+fact was never right) and add. The call count does not change: one reconcile call per turn
+(`reconcileMany` on the split path), and the gate gains one question (`volatile`).
+
+| Jev's choice | What happens to the old memory | Outcome |
+| --- | --- | --- |
+| refine | Rewritten in place; its earlier text is kept in its decisions (`refine` / `previous-text`). | `updated` |
+| supersede | Closed at the new fact's start: `validTo` and `endReason: superseded`. A fact that starts later ("starting next week") leaves the old one current until then. | `superseded` |
+| correct | Retracted: `expiredAt` (now) and `endReason: corrected`. The correction takes its valid interval. | `corrected` |
+
+A turn can still arrive late (an import, a queued drain): an older fact closes itself in front of
+the newer one instead of ending it.
+
+Dates are resolved in code, never by the writer model. "Until Friday", "starting next week" and
+"since last Monday" in a written fact set its `validFrom` and `validTo`, read against the turn's
+own time. When the turn says "yesterday" and the writer put a different day in the fact, the day
+is fixed and the decision log records `temporal` / `writer-date`.
+
+The prompt hook reads the time mode from the prompt (see [Time](cli.md#time-recall-modes)): "what
+port did we use in March" gets what was true then, "how has the build changed" gets every version,
+oldest first. In the injected block a version that is no longer current shows its interval instead
+of its age:
+
+```text
+<oort-memory>
+- [semantic, 2026-03-01 to 2026-05-01] auth-service listens on port 3000 in local development.
+- [semantic, 3mo ago] auth-service listens on port 8080 in local development.
+- [episodic, 2mo ago] Release 1.3 is blocked on the auth migration. (may be outdated; last confirmed 2mo ago)
+</oort-memory>
+```
+
+The last line is a volatile fact (a status, a current version, an owner) that nobody confirmed
+within `recall.staleAfterDays` (default 30). `oort revalidate` lists them; confirming one in a
+session clears the note.

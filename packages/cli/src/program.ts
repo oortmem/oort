@@ -17,7 +17,8 @@ import { mcpCommand } from './commands/mcp.js';
 import { observeCommand } from './commands/observe.js';
 import { pinCommand } from './commands/pin.js';
 import { projectLinkCommand, projectUnlinkCommand } from './commands/project.js';
-import { recallCommand } from './commands/recall.js';
+import { recallCommand, type RecallOptions } from './commands/recall.js';
+import { revalidateCommand } from './commands/revalidate.js';
 import { setupCommand, type SetupOptions } from './commands/setup.js';
 import { statsCommand } from './commands/stats.js';
 import type { Io } from './io.js';
@@ -117,13 +118,23 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<text>')
     .option('--json', 'print the full RecallResult as JSON')
     .option('--as-of <iso>', 'recall what was true at this time')
-    .action(run((t: string, o: { json?: boolean; asOf?: string }) => recallCommand(t, o, ctx)));
+    .option('--known-at <iso>', 'recall what was believed at this time, corrected facts included')
+    .option('--history', 'recall every version of the matching facts, oldest first')
+    .action(run((t: string, o: RecallOptions) => recallCommand(t, o, ctx)));
 
   p.command('explain')
     .description("recall with each stage's ranks and scores")
     .argument('<query>')
     .option('--json', 'print each memory with its ranks and scores, and the timings, as JSON')
-    .action(run((q: string, o: { json?: boolean }) => explainCommand(q, o, ctx)));
+    .option('--as-of <iso>', 'explain a recall of what was true at this time')
+    .option('--known-at <iso>', 'explain a recall of what was believed at this time')
+    .option('--history', 'explain a recall of every version of the matching facts')
+    .action(run((q: string, o: RecallOptions) => explainCommand(q, o, ctx)));
+
+  p.command('revalidate')
+    .description('list volatile facts nobody has confirmed lately (recall marks them outdated)')
+    .option('--json', 'print them as JSON')
+    .action(run((o: { json?: boolean }) => revalidateCommand(o, ctx)));
 
   p.command('observe')
     .description('run the write path on one observation (JSON on stdin, or --user/--assistant)')

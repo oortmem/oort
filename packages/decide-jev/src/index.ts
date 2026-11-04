@@ -34,6 +34,7 @@ import {
   SALIENCE_NAMES,
   SHOULD_STORE_INSTRUCTIONS,
   TYPE_INSTRUCTIONS,
+  VOLATILE_INSTRUCTIONS,
   novelManyInstructions,
   reconcileInstructions,
   reconcileManyInstructions,
@@ -141,7 +142,16 @@ function scoreOf(
   return { score: a['score'], probabilities: a['probabilities'] };
 }
 
-const ACTIONS = new Set<string>(['NOOP', 'REINFORCE', 'ADD', 'UPDATE', 'SUPERSEDE']);
+/** UPDATE is the earlier name for REFINE and stays accepted from older answers. */
+const ACTIONS = new Set<string>([
+  'NOOP',
+  'REINFORCE',
+  'ADD',
+  'REFINE',
+  'SUPERSEDE',
+  'CORRECT',
+  'UPDATE',
+]);
 
 function choiceOf(
   answers: Record<string, unknown>,
@@ -250,6 +260,7 @@ export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
         salience: score(SALIENCE_INSTRUCTIONS, [...SALIENCE_LEVELS]),
       };
       for (const t of MEMORY_TYPES) questions[`type_${t}`] = noul(TYPE_INSTRUCTIONS[t]);
+      questions['volatile'] = noul(VOLATILE_INSTRUCTIONS);
 
       const answers = await ask(obsState(obs), questions);
       const decisions: Decision[] = [];
@@ -282,7 +293,10 @@ export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
         types[t] = p;
         yesNo(`type_${t}`, p);
       }
-      return { shouldStore, salience: 0.1 + 0.3 * s, types, decisions };
+      // Recorded on the memory: recall marks a volatile fact that has not been confirmed lately.
+      const volatile = noulOf(answers, 'volatile');
+      yesNo('volatile', volatile);
+      return { shouldStore, salience: 0.1 + 0.3 * s, types, volatile, decisions };
     },
 
     async reconcile(obs: Observation, candidates: Memory[]): Promise<ReconcileDecision[]> {

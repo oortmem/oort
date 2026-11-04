@@ -14,7 +14,7 @@ import { seedStore } from './seed.js';
 const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>] [--k 5,10]
                  [--min-recall10 <0..1>] [--dimension <n>] [--dense] [--now <iso>]
                  [--abstain-threshold <n>] [--no-gate] [--json]
-       pnpm eval --demo [--json]    synthetic 1500-memory store + the bundled 20-row fixture
+       pnpm eval --demo [--json]    synthetic 1500-memory store + the bundled 23-row fixture
 
 Runs recall for each row against a temp copy of the store (the live store is never written).`;
 

@@ -49,22 +49,61 @@ function paraphrase(stub: string): string {
     .join(' ');
 }
 
-/** `auth-service-3` to "auth service": the subject in natural words. */
-const naturalSubject = (id: string): string => id.replace(/-\d+$/, '').replaceAll('-', ' ');
-
+/**
+ * The question about a chain's current (or as-of) value. It names the subject as the memories
+ * do (`auth-service-3`): several chains share a service name, so "the auth service" alone has
+ * no single answer.
+ */
 function chainQuestion(tail: Memory, subject: string, when: string): string {
-  const who = naturalSubject(subject);
-  if (tail.text.includes('listens on port')) return `which port does the ${who} listen on ${when}`;
+  if (tail.text.includes('listens on port')) return `which port does ${subject} listen on ${when}`;
   if (tail.text.includes('installs dependencies'))
-    return `which package manager does the ${who} use ${when}`;
-  return `which library does the ${who} use to validate requests ${when}`;
+    return `which package manager does ${subject} use ${when}`;
+  return `which library does ${subject} use to validate requests ${when}`;
+}
+
+const MONTHS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/** `2026-04-02T…` as "2 April 2026", the way a person writes a date. */
+const spoken = (d: Date): string =>
+  `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+
+/** A LongMemEval-style temporal question: the date is in the words, with no `asOf`. */
+function datedQuestion(tail: Memory, subject: string, day: string): string {
+  if (tail.text.includes('listens on port'))
+    return `on ${day}, which port did ${subject} listen on`;
+  if (tail.text.includes('installs dependencies'))
+    return `which package manager did ${subject} install dependencies with on ${day}`;
+  return `which library did ${subject} validate requests with on ${day}`;
+}
+
+/** How a chain's value changed: every version is expected. */
+function historyQuestion(tail: Memory, subject: string): string {
+  if (tail.text.includes('listens on port'))
+    return `how has the port of ${subject} changed over time`;
+  if (tail.text.includes('installs dependencies'))
+    return `how has the package manager of ${subject} changed over time`;
+  return `how has the request validation library of ${subject} changed over time`;
 }
 
 /**
- * The 20 demo rows over the synthetic store: 6 single-fact (exact, partial and
- * paraphrased), 4 knowledge-update and 3 temporal (the subject in natural words,
- * not the chain id), 3 multi-session and 4 abstention. A smoke test of the
- * eval pipeline, not a quality benchmark. Deterministic for a given memory list.
+ * The 23 demo rows over the synthetic store: 6 single-fact (exact, partial and
+ * paraphrased), 4 knowledge-update, 6 temporal (3 with an explicit `asOf`, 2 with the
+ * date in the question and 1 asking for the history), 3 multi-session and 4 abstention.
+ * A smoke test of the eval pipeline, not a quality benchmark. Deterministic for a given
+ * memory list.
  */
 export function buildFixtureRows(memories: Memory[]): EvalRow[] {
   const rng = createRng(FIXTURE_SEED);
@@ -197,6 +236,37 @@ export function buildFixtureRows(memories: Memory[]): EvalRow[] {
       expectedMemoryIds: [middle.id],
       notExpectedMemoryIds: chain.filter((m) => m.id !== middle.id).map((m) => m.id),
       asOf: new Date(Date.parse(middle.validFrom) + DAY_MS).toISOString(),
+      category: 'temporal',
+    });
+  }
+
+  // temporal, LongMemEval style: the day is in the question, so recall must read it (CON-34).
+  // Not one random draw: the multi-session rows below must not move.
+  let dated = 0;
+  for (const head of heads.slice(7)) {
+    if (dated === 2) break;
+    const chain = chainOf(head);
+    const middle = chain[1] as Memory;
+    const tail = chain[chain.length - 1] as Memory;
+    const day = new Date(Date.parse(middle.validFrom) + DAY_MS);
+    const endOfDay = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate() + 1);
+    if (chain.length < 3 || Date.parse(tail.validFrom) < endOfDay) continue;
+    rows.push({
+      question: datedQuestion(tail, head.entities[0] ?? '', spoken(day)),
+      expectedMemoryIds: [middle.id],
+      notExpectedMemoryIds: chain.filter((m) => m.id !== middle.id).map((m) => m.id),
+      category: 'temporal',
+    });
+    dated++;
+  }
+
+  // temporal: the whole chain, oldest first.
+  const historyHead = heads[heads.length - 1];
+  if (historyHead !== undefined) {
+    const chain = chainOf(historyHead);
+    rows.push({
+      question: historyQuestion(chain[chain.length - 1] as Memory, historyHead.entities[0] ?? ''),
+      expectedMemoryIds: chain.map((m) => m.id),
       category: 'temporal',
     });
   }

@@ -28,10 +28,23 @@ export interface GateDecision {
   salience: number;
   /** Probability per memory type; absent types are treated as 0. */
   types: Partial<Record<MemoryType, number>>;
+  /**
+   * Probability that the fact is likely to change within weeks (a status, a current version).
+   * Optional; a controller that sets it also records a `gate`/`volatile` decision, which is how
+   * the stored memory remembers it.
+   */
+  volatile?: number;
   decisions: Decision[];
 }
 
-export type ReconcileAction = 'NOOP' | 'REINFORCE' | 'ADD' | 'UPDATE' | 'SUPERSEDE';
+/**
+ * Stage C actions (CON-49). REFINE adds detail to the same fact and rewrites it in place.
+ * SUPERSEDE means the situation changed: the old fact was true until the new one starts.
+ * CORRECT means the old fact was wrong from the start: it is retracted in transaction time and
+ * the correction takes its place in valid time. UPDATE is the earlier name for REFINE.
+ */
+export type ReconcileAction =
+  'NOOP' | 'REINFORCE' | 'ADD' | 'REFINE' | 'SUPERSEDE' | 'CORRECT' | 'UPDATE';
 
 /** Stage C: what to do with the observation relative to one candidate. */
 export interface ReconcileDecision {

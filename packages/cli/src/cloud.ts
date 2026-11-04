@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { Memory, RecallResult, Tier } from '@oortmem/core';
+import type { Memory, RecallMode, RecallResult, Tier } from '@oortmem/core';
 import type { Env } from './io.js';
 import { ACCOUNT_URL } from './relay.js';
 import { Refusal, writeOwnerOnly } from './util.js';
@@ -212,7 +212,14 @@ export interface CloudImportResult {
 export interface CloudClient {
   readonly url: string;
   whoami(): Promise<{ account: string; plan: string; via: string }>;
-  recall(q: { text: string; project?: string; k?: number; asOf?: string }): Promise<RecallResult>;
+  recall(q: {
+    text: string;
+    project?: string;
+    k?: number;
+    asOf?: string;
+    knownAt?: string;
+    mode?: RecallMode;
+  }): Promise<RecallResult>;
   /** `turnRef` makes a retry safe: the API saves each turn once and answers `duplicate`. */
   observe(b: {
     project?: string;

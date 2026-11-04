@@ -289,6 +289,9 @@ importers:
 
   packages/core:
     dependencies:
+      chrono-node:
+        specifier: 2.10.3
+        version: 2.10.3
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -1057,6 +1060,10 @@ packages:
   chai@6.3.0:
     resolution: {integrity: sha512-XWAtwJ6OHO+tj0EKCs0Y2UamnyOxseZWltU4x2U2wh8g4AigdjwvtUjvLP2tqkA/avxHEtzxNaqGq/YGNwckKg==}
     engines: {node: '>=18'}
+
+  chrono-node@2.10.3:
+    resolution: {integrity: sha512-MOfrzXgSMZTH4SZ5gyRKQCVwiCrCKY+uYkSJiWoRLXS88DA6WGJm8UjgS+VVEuUQeew/UUXaxrO+SeDn/WCisg==}
+    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
   combined-stream@1.0.8:
     resolution: {integrity: sha512-FQN4MRfuJeHf7cBbBMJFXhKSDq+2kAArBlmRBvcvFE5BB1HZKXtSFASDhdlz9zOYwxh8lDdnvmMOe/+5cdoEdg==}
@@ -2184,6 +2191,8 @@ snapshots:
     optional: true
 
   chai@6.3.0: {}
+
+  chrono-node@2.10.3: {}
 
   combined-stream@1.0.8:
     dependencies:

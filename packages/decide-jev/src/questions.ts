@@ -31,6 +31,9 @@ export const TYPE_INSTRUCTIONS = {
     'Does this exchange contain a stated preference or rule for style, tools or communication that the assistant should follow in future?',
 } as const;
 
+export const VOLATILE_INSTRUCTIONS =
+  'Is what this exchange states likely to change within weeks, such as a status, a current version, an owner, an assignee, a deadline or a temporary workaround? Stable facts, decisions and preferences are not.';
+
 export function reconcileInstructions(i: number): string {
   return `How does the new observation relate to the existing memory at \`candidates[${i}]\`? Judge only this one memory.`;
 }
@@ -48,9 +51,11 @@ export function novelManyInstructions(j: number): string {
 export const RECONCILE_CRITERIA = {
   NOOP: 'unrelated: the observation is about something else',
   REINFORCE: 'restates or confirms the memory with no new information',
-  UPDATE: 'adds detail to or refines the memory without contradicting it',
+  REFINE: 'the same fact with added or sharper detail; it does not contradict the memory',
   SUPERSEDE:
-    'states that the memory is no longer true; the situation changed or the memory was wrong',
+    'the situation changed: the memory was true until now and something else is true from now on',
+  CORRECT:
+    'the memory was never right: the observation says it was a mistake, a misreading or a wrong assumption',
   ADD: 'touches the same subject but carries a separate new fact that should be stored on its own',
 } as const;
 

@@ -11,7 +11,7 @@ export const WRITER_SYSTEM_PROMPT = [
   'Rules:',
   '1. Write one self-contained claim that is true without the conversation around it.',
   '2. Resolve pronouns and references to the named things they stand for.',
-  '3. When the observation implies a date or time ("yesterday", "tomorrow", "next week"), convert it to an absolute date using the observation timestamp, and state it.',
+  '3. When the observation implies a date or time ("yesterday", "tomorrow", "next week"), convert it to an absolute date in YYYY-MM-DD form using the observation timestamp, and state it. Keep a stated end or start in words as well ("until Friday 2026-11-06", "starting 2026-11-09").',
   "4. Prefer the user's facts and decisions over the assistant's suggestions, and never store a suggestion the user did not accept as a fact.",
   '5. Keep code identifiers, ports, paths, versions and names exactly as written.',
   '6. The stub is at most 35 tokens: a terse summary followed by entity keywords.',

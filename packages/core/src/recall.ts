@@ -1,10 +1,12 @@
 import type { Embedder, Hit, MemoryStore, Reranker, ScopeFilter } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
 import { activation } from './activation.js';
-import { fuse, isValid } from './fusion.js';
+import { fuse, isVisible, type TemporalView } from './fusion.js';
 import { localGrant } from './grant.js';
 import { scrub } from './scrub.js';
-import type { Memory } from './model.js';
+import { isCurrent, type Memory } from './model.js';
+import { temporalIntent, type RecallMode } from './temporal.js';
+import { isStale, lastConfirmed } from './volatile.js';
 import {
   CONFIDENT_COVERAGE,
   CONFIDENT_COVERAGE_GAP,
@@ -16,8 +18,24 @@ export interface RecallQuery {
   text: string;
   scope: ScopeFilter;
   budgetChars?: number;
-  /** ISO timestamp: recall what was true then. */
+  /** ISO timestamp: recall what was true then (valid time). Implies `mode: 'as-of'`. */
   asOf?: string;
+  /** ISO timestamp: recall what was believed then (transaction time). Implies `mode: 'known-at'`. */
+  knownAt?: string;
+  /**
+   * Which slice of time to read (CON-34): `current` (the default), `as-of` (`asOf`), `history`
+   * (every version, along the supersede chain) or `known-at` (`knownAt`). Without a mode, `asOf`
+   * or `knownAt`, the mode is read from the query ("on 2 April", "how has … changed").
+   */
+  mode?: RecallMode;
+}
+
+/** The temporal view a recall used, and whether it was read from the query. */
+export interface RecallTemporal {
+  mode: RecallMode;
+  asOf?: string;
+  knownAt?: string;
+  inferred: boolean;
 }
 
 export interface RecalledMemory extends Memory {
@@ -35,6 +53,10 @@ export interface RecalledMemory extends Memory {
     dense?: number;
     activation: number;
     hydrated: boolean;
+    /** History mode: found by walking the supersede chain, not by the search. */
+    chain?: true;
+    /** A volatile fact nobody confirmed within `recall.staleAfterDays`. */
+    stale?: true;
   };
 }
 
@@ -65,6 +87,8 @@ export interface RecallResult {
   rerankSkipped?: 'confident';
   /** The query was not embedded, because the lexical search already had a clear answer. */
   embedSkipped?: 'lexical-confident';
+  /** The temporal view this recall read. Always set by `recall`. */
+  temporal?: RecallTemporal;
   timings: Record<string, number>;
 }
 
@@ -88,9 +112,10 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   const { store, config } = deps;
   // The store enforces scope; recall reads and hydrates only inside q.scope.
   const grant = localGrant(q.scope);
-  // Scrub once: the query text reaches embedders and rerankers, which may be remote.
-  const text = scrub(q.text).text;
   const now = deps.now ?? new Date();
+  // Scrub once: the query text reaches embedders and rerankers, which may be remote. Temporal
+  // words ("on 2 April", "changed over time") pick the view and are not searched for.
+  const { view, temporal, text } = viewFor(q, scrub(q.text).text, now);
   const t0 = clock();
   const degraded: Degradation[] = [];
   const timings: Record<string, number> = {
@@ -132,7 +157,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   let embedSkipped: RecallResult['embedSkipped'];
   if (deps.embed && config.recall.lexicalFirst) {
     const first = await lexicalP;
-    if (await lexicalIsConfident(first, queryTokens, read, now, q.asOf)) {
+    if (await lexicalIsConfident(first, queryTokens, read, now, view)) {
       embedSkipped = 'lexical-confident';
     }
   }
@@ -204,10 +229,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   for (const m of loaded) if (m !== null) memories.set(m.id, m);
 
   const tf = clock();
-  const fused = fuse([lexical, dense], memories, now, {
-    activation: config.activation,
-    ...(q.asOf !== undefined ? { asOf: q.asOf } : {}),
-  });
+  const fused = fuse([lexical, dense], memories, now, { activation: config.activation, view });
   timings['fuseMs'] = clock() - tf;
 
   const coverage = new Map<string, number>();
@@ -302,9 +324,16 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     out.map((m) => m.id),
     now,
   );
+  const result =
+    view.mode === 'history' ? await withChains(out, read, now, view, queryTokens, config) : out;
+  for (const m of result) {
+    if (isCurrent(m, now) && isStale(m, now, config.recall.staleAfterDays)) {
+      m.explanation.stale = true;
+    }
+  }
   timings['totalMs'] = clock() - t0;
   return {
-    memories: out,
+    memories: result,
     ...(degraded.length > 0 ? { degraded } : {}),
     ...(out.length === 0 && candidates.length > 0 ? { abstained: true as const } : {}),
     ...(dropped > 0
@@ -318,8 +347,95 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
       : {}),
     ...(rerankSkipped !== undefined ? { rerankSkipped } : {}),
     ...(embedSkipped !== undefined ? { embedSkipped } : {}),
+    temporal,
     timings,
   };
+}
+
+/** The view a query asks for: explicit options first, else read from the query in code. */
+function viewFor(
+  q: RecallQuery,
+  text: string,
+  now: Date,
+): { view: TemporalView; temporal: RecallTemporal; text: string } {
+  const at = (iso: string | undefined) => iso ?? now.toISOString();
+  let view: TemporalView;
+  let inferred = false;
+  let search = text;
+  if (q.mode !== undefined) {
+    view = { mode: q.mode };
+    if (q.mode === 'as-of') view.asOf = at(q.asOf);
+    if (q.mode === 'known-at') view.knownAt = at(q.knownAt);
+  } else if (q.asOf !== undefined) {
+    view = { mode: 'as-of', asOf: q.asOf };
+  } else if (q.knownAt !== undefined) {
+    view = { mode: 'known-at', knownAt: q.knownAt };
+  } else {
+    const i = temporalIntent(text, now);
+    view = {
+      mode: i.mode,
+      ...(i.asOf !== undefined && { asOf: i.asOf }),
+      ...(i.knownAt !== undefined && { knownAt: i.knownAt }),
+    };
+    inferred = true;
+    search = i.text ?? text;
+  }
+  return { view, temporal: { ...view, inferred }, text: search };
+}
+
+/** Longest stretch of a supersede chain walked in each direction. */
+const CHAIN_MAX = 8;
+
+/**
+ * History mode: each recalled fact with the rest of its supersede chain, oldest first, the
+ * first-ranked chain first. Corrected versions are skipped (they were never true) but walked
+ * through. Versions only the walk found are marked `chain`.
+ */
+async function withChains(
+  out: RecalledMemory[],
+  read: (id: string) => Promise<Memory | null>,
+  now: Date,
+  view: TemporalView,
+  queryTokens: Set<string>,
+  config: ResolvedConfig,
+): Promise<RecalledMemory[]> {
+  const byId = new Map(out.map((m) => [m.id, m]));
+  const seen = new Set<string>();
+  const result: RecalledMemory[] = [];
+  for (const head of out) {
+    if (seen.has(head.id)) continue;
+    const links: Memory[] = [head];
+    for (const dir of ['supersedes', 'supersededBy'] as const) {
+      let cur: Memory = head;
+      for (let n = 0; n < CHAIN_MAX; n++) {
+        const next = cur[dir];
+        if (next === null || seen.has(next) || links.some((l) => l.id === next)) break;
+        const m = await read(next);
+        if (m === null) break;
+        links.push(m);
+        cur = m;
+      }
+    }
+    links.sort((a, b) => Date.parse(a.validFrom) - Date.parse(b.validFrom));
+    for (const m of links) {
+      seen.add(m.id);
+      if (!isVisible(m, now, view)) continue;
+      result.push(
+        byId.get(m.id) ?? {
+          ...m,
+          explanation: {
+            fused: 0,
+            rrf: 0,
+            coverage: queryCoverage(queryTokens, m),
+            activation: activation(m.accessLog, m.salience, now, config.activation),
+            hydrated: false,
+            chain: true,
+          },
+        },
+      );
+    }
+  }
+  return result;
 }
 
 const TIMED_OUT = Symbol('timed-out');
@@ -352,13 +468,13 @@ async function lexicalIsConfident(
   queryTokens: Set<string>,
   read: (id: string) => Promise<Memory | null>,
   now: Date,
-  asOf: string | undefined,
+  view: TemporalView,
 ): Promise<boolean> {
   if (queryTokens.size < 2) return false;
   const top = lexical[0];
   if (top === undefined) return false;
   const m = await read(top.id);
-  if (m === null || !isValid(m, now, asOf)) return false;
+  if (m === null || !isVisible(m, now, view)) return false;
   if (queryCoverage(queryTokens, m) < 1) return false;
   const next = lexical[1];
   if (next === undefined) return true;
@@ -390,6 +506,15 @@ function isConfident(
   return (coverage.get(second.id) ?? 0) <= topCov - CONFIDENT_COVERAGE_GAP;
 }
 
+const ymd = (iso: string): string => iso.slice(0, 10);
+
+/** How a memory is dated in the block: its age when current, else the interval it held. */
+function when(m: Memory, now: Date): string {
+  if (isCurrent(m, now)) return age(m.validFrom, now);
+  const span = `${ymd(m.validFrom)} to ${m.validTo === null ? 'now' : ymd(m.validTo)}`;
+  return m.endReason === 'corrected' ? `${span}, later corrected` : span;
+}
+
 function age(validFrom: string, now: Date): string {
   const days = Math.max(0, Math.floor((now.getTime() - Date.parse(validFrom)) / 86_400_000));
   if (days < 1) return 'today';
@@ -412,7 +537,11 @@ export function formatForInjection(r: RecallResult, budgetChars: number, now = n
   let total = open.length + close.length;
   const lines: string[] = [];
   for (const m of r.memories) {
-    const line = `- [${m.type}, ${age(m.validFrom, now)}] ${scrub(m.text).text}`;
+    const note =
+      m.explanation.stale === true
+        ? ` (may be outdated; last confirmed ${age(lastConfirmed(m), now)})`
+        : '';
+    const line = `- [${m.type}, ${when(m, now)}] ${scrub(m.text).text}${note}`;
     const cost = line.length + (lines.length > 0 ? 1 : 0);
     if (total + cost > budgetChars) break;
     lines.push(line);

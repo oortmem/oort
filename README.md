@@ -35,7 +35,7 @@ Oort keeps memory the way a solar system keeps matter:
 | Warm | **Kuiper Belt** | Short distilled facts from past sessions, fully indexed                | A few milliseconds               |
 | Cold | **Oort Cloud**  | Older history, zstd-compressed. The text stays, the heavy vector goes. | Comes back when it matters again |
 
-When a fact changes, the old one is marked superseded and kept for history. Recall only returns what is true now, unless you ask for `--as-of` a date.
+When a fact changes, the old one is marked superseded and kept for history; a fact found wrong is marked corrected. Recall returns what is true now, unless you ask for `--as-of` a date, the `--history` of a fact, or what was `--known-at` a time (or just ask "what did we use in March").
 
 ## Quickstart
 

@@ -9,12 +9,18 @@ export interface RecalledFact {
   type: string;
   tier: string;
   valid_from: string;
+  /** When the fact stopped holding; present for a version that is not current (history, as-of). */
+  valid_to?: string | null;
+  /** A volatile fact nobody confirmed lately: it may be outdated. */
+  stale?: true;
   /** Why it matched, e.g. `lexical #1, rerank 0.81`. */
   why: string;
 }
 
 export interface RecallOutput {
   memories: RecalledFact[];
+  /** The time mode the recall used, e.g. `current`, `as-of 2026-04-02 (from the query)`. */
+  mode?: string;
   /** True when candidates existed but none answers the question. */
   abstained?: boolean;
   /** A short, user-safe note (degraded recall, missing keys). */
@@ -23,7 +29,7 @@ export interface RecallOutput {
 
 export interface RememberOutcome {
   fact: number;
-  outcome: 'added' | 'reinforced' | 'updated' | 'superseded' | 'skipped';
+  outcome: 'added' | 'reinforced' | 'updated' | 'superseded' | 'corrected' | 'skipped';
   id?: string;
   supersedes?: string;
   reason?: string;
