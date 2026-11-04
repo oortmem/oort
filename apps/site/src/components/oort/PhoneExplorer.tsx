@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { Search, Star, ChevronLeft, ChevronRight, PictureInPicture2 } from 'lucide-react';
+import { PlannedBadge } from '@/components/site/PlannedBadge';
+import { Search, Star, ChevronLeft, ChevronRight } from 'lucide-react';
 
 type View = 'discover' | 'space' | 'me';
 
@@ -809,6 +810,10 @@ export function PhoneExplorer({ initial = 'discover' as View }: { initial?: View
             <div className="absolute bottom-2 left-1/2 h-[4px] w-28 -translate-x-1/2 rounded-full bg-foreground/80" />
           </div>
         </div>
+        <p className="absolute -bottom-8 left-0 right-0 text-center font-mono text-[11px] text-muted-foreground">
+          <PlannedBadge kind="Concept" className="mr-1.5" />
+          Sample data, not a shipped app
+        </p>
       </div>
     </PrefsCtx.Provider>
   );

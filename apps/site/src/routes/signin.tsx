@@ -5,10 +5,10 @@ import { Github } from 'lucide-react';
 export const Route = createFileRoute('/signin')({
   head: () => ({
     meta: [
-      { title: 'Sign in — Oort Cloud console' },
+      { title: 'Sign in | Oort Cloud console demo' },
       {
         name: 'description',
-        content: 'Sign in to the Oort Cloud console to manage agent memory, keys and usage.',
+        content: 'Demo sign-in for the Oort Cloud console. No account is created.',
       },
       { property: 'og:title', content: 'Sign in to Oort Cloud' },
       { property: 'og:description', content: 'Access your Oort Cloud memory console.' },
@@ -32,6 +32,9 @@ function SignIn() {
           {mode === 'in' ? 'Welcome back' : 'Create your cloud'}
         </h1>
         <p className="mt-1 text-center text-sm text-muted-foreground">Oort Cloud console</p>
+        <p className="mt-3 rounded-xl border border-ember/40 bg-ember/10 px-3 py-2 text-center text-xs text-ember">
+          Demo. No account is created.
+        </p>
         <button
           onClick={() => go()}
           className="mt-6 flex w-full items-center justify-center gap-2 rounded-full border border-border py-2.5 text-sm hover:bg-secondary"
