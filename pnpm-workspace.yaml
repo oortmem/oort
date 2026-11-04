@@ -4,3 +4,8 @@ packages:
 allowBuilds:
   esbuild: true
   workerd: true
+# Supply-chain hold-backs (pnpm settings, explicit rather than relying on defaults).
+# One day, not seven: the AI SDK packages this repo pins were published 2026-11-03.
+minimumReleaseAge: 1440
+blockExoticSubdeps: true
+trustPolicy: no-downgrade
