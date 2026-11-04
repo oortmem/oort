@@ -103,7 +103,9 @@ function setup(opts: { status?: string; plan?: string; revoked?: boolean; limit?
     const req = new Request(`https://relay.oortcloud.dev${path}`, {
       method,
       headers,
-      ...(method === 'GET' ? {} : { body: typeof body === 'string' ? body : JSON.stringify(body) }),
+      ...(method === 'GET' || method === 'HEAD'
+        ? {}
+        : { body: typeof body === 'string' ? body : JSON.stringify(body) }),
     });
     const res = await handleRelay(
       req,

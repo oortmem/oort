@@ -307,6 +307,14 @@ export async function handleRelay(
   const now = (deps.now ?? (() => new Date()))();
   const url = new URL(request.url);
 
+  if (url.pathname === '/health') {
+    // Unauthenticated liveness for `oort doctor`: no D1, no rate limiter, no upstream.
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return fail(405, 'Use GET.', { allow: 'GET, HEAD' });
+    }
+    return Response.json({ ok: true }, { headers: BASE_HEADERS });
+  }
+
   const route = ROUTES.find((r) => r.path === url.pathname);
   if (!route) return fail(404, 'Not found. See https://oortcloud.dev/docs for the relay routes.');
   if (request.method !== 'POST') return fail(405, 'Use POST.', { allow: 'POST' });
