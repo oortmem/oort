@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -162,11 +163,23 @@ function isOurs(host: Host, v: unknown, cmd: string): boolean {
     /(?:^|[\\/])oort(?:mem)?$/.test(c) ||
     /[\\/]oort(?:mem)?[\\/]dist[\\/]main\.js$/.test(c);
   if (!oortPath) return false;
-  const mine = { ...v, command: cmd };
+  const mine = withoutEmptyEnv({ ...v, command: cmd });
   return [serverEntry(host, cmd), ...olderEntries(host, cmd)].some((e) =>
     isDeepStrictEqual(mine, e),
   );
 }
+
+/** `claude mcp add` writes `env: {}` for a stdio server; an empty env changes nothing. */
+function withoutEmptyEnv(v: Record<string, unknown>): Record<string, unknown> {
+  const { env, ...rest } = v;
+  return isObject(env) && Object.keys(env).length === 0 ? rest : v;
+}
+
+/** `current` already is `want` (ignoring an empty `env`). */
+const same = (current: unknown, want: Record<string, unknown> | undefined): boolean =>
+  current === undefined || want === undefined
+    ? current === want
+    : isObject(current) && isDeepStrictEqual(withoutEmptyEnv(current), want);
 
 export interface Change {
   host: Host;
@@ -181,6 +194,8 @@ export interface Change {
   backup?: string;
   /** The file as it was just before this change. */
   previous?: string;
+  /** How the entry was written: Oort's own file edit, or `claude mcp add/remove --scope user`. */
+  via?: 'file' | 'claude-cli';
 }
 
 /** Dotted key paths of every leaf under `v`, prefixed with `prefix`. */
@@ -383,7 +398,7 @@ function jsonChange(
     );
   }
   const want = action === 'connect' ? serverEntry(host, cmd) : undefined;
-  if (isDeepStrictEqual(current, want)) return result;
+  if (same(current, want)) return result;
   const style = styleOf(loaded.text);
   const base = loaded.text.trim() === '' ? '{}' : loaded.text;
   const root = parseTree(base) as Node;
@@ -414,7 +429,103 @@ function jsonChange(
     changed: true,
     created: !loaded.existed,
     diff: keyDiff(current, want, `${key}.${SERVER_NAME}`),
+    via: 'file',
   });
+  return result;
+}
+
+// ---------------------------------------------------------------- Claude Code CLI
+
+/** The `claude` executable on `PATH`, if any (not on Windows, where it is a `.cmd` shim). */
+export function claudeOnPath(hc: HostContext): string | undefined {
+  if (hc.platform === 'win32') return undefined;
+  for (const dir of (hc.env['PATH'] ?? '').split(path.delimiter)) {
+    if (dir === '' || !path.isAbsolute(dir)) continue;
+    const file = path.join(dir, 'claude');
+    try {
+      fs.accessSync(file, fs.constants.X_OK);
+      if (fs.statSync(file).isFile()) return file;
+    } catch {
+      // not here
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Claude Code rewrites `~/.claude.json` itself, so when its CLI is on PATH
+ * the entry goes through `claude mcp add --scope user` (and `remove`) rather
+ * than a file edit that a running Claude Code could overwrite. Oort still
+ * reads the file first, to refuse an entry it did not write and to print the
+ * diff, and backs it up before `claude` runs.
+ */
+function claudeCliChange(
+  action: 'connect' | 'disconnect',
+  file: string,
+  cmd: string,
+  claude: string,
+  hc: HostContext,
+  opts: ChangeOptions,
+): Change {
+  const host: Host = 'claude-code';
+  const loaded = load(file);
+  const read = readJson(file);
+  const cfg = read(loaded.text);
+  const servers = cfg['mcpServers'];
+  if (servers !== undefined && !isObject(servers)) {
+    throw new Refusal(`${file}: "mcpServers" is not an object; not changed.`);
+  }
+  const current = servers?.[SERVER_NAME];
+  const result: Change = {
+    host,
+    action,
+    file,
+    changed: false,
+    created: false,
+    diff: [],
+    via: 'claude-cli',
+  };
+  if (current !== undefined && !isOurs(host, current, cmd)) {
+    throw new Refusal(
+      `${file} already has an MCP server named "${SERVER_NAME}" that oort did not write; remove or rename it, then run this again.`,
+    );
+  }
+  const want = action === 'connect' ? serverEntry(host, cmd) : undefined;
+  if (same(current, want)) return result;
+  const diff = keyDiff(
+    isObject(current) ? withoutEmptyEnv(current) : current,
+    want,
+    `mcpServers.${SERVER_NAME}`,
+  );
+  Object.assign(result, { changed: true, created: !loaded.existed, diff });
+  if (opts.dryRun === true) return result;
+  if (loaded.existed) {
+    if (!fs.existsSync(backupPath(file))) copyOwnerOnly(file, backupPath(file));
+    copyOwnerOnly(file, previousPath(file));
+    result.backup = backupPath(file);
+    result.previous = previousPath(file);
+  }
+  const run = (args: string[]): void => {
+    const r = spawnSync(claude, args, {
+      env: hc.env as NodeJS.ProcessEnv,
+      stdio: ['ignore', 'ignore', 'ignore'],
+      timeout: 60_000,
+    });
+    if (r.status !== 0) {
+      throw new Refusal(
+        `\`claude ${args.slice(0, 5).join(' ')}\` failed (${r.status === null ? (r.error?.name ?? 'signal') : `exit ${r.status}`}); run it yourself: claude mcp add --scope user ${SERVER_NAME} -- ${cmd} mcp`,
+      );
+    }
+  };
+  if (current !== undefined) run(['mcp', 'remove', '--scope', 'user', SERVER_NAME]);
+  if (want !== undefined) run(['mcp', 'add', '--scope', 'user', SERVER_NAME, '--', cmd, 'mcp']);
+  // Check that claude wrote what we meant.
+  const after = read(load(file).text)['mcpServers'];
+  if (!same(isObject(after) ? after[SERVER_NAME] : undefined, want)) {
+    throw new Refusal(
+      `\`claude mcp\` did not leave the expected oort entry in ${file}; check \`claude mcp list\`.`,
+    );
+  }
   return result;
 }
 
@@ -480,7 +591,7 @@ function tomlChange(
     );
   }
   const want = action === 'connect' ? serverEntry(host, cmd) : undefined;
-  if (isDeepStrictEqual(current, want)) return result;
+  if (same(current, want)) return result;
 
   const eol = loaded.text.includes('\r\n') ? '\r\n' : '\n';
   const lines = loaded.text.split(/\r?\n/);
@@ -532,6 +643,7 @@ function tomlChange(
     changed: true,
     created: !loaded.existed,
     diff: keyDiff(current, want, `mcp_servers.${SERVER_NAME}`),
+    via: 'file',
   });
   return result;
 }
@@ -544,6 +656,8 @@ export function connectHost(
   opts: ChangeOptions = {},
 ): Change {
   const file = hostConfigPath(host, hc);
+  const claude = host === 'claude-code' ? claudeOnPath(hc) : undefined;
+  if (claude !== undefined) return claudeCliChange('connect', file, cmd, claude, hc, opts);
   return host === 'codex'
     ? tomlChange('connect', file, cmd, opts)
     : jsonChange(host, 'connect', file, cmd, opts);
@@ -560,6 +674,8 @@ export function disconnectHost(
   if (!fs.existsSync(file)) {
     return { host, action: 'disconnect', file, changed: false, created: false, diff: [] };
   }
+  const claude = host === 'claude-code' ? claudeOnPath(hc) : undefined;
+  if (claude !== undefined) return claudeCliChange('disconnect', file, cmd, claude, hc, opts);
   return host === 'codex'
     ? tomlChange('disconnect', file, cmd, opts)
     : jsonChange(host, 'disconnect', file, cmd, opts);

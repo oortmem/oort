@@ -73,10 +73,12 @@ export function describeChange(
   if (dryRun) return `${out}${ui.dim('(dry run: nothing written)')}\n`;
   const rows: [string, string][] = [];
   if (c.action === 'connect') {
-    out += `${ui.ok(`${c.created ? 'Created' : 'Updated'} ${show(c.file)}: ${label} starts \`${cmd} mcp\`.`)}\n`;
+    const how = c.via === 'claude-cli' ? ' (through `claude mcp add --scope user`)' : '';
+    out += `${ui.ok(`${c.created ? 'Created' : 'Updated'} ${show(c.file)}${how}: ${label} starts \`${cmd} mcp\`.`)}\n`;
     rows.push(['scope', scopeNote(c.host)], ['next', RELOAD[c.host]]);
   } else {
-    out += `${ui.ok(`Removed the oort entry from ${show(c.file)}.`)}\n`;
+    const how = c.via === 'claude-cli' ? ' (through `claude mcp remove --scope user`)' : '';
+    out += `${ui.ok(`Removed the oort entry from ${show(c.file)}${how}.`)}\n`;
   }
   if (c.backup !== undefined)
     rows.push(['backup', `${show(c.backup)} (before Oort first changed it)`]);

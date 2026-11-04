@@ -284,3 +284,121 @@ describe('oort connect, edge cases', () => {
     expect(() => connectHost('gemini', hc, CMD)).toThrow(/mcpServers/);
   });
 });
+
+describe('oort connect claude-code through the claude CLI', () => {
+  /**
+   * A stand-in `claude` on PATH: it logs its argv and edits ~/.claude.json the
+   * way `claude mcp add/remove --scope user` does (stdio entries get `env: {}`;
+   * adding a name that exists fails). `fail` makes every call exit 1.
+   */
+  function withClaude(opts: { fail?: boolean } = {}): { hc: HostContext; calls: () => string[][] } {
+    const hc = context();
+    const bin = path.join(path.dirname(hc.home), 'bin');
+    fs.mkdirSync(bin);
+    const log = path.join(bin, 'calls.jsonl');
+    const script = [
+      `#!${process.execPath}`,
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      'const args = process.argv.slice(2);',
+      `fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + '\\n');`,
+      opts.fail === true ? 'process.exit(1);' : '',
+      "const file = path.join(process.env.HOME, '.claude.json');",
+      "const cfg = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};",
+      'cfg.mcpServers = cfg.mcpServers || {};',
+      "if (args[0] === 'mcp' && args[1] === 'add') {",
+      '  const name = args[4];',
+      "  if (cfg.mcpServers[name]) { console.error('MCP server ' + name + ' already exists'); process.exit(1); }",
+      "  const rest = args.slice(args.indexOf('--') + 1);",
+      "  cfg.mcpServers[name] = { type: 'stdio', command: rest[0], args: rest.slice(1), env: {} };",
+      "} else if (args[0] === 'mcp' && args[1] === 'remove') {",
+      '  const name = args[4];',
+      '  if (!cfg.mcpServers[name]) process.exit(1);',
+      '  delete cfg.mcpServers[name];',
+      '} else process.exit(2);',
+      'fs.writeFileSync(file, JSON.stringify(cfg, null, 2));',
+    ].join('\n');
+    fs.writeFileSync(path.join(bin, 'claude'), script, { mode: 0o755 });
+    hc.env['PATH'] = bin;
+    const calls = (): string[][] =>
+      fs.existsSync(log)
+        ? fs
+            .readFileSync(log, 'utf8')
+            .trim()
+            .split('\n')
+            .map((l) => JSON.parse(l) as string[])
+        : [];
+    return { hc, calls };
+  }
+  const file = (hc: HostContext): string => path.join(hc.home, '.claude.json');
+  const entry = (hc: HostContext): unknown =>
+    (JSON.parse(fs.readFileSync(file(hc), 'utf8')) as { mcpServers?: Record<string, unknown> })
+      .mcpServers?.['oort'];
+
+  it('connect.claude-code-uses-claude-mcp-add-when-claude-is-on-path', () => {
+    const { hc, calls } = withClaude();
+    fs.writeFileSync(file(hc), JSON.stringify({ numStartups: 3, mcpServers: {} }));
+    const c = connectHost('claude-code', hc, CMD);
+    expect(c.changed).toBe(true);
+    expect(c.via).toBe('claude-cli');
+    expect(c.diff).toContain('+ mcpServers.oort.command');
+    expect(calls()).toEqual([['mcp', 'add', '--scope', 'user', 'oort', '--', CMD, 'mcp']]);
+    expect(entry(hc)).toEqual({ type: 'stdio', command: CMD, args: ['mcp'], env: {} });
+    expect(fs.existsSync(`${file(hc)}.oort-backup`)).toBe(true);
+
+    // Idempotent: the entry claude wrote (with env: {}) counts as ours, so nothing runs.
+    expect(connectHost('claude-code', hc, CMD).changed).toBe(false);
+    expect(calls()).toHaveLength(1);
+
+    // A dry run never runs claude.
+    expect(disconnectHost('claude-code', hc, CMD, { dryRun: true }).changed).toBe(true);
+    expect(calls()).toHaveLength(1);
+
+    const d = disconnectHost('claude-code', hc, CMD);
+    expect(d.changed).toBe(true);
+    expect(d.via).toBe('claude-cli');
+    expect(calls()[1]).toEqual(['mcp', 'remove', '--scope', 'user', 'oort']);
+    expect(entry(hc)).toBeUndefined();
+  });
+
+  it('connect.claude-code-replaces-a-stale-entry-with-remove-then-add', () => {
+    const { hc, calls } = withClaude();
+    fs.writeFileSync(
+      file(hc),
+      JSON.stringify({
+        mcpServers: {
+          oort: { type: 'stdio', command: '/old/node_modules/oort/dist/main.js', args: ['mcp'] },
+        },
+      }),
+    );
+    const c = connectHost('claude-code', hc, CMD);
+    expect(c.changed).toBe(true);
+    expect(calls().map((a) => a[1])).toEqual(['remove', 'add']);
+    expect(entry(hc)).toMatchObject({ command: CMD });
+  });
+
+  it('connect.claude-code-refuses-a-foreign-entry-without-running-claude', () => {
+    const { hc, calls } = withClaude();
+    fs.writeFileSync(
+      file(hc),
+      JSON.stringify({ mcpServers: { oort: { type: 'http', url: 'https://example.test/mcp' } } }),
+    );
+    expect(() => connectHost('claude-code', hc, CMD)).toThrow(Refusal);
+    expect(calls()).toEqual([]);
+  });
+
+  it('connect.claude-code-reports-a-failing-claude-with-the-command-to-run', () => {
+    const { hc } = withClaude({ fail: true });
+    expect(() => connectHost('claude-code', hc, CMD)).toThrow(
+      /claude mcp add --scope user oort -- .* mcp/,
+    );
+  });
+
+  it('connect.claude-code-edits-the-file-when-claude-is-not-on-path', () => {
+    const hc = context('darwin', { PATH: tmpdir('oort-no-claude-') });
+    const c = connectHost('claude-code', hc, CMD);
+    expect(c.changed).toBe(true);
+    expect(c.via).toBe('file');
+    expect(entry(hc)).toEqual({ type: 'stdio', command: CMD, args: ['mcp'] });
+  });
+});
