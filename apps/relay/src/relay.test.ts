@@ -658,3 +658,25 @@ describe('no content in logs or responses', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
   });
 });
+
+describe('GET /health', () => {
+  it('answers {"ok":true} with no key, no D1 and no upstream call', async () => {
+    const r = setup();
+    const prepare = vi.spyOn(r.db, 'prepare');
+    const res = await r.send('/health', undefined, { key: null, method: 'GET' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(prepare).not.toHaveBeenCalled();
+    expect(r.calls).toHaveLength(0);
+    expect(r.rateKeys).toHaveLength(0);
+  });
+
+  it('answers HEAD, and refuses other methods with 405', async () => {
+    const r = setup();
+    expect((await r.send('/health', undefined, { key: null, method: 'HEAD' })).status).toBe(200);
+    const post = await r.send('/health', {}, { key: null });
+    expect(post.status).toBe(405);
+    expect(post.headers.get('allow')).toBe('GET, HEAD');
+  });
+});
