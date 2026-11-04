@@ -4,7 +4,7 @@ Oort is an open-source memory engine for AI agents. It tiers memory into hot, wa
 
 To get started, run `pnpm install && pnpm verify`. That installs dependencies and runs formatting, lint, build, typecheck, and tests across every package.
 
-To use the `oort` CLI with Claude Code, install it from the repo with `pnpm build && cd packages/cli && pnpm add -g .`, then run `oort init` and `oort install claude-code`.
+To use the `oort` CLI, install it from the repo with `pnpm build && cd packages/cli && pnpm add -g .`, then run `oort setup`. It connects Claude Code (hooks) and Claude Desktop, Codex, Cursor, Gemini CLI or VS Code (the local MCP server). Every command is in [docs/cli.md](docs/cli.md).
 
 A project's `oort.config.json` shapes recall in that project, but not the write path: queued turns are observed by a background drain that runs in `~/.oort` and reads only `~/.oort/config.json`. The store's `embed.dimension` likewise always comes from the home config; a different project value is ignored with a warning.
 
