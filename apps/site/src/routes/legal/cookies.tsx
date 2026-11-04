@@ -15,8 +15,13 @@ function Page() {
   return (
     <LegalPage title="Cookies">
       <p>
-        <strong>We set no cookies.</strong> The Oort website does not use cookies, local tracking or
-        advertising pixels, so there is no cookie banner.
+        <strong>We set no advertising or tracking cookies</strong>, so there is no cookie banner.
+      </p>
+      <p>
+        <strong>Sign-in cookies.</strong> When you sign in to your Oort account, Clerk, our sign-in
+        provider, sets cookies that keep you signed in (for example <code>__session</code> and{' '}
+        <code>__client_uat</code>). They are strictly necessary for the account pages, so they need
+        no consent. If you never sign in, they are not set.
       </p>
       <p>
         When switched on, we use Cloudflare Web Analytics, which is cookieless. It counts page views

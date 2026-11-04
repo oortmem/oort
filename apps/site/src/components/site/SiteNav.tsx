@@ -105,6 +105,7 @@ export function SiteFooter() {
             [
               ['/legal/privacy', 'Privacy'],
               ['/legal/terms', 'Terms of use'],
+              ['/legal/terms-of-service', 'Oort Pro terms'],
               ['/legal/acceptable-use', 'Acceptable use'],
               ['/legal/cookies', 'Cookies'],
               ['/legal/subprocessors', 'Subprocessors'],
@@ -114,7 +115,8 @@ export function SiteFooter() {
             'Account',
             [
               ['/signin', 'Sign in'],
-              ['/dashboard', 'Dashboard'],
+              ['/account', 'Account'],
+              ['/dashboard', 'Console demo'],
             ],
           ],
         ].map(([title, items]) => (

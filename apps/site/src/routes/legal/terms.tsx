@@ -10,9 +10,6 @@ export const Route = createFileRoute('/legal/terms')({
 });
 
 function Page() {
-  void legal;
-  void Contact;
-  void GeneralContact;
   return (
     <LegalPage title="Terms of use">
       <p>
@@ -23,9 +20,10 @@ function Page() {
       <VatLine />
       <h2>The site</h2>
       <p>
-        The site describes Oort, an open-source agent memory engine. Some pages are demos with
-        sample data (the console, the sign-in page and the Explorer concept). Features marked
-        Planned or Concept are not built yet. Prices are a launch proposal and may change.
+        The site describes Oort, an open-source agent memory engine, and is where you manage an Oort
+        account. Some pages are demos with sample data (the console and the Explorer concept).
+        Features marked Planned or Concept are not built yet. Prices are a launch proposal and may
+        change.
       </p>
       <h2>Open source software</h2>
       <p>
@@ -48,10 +46,12 @@ function Page() {
         We may update these terms and will change the date above. They are governed by the law of{' '}
         {legal.country}.
       </p>
-      <h2>Hosted service</h2>
+      <h2>Oort Pro and hosted Oort Cloud</h2>
       <p>
-        Terms of service and a data processing agreement for hosted Oort Cloud will be published
-        before it opens. They are not part of these terms.
+        Oort Pro, the paid subscription, has its own{' '}
+        <a href="/legal/terms-of-service">Oort Pro terms of service</a>, which apply when you
+        subscribe. Terms and a data processing agreement for hosted Oort Cloud will be published
+        before it opens. Neither is part of these terms.
       </p>
     </LegalPage>
   );

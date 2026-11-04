@@ -25,6 +25,7 @@ import { Route as LegalCookiesRouteImport } from './routes/legal/cookies'
 import { Route as LegalPrivacyRouteImport } from './routes/legal/privacy'
 import { Route as LegalSubprocessorsRouteImport } from './routes/legal/subprocessors'
 import { Route as LegalTermsRouteImport } from './routes/legal/terms'
+import { Route as LegalTermsOfServiceRouteImport } from './routes/legal/terms-of-service'
 import { Route as ApiStripeWebhookRouteImport } from './routes/api/stripe/webhook'
 import { Route as ApiCliSessionIdRouteImport } from './routes/api/cli/session/$id'
 
@@ -108,6 +109,11 @@ const LegalTermsRoute = LegalTermsRouteImport.update({
   path: '/legal/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LegalTermsOfServiceRoute = LegalTermsOfServiceRouteImport.update({
+  id: '/legal/terms-of-service',
+  path: '/legal/terms-of-service',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiStripeWebhookRoute = ApiStripeWebhookRouteImport.update({
   id: '/api/stripe/webhook',
   path: '/api/stripe/webhook',
@@ -135,6 +141,7 @@ export interface FileRoutesByFullPath {
   '/legal/privacy': typeof LegalPrivacyRoute
   '/legal/subprocessors': typeof LegalSubprocessorsRoute
   '/legal/terms': typeof LegalTermsRoute
+  '/legal/terms-of-service': typeof LegalTermsOfServiceRoute
   '/account/': typeof AccountIndexRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/api/cli/session/$id': typeof ApiCliSessionIdRoute
@@ -155,6 +162,7 @@ export interface FileRoutesByTo {
   '/legal/privacy': typeof LegalPrivacyRoute
   '/legal/subprocessors': typeof LegalSubprocessorsRoute
   '/legal/terms': typeof LegalTermsRoute
+  '/legal/terms-of-service': typeof LegalTermsOfServiceRoute
   '/account': typeof AccountIndexRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/api/cli/session/$id': typeof ApiCliSessionIdRoute
@@ -176,6 +184,7 @@ export interface FileRoutesById {
   '/legal/privacy': typeof LegalPrivacyRoute
   '/legal/subprocessors': typeof LegalSubprocessorsRoute
   '/legal/terms': typeof LegalTermsRoute
+  '/legal/terms-of-service': typeof LegalTermsOfServiceRoute
   '/account/': typeof AccountIndexRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/api/cli/session/$id': typeof ApiCliSessionIdRoute
@@ -198,6 +207,7 @@ export interface FileRouteTypes {
     | '/legal/privacy'
     | '/legal/subprocessors'
     | '/legal/terms'
+    | '/legal/terms-of-service'
     | '/account/'
     | '/api/stripe/webhook'
     | '/api/cli/session/$id'
@@ -218,6 +228,7 @@ export interface FileRouteTypes {
     | '/legal/privacy'
     | '/legal/subprocessors'
     | '/legal/terms'
+    | '/legal/terms-of-service'
     | '/account'
     | '/api/stripe/webhook'
     | '/api/cli/session/$id'
@@ -238,6 +249,7 @@ export interface FileRouteTypes {
     | '/legal/privacy'
     | '/legal/subprocessors'
     | '/legal/terms'
+    | '/legal/terms-of-service'
     | '/account/'
     | '/api/stripe/webhook'
     | '/api/cli/session/$id'
@@ -259,6 +271,7 @@ export interface RootRouteChildren {
   LegalPrivacyRoute: typeof LegalPrivacyRoute
   LegalSubprocessorsRoute: typeof LegalSubprocessorsRoute
   LegalTermsRoute: typeof LegalTermsRoute
+  LegalTermsOfServiceRoute: typeof LegalTermsOfServiceRoute
   AccountIndexRoute: typeof AccountIndexRoute
   ApiStripeWebhookRoute: typeof ApiStripeWebhookRoute
   ApiCliSessionIdRoute: typeof ApiCliSessionIdRoute
@@ -378,6 +391,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LegalTermsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/legal/terms-of-service': {
+      id: '/legal/terms-of-service'
+      path: '/legal/terms-of-service'
+      fullPath: '/legal/terms-of-service'
+      preLoaderRoute: typeof LegalTermsOfServiceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/stripe/webhook': {
       id: '/api/stripe/webhook'
       path: '/api/stripe/webhook'
@@ -411,6 +431,7 @@ const rootRouteChildren: RootRouteChildren = {
   LegalPrivacyRoute: LegalPrivacyRoute,
   LegalSubprocessorsRoute: LegalSubprocessorsRoute,
   LegalTermsRoute: LegalTermsRoute,
+  LegalTermsOfServiceRoute: LegalTermsOfServiceRoute,
   AccountIndexRoute: AccountIndexRoute,
   ApiStripeWebhookRoute: ApiStripeWebhookRoute,
   ApiCliSessionIdRoute: ApiCliSessionIdRoute,
