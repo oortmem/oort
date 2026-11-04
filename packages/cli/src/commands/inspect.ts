@@ -1,7 +1,7 @@
 import { filterFor } from '@oortmem/claude-code';
 import {
   activation,
-  scopeMatches,
+  localGrant,
   type Memory,
   type MemoryStore,
   type ScopeFilter,
@@ -56,6 +56,7 @@ export async function supersedeChain(
   m: Memory,
   filter: ScopeFilter,
 ): Promise<{ links: ChainLink[]; hidden: number }> {
+  const grant = localGrant(filter);
   const seen = new Set([m.id]);
   let hidden = 0;
   const walk = async (
@@ -65,10 +66,14 @@ export async function supersedeChain(
   ): Promise<void> => {
     for (let id = start; id !== null && !seen.has(id);) {
       seen.add(id);
-      const x = await store.get(id);
-      if (x === null) break;
-      if (scopeMatches(x.scope, filter)) add(link(x));
-      else hidden++;
+      // The store answers an unknown and an out-of-scope id alike: the chain
+      // continues where this view cannot follow, so the walk stops there.
+      const x = await store.get(grant, id);
+      if (x === null) {
+        hidden++;
+        break;
+      }
+      add(link(x));
       id = next(x);
     }
   };
@@ -106,7 +111,7 @@ export async function inspectCommand(
     const now = new Date();
     const filter = filterFor(w.scope);
     if (id === undefined) {
-      const current = (await w.store.list(filter)).slice(0, limit);
+      const current = (await w.store.list(localGrant(filter))).slice(0, limit);
       if (opts.json === true) {
         const shaped = await Promise.all(current.map((m) => shapeLinks(w.store, filter, m)));
         ctx.io.out(`${JSON.stringify(shaped.map(withoutEmbedding), null, 2)}\n`);

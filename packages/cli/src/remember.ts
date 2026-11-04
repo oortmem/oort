@@ -2,6 +2,7 @@ import { observe, type MemoryType, type Scope } from '@oortmem/core';
 import { turnObservation } from './commands/observe.js';
 import { writePath } from './util.js';
 import type { Wired } from './wire.js';
+import { grantFor } from '@oortmem/claude-code';
 
 export const REMEMBER_MAX_FACTS = 5;
 export const FACT_MAX_CHARS = 500;
@@ -47,7 +48,7 @@ export async function rememberFacts(
     const out: RememberResult = { fact: i, outcome: r.outcome };
     if (r.memoryId !== undefined) out.id = r.memoryId;
     if (r.outcome === 'superseded' && r.memoryId !== undefined) {
-      const prior = (await w.store.get(r.memoryId))?.supersedes;
+      const prior = (await w.store.get(grantFor(w.scope), r.memoryId))?.supersedes;
       if (prior !== null && prior !== undefined) out.supersedes = prior;
     }
     if (r.outcome === 'skipped') out.reason = r.reason ?? 'not durable';

@@ -12,6 +12,7 @@ import type {
   WrittenMemory,
 } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
+import { localGrant, type Grant } from './grant.js';
 import { capObservation } from './cap.js';
 import type { Decision, Memory, Scope } from './model.js';
 import { scrubObservation } from './scrub.js';
@@ -93,9 +94,14 @@ function strongMatch(turn: ReadonlySet<string>, m: Memory): boolean {
   return shared >= REINFORCE_MIN_SHARED && shared >= REINFORCE_MIN_CONTAINMENT * own.size;
 }
 
-async function confirm(store: MemoryStore, id: string, nowIso: string): Promise<void> {
-  const m = await store.get(id);
-  if (m !== null) await store.upsert({ ...m, lastConfirmedAt: nowIso });
+async function confirm(
+  store: MemoryStore,
+  grant: Grant,
+  id: string,
+  nowIso: string,
+): Promise<void> {
+  const m = await store.get(grant, id);
+  if (m !== null) await store.upsert(grant, { ...m, lastConfirmedAt: nowIso });
 }
 
 const GATE_THRESHOLD = 0.5;
@@ -112,18 +118,18 @@ async function candidatesFor(
   store: MemoryStore,
   text: string,
   v: Int8Array,
-  filter: ScopeFilter,
+  grant: Grant,
   now: Date,
 ): Promise<Memory[]> {
   // Stores ignore temporal validity, so over-fetch to keep superseded rows from crowding out the head.
   const [dense, lexical] = await Promise.all([
-    store.dense(v, filter, CANDIDATES * 2),
-    store.lexical(text, filter, CANDIDATES * 2),
+    store.dense(grant, v, CANDIDATES * 2),
+    store.lexical(grant, text, CANDIDATES * 2),
   ]);
   const ids = [...new Set([...dense, ...lexical].map((h) => h.id))];
   const out: Memory[] = [];
   for (const id of ids) {
-    const m = await store.get(id);
+    const m = await store.get(grant, id);
     if (m !== null && isLive(m, now)) out.push(m);
     if (out.length === CANDIDATES) break;
   }
@@ -145,6 +151,8 @@ function bestOf(
 interface ApplyArgs {
   obs: Observation;
   scope: Scope;
+  /** What the store lets this observation read and write (its project plus global). */
+  grant: Grant;
   deps: ObserveDeps;
   now: Date;
   salience: number;
@@ -163,7 +171,7 @@ interface ApplyArgs {
 
 /** Applies one reconcile decision: reinforce, or write and link a new memory. */
 async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
-  const { obs, scope, deps, now, candidates, decisions } = a;
+  const { obs, scope, grant, deps, now, candidates, decisions } = a;
   const { store } = deps;
   let best = bestOf(a.rs);
   if (best === undefined && a.noopMeansNew === true && a.rs.length > 0) {
@@ -182,8 +190,8 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   if (best.action === 'REINFORCE') {
     const target = candidates.find((c) => c.id === best.candidateId);
     if (target === undefined) return { outcome: 'skipped' };
-    await store.recordAccess([target.id], now);
-    await confirm(store, target.id, now.toISOString());
+    await store.recordAccess(grant, [target.id], now);
+    await confirm(store, grant, target.id, now.toISOString());
     return { outcome: 'reinforced', memoryId: target.id };
   }
 
@@ -213,7 +221,7 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   }
   if (prior !== undefined && a.claimed !== undefined) {
     // Re-read: the snapshot was taken before this turn wrote anything.
-    const fresh = await store.get(prior.id);
+    const fresh = await store.get(grant, prior.id);
     prior = fresh !== null && isLive(fresh, now) ? fresh : undefined;
   }
   if (action !== 'ADD' && prior === undefined) action = 'ADD';
@@ -231,7 +239,7 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   const inOrder = prior === undefined || Date.parse(prior.validFrom) <= Date.parse(validFrom);
   let pred: Memory | null = null;
   if (prior !== undefined && !inOrder && prior.supersedes !== null) {
-    pred = await store.get(prior.supersedes);
+    pred = await store.get(grant, prior.supersedes);
   }
   const deep = pred !== null && Date.parse(validFrom) < Date.parse(pred.validFrom);
   if (prior !== undefined) {
@@ -277,12 +285,12 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   // A supersede, update or out-of-order insert changes several records; they land
   // together in one atomic write so a crash cannot leave a half-linked chain.
   if (prior === undefined) {
-    await store.upsert(memory);
+    await store.upsert(grant, memory);
   } else if (inOrder) {
     // Close the prior where the new fact starts, not where we observed it. A fact
     // starting in the future leaves the prior current until then (`expiredAt` stays
     // null; consolidation expires it once `validTo` has passed).
-    await store.upsertMany([
+    await store.upsertMany(grant, [
       memory,
       {
         ...prior,
@@ -295,8 +303,8 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     ]);
   } else if (pred !== null && deep) {
     // Older than the prior's predecessor too: close at the predecessor's start and slot in before it.
-    const before = pred.supersedes === null ? null : await store.get(pred.supersedes);
-    await store.upsertMany([
+    const before = pred.supersedes === null ? null : await store.get(grant, pred.supersedes);
+    await store.upsertMany(grant, [
       {
         ...memory,
         validTo: pred.validFrom,
@@ -310,7 +318,7 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     ]);
   } else {
     // The "new" fact is older than the prior: it slots in before it, already closed.
-    await store.upsertMany([
+    await store.upsertMany(grant, [
       {
         ...memory,
         validTo: prior.validFrom,
@@ -366,7 +374,7 @@ export async function observe(
   const obs = capObservation(scrubbed.obs);
   const { store, embed, decide, write } = deps;
   const now = deps.now ?? new Date();
-  const filter = filterFor(scope);
+  const grant = localGrant(filterFor(scope));
   const g = await decide.gate(obs);
   const text = `${obs.userText}\n${obs.assistantText}`;
 
@@ -374,27 +382,28 @@ export async function observe(
     // Lexical search ignores validity, so look past superseded rows for a live one.
     const turnText = `${obs.userText} ${obs.assistantText}`;
     const turn = new Set(tokenizeLexical(turnText));
-    const hits = await store.lexical(turnText, filter, 3);
+    const hits = await store.lexical(grant, turnText, 3);
     for (const hit of hits) {
-      const m = await store.get(hit.id);
+      const m = await store.get(grant, hit.id);
       if (m === null || !isLive(m, now) || !strongMatch(turn, m)) continue;
       // Activation only: `lastConfirmedAt` is reserved for a decided REINFORCE.
-      await store.recordAccess([m.id], now);
+      await store.recordAccess(grant, [m.id], now);
       return single({ outcome: 'reinforced', memoryId: m.id }, g.decisions);
     }
     return single({ outcome: 'skipped' }, g.decisions);
   }
 
-  if (write.writeMany !== undefined) return observeMany(obs, scope, deps, g, now, filter);
+  if (write.writeMany !== undefined) return observeMany(obs, scope, grant, deps, g, now);
 
   const [vec] = await embed.embed([text], 'document');
   if (vec === undefined) throw new Error('embedder returned no vector for the observation');
-  const candidates = await candidatesFor(store, text, vec, filter, now);
+  const candidates = await candidatesFor(store, text, vec, grant, now);
   const rs = await decide.reconcile(obs, candidates);
   const decisions = [...g.decisions, ...rs.flatMap((r) => r.decisions)];
   const r = await apply({
     obs,
     scope,
+    grant,
     deps,
     now,
     salience: g.salience,
@@ -410,10 +419,10 @@ export async function observe(
 async function observeMany(
   obs: Observation,
   scope: Scope,
+  grant: Grant,
   deps: ObserveDeps,
   g: GateDecision,
   now: Date,
-  filter: ScopeFilter,
 ): Promise<ObserveResult> {
   const { store, embed, decide } = deps;
   const max = deps.config.writer.maxMemoriesPerObservation;
@@ -432,7 +441,7 @@ async function observeMany(
       m,
       v: vecs[i]!,
       obs: factObservation(obs, m),
-      candidates: await candidatesFor(store, m.text, vecs[i]!, filter, now),
+      candidates: await candidatesFor(store, m.text, vecs[i]!, grant, now),
     })),
   );
   const rss =
@@ -459,6 +468,7 @@ async function observeMany(
       await apply({
         obs,
         scope,
+        grant,
         deps,
         now,
         salience: g.salience,

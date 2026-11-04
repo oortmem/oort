@@ -23,6 +23,8 @@ import {
 } from './observe.js';
 import { localScope } from './scope.js';
 import { makeMemory, vec } from './store-conformance.js';
+import { TG } from './store-conformance.js';
+import { localGrant, type GrantFilter } from './grant.js';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-observe-'));
 const config = resolveConfig(dir, { OORT_HOME: path.join(dir, 'home') });
@@ -69,7 +71,7 @@ interface Spy {
   reconcile: Memory[][];
   write: { action: string; prior?: Memory }[];
   access: string[][];
-  filters: ScopeFilter[];
+  filters: GrantFilter[];
   /** One entry per store write call: the method and the ids it wrote. */
   writes: string[][];
 }
@@ -82,25 +84,25 @@ function setup(
   const real = createMemoryStore({ d: config.activation.d, ...(listNow && { now: listNow }) });
   const spy: Spy = { embed: 0, reconcile: [], write: [], access: [], filters: [], writes: [] };
   const store: MemoryStore = Object.create(real) as MemoryStore;
-  store.lexical = (q, f, k) => {
-    spy.filters.push(f);
-    return real.lexical(q, f, k);
+  store.lexical = (grant, q, k) => {
+    spy.filters.push(grant.read);
+    return real.lexical(grant, q, k);
   };
-  store.dense = (v, f, k) => {
-    spy.filters.push(f);
-    return real.dense(v, f, k);
+  store.dense = (grant, v, k) => {
+    spy.filters.push(grant.read);
+    return real.dense(grant, v, k);
   };
-  store.upsert = (m) => {
+  store.upsert = (grant, m) => {
     spy.writes.push(['upsert', m.id]);
-    return real.upsert(m);
+    return real.upsert(grant, m);
   };
-  store.upsertMany = (ms) => {
+  store.upsertMany = (grant, ms) => {
     spy.writes.push(['upsertMany', ...ms.map((m) => m.id)]);
-    return real.upsertMany(ms);
+    return real.upsertMany(grant, ms);
   };
-  store.recordAccess = (ids, at) => {
+  store.recordAccess = (grant, ids, at) => {
     spy.access.push(ids);
-    return real.recordAccess(ids, at);
+    return real.recordAccess(grant, ids, at);
   };
   const decide: DecisionController = {
     async gate() {
@@ -193,25 +195,26 @@ describe('observe', () => {
     const res = await observe(obs('hello there'), localScope(), deps);
     expect(res.outcome).toBe('skipped');
     expect(res.memoryId).toBeUndefined();
-    expect(await store.list(FILTER)).toEqual([]);
+    expect(await store.list(localGrant(FILTER))).toEqual([]);
   });
 
   it('observe.reinforce-increments-access', async () => {
     const { store, deps } = setup(gate(0.9), [rec('X', 'REINFORCE')]);
     await store.upsert(
+      TG,
       makeMemory({ id: 'X', text: 'auth runs on port 4000', embedding: vec(100, 0, 0, 0) }),
     );
     const res = await observe(obs('auth runs on port 4000'), localScope(), deps);
     expect(res).toMatchObject({ outcome: 'reinforced', memoryId: 'X' });
-    expect((await store.get('X'))?.accessLog.count).toBe(1);
-    expect(await store.list(FILTER)).toHaveLength(1);
+    expect((await store.get(TG, 'X'))?.accessLog.count).toBe(1);
+    expect(await store.list(localGrant(FILTER))).toHaveLength(1);
   });
 
   it('observe.add-stores-warm', async () => {
     const { store, deps } = setup(gate(0.9, 0.5), [rec(null, 'ADD')]);
     const res = await observe(obs('auth moved'), localScope(), deps);
     expect(res.outcome).toBe('added');
-    const m = await store.get(res.memoryId ?? '');
+    const m = await store.get(TG, res.memoryId ?? '');
     expect(m?.tier).toBe('warm');
     expect(m?.pinned).toBe(false);
     expect(m?.supersedes).toBeNull();
@@ -222,7 +225,7 @@ describe('observe', () => {
   it('observe.high-salience-is-hot', async () => {
     const { store, deps } = setup(gate(0.9, 0.85), [rec(null, 'ADD')]);
     const res = await observe(obs('auth moved'), localScope(), deps);
-    expect((await store.get(res.memoryId ?? ''))?.tier).toBe('hot');
+    expect((await store.get(TG, res.memoryId ?? ''))?.tier).toBe('hot');
   });
 
   it('observe.supersede-chain', async () => {
@@ -246,9 +249,9 @@ describe('observe', () => {
     expect(c.outcome).toBe('updated');
     expect(spy.reconcile[2]?.map((m) => m.id)).toEqual([b.memoryId]);
 
-    const valid = await store.list(FILTER, { validOnly: true });
+    const valid = await store.list(localGrant(FILTER), { validOnly: true });
     expect(valid.map((m) => m.id)).toEqual([c.memoryId]);
-    const [A, B, C] = await Promise.all([a, b, c].map((r) => store.get(r.memoryId ?? '')));
+    const [A, B, C] = await Promise.all([a, b, c].map((r) => store.get(TG, r.memoryId ?? '')));
     expect(C?.supersedes).toBe(B?.id);
     expect(B?.supersededBy).toBe(C?.id);
     expect(B?.validTo).toBe('2026-01-03T00:00:00.000Z');
@@ -270,7 +273,7 @@ describe('observe', () => {
       ...deps,
       now: new Date('2026-01-06T00:00:00.000Z'),
     });
-    const [A, B] = await Promise.all([a, b].map((r) => store.get(r.memoryId ?? '')));
+    const [A, B] = await Promise.all([a, b].map((r) => store.get(TG, r.memoryId ?? '')));
     expect(A).toMatchObject({
       validTo: B?.validFrom,
       expiredAt: '2026-01-06T00:00:00.000Z',
@@ -298,25 +301,26 @@ describe('observe', () => {
     );
     next = [rec(a.memoryId ?? null, 'SUPERSEDE')];
     await observe(obs('auth on port 4000', '2026-01-05T00:00:00.000Z'), localScope(), deps);
-    const A = await store.get(a.memoryId ?? '');
+    const A = await store.get(TG, a.memoryId ?? '');
     expect(A).toMatchObject({
       expiredAt: null,
       endReason: 'superseded',
       validTo: '2026-01-05T00:00:00.000Z',
     });
-    expect((await store.list(FILTER)).map((m) => m.id)).toEqual([a.memoryId]);
+    expect((await store.list(localGrant(FILTER))).map((m) => m.id)).toEqual([a.memoryId]);
   });
 
   it('observe.future-validFrom-fact-is-reinforced-though-not-listed', async () => {
     const { store, deps } = setup(gate(0.1), [], () => new Date('2026-01-01T00:00:00.000Z'));
     await store.upsert(
+      TG,
       makeMemory({
         id: 'F',
         text: 'auth runs on port 4000',
         validFrom: '2026-02-01T00:00:00.000Z',
       }),
     );
-    expect(await store.list(FILTER)).toEqual([]);
+    expect(await store.list(localGrant(FILTER))).toEqual([]);
     const res = await observe(obs('auth runs on port 4000'), localScope(), deps);
     expect(res).toMatchObject({ outcome: 'reinforced', memoryId: 'F' });
   });
@@ -336,7 +340,7 @@ describe('observe', () => {
       deps,
     );
     expect(b.outcome).toBe('superseded');
-    const [A, B] = await Promise.all([a, b].map((r) => store.get(r.memoryId ?? '')));
+    const [A, B] = await Promise.all([a, b].map((r) => store.get(TG, r.memoryId ?? '')));
     expect(A).toMatchObject({ validTo: null, expiredAt: null, endReason: null, supersedes: B?.id });
     expect(B).toMatchObject({
       validTo: A?.validFrom,
@@ -345,7 +349,7 @@ describe('observe', () => {
       supersededBy: A?.id,
       supersedes: null,
     });
-    expect((await store.list(FILTER)).map((m) => m.id)).toEqual([a.memoryId]);
+    expect((await store.list(localGrant(FILTER))).map((m) => m.id)).toEqual([a.memoryId]);
     const temporal = {
       stage: 'temporal',
       question: 'order',
@@ -376,14 +380,14 @@ describe('observe', () => {
       localScope(),
       deps,
     );
-    const [Z, A, B] = await Promise.all([z, a, b].map((r) => store.get(r.memoryId ?? '')));
+    const [Z, A, B] = await Promise.all([z, a, b].map((r) => store.get(TG, r.memoryId ?? '')));
     expect(Z?.supersededBy).toBe(B?.id);
     expect(B?.supersedes).toBe(Z?.id);
     expect(B?.supersededBy).toBe(A?.id);
     expect(A?.supersedes).toBe(B?.id);
     expect(B?.validTo).toBe(A?.validFrom);
     expect(Z?.validTo).toBe(B?.validFrom);
-    expect((await store.list(FILTER)).map((m) => m.id)).toEqual([a.memoryId]);
+    expect((await store.list(localGrant(FILTER))).map((m) => m.id)).toEqual([a.memoryId]);
   });
 
   it('observe.out-of-order-deep-walks-back-one-step', async () => {
@@ -409,7 +413,7 @@ describe('observe', () => {
     next = [rec(a.memoryId ?? null, 'SUPERSEDE')];
     const b = await observe(obs('auth on port 7', '2026-01-04T00:00:00.000Z'), localScope(), deps);
     // B (01-04) is older than A (01-10) and than its predecessor Z (01-05).
-    const [Y, Z, B] = await Promise.all([y, z, b].map((r) => store.get(r.memoryId ?? '')));
+    const [Y, Z, B] = await Promise.all([y, z, b].map((r) => store.get(TG, r.memoryId ?? '')));
     expect(B).toMatchObject({
       validTo: Z?.validFrom,
       supersededBy: Z?.id,
@@ -453,23 +457,24 @@ describe('observe', () => {
   it('observe.reinforce-sets-lastConfirmedAt', async () => {
     // Only a decided REINFORCE confirms; the gate-stage path bumps activation alone.
     const gateSide = setup(gate(0.1), []);
-    await gateSide.store.upsert(makeMemory({ id: 'X', text: 'auth runs on port 4000' }));
+    await gateSide.store.upsert(TG, makeMemory({ id: 'X', text: 'auth runs on port 4000' }));
     const res = await observe(obs('auth runs on port 4000'), localScope(), gateSide.deps);
     expect(res).toMatchObject({ outcome: 'reinforced', memoryId: 'X' });
-    expect((await gateSide.store.get('X'))?.lastConfirmedAt).toBeNull();
+    expect((await gateSide.store.get(TG, 'X'))?.lastConfirmedAt).toBeNull();
 
     const rec2 = setup(gate(0.9), [rec('Y', 'REINFORCE')]);
     await rec2.store.upsert(
+      TG,
       makeMemory({ id: 'Y', text: 'auth runs on port 4000', embedding: vec(100, 0, 0, 0) }),
     );
     await observe(obs('auth runs on port 4000'), localScope(), rec2.deps);
-    expect((await rec2.store.get('Y'))?.lastConfirmedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect((await rec2.store.get(TG, 'Y'))?.lastConfirmedAt).toBe('2026-01-01T00:00:00.000Z');
   });
 
   it('observe.records-decisions', async () => {
     const { store, deps } = setup(gate(0.9), [rec(null, 'ADD', 0.7), rec(null, 'NOOP', 0.2)]);
     const res = await observe(obs('auth moved'), localScope(), deps);
-    const m = await store.get(res.memoryId ?? '');
+    const m = await store.get(TG, res.memoryId ?? '');
     const stages = m?.source.decisions.map((d) => d.stage);
     expect(stages).toEqual(['gate', 'reconcile', 'reconcile', 'write']);
     expect(m?.source.decisions.at(-1)).toMatchObject({ answer: 'ADD', probability: 0.7 });
@@ -479,7 +484,7 @@ describe('observe', () => {
 
   it('observe.gate-reinforce-skips-embed-reconcile-write', async () => {
     const { store, deps, spy } = setup(gate(0.1), []);
-    await store.upsert(makeMemory({ id: 'X', text: 'auth runs on port 4000' }));
+    await store.upsert(TG, makeMemory({ id: 'X', text: 'auth runs on port 4000' }));
     const res = await observe(obs('auth runs on port 4000'), localScope(), deps);
     expect(res).toMatchObject({ outcome: 'reinforced', memoryId: 'X' });
     expect(spy.access).toEqual([['X']]);
@@ -489,9 +494,10 @@ describe('observe', () => {
   it('observe.gate-reinforce-ignores-coincidental-overlap', async () => {
     const { store, deps, spy } = setup(gate(0.1), []);
     // One shared token ("job").
-    await store.upsert(makeMemory({ id: 'one', text: 'Billing job runs nightly at 02:00' }));
+    await store.upsert(TG, makeMemory({ id: 'one', text: 'Billing job runs nightly at 02:00' }));
     // Four shared tokens, but under a third of a long memory's.
     await store.upsert(
+      TG,
       makeMemory({
         id: 'long',
         text: 'Staging deploys of the payments service wait for the canary, then promote at noon',
@@ -505,7 +511,7 @@ describe('observe', () => {
     expect(res.outcome).toBe('skipped');
     expect(spy.access).toEqual([]);
     for (const id of ['one', 'long']) {
-      const m = await store.get(id);
+      const m = await store.get(TG, id);
       expect(m?.accessLog.count).toBe(0);
       expect(m?.lastConfirmedAt).toBeNull();
     }
@@ -513,8 +519,8 @@ describe('observe', () => {
 
   it('observe.gate-reinforce-on-strong-match', async () => {
     const { store, deps, spy } = setup(gate(0.1), []);
-    await store.upsert(makeMemory({ id: 'weak', text: 'The billing job runs nightly' }));
-    await store.upsert(makeMemory({ id: 'X', text: 'The auth service listens on port 4000' }));
+    await store.upsert(TG, makeMemory({ id: 'weak', text: 'The billing job runs nightly' }));
+    await store.upsert(TG, makeMemory({ id: 'X', text: 'The auth service listens on port 4000' }));
     const res = await observe(
       obs('so the auth service listens on port 4000, right?'),
       localScope(),
@@ -522,10 +528,10 @@ describe('observe', () => {
     );
     expect(res).toMatchObject({ outcome: 'reinforced', memoryId: 'X' });
     expect(spy.access).toEqual([['X']]);
-    const m = await store.get('X');
+    const m = await store.get(TG, 'X');
     expect(m?.accessLog.count).toBe(1);
     expect(m?.lastConfirmedAt).toBeNull(); // activation only: nothing decided it was confirmed
-    expect((await store.get('weak'))?.accessLog.count).toBe(0);
+    expect((await store.get(TG, 'weak'))?.accessLog.count).toBe(0);
     expect([REINFORCE_MIN_SHARED, REINFORCE_MIN_CONTAINMENT]).toEqual([3, 0.5]);
   });
 
@@ -533,9 +539,9 @@ describe('observe', () => {
     for (const at of ['', 'not a date']) {
       const { store, deps } = setup(gate(0.9), [rec(null, 'ADD')]);
       const res = await observe(obs('auth moved to port 4000', at), localScope(), deps);
-      const m = await store.get(res.memoryId ?? '');
+      const m = await store.get(TG, res.memoryId ?? '');
       expect(m?.validFrom, JSON.stringify(at)).toBe('2026-01-01T00:00:00.000Z');
-      expect((await store.list(FILTER)).map((x) => x.id)).toEqual([res.memoryId]);
+      expect((await store.list(localGrant(FILTER))).map((x) => x.id)).toEqual([res.memoryId]);
     }
   });
 
@@ -551,6 +557,7 @@ describe('observe', () => {
   it('observe.gate-reinforce-skips-superseded-hit', async () => {
     const { store, deps, spy } = setup(gate(0.1), []);
     await store.upsert(
+      TG,
       makeMemory({
         id: 'old',
         text: 'auth auth auth runs on port 3000 auth',
@@ -559,6 +566,7 @@ describe('observe', () => {
       }),
     );
     await store.upsert(
+      TG,
       makeMemory({ id: 'cur', text: 'auth runs on port 3000', supersedes: 'old' }),
     );
     const res = await observe(obs('auth runs on port 3000'), localScope(), deps);
@@ -580,7 +588,7 @@ describe('observe', () => {
     expect(res.outcome).toBe('skipped');
     expect(res.decisions.map((d) => d.stage)).toEqual(['gate', 'reconcile']);
     expect(spy.write).toEqual([]);
-    expect(await store.list(FILTER)).toEqual([]);
+    expect(await store.list(localGrant(FILTER))).toEqual([]);
   });
 
   it('observe.reinforce-null-candidate-skips', async () => {
@@ -602,7 +610,7 @@ describe('observe', () => {
     const res = await observe(obs('auth moved'), localScope(), deps);
     expect(res.outcome).toBe('added');
     expect(spy.write).toEqual([{ action: 'ADD' }]);
-    const m = await store.get(res.memoryId ?? '');
+    const m = await store.get(TG, res.memoryId ?? '');
     expect(m?.supersedes).toBeNull();
     expect(m?.source.decisions.at(-1)).toMatchObject({ stage: 'write', answer: 'ADD' });
   });
@@ -615,13 +623,13 @@ describe('observe', () => {
         text: 'auth on port 4000',
         embedding: vec(100, 0, 0, 0),
       });
-      await store.upsert(global);
+      await store.upsert(TG, global);
       const res = await observe(obs('auth on port 5000'), localScope('p'), deps);
       // The global fact is another scope's: the project gets its own memory instead.
       expect(res.outcome).toBe('added');
       expect(spy.write).toEqual([{ action: 'ADD' }]);
-      expect(await store.get('G')).toEqual(global);
-      const m = await store.get(res.memoryId ?? '');
+      expect(await store.get(TG, 'G')).toEqual(global);
+      const m = await store.get(TG, res.memoryId ?? '');
       expect(m?.scope.projectId).toBe('p');
       expect(m?.supersedes).toBeNull();
       const scopeDecision = {
@@ -639,18 +647,19 @@ describe('observe', () => {
   it('observe.project-observation-may-reinforce-global', async () => {
     const { store, deps } = setup(gate(0.9), [rec('G', 'REINFORCE')]);
     await store.upsert(
+      TG,
       makeMemory({ id: 'G', text: 'auth on port 4000', embedding: vec(100, 0, 0, 0) }),
     );
     const res = await observe(obs('auth on port 4000'), localScope('p'), deps);
     expect(res).toMatchObject({ outcome: 'reinforced', memoryId: 'G' });
-    expect((await store.get('G'))?.accessLog.count).toBe(1);
+    expect((await store.get(TG, 'G'))?.accessLog.count).toBe(1);
     expect(res.decisions.some((d) => d.stage === 'scope')).toBe(false);
   });
 
   it('observe.salience-boundary-is-hot', async () => {
     const { store, deps } = setup(gate(0.9, 0.8), [rec(null, 'ADD')]);
     const res = await observe(obs('auth moved'), localScope(), deps);
-    expect((await store.get(res.memoryId ?? ''))?.tier).toBe('hot');
+    expect((await store.get(TG, res.memoryId ?? ''))?.tier).toBe('hot');
   });
 
   it('observe.lookup-filter-scopes', async () => {

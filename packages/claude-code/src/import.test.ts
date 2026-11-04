@@ -22,6 +22,8 @@ import {
 import { handleStop } from './hooks.js';
 import { importTranscripts } from './import.js';
 import { parseTranscript, turnsToObservations } from './transcript.js';
+import { TG } from '@oortmem/core/store-conformance';
+import { localGrant } from '@oortmem/core';
 
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const LOCAL = { orgId: 'local', customerId: 'self', agentId: 'claude-code', projectIds: [null] };
@@ -79,9 +81,9 @@ describe('importTranscripts', () => {
       skippedUnresolved: 0,
       skippedUnreadable: 0,
     });
-    expect(await deps.store.list(scopeOf(t), { validOnly: false })).toEqual([]);
-    expect(await deps.store.getCursor(`claude-code:${SESSION}`)).toBeNull();
-    expect(await deps.store.getCursor(`claude-code:${OTHER}`)).toBeNull();
+    expect(await deps.store.list(localGrant(scopeOf(t)), { validOnly: false })).toEqual([]);
+    expect(await deps.store.getCursor(TG, `claude-code:${SESSION}`)).toBeNull();
+    expect(await deps.store.getCursor(TG, `claude-code:${OTHER}`)).toBeNull();
     expect(fs.existsSync(path.join(t.home, 'eval'))).toBe(false);
     expect(deps.calls).toMatchObject({ embed: 0, gate: 0, write: 0 });
 
@@ -132,8 +134,8 @@ describe('importTranscripts', () => {
     const done = await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
     expect(done).toMatchObject({ observations: 10, outcomes: { added: 10 } });
     const linked = { ...LOCAL, projectIds: ['cfg:pinned-id'] };
-    expect(await deps.store.list(linked, { validOnly: false })).toHaveLength(10);
-    expect(await deps.store.list(scopeOf(t), { validOnly: false })).toEqual([]);
+    expect(await deps.store.list(localGrant(linked), { validOnly: false })).toHaveLength(10);
+    expect(await deps.store.list(localGrant(scopeOf(t)), { validOnly: false })).toEqual([]);
   });
 
   it('import.untrusted-project-id-keeps-derived', async () => {
@@ -145,7 +147,7 @@ describe('importTranscripts', () => {
     );
     const deps = makeDeps(t);
     await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
-    expect(await deps.store.list(scopeOf(t), { validOnly: false })).toHaveLength(10);
+    expect(await deps.store.list(localGrant(scopeOf(t)), { validOnly: false })).toHaveLength(10);
   });
 
   it('import.sets-cursors-so-stop-skips-imported-turns', async () => {
@@ -153,8 +155,8 @@ describe('importTranscripts', () => {
     const dir = projects(t);
     const deps = makeDeps(t);
     await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
-    expect(await deps.store.getCursor(`claude-code:${SESSION}`)).toBe('a-0015');
-    expect(await deps.store.getCursor(`claude-code:${OTHER}`)).toBe('o-a-0015');
+    expect(await deps.store.getCursor(TG, `claude-code:${SESSION}`)).toBe('a-0015');
+    expect(await deps.store.getCursor(TG, `claude-code:${OTHER}`)).toBe('o-a-0015');
     await handleStop(
       {
         transcript_path: path.join(dir, '-synthetic-project-a', `${SESSION}.jsonl`),
@@ -174,7 +176,7 @@ describe('importTranscripts', () => {
   it('import.respects-existing-cursor', async () => {
     const t = tempHome();
     const deps = makeDeps(t);
-    await deps.store.setCursor(`claude-code:${SESSION}`, 'a-0001c');
+    await deps.store.setCursor(TG, `claude-code:${SESSION}`, 'a-0001c');
     const r = await importTranscripts({ projectsDir: projects(t), estimateOnly: true }, deps);
     expect(r).toMatchObject({ sessions: 2, observations: 9 });
   });
@@ -259,13 +261,13 @@ describe('importTranscripts', () => {
 
     const r = await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
     expect(r).toMatchObject({ sessions: 2, observations: 10, skippedUnresolved: 2 });
-    expect(await deps.store.list(GLOBAL_ONLY, { validOnly: false })).toEqual([]);
+    expect(await deps.store.list(localGrant(GLOBAL_ONLY), { validOnly: false })).toEqual([]);
     const pid = projectIdFor(t.cwd);
-    const stored = await deps.store.list(scopeOf(t), { validOnly: false });
+    const stored = await deps.store.list(localGrant(scopeOf(t)), { validOnly: false });
     expect(stored).toHaveLength(10);
     expect(stored.every((m: Memory) => m.scope.projectId === pid)).toBe(true);
-    expect(await deps.store.getCursor(`claude-code:${GONE}`)).toBeNull();
-    expect(await deps.store.getCursor(`claude-code:${PLAIN}`)).toBeNull();
+    expect(await deps.store.getCursor(TG, `claude-code:${GONE}`)).toBeNull();
+    expect(await deps.store.getCursor(TG, `claude-code:${PLAIN}`)).toBeNull();
   });
 
   it('import.include-unresolved-imports-as-global', async () => {
@@ -277,10 +279,10 @@ describe('importTranscripts', () => {
       deps,
     );
     expect(r).toMatchObject({ sessions: 4, observations: 20, skippedUnresolved: 0 });
-    const global = await deps.store.list(GLOBAL_ONLY, { validOnly: false });
+    const global = await deps.store.list(localGrant(GLOBAL_ONLY), { validOnly: false });
     expect(global).toHaveLength(10);
     expect(global.every((m: Memory) => m.scope.projectId === undefined)).toBe(true);
-    expect(await deps.store.getCursor(`claude-code:${GONE}`)).toBe('a-0015');
+    expect(await deps.store.getCursor(TG, `claude-code:${GONE}`)).toBe('a-0015');
   });
 
   it('import.private-project-keeps-project-id', async () => {
@@ -294,13 +296,13 @@ describe('importTranscripts', () => {
     await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
     const pid = projectIdFor(t.cwd);
     expect(pid).toBeDefined();
-    const stored = await deps.store.list(scopeOf(t), { validOnly: false });
+    const stored = await deps.store.list(localGrant(scopeOf(t)), { validOnly: false });
     expect(stored).toHaveLength(10);
     expect(stored.every((m: Memory) => m.scope.projectId === pid)).toBe(true);
     // Invisible from global scope and from any other project, even on an exact lexical match.
     const elsewhere = { ...LOCAL, projectIds: [null, 'p-other'] };
-    expect(await deps.store.list(elsewhere, { validOnly: false })).toEqual([]);
-    expect(await deps.store.lexical('auth service port', elsewhere, 10)).toEqual([]);
+    expect(await deps.store.list(localGrant(elsewhere), { validOnly: false })).toEqual([]);
+    expect(await deps.store.lexical(localGrant(elsewhere), 'auth service port', 10)).toEqual([]);
   });
 
   it('import.failure-reason-names-the-error-never-its-message', async () => {
@@ -404,8 +406,8 @@ describe('importTranscripts', () => {
       'a-0014',
       'a-0015',
     ]);
-    expect(await deps.store.getCursor(`claude-code:${OTHER}`)).toBe('o-a-0001c');
-    expect(await deps.store.getCursor(`claude-code:${SESSION}`)).toBe('a-0015');
+    expect(await deps.store.getCursor(TG, `claude-code:${OTHER}`)).toBe('o-a-0001c');
+    expect(await deps.store.getCursor(TG, `claude-code:${SESSION}`)).toBe('a-0015');
 
     // The Stop hook (or a later import) picks the session up where it stopped.
     const again = await importTranscripts({ projectsDir: dir, estimateOnly: true }, base);

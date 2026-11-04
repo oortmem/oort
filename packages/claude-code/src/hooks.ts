@@ -3,12 +3,14 @@ import { z } from 'zod';
 import {
   activation,
   formatForInjection,
+  localGrant,
   localScope,
   resolveProjectId,
   recall,
   shouldRecall,
   type RecallQuery,
   type RecallResult,
+  type Grant,
   type RecalledMemory,
   type Scope,
   type ScopeFilter,
@@ -57,6 +59,11 @@ export function filterFor(scope: Scope): ScopeFilter {
     agentId: scope.agentId,
     projectIds: [...new Set<string | null>([scope.projectId ?? null, null])],
   };
+}
+
+/** The grant for `filterFor(scope)`: what hooks, import and the CLI read and write. */
+export function grantFor(scope: Scope): Grant {
+  return localGrant(filterFor(scope));
 }
 
 function contextOutput(event: 'UserPromptSubmit' | 'SessionStart', text: string): HookOutput {
@@ -192,7 +199,8 @@ export async function handleStop(
     entry.timings['parseMs'] = performance.now() - t;
 
     const key = cursorKey(input.session_id);
-    const sel = selectAfterCursor(detailed, await deps.store.getCursor(key));
+    const grant = grantFor(scope);
+    const sel = selectAfterCursor(detailed, await deps.store.getCursor(grant, key));
     let fresh = sel.fresh;
     entry.counts = { turns: detailed.length, observations: fresh.length };
     // Compaction or rotation dropped the cursor's row; take only the newest turns.
@@ -212,7 +220,7 @@ export async function handleStop(
     entry.counts['queued'] = queued;
     entry.counts['dropped'] = dropped;
     const last = fresh.at(-1)?.turnRef;
-    if (last !== undefined) await deps.store.setCursor(key, last);
+    if (last !== undefined) await deps.store.setCursor(grant, key, last);
     if (queued > 0 || hasPendingQueue(deps.config.home)) {
       try {
         deps.spawnDrain?.();
@@ -234,7 +242,7 @@ export async function handleSessionStart(
     entry.project = scope.projectId ?? null;
     const now = deps.now?.() ?? new Date();
     const { config } = deps;
-    const current = await deps.store.list(filterFor(scope));
+    const current = await deps.store.list(grantFor(scope));
     const picked: RecalledMemory[] = current
       .filter((m) => m.pinned || m.tier === 'hot')
       .map((m) => ({

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
-  scopeMatches,
+  localGrant,
   scrub,
   type DecisionController,
   type Embedder,
@@ -143,20 +143,19 @@ export interface HiddenLinkFlags {
 
 /**
  * `m` shaped for output from `filter`'s point of view: a `supersedes` or
- * `supersededBy` pointing at a memory outside `filter` becomes null and is
- * flagged, so output never names another scope's memory. Storage is untouched;
- * a link to a memory that no longer exists keeps its id.
+ * `supersededBy` pointing at a memory `filter` cannot read becomes null and is
+ * flagged, so output never names another scope's memory. The store answers
+ * an unknown id and an out-of-scope id the same way, so a link to a memory
+ * that no longer exists is hidden too. Storage is untouched.
  */
 export async function shapeLinks<T extends Memory>(
   store: MemoryStore,
   filter: ScopeFilter,
   m: T,
 ): Promise<T & HiddenLinkFlags> {
-  const hidden = async (id: string | null): Promise<boolean> => {
-    if (id === null) return false;
-    const target = await store.get(id);
-    return target !== null && !scopeMatches(target.scope, filter);
-  };
+  const grant = localGrant(filter);
+  const hidden = async (id: string | null): Promise<boolean> =>
+    id !== null && (await store.get(grant, id)) === null;
   const out: T & HiddenLinkFlags = { ...m };
   if (await hidden(m.supersedes)) {
     out.supersedes = null;
@@ -177,20 +176,21 @@ export function withoutEmbedding<T extends Memory>(m: T): Omit<T, 'embedding'> {
 
 /**
  * The memory `ref` names, if it is visible from `filter`: an exact id, or a
- * unique prefix of one. A memory of another scope is refused exactly like a
- * missing one, so ids from other projects reveal nothing.
+ * unique prefix of one. The store scopes the lookup, so a memory of another
+ * scope is refused exactly like a missing one and ids from other projects
+ * reveal nothing.
  */
 export async function findMemory(
   store: MemoryStore,
   filter: ScopeFilter,
   ref: string,
 ): Promise<Memory> {
-  const exact = await store.get(ref);
-  if (exact !== null && scopeMatches(exact.scope, filter)) return exact;
-  const matches =
-    exact !== null
-      ? []
-      : (await store.list(filter, { validOnly: false })).filter((m) => m.id.startsWith(ref));
+  const grant = localGrant(filter);
+  const exact = await store.get(grant, ref);
+  if (exact !== null) return exact;
+  const matches = (await store.list(grant, { validOnly: false })).filter((m) =>
+    m.id.startsWith(ref),
+  );
   if (matches.length === 1 && matches[0] !== undefined) return matches[0];
   if (matches.length > 1) {
     throw new Refusal(`${echo(ref)} matches ${matches.length} memories; give more of the id.`);

@@ -14,6 +14,7 @@ import { Refusal } from '../util.js';
 import type { LoginDeps } from './login.js';
 import type { WireFn } from '../wire.js';
 import { setupCommand, type Choice, type Prompter, type SetupDeps } from './setup.js';
+import { TG } from '@oortmem/core/store-conformance';
 
 const CMD = '/opt/oort/node_modules/oort/dist/main.js';
 
@@ -24,13 +25,13 @@ function recording(h: Harness): { wire: WireFn; ids: Set<string> } {
     const w = await h.wire(cwd, opts);
     const store = w.store;
     w.store = Object.assign(Object.create(store) as typeof store, {
-      upsert: async (m: Parameters<typeof store.upsert>[0]) => {
+      upsert: async (...[grant, m]: Parameters<typeof store.upsert>) => {
         ids.add(m.id);
-        return store.upsert(m);
+        return store.upsert(grant, m);
       },
-      upsertMany: async (ms: Parameters<typeof store.upsertMany>[0]) => {
+      upsertMany: async (...[grant, ms]: Parameters<typeof store.upsertMany>) => {
         for (const m of ms) ids.add(m.id);
-        return store.upsertMany(ms);
+        return store.upsertMany(grant, ms);
       },
     });
     return w;
@@ -162,7 +163,7 @@ describe('oort setup', () => {
     expect(out).toMatch(/recalled/i);
     expect(out).toMatch(/forgot/i);
     expect(ids.size).toBeGreaterThan(0);
-    for (const id of ids) expect(await h.store.get(id)).toBeNull();
+    for (const id of ids) expect(await h.store.get(TG, id)).toBeNull();
     // Missing keys are reported with where to get each, never prompted for.
     expect(out).not.toContain('Keychain now');
   });
@@ -176,7 +177,7 @@ describe('oort setup', () => {
     expect(r.io.stdout).toContain('export TYPESAFE_API_KEY=');
     expect(r.io.stdout).toContain('macOS-only');
     expect(r.io.stdout).toMatch(/recalled/i);
-    for (const id of ids) expect(await h.store.get(id)).toBeNull();
+    for (const id of ids) expect(await h.store.get(TG, id)).toBeNull();
   });
 
   it('setup.import-runs-only-when-asked-and-reuses-the-estimate', async () => {

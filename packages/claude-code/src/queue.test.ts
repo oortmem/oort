@@ -15,6 +15,7 @@ import {
 } from '../test/helpers.js';
 import { handleStop } from './hooks.js';
 import { drainQueue, enqueueObservations } from './queue.js';
+import { localGrant } from '@oortmem/core';
 
 function obs(i: number, session = SESSION): Observation {
   return {
@@ -50,12 +51,14 @@ describe('drainQueue', () => {
     const r = await drainQueue(deps);
     expect(r).toEqual({ processed: 5, failed: 0, remaining: 0 });
     expect(fs.existsSync(path.join(t.home, 'queue', `${SESSION}.jsonl`))).toBe(false);
-    const stored = await deps.store.list({
-      orgId: 'local',
-      customerId: 'self',
-      agentId: 'claude-code',
-      projectIds: [null],
-    });
+    const stored = await deps.store.list(
+      localGrant({
+        orgId: 'local',
+        customerId: 'self',
+        agentId: 'claude-code',
+        projectIds: [null],
+      }),
+    );
     expect(stored).toHaveLength(5);
     expect(stored.every((m) => m.source.harness === 'claude-code')).toBe(true);
     expect(stored.map((m) => m.source.turnRef).sort()).toEqual([

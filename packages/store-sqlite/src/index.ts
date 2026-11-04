@@ -4,16 +4,23 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import {
   appendAccess,
+  assertGrant,
+  canRead,
+  canWrite,
+  cursorKey,
+  GrantError,
   isCurrent,
+  sameScope,
   tokenizeLexical,
   type AccessLog,
+  type Grant,
+  type GrantFilter,
   type GuardedWriteResult,
   type Hit,
   type Memory,
   type MemorySource,
   type MemoryStore,
   type Scope,
-  type ScopeFilter,
   type Tier,
 } from '@oortmem/core';
 import {
@@ -214,18 +221,29 @@ const COLUMNS: (keyof RowParams)[] = [
   'updated_at',
 ];
 
-/** Scope predicate over `memories` aliased `m`; bound with `scopeParams`. */
+/**
+ * Grant predicate over `memories` aliased `m`; bound with `scopeParams`. The
+ * principal always matches exactly; `@all` admits every project of it.
+ */
 const SCOPE_SQL = `m.org_id = @org AND m.customer_id = @customer AND m.agent_id = @agent
-  AND (m.project_id IN (SELECT value FROM json_each(@projects)) OR (@global AND m.project_id IS NULL))`;
+  AND (@all OR m.project_id IN (SELECT value FROM json_each(@projects))
+    OR (@global AND m.project_id IS NULL))`;
 
-function scopeParams(s: ScopeFilter) {
+function scopeParams(f: GrantFilter) {
+  const ids = f.projectIds === 'all' ? [] : f.projectIds;
   return {
-    org: s.orgId,
-    customer: s.customerId,
-    agent: s.agentId,
-    projects: JSON.stringify(s.projectIds.filter((p): p is string => p !== null)),
-    global: s.projectIds.includes(null) ? 1 : 0,
+    org: f.orgId,
+    customer: f.customerId,
+    agent: f.agentId,
+    all: f.projectIds === 'all' ? 1 : 0,
+    projects: JSON.stringify(ids.filter((p): p is string => p !== null)),
+    global: f.projectIds === 'all' || ids.includes(null) ? 1 : 0,
   };
+}
+
+/** True when `f` can match nothing, so a search can skip the query. */
+function coversNothing(f: GrantFilter): boolean {
+  return f.projectIds !== 'all' && f.projectIds.length === 0;
 }
 
 /**
@@ -298,6 +316,10 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        RETURNING rid`,
     ),
     getRow: db.prepare<[string], MemoryRow>('SELECT * FROM memories WHERE id = ?'),
+    // The one way a by-id read or change finds its row: inside the grant or not at all.
+    getScoped: db.prepare<[ReturnType<typeof scopeParams> & { id: string }], MemoryRow>(
+      `SELECT * FROM memories m WHERE m.id = @id AND ${SCOPE_SQL}`,
+    ),
     deleteRow: db.prepare<[string], { rid: number }>(
       'DELETE FROM memories WHERE id = ? RETURNING rid',
     ),
@@ -320,9 +342,6 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       `UPDATE memories SET expired_at = @at, end_reason = COALESCE(end_reason, 'expired')
        WHERE id = @id AND updated_at = @updatedAt AND tier = @was AND expired_at IS NULL
        RETURNING rid`,
-    ),
-    getAccess: db.prepare<[string], { access_log: string }>(
-      'SELECT access_log FROM memories WHERE id = ?',
     ),
     setAccess: db.prepare<[string, string]>('UPDATE memories SET access_log = ? WHERE id = ?'),
     list: db.prepare<[ReturnType<typeof scopeParams> & { tier: Tier | null }], MemoryRow>(
@@ -354,6 +373,27 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
          SELECT id, distance FROM memories_vec
          WHERE embedding MATCH vec_int8(@v) AND k = @k AND scope_key = @scopeKey
            AND project_key IN (SELECT value FROM json_each(@projectKeys)) AND tier != 'cold'
+       )
+       SELECT knn.id AS id, knn.distance AS distance, m.tier AS tier
+       FROM knn JOIN memories m ON m.id = knn.id
+       WHERE m.tier != 'cold' AND ${SCOPE_SQL}
+       ORDER BY knn.distance, m.updated_at DESC, m.id`,
+    ),
+    // A whole-principal grant: the vec0 partition alone bounds the KNN.
+    denseAll: db.prepare<
+      [
+        ReturnType<typeof scopeParams> & {
+          v: Buffer;
+          k: number;
+          scopeKey: string;
+        },
+      ],
+      { id: string; distance: number; tier: Tier }
+    >(
+      `WITH knn AS (
+         SELECT id, distance FROM memories_vec
+         WHERE embedding MATCH vec_int8(@v) AND k = @k AND scope_key = @scopeKey
+           AND tier != 'cold'
        )
        SELECT knn.id AS id, knn.distance AS distance, m.tier AS tier
        FROM knn JOIN memories m ON m.id = knn.id
@@ -424,8 +464,14 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
    * Writes one memory's row, FTS row and vec row. Call inside a transaction.
    * Returns the blob to unlink after commit when a non-cold write dropped the cold copy.
    */
-  function writeMemory(m: Memory): string[] {
+  function writeMemory(grant: Grant, m: Memory): string[] {
     if (m.embedding !== undefined) checkDimension(m.embedding, `upsert ${m.id}`);
+    // Inside the transaction, so a rejection rolls back the whole batch.
+    if (!canWrite(grant, m.scope)) throw new GrantError();
+    const existing = q.getRow.get(m.id);
+    if (existing !== undefined && !sameScope(fromRow(existing, undefined).scope, m.scope)) {
+      throw new GrantError();
+    }
     const row = q.upsertRow.get(toRow(m));
     if (row === undefined) throw new Error(`upsert ${m.id}: no row returned`);
     writeFts(row.rid, m.tier, m.text, m.stub, m.entities);
@@ -459,24 +505,32 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     }
   }
 
-  const writeAll = db.transaction((ms: Memory[]) => ms.flatMap(writeMemory));
+  const writeAll = db.transaction((grant: Grant, ms: Memory[]) =>
+    ms.flatMap((m) => writeMemory(grant, m)),
+  );
 
-  function upsertMany(ms: Memory[]): void {
+  function upsertMany(grant: Grant, ms: Memory[]): void {
     // The rows are gone once the transaction commits; only then unlink exactly
     // the blob each one named (unique per coldPut, so never another write's).
-    removeAfterCommit(writeAll.immediate(ms));
+    removeAfterCommit(writeAll.immediate(grant, ms));
   }
 
-  const forgetTx = db.transaction((id: string): string | undefined => {
+  /** The row for `id` if it lies inside `f`; unknown and out-of-grant read the same. */
+  function scopedRow(f: GrantFilter, id: string): MemoryRow | undefined {
+    return q.getScoped.get({ ...scopeParams(f), id });
+  }
+
+  const forgetTx = db.transaction((grant: Grant, id: string): string | undefined => {
+    if (scopedRow(grant.write, id) === undefined) return undefined;
     const row = q.deleteRow.get(id);
     if (row !== undefined) q.ftsDelete.run(row.rid);
     q.vecDelete.run(id);
     return q.coldDelete.get(id)?.path;
   });
 
-  const recordAccessTx = db.transaction((ids: string[], at: Date) => {
+  const recordAccessTx = db.transaction((grant: Grant, ids: string[], at: Date) => {
     for (const id of ids) {
-      const row = q.getAccess.get(id);
+      const row = scopedRow(grant.read, id);
       if (row === undefined) continue;
       const log = appendAccess(JSON.parse(row.access_log) as AccessLog, at, { d });
       q.setAccess.run(JSON.stringify(log), id);
@@ -494,7 +548,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   }
 
   const setTierTx = db.transaction(
-    (id: string, tier: Tier, snapshot?: Pick<Memory, 'updatedAt' | 'tier'>): boolean => {
+    (
+      grant: Grant,
+      id: string,
+      tier: Tier,
+      snapshot?: Pick<Memory, 'updatedAt' | 'tier'>,
+    ): boolean => {
+      if (scopedRow(grant.write, id) === undefined) return false;
       const row =
         snapshot === undefined
           ? q.setTierRow.get(tier, id)
@@ -510,12 +570,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     },
   );
 
-  const expireManyTx = db.transaction((ms: Memory[], at: string): string[] =>
+  const expireManyTx = db.transaction((grant: Grant, ms: Memory[], at: string): string[] =>
     ms
       .filter(
         (m) =>
+          scopedRow(grant.write, m.id) === undefined ||
           q.expireIfUnchanged.get({ id: m.id, at, updatedAt: m.updatedAt, was: m.tier }) ===
-          undefined,
+            undefined,
       )
       .map((m) => m.id),
   );
@@ -527,10 +588,14 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
    * indices skipped by the guard and the blobs replaced, both to unlink after commit.
    */
   const coldPutManyTx = db.transaction(
-    (ms: Memory[], files: string[]): { skipped: number[]; previous: string[] } => {
+    (grant: Grant, ms: Memory[], files: string[]): { skipped: number[]; previous: string[] } => {
       const skipped: number[] = [];
       const previous: string[] = [];
       for (const [i, m] of ms.entries()) {
+        if (scopedRow(grant.write, m.id) === undefined) {
+          skipped.push(i);
+          continue;
+        }
         const row = q.setTierIfUnchanged.get({
           id: m.id,
           tier: 'cold',
@@ -557,8 +622,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
    * that commit succeeds and removed after; a failed commit removes only the
    * new blobs, and so does a skipped entry once the commit is done.
    */
-  async function coldPutMany(snapshots: Memory[]): Promise<GuardedWriteResult> {
+  async function coldPutMany(grant: Grant, snapshots: Memory[]): Promise<GuardedWriteResult> {
     open();
+    assertGrant(grant);
     const skipped: string[] = [];
     const ms: Memory[] = [];
     for (const m of new Map(snapshots.map((x) => [x.id, x])).values()) {
@@ -571,7 +637,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     const files = await blobs.writeMany(ms.map((m) => ({ id: m.id, data: codec.encode(m) })));
     let tx: { skipped: number[]; previous: string[] };
     try {
-      tx = coldPutManyTx.immediate(ms, files);
+      tx = coldPutManyTx.immediate(grant, ms, files);
     } catch (e) {
       throw withCleanupFailures(e, blobs.removeAll(files));
     }
@@ -581,111 +647,135 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   }
 
   return {
-    async upsert(m) {
+    async upsert(grant, m) {
       open();
-      upsertMany([m]);
+      assertGrant(grant);
+      upsertMany(grant, [m]);
     },
 
-    async upsertMany(ms) {
+    async upsertMany(grant, ms) {
       open();
-      upsertMany(ms);
+      assertGrant(grant);
+      upsertMany(grant, ms);
     },
 
-    async get(id) {
+    async get(grant, id) {
       open();
-      const row = q.getRow.get(id);
+      assertGrant(grant);
+      const row = scopedRow(grant.read, id);
       return row === undefined ? null : fromRow(row, embeddingOf(id));
     },
 
-    async forget(id) {
+    async forget(grant, id) {
       open();
-      const file = forgetTx.immediate(id);
+      assertGrant(grant);
+      const file = forgetTx.immediate(grant, id);
       if (file !== undefined) blobs.remove(file);
     },
 
     /** BM25 over normalised tokens, any-token match; `score` is -bm25 (higher is better). */
-    async lexical(text, scope, k) {
+    async lexical(grant, text, k) {
       open();
+      assertGrant(grant);
       const match = matchQuery(text);
-      if (match === null || k <= 0 || scope.projectIds.length === 0) return [];
+      if (match === null || k <= 0 || coversNothing(grant.read)) return [];
       return q.lexical
-        .all({ ...scopeParams(scope), match, k: Math.floor(k) })
+        .all({ ...scopeParams(grant.read), match, k: Math.floor(k) })
         .map((r): Hit => ({ id: r.id, score: -r.rank, tier: r.tier }));
     },
 
-    /** KNN filtered inside vec0 by scope partition and project/tier metadata; `score` is cosine similarity. */
-    async dense(v, scope, k) {
+    /**
+     * KNN filtered inside vec0 by the principal's partition (and, for a project
+     * list, project metadata), then by the grant again on the joined row;
+     * `score` is cosine similarity.
+     */
+    async dense(grant, v, k) {
       open();
+      assertGrant(grant);
       checkDimension(v, 'dense');
-      if (k <= 0 || scope.projectIds.length === 0) return [];
-      return q.dense
-        .all({
-          ...scopeParams(scope),
-          v: toBytes(v),
-          k: Math.min(Math.floor(k), MAX_KNN),
-          scopeKey: scopeKey(scope.orgId, scope.customerId, scope.agentId),
-          projectKeys: JSON.stringify(scope.projectIds.map(projectKey)),
-        })
-        .map((r): Hit => ({ id: r.id, score: 1 - r.distance, tier: r.tier }));
+      const f = grant.read;
+      if (k <= 0 || coversNothing(f)) return [];
+      const params = {
+        ...scopeParams(f),
+        v: toBytes(v),
+        k: Math.min(Math.floor(k), MAX_KNN),
+        scopeKey: scopeKey(f.orgId, f.customerId, f.agentId),
+      };
+      const rows =
+        f.projectIds === 'all'
+          ? q.denseAll.all(params)
+          : q.dense.all({ ...params, projectKeys: JSON.stringify(f.projectIds.map(projectKey)) });
+      return rows.map((r): Hit => ({ id: r.id, score: 1 - r.distance, tier: r.tier }));
     },
 
-    async recordAccess(ids, at) {
+    async recordAccess(grant, ids, at) {
       open();
-      recordAccessTx.immediate(ids, at);
+      assertGrant(grant);
+      recordAccessTx.immediate(grant, ids, at);
     },
 
-    async list(scope, listOpts = {}) {
+    async list(grant, listOpts = {}) {
       open();
-      if (scope.projectIds.length === 0) return [];
+      assertGrant(grant);
+      if (coversNothing(grant.read)) return [];
       const validOnly = listOpts.validOnly ?? true;
       const now = clock();
       return q.list
-        .all({ ...scopeParams(scope), tier: listOpts.tier ?? null })
+        .all({ ...scopeParams(grant.read), tier: listOpts.tier ?? null })
         .map((r) => fromRow(r, embeddingOf(r.id)))
         .filter((m) => !validOnly || isCurrent(m, now))
         .sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt));
     },
 
-    async expireMany(snapshots, at) {
+    async expireMany(grant, snapshots, at) {
       open();
+      assertGrant(grant);
       const ms = [...new Map(snapshots.map((m) => [m.id, m])).values()];
       if (ms.length === 0) return { skipped: [] };
-      return { skipped: expireManyTx.immediate(ms, at.toISOString()) };
+      return { skipped: expireManyTx.immediate(grant, ms, at.toISOString()) };
     },
 
-    coldPut: (m) => coldPutMany([m]),
+    coldPut: (grant, m) => coldPutMany(grant, [m]),
 
     coldPutMany,
 
     /** A missing or corrupt blob (logged by id) reads as no cold copy. */
-    async coldGet(id) {
+    async coldGet(grant, id) {
       open();
+      assertGrant(grant);
+      if (scopedRow(grant.read, id) === undefined) return null;
       const row = q.coldPath.get(id);
       if (row === undefined) return null;
       const blob = blobs.read(row.path);
       if (blob === null) return null;
+      let m: Memory;
       try {
-        return codec.decode(blob);
+        m = codec.decode(blob);
       } catch (e) {
         if (!(e instanceof ColdBlobCorruptError)) throw e;
         log(`oort store: cold blob for memory ${id} is corrupt; ignoring it`);
         return null;
       }
+      // The blob carries its own scope; a mismatched one is treated as missing.
+      return canRead(grant, m.scope) ? m : null;
     },
 
-    async setTier(id, tier, snapshot) {
+    async setTier(grant, id, tier, snapshot) {
       open();
-      return setTierTx.immediate(id, tier, snapshot);
+      assertGrant(grant);
+      return setTierTx.immediate(grant, id, tier, snapshot);
     },
 
-    async getCursor(key) {
+    async getCursor(grant, key) {
       open();
-      return q.getCursor.get(key)?.value ?? null;
+      assertGrant(grant);
+      return q.getCursor.get(cursorKey(grant, key))?.value ?? null;
     },
 
-    async setCursor(key, value) {
+    async setCursor(grant, key, value) {
       open();
-      q.setCursor.run(key, value);
+      assertGrant(grant);
+      q.setCursor.run(cursorKey(grant, key), value);
     },
 
     async close() {

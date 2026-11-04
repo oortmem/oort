@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { filterFor } from '@oortmem/claude-code';
-import type { Memory, MemoryStore, Scope } from '@oortmem/core';
+import { localGrant, type Grant, type Memory, type MemoryStore, type Scope } from '@oortmem/core';
 import { shapeLinks, toJson, withWired, writeOwnerOnly, type Ctx } from '../util.js';
 
 /** Version of the export format documented in docs/export-format.md. */
@@ -15,11 +15,11 @@ export interface ExportManifest {
 }
 
 /** A cold memory's main record has only its stub indexed; the cold copy holds the full text and embedding. */
-async function decoded(m: Memory, store: MemoryStore, ctx: Ctx): Promise<Memory> {
+async function decoded(m: Memory, store: MemoryStore, grant: Grant, ctx: Ctx): Promise<Memory> {
   if (m.tier !== 'cold') return m;
   let blob: Memory | null;
   try {
-    blob = await store.coldGet(m.id);
+    blob = await store.coldGet(grant, m.id);
   } catch (e) {
     // One unreadable blob must not block a backup: export what the main record holds.
     ctx.io.err(
@@ -50,14 +50,15 @@ export async function exportCommand(
 ): Promise<number> {
   return withWired(ctx, async (w) => {
     const filter = filterFor(w.scope);
-    const listed = await w.store.list(filter, { validOnly: false });
+    const grant = localGrant(filter);
+    const listed = await w.store.list(grant, { validOnly: false });
     // Oldest first, so an importer replays supersede chains in order.
     listed.sort(
       (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.id < b.id ? -1 : 1),
     );
     const memories: Memory[] = [];
     for (const m of listed) {
-      memories.push(await shapeLinks(w.store, filter, await decoded(m, w.store, ctx)));
+      memories.push(await shapeLinks(w.store, filter, await decoded(m, w.store, grant, ctx)));
     }
     const scopes = new Map<string, Scope>();
     for (const m of memories) scopes.set(scopeKey(m.scope), m.scope);

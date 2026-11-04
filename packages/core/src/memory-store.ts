@@ -1,11 +1,16 @@
 import { appendAccess } from './activation.js';
+import type { GuardedWriteResult, Hit, MemoryStore } from './adapters.js';
 import {
-  scopeMatches,
-  type GuardedWriteResult,
-  type Hit,
-  type MemoryStore,
-  type ScopeFilter,
-} from './adapters.js';
+  assertGrant,
+  canRead,
+  canWrite,
+  cursorKey,
+  filterCovers,
+  GrantError,
+  sameScope,
+  type Grant,
+  type GrantFilter,
+} from './grant.js';
 import { isCurrent, type Memory, type Tier } from './model.js';
 import { tokenizeLexical as tokens } from './tokenize.js';
 
@@ -70,8 +75,27 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     if (m.tier !== 'cold') cold.delete(m.id);
   }
 
-  function scoped(scope: ScopeFilter): Memory[] {
-    return [...main.values()].filter((m) => scopeMatches(m.scope, scope));
+  function scoped(f: GrantFilter): Memory[] {
+    return [...main.values()].filter((m) => filterCovers(f, m.scope));
+  }
+
+  /** The live record if `grant` may read it; `undefined` for unknown and out-of-grant alike. */
+  function readable(grant: Grant, id: string): Memory | undefined {
+    const m = main.get(id);
+    return m !== undefined && canRead(grant, m.scope) ? m : undefined;
+  }
+
+  /** The live record if `grant` may change it. */
+  function writable(grant: Grant, id: string): Memory | undefined {
+    const m = main.get(id);
+    return m !== undefined && canWrite(grant, m.scope) ? m : undefined;
+  }
+
+  /** Every check `upsert` makes, before anything is written. */
+  function checkWrite(grant: Grant, m: Memory): void {
+    if (!canWrite(grant, m.scope)) throw new GrantError();
+    const existing = main.get(m.id);
+    if (existing !== undefined && !sameScope(existing.scope, m.scope)) throw new GrantError();
   }
 
   /** True while the live record still matches the snapshot a guarded write was computed from. */
@@ -85,15 +109,16 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   }
 
   /** Atomic trivially: validates and clones every snapshot before writing any. */
-  async function coldPutMany(snapshots: Memory[]): Promise<GuardedWriteResult> {
+  async function coldPutMany(grant: Grant, snapshots: Memory[]): Promise<GuardedWriteResult> {
     open();
+    assertGrant(grant);
     const dims = new Set(
       snapshots.flatMap((m) => (m.embedding === undefined ? [] : [m.embedding.length])),
     );
     if (dims.size > 1) throw new RangeError('coldPutMany: embeddings differ in dimension');
     const skipped: string[] = [];
     for (const snap of lastPerId(snapshots).map((x) => structuredClone(x))) {
-      const live = main.get(snap.id);
+      const live = writable(grant, snap.id);
       if (snap.tier === 'cold' || live === undefined || !unchanged(live, snap)) {
         skipped.push(snap.id);
         continue;
@@ -105,12 +130,17 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     return { skipped };
   }
 
-  async function expireMany(snapshots: Memory[], at: Date): Promise<GuardedWriteResult> {
+  async function expireMany(
+    grant: Grant,
+    snapshots: Memory[],
+    at: Date,
+  ): Promise<GuardedWriteResult> {
     open();
+    assertGrant(grant);
     const iso = at.toISOString();
     const skipped: string[] = [];
     for (const snap of lastPerId(snapshots)) {
-      const live = main.get(snap.id);
+      const live = writable(grant, snap.id);
       if (live === undefined || !unchanged(live, snap) || live.expiredAt !== null) {
         skipped.push(snap.id);
         continue;
@@ -122,25 +152,42 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   }
 
   return {
-    async upsert(m) {
+    async upsert(grant, m) {
       open();
-      put(structuredClone(m));
+      assertGrant(grant);
+      const c = structuredClone(m);
+      checkWrite(grant, c);
+      put(c);
     },
 
-    /** Atomic trivially: clones every record before writing any. */
-    async upsertMany(ms) {
+    /** Atomic trivially: checks and clones every record before writing any. */
+    async upsertMany(grant, ms) {
       open();
-      for (const m of ms.map((x) => structuredClone(x))) put(m);
+      assertGrant(grant);
+      const cs = ms.map((x) => structuredClone(x));
+      // Later entries may move an id the batch itself created: check against
+      // the batch's own earlier entries as well as the store.
+      const batch = new Map<string, Memory>();
+      for (const c of cs) {
+        if (!canWrite(grant, c.scope)) throw new GrantError();
+        const existing = batch.get(c.id) ?? main.get(c.id);
+        if (existing !== undefined && !sameScope(existing.scope, c.scope)) throw new GrantError();
+        batch.set(c.id, c);
+      }
+      for (const c of cs) put(c);
     },
 
-    async get(id) {
+    async get(grant, id) {
       open();
-      const m = main.get(id);
+      assertGrant(grant);
+      const m = readable(grant, id);
       return m === undefined ? null : structuredClone(m);
     },
 
-    async forget(id) {
+    async forget(grant, id) {
       open();
+      assertGrant(grant);
+      if (writable(grant, id) === undefined) return;
       main.delete(id);
       cold.delete(id);
     },
@@ -150,12 +197,13 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
      * match) in text + stub + entities, or in stub + entities only for cold
      * memories, mirroring a store that keeps only those indexed when cold.
      */
-    async lexical(q, scope, k) {
+    async lexical(grant, q, k) {
       open();
+      assertGrant(grant);
       const query = new Set(tokens(q));
       if (query.size === 0) return [];
       const scored: { m: Memory; score: number }[] = [];
-      for (const m of scoped(scope)) {
+      for (const m of scoped(grant.read)) {
         const fields =
           m.tier === 'cold' ? [m.stub, ...m.entities] : [m.text, m.stub, ...m.entities];
         const doc = new Set(tokens(fields.join(' ')));
@@ -166,10 +214,11 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       return rank(scored, k);
     },
 
-    async dense(v, scope, k) {
+    async dense(grant, v, k) {
       open();
+      assertGrant(grant);
       const scored: { m: Memory; score: number }[] = [];
-      for (const m of scoped(scope)) {
+      for (const m of scoped(grant.read)) {
         if (m.tier === 'cold' || m.embedding === undefined) continue;
         if (m.embedding.length !== v.length) {
           throw new RangeError(
@@ -181,19 +230,21 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       return rank(scored, k);
     },
 
-    async recordAccess(ids, at) {
+    async recordAccess(grant, ids, at) {
       open();
+      assertGrant(grant);
       for (const id of ids) {
-        const m = main.get(id);
+        const m = readable(grant, id);
         if (m !== undefined) m.accessLog = appendAccess(m.accessLog, at, { d });
       }
     },
 
-    async list(scope, listOpts = {}) {
+    async list(grant, listOpts = {}) {
       open();
+      assertGrant(grant);
       const validOnly = listOpts.validOnly ?? true;
       const now = clock();
-      return scoped(scope)
+      return scoped(grant.read)
         .filter((m) => !validOnly || isCurrent(m, now))
         .filter((m) => listOpts.tier === undefined || m.tier === listOpts.tier)
         .sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt))
@@ -202,32 +253,42 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
 
     expireMany,
 
-    coldPut: (m) => coldPutMany([m]),
+    coldPut: (grant, m) => coldPutMany(grant, [m]),
 
     coldPutMany,
 
-    async coldGet(id) {
+    async coldGet(grant, id) {
       open();
+      assertGrant(grant);
+      if (readable(grant, id) === undefined) return null;
       const m = cold.get(id);
-      return m === undefined ? null : structuredClone(m);
+      return m === undefined || !canRead(grant, m.scope) ? null : structuredClone(m);
     },
 
-    async setTier(id: string, tier: Tier, snapshot?: Pick<Memory, 'updatedAt' | 'tier'>) {
+    async setTier(
+      grant: Grant,
+      id: string,
+      tier: Tier,
+      snapshot?: Pick<Memory, 'updatedAt' | 'tier'>,
+    ) {
       open();
-      const m = main.get(id);
+      assertGrant(grant);
+      const m = writable(grant, id);
       if (m === undefined || (snapshot !== undefined && !unchanged(m, snapshot))) return false;
       m.tier = tier;
       return true;
     },
 
-    async getCursor(key) {
+    async getCursor(grant, key) {
       open();
-      return cursors.get(key) ?? null;
+      assertGrant(grant);
+      return cursors.get(cursorKey(grant, key)) ?? null;
     },
 
-    async setCursor(key, value) {
+    async setCursor(grant, key, value) {
       open();
-      cursors.set(key, value);
+      assertGrant(grant);
+      cursors.set(cursorKey(grant, key), value);
     },
 
     async close() {

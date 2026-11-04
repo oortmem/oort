@@ -13,10 +13,11 @@ import type {
 } from './adapters.js';
 import { resolveConfig } from './config.js';
 import { createMemoryStore } from './memory-store.js';
-import type { Memory } from './model.js';
+import type { Memory, Scope } from './model.js';
 import { observe } from './observe.js';
 import { localScope } from './scope.js';
-import { makeMemory, vec } from './store-conformance.js';
+import { makeMemory, TG, vec } from './store-conformance.js';
+import { localGrant } from './grant.js';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-observe-multi-'));
 const config = resolveConfig(dir, { OORT_HOME: path.join(dir, 'home') });
@@ -87,29 +88,40 @@ interface Spy {
   reconcile: string[];
   reconcileMany: number;
   embeds: string[][];
+  /** The candidate ids each reconcile call was shown. */
+  shown: string[][];
 }
 
 function deps(
   facts: WrittenMemory[],
-  opts: { batched?: boolean; seed?: Memory[] } = {},
+  opts: { batched?: boolean; seed?: Memory[]; scope?: Scope } = {},
 ): {
   spy: Spy;
   run: () => ReturnType<typeof observe>;
   store: ReturnType<typeof createMemoryStore>;
 } {
   const store = createMemoryStore({ d: config.activation.d, now: () => NOW });
-  const spy: Spy = { writeMany: 0, write: 0, reconcile: [], reconcileMany: 0, embeds: [] };
+  const spy: Spy = {
+    writeMany: 0,
+    write: 0,
+    reconcile: [],
+    reconcileMany: 0,
+    embeds: [],
+    shown: [],
+  };
   const decide: DecisionController = {
     async gate() {
       return gate;
     },
     async reconcile(o, candidates) {
       spy.reconcile.push(o.userText);
+      spy.shown.push(candidates.map((c) => c.id));
       return bySubject(o, candidates);
     },
     ...(opts.batched === true && {
       async reconcileMany(items: { obs: Observation; candidates: Memory[] }[]) {
         spy.reconcileMany++;
+        for (const it of items) spy.shown.push(it.candidates.map((c) => c.id));
         return items.map((it) => bySubject(it.obs, it.candidates));
       },
     }),
@@ -125,8 +137,8 @@ function deps(
     },
   };
   const run = async () => {
-    for (const m of opts.seed ?? []) await store.upsert(m);
-    return observe(obs, scope, {
+    for (const m of opts.seed ?? []) await store.upsert(TG, m);
+    return observe(obs, opts.scope ?? scope, {
       store,
       embed: embedder(spy.embeds),
       decide,
@@ -154,12 +166,14 @@ describe('observe with a multi-memory writer (CON-56)', () => {
     expect(spy.write).toBe(0);
     expect(spy.embeds).toHaveLength(1);
     expect(spy.embeds[0]).toHaveLength(3);
-    const stored = await store.list({
-      orgId: scope.orgId,
-      customerId: scope.customerId,
-      agentId: scope.agentId,
-      projectIds: [null],
-    });
+    const stored = await store.list(
+      localGrant({
+        orgId: scope.orgId,
+        customerId: scope.customerId,
+        agentId: scope.agentId,
+        projectIds: [null],
+      }),
+    );
     expect(stored.map((m) => m.text).sort()).toEqual([
       'CI on main is green.',
       'pnpm is the package manager.',
@@ -198,13 +212,13 @@ describe('observe with a multi-memory writer (CON-56)', () => {
     const r = await run();
     expect(r.memories.map((m) => m.outcome)).toEqual(['superseded', 'superseded']);
     const [ci, rel] = r.memories;
-    const ciPrior = await store.get('ci-red');
-    const relPrior = await store.get('release-planned');
+    const ciPrior = await store.get(TG, 'ci-red');
+    const relPrior = await store.get(TG, 'release-planned');
     // Each old status is closed by the new status about the same thing, never the other one.
     expect(ciPrior?.supersededBy).toBe(ci?.memoryId);
     expect(relPrior?.supersededBy).toBe(rel?.memoryId);
-    expect((await store.get(ci!.memoryId!))?.supersedes).toBe('ci-red');
-    expect((await store.get(rel!.memoryId!))?.supersedes).toBe('release-planned');
+    expect((await store.get(TG, ci!.memoryId!))?.supersedes).toBe('ci-red');
+    expect((await store.get(TG, rel!.memoryId!))?.supersedes).toBe('release-planned');
   });
 
   it('observe.multi.facts-from-one-turn-never-supersede-each-other', async () => {
@@ -213,7 +227,7 @@ describe('observe with a multi-memory writer (CON-56)', () => {
     const { run, store } = deps([fact('CI uses pnpm 12.'), fact('CI caches the store.')]);
     const r = await run();
     expect(r.memories.map((m) => m.outcome)).toEqual(['added', 'added']);
-    for (const m of r.memories) expect((await store.get(m.memoryId!))?.supersedes).toBeNull();
+    for (const m of r.memories) expect((await store.get(TG, m.memoryId!))?.supersedes).toBeNull();
   });
 
   it('observe.multi.a-prior-is-claimed-once', async () => {
@@ -229,8 +243,8 @@ describe('observe with a multi-memory writer (CON-56)', () => {
     });
     const r = await run();
     expect(r.memories.map((m) => m.outcome)).toEqual(['superseded', 'added']);
-    expect((await store.get('ci-red'))?.supersededBy).toBe(r.memories[0]?.memoryId);
-    const second = await store.get(r.memories[1]!.memoryId!);
+    expect((await store.get(TG, 'ci-red'))?.supersededBy).toBe(r.memories[0]?.memoryId);
+    const second = await store.get(TG, r.memories[1]!.memoryId!);
     expect(second?.supersedes).toBeNull();
     expect(second?.source.decisions.some((d) => d.question === 'prior-claimed')).toBe(true);
   });
@@ -275,5 +289,45 @@ describe('observe with a multi-memory writer (CON-56)', () => {
     });
     const r = await run();
     expect(r.counts).toEqual({ superseded: 1, added: 1 });
+  });
+
+  it('observe.multi.split-turn-cannot-touch-another-project', async () => {
+    // Project A's turn splits into a CI fact and a release fact. Project B holds a CI
+    // fact with the same subject and vector, the one Jev would supersede if it saw it.
+    const a = localScope('proj-a');
+    const b = localScope('proj-b');
+    for (const batched of [false, true]) {
+      const theirs = makeMemory({
+        id: 'b-ci',
+        validFrom: '2026-11-01T00:00:00.000Z',
+        scope: b,
+        text: 'CI on main is red.',
+        embedding: vec(100, 0, 0, 0),
+      });
+      const ours = makeMemory({
+        id: 'a-ci',
+        validFrom: '2026-11-01T00:00:00.000Z',
+        scope: a,
+        text: 'CI on main is red.',
+        embedding: vec(100, 0, 0, 0),
+      });
+      const { spy, run, store } = deps(
+        [fact('CI on main is green.', ['CI']), fact('release 1.2 shipped.', ['release'])],
+        { batched, seed: [theirs, ours], scope: a },
+      );
+      const r = await run();
+      // B's memory was never a candidate, so never superseded, reinforced or rewritten.
+      expect(spy.shown.flat()).not.toContain('b-ci');
+      const after = await store.get(TG, 'b-ci');
+      expect(after).toEqual(theirs);
+      // A's own same-subject memory is superseded as before; the release fact is new.
+      expect(r.counts).toEqual({ superseded: 1, added: 1 });
+      expect((await store.get(TG, 'a-ci'))?.endReason).toBe('superseded');
+      // Every memory the turn wrote is A's.
+      for (const m of r.memories) {
+        if (m.memoryId === undefined) continue;
+        expect((await store.get(TG, m.memoryId))?.scope).toEqual(a);
+      }
+    }
   });
 });

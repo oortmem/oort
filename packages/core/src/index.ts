@@ -4,6 +4,7 @@ export * from './scope.js';
 export * from './config.js';
 export * from './activation.js';
 export * from './adapters.js';
+export * from './grant.js';
 export * from './fusion.js';
 export * from './memory-store.js';
 export * from './tokenize.js';

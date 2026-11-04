@@ -6,6 +6,8 @@ import { localScope, type Embedder, type Memory } from '@oortmem/core';
 import { AWS_KEY, fakeIo, harness, memory, tmpdir, writeTranscript } from '../test/helpers.js';
 import { runCli } from './program.js';
 import { wire as realWire, type WireFn } from './wire.js';
+import { TG } from '@oortmem/core/store-conformance';
+import { localGrant } from '@oortmem/core';
 
 // The real wire, but never the real Keychain (tests may pass their own reader).
 const wire: WireFn = (cwd, opts) => realWire(cwd, { keychain: async () => undefined, ...opts });
@@ -59,7 +61,12 @@ describe('oort observe', () => {
     expect(r.io.stdout).toBe('');
     expect(
       await h.store.list(
-        { orgId: 'local', customerId: 'self', agentId: 'claude-code', projectIds: [null] },
+        localGrant({
+          orgId: 'local',
+          customerId: 'self',
+          agentId: 'claude-code',
+          projectIds: [null],
+        }),
         { validOnly: false },
       ),
     ).toEqual([]);
@@ -112,7 +119,7 @@ describe('oort inspect', () => {
       endReason: 'superseded',
       supersededBy: next.id,
     });
-    await h.store.upsertMany([
+    await h.store.upsertMany(TG, [
       closed(a, b),
       {
         ...closed(b, c),
@@ -179,7 +186,7 @@ describe('scope boundaries', () => {
       validFrom: '2026-09-10T00:00:00.000Z',
     });
     // A chain that crosses scopes (written before observe kept chains in one scope).
-    await h.store.upsertMany([
+    await h.store.upsertMany(TG, [
       {
         ...g,
         validTo: p.validFrom,
@@ -214,13 +221,13 @@ describe('scope boundaries', () => {
       expect(r.io.stdout, args.join(' ')).not.toContain(p.id);
     }
     // Storage is untouched.
-    expect((await h.store.get(g.id))?.supersededBy).toBe(p.id);
+    expect((await h.store.get(TG, g.id))?.supersededBy).toBe(p.id);
   });
 
   it('cli.pin-forget-refuse-out-of-scope-id', async () => {
     const h = harness();
     const p = memory({ text: 'another project fact', scope: elsewhere });
-    await h.store.upsert(p);
+    await h.store.upsert(TG, p);
     for (const args of [
       ['inspect', p.id],
       ['pin', p.id],
@@ -232,7 +239,7 @@ describe('scope boundaries', () => {
       expect(r.io.stderr).toMatch(/no such memory in this project/i);
       expect(r.io.stdout).not.toContain('another project fact');
     }
-    expect(await h.store.get(p.id)).toEqual(p);
+    expect(await h.store.get(TG, p.id)).toEqual(p);
   });
 });
 
@@ -240,7 +247,7 @@ describe('oort stats', () => {
   it('cli.stats-reports-tiers', async () => {
     const h = harness();
     const cold = memory({ text: 'cold fact' });
-    await h.store.upsertMany([
+    await h.store.upsertMany(TG, [
       memory({ tier: 'hot' }),
       memory({ tier: 'warm' }),
       memory({
@@ -257,7 +264,7 @@ describe('oort stats', () => {
       }),
       cold,
     ]);
-    await h.store.coldPut(cold);
+    await h.store.coldPut(TG, cold);
     fs.mkdirSync(path.join(h.home, 'queue', 'dead'), { recursive: true });
     fs.writeFileSync(path.join(h.home, 'queue', 's1.jsonl'), '{"a":1}\n{"a":2}\n');
     fs.writeFileSync(path.join(h.home, 'queue', 'dead', 's1.jsonl'), '{"a":3}\n');
@@ -360,9 +367,9 @@ describe('oort export', () => {
       createdAt: '2026-10-03T00:00:00.000Z',
     });
     const elsewhere = memory({ text: 'another project', scope: localScope('other-1234abcd') });
-    await h.store.upsertMany([warm, cold, noEmbedding, elsewhere]);
-    await h.store.coldPut(cold);
-    expect((await h.store.get(cold.id))?.embedding).toBeUndefined();
+    await h.store.upsertMany(TG, [warm, cold, noEmbedding, elsewhere]);
+    await h.store.coldPut(TG, cold);
+    expect((await h.store.get(TG, cold.id))?.embedding).toBeUndefined();
 
     fs.mkdirSync(h.home, { recursive: true });
     const file = path.join(h.home, 'export.jsonl');
@@ -405,7 +412,7 @@ describe('oort export, scope', () => {
     const a = memory({ text: 'global a', createdAt: '2026-09-01T00:00:00.000Z' });
     const p = memory({ text: 'project p', scope: other, createdAt: '2026-09-02T00:00:00.000Z' });
     const b = memory({ text: 'global b', createdAt: '2026-09-03T00:00:00.000Z' });
-    await h.store.upsertMany([
+    await h.store.upsertMany(TG, [
       { ...a, supersededBy: p.id, validTo: p.validFrom, endReason: 'superseded' },
       { ...p, supersedes: a.id, supersededBy: b.id },
       { ...b, supersedes: p.id },
@@ -433,7 +440,7 @@ describe('oort export, scope', () => {
     ]);
     // In-scope links keep their ids.
     const c = memory({ text: 'global c', supersedes: b.id, createdAt: '2026-09-04T00:00:00.000Z' });
-    await h.store.upsert(c);
+    await h.store.upsert(TG, c);
     const again = (await h.run(['export'])).io.stdout;
     expect(again).toContain(`"supersedes":"${b.id}"`);
   });
@@ -442,7 +449,7 @@ describe('oort export, scope', () => {
 describe('oort export --out', () => {
   it('cli.export-out-refuses-existing-and-symlinks', async () => {
     const h = harness();
-    await h.store.upsert(memory());
+    await h.store.upsert(TG, memory());
     fs.mkdirSync(h.home, { recursive: true });
     const file = path.join(h.root, 'out.jsonl');
     fs.writeFileSync(file, 'keep me');
@@ -531,37 +538,37 @@ describe('oort forget, pin', () => {
   it('cli.forget-refuses-non-tty-without-yes', async () => {
     const h = harness();
     const m = memory({ text: 'secret-ish memory text' });
-    await h.store.upsert(m);
+    await h.store.upsert(TG, m);
 
     const refused = await h.run(['forget', m.id]);
     expect(refused.code).toBe(2);
     expect(refused.io.stderr).toMatch(/--yes/);
     expect(refused.io.stderr).not.toContain(m.text);
-    expect(await h.store.get(m.id)).not.toBeNull();
+    expect(await h.store.get(TG, m.id)).not.toBeNull();
 
     const declined = await h.run(['forget', m.id], { tty: true, answer: 'n' });
     expect(declined.code).toBe(0);
     expect(declined.io.asked).toHaveLength(1);
-    expect(await h.store.get(m.id)).not.toBeNull();
+    expect(await h.store.get(TG, m.id)).not.toBeNull();
 
     const yes = await h.run(['forget', m.id.slice(0, 8), '--yes']);
     expect(yes.code).toBe(0);
-    expect(await h.store.get(m.id)).toBeNull();
+    expect(await h.store.get(TG, m.id)).toBeNull();
   });
 
   it('cli.pin-unpin', async () => {
     const h = harness();
     const m = memory();
-    await h.store.upsert(m);
+    await h.store.upsert(TG, m);
     expect((await h.run(['pin', m.id])).code).toBe(0);
-    expect((await h.store.get(m.id))?.pinned).toBe(true);
+    expect((await h.store.get(TG, m.id))?.pinned).toBe(true);
     expect((await h.run(['unpin', m.id])).code).toBe(0);
-    expect((await h.store.get(m.id))?.pinned).toBe(false);
+    expect((await h.store.get(TG, m.id))?.pinned).toBe(false);
   });
 
   it('cli.consolidate-prints-skipped', async () => {
     const h = harness();
-    await h.store.upsert(memory({ validTo: '2026-10-02T00:00:00.000Z' }));
+    await h.store.upsert(TG, memory({ validTo: '2026-10-02T00:00:00.000Z' }));
     const r = await h.run(['consolidate']);
     expect(r.code).toBe(0);
     // Updated deliberately for the ui module: one header line, then aligned rows.
@@ -582,7 +589,7 @@ describe('oort hook (in process)', () => {
 
   it('cli.hook-injects-recall', async () => {
     const h = harness();
-    await h.store.upsert(memory());
+    await h.store.upsert(TG, memory());
     const r = await h.run(['hook', 'UserPromptSubmit'], { stdin: prompt(h.cwd) });
     expect(r.code).toBe(0);
     expect(r.io.hookExits).toBe(1);
@@ -595,7 +602,7 @@ describe('oort hook (in process)', () => {
 
   it('cli.hook-log-records-wiring-time', async () => {
     const h = harness();
-    await h.store.upsert(memory());
+    await h.store.upsert(TG, memory());
     await h.run(['hook', 'UserPromptSubmit'], { stdin: prompt(h.cwd) });
     const [line] = readLines(path.join(h.home, 'logs', 'hooks.log'));
     // Wiring reads the config and the keys (the keychain), so a slow keychain shows here.
@@ -676,7 +683,7 @@ describe('oort hook (in process)', () => {
 
     // A write inside the handler hit the lock: no context is injected.
     const b = harness();
-    await b.store.upsert(memory());
+    await b.store.upsert(TG, memory());
     const inner = b.wire;
     b.wire = async (cwd, o) => {
       const w = await inner(cwd, o);
@@ -698,7 +705,7 @@ describe('oort hook (in process)', () => {
 
   it('cli.hook-slow-adapters-in-process', async () => {
     const h = harness();
-    await h.store.upsert(memory());
+    await h.store.upsert(TG, memory());
     const never: Embedder = { dimension: 4, embed: () => new Promise(() => {}) };
     const inner = h.wire;
     h.wire = async (cwd, o) => ({ ...(await inner(cwd, o)), embed: never });
@@ -727,12 +734,14 @@ describe('oort import (in process)', () => {
     expect(est.code).toBe(0);
     expect(est.io.stdout).toMatch(/observations\s+[1-9]/);
     expect(
-      await h.store.list({
-        orgId: 'local',
-        customerId: 'self',
-        agentId: 'claude-code',
-        projectIds: [null],
-      }),
+      await h.store.list(
+        localGrant({
+          orgId: 'local',
+          customerId: 'self',
+          agentId: 'claude-code',
+          projectIds: [null],
+        }),
+      ),
     ).toEqual([]);
 
     const run = await h.run([
@@ -747,12 +756,14 @@ describe('oort import (in process)', () => {
     expect(run.io.stdout).toMatch(/added [1-9]/);
     expect(
       (
-        await h.store.list({
-          orgId: 'local',
-          customerId: 'self',
-          agentId: 'claude-code',
-          projectIds: [null],
-        })
+        await h.store.list(
+          localGrant({
+            orgId: 'local',
+            customerId: 'self',
+            agentId: 'claude-code',
+            projectIds: [null],
+          }),
+        )
       ).length,
     ).toBeGreaterThan(0);
 
@@ -926,7 +937,7 @@ describe('wire', () => {
     try {
       expect(w.config.embed.dimension).toBe(512);
       expect(w.warnings.map((x) => x.code)).toEqual(['embed-dimension-ignored']);
-      await w.store.upsert(memory({ embedding: new Int8Array(512) }));
+      await w.store.upsert(TG, memory({ embedding: new Int8Array(512) }));
     } finally {
       await w.close();
     }
