@@ -495,7 +495,7 @@ function tomlChange(
   // `oort` entry cannot be edited as a block, so it fails here).
   const after = read(text);
   const expected: Json = { ...cfg };
-  const nextServers: Json = { ...(servers ?? {}) };
+  const nextServers: Json = { ...servers };
   if (want === undefined) delete nextServers[SERVER_NAME];
   else nextServers[SERVER_NAME] = want;
   if (Object.keys(nextServers).length > 0) expected['mcp_servers'] = nextServers;
