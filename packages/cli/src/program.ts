@@ -1,5 +1,6 @@
 import { Command, CommanderError } from 'commander';
 import { VERSION } from '@oortmem/core';
+import { connectCommand } from './commands/connect.js';
 import { consolidateCommand } from './commands/consolidate.js';
 import { explainCommand } from './commands/explain.js';
 import { exportCommand } from './commands/export.js';
@@ -57,6 +58,24 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<harness>', 'claude-code')
     .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
     .action(run((h: string, o: { project?: boolean }) => installCommand('uninstall', h, o, ctx)));
+
+  p.command('connect')
+    .description('add the oort MCP server to an agent host (backs up the file, prints the diff)')
+    .argument('<hosts...>', 'claude-desktop, claude-code, codex, cursor, gemini or vscode')
+    .option('--dry-run', 'print the diff without writing')
+    .action(
+      run((hosts: string[], o: { dryRun?: boolean }) => connectCommand('connect', hosts, o, ctx)),
+    );
+
+  p.command('disconnect')
+    .description("remove the oort MCP server from an agent host's config")
+    .argument('<hosts...>', 'claude-desktop, claude-code, codex, cursor, gemini or vscode')
+    .option('--dry-run', 'print the diff without writing')
+    .action(
+      run((hosts: string[], o: { dryRun?: boolean }) =>
+        connectCommand('disconnect', hosts, o, ctx),
+      ),
+    );
 
   p.command('hook')
     .description('run a Claude Code hook (reads the hook JSON on stdin; always exits 0)')

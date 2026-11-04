@@ -427,4 +427,36 @@ describe('oort bin', () => {
     const global = await whoami(['mcp'], s.cwd);
     expect(global['project']).toBeNull();
   });
+
+  it('cli.connect-disconnect-roundtrip', async () => {
+    const s = sandbox();
+    const bin = fs.realpathSync(BIN);
+    const cursor = path.join(s.home, '.cursor', 'mcp.json');
+    fs.mkdirSync(path.dirname(cursor), { recursive: true });
+    const original = '{\n  "mcpServers": {\n    "github": { "command": "gh-mcp" }\n  }\n}\n';
+    fs.writeFileSync(cursor, original);
+    const codex = path.join(s.home, '.codex', 'config.toml');
+
+    const r = await oort(s, ['connect', 'cursor', 'codex']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('oort connect cursor');
+    expect(r.stdout).toContain('+ mcpServers.oort.command');
+    expect(r.stdout).toContain('+ mcp_servers.oort.args');
+    expect(r.stdout).toContain(`${cursor}.oort-backup`);
+    expect(r.stdout).toContain('oort disconnect cursor');
+    const entry = (
+      JSON.parse(fs.readFileSync(cursor, 'utf8')) as { mcpServers: Record<string, unknown> }
+    ).mcpServers['oort'];
+    expect(entry).toEqual({ type: 'stdio', command: bin, args: ['mcp'] });
+    expect(fs.readFileSync(codex, 'utf8')).toContain(`command = ${JSON.stringify(bin)}`);
+
+    const again = await oort(s, ['connect', 'cursor']);
+    expect(again.exitCode).toBe(0);
+    expect(again.stdout).toMatch(/already connected/);
+
+    const un = await oort(s, ['disconnect', 'cursor', 'codex']);
+    expect(un.exitCode).toBe(0);
+    expect(fs.readFileSync(cursor, 'utf8')).toBe(original);
+    expect(fs.readFileSync(codex, 'utf8')).toBe('');
+  });
 });
