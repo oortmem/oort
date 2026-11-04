@@ -19,7 +19,7 @@ import {
   hostConfigPath,
   type Host,
 } from '../connectors.js';
-import { PROVIDERS, PROVIDER_ENV, type Provider } from '../keychain.js';
+import { PROVIDER_ENV, VENDORS, type Vendor } from '../keychain.js';
 import { rememberFacts } from '../remember.js';
 import { uiFor, type Ui } from '../ui.js';
 import { Refusal, echo, tilde, withWired, type Ctx } from '../util.js';
@@ -74,7 +74,7 @@ export interface SetupDeps {
 
 const STEPS = 6;
 
-const KEY_HELP: Record<Provider, { label: string; url: string; needs: string }> = {
+const KEY_HELP: Record<Vendor, { label: string; url: string; needs: string }> = {
   voyage: {
     label: 'Voyage AI',
     url: 'https://docs.voyageai.com/docs/api-key-and-installation',
@@ -351,12 +351,12 @@ export async function setupCommand(
 
     // 2. Keys.
     p.step(2, 'Choose keys');
-    const sources = new Map<Provider, string>();
-    for (const provider of PROVIDERS) sources.set(provider, await keySource(provider, ctx));
-    const missing = PROVIDERS.filter((k) => sources.get(k) === 'missing');
+    const sources = new Map<Vendor, string>();
+    for (const provider of VENDORS) sources.set(provider, await keySource(provider, ctx));
+    const missing = VENDORS.filter((k) => sources.get(k) === 'missing');
     p.info(
       ui.kv(
-        PROVIDERS.map((k) => [
+        VENDORS.map((k) => [
           k,
           sources.get(k) === 'missing' ? ui.yellow('missing') : ui.green(sources.get(k) ?? ''),
         ]),

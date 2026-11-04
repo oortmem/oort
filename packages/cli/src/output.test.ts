@@ -23,7 +23,8 @@ describe('consistent output', () => {
       const lines = r.io.stdout.split('\n');
       expect(lines[0], args.join(' ')).toMatch(new RegExp(`^oort ${args[0]}`));
       // Exactly one header line.
-      expect(lines.filter((l) => l.startsWith('oort ')).length, args.join(' ')).toBe(1);
+      // A header is `oort <command>`; `keys list`'s padded `oort       …` row is a key, not a header.
+      expect(lines.filter((l) => /^oort \S/.test(l)).length, args.join(' ')).toBe(1);
       expect(r.io.stdout, args.join(' ')).not.toContain(ESC);
     }
     for (const args of [

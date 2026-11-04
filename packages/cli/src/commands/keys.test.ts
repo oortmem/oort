@@ -38,7 +38,7 @@ describe('oort keys', () => {
     expect(r.code).toBe(0);
     // Updated deliberately for the ui module: one header line, then aligned rows.
     expect(r.io.stdout).toBe(
-      'oort keys list\nvoyage     keychain  oort.voyage\ntypesafe   env       TYPESAFE_API_KEY\nanthropic  missing   oort keys set anthropic\n',
+      'oort keys list\nvoyage     keychain  oort.voyage\ntypesafe   env       TYPESAFE_API_KEY\nanthropic  missing   oort keys set anthropic\noort       missing   oort login (Oort Pro)\n',
     );
     const json = await h.run(
       ['keys', 'list', '--json'],
@@ -49,11 +49,28 @@ describe('oort keys', () => {
       { provider: 'voyage', envVar: 'VOYAGE_API_KEY', source: 'keychain' },
       { provider: 'typesafe', envVar: 'TYPESAFE_API_KEY', source: 'env' },
       { provider: 'anthropic', envVar: 'ANTHROPIC_API_KEY', source: 'missing' },
+      { provider: 'oort', envVar: 'OORT_API_KEY', source: 'missing' },
     ]);
     expect(json.io.stdout).not.toContain(key);
     expect(json.io.stdout).not.toContain(key2);
     expect(r.io.stdout + r.io.stderr).not.toContain(key);
     expect(r.io.stdout + r.io.stderr).not.toContain(key2);
+  });
+
+  it('keys.list-shows-the-oort-key-presence-only', async () => {
+    const key = ['oort', 'sk', planted()].join('_');
+    const h = harness();
+    const { kc } = fakeKeychain({ 'oort.oort': key });
+    const r = await h.run(['keys', 'list'], {}, kc);
+    expect(r.io.stdout).toContain('oort       keychain  oort.oort');
+    expect(r.io.stdout + r.io.stderr).not.toContain(key);
+    const env = await h.run(['keys', 'list', '--json'], { env: { OORT_API_KEY: key } }, kc);
+    expect(JSON.parse(env.io.stdout)).toContainEqual({
+      provider: 'oort',
+      envVar: 'OORT_API_KEY',
+      source: 'env',
+    });
+    expect(env.io.stdout).not.toContain(key);
   });
 
   it('keys.set-delegates-to-security-and-rm-deletes', async () => {

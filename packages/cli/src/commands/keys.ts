@@ -59,7 +59,9 @@ export async function keysListCommand(opts: { json?: boolean }, ctx: Ctx): Promi
       ? r.envVar
       : r.source === 'keychain'
         ? `oort.${r.provider}`
-        : `oort keys set ${r.provider}`;
+        : r.provider === 'oort'
+          ? 'oort login (Oort Pro)'
+          : `oort keys set ${r.provider}`;
   const shown = (s: KeySource): string =>
     (s === 'missing' ? ui.yellow : ui.green)(s.padEnd('keychain'.length));
   ctx.io.out(ui.header('keys list'));

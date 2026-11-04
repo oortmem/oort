@@ -173,11 +173,11 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
 
   const keys = p
     .command('keys')
-    .description('provider keys in the macOS Keychain (voyage, typesafe, anthropic)');
+    .description('provider keys in the macOS Keychain (voyage, typesafe, anthropic, oort)');
   keys
     .command('set')
     .description('store a key; the Keychain prompts for it (never in argv or history)')
-    .argument('<provider>', 'voyage, typesafe or anthropic')
+    .argument('<provider>', 'voyage, typesafe, anthropic or oort')
     .action(run((provider: string) => keysSetCommand(provider, ctx)));
   keys
     .command('list')
@@ -187,7 +187,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
   keys
     .command('rm')
     .description('delete a key from the Keychain')
-    .argument('<provider>', 'voyage, typesafe or anthropic')
+    .argument('<provider>', 'voyage, typesafe, anthropic or oort')
     .action(run((provider: string) => keysRmCommand(provider, ctx)));
 
   p.command('import')
