@@ -40,6 +40,12 @@ export interface RelayDeps {
 }
 
 export const MAX_BODY_BYTES = 256 * 1024;
+/** The writer's prompt plus 32 KB of user and assistant text each fits well inside this. */
+export const MAX_MESSAGES_BODY_BYTES = 128 * 1024;
+/** Per-field caps; one over returns 413 before any upstream call or metering. */
+export const MAX_RERANK_QUERY_BYTES = 2 * 1024;
+export const MAX_RERANK_DOCUMENT_BYTES = 4 * 1024;
+export const MAX_EMBED_INPUT_BYTES = 8 * 1024;
 /** Jev requests are small: state plus a handful of questions. */
 export const MAX_TYPESAFE_BODY_BYTES = 64 * 1024;
 export const ACCOUNT_URL = 'https://oortcloud.dev/account';
@@ -70,7 +76,7 @@ export const PLAN_LIMITS = {
     recalls: 50_000,
     embed_inputs: 200_000,
     rerank_calls: 60_000,
-    decide_calls: 60_000,
+    decide_calls: 150_000,
   },
 } as const satisfies Record<string, Record<Counter, number>>;
 
@@ -108,7 +114,11 @@ export const MAX_OUTPUT_TOKENS = 2048;
 export const MAX_DECIDE_QUESTIONS = 32;
 
 type Check =
-  | { error: string }
+  | {
+      error: string;
+      /** 413 for a field over its size cap; 400 (the default) for anything else. */
+      status?: 413;
+    }
   | {
       /** The checked object; this, re-serialised, is what goes upstream. */
       body: Record<string, unknown>;
@@ -138,6 +148,16 @@ function unknownKey(o: Record<string, unknown>, allowed: ReadonlySet<string>): s
   return Object.keys(o).find((k) => !allowed.has(k));
 }
 
+const encoder = new TextEncoder();
+/** True when `s` is longer than `max` UTF-8 bytes. */
+const overBytes = (s: string, max: number): boolean =>
+  s.length > max || (s.length * 3 > max && encoder.encode(s).byteLength > max);
+
+const tooLarge = (what: string, max: number): { error: string; status: 413 } => ({
+  error: `${what} is larger than ${max / 1024} KB.`,
+  status: 413,
+});
+
 const notAvailable = (field: string): { error: string } => ({
   error: `${field} is not available through Oort Pro.`,
 });
@@ -165,6 +185,13 @@ function checkEmbeddings(b: Record<string, unknown>): Check {
   if (n < 1) return { error: 'input must be a string or a non-empty list of strings.' };
   if (n > MAX_EMBED_INPUTS) {
     return { error: `Send at most ${MAX_EMBED_INPUTS} inputs per embeddings call.` };
+  }
+  if (
+    (typeof input === 'string' ? [input] : (input as string[])).some((t) =>
+      overBytes(t, MAX_EMBED_INPUT_BYTES),
+    )
+  ) {
+    return tooLarge('An embedding input', MAX_EMBED_INPUT_BYTES);
   }
   const kind = b['input_type'];
   if (kind !== 'query' && kind !== 'document') {
@@ -201,7 +228,16 @@ function checkRerank(b: Record<string, unknown>): Check {
     return { error: 'documents must be a non-empty list of strings.' };
   }
   if (docs.length > MAX_RERANK_DOCUMENTS) {
-    return { error: `Send at most ${MAX_RERANK_DOCUMENTS} documents per rerank call.` };
+    return {
+      error: `Send at most ${MAX_RERANK_DOCUMENTS} documents per rerank call.`,
+      status: 413,
+    };
+  }
+  if (overBytes(b['query'], MAX_RERANK_QUERY_BYTES)) {
+    return tooLarge('The rerank query', MAX_RERANK_QUERY_BYTES);
+  }
+  if (docs.some((d) => overBytes(d, MAX_RERANK_DOCUMENT_BYTES))) {
+    return tooLarge('A rerank document', MAX_RERANK_DOCUMENT_BYTES);
   }
   // The rerank in an engine recall is not a second recall, but it is counted as a rerank call
   // and stops at the recall cap like the rest of the recall.
@@ -366,7 +402,7 @@ export const ROUTES: readonly Route[] = [
     path: '/v1/anthropic/v1/messages',
     upstream: 'https://api.anthropic.com/v1/messages',
     provider: 'anthropic',
-    maxBytes: MAX_BODY_BYTES,
+    maxBytes: MAX_MESSAGES_BODY_BYTES,
     check: checkMessages,
   },
 ];
@@ -653,7 +689,7 @@ export async function handleRelay(
   }
   if (!isObj(parsed)) return fail(400, 'The request body must be a JSON object.');
   const c = route.check(parsed);
-  if ('error' in c) return fail(400, c.error);
+  if ('error' in c) return fail(c.status ?? 400, c.error);
 
   const month = now.toISOString().slice(0, 7);
   const account = row.account_id;
@@ -702,7 +738,9 @@ export async function handleRelay(
       body: JSON.stringify(c.body),
     });
   } catch {
-    settle(true);
+    // The caller left (it closed the connection): the provider may well have done the work, so the
+    // reservation stays. A failure with the caller still there is refunded.
+    settle(!request.signal.aborted);
     return fail(502, 'The provider could not be reached. Try again in a moment.');
   }
 

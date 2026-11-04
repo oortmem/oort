@@ -154,7 +154,7 @@ describe('review C1: every forwarded call is metered and capped', () => {
     const { send, db, calls } = await setup([KEY]);
     await db
       .prepare(
-        "INSERT INTO usage (account_id, month, embed_inputs, rerank_calls, decide_calls) VALUES ('acc_1','2026-11',199999,60000,60000)",
+        "INSERT INTO usage (account_id, month, embed_inputs, rerank_calls, decide_calls) VALUES ('acc_1','2026-11',199999,60000,150000)",
       )
       .run();
     const two = JSON.stringify({

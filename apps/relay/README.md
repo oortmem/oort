@@ -25,8 +25,9 @@ accepted, for the Anthropic SDK's default header).
 | `/v1/typesafe/v1/systemone` | `https://api.typesafe.ai/v1/systemone`   | only this path (the one `@typesafe-ai/sdk` 0.7.0 calls); `{state, questions, model}` with model `jev-latest`, 1 to 32 noul, score or choice questions, 64 KB |
 | `/v1/anthropic/v1/messages` | `https://api.anthropic.com/v1/messages`  | model `claude-haiku-5-5`, `max_tokens` 1 to 2048, text-only content, top-level fields from an allowlist                                                      |
 
-Every body must be uncompressed `application/json` and is capped at 256 KB (64 KB for Jev; 413
-above that). Unknown top-level fields are refused with 400 on every route. The Anthropic allowlist is
+Every body must be uncompressed `application/json` and is capped at 256 KB (128 KB for Anthropic, 64 KB for Jev;
+413 above that). Fields have caps too, also 413 with no upstream call and no metering: a rerank
+`query` 2 KB, a rerank document 4 KB (at most 100 documents), an embedding input 8 KB. Unknown top-level fields are refused with 400 on every route. The Anthropic allowlist is
 `model`, `max_tokens`, `messages`, `system`, `stop_sequences`, `metadata` (`user_id` only),
 `stream`, `thinking` and `output_config` (`format` as a JSON schema, `effort`); message and system
 content may only be strings or `{type: "text", text}` blocks, so no URL documents or images, and no
@@ -60,7 +61,7 @@ Client base URLs:
   | `recalls`      | 50,000  | one per embedding call with `input_type: "query"` |                                       |
   | `embed_inputs` | 200,000 | every embedding input, query or document          | the save cap, for document embeddings |
   | `rerank_calls` | 60,000  | one per rerank call                               | the recall cap                        |
-  | `decide_calls` | 60,000  | one per Jev call                                  | the save cap                          |
+  | `decide_calls` | 150,000 | one per Jev call (the gate runs one every turn)   | the save cap                          |
 
   `saves` and `recalls` are the user-facing units and equal `rates.managed.Pro` in
   `apps/site/src/lib/oort-data.ts` (a test keeps them equal). At a cap the relay returns 429 with
@@ -69,7 +70,9 @@ Client base URLs:
 - **Metering.** Capacity is reserved before the call with one conditional upsert (`... DO UPDATE
 ... WHERE usage.saves + 1 <= 25000 AND ...`), so concurrent calls cannot pass a cap. The
   reservation is refunded (in `ctx.waitUntil`) when the provider did no work: a network failure, a
-  401 or 403 (our key), a 429 or a 5xx. `api_keys.last_used_at` is updated at the same time.
+  401 or 403 (our key), a 429 or a 5xx. When the client disconnected first (the request's signal
+  is aborted), the reservation is kept, because the provider may have done the work.
+  `api_keys.last_used_at` is updated at the same time.
 
 ## No content, no key leaks
 

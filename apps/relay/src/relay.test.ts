@@ -92,7 +92,12 @@ function setup(opts: { status?: string; plan?: string; revoked?: boolean; limit?
   const send = async (
     path: string,
     body: unknown,
-    init: { key?: string | null; headers?: Record<string, string>; method?: string } = {},
+    init: {
+      key?: string | null;
+      headers?: Record<string, string>;
+      method?: string;
+      signal?: AbortSignal;
+    } = {},
   ) => {
     const headers = new Headers(init.headers);
     const key = init.key === undefined ? CALLER_KEY : init.key;
@@ -104,6 +109,7 @@ function setup(opts: { status?: string; plan?: string; revoked?: boolean; limit?
     const req = new Request(`https://relay.oortcloud.dev${path}`, {
       method,
       headers,
+      ...(init.signal === undefined ? {} : { signal: init.signal }),
       ...(method === 'GET' || method === 'HEAD'
         ? {}
         : { body: typeof body === 'string' ? body : JSON.stringify(body) }),
@@ -265,7 +271,7 @@ describe('allowlists and size caps', () => {
     ['embed: 129 inputs', '/v1/voyage/embeddings', embedBody(129), 400],
     ['embed: no input', '/v1/voyage/embeddings', { model: 'voyage-3.5-lite' }, 400],
     ['rerank: full model', '/v1/voyage/rerank', rerankBody(3, 'rerank-2.5'), 400],
-    ['rerank: 101 documents', '/v1/voyage/rerank', rerankBody(101), 400],
+    ['rerank: 101 documents', '/v1/voyage/rerank', rerankBody(101), 413],
     [
       'messages: other model',
       '/v1/anthropic/v1/messages',
@@ -725,7 +731,7 @@ describe('metering', () => {
       recalls: 50_000,
       embed_inputs: 200_000,
       rerank_calls: 60_000,
-      decide_calls: 60_000,
+      decide_calls: 150_000,
     });
   });
 
@@ -893,5 +899,100 @@ describe('GET /health', () => {
     const post = await r.send('/health', {}, { key: null });
     expect(post.status).toBe(405);
     expect(post.headers.get('allow')).toBe('GET, HEAD');
+  });
+});
+
+describe('size caps', () => {
+  const KB = 1024;
+  const none = async (s: ReturnType<typeof setup>) => {
+    expect(s.calls).toHaveLength(0);
+    expect(await s.usage()).toBeNull();
+  };
+
+  it('caps an Anthropic body at 128 KB and still takes one just under it', async () => {
+    const s = setup();
+    await s.seed();
+    const over = messagesBody({ messages: [{ role: 'user', content: 'x'.repeat(128 * KB) }] });
+    expect((await s.send('/v1/anthropic/v1/messages', over)).status).toBe(413);
+    await none(s);
+    const fits = messagesBody({ messages: [{ role: 'user', content: 'x'.repeat(127 * KB) }] });
+    expect((await s.send('/v1/anthropic/v1/messages', fits)).status).toBe(200);
+  });
+
+  it.each([
+    [
+      'a rerank query over 2 KB',
+      '/v1/voyage/rerank',
+      () => ({ ...rerankBody(), query: 'q'.repeat(2 * KB + 1) }),
+    ],
+    [
+      'a rerank document over 4 KB',
+      '/v1/voyage/rerank',
+      () => ({ ...rerankBody(2), documents: ['ok', 'd'.repeat(4 * KB + 1)] }),
+    ],
+    ['more than 100 rerank documents', '/v1/voyage/rerank', () => rerankBody(101)],
+    [
+      'an embedding input over 8 KB',
+      '/v1/voyage/embeddings',
+      () => ({ ...embedBody(1), input: ['e'.repeat(8 * KB + 1)] }),
+    ],
+    [
+      'an embedding string input over 8 KB',
+      '/v1/voyage/embeddings',
+      () => ({ ...embedBody(1), input: 'e'.repeat(8 * KB + 1) }),
+    ],
+    [
+      'an embedding input over 8 KB in bytes, not characters',
+      '/v1/voyage/embeddings',
+      () => ({ ...embedBody(1), input: ['😀'.repeat(2 * KB + 1)] }),
+    ],
+  ])('returns 413 with no upstream call or metering for %s', async (_n, path, body) => {
+    const s = setup();
+    await s.seed();
+    expect((await s.send(path, body())).status).toBe(413);
+    await none(s);
+  });
+
+  it('accepts inputs exactly at the caps', async () => {
+    const s = setup();
+    await s.seed();
+    const rr = {
+      ...rerankBody(2),
+      query: 'q'.repeat(2 * KB),
+      documents: ['d'.repeat(4 * KB), 'd'],
+    };
+    expect((await s.send('/v1/voyage/rerank', rr)).status).toBe(200);
+    const em = { ...embedBody(1), input: ['e'.repeat(8 * KB)] };
+    expect((await s.send('/v1/voyage/embeddings', em)).status).toBe(200);
+    expect((await s.send('/v1/voyage/rerank', rerankBody(100))).status).toBe(200);
+  });
+});
+
+describe('a caller who left', () => {
+  const abortedFetch = (ctl: AbortController) => (): Response => {
+    ctl.abort();
+    throw new Error('The operation was aborted');
+  };
+
+  it('keeps the reservation when the client disconnected before the upstream answered', async () => {
+    const s = setup();
+    await s.seed();
+    const ctl = new AbortController();
+    s.respond(abortedFetch(ctl));
+    const res = await s.send('/v1/anthropic/v1/messages', messagesBody(), { signal: ctl.signal });
+    expect(res.status).toBe(502);
+    expect(await s.usage()).toEqual({ saves: 1, recalls: 0 });
+  });
+
+  it('still refunds when the upstream failed and the client is still there', async () => {
+    const s = setup();
+    await s.seed();
+    s.respond(() => {
+      throw new Error('boom');
+    });
+    const ctl = new AbortController();
+    const res = await s.send('/v1/anthropic/v1/messages', messagesBody(), { signal: ctl.signal });
+    expect(res.status).toBe(502);
+    expect(await s.usage()).toEqual({ saves: 0, recalls: 0 });
   });
 });
