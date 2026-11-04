@@ -1,0 +1,58 @@
+name: Release
+
+# Publishes every package in packages/* (except the private bench) to npm when a v* tag is pushed.
+# No npm token exists: npm trusts this workflow through OIDC (trusted publishing) and attaches a
+# provenance statement to each package. The `npm` environment requires Marcus's approval.
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing and provenance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0 (reads packageManager)
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@11.20.0 && npm --version
+      - run: pnpm install --frozen-lockfile
+      - name: Tag matches every package version
+        run: node scripts/release-check.mjs "${GITHUB_REF_NAME#v}"
+      - run: pnpm verify
+      - name: Pack (pnpm resolves workspace:* to the release version)
+        run: |
+          mkdir -p "$RUNNER_TEMP/pack"
+          pnpm -r --filter './packages/*' --filter '!@oortmem/bench' pack --pack-destination "$RUNNER_TEMP/pack"
+          ls -l "$RUNNER_TEMP/pack"
+      - name: Publish in dependency order (skips versions already on npm)
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          v="${VERSION#v}"
+          for name in core store-sqlite writer decide-jev embed-voyage rerank-voyage claude-code; do
+            pkg="@oortmem/$name"; file="$RUNNER_TEMP/pack/oortmem-$name-$v.tgz"
+            if npm view "$pkg@$v" version >/dev/null 2>&1; then echo "skip $pkg@$v (already published)"; continue; fi
+            npm publish "$file" --access public --provenance
+          done
+          if npm view "oortmem@$v" version >/dev/null 2>&1; then echo "skip oortmem@$v"; else
+            npm publish "$RUNNER_TEMP/pack/oortmem-$v.tgz" --access public --provenance
+          fi

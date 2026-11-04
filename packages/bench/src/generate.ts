@@ -336,12 +336,12 @@ function chainStatements(rng: Rng, subject: string): string[] {
     return [...ports].map((p) => `${subject} listens on port ${p} in local development.`);
   }
   if (kind === 1) {
-    const tools = [...TOOLS].sort(() => rng.next() - 0.5).slice(0, 3);
+    const tools = rng.shuffle(TOOLS).slice(0, 3);
     return tools.map(
       (t) => `${subject} installs dependencies with ${t} and pins the lockfile in CI.`,
     );
   }
-  const libs = [...LIBS].sort(() => rng.next() - 0.5).slice(0, 3);
+  const libs = rng.shuffle(LIBS).slice(0, 3);
   return libs.map((l) => `${subject} validates requests with ${l} in its request handlers.`);
 }
 
