@@ -103,6 +103,28 @@ describe('UserPromptSubmit', () => {
     expect(line?.counts['memories']).toBe(1);
   });
 
+  it('hook.prompt-records-access-only-for-injected-memories (CON-47)', async () => {
+    const t = tempHome();
+    const second = makeMemory({
+      id: 'm-port-2',
+      text: `The auth service port 4471 note ${'x'.repeat(400)}`,
+      stub: 'auth port 4471',
+    });
+    const deps = await withMemories(t, PORT_MEMORY, second);
+    // Room for one line: the second recalled memory is cut by the injection budget.
+    const config = { ...t.config, recall: { ...t.config.recall, budgetChars: 120 } };
+    const out = await handleUserPromptSubmit(prompt(t, 'which port does the auth service use?'), {
+      ...deps,
+      config,
+    });
+    const ctx = context(out.stdout, 'UserPromptSubmit');
+    expect(ctx).toContain('The auth service listens on port 4471.');
+    expect(ctx).not.toContain('note');
+    expect((await deps.store.get(TG, 'm-port'))?.accessLog.count).toBe(1);
+    expect((await deps.store.get(TG, 'm-port-2'))?.accessLog.count).toBe(0);
+    expect(readLog(t.home)[0]?.counts['memories']).toBe(1);
+  });
+
   it('hook.prompt-skips-trivial-silently', async () => {
     const t = tempHome();
     const base = await withMemories(t, PORT_MEMORY);

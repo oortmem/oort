@@ -118,9 +118,11 @@ export async function handleUserPromptSubmit(
     }
     const scope = scopeFor(input.cwd, deps);
     entry.project = scope.projectId ?? null;
-    const q: RecallQuery = { text: input.prompt, scope: filterFor(scope) };
-    const now = deps.now?.() ?? new Date();
     const { store, config } = deps;
+    const budget = Math.min(config.recall.budgetChars, CONTEXT_MAX_CHARS);
+    // Recall returns (and records access for) only what this block can hold (CON-47).
+    const q: RecallQuery = { text: input.prompt, scope: filterFor(scope), budgetChars: budget };
+    const now = deps.now?.() ?? new Date();
     const degraded: string[] = [];
     const t = performance.now();
     let result: RecallResult;
@@ -175,11 +177,7 @@ export async function handleUserPromptSubmit(
     }
     degraded.push(...(result.degraded ?? []));
     entry.degraded = [...new Set(degraded)];
-    const text = formatForInjection(
-      result,
-      Math.min(config.recall.budgetChars, CONTEXT_MAX_CHARS),
-      now,
-    );
+    const text = formatForInjection(result, budget, now);
     entry.counts = {
       memories: result.memories.length,
       chars: text.length,

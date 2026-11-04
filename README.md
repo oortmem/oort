@@ -70,7 +70,8 @@ flowchart LR
   Q[Recall query] --> F[Lexical + vector<br/>validity filter]
   F --> R[Fuse and rerank,<br/>freshness breaks ties]
   K --> F
-  C -. hydrate .-> F
+  C -- stub and entities --> F
+  C -. hydrated when returned .-> A
   R --> A[Memory block<br/>for the prompt]
 ```
 
