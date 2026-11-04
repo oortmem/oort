@@ -49,18 +49,23 @@ describe('estimateMonthlyCost, we run the models', () => {
   it('Pro storage overage is $0.50 per GB warm and $0.03 per GB cold', () => {
     expect(planCost('Pro', usage(25_000, 50_000, 3, 30))).toBeCloseTo(19 + 2 * 0.5 + 10 * 0.03, 2);
   });
-  it('Team is $99 with 150k saves, 300k recalls, 5 GB warm and 100 GB cold included', () => {
-    expect(planCost('Team', usage(150_000, 300_000, 5, 100))).toBe(99);
+  it('Team is $99 with 600k saves, 1.2M recalls, 20 GB warm and 400 GB cold included (4x Pro)', () => {
+    expect(planCost('Team', usage(600_000, 1_200_000, 20, 400))).toBe(99);
   });
-  it('picks the cheaper of Pro and Team (with the proposed rates Pro plus overage always wins)', () => {
-    expect(estimateMonthlyCost(usage(150_000, 300_000, 5, 100)).plan).toBe('Pro');
-    const big = estimateMonthlyCost(usage(5_000_000, 10_000_000, 50, 500));
-    expect(big.plan).toBe('Pro');
-    expect(big.monthly).toBeCloseTo(19 + 4_975 * 0.2 + 9_950 * 0.12 + 49 * 0.5 + 480 * 0.03, 2);
-    expect(planCost('Team', usage(5_000_000, 10_000_000, 50, 500))).toBeCloseTo(
-      99 + 4_850 * 0.2 + 9_700 * 0.12 + 45 * 0.5 + 400 * 0.03,
+  it('Team overage is $0.12 per 1k saves and $0.08 per 1k recalls', () => {
+    expect(planCost('Team', usage(700_000, 1_300_000, 20, 400))).toBeCloseTo(
+      99 + 100 * 0.12 + 100 * 0.08,
       2,
     );
+  });
+  it('Pro is cheaper at light usage', () => {
+    expect(estimateMonthlyCost(usage(150_000, 300_000, 5, 100)).plan).toBe('Pro');
+  });
+  it('recommends Team at heavy usage', () => {
+    const big = estimateMonthlyCost(usage(5_000_000, 10_000_000, 50, 500));
+    expect(big.plan).toBe('Team');
+    expect(big.monthly).toBeCloseTo(99 + 4_400 * 0.12 + 8_800 * 0.08 + 30 * 0.5 + 100 * 0.03, 2);
+    expect(big.monthly).toBeLessThan(planCost('Pro', usage(5_000_000, 10_000_000, 50, 500)));
   });
   it('reports the overage part separately from the base price', () => {
     const e = estimateMonthlyCost(usage(35_000, 50_000, 1, 20));

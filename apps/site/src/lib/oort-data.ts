@@ -100,8 +100,9 @@ export const rates = {
   managed: {
     Free: { price: 0, saves: 5_000, recalls: 10_000, warmGb: 0.1, coldGb: 1 },
     Pro: { price: 19, saves: 25_000, recalls: 50_000, warmGb: 1, coldGb: 20 },
-    Team: { price: 99, saves: 150_000, recalls: 300_000, warmGb: 5, coldGb: 100 },
+    Team: { price: 99, saves: 600_000, recalls: 1_200_000, warmGb: 20, coldGb: 400 },
     overagePer1k: { saves: 0.2, recalls: 0.12 },
+    teamOveragePer1k: { saves: 0.12, recalls: 0.08 },
   },
   byok: {
     Free: { price: 0, saves: 25_000, recalls: 50_000, warmGb: 0.1, coldGb: 1 },
@@ -111,7 +112,10 @@ export const rates = {
   },
   storagePerGbMonth: { warm: 0.5, cold: 0.03 },
 } as const satisfies {
-  managed: Record<PlanName, Allowance> & { overagePer1k: { saves: number; recalls: number } };
+  managed: Record<PlanName, Allowance> & {
+    overagePer1k: { saves: number; recalls: number };
+    teamOveragePer1k: { saves: number; recalls: number };
+  };
   byok: Record<PlanName, Allowance> & { overagePer1k: { saves: number; recalls: number } };
   storagePerGbMonth: { warm: number; cold: number };
 };
@@ -130,9 +134,10 @@ export function fitsFree(u: Usage, byok = false) {
 export function planCost(plan: PaidPlan, u: Usage, byok = false) {
   const r = rates[byok ? 'byok' : 'managed'];
   const p = r[plan];
+  const per1k = plan === 'Team' && 'teamOveragePer1k' in r ? r.teamOveragePer1k : r.overagePer1k;
   const over =
-    (Math.max(0, u.saves - p.saves) / 1000) * r.overagePer1k.saves +
-    (Math.max(0, u.recalls - p.recalls) / 1000) * r.overagePer1k.recalls +
+    (Math.max(0, u.saves - p.saves) / 1000) * per1k.saves +
+    (Math.max(0, u.recalls - p.recalls) / 1000) * per1k.recalls +
     Math.max(0, u.warmGb - p.warmGb) * rates.storagePerGbMonth.warm +
     Math.max(0, u.coldGb - p.coldGb) * rates.storagePerGbMonth.cold;
   return cents(p.price + over);
@@ -172,7 +177,7 @@ export const plans = [
     who: 'For trying things out. Stops at the limit, never bills.',
     included: ['5,000 saves', '10,000 recalls', '100 MB warm', '1 GB cold'],
     features: ['Hard stop at the limits', 'No card needed', 'Smart rerank runs when it helps'],
-    cta: 'Start free',
+    cta: 'Get early access',
   },
   {
     name: 'Pro',
@@ -185,7 +190,7 @@ export const plans = [
       'Extra storage: $0.50 per GB warm, $0.03 per GB cold',
       'Smart rerank runs when it helps',
     ],
-    cta: 'Go Pro',
+    cta: 'Get early access',
     featured: true,
   },
   {
@@ -193,13 +198,14 @@ export const plans = [
     price: '$99',
     unit: '/ month',
     who: 'For bigger products and teams.',
-    included: ['150,000 saves', '300,000 recalls', '5 GB warm', '100 GB cold'],
+    included: ['600,000 saves', '1,200,000 recalls', '20 GB warm', '400 GB cold'],
     features: [
-      'Same overage rates as Pro',
-      'Warm storage on the managed tier',
-      'Smart rerank runs when it helps',
+      'Extra use: $0.12 per 1k saves, $0.08 per 1k recalls',
+      'SSO (Planned)',
+      'Shared org memory (Planned)',
+      'Priority support',
     ],
-    cta: 'Choose Team',
+    cta: 'Get early access',
   },
   {
     name: 'Enterprise',
