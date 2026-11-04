@@ -5,7 +5,10 @@ import { z } from 'zod';
 import { localScope, type Embedder, type Memory } from '@oortmem/core';
 import { AWS_KEY, fakeIo, harness, memory, tmpdir, writeTranscript } from '../test/helpers.js';
 import { runCli } from './program.js';
-import { wire } from './wire.js';
+import { wire as realWire, type WireFn } from './wire.js';
+
+// The real wire, but never the real Keychain (tests may pass their own reader).
+const wire: WireFn = (cwd, opts) => realWire(cwd, { keychain: async () => undefined, ...opts });
 
 const readLines = (file: string): Record<string, unknown>[] =>
   fs
@@ -981,5 +984,56 @@ describe('oort usage', () => {
     const debug = await h.run(['--debug', 'stats']);
     expect(debug.code).toBe(1);
     expect(debug.io.stderr).toMatch(/disk on fire\n.*at /s);
+  });
+});
+
+describe('wire keychain', () => {
+  const key = (): string => ['sk', 'test', String(Date.now())].join('-');
+  const setup = (): { env: Record<string, string> } => {
+    const root = tmpdir();
+    return { env: { OORT_HOME: path.join(root, 'home'), HOME: root } };
+  };
+
+  it('wire.env-wins-over-keychain', async () => {
+    const { env } = setup();
+    const reads: string[] = [];
+    const w = await realWire(tmpdir(), {
+      env: { ...env, VOYAGE_API_KEY: key() },
+      keychain: async (p) => {
+        reads.push(p);
+        return key();
+      },
+    });
+    expect(w.embed).toBeDefined();
+    expect(reads).not.toContain('voyage');
+    await w.close();
+  });
+
+  it('wire.keychain-used-when-env-missing-or-empty-and-read-once', async () => {
+    for (const empty of [undefined, '']) {
+      const { env } = setup();
+      const reads: string[] = [];
+      const w = await realWire(tmpdir(), {
+        env: { ...env, ...(empty !== undefined && { VOYAGE_API_KEY: empty }) },
+        keychain: async (p) => {
+          reads.push(p);
+          return p === 'voyage' ? key() : undefined;
+        },
+      });
+      expect(w.embed).toBeDefined();
+      expect(w.rerank).toBeDefined();
+      expect(w.decide).toBeUndefined();
+      expect(reads.filter((p) => p === 'voyage')).toHaveLength(1);
+      await w.close();
+    }
+  });
+
+  it('wire.missing-everywhere-names-oort-keys-set', async () => {
+    const { env } = setup();
+    const w = await realWire(tmpdir(), { env, keychain: async () => undefined });
+    expect(w.embed).toBeUndefined();
+    expect(w.unavailable.embed?.message).toContain('oort keys set voyage');
+    expect(w.unavailable.write?.message).toContain('oort keys set anthropic');
+    await w.close();
   });
 });

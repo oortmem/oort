@@ -7,6 +7,7 @@ import { forgetCommand } from './commands/forget.js';
 import { hookCommand } from './commands/hook.js';
 import { importCommand } from './commands/import.js';
 import { initCommand } from './commands/init.js';
+import { keysListCommand, keysRmCommand, keysSetCommand } from './commands/keys.js';
 import { inspectCommand } from './commands/inspect.js';
 import { installCommand } from './commands/install.js';
 import { observeCommand } from './commands/observe.js';
@@ -15,6 +16,7 @@ import { projectLinkCommand, projectUnlinkCommand } from './commands/project.js'
 import { recallCommand } from './commands/recall.js';
 import { statsCommand } from './commands/stats.js';
 import type { Io } from './io.js';
+import { createKeychain, type Keychain } from './keychain.js';
 import { Refusal, echo, type Ctx } from './util.js';
 import { wire as defaultWire, type WireFn } from './wire.js';
 
@@ -131,6 +133,24 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description("remove this repository's binding (back to the derived id)")
     .action(run(() => projectUnlinkCommand(ctx)));
 
+  const keys = p
+    .command('keys')
+    .description('provider keys in the macOS Keychain (voyage, typesafe, anthropic)');
+  keys
+    .command('set')
+    .description('store a key; the Keychain prompts for it (never in argv or history)')
+    .argument('<provider>', 'voyage, typesafe or anthropic')
+    .action(run((provider: string) => keysSetCommand(provider, ctx)));
+  keys
+    .command('list')
+    .description('where each key comes from: keychain, env or missing (never the value)')
+    .action(run(() => keysListCommand(ctx)));
+  keys
+    .command('rm')
+    .description('delete a key from the Keychain')
+    .argument('<provider>', 'voyage, typesafe or anthropic')
+    .action(run((provider: string) => keysRmCommand(provider, ctx)));
+
   p.command('import')
     .description('import existing Claude Code transcripts (estimates first, then asks)')
     .argument('<harness>', 'claude-code')
@@ -175,9 +195,14 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
  * stack with --debug), 2 refusal or usage problem. Never prints a key: error
  * messages come from our own refusals or from adapters that never include one.
  */
-export async function runCli(args: string[], io: Io, wire: WireFn = defaultWire): Promise<number> {
+export async function runCli(
+  args: string[],
+  io: Io,
+  wire: WireFn = defaultWire,
+  keychain: Keychain = createKeychain({ warn: (m) => io.err(`oort: ${m}\n`) }),
+): Promise<number> {
   let code = 0;
-  const p = program({ io, wire }, (c) => {
+  const p = program({ io, wire, keychain }, (c) => {
     code = c;
   });
   try {

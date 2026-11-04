@@ -33,7 +33,13 @@ function sandbox(): Sandbox {
     home,
     oortHome,
     cwd,
-    env: { PATH: process.env['PATH'] ?? '', HOME: home, OORT_HOME: oortHome },
+    env: {
+      PATH: process.env['PATH'] ?? '',
+      HOME: home,
+      OORT_HOME: oortHome,
+      // The real bin must never reach the real Keychain from a test.
+      OORT_NO_KEYCHAIN: '1',
+    },
   };
 }
 
@@ -120,7 +126,7 @@ describe('oort bin', () => {
     expect(r.stdout).toContain('<oort-memory>');
     expect(r.stdout).toContain('port 5582');
     expect(r.stderr).toContain('VOYAGE_API_KEY');
-    expect(r.stderr).toContain('export VOYAGE_API_KEY=...');
+    expect(r.stderr).toContain('oort keys set voyage');
     expect(r.stderr).not.toContain('config.json');
     expect(r.stderr.trim().split('\n')).toHaveLength(1);
     expect(r.stderr).not.toContain('5582');
@@ -184,7 +190,7 @@ describe('oort bin', () => {
     const keyless = await oort(s, ['import', 'claude-code', '--yes']);
     expect(keyless.exitCode).toBe(2);
     expect(keyless.stdout).toMatch(/observations\s+[1-9]/);
-    expect(keyless.stderr).toContain('export TYPESAFE_API_KEY=');
+    expect(keyless.stderr).toContain('oort keys set typesafe');
   });
 
   it('cli.hook-exit-zero-on-garbage-stdin', async () => {

@@ -82,7 +82,7 @@ describe('voyageEmbedder', () => {
     try {
       expect(() => voyageEmbedder({ model: 'm', dimension: 4 })).toThrow(MissingCredentialError);
       expect(() => voyageEmbedder({ model: 'm', dimension: 4 })).toThrow(
-        /^Missing VOYAGE_API_KEY\. Set it with: export VOYAGE_API_KEY=\.\.\.$/,
+        /^Missing VOYAGE_API_KEY\. Set it with: oort keys set voyage \(or export VOYAGE_API_KEY=\.\.\.\)$/,
       );
     } finally {
       if (prev !== undefined) process.env['VOYAGE_API_KEY'] = prev;

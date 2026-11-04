@@ -298,7 +298,7 @@ describe('anthropicWriter', () => {
       expect(() => anthropicWriter()).toThrow(MissingCredentialError);
       expect(() => anthropicWriter({})).toThrow(/ANTHROPIC_API_KEY/);
       expect(() => anthropicWriter({})).toThrow(
-        /^Missing ANTHROPIC_API_KEY\. Set it with: export ANTHROPIC_API_KEY=\.\.\.$/,
+        /^Missing ANTHROPIC_API_KEY\. Set it with: oort keys set anthropic \(or export ANTHROPIC_API_KEY=\.\.\.\)$/,
       );
     } finally {
       if (saved !== undefined) process.env['ANTHROPIC_API_KEY'] = saved;

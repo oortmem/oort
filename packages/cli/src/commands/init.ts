@@ -5,9 +5,13 @@ import { Refusal, type Ctx } from '../util.js';
 
 /** Each key and what needs it. */
 const KEYS = [
-  { envVar: 'VOYAGE_API_KEY', needs: 'embed and rerank (dense recall; observe, import)' },
-  { envVar: 'TYPESAFE_API_KEY', needs: 'decide (observe, import)' },
-  { envVar: 'ANTHROPIC_API_KEY', needs: 'write (observe, import)' },
+  {
+    provider: 'voyage',
+    envVar: 'VOYAGE_API_KEY',
+    needs: 'embed and rerank (dense recall; observe, import)',
+  },
+  { provider: 'typesafe', envVar: 'TYPESAFE_API_KEY', needs: 'decide (observe, import)' },
+  { provider: 'anthropic', envVar: 'ANTHROPIC_API_KEY', needs: 'write (observe, import)' },
 ] as const;
 
 /** Creates `file` with `data` and `mode`; returns false, leaving it untouched, when it exists. */
@@ -54,14 +58,20 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
     );
   }
 
+  // Keychain items are not probed here (init only checks the environment); `oort keys list` shows both.
   const missing = KEYS.filter((k) => !io.env[k.envVar]);
   if (missing.length === 0) {
     io.out('All keys are set.\n');
   } else {
     io.out('Missing keys (recall works lexical-only without them):\n');
     for (const k of missing) {
-      io.out(`  ${k.envVar}, for ${k.needs}. Set it with: export ${k.envVar}=...\n`);
+      io.out(
+        `  ${k.envVar}, for ${k.needs}. Set it with: oort keys set ${k.provider} (or export ${k.envVar}=...)\n`,
+      );
     }
+    io.out(
+      'Do not export ANTHROPIC_API_KEY globally if you also use Claude Code on a subscription: it would bill the API instead.\n',
+    );
   }
   return 0;
 }

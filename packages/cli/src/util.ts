@@ -10,6 +10,7 @@ import {
   type ScopeFilter,
 } from '@oortmem/core';
 import type { Io } from './io.js';
+import type { Keychain } from './keychain.js';
 import type { WireFn, Wired } from './wire.js';
 
 /**
@@ -33,6 +34,7 @@ export class Refusal extends Error {
 export interface Ctx {
   io: Io;
   wire: WireFn;
+  keychain: Keychain;
 }
 
 /** Wires for the cwd, runs `fn`, and always closes the store. */

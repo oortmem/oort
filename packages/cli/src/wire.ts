@@ -17,6 +17,7 @@ import {
 import { createHookLogger, type HookLogger } from '@oortmem/claude-code';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import type { Env } from './io.js';
+import { createKeychain, type KeychainReader, type Provider } from './keychain.js';
 import { echo } from './util.js';
 
 export type AdapterRole = 'embed' | 'rerank' | 'decide' | 'write';
@@ -42,7 +43,7 @@ export interface Wired {
 }
 
 export interface WireWarning {
-  code: 'embed-dimension-ignored' | 'project-id-untrusted';
+  code: 'embed-dimension-ignored' | 'project-id-untrusted' | 'keychain-unreadable';
   /** One line for stderr; holds config values only. */
   message: string;
 }
@@ -53,6 +54,11 @@ export interface WireOptions {
   busyTimeoutMs?: number;
   /** false: read no `oort.config.json` at all, only the home config (the drain). */
   projectConfig?: boolean;
+  /**
+   * Reads a provider key from the OS keychain when its env var is unset or
+   * empty. Defaults to the macOS Keychain; tests inject a double.
+   */
+  keychain?: KeychainReader;
 }
 
 export type WireFn = (cwd: string, opts?: WireOptions) => Promise<Wired>;
@@ -60,6 +66,8 @@ export type WireFn = (cwd: string, opts?: WireOptions) => Promise<Wired>;
 interface Spec {
   configKey: 'embed' | 'rerank' | 'decide' | 'writer';
   provider: string;
+  /** The keychain item (`oort.<keychain>`). */
+  keychain: Provider;
   envVar: string;
   pkg: string;
 }
@@ -67,37 +75,41 @@ interface Spec {
 const EMBED: Spec = {
   configKey: 'embed',
   provider: 'voyage',
+  keychain: 'voyage',
   envVar: 'VOYAGE_API_KEY',
   pkg: '@oortmem/embed-voyage',
 };
 const RERANK: Spec = {
   configKey: 'rerank',
   provider: 'voyage',
+  keychain: 'voyage',
   envVar: 'VOYAGE_API_KEY',
   pkg: '@oortmem/rerank-voyage',
 };
 const DECIDE: Spec = {
   configKey: 'decide',
   provider: 'jev',
+  keychain: 'typesafe',
   envVar: 'TYPESAFE_API_KEY',
   pkg: '@oortmem/decide-jev',
 };
 const WRITE: Spec = {
   configKey: 'writer',
   provider: 'anthropic',
+  keychain: 'anthropic',
   envVar: 'ANTHROPIC_API_KEY',
   pkg: '@oortmem/writer',
 };
 
 /**
  * One adapter, or why it is unavailable. `make` (which imports the adapter
- * package) only runs when the provider is supported and the key is set, so a
- * keyless run never loads a network client.
+ * package) only runs when the provider is supported and a key is found (env,
+ * then keychain), so a keyless run never loads a network client.
  */
 async function load<T>(
   spec: Spec,
   config: ResolvedConfig,
-  env: Env,
+  keyOf: (spec: Spec) => Promise<string | undefined>,
   make: (apiKey: string) => Promise<T>,
 ): Promise<{ ok: T } | { error: Error }> {
   const provider = config[spec.configKey].provider;
@@ -108,7 +120,7 @@ async function load<T>(
       ),
     };
   }
-  const apiKey = env[spec.envVar];
+  const apiKey = await keyOf(spec);
   if (apiKey === undefined || apiKey === '') {
     return { error: new MissingCredentialError(spec.envVar, `${spec.configKey}.apiKey`) };
   }
@@ -179,6 +191,25 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     d: config.activation.d,
     ...(opts.busyTimeoutMs !== undefined && { busyTimeoutMs: opts.busyTimeoutMs }),
   });
+  // Env first (set and non-empty), then the keychain, each item read at most once.
+  const reader: KeychainReader =
+    opts.keychain ??
+    (env['OORT_NO_KEYCHAIN'] === '1'
+      ? async () => undefined
+      : createKeychain({
+          warn: (message) => warnings.push({ code: 'keychain-unreadable', message }),
+        }).read);
+  const reads = new Map<Provider, Promise<string | undefined>>();
+  const keyOf = async (spec: Spec): Promise<string | undefined> => {
+    const fromEnv = env[spec.envVar];
+    if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
+    let read = reads.get(spec.keychain);
+    if (read === undefined) {
+      read = reader(spec.keychain).then((v) => (v === '' ? undefined : v));
+      reads.set(spec.keychain, read);
+    }
+    return read;
+  };
   const out: Wired = {
     config,
     scope,
@@ -188,7 +219,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     warnings,
     close: () => store.close(),
   };
-  const embed = await load(EMBED, config, env, async (apiKey) =>
+  const embed = await load(EMBED, config, keyOf, async (apiKey) =>
     (await import('@oortmem/embed-voyage')).voyageEmbedder({
       apiKey,
       model: config.embed.model,
@@ -197,17 +228,17 @@ export const wire: WireFn = async (cwd, opts = {}) => {
   );
   if ('ok' in embed) out.embed = embed.ok;
   else out.unavailable.embed = embed.error;
-  const rerank = await load(RERANK, config, env, async (apiKey) =>
+  const rerank = await load(RERANK, config, keyOf, async (apiKey) =>
     (await import('@oortmem/rerank-voyage')).voyageReranker({ apiKey, model: config.rerank.model }),
   );
   if ('ok' in rerank) out.rerank = rerank.ok;
   else out.unavailable.rerank = rerank.error;
-  const decide = await load(DECIDE, config, env, async (apiKey) =>
+  const decide = await load(DECIDE, config, keyOf, async (apiKey) =>
     (await import('@oortmem/decide-jev')).jevDecider({ apiKey }),
   );
   if ('ok' in decide) out.decide = decide.ok;
   else out.unavailable.decide = decide.error;
-  const write = await load(WRITE, config, env, async (apiKey) =>
+  const write = await load(WRITE, config, keyOf, async (apiKey) =>
     (await import('@oortmem/writer')).anthropicWriter({ apiKey, model: config.writer.model }),
   );
   if ('ok' in write) out.write = write.ok;
