@@ -4,45 +4,50 @@ Eight packages publish from `packages/*`: `oortmem` (the CLI) and `@oortmem/core
 `writer`, `decide-jev`, `embed-voyage`, `rerank-voyage` and `claude-code`. `@oortmem/bench` is
 private. All share one version.
 
+Releases run in GitHub Actions (`.github/workflows/release.yml`) with **npm trusted publishing**:
+npm trusts that one workflow through OIDC, so no npm token exists anywhere, and every package gets
+a provenance statement that links it to the commit and workflow run that built it. The workflow
+runs in the GitHub environment `npm`, which needs Marcus's approval before it can publish.
+
 ## One-time setup
 
-1. On npmjs.com, sign in with the Oort account and create the organization **`oortmem`** (free,
-   public packages). This reserves the `@oortmem` scope.
-2. Turn on two-factor authentication for publishing.
-3. Create a **granular access token**: packages and scopes `oortmem` and `@oortmem/*`, read and
-   write, an expiry of 30 days or less. The old token was exposed, so never reuse it.
-4. Store it in the Keychain, not in a file:
+1. **npm organization** `oortmem` exists (done 2026-11-04). Turn on two-factor authentication for
+   the account.
+2. **First publish (bootstrap).** npm only lets you add a trusted publisher to a package that
+   exists, so `0.1.0` is published once from a terminal:
 
    ```sh
-   security add-generic-password -a "$USER" -s oort.npm-token -w
+   npm login                      # opens the browser; uses your 2FA
+   git checkout main && git pull && pnpm install --frozen-lockfile && pnpm verify && pnpm build
+   pnpm -r --filter './packages/*' --filter '!@oortmem/bench' publish --access public
+   npm logout
    ```
+
+3. **Trust the workflow** for each package (npm 11.5.1 or later):
+
+   ```sh
+   scripts/npm-trust.sh           # runs `npm trust github` for all eight packages
+   ```
+
+   Or on npmjs.com: each package → Settings → Trusted Publisher → GitHub Actions, with
+   organization `oortmem`, repository `oort`, workflow `release.yml`, environment `npm`.
+
+4. **Lock tokens out.** On each package: Settings → Publishing access → "Require two-factor
+   authentication and disallow tokens". Trusted publishing keeps working; stolen tokens do not.
 
 ## Each release
 
-The first release is `0.1.0`, which every package already has: skip the version bump and tag `v0.1.0`.
-
 ```sh
 git checkout main && git pull
-pnpm install --frozen-lockfile
-pnpm verify
-# Bump every package to the same version, e.g. 0.1.1:
+# Bump every package to the same version, e.g. 0.1.1, and VERSION in packages/core/src/index.ts:
 pnpm -r --filter './packages/*' exec npm version 0.1.1 --no-git-tag-version
-# and set VERSION in packages/core/src/index.ts (a test keeps them equal).
-pnpm build
-pnpm -r --filter './packages/*' --filter '!@oortmem/bench' publish --dry-run --no-git-checks --access public
-# .npmrc holds only a reference; npm reads the token from the environment at publish time.
-printf '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n' > .npmrc
-NPM_TOKEN="$(security find-generic-password -a "$USER" -s oort.npm-token -w)" \
-  pnpm -r --filter './packages/*' --filter '!@oortmem/bench' publish --access public
-rm .npmrc
+# commit through a PR, merge it, then tag main:
 git tag v0.1.1 && git push origin v0.1.1
 ```
 
-pnpm publishes in dependency order (`@oortmem/core` first, `oortmem` last) and turns `workspace:*`
-into the real version.
-
-Later, prefer npm trusted publishing from a GitHub Actions workflow (OIDC, with provenance), so no
-long-lived token exists at all.
+The tag starts the workflow. Approve the `npm` environment in the Actions run. The workflow checks
+that the tag equals every package version, runs `pnpm verify`, packs (resolving `workspace:*`), and
+publishes in dependency order, skipping any version already on npm so a re-run is safe.
 
 ## After the first release
 
