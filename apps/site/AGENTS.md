@@ -1,4 +1,4 @@
-- Oort marketing site, console and app demos use shared mock data in src/lib/oort-data.ts; no backend yet, so sign-in is a UI demo that routes to /dashboard. Why: one source for tiers, pricing and demo content.
+- Oort marketing site, console and app demos use shared mock data in src/lib/oort-data.ts. Sign-in (Clerk), /account and the Stripe webhook are real (Oort Pro); the console at /dashboard is still a demo. Why: one source for tiers, pricing and demo content.
 
 ## North star
 
