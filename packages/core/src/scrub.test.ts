@@ -15,8 +15,14 @@ function fixture(name: string): string[] {
     .filter((l) => l.length > 0);
 }
 
-const SECRETS = fixture('secrets.txt').map((l) => {
-  const [kind = '', secret = '', ...rest] = l.split('\t');
+// Each line is `<kind>\t<base64 of "secret\ttext">`: the synthetic credentials stay out of
+// plain text so secret scanners (GitHub push protection among them) do not flag the corpus.
+const SECRETS = fixture('secrets.b64.txt').map((l) => {
+  const tab = l.indexOf('\t');
+  const kind = l.slice(0, tab);
+  const [secret = '', ...rest] = Buffer.from(l.slice(tab + 1), 'base64')
+    .toString('utf8')
+    .split('\t');
   return { kind, secret, text: rest.join('\t') };
 });
 
