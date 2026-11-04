@@ -61,6 +61,15 @@ const recall = z
     minDenseScore: z.number().min(0).max(1).default(0.6),
     /** Skip the rerank call when lexical and dense agree on a clear top result (CON-57). */
     skipRerankWhenConfident: z.boolean().default(true),
+    /**
+     * Run the lexical search first and skip the query embedding when its top result holds every
+     * informative query word and the runner-up is clearly weaker (CON-57).
+     */
+    lexicalFirst: z.boolean().default(true),
+    /** Longest wait for the reranker, in ms; past it the fused order is used. 0 waits forever. */
+    rerankBudgetMs: z.number().int().min(0).default(150),
+    /** How long a query embedding is reused, in seconds. 0 turns the cache off. */
+    queryCacheTtlSec: z.number().int().min(0).default(600),
   })
   .default({
     lexicalK: 50,
@@ -72,6 +81,9 @@ const recall = z
     minCoverage: 0.5,
     minDenseScore: 0.6,
     skipRerankWhenConfident: true,
+    lexicalFirst: true,
+    rerankBudgetMs: 150,
+    queryCacheTtlSec: 600,
   });
 
 const project = z

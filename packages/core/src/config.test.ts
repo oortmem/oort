@@ -38,6 +38,9 @@ describe('config', () => {
       minCoverage: 0.5,
       minDenseScore: 0.6,
       skipRerankWhenConfident: true,
+      lexicalFirst: true,
+      rerankBudgetMs: 150,
+      queryCacheTtlSec: 600,
     });
     expect(c.project).toEqual({ private: false });
     expect(c.sources['embed']).toBe('default');
