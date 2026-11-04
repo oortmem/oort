@@ -232,3 +232,42 @@ export function writeTranscript(projectsDir: string, cwd: string): string {
   );
   return file;
 }
+
+/**
+ * A Keychain held in memory, shaped like the macOS one (`security` argv and
+ * `security -i` input are parsed back), so tests never touch a real Keychain.
+ */
+export function memoryKeychain(items: Record<string, string> = {}): {
+  kc: Keychain;
+  items: Record<string, string>;
+  calls: string[][];
+} {
+  const calls: string[][] = [];
+  const service = (args: string[]): string => args[args.indexOf('-s') + 1] ?? '';
+  const kc = createKeychain({
+    platform: 'darwin',
+    user: 'tester',
+    execFile: async (_f, args) => {
+      calls.push(args);
+      const v = items[service(args)];
+      if (v === undefined) throw Object.assign(new Error('not found'), { code: 44 });
+      return { stdout: `${v}\n` };
+    },
+    spawnInherit: async (_f, args) => {
+      calls.push(args);
+      if (args[0] !== 'delete-generic-password') return 1;
+      if (items[service(args)] === undefined) return 44;
+      delete items[service(args)];
+      return 0;
+    },
+    spawnWithInput: async (_f, args, input) => {
+      calls.push(args);
+      const m = /^add-generic-password -U -a "[^"]+" -s "([^"]+)" -w "([^"]+)"\n$/.exec(input);
+      if (m === null) return 1;
+      items[m[1] ?? ''] = m[2] ?? '';
+      return 0;
+    },
+    warn: () => {},
+  });
+  return { kc, items, calls };
+}

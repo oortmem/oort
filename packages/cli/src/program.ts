@@ -9,6 +9,7 @@ import { hookCommand } from './commands/hook.js';
 import { importCommand } from './commands/import.js';
 import { initCommand } from './commands/init.js';
 import { keysListCommand, keysRmCommand, keysSetCommand } from './commands/keys.js';
+import { loginCommand, logoutCommand, type LoginDeps } from './commands/login.js';
 import { inspectCommand } from './commands/inspect.js';
 import { installCommand } from './commands/install.js';
 import { mcpCommand } from './commands/mcp.js';
@@ -171,6 +172,15 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description("remove this repository's binding (back to the derived id)")
     .action(run(() => projectUnlinkCommand(ctx)));
 
+  p.command('login')
+    .description('sign in to Oort Pro in the browser and keep the Oort key in the Keychain')
+    .option('--no-browser', 'print the sign-in URL instead of opening the browser')
+    .action(run((o: { browser?: boolean }) => loginCommand(o, ctx)));
+
+  p.command('logout')
+    .description('remove the Oort key from the Keychain (it does not revoke the key)')
+    .action(run(() => logoutCommand(ctx)));
+
   const keys = p
     .command('keys')
     .description('provider keys in the macOS Keychain (voyage, typesafe, anthropic, oort)');
@@ -239,9 +249,10 @@ export async function runCli(
   io: Io,
   wire: WireFn = defaultWire,
   keychain: Keychain = keychainFor(io.env, { warn: (m) => io.err(`oort: ${m}\n`) }),
+  deps: { login?: LoginDeps } = {},
 ): Promise<number> {
   let code = 0;
-  const p = program({ io, wire, keychain }, (c) => {
+  const p = program({ io, wire, keychain, ...deps }, (c) => {
     code = c;
   });
   try {

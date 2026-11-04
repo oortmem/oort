@@ -6,6 +6,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import Database from 'better-sqlite3';
 import { execa } from 'execa';
+import { fakeSite } from '../test/fake-site.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { OortConfig, projectIdFor, type Memory } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
@@ -297,6 +298,33 @@ describe('oort bin', () => {
     expect(first.split('\n')[0]).toMatch(/^\{"oort":"export"/);
     expect(stderr).toBe('');
     expect(code).toBe(0);
+  });
+
+  it('cli.login-refuses-before-any-request-while-the-keychain-is-off', async () => {
+    const s = sandbox();
+    const site = await fakeSite({ approveAtPoll: 1 });
+    try {
+      const r = await execa(BIN, ['login'], {
+        cwd: s.cwd,
+        env: { ...s.env, OORT_SITE_URL: site.url },
+        extendEnv: false,
+        reject: false,
+        stdin: 'ignore',
+      });
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).toContain('OORT_NO_KEYCHAIN=1');
+      expect(site.polls).toEqual([]);
+      const out = await execa(BIN, ['logout'], {
+        cwd: s.cwd,
+        env: s.env,
+        extendEnv: false,
+        reject: false,
+        stdin: 'ignore',
+      });
+      expect(out.exitCode).toBe(2);
+    } finally {
+      await site.close();
+    }
   });
 
   it('cli.install-refuses-without-bin', async () => {

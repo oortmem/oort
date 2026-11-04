@@ -10,6 +10,7 @@ import {
   type MemoryWriter,
   type ScopeFilter,
 } from '@oortmem/core';
+import type { LoginDeps } from './commands/login.js';
 import type { Io } from './io.js';
 import type { Keychain } from './keychain.js';
 import type { WireFn, Wired } from './wire.js';
@@ -36,6 +37,8 @@ export interface Ctx {
   io: Io;
   wire: WireFn;
   keychain: Keychain;
+  /** The network and browser `oort login` uses; tests inject a fake site. */
+  login?: LoginDeps;
 }
 
 /** The scope a command reads, for header lines: `project <id>` or `global`. */
