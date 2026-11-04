@@ -361,6 +361,79 @@ describe('anthropicWriter', () => {
     }
   });
 
+  describe('relay mode', () => {
+    const token = ['oort', 'sk', 'test0123456789'].join('_');
+    const cap = 'You have used the 25,000 saves included in Oort Pro this month.';
+    const okBody = {
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      model: 'claude-haiku-5-5',
+      content: [{ type: 'text', text: JSON.stringify(good) }],
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 10, output_tokens: 20 },
+    };
+    const json = (b: unknown, status: number, headers: Record<string, string> = {}) =>
+      new Response(JSON.stringify(b), {
+        status,
+        headers: { 'content-type': 'application/json', ...headers },
+      });
+    const relayWriter = (fn: typeof fetch) =>
+      anthropicWriter({
+        authToken: token,
+        baseURL: 'https://relay.example.test/v1/anthropic/v1',
+        relay: true,
+        fetch: fn,
+      });
+
+    it('writer.relay-cap-429-without-retry-after-is-not-retried-and-keeps-the-message', async () => {
+      let n = 0;
+      const f = (async () => (n++, json({ error: cap }, 429))) as typeof fetch;
+      await expect(relayWriter(f).write(obs, 'ADD')).rejects.toMatchObject({
+        name: 'WriterError',
+        kind: 'rate-limit',
+        status: 429,
+        message: cap,
+        relayMessage: cap,
+      });
+      expect(n).toBe(1);
+    });
+
+    it('writer.relay-429-with-retry-after-is-retried-once', async () => {
+      let n = 0;
+      const ok = (async () =>
+        ++n === 1
+          ? json({ error: 'slow' }, 429, { 'retry-after': '0' })
+          : json(okBody, 200)) as typeof fetch;
+      await expect(relayWriter(ok).write(obs, 'ADD')).resolves.toEqual(good);
+      expect(n).toBe(2);
+      n = 0;
+      const always = (async () => (
+        n++,
+        json({ error: 'slow' }, 429, { 'retry-after': '0' })
+      )) as typeof fetch;
+      await expect(relayWriter(always).write(obs, 'ADD')).rejects.toMatchObject({
+        kind: 'rate-limit',
+        relayMessage: 'slow',
+      });
+      expect(n).toBe(2);
+    });
+
+    it('writer.direct-429-without-retry-after-keeps-the-sdk-retries-and-no-vendor-body', async () => {
+      let n = 0;
+      const f = (async () => (
+        n++,
+        json({ error: 'vendor secret' }, 429, { 'retry-after': '0' })
+      )) as typeof fetch;
+      const w = anthropicWriter({ apiKey: 'sk-ant-synthetic0123456789', fetch: f });
+      const err = await w.write(obs, 'ADD').catch((e: unknown) => e);
+      expect(n).toBeGreaterThan(1);
+      expect((err as WriterError).message).not.toContain('vendor secret');
+      expect((err as WriterError).relayMessage).toBeUndefined();
+    });
+  });
+
   it('writer.anthropic-constructs-with-key', () => {
     const key = 'sk-' + 'ant-' + 'synthetic0123456789';
     expect(typeof anthropicWriter({ apiKey: key }).write).toBe('function');

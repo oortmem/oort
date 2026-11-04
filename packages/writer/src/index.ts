@@ -46,8 +46,10 @@ export type WriterErrorKind =
 export class WriterError extends Error {
   readonly kind: WriterErrorKind;
   readonly status: number | undefined;
+  /** The Oort Pro relay's own message for a refusal (relay mode only); never a vendor body. */
+  readonly relayMessage: string | undefined;
 
-  constructor(kind: WriterErrorKind, status?: number, message?: string) {
+  constructor(kind: WriterErrorKind, status?: number, message?: string, relayMessage?: string) {
     super(
       message ??
         `Memory writer call failed (${kind}${status === undefined ? '' : `, HTTP ${status}`})`,
@@ -55,8 +57,35 @@ export class WriterError extends Error {
     this.name = 'WriterError';
     this.kind = kind;
     this.status = status;
+    this.relayMessage = relayMessage;
   }
 }
+
+/** A relay refusal that waiting cannot clear (the monthly cap); thrown from fetch so the SDK does not retry it. */
+class RelayCapError extends Error {
+  constructor(readonly relayMessage: string | undefined) {
+    super('Oort Pro cap reached');
+    this.name = 'RelayCapError';
+  }
+}
+
+/** The `error` string of a relay refusal body, cleaned and cut short; undefined for anything else. */
+function relayMessageFrom(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  try {
+    const msg = (JSON.parse(raw) as { error?: unknown } | null)?.error;
+    if (typeof msg !== 'string') return undefined;
+    const clean = msg.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+    return clean === '' ? undefined : clean.slice(0, 400);
+  } catch {
+    return undefined;
+  }
+}
+
+const rateLimit = (relayMessage: string | undefined): WriterError =>
+  relayMessage === undefined
+    ? new WriterError('rate-limit', 429)
+    : new WriterError('rate-limit', 429, relayMessage, relayMessage);
 
 /** The model's output failed the schema twice. Carries field names only, never text. */
 export class WriterOutputError extends Error {
@@ -77,11 +106,16 @@ function fromStatus(status: number): WriterError {
   return new WriterError('bad-response', status);
 }
 
-/** Maps anything the SDK or provider throws to a WriterError, dropping its message and cause. */
-function wrap(e: unknown): WriterError {
+/**
+ * Maps anything the SDK or provider throws to a WriterError, dropping its message and cause.
+ * With `relay`, a 429's body is the relay's own message, which is kept.
+ */
+function wrap(e: unknown, relay = false): WriterError {
   if (e instanceof WriterError) return e;
-  if (RetryError.isInstance(e)) return wrap(e.lastError);
+  if (e instanceof RelayCapError) return rateLimit(e.relayMessage);
+  if (RetryError.isInstance(e)) return wrap(e.lastError, relay);
   if (APICallError.isInstance(e)) {
+    if (e.statusCode === 429 && relay) return rateLimit(relayMessageFrom(e.responseBody));
     return e.statusCode === undefined ? new WriterError('network') : fromStatus(e.statusCode);
   }
   const name = e instanceof Error ? e.name : '';
@@ -177,6 +211,10 @@ function scrubbed(o: WriterOutput): {
 export function aiSdkWriter(opts: {
   model: LanguageModel;
   maxOutputTokens?: number;
+  /** The AI SDK's retries per call (its default is 2). */
+  maxRetries?: number;
+  /** The model is served by the Oort Pro relay: a 429's body is its message, and is kept. */
+  relay?: boolean;
 }): MemoryWriter {
   const maxOutputTokens = opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
@@ -189,6 +227,7 @@ export function aiSdkWriter(opts: {
       // No sampling parameters: Claude Haiku 5.5 rejects non-default values, and the defaults suit this task.
       providerOptions: { anthropic: { thinking: { type: 'disabled' } } },
       maxOutputTokens,
+      ...(opts.maxRetries !== undefined && { maxRetries: opts.maxRetries }),
     });
     return output;
   }
@@ -203,7 +242,7 @@ export function aiSdkWriter(opts: {
       try {
         return scrubbed(await attempt([user]));
       } catch (e) {
-        if (!isSchemaFailure(e)) throw wrap(e);
+        if (!isSchemaFailure(e)) throw wrap(e, opts.relay === true);
         throwIfUnusable(e);
         first = e;
       }
@@ -211,7 +250,7 @@ export function aiSdkWriter(opts: {
       try {
         return scrubbed(await attempt([user, { role: 'user', content: correction(fields) }]));
       } catch (e) {
-        if (!isSchemaFailure(e)) throw wrap(e);
+        if (!isSchemaFailure(e)) throw wrap(e, opts.relay === true);
         throwIfUnusable(e);
         throw new WriterOutputError(failingFields(e));
       }
@@ -233,24 +272,40 @@ export interface AnthropicWriterOptions {
    */
   baseURL?: string;
   model?: string;
+  /**
+   * The model is served by the Oort Pro relay. A 429 with `Retry-After` is retried once, as
+   * before; a 429 without it (the monthly cap) is not retried at all, and the relay's message is
+   * kept on the error as `relayMessage`.
+   */
+  relay?: boolean;
   /** For tests. */
   fetch?: typeof fetch;
 }
 
 /** Anthropic-backed writer. Throws MissingCredentialError at construction when no key is available. */
 export function anthropicWriter(opts: AnthropicWriterOptions = {}): MemoryWriter {
+  const relay = opts.relay === true;
+  const base = opts.fetch ?? globalThis.fetch;
+  // The AI SDK retries every 429. Through the relay, one without Retry-After is the monthly cap:
+  // throwing from fetch is the one way to stop the SDK from retrying it.
+  const capAware: typeof fetch = async (input, init) => {
+    const res = await base(input, init);
+    if (res.status !== 429 || res.headers.has('retry-after')) return res;
+    throw new RelayCapError(relayMessageFrom(await res.text().catch(() => undefined)));
+  };
   const extra = {
     ...(opts.baseURL !== undefined && { baseURL: opts.baseURL }),
-    ...(opts.fetch !== undefined && { fetch: opts.fetch }),
+    ...(relay ? { fetch: capAware } : opts.fetch !== undefined && { fetch: opts.fetch }),
   };
+  const sdk = relay ? { relay: true, maxRetries: 1 } : {};
   if (opts.authToken !== undefined && opts.authToken !== '') {
     const anthropic = createAnthropic({ authToken: opts.authToken, ...extra });
-    return aiSdkWriter({ model: anthropic(opts.model ?? DEFAULT_MODEL) });
+    return aiSdkWriter({ model: anthropic(opts.model ?? DEFAULT_MODEL), ...sdk });
   }
   const apiKey = opts.apiKey ?? process.env['ANTHROPIC_API_KEY'];
   if (apiKey === undefined || apiKey === '') {
     throw new MissingCredentialError('ANTHROPIC_API_KEY', 'writer.apiKey');
   }
   const anthropic = createAnthropic({ apiKey, ...extra });
-  return aiSdkWriter({ model: anthropic(opts.model ?? DEFAULT_MODEL) });
+  return aiSdkWriter({ model: anthropic(opts.model ?? DEFAULT_MODEL), ...sdk });
 }
