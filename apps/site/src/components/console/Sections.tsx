@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Copy, Plus, RotateCw, Search, Trash2, Check } from 'lucide-react';
+import { PlannedBadge } from '@/components/site/PlannedBadge';
 import { clusters, timeline, tierClass, estimateMonthlyCost, type Tier } from '@/lib/oort-data';
 
 export { StarMapSection } from './StarMap';
@@ -10,7 +11,7 @@ const label = 'font-mono text-xs text-muted-foreground';
 
 const tenantRows = [
   {
-    name: 'Global retail · US',
+    name: 'Example retailer · US',
     customers: '21.4M',
     ret: '512M',
     p95: '71 ms',
@@ -18,7 +19,7 @@ const tenantRows = [
     status: 'Healthy',
   },
   {
-    name: 'Global retail · EU',
+    name: 'Example retailer · EU',
     customers: '17.9M',
     ret: '401M',
     p95: '68 ms',
@@ -26,7 +27,7 @@ const tenantRows = [
     status: 'Healthy',
   },
   {
-    name: 'Global retail · APAC',
+    name: 'Example retailer · APAC',
     customers: '10.7M',
     ret: '287M',
     p95: '74 ms',
@@ -108,7 +109,7 @@ export function StorageSection() {
       cap: '2 TB',
       p: 60,
       c: 'bg-hot',
-      note: 'int8 in RAM across 48 nodes',
+      note: 'int8 vectors in RAM (sample figures)',
     },
     {
       n: 'Kuiper · warm',
@@ -116,15 +117,15 @@ export function StorageSection() {
       cap: '64 TB',
       p: 59,
       c: 'bg-warm',
-      note: '512d binary quantized + BM25',
+      note: '512-dim int8 + BM25 keyword (binary quantization is Planned)',
     },
     {
       n: 'Oort · cold',
       used: '412 TB',
-      cap: '∞',
+      cap: 'no cap',
       p: 100,
       c: 'bg-cold',
-      note: 'zstd dictionary · 7.4× ratio',
+      note: 'text, stub and entities, zstd-compressed',
     },
   ];
   const [ttl, setTtl] = useState(30);
@@ -162,7 +163,8 @@ export function StorageSection() {
           <span className="w-20 font-mono text-sm">{ttl} days</span>
         </div>
         <p className="mt-3 text-xs text-muted-foreground">
-          Estimated hot+warm RAM saved: {Math.round(ttl < 30 ? 92 - ttl / 10 : 89 - ttl / 20)}%
+          Longer waits keep more in the warm tier. Savings depend on your data and are not estimated
+          here.
         </p>
       </div>
     </div>
@@ -230,7 +232,9 @@ export function KeysSection() {
         ))}
       </div>
       <div className={card}>
-        <p className={label}>Customer encryption</p>
+        <p className={label}>
+          Customer encryption <PlannedBadge className="ml-2" />
+        </p>
         <p className="mt-3 text-sm">
           Provider: <span className="font-mono">AWS KMS · eu-west-1</span>
         </p>
@@ -311,10 +315,10 @@ export function UsageSection() {
 export function SettingsSection() {
   const [s, setS] = useState({ rerank: true, pii: true, audit: true, residency: false });
   const rows: [keyof typeof s, string, string][] = [
-    ['rerank', 'Hybrid rerank', 'Cross-encoder rerank on top 50 candidates'],
-    ['pii', 'PII redaction', 'Strip emails and card numbers before writes'],
-    ['audit', 'Audit log streaming', 'Send every recall and erase to your SIEM'],
-    ['residency', 'Strict data residency', 'Never route a tenant outside its region'],
+    ['rerank', 'Smart rerank', 'Voyage rerank of the top 30 candidates when it helps'],
+    ['pii', 'Secret scrubbing', 'Scrub secrets before a memory is saved'],
+    ['audit', 'Audit log streaming (Planned)', 'Send every recall and forget to your SIEM'],
+    ['residency', 'Strict data residency (Planned)', 'Never route a tenant outside its region'],
   ];
   return (
     <div className="max-w-2xl overflow-hidden rounded-2xl border border-border bg-card">

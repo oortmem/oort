@@ -8,98 +8,85 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as ArchitectureRouteImport } from './routes/architecture'
-import { Route as DashboardRouteImport } from './routes/dashboard'
-import { Route as EnterpriseRouteImport } from './routes/enterprise'
-import { Route as ExplorerRouteImport } from './routes/explorer'
-import { Route as PricingRouteImport } from './routes/pricing'
-import { Route as SigninRouteImport } from './routes/signin'
+import { Route as rootRouteImport } from './routes/__root';
+import { Route as IndexRouteImport } from './routes/index';
+import { Route as ArchitectureRouteImport } from './routes/architecture';
+import { Route as DashboardRouteImport } from './routes/dashboard';
+import { Route as EnterpriseRouteImport } from './routes/enterprise';
+import { Route as ExplorerRouteImport } from './routes/explorer';
+import { Route as PricingRouteImport } from './routes/pricing';
+import { Route as SigninRouteImport } from './routes/signin';
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const ArchitectureRoute = ArchitectureRouteImport.update({
   id: '/architecture',
   path: '/architecture',
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const DashboardRoute = DashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const EnterpriseRoute = EnterpriseRouteImport.update({
   id: '/enterprise',
   path: '/enterprise',
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const ExplorerRoute = ExplorerRouteImport.update({
   id: '/explorer',
   path: '/explorer',
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const PricingRoute = PricingRouteImport.update({
   id: '/pricing',
   path: '/pricing',
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const SigninRoute = SigninRouteImport.update({
   id: '/signin',
   path: '/signin',
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/architecture': typeof ArchitectureRoute
-  '/dashboard': typeof DashboardRoute
-  '/enterprise': typeof EnterpriseRoute
-  '/explorer': typeof ExplorerRoute
-  '/pricing': typeof PricingRoute
-  '/signin': typeof SigninRoute
+  '/': typeof IndexRoute;
+  '/architecture': typeof ArchitectureRoute;
+  '/dashboard': typeof DashboardRoute;
+  '/enterprise': typeof EnterpriseRoute;
+  '/explorer': typeof ExplorerRoute;
+  '/pricing': typeof PricingRoute;
+  '/signin': typeof SigninRoute;
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/architecture': typeof ArchitectureRoute
-  '/dashboard': typeof DashboardRoute
-  '/enterprise': typeof EnterpriseRoute
-  '/explorer': typeof ExplorerRoute
-  '/pricing': typeof PricingRoute
-  '/signin': typeof SigninRoute
+  '/': typeof IndexRoute;
+  '/architecture': typeof ArchitectureRoute;
+  '/dashboard': typeof DashboardRoute;
+  '/enterprise': typeof EnterpriseRoute;
+  '/explorer': typeof ExplorerRoute;
+  '/pricing': typeof PricingRoute;
+  '/signin': typeof SigninRoute;
 }
 export interface FileRoutesById {
-  __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/architecture': typeof ArchitectureRoute
-  '/dashboard': typeof DashboardRoute
-  '/enterprise': typeof EnterpriseRoute
-  '/explorer': typeof ExplorerRoute
-  '/pricing': typeof PricingRoute
-  '/signin': typeof SigninRoute
+  __root__: typeof rootRouteImport;
+  '/': typeof IndexRoute;
+  '/architecture': typeof ArchitectureRoute;
+  '/dashboard': typeof DashboardRoute;
+  '/enterprise': typeof EnterpriseRoute;
+  '/explorer': typeof ExplorerRoute;
+  '/pricing': typeof PricingRoute;
+  '/signin': typeof SigninRoute;
 }
 export interface FileRouteTypes {
-  fileRoutesByFullPath: FileRoutesByFullPath
+  fileRoutesByFullPath: FileRoutesByFullPath;
   fullPaths:
-    | '/'
-    | '/architecture'
-    | '/dashboard'
-    | '/enterprise'
-    | '/explorer'
-    | '/pricing'
-    | '/signin'
-  fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/'
-    | '/architecture'
-    | '/dashboard'
-    | '/enterprise'
-    | '/explorer'
-    | '/pricing'
-    | '/signin'
+    '/' | '/architecture' | '/dashboard' | '/enterprise' | '/explorer' | '/pricing' | '/signin';
+  fileRoutesByTo: FileRoutesByTo;
+  to: '/' | '/architecture' | '/dashboard' | '/enterprise' | '/explorer' | '/pricing' | '/signin';
   id:
     | '__root__'
     | '/'
@@ -108,70 +95,70 @@ export interface FileRouteTypes {
     | '/enterprise'
     | '/explorer'
     | '/pricing'
-    | '/signin'
-  fileRoutesById: FileRoutesById
+    | '/signin';
+  fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  ArchitectureRoute: typeof ArchitectureRoute
-  DashboardRoute: typeof DashboardRoute
-  EnterpriseRoute: typeof EnterpriseRoute
-  ExplorerRoute: typeof ExplorerRoute
-  PricingRoute: typeof PricingRoute
-  SigninRoute: typeof SigninRoute
+  IndexRoute: typeof IndexRoute;
+  ArchitectureRoute: typeof ArchitectureRoute;
+  DashboardRoute: typeof DashboardRoute;
+  EnterpriseRoute: typeof EnterpriseRoute;
+  ExplorerRoute: typeof ExplorerRoute;
+  PricingRoute: typeof PricingRoute;
+  SigninRoute: typeof SigninRoute;
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
     '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
+      id: '/';
+      path: '/';
+      fullPath: '/';
+      preLoaderRoute: typeof IndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     '/architecture': {
-      id: '/architecture'
-      path: '/architecture'
-      fullPath: '/architecture'
-      preLoaderRoute: typeof ArchitectureRouteImport
-      parentRoute: typeof rootRouteImport
-    }
+      id: '/architecture';
+      path: '/architecture';
+      fullPath: '/architecture';
+      preLoaderRoute: typeof ArchitectureRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     '/dashboard': {
-      id: '/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof DashboardRouteImport
-      parentRoute: typeof rootRouteImport
-    }
+      id: '/dashboard';
+      path: '/dashboard';
+      fullPath: '/dashboard';
+      preLoaderRoute: typeof DashboardRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     '/enterprise': {
-      id: '/enterprise'
-      path: '/enterprise'
-      fullPath: '/enterprise'
-      preLoaderRoute: typeof EnterpriseRouteImport
-      parentRoute: typeof rootRouteImport
-    }
+      id: '/enterprise';
+      path: '/enterprise';
+      fullPath: '/enterprise';
+      preLoaderRoute: typeof EnterpriseRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     '/explorer': {
-      id: '/explorer'
-      path: '/explorer'
-      fullPath: '/explorer'
-      preLoaderRoute: typeof ExplorerRouteImport
-      parentRoute: typeof rootRouteImport
-    }
+      id: '/explorer';
+      path: '/explorer';
+      fullPath: '/explorer';
+      preLoaderRoute: typeof ExplorerRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     '/pricing': {
-      id: '/pricing'
-      path: '/pricing'
-      fullPath: '/pricing'
-      preLoaderRoute: typeof PricingRouteImport
-      parentRoute: typeof rootRouteImport
-    }
+      id: '/pricing';
+      path: '/pricing';
+      fullPath: '/pricing';
+      preLoaderRoute: typeof PricingRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     '/signin': {
-      id: '/signin'
-      path: '/signin'
-      fullPath: '/signin'
-      preLoaderRoute: typeof SigninRouteImport
-      parentRoute: typeof rootRouteImport
-    }
+      id: '/signin';
+      path: '/signin';
+      fullPath: '/signin';
+      preLoaderRoute: typeof SigninRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
   }
 }
 
@@ -183,17 +170,17 @@ const rootRouteChildren: RootRouteChildren = {
   ExplorerRoute: ExplorerRoute,
   PricingRoute: PricingRoute,
   SigninRoute: SigninRoute,
-}
+};
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
-  ._addFileTypes<FileRouteTypes>()
+  ._addFileTypes<FileRouteTypes>();
 
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
+import type { getRouter } from './router.tsx';
+import type { startInstance } from './start.ts';
 declare module '@tanstack/react-start' {
   interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+    ssr: true;
+    router: Awaited<ReturnType<typeof getRouter>>;
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>;
   }
 }

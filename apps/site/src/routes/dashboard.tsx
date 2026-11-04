@@ -12,6 +12,7 @@ import {
   Settings,
   Users,
 } from 'lucide-react';
+import { PlannedBadge } from '@/components/site/PlannedBadge';
 import { Logo } from '@/components/site/Logo';
 import { timeline, tierClass } from '@/lib/oort-data';
 import {
@@ -37,11 +38,11 @@ const sections: Record<string, () => React.ReactElement> = {
 export const Route = createFileRoute('/dashboard')({
   head: () => ({
     meta: [
-      { title: 'Console — Oort Cloud' },
+      { title: 'Console demo | Oort Cloud' },
       {
         name: 'description',
         content:
-          'Oort Cloud console: memory star map, tier health, retrieval latency, tenants and keys.',
+          'A demo of the Oort Cloud console with sample data: memory star map, tier health, recall latency, tenants and keys.',
       },
       { property: 'og:title', content: 'Oort Cloud console' },
       {
@@ -69,10 +70,22 @@ const latency = [
 ];
 
 const tenants = [
-  { name: 'Global retail · US', customers: '21.4M', ret: '512M', p95: '71 ms', region: 'us-east' },
-  { name: 'Global retail · EU', customers: '17.9M', ret: '401M', p95: '68 ms', region: 'eu-west' },
   {
-    name: 'Global retail · APAC',
+    name: 'Example retailer · US',
+    customers: '21.4M',
+    ret: '512M',
+    p95: '71 ms',
+    region: 'us-east',
+  },
+  {
+    name: 'Example retailer · EU',
+    customers: '17.9M',
+    ret: '401M',
+    p95: '68 ms',
+    region: 'eu-west',
+  },
+  {
+    name: 'Example retailer · APAC',
     customers: '10.7M',
     ret: '287M',
     p95: '74 ms',
@@ -104,7 +117,7 @@ function Dashboard() {
                 Organisation
               </span>
               <span className="block truncate text-sm font-medium">Acme Global</span>
-              <span className="block text-[10px] text-muted-foreground">Enterprise · {env}</span>
+              <span className="block text-[10px] text-muted-foreground">Demo · {env}</span>
             </span>
             <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
           </div>
@@ -132,7 +145,10 @@ function Dashboard() {
         <header className="liquid-glass sticky top-4 z-10 mx-4 mt-4 flex items-center justify-between rounded-full px-6 py-3 md:ml-0">
           <div>
             <h1 className="text-xl font-semibold">{active}</h1>
-            <p className="text-xs text-muted-foreground">Demo data · Acme Global</p>
+            <p className="text-xs text-muted-foreground">
+              <PlannedBadge kind="Demo" className="mr-1.5" />
+              Sample data for a made-up organisation. Not real usage.
+            </p>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-border p-1 text-xs">
             {(['Production', 'Staging'] as const).map((e) => (

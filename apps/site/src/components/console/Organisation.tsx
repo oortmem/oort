@@ -145,10 +145,10 @@ export function OrganisationSection() {
         </div>
         <div className="relative mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
           {[
-            ['Plan', 'Enterprise'],
+            ['Plan', 'Enterprise (sample)'],
             ['Seats', `${members.length} / 25`],
             ['Tenants', '4 regions'],
-            ['Uptime', '99.99%'],
+            ['Uptime', 'Not measured'],
           ].map(([k, v]) => (
             <div key={k} className="rounded-2xl border border-border px-4 py-3">
               <p className="text-[11px] text-muted-foreground">{k}</p>
@@ -409,10 +409,10 @@ export function OrganisationSection() {
           <div className="grid gap-4 md:grid-cols-2">
             {(
               [
-                ['sso', 'Single sign-on', 'Everyone signs in through Okta.'],
+                ['sso', 'Single sign-on (Planned)', 'Everyone signs in through Okta.'],
                 ['mfa', 'Two-step sign-in', 'Required for every member.'],
                 ['ip', 'Office network only', 'Block sign-ins from outside your offices.'],
-                ['byok', 'Your own keys', 'Memories are locked with keys you control.'],
+                ['byok', 'Your own keys (Planned)', 'Memories are locked with keys you control.'],
               ] as const
             ).map(([k, t, d]) => (
               <button

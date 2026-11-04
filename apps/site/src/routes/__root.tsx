@@ -74,7 +74,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'Oort Cloud — Tiered memory for AI agents' },
+      { title: 'Oort Cloud: tiered memory for AI agents' },
       {
         name: 'description',
         content: 'Open-source agent memory engine with hot, warm and cold tiers.',

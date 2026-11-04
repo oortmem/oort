@@ -116,7 +116,7 @@ function Home() {
               </div>
               <div>
                 <dt>p95 (demo)</dt>
-                <dd className="text-base text-foreground">{p95 ? `${p95} ms` : '—'}</dd>
+                <dd className="text-base text-foreground">{p95 ? `${p95} ms` : '-'}</dd>
               </div>
             </dl>
             <p className="-mt-4 font-mono text-[11px] text-muted-foreground">
