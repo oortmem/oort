@@ -95,27 +95,48 @@ export function keychainFor(
   );
 }
 
-const defaultExecFile: NonNullable<KeychainDeps['execFile']> = (file, args) =>
-  new Promise((resolve, reject) => {
+/**
+ * Tests must inject a fake: the real login Keychain is never touched under vitest
+ * (VITEST is set by the runner). Throws synchronously so no catch can swallow it.
+ */
+const REAL_KEYCHAIN_IN_TEST = 'ERR_OORT_REAL_KEYCHAIN_IN_TEST';
+
+function refuseUnderTest(): void {
+  if (process.env['VITEST'] !== undefined && process.env['OORT_ALLOW_REAL_KEYCHAIN'] !== '1') {
+    throw Object.assign(
+      new Error('refusing to run /usr/bin/security under the test runner: inject a fake keychain'),
+      { code: REAL_KEYCHAIN_IN_TEST },
+    );
+  }
+}
+
+const defaultExecFile: NonNullable<KeychainDeps['execFile']> = (file, args) => {
+  refuseUnderTest();
+  return new Promise((resolve, reject) => {
     nodeExecFile(file, args, { encoding: 'utf8' }, (err, stdout) =>
       err === null ? resolve({ stdout }) : reject(err),
     );
   });
+};
 
-const defaultSpawnInherit: NonNullable<KeychainDeps['spawnInherit']> = (file, args) =>
-  new Promise((resolve, reject) => {
+const defaultSpawnInherit: NonNullable<KeychainDeps['spawnInherit']> = (file, args) => {
+  refuseUnderTest();
+  return new Promise((resolve, reject) => {
     spawn(file, args, { stdio: 'inherit' })
       .once('error', reject)
       .once('close', (code) => resolve(code ?? 1));
   });
+};
 
-const defaultSpawnWithInput: NonNullable<KeychainDeps['spawnWithInput']> = (file, args, input) =>
-  new Promise((resolve, reject) => {
+const defaultSpawnWithInput: NonNullable<KeychainDeps['spawnWithInput']> = (file, args, input) => {
+  refuseUnderTest();
+  return new Promise((resolve, reject) => {
     const child = spawn(file, args, { stdio: ['pipe', 'ignore', 'ignore'] });
     child.once('error', reject).once('close', (code) => resolve(code ?? 1));
     child.stdin.on('error', () => {}); // an early exit closes the pipe; `close` reports it
     child.stdin.end(input);
   });
+};
 
 /** Safe inside double quotes in `security -i`'s command line: no quote, backslash, space or control. */
 const QUOTABLE = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
@@ -227,6 +248,7 @@ export function createKeychain(deps: KeychainDeps = {}): Keychain {
         return key === '' ? undefined : key;
       } catch (e) {
         const code = (e as { code?: unknown }).code;
+        if (code === REAL_KEYCHAIN_IN_TEST) throw e;
         // A non-zero exit is "no such item" (44) or a locked/denied keychain: no key either way.
         if (typeof code !== 'number') {
           const why = typeof code === 'string' ? code : 'error';

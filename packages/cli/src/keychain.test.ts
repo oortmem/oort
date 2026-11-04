@@ -145,3 +145,10 @@ describe('keychainFor', () => {
     expect(calls).toHaveLength(1);
   });
 });
+
+describe('keychain test guard', () => {
+  it('keychain.refuses-real-security-under-vitest', async () => {
+    const kc = createKeychain({ platform: 'darwin', user: 'alice', warn: () => {} });
+    await expect(kc.read('voyage')).rejects.toThrow(/refusing to run \/usr\/bin\/security/);
+  });
+});
