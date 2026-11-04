@@ -16,7 +16,7 @@ import {
 import { wire as realWire, type WireOptions } from './wire.js';
 
 /** Assembled at runtime so no key literal sits in a source file. */
-const oortKey = (): string => ['oort', 'sk', `test${Date.now()}AAAAAAAAAAAAAAAA`].join('_');
+const oortKey = (): string => ['oort', 'sk', `test${Date.now()}`.padEnd(43, 'A')].join('_');
 const vendorKey = (name: string): string => ['test', name, String(Date.now())].join('-');
 
 const obs: Observation = {
@@ -236,6 +236,15 @@ describe('the oort provider', () => {
     expect(relayErrorOf({ status: 429 })?.kind).toBe('rate-limit');
     expect(relayErrorOf({ status: 401 })?.kind).toBe('unauthorized');
     expect(relayErrorOf({ status: 500 })).toBeUndefined();
+    // The relay's own 503: the providers are busy for everyone, not this account's cap.
+    const busy = relayErrorOf({ status: 503 });
+    expect(busy?.kind).toBe('busy');
+    expect(busy?.message).toBe('Oort Pro is busy, try again shortly (HTTP 503).');
+    // A cap 429 names its pool; a rate-limit 429 says so.
+    expect(
+      new OortRelayError('rate-limit', 429, 'You have used the 50,000 recalls included.').message,
+    ).toContain('50,000 recalls');
+    expect(new OortRelayError('rate-limit', 429).message).not.toContain('busy');
     expect(relayErrorOf(new Error('x'))).toBeUndefined();
     for (const kind of ['payment-required', 'rate-limit', 'unauthorized'] as const) {
       const m = new OortRelayError(kind, 400).message;
@@ -270,6 +279,8 @@ describe('the oort provider', () => {
     expect([...RELAY_MODELS.embed]).toEqual([...(relay.MODELS['embed'] ?? [])]);
     expect([...RELAY_MODELS.rerank]).toEqual([...(relay.MODELS['rerank'] ?? [])]);
     expect([...RELAY_MODELS.write]).toEqual([...(relay.MODELS['messages'] ?? [])]);
+    const { RELAY_MODEL } = await import('@oortmem/decide-jev');
+    expect([RELAY_MODEL]).toEqual([...(relay.MODELS['decide'] ?? [])]);
   });
 });
 
@@ -369,6 +380,7 @@ describe('contract with apps/relay', () => {
     const relayEnv = {
       DB: db,
       RATE_LIMITER: { limit: async () => ({ success: rateOk }) },
+      AUTH_LIMITER: { limit: async () => ({ success: true }) },
       ...ours,
     };
     const upstream: { url: string; headers: Headers }[] = [];

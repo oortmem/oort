@@ -504,16 +504,21 @@ Every adapter role picks its key on its own:
   with another model is unavailable through Oort Pro, with a message that
   names the served model and the vendor key to set instead.
 - **Refusals.** A relay 402 (subscription not active), 429 (60 requests per 10
-  seconds, or the month's 25,000 saves or 50,000 recalls used up) or 401 (key
-  unknown or revoked) becomes one line with the fix and
-  https://oortcloud.dev/account, never a stack trace. `oort observe` prints it
-  and exits 1; `oort recall` degrades to lexical-only and prints it on stderr;
-  the MCP `recall` tool puts it in `note`; hooks log it and carry on, as they do
-  for any adapter error.
+  seconds per key or per account, or a monthly cap used up: the 25,000 saves
+  or 50,000 recalls, or a fair-use limit on embedding inputs, rerank calls or
+  Jev calls) or 401 (key unknown or revoked) becomes one line with the fix and
+  https://oortcloud.dev/account, never a stack trace. A relay 503 means a
+  provider is busy for every Pro user, not your cap: "Oort Pro is busy, try
+  again shortly". `oort observe` prints it and exits 1; `oort recall` degrades
+  to lexical-only and prints it on stderr; the MCP `recall` tool puts it in
+  `note`; hooks log it and carry on, as they do for any adapter error.
 - **No retry on the cap.** A 429 with a `Retry-After` header (the 10-second
-  limit) is retried once, as with any adapter. A 429 without one is the
+  limit) is retried once, as with any adapter. A 429 without one is a
   monthly cap, which waiting does not clear: it is not retried, and the relay's
-  own message (which pool, and when it resets) is the line you see.
+  own message (which cap, and when it resets) is the line you see. A 503 is
+  retried by the adapters like any server error.
+- **Jev through the relay** is sent as plain JSON (no zstd) with the model
+  pinned to `jev-latest`, because the relay checks every body it forwards.
 
 `oort keys list` and `oort doctor` show which key serves each role.
 

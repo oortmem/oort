@@ -51,7 +51,7 @@ export function relayUrl(env: Env): { url: string } | { error: string } {
   return { url: `${u.origin}${u.pathname.replace(/\/+$/, '')}` };
 }
 
-export type RelayErrorKind = 'unauthorized' | 'payment-required' | 'rate-limit';
+export type RelayErrorKind = 'unauthorized' | 'payment-required' | 'rate-limit' | 'busy';
 
 /**
  * A relay refusal the user can act on, in the same shape as
@@ -64,17 +64,21 @@ export class OortRelayError extends Error {
 
   /**
    * `relayMessage` is the relay's own line for a 429 (the monthly cap says which pool and when it
-   * resets), as the adapters keep it; without one the message is the generic 429 text.
+   * resets, a rate limit says per key or per account), as the adapters keep it; without one the
+   * message is the generic 429 text. `busy` is the relay's 503: a provider is rate-limited or
+   * failing for every Pro user, so it is never this account's cap.
    */
   constructor(kind: RelayErrorKind, status: number, relayMessage?: string) {
     super(
-      kind === 'rate-limit' && relayMessage !== undefined
-        ? `Oort Pro limit reached (HTTP 429): ${relayMessage}${relayMessage.includes(ACCOUNT_URL) ? '' : ` Usage is at ${ACCOUNT_URL}.`}`
-        : kind === 'payment-required'
-          ? `Oort Pro is not active on this account (HTTP 402). Subscribe or update billing at ${ACCOUNT_URL}, or set your own keys with \`oort keys set <provider>\`.`
-          : kind === 'rate-limit'
-            ? `Oort Pro limit reached (HTTP 429): too many requests in 10 seconds, or this month's included saves or recalls are used up. Usage is at ${ACCOUNT_URL}.`
-            : `The relay rejected the Oort key (HTTP 401): it is unknown or revoked. Run \`oort login\` again, or create a key at ${ACCOUNT_URL}.`,
+      kind === 'busy'
+        ? `Oort Pro is busy, try again shortly (HTTP ${status}).`
+        : kind === 'rate-limit' && relayMessage !== undefined
+          ? `Oort Pro limit reached (HTTP 429): ${relayMessage}${relayMessage.includes(ACCOUNT_URL) ? '' : ` Usage is at ${ACCOUNT_URL}.`}`
+          : kind === 'payment-required'
+            ? `Oort Pro is not active on this account (HTTP 402). Subscribe or update billing at ${ACCOUNT_URL}, or set your own keys with \`oort keys set <provider>\`.`
+            : kind === 'rate-limit'
+              ? `Oort Pro limit reached (HTTP 429): too many requests in 10 seconds, or this month's included use is used up. Usage is at ${ACCOUNT_URL}.`
+              : `The relay rejected the Oort key (HTTP 401): it is unknown or revoked. Run \`oort login\` again, or create a key at ${ACCOUNT_URL}.`,
     );
     this.name = 'OortRelayError';
     this.kind = kind;
@@ -92,11 +96,12 @@ export function relayErrorOf(e: unknown): OortRelayError | undefined {
     return new OortRelayError('rate-limit', 429, typeof msg === 'string' ? msg : undefined);
   }
   if (status === 401 || status === 403) return new OortRelayError('unauthorized', status);
+  if (status === 503) return new OortRelayError('busy', 503);
   return undefined;
 }
 
 /**
- * `adapter` with every method's 401, 402 and 429 rethrown as an
+ * `adapter` with every method's 401, 402, 429 and 503 rethrown as an
  * `OortRelayError`, reported to `onError` as well. Other errors pass through
  * unchanged, so callers that fail soft (recall, hooks) still do.
  */

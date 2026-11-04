@@ -9,7 +9,7 @@ const OUR = {
   TYPESAFE_API_KEY: 'ts-OUR-TYPESAFE-SECRET',
   ANTHROPIC_API_KEY: 'sk-ant-OUR-ANTHROPIC-SECRET',
 };
-const CALLER_KEY = 'oort_sk_callerKeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const CALLER_KEY = 'oort_sk_callerKey' + 'A'.repeat(34);
 const SECRET_TEXT = 'my private memory about the merger with Acme';
 const NOW = new Date('2026-11-15T12:00:00Z');
 
@@ -51,6 +51,7 @@ function setup(opts: { status?: string; plan?: string; revoked?: boolean; limit?
         return { success: rateOk };
       },
     },
+    AUTH_LIMITER: { limit: async () => ({ success: true }) },
     ...OUR,
   };
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -122,6 +123,13 @@ function setup(opts: { status?: string; plan?: string; revoked?: boolean; limit?
       .prepare('SELECT saves, recalls FROM usage WHERE account_id = ? AND month = ?')
       .bind('acc_1', '2026-11')
       .first<{ saves: number; recalls: number }>();
+  const counters = () =>
+    db
+      .prepare(
+        'SELECT embed_inputs, rerank_calls, decide_calls FROM usage WHERE account_id = ? AND month = ?',
+      )
+      .bind('acc_1', '2026-11')
+      .first<Record<string, number>>();
 
   return {
     db,
@@ -131,6 +139,7 @@ function setup(opts: { status?: string; plan?: string; revoked?: boolean; limit?
     seed,
     send,
     usage,
+    counters,
     setRate: (ok: boolean) => (rateOk = ok),
     respond: (fn: (u: Upstream) => Response) => (upstream = fn),
   };
@@ -151,7 +160,11 @@ const rerankBody = (n = 3, model = 'rerank-3-lite') => ({
   top_k: 2,
   truncation: true,
 });
-const jevBody = () => ({ state: SECRET_TEXT, questions: { q: { type: 'noul' } }, model: 'jev' });
+const jevBody = () => ({
+  state: SECRET_TEXT,
+  questions: { q: { type: 'noul', instructions: 'Keep it?' } },
+  model: 'jev-latest',
+});
 const messagesBody = (over: Record<string, unknown> = {}) => ({
   model: 'claude-haiku-5-5',
   max_tokens: 2048,
@@ -188,46 +201,21 @@ describe('routes forward with our key, never the caller key', () => {
     expect([...c.headers.values()].join(' ')).not.toContain(CALLER_KEY);
   });
 
-  it('Jev goes to the TypeSafe systemone path with our bearer key, bytes untouched', async () => {
+  it('Jev goes to the TypeSafe systemone path with our bearer key, as checked plain JSON', async () => {
     const s = setup();
     await s.seed();
-    const compressed = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd, 1, 2, 3, 4]);
-    const req = new Request('https://relay.oortcloud.dev/v1/typesafe/v1/systemone', {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${CALLER_KEY}`,
-        'content-type': 'application/json',
-        'content-encoding': 'zstd',
-        'x-typesafe-sdk': 'typesafe-sdk/0.7.0',
-        'x-typesafe-retry-count': '1',
-      },
-      body: compressed,
+    const res = await s.send('/v1/typesafe/v1/systemone', jevBody(), {
+      headers: { 'x-typesafe-sdk': 'typesafe-sdk/0.7.0', 'x-typesafe-retry-count': '1' },
     });
-    const res = await handleRelay(
-      req,
-      s.env,
-      { waitUntil: () => undefined },
-      {
-        fetch: (async (i: string | URL | Request, init?: RequestInit) => {
-          const r = new Request(i, init);
-          s.calls.push({
-            url: r.url,
-            method: r.method,
-            headers: r.headers,
-            body: new Uint8Array(await r.arrayBuffer()),
-          });
-          return Response.json({ answers: {} });
-        }) as typeof fetch,
-        now: () => NOW,
-      },
-    );
     expect(res.status).toBe(200);
     const c = s.calls[0]!;
     expect(c.url).toBe('https://api.typesafe.ai/v1/systemone');
     expect(c.headers.get('authorization')).toBe(`Bearer ${OUR.TYPESAFE_API_KEY}`);
-    expect(c.headers.get('content-encoding')).toBe('zstd');
+    expect(c.headers.get('content-type')).toBe('application/json');
+    expect(c.headers.get('content-encoding')).toBeNull();
     expect(c.headers.get('x-typesafe-retry-count')).toBe('1');
-    expect([...c.body]).toEqual([...compressed]);
+    expect(c.headers.get('x-typesafe-sdk')).toBeNull();
+    expect(JSON.parse(text(c.body))).toEqual(jevBody());
     expect([...c.headers.values()].join(' ')).not.toContain(CALLER_KEY);
   });
 
@@ -375,13 +363,104 @@ describe('allowlists and size caps', () => {
     expect(res.status).toBe(415);
   });
 
-  it('rejects an unknown content-encoding on the TypeSafe route', async () => {
+  it('rejects any content-encoding, zstd included, on the TypeSafe route', async () => {
     const s = setup();
     await s.seed();
-    const res = await s.send('/v1/typesafe/v1/systemone', jevBody(), {
-      headers: { 'content-encoding': 'br' },
+    for (const enc of ['br', 'zstd', 'gzip']) {
+      const res = await s.send('/v1/typesafe/v1/systemone', jevBody(), {
+        headers: { 'content-encoding': enc },
+      });
+      expect(res.status).toBe(415);
+    }
+    expect(s.calls).toHaveLength(0);
+  });
+
+  it('rejects a body that is not application/json', async () => {
+    const s = setup();
+    await s.seed();
+    for (const type of ['text/plain', 'multipart/form-data; boundary=x', '']) {
+      const res = await s.send('/v1/voyage/embeddings', embedBody(), {
+        headers: { 'content-type': type || 'application/x-empty' },
+      });
+      expect(res.status).toBe(415);
+    }
+    expect(s.calls).toHaveLength(0);
+  });
+
+  it('accepts application/json with a charset', async () => {
+    const s = setup();
+    await s.seed();
+    const res = await s.send('/v1/voyage/embeddings', embedBody(), {
+      headers: { 'content-type': 'application/json; charset=utf-8' },
     });
-    expect(res.status).toBe(415);
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects unknown top-level fields on every route', async () => {
+    const s = setup();
+    await s.seed();
+    const bodies: [string, Record<string, unknown>][] = [
+      ['/v1/voyage/embeddings', { ...embedBody(), extra: 1 }],
+      ['/v1/voyage/rerank', { ...rerankBody(), extra: 1 }],
+      ['/v1/typesafe/v1/systemone', { ...jevBody(), extra: 1 }],
+      ['/v1/anthropic/v1/messages', messagesBody({ temperature: 2 })],
+    ];
+    for (const [path, body] of bodies) expect((await s.send(path, body)).status, path).toBe(400);
+    expect(s.calls).toHaveLength(0);
+  });
+
+  it('rejects Anthropic content that is not plain text', async () => {
+    const s = setup();
+    await s.seed();
+    const bad = [
+      messagesBody({
+        messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64' } }] }],
+      }),
+      messagesBody({ messages: [{ role: 'system', content: 'x' }] }),
+      messagesBody({ system: [{ type: 'text', text: 's', cache_control: { type: 'ephemeral' } }] }),
+      messagesBody({ metadata: { user_id: 'u', other: 1 } }),
+      messagesBody({ thinking: { type: 'enabled', budget_tokens: 50_000 } }),
+      messagesBody({ output_config: { format: { type: 'json_schema', schema: {} }, other: 1 } }),
+    ];
+    for (const b of bad) expect((await s.send('/v1/anthropic/v1/messages', b)).status).toBe(400);
+    const ok = messagesBody({
+      system: [{ type: 'text', text: 'write a memory' }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: SECRET_TEXT }] }],
+      output_config: { format: { type: 'json_schema', schema: { type: 'object' } } },
+      stream: false,
+      stop_sequences: ['\n\n'],
+    });
+    expect((await s.send('/v1/anthropic/v1/messages', ok)).status).toBe(200);
+    expect(s.calls).toHaveLength(1);
+  });
+
+  it('rejects a Jev call that is not decide-jev shaped', async () => {
+    const s = setup();
+    await s.seed();
+    const many = Object.fromEntries(
+      Array.from({ length: 33 }, (_, i) => [`q${i}`, { type: 'noul', instructions: 'x' }]),
+    );
+    for (const b of [
+      { ...jevBody(), model: 'jev-preview' },
+      { ...jevBody(), state: null },
+      { ...jevBody(), questions: many },
+      { ...jevBody(), questions: { q: { type: 'box', instructions: 'x' } } },
+      { ...jevBody(), questions: { q: { type: 'noul', instructions: 'x', assets: {} } } },
+    ]) {
+      expect((await s.send('/v1/typesafe/v1/systemone', b)).status).toBe(400);
+    }
+    expect(s.calls).toHaveLength(0);
+  });
+
+  it('caps a Jev body at 64 KB', async () => {
+    const s = setup();
+    await s.seed();
+    const res = await s.send('/v1/typesafe/v1/systemone', {
+      ...jevBody(),
+      state: 'x'.repeat(64 * 1024),
+    });
+    expect(res.status).toBe(413);
+    expect(s.calls).toHaveLength(0);
   });
 });
 
@@ -406,7 +485,7 @@ describe('auth and entitlement', () => {
     const s = setup();
     await s.seed();
     const res = await s.send('/v1/voyage/embeddings', embedBody(), {
-      key: 'oort_sk_unknownBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+      key: 'oort_sk_unknown' + 'B'.repeat(36),
     });
     expect(res.status).toBe(401);
     expect(s.calls).toHaveLength(0);
@@ -451,10 +530,69 @@ describe('auth and entitlement', () => {
     const res = await s.send('/v1/voyage/embeddings', embedBody());
     expect(res.status).toBe(429);
     expect(res.headers.get('retry-after')).toBe('10');
-    expect(((await res.json()) as { error: string }).error).toMatch(/60 requests every 10 seconds/);
+    const j = (await res.json()) as { error: string; reason: string };
+    expect(j.error).toMatch(/60 requests every 10 seconds per key/);
+    expect(j.reason).toBe('rate limit: key');
     expect(s.calls).toHaveLength(0);
     // The limiter key is the key hash, never the raw key.
     expect(s.rateKeys[0]).toBe(await hashKey(CALLER_KEY));
+  });
+
+  it('rate limits per account too, after the key and before the body is read', async () => {
+    const s = setup();
+    await s.seed();
+    s.env.RATE_LIMITER = {
+      limit: async ({ key }) => ({ success: !key.startsWith('account:') }),
+    };
+    const res = await s.send('/v1/voyage/embeddings', embedBody());
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as { reason: string }).reason).toBe('rate limit: account');
+    expect(s.calls).toHaveLength(0);
+  });
+
+  it('rejects a key of the wrong length before any limiter or D1 call', async () => {
+    const s = setup();
+    await s.seed();
+    const prepare = vi.spyOn(s.db, 'prepare');
+    for (const key of [`${CALLER_KEY}A`, CALLER_KEY.slice(0, -1), 'oort_sk_' + '!'.repeat(43)]) {
+      expect((await s.send('/v1/voyage/embeddings', embedBody(), { key })).status).toBe(401);
+    }
+    expect(s.rateKeys).toHaveLength(0);
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it('throttles failed sign-ins per IP with 429', async () => {
+    const s = setup();
+    await s.seed();
+    const ips: string[] = [];
+    s.env.AUTH_LIMITER = {
+      limit: async ({ key }) => (ips.push(key), { success: false }),
+    };
+    const res = await s.send('/v1/voyage/embeddings', embedBody(), {
+      key: 'oort_sk_' + 'Q'.repeat(43),
+      headers: { 'cf-connecting-ip': '198.51.100.7' },
+    });
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as { reason: string }).reason).toBe('rate limit: failed sign-ins');
+    expect(ips).toEqual(['ip:198.51.100.7']);
+    // A good key never touches the failed sign-in limiter.
+    expect((await s.send('/v1/voyage/embeddings', embedBody())).status).toBe(200);
+    expect(ips).toHaveLength(1);
+  });
+
+  it('denies a subscription whose period ended more than 3 days ago', async () => {
+    const s = setup();
+    await s.seed();
+    await s.db
+      .prepare('UPDATE accounts SET current_period_end = ?')
+      .bind(new Date(NOW.getTime() - 3 * 86_400_000 - 1000).toISOString())
+      .run();
+    expect((await s.send('/v1/voyage/embeddings', embedBody())).status).toBe(402);
+    await s.db
+      .prepare('UPDATE accounts SET current_period_end = ?')
+      .bind(new Date(NOW.getTime() - 2 * 86_400_000).toISOString())
+      .run();
+    expect((await s.send('/v1/voyage/embeddings', embedBody())).status).toBe(200);
   });
 });
 
@@ -473,29 +611,66 @@ describe('metering', () => {
     await s.send('/v1/voyage/embeddings', embedBody(1, 'query'));
     await s.send('/v1/voyage/rerank', rerankBody());
     expect(await s.usage()).toEqual({ saves: 0, recalls: 1 });
+    expect(await s.counters()).toEqual({ embed_inputs: 1, rerank_calls: 1, decide_calls: 0 });
   });
 
-  it('does not count a rerank call on its own', async () => {
+  it('counts a rerank call as a rerank call, not a recall', async () => {
     const s = setup();
     await s.seed();
     await s.send('/v1/voyage/rerank', rerankBody());
-    expect(await s.usage()).toBeNull();
+    expect(await s.usage()).toEqual({ saves: 0, recalls: 0 });
+    expect(await s.counters()).toEqual({ embed_inputs: 0, rerank_calls: 1, decide_calls: 0 });
   });
 
-  it('does not count document embeddings or Jev calls', async () => {
+  it('counts every embedding input and every Jev call, but neither as a save', async () => {
     const s = setup();
     await s.seed();
     await s.send('/v1/voyage/embeddings', embedBody(5, 'document'));
     await s.send('/v1/typesafe/v1/systemone', jevBody());
-    expect(await s.usage()).toBeNull();
+    expect(await s.usage()).toEqual({ saves: 0, recalls: 0 });
+    expect(await s.counters()).toEqual({ embed_inputs: 5, rerank_calls: 0, decide_calls: 1 });
   });
 
-  it('does not count a failed upstream call', async () => {
+  for (const [what, respond] of [
+    ['a 5xx', () => new Response('{"error":"x"}', { status: 500 })],
+    ['a 429', () => new Response('{"error":"x"}', { status: 429 })],
+    ['our key failing (401)', () => new Response('{"error":"x"}', { status: 401 })],
+    [
+      'a network failure',
+      () => {
+        throw new Error('down');
+      },
+    ],
+  ] as const) {
+    it(`refunds the reservation after ${what}`, async () => {
+      const s = setup();
+      await s.seed();
+      s.respond(respond);
+      await s.send('/v1/anthropic/v1/messages', messagesBody());
+      await s.send('/v1/voyage/embeddings', embedBody(3, 'query'));
+      expect(await s.usage()).toEqual({ saves: 0, recalls: 0 });
+      expect(await s.counters()).toEqual({ embed_inputs: 0, rerank_calls: 0, decide_calls: 0 });
+    });
+  }
+
+  it('keeps the reservation after a provider 4xx (the provider did the work of refusing)', async () => {
     const s = setup();
     await s.seed();
-    s.respond(() => new Response('{"error":"x"}', { status: 500 }));
+    s.respond(() => new Response('{"error":"x"}', { status: 400 }));
     await s.send('/v1/anthropic/v1/messages', messagesBody());
-    expect(await s.usage()).toBeNull();
+    expect(await s.usage()).toEqual({ saves: 1, recalls: 0 });
+  });
+
+  it('reserves before forwarding: the counter moves before the provider answers', async () => {
+    const s = setup();
+    await s.seed();
+    let seen: unknown;
+    s.respond(() => {
+      seen = s.db.raw.prepare('SELECT saves FROM usage').get();
+      return Response.json({ ok: true });
+    });
+    await s.send('/v1/anthropic/v1/messages', messagesBody());
+    expect(seen).toEqual({ saves: 1 });
   });
 
   it('records last_used_at on the key', async () => {
@@ -541,11 +716,28 @@ describe('metering', () => {
   });
 
   it('uses the same Pro included amounts as the site pricing (Structure A)', () => {
-    expect(PLAN_LIMITS.pro).toEqual({
+    expect(PLAN_LIMITS.pro).toMatchObject({
       saves: rates.managed.Pro.saves,
       recalls: rates.managed.Pro.recalls,
     });
-    expect(PLAN_LIMITS.pro).toEqual({ saves: 25_000, recalls: 50_000 });
+    expect(PLAN_LIMITS.pro).toEqual({
+      saves: 25_000,
+      recalls: 50_000,
+      embed_inputs: 200_000,
+      rerank_calls: 60_000,
+      decide_calls: 60_000,
+    });
+  });
+
+  it('names the cap in a reason field', async () => {
+    const s = setup();
+    await s.seed();
+    await s.db
+      .prepare('INSERT INTO usage (account_id, month, saves, recalls) VALUES (?, ?, ?, ?)')
+      .bind('acc_1', '2026-11', 0, PLAN_LIMITS.pro.recalls)
+      .run();
+    const res = await s.send('/v1/voyage/embeddings', embedBody(1, 'query'));
+    expect(((await res.json()) as { reason: string }).reason).toBe('monthly cap: recalls');
   });
 });
 
@@ -629,7 +821,7 @@ describe('no content in logs or responses', () => {
     expect(await res.text()).not.toContain(OUR.VOYAGE_API_KEY);
   });
 
-  it('passes other upstream errors through without our keys or the upstream request id', async () => {
+  it('answers an upstream 4xx with its own message, never the upstream body', async () => {
     const s = setup();
     await s.seed();
     s.respond(() =>
@@ -645,10 +837,31 @@ describe('no content in logs or responses', () => {
     const res = await s.send('/v1/anthropic/v1/messages', messagesBody());
     expect(res.status).toBe(400);
     const body = await res.text();
-    expect(body).toContain('invalid_request_error');
+    expect(JSON.parse(body)).toEqual({ error: 'The provider rejected this request (HTTP 400).' });
     expect(body).not.toContain(OUR.ANTHROPIC_API_KEY);
-    expect(body).not.toContain('req_upstream_123');
+    expect(body).not.toContain('invalid_request_error');
     expect(res.headers.get('request-id')).toBeNull();
+  });
+
+  it('answers an upstream 429 or 5xx with 503 busy and the upstream Retry-After only', async () => {
+    for (const status of [429, 500, 529]) {
+      const s = setup();
+      await s.seed();
+      s.respond(
+        () =>
+          new Response(`{"error":"org_789 over its limit"}`, {
+            status,
+            headers: { 'retry-after': '12', 'x-request-id': 'xreq_456' },
+          }),
+      );
+      const res = await s.send('/v1/voyage/rerank', rerankBody());
+      expect(res.status, String(status)).toBe(503);
+      expect(res.headers.get('retry-after')).toBe('12');
+      expect(await res.json()).toEqual({
+        error: 'Oort Pro is busy, try again shortly.',
+        reason: 'upstream busy',
+      });
+    }
   });
 
   it('keeps only content-type and retry-after from upstream response headers', async () => {

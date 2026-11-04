@@ -44,6 +44,7 @@ describe('one oort-accounts schema for site and relay', () => {
     expect(readdirSync(resolve(SITE, siteAccounts.migrations_dir)).sort()).toEqual([
       '0001_accounts.sql',
       '0002_cli_sessions.sql',
+      '0003_usage_counters.sql',
     ]);
   });
 
