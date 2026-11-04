@@ -23,8 +23,7 @@ function Page() {
         in aggregate and does not follow you across sites.
       </p>
       <p>
-        Fonts load from Google Fonts, which receives your IP address when the page loads. Questions:{' '}
-        <Contact />.
+        Fonts are served from our own site, not from a third party. Questions: <Contact />.
       </p>
     </LegalPage>
   );

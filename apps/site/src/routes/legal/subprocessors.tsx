@@ -26,8 +26,7 @@ function Page() {
         </li>
       </ul>
       <p>
-        Cloudflare is the only subprocessor for the site today. Google Fonts serves the typeface
-        directly to your browser and is not a processor of our data. We will update this list before
+        Cloudflare is the only subprocessor for the site today. We will update this list before
         adding another, and publish the hosted-service list before Oort Cloud opens.
       </p>
     </LegalPage>
