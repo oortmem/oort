@@ -48,7 +48,7 @@ The relevance gate, under `recall` in `~/.oort/config.json`:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `minRerankScore` | 0.35 | A reranked memory needs at least this Voyage rerank score (0 to 1). Calibrated on 2026-11-04 with real `rerank-3-lite` scores on the demo eval: answerable rows scored 0.740 or more, abstention rows 0.303 or less. Rerun the calibration on your own store to tune it, see below. |
+| `minRerankScore` | 0.35 | A reranked memory needs at least this Voyage rerank score (0 to 1). Calibrated on 2026-11-04 with real `rerank-3-lite` scores on the demo eval: answerable rows scored 0.767 or more, abstention rows 0.303 or less. Rerun the calibration on your own store to tune it, see below. |
 | `minCoverage` | 0.5 | Without a rerank score, a memory needs this share of the prompt's informative words (stopwords and question words do not count). Set from the bench eval fixture. |
 | `minDenseScore` | 0.6 | Without a rerank score, a dense similarity this high also lets a memory through, for paraphrases. Provisional. |
 | `skipRerankWhenConfident` | true | Skip the rerank call when the top result is clear: it is the lexical top, holds most of the prompt's words, the runner-up is clearly weaker, and it is near the top of the dense search too unless it holds every word. |

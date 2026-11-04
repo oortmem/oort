@@ -7,6 +7,11 @@ export interface Rng {
   /** Uniform integer in [lo, hi]. */
   range(lo: number, hi: number): number;
   pick<T>(xs: readonly T[]): T;
+  /**
+   * A uniformly shuffled copy (Fisher-Yates). It draws exactly `xs.length - 1` values, so the
+   * stream stays the same on every JavaScript engine, unlike `sort` with a random comparator.
+   */
+  shuffle<T>(xs: readonly T[]): T[];
 }
 
 export function createRng(seed: number): Rng {
@@ -24,5 +29,13 @@ export function createRng(seed: number): Rng {
     int,
     range: (lo, hi) => lo + int(hi - lo + 1),
     pick: (xs) => xs[int(xs.length)] as (typeof xs)[number],
+    shuffle: (xs) => {
+      const out = [...xs];
+      for (let i = out.length - 1; i > 0; i--) {
+        const j = int(i + 1);
+        [out[i], out[j]] = [out[j] as (typeof out)[number], out[i] as (typeof out)[number]];
+      }
+      return out;
+    },
   };
 }
