@@ -58,6 +58,8 @@ Every body is capped at 256 KB (413 above that). Client base URLs:
   and key echoes are dropped. Upstream error bodies are passed through with our keys and the
   top-level `request_id` removed. An upstream 401 or 403 (our key) becomes a plain 502.
 - Workers Logs keep invocation logs only (method, path, status, duration) at a 10% head sample.
+  Cloudflare redacts header values whose name contains `auth` or `key`, so neither
+  `Authorization` nor `x-api-key` is recorded.
 
 ## Configuration
 
