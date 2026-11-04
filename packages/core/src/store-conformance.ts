@@ -161,6 +161,72 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
       expect(await store.coldGet(TG, 'c2')).toBeNull();
     });
 
+    it('temporal-fields-roundtrip', async () => {
+      // CON-34/49: confirmation, correction and the new decision stages survive a round trip.
+      const m = makeMemory({
+        id: 't1',
+        text: 'auth listens on port 3000',
+        embedding: vec(1, 2, 3, 4),
+        validFrom: '2026-01-01T00:00:00.000Z',
+        validTo: '2026-02-01T00:00:00.000Z',
+        expiredAt: '2026-01-15T00:00:00.000Z',
+        endReason: 'corrected',
+        lastConfirmedAt: '2026-01-10T08:30:00.000Z',
+        supersededBy: 't2',
+        source: {
+          harness: 'test',
+          turnRef: 'turn-9',
+          decisions: [
+            { stage: 'gate', question: 'volatile', answer: 'yes', probability: 0.8 },
+            {
+              stage: 'temporal',
+              question: 'interval',
+              answer: 'turn .. 2026-02-01',
+              probability: 1,
+            },
+            {
+              stage: 'temporal',
+              question: 'writer-date',
+              answer: '2026-01-02 -> 2026-01-03',
+              probability: 1,
+            },
+            {
+              stage: 'refine',
+              question: 'previous-text',
+              answer: 'auth on 3000',
+              probability: 0.7,
+            },
+            { stage: 'write', question: 'action', answer: 'CORRECT', probability: 0.9 },
+          ],
+        },
+      });
+      await store.upsert(TG, m);
+      expect(await store.get(TG, 't1')).toEqual(m);
+    });
+
+    it('refine-in-place-of-a-cold-record-stays-consistent', async () => {
+      // A REFINE rewrites a cold memory in place and promotes it: the cold copy goes, so a later
+      // hydration cannot bring the old wording back.
+      const m = makeMemory({ id: 'r1', text: 'auth on port 3000', embedding: vec(1, 2, 3, 4) });
+      await seedCold(store, m);
+      const cold = await store.get(TG, 'r1');
+      if (cold === null) throw new Error('coldPut lost the main record');
+      expect(cold.tier).toBe('cold');
+      const refined: Memory = {
+        ...cold,
+        text: 'auth on port 3000 over TLS',
+        stub: 'auth port TLS',
+        embedding: vec(4, 3, 2, 1),
+        tier: 'warm',
+        lastConfirmedAt: '2026-01-10T00:00:00.000Z',
+        updatedAt: '2026-01-10T00:00:00.000Z',
+      };
+      await store.upsert(TG, refined);
+      expect(await store.get(TG, 'r1')).toEqual(refined);
+      expect(await store.coldGet(TG, 'r1')).toBeNull();
+      expect((await store.lexical(TG, 'TLS', 5)).map((h) => h.id)).toEqual(['r1']);
+    });
+
     it('cold-put-many-roundtrip', async () => {
       const a = makeMemory({ id: 'a', text: 'alpha', embedding: vec(1, 2, 3, 4) });
       const b = makeMemory({ id: 'b', text: 'beta', tier: 'hot', embedding: vec(4, 3, 2, 1) });

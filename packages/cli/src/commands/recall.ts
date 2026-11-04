@@ -50,6 +50,19 @@ export function temporalView(f: TemporalFlags): TemporalView {
   return f.history === true ? { mode: 'history' } : {};
 }
 
+/**
+ * True when a view was asked for explicitly but the result reports none: a backend (an older
+ * cloud API) that ignores time modes. The results are then probably current facts.
+ */
+export function viewIgnored(view: TemporalView, r: RecallResult): boolean {
+  return view.mode !== undefined && r.temporal === undefined;
+}
+
+/** The warning for `viewIgnored`, on stderr. */
+export function viewIgnoredWarning(view: TemporalView): string {
+  return `oort: the store did not report the time mode, so "${view.mode}" may not have been applied; these may be current facts.\n`;
+}
+
 /** Recall for the cwd's project plus global memories; lexical-only without a Voyage key. */
 export async function runRecall(
   w: Wired,
@@ -86,6 +99,7 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
     const now = new Date();
     const result = await runRecall(w, text, view, now);
     degradedHint(ctx.io, w, result.degraded);
+    if (viewIgnored(view, result)) ctx.io.err(viewIgnoredWarning(view));
     if (opts.json === true) {
       const filter = filterFor(w.scope);
       // Cloud memories arrive already shaped for this account.

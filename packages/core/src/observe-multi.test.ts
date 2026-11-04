@@ -104,6 +104,7 @@ function deps(
     scope?: Scope;
     /** What the fake Jev answers for a candidate about the same subject. */
     same?: ReconcileDecision['action'];
+    gate?: GateDecision;
   } = {},
 ): {
   spy: Spy;
@@ -121,7 +122,7 @@ function deps(
   };
   const decide: DecisionController = {
     async gate() {
-      return gate;
+      return opts.gate ?? gate;
     },
     async reconcile(o, candidates) {
       spy.reconcile.push(o.userText);
@@ -380,5 +381,24 @@ describe('observe with a multi-memory writer (CON-56)', () => {
       memoryId: 'ci-red',
     });
     expect((await reinforced.store.get(TG, 'ci-red'))?.lastConfirmedAt).toBe(NOW.toISOString());
+  });
+
+  it('observe.multi.turn-level-volatile-is-not-applied-to-each-fact (review 14)', async () => {
+    const volatileGate: GateDecision = {
+      ...gate,
+      volatile: 0.9,
+      decisions: [
+        ...gate.decisions,
+        { stage: 'gate', question: 'volatile', answer: 'yes', probability: 0.9 },
+      ],
+    };
+    const { run, store } = deps([fact('CI on main is green.'), fact('release 1.2 shipped.')], {
+      gate: volatileGate,
+    });
+    const r = await run();
+    for (const m of r.memories) {
+      const stored = await store.get(TG, m.memoryId!);
+      expect(stored?.source.decisions.some((d) => d.question === 'volatile')).toBe(false);
+    }
   });
 });

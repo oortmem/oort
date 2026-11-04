@@ -16,7 +16,7 @@ import { localGrant, type Grant } from './grant.js';
 import { capObservation } from './cap.js';
 import type { Decision, Memory, Scope } from './model.js';
 import { scrubObservation } from './scrub.js';
-import { checkWriterDate, factInterval } from './temporal.js';
+import { checkWriterDate, factInterval, utcOffset } from './temporal.js';
 import { tokenizeLexical } from './tokenize.js';
 
 export type MemoryOutcomeKind =
@@ -124,6 +124,7 @@ async function confirm(
   if (m !== null) await store.upsert(grant, { ...m, lastConfirmedAt: nowIso });
 }
 
+const DAY_MS = 86_400_000;
 const GATE_THRESHOLD = 0.5;
 const HOT_SALIENCE = 0.8;
 const CANDIDATES = 5;
@@ -193,6 +194,8 @@ interface ApplyArgs {
 async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   const { obs, scope, grant, deps, now, candidates, decisions } = a;
   const { store } = deps;
+  // Decisions from here on are this memory's own (the turn's gate and reconcile come before).
+  const firstOwn = decisions.length;
   let best = bestOf(a.rs);
   if (best === undefined && a.noopMeansNew === true && a.rs.length > 0) {
     // Every candidate is unrelated. The writer already said this is a fact worth keeping,
@@ -247,7 +250,14 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   if (action !== 'ADD' && prior === undefined) action = 'ADD';
   if (prior !== undefined) a.claimed?.add(prior.id);
 
-  const w = dated(obs, await a.author(WRITER_ACTION[action], prior), now, decisions);
+  // The turn's time and UTC offset: relative dates are read in the offset the turn was written
+  // in. A turn with no usable timestamp starts now: an empty or unparseable validFrom would make
+  // the memory never current (and consolidation would evict it).
+  const usable = !Number.isNaN(Date.parse(obs.at));
+  const turnAt = usable ? new Date(obs.at) : now;
+  const offset = usable ? (utcOffset(obs.at) ?? 0) : 0;
+
+  const w = dated(obs, await a.author(WRITER_ACTION[action], prior), turnAt, offset, decisions);
   const id = randomUUID();
   const iso = now.toISOString();
   const writeDecision: Decision = {
@@ -257,11 +267,8 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     probability: best.probability,
   };
 
-  // The fact's own bounds ("until Friday", "starting next week"), resolved in code against the
-  // turn's time. A turn with no usable timestamp starts now: an empty or unparseable validFrom
-  // would make the memory never current (and consolidation would evict it).
-  const turnAt = Number.isNaN(Date.parse(obs.at)) ? now : new Date(obs.at);
-  const bounds = factInterval(w.text, turnAt);
+  // The fact's own bounds ("until Friday", "starting next week"), resolved in code.
+  const bounds = factInterval(w.text, turnAt, offset);
   if (bounds.validFrom !== undefined || bounds.validTo !== undefined) {
     decisions.push({
       stage: 'temporal',
@@ -270,14 +277,20 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
       probability: 1,
     });
   }
-  const validFrom = bounds.validFrom ?? (Number.isNaN(Date.parse(obs.at)) ? iso : obs.at);
-  const validTo =
-    bounds.validTo !== undefined && Date.parse(bounds.validTo) > Date.parse(validFrom)
-      ? bounds.validTo
-      : null;
+  // A start, moved back a day before an end it would pass: an end already in the past ("the
+  // freeze ran until yesterday") is kept, and the fact is stored already ended.
+  const startBefore = (from: string, to: string | null): string =>
+    to !== null && Date.parse(to) <= Date.parse(from)
+      ? new Date(Date.parse(to) - DAY_MS).toISOString()
+      : from;
+  const validTo = bounds.validTo ?? null;
+  const validFrom = startBefore(bounds.validFrom ?? turnAt.toISOString(), validTo);
 
   if (action === 'REFINE' && prior !== undefined) {
-    // Same fact, more detail: rewrite in place. The earlier wording stays in the decisions.
+    // Same fact, more detail: rewrite in place. The earlier wording stays in the decisions, and
+    // only this turn's own decisions are appended, so the list grows by a few per refine.
+    // A cold memory is promoted: the store drops its cold copy, so hydration can't undo this.
+    const to = bounds.validTo ?? prior.validTo;
     await store.upsert(grant, {
       ...prior,
       type: w.type,
@@ -285,15 +298,21 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
       stub: w.stub,
       entities: w.entities,
       embedding: a.embedding,
+      tier: prior.tier === 'cold' ? 'warm' : prior.tier,
       salience: Math.max(prior.salience, a.salience),
-      validTo: validTo ?? prior.validTo,
+      validFrom: startBefore(bounds.validFrom ?? prior.validFrom, to),
+      validTo: to,
       lastConfirmedAt: iso,
       updatedAt: iso,
       source: {
         ...prior.source,
+        ...(obs.sessionId !== undefined && { sessionId: obs.sessionId }),
+        ...(obs.turnRef !== undefined && { turnRef: obs.turnRef }),
         decisions: [
           ...prior.source.decisions,
-          ...decisions,
+          ...decisions.slice(0, firstOwn).filter(isVolatileDecision),
+          ...best.decisions,
+          ...decisions.slice(firstOwn),
           {
             stage: 'refine',
             question: 'previous-text',
@@ -343,8 +362,11 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   if (action === 'CORRECT' && prior !== undefined) {
     // The prior was never true: retract it in transaction time and put the correction in its
     // place in valid time. Its valid interval is left alone, so as-of reads skip it by reason.
+    // The correction keeps bounds its own text states, else takes the prior's.
+    const to = bounds.validTo ?? prior.validTo;
+    const from = startBefore(bounds.validFrom ?? prior.validFrom, to);
     await store.upsertMany(grant, [
-      withDecisions({ ...base, validFrom: prior.validFrom, validTo: prior.validTo }),
+      withDecisions({ ...base, validFrom: from, validTo: to }),
       {
         ...prior,
         expiredAt: iso,
@@ -359,7 +381,9 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   // Temporal order of the new fact against the one it replaces. `deep` means it is
   // also older than the prior's own predecessor; chains are re-slotted at most one
   // step back (deeper out-of-order chains are a Phase 2 concern).
-  const inOrder = prior === undefined || Date.parse(prior.validFrom) <= Date.parse(validFrom);
+  // Order is the turn's: a turn after the prior that says "since <earlier day>" is an update and
+  // becomes current; only a turn that itself arrives late slots in behind the prior.
+  const inOrder = prior === undefined || Date.parse(prior.validFrom) <= turnAt.getTime();
   let pred: Memory | null = null;
   if (prior !== undefined && !inOrder && prior.supersedes !== null) {
     pred = await store.get(grant, prior.supersedes);
@@ -380,15 +404,17 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   if (prior === undefined) {
     await store.upsert(grant, memory);
   } else if (inOrder) {
-    // Close the prior where the new fact starts, not where we observed it. A fact
-    // starting in the future leaves the prior current until then (`expiredAt` stays
-    // null; consolidation expires it once `validTo` has passed).
+    // Close the prior where the new fact starts, not where we observed it (but never before
+    // the prior's own start). A fact starting in the future leaves the prior current until
+    // then (`expiredAt` stays null; consolidation expires it once `validTo` has passed).
+    const closeAt =
+      Date.parse(validFrom) > Date.parse(prior.validFrom) ? validFrom : prior.validFrom;
     await store.upsertMany(grant, [
       memory,
       {
         ...prior,
-        validTo: validFrom,
-        expiredAt: Date.parse(validFrom) <= now.getTime() ? iso : null,
+        validTo: closeAt,
+        expiredAt: Date.parse(closeAt) <= now.getTime() ? iso : null,
         endReason: 'superseded',
         supersededBy: id,
         updatedAt: iso,
@@ -428,18 +454,31 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   return { outcome: OUTCOME[action], memoryId: id };
 }
 
+/** The gate's volatile answer: recorded on the memory, it is what marks a fact as volatile. */
+const isVolatileDecision = (d: Decision): boolean =>
+  d.stage === 'gate' && d.question === 'volatile';
+
 /**
  * The writer's absolute date checked against the turn (CON-34): when the turn says "yesterday"
- * and the fact carries one ISO day, that day is chrono's reading, not the model's arithmetic.
+ * and the fact carries one ISO day a day or two off, that day is chrono's reading, not the
+ * model's arithmetic. A stated or distant date is kept and the difference logged.
  */
 function dated(
   obs: Observation,
   w: WrittenMemory,
-  now: Date,
+  at: Date,
+  offset: number,
   decisions: Decision[],
 ): WrittenMemory {
-  const at = Number.isNaN(Date.parse(obs.at)) ? now : new Date(obs.at);
-  const r = checkWriterDate(`${obs.userText}\n${obs.assistantText}`, w.text, at);
+  const r = checkWriterDate(`${obs.userText}\n${obs.assistantText}`, w.text, at, offset);
+  if (r.mismatch !== undefined) {
+    decisions.push({
+      stage: 'temporal',
+      question: 'writer-date',
+      answer: `kept ${r.mismatch.written} (turn reads ${r.mismatch.resolved})`,
+      probability: 1,
+    });
+  }
   if (r.fixed === undefined) return w;
   decisions.push({
     stage: 'temporal',
@@ -570,11 +609,14 @@ async function observeMany(
 
   const claimed = new Set<string>();
   const memories: MemoryOutcome[] = [];
-  const all: Decision[] = [...g.decisions];
+  // The gate's volatile answer is about the whole turn, not each fact of it: until there is a
+  // per-fact question, facts split from a turn carry none (so none is ever marked stale).
+  const turnDecisions = g.decisions.filter((d) => !isVolatileDecision(d));
+  const all: Decision[] = [...turnDecisions];
   for (const [i, f] of facts.entries()) {
     const rs = rss[i]!;
     const decisions: Decision[] = [
-      ...g.decisions,
+      ...turnDecisions,
       { stage: 'write', question: 'fact', answer: `${i + 1}/${facts.length}`, probability: 1 },
       ...rs.flatMap((r) => r.decisions),
     ];
@@ -595,7 +637,7 @@ async function observeMany(
         noopMeansNew: true,
       }),
     );
-    all.push(...decisions.slice(g.decisions.length));
+    all.push(...decisions.slice(turnDecisions.length));
   }
   const head = memories.find((m) => m.outcome !== 'skipped') ?? memories[0]!;
   return {

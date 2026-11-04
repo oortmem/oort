@@ -178,12 +178,17 @@ the newer one instead of ending it.
 
 Dates are resolved in code, never by the writer model. "Until Friday", "starting next week" and
 "since last Monday" in a written fact set its `validFrom` and `validTo`, read against the turn's
-own time. When the turn says "yesterday" and the writer put a different day in the fact, the day
-is fixed and the decision log records `temporal` / `writer-date`.
+own time (see [Time](cli.md#time-recall-modes) for each cue). When the turn says "yesterday" and
+the writer's day is one or two off, it is fixed; a date the user stated is never rewritten. Both
+are logged as `temporal` / `writer-date`.
+
+A refine rewrites the memory in place, records the refining turn, and appends only that turn's own
+decisions. A cold memory that is refined moves back to warm.
 
 The prompt hook reads the time mode from the prompt (see [Time](cli.md#time-recall-modes)): "what
-port did we use in March" gets what was true then, "how has the build changed" gets every version,
-oldest first. In the injected block a version that is no longer current shows its interval instead
+port did we use in March" gets what was true then, and a history question ("how has the build
+changed?") gets every version, oldest first. An ordinary instruction that mentions a change ("fix
+the test, the config changed") stays current. In the injected block a version that is no longer current shows its interval instead
 of its age:
 
 ```text

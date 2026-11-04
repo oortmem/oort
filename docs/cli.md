@@ -318,7 +318,7 @@ Tools:
 
 | Tool | Input | Annotations | Returns |
 | --- | --- | --- | --- |
-| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of`, `history`, `known-at`), `limit?` (1–10, default 5) | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`); `mode`, the time mode used (for example `as-of 2026-04-02`); a `note` when recall is lexical-only |
+| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10, default 5) | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
 | `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`) | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
 | `forget` | `id` (required) | destructive, idempotent | `{ forgotten: id }` |
 | `pin` | `id`, `pinned` (boolean) | write, not destructive, idempotent | `{ id, pinned, changed }` |
@@ -409,27 +409,50 @@ transaction time (`createdAt` to `expiredAt`: when Oort believed it). A recall r
 | `current` | (default) | What is true now and still believed. |
 | `as-of` | `--as-of <iso>` | What was true at that time, using everything learned since. A corrected fact never shows: it was never true. |
 | `history` | `--history` | Every version of the matching facts, along the supersede chain, oldest first. Versions found only by walking the chain have `explanation.chain`. |
-| `known-at` | `--known-at <iso>` | What Oort believed at that time, including facts corrected later. |
+| `known-at` | `--known-at <iso>` | What Oort believed at that time, including facts corrected later. A fact whose own end (or expiry) had passed by then is not shown; a fact superseded or corrected after that time is. A refined memory shows its latest wording; earlier wording is in its decisions (`refine` / `previous-text`). |
 
-Without a flag the mode comes from the query, in code (chrono-node, no model call): "on 2 April
-2026" or "in March" is as-of the end of that day, "how has … changed" or "used to" is history,
-"what did we believe … on <day>" is known-at. A bare date with no "on", "in" or "as of" stays a
-keyword ("2026-05-16 pooling" finds the memory that mentions it). The temporal words are left out
-of the search. `--json` reports the view under `temporal` (`inferred: true` when it came from the
-query). Validity is a filter; recency only breaks ties in the ranking.
+Without a flag the mode comes from the query, in code (chrono-node, no model call):
+
+- "on 2 April 2026", "in March" or "yesterday" is as-of the end of that day. The date words are
+  left out of the search. A coming day ("by Friday", "next week") stays current, and a bare date
+  with no "on", "in" or "as of" stays a keyword ("2026-05-16 pooling" finds the memory that
+  mentions it).
+- A history question, asked as one: "how has X changed", "history of X", "what did X used to
+  be", "what was X before". Every word stays in the search. A prompt that only mentions a change
+  ("fix the test, the config changed") stays current.
+- "what did we believe … on <day>" is known-at that day.
+
+`--json` reports the view under `temporal` (`inferred: true` when it came from the query). If the
+store reports no view (an older Oort Cloud API), `recall` and `explain` warn on stderr that a
+requested mode may not have been applied. Validity is a filter; recency only breaks ties in the
+ranking.
 
 A fact can end two ways. **Superseded**: the situation changed, so the old fact gets `validTo`
 (the new fact's start) and `endReason: superseded`. **Corrected**: the old fact was wrong from the
 start, so it gets `expiredAt` (when Oort learned) and `endReason: corrected`, and the correction
 takes its valid interval. A fact that only gains detail is **refined** in place; its earlier
-wording stays in its decisions. Dates in a fact ("until Friday", "starting next week", "since
-last Monday") set its interval, resolved against the turn's time, and a date the writer got wrong
-("yesterday" written as the wrong day) is fixed from the turn.
+wording stays in its decisions.
+
+Dates in a fact set its interval, resolved against the turn's time, in the turn's UTC offset when
+its timestamp has one:
+
+- "until Friday" ends it after that Friday. An end already past ("the freeze ran until
+  yesterday") is kept: the fact is stored already ended.
+- "starting next week" or "starting Monday" starts it at the coming one, "since last Monday" at
+  the past one, and "as of", "effective" or "from" at whichever is closer within a week, else the
+  past one. "From Monday to Friday" is a schedule and sets nothing.
+- A start earlier than the fact it replaces ("since October" for a fact stored in November) still
+  makes the new fact current; the old one is closed at its own start.
+
+When the turn says "yesterday" and the writer put a day one or two off in the fact, the day is
+fixed. A date the turn states itself, or one further off, is kept and the difference is logged
+(`temporal` / `writer-date`).
 
 **Volatile facts.** The write gate marks facts likely to change within weeks (a status, a current
 version, an owner, a deadline). One not confirmed within `recall.staleAfterDays` (default 30; 0
 turns it off) is injected with "(may be outdated; last confirmed 2mo ago)" and listed by `oort
-revalidate`. Confirming it in a session clears the mark.
+revalidate`. Confirming it in a session clears the mark. The gate answers this once per turn, so
+facts split from a multi-fact turn are not marked yet (a per-fact question is a follow-up).
 
 ## Keys: `oort keys`
 
