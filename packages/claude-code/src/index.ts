@@ -1,4 +1,4 @@
-export type { HookDeps } from './deps.js';
+export type { HookDeps, RemoteMemory } from './deps.js';
 export { createHookLogger, HOOK_LOG_MAX_BYTES, type HookLogEntry, type HookLogger } from './log.js';
 export {
   HARNESS_TAGS,
