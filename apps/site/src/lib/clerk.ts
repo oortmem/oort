@@ -11,6 +11,7 @@ const PLACEHOLDER_ORIGIN = 'https://oortcloud.invalid';
  */
 export function safeRedirect(v: unknown, fallback = '/account'): string {
   if (typeof v !== 'string' || v.length > 512) return fallback;
+  // oxlint-disable-next-line no-control-regex -- control characters are exactly what is refused
   if (!v.startsWith('/') || /[\u0000-\u001f\u007f\\]/.test(v)) return fallback;
   let u: URL;
   try {
