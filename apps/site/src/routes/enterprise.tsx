@@ -1,40 +1,38 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { SiteNav, SiteFooter } from '@/components/site/SiteNav';
+import { PlannedBadge } from '@/components/site/PlannedBadge';
 
 export const Route = createFileRoute('/enterprise')({
   head: () => ({
     meta: [
-      { title: 'Enterprise — Oort Cloud at global scale' },
+      { title: 'Enterprise | An example scenario for Oort Cloud' },
       {
         name: 'description',
         content:
-          'How a global retailer runs personal AI agents for 50 million members on Oort: regional cells, BYOK, tiered cost control.',
+          'A hypothetical scenario: a retailer with 50 million members and personal AI agents, and how it could run on Oort.',
       },
       { property: 'og:title', content: 'Oort Cloud for enterprise' },
       {
         property: 'og:description',
-        content:
-          'Memory for millions of customers with per-customer encryption and flat infrastructure cost.',
+        content: 'A hypothetical scenario for memory at the scale of millions of customers.',
       },
     ],
   }),
   component: Enterprise,
 });
 
-const flow = [
-  ['Brand apps', 'Web · iOS · Android · in-store kiosks · support chat'],
-  ['Agent layer', 'Shopping assistant, support agent, coach agent — all call one memory API'],
-  ['Oort edge gateway', 'Auth, rate limits, tenant + customer routing, read hook < 80 ms'],
-  ['Regional cells', 'US · EU · APAC — data never leaves its region'],
-  ['Tiers per cell', 'Photosphere (hot RAM) → Kuiper (warm index) → Oort (object storage)'],
-  ['Customer KMS', "One data key per member, wrapped by the brand's own key"],
+const flow: [string, string, boolean][] = [
+  ['Brand apps', 'Web, iOS, Android, in-store kiosks, support chat', false],
+  ['Agent layer', 'Shopping assistant, support agent, coach agent. All call one memory API', false],
+  ['Oort gateway', 'Auth, rate limits, tenant and customer routing', true],
+  ['Regional cells', 'US, EU and APAC, so data stays in its region', true],
+  ['Tiers per cell', 'Photosphere (hot) to Kuiper Belt (warm) to Oort Cloud (cold)', false],
+  ['Customer keys', "One data key per member, wrapped by the brand's own key", true],
 ];
 
 const numbers = [
-  ['50M', 'members with personal memory'],
-  ['1.2B', 'retrievals / month'],
-  ['~3%', 'of memories hot at any time'],
-  ['$0.02', 'per GB-month for frozen history'],
+  ['50M', 'members, assumed for this scenario'],
+  ['1.2B', 'recalls a month, assumed for this scenario'],
 ];
 
 function Enterprise() {
@@ -43,15 +41,16 @@ function Enterprise() {
       <SiteNav />
       <section className="starfield mx-auto max-w-7xl px-6 py-20">
         <p className="font-mono text-xs uppercase tracking-widest text-photon-glow">
-          Enterprise · example scenario
+          Enterprise · hypothetical scenario
         </p>
         <h1 className="mt-3 max-w-3xl text-5xl font-semibold">
-          One memory for every customer. Built for millions.
+          One memory for every customer, at the scale of millions.
         </h1>
         <p className="mt-4 max-w-2xl text-muted-foreground">
-          Picture a global sportswear brand. Every member talks to an assistant that remembers their
-          size, sports, injuries, past orders and what they said in-store last spring. Here is how
-          that runs on Oort.
+          Picture a retailer with 50M members. Every member talks to an assistant that remembers
+          their size, sports, injuries, past orders and what they said in-store last spring. This is
+          a hypothetical scenario, not a customer. Here is how it could run on Oort. Parts that are
+          not built yet are labelled.
         </p>
 
         <div className="mt-12 grid grid-cols-2 gap-5 md:grid-cols-4">
@@ -65,7 +64,7 @@ function Enterprise() {
 
         <h2 className="mt-20 text-3xl font-semibold">How the system fits together</h2>
         <div className="mt-8 space-y-3">
-          {flow.map(([t, d], i) => (
+          {flow.map(([t, d, planned], i) => (
             <div
               key={t}
               className="flex items-center gap-5 rounded-2xl border border-border bg-card p-5"
@@ -75,7 +74,9 @@ function Enterprise() {
                 {i + 1}
               </span>
               <div>
-                <p className="font-semibold">{t}</p>
+                <p className="font-semibold">
+                  {t} {planned && <PlannedBadge className="ml-1" />}
+                </p>
                 <p className="text-sm text-muted-foreground">{d}</p>
               </div>
             </div>
@@ -83,34 +84,44 @@ function Enterprise() {
         </div>
 
         <div className="mt-20 grid gap-6 md:grid-cols-3">
-          {[
+          {(
             [
-              'Organisation & teams',
-              'Workspaces per brand or region, SSO/SAML, role-based access for engineering, data and privacy teams.',
-            ],
-            [
-              'Cost stays flat',
-              'As member histories grow 50×, stale memory freezes into object storage. Bills track activity, not age.',
-            ],
-            [
-              'Privacy on request',
-              'A member deletes their account: their key is destroyed and every tier becomes unreadable instantly.',
-            ],
-            [
-              'Seasonal spikes',
-              'Launch day traffic is absorbed by the hot tier; warm and cold scale independently.',
-            ],
-            [
-              'Audit & compliance',
-              'Per-call audit log, SOC 2, GDPR, CCPA. Dedicated VPC or fully self-hosted.',
-            ],
-            [
-              'Billing',
-              'Annual commit with usage tiers; chargeback reports per brand, region and agent.',
-            ],
-          ].map(([t, d]) => (
+              [
+                'Organisation and teams',
+                'Workspaces per brand or region, SSO and SAML, role-based access for engineering, data and privacy teams.',
+                true,
+              ],
+              [
+                'Cost that follows activity',
+                'As member histories grow, stale memory goes cold and is compressed. The goal is that bills track activity, not age.',
+                false,
+              ],
+              [
+                'Privacy on request',
+                'A member deletes their account and their key is destroyed, so every tier becomes unreadable. Today you can forget single memories from the CLI.',
+                true,
+              ],
+              [
+                'Seasonal spikes',
+                'The tiers are designed to scale independently, so launch day traffic does not need cold storage to grow.',
+                true,
+              ],
+              [
+                'Audit and compliance',
+                'A per-call audit log, SOC 2, GDPR and CCPA, and a dedicated VPC. Fully self-hosted is possible today with the open source engine.',
+                true,
+              ],
+              [
+                'Billing',
+                'Annual commit with usage tiers, and chargeback reports per brand, region and agent.',
+                true,
+              ],
+            ] as const
+          ).map(([t, d, planned]) => (
             <div key={t} className="iris-border rounded-2xl bg-card p-6">
-              <h3 className="font-semibold">{t}</h3>
+              <h3 className="font-semibold">
+                {t} {planned && <PlannedBadge className="ml-1" />}
+              </h3>
               <p className="mt-2 text-sm text-muted-foreground">{d}</p>
             </div>
           ))}
@@ -121,7 +132,7 @@ function Enterprise() {
             to="/dashboard"
             className="rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground"
           >
-            See the enterprise console
+            See the console demo
           </Link>
         </div>
       </section>
