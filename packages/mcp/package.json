@@ -1,6 +1,6 @@
 {
   "name": "@oortmem/mcp",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Oort's MCP server definition: the memory tools, their schemas and annotations, the server instructions and a skill, served over any memory backend.",
   "keywords": [
     "oort",
@@ -47,8 +47,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.typecheck.json"
+    "build": "node scripts/build-widgets.mjs && tsc -p tsconfig.json",
+    "typecheck": "node scripts/build-widgets.mjs && tsc -p tsconfig.typecheck.json"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",
@@ -57,6 +57,9 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/ext-apps": "2.0.4",
+    "@types/jsdom": "^27.0.0",
+    "jsdom": "27.4.0",
     "vitest": "^5.0.5"
   }
 }

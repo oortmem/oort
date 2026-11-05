@@ -26,18 +26,9 @@ const RULES = [
   ['Swedish phone number', /\+46[\s-]?\d{2}[\s-]?\d{3}[\s-]?\d{2}/],
 ];
 
-// Large binaries bloat every clone forever (history keeps them). New files above this size fail;
-// the brand kit's existing high-resolution sources are grandfathered at their current size.
-const MAX_BYTES = 600_000;
-const KNOWN_LARGE = new Map([
-  ['assets/brand/hero/hero-inspiration-1280x720.png', 1_289_956],
-  ['assets/brand/source/app-icon-dark-bg-1024.png', 1_254_179],
-  ['assets/brand/source/app-icon-light-bg-1024.png', 1_167_851],
-  ['assets/brand/icons/app-icon-rounded-1024.png', 997_526],
-  ['assets/brand/icons/app-icon-1024.png', 996_910],
-  ['assets/brand/source/social-card-1280x720.png', 980_130],
-  ['assets/brand/social/social-card-1280x720.png', 635_434],
-]);
+// Large binaries bloat every clone forever (history keeps them), so any tracked file above this
+// size fails. The full-size brand kit lives in the private repo, not here.
+const MAX_BYTES = 500_000;
 
 const files = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' })
   .split('\0')
@@ -51,10 +42,9 @@ for (const file of files) {
   } catch {
     size = 0;
   }
-  const cap = KNOWN_LARGE.get(file) ?? MAX_BYTES;
-  if (size > cap) {
+  if (size > MAX_BYTES) {
     hits.push(
-      `${file}  ${(size / 1000).toFixed(0)} kB is over the ${(cap / 1000).toFixed(0)} kB limit`,
+      `${file}  ${(size / 1000).toFixed(0)} kB is over the ${(MAX_BYTES / 1000).toFixed(0)} kB limit`,
     );
   }
   let buf;
