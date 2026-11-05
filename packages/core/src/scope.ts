@@ -13,23 +13,36 @@ export function localScope(projectId?: string): Scope {
   return scope;
 }
 
-/** Walk up from `start` to the first directory containing `.git`. */
+/**
+ * `p` resolved, then realpathed by the OS (`realpath(3)`), or `p` resolved when
+ * it cannot be (it vanished, a permission error). The native call returns the
+ * spelling on disk, so on a case-insensitive filesystem (APFS, HFS+, NTFS)
+ * `~/Repos/Oort` and `~/repos/oort` give one path, where `fs.realpathSync`
+ * would keep the case as typed and split one repository into two project ids.
+ * Every path that feeds an id or a trust binding goes through this.
+ */
+export function canonicalPath(p: string): string {
+  const resolved = path.resolve(p);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+/**
+ * Walk up from `start` to the first directory containing `.git`. The walk
+ * starts from `start` realpathed, as git does (it walks from the physical
+ * cwd): a symlink inside one repository that leads into another must land on
+ * the other, never on the repository the symlink happens to sit in.
+ */
 export function findGitRoot(start: string): string | undefined {
-  let dir = path.resolve(start);
+  let dir = canonicalPath(start);
   for (;;) {
     if (fs.existsSync(path.join(dir, '.git'))) return dir;
     const parent = path.dirname(dir);
     if (parent === dir) return undefined;
     dir = parent;
-  }
-}
-
-/** `p` realpathed, or `p` itself when it cannot be (it vanished, a permission error). */
-function realOr(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return p;
   }
 }
 
@@ -50,10 +63,23 @@ function realOr(p: string): string {
  * from that verified `commonDir` and nothing else: a lexical resolution of the
  * written path could run through an attacker's symlink to another repository.
  * Any mismatch, missing file or read error (a submodule has no `commondir`)
- * falls back to `root` itself.
+ * falls back to `root` itself. That includes a stale worktree whose main
+ * checkout was moved or deleted (its `gitdir` no longer exists) or replaced
+ * by an unrelated repository (no back-pointer naming this checkout): it gets
+ * the id of its own root, never an error and never the new repository's id.
+ *
+ * Stale admin dirs (decided for CON-53): a worktree deleted without
+ * `git worktree prune` leaves `<commonDir>/worktrees/<name>/` behind, so a
+ * directory recreated at exactly that path with the same `.git` file passes
+ * both checks and shares the main repository's id. This matches git, which
+ * treats that directory as the worktree and serves it the main repository's
+ * objects and refs, so the id grants nothing git does not already. An mtime
+ * rule (the admin `gitdir` no older than the checkout's `.git`) was rejected:
+ * `git worktree add` writes `gitdir` before `.git`, so it would refuse every
+ * fresh worktree, and an extracted archive sets whatever mtimes it carries.
  */
 function mainRootOf(root: string): string {
-  const own = realOr(root);
+  const own = canonicalPath(root);
   const dotGit = path.join(root, '.git');
   try {
     // A symlinked `.git` (to a file or a directory) never inherits another
@@ -63,16 +89,16 @@ function mainRootOf(root: string): string {
     if (entry.isDirectory()) return own;
     const m = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dotGit, 'utf8'));
     if (m?.[1] === undefined) return own;
-    const gitdir = fs.realpathSync(path.resolve(root, m[1]));
+    const gitdir = fs.realpathSync.native(path.resolve(root, m[1]));
     const common = fs.readFileSync(path.join(gitdir, 'commondir'), 'utf8').trim();
     if (common === '') return own;
-    const commonDir = fs.realpathSync(path.resolve(gitdir, common));
+    const commonDir = fs.realpathSync.native(path.resolve(gitdir, common));
     if (!fs.statSync(commonDir).isDirectory()) return own;
     if (path.dirname(gitdir) !== path.join(commonDir, 'worktrees')) return own;
     const back = fs.readFileSync(path.join(gitdir, 'gitdir'), 'utf8').trim();
     if (back === '') return own;
     // The back-pointer must name this checkout's own `.git`, not wherever it leads.
-    if (fs.realpathSync(path.resolve(gitdir, back)) !== path.join(own, '.git')) return own;
+    if (fs.realpathSync.native(path.resolve(gitdir, back)) !== path.join(own, '.git')) return own;
     return path.basename(commonDir) === '.git' ? path.dirname(commonDir) : commonDir;
   } catch {
     return own;
@@ -134,19 +160,20 @@ function writeProjectLinks(home: string, links: Record<string, string>): void {
 
 /**
  * Binds main repository root `root` to project id `id` (unprefixed) in the
- * user's trust file (0600). The key is `root` realpathed, the form
- * `projectRootFor` returns, so a binding made through a symlink still applies.
+ * user's trust file (0600). The key is `canonicalPath(root)`, the form
+ * `projectRootFor` returns, so a binding made through a symlink or with other
+ * case still applies.
  */
 export function linkProject(home: string, root: string, id: string): void {
   if (id === '' || [...id].some((c) => c.charCodeAt(0) < 0x20)) {
     throw new RangeError('project id must be non-empty, without control characters');
   }
-  writeProjectLinks(home, { ...readProjectLinks(home), [realOr(root)]: id });
+  writeProjectLinks(home, { ...readProjectLinks(home), [canonicalPath(root)]: id });
 }
 
-/** Removes `root`'s binding (realpathed, as `linkProject` keys it); false when there was none. */
+/** Removes `root`'s binding (canonicalised, as `linkProject` keys it); false when there was none. */
 export function unlinkProject(home: string, root: string): boolean {
-  root = realOr(root);
+  root = canonicalPath(root);
   const links = readProjectLinks(home);
   if (!(root in links)) return false;
   delete links[root];
