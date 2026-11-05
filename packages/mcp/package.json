@@ -1,6 +1,6 @@
 {
   "name": "@oortmem/mcp",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Oort's MCP server definition: the memory tools, their schemas and annotations, the server instructions and a skill, served over any memory backend.",
   "keywords": [
     "oort",
