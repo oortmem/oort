@@ -1,7 +1,7 @@
 import { VERSION } from '@oortmem/core';
 import type { CloudSpace } from '../cloud.js';
 import { uiFor } from '../ui.js';
-import { cloudOf, shown, withWired, type Ctx } from '../util.js';
+import { cloudOf, safeJson, shown, withWired, type Ctx } from '../util.js';
 
 /** How a space reads in a list: `Constellation oort-core (member: read, share)`. */
 export function spaceLine(s: CloudSpace): string {
@@ -40,7 +40,7 @@ export async function whoamiCommand(opts: { json?: boolean }, ctx: Ctx): Promise
       };
     }
     if (opts.json === true) {
-      ctx.io.out(`${JSON.stringify(out, null, 2)}\n`);
+      ctx.io.out(`${safeJson(out)}\n`);
       return 0;
     }
     const ui = uiFor(ctx.io);

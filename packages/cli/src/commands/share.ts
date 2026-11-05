@@ -11,6 +11,7 @@ import {
   shown,
   withWired,
   type Ctx,
+  safeJson,
 } from '../util.js';
 
 /** What each kind of finding is called in the preview. */
@@ -64,6 +65,21 @@ function preview(p: CloudShareResult, ui: Ui): string {
  * would be shared first (secrets already redacted, personal data marked); nothing is shared until
  * you confirm. A non-terminal session needs --yes.
  */
+/**
+ * What the Constellation did with the share, when it is more than a new copy (CON-66). Keyed by
+ * the API's outcome; an outcome this CLI doesn't know prints nothing.
+ */
+const OUTCOME_NOTES: Record<string, string> = {
+  reinforced: 'It says what a memory already there says: your share counts as a confirmation.',
+  refined: 'It adds detail to a memory already there, which now reads as your share.',
+  superseded: 'It replaces an earlier memory there, which stays in its history.',
+  corrected: 'It corrects an earlier memory there, which stays in its history as corrected.',
+  history:
+    'A newer memory there says otherwise, so this one is kept as history (it was observed earlier).',
+  contested:
+    'It contradicts a memory a member with more trust shared: both are kept, labelled contested, until a maintainer decides (`oort constellation contested`).',
+};
+
 export async function shareCommand(
   id: string,
   opts: { to?: string; text?: string; yes?: boolean; json?: boolean },
@@ -122,12 +138,17 @@ export async function shareCommand(
       ...(pii && { acknowledgedFindings: true }),
     });
     if (opts.json === true) {
-      ctx.io.out(`${JSON.stringify(done, null, 2)}\n`);
+      ctx.io.out(`${safeJson(done)}\n`);
       return 0;
     }
     ctx.io.out(
       `Shared to Constellation ${labelOf(done)} as ${shown(done.id ?? '?')}. Members' agents recall it labelled with the Constellation.\n`,
     );
+    const note =
+      typeof done.outcome === 'string' && Object.hasOwn(OUTCOME_NOTES, done.outcome)
+        ? OUTCOME_NOTES[done.outcome]
+        : undefined;
+    if (note !== undefined) ctx.io.out(`${note}\n`);
     return 0;
   });
 }

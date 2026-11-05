@@ -20,6 +20,7 @@ import {
   withWired,
   echo,
   type Ctx,
+  safeJson,
 } from '../util.js';
 import { privacyStatement, type Wired } from '../wire.js';
 
@@ -165,7 +166,7 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
           ? result.memories
           : await Promise.all(result.memories.map((m) => shapeLinks(w.store, filter, m)));
       const plain = { ...result, memories: shaped.map(withoutEmbedding) };
-      ctx.io.out(`${JSON.stringify(plain, null, 2)}\n`);
+      ctx.io.out(`${safeJson(plain)}\n`);
     } else {
       const block = formatForInjection(result, w.config.recall.budgetChars, now);
       const ui = uiFor(ctx.io);

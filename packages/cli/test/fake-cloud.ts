@@ -73,10 +73,23 @@ export interface FakeHive {
   /** Bound project ids per Constellation. */
   projects: Map<string, Set<string>>;
   policy: Map<string, string>;
+  /** CON-66: each Constellation's supersedeTrust (absent: member). */
+  supersedeTrust: Map<string, string>;
+  /** CON-66: open contests per Constellation. */
+  contests: Map<string, FakeContest[]>;
+  /** Set: confirmed shares answer with this outcome (what the vault's Stage C decided). */
+  shareOutcome?: string;
   /** Members a Constellation may hold before plan_limit (a test knob, not a plan rule). */
   memberLimit: number;
   /** Set: invites answer with this note (a daily email limit was reached). */
   inviteNote?: string;
+}
+
+export interface FakeContest {
+  action: 'SUPERSEDE' | 'CORRECT';
+  openedAt: string;
+  current: FakeMemory;
+  challenger: FakeMemory;
 }
 
 export interface FakeMember {
@@ -168,6 +181,8 @@ export function fakeCloud(key: string): FakeCloud {
       stars: new Map(),
       projects: new Map(),
       policy: new Map(),
+      supersedeTrust: new Map(),
+      contests: new Map(),
       memberLimit: 3,
     },
     recalls: [],
@@ -286,7 +301,7 @@ export function fakeCloud(key: string): FakeCloud {
         return Response.json({ project, private: b.private });
       }
       const manage =
-        /^\/v1\/constellations\/([^/]+)(\/(invites|members|leave|stars|policy|projects|transfer)(\/([^/]+))?)?$/.exec(
+        /^\/v1\/constellations\/([^/]+)(\/(invites|members|leave|stars|policy|projects|transfer|contested)(\/([^/]+))?)?$/.exec(
           p,
         );
       if (manage !== null && !(manage[2] === undefined && req.method === 'GET')) {
@@ -419,9 +434,49 @@ export function fakeCloud(key: string): FakeCloud {
         }
         if (sub === 'policy') {
           if (!maintainer) return needMaintainer();
+          if (c.narrowed === true) return err(403, 'scope_denied', 'This key is narrowed.');
           const b = await body();
-          c.hive.policy.set(x.id, String(b['policy']));
-          return Response.json({ policy: b['policy'], policyVersion: 2 });
+          if (b['policy'] === undefined && b['supersedeTrust'] === undefined) {
+            return err(400, 'bad_request', 'Send policy, supersedeTrust, or both.');
+          }
+          if (b['policy'] !== undefined) c.hive.policy.set(x.id, String(b['policy']));
+          if (b['supersedeTrust'] !== undefined) {
+            if (b['supersedeTrust'] !== 'member' && b['supersedeTrust'] !== 'maintainer') {
+              return err(400, 'bad_request', 'supersedeTrust must be member or maintainer.');
+            }
+            c.hive.supersedeTrust.set(x.id, String(b['supersedeTrust']));
+          }
+          return Response.json({
+            policy: c.hive.policy.get(x.id) ?? 'confirm',
+            supersedeTrust: c.hive.supersedeTrust.get(x.id) ?? 'member',
+            policyVersion: 2,
+          });
+        }
+        if (sub === 'contested' && req.method === 'GET' && arg === undefined) {
+          return Response.json({ contested: c.hive.contests.get(x.id) ?? [] });
+        }
+        if (sub === 'contested' && req.method === 'POST' && arg !== undefined) {
+          if (!maintainer) return needMaintainer();
+          if (c.narrowed === true) return err(403, 'scope_denied', 'This key is narrowed.');
+          const b = await body();
+          const keep = String(b['keep']);
+          const open = c.hive.contests.get(x.id) ?? [];
+          const has = (k: FakeContest, id: string) => k.current.id === id || k.challenger.id === id;
+          const found = open.filter((k) => has(k, arg) && has(k, keep));
+          if (found.length !== 1)
+            return err(404, 'not_found', 'No open contest holds these memories.');
+          const k = found[0]!;
+          c.hive.contests.set(
+            x.id,
+            open.filter((o) => o !== k),
+          );
+          const keptChallenger = keep === k.challenger.id;
+          return Response.json({
+            kept: keep,
+            ended: keptChallenger ? k.current.id : k.challenger.id,
+            action: keptChallenger ? k.action : 'RETRACT',
+            nodeVersion: 7,
+          });
         }
         if (sub === 'projects' && arg !== undefined) {
           if (!maintainer) return needMaintainer();
@@ -526,7 +581,12 @@ export function fakeCloud(key: string): FakeCloud {
         const copyId = `copy-${m.id}-${to.id}`;
         const copy = { ...fakeMemory({ id: copyId, text }), constellation: to.id, sourceId: m.id };
         c.hive.shared.set(copy.id, copy);
-        return Response.json({ confirmed: true, ...base, id: copy.id });
+        return Response.json({
+          confirmed: true,
+          ...base,
+          id: copy.id,
+          ...(c.hive.shareOutcome !== undefined && { outcome: c.hive.shareOutcome }),
+        });
       }
       if (p === '/v1/recall') {
         const b = (await req.json()) as {

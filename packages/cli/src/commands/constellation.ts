@@ -1,7 +1,7 @@
 import { ANONYMOUS_AGENT, isAgentId } from '@oortmem/core';
-import type { CloudConstellation } from '../cloud.js';
+import { OortCloudError, type CloudConstellation } from '../cloud.js';
 import { uiFor } from '../ui.js';
-import { Refusal, confirm, echo, shown, type Ctx } from '../util.js';
+import { Refusal, clip, confirm, echo, safeJson, shown, type Ctx } from '../util.js';
 import { clientFor } from './cloud.js';
 import { platformOpener } from './login.js';
 
@@ -15,7 +15,7 @@ export async function constellationListCommand(
   const client = await clientFor(ctx);
   const all = await client.constellations();
   if (opts.json === true) {
-    ctx.io.out(`${JSON.stringify(all, null, 2)}\n`);
+    ctx.io.out(`${safeJson(all)}\n`);
     return 0;
   }
   const ui = uiFor(ctx.io);
@@ -47,7 +47,7 @@ export async function constellationCreateCommand(
   }
   const client = await clientFor(ctx);
   const c = await client.createConstellation(n);
-  if (opts.json === true) ctx.io.out(`${JSON.stringify(c, null, 2)}\n`);
+  if (opts.json === true) ctx.io.out(`${safeJson(c)}\n`);
   else
     ctx.io.out(
       `Created Constellation ${shown(c.name)} (${shown(c.id)}). Share a memory with \`oort share <id> --to ${shown(c.name)}\`.\n`,
@@ -86,7 +86,7 @@ function agentArg(agent: string | undefined): string {
 }
 
 const json = (ctx: Ctx, v: unknown): number => {
-  ctx.io.out(`${JSON.stringify(v, null, 2)}\n`);
+  ctx.io.out(`${safeJson(v)}\n`);
   return 0;
 };
 
@@ -316,18 +316,117 @@ export async function constellationDeleteCommand(
   return 0;
 }
 
-/** `oort constellation policy <c> --confirm|--open` */
+/**
+ * `oort constellation policy <c> [--confirm|--open] [--supersede-trust member|maintainer]`: how
+ * shares are accepted, and the least trust a contradiction of someone else's memory needs to
+ * supersede it (below it, both are kept as contested until a maintainer decides).
+ */
 export async function constellationPolicyCommand(
   c: string,
-  opts: { open?: boolean; confirm?: boolean },
+  opts: { open?: boolean; confirm?: boolean; supersedeTrust?: string },
   ctx: Ctx,
 ): Promise<number> {
-  if ((opts.open === true) === (opts.confirm === true)) {
-    throw new Refusal('Pick one: --confirm (every share is confirmed by a person) or --open.');
+  const both = opts.open === true && opts.confirm === true;
+  const policy = opts.open === true ? 'open' : opts.confirm === true ? 'confirm' : undefined;
+  const trust = opts.supersedeTrust;
+  if (both || (policy === undefined && trust === undefined)) {
+    throw new Refusal(
+      'Pick --confirm (every share is confirmed by a person) or --open, and/or --supersede-trust member|maintainer.',
+    );
+  }
+  if (trust !== undefined && trust !== 'member' && trust !== 'maintainer') {
+    throw new Refusal('--supersede-trust must be member or maintainer.');
   }
   const client = await clientFor(ctx);
-  const r = await client.setPolicy(c, opts.open === true ? 'open' : 'confirm');
-  ctx.io.out(`${echo(c)} now uses the ${shown(r.policy)} policy.\n`);
+  const r = await client.setPolicy(c, {
+    ...(policy !== undefined && { policy }),
+    ...(trust !== undefined && { supersedeTrust: trust }),
+  });
+  ctx.io.out(
+    `${echo(c)} now uses the ${shown(r.policy)} policy` +
+      (r.supersedeTrust === undefined
+        ? '.\n'
+        : `; a contradiction of someone else's memory needs ${shown(r.supersedeTrust)} trust to supersede it.\n`),
+  );
+  return 0;
+}
+
+/**
+ * `oort constellation contested <c> [--json]`: memories held against each other because a member
+ * below the Constellation's supersedeTrust contradicted another's. Both are served, labelled
+ * contested, until a maintainer resolves the pair.
+ */
+export async function constellationContestedCommand(
+  c: string,
+  opts: { json?: boolean },
+  ctx: Ctx,
+): Promise<number> {
+  const client = await clientFor(ctx);
+  const all = await client.contested(c).catch((e: unknown) => {
+    if (e instanceof OortCloudError && e.kind === 'not-found') {
+      throw new Refusal(`No Constellation ${echo(c)} among yours.`);
+    }
+    throw e;
+  });
+  if (opts.json === true) return json(ctx, all);
+  const ui = uiFor(ctx.io);
+  ctx.io.out(ui.header('contested', `${all.length}`));
+  if (all.length === 0) {
+    ctx.io.out(`Nothing in ${echo(c)} is contested.\n`);
+    return 0;
+  }
+  for (const x of all) {
+    ctx.io.out(
+      `  current     ${shown(x.current.id)}  "${shown(clip(x.current.text, 60))}"\n` +
+        `  challenger  ${shown(x.challenger.id)}  "${shown(clip(x.challenger.text, 60))}"\n` +
+        ui.dim(
+          `              asks to ${shown(x.action)}, since ${shown(x.openedAt.slice(0, 10))}`,
+        ) +
+        '\n\n',
+    );
+  }
+  ctx.io.out(
+    ui.dim(
+      `A maintainer keeps one: oort constellation resolve ${echo(c)} <challenger id> --keep <id>`,
+    ) + '\n',
+  );
+  return 0;
+}
+
+const ENDED: Record<string, string> = {
+  SUPERSEDE: 'superseded (kept in its history)',
+  CORRECT: 'marked as corrected (kept in its history)',
+  RETRACT: 'retracted (kept in its history)',
+};
+
+/** `oort constellation resolve <c> <id> --keep <id>`: a maintainer settles a contest. */
+export async function constellationResolveCommand(
+  c: string,
+  id: string,
+  opts: { keep?: string; json?: boolean },
+  ctx: Ctx,
+): Promise<number> {
+  const keep = opts.keep?.trim();
+  if (keep === undefined || keep === '') {
+    throw new Refusal(
+      'Name the memory that stays with --keep <id> (from `oort constellation contested`).',
+    );
+  }
+  const client = await clientFor(ctx);
+  const r = await client.resolve(c, id.trim(), keep).catch((e: unknown) => {
+    if (e instanceof OortCloudError && e.kind === 'not-found') {
+      throw new Refusal(
+        `No open contest in ${echo(c)} holds ${echo(id.trim())} and ${echo(keep)}. See \`oort constellation contested ${echo(c)}\`.`,
+      );
+    }
+    throw e;
+  });
+  if (opts.json === true) return json(ctx, r);
+  ctx.io.out(
+    `Kept ${shown(r.kept)} in ${echo(c)}; ${shown(r.ended)} is ${
+      Object.hasOwn(ENDED, r.action) ? ENDED[r.action] : shown(String(r.action).toLowerCase())
+    }.\n`,
+  );
   return 0;
 }
 

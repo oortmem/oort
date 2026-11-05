@@ -223,6 +223,24 @@ export function shown(s: unknown, opts: { newlines?: boolean } = {}): string {
   );
 }
 
+/**
+ * DISPLAY_UNSAFE without C0: what JSON.stringify leaves raw inside strings (it escapes C0
+ * itself, and pretty-printing puts newlines between tokens, which must stay).
+ */
+const JSON_UNSAFE = new RegExp(DISPLAY_UNSAFE.source.replace('\\u0000-\\u001f', ''), 'g');
+
+/**
+ * `--json` output that may carry other people's strings (memory text, names, email hints): JSON
+ * with every DISPLAY_UNSAFE character `\uXXXX`-escaped, so it is still valid JSON (and parses to
+ * the same values) but plants no C1 control, bidi override or invisible character in a terminal.
+ */
+export function safeJson(v: unknown): string {
+  return JSON.stringify(v, null, 2).replace(
+    JSON_UNSAFE,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
+}
+
 /** One line, at most `n` characters. */
 export function clip(text: string, n: number): string {
   const one = text.replace(/\s+/g, ' ').trim();
