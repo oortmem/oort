@@ -115,10 +115,10 @@ describe('oort mcp spaces (CON-64)', () => {
     const ms = await household(h);
     const anon = await connect(h);
     const listed = (await anon.client.listTools()).tools.find((t) => t.name === 'recall');
-    expect(
-      (listed?.inputSchema as { properties: { include: { items: { enum: string[] } } } }).properties
-        .include.items.enum,
-    ).toEqual(['planet']);
+    const schema = listed?.inputSchema as unknown as {
+      properties: { include: { items: { enum: string[] } } };
+    };
+    expect(schema.properties.include.items.enum).toEqual(['planet']);
     for (const include of [['star'], ['constellation'], ['galaxy']]) {
       const r = await anon.client.callTool({
         name: 'recall',
