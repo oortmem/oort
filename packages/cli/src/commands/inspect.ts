@@ -234,7 +234,9 @@ export async function inspectCommand(
     ctx.io.out(
       ui.table(
         ['stage', 'question', 'answer', 'p'],
-        m.source.decisions.map((d) => [d.stage, d.question, d.answer, fixed(d.probability, 3)]),
+        (cloud !== undefined ? m : await shapeLinks(w.store, filter, m)).source.decisions.map(
+          (d) => [d.stage, d.question, d.answer, fixed(d.probability, 3)],
+        ),
       ),
     );
     ctx.io.out(`\n${ui.bold('supersede chain')} ${ui.dim('(oldest first)')}\n`);

@@ -1,7 +1,18 @@
 import { uiFor } from '../ui.js';
-import { age, clip, degradedHint, fixed, scopeLabel, short, withWired, type Ctx } from '../util.js';
+import {
+  age,
+  agentLabel,
+  clip,
+  degradedHint,
+  fixed,
+  scopeLabel,
+  short,
+  withWired,
+  type Ctx,
+} from '../util.js';
 import type { RecallResult } from '@oortmem/core';
 import {
+  includeLevels,
   runRecall,
   temporalView,
   viewIgnored,
@@ -22,16 +33,27 @@ export function modeLabel(t: RecallResult['temporal']): string {
   return `mode: ${timeMode(t)}${t?.inferred === true ? ' (from the query)' : ''}`;
 }
 
+/**
+ * Where a memory came from, for the table: `your Planet`, `this agent's Star`, `Star cursor`, with
+ * `(overridden)` when a narrower memory in the result contradicts it. `-` when not reported.
+ */
+export function fromLabel(o: RecallResult['memories'][number]['origin']): string {
+  if (o === undefined) return '-';
+  const where = o.from.replace(/^from /, '');
+  return o.overriddenBy === undefined ? where : `${where} (overridden)`;
+}
+
 /** `oort explain "<query>" [--json] [temporal flags]`: recall, with each stage's rank and score. */
 export async function explainCommand(
   query: string,
-  opts: { json?: boolean } & TemporalFlags,
+  opts: { json?: boolean; include?: string } & TemporalFlags,
   ctx: Ctx,
 ): Promise<number> {
   const view = temporalView(opts);
+  const include = includeLevels(opts.include);
   return withWired(ctx, async (w) => {
     const now = new Date();
-    const result = await runRecall(w, query, view, now);
+    const result = await runRecall(w, query, view, now, include);
     degradedHint(ctx.io, w, result.degraded);
     if (viewIgnored(view, result)) ctx.io.err(viewIgnoredWarning(view));
     if (opts.json === true) {
@@ -43,8 +65,11 @@ export async function explainCommand(
         validFrom: m.validFrom,
         text: m.text,
         explanation: m.explanation,
+        ...(m.origin !== undefined && { origin: m.origin }),
       }));
       const out = {
+        agent: { id: w.agent.id, home: w.agent.home },
+        ...(result.read !== undefined && { read: result.read }),
         memories,
         ...(result.temporal !== undefined && { temporal: result.temporal }),
         timings: result.timings,
@@ -69,6 +94,7 @@ export async function explainCommand(
         fixed(e.reranked, 3),
         fixed(e.activation),
         e.hydrated ? 'yes' : 'no',
+        fromLabel(m.origin),
         clip(m.text, 80),
       ];
     });
@@ -78,6 +104,8 @@ export async function explainCommand(
         'explain',
         `${result.memories.length} memories in ${fixed(t['totalMs'], 1)} ms`,
         scopeLabel(w),
+        agentLabel(w),
+        ...(result.read !== undefined ? [`reads: ${result.read.join(', ')}`] : []),
         modeLabel(result.temporal),
         ...(result.degraded !== undefined ? [`degraded: ${result.degraded.join(', ')}`] : []),
       ),
@@ -97,6 +125,7 @@ export async function explainCommand(
           'reranked',
           'activation',
           'hydrated',
+          'from',
           'text',
         ],
         rows,

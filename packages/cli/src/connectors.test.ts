@@ -10,6 +10,7 @@ import {
   detectHosts,
   disconnectHost,
   hostConfigPath,
+  serverEntry,
   type Host,
   type HostContext,
 } from './connectors.js';
@@ -137,9 +138,12 @@ describe.each<Host>([...HOSTS])('oort connect %s', (host) => {
     const after = read(host, file);
     const entry = servers(host, after)['oort'] as Record<string, unknown>;
     expect(entry['command']).toBe(CMD);
-    // Cursor and VS Code fill in ${workspaceFolder}, so the scope is the open workspace.
+    // Each host acts as its own agent (CON-62). Cursor and VS Code fill in ${workspaceFolder},
+    // so the scope is the open workspace.
     expect(entry['args']).toEqual(
-      host === 'cursor' || host === 'vscode' ? ['mcp', '--project', '${workspaceFolder}'] : ['mcp'],
+      host === 'cursor' || host === 'vscode'
+        ? ['mcp', '--agent', host, '--project', '${workspaceFolder}']
+        : ['mcp', '--agent', host],
     );
     if (['cursor', 'vscode', 'claude-code'].includes(host)) expect(entry['type']).toBe('stdio');
     // Everything else is untouched.
@@ -208,9 +212,35 @@ describe.each<Host>([...HOSTS])('oort connect %s', (host) => {
     expect(c.diff.join('\n')).toMatch(/args/);
     expect((servers(host, read(host, file))['oort'] as { args: string[] }).args).toEqual([
       'mcp',
+      '--agent',
+      host,
       '--project',
       '${workspaceFolder}',
     ]);
+    expect(disconnectHost(host, hc, CMD).changed).toBe(true);
+  });
+
+  it(`connect.${host}-updates-an-entry-from-before-agents`, () => {
+    // An entry written before CON-62 (no --agent) is still Oort's own: connect adds the agent.
+    const hc = context();
+    const file = hostConfigPath(host, hc);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const old = serverEntry(host, CMD);
+    const args = (old['args'] as string[]).filter(
+      (a, i, all) => a !== '--agent' && all[i - 1] !== '--agent',
+    );
+    if (host === 'codex') {
+      fs.writeFileSync(
+        file,
+        `[mcp_servers.oort]\ncommand = "${CMD}"\nargs = ${JSON.stringify(args)}\n`,
+      );
+    } else {
+      const key = host === 'vscode' ? 'servers' : 'mcpServers';
+      fs.writeFileSync(file, JSON.stringify({ [key]: { oort: { ...old, args } } }));
+    }
+    const c = connectHost(host, hc, CMD);
+    expect(c.changed).toBe(true);
+    expect((servers(host, read(host, file))['oort'] as { args: string[] }).args).toContain(host);
     expect(disconnectHost(host, hc, CMD).changed).toBe(true);
   });
 
@@ -342,8 +372,15 @@ describe('oort connect claude-code through the claude CLI', () => {
     expect(c.changed).toBe(true);
     expect(c.via).toBe('claude-cli');
     expect(c.diff).toContain('+ mcpServers.oort.command');
-    expect(calls()).toEqual([['mcp', 'add', '--scope', 'user', 'oort', '--', CMD, 'mcp']]);
-    expect(entry(hc)).toEqual({ type: 'stdio', command: CMD, args: ['mcp'], env: {} });
+    expect(calls()).toEqual([
+      ['mcp', 'add', '--scope', 'user', 'oort', '--', CMD, 'mcp', '--agent', 'claude-code'],
+    ]);
+    expect(entry(hc)).toEqual({
+      type: 'stdio',
+      command: CMD,
+      args: ['mcp', '--agent', 'claude-code'],
+      env: {},
+    });
     expect(fs.existsSync(`${file(hc)}.oort-backup`)).toBe(true);
 
     // Idempotent: the entry claude wrote (with env: {}) counts as ours, so nothing runs.
@@ -390,7 +427,7 @@ describe('oort connect claude-code through the claude CLI', () => {
   it('connect.claude-code-reports-a-failing-claude-with-the-command-to-run', () => {
     const { hc } = withClaude({ fail: true });
     expect(() => connectHost('claude-code', hc, CMD)).toThrow(
-      /claude mcp add --scope user oort -- .* mcp/,
+      /claude mcp add --scope user oort -- .* mcp --agent claude-code/,
     );
   });
 
@@ -399,6 +436,10 @@ describe('oort connect claude-code through the claude CLI', () => {
     const c = connectHost('claude-code', hc, CMD);
     expect(c.changed).toBe(true);
     expect(c.via).toBe('file');
-    expect(entry(hc)).toEqual({ type: 'stdio', command: CMD, args: ['mcp'] });
+    expect(entry(hc)).toEqual({
+      type: 'stdio',
+      command: CMD,
+      args: ['mcp', '--agent', 'claude-code'],
+    });
   });
 });

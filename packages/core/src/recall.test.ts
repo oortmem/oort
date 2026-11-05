@@ -159,7 +159,8 @@ describe('recall', () => {
     expect(r.degraded).toBeUndefined();
     expect(r.memories.map((m) => m.id)).toEqual(['a']);
     expect(seen).toHaveLength(2);
-    expect(lexicalQueries).toHaveLength(1);
+    // One lexical query per node read: the Planet and this agent's Star.
+    expect(lexicalQueries).toHaveLength(2);
     for (const t of [...seen, ...lexicalQueries]) {
       expect(t).not.toContain(key);
       expect(t).toContain('[REDACTED:aws-access-key]');

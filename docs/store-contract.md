@@ -44,21 +44,43 @@ exactly (field by field, never by prefix), its project, and its author if the pa
 Patterns may name nodes of other owners: whoever builds the grant has already decided the principal
 may use them.
 
-The pre-level constructors build one pattern: the principal's own Planet, restricted to the
-principal's agent as author. They see exactly what they saw before levels existed. Their two
-project sets are:
+`localGrant` and `principalGrant` act for one agent of one person. They build two patterns per
+side: the person's Planet, whichever of their agents wrote the memory, and the principal agent's
+own Star (`{ level: 'agent', orgId, agentId }`). Another agent's Star is never covered, so one
+agent never reads, changes or learns of another agent's private memory. Their two project sets
+are:
 
 - `read`: what `get`, `lexical`, `dense`, `list`, `coldGet` and `recordAccess` can see.
 - `write`: what `upsert`, `upsertMany`, `forget`, `setTier`, `expireMany`, `coldPut` and
   `coldPutMany` can change.
 
-`null` in a project set means global memories (no project). Build grants with:
+`null` in a project set means global memories (no project).
+
+Every grant also has a `home`: the node new memories are written to. For the local constructors it
+is the Planet, or the agent's Star with `{ home: 'star' }`. With a Star home the write side is the
+Star alone: the agent reads the shared Planet but cannot change any of it (upsert, forget, tiers,
+expiry, cold copies; `observe` records an access on a Planet memory it re-observes but never
+confirms it, and `recall` serves a cold Planet memory without hydrating it). The principal agent
+id `ANONYMOUS_AGENT` (`anonymous`, a caller that named no agent) gets the Planet alone, read and
+write, and can have no Star. `observe` addresses new memories there
+(`homeAddress(grant, projectId)`), and never edits a memory in another node: an observation that
+would supersede, correct or refine a memory outside its home becomes a new memory at home, and a
+contradiction is recorded on it as a `level`/`contradicts` decision naming the other memory. That
+id may be a Star memory other readers cannot see: anything that shows a memory's decisions to a
+reader should drop a `level`/`contradicts` entry whose id the reader's grant cannot read (the CLI
+and MCP server do). Recall still ranks by the full record.
+
+Build grants with:
 
 ```ts
 import { localGrant, principalGrant } from '@oortmem/core';
 
-// Read and write the project and global memories (what the CLI and hooks use).
+// Read and write the project and global memories of the person's Planet and this agent's Star
+// (what the CLI and hooks use).
 const g = localGrant({ orgId, customerId, agentId, projectIds: ['my-project', null] });
+
+// The same, for an agent that keeps its new memories in its own Star.
+const star = localGrant({ orgId, customerId, agentId, projectIds: [null] }, { home: 'star' });
 
 // Read global memories but write only the project.
 const narrow = localGrant(
@@ -80,8 +102,58 @@ const wide = nodeGrant({
 });
 ```
 
-The CLI, hooks and MCP server use only the pre-level constructors. `grant.read` and `grant.write`
-remain as the deprecated pre-level view of the patterns (never wider than them).
+`narrowGrant(g, nodes)` keeps only some of a grant's nodes (recall uses it to search one node at a
+time), and `readableNodes(g)` lists them. The CLI, hooks and MCP server use `localGrant` and
+`principalGrant`. `grant.read` and `grant.write` remain as the deprecated pre-level view of the
+patterns (never wider than them).
+
+### The Planet is shared by a person's agents
+
+Before, the local constructors restricted the Planet pattern to memories the principal's own agent
+wrote, so an agent id saw only its own writing. Now they read every author's Planet memories and add
+the agent's Star. Nothing is rewritten in any store: the stored memories are the same, only what a
+grant covers changed. Every local store so far was written as `claude-code`, so it reads exactly as
+before. A library caller that used several agent ids to keep memories apart inside one Planet
+should write those memories to each agent's Star (`addressed({ level: 'agent', orgId, agentId },
+{ agentId })`), or build the old grant explicitly:
+
+```ts
+nodeGrant({
+  principal: { orgId, customerId, agentId },
+  read: [{ node: { level: 'user', orgId, customerId }, projectIds: 'all', authorAgentId: agentId }],
+});
+```
+
+## Recall across levels
+
+`recall` reads one node at a time and fuses the results (spec: recall per node, then fuse):
+
+- **First stage per node.** Lexical and dense search run once per node the grant reads, and
+  reciprocal rank fusion runs within each node as before. The nodes are then merged by fused score
+  and reranked once. A recall over one node (or over a Planet and an empty Star) is exactly the
+  recall of a single-node grant: same ids, order, scores and injected text.
+- **`include`** names levels: `self` (the home node), `planet`, `star` (the calling agent's own),
+  `constellation`, `galaxy`. It is intersected with the grant; a level the grant does not cover
+  rejects with `ScopeDeniedError` (`code: 'scope_denied'`), never an empty result. Without it,
+  every node the grant reads, with at most four hive nodes.
+- **Specificity prior**, off by default (`recall.specificityPrior`, ε = 0): when set, each node's
+  fused scores are scaled by `1 + ε × specificity / 3`, with an agent's Star (or Orbit, Flyby) 3,
+  the Planet 2, a Constellation 1 and a Galaxy 0.
+- **Conflict rule**, always on: when a returned memory records a contradiction of another returned
+  memory in a different node, the narrower one ranks first and the wider one stays in the results,
+  its `origin.overriddenBy` naming the narrower memory.
+- **Origin.** Each recalled memory carries `origin`: its level, space, node label (`your Planet`,
+  `Star cursor`, `Constellation checkout`), `from` (`from your Planet`, `from this agent's Star`),
+  whether it is in the home node, and its author. `result.read` lists the nodes the recall read.
+- **Labels.** `formatForInjection` names the node in each line (`- [semantic, Star cursor, 5h ago]`)
+  only when some memory comes from outside the reader's home node, so a one-node recall reads as it
+  always did. Labels are built from these fields only; brackets in memory text are escaped (`\[`,
+  `\]`), so a memory cannot pass its text off as a label, and any `<oort-` or `</oort-` in it is
+  written `&lt;oort-`, so it cannot close the block. Hive memories take at most 40% of the
+  injection budget.
+
+`consolidate` re-tiers each node of its grant on its own, so the Planet's tiers do not depend on
+which agent ran it.
 
 A grant is frozen and nominal. A plain object with the same fields is not a grant: TypeScript
 rejects it, and every store rejects it at run time with a `TypeError`.
@@ -146,9 +218,13 @@ schema, and the next `oort` command migrates the store straight back up.
 `@oortmem/core/store-conformance` exports `storeConformance(name, make)`. It runs the contract
 tests and the isolation suite:
 
-- every method, against memories in every other scope and at every other level;
-- a seeded non-interference property, with single-node and multi-node grants
+- every method, against memories in every other scope and at every other level, once as the
+  narrowest grant and once as `localGrant`, which may reach only the shared Planet and its own
+  agent's Star (another agent's Star stays out of reach, warm and cold);
+- a seeded non-interference property, with single-node grants, multi-node grants, and two agents of
+  one person, where nothing the second agent does through its own Star reaches the first
   (`OORT_ISOLATION_SEEDS` raises the number of seeds);
 - separator and empty-grant edge cases;
 - levels: every address round-trips, illegal ones are refused, node-pattern grants see exactly
-  their nodes, and data written before levels reads back unchanged.
+  their nodes, the local grants see the Planet and their own Star only, and data written before
+  levels reads back unchanged.

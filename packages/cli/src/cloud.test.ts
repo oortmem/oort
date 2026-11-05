@@ -1,7 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { localGrant, localScope } from '@oortmem/core';
+import { addressed, localGrant, localScope, readAgents, setAgentStar } from '@oortmem/core';
+import { nodesGrant } from '@oortmem/core/store-conformance';
+import { cloudBackend } from './mcp.js';
 import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
 import { fakeIo, memory, tmpdir, writeTranscript } from '../test/helpers.js';
 import CONTRACT from '../test/cloud-contract.json' with { type: 'json' };
@@ -614,5 +616,158 @@ describe('cloud mode, time modes (review 12)', () => {
     const explain = await e.run(['explain', 'auth service port 5582', '--as-of', '2026-04-01']);
     expect(explain.io.stdout).toContain('mode: not reported');
     expect(explain.io.stderr).toContain('did not report the time mode');
+  });
+});
+
+describe('Stars and Oort Cloud (CON-62 review)', () => {
+  const stop = async (e: Env) => {
+    const transcript = writeTranscript(path.join(e.root, 'claude-projects'), e.cwd);
+    return e.run(['hook', 'Stop'], {
+      stdin: JSON.stringify({ session_id: 'sess-1', cwd: e.cwd, transcript_path: transcript }),
+    });
+  };
+
+  it('cloud.star-agents-never-write-the-cloud-planet', async () => {
+    const e = setup('cloud');
+    setAgentStar(e.home, 'cursor', true);
+    setAgentStar(e.home, 'claude-code', true);
+    // oort observe as a Star agent: refused, nothing sent.
+    const obs = await e.run([
+      '--agent',
+      'cursor',
+      'observe',
+      '--user',
+      'remember this',
+      '--assistant',
+      'ci runs on arm',
+    ]);
+    expect(obs.code).toBe(2);
+    expect(obs.io.stderr).toContain('cursor keeps its memories in its own Star');
+    // forget and pin too.
+    e.cloud.memories.set(MEMORY_ID, fakeMemory({ id: MEMORY_ID }));
+    for (const args of [
+      ['forget', MEMORY_ID, '--yes'],
+      ['pin', MEMORY_ID],
+    ]) {
+      const r = await e.run(['--agent', 'cursor', ...args]);
+      expect(r.code, args.join(' ')).toBe(2);
+    }
+    expect(e.cloud.memories.get(MEMORY_ID)?.pinned).toBe(false);
+    // The Claude Code hooks fail open: Stop saves nothing, says so once, exits 0; drain holds.
+    const s = await stop(e);
+    expect(s.code).toBe(0);
+    expect(s.io.stderr).toContain('claude-code keeps its memories in its own Star');
+    expect(s.io.spawned).toBe(0);
+    const d = await e.run(['hook', 'drain']);
+    expect(d.code).toBe(0);
+    expect(e.cloud.observed).toEqual([]);
+    // Reads still work.
+    const r = await e.run(['--agent', 'cursor', 'recall', 'auth service port', '--json']);
+    expect(r.code).toBe(0);
+    // A Planet agent still writes.
+    const ok = await e.run([
+      '--agent',
+      'codex',
+      'observe',
+      '--user',
+      'remember this',
+      '--assistant',
+      'ci runs on arm',
+    ]);
+    expect(ok.code, ok.io.stderr).toBe(0);
+    expect(e.cloud.observed).toHaveLength(1);
+  });
+
+  it('cloud.mcp-remember-as-a-star-agent-is-refused', async () => {
+    const e = setup('cloud');
+    setAgentStar(e.home, 'cursor', true);
+    const w = await realWire(e.cwd, {
+      env: { HOME: e.root, OORT_HOME: e.home, OORT_NO_KEYCHAIN: '1', OORT_API_KEY: e.key },
+      keychain: async () => undefined,
+      fetch: e.cloud.fetch,
+      agent: 'cursor',
+    });
+    const backend = cloudBackend({ wired: w, client: w.cloud! });
+    await expect(backend.remember({ facts: ['ci runs on arm'] })).rejects.toThrow(
+      /keeps its memories in its own Star/,
+    );
+    expect(e.cloud.observed).toEqual([]);
+    await w.close();
+  });
+
+  it('cloud.connect-star-and-cloud-use-refuse-the-combination', async () => {
+    const cloudMode = setup('cloud');
+    const c = await cloudMode.run(['connect', 'cursor', '--star']);
+    expect(c.code).toBe(2);
+    expect(c.io.stderr).toContain('Oort Cloud, which has no Stars yet');
+    expect(readAgents(cloudMode.home)).toEqual({});
+    // Doctor warns when the combination exists anyway (set before switching, or by hand).
+    setAgentStar(cloudMode.home, 'cursor', true);
+    const doc = await cloudMode.run(['doctor', '--json']);
+    const checks = (JSON.parse(doc.io.stdout) as { checks: Record<string, string>[] }).checks;
+    expect(checks.find((x) => x['group'] === 'cloud' && x['name'] === 'stars')).toMatchObject({
+      status: 'warn',
+      fix: 'oort connect cursor --no-star, or oort cloud use --local',
+    });
+
+    const local = setup('local');
+    setAgentStar(local.home, 'cursor', true);
+    const use = await local.run(['cloud', 'use'], { withKey: true });
+    expect(use.code).toBe(2);
+    expect(use.io.stderr).toContain('cursor keeps its memories in a Star');
+    expect(readCloudSettings(local.home).store).toBe('local');
+    setAgentStar(local.home, 'cursor', false);
+    expect((await local.run(['cloud', 'use'], { withKey: true })).code).toBe(0);
+  });
+
+  it('cloud.import-uploads-every-agents-planet-memories-and-no-star', async () => {
+    const e = setup('local');
+    const env = { HOME: e.root, OORT_HOME: e.home, OORT_NO_KEYCHAIN: '1' };
+    const w = await realWire(e.cwd, { env, keychain: async () => undefined });
+    const planet = { level: 'user', orgId: 'local', customerId: 'self' } as const;
+    const ccStar = { level: 'agent', orgId: 'local', agentId: 'claude-code' } as const;
+    const cursorStar = { level: 'agent', orgId: 'local', agentId: 'cursor' } as const;
+    const secret = memory({
+      ...addressed(ccStar, { agentId: 'claude-code' }),
+      text: 'Private note.',
+      embedding: undefined,
+    });
+    const byCodex = memory({
+      ...addressed({ ...planet, projectId: 'p1' }, { agentId: 'codex' }),
+      text: 'Codex learned this.',
+      embedding: undefined,
+    });
+    const byClaude = memory({
+      text: 'Claude learned this.',
+      embedding: undefined,
+      source: {
+        harness: 'test',
+        decisions: [{ stage: 'level', question: 'contradicts', answer: secret.id, probability: 1 }],
+      },
+    });
+    const starOnly = memory({
+      ...addressed(cursorStar, { agentId: 'cursor' }),
+      text: 'Cursor only.',
+      embedding: undefined,
+    });
+    await w.store.upsertMany(nodesGrant(planet, ccStar, cursorStar), [
+      secret,
+      byCodex,
+      byClaude,
+      starOnly,
+    ]);
+    await w.close();
+    const r = await e.run(['cloud', 'import', '--yes'], { withKey: true });
+    expect(r.code, r.io.stderr).toBe(0);
+    expect([...e.cloud.memories.keys()].sort()).toEqual([byClaude.id, byCodex.id].sort());
+    // The cloud puts each on the account's own Planet, keeping the project.
+    expect(e.cloud.memories.get(byCodex.id)?.scope).toEqual({
+      orgId: 'acct:a1',
+      customerId: 'self',
+      agentId: 'default',
+      projectId: 'p1',
+    });
+    // A contradiction naming a Star memory never leaves the machine.
+    expect(JSON.stringify(e.cloud.memories.get(byClaude.id))).not.toContain(secret.id);
   });
 });

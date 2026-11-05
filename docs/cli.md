@@ -184,28 +184,36 @@ changed, with each undo command, and exits 1.
 
 ```sh
 oort connect cursor codex
+oort connect cursor --star         # Cursor keeps its new memories in its own Star
 oort connect vscode --dry-run      # print the diff, write nothing
 oort disconnect cursor
 ```
 
 These commands add or remove one MCP server entry named `oort` in each host's
-user-level config. The entry runs the installed bin as `oort mcp`. Cursor and
-VS Code also get `--project ${workspaceFolder}`, which they replace with the
-open workspace's folder; the other hosts get no arguments beyond `mcp`.
+user-level config. The entry runs the installed bin as `oort mcp --agent
+<host>`, so each host acts as its own agent (see [Agents](#agents-one-planet-a-star-each)).
+Cursor and VS Code also get `--project ${workspaceFolder}`, which they replace
+with the open workspace's folder.
 
 | Host | File (macOS; Linux and Windows below) | Key | Entry |
 | --- | --- | --- | --- |
-| `claude-code` | `~/.claude.json` (user scope) | `mcpServers.oort` | `{"type":"stdio","command":"<bin>","args":["mcp"]}` |
-| `claude-desktop` | `~/Library/Application Support/Claude/claude_desktop_config.json` | `mcpServers.oort` | `{"command":"<bin>","args":["mcp"]}` |
-| `codex` | `~/.codex/config.toml`, or `$CODEX_HOME/config.toml` | `[mcp_servers.oort]` | `command = "<bin>"`, `args = ["mcp"]` |
-| `cursor` | `~/.cursor/mcp.json` | `mcpServers.oort` | `{"type":"stdio","command":"<bin>","args":["mcp","--project","${workspaceFolder}"]}` |
-| `gemini` | `~/.gemini/settings.json` | `mcpServers.oort` | `{"command":"<bin>","args":["mcp"]}` |
-| `vscode` | `~/Library/Application Support/Code/User/mcp.json` | `servers.oort` | `{"type":"stdio","command":"<bin>","args":["mcp","--project","${workspaceFolder}"]}` |
+| `claude-code` | `~/.claude.json` (user scope) | `mcpServers.oort` | `{"type":"stdio","command":"<bin>","args":["mcp","--agent","claude-code"]}` |
+| `claude-desktop` | `~/Library/Application Support/Claude/claude_desktop_config.json` | `mcpServers.oort` | `{"command":"<bin>","args":["mcp","--agent","claude-desktop"]}` |
+| `codex` | `~/.codex/config.toml`, or `$CODEX_HOME/config.toml` | `[mcp_servers.oort]` | `command = "<bin>"`, `args = ["mcp","--agent","codex"]` |
+| `cursor` | `~/.cursor/mcp.json` | `mcpServers.oort` | `{"type":"stdio","command":"<bin>","args":["mcp","--agent","cursor","--project","${workspaceFolder}"]}` |
+| `gemini` | `~/.gemini/settings.json` | `mcpServers.oort` | `{"command":"<bin>","args":["mcp","--agent","gemini"]}` |
+| `vscode` | `~/Library/Application Support/Code/User/mcp.json` | `servers.oort` | `{"type":"stdio","command":"<bin>","args":["mcp","--agent","vscode","--project","${workspaceFolder}"]}` |
+
+`--star` records in `$OORT_HOME/agents.json` (0600) that the host's new
+memories stay in its own Star; `--no-star` sends them to your Planet again
+(the default). Neither flag leaves the setting as it is. The host's config
+entry is the same either way. `connect` prints where the host's new memories
+go.
 
 **Claude Code through its CLI.** Claude Code rewrites `~/.claude.json`
 itself, so a running Claude Code could overwrite a direct edit. When `claude`
 is on `PATH` (macOS and Linux), `oort connect claude-code` therefore runs
-`claude mcp add --scope user oort -- <bin> mcp`, and `oort disconnect
+`claude mcp add --scope user oort -- <bin> mcp --agent claude-code`, and `oort disconnect
 claude-code` runs `claude mcp remove --scope user oort`. Oort still reads the
 file first: it refuses an `oort` entry it did not write, prints the diff and
 makes the backups. A stale entry from an older path is removed, then added
@@ -254,8 +262,9 @@ What every run does:
 - **Never take over your entry.** Oort changes an `oort` entry only if it
   wrote that entry itself, from this install path or an older one (an `oort`
   or `oortmem` bin, a package's `oort/dist/main.js` or `oortmem/dist/main.js`,
-  or the `["mcp"]` args that Cursor and VS Code entries had before
-  `--project ${workspaceFolder}`). Anything
+  or the args entries had before `--agent <host>` and, for Cursor and VS
+  Code, before `--project ${workspaceFolder}`). `connect` updates such an
+  entry, and `oort doctor` calls it outdated until then. Anything
   else named `oort`, such as a remote URL or extra args, is yours. `connect`
   and `disconnect` then refuse (exit 2) and leave the file untouched. So do an
   unparseable file and a Codex `oort` entry written as an inline table.
@@ -281,20 +290,71 @@ The server's memory scope is a project, plus global memories:
 To pin one project, add it to `args`:
 
 ```json
-"args": ["mcp", "--project", "/path/to/repo"]
+"args": ["mcp", "--agent", "codex", "--project", "/path/to/repo"]
 ```
 
 An entry edited this way counts as yours from then on: `oort connect` and
 `oort disconnect` leave it alone.
 
+### Agents: one Planet, a Star each
+
+Your memory is your **Planet**. Every agent you connect (Claude Code, Codex,
+Cursor, …) acts as its own agent, named after its host, and they all read and
+write the same Planet: what Claude Code learned, Codex can recall. Each agent
+also has a **Star**, private memory that no other agent reads, changes or
+counts.
+
+- **Where new memories go.** To your Planet, unless the agent keeps a Star
+  (`oort connect <host> --star`). An agent that keeps a Star writes its new
+  memories there and still reads your Planet, but never changes it: `forget`,
+  `pin` and the like on a Planet memory are refused (exit 2, or a tool error),
+  and re-observing a Planet fact only raises its activation.
+- **What a recall reads.** Your Planet and the agent's own Star, never another
+  agent's Star. When the answer mixes the two, each injected line names where
+  it came from: `- [semantic, your Planet, 2d ago] …` or
+  `- [semantic, Star cursor, 5h ago] …`. A recall that finds only your Planet
+  looks exactly as before.
+- **Conflicts.** An agent never edits a memory outside its home: when it
+  learns something that contradicts your Planet, it writes its own memory and
+  records the contradiction. A recall then ranks the agent's Star memory first
+  and keeps the Planet one, marked `overridden by Star cursor`.
+- **Which agent.** `oort mcp --agent <id>` (what `oort connect` writes), the
+  global `--agent <id>` option on any command, or `OORT_AGENT`. With none of
+  them the caller is anonymous: it reads and writes your Planet only, with no
+  Star, and `whoami` reports `agent: null`. An MCP entry written before agents
+  existed (no `--agent`) runs this way; `oort doctor` flags it and `oort
+  connect <host>` rewrites it. The Claude Code hooks and `oort import
+  claude-code` always act as `claude-code`. An id is lowercase letters,
+  digits, `.`, `_` and `-`; `anonymous` is reserved.
+- **Identity is configuration, not authentication.** The agent id is a local
+  setting that keeps your agents' memories apart from each other. Any program
+  running as you can start `oort mcp --agent cursor` and read Cursor's Star.
+  It protects against mix-ups, not against software you run.
+- **Oort Cloud has no Stars yet.** In cloud mode an agent that keeps a Star
+  can recall your Planet, but its saves (`observe`, MCP `remember`, `forget`,
+  `pin`) are refused, and the Claude Code hooks save nothing (one stderr line,
+  the prompt goes on; queued turns wait for a local drain). `oort connect
+  <host> --star` is refused in cloud mode, `oort cloud use` is refused while
+  an agent keeps a Star, and `oort doctor` warns about the combination.
+
+Memories saved before agents existed were all written as `claude-code` and
+live in your Planet, so every agent sees them. Nothing is rewritten.
+
+```sh
+oort --agent cursor recall "release checklist"            # what Cursor would recall
+oort --agent cursor explain "release checklist"           # with a "from" column
+oort recall "release checklist" --include planet          # only your Planet
+oort recall "release checklist" --include constellation   # exit 2: scope_denied
+```
+
 ### Any other MCP client
 
 Any client that starts stdio servers can run Oort. Give it the absolute path
 of the bin (`readlink -f "$(command -v oort)"`, or `realpath` on macOS) and
-the argument `mcp`:
+the arguments `mcp --agent <name>`:
 
 ```json
-{ "mcpServers": { "oort": { "command": "/abs/path/to/oort/dist/main.js", "args": ["mcp"] } } }
+{ "mcpServers": { "oort": { "command": "/abs/path/to/oort/dist/main.js", "args": ["mcp", "--agent", "my-client"] } } }
 ```
 
 ChatGPT and claude.ai on the web or mobile need a remote MCP URL. That comes
@@ -303,7 +363,7 @@ with Oort Cloud, so they are not hosts here.
 ## `oort mcp`
 
 ```sh
-oort mcp [--project <dir>]
+oort mcp [--agent <id>] [--project <dir>]
 ```
 
 `oort mcp` is a local MCP server on stdin and stdout, built on the official
@@ -325,18 +385,22 @@ keeps serving.
 
   No tool argument can choose another scope. An id from another project is
   "not found", exactly like a missing one.
+- **Agent.** `--agent <id>` (written by `oort connect`) names the agent the
+  server acts as: it reads your Planet and that agent's own Star, and writes
+  new memories to the Planet, or to the Star when the agent keeps one. A
+  memory in another agent's Star is "not found".
 
 Tools:
 
 | Tool | Input | Annotations | Returns |
 | --- | --- | --- | --- |
-| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10, default 5) | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
+| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10, default 5) | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`), `from` (`from your Planet` or `from this agent's Star`), `overridden_by` (the id of a narrower memory in the result that contradicts it); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
 | `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`) | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
 | `forget` | `id` (required) | destructive, idempotent | `{ forgotten: id }` |
 | `pin` | `id`, `pinned` (boolean) | write, not destructive, idempotent | `{ id, pinned, changed }` |
 | `explain` | `id` | read-only, idempotent | the memory, its stored decisions, and its supersede chain |
 | `list_recent` | `since?` (ISO), `limit?` (1–50, default 20) | read-only, idempotent | memories by `updated_at`, newest first, each with `status` (`current`, `superseded` or `expired`) |
-| `whoami` | none | read-only, idempotent | `mode: "local"`, `project`, `version`, which adapters are available, and per role whether it uses `oort-pro`, an `own-key` or is `missing`; no account or email |
+| `whoami` | none | read-only, idempotent | `mode: "local"`, `project`, `version`, `agent`, `reads` (`your Planet`, `Star <agent>`), `writes_to`, which adapters are available, and per role whether it uses `oort-pro`, an `own-key` or is `missing`; no account or email |
 
 Every tool sets `openWorldHint: false` and has a `title`.
 
@@ -396,20 +460,28 @@ tools are available too.
 
 | Command | What it does | Flags |
 | --- | --- | --- |
-| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block). | `--json` (the full RecallResult, without embeddings), `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)) |
-| `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation and hydrated. The header names the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (rank, id, type, tier, validFrom, text, explanation; temporal; timings; degraded), `--as-of`, `--known-at`, `--history` |
+| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)) |
+| `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation, hydrated, and where it came from (`your Planet`, `this agent's Star`, with `(overridden)` when a narrower memory contradicts it). The header names the agent, the nodes read (`reads: your Planet, Star cursor`) and the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (agent; read; rank, id, type, tier, validFrom, text, explanation, origin; temporal; timings; degraded), `--include <levels>`, `--as-of`, `--known-at`, `--history` |
 | `oort revalidate` | Lists volatile facts (a status, a current version, an owner) that nobody confirmed within `recall.staleAfterDays`, oldest first. | `--json` (id, type, text, lastConfirmed) |
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
 | `oort stats` | Counts per tier and validity, store and cold sizes, the hook queue and memory use. | `--json` |
 | `oort observe` | Runs the write path on one turn, from JSON on stdin or from `--user` with `--assistant`. | `--dry-run` (reports scrubbing only) |
 | `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. | `--yes` |
 | `oort pin <id>` / `oort unpin <id>` | A pinned memory is never sent to cold storage. | |
-| `oort consolidate` | Expires, re-tiers and evicts memories. | |
-| `oort export` | Writes every visible memory as v2 JSON Lines (`--format 1` for v1). | `--out <file>` (0600), `--force`, `--format 1\|2` |
+| `oort consolidate` | Expires, re-tiers and evicts memories: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each is re-tiered on its own. | |
+| `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. | `--out <file>` (0600), `--force`, `--format 1\|2` |
 | `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
 
 Ids are full ids or unique prefixes. Every command reads the cwd's project
-plus global memories.
+plus global memories, as the acting agent (`--agent`, `OORT_AGENT`, else
+`claude-code`): your Planet and that agent's own Star.
+
+`--include` takes a comma list of levels: `self` (where the agent's new
+memories go), `planet`, `star` (the agent's own). `constellation` and
+`galaxy` are names for shared memory this build does not have yet; asking
+for them, or for any level the agent cannot read, exits 2 with
+`scope_denied` rather than an empty answer. In cloud mode a recall reads
+your Planet only.
 
 ### Time: recall modes
 
@@ -661,7 +733,7 @@ Pro, with no key and a 3 second timeout.
 | `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort keys set <provider>, or oort login (Oort Pro)`. A model the relay does not serve: use the default model, or set the vendor key. |
 | `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, for this bin. | Missing, from another path, or a command that is not executable: `oort install claude-code`. Unparseable settings: fix the JSON, then `oort install claude-code`. |
 | `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
-| `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Readable by others: `chmod 700 ~/.oort`. |
+| `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Readable by others: `chmod 700 ~/.oort`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
 
 Each check has a status: `✓` ok, `!` warn, `✗` fail, `·` info and `?`

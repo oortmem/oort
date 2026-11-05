@@ -12,7 +12,9 @@ import type {
   WrittenMemory,
 } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
-import { localGrant, type Grant } from './grant.js';
+import { addressed, addressOf, nodeKey, nodeOf } from './address.js';
+import { grantWrites, homeAddress, localGrant, type Grant, type Home } from './grant.js';
+import { CONTRADICTS } from './levels.js';
 import { capObservation } from './cap.js';
 import type { Decision, Memory, Scope } from './model.js';
 import { scrubObservation } from './scrub.js';
@@ -85,6 +87,14 @@ export interface ObserveDeps {
   now?: Date;
   /** Recorded on `source.harness`; defaults to "unknown". */
   harness?: string;
+  /**
+   * Where new memories land (spec 5.1): the person's Planet (default) or, for an agent configured
+   * as a Star, `scope.agentId`'s own Star. Candidates come from both. A memory is only ever
+   * superseded, corrected or refined in the home node, and an agent whose home is its Star never
+   * writes the Planet at all: a Planet memory it re-observes gets an access record (activation),
+   * never a confirmation or an edit.
+   */
+  home?: Home;
 }
 
 /**
@@ -214,12 +224,30 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     const target = candidates.find((c) => c.id === best.candidateId);
     if (target === undefined) return { outcome: 'skipped' };
     await store.recordAccess(grant, [target.id], now);
-    await confirm(store, grant, target.id, now.toISOString());
+    // Confirming writes the memory: only where this agent may write (a Star agent reinforces a
+    // Planet memory's activation but never edits it).
+    if (grantWrites(grant, target)) await confirm(store, grant, target.id, now.toISOString());
     return { outcome: 'reinforced', memoryId: target.id };
   }
 
   let action: WriteAction = best.action === 'UPDATE' ? 'REFINE' : best.action;
   let prior = action === 'ADD' ? undefined : candidates.find((c) => c.id === best.candidateId);
+  if (prior !== undefined && nodeKey(nodeOf(addressOf(prior))) !== nodeKey(grant.home)) {
+    // The prior lives in another node (the Planet, for an agent writing to its Star, or the
+    // reverse). A write never edits a memory outside its home node: the observation becomes a
+    // memory of its own there. A contradiction is recorded, so recall can rank the narrower of the
+    // two first and label the other (spec 7.2). Reinforcing it (above) stays allowed.
+    decisions.push({
+      stage: 'level',
+      question: 'other-node',
+      answer: 'add-instead',
+      probability: 1,
+    });
+    if (action === 'SUPERSEDE' || action === 'CORRECT') {
+      decisions.push({ ...CONTRADICTS, answer: prior.id, probability: best.probability });
+    }
+    prior = undefined;
+  }
   if (prior !== undefined && (prior.scope.projectId ?? null) !== (scope.projectId ?? null)) {
     // Candidates include global memories. A project's observation must not end or
     // rewrite a fact another scope (every project, for a global one) relies on, so it
@@ -329,6 +357,9 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   const base: Memory = {
     id,
     scope,
+    // A memory at another level than the Planet carries its address and author.
+    ...(grant.home.level !== 'user' &&
+      addressed(homeAddress(grant, scope.projectId), { agentId: scope.agentId })),
     type: w.type,
     text: w.text,
     stub: w.stub,
@@ -527,7 +558,7 @@ export async function observe(
   const obs = capObservation(scrubbed.obs);
   const { store, embed, decide, write } = deps;
   const now = deps.now ?? new Date();
-  const grant = localGrant(filterFor(scope));
+  const grant = localGrant(filterFor(scope), deps.home === undefined ? {} : { home: deps.home });
   const g = await decide.gate(obs);
   const text = `${obs.userText}\n${obs.assistantText}`;
 

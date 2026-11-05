@@ -18,7 +18,7 @@ import type { Io } from '../src/io.js';
 import type { LoginDeps } from '../src/commands/login.js';
 import { createKeychain, type Keychain } from '../src/keychain.js';
 import { runCli } from '../src/program.js';
-import type { WireFn, Wired } from '../src/wire.js';
+import { resolveAgent, type WireFn, type Wired } from '../src/wire.js';
 
 export function tmpdir(prefix = 'oort-cli-'): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
@@ -148,13 +148,15 @@ export function harness(opts: { adapters?: boolean } = {}): Harness {
     cwd,
     store,
     wired: 0,
-    wire: async (dir) => {
+    wire: async (dir, wopts = {}) => {
       h.wired++;
       const config = resolveConfig(dir, { OORT_HOME: home });
       const keyed = opts.adapters !== false;
+      const agent = resolveAgent(home, wopts.env ?? {}, wopts.agent);
       const w: Wired = {
         config,
-        scope: localScope(undefined),
+        scope: { ...localScope(undefined), agentId: agent.id },
+        agent,
         store,
         unavailable: keyed
           ? {}

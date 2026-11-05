@@ -102,9 +102,44 @@ describe('isolation suite catches broken stores (mutation check)', () => {
     expect(caught).toMatch(/^seed \d+: A's step \d+ differs/);
   });
 
+  it('isolation.catches-a-star-read-by-another-agent', async () => {
+    // A store that matches a Star by owner only, ignoring which agent it belongs to.
+    const make = broken((inner, seen) => ({
+      async get(g, id) {
+        const m = seen.get(id);
+        const ownerStar = g.readNodes.some((p) => p.node.level === 'agent');
+        if (m?.address?.level === 'agent' && ownerStar && m.address.orgId === g.principal.orgId) {
+          return inner.get(soleGrantFor(m), id);
+        }
+        return inner.get(g, id);
+      },
+    }));
+    const v = await isolationViolations(make);
+    expect(v).toContain('local: victim-otherStar-warm: get returned it');
+    expect(v.some((x) => x.startsWith('narrowest:'))).toBe(false);
+  });
+
+  it('isolation.non-interference-catches-a-star-written-through-a-peer', async () => {
+    // forget through the record's own grant: agent B can delete agent A's Star memories.
+    const make = broken((inner, seen) => ({
+      async forget(_g, id) {
+        const m = seen.get(id);
+        if (m !== undefined) await inner.forget(soleGrantFor(m), id);
+      },
+    }));
+    let caught: string | null = null;
+    for (let seed = 1; seed <= 30 && caught === null; seed++) {
+      caught = await nonInterference(make, seed, 80, { peers: true });
+    }
+    expect(caught).toMatch(/^seed \d+: A's step \d+ differs/);
+  });
+
   it('isolation.correct-store-passes', async () => {
     expect(await isolationViolations(async () => createMemoryStore())).toEqual([]);
     expect(await nonInterference(async () => createMemoryStore(), 7, 80)).toBeNull();
+    expect(
+      await nonInterference(async () => createMemoryStore(), 7, 80, { peers: true }),
+    ).toBeNull();
   });
 });
 

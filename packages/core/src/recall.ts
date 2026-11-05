@@ -2,7 +2,26 @@ import type { Embedder, Hit, MemoryStore, Reranker, ScopeFilter } from './adapte
 import type { ResolvedConfig } from './config.js';
 import { activation } from './activation.js';
 import { fuse, isVisible, type TemporalView } from './fusion.js';
-import { localGrant } from './grant.js';
+import { addressOf, nodeKey, nodeOf, type NodeRef } from './address.js';
+import {
+  assertGrant,
+  grantWrites,
+  localGrant,
+  narrowGrant,
+  type Grant,
+  type Home,
+} from './grant.js';
+import {
+  contradicted,
+  escapeLabelText,
+  nodeLabel,
+  nodesToRead,
+  originOf,
+  specificity,
+  specificityFactor,
+  type IncludeLevel,
+  type MemoryOrigin,
+} from './levels.js';
 import { scrub } from './scrub.js';
 import { isCurrent, type Memory } from './model.js';
 import { temporalIntent, type RecallMode } from './temporal.js';
@@ -16,7 +35,20 @@ import {
 
 export interface RecallQuery {
   text: string;
-  scope: ScopeFilter;
+  /**
+   * Who recalls, as a pre-level filter: read with `localGrant(scope, { home })`, the person's
+   * Planet plus this agent's own Star in these projects. Required unless `grant` is given.
+   */
+  scope?: ScopeFilter;
+  /** The grant to read with, instead of one built from `scope` (multi-node grants, tests). */
+  grant?: Grant;
+  /** With `scope`: where this agent's memories land (`star` for an agent configured as a Star). */
+  home?: Home;
+  /**
+   * Which levels to read (spec 7.1), intersected with the grant. A level the grant does not cover
+   * rejects with `ScopeDeniedError`. Default: every node the grant reads.
+   */
+  include?: IncludeLevel[];
   budgetChars?: number;
   /** ISO timestamp: recall what was true then (valid time). Implies `mode: 'as-of'`. */
   asOf?: string;
@@ -58,6 +90,8 @@ export interface RecalledMemory extends Memory {
     /** A volatile fact nobody confirmed within `recall.staleAfterDays`. */
     stale?: true;
   };
+  /** Where it came from: level, node, author, and whether a narrower memory overrides it. */
+  origin?: MemoryOrigin;
 }
 
 export type Degradation =
@@ -91,6 +125,8 @@ export interface RecallResult {
   embedSkipped?: 'lexical-confident';
   /** The temporal view this recall read. Always set by `recall`. */
   temporal?: RecallTemporal;
+  /** The nodes this recall read, as labels show them (`your Planet`, `Star cursor`). */
+  read?: string[];
   timings: Record<string, number>;
 }
 
@@ -114,8 +150,14 @@ const clock = (): number => performance.now();
  */
 export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallResult> {
   const { store, config } = deps;
-  // The store enforces scope; recall reads and hydrates only inside q.scope.
-  const grant = localGrant(q.scope);
+  const full = grantOf(q);
+  // The nodes to read: the grant intersected with `include` (a level it lacks rejects here,
+  // before anything is read). Recall reads and hydrates only inside them; the store enforces it.
+  const nodes = nodesToRead(full, q.include);
+  const grant = narrowGrant(full, nodes);
+  // First stage per node (spec 7.2), then nodes merged by fused score. One node: today's recall.
+  const legs = nodes.map((n) => ({ node: n, grant: narrowGrant(full, [n]) }));
+  const epsilon = config.recall.specificityPrior;
   const now = deps.now ?? new Date();
   // Scrub once: the query text reaches embedders and rerankers, which may be remote. Temporal
   // words ("on 2 April", "changed over time") pick the view and are not searched for.
@@ -152,7 +194,9 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     return m;
   };
 
-  const lexicalP = timed('lexicalMs', () => store.lexical(grant, text, config.recall.lexicalK));
+  const lexicalP = timed('lexicalMs', () =>
+    Promise.all(legs.map((l) => store.lexical(l.grant, text, config.recall.lexicalK))),
+  );
   // A failed embed must not leave the lexical promise unobserved.
   lexicalP.catch(() => {});
 
@@ -160,7 +204,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   // trip. Otherwise the lexical search has run while nothing else waited on it.
   let embedSkipped: RecallResult['embedSkipped'];
   if (deps.embed && config.recall.lexicalFirst) {
-    const first = await lexicalP;
+    const first = byRank(await lexicalP);
     if (await lexicalIsConfident(first, queryTokens, read, now, view)) {
       embedSkipped = 'lexical-confident';
     }
@@ -181,17 +225,29 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   }
 
   const v = vector;
-  const [lexical, dense] = await Promise.all([
+  let denseFailed = false;
+  const [lexicalLegs, denseLegs] = await Promise.all([
     lexicalP,
     v === undefined
-      ? Promise.resolve<Hit[]>([])
+      ? Promise.resolve<Hit[][]>(legs.map(() => []))
       : timed('denseMs', () =>
-          store.dense(grant, v, config.recall.denseK).catch((): Hit[] => {
-            degraded.push('dense-failed');
-            return [];
-          }),
+          Promise.all(
+            legs.map((l) =>
+              store.dense(l.grant, v, config.recall.denseK).catch((): Hit[] => {
+                denseFailed = true;
+                return [];
+              }),
+            ),
+          ),
         ),
   ]);
+  if (denseFailed) degraded.push('dense-failed');
+  // Across nodes, by rank (one node: its own list). Used where one list is needed.
+  const lexical = byRank(lexicalLegs);
+  const dense = byRank(denseLegs);
+  // Ranks are per node: each node's first stage ranks its own memories.
+  const lexicalRank = rankWithin(lexicalLegs);
+  const denseRank = rankWithin(denseLegs);
 
   // Live rows only: a cold row keeps its text, stub and entities, which is all fusion, the gate
   // and the reranker read. Hydration waits until we know what is returned (CON-47).
@@ -201,7 +257,18 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   for (const m of loaded) if (m !== null) memories.set(m.id, m);
 
   const tf = clock();
-  const fused = fuse([lexical, dense], memories, now, { activation: config.activation, view });
+  // Reciprocal rank fusion within each node as before, then the nodes merged by fused score,
+  // each scaled by the specificity prior (off at ε = 0). A stable sort: one node keeps its order.
+  const fused = legs
+    .flatMap((l, i) =>
+      fuse([lexicalLegs[i]!, denseLegs[i]!], memories, now, {
+        activation: config.activation,
+        view,
+      }).map((f) =>
+        epsilon === 0 ? f : { ...f, score: f.score * specificityFactor(l.node, epsilon) },
+      ),
+    )
+    .sort((x, y) => y.score - x.score);
   timings['fuseMs'] = clock() - tf;
 
   const coverage = new Map<string, number>();
@@ -267,12 +334,12 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   const kept = candidates.filter((f) => relevant(f.id));
   const dropped = candidates.length - kept.length;
 
-  const out: RecalledMemory[] = [];
+  let out: RecalledMemory[] = [];
   for (const f of kept) {
     const m = memories.get(f.id);
     if (m === undefined) continue;
-    const lr = lexical.findIndex((h) => h.id === f.id);
-    const dr = dense.findIndex((h) => h.id === f.id);
+    const lr = lexicalRank.get(f.id) ?? -1;
+    const dr = denseRank.get(f.id) ?? -1;
     const rs = rerankScores.get(f.id);
     const ds = denseScore.get(f.id);
     out.push({
@@ -288,11 +355,15 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         activation: activation(m.accessLog, m.salience, now, config.activation),
         hydrated: false,
       },
+      origin: originOf(m, full),
     });
   }
+  out = withConflicts(out);
 
   let result =
-    view.mode === 'history' ? await withChains(out, read, now, view, queryTokens, config) : out;
+    view.mode === 'history'
+      ? await withChains(out, full, read, now, view, queryTokens, config)
+      : out;
   for (const m of result) {
     if (isCurrent(m, now) && isStale(m, now, config.recall.staleAfterDays)) {
       m.explanation.stale = true;
@@ -311,6 +382,9 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   result = await Promise.all(
     result.map(async (m): Promise<RecalledMemory> => {
       if (!touched.has(m.id) || m.tier !== 'cold' || !isCurrent(m, now)) return m;
+      // Hydrating writes the memory back; a node this caller only reads (the Planet, for a Star
+      // agent) is served from its live row, cold and lexical-only, and left as it is.
+      if (!grantWrites(grant, m)) return m;
       try {
         const blob = await store.coldGet(grant, m.id);
         // A lost or torn blob: the memory stays cold, lexical-only.
@@ -362,8 +436,86 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     ...(rerankSkipped !== undefined ? { rerankSkipped } : {}),
     ...(embedSkipped !== undefined ? { embedSkipped } : {}),
     temporal,
+    read: nodes.map((n) => nodeLabel(n, full)),
     timings,
   };
+}
+
+/** The grant a query reads with: its own, or the local grant for its scope and home. */
+function grantOf(q: RecallQuery): Grant {
+  if (q.grant !== undefined) {
+    assertGrant(q.grant);
+    return q.grant;
+  }
+  if (q.scope === undefined) throw new TypeError('recall needs a scope or a grant');
+  return localGrant(q.scope, q.home === undefined ? {} : { home: q.home });
+}
+
+/**
+ * Per-node hit lists as one list, by rank: every node's first hit, then every node's second, in
+ * node order. With one non-empty node it is exactly that node's list.
+ */
+function byRank(lists: Hit[][]): Hit[] {
+  if (lists.length === 1) return lists[0]!;
+  const out: Hit[] = [];
+  const seen = new Set<string>();
+  const longest = Math.max(0, ...lists.map((l) => l.length));
+  for (let r = 0; r < longest; r++) {
+    for (const l of lists) {
+      const h = l[r];
+      if (h !== undefined && !seen.has(h.id)) {
+        seen.add(h.id);
+        out.push(h);
+      }
+    }
+  }
+  return out;
+}
+
+/** Each id's 0-based rank within its own node's list. */
+function rankWithin(lists: Hit[][]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const l of lists) {
+    l.forEach((h, i) => {
+      if (!out.has(h.id)) out.set(h.id, i);
+    });
+  }
+  return out;
+}
+
+const nodeOfMemory = (m: Memory): NodeRef => nodeOf(addressOf(m));
+
+/**
+ * The conflict rule (spec 7.2), always on: when a returned memory contradicts a returned memory in
+ * another node (recorded by observe as a `level`/`contradicts` decision), the narrower of the two
+ * ranks first and the wider one stays, its origin naming what overrides it. Equally specific: the
+ * memory that recorded the contradiction wins.
+ */
+function withConflicts(out: RecalledMemory[]): RecalledMemory[] {
+  const byId = new Map(out.map((m) => [m.id, m]));
+  const list = [...out];
+  for (const m of out) {
+    for (const otherId of contradicted(m)) {
+      const other = byId.get(otherId);
+      if (other === undefined || other === m) continue;
+      const [a, b] = [nodeOfMemory(m), nodeOfMemory(other)];
+      if (nodeKey(a) === nodeKey(b)) continue;
+      const [winner, loser] = specificity(b) > specificity(a) ? [other, m] : [m, other];
+      const iw = list.indexOf(winner);
+      const il = list.indexOf(loser);
+      if (iw > il) {
+        list.splice(iw, 1);
+        list.splice(il, 0, winner);
+      }
+      if (loser.origin !== undefined && winner.origin !== undefined) {
+        loser.origin = {
+          ...loser.origin,
+          overriddenBy: { id: winner.id, node: winner.origin.node },
+        };
+      }
+    }
+  }
+  return list;
 }
 
 /** The view a query asks for: explicit options first, else read from the query in code. */
@@ -407,6 +559,7 @@ const CHAIN_MAX = 8;
  */
 async function withChains(
   out: RecalledMemory[],
+  grantFor: Grant,
   read: (id: string) => Promise<Memory | null>,
   now: Date,
   view: TemporalView,
@@ -445,6 +598,7 @@ async function withChains(
             hydrated: false,
             chain: true,
           },
+          origin: originOf(m, grantFor),
         },
       );
     }
@@ -563,19 +717,54 @@ export function fitForInjection<M extends RecalledMemory>(
   now = new Date(),
 ): { kept: M[]; lines: string[] } {
   let total = INJECT_OPEN.length + INJECT_CLOSE.length;
+  let hive = 0;
   const lines: string[] = [];
   const kept: M[] = [];
+  // Levels are named only when something comes from outside the reader's home node: a recall of
+  // one node reads exactly as before levels existed.
+  const labelled = memories.some((m) => m.origin !== undefined && !m.origin.home);
   for (const m of memories) {
     const note =
       m.explanation.stale === true
         ? ` (may be outdated; last confirmed ${age(lastConfirmed(m), now)})`
         : '';
-    const line = `- [${m.type}, ${when(m, now)}] ${scrub(m.text).text}${note}`;
+    const text = scrub(escapeBlockTags(escapeLabelText(m.text))).text;
+    const line = `- [${labelFor(m, labelled, now)}] ${text}${note}`;
     const cost = line.length + (lines.length > 0 ? 1 : 0);
+    // Hive memories (Constellation, Galaxy) take at most HIVE_QUOTA of the budget, so a large team
+    // cannot crowd out the person's own memory: one past it is skipped, not the end of the block.
+    const fromHive = m.origin?.level === 'hive';
+    if (fromHive && hive + cost > HIVE_QUOTA * budgetChars) continue;
     if (total + cost > budgetChars) break;
     lines.push(line);
     kept.push(m);
     total += cost;
+    if (fromHive) hive += cost;
   }
   return { kept, lines };
+}
+
+/**
+ * Memory text with any `<oort-…` or `</oort-…` tag opening written as `&lt;`, so a memory cannot
+ * close the `<oort-memory>` block (or open another) and have what follows read as the prompt.
+ */
+export function escapeBlockTags(text: string): string {
+  return text.replace(/<(?=\s*\/?\s*oort-)/gi, '&lt;');
+}
+
+/** The share of an injection budget hive memories may take (spec 7.2). */
+export const HIVE_QUOTA = 0.4;
+
+/**
+ * A memory's label, built by code from structured fields only: `semantic, 2d ago`, or with levels
+ * named `semantic, Star cursor, 5h ago`, and `, overridden by Star cursor` when a narrower memory
+ * in the result contradicts it. Memory text never reaches it (and its brackets are escaped).
+ */
+function labelFor(m: RecalledMemory, labelled: boolean, now: Date): string {
+  const parts: string[] = [m.type];
+  if (labelled && m.origin !== undefined) parts.push(m.origin.node);
+  parts.push(when(m, now));
+  if (m.origin?.overriddenBy !== undefined)
+    parts.push(`overridden by ${m.origin.overriddenBy.node}`);
+  return parts.join(', ');
 }

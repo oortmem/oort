@@ -6,6 +6,9 @@ import {
   cachingEmbedder,
   layeredEmbeddingCache,
   memoryEmbeddingCache,
+  agentHome,
+  ANONYMOUS_AGENT,
+  isAgentId,
   localScope,
   resolveProject,
   resolveConfig,
@@ -14,6 +17,7 @@ import {
   type MemoryStore,
   type MemoryWriter,
   type Reranker,
+  type Home,
   type ResolvedConfig,
   type Scope,
 } from '@oortmem/core';
@@ -32,7 +36,7 @@ import {
 import { diskEmbeddingCache } from './embed-cache-disk.js';
 import { createKeychain, type KeychainReader } from './keychain.js';
 import { RELAY_MODELS, RELAY_PATHS, relayUrl, viaRelay, type OortRelayError } from './relay.js';
-import { echo } from './util.js';
+import { Refusal, echo } from './util.js';
 
 import { cloudUrl, createCloudClient, readCloudSettings, type CloudClient } from './cloud.js';
 export type { AdapterRole } from './credentials.js';
@@ -48,7 +52,10 @@ export interface Wired {
   cloud?: CloudClient;
   /** Why cloud mode has no client (no Oort key, a bad OORT_CLOUD_URL). */
   cloudProblem?: string;
+  /** `scope.agentId` is the acting agent (`agent.id`). */
   scope: Scope;
+  /** Which of the person's agents this run acts as, and where its new memories land. */
+  agent: WiredAgent;
   store: MemoryStore;
   embed?: Embedder;
   rerank?: Reranker;
@@ -71,6 +78,41 @@ export interface Wired {
    */
   warnings: WireWarning[];
   close(): Promise<void>;
+}
+
+/**
+ * The agent a run acts as (CON-62): every host is its own agent, sharing the person's Planet and
+ * keeping a Star no other agent reads. `home` is `star` when it is configured as a Star
+ * (`oort connect <host> --star`), so its new memories stay private to it.
+ */
+export interface WiredAgent {
+  id: string;
+  home: Home;
+  /**
+   * Where the id came from: `--agent` (or a host's `oort mcp --agent`), `OORT_AGENT`, or `none`:
+   * no agent was named, and the run is `anonymous`, reading and writing the Planet only.
+   */
+  source: 'flag' | 'env' | 'none';
+}
+
+/**
+ * The agent for this run: the flag, else `OORT_AGENT`, else anonymous (`ANONYMOUS_AGENT`: the
+ * Planet only, no Star read or written). Never Claude Code by default: an MCP entry written before
+ * agents existed must not act as one. Refuses a bad or reserved id. An agent id is local
+ * configuration, not authentication: any local process can name any agent.
+ */
+export function resolveAgent(home: string, env: Env, flag?: string): WiredAgent {
+  const fromEnv = env['OORT_AGENT'];
+  if (flag === undefined && (fromEnv === undefined || fromEnv === '')) {
+    return { id: ANONYMOUS_AGENT, home: 'planet', source: 'none' };
+  }
+  const [id, source] = flag !== undefined ? [flag, 'flag' as const] : [fromEnv!, 'env' as const];
+  if (!isAgentId(id)) {
+    throw new Refusal(
+      `agent ${echo(id)} is not an agent id: lowercase letters, digits, ".", "_" or "-", starting with a letter or digit.`,
+    );
+  }
+  return { id, home: agentHome(home, id), source };
 }
 
 export interface WireWarning {
@@ -108,6 +150,8 @@ export interface WireOptions {
   roles?: readonly AdapterRole[];
   /** Per-request timeout for the Oort Cloud client (the hooks pass their budget). */
   cloudTimeoutMs?: number;
+  /** The agent to act as (`--agent`); default `OORT_AGENT`, else anonymous (Planet only). */
+  agent?: string;
 }
 
 export type WireFn = (cwd: string, opts?: WireOptions) => Promise<Wired>;
@@ -274,7 +318,8 @@ export const wire: WireFn = async (cwd, opts = {}) => {
       message: `oort.config.json sets project.id ${echo(project.untrustedId)}, ignored until you trust it: run \`oort project link\` in this repository.`,
     });
   }
-  const scope = localScope(project.projectId);
+  const agent = resolveAgent(config.home, env, opts.agent);
+  const scope: Scope = { ...localScope(project.projectId), agentId: agent.id };
   const store = await openSqliteStore({
     path: path.join(config.home, 'oort.sqlite'),
     coldDir: path.join(config.home, 'cold'),
@@ -306,6 +351,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
   const out: Wired = {
     config,
     scope,
+    agent,
     store,
     unavailable: {},
     routes,

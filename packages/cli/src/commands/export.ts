@@ -1,11 +1,16 @@
 import * as path from 'node:path';
-import { filterFor } from '@oortmem/claude-code';
+import { HOSTS } from '../connectors.js';
+import type { Wired } from '../wire.js';
 import {
   EXPORT_FORMAT_VERSION,
   fitsVersion1,
   formatExport,
-  localGrant,
+  nodeGrant,
+  planetNode,
+  readAgents,
+  starNode,
   type ExportManifestV1,
+  type NodePattern,
   type ExportVersion,
   type Grant,
   type Memory,
@@ -70,6 +75,33 @@ export async function decoded(
 export const scopeKey = (s: Scope): string => JSON.stringify(Object.entries(s).sort());
 
 /**
+ * What `oort export` reads, in the cwd's project plus global memories. Version 2 is a backup of
+ * everything the person owns: their Planet and the Star of every agent this machine knows (each
+ * host, every agent in agents.json, and the acting one), read-only. Version 1 holds Planet
+ * memories only, so it reads the Planet alone.
+ */
+export function exportGrant(w: Wired, version: ExportVersion): Grant {
+  const { orgId, customerId, agentId, projectId } = w.scope;
+  const projectIds = [...new Set([projectId ?? null, null])];
+  const planet: NodePattern = { node: planetNode({ orgId, customerId }), projectIds };
+  const agents =
+    version === 1
+      ? []
+      : [
+          ...new Set([
+            ...HOSTS,
+            ...Object.keys(readAgents(w.config.home)),
+            ...(w.agent.source === 'none' ? [] : [w.agent.id]),
+          ]),
+        ];
+  return nodeGrant({
+    principal: { orgId, customerId, agentId },
+    read: [planet, ...agents.map((a) => ({ node: starNode({ orgId, agentId: a }), projectIds }))],
+    write: [],
+  });
+}
+
+/**
  * `oort export [--out <file>] [--format 1|2]`: a manifest line and one JSON
  * line per memory (every tier and validity state) visible from the cwd, in
  * format version 2 unless `--format 1` asks for the old one.
@@ -93,8 +125,7 @@ export async function exportCommand(
       }
       return 0;
     }
-    const filter = filterFor(w.scope);
-    const grant = localGrant(filter);
+    const grant = exportGrant(w, version);
     const listed = await w.store.list(grant, { validOnly: false });
     // Oldest first, so an importer replays supersede chains in order.
     listed.sort(
@@ -102,7 +133,7 @@ export async function exportCommand(
     );
     const memories: Memory[] = [];
     for (const m of listed) {
-      memories.push(await shapeLinks(w.store, filter, await decoded(m, w.store, grant, ctx)));
+      memories.push(await shapeLinks(w.store, grant, await decoded(m, w.store, grant, ctx)));
     }
     if (version === 1 && !memories.every(fitsVersion1)) {
       throw new Refusal(

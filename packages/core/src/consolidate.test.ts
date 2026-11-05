@@ -8,6 +8,8 @@ import { isCurrent, type AccessLog, type Memory } from './model.js';
 import { makeMemory as baseMemory, vec } from './store-conformance.js';
 import { grantFor, TG } from './store-conformance.js';
 import { localGrant } from './grant.js';
+import { addressed, canonicalMemory } from './address.js';
+import { soleGrantFor } from './isolation.js';
 
 const SCOPE: ScopeFilter = {
   orgId: 'local',
@@ -185,21 +187,36 @@ describe('consolidate', () => {
       scope: { ...base, customerId: 'someone-else' },
       ...stale,
     });
+    // Another agent's Star: private to it, so this agent's consolidation never touches it.
     const b = makeMemory({
       id: 'other-agent',
-      scope: { ...base, agentId: 'another-agent' },
+      ...addressed(
+        { level: 'agent', orgId: 'local', agentId: 'another-agent' },
+        {
+          agentId: 'another-agent',
+        },
+      ),
       validTo: ago(HOUR).toISOString(),
       ...stale,
     });
     await store.upsert(grantFor(a.scope), a);
-    await store.upsert(grantFor(b.scope), b);
+    await store.upsert(soleGrantFor(b), b);
+    // Another of the person's agents wrote this one to the Planet: the Planet is shared (CON-62).
+    const c = makeMemory({
+      id: 'planet-other-author',
+      scope: { ...base, agentId: 'another-agent' },
+      validTo: ago(HOUR).toISOString(),
+      ...stale,
+    });
+    await store.upsert(grantFor(c.scope), c);
     const res = await consolidate(SCOPE, deps);
     for (const arr of [res.promoted, res.demoted, res.evicted, res.expired]) {
       expect(arr).not.toContain('other-customer');
       expect(arr).not.toContain('other-agent');
     }
+    expect(res.expired).toContain('planet-other-author');
     expect(await store.get(grantFor(a.scope), 'other-customer')).toEqual(a);
-    expect(await store.get(grantFor(b.scope), 'other-agent')).toEqual(b);
+    expect(await store.get(soleGrantFor(b), 'other-agent')).toEqual(canonicalMemory(b));
   });
 
   it('consolidate.pinned-non-current-keeps-tier', async () => {

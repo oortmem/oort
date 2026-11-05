@@ -128,11 +128,17 @@ export const WORKSPACE_FOLDER = '${workspaceFolder}';
 
 const takesWorkspaceFolder = (host: Host): boolean => host === 'cursor' || host === 'vscode';
 
-/** The entry `oort connect` writes: the bin's realpath, started as `oort mcp`. */
+/**
+ * The entry `oort connect` writes: the bin's realpath, started as `oort mcp --agent <host>`, so
+ * each host acts as its own agent (CON-62): one shared Planet, a Star of its own.
+ */
 export function serverEntry(host: Host, cmd: string): Record<string, unknown> {
+  const agent = ['--agent', host];
   const base = {
     command: cmd,
-    args: takesWorkspaceFolder(host) ? ['mcp', '--project', WORKSPACE_FOLDER] : ['mcp'],
+    args: takesWorkspaceFolder(host)
+      ? ['mcp', ...agent, '--project', WORKSPACE_FOLDER]
+      : ['mcp', ...agent],
   };
   // Cursor and VS Code document `type` as required; Claude Code writes it for stdio servers.
   return host === 'cursor' || host === 'vscode' || host === 'claude-code'
@@ -140,9 +146,18 @@ export function serverEntry(host: Host, cmd: string): Record<string, unknown> {
     : base;
 }
 
-/** Entries earlier versions wrote, still recognised as Oort's own (and replaced on connect). */
+/**
+ * Entries earlier versions wrote, still recognised as Oort's own (and replaced on connect): no
+ * agent (before CON-62), and for the workspace hosts no `--project` either.
+ */
 function olderEntries(host: Host, cmd: string): Record<string, unknown>[] {
-  return takesWorkspaceFolder(host) ? [{ ...serverEntry(host, cmd), args: ['mcp'] }] : [];
+  const current = serverEntry(host, cmd);
+  return takesWorkspaceFolder(host)
+    ? [
+        { ...current, args: ['mcp', '--project', WORKSPACE_FOLDER] },
+        { ...current, args: ['mcp'] },
+      ]
+    : [{ ...current, args: ['mcp'] }];
 }
 
 type Json = Record<string, unknown>;
@@ -505,6 +520,7 @@ function claudeCliChange(
     result.backup = backupPath(file);
     result.previous = previousPath(file);
   }
+  const entryArgs = serverEntry(host, cmd)['args'] as string[];
   const run = (args: string[]): void => {
     const r = spawnSync(claude, args, {
       env: hc.env as NodeJS.ProcessEnv,
@@ -513,12 +529,13 @@ function claudeCliChange(
     });
     if (r.status !== 0) {
       throw new Refusal(
-        `\`claude ${args.slice(0, 5).join(' ')}\` failed (${r.status === null ? (r.error?.name ?? 'signal') : `exit ${r.status}`}); run it yourself: claude mcp add --scope user ${SERVER_NAME} -- ${cmd} mcp`,
+        `\`claude ${args.slice(0, 5).join(' ')}\` failed (${r.status === null ? (r.error?.name ?? 'signal') : `exit ${r.status}`}); run it yourself: claude mcp add --scope user ${SERVER_NAME} -- ${cmd} ${entryArgs.join(' ')}`,
       );
     }
   };
   if (current !== undefined) run(['mcp', 'remove', '--scope', 'user', SERVER_NAME]);
-  if (want !== undefined) run(['mcp', 'add', '--scope', 'user', SERVER_NAME, '--', cmd, 'mcp']);
+  if (want !== undefined)
+    run(['mcp', 'add', '--scope', 'user', SERVER_NAME, '--', cmd, ...entryArgs]);
   // Check that claude wrote what we meant.
   const after = read(load(file).text)['mcpServers'];
   if (!same(isObject(after) ? after[SERVER_NAME] : undefined, want)) {
@@ -692,6 +709,8 @@ export interface HostStatus {
    * cannot be read as its format.
    */
   state: 'connected' | 'outdated' | 'broken' | 'absent' | 'foreign' | 'invalid';
+  /** `outdated` only: the entry names no `--agent` (written before agents existed). */
+  noAgent?: true;
   /** Why the file is `invalid` (holds no config values). */
   message?: string;
 }
@@ -744,5 +763,8 @@ export function inspectHost(host: Host, hc: HostContext, cmd?: string): HostStat
   // Without this bin's path, only an oort-looking path counts as ours (never "\0").
   if (!isOurs(host, entry, cmd ?? '\u0000')) return status('foreign');
   if (!executable(command)) return status('broken');
-  return status(same(entry, serverEntry(host, cmd ?? command)) ? 'connected' : 'outdated');
+  if (same(entry, serverEntry(host, cmd ?? command))) return status('connected');
+  // An entry from before agents (no --agent) runs as an anonymous, Planet-only agent.
+  const args = isObject(entry) && Array.isArray(entry['args']) ? entry['args'] : [];
+  return { ...status('outdated'), ...(!args.includes('--agent') && { noAgent: true }) };
 }
