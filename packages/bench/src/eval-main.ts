@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { resolveHome } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
+import { runDecisionsCli } from './decide-eval-main.js';
 import { loadEvalRows, runEval, type EvalReport } from './eval.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { FIXTURE_COUNT, FIXTURE_SEED } from './fixture.js';
@@ -15,6 +16,9 @@ const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>]
                  [--min-recall10 <0..1>] [--dimension <n>] [--dense] [--now <iso>]
                  [--abstain-threshold <n>] [--no-gate] [--json]
        pnpm eval --demo [--json]    synthetic 1500-memory store + the bundled 23-row fixture
+       pnpm eval --decisions [--decider local,jev,keyless] [--model <id>] [--home <dir>]
+                       [--rewrites] [--fit] [--json]
+                                    the decision questions (eval/decisions.jsonl) per decider
 
 Runs recall for each row against a temp copy of the store (the live store is never written).`;
 
@@ -46,6 +50,7 @@ export function renderReport(r: EvalReport): string {
 const fromUser = (p: string): string => path.resolve(process.env['INIT_CWD'] ?? process.cwd(), p);
 
 async function main(): Promise<number> {
+  if (process.argv.includes('--decisions')) return runDecisionsCli(process.argv.slice(2));
   const { values, positionals } = parseArgs({
     args: process.argv.slice(2).filter((a) => a !== '--'),
     allowPositionals: true,

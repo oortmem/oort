@@ -10,7 +10,7 @@
  * `oort mcp` server rather than per-prompt hooks.
  */
 
-export type ModelRole = 'embed' | 'rerank';
+export type ModelRole = 'embed' | 'rerank' | 'decide';
 
 /** One file of a model: where it comes from in the repo, and what it must hash to. */
 export interface ModelFile {
@@ -65,7 +65,35 @@ export interface RerankModelSpec extends BaseSpec {
   calibration: { scale: number; shift: number };
 }
 
-export type ModelSpec = EmbedModelSpec | RerankModelSpec;
+export interface DecideModelSpec extends BaseSpec {
+  role: 'decide';
+  /** The decoder's key/value cache inputs. */
+  kvCache: { layers: number; heads: number; headDim: number };
+  /**
+   * The chat format the prompt is written in. `chatml-nothink` is ChatML with an empty
+   * `<think></think>` block opening the answer (Qwen3 with thinking off).
+   */
+  template: 'chatml' | 'chatml-nothink';
+  /**
+   * Log-odds added to each yes-or-no answer before it is read at 0.5: small models lean towards
+   * "yes" (or "no") whatever the question. Fitted per model on packages/bench/eval/decisions.jsonl
+   * (docs/local-decider.md); a question without an entry is read as the model answers it.
+   */
+  calibration: Partial<Record<DecideQuestion, number>>;
+}
+
+/** The yes-or-no questions of the local decider (gate, novel, and the reconcile tree). */
+export type DecideQuestion =
+  | 'should_store'
+  | 'volatile'
+  | 'novel'
+  | 'related'
+  | 'conflict'
+  | 'mistake'
+  | 'newinfo'
+  | 'samefact';
+
+export type ModelSpec = EmbedModelSpec | RerankModelSpec | DecideModelSpec;
 
 const HF_TOKENIZER_JSON_BERT_UNCASED = {
   name: 'tokenizer.json',
@@ -211,10 +239,59 @@ export const MODELS: readonly ModelSpec[] = [
     maxTokens: 512,
     calibration: { scale: 1, shift: 0 },
   },
+  {
+    // Decisions only (CON-16). Qwen3 0.6B, Qwen2.5 0.5B and SmolLM2 class models were measured
+    // and do not tell the answers apart; this is the smallest that does (docs/local-decider.md).
+    id: 'qwen2.5-1.5b-instruct',
+    role: 'decide',
+    label: 'Qwen2.5 1.5B Instruct, decisions (int4, 1.8 GB; loaded by the background drain)',
+    size: 'large',
+    source: {
+      repo: 'onnx-community/Qwen2.5-1.5B-Instruct',
+      revision: 'd54957e3af1be04546436e874a60fe386041b244',
+    },
+    upstream: 'Qwen/Qwen2.5-1.5B-Instruct',
+    licence: 'Apache-2.0',
+    files: [
+      {
+        name: 'model.onnx',
+        path: 'onnx/model_q4.onnx',
+        bytes: 1_787_566_590,
+        sha256: '70c24509f760fed9a8f50391165c46a87660197028a42c4547763f1c173ddea6',
+      },
+      {
+        name: 'tokenizer.json',
+        path: 'tokenizer.json',
+        bytes: 7_031_673,
+        sha256: 'a8506e7111b80c6d8635951a02eab0f4e1a8e4e5772da83846579e97b16f61bf',
+      },
+      {
+        name: 'tokenizer_config.json',
+        path: 'tokenizer_config.json',
+        bytes: 7_849,
+        sha256: '6a14243f0ae04884e597b3f032c05e15de9f417318fdcac24ab4e2680e691430',
+      },
+    ],
+    maxTokens: 4096,
+    kvCache: { layers: 28, heads: 2, headDim: 128 },
+    template: 'chatml',
+    // pnpm eval --decisions --fit (docs/local-decider.md).
+    calibration: {
+      should_store: -4.09,
+      volatile: 2.33,
+      novel: -0.5,
+      related: 5.44,
+      conflict: -0.46,
+      mistake: -2.75,
+      newinfo: 0.94,
+      samefact: 0.55,
+    },
+  },
 ];
 
 export const DEFAULT_EMBED_MODEL = 'bge-small-en-v1.5';
 export const DEFAULT_RERANK_MODEL = 'ms-marco-minilm-l6-v2';
+export const DEFAULT_DECIDE_MODEL = 'qwen2.5-1.5b-instruct';
 
 /** The catalog entry for `id`, or undefined. */
 export function findModel(id: string): ModelSpec | undefined {

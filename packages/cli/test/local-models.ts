@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   MODELS,
+  type DecideModelSpec,
   type EmbedModelSpec,
   type ModelSpec,
   type RerankModelSpec,
@@ -54,6 +55,18 @@ export const TINY_RERANK: RerankModelSpec = {
   calibration: { scale: 1, shift: 3 },
 };
 
+export const TINY_DECIDE: DecideModelSpec = {
+  ...common,
+  id: 'tiny-decide',
+  role: 'decide',
+  label: 'tiny test decoder',
+  files: fixtureFiles('tiny-decide'),
+  maxTokens: 256,
+  kvCache: { layers: 1, heads: 1, headDim: 4 },
+  template: 'chatml',
+  calibration: {},
+};
+
 /** Serves fixture files by URL path; records every request. */
 export function fixtureFetch(calls: string[]): typeof fetch {
   return (async (input: string | URL | Request) => {
@@ -69,9 +82,9 @@ export function fixtureFetch(calls: string[]): typeof fetch {
 /** Adds the tiny models to the catalog; returns the undo. */
 export function registerTinyModels(): () => void {
   const list = MODELS as ModelSpec[];
-  list.push(TINY_EMBED, TINY_RERANK);
+  list.push(TINY_EMBED, TINY_RERANK, TINY_DECIDE);
   return () => {
-    for (const id of [TINY_EMBED.id, TINY_RERANK.id]) {
+    for (const id of [TINY_EMBED.id, TINY_RERANK.id, TINY_DECIDE.id]) {
       const i = list.findIndex((m) => m.id === id);
       if (i >= 0) list.splice(i, 1);
     }

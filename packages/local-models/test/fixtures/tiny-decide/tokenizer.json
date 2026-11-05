@@ -1,0 +1,78 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {
+      "id": 0,
+      "content": "[UNK]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 1,
+      "content": "<|im_start|>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 2,
+      "content": "<|im_end|>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    }
+  ],
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "Whitespace"
+  },
+  "post_processor": null,
+  "decoder": null,
+  "model": {
+    "type": "WordPiece",
+    "unk_token": "[UNK]",
+    "continuing_subword_prefix": "##",
+    "max_input_chars_per_word": 100,
+    "vocab": {
+      "[UNK]": 0,
+      "<|im_start|>": 1,
+      "<|im_end|>": 2,
+      "A": 3,
+      "B": 4,
+      "C": 5,
+      "D": 6,
+      "E": 7,
+      "F": 8,
+      "yes": 9,
+      "no": 10,
+      "trivial": 11,
+      "useful": 12,
+      "important": 13,
+      "critical": 14,
+      "fact": 15,
+      "event": 16,
+      "procedure": 17,
+      "preference": 18,
+      "changed": 19,
+      "moved": 20,
+      "now": 21,
+      "switched": 22,
+      "wrong": 23,
+      "mistake": 24,
+      "correction": 25,
+      "never": 26,
+      "thanks": 27,
+      "ok": 28,
+      "hello": 29
+    }
+  }
+}

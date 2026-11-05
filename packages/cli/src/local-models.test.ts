@@ -7,6 +7,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { enqueueObservations } from '@oortmem/claude-code';
+import { localScope } from '@oortmem/core';
 import { openSqliteStore, readEmbedderBinding } from '@oortmem/store-sqlite';
 import { TG } from '@oortmem/core/store-conformance';
 import { createKeychain } from './keychain.js';
@@ -232,6 +234,52 @@ describe('a store embedded with another model', () => {
     expect(fs.existsSync(path.join(s.oortHome, 'models', 'tiny-embed'))).toBe(false);
     expect(config(s)).toEqual({});
     expect(r.io.stdout).toContain('oort reembed'); // the store is now bound to the local model
+  });
+});
+
+describe('the local decision model (CON-16)', () => {
+  it('local.decide-pull-switches-decide-and-doctor-names-it', async () => {
+    const s = sandbox();
+    const pull = await oort(s, ['models', 'pull', 'tiny-decide']);
+    expect(pull.code, pull.io.stderr).toBe(0);
+    // decide names no model in the config: the downloaded decision model is the one used.
+    expect(config(s)).toEqual({ decide: { provider: 'local' } });
+    const list = await oort(s, ['models', 'list', '--json']);
+    const rows = (JSON.parse(list.io.stdout) as { models: { id: string; active: boolean }[] })
+      .models;
+    expect(rows.find((m) => m.id === 'tiny-decide')).toMatchObject({ active: true });
+    const doctor = await oort(s, ['doctor', '--json']);
+    const checks = (
+      JSON.parse(doctor.io.stdout) as { checks: { name: string; status: string; detail: string }[] }
+    ).checks;
+    expect(checks.find((c) => c.name === 'decide')).toMatchObject({ status: 'ok' });
+    expect(checks.find((c) => c.name === 'decide')?.detail).toContain('local model tiny-decide');
+    // The writer still needs a key: doctor says nothing new is saved.
+    expect(checks.find((c) => c.name === 'write')?.detail).toContain('nothing new is saved');
+    const rm = await oort(s, ['models', 'rm', 'tiny-decide']);
+    expect(rm.io.stdout).toContain('TypeSafe Jev');
+    expect(config(s)).toEqual({});
+  });
+
+  it('local.decide-without-a-writer-leaves-the-queue-for-later', async () => {
+    const s = sandbox();
+    expect((await oort(s, ['models', 'pull', 'tiny-decide'])).code).toBe(0);
+    const calls = s.calls.length;
+    enqueueObservations(s.oortHome, 's-decide', localScope(undefined), [
+      {
+        userText: 'Always use pnpm in this repo.',
+        assistantText: 'Got it.',
+        toolSummaries: [],
+        at: '2026-11-05T10:00:00Z',
+      },
+    ]);
+    const r = await oort(s, ['hook', 'drain']);
+    expect(r.code).toBe(0);
+    // A decider alone saves nothing: the queue waits for a writer, as with no keys at all.
+    expect(
+      fs.readdirSync(path.join(s.oortHome, 'queue')).filter((f) => f.endsWith('.jsonl')),
+    ).toHaveLength(1);
+    expect(s.calls.length).toBe(calls);
   });
 });
 

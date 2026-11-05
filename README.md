@@ -104,7 +104,7 @@ This repo is the open-source engine and CLI only. The hosted side (oortcloud.dev
 
 Oort calls three model services: Voyage AI (embeddings and rerank), TypeSafe (decisions) and Anthropic (the writer). Bring your own keys with `oort keys set`. They stay in the macOS Keychain, or in a `0600` credentials file on Linux and Windows.
 
-Or run with **no keys and no account**: `npm i -g @oortmem/local-models && oort models pull` downloads small embedding and rerank models (58 MB, MIT and Apache-2.0) and runs them on your CPU, offline. Saving new memories still needs the decision and writer models. [Local models](docs/cli.md#no-api-keys-local-models).
+Or run with **no keys and no account**: `npm i -g @oortmem/local-models && oort models pull` downloads small embedding and rerank models (58 MB, MIT and Apache-2.0) and runs them on your CPU, offline. Saving new memories still needs the writer (an Anthropic key or Oort Pro); the save decisions can run locally too, with an optional 1.8 GB model. [Local models](docs/cli.md#no-api-keys-local-models).
 
 Or use **Oort Pro**: $19/month, VAT included where applicable. No API keys needed. Run `oort login`, then `oort cloud use` to keep your memories in Oort Cloud in the EU, with a dashboard, a star map and a connector for claude.ai and ChatGPT. You can export or delete them at any time, or keep them on your machine and use only the relay, which stores no content. [Pricing](https://oortcloud.dev/pricing).
 

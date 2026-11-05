@@ -51,11 +51,16 @@ const CONFIG_KEY: Record<AdapterRole, 'embed' | 'rerank' | 'decide' | 'writer'> 
  * inference (no network; the model was verified when it was pulled).
  */
 async function localModelCheck(
-  role: 'embed' | 'rerank',
+  role: 'embed' | 'rerank' | 'decide',
   config: ReturnType<typeof resolveConfig>,
 ): Promise<Check> {
-  const model = config[role].model;
   const lm = await importLocalModels();
+  const model =
+    role === 'decide'
+      ? lm instanceof Error
+        ? 'decide'
+        : lm.decideModelId(config.home)
+      : config[role].model;
   if (lm instanceof Error) {
     return {
       group: 'keys',
@@ -66,6 +71,16 @@ async function localModelCheck(
     };
   }
   try {
+    if (role === 'decide') {
+      // Construction checks the download; the model (hundreds of MB) is only loaded by the drain.
+      lm.localDecider({ home: config.home, model });
+      return {
+        group: 'keys',
+        name: role,
+        status: 'ok',
+        detail: `local model ${model} on this CPU, no key (loaded by the background drain when saving)`,
+      };
+    }
     const t0 = performance.now();
     if (role === 'embed') {
       const e = lm.localEmbedder({ home: config.home, model, dimension: config.embed.dimension });
@@ -112,7 +127,10 @@ async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean 
   const checks: Check[] = [];
   let relayed = false;
   for (const role of ROLES) {
-    if ((role === 'embed' || role === 'rerank') && config?.[role].provider === LOCAL_PROVIDER) {
+    if (
+      (role === 'embed' || role === 'rerank' || role === 'decide') &&
+      config?.[role].provider === LOCAL_PROVIDER
+    ) {
       checks.push(await localModelCheck(role, config));
       continue;
     }

@@ -17,7 +17,9 @@
   },
   "dependencies": {
     "@oortmem/core": "workspace:*",
+    "@oortmem/decide-jev": "workspace:*",
     "@oortmem/embed-voyage": "workspace:*",
+    "@oortmem/local-models": "workspace:*",
     "@oortmem/rerank-voyage": "workspace:*",
     "@oortmem/store-sqlite": "workspace:*",
     "better-sqlite3": "13.0.3"

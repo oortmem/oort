@@ -141,7 +141,8 @@ The steps:
      downloads the small embedder and reranker (58 MB) and switches to them
      (see [No API keys: local models](#no-api-keys-local-models)). It needs
      `@oortmem/local-models` installed; if the package or the download is
-     missing, setup says why and carries on. Undo: `oort models rm`.
+     missing, setup says why and carries on. Undo: `oort models rm`. It then
+     offers the optional local decision model (1.8 GB; `--yes` only prints the command).
    - **Skip.** Recall works lexical-only until keys are set.
 
    Setup also shows whether an Oort key exists (`OORT_API_KEY` or Keychain
@@ -508,8 +509,9 @@ stay out of your shell profile.
 ## No API keys: local models
 
 Embeddings and reranking can run on this machine's CPU instead of through Voyage: no API keys, no
-account, and no network after a one-time download. Saving new memories still needs the decision
-and writer models (TypeSafe and Anthropic keys, or Oort Pro); a local decision model is CON-16.
+account, and no network after a one-time download. Saving new memories still needs the writer
+(an Anthropic key, or Oort Pro). The decisions about what to save can also run locally, with an
+optional larger model (see [Local decisions](#local-decisions) below); there is no local writer.
 
 ```sh
 npm i -g @oortmem/local-models   # the runtime: ONNX Runtime, about 115 MB
@@ -551,6 +553,21 @@ scores 16 short documents in 110 ms. The large models take 0.8 to 1 s to load pl
 to parse their tokenizer, use about 1 GB of memory, and need 120 ms per query or 2.3 s per 16
 documents, so they suit the long-lived `oort mcp` server. Runtime: `onnxruntime-node` (MIT) and
 `@huggingface/tokenizers` (Apache-2.0), loaded only on first use.
+
+### Local decisions
+
+```sh
+oort models pull qwen2.5-1.5b-instruct   # 1.8 GB, Apache-2.0; sets "decide": { "provider": "local" }
+```
+
+The local decider answers the gate questions Jev answers (worth storing, salience, type,
+volatile) on the CPU, one forward pass per question, from the probability of a one-word answer:
+nothing is generated, so answers are deterministic. It never rewrites, supersedes or corrects a
+memory: a fact about the same thing as an existing memory is added beside it, because no small
+model measured told those cases apart reliably. Only the background drain loads it (about 30 s
+and 2 to 3 GB per drain on a busy M1 Max), never a prompt hook. `oort setup --keys local` offers
+it after the small models; `oort doctor` names the active decider. With no writer key the queue
+waits, as it does with no keys at all. Measurements: [docs/local-decider.md](local-decider.md).
 
 **In the hooks.** The prompt hook (`UserPromptSubmit`) embeds the query locally, loading the
 model only when the lexical search is not already confident and the query is not in the

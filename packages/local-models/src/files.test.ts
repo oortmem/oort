@@ -2,15 +2,18 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_DECIDE_MODEL,
   DEFAULT_EMBED_MODEL,
   DEFAULT_RERANK_MODEL,
   MODELS,
   downloadBytes,
   findModel,
+  type ModelSpec,
 } from './catalog.js';
 import {
   ChecksumError,
   MANIFEST,
+  decideModelId,
   fileUrl,
   modelDir,
   modelState,
@@ -18,7 +21,13 @@ import {
   removeModel,
   verifyModel,
 } from './files.js';
-import { fixtureFetch, tinyEmbedSpec, tmpHome } from '../test/support.js';
+import {
+  fixtureFetch,
+  tinyDecideSpec,
+  tinyEmbedSpec,
+  tmpHome,
+  writeReady,
+} from '../test/support.js';
 
 const homes: string[] = [];
 const home = (): string => {
@@ -60,6 +69,40 @@ describe('catalog', () => {
     expect(downloadBytes(embed!) + downloadBytes(rerank!)).toBeLessThan(60_000_000);
     for (const m of MODELS) {
       if (m.role === 'embed') expect(m.nativeDimension <= 512 || m.matryoshka).toBe(true);
+    }
+  });
+
+  it('local.decide-default-is-a-calibrated-decoder', () => {
+    const d = findModel(DEFAULT_DECIDE_MODEL);
+    expect(d?.role).toBe('decide');
+    if (d?.role !== 'decide') return;
+    expect(d.kvCache.layers).toBeGreaterThan(0);
+    // Every yes-or-no question the decider asks has a fitted bias.
+    expect(Object.keys(d.calibration).sort()).toEqual([
+      'conflict',
+      'mistake',
+      'newinfo',
+      'novel',
+      'related',
+      'samefact',
+      'should_store',
+      'volatile',
+    ]);
+  });
+
+  it('local.decide-model-id-prefers-the-default-then-any-downloaded', () => {
+    const h = home();
+    expect(decideModelId(h)).toBe(DEFAULT_DECIDE_MODEL);
+    const list = MODELS as ModelSpec[];
+    list.push(tinyDecideSpec());
+    try {
+      writeReady(h, tinyDecideSpec());
+      expect(decideModelId(h)).toBe('tiny-decide');
+    } finally {
+      list.splice(
+        list.findIndex((m) => m.id === 'tiny-decide'),
+        1,
+      );
     }
   });
 

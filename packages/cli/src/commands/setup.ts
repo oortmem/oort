@@ -36,6 +36,7 @@ import {
   type GlobalInstall,
 } from './install.js';
 import { keySource } from './keys.js';
+import { importLocalModels } from '../local-models.js';
 import { modelsPullCommand } from './models.js';
 import { keychainBlocker, runLogin } from './login.js';
 
@@ -221,7 +222,8 @@ function nonInteractiveHelp(detected: Host[]): string {
     `  oort setup --yes --agents ${agents} --keys byo --import skip`,
     `  --agents  detected (the default with --yes), none, or a comma list of: ${HOSTS.join(', ')}`,
     '  --keys    byo (report missing keys and where to get them), pro (oort login: Oort Pro, no vendor keys),',
-    '            local (download local models, 58 MB: embeddings and rerank with no keys), or skip',
+    '            local (download local models, 58 MB: embeddings and rerank with no keys; the local',
+    '            decision model is a separate pull, see `oort models`), or skip',
     '  --import  skip (the default) or an age such as 14d: imports Claude Code transcripts, using the writer',
     '  --no-demo skip the remember, recall and forget check',
     '  --install-global  under npx: run `npm i -g oortmem` first, so agents start a stable `oort`',
@@ -518,6 +520,7 @@ export async function setupCommand(
             'Recall now embeds and reranks on this machine. Saving new memories still needs the TypeSafe and Anthropic keys (or Oort Pro).',
           ),
         );
+        await offerLocalDecider(ctx, p, ui, interactive, done);
       } catch (e) {
         if (!(e instanceof Refusal)) throw e;
         p.info(
@@ -733,5 +736,44 @@ export async function setupCommand(
         : `Setup cancelled. Already changed:\n${done.map((d) => `  ${d.what} (undo: ${d.undo})`).join('\n')}`;
     p.outro(summary);
     return 1;
+  }
+}
+
+/**
+ * After `--keys local`: the local decision model (CON-16) replaces the TypeSafe key for the
+ * add/update/supersede decisions. It is a large download, so setup asks (and `--yes` only says
+ * how). Saving still needs a writer key: there is no local writer.
+ */
+async function offerLocalDecider(
+  ctx: Ctx,
+  p: Prompter,
+  ui: Ui,
+  interactive: boolean,
+  done: { what: string; undo: string }[],
+): Promise<void> {
+  const lm = await importLocalModels();
+  if (lm instanceof Error) return;
+  const spec = lm.findModel(lm.DEFAULT_DECIDE_MODEL);
+  if (spec === undefined) return;
+  const size = `${Math.round(lm.downloadBytes(spec) / 1e6)} MB`;
+  const ask = `Also download the local decision model ${spec.id} (${size}), so deciding what to save needs no TypeSafe key? Saving still needs the Anthropic key (or Oort Pro) for the writer.`;
+  if (!interactive) {
+    p.info(
+      ui.dim(
+        `Optional: \`oort models pull ${spec.id}\` (${size}) decides what to save on this CPU, with no TypeSafe key.`,
+      ),
+    );
+    return;
+  }
+  if (!answered(await p.confirm(ask, false))) return;
+  try {
+    await modelsPullCommand([spec.id], {}, ctx);
+    done.push({
+      what: `downloaded ${spec.id} and switched decide to it`,
+      undo: `oort models rm ${spec.id}`,
+    });
+  } catch (e) {
+    if (!(e instanceof Refusal)) throw e;
+    p.info(ui.warn(`Local decision model skipped: ${e.message}`));
   }
 }

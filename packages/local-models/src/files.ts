@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ensurePrivateDir, writePrivateFile } from '@oortmem/core';
-import type { ModelFile, ModelSpec } from './catalog.js';
+import { DEFAULT_DECIDE_MODEL, MODELS, type ModelFile, type ModelSpec } from './catalog.js';
 
 /** Written last by a successful pull: the model is complete and its checksums matched. */
 export const MANIFEST = 'oort-model.json';
@@ -205,4 +205,15 @@ export function removeModel(home: string, id: string): boolean {
   if (!fs.existsSync(dir)) return false;
   fs.rmSync(dir, { recursive: true, force: true });
   return true;
+}
+
+/**
+ * The decision model `decide.provider: "local"` runs: the default when it is downloaded, else
+ * the first downloaded one in catalog order, else the default (which then reports how to pull it).
+ * The config names no decision model, so pulling one is how it is chosen.
+ */
+export function decideModelId(home: string): string {
+  const decide = MODELS.filter((m) => m.role === 'decide');
+  const ready = decide.filter((m) => modelState(home, m) === 'ready');
+  return (ready.find((m) => m.id === DEFAULT_DECIDE_MODEL) ?? ready[0])?.id ?? DEFAULT_DECIDE_MODEL;
 }

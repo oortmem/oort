@@ -428,22 +428,20 @@ export const wire: WireFn = async (cwd, opts = {}) => {
       })(),
     want.has('decide') &&
       (async () => {
-        const decide = await load(
-          DECIDE,
-          config,
-          await routeOf(DECIDE),
-          relay,
-          onRelayError,
-          async (r) =>
-            (await import('@oortmem/decide-jev')).jevDecider({
-              apiKey: r.key,
-              ...(r.relay !== undefined && {
-                baseURL: `${r.relay}${RELAY_PATHS.typesafe}`,
-                relay: true,
-              }),
-              ...fetchOpt,
-            }),
-        );
+        // A local decision model needs no key: nothing is read from the keychain for it.
+        const decide =
+          config.decide.provider === LOCAL_PROVIDER
+            ? await loadLocal('decide', config)
+            : await load(DECIDE, config, await routeOf(DECIDE), relay, onRelayError, async (r) =>
+                (await import('@oortmem/decide-jev')).jevDecider({
+                  apiKey: r.key,
+                  ...(r.relay !== undefined && {
+                    baseURL: `${r.relay}${RELAY_PATHS.typesafe}`,
+                    relay: true,
+                  }),
+                  ...fetchOpt,
+                }),
+              );
         if ('ok' in decide) out.decide = decide.ok;
         else out.unavailable.decide = decide.error;
       })(),

@@ -1,4 +1,10 @@
-import type { Embedder, OortConfig, Reranker, ResolvedConfig } from '@oortmem/core';
+import type {
+  DecisionController,
+  Embedder,
+  OortConfig,
+  Reranker,
+  ResolvedConfig,
+} from '@oortmem/core';
 
 /** `embed.provider` / `rerank.provider` for models that run on this machine. */
 export const LOCAL_PROVIDER = 'local';
@@ -50,15 +56,22 @@ export async function importLocalModels(): Promise<LocalModels | Error> {
   }
 }
 
+type LocalAdapter<R> = R extends 'embed'
+  ? Embedder
+  : R extends 'rerank'
+    ? Reranker
+    : DecisionController;
+
 /**
- * The local embedder or reranker the config names. Construction only checks that the model was
+ * The local embedder, reranker or decision controller the config names (`decide.provider:
+ * "local"` uses the downloaded decision model, see `decideModelId`). Construction only checks that the model was
  * pulled; nothing is loaded and nothing is downloaded (a missing model is an error naming
  * `oort models pull`).
  */
-export async function loadLocal<R extends 'embed' | 'rerank'>(
+export async function loadLocal<R extends 'embed' | 'rerank' | 'decide'>(
   role: R,
   config: ResolvedConfig,
-): Promise<{ ok: R extends 'embed' ? Embedder : Reranker } | { error: Error }> {
+): Promise<{ ok: LocalAdapter<R> } | { error: Error }> {
   const lm = await importLocalModels();
   if (lm instanceof Error) return { error: lm };
   try {
@@ -69,8 +82,10 @@ export async function loadLocal<R extends 'embed' | 'rerank'>(
             model: config.embed.model,
             dimension: config.embed.dimension,
           })
-        : lm.localReranker({ home: config.home, model: config.rerank.model });
-    return { ok: adapter as unknown as R extends 'embed' ? Embedder : Reranker };
+        : role === 'rerank'
+          ? lm.localReranker({ home: config.home, model: config.rerank.model })
+          : lm.localDecider({ home: config.home, model: lm.decideModelId(config.home) });
+    return { ok: adapter as unknown as LocalAdapter<R> };
   } catch (e) {
     if (e instanceof lm.LocalModelError) return { error: e };
     return {

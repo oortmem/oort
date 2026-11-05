@@ -31,11 +31,14 @@ function readHomeConfig(home: string): Record<string, unknown> {
   throw new Refusal(`${file} is not a JSON object; fix it, then run this again.`);
 }
 
+type LocalRole = 'embed' | 'rerank' | 'decide';
+
 /**
  * Sets (or with `model` null, removes) one role's provider and model in the home config. Every
  * other key, `embed.dimension` included, is kept; the result must still be a valid config.
+ * `decide` names no model (the downloaded decision model is used), only `provider: "local"`.
  */
-export function setHomeModel(home: string, role: 'embed' | 'rerank', model: string | null): void {
+export function setHomeModel(home: string, role: LocalRole, model: string | null): void {
   const config = readHomeConfig(home);
   const section: Record<string, unknown> = {
     ...(config[role] as Record<string, unknown> | undefined),
@@ -45,7 +48,7 @@ export function setHomeModel(home: string, role: 'embed' | 'rerank', model: stri
     delete section['model'];
   } else {
     section['provider'] = LOCAL_PROVIDER;
-    section['model'] = model;
+    if (role !== 'decide') section['model'] = model;
   }
   if (Object.keys(section).length === 0) delete config[role];
   else config[role] = section;
@@ -54,16 +57,17 @@ export function setHomeModel(home: string, role: 'embed' | 'rerank', model: stri
 }
 
 /** Which local model each role of the home config uses, if any. */
-function activeLocal(home: string): Partial<Record<'embed' | 'rerank', string>> {
+function activeLocal(lm: LocalModels, home: string): Partial<Record<LocalRole, string>> {
   let config: OortConfig;
   try {
     config = OortConfig.parse(readHomeConfig(home));
   } catch {
     return {};
   }
-  const out: Partial<Record<'embed' | 'rerank', string>> = {};
+  const out: Partial<Record<LocalRole, string>> = {};
   if (config.embed.provider === LOCAL_PROVIDER) out.embed = config.embed.model;
   if (config.rerank.provider === LOCAL_PROVIDER) out.rerank = config.rerank.model;
+  if (config.decide.provider === LOCAL_PROVIDER) out.decide = lm.decideModelId(home);
   return out;
 }
 
@@ -83,7 +87,7 @@ function specsFor(lm: LocalModels, ids: readonly string[]): ModelSpec[] {
 export async function modelsListCommand(opts: { json?: boolean }, ctx: Ctx): Promise<number> {
   const lm = await localModels();
   const home = resolveHome(ctx.io.env);
-  const active = activeLocal(home);
+  const active = activeLocal(lm, home);
   const rows = lm.MODELS.map((m) => ({
     id: m.id,
     role: m.role,
@@ -142,7 +146,7 @@ export async function modelsPullCommand(
   const home = resolveHome(ctx.io.env);
   const wanted = ids.length > 0 ? ids : [lm.DEFAULT_EMBED_MODEL, lm.DEFAULT_RERANK_MODEL];
   const specs = specsFor(lm, wanted);
-  for (const role of ['embed', 'rerank'] as const) {
+  for (const role of ['embed', 'rerank', 'decide'] as const) {
     if (specs.filter((s) => s.role === role).length > 1) {
       throw new Refusal(`pull one ${role} model at a time.`);
     }
@@ -178,6 +182,9 @@ export async function modelsPullCommand(
       if (shown >= 0) ctx.io.err('\n');
       ctx.io.out(`${ui.ok(`${spec.id}: verified (SHA-256 of every file matches its pin)`)}\n`);
     }
+    // The decision model is 1.8 GB and loads once per drain: an optimised copy would double the
+    // disk it takes for a load time nobody waits on.
+    if (spec.role === 'decide') continue;
     try {
       await runtime.optimize?.(lm.modelDir(home, spec.id));
     } catch (e) {
@@ -255,13 +262,13 @@ export async function modelsRmCommand(ids: string[], ctx: Ctx): Promise<number> 
     ids.length > 0
       ? specsFor(lm, ids)
       : lm.MODELS.filter((m) => lm.modelState(home, m) !== 'missing');
-  const active = activeLocal(home);
+  const active = activeLocal(lm, home);
   for (const spec of specs) {
     if (lm.removeModel(home, spec.id)) ctx.io.out(`${ui.ok(`deleted ${spec.id}`)}\n`);
     if (active[spec.role] === spec.id) {
       setHomeModel(home, spec.role, null);
       ctx.io.out(
-        `${ui.ok(`${spec.role} is back to the default provider (Voyage, when a key or Oort Pro is set)`)}\n`,
+        `${ui.ok(`${spec.role} is back to the default provider (${spec.role === 'decide' ? 'TypeSafe Jev' : 'Voyage'}, when a key or Oort Pro is set)`)}\n`,
       );
       if (spec.role === 'embed') {
         const embed = OortConfig.parse(readHomeConfig(home)).embed;

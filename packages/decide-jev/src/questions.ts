@@ -1,3 +1,4 @@
+// NOTE: duplicated in packages/local-models/src/questions.ts (scripts/check-voyage-http.mjs)
 /**
  * The questions Jev answers. Question ids are not sent to the model, so every
  * instruction must stand on its own. Later calibration work tunes this file.

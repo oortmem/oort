@@ -28,7 +28,7 @@ export function readyModel(
   custom?: ModelSpec,
 ): { spec: ModelSpec; dir: string } {
   const spec = custom?.id === id ? custom : findModel(id);
-  const key = role === 'embed' ? 'embed.model' : 'rerank.model';
+  const key = role === 'decide' ? 'decide model' : `${role}.model`;
   if (spec === undefined) {
     const ids = MODELS.filter((m) => m.role === role).map((m) => m.id);
     throw new LocalModelError(

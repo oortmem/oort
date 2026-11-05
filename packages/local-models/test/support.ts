@@ -5,7 +5,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { EmbedModelSpec, ModelFile, ModelSpec, RerankModelSpec } from '../src/catalog.js';
+import type {
+  DecideModelSpec,
+  EmbedModelSpec,
+  ModelFile,
+  ModelSpec,
+  RerankModelSpec,
+} from '../src/catalog.js';
 import type { Feed, LoadedModel, Output, Runtime } from '../src/runtime.js';
 
 export const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -55,6 +61,25 @@ export function tinyRerankSpec(over: Partial<RerankModelSpec> = {}): RerankModel
     files: files('tiny-rerank'),
     maxTokens: 32,
     calibration: { scale: 1, shift: 0 },
+    ...over,
+  };
+}
+
+/** A one-layer cue-summing decoder (see scripts/make-test-models.py). */
+export function tinyDecideSpec(over: Partial<DecideModelSpec> = {}): DecideModelSpec {
+  return {
+    id: 'tiny-decide',
+    role: 'decide',
+    label: 'tiny test decoder',
+    size: 'small',
+    source: { repo: 'oort/tiny', revision: 'test' },
+    upstream: 'none',
+    licence: 'Apache-2.0',
+    files: files('tiny-decide'),
+    maxTokens: 256,
+    kvCache: { layers: 1, heads: 1, headDim: 4 },
+    template: 'chatml',
+    calibration: {},
     ...over,
   };
 }
