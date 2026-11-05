@@ -97,6 +97,21 @@ offset. When the file was truncated or rewritten under that offset, it reads the
 once and counts `offsetStale`. `SessionStart` makes two store queries (hot, then pinned), however
 many memories there are.
 
+`oort serve` removes most of what is left, the start-up each hook pays: with it running, `UserPromptSubmit` and `SessionStart` send their
+input over a Unix socket to a process that has the store open and the adapters loaded, and fall
+back to in-process whenever it does not answer (see `oort serve` in `docs/cli.md`). Measured with
+`pnpm bench:serve` on 2026-11-05 (2,000 synthetic memories, lexical-only so no network, 40 runs, an
+M1 Max under heavy load), from process start to stdout flushed:
+
+| Hook | In-process p50 / p95 | With `oort serve` p50 / p95 | The daemon's part p50 / p95 |
+| --- | --- | --- | --- |
+| `UserPromptSubmit` | 114 / 216 ms | 33 / 53 ms | 5.8 / 11.9 ms |
+| `SessionStart` | 105 / 185 ms | 30 / 46 ms | 2.4 / 5.0 ms |
+
+Most of what remains is Node itself: a Node process reaches its first line of code about 21 ms
+after it starts, so no hook process finishes in under about 25 ms. The daemon's part is one socket
+request, connect to answer.
+
 Most of a recall's time is two calls to Voyage: embedding the prompt and reranking the results.
 Three settings under `recall` cut them:
 

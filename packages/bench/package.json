@@ -13,7 +13,8 @@
     "bench": "tsc -p tsconfig.json && node --expose-gc dist/bench-main.js",
     "eval": "tsc -p tsconfig.json && node dist/eval-main.js",
     "fixture": "tsc -p tsconfig.json && node dist/make-fixture.js",
-    "calibrate": "tsc -p tsconfig.json && node dist/calibrate-main.js"
+    "calibrate": "tsc -p tsconfig.json && node dist/calibrate-main.js",
+    "bench:serve": "tsc -p tsconfig.json && node dist/serve-bench.js"
   },
   "dependencies": {
     "@oortmem/core": "workspace:*",
