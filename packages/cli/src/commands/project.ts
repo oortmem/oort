@@ -114,3 +114,32 @@ export async function projectPrivacyCommand(
     return 0;
   });
 }
+
+/**
+ * `oort project link|unlink --constellation <c>` (Oort Cloud, maintainers only): binds this
+ * repository's project to a Constellation, so the Constellation knows which projects it serves.
+ * The API refuses anyone but a maintainer.
+ */
+export async function projectConstellationCommand(
+  c: string,
+  bind: boolean,
+  ctx: Ctx,
+): Promise<number> {
+  return withWired(ctx, async (w) => {
+    const cloud = cloudOf(w);
+    if (cloud === undefined) {
+      throw new Refusal('Constellations live in Oort Cloud: run this on a machine that uses it.');
+    }
+    const project = w.scope.projectId;
+    if (project === undefined) {
+      throw new Refusal('This needs a git repository with a project; none found above the cwd.');
+    }
+    const r = bind ? await cloud.bindProject(c, project) : await cloud.unbindProject(c, project);
+    ctx.io.out(
+      r.bound
+        ? `Bound project ${echo(r.project)} to Constellation ${echo(c)}.\n`
+        : `Project ${echo(r.project)} is no longer bound to Constellation ${echo(c)}.\n`,
+    );
+    return 0;
+  });
+}

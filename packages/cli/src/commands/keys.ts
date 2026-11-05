@@ -1,6 +1,7 @@
 import { PROVIDERS, PROVIDER_ENV, isProvider, type Provider } from '../keychain.js';
 import { uiFor } from '../ui.js';
-import { Refusal, type Ctx } from '../util.js';
+import { Refusal, echo, type Ctx } from '../util.js';
+import { clientFor } from './cloud.js';
 
 function providerArg(arg: string, ctx: Ctx): Provider {
   if (!isProvider(arg)) {
@@ -75,5 +76,66 @@ export async function keysListCommand(opts: { json?: boolean }, ctx: Ctx): Promi
     (s === 'missing' ? ui.yellow : ui.green)(s.padEnd('keychain'.length));
   ctx.io.out(ui.header('keys list'));
   ctx.io.out(ui.kv(rows.map((r) => [r.provider, `${shown(r.source)}  ${ui.dim(where(r))}`])));
+  return 0;
+}
+
+const SCOPE_ENTRY = /^(planet|[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}(:(read|share))?)$/;
+
+/** `--scope planet,checkout:read` as the API takes it; refuses what it would refuse anyway. */
+export function parseKeyScope(raw: string): string[] {
+  const entries = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+  if (entries.length === 0 || entries.length > 17) {
+    throw new Refusal('--scope lists planet and up to 16 Constellations, comma separated.');
+  }
+  const bad = entries.find((e) => !SCOPE_ENTRY.test(e));
+  if (bad !== undefined) {
+    throw new Refusal(`--scope entry ${echo(bad)} is not planet or <constellation>[:read|:share].`);
+  }
+  if (!entries.includes('planet')) {
+    throw new Refusal('A key always reads and writes your own Planet: start --scope with planet.');
+  }
+  return [...new Set(entries)];
+}
+
+/**
+ * `oort keys create [--name <n>] [--scope planet[,<c>[:read|:share]]…] [--json]`: a new Oort Cloud
+ * key for this account, shown once. Without --scope it carries everything the account may do;
+ * with it, only the Planet and the Constellations named (`:read` recall only, `:share` recall and
+ * share). A narrowed key can only make keys inside its own scope. Oort never stores the key.
+ */
+export async function keysCreateCommand(
+  opts: { name?: string; scope?: string; json?: boolean },
+  ctx: Ctx,
+): Promise<number> {
+  const name = opts.name?.trim();
+  if (name !== undefined && (name.length < 1 || name.length > 60)) {
+    throw new Refusal('--name is 1 to 60 characters.');
+  }
+  const scope = opts.scope === undefined ? undefined : parseKeyScope(opts.scope);
+  const client = await clientFor(ctx);
+  const k = await client.createKey({
+    ...(name !== undefined && { name }),
+    ...(scope !== undefined && { scope }),
+  });
+  if (opts.json === true) {
+    ctx.io.out(`${JSON.stringify(k, null, 2)}\n`);
+    return 0;
+  }
+  const ui = uiFor(ctx.io);
+  ctx.io.out(
+    `${k.key}\n\n` +
+      ui.kv([
+        ['name', k.name],
+        ['prefix', k.prefix],
+        ['scope', k.scope === null ? 'everything this account may do' : k.scope.join(', ')],
+      ]) +
+      ui.dim(
+        'This is the only time the key is shown. Keep it like a password; revoke it at oortcloud.dev/account.',
+      ) +
+      '\n',
+  );
   return 0;
 }

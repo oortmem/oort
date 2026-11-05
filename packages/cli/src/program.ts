@@ -1,7 +1,23 @@
 import { Command, CommanderError } from 'commander';
 import { VERSION } from '@oortmem/core';
 import { connectCommand } from './commands/connect.js';
-import { constellationCreateCommand, constellationListCommand } from './commands/constellation.js';
+import {
+  constellationAttachCommand,
+  constellationCreateCommand,
+  constellationDeleteCommand,
+  constellationDetachCommand,
+  constellationInviteCommand,
+  constellationInvitesCommand,
+  constellationJoinCommand,
+  constellationLeaveCommand,
+  constellationListCommand,
+  constellationMembersCommand,
+  constellationPolicyCommand,
+  constellationRemoveCommand,
+  constellationRevokeCommand,
+  constellationRoleCommand,
+  constellationTransferCommand,
+} from './commands/constellation.js';
 import { doctorCommand } from './commands/doctor.js';
 import { consolidateCommand } from './commands/consolidate.js';
 import { explainCommand } from './commands/explain.js';
@@ -10,7 +26,13 @@ import { forgetCommand } from './commands/forget.js';
 import { hookCommand } from './commands/hook.js';
 import { importCommand } from './commands/import.js';
 import { initCommand } from './commands/init.js';
-import { keysListCommand, keysRmCommand, keysSetCommand } from './commands/keys.js';
+import {
+  keysCreateCommand,
+  keysListCommand,
+  keysRmCommand,
+  keysSetCommand,
+} from './commands/keys.js';
+import { whoamiCommand } from './commands/whoami.js';
 import { loginCommand, logoutCommand, type LoginDeps } from './commands/login.js';
 import { inspectCommand } from './commands/inspect.js';
 import { installCommand } from './commands/install.js';
@@ -24,6 +46,7 @@ import {
 import { observeCommand } from './commands/observe.js';
 import { pinCommand } from './commands/pin.js';
 import {
+  projectConstellationCommand,
   projectLinkCommand,
   projectPrivacyCommand,
   projectUnlinkCommand,
@@ -251,6 +274,123 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<name>', 'its name, as labels show it')
     .option('--json', 'print JSON')
     .action(run((name: string, o: { json?: boolean }) => constellationCreateCommand(name, o, ctx)));
+  constellation
+    .command('invite')
+    .description('invite someone by email (maintainers): a single-use link, valid 7 days')
+    .argument('<constellation>', 'name or id')
+    .argument('<email>', 'the address they will accept with')
+    .option('--role <role>', 'maintainer, member (default) or reader')
+    .option('--json', 'print JSON')
+    .action(
+      run((c: string, email: string, o: { role?: string; json?: boolean }) =>
+        constellationInviteCommand(c, email, o, ctx),
+      ),
+    );
+  constellation
+    .command('join')
+    .description('open an invite link to accept it, signed in on oortcloud.dev')
+    .argument('<link>', 'the invite link (or its token)')
+    .option('--no-browser', 'print the page instead of opening the browser')
+    .action(
+      run((link: string, o: { browser?: boolean }) => constellationJoinCommand(link, o, ctx)),
+    );
+  constellation
+    .command('invites')
+    .description('invites nobody has accepted yet (maintainers)')
+    .argument('<constellation>', 'name or id')
+    .option('--json', 'print JSON')
+    .action(run((c: string, o: { json?: boolean }) => constellationInvitesCommand(c, o, ctx)));
+  constellation
+    .command('revoke')
+    .description('revoke an open invite (maintainers)')
+    .argument('<constellation>', 'name or id')
+    .argument('<invite>', 'the invite id from `oort constellation invites`')
+    .action(run((c: string, invite: string) => constellationRevokeCommand(c, invite, ctx)));
+  constellation
+    .command('members')
+    .description('who is in a Constellation: roles and attached agents')
+    .argument('<constellation>', 'name or id')
+    .option('--json', 'print JSON')
+    .action(run((c: string, o: { json?: boolean }) => constellationMembersCommand(c, o, ctx)));
+  constellation
+    .command('remove')
+    .description('remove a member (maintainers); what they shared stays')
+    .argument('<constellation>', 'name or id')
+    .argument('<member>', 'the mb_… id from `members`, or their email address')
+    .option('--yes', 'do not ask first (needed outside a terminal)')
+    .action(
+      run((c: string, member: string, o: { yes?: boolean }) =>
+        constellationRemoveCommand(c, member, o, ctx),
+      ),
+    );
+  constellation
+    .command('role')
+    .description("change a member's role (maintainers)")
+    .argument('<constellation>', 'name or id')
+    .argument('<member>', 'the mb_… id from `members`, or their email address')
+    .argument('<role>', 'maintainer, member or reader')
+    .action(
+      run((c: string, member: string, role: string) =>
+        constellationRoleCommand(c, member, role, ctx),
+      ),
+    );
+  constellation
+    .command('leave')
+    .description('leave a Constellation; what you shared stays')
+    .argument('<constellation>', 'name or id')
+    .option('--yes', 'do not ask first (needed outside a terminal)')
+    .action(run((c: string, o: { yes?: boolean }) => constellationLeaveCommand(c, o, ctx)));
+  constellation
+    .command('transfer')
+    .description('make another member the owner (owner only)')
+    .argument('<constellation>', 'name or id')
+    .argument('<member>', 'the mb_… id from `members`, or their email address')
+    .option('--yes', 'do not ask first (needed outside a terminal)')
+    .action(
+      run((c: string, member: string, o: { yes?: boolean }) =>
+        constellationTransferCommand(c, member, o, ctx),
+      ),
+    );
+  constellation
+    .command('delete')
+    .description('delete a Constellation and every memory shared in it (owner only)')
+    .argument('<constellation>', 'name or id')
+    .option('--yes', 'do not ask first (needed outside a terminal)')
+    .action(run((c: string, o: { yes?: boolean }) => constellationDeleteCommand(c, o, ctx)));
+  constellation
+    .command('policy')
+    .description('how shares are accepted (maintainers): --confirm or --open')
+    .argument('<constellation>', 'name or id')
+    .option('--confirm', 'every share is confirmed by a person (the default)')
+    .option('--open', 'shares are accepted without a review step')
+    .action(
+      run((c: string, o: { open?: boolean; confirm?: boolean }) =>
+        constellationPolicyCommand(c, o, ctx),
+      ),
+    );
+  constellation
+    .command('attach')
+    .description('let one of your agents read a Constellation (never more than your role)')
+    .argument('<constellation>', 'name or id')
+    .option('--agent <name>', 'the agent: claude-code, codex, cursor, …')
+    .option('--share', 'also let it share into the Constellation')
+    .option('--json', 'print JSON')
+    .action(
+      run((c: string, o: { agent?: string; share?: boolean; json?: boolean }) =>
+        // `--agent` is also the program-wide option, which commander may claim first.
+        constellationAttachCommand(c, { ...o, agent: o.agent ?? ctx.agent }, ctx),
+      ),
+    );
+  constellation
+    .command('detach')
+    .description('stop one of your agents reading a Constellation')
+    .argument('<constellation>', 'name or id')
+    .option('--agent <name>', 'the agent')
+    .action(
+      run((c: string, o: { agent?: string }) =>
+        constellationDetachCommand(c, { agent: o.agent ?? ctx.agent }, ctx),
+      ),
+    );
 
   p.command('pin')
     .description('pin a memory (never sent to cold)')
@@ -269,11 +409,25 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .command('link')
     .description('bind this repository to its configured project id, or to --id')
     .option('--id <id>', 'the project id to bind (default: project.id in oort.config.json)')
-    .action(run((o: { id?: string }) => projectLinkCommand(o, ctx)));
+    .option('--constellation <c>', 'Oort Cloud: bind this project to a Constellation (maintainers)')
+    .action(
+      run((o: { id?: string; constellation?: string }) =>
+        o.constellation !== undefined
+          ? projectConstellationCommand(o.constellation, true, ctx)
+          : projectLinkCommand(o, ctx),
+      ),
+    );
   project
     .command('unlink')
     .description("remove this repository's binding (back to the derived id)")
-    .action(run(() => projectUnlinkCommand(ctx)));
+    .option('--constellation <c>', 'Oort Cloud: unbind this project from a Constellation')
+    .action(
+      run((o: { constellation?: string }) =>
+        o.constellation !== undefined
+          ? projectConstellationCommand(o.constellation, false, ctx)
+          : projectUnlinkCommand(ctx),
+      ),
+    );
   project
     .command('privacy')
     .description(
@@ -309,6 +463,11 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--force', 'with --out, overwrite an existing file (never a symlink)')
     .action(run((o: { out?: string; force?: boolean }) => cloudExportCommand(o, ctx)));
 
+  p.command('whoami')
+    .description('the store, the agent, and the spaces it reaches with your role in each')
+    .option('--json', 'print JSON')
+    .action(run((o: { json?: boolean }) => whoamiCommand(o, ctx)));
+
   p.command('doctor')
     .description(
       'check keys, hooks, MCP connectors, the store and the relay, with a fix per problem',
@@ -342,6 +501,17 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('where each key comes from: keychain, env or missing (never the value)')
     .option('--json', 'print JSON')
     .action(run((o: { json?: boolean }) => keysListCommand(o, ctx)));
+  keys
+    .command('create')
+    .description(
+      'Oort Cloud: a new Oort key for this account, shown once; --scope narrows it (planet,<c>[:read|:share])',
+    )
+    .option('--name <name>', 'a name to recognise it by on oortcloud.dev/account')
+    .option('--scope <list>', 'planet, then Constellations: planet,checkout:read')
+    .option('--json', 'print JSON')
+    .action(
+      run((o: { name?: string; scope?: string; json?: boolean }) => keysCreateCommand(o, ctx)),
+    );
   keys
     .command('rm')
     .description('delete a stored key')

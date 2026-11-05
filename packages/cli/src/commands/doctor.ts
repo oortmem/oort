@@ -8,7 +8,9 @@ import {
   readConsolidationState,
 } from '@oortmem/claude-code';
 import {
+  ANONYMOUS_AGENT,
   addressOf,
+  isAgentId,
   localGrant,
   principalGrant,
   readAgents,
@@ -26,6 +28,7 @@ import { ROLES, ROLE_VENDOR, keyLookup, routeFor, type AdapterRole } from '../cr
 import { describeProblem, inspectCredentialsFile } from '../credentials-file.js';
 import { PROVIDER_ENV } from '../keychain.js';
 import { OortCloudError, cloudUrl, createCloudClient, readCloudSettings } from '../cloud.js';
+import { spaceLine } from './whoami.js';
 import { LOCAL_INSTALL_HINT, LOCAL_PROVIDER, importLocalModels } from '../local-models.js';
 import { RELAY_MODELS, relayUrl } from '../relay.js';
 import { uiFor, type Ui } from '../ui.js';
@@ -653,14 +656,25 @@ async function cloudStoreChecks(
     timeoutMs: PROBE_TIMEOUT_MS,
     ...(ctx.fetch !== undefined && { fetch: ctx.fetch }),
   });
+  // The agent this check runs as (--agent or OORT_AGENT): spaces list what it may reach.
+  const named = ctx.agent ?? ctx.io.env['OORT_AGENT'];
+  const agent =
+    named !== undefined && isAgentId(named) && named !== ANONYMOUS_AGENT ? named : undefined;
   try {
-    const me = await client.whoami();
+    const me = await client.whoami(agent);
+    const spaces = (me.spaces ?? [{ level: 'planet' as const }]).map(spaceLine);
     return [
       {
         group: 'cloud',
         name: 'store',
         status: 'ok',
-        detail: `Oort Cloud (${u.url}), account ${me.account}, plan ${me.plan}`,
+        detail: `Oort Cloud (${u.url}), account ${me.account}, plan ${me.plan}${me.scope === 'narrowed' ? ', narrowed key' : ''}`,
+      },
+      {
+        group: 'cloud',
+        name: 'spaces',
+        status: 'info',
+        detail: `${agent === undefined ? '' : `as ${agent}: `}${spaces.join('; ')}`,
       },
     ];
   } catch (e) {
