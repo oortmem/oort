@@ -56,3 +56,10 @@ jobs:
           if npm view "oortmem@$v" version >/dev/null 2>&1; then echo "skip oortmem@$v"; else
             npm publish "$RUNNER_TEMP/pack/oortmem-$v.tgz" --access public --provenance
           fi
+          # @oortmem/local-models is optional and newer than the trust setup: npm trusted publishing
+          # only works for a package that already exists, so its first version is published by hand
+          # (then scripts/npm-trust.sh). Until then it is skipped here, never failing the release.
+          lm="$RUNNER_TEMP/pack/oortmem-local-models-$v.tgz"
+          if npm view "@oortmem/local-models@$v" version >/dev/null 2>&1; then echo "skip @oortmem/local-models@$v"
+          elif npm view "@oortmem/local-models" name >/dev/null 2>&1; then npm publish "$lm" --access public --provenance
+          else echo "::warning::@oortmem/local-models is not on npm yet: publish $v by hand once, then run scripts/npm-trust.sh"; fi
