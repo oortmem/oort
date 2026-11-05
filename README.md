@@ -77,7 +77,7 @@ flowchart LR
 
 - **Write path.** Every turn is scrubbed of secrets first. A small writer model distils it into short facts, and a decision model compares each fact with what is already stored: add it, update it, supersede the old one, or skip it.
 - **Read path.** Keyword (SQLite FTS5) and vector (sqlite-vec) search run together. Facts that are no longer valid are filtered out before ranking. Results are fused, reranked when it helps, and freshness only breaks ties, so a newer fact never beats a better match.
-- **Local first.** Everything lives in `~/.oort` on your machine, in one SQLite file plus compressed cold blobs. Nothing is hosted.
+- **Local first.** Everything lives in `~/.oort` on your machine, in one SQLite file plus compressed cold blobs. Nothing is hosted. With no API keys and no Oort Pro login, the local commands make no network call at all (recall falls back to keyword search), and a test runs them with every socket blocked.
 
 ## Packages
 
