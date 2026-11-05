@@ -14,6 +14,7 @@ export * from './recall.js';
 export * from './relevance.js';
 export * from './observe.js';
 export * from './temporal.js';
+export { chronoLoaded, mayHaveDateCue, preloadChrono } from './date-cue.js';
 export * from './volatile.js';
 export * from './scrub.js';
 export * from './cap.js';
