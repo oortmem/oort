@@ -17,6 +17,7 @@ import {
 } from '@oortmem/store-sqlite';
 import { wire as realWire } from '../wire.js';
 import { MIGRATION_PENDING_NOTE } from './hook.js';
+import { consolidationCheck } from './doctor.js';
 
 interface Check {
   group: string;
@@ -146,6 +147,8 @@ describe('oort doctor', () => {
     expect(d.check('store', 'store')).toMatchObject({ status: 'ok' });
     expect(d.check('store', 'store')?.detail).toMatch(/1 memor/);
     expect(d.check('store', 'spaces')?.detail).toBe('Planet: 1 memory (every project)');
+    expect(d.check('store', 'consolidation')).toMatchObject({ status: 'info' });
+    expect(d.check('store', 'consolidation')?.detail).toContain('never ran from the hooks; due');
     expect(d.check('relay', 'relay')).toMatchObject({ status: 'ok' });
     expect(d.check('relay', 'relay')?.detail).toContain('https://relay.oortcloud.dev');
     expect(d.check('relay', 'relay')?.detail).toContain('reachable');
@@ -344,5 +347,43 @@ describe('oort doctor', () => {
     fs.chmodSync(file, 0o600);
     const ok = await doctor(h, {}, kc);
     expect(ok.check('keys', 'credentials')).toBeUndefined();
+  });
+});
+
+describe('doctor consolidation check (CON-48)', () => {
+  const NOW = new Date('2026-06-01T12:00:00.000Z');
+  const write = (home: string, state: Record<string, unknown>): void => {
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, 'consolidate.json'), JSON.stringify({ v: 1, ...state }));
+  };
+
+  it('doctor.consolidation-shows-the-last-run-and-what-is-due', () => {
+    const h = harness();
+    write(h.home, {
+      lastRunAt: '2026-06-01T09:00:00.000Z',
+      lastCompleteAt: '2026-06-01T09:00:00.000Z',
+      lastOutcome: 'complete',
+      savesSince: 50,
+      last: { promoted: 2, demoted: 5, evicted: 4, expired: 1, skipped: 0, ms: 120 },
+    });
+    expect(consolidationCheck(h.home, NOW)).toEqual({
+      group: 'store',
+      name: 'consolidation',
+      status: 'info',
+      detail:
+        'last ran 3 h ago (4 to cold, 1 expired, 3 re-tiered); next 2026-06-02T09:00:00.000Z, or after 150 more saved turns',
+    });
+  });
+
+  it('doctor.consolidation-partial-and-failed-runs', () => {
+    const h = harness();
+    write(h.home, { lastRunAt: '2026-06-01T11:59:30.000Z', lastOutcome: 'partial' });
+    expect(consolidationCheck(h.home, NOW).detail).toContain('stopped at its time budget');
+    write(h.home, { lastRunAt: '2026-06-01T10:00:00.000Z', lastOutcome: 'error' });
+    expect(consolidationCheck(h.home, NOW)).toMatchObject({
+      status: 'warn',
+      fix: 'oort consolidate',
+    });
+    expect(consolidationCheck(h.home, NOW).detail).toContain('the next drain retries it');
   });
 });

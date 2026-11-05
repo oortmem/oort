@@ -959,7 +959,8 @@ describe('hook log', () => {
     expect(raw).not.toContain('4471');
     expect(raw).not.toContain(AWS_KEY);
     const lines = readLog(t.home);
-    expect(lines.length).toBe(6);
+    // Six hook runs, and the consolidation the first drain runs (CON-48).
+    expect(lines.length).toBe(7);
     const allowed = [
       'ts',
       'event',

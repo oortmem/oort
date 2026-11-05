@@ -1,6 +1,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { filterFor, queueDir } from '@oortmem/claude-code';
+import {
+  consolidationDue,
+  filterFor,
+  queueDir,
+  readConsolidationState,
+} from '@oortmem/claude-code';
 import { isCurrent, type Tier, localGrant } from '@oortmem/core';
 import { uiFor } from '../ui.js';
 import { cloudOf, scopeLabel, withWired, type Ctx } from '../util.js';
@@ -12,6 +17,14 @@ export interface Stats {
   sqliteBytes: number;
   coldBytes: number;
   queue: { pending: number; deadLetters: number };
+  /** The hooks' automatic consolidation (CON-48); `oort consolidate` counts too. */
+  consolidation: {
+    lastRunAt: string | null;
+    lastCompleteAt: string | null;
+    lastOutcome: 'complete' | 'partial' | 'error' | null;
+    due: boolean;
+    nextAt: string | null;
+  };
   rssBytes: number;
 }
 
@@ -115,6 +128,8 @@ export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<
     const home = w.config.home;
     const db = path.join(home, 'oort.sqlite');
     const queue = queueDir(home);
+    const cs = readConsolidationState(home);
+    const due = consolidationDue(cs, now);
     const stats: Stats = {
       scope: { projectId: w.scope.projectId ?? null },
       tiers,
@@ -122,6 +137,13 @@ export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<
       sqliteBytes: size(db) + size(`${db}-wal`),
       coldBytes: dirBytes(path.join(home, 'cold')),
       queue: { pending: jsonlLines(queue), deadLetters: jsonlLines(path.join(queue, 'dead')) },
+      consolidation: {
+        lastRunAt: cs.lastRunAt,
+        lastCompleteAt: cs.lastCompleteAt,
+        lastOutcome: cs.lastOutcome,
+        due: due.due,
+        nextAt: due.nextAt,
+      },
       rssBytes: process.memoryUsage().rss,
     };
     if (opts.json === true) {
@@ -144,6 +166,13 @@ export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<
         ['sqlite', `${mb(stats.sqliteBytes)} ${ui.dim(`(${db}, including -wal)`)}`],
         ['cold', mb(stats.coldBytes)],
         ['queue', `${stats.queue.pending} pending, ${stats.queue.deadLetters} dead-lettered`],
+        [
+          'consolidated',
+          (cs.lastCompleteAt ?? 'not yet') +
+            (cs.lastOutcome === 'partial' ? ' (a later run stopped at its budget)' : '') +
+            (cs.lastOutcome === 'error' ? ' (the last run failed)' : '') +
+            ui.dim(due.due ? ' · due on the next drain' : ` · next ${due.nextAt ?? ''}`),
+        ],
         ['rss', mb(stats.rssBytes)],
       ]),
     );

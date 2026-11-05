@@ -39,3 +39,17 @@ export {
   type HookEventStatus,
 } from './install.js';
 export { importTranscripts, type ImportOptions, type ImportResult } from './import.js';
+export {
+  CONSOLIDATE_BUDGET_MS,
+  CONSOLIDATE_EVERY_MS,
+  CONSOLIDATE_EVERY_SAVES,
+  consolidateIfDue,
+  consolidationDue,
+  consolidationStateFile,
+  isConsolidationDue,
+  readConsolidationState,
+  recordConsolidation,
+  type ConsolidationState,
+  type Due,
+  type DueReason,
+} from './upkeep.js';
