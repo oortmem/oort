@@ -1,6 +1,6 @@
 {
   "name": "oort",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Oort memory for Claude Code: recalls relevant facts before each prompt, saves what matters after each turn, and adds the Oort memory tools and skill.",
   "author": {
     "name": "Oort",
