@@ -173,6 +173,11 @@ export interface WireOptions {
   roles?: readonly AdapterRole[];
   /** Per-request timeout for the Oort Cloud client (the hooks pass their budget). */
   cloudTimeoutMs?: number;
+  /**
+   * Keep Oort Cloud connections open between requests: set by the long-lived processes
+   * (`oort serve`, `oort mcp`), so a warm one sends each request on an open connection.
+   */
+  cloudKeepAlive?: boolean;
   /** The agent to act as (`--agent`); default `OORT_AGENT`, else anonymous (Planet only). */
   agent?: string;
 }
@@ -441,6 +446,9 @@ export const wire: WireFn = async (cwd, opts = {}) => {
         key: key.key,
         ...fetchOpt,
         ...(opts.cloudTimeoutMs !== undefined && { timeoutMs: opts.cloudTimeoutMs }),
+        ...(opts.cloudKeepAlive === true && { keepAlive: true }),
+        // Diagnostics only: the API's Server-Timing breakdown, beside the CLI's own clock.
+        ...(env['OORT_HOOK_TIMING'] === '1' && { serverTiming: true }),
       });
     if (out.cloudProblem !== undefined)
       warnings.push({ code: 'cloud-unavailable', message: out.cloudProblem });

@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
+import { closeCloudPool } from '../cloud-http.js';
 import { cloudSpaces, createOortServer, localSpaces } from '../mcp.js';
 import { Refusal, echo, withWired, type Ctx } from '../util.js';
 
@@ -47,15 +48,23 @@ export async function mcpCommand(
       'oort: `oort mcp` speaks MCP on stdin and stdout for an agent host to start; add it to one with `oort connect <host>`.\n',
     );
   }
-  return withWired({ ...ctx, io: { ...ctx.io, cwd } }, async (w) => {
-    // What the tools may reach is fixed here, once, from trusted config (CON-64): the model can
-    // pick inside it and never widen it.
-    const spaces =
-      w.mode === 'cloud' && w.cloud !== undefined ? await cloudSpaces(w, w.cloud) : localSpaces(w);
-    await serve(
-      () => createOortServer({ wired: w, spaces }),
-      (e) => ctx.io.err(`oort: mcp: ${e.message}\n`),
-    );
-    return 0;
-  });
+  // A long-lived process: Oort Cloud requests reuse one connection (CON-101).
+  return withWired(
+    { ...ctx, io: { ...ctx.io, cwd } },
+    async (w) => {
+      // What the tools may reach is fixed here, once, from trusted config (CON-64): the model can
+      // pick inside it and never widen it.
+      const spaces =
+        w.mode === 'cloud' && w.cloud !== undefined
+          ? await cloudSpaces(w, w.cloud)
+          : localSpaces(w);
+      await serve(
+        () => createOortServer({ wired: w, spaces }),
+        (e) => ctx.io.err(`oort: mcp: ${e.message}\n`),
+      );
+      await closeCloudPool();
+      return 0;
+    },
+    { cloudKeepAlive: true },
+  );
 }

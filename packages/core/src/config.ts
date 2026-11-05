@@ -81,6 +81,13 @@ const recall = z
      * Galaxy 0). 0, the default, turns it off: it is turned on only if the eval shows a gain.
      */
     specificityPrior: z.number().min(0).max(1).default(0),
+    /**
+     * How the prompt hook (Claude Code's UserPromptSubmit) recalls, locally and in Oort Cloud
+     * (CON-101): `full` embeds the prompt and reranks; `fast` skips the reranker (fusion and the
+     * relevance gate rank); `lexical` skips the query embedding too (no model call at all). `oort
+     * recall`, MCP and SessionStart always recall in full.
+     */
+    promptMode: z.enum(['full', 'fast', 'lexical']).default('full'),
   })
   .default({
     lexicalK: 50,
@@ -97,6 +104,7 @@ const recall = z
     queryCacheTtlSec: 600,
     staleAfterDays: 30,
     specificityPrior: 0,
+    promptMode: 'full',
   });
 
 const project = z

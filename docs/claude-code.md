@@ -125,6 +125,37 @@ From Europe a warm Voyage rerank took 200 to 300 ms when measured on 2026-11-04,
 default lets normal reranks finish and only cuts off slow outliers. Lower it (150 ms is the spec's
 target) to trade rerank quality for latency, or set it to 0 to always wait.
 
+`recall.promptMode` trades more of the prompt hook's recall for speed, locally and in Oort Cloud.
+It applies to `UserPromptSubmit` only: `oort recall`, the MCP server and `SessionStart` always
+recall in full. In cloud mode the hook asks the API to skip those stages; an Oort Cloud release
+from before CON-101 ignores the request and recalls in full.
+
+| `promptMode` | What the prompt hook does | Model calls per prompt |
+| --- | --- | --- |
+| `full` (default) | Embeds the prompt and reranks the candidates, as above. | embed, rerank |
+| `fast` | Embeds the prompt; fusion and the relevance gate rank, with no reranker. | embed |
+| `lexical` | Lexical search only: no query embedding and no reranker. | none |
+
+On the bench eval (`pnpm eval --demo`'s 1,500-memory store and 23-row fixture, with the cloud's
+own models: voyage-3.5-lite embeddings and rerank-3-lite, measured 2026-11-05), recall@3, @5 and
+@10 were 1.000 in all three modes. MRR@10 was 1.000 for `full` and `lexical` and 0.947 for `fast`
+(one multi-session question ranked its answer second). The abstention rows returned something for
+4 of 4 questions with `full`, 1 of 4 with `fast` and none with `lexical`. The fixture's questions
+share words with their answers, which favours lexical search: a prompt that says the same thing in
+other words finds its memory only through the embedding, so `lexical` misses it. That is why
+`full` stays the default.
+
+### Cloud mode
+
+In cloud mode the prompt hook's recall is one HTTPS request to Oort Cloud. Measured live from
+Europe on 2026-11-05 (prompts 15 s apart, `OORT_HOOK_TIMING=1`), most of it was the API's two
+model calls (Voyage embed about 270 ms and rerank about 270 ms, both in the US), its own checks
+before the recall (about 300 ms of database round trips, the account object's hop and the usage
+reservation), and opening the connection (about 100 to 250 ms of DNS, TCP and TLS) whenever the
+previous one had closed. `oort serve` now keeps that connection open (see `docs/cli.md`). A prompt
+longer than the API's 2 KB recall limit is sent as its start and its end, so it still recalls
+instead of being refused.
+
 ## Consolidation
 
 With hooks alone nothing would ever call `oort consolidate`, so the drain that `Stop` starts runs it

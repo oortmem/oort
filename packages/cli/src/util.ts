@@ -123,12 +123,13 @@ export function cloudOf(w: Wired): CloudClient | undefined {
 export async function withWired<T>(
   ctx: Ctx,
   fn: (w: Wired) => Promise<T>,
-  opts: { agent?: string } = {},
+  opts: { agent?: string; cloudKeepAlive?: boolean } = {},
 ): Promise<T> {
   const agent = opts.agent ?? ctx.agent;
   const w = await ctx.wire(ctx.io.cwd, {
     env: ctx.io.env,
     ...(agent !== undefined && { agent }),
+    ...(opts.cloudKeepAlive === true && { cloudKeepAlive: true }),
   });
   for (const warning of w.warnings) ctx.io.err(`oort: ${warning.message}\n`);
   try {
