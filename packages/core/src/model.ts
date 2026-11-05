@@ -1,6 +1,14 @@
 import type { Address, Author, Provenance } from './address.js';
+import type { Judgment } from './judgment.js';
 
-export type MemoryType = 'semantic' | 'episodic' | 'procedural' | 'preference';
+/**
+ * `judgment` (CON-71) is an expert's recorded decision: written only through the explicit
+ * judgment path (`recordJudgment`), never by the write path's gate or writer, and always with a
+ * `judgment` record next to the text.
+ */
+export type MemoryType = 'semantic' | 'episodic' | 'procedural' | 'preference' | 'judgment';
+/** The types the write path (gate and writer) can give a memory: every type but `judgment`. */
+export type ObservedMemoryType = Exclude<MemoryType, 'judgment'>;
 export type Tier = 'hot' | 'warm' | 'cold';
 
 /**
@@ -79,6 +87,11 @@ export interface Memory {
   supersedes: string | null;
   supersededBy: string | null;
   source: MemorySource;
+  /**
+   * The expert's decision, verbatim, on a `judgment` memory (CON-71); absent on every other type.
+   * `text` is a rendering of it for recall; this record is what judging reads.
+   */
+  judgment?: Judgment;
   embedding?: Int8Array;
   createdAt: string;
   updatedAt: string;

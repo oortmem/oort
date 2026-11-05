@@ -161,7 +161,9 @@ async function candidatesFor(
   const out: Memory[] = [];
   for (const id of ids) {
     const m = await store.get(grant, id);
-    if (m !== null && isLive(m, now)) out.push(m);
+    // A judgment (CON-71) is the expert's own words: the write path never refines, supersedes or
+    // corrects one. Only the judgment commands change it.
+    if (m !== null && isLive(m, now) && m.type !== 'judgment') out.push(m);
     if (out.length === CANDIDATES) break;
   }
   return out;
