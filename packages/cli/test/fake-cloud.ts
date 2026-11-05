@@ -41,6 +41,13 @@ export interface FakeCloud {
   key: string;
   /** The hive beta (CON-63): off answers 403 hive_not_enabled on every Constellation route. */
   hive: FakeHive;
+  /** Bodies sent to /v1/recall, and the agent each /v1/whoami named (CON-64). */
+  recalls: Record<string, unknown>[];
+  whoamiAgents: (string | null)[];
+  /** Bodies sent to POST /v1/keys. */
+  keyRequests: Record<string, unknown>[];
+  /** Whether the key in use is narrowed (whoami's `scope`). */
+  narrowed?: boolean;
 }
 
 export interface FakeHive {
@@ -54,14 +61,49 @@ export interface FakeHive {
   privacy: Map<string, boolean>;
   /** Preview tokens handed out: what each one binds. */
   previews: Map<string, { mem: string; cid: string; text: string; pii: boolean }>;
+  /** CON-64: each Constellation's members (you included, as `you: true`). */
+  members: Map<string, FakeMember[]>;
+  /** Pending invites per Constellation. */
+  invites: Map<
+    string,
+    { id: string; role: string; email: string; createdAt: string; expiresAt: string }[]
+  >;
+  /** Attached agents per Constellation: agent → rights asked. */
+  stars: Map<string, Map<string, string[]>>;
+  /** Bound project ids per Constellation. */
+  projects: Map<string, Set<string>>;
+  policy: Map<string, string>;
+  /** Members a Constellation may hold before plan_limit (a test knob, not a plan rule). */
+  memberLimit: number;
 }
 
-const MATCHERS = [...CONTRACT.routes, ...CONTRACT.hive.routes].map((r) => ({
-  method: r.method,
-  re: new RegExp(
-    `^${r.path.replace(/\?.*$/, '').replace(':c', '[^/]+').replace(':project', '[^/]+').replace(':id', '[^/]+')}$`,
-  ),
-}));
+export interface FakeMember {
+  member: string;
+  role: string;
+  owner: boolean;
+  you: boolean;
+  email: string | null;
+  joinedAt: string;
+}
+
+const MATCHERS = [...CONTRACT.routes, ...CONTRACT.hive.routes, ...CONTRACT.keys.routes].map(
+  (r) => ({
+    method: r.method,
+    re: new RegExp(`^${r.path.replace(/\?.*$/, '').replace(/:[a-z]+/g, '[^/]+')}$`),
+  }),
+);
+
+const RIGHTS: Record<string, string[]> = {
+  maintainer: ['read', 'share', 'maintain'],
+  member: ['read', 'share'],
+  reader: ['read'],
+};
+
+/** `maya@example.com` → `ma…@example.com`, as the API hints an address. */
+const hint = (email: string): string => {
+  const [local = '', domain = ''] = email.split('@');
+  return `${local.slice(0, 2)}…@${domain}`;
+};
 
 /** What the API's share gate marks: here, email addresses only. */
 function findings(text: string): { kind: string; start: number; end: number }[] {
@@ -119,7 +161,16 @@ export function fakeCloud(key: string): FakeCloud {
       requests: [],
       privacy: new Map(),
       previews: new Map(),
+      members: new Map(),
+      invites: new Map(),
+      stars: new Map(),
+      projects: new Map(),
+      policy: new Map(),
+      memberLimit: 3,
     },
+    recalls: [],
+    whoamiAgents: [],
+    keyRequests: [],
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
       const req = new Request(input, init);
       const url = new URL(req.url);
@@ -132,6 +183,8 @@ export function fakeCloud(key: string): FakeCloud {
       }
       if (c.refuse !== undefined) return err(c.refuse.status, c.refuse.code, c.refuse.message);
       const p = url.pathname;
+      const byName = (ref: string) =>
+        [...c.hive.constellations.values()].find((x) => x.id === ref || x.name === ref);
       if (c.lapsed === true && p !== '/v1/export') {
         return err(402, 'payment_required', 'Oort Pro is not active on this account.');
       }
@@ -139,7 +192,53 @@ export function fakeCloud(key: string): FakeCloud {
         want === undefined || want === null
           ? true
           : m.scope['projectId'] === want || m.scope['projectId'] === undefined;
-      if (p === '/v1/whoami') return Response.json({ account: 'a1', plan: 'pro', via: 'key' });
+      const attached = (cid: string, agent: string): string[] | undefined =>
+        c.hive.stars.get(cid)?.get(agent);
+      if (p === '/v1/whoami') {
+        const agent = url.searchParams.get('agent');
+        c.whoamiAgents.push(agent);
+        const spaces: Record<string, unknown>[] = [{ level: 'planet' }];
+        if (c.hive.enabled) {
+          for (const x of c.hive.constellations.values()) {
+            let rights = RIGHTS[x.role] ?? [];
+            if (agent !== null) {
+              const asked = attached(x.id, agent);
+              if (asked === undefined) continue;
+              rights = rights.filter((r) => asked.includes(r));
+            }
+            spaces.push({ level: 'constellation', id: x.id, name: x.name, role: x.role, rights });
+          }
+        }
+        return Response.json({
+          account: 'a1',
+          plan: 'pro',
+          via: 'key',
+          spaces,
+          scope: c.narrowed === true ? 'narrowed' : 'full',
+        });
+      }
+      if (p === '/v1/keys') {
+        const b = (await req.json()) as { name?: string; scope?: string[] };
+        c.keyRequests.push(b);
+        if (b.scope !== undefined && !b.scope.includes('planet')) {
+          return err(400, 'bad_request', "A key's scope must include planet.");
+        }
+        const scope =
+          b.scope === undefined
+            ? null
+            : b.scope.map((s) => {
+                const [ref = '', right] = s.split(':');
+                const x = byName(ref);
+                return ref === 'planet'
+                  ? 'planet'
+                  : `${x?.id ?? ref}${right === undefined ? '' : `:${right}`}`;
+              });
+        const made = ['oort', 'sk', 'made'.padEnd(43, 'K')].join('_');
+        return Response.json(
+          { id: 'k_1', key: made, prefix: made.slice(0, 12), name: b.name ?? 'oort cli', scope },
+          { status: 201 },
+        );
+      }
       const hiveRoute =
         p.startsWith('/v1/constellations') ||
         /^\/v1\/memories\/[^/]+\/shares$/.test(p) ||
@@ -183,6 +282,165 @@ export function fakeCloud(key: string): FakeCloud {
         if (typeof b.private !== 'boolean') return err(400, 'bad_request', 'private');
         c.hive.privacy.set(project, b.private);
         return Response.json({ project, private: b.private });
+      }
+      const manage =
+        /^\/v1\/constellations\/([^/]+)(\/(invites|members|leave|stars|policy|projects|transfer)(\/([^/]+))?)?$/.exec(
+          p,
+        );
+      if (manage !== null && !(manage[2] === undefined && req.method === 'GET')) {
+        const x = byRef(decodeURIComponent(manage[1] ?? ''));
+        if (x === undefined) return err(404, 'not_found', 'No such Constellation.');
+        const sub = manage[3];
+        const arg = manage[5] === undefined ? undefined : decodeURIComponent(manage[5]);
+        const members = c.hive.members.get(x.id) ?? [
+          {
+            member: 'mb_you000000001',
+            role: x.role,
+            owner: x.owner,
+            you: true,
+            email: null,
+            joinedAt: '2026-11-05T00:00:00.000Z',
+          },
+        ];
+        c.hive.members.set(x.id, members);
+        const maintainer = x.role === 'maintainer';
+        const needMaintainer = () =>
+          err(403, 'role_required', 'Only a maintainer of this Constellation can do that.');
+        const find = (ref: string) =>
+          members.find(
+            (m) =>
+              m.member === ref || (m.email !== null && ref.includes('@') && m.email === hint(ref)),
+          );
+        const body = async () =>
+          req.headers.get('content-type') === 'application/json'
+            ? ((await req.json()) as Record<string, unknown>)
+            : {};
+        if (sub === 'invites' && req.method === 'POST') {
+          if (!maintainer) return needMaintainer();
+          const b = await body();
+          const pending = c.hive.invites.get(x.id) ?? [];
+          if (members.length + pending.length >= c.hive.memberLimit) {
+            return err(403, 'plan_limit', 'This Constellation is full on your plan.');
+          }
+          const role = typeof b['role'] === 'string' ? b['role'] : 'member';
+          const inv = {
+            id: `i_${pending.length + 1}`,
+            role,
+            email: hint(String(b['email'])),
+            createdAt: '2026-11-05T00:00:00.000Z',
+            expiresAt: '2026-11-12T00:00:00.000Z',
+          };
+          pending.push(inv);
+          c.hive.invites.set(x.id, pending);
+          return Response.json(
+            {
+              id: inv.id,
+              constellationId: x.id,
+              constellation: x.name,
+              role,
+              email: inv.email,
+              expiresAt: inv.expiresAt,
+              link: `https://oortcloud.dev/invite#oort_iv_${'t'.repeat(43)}`,
+              emailed: false,
+            },
+            { status: 201 },
+          );
+        }
+        if (sub === 'invites' && req.method === 'GET') {
+          if (!maintainer) return needMaintainer();
+          return Response.json({ invites: c.hive.invites.get(x.id) ?? [] });
+        }
+        if (sub === 'invites' && req.method === 'DELETE') {
+          if (!maintainer) return needMaintainer();
+          const pending = c.hive.invites.get(x.id) ?? [];
+          const left = pending.filter((i) => i.id !== arg);
+          c.hive.invites.set(x.id, left);
+          return Response.json({ revoked: left.length < pending.length });
+        }
+        if (sub === 'members' && req.method === 'GET' && arg === undefined) {
+          const stars = c.hive.stars.get(x.id) ?? new Map<string, string[]>();
+          return Response.json({
+            members: members.map((m) => ({
+              ...m,
+              stars: m.you
+                ? [...stars.entries()].map(([agent, asked]) => ({
+                    agent,
+                    rights: (RIGHTS[x.role] ?? []).filter((r) => asked.includes(r)),
+                  }))
+                : [],
+            })),
+          });
+        }
+        if (sub === 'members' && arg !== undefined) {
+          if (!maintainer) return needMaintainer();
+          const m = find(arg);
+          if (m === undefined) return err(404, 'not_found', 'No such member.');
+          if (m.owner) return err(409, 'owner_cannot_be_removed', 'The owner stays a maintainer.');
+          if (req.method === 'DELETE') {
+            c.hive.members.set(
+              x.id,
+              members.filter((y) => y !== m),
+            );
+            return Response.json({ removed: true });
+          }
+          const b = await body();
+          m.role = String(b['role']);
+          return Response.json({ member: m.member, role: m.role });
+        }
+        if (sub === 'leave') {
+          if (x.owner) {
+            return err(
+              409,
+              'owner_cannot_leave',
+              'Transfer ownership or delete the Constellation.',
+            );
+          }
+          c.hive.constellations.delete(x.id);
+          return Response.json({ left: true });
+        }
+        if (sub === 'stars' && req.method === 'POST') {
+          if (x.role === 'reader')
+            return err(403, 'role_required', 'Readers cannot attach agents.');
+          const b = await body();
+          const asked = b['share'] === true ? ['read', 'share'] : ['read'];
+          const stars = c.hive.stars.get(x.id) ?? new Map<string, string[]>();
+          stars.set(String(b['agent']), asked);
+          c.hive.stars.set(x.id, stars);
+          const rights = (RIGHTS[x.role] ?? []).filter((r) => asked.includes(r));
+          return Response.json({ agent: b['agent'], asked, rights });
+        }
+        if (sub === 'stars' && req.method === 'DELETE') {
+          const stars = c.hive.stars.get(x.id);
+          const had = stars?.delete(arg ?? '') ?? false;
+          return Response.json({ detached: had });
+        }
+        if (sub === 'policy') {
+          if (!maintainer) return needMaintainer();
+          const b = await body();
+          c.hive.policy.set(x.id, String(b['policy']));
+          return Response.json({ policy: b['policy'], policyVersion: 2 });
+        }
+        if (sub === 'projects' && arg !== undefined) {
+          if (!maintainer) return needMaintainer();
+          const set = c.hive.projects.get(x.id) ?? new Set<string>();
+          if (req.method === 'PUT') set.add(arg);
+          else set.delete(arg);
+          c.hive.projects.set(x.id, set);
+          return Response.json({ project: arg, bound: req.method === 'PUT' });
+        }
+        if (sub === 'transfer') {
+          if (!x.owner) return err(403, 'role_required', 'Only the owner can transfer ownership.');
+          const b = await body();
+          const m = find(String(b['member']));
+          if (m === undefined) return err(404, 'not_found', 'No such member.');
+          x.owner = false;
+          return Response.json({ owner: true, member: m.member });
+        }
+        if (sub === undefined && req.method === 'DELETE') {
+          if (!x.owner) return err(403, 'role_required', 'Only the owner can delete it.');
+          c.hive.constellations.delete(x.id);
+          return Response.json({ deleted: true, memories: 0 });
+        }
       }
       const shareMatch = /^\/v1\/constellations\/([^/]+)\/share$/.exec(p);
       if (shareMatch !== null) {
@@ -274,6 +532,7 @@ export function fakeCloud(key: string): FakeCloud {
           k?: number;
           projectPrivate?: boolean;
         };
+        c.recalls.push(b);
         state(b.project, b.projectPrivate);
         if (c.hangRecall === true) return new Promise<Response>(() => {});
         const words = b.text
@@ -291,7 +550,13 @@ export function fakeCloud(key: string): FakeCloud {
         const own = wantsPlanet
           ? [...c.memories.values()].filter((m) => project(m, b.project) && match(m))
           : [];
-        const shared = wantsHive ? [...c.hive.shared.values()].filter(match) : [];
+        // An agent reads only the Constellations it is attached to (CON-64).
+        const agent = (b as { agent?: string }).agent;
+        const shared = wantsHive
+          ? [...c.hive.shared.values()]
+              .filter((x) => agent === undefined || attached(x.constellation, agent) !== undefined)
+              .filter(match)
+          : [];
         const hits = [
           ...own.map((m) => ({ ...m, origin: undefined as unknown })),
           ...shared.map(({ constellation, sourceId: _s, ...m }) => ({

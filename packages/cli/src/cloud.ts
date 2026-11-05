@@ -231,6 +231,67 @@ export interface CloudConstellation {
   joinedAt: string;
 }
 
+export type CloudRole = 'maintainer' | 'member' | 'reader';
+export type CloudRight = 'read' | 'share' | 'maintain';
+
+/** A space a caller can reach, as `/v1/whoami` lists it (CON-64). */
+export type CloudSpace =
+  | { level: 'planet' }
+  | { level: 'constellation'; id: string; name: string; role: CloudRole; rights: CloudRight[] };
+
+export interface CloudWhoami {
+  account: string;
+  plan: string;
+  via: string;
+  /** What this key (and agent, when one was named) reaches; absent from an older API. */
+  spaces?: CloudSpace[];
+  /** `narrowed`: the key was limited to some spaces when it was made. */
+  scope?: 'full' | 'narrowed';
+}
+
+/** An invite as the inviter sees it: the token only ever appears inside `link`. */
+export interface CloudInvite {
+  id: string;
+  constellationId: string;
+  constellation: string;
+  role: CloudRole;
+  /** A hint of the invited address (`ma…@example.com`), never the address itself. */
+  email: string;
+  expiresAt: string;
+  link: string;
+  emailed: boolean;
+}
+
+export interface CloudPendingInvite {
+  id: string;
+  role: CloudRole;
+  email: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+/** A member of a Constellation, as its members see them: never an account id. */
+export interface CloudMember {
+  /** The id to name this member by (`mb_…`). */
+  member: string;
+  role: CloudRole;
+  owner: boolean;
+  you: boolean;
+  email: string | null;
+  joinedAt: string;
+  stars: { agent: string; rights: string[] }[];
+}
+
+/** A new Oort Cloud key: shown once, never stored by Oort. */
+export interface CloudKey {
+  id: string;
+  key: string;
+  prefix: string;
+  name: string;
+  /** Canonical scope (`planet`, `c_…:read`), or null for a key that carries everything. */
+  scope: string[] | null;
+}
+
 /** Something the share gate found in the text that would be shared. */
 export interface ShareFinding {
   kind: string;
@@ -264,7 +325,8 @@ export interface CloudShareEdge {
 
 export interface CloudClient {
   readonly url: string;
-  whoami(): Promise<{ account: string; plan: string; via: string }>;
+  /** With `agent`, the spaces list only what that agent may reach. */
+  whoami(agent?: string): Promise<CloudWhoami>;
   recall(q: {
     text: string;
     project?: string;
@@ -276,6 +338,8 @@ export interface CloudClient {
     include?: IncludeLevel[];
     /** Whether `project` (the one this runs in) is private: the cloud records it for sharing. */
     projectPrivate?: boolean;
+    /** The agent asking: it reads only the Constellations it is attached to (CON-64). */
+    agent?: string;
   }): Promise<RecallResult>;
   /** The account's Constellations (hive beta; 403 `hive_not_enabled` outside it). */
   constellations(): Promise<CloudConstellation[]>;
@@ -300,6 +364,33 @@ export interface CloudClient {
       acknowledgedFindings?: boolean;
     },
   ): Promise<CloudShareResult>;
+  /** Invites an email address to a Constellation (maintainers only). */
+  invite(c: string, email: string, role?: CloudRole): Promise<CloudInvite>;
+  /** The invites nobody has accepted yet (maintainers only). */
+  invites(c: string): Promise<CloudPendingInvite[]>;
+  revokeInvite(c: string, invite: string): Promise<{ revoked: boolean }>;
+  members(c: string): Promise<CloudMember[]>;
+  /** `member` is an `mb_…` id or the member's invited email address. */
+  setRole(c: string, member: string, role: CloudRole): Promise<{ member: string; role: CloudRole }>;
+  removeMember(c: string, member: string): Promise<{ removed: boolean }>;
+  leave(c: string): Promise<{ left: boolean }>;
+  /** Lets one of your agents read (and with `share`, share into) a Constellation. */
+  attach(
+    c: string,
+    agent: string,
+    share?: boolean,
+  ): Promise<{ agent: string; asked: string[]; rights: string[] }>;
+  detach(c: string, agent: string): Promise<{ detached: boolean }>;
+  setPolicy(
+    c: string,
+    policy: 'confirm' | 'open',
+  ): Promise<{ policy: string; policyVersion: number }>;
+  bindProject(c: string, project: string): Promise<{ project: string; bound: boolean }>;
+  unbindProject(c: string, project: string): Promise<{ project: string; bound: boolean }>;
+  transfer(c: string, member: string): Promise<{ owner: boolean; member: string }>;
+  deleteConstellation(c: string): Promise<{ deleted: boolean; memories: number }>;
+  /** A new Oort Cloud key, narrowed to `scope` when given (`planet`, `<c>[:read|:share]`). */
+  createKey(b: { name?: string; scope?: string[] }): Promise<CloudKey>;
   /** The owner's explicit privacy choice for a project (the only way to clear private). */
   setProjectPrivacy(project: string, priv: boolean): Promise<{ project: string; private: boolean }>;
   /** The Constellation copies of one memory. */
@@ -398,10 +489,34 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       await call(method, route, body === undefined ? undefined : { json: body })
     ).json()) as T;
   const idPath = (id: string): string => `/v1/memories/${encodeURIComponent(id)}`;
+  const cPath = (c: string, rest = ''): string =>
+    `/v1/constellations/${encodeURIComponent(c)}${rest}`;
 
   return {
     url: opts.url,
-    whoami: () => json('GET', '/v1/whoami'),
+    whoami: (agent) =>
+      json('GET', `/v1/whoami${agent === undefined ? '' : `?agent=${encodeURIComponent(agent)}`}`),
+    invite: (c, email, role) =>
+      json('POST', cPath(c, '/invites'), { email, ...(role !== undefined && { role }) }),
+    invites: async (c) =>
+      (await json<{ invites: CloudPendingInvite[] }>('GET', cPath(c, '/invites'))).invites,
+    revokeInvite: (c, invite) => json('DELETE', cPath(c, `/invites/${encodeURIComponent(invite)}`)),
+    members: async (c) =>
+      (await json<{ members: CloudMember[] }>('GET', cPath(c, '/members'))).members,
+    setRole: (c, member, role) =>
+      json('PUT', cPath(c, `/members/${encodeURIComponent(member)}`), { role }),
+    removeMember: (c, member) => json('DELETE', cPath(c, `/members/${encodeURIComponent(member)}`)),
+    leave: (c) => json('POST', cPath(c, '/leave')),
+    attach: (c, agent, share) =>
+      json('POST', cPath(c, '/stars'), { agent, ...(share === true && { share: true }) }),
+    detach: (c, agent) => json('DELETE', cPath(c, `/stars/${encodeURIComponent(agent)}`)),
+    setPolicy: (c, policy) => json('PUT', cPath(c, '/policy'), { policy }),
+    bindProject: (c, project) => json('PUT', cPath(c, `/projects/${encodeURIComponent(project)}`)),
+    unbindProject: (c, project) =>
+      json('DELETE', cPath(c, `/projects/${encodeURIComponent(project)}`)),
+    transfer: (c, member) => json('POST', cPath(c, '/transfer'), { member }),
+    deleteConstellation: (c) => json('DELETE', cPath(c)),
+    createKey: (b) => json('POST', '/v1/keys', b),
     recall: (q) => json('POST', '/v1/recall', q),
     constellations: async () =>
       (await json<{ constellations: CloudConstellation[] }>('GET', '/v1/constellations'))
