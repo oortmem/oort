@@ -19,6 +19,7 @@ import {
 import type { HookDeps } from './deps.js';
 import type { HookLogEntry } from './log.js';
 import { drainQueue, enqueueObservations, hasPendingQueue } from './queue.js';
+import { consolidateIfDue, isConsolidationDue, noteSaves } from './upkeep.js';
 import {
   parseTranscriptDetailed,
   readTranscriptFrom,
@@ -309,7 +310,12 @@ export async function handleStop(
         );
       }
     }
-    if (queued > 0 || hasPendingQueue(deps.config.home)) {
+    // A due consolidation also starts the drain (local store only): one small file read (CON-48).
+    const pending = queued > 0 || hasPendingQueue(deps.config.home);
+    const consolidate =
+      !pending && deps.remote === undefined && isConsolidationDue(deps.config.home, now);
+    if (consolidate) entry.counts['consolidationDue'] = 1;
+    if (pending || consolidate) {
       try {
         deps.spawnDrain?.();
       } catch {
@@ -409,7 +415,12 @@ export async function runHook(
   let session: string | null = null;
   try {
     if (event === 'drain') {
-      await drainQueue(deps);
+      const drained = await drainQueue(deps);
+      // After the drain's own work: consolidation when due, within its budget (CON-48).
+      if (deps.remote === undefined) {
+        noteSaves(deps.config.home, drained.processed);
+        await consolidateIfDue(deps);
+      }
       return EMPTY;
     }
     let raw: unknown;

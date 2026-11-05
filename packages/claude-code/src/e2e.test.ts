@@ -69,6 +69,8 @@ describe('end to end', () => {
       expect(readLog(t.home).map((l) => [l.event, l.outcome])).toEqual([
         ['Stop', 'queued'],
         ['drain', 'ok'],
+        // The first drain on a store also consolidates it (CON-48).
+        ['consolidate', 'ok'],
         ['UserPromptSubmit', 'injected'],
       ]);
     } finally {
