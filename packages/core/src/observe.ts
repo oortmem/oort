@@ -13,7 +13,7 @@ import type {
 } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
 import { addressed, addressOf, nodeKey, nodeOf } from './address.js';
-import { homeAddress, localGrant, type Grant, type Home } from './grant.js';
+import { grantWrites, homeAddress, localGrant, type Grant, type Home } from './grant.js';
 import { CONTRADICTS } from './levels.js';
 import { capObservation } from './cap.js';
 import type { Decision, Memory, Scope } from './model.js';
@@ -89,8 +89,10 @@ export interface ObserveDeps {
   harness?: string;
   /**
    * Where new memories land (spec 5.1): the person's Planet (default) or, for an agent configured
-   * as a Star, `scope.agentId`'s own Star. Recall candidates come from both; an existing memory
-   * is only ever edited in its own node.
+   * as a Star, `scope.agentId`'s own Star. Candidates come from both. A memory is only ever
+   * superseded, corrected or refined in the home node, and an agent whose home is its Star never
+   * writes the Planet at all: a Planet memory it re-observes gets an access record (activation),
+   * never a confirmation or an edit.
    */
   home?: Home;
 }
@@ -222,7 +224,9 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     const target = candidates.find((c) => c.id === best.candidateId);
     if (target === undefined) return { outcome: 'skipped' };
     await store.recordAccess(grant, [target.id], now);
-    await confirm(store, grant, target.id, now.toISOString());
+    // Confirming writes the memory: only where this agent may write (a Star agent reinforces a
+    // Planet memory's activation but never edits it).
+    if (grantWrites(grant, target)) await confirm(store, grant, target.id, now.toISOString());
     return { outcome: 'reinforced', memoryId: target.id };
   }
 

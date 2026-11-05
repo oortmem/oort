@@ -90,6 +90,28 @@ describe('drainQueue', () => {
     expect(await deps.store.list(localGrant({ ...person, agentId: 'codex' }))).toEqual([]);
   });
 
+  it('drain.a-star-agent-in-cloud-mode-saves-nothing-and-keeps-the-queue', async () => {
+    // Oort Cloud has no Stars: saving would put Claude Code's private memories on the Planet.
+    const t = tempHome();
+    const observed: unknown[] = [];
+    const deps = {
+      ...makeDeps(t),
+      home: 'star' as const,
+      remote: {
+        recall: async () => ({ memories: [], timings: {} }),
+        sessionMemories: async () => [],
+        observe: async (o: Observation) => void observed.push(o),
+      },
+    };
+    enqueue(t, 2);
+    expect(await drainQueue(deps)).toEqual({ processed: 0, failed: 0, remaining: 2 });
+    expect(observed).toEqual([]);
+    expect(readLog(t.home).at(-1)).toMatchObject({ outcome: 'drain-skipped:star-in-cloud' });
+    // A Planet agent drains to the cloud as before.
+    expect(await drainQueue({ ...deps, home: 'planet' })).toMatchObject({ processed: 2 });
+    expect(observed).toHaveLength(2);
+  });
+
   it('drain.oldest-file-first', async () => {
     const t = tempHome();
     const calls = newCalls();

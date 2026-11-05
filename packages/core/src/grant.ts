@@ -60,6 +60,13 @@ export interface NodePattern {
 export type Home = 'planet' | 'star';
 
 /**
+ * The agent id of a caller that named no agent (an MCP entry written before agents existed, a
+ * terminal without `--agent`). It reads and writes the person's Planet only: it has no Star, so
+ * it can neither see nor create one. No configured agent may use this id.
+ */
+export const ANONYMOUS_AGENT = 'anonymous';
+
+/**
  * The permission every `MemoryStore` method takes. Opaque: built only by
  * `localGrant`, `principalGrant` or `nodeGrant`, frozen, and nominal, so a raw
  * `ScopeFilter` (or any look-alike object) is rejected by the type checker
@@ -118,10 +125,23 @@ export class Grant {
     home: Home = 'planet',
   ): Grant {
     checkPrincipal(principal);
+    const anonymous = principal.agentId === ANONYMOUS_AGENT;
+    if (anonymous && home === 'star') throw new RangeError('grant: an anonymous agent has no Star');
+    const readSide = anonymous
+      ? [ownPlanet(principal, read)]
+      : [ownPlanet(principal, read), ownStar(principal, read)];
+    // An agent whose home is its Star may read the shared Planet but never change it: its writes
+    // (new memories, forget, pin, tiers, confirmations) stay in its Star.
+    const writeSide =
+      home === 'star'
+        ? [ownStar(principal, write)]
+        : anonymous
+          ? [ownPlanet(principal, write)]
+          : [ownPlanet(principal, write), ownStar(principal, write)];
     return new Grant(
       principal,
-      [ownPlanet(principal, read), ownStar(principal, read)],
-      [ownPlanet(principal, write), ownStar(principal, write)],
+      readSide,
+      writeSide,
       home === 'star' ? starNode(principal) : planetNode(principal),
     );
   }
@@ -247,8 +267,9 @@ function samePrincipal(a: Principal, b: Principal): boolean {
  * person's Planet (memories any of their agents wrote) and this agent's own
  * Star, in the projects `read` names; `opts.write` may narrow the write side.
  * Another agent's Star is never covered. `opts.home` picks where new memories
- * land: the Planet (default) or the agent's Star. `write` must name the same
- * principal as `read`.
+ * land: the Planet (default) or the agent's Star; with `star` the Planet is
+ * read-only (the agent writes only its Star). `ANONYMOUS_AGENT` gets the
+ * Planet alone. `write` must name the same principal as `read`.
  *
  * Before CON-62 the Planet side was restricted to memories the principal's
  * own agent wrote. Every local memory so far was written as `claude-code`,

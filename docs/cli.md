@@ -306,7 +306,9 @@ counts.
 
 - **Where new memories go.** To your Planet, unless the agent keeps a Star
   (`oort connect <host> --star`). An agent that keeps a Star writes its new
-  memories there and still reads your Planet.
+  memories there and still reads your Planet, but never changes it: `forget`,
+  `pin` and the like on a Planet memory are refused (exit 2, or a tool error),
+  and re-observing a Planet fact only raises its activation.
 - **What a recall reads.** Your Planet and the agent's own Star, never another
   agent's Star. When the answer mixes the two, each injected line names where
   it came from: `- [semantic, your Planet, 2d ago] …` or
@@ -317,9 +319,23 @@ counts.
   records the contradiction. A recall then ranks the agent's Star memory first
   and keeps the Planet one, marked `overridden by Star cursor`.
 - **Which agent.** `oort mcp --agent <id>` (what `oort connect` writes), the
-  global `--agent <id>` option on any command, or `OORT_AGENT`; otherwise
-  `claude-code`. The Claude Code hooks always act as `claude-code`. An id is
-  lowercase letters, digits, `.`, `_` and `-`.
+  global `--agent <id>` option on any command, or `OORT_AGENT`. With none of
+  them the caller is anonymous: it reads and writes your Planet only, with no
+  Star, and `whoami` reports `agent: null`. An MCP entry written before agents
+  existed (no `--agent`) runs this way; `oort doctor` flags it and `oort
+  connect <host>` rewrites it. The Claude Code hooks and `oort import
+  claude-code` always act as `claude-code`. An id is lowercase letters,
+  digits, `.`, `_` and `-`; `anonymous` is reserved.
+- **Identity is configuration, not authentication.** The agent id is a local
+  setting that keeps your agents' memories apart from each other. Any program
+  running as you can start `oort mcp --agent cursor` and read Cursor's Star.
+  It protects against mix-ups, not against software you run.
+- **Oort Cloud has no Stars yet.** In cloud mode an agent that keeps a Star
+  can recall your Planet, but its saves (`observe`, MCP `remember`, `forget`,
+  `pin`) are refused, and the Claude Code hooks save nothing (one stderr line,
+  the prompt goes on; queued turns wait for a local drain). `oort connect
+  <host> --star` is refused in cloud mode, `oort cloud use` is refused while
+  an agent keeps a Star, and `oort doctor` warns about the combination.
 
 Memories saved before agents existed were all written as `claude-code` and
 live in your Planet, so every agent sees them. Nothing is rewritten.
@@ -453,7 +469,7 @@ tools are available too.
 | `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. | `--yes` |
 | `oort pin <id>` / `oort unpin <id>` | A pinned memory is never sent to cold storage. | |
 | `oort consolidate` | Expires, re-tiers and evicts memories: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each is re-tiered on its own. | |
-| `oort export` | Writes every visible memory as v2 JSON Lines (`--format 1` for v1). | `--out <file>` (0600), `--force`, `--format 1\|2` |
+| `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. | `--out <file>` (0600), `--force`, `--format 1\|2` |
 | `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
 
 Ids are full ids or unique prefixes. Every command reads the cwd's project

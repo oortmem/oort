@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { observe, scrubObservation, type Observation } from '@oortmem/core';
-import { Refusal, cloudOf, writePath, withWired, type Ctx } from '../util.js';
+import { Refusal, cloudOf, writePath, withWired, type Ctx, refuseStarInCloud } from '../util.js';
 
 export interface ObserveOptions {
   user?: string;
@@ -74,6 +74,7 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
   return withWired(ctx, async (w) => {
     const cloud = cloudOf(w);
     if (cloud !== undefined) {
+      refuseStarInCloud(w);
       const result = await cloud.observe({
         ...(w.scope.projectId !== undefined && { project: w.scope.projectId }),
         observation: {

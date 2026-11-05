@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { Home } from './grant.js';
+import { ANONYMOUS_AGENT, type Home } from './grant.js';
 import { writePrivateFile } from './private-fs.js';
 
 /**
@@ -12,8 +12,14 @@ import { writePrivateFile } from './private-fs.js';
  * `$OORT_HOME/agents.json` (0600).
  */
 
-/** The agent every surface acts as when nothing names one: what every local memory was written as. */
+/**
+ * Claude Code's agent id: what every local memory before agents was written as, and what the
+ * Claude Code hooks and transcript import always act as. A caller that names no agent is
+ * `ANONYMOUS_AGENT` (Planet only), never this.
+ */
 export const DEFAULT_AGENT = 'claude-code';
+
+export { ANONYMOUS_AGENT };
 
 /** Agents configured as Stars, under `OORT_HOME`. */
 export const AGENTS_FILE = 'agents.json';
@@ -21,7 +27,8 @@ export const AGENTS_FILE = 'agents.json';
 /** A lowercase id: letters, digits, `.`, `_` and `-`, at most 64 characters, starting alphanumeric. */
 export const AGENT_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
-export const isAgentId = (s: string): boolean => AGENT_ID.test(s);
+/** A valid agent id that is not reserved (`anonymous` names a caller that named none). */
+export const isAgentId = (s: string): boolean => AGENT_ID.test(s) && s !== ANONYMOUS_AGENT;
 
 export interface AgentSettings {
   /** New memories land in this agent's Star (private to it) instead of the person's Planet. */
@@ -49,13 +56,15 @@ export function readAgents(home: string): Record<string, AgentSettings> {
   return out;
 }
 
-/** Records whether agent `id` keeps a Star (0600). Returns true when that changed anything. */
+/**
+ * Records whether agent `id` keeps a Star (0600). Returns true when that changed anything. An agent
+ * that stops keeping one stays listed (`star: false`), so its Star is still found (export).
+ */
 export function setAgentStar(home: string, id: string, star: boolean): boolean {
   if (!isAgentId(id)) throw new RangeError(`not an agent id: ${JSON.stringify(id)}`);
   const agents = readAgents(home);
   if ((agents[id]?.star ?? false) === star) return false;
-  if (star) agents[id] = { star: true };
-  else delete agents[id];
+  agents[id] = { star };
   writePrivateFile(
     path.join(home, AGENTS_FILE),
     `${JSON.stringify({ version: 1, agents }, null, 2)}\n`,

@@ -3,7 +3,14 @@ import type { ResolvedConfig } from './config.js';
 import { activation } from './activation.js';
 import { fuse, isVisible, type TemporalView } from './fusion.js';
 import { addressOf, nodeKey, nodeOf, type NodeRef } from './address.js';
-import { assertGrant, localGrant, narrowGrant, type Grant, type Home } from './grant.js';
+import {
+  assertGrant,
+  grantWrites,
+  localGrant,
+  narrowGrant,
+  type Grant,
+  type Home,
+} from './grant.js';
 import {
   contradicted,
   escapeLabelText,
@@ -375,6 +382,9 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   result = await Promise.all(
     result.map(async (m): Promise<RecalledMemory> => {
       if (!touched.has(m.id) || m.tier !== 'cold' || !isCurrent(m, now)) return m;
+      // Hydrating writes the memory back; a node this caller only reads (the Planet, for a Star
+      // agent) is served from its live row, cold and lexical-only, and left as it is.
+      if (!grantWrites(grant, m)) return m;
       try {
         const blob = await store.coldGet(grant, m.id);
         // A lost or torn blob: the memory stays cold, lexical-only.
@@ -718,7 +728,8 @@ export function fitForInjection<M extends RecalledMemory>(
       m.explanation.stale === true
         ? ` (may be outdated; last confirmed ${age(lastConfirmed(m), now)})`
         : '';
-    const line = `- [${labelFor(m, labelled, now)}] ${scrub(escapeLabelText(m.text)).text}${note}`;
+    const text = scrub(escapeBlockTags(escapeLabelText(m.text))).text;
+    const line = `- [${labelFor(m, labelled, now)}] ${text}${note}`;
     const cost = line.length + (lines.length > 0 ? 1 : 0);
     // Hive memories (Constellation, Galaxy) take at most HIVE_QUOTA of the budget, so a large team
     // cannot crowd out the person's own memory: one past it is skipped, not the end of the block.
@@ -731,6 +742,14 @@ export function fitForInjection<M extends RecalledMemory>(
     if (fromHive) hive += cost;
   }
   return { kept, lines };
+}
+
+/**
+ * Memory text with any `<oort-…` or `</oort-…` tag opening written as `&lt;`, so a memory cannot
+ * close the `<oort-memory>` block (or open another) and have what follows read as the prompt.
+ */
+export function escapeBlockTags(text: string): string {
+  return text.replace(/<(?=\s*\/?\s*oort-)/gi, '&lt;');
 }
 
 /** The share of an injection budget hive memories may take (spec 7.2). */

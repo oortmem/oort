@@ -709,6 +709,8 @@ export interface HostStatus {
    * cannot be read as its format.
    */
   state: 'connected' | 'outdated' | 'broken' | 'absent' | 'foreign' | 'invalid';
+  /** `outdated` only: the entry names no `--agent` (written before agents existed). */
+  noAgent?: true;
   /** Why the file is `invalid` (holds no config values). */
   message?: string;
 }
@@ -761,5 +763,8 @@ export function inspectHost(host: Host, hc: HostContext, cmd?: string): HostStat
   // Without this bin's path, only an oort-looking path counts as ours (never "\0").
   if (!isOurs(host, entry, cmd ?? '\u0000')) return status('foreign');
   if (!executable(command)) return status('broken');
-  return status(same(entry, serverEntry(host, cmd ?? command)) ? 'connected' : 'outdated');
+  if (same(entry, serverEntry(host, cmd ?? command))) return status('connected');
+  // An entry from before agents (no --agent) runs as an anonymous, Planet-only agent.
+  const args = isObject(entry) && Array.isArray(entry['args']) ? entry['args'] : [];
+  return { ...status('outdated'), ...(!args.includes('--agent') && { noAgent: true }) };
 }

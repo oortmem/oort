@@ -1,6 +1,7 @@
 import { activation, tierFor } from './activation.js';
 import type { MemoryStore, ScopeFilter } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
+import { nodeKey } from './address.js';
 import { localGrant, narrowGrant, readableNodes, type Grant } from './grant.js';
 import { isCurrent, type Memory, type Tier } from './model.js';
 
@@ -64,7 +65,9 @@ export async function consolidate(
     expired: [],
     skipped: 0,
   };
-  for (const node of readableNodes(full)) {
+  // Only nodes this grant may change: a Star agent's grant reads the Planet but does not write it.
+  const writable = new Set(full.writeNodes.map((p) => nodeKey(p.node)));
+  for (const node of readableNodes(full).filter((n) => writable.has(nodeKey(n)))) {
     await consolidateNode(store, narrowGrant(full, [node]), config, now, result);
   }
   return result;

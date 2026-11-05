@@ -1,6 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
+  CONTRADICTS,
+  Grant,
+  grantWrites,
   localGrant,
   scrub,
   type DecisionController,
@@ -51,7 +54,49 @@ export interface Ctx {
  * memories stay in its own Star.
  */
 export function agentLabel(w: Pick<Wired, 'agent'>): string {
+  if (w.agent.source === 'none') return 'no agent named (Planet only)';
   return `as ${w.agent.id}${w.agent.home === 'star' ? ' (Star)' : ''}`;
+}
+
+/**
+ * The grant a command changes memories with: the acting agent's local grant. For an agent whose
+ * home is its Star the Planet is read-only, so forget, pin and the like never touch it.
+ */
+export function writeGrant(w: Pick<Wired, 'scope' | 'agent'>): Grant {
+  const { orgId, customerId, agentId, projectId } = w.scope;
+  return localGrant(
+    { orgId, customerId, agentId, projectIds: [...new Set([projectId ?? null, null])] },
+    { home: w.agent.home },
+  );
+}
+
+/** Why a Star agent cannot write in cloud mode, for refusals and the hooks' one stderr line. */
+export function starInCloudMessage(agentId: string): string {
+  return `${agentId} keeps its memories in its own Star, which Oort Cloud does not have yet, so nothing was saved (your Planet in the cloud is left as it is). Run \`oort connect ${agentId} --no-star\` to write your Planet, or \`oort cloud use --local\`.`;
+}
+
+/**
+ * Refuses a write in cloud mode by an agent whose home is its Star: the cloud would put it on the
+ * shared Planet. Reads are fine.
+ */
+export function refuseStarInCloud(w: Pick<Wired, 'mode' | 'agent'>): void {
+  if (w.mode === 'cloud' && w.agent.home === 'star') {
+    throw new Refusal(starInCloudMessage(w.agent.id));
+  }
+}
+
+/**
+ * `writeGrant(w)`, refusing when it cannot change `m`: a memory on the shared Planet, for an
+ * agent whose home is its Star. A silent no-op would read as done.
+ */
+export function writeGrantFor(w: Pick<Wired, 'scope' | 'agent'>, m: Memory): Grant {
+  const g = writeGrant(w);
+  if (!grantWrites(g, m)) {
+    throw new Refusal(
+      `${w.agent.id} keeps its memories in its own Star: it reads your Planet but cannot change it. Run this without --agent (or as an agent that writes your Planet).`,
+    );
+  }
+  return g;
 }
 
 /** The scope a command reads, for header lines: `project <id>` or `global`. */
@@ -182,18 +227,19 @@ export interface HiddenLinkFlags {
 }
 
 /**
- * `m` shaped for output from `filter`'s point of view: a `supersedes` or
- * `supersededBy` pointing at a memory `filter` cannot read becomes null and is
- * flagged, so output never names another scope's memory. The store answers
- * an unknown id and an out-of-scope id the same way, so a link to a memory
- * that no longer exists is hidden too. Storage is untouched.
+ * `m` shaped for output from `readable`'s point of view (a filter, read with its local grant, or a
+ * grant): a `supersedes` or `supersededBy` pointing at a memory it cannot read becomes null and is
+ * flagged, and a `level`/`contradicts` decision naming such a memory (another agent's Star) is
+ * dropped, so output never names another scope's memory. The store answers an unknown id and an
+ * out-of-scope id the same way, so a link to a memory that no longer exists is hidden too. Storage
+ * is untouched (recall still ranks by the full record).
  */
 export async function shapeLinks<T extends Memory>(
   store: MemoryStore,
-  filter: ScopeFilter,
+  readable: ScopeFilter | Grant,
   m: T,
 ): Promise<T & HiddenLinkFlags> {
-  const grant = localGrant(filter);
+  const grant = Grant.is(readable) ? readable : localGrant(readable);
   const hidden = async (id: string | null): Promise<boolean> =>
     id !== null && (await store.get(grant, id)) === null;
   const out: T & HiddenLinkFlags = { ...m };
@@ -204,6 +250,14 @@ export async function shapeLinks<T extends Memory>(
   if (await hidden(m.supersededBy)) {
     out.supersededBy = null;
     out.supersededByHidden = true;
+  }
+  const decisions = [];
+  for (const d of m.source.decisions) {
+    const link = d.stage === CONTRADICTS.stage && d.question === CONTRADICTS.question;
+    if (!link || !(await hidden(d.answer))) decisions.push(d);
+  }
+  if (decisions.length !== m.source.decisions.length) {
+    out.source = { ...m.source, decisions };
   }
   return out;
 }

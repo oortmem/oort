@@ -57,10 +57,18 @@ are:
 `null` in a project set means global memories (no project).
 
 Every grant also has a `home`: the node new memories are written to. For the local constructors it
-is the Planet, or the agent's Star with `{ home: 'star' }`. `observe` addresses new memories there
+is the Planet, or the agent's Star with `{ home: 'star' }`. With a Star home the write side is the
+Star alone: the agent reads the shared Planet but cannot change any of it (upsert, forget, tiers,
+expiry, cold copies; `observe` records an access on a Planet memory it re-observes but never
+confirms it, and `recall` serves a cold Planet memory without hydrating it). The principal agent
+id `ANONYMOUS_AGENT` (`anonymous`, a caller that named no agent) gets the Planet alone, read and
+write, and can have no Star. `observe` addresses new memories there
 (`homeAddress(grant, projectId)`), and never edits a memory in another node: an observation that
 would supersede, correct or refine a memory outside its home becomes a new memory at home, and a
-contradiction is recorded on it as a `level`/`contradicts` decision naming the other memory.
+contradiction is recorded on it as a `level`/`contradicts` decision naming the other memory. That
+id may be a Star memory other readers cannot see: anything that shows a memory's decisions to a
+reader should drop a `level`/`contradicts` entry whose id the reader's grant cannot read (the CLI
+and MCP server do). Recall still ranks by the full record.
 
 Build grants with:
 
@@ -140,7 +148,8 @@ nodeGrant({
 - **Labels.** `formatForInjection` names the node in each line (`- [semantic, Star cursor, 5h ago]`)
   only when some memory comes from outside the reader's home node, so a one-node recall reads as it
   always did. Labels are built from these fields only; brackets in memory text are escaped (`\[`,
-  `\]`), so a memory cannot pass its text off as a label. Hive memories take at most 40% of the
+  `\]`), so a memory cannot pass its text off as a label, and any `<oort-` or `</oort-` in it is
+  written `&lt;oort-`, so it cannot close the block. Hive memories take at most 40% of the
   injection budget.
 
 `consolidate` re-tiers each node of its grant on its own, so the Planet's tiers do not depend on

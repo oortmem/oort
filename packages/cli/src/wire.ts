@@ -7,7 +7,7 @@ import {
   layeredEmbeddingCache,
   memoryEmbeddingCache,
   agentHome,
-  DEFAULT_AGENT,
+  ANONYMOUS_AGENT,
   isAgentId,
   localScope,
   resolveProject,
@@ -88,19 +88,25 @@ export interface Wired {
 export interface WiredAgent {
   id: string;
   home: Home;
-  /** Where the id came from: `--agent` (or a host's `oort mcp --agent`), `OORT_AGENT`, or the default. */
-  source: 'flag' | 'env' | 'default';
+  /**
+   * Where the id came from: `--agent` (or a host's `oort mcp --agent`), `OORT_AGENT`, or `none`:
+   * no agent was named, and the run is `anonymous`, reading and writing the Planet only.
+   */
+  source: 'flag' | 'env' | 'none';
 }
 
-/** The agent for this run: the flag, else `OORT_AGENT`, else `claude-code`. Refuses a bad id. */
+/**
+ * The agent for this run: the flag, else `OORT_AGENT`, else anonymous (`ANONYMOUS_AGENT`: the
+ * Planet only, no Star read or written). Never Claude Code by default: an MCP entry written before
+ * agents existed must not act as one. Refuses a bad or reserved id. An agent id is local
+ * configuration, not authentication: any local process can name any agent.
+ */
 export function resolveAgent(home: string, env: Env, flag?: string): WiredAgent {
   const fromEnv = env['OORT_AGENT'];
-  const [id, source] =
-    flag !== undefined
-      ? [flag, 'flag' as const]
-      : fromEnv !== undefined && fromEnv !== ''
-        ? [fromEnv, 'env' as const]
-        : [DEFAULT_AGENT, 'default' as const];
+  if (flag === undefined && (fromEnv === undefined || fromEnv === '')) {
+    return { id: ANONYMOUS_AGENT, home: 'planet', source: 'none' };
+  }
+  const [id, source] = flag !== undefined ? [flag, 'flag' as const] : [fromEnv!, 'env' as const];
   if (!isAgentId(id)) {
     throw new Refusal(
       `agent ${echo(id)} is not an agent id: lowercase letters, digits, ".", "_" or "-", starting with a letter or digit.`,
@@ -144,7 +150,7 @@ export interface WireOptions {
   roles?: readonly AdapterRole[];
   /** Per-request timeout for the Oort Cloud client (the hooks pass their budget). */
   cloudTimeoutMs?: number;
-  /** The agent to act as (`--agent`); default `OORT_AGENT`, else `claude-code`. */
+  /** The agent to act as (`--agent`); default `OORT_AGENT`, else anonymous (Planet only). */
   agent?: string;
 }
 

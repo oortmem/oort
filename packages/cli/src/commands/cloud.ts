@@ -1,9 +1,11 @@
 import * as path from 'node:path';
 import {
+  ANONYMOUS_AGENT,
   addressOf,
   exportLine,
   fitsVersion1,
   principalGrant,
+  readAgents,
   type Memory,
   type Scope,
 } from '@oortmem/core';
@@ -18,7 +20,7 @@ import {
 } from '../cloud.js';
 import { keyLookup } from '../credentials.js';
 import { uiFor } from '../ui.js';
-import { Refusal, confirm, withWired, writeOwnerOnly, type Ctx } from '../util.js';
+import { Refusal, confirm, shapeLinks, withWired, writeOwnerOnly, type Ctx } from '../util.js';
 import type { Wired } from '../wire.js';
 import { decoded, scopeKey, type ExportManifest } from './export.js';
 
@@ -44,15 +46,23 @@ async function clientFor(ctx: Ctx): Promise<CloudClient> {
 /**
  * Every memory in the local store (all projects of this machine's principal),
  * oldest first, in export format version 1: the version Oort Cloud's import
- * reads: the person's Planet, which version 1 holds exactly. The acting
- * agent's Star stays on this machine (it is private to that agent).
+ * reads: the person's Planet (every agent's Planet memories), which version 1
+ * holds exactly. Stars stay on this machine (each is private to its agent),
+ * and a contradiction naming one is left out. Each line keeps its author in
+ * `scope.agentId`; Oort Cloud's import re-scopes every line to the account's
+ * own Planet, keeping its project (see `test/fake-cloud.ts`).
  */
 async function localExport(
   w: Wired,
   ctx: Ctx,
 ): Promise<{ manifest: ExportManifest; lines: string[]; withEmbedding: number }> {
   const s = w.scope;
-  const grant = principalGrant({ orgId: s.orgId, customerId: s.customerId, agentId: s.agentId });
+  // The Planet alone, whoever acts: the anonymous principal has no Star.
+  const grant = principalGrant({
+    orgId: s.orgId,
+    customerId: s.customerId,
+    agentId: ANONYMOUS_AGENT,
+  });
   const all = (await w.store.list(grant, { validOnly: false })).filter(
     (m) => addressOf(m).level === 'user',
   );
@@ -61,7 +71,7 @@ async function localExport(
   const scopes = new Map<string, Scope>();
   let withEmbedding = 0;
   for (const m of all) {
-    const full: Memory = await decoded(m, w.store, grant, ctx);
+    const full: Memory = await shapeLinks(w.store, grant, await decoded(m, w.store, grant, ctx));
     if (full.embedding !== undefined && full.embedding.length === w.config.embed.dimension)
       withEmbedding++;
     if (!fitsVersion1(full)) {
@@ -171,6 +181,15 @@ export async function cloudUseCommand(opts: { local?: boolean }, ctx: Ctx): Prom
       `${ui.ok('This machine now uses the local store.')} Memories already in Oort Cloud stay there; \`oort cloud export\` downloads them.\n`,
     );
     return 0;
+  }
+  const stars = Object.entries(readAgents(home))
+    .filter(([, a]) => a.star)
+    .map(([id]) => id);
+  if (stars.length > 0) {
+    // Oort Cloud has no Stars yet: these agents' new memories would land on the shared Planet.
+    throw new Refusal(
+      `${stars.join(', ')} ${stars.length === 1 ? 'keeps its' : 'keep their'} memories in a Star, which Oort Cloud does not have yet. Run \`oort connect ${stars[0]} --no-star\`${stars.length > 1 ? ' for each' : ''} first, or stay local.`,
+    );
   }
   const client = await clientFor(ctx);
   const me = await client.whoami();

@@ -224,6 +224,18 @@ export async function drainQueue(deps: HookDeps): Promise<DrainResult> {
     });
     return { processed: 0, failed: 0, remaining };
   }
+  if (remote !== undefined && deps.home === 'star') {
+    // A Star agent's memories have no place in Oort Cloud yet (it would save them to the shared
+    // Planet): the lines stay queued for a local drain, untouched.
+    const remaining = countLines(dir);
+    deps.log.write({
+      ...logBase,
+      outcome: 'drain-skipped:star-in-cloud',
+      counts: { remaining },
+      timings: { totalMs: performance.now() - t0 },
+    });
+    return { processed: 0, failed: 0, remaining };
+  }
   if (queueFiles(dir).length === 0) {
     deps.log.write({
       ...logBase,

@@ -227,7 +227,10 @@ function mcpChecks(ctx: Ctx, cmd: string | undefined): Check[] {
         return {
           ...base,
           status: 'warn',
-          detail: `Oort's entry in ${show} is from another install path or an older version`,
+          detail:
+            s.noAgent === true
+              ? `Oort's entry in ${show} names no agent (from before agents): ${HOST_LABEL[host]} runs as an anonymous agent that reads and writes your Planet only, with no Star`
+              : `Oort's entry in ${show} is from another install path or an older version`,
           fix: `oort connect ${host}`,
         };
       case 'broken':
@@ -330,13 +333,20 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
       group: 'store',
       name: 'spaces',
       status: 'info',
-      detail: `Planet: ${n(planet)} (every project); Star ${agent.id}: ${n(star)}`,
+      detail:
+        agent.source === 'none'
+          ? `Planet: ${n(planet)} (every project)`
+          : `Planet: ${n(planet)} (every project); Star ${agent.id}: ${n(star)}`,
     });
+    const keeping = stars.length > 0 ? `; agents keeping a Star: ${stars.join(', ')}` : '';
     checks.push({
       group: 'store',
       name: 'agent',
       status: 'info',
-      detail: `acting as ${agent.id}${agent.source === 'default' ? '' : ` (from ${agent.source === 'flag' ? '--agent' : 'OORT_AGENT'})`}: reads your Planet and its own Star; new memories go to ${agent.home === 'star' ? `Star ${agent.id}` : 'your Planet'}${stars.length > 0 ? `; agents keeping a Star: ${stars.join(', ')}` : ''}`,
+      detail:
+        agent.source === 'none'
+          ? `no agent named: reads and writes your Planet only, no Star (name one with --agent or OORT_AGENT)${keeping}`
+          : `acting as ${agent.id} (from ${agent.source === 'flag' ? '--agent' : 'OORT_AGENT'}): reads your Planet and its own Star; new memories go to ${agent.home === 'star' ? `Star ${agent.id}` : 'your Planet'}${agent.home === 'star' ? ', and it never changes your Planet' : ''}${keeping}`,
     });
     const backup = listBackups(db, 'pre-v2').at(-1);
     if (backup !== undefined) {
@@ -434,6 +444,29 @@ async function relayChecks(ctx: Ctx, relayed: boolean): Promise<Check[]> {
 /** Oort Cloud: which store this machine uses, and in cloud mode whether the account answers. */
 async function cloudChecks(ctx: Ctx): Promise<Check[]> {
   const settings = readCloudSettings(resolveHome(ctx.io.env));
+  const stars = Object.entries(readAgents(resolveHome(ctx.io.env)))
+    .filter(([, a]) => a.star)
+    .map(([id]) => id);
+  const starCheck: Check[] =
+    settings.store === 'cloud' && stars.length > 0
+      ? [
+          {
+            group: 'cloud',
+            name: 'stars',
+            status: 'warn',
+            detail: `${stars.join(', ')} ${stars.length === 1 ? 'keeps' : 'keep'} a Star, which Oort Cloud does not have yet: their saves are refused (the hooks save nothing) until this changes`,
+            fix: `oort connect ${stars[0]} --no-star, or oort cloud use --local`,
+          },
+        ]
+      : [];
+  return [...starCheck, ...(await cloudStoreChecks(ctx, settings))];
+}
+
+/** The cloud store's own checks (see `cloudChecks`). */
+async function cloudStoreChecks(
+  ctx: Ctx,
+  settings: ReturnType<typeof readCloudSettings>,
+): Promise<Check[]> {
   const u = cloudUrl(ctx.io.env);
   if (settings.store !== 'cloud') {
     return [

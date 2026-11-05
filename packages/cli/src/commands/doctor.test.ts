@@ -118,9 +118,7 @@ describe('oort doctor', () => {
     expect(d.human.io.stdout).toContain('migrated the store from schema version 1 to 2');
     expect(sqliteSchemaVersion(db)).toBe(2);
     expect(listBackups(db, 'pre-v2')).toHaveLength(1);
-    expect(d.check('store', 'spaces')?.detail).toBe(
-      'Planet: 1 memory (every project); Star claude-code: 0 memories',
-    );
+    expect(d.check('store', 'spaces')?.detail).toBe('Planet: 1 memory (every project)');
     expect(d.check('store', 'backup')?.detail).toContain('oort.sqlite.pre-v2.');
   });
 
@@ -147,9 +145,7 @@ describe('oort doctor', () => {
     expect(d.check('mcp', 'codex')).toMatchObject({ status: 'info' });
     expect(d.check('store', 'store')).toMatchObject({ status: 'ok' });
     expect(d.check('store', 'store')?.detail).toMatch(/1 memor/);
-    expect(d.check('store', 'spaces')?.detail).toBe(
-      'Planet: 1 memory (every project); Star claude-code: 0 memories',
-    );
+    expect(d.check('store', 'spaces')?.detail).toBe('Planet: 1 memory (every project)');
     expect(d.check('relay', 'relay')).toMatchObject({ status: 'ok' });
     expect(d.check('relay', 'relay')?.detail).toContain('https://relay.oortcloud.dev');
     expect(d.check('relay', 'relay')?.detail).toContain('reachable');

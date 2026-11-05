@@ -243,7 +243,19 @@ export function fakeCloud(key: string): FakeCloud {
           const m = JSON.parse(lines[i] as string) as FakeMemory;
           if (c.memories.has(m.id)) skipped++;
           else {
-            c.memories.set(m.id, { ...m, embedding: undefined } as FakeMemory);
+            // As the real import does: every line is re-scoped to the account's own Planet (its
+            // project kept), whichever principal or author the line names.
+            const projectId = m.scope['projectId'];
+            c.memories.set(m.id, {
+              ...m,
+              scope: {
+                orgId: 'acct:a1',
+                customerId: 'self',
+                agentId: 'default',
+                ...(typeof projectId === 'string' && { projectId }),
+              },
+              embedding: undefined,
+            } as FakeMemory);
             imported++;
           }
         }

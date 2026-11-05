@@ -10,6 +10,7 @@ import {
   type Host,
   type HostContext,
 } from '../connectors.js';
+import { readCloudSettings } from '../cloud.js';
 import { uiFor, type Ui } from '../ui.js';
 import { Refusal, echo, tilde, type Ctx } from '../util.js';
 import { hookCommandPath } from './install.js';
@@ -120,6 +121,14 @@ export async function connectCommand(
   ctx: Ctx,
 ): Promise<number> {
   const hosts = hostArgs(args);
+  if (action === 'connect' && opts.star === true) {
+    // Oort Cloud has no Stars yet: a Star agent there would save to the shared Planet.
+    if (readCloudSettings(resolveHome(ctx.io.env)).store === 'cloud') {
+      throw new Refusal(
+        'This machine uses Oort Cloud, which has no Stars yet: --star would have nowhere private to save. Run `oort cloud use --local` first, or connect without --star.',
+      );
+    }
+  }
   // Disconnect also removes an entry from an older install path, so it never needs the bin.
   let cmd: string;
   try {
