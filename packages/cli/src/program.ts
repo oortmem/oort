@@ -135,14 +135,16 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .action(run((o: { project?: boolean }) => initCommand(o, ctx)));
 
   p.command('install')
-    .description('install the Claude Code hooks')
-    .argument('<harness>', 'claude-code')
+    .description(
+      'install Oort into a harness: the Claude Code hooks, or the MCP server for any other (as `oort connect`)',
+    )
+    .argument('<harness>', 'claude-code, codex, cursor, claude-desktop, gemini or vscode')
     .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
     .action(run((h: string, o: { project?: boolean }) => installCommand('install', h, o, ctx)));
 
   p.command('uninstall')
-    .description('remove the Claude Code hooks')
-    .argument('<harness>', 'claude-code')
+    .description('remove the Claude Code hooks, or the MCP server from any other harness')
+    .argument('<harness>', 'claude-code, codex, cursor, claude-desktop, gemini or vscode')
     .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
     .action(run((h: string, o: { project?: boolean }) => installCommand('uninstall', h, o, ctx)));
 

@@ -453,7 +453,14 @@ up the next time the host restarts it.
 ```sh
 oort install claude-code [--project]
 oort uninstall claude-code [--project]
+oort install <harness>      # codex, cursor, claude-desktop, gemini or vscode
+oort uninstall <harness>
 ```
+
+For every harness other than Claude Code, `oort install <harness>` adds the MCP
+server, exactly as `oort connect <harness>` does (and `oort uninstall` as
+`oort disconnect`); see `oort connect` above. The rest of this section is about
+Claude Code.
 
 These commands add or remove the `UserPromptSubmit`, `Stop` and
 `SessionStart` hooks in `~/.claude/settings.json`, or in
