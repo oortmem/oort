@@ -985,7 +985,13 @@ describe('recall touches only what it returns (CON-47)', () => {
     const inner = await setup([
       makeMemory({ id: 'a', text: 'auth port 8080 is the default', salience: 0.9 }),
     ]);
-    await seedCold(inner, coldOne('b', long));
+    // 'b' must rank second for this test: lower salience and an older date, so ties on equal
+    // timestamps (both made in the same millisecond) cannot flip the order.
+    const older = '2026-01-01T00:00:00.000Z';
+    await seedCold(
+      inner,
+      coldOne('b', long, { salience: 0.1, createdAt: older, updatedAt: older, validFrom: older }),
+    );
     const store = counting(inner);
     const a = (await inner.get(TG, 'a'))!;
     const explanation = { fused: 0, rrf: 0, coverage: 0, activation: 0, hydrated: false };
