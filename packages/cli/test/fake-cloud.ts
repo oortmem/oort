@@ -28,6 +28,8 @@ export interface FakeCloud {
   refuse?: { status: number; code: string; message: string };
   /** Never answers a recall (for hook timeouts). */
   hangRecall?: boolean;
+  /** What a recall reports in `degraded` (a server-side stage that was skipped). */
+  recallDegraded?: string[];
   /** The plan has lapsed: every route answers 402 except export, which works in every state. */
   lapsed?: boolean;
   /** Stores the next observe, then drops the connection before answering (a crash mid-request). */
@@ -120,6 +122,7 @@ export function fakeCloud(key: string): FakeCloud {
             explanation: { fused: 1, rrf: 1, coverage: 1, activation: 0, hydrated: false },
           })),
           timings: { totalMs: 2 },
+          ...(c.recallDegraded !== undefined && { degraded: c.recallDegraded }),
         });
       }
       if (p === '/v1/observe') {

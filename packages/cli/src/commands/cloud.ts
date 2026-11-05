@@ -7,6 +7,7 @@ import {
   readCloudSettings,
   writeCloudSettings,
   type CloudClient,
+  type ImportProgress,
 } from '../cloud.js';
 import { keyLookup } from '../credentials.js';
 import { uiFor } from '../ui.js';
@@ -123,6 +124,22 @@ const fingerprintOf = (lines: string[]): string => {
   return `${lines.length}:${id(lines[0])}:${id(lines.at(-1))}`;
 };
 
+/**
+ * How many of `lines` (the local store, oldest first) an earlier `oort cloud import` uploaded:
+ * all of them when the store is unchanged since, the first `total` when memories were only added
+ * after it, else none known.
+ */
+export function importedCount(progress: ImportProgress | undefined, lines: string[]): number {
+  if (progress === undefined) return 0;
+  if (progress.fingerprint === fingerprintOf(lines)) return Math.min(progress.done, lines.length);
+  if (
+    progress.total < lines.length &&
+    progress.fingerprint === fingerprintOf(lines.slice(0, progress.total))
+  )
+    return Math.min(progress.done, progress.total);
+  return 0;
+}
+
 /** `oort cloud use [--local]`: switch this machine's store. */
 export async function cloudUseCommand(opts: { local?: boolean }, ctx: Ctx): Promise<number> {
   const home = (await withWired(ctx, async (w) => w.config.home)) as string;
@@ -138,7 +155,9 @@ export async function cloudUseCommand(opts: { local?: boolean }, ctx: Ctx): Prom
   }
   const client = await clientFor(ctx);
   const me = await client.whoami();
-  const local = await withWired(ctx, async (w) => (await localExport(w, ctx)).lines.length);
+  const lines = await withWired(ctx, async (w) => (await localExport(w, ctx)).lines);
+  const local = lines.length;
+  const left = local - importedCount(settings.import, lines);
   writeCloudSettings(home, { ...settings, store: 'cloud' });
   ctx.io.out(ui.header('cloud', 'Oort Cloud'));
   ctx.io.out(
@@ -150,9 +169,11 @@ export async function cloudUseCommand(opts: { local?: boolean }, ctx: Ctx): Prom
   );
   ctx.io.out(
     `\nHooks, MCP and the oort commands now read and save in Oort Cloud.\n` +
-      (local > 0
-        ? `${local} ${local === 1 ? 'memory stays' : 'memories stay'} in the local store until you run \`oort cloud import\`.\n`
-        : '') +
+      (left > 0
+        ? `${left} ${left === 1 ? 'memory stays' : 'memories stay'} in the local store until you run \`oort cloud import\`.\n`
+        : local > 0
+          ? `${local === 1 ? 'The local memory is' : `All ${local} local memories are`} already in Oort Cloud.\n`
+          : '') +
       'Switch back any time with `oort cloud use --local`.\n',
   );
   return 0;
