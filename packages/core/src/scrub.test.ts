@@ -215,7 +215,10 @@ describe('scrub', () => {
       const large = make(2 * MB);
       scrub(small); // warm up
       const ratio = fastest(large) / fastest(small);
-      expect(ratio, `${label}: t(2 MB) / t(0.5 MB)`).toBeLessThan(6);
+      // 4x the input: linear is ~4, quadratic ~16. 10 leaves room for cache and GC effects
+      // on a loaded machine (6 failed at 6.7-8.1 while two test suites ran) and still
+      // catches a quadratic scan.
+      expect(ratio, `${label}: t(2 MB) / t(0.5 MB)`).toBeLessThan(10);
     }
   });
 
