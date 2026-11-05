@@ -26,7 +26,8 @@ import type { WireFn, Wired } from './wire.js';
  */
 export function echo(arg: string): string {
   const clean = scrub(arg).text;
-  return JSON.stringify(clean.length > 24 ? `${clean.slice(0, 23)}…` : clean);
+  // JSON escapes C0 controls; `shown` also catches C1 (\u009b CSI) and bidi overrides.
+  return shown(JSON.stringify(clean.length > 24 ? `${clean.slice(0, 23)}…` : clean));
 }
 
 /** A refusal or usage problem: the message is printed and the CLI exits 2. */
@@ -192,6 +193,20 @@ export function age(iso: string, now: Date): string {
   if (s < 86_400 * 30) return `${Math.floor(s / 86_400)}d`;
   if (s < 86_400 * 365) return `${Math.floor(s / (86_400 * 30))}mo`;
   return `${Math.floor(s / (86_400 * 365))}y`;
+}
+
+/**
+ * A string from Oort Cloud (another member's email hint, an agent or Constellation name, an API
+ * message) as it may be printed: every C0 and C1 control character (ESC, CSI \u009b, newlines,
+ * DEL) and bidi override becomes a visible `\u{…}` escape, so nobody can plant terminal escape
+ * sequences that rewrite or hide output. Never truncates.
+ */
+export function shown(s: unknown, opts: { newlines?: boolean } = {}): string {
+  return String(s).replace(
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    (c) => (opts.newlines === true && c === '\n' ? c : `\\u{${c.charCodeAt(0).toString(16)}}`),
+  );
 }
 
 /** One line, at most `n` characters. */

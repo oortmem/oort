@@ -1,13 +1,13 @@
 import { VERSION } from '@oortmem/core';
 import type { CloudSpace } from '../cloud.js';
 import { uiFor } from '../ui.js';
-import { cloudOf, withWired, type Ctx } from '../util.js';
+import { cloudOf, shown, withWired, type Ctx } from '../util.js';
 
 /** How a space reads in a list: `Constellation oort-core (member: read, share)`. */
 export function spaceLine(s: CloudSpace): string {
   return s.level === 'planet'
     ? 'your Planet'
-    : `Constellation ${s.name} (${s.role}: ${s.rights.join(', ') || 'no rights'})`;
+    : `Constellation ${shown(s.name)} (${shown(s.role)}: ${shown(s.rights.join(', ')) || 'no rights'})`;
 }
 
 /**
@@ -53,7 +53,7 @@ export async function whoamiCommand(opts: { json?: boolean }, ctx: Ctx): Promise
         [
           'account',
           out['mode'] === 'cloud'
-            ? `${String(out['account'])} (${String(out['plan'])})`
+            ? `${shown(out['account'])} (${shown(out['plan'])})`
             : 'none (local store)',
         ],
         ...(out['mode'] === 'cloud'

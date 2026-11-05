@@ -32,7 +32,7 @@ import { spaceLine } from './whoami.js';
 import { LOCAL_INSTALL_HINT, LOCAL_PROVIDER, importLocalModels } from '../local-models.js';
 import { RELAY_MODELS, relayUrl } from '../relay.js';
 import { uiFor, type Ui } from '../ui.js';
-import { Refusal, echo, tilde, withWired, type Ctx } from '../util.js';
+import { Refusal, echo, shown, tilde, withWired, type Ctx } from '../util.js';
 import { hostContext } from './connect.js';
 import { hookCommandPath, settingsFile } from './install.js';
 
@@ -668,7 +668,7 @@ async function cloudStoreChecks(
         group: 'cloud',
         name: 'store',
         status: 'ok',
-        detail: `Oort Cloud (${u.url}), account ${me.account}, plan ${me.plan}${me.scope === 'narrowed' ? ', narrowed key' : ''}`,
+        detail: `Oort Cloud (${u.url}), account ${shown(me.account)}, plan ${shown(me.plan)}${me.scope === 'narrowed' ? ', narrowed key' : ''}`,
       },
       {
         group: 'cloud',

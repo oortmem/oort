@@ -9,6 +9,7 @@ import { cloudBackend, cloudSpaces } from './mcp.js';
 import { parseKeyScope } from './commands/keys.js';
 import { createKeychain } from './keychain.js';
 import { runCli } from './program.js';
+import { echo, shown } from './util.js';
 import { wire as realWire, type WireFn } from './wire.js';
 
 /**
@@ -144,7 +145,7 @@ describe('oort constellation invite and join (CON-64)', () => {
     const list = await e.run(['constellation', 'invites', 'oort-core']);
     expect(list.io.stdout).toContain('i_1  sa…@example.com  member');
     const revoked = await e.run(['constellation', 'revoke', 'oort-core', 'i_1']);
-    expect(revoked.io.stdout).toContain('Revoked invite i_1.');
+    expect(revoked.io.stdout).toContain('Revoked invite "i_1".');
     expect((await e.run(['constellation', 'invites', 'oort-core'])).io.stdout).toContain(
       'No open invites.',
     );
@@ -446,5 +447,59 @@ describe('oort mcp in cloud mode: spaces from whoami (CON-64)', () => {
     e.cloud.refuse = { status: 503, code: 'unavailable', message: 'down' };
     expect((await cloudSpaces(cursor, cursor.cloud!)).include).toEqual(['planet']);
     await cursor.close();
+  });
+});
+
+describe('server strings never reach the terminal raw (CON-64 review)', () => {
+  const ESC = '\u001b';
+  const CSI = '\u009b';
+  const raw = (s: string) => s.includes(ESC) || s.includes(CSI);
+
+  it('display.shown-escapes-controls-and-never-truncates', () => {
+    expect(shown(`a${ESC}[2Jb${CSI}31mc‮d`)).toBe('a\\u{1b}[2Jb\\u{9b}31mc\\u{202e}d');
+    expect(shown('x'.repeat(500))).toHaveLength(500);
+    expect(shown('one\ntwo', { newlines: true })).toBe('one\ntwo');
+    expect(shown('one\ntwo')).toBe('one\\u{a}two');
+    expect(raw(echo(`x${CSI}y`))).toBe(false);
+  });
+
+  it('display.members-and-agents-with-escape-sequences-are-printed-escaped', async () => {
+    const e = setup();
+    team(e);
+    e.cloud.hive.members.get(C)![1]!.email = `ev${ESC}[2J@example.com`;
+    e.cloud.hive.stars.set(C, new Map([[`cur${CSI}2Jsor`, ['read']]]));
+    const r = await e.run(['constellation', 'members', 'oort-core']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(raw(r.io.stdout)).toBe(false);
+    expect(r.io.stdout).toContain('ev\\u{1b}[2J@example.com');
+    expect(r.io.stdout).toContain('cur\\u{9b}2Jsor');
+    // JSON output stays JSON: escaped by JSON, the value intact when parsed.
+    const j = await e.run(['constellation', 'members', 'oort-core', '--json']);
+    expect(j.io.stdout.includes(ESC)).toBe(false);
+    expect((JSON.parse(j.io.stdout) as { email: string | null }[])[1]!.email).toBe(
+      `ev${ESC}[2J@example.com`,
+    );
+  });
+
+  it('display.invites-whoami-and-api-messages-are-printed-escaped', async () => {
+    const e = setup();
+    team(e);
+    e.cloud.hive.memberLimit = 10;
+    e.cloud.hive.constellations.get(C)!.name = `oort${ESC}]0;pwned${ESC}\\`;
+    const inv = await e.run(['constellation', 'invite', C, 'sam@example.com']);
+    expect(inv.code, inv.io.stderr).toBe(0);
+    expect(raw(inv.io.stdout)).toBe(false);
+    const list = await e.run(['constellation', 'invites', C]);
+    expect(raw(list.io.stdout)).toBe(false);
+    const me = await e.run(['whoami']);
+    expect(raw(me.io.stdout)).toBe(false);
+    expect(me.io.stdout).toContain('oort\\u{1b}]0;pwned');
+    const doc = await e.run(['doctor']);
+    expect(raw(doc.io.stdout)).toBe(false);
+    e.cloud.refuse = { status: 403, code: 'role_required', message: `No${ESC}[2J${CSI}K way.` };
+    const refused = await e.run(['constellation', 'invites', C]);
+    expect(refused.code).toBe(2);
+    expect(raw(refused.io.stderr)).toBe(false);
+    expect(refused.io.stderr).toContain('No\\u{1b}[2J\\u{9b}K way.');
   });
 });

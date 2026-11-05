@@ -1,6 +1,6 @@
 import { PROVIDERS, PROVIDER_ENV, isProvider, type Provider } from '../keychain.js';
 import { uiFor } from '../ui.js';
-import { Refusal, echo, type Ctx } from '../util.js';
+import { Refusal, echo, shown, type Ctx } from '../util.js';
 import { clientFor } from './cloud.js';
 
 function providerArg(arg: string, ctx: Ctx): Provider {
@@ -126,11 +126,11 @@ export async function keysCreateCommand(
   }
   const ui = uiFor(ctx.io);
   ctx.io.out(
-    `${k.key}\n\n` +
+    `${shown(k.key)}\n\n` +
       ui.kv([
-        ['name', k.name],
-        ['prefix', k.prefix],
-        ['scope', k.scope === null ? 'everything this account may do' : k.scope.join(', ')],
+        ['name', shown(k.name)],
+        ['prefix', shown(k.prefix)],
+        ['scope', k.scope === null ? 'everything this account may do' : shown(k.scope.join(', '))],
       ]) +
       ui.dim(
         'This is the only time the key is shown. Keep it like a password; revoke it at oortcloud.dev/account.',

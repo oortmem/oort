@@ -1,7 +1,7 @@
 import { ANONYMOUS_AGENT, isAgentId } from '@oortmem/core';
 import type { CloudConstellation } from '../cloud.js';
 import { uiFor } from '../ui.js';
-import { Refusal, confirm, echo, type Ctx } from '../util.js';
+import { Refusal, confirm, echo, shown, type Ctx } from '../util.js';
 import { clientFor } from './cloud.js';
 import { platformOpener } from './login.js';
 
@@ -30,7 +30,7 @@ export async function constellationListCommand(
 
 function row(c: CloudConstellation): string {
   const who = c.members === 1 ? '1 member' : `${c.members} members`;
-  return `  ${c.name}  ${c.role}${c.owner ? ' (owner)' : ''}  ${who}  ${c.id}`;
+  return `  ${shown(c.name)}  ${shown(c.role)}${c.owner ? ' (owner)' : ''}  ${who}  ${shown(c.id)}`;
 }
 
 /** `oort constellation create <name>`: a new Constellation, with you as its maintainer. */
@@ -50,7 +50,7 @@ export async function constellationCreateCommand(
   if (opts.json === true) ctx.io.out(`${JSON.stringify(c, null, 2)}\n`);
   else
     ctx.io.out(
-      `Created Constellation ${c.name} (${c.id}). Share a memory with \`oort share <id> --to ${c.name}\`.\n`,
+      `Created Constellation ${shown(c.name)} (${shown(c.id)}). Share a memory with \`oort share <id> --to ${shown(c.name)}\`.\n`,
     );
   return 0;
 }
@@ -105,9 +105,9 @@ export async function constellationInviteCommand(
   if (opts.json === true) return json(ctx, inv);
   const ui = uiFor(ctx.io);
   ctx.io.out(
-    `Invited ${inv.email} to ${inv.constellation} as ${inv.role}. ${
+    `Invited ${shown(inv.email)} to ${shown(inv.constellation)} as ${shown(inv.role)}. ${
       inv.emailed ? 'They have an email with the link;' : 'Nothing was emailed:'
-    } send them this link (single use, expires ${inv.expiresAt.slice(0, 10)}):\n\n  ${inv.link}\n\n` +
+    } send them this link (single use, expires ${shown(inv.expiresAt.slice(0, 10))}):\n\n  ${shown(inv.link)}\n\n` +
       ui.dim(
         'They accept it signed in to oortcloud.dev with that email address. Anyone with the link can see the invite, so send it only to them.',
       ) +
@@ -167,7 +167,9 @@ export async function constellationInvitesCommand(
   ctx.io.out(ui.header('invites', `${all.length}`));
   if (all.length === 0) ctx.io.out('No open invites.\n');
   for (const i of all) {
-    ctx.io.out(`  ${i.id}  ${i.email}  ${i.role}  expires ${i.expiresAt.slice(0, 10)}\n`);
+    ctx.io.out(
+      `  ${shown(i.id)}  ${shown(i.email)}  ${shown(i.role)}  expires ${shown(i.expiresAt.slice(0, 10))}\n`,
+    );
   }
   return 0;
 }
@@ -180,7 +182,7 @@ export async function constellationRevokeCommand(
 ): Promise<number> {
   const client = await clientFor(ctx);
   const r = await client.revokeInvite(c, invite.trim());
-  ctx.io.out(r.revoked ? `Revoked invite ${invite}.\n` : `No open invite ${echo(invite)}.\n`);
+  ctx.io.out(r.revoked ? `Revoked invite ${echo(invite)}.\n` : `No open invite ${echo(invite)}.\n`);
   return 0;
 }
 
@@ -196,13 +198,13 @@ export async function constellationMembersCommand(
   const ui = uiFor(ctx.io);
   ctx.io.out(ui.header('members', `${all.length}`));
   for (const m of all) {
-    const who = m.you ? 'you' : (m.email ?? 'a member');
+    const who = m.you ? 'you' : m.email === null ? 'a member' : shown(m.email);
     const stars =
       m.stars.length === 0
         ? ''
-        : `  agents: ${m.stars.map((s) => `${s.agent} (${s.rights.join('+') || 'none'})`).join(', ')}`;
+        : `  agents: ${m.stars.map((s) => `${shown(s.agent)} (${shown(s.rights.join('+')) || 'none'})`).join(', ')}`;
     ctx.io.out(
-      `  ${m.member}  ${who}  ${m.role}${m.owner ? ' (owner)' : ''}  since ${m.joinedAt.slice(0, 10)}${stars}\n`,
+      `  ${shown(m.member)}  ${who}  ${shown(m.role)}${m.owner ? ' (owner)' : ''}  since ${shown(m.joinedAt.slice(0, 10))}${stars}\n`,
     );
   }
   return 0;
@@ -240,7 +242,7 @@ export async function constellationRoleCommand(
 ): Promise<number> {
   const client = await clientFor(ctx);
   const r = await client.setRole(c, member.trim(), roleArg(role));
-  ctx.io.out(`${r.member} is now a ${r.role} of ${echo(c)}.\n`);
+  ctx.io.out(`${shown(r.member)} is now a ${shown(r.role)} of ${echo(c)}.\n`);
   return 0;
 }
 
@@ -285,7 +287,7 @@ export async function constellationTransferCommand(
     return 0;
   }
   const r = await client.transfer(c, member.trim());
-  ctx.io.out(`${r.member} now owns ${echo(c)}.\n`);
+  ctx.io.out(`${shown(r.member)} now owns ${echo(c)}.\n`);
   return 0;
 }
 
@@ -308,7 +310,7 @@ export async function constellationDeleteCommand(
   }
   const r = await client.deleteConstellation(c);
   ctx.io.out(
-    `Deleted ${echo(c)} (${r.memories} ${r.memories === 1 ? 'memory' : 'memories'}). Members' own memories are untouched.\n`,
+    `Deleted ${echo(c)} (${shown(r.memories)} ${r.memories === 1 ? 'memory' : 'memories'}). Members' own memories are untouched.\n`,
   );
   return 0;
 }
@@ -324,7 +326,7 @@ export async function constellationPolicyCommand(
   }
   const client = await clientFor(ctx);
   const r = await client.setPolicy(c, opts.open === true ? 'open' : 'confirm');
-  ctx.io.out(`${echo(c)} now uses the ${r.policy} policy.\n`);
+  ctx.io.out(`${echo(c)} now uses the ${shown(r.policy)} policy.\n`);
   return 0;
 }
 
@@ -343,9 +345,9 @@ export async function constellationAttachCommand(
   if (opts.json === true) return json(ctx, r);
   const capped = r.asked.filter((x) => !r.rights.includes(x));
   ctx.io.out(
-    `${r.agent} can now ${r.rights.includes('share') ? 'read and share into' : 'read'} ${echo(c)}.` +
+    `${shown(r.agent)} can now ${r.rights.includes('share') ? 'read and share into' : 'read'} ${echo(c)}.` +
       (capped.length > 0
-        ? ` It asked to ${capped.join(', ')}, which your role does not allow.`
+        ? ` It asked to ${shown(capped.join(', '))}, which your role does not allow.`
         : '') +
       '\n',
   );

@@ -1,7 +1,17 @@
 import { privacyStatement } from '../wire.js';
 import { findCloudMemory, type CloudShareResult, type ShareFinding } from '../cloud.js';
 import { uiFor, type Ui } from '../ui.js';
-import { Refusal, clip, cloudOf, confirm, echo, short, withWired, type Ctx } from '../util.js';
+import {
+  Refusal,
+  clip,
+  cloudOf,
+  confirm,
+  echo,
+  short,
+  shown,
+  withWired,
+  type Ctx,
+} from '../util.js';
 
 /** What each kind of finding is called in the preview. */
 const KIND: Record<string, string> = {
@@ -19,16 +29,18 @@ export function marked(text: string, findings: readonly ShareFinding[], ui: Ui):
   let at = 0;
   for (const f of [...findings].sort((a, b) => a.start - b.start)) {
     if (f.start < at || f.end > text.length) continue;
-    const span = text.slice(f.start, f.end);
-    out += text.slice(at, f.start) + (ui.color ? ui.bold(ui.accent(span)) : `»${span}«`);
+    const span = shown(text.slice(f.start, f.end), { newlines: true });
+    out +=
+      shown(text.slice(at, f.start), { newlines: true }) +
+      (ui.color ? ui.bold(ui.accent(span)) : `»${span}«`);
     at = f.end;
   }
-  return out + text.slice(at);
+  return out + shown(text.slice(at), { newlines: true });
 }
 
 /** A Constellation as people tell them apart: its name and the start of its id. */
 export const labelOf = (p: Pick<CloudShareResult, 'constellation' | 'constellationId'>): string =>
-  `${p.constellation} (${p.constellationId.slice(0, 6)})`;
+  `${shown(p.constellation)} (${shown(p.constellationId.slice(0, 6))})`;
 
 const CONSTELLATION_ID = /^c_[a-z0-9]{16}$/;
 
@@ -88,7 +100,7 @@ export async function shareCommand(
     if (opts.json !== true) ctx.io.out(preview(p, ui));
     const ok = await confirm(
       ctx.io,
-      `Share ${short(m.id)} "${clip(p.text, 40)}" with ${echo(p.constellation)} (${p.constellationId.slice(0, 6)})?`,
+      `Share ${short(m.id)} "${shown(clip(p.text, 40))}" with ${echo(p.constellation)} (${shown(p.constellationId.slice(0, 6))})?`,
       opts.yes === true,
       'share it',
     );
@@ -114,7 +126,7 @@ export async function shareCommand(
       return 0;
     }
     ctx.io.out(
-      `Shared to Constellation ${labelOf(done)} as ${done.id ?? '?'}. Members' agents recall it labelled with the Constellation.\n`,
+      `Shared to Constellation ${labelOf(done)} as ${shown(done.id ?? '?')}. Members' agents recall it labelled with the Constellation.\n`,
     );
     return 0;
   });

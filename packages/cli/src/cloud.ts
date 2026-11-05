@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import type { IncludeLevel, Memory, RecallMode, RecallResult, Tier } from '@oortmem/core';
 import type { Env } from './io.js';
 import { ACCOUNT_URL } from './relay.js';
-import { Refusal, writeOwnerOnly } from './util.js';
+import { Refusal, shown, writeOwnerOnly } from './util.js';
 
 /**
  * Oort Cloud, as the CLI sees it: where the API is, which store this machine uses, and what the
@@ -138,7 +138,9 @@ export class OortCloudError extends Refusal {
   }
 }
 
-function messageFor(kind: CloudErrorKind, status: number, api?: string): string {
+function messageFor(kind: CloudErrorKind, status: number, apiRaw?: string): string {
+  // The API's own words are printed: never with control characters in them.
+  const api = apiRaw === undefined ? undefined : shown(apiRaw);
   switch (kind) {
     case 'unauthorized':
       return `Oort Cloud rejected the Oort key (HTTP ${status}): it is unknown or revoked. Run \`oort login\` again.`;
