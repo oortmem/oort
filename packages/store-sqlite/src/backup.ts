@@ -5,10 +5,10 @@ import Database from 'better-sqlite3';
 
 /**
  * The copies a store takes of its database before changing its schema:
- * `pre-v2` before migrating a version 1 store, `pre-downgrade` before taking
- * a store back to version 1.
+ * `pre-v2` before migrating a version 1 store, `pre-v3` before migrating a
+ * version 2 store, `pre-downgrade` before taking a store back to an older version.
  */
-export type BackupKind = 'pre-v2' | 'pre-downgrade';
+export type BackupKind = 'pre-v2' | 'pre-v3' | 'pre-downgrade';
 
 /** How many of the newest copies of each kind are kept. */
 export const BACKUPS_KEPT = 3;
@@ -63,7 +63,7 @@ const memoryCount = (db: Database.Database): number =>
  * file behind, when any step fails.
  *
  * Afterwards only the `BACKUPS_KEPT` newest copies of `kind` stay, plus,
- * for `pre-v2`, the oldest one (the copy of the original version 1 store).
+ * for a migration, the oldest one (the copy of the store before it first migrated).
  * Must run outside a transaction.
  */
 export function backupDatabase(db: Database.Database, dbPath: string, kind: BackupKind): string {
@@ -93,7 +93,7 @@ export function backupDatabase(db: Database.Database, dbPath: string, kind: Back
     fsyncPath(dir, 'r');
   } catch (e) {
     throw new Error(
-      `sqlite store: could not copy ${file} to ${target} before ${kind === 'pre-v2' ? 'migrating' : 'downgrading'} it (${(e as Error).message}); nothing was changed`,
+      `sqlite store: could not copy ${file} to ${target} before ${kind === 'pre-downgrade' ? 'downgrading' : 'migrating'} it (${(e as Error).message}); nothing was changed`,
       { cause: e },
     );
   } finally {
@@ -103,11 +103,11 @@ export function backupDatabase(db: Database.Database, dbPath: string, kind: Back
   return target;
 }
 
-/** Removes all but the newest copies of `kind` (and the oldest `pre-v2`). Best effort. */
+/** Removes all but the newest copies of `kind` (and the oldest migration copy). Best effort. */
 function prune(dbPath: string, kind: BackupKind): void {
   const all = listBackups(dbPath, kind);
   const keep = new Set(all.slice(-BACKUPS_KEPT));
-  if (kind === 'pre-v2' && all[0] !== undefined) keep.add(all[0]);
+  if (kind !== 'pre-downgrade' && all[0] !== undefined) keep.add(all[0]);
   for (const f of all) {
     if (!keep.has(f)) fs.rmSync(f, { force: true });
   }

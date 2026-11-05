@@ -1,0 +1,303 @@
+{
+  "list": [
+    {
+      "id": "v2-b",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "The auth service listens on port 5582.",
+      "stub": "The auth service lis",
+      "entities": ["auth-service"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 1,
+        "recent": ["2026-10-02T00:00:00.000Z"],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-10T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": "v2-a",
+      "supersededBy": null,
+      "source": {
+        "harness": "claude-code",
+        "decisions": [
+          {
+            "stage": "gate",
+            "question": "should_store",
+            "answer": "yes",
+            "probability": 0.9
+          }
+        ]
+      },
+      "createdAt": "2026-10-10T00:00:00.000Z",
+      "updatedAt": "2026-10-10T00:00:00.000Z",
+      "embedding": [-74, -45, -16, 13, 42, 71, -100, -71]
+    },
+    {
+      "id": "v2-a",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "The auth service listens on port 4000.",
+      "stub": "The auth service lis",
+      "entities": ["auth-service"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 1,
+        "recent": ["2026-10-02T00:00:00.000Z"],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": "2026-10-10T00:00:00.000Z",
+      "expiredAt": "2026-10-10T00:00:00.000Z",
+      "endReason": "superseded",
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": "v2-b",
+      "source": {
+        "harness": "claude-code",
+        "decisions": [
+          {
+            "stage": "gate",
+            "question": "should_store",
+            "answer": "yes",
+            "probability": 0.9
+          }
+        ]
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-87, -58, -29, 0, 29, 58, 87, -84]
+    },
+    {
+      "id": "v2-c",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code",
+        "projectId": "oort-1a2b3c4d"
+      },
+      "type": "procedural",
+      "text": "Releases are cut from the main branch every Tuesday.",
+      "stub": "Releases are cut fro",
+      "entities": ["release"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 1,
+        "recent": ["2026-10-02T00:00:00.000Z"],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "claude-code",
+        "decisions": [
+          {
+            "stage": "gate",
+            "question": "should_store",
+            "answer": "yes",
+            "probability": 0.9
+          }
+        ]
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-61, -32, -3, 26, 55, 84, -87, -58]
+    },
+    {
+      "id": "v2-d",
+      "scope": {
+        "orgId": "local",
+        "customerId": "",
+        "agentId": "cursor"
+      },
+      "address": {
+        "level": "agent",
+        "orgId": "local",
+        "agentId": "cursor"
+      },
+      "type": "preference",
+      "text": "Cursor prefers tabs in Go files.",
+      "stub": "Cursor prefers tabs ",
+      "entities": ["go"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 1,
+        "recent": ["2026-10-02T00:00:00.000Z"],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "claude-code",
+        "decisions": [
+          {
+            "stage": "gate",
+            "question": "should_store",
+            "answer": "yes",
+            "probability": 0.9
+          }
+        ]
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-48, -19, 10, 39, 68, 97, -74, -45]
+    },
+    {
+      "id": "v2-e",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "An old note about the staging cluster.",
+      "stub": "An old note about th",
+      "entities": ["staging"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "cold",
+      "accessLog": {
+        "count": 1,
+        "recent": ["2026-10-02T00:00:00.000Z"],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "claude-code",
+        "decisions": [
+          {
+            "stage": "gate",
+            "question": "should_store",
+            "answer": "yes",
+            "probability": 0.9
+          }
+        ]
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": null
+    }
+  ],
+  "current": ["v2-b", "v2-c", "v2-d", "v2-e"],
+  "lexical": [
+    {
+      "id": "v2-b",
+      "score": 2.1535578129149564,
+      "tier": "warm"
+    },
+    {
+      "id": "v2-a",
+      "score": 2.1535578129149564,
+      "tier": "warm"
+    },
+    {
+      "id": "v2-e",
+      "score": 1.602630224776573,
+      "tier": "cold"
+    }
+  ],
+  "dense": [
+    {
+      "id": "v2-b",
+      "score": 1,
+      "tier": "warm"
+    },
+    {
+      "id": "v2-c",
+      "score": 0.9776646047830582,
+      "tier": "warm"
+    },
+    {
+      "id": "v2-d",
+      "score": 0.905009537935257,
+      "tier": "warm"
+    },
+    {
+      "id": "v2-a",
+      "score": 0.40125715732574463,
+      "tier": "warm"
+    }
+  ],
+  "cold": {
+    "id": "v2-e",
+    "scope": {
+      "orgId": "local",
+      "customerId": "self",
+      "agentId": "claude-code"
+    },
+    "type": "semantic",
+    "text": "An old note about the staging cluster.",
+    "stub": "An old note about th",
+    "entities": ["staging"],
+    "salience": 0.5,
+    "pinned": false,
+    "tier": "warm",
+    "accessLog": {
+      "count": 1,
+      "recent": ["2026-10-02T00:00:00.000Z"],
+      "compactedSum": 0,
+      "compactedAt": null
+    },
+    "validFrom": "2026-10-01T00:00:00.000Z",
+    "validTo": null,
+    "expiredAt": null,
+    "endReason": null,
+    "lastConfirmedAt": null,
+    "supersedes": null,
+    "supersededBy": null,
+    "source": {
+      "harness": "claude-code",
+      "decisions": [
+        {
+          "stage": "gate",
+          "question": "should_store",
+          "answer": "yes",
+          "probability": 0.9
+        }
+      ]
+    },
+    "createdAt": "2026-10-01T00:00:00.000Z",
+    "updatedAt": "2026-10-01T00:00:00.000Z",
+    "embedding": [-35, -6, 23, 52, 81, -90, -61, -32]
+  },
+  "cursor": "42"
+}
