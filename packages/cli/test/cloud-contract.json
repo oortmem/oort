@@ -6,7 +6,7 @@
     {
       "method": "GET",
       "path": "/v1/whoami",
-      "response": ["account", "plan", "via", "spaces?", "scope?"],
+      "response": ["account", "plan", "via", "spaces?", "galaxies?", "scope?"],
       "query": ["agent"]
     },
     {
@@ -177,7 +177,8 @@
         "method": "POST",
         "path": "/v1/constellations",
         "request": {
-          "name": "string"
+          "name": "string",
+          "galaxy": "string?"
         },
         "status": 201,
         "response": ["id", "name", "role", "owner", "members", "policy", "joinedAt"]
@@ -403,6 +404,23 @@
     },
     "member": ["member", "role", "owner", "you", "email", "joinedAt", "stars"],
     "contest": ["action", "openedAt", "current", "challenger"]
+  },
+  "galaxies": {
+    "$comment": "Galaxies (CON-97): a Galaxy is a Clerk Organization, mirrored into Oort's database by the site's webhook; every route here reads that mirror and never calls Clerk. Hive beta only (403 hive_not_enabled outside it), and only for a full key or the signed-in dashboard: a narrowed key or a connector answers 403 scope_denied and whoami lists no galaxies for it. :g is a Galaxy id (g_…), its slug or its name (URL-encoded), among the caller's own Galaxies; one the caller is not in answers 404, exactly like one that does not exist, and a reference matching more than one Galaxy (by id, slug or name) answers 409 ambiguous_galaxy listing the candidates with their ids. role is admin (org:admin) or member (any other Organization role), and owner for the Organization's creator while they are an admin: rights follow the current role alone. Galaxies are created and people invited on https://oortcloud.dev/dashboard/galaxies, signed in. An admin creates Constellations in it (POST /v1/constellations with galaxy, which must be the Galaxy's id: a slug or name answers 400 galaxy_by_id naming the id, so clients resolve it first; anyone else answers 403 role_required) and is at least a maintainer of every Constellation in it (demoting or removing them there answers 409 galaxy_admin); a member gets no Constellation access by being in the Galaxy and is invited as before. Removing someone from the Organization, demoting them, or deleting the Organization ends what their Galaxy role gave them, and removal or deletion removes them from its Constellations (except ones they own, which stay theirs), within 60 seconds. whoami lists galaxies (id, name, slug, role) when the account has any.",
+    "galaxy": ["id", "name", "slug", "role", "members", "constellations"],
+    "member": ["member", "role", "you", "email", "joinedAt"],
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/v1/galaxies",
+        "response": ["galaxies"]
+      },
+      {
+        "method": "GET",
+        "path": "/v1/galaxies/:g/members",
+        "response": ["galaxy", "members"]
+      }
+    ]
   },
   "keys": {
     "$comment": "API keys (CON-64). A key carries everything its account may do unless it was narrowed when it was made. scope lists 'planet' (always required: a key always reads and writes its own Planet) and Constellations by id or name, each optionally ':read' (recall only) or ':share' (recall and share); a bare Constellation carries every right the account's role has there. Only a full key or the signed-in dashboard makes keys (403 scope_denied for a narrowed key); a key made by a key is revoked with it. The response's scope is canonical (ids, not names), or null for a full key; the key itself is shown once and never stored.",

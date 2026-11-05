@@ -50,8 +50,23 @@ export interface FakeCloud {
   narrowed?: boolean;
 }
 
+/** A Galaxy as the API lists it (CON-97). */
+export interface FakeGalaxy {
+  id: string;
+  name: string;
+  slug: string | null;
+  role: string;
+  members: number;
+  constellations: number;
+}
+
 export interface FakeHive {
   enabled: boolean;
+  /** CON-97: the account's Galaxies, and each one's people. */
+  galaxies: Map<string, FakeGalaxy>;
+  galaxyMembers: Map<string, Record<string, unknown>[]>;
+  /** Bodies sent to POST /v1/constellations. */
+  creates: Record<string, unknown>[];
   constellations: Map<string, { id: string; name: string; role: string; owner: boolean }>;
   /** Shared copies, by id, with the Constellation they are in. */
   shared: Map<string, FakeMemory & { constellation: string; sourceId: string }>;
@@ -101,12 +116,15 @@ export interface FakeMember {
   joinedAt: string;
 }
 
-const MATCHERS = [...CONTRACT.routes, ...CONTRACT.hive.routes, ...CONTRACT.keys.routes].map(
-  (r) => ({
-    method: r.method,
-    re: new RegExp(`^${r.path.replace(/\?.*$/, '').replace(/:[a-z]+/g, '[^/]+')}$`),
-  }),
-);
+const MATCHERS = [
+  ...CONTRACT.routes,
+  ...CONTRACT.hive.routes,
+  ...CONTRACT.galaxies.routes,
+  ...CONTRACT.keys.routes,
+].map((r) => ({
+  method: r.method,
+  re: new RegExp(`^${r.path.replace(/\?.*$/, '').replace(/:[a-z]+/g, '[^/]+')}$`),
+}));
 
 const RIGHTS: Record<string, string[]> = {
   maintainer: ['read', 'share', 'maintain'],
@@ -171,6 +189,9 @@ export function fakeCloud(key: string): FakeCloud {
     key,
     hive: {
       enabled: false,
+      galaxies: new Map(),
+      galaxyMembers: new Map(),
+      creates: [],
       constellations: new Map(),
       shared: new Map(),
       requests: [],
@@ -226,11 +247,20 @@ export function fakeCloud(key: string): FakeCloud {
             spaces.push({ level: 'constellation', id: x.id, name: x.name, role: x.role, rights });
           }
         }
+        const galaxies = c.hive.enabled
+          ? [...c.hive.galaxies.values()].map((g) => ({
+              id: g.id,
+              name: g.name,
+              slug: g.slug,
+              role: g.role,
+            }))
+          : [];
         return Response.json({
           account: 'a1',
           plan: 'pro',
           via: 'key',
           spaces,
+          ...(galaxies.length > 0 && { galaxies }),
           scope: c.narrowed === true ? 'narrowed' : 'full',
         });
       }
@@ -258,6 +288,7 @@ export function fakeCloud(key: string): FakeCloud {
       }
       const hiveRoute =
         p.startsWith('/v1/constellations') ||
+        p.startsWith('/v1/galaxies') ||
         /^\/v1\/memories\/[^/]+\/shares$/.test(p) ||
         (req.method === 'DELETE' && url.searchParams.has('everywhere'));
       if (hiveRoute && !c.hive.enabled) {
@@ -281,8 +312,41 @@ export function fakeCloud(key: string): FakeCloud {
           })),
         });
       }
+      const galaxyByRef = (ref: string) =>
+        [...c.hive.galaxies.values()].find(
+          (g) => g.id === ref || g.slug === ref || g.name.toLowerCase() === ref.toLowerCase(),
+        );
+      if (p === '/v1/galaxies') {
+        return Response.json({ galaxies: [...c.hive.galaxies.values()] });
+      }
+      const galaxyMatch = /^\/v1\/galaxies\/([^/]+)\/members$/.exec(p);
+      if (galaxyMatch !== null) {
+        const g = galaxyByRef(decodeURIComponent(galaxyMatch[1] ?? ''));
+        if (g === undefined) return err(404, 'not_found', 'No such Galaxy.');
+        return Response.json({
+          galaxy: { id: g.id, name: g.name, slug: g.slug, role: g.role },
+          members: c.hive.galaxyMembers.get(g.id) ?? [],
+        });
+      }
       if (p === '/v1/constellations' && req.method === 'POST') {
-        const b = (await req.json()) as { name: string };
+        const b = (await req.json()) as { name: string; galaxy?: string };
+        c.hive.creates.push(b);
+        if (b.galaxy !== undefined) {
+          // As the API: a change names the Galaxy by id only.
+          const g = c.hive.galaxies.get(b.galaxy);
+          if (g === undefined) {
+            return galaxyByRef(b.galaxy) === undefined
+              ? err(404, 'not_found', 'No such Galaxy.')
+              : err(400, 'galaxy_by_id', 'Name the Galaxy by its id here.');
+          }
+          if (g.role !== 'owner' && g.role !== 'admin') {
+            return err(
+              403,
+              'role_required',
+              `Only an admin of ${g.name} can create Constellations in it.`,
+            );
+          }
+        }
         if (c.hive.constellations.size >= 1) return err(403, 'plan_limit', 'One Constellation.');
         const x = { id: 'c_aaaaaaaaaaaaaaaa', name: b.name, role: 'maintainer', owner: true };
         c.hive.constellations.set(x.id, x);

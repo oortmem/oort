@@ -241,12 +241,36 @@ export type CloudSpace =
   | { level: 'planet' }
   | { level: 'constellation'; id: string; name: string; role: CloudRole; rights: CloudRight[] };
 
+/** A Galaxy (a team, CON-97) and your role in it: owner, admin or member. */
+export type CloudGalaxyRole = 'owner' | 'admin' | 'member';
+
+export interface CloudGalaxy {
+  id: string;
+  name: string;
+  slug: string | null;
+  role: CloudGalaxyRole;
+  members: number;
+  constellations: number;
+}
+
+/** A person in a Galaxy, as its people see them: never an account id. */
+export interface CloudGalaxyMember {
+  /** The id to name this member by (`gm_…`). */
+  member: string;
+  role: CloudGalaxyRole;
+  you: boolean;
+  email: string | null;
+  joinedAt: string;
+}
+
 export interface CloudWhoami {
   account: string;
   plan: string;
   via: string;
   /** What this key (and agent, when one was named) reaches; absent from an older API. */
   spaces?: CloudSpace[];
+  /** Your Galaxies and your role in each (CON-97); absent when you have none. */
+  galaxies?: Pick<CloudGalaxy, 'id' | 'name' | 'slug' | 'role'>[];
   /** `narrowed`: the key was limited to some spaces when it was made. */
   scope?: 'full' | 'narrowed';
 }
@@ -386,7 +410,15 @@ export interface CloudClient {
   }): Promise<RecallResult>;
   /** The account's Constellations (hive beta; 403 `hive_not_enabled` outside it). */
   constellations(): Promise<CloudConstellation[]>;
-  createConstellation(name: string): Promise<CloudConstellation>;
+  /** In a Galaxy (`galaxy`: id, slug or name) when you are its admin or owner (CON-97). */
+  createConstellation(name: string, galaxy?: string): Promise<CloudConstellation>;
+  /** Your Galaxies and your role in each (hive beta; 403 `hive_not_enabled` outside it). */
+  galaxies(): Promise<CloudGalaxy[]>;
+  /** The people of one of your Galaxies, by id, slug or name. */
+  galaxyMembers(galaxy: string): Promise<{
+    galaxy: Pick<CloudGalaxy, 'id' | 'name' | 'slug' | 'role'>;
+    members: CloudGalaxyMember[];
+  }>;
   /**
    * Shares a memory with a Constellation: without `confirm`, a preview of exactly what would be
    * shared (by id or name; a name several of yours share is refused); with it, the copy, which
@@ -573,7 +605,10 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
     constellations: async () =>
       (await json<{ constellations: CloudConstellation[] }>('GET', '/v1/constellations'))
         .constellations,
-    createConstellation: (name) => json('POST', '/v1/constellations', { name }),
+    createConstellation: (name, galaxy) =>
+      json('POST', '/v1/constellations', { name, ...(galaxy !== undefined && { galaxy }) }),
+    galaxies: async () => (await json<{ galaxies: CloudGalaxy[] }>('GET', '/v1/galaxies')).galaxies,
+    galaxyMembers: (g) => json('GET', `/v1/galaxies/${encodeURIComponent(g)}/members`),
     share: (to, b) => json('POST', `/v1/constellations/${encodeURIComponent(to)}/share`, b),
     setProjectPrivacy: (project, priv) =>
       json('PUT', `/v1/projects/${encodeURIComponent(project)}/privacy`, { private: priv }),

@@ -1,5 +1,6 @@
 import { VERSION } from '@oortmem/core';
-import type { CloudSpace } from '../cloud.js';
+import type { CloudSpace, CloudWhoami } from '../cloud.js';
+import { galaxyLine } from './galaxy.js';
 import { uiFor } from '../ui.js';
 import { cloudOf, safeJson, shown, withWired, type Ctx } from '../util.js';
 
@@ -12,7 +13,8 @@ export function spaceLine(s: CloudSpace): string {
 
 /**
  * `oort whoami [--json]`: which store this runs against, as which agent, and the spaces it
- * reaches with your role in each (CON-64). In cloud mode the API answers for this key and agent.
+ * reaches with your role in each (CON-64), and your Galaxies with your role in each (CON-97). In
+ * cloud mode the API answers for this key and agent.
  */
 export async function whoamiCommand(opts: { json?: boolean }, ctx: Ctx): Promise<number> {
   return withWired(ctx, async (w) => {
@@ -36,6 +38,7 @@ export async function whoamiCommand(opts: { json?: boolean }, ctx: Ctx): Promise
         key: me.scope ?? 'full',
         agent,
         spaces: me.spaces ?? [{ level: 'planet' }],
+        galaxies: me.galaxies ?? [],
         version: VERSION,
       };
     }
@@ -68,6 +71,9 @@ export async function whoamiCommand(opts: { json?: boolean }, ctx: Ctx): Promise
           : []),
         ['agent', agent ?? 'none named (reads every space below)'],
         ...spaces.map((line, i) => [i === 0 ? 'spaces' : '', line] as [string, string]),
+        ...((out['galaxies'] as CloudWhoami['galaxies']) ?? []).map(
+          (g, i) => [i === 0 ? 'galaxies' : '', galaxyLine(g)] as [string, string],
+        ),
       ]),
     );
     return 0;
