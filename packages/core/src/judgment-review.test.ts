@@ -594,3 +594,71 @@ describe('H1: who counts as an expert is the home config’s call', () => {
     });
   });
 });
+
+describe('second review: what an agent can still touch', () => {
+  it('review.an-agent-cannot-retract-a-judgment-a-person-confirmed', async () => {
+    const store = createMemoryStore({ now: () => NOW });
+    const agent = await recordJudgment(base(), { ...deps(store), via: 'mcp' });
+    expect(await confirmJudgment(store, grant, agent.memory, 'marcus', NOW)).toBe(true);
+    const confirmed = (await store.get(grant, agent.memory.id))!;
+    // The same item again over MCP: recorded alongside, the confirmed one untouched.
+    const again = await recordJudgment(base({ verdict: 'approved', reason: 'Changed my mind.' }), {
+      ...deps(store),
+      via: 'mcp',
+    });
+    expect(again.outcome).toBe('added');
+    expect(again.supersedes).toBeUndefined();
+    const after = (await store.get(grant, agent.memory.id))!;
+    expect(after).toEqual(confirmed);
+    expect(isActiveJudgment(after, NOW)).toBe(true);
+    // Nor by naming it.
+    await expect(
+      recordJudgment(base({ reason: 'x' }), { ...deps(store), via: 'mcp', corrects: confirmed }),
+    ).rejects.toThrow(/cannot correct one a person recorded or confirmed/);
+    // A person can still correct it.
+    const person = await recordJudgment(base({ verdict: 'approved', reason: 'Source found.' }), {
+      ...deps(store),
+      via: 'cli',
+    });
+    expect(person).toMatchObject({ outcome: 'corrected', supersedes: agent.memory.id });
+  });
+
+  it('review.an-agent-record-leaves-no-tombstone', async () => {
+    const store = createMemoryStore({ now: () => NOW });
+    // An agent records ada's decision, then withdraws it; another agent record is corrected.
+    const a = await recordJudgment(base({ ref: undefined }), { ...deps(store), via: 'mcp' });
+    await withdrawJudgment(store, grant, a.memory, 'agent', NOW);
+    const b = await recordJudgment(base({ ref: 'r9', subject: 'Second post' }), {
+      ...deps(store),
+      via: 'mcp',
+    });
+    await recordJudgment(
+      base({ ref: 'r9', subject: 'Second post', verdict: 'approved', reason: 'ok' }),
+      {
+        ...deps(store),
+        via: 'mcp',
+      },
+    );
+    expect((await store.get(grant, b.memory.id))!.endReason).toBe('corrected');
+    // The genuine decisions, from the expert's own pack and file, still import.
+    const from = createMemoryStore({ now: () => NOW });
+    await recordJudgment(base({ ref: undefined }), { ...deps(from), via: 'cli' });
+    const pack = parseJudgmentPack(
+      formatJudgmentPack(await from.list(grant), { name: 'ada', exportedBy: 'x', exportedAt: NOW }),
+    );
+    const r = await importJudgmentPack(pack, deps(store));
+    expect(r).toMatchObject({ tombstoned: [] });
+    expect(r.added).toHaveLength(1);
+    const rows = await importJudgments([base({ ref: 'r9', subject: 'Second post' })], deps(store));
+    expect(rows).toMatchObject({ tombstoned: 0, added: 1 });
+    // A person's withdrawal still blocks it.
+    const mine = await recordJudgment(base({ ref: 'p1', subject: 'Third post' }), {
+      ...deps(store),
+      via: 'cli',
+    });
+    await withdrawJudgment(store, grant, mine.memory, 'marcus', NOW);
+    expect(
+      await importJudgments([base({ ref: 'p2', subject: 'Third post' })], deps(store)),
+    ).toMatchObject({ tombstoned: 1, added: 0 });
+  });
+});

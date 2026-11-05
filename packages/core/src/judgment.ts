@@ -348,8 +348,13 @@ export interface RecordJudgmentResult {
   embedFailed?: true;
 }
 
-/** Person-recorded or agent-recorded: a write only ever corrects a judgment of its own kind. */
-const recordedBy = (via: JudgmentVia): 'agent' | 'person' => (via === 'mcp' ? 'agent' : 'person');
+/**
+ * Who owns a judgment: a person (recorded by a person, or an agent's record a person confirmed) or
+ * an agent (recorded over MCP, unconfirmed). A write only ever corrects a judgment of its own kind,
+ * so an agent can never retract what a person recorded or confirmed.
+ */
+const recordedBy = (j: Pick<Judgment, 'via' | 'confirmed'>): 'agent' | 'person' =>
+  isUnconfirmedAgentJudgment(j) ? 'agent' : 'person';
 
 /** What the store already holds, read once per record or import. */
 interface JudgmentIndex {
@@ -364,7 +369,7 @@ interface JudgmentIndex {
 const itemKey = (j: Pick<Judgment, 'via' | 'subject' | 'domain' | 'by'>): string | undefined =>
   j.subject.ref === undefined
     ? undefined
-    : JSON.stringify([recordedBy(j.via), j.subject.ref, j.domain, j.by]);
+    : JSON.stringify([recordedBy(j), j.subject.ref, j.domain, j.by]);
 
 async function indexJudgments(store: MemoryStore, grant: Grant, now: Date): Promise<JudgmentIndex> {
   const index: JudgmentIndex = {
@@ -377,9 +382,15 @@ async function indexJudgments(store: MemoryStore, grant: Grant, now: Date): Prom
   for (const m of all) {
     if (m.type !== 'judgment' || m.judgment === undefined) continue;
     const j = m.judgment;
-    index.fingerprints.add(fingerprint(j));
+    // An agent's unconfirmed record is no evidence the decision is already here.
+    if (!isUnconfirmedAgentJudgment(j)) index.fingerprints.add(fingerprint(j));
     if (j.pack !== undefined) index.imported.add(`${j.pack.id}:${j.pack.originalId}`);
-    if (j.withdrawn !== undefined || j.purged !== undefined || m.endReason === 'corrected') {
+    // Only a person's decision leaves a tombstone that blocks imports: an agent withdrawing or
+    // correcting its own unconfirmed record must not keep a genuine expert decision out.
+    if (
+      (j.withdrawn !== undefined || j.purged !== undefined || m.endReason === 'corrected') &&
+      !isUnconfirmedAgentJudgment(j)
+    ) {
       index.tombstones.add(j.tombstone ?? tombstoneKey(j));
     }
     const key = itemKey(j);
@@ -434,8 +445,14 @@ function plan(
   };
   const key = itemKey(j);
   // A pack never corrects anything: it only adds.
-  const prior =
+  const found =
     ctx.corrects ?? (ctx.via === 'pack' || key === undefined ? undefined : index.items.get(key));
+  // An agent never retracts a person-owned judgment (recorded or confirmed by a person): it is
+  // recorded alongside instead. The item key already separates them; this is the second line.
+  const prior =
+    ctx.via === 'mcp' && found !== undefined && recordedBy(found.judgment) === 'person'
+      ? undefined
+      : found;
   if (prior !== undefined && ctx.corrects === undefined && sameDecision(prior.judgment, j)) {
     return { kind: 'unchanged', memory: prior };
   }
@@ -448,10 +465,12 @@ function plan(
   );
   if (prior !== undefined) {
     memory.supersedes = prior.id;
-    index.tombstones.add(prior.judgment.tombstone ?? tombstoneKey(prior.judgment));
+    if (recordedBy(prior.judgment) === 'person') {
+      index.tombstones.add(prior.judgment.tombstone ?? tombstoneKey(prior.judgment));
+    }
   }
   if (key !== undefined && ctx.via !== 'pack') index.items.set(key, memory);
-  index.fingerprints.add(fingerprint(base));
+  if (ctx.via !== 'mcp') index.fingerprints.add(fingerprint(base));
   if (ctx.importedKey !== undefined) index.imported.add(ctx.importedKey);
   return { kind: 'write', planned: { memory, ...(prior !== undefined && { prior }), redacted } };
 }
@@ -531,8 +550,10 @@ export async function recordJudgment(
     deps.corrects !== undefined && deps.corrects.judgment !== undefined
       ? (deps.corrects as Memory & { judgment: Judgment })
       : undefined;
-  if (corrects !== undefined && deps.via === 'mcp' && corrects.judgment.via !== 'mcp') {
-    throw new JudgmentInputError('an agent-recorded judgment cannot correct a person’s');
+  if (corrects !== undefined && deps.via === 'mcp' && recordedBy(corrects.judgment) === 'person') {
+    throw new JudgmentInputError(
+      'an agent-recorded judgment cannot correct one a person recorded or confirmed',
+    );
   }
   const hasRef = typeof input?.ref === 'string' && input.ref.trim() !== '';
   const index =
