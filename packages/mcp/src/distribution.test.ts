@@ -68,7 +68,10 @@ describe('distribution', () => {
         args: ['${__dirname}/server/node_modules/oortmem/dist/main.js', 'mcp'],
       },
     });
-    expect(m.tools.map((t: { name: string }) => t.name)).toEqual([...TOOL_NAMES]);
+    // `share` is offered only by the remote connector, to a grant with memory.share (CON-64).
+    expect(m.tools.map((t: { name: string }) => t.name)).toEqual(
+      TOOL_NAMES.filter((n) => n !== 'share'),
+    );
     // Every env value comes from a user setting; key settings are sensitive and optional.
     for (const [k, v] of Object.entries(m.server.mcp_config.env as Record<string, string>)) {
       expect(v, k).toMatch(/^\$\{user_config\.[a-z_]+\}$/);

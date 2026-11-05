@@ -1,16 +1,22 @@
 export {
   FACT_MAX_CHARS,
+  INCLUDE_LEVELS,
   INSTRUCTIONS,
+  PLANET_ONLY,
+  SHARE_TEXT_MAX_CHARS,
   MEMORY_TYPES,
   REMEMBER_MAX_FACTS,
   TOOLS,
   TOOL_NAMES,
   inputSchemas,
+  inputSchemasFor,
   toolJsonSchemas,
+  type IncludeLevel,
   type ToolAnnotations,
   type ToolDefinition,
   type ToolInput,
   type ToolName,
+  type ToolSpaces,
 } from './tools.js';
 export {
   MemoryToolError,
@@ -20,6 +26,7 @@ export {
   type RecallOutput,
   type RecalledFact,
   type RememberOutcome,
+  type ShareOutcome,
 } from './server.js';
 export {
   TOOL_WIDGETS,

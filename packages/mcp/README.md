@@ -29,7 +29,14 @@ resources linked from the tool's `_meta.ui`, built from the tool's own result, w
 access and no remote scripts. Tool results are the same text either way, and a host that
 declares no MCP Apps support is not offered them. Pass `widgets: false` to turn them off.
 
-Also exported: `TOOLS`, `TOOL_NAMES`, `INSTRUCTIONS`, `inputSchemas` (zod), `toolJsonSchemas()`
+What a connection may reach comes from trusted configuration, never from the model: pass
+`spaces: { include, visibility, share }` (default `PLANET_ONLY`). `recall.include` then lists only
+those levels, `remember.visibility` only `private` and the Constellations named, and the `share`
+tool is offered only when `share` names a Constellation and the backend implements `share()`.
+Arguments a model invents (a `scope`, `project` or `agent`) are dropped before the backend.
+
+Also exported: `TOOLS`, `TOOL_NAMES`, `INSTRUCTIONS`, `inputSchemas` (zod), `inputSchemasFor()`,
+`toolJsonSchemas()`
 (JSON Schema), `REMEMBER_MAX_FACTS` and `FACT_MAX_CHARS`. The skill is at
 `@oortmem/mcp/skill/SKILL.md`.
 
