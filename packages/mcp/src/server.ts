@@ -15,6 +15,10 @@ export interface RecalledFact {
   stale?: true;
   /** Why it matched, e.g. `lexical #1, rerank 0.81`. */
   why: string;
+  /** Where it came from: `from your Planet`, `from this agent's Star`. */
+  from?: string;
+  /** A narrower memory in this result contradicts this one: its id (it ranks first). */
+  overridden_by?: string;
 }
 
 export interface RecallOutput {

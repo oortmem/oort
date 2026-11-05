@@ -76,6 +76,20 @@ describe('drainQueue', () => {
     });
   });
 
+  it('drain.writes-to-claude-codes-star-when-it-keeps-one', async () => {
+    // CON-62: `oort connect claude-code --star` keeps Claude Code's new memories in its Star.
+    const t = tempHome();
+    const deps = { ...makeDeps(t), home: 'star' as const };
+    enqueue(t, 2);
+    expect(await drainQueue(deps)).toEqual({ processed: 2, failed: 0, remaining: 0 });
+    const person = { orgId: 'local', customerId: 'self', projectIds: [null] };
+    const stored = await deps.store.list(localGrant({ ...person, agentId: 'claude-code' }));
+    expect(stored).toHaveLength(2);
+    expect(stored.every((m) => m.address?.level === 'agent')).toBe(true);
+    // Another agent of the same person reads the Planet, never Claude Code's Star.
+    expect(await deps.store.list(localGrant({ ...person, agentId: 'codex' }))).toEqual([]);
+  });
+
   it('drain.oldest-file-first', async () => {
     const t = tempHome();
     const calls = newCalls();

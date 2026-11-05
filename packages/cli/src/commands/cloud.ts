@@ -1,5 +1,12 @@
 import * as path from 'node:path';
-import { exportLine, fitsVersion1, principalGrant, type Memory, type Scope } from '@oortmem/core';
+import {
+  addressOf,
+  exportLine,
+  fitsVersion1,
+  principalGrant,
+  type Memory,
+  type Scope,
+} from '@oortmem/core';
 import {
   OortCloudError,
   cloudUrl,
@@ -37,8 +44,8 @@ async function clientFor(ctx: Ctx): Promise<CloudClient> {
 /**
  * Every memory in the local store (all projects of this machine's principal),
  * oldest first, in export format version 1: the version Oort Cloud's import
- * reads. The local store's principal sees only its own Planet, which version
- * 1 holds exactly.
+ * reads: the person's Planet, which version 1 holds exactly. The acting
+ * agent's Star stays on this machine (it is private to that agent).
  */
 async function localExport(
   w: Wired,
@@ -46,7 +53,9 @@ async function localExport(
 ): Promise<{ manifest: ExportManifest; lines: string[]; withEmbedding: number }> {
   const s = w.scope;
   const grant = principalGrant({ orgId: s.orgId, customerId: s.customerId, agentId: s.agentId });
-  const all = await w.store.list(grant, { validOnly: false });
+  const all = (await w.store.list(grant, { validOnly: false })).filter(
+    (m) => addressOf(m).level === 'user',
+  );
   all.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.id < b.id ? -1 : 1));
   const lines: string[] = [];
   const scopes = new Map<string, Scope>();

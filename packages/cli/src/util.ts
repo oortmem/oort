@@ -42,6 +42,16 @@ export interface Ctx {
   login?: LoginDeps;
   /** The network `oort doctor` probes the relay with; tests inject a fake. */
   fetch?: typeof fetch;
+  /** The agent to act as (`oort --agent <id>`); wiring falls back to `OORT_AGENT`, then `claude-code`. */
+  agent?: string;
+}
+
+/**
+ * The acting agent, for header lines: `as claude-code`, or `as cursor (Star)` when its new
+ * memories stay in its own Star.
+ */
+export function agentLabel(w: Pick<Wired, 'agent'>): string {
+  return `as ${w.agent.id}${w.agent.home === 'star' ? ' (Star)' : ''}`;
 }
 
 /** The scope a command reads, for header lines: `project <id>` or `global`. */
@@ -59,9 +69,20 @@ export function cloudOf(w: Wired): CloudClient | undefined {
   return w.cloud;
 }
 
-/** Wires for the cwd, runs `fn`, and always closes the store. */
-export async function withWired<T>(ctx: Ctx, fn: (w: Wired) => Promise<T>): Promise<T> {
-  const w = await ctx.wire(ctx.io.cwd, { env: ctx.io.env });
+/**
+ * Wires for the cwd, runs `fn`, and always closes the store. `opts.agent` fixes the agent (a
+ * Claude Code transcript import is always Claude Code); otherwise `--agent` decides.
+ */
+export async function withWired<T>(
+  ctx: Ctx,
+  fn: (w: Wired) => Promise<T>,
+  opts: { agent?: string } = {},
+): Promise<T> {
+  const agent = opts.agent ?? ctx.agent;
+  const w = await ctx.wire(ctx.io.cwd, {
+    env: ctx.io.env,
+    ...(agent !== undefined && { agent }),
+  });
   for (const warning of w.warnings) ctx.io.err(`oort: ${warning.message}\n`);
   try {
     return await fn(w);

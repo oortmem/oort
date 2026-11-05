@@ -296,6 +296,7 @@ export async function drainQueue(deps: HookDeps): Promise<DrainResult> {
               config: deps.config,
               now: deps.now?.() ?? new Date(),
               harness: 'claude-code',
+              ...(deps.home !== undefined && { home: deps.home }),
             });
           }
           processed++;

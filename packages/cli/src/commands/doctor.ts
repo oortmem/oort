@@ -1,7 +1,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { filterFor, hookStatus } from '@oortmem/claude-code';
-import { resolveConfig, resolveHome, localGrant, principalGrant } from '@oortmem/core';
+import {
+  addressOf,
+  localGrant,
+  principalGrant,
+  readAgents,
+  resolveConfig,
+  resolveHome,
+} from '@oortmem/core';
 import { listBackups, SCHEMA_VERSION, sqliteSchemaVersion } from '@oortmem/store-sqlite';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
 import { ROLES, ROLE_VENDOR, keyLookup, routeFor, type AdapterRole } from '../credentials.js';
@@ -284,15 +291,25 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
   }
   try {
     // Opening migrates an older store (after copying it): doctor is where the hooks send you.
-    const { count, planet } = await withWired(ctx, async (w) => {
+    const { count, planet, star, agent, stars } = await withWired(ctx, async (w) => {
       const all = await w.store.list(localGrant(filterFor(w.scope)), { validOnly: false });
-      // Every memory this machine's agent wrote lives in your Planet (levels, CON-61).
+      // Your Planet (shared by your agents) and this agent's own Star, every project (CON-62).
       const { orgId, customerId, agentId } = w.scope;
-      const own = await w.store.list(principalGrant({ orgId, customerId, agentId }), {
+      const mine = await w.store.list(principalGrant({ orgId, customerId, agentId }), {
         validOnly: false,
         embeddings: false,
       });
-      return { count: all.length, planet: own.length };
+      const atStar = mine.filter((m) => addressOf(m).level === 'agent').length;
+      const configured = Object.entries(readAgents(w.config.home))
+        .filter(([, a]) => a.star)
+        .map(([id]) => id);
+      return {
+        count: all.length,
+        planet: mine.length - atStar,
+        star: atStar,
+        agent: w.agent,
+        stars: configured,
+      };
     });
     checks.push({
       group: 'store',
@@ -308,11 +325,18 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
         detail: `migrated the store from schema version ${before} to ${SCHEMA_VERSION}; your memories now live in your Planet`,
       });
     }
+    const n = (k: number) => `${k} ${k === 1 ? 'memory' : 'memories'}`;
     checks.push({
       group: 'store',
       name: 'spaces',
       status: 'info',
-      detail: `Planet: ${planet} ${planet === 1 ? 'memory' : 'memories'} (every project)`,
+      detail: `Planet: ${n(planet)} (every project); Star ${agent.id}: ${n(star)}`,
+    });
+    checks.push({
+      group: 'store',
+      name: 'agent',
+      status: 'info',
+      detail: `acting as ${agent.id}${agent.source === 'default' ? '' : ` (from ${agent.source === 'flag' ? '--agent' : 'OORT_AGENT'})`}: reads your Planet and its own Star; new memories go to ${agent.home === 'star' ? `Star ${agent.id}` : 'your Planet'}${stars.length > 0 ? `; agents keeping a Star: ${stars.join(', ')}` : ''}`,
     });
     const backup = listBackups(db, 'pre-v2').at(-1);
     if (backup !== undefined) {

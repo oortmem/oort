@@ -103,6 +103,10 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           ...(!isCurrent(m, now()) && { valid_to: m.validTo }),
           ...(e.stale === true && { stale: true as const }),
           why: why.join(', ') || (e.chain === true ? 'history chain' : 'activation'),
+          ...(m.origin !== undefined && { from: m.origin.from }),
+          ...(m.origin?.overriddenBy !== undefined && {
+            overridden_by: m.origin.overriddenBy.id,
+          }),
         };
       });
       const lexicalOnly = w.mode !== 'cloud' && (w.embed === undefined || w.rerank === undefined);
@@ -203,6 +207,10 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
         note: 'Memories stay on this machine; there is no Oort account in local mode.',
         project: w.scope.projectId ?? null,
         scope: w.scope.projectId === undefined ? 'global' : 'project, plus global memories',
+        agent: w.agent.id,
+        // Every agent reads the person's Planet and its own Star; new memories land in `writes_to`.
+        reads: ['your Planet', `Star ${w.agent.id}`],
+        writes_to: w.agent.home === 'star' ? `Star ${w.agent.id}` : 'your Planet',
         version: VERSION,
         adapters: {
           embed: w.embed !== undefined,

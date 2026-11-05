@@ -5,6 +5,7 @@ import type {
   MemoryStore,
   MemoryWriter,
   Observation,
+  Home,
   RecallResult,
   Reranker,
   ResolvedConfig,
@@ -41,6 +42,8 @@ export interface HookDeps {
   write?: MemoryWriter;
   config: ResolvedConfig;
   scope?: Scope;
+  /** Where Claude Code's new memories land: its Star when configured as one, else the Planet. */
+  home?: Home;
   now?: () => Date;
   log: HookLogger;
   spawnDrain?: () => void;

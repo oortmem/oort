@@ -126,6 +126,8 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         // A schema migration copies and rebuilds the whole store: never inside a hook.
         migrate: false,
         roles: HOOK_ROLES[event],
+        // The hooks are Claude Code's: they always act as that agent.
+        agent: 'claude-code',
       });
       // Config, store open and key lookup (env, then the keychain): the hook log records it (CON-57).
       const wireMs = performance.now() - wireStart;
@@ -136,6 +138,7 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         unavailable: _u,
         close: _c,
         scope: _s,
+        agent,
         warnings: _w,
         store,
         mode: _m,
@@ -149,6 +152,7 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         store: busyAware(store, () => {
           busy = true;
         }),
+        home: agent.home,
         log: { write: (e) => harnessLog.write({ ...e, timings: { ...e.timings, wireMs } }) },
         // The drain runs in the home directory, so it resolves the home config only:
         // project config never affects the write path.

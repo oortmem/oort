@@ -93,6 +93,7 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
       ...adapters,
       config: w.config,
       harness: 'cli',
+      home: w.agent.home,
     });
     ctx.io.out(`${JSON.stringify(result, null, 2)}\n`);
     return 0;

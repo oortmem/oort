@@ -586,13 +586,28 @@ describe('oort bin', () => {
     expect(entry).toEqual({
       type: 'stdio',
       command: bin,
-      args: ['mcp', '--project', '${workspaceFolder}'],
+      args: ['mcp', '--agent', 'cursor', '--project', '${workspaceFolder}'],
     });
     expect(fs.readFileSync(codex, 'utf8')).toContain(`command = ${JSON.stringify(bin)}`);
 
     const again = await oort(s, ['connect', 'cursor']);
     expect(again.exitCode).toBe(0);
     expect(again.stdout).toMatch(/already connected/);
+    expect(again.stdout).toContain('new memories go to your Planet');
+
+    // --star (CON-62): the entry stays as it is; agents.json records the Star.
+    const star = await oort(s, ['connect', 'cursor', '--star']);
+    expect(star.exitCode).toBe(0);
+    expect(star.stdout).toContain('Cursor now keeps its new memories in its own Star');
+    expect(star.stdout).toContain('new memories stay in Star cursor');
+    const agents = path.join(s.oortHome, 'agents.json');
+    expect(JSON.parse(fs.readFileSync(agents, 'utf8'))).toEqual({
+      version: 1,
+      agents: { cursor: { star: true } },
+    });
+    expect(fs.statSync(agents).mode & 0o777).toBe(0o600);
+    const planet = await oort(s, ['connect', 'cursor', '--no-star']);
+    expect(planet.stdout).toContain('Cursor now writes new memories to your Planet');
 
     const un = await oort(s, ['disconnect', 'cursor', 'codex']);
     expect(un.exitCode).toBe(0);
