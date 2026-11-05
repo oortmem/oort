@@ -3,7 +3,7 @@ import { resolveHome, type MemoryStore } from '@oortmem/core';
 import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
 import { cloudRemote } from '../cloud-remote.js';
 import { LOCAL_PROVIDER } from '../local-models.js';
-import { echo, type Ctx } from '../util.js';
+import { echo, starInCloudMessage, type Ctx } from '../util.js';
 import type { AdapterRole, Wired } from '../wire.js';
 
 export const HOOK_COMMAND_EVENTS: readonly HookEvent[] = [
@@ -127,6 +127,8 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         // A schema migration copies and rebuilds the whole store: never inside a hook.
         migrate: false,
         roles: HOOK_ROLES[event],
+        // The hooks are Claude Code's: they always act as that agent.
+        agent: 'claude-code',
       });
       // Config, store open and key lookup (env, then the keychain): the hook log records it (CON-57).
       const wireMs = performance.now() - wireStart;
@@ -137,6 +139,7 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         unavailable: _u,
         close: _c,
         scope: _s,
+        agent,
         warnings: _w,
         store,
         mode: _m,
@@ -147,6 +150,16 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         rerank,
         ...engine
       } = w;
+      // Claude Code keeps a Star, which Oort Cloud does not have: saving would put its memories
+      // on the shared Planet. Fail open: nothing is saved, recall still works, one stderr line.
+      const starInCloud = w.mode === 'cloud' && agent.home === 'star';
+      if (starInCloud && event === 'Stop') io.err(`oort: ${starInCloudMessage(agent.id)}\n`);
+      if (starInCloud && (event === 'Stop' || event === 'drain')) {
+        log(ctx, w, event, 'skipped:star-in-cloud');
+        if (event === 'drain') await w.close();
+        exit('');
+        return;
+      }
       // A local reranker would load in this short-lived process on every prompt: about 450 ms
       // and 600 ms of CPU, often past the rerank budget anyway. The prompt hook ranks by fusion
       // and the relevance gate instead; `oort mcp` and `oort recall` keep it (CON-15).
@@ -161,6 +174,7 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         store: busyAware(store, () => {
           busy = true;
         }),
+        home: agent.home,
         log: { write: (e) => harnessLog.write({ ...e, timings: { ...e.timings, wireMs } }) },
         // The drain runs in the home directory, so it resolves the home config only:
         // project config never affects the write path.

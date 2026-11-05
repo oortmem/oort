@@ -147,7 +147,12 @@ export async function handleUserPromptSubmit(
     const { store, config } = deps;
     const budget = Math.min(config.recall.budgetChars, CONTEXT_MAX_CHARS);
     // Recall returns (and records access for) only what this block can hold (CON-47).
-    const q: RecallQuery = { text: input.prompt, scope: filterFor(scope), budgetChars: budget };
+    const q: RecallQuery = {
+      text: input.prompt,
+      scope: filterFor(scope),
+      budgetChars: budget,
+      ...(deps.home !== undefined && { home: deps.home }),
+    };
     const now = deps.now?.() ?? new Date();
     const degraded: string[] = [];
     const t = performance.now();

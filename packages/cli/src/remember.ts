@@ -45,6 +45,7 @@ export async function rememberFacts(
       ...adapters,
       config: w.config,
       harness: opts.harness,
+      home: w.agent.home,
       ...(opts.now !== undefined && { now: opts.now }),
     });
     const out: RememberResult = { fact: i, outcome: r.outcome };

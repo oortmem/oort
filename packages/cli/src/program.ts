@@ -60,6 +60,14 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description(banner === '' ? 'Oort: tiered memory for coding agents.' : '')
     .version(VERSION)
     .option('--debug', 'print stack traces for unexpected errors')
+    .option(
+      '--agent <id>',
+      'act as this agent (claude-code, codex, cursor, …): it shares your Planet and has its own Star',
+    )
+    .hook('preAction', (cmd) => {
+      const agent = (cmd.opts() as { agent?: string }).agent;
+      if (agent !== undefined) ctx.agent = agent;
+    })
     .exitOverride()
     .configureOutput({
       writeOut: (s) => ctx.io.out(s),
@@ -113,8 +121,12 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('add the oort MCP server to an agent host (backs up the file, prints the diff)')
     .argument('<hosts...>', 'claude-desktop, claude-code, codex, cursor, gemini or vscode')
     .option('--dry-run', 'print the diff without writing')
+    .option('--star', "keep this agent's new memories in its own Star (it still reads your Planet)")
+    .option('--no-star', "write this agent's new memories to your Planet again (the default)")
     .action(
-      run((hosts: string[], o: { dryRun?: boolean }) => connectCommand('connect', hosts, o, ctx)),
+      run((hosts: string[], o: { dryRun?: boolean; star?: boolean }) =>
+        connectCommand('connect', hosts, o, ctx),
+      ),
     );
 
   p.command('disconnect')
@@ -147,6 +159,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--as-of <iso>', 'recall what was true at this time')
     .option('--known-at <iso>', 'recall what was believed at this time, corrected facts included')
     .option('--history', 'recall every version of the matching facts, oldest first')
+    .option('--include <levels>', 'read only these levels: self, planet, star (comma list)')
     .action(run((t: string, o: RecallOptions) => recallCommand(t, o, ctx)));
 
   p.command('explain')
@@ -156,6 +169,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--as-of <iso>', 'explain a recall of what was true at this time')
     .option('--known-at <iso>', 'explain a recall of what was believed at this time')
     .option('--history', 'explain a recall of every version of the matching facts')
+    .option('--include <levels>', 'read only these levels: self, planet, star (comma list)')
     .action(run((q: string, o: RecallOptions) => explainCommand(q, o, ctx)));
 
   p.command('revalidate')

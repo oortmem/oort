@@ -433,12 +433,17 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
       const others = {
         'other-org': { ...localScope(), orgId: 'another-org' },
         'other-customer': { ...localScope(), customerId: 'someone-else' },
-        'other-agent': { ...localScope(), agentId: 'another-agent' },
       };
       await store.upsert(TG, makeMemory({ id: 'mine', text, embedding }));
       for (const [id, scope] of Object.entries(others)) {
         await store.upsert(grantFor(scope), makeMemory({ id, text, embedding, scope }));
       }
+      // Another agent's Star is private to it (CON-62).
+      const star: NodeRef = { level: 'agent', orgId: 'local', agentId: 'another-agent' };
+      await store.upsert(
+        nodesGrant(star),
+        memoryAt('other-agent', star as Address, { agentId: 'another-agent' }, { text, embedding }),
+      );
       expect(ids(await store.lexical(localGrant(LOCAL), 'auth-service-8080', 10))).toEqual([
         'mine',
       ]);
@@ -668,6 +673,13 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
         expect(await nonInterference(make, seed, 60, { multiNode: true })).toBeNull();
       }
     }, 120_000);
+
+    it(`isolation.non-interference-peer-agents-${seeds}-seeds`, async () => {
+      // CON-62: another agent of the same person, working in its own Star, never reaches mine.
+      for (let seed = 1; seed <= seeds; seed++) {
+        expect(await nonInterference(make, seed, 60, { peers: true })).toBeNull();
+      }
+    }, 120_000);
   });
 
   levelConformance(name, make);
@@ -675,6 +687,21 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
 
 /** The owner every level case belongs to or reads as: the local principal. */
 const OWNER = { orgId: 'local', customerId: 'self', agentId: 'claude-code' };
+
+/**
+ * The grant every local caller had before CON-62: the owner's Planet, restricted to memories its
+ * own agent wrote. Kept to prove data written before levels reads back unchanged.
+ */
+const PRE_LEVEL: Grant = nodeGrant({
+  principal: OWNER,
+  read: [
+    {
+      node: { level: 'user', orgId: 'local', customerId: 'self' },
+      projectIds: 'all',
+      authorAgentId: 'claude-code',
+    },
+  ],
+});
 
 const PROVENANCE: Provenance = {
   derivedFrom: [{ vault: 'acct:1', memoryId: 'src-1' }],
@@ -837,13 +864,40 @@ function levelConformance(name: string, make: () => Promise<MemoryStore>): void 
 
     it('levels.pre-level-grants-see-no-other-level', async () => {
       for (const c of cases()) await store.upsert(c.g, c.m);
-      const legacy = [TG, localGrant({ ...OWNER, projectIds: ['p1', null] })];
-      for (const g of legacy) {
-        for (const c of cases()) expect(await store.get(g, c.m.id), c.name).toBeNull();
-        expect(await store.list(g, { validOnly: false })).toEqual([]);
-        expect(await store.lexical(g, 'levelprobe', 50)).toEqual([]);
-        expect(await store.dense(g, vec(1, 1, -1, 2), 50)).toEqual([]);
+      for (const c of cases()) expect(await store.get(PRE_LEVEL, c.m.id), c.name).toBeNull();
+      expect(await store.list(PRE_LEVEL, { validOnly: false })).toEqual([]);
+      expect(await store.lexical(PRE_LEVEL, 'levelprobe', 50)).toEqual([]);
+      expect(await store.dense(PRE_LEVEL, vec(1, 1, -1, 2), 50)).toEqual([]);
+    });
+
+    it('levels.local-grants-see-the-planet-and-their-own-star', async () => {
+      // CON-62: a person's agents share the Planet; each agent's Star is its own.
+      for (const c of cases()) await store.upsert(c.g, c.m);
+      const ccStar: Address = { level: 'agent', orgId: 'local', agentId: 'claude-code' };
+      await store.upsert(
+        nodesGrant(ccStar),
+        memoryAt('cc-star', ccStar, { agentId: 'claude-code' }, { text: 'levelprobe cc star' }),
+      );
+      const asClaude = [TG, localGrant({ ...OWNER, projectIds: ['p1', null] })];
+      for (const g of asClaude) {
+        expect(ids(await store.list(g, { validOnly: false })).sort()).toEqual([
+          'cc-star',
+          'lv-planet-other-author',
+        ]);
+        expect(ids(await store.lexical(g, 'levelprobe', 50)).sort()).toEqual([
+          'cc-star',
+          'lv-planet-other-author',
+        ]);
+        expect(await store.get(g, 'lv-star')).toBeNull();
+        expect(await store.setTier(g, 'lv-star', 'hot')).toBe(false);
       }
+      const asCursor = localGrant({ ...OWNER, agentId: 'cursor', projectIds: ['p1', null] });
+      expect(ids(await store.list(asCursor, { validOnly: false })).sort()).toEqual([
+        'lv-planet-other-author',
+        'lv-star',
+      ]);
+      expect(await store.get(asCursor, 'cc-star')).toBeNull();
+      expect(ids(await store.dense(asCursor, vec(2, 1, -1, 2), 50))).not.toContain('cc-star');
     });
 
     it('levels.existing-data-unchanged', async () => {
@@ -863,16 +917,17 @@ function levelConformance(name: string, make: () => Promise<MemoryStore>): void 
         store,
         makeMemory({ id: 'old-4', text: 'levelprobe cold', embedding: vec(3, 1, -1, 2) }),
       );
+      const g = PRE_LEVEL;
       const view = async () => {
         const out: string[] = [];
         for (const id of ['old-1', 'old-2', 'old-3', 'old-4']) {
-          out.push(render(await store.get(TG, id)), render(await store.coldGet(TG, id)));
+          out.push(render(await store.get(g, id)), render(await store.coldGet(g, id)));
         }
-        out.push((await store.list(TG, { validOnly: false })).map(render).join('|'));
-        out.push(JSON.stringify(await store.dense(TG, vec(1, 1, -1, 2), 10)));
+        out.push((await store.list(g, { validOnly: false })).map(render).join('|'));
+        out.push(JSON.stringify(await store.dense(g, vec(1, 1, -1, 2), 10)));
         // bm25 scores use table-wide statistics: compare which memories match.
         out.push(
-          ids(await store.lexical(TG, 'levelprobe orbit', 50))
+          ids(await store.lexical(g, 'levelprobe orbit', 50))
             .sort()
             .join(','),
         );
@@ -972,7 +1027,12 @@ function levelConformance(name: string, make: () => Promise<MemoryStore>): void 
         'by-cc',
         'by-cursor',
       ]);
-      expect(ids(await store.lexical(TG, 'authorprobe', 10))).toEqual(['by-cc']);
+      expect(ids(await store.lexical(PRE_LEVEL, 'authorprobe', 10))).toEqual(['by-cc']);
+      // The local grant shares the Planet among the person's agents (CON-62).
+      expect(ids(await store.lexical(TG, 'authorprobe', 10)).sort()).toEqual([
+        'by-cc',
+        'by-cursor',
+      ]);
       const cursor = nodeGrant({
         principal: { ...OWNER, agentId: 'cursor' },
         read: [{ node: planet, projectIds: 'all', authorAgentId: 'cursor' }],
@@ -995,7 +1055,8 @@ function levelConformance(name: string, make: () => Promise<MemoryStore>): void 
         read: [...TG.readNodes, { node: nodeOf(hive.address), projectIds: ['p1'] }],
         write: TG.writeNodes,
       });
-      const visible = ['own', hive.m.id].sort();
+      const other = all.find((c) => c.name === 'planet-other-author')!;
+      const visible = ['own', other.m.id, hive.m.id].sort();
       expect(ids(await store.list(g, { validOnly: false })).sort()).toEqual(visible);
       expect(ids(await store.lexical(g, 'levelprobe', 50)).sort()).toEqual(visible);
       const dense = await store.dense(g, vec(9, 1, -1, 2), 50);
@@ -1012,12 +1073,12 @@ function levelConformance(name: string, make: () => Promise<MemoryStore>): void 
         store.upsert(g, memoryAt('new-hive', hive.address, hive.author)),
       ).rejects.toThrow(GrantError);
       // A project outside the pattern stays out.
-      const other = memoryAt(
+      const hiveP2 = memoryAt(
         'hive-p2',
         { ...hive.address, projectId: 'p2' } as Address,
         hive.author,
       );
-      await store.upsert(hive.g, other);
+      await store.upsert(hive.g, hiveP2);
       expect(await store.get(g, 'hive-p2')).toBeNull();
     });
   });

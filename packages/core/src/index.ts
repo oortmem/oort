@@ -8,6 +8,8 @@ export * from './activation.js';
 export * from './adapters.js';
 export * from './embed-cache.js';
 export * from './grant.js';
+export * from './levels.js';
+export * from './agents.js';
 export * from './fusion.js';
 export * from './memory-store.js';
 export * from './tokenize.js';

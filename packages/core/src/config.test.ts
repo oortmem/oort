@@ -38,6 +38,7 @@ describe('config', () => {
       minCoverage: 0.5,
       minDenseScore: 0.6,
       skipRerankWhenConfident: true,
+      specificityPrior: 0,
       lexicalFirst: true,
       rerankBudgetMs: 400,
       queryCacheTtlSec: 600,

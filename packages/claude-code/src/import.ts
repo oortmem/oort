@@ -269,6 +269,7 @@ export async function importTranscripts(
         config: deps.config,
         now: deps.now?.() ?? new Date(),
         harness: 'claude-code',
+        ...(deps.home !== undefined && { home: deps.home }),
       });
     } catch (e) {
       if (isPermanent(e)) {

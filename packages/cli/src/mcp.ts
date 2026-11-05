@@ -1,13 +1,20 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { MemoryToolError, createMcpServer, type MemoryBackend } from '@oortmem/mcp';
-import { filterFor, grantFor } from '@oortmem/claude-code';
+import { filterFor } from '@oortmem/claude-code';
 import { VERSION, activation, isCurrent, scrub, type Memory, localGrant } from '@oortmem/core';
 import { supersedeChain } from './commands/inspect.js';
 import { timeMode } from './commands/explain.js';
 import { runRecall, viewIgnored, type TemporalView } from './commands/recall.js';
 import { rememberFacts } from './remember.js';
 import { OortCloudError, findCloudMemory, type CloudClient } from './cloud.js';
-import { Refusal, findMemory, fixed } from './util.js';
+import {
+  Refusal,
+  findMemory,
+  fixed,
+  refuseStarInCloud,
+  shapeLinks,
+  writeGrantFor,
+} from './util.js';
 import type { Wired } from './wire.js';
 
 /**
@@ -103,6 +110,10 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           ...(!isCurrent(m, now()) && { valid_to: m.validTo }),
           ...(e.stale === true && { stale: true as const }),
           why: why.join(', ') || (e.chain === true ? 'history chain' : 'activation'),
+          ...(m.origin !== undefined && { from: m.origin.from }),
+          ...(m.origin?.overriddenBy !== undefined && {
+            overridden_by: m.origin.overriddenBy.id,
+          }),
         };
       });
       const lexicalOnly = w.mode !== 'cloud' && (w.embed === undefined || w.rerank === undefined);
@@ -134,21 +145,23 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
 
     async forget({ id }) {
       const m = await findMemory(w.store, filter, id);
-      await w.store.forget(grantFor(w.scope), m.id);
+      await w.store.forget(writeGrantFor(w, m), m.id);
       return { forgotten: m.id };
     },
 
     async pin({ id, pinned }) {
       const m = await findMemory(w.store, filter, id);
       if (m.pinned === pinned) return { id: m.id, pinned, changed: false };
-      await w.store.upsert(grantFor(w.scope), { ...m, pinned, updatedAt: now().toISOString() });
+      await w.store.upsert(writeGrantFor(w, m), { ...m, pinned, updatedAt: now().toISOString() });
       return { id: m.id, pinned, changed: true };
     },
 
     async explain({ id }) {
       const at = now();
-      const m = await findMemory(w.store, filter, id);
-      const { links, hidden } = await supersedeChain(w.store, m, filter);
+      // Shaped: a contradiction naming a memory this agent cannot read (another Star) is dropped.
+      const raw = await findMemory(w.store, filter, id);
+      const m = await shapeLinks(w.store, filter, raw);
+      const { links, hidden } = await supersedeChain(w.store, raw, filter);
       return {
         memory: {
           id: m.id,
@@ -203,6 +216,11 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
         note: 'Memories stay on this machine; there is no Oort account in local mode.',
         project: w.scope.projectId ?? null,
         scope: w.scope.projectId === undefined ? 'global' : 'project, plus global memories',
+        // A named agent reads the person's Planet and its own Star; new memories land in
+        // `writes_to`. With no --agent (an entry from before agents) it is anonymous: Planet only.
+        agent: w.agent.source === 'none' ? null : w.agent.id,
+        reads: w.agent.source === 'none' ? ['your Planet'] : ['your Planet', `Star ${w.agent.id}`],
+        writes_to: w.agent.home === 'star' ? `Star ${w.agent.id}` : 'your Planet',
         version: VERSION,
         adapters: {
           embed: w.embed !== undefined,
@@ -237,6 +255,7 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
     recall: local.recall,
 
     async remember({ facts, type }) {
+      refuseStarInCloud(w);
       // The same turn the local engine observes for a fact, sent to the cloud's write path.
       const hint = type === undefined ? '' : ` (a ${type} fact)`;
       const results = [];
@@ -261,12 +280,14 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
     },
 
     async forget({ id }) {
+      refuseStarInCloud(w);
       const m = await findCloudMemory(client, id);
       await client.forget(m.id);
       return { forgotten: m.id };
     },
 
     async pin({ id, pinned }) {
+      refuseStarInCloud(w);
       const m = await findCloudMemory(client, id);
       if (m.pinned === pinned) return { id: m.id, pinned, changed: false };
       await client.pin(m.id, pinned);

@@ -48,8 +48,26 @@ export function isoMemory(id: string, scope: Scope, marker: string, embedding?: 
 
 const principal = (s: Scope) => ({ orgId: s.orgId, customerId: s.customerId, agentId: s.agentId });
 
-/** The narrowest grant for one scope (its principal and its one project or global). */
+/**
+ * The narrowest grant for one scope: its Planet, its one project (or global),
+ * memories its own agent wrote. (The pre-CON-62 local grant; today's
+ * `localGrant` also covers the Planet's other authors and the agent's Star.)
+ */
 export function soleGrant(s: Scope): Grant {
+  return nodeGrant({
+    principal: principal(s),
+    read: [
+      {
+        node: { level: 'user', orgId: s.orgId, customerId: s.customerId },
+        projectIds: [s.projectId ?? null],
+        authorAgentId: s.agentId,
+      },
+    ],
+  });
+}
+
+/** The local grant of `ISO_SCOPES.mine`'s agent for its one project: Planet plus its own Star. */
+export function defaultGrant(s: Scope): Grant {
   return localGrant({ ...principal(s), projectIds: [s.projectId ?? null] });
 }
 
@@ -118,8 +136,10 @@ const ISO_PRINCIPAL = { orgId: 'local', customerId: 'self', agentId: 'claude-cod
 /**
  * Victims at the other levels, each next to the caller's own Planet: a Planet
  * memory another of the caller's agents wrote, the caller's agent's own Star,
- * an Orbit, a Flyby, a Constellation and a Galaxy root of an organisation, and
- * one of the caller's own owner. A pre-level grant sees none of them.
+ * another agent's Star (in the caller's project and global), an Orbit, a
+ * Flyby, a Constellation and a Galaxy root of an organisation, and one of the
+ * caller's own owner. The narrowest grant sees none of them; the local grant
+ * sees only those in `DEFAULT_COVERS`.
  */
 export const ISO_LEVELS: Record<string, { address: Address; author: Author }> = {
   planetOtherAuthor: {
@@ -129,6 +149,14 @@ export const ISO_LEVELS: Record<string, { address: Address; author: Author }> = 
   star: {
     address: { level: 'agent', orgId: 'local', agentId: 'claude-code', projectId: 'pa' },
     author: { agentId: 'claude-code' },
+  },
+  otherStar: {
+    address: { level: 'agent', orgId: 'local', agentId: 'cursor', projectId: 'pa' },
+    author: { agentId: 'cursor' },
+  },
+  otherStarGlobal: {
+    address: { level: 'agent', orgId: 'local', agentId: 'cursor' },
+    author: { agentId: 'cursor' },
   },
   orbit: {
     address: { level: 'agent-user', orgId: 'local', agentId: 'claude-code', customerId: 'self' },
@@ -160,12 +188,26 @@ export const ISO_LEVELS: Record<string, { address: Address; author: Author }> = 
 };
 
 /**
+ * The victims the local grant of `ISO_SCOPES.mine` legitimately covers (CON-62): Planet memories
+ * the person's other agents wrote, and its agent's own Star. Never another agent's Star.
+ */
+export const DEFAULT_COVERS: readonly string[] = Object.freeze([
+  'otherAgent',
+  'planetOtherAuthor',
+  'star',
+]);
+
+/**
  * Every `MemoryStore` method, called with a grant for `ISO_SCOPES.mine`
  * against memories (warm and cold) in each other scope: nothing is seen,
  * nothing changes, and nothing in a return value or error tells the cases
  * apart. Also the write-side rules (`GrantError` for an out-of-grant scope
  * and for an id that exists elsewhere, atomic batches, address changes),
  * read/write splits, cursor namespaces and rejection of non-grants.
+ *
+ * Run twice: as the narrowest grant (every victim out of reach), and as the
+ * local grant (`localGrant`, Planet plus own Star), for which every victim
+ * but `DEFAULT_COVERS` is out of reach, other agents' Stars included.
  */
 export async function isolationViolations(make: () => Promise<MemoryStore>): Promise<string[]> {
   const out: string[] = [];
@@ -211,57 +253,14 @@ export async function isolationViolations(make: () => Promise<MemoryStore>): Pro
             `${render(await store.get(v.g, v.m.id))}|${render(await store.coldGet(v.g, v.m.id))}`,
         ),
       );
-    const before = await snapshot();
-
-    for (const v of victims) {
-      const id = v.m.id;
-      const fail = (what: string) => out.push(`${v.name}: ${what}`);
-      if ((await store.get(mine, id)) !== null) fail('get returned it');
-      if ((await store.coldGet(mine, id)) !== null) fail('coldGet returned it');
-      const lex = await store.lexical(mine, 'shared canary', 50);
-      if (lex.some((h) => h.id === id)) fail('lexical returned it');
-      const den = await store.dense(mine, v.m.embedding ?? vec(1), 50);
-      if (den.some((h) => h.id === id)) fail('dense returned it');
-      for (const validOnly of [true, false]) {
-        if ((await store.list(mine, { validOnly })).some((m) => m.id === id))
-          fail('list returned it');
-      }
-      await store.recordAccess(mine, [id], new Date(NOW));
-      if ((await store.setTier(mine, id, 'hot')) !== false) fail('setTier reported a write');
-      if ((await store.setTier(mine, id, 'hot', v.m)) !== false)
-        fail('guarded setTier reported a write');
-      const exp = await store.expireMany(mine, [v.m], new Date(NOW));
-      if (!exp.skipped.includes(id)) fail('expireMany did not skip it');
-      for (const r of [await store.coldPut(mine, v.m), await store.coldPutMany(mine, [v.m])]) {
-        if (!r.skipped.includes(id)) fail('coldPut did not skip it');
-      }
-      await store.forget(mine, id);
-      const direct = await settle(store.upsert(mine, v.m));
-      if (!('err' in direct) || !(direct.err instanceof GrantError)) {
-        fail('upsert of its own scope was not refused with GrantError');
-      }
-      const moved = await settle(store.upsert(mine, movedTo(v.m, ISO_SCOPES.mine)));
-      if (!('err' in moved) || !(moved.err instanceof GrantError)) {
-        fail('upsert moving its id into my scope was not refused with GrantError');
-      } else if (
-        'err' in direct &&
-        (direct.err as Error).message !== (moved.err as Error).message
-      ) {
-        fail('the two refusals have different messages');
-      }
-      const batch = await settle(
-        store.upsertMany(mine, [
-          isoMemory(`batch-${id}`, ISO_SCOPES.mine, 'batch'),
-          movedTo(v.m, ISO_SCOPES.mine),
-        ]),
+    for (const [caller, grant, covered] of [
+      ['narrowest', mine, []],
+      ['local', defaultGrant(ISO_SCOPES.mine), DEFAULT_COVERS],
+    ] as const) {
+      const reach = victims.filter(
+        (v) => !covered.some((c) => v.name === `victim-${c}-warm` || v.name === `victim-${c}-cold`),
       );
-      if (!('err' in batch)) fail('a batch reaching it was not refused');
-      if ((await store.get(mine, `batch-${id}`)) !== null)
-        fail('a refused batch wrote part of itself');
-    }
-    const after = await snapshot();
-    for (const [i, v] of victims.entries()) {
-      if (before[i] !== after[i]) out.push(`${v.name}: changed through a grant that cannot see it`);
+      out.push(...(await victimViolations(store, caller, grant, reach, snapshot, victims)));
     }
 
     // An address change of my own record is refused too, and leaves it as it was.
@@ -353,6 +352,69 @@ export async function isolationViolations(make: () => Promise<MemoryStore>): Pro
   return out;
 }
 
+/** One caller's pass over the victims it must not reach: nothing seen, nothing changed. */
+async function victimViolations(
+  store: MemoryStore,
+  caller: string,
+  mine: Grant,
+  victims: { name: string; m: Memory; g: Grant; cold: boolean }[],
+  snapshot: () => Promise<string[]>,
+  all: { name: string }[],
+): Promise<string[]> {
+  const out: string[] = [];
+  const vec = (n: number) => Int8Array.from([n, 1, 1, 1]);
+  const before = await snapshot();
+  for (const v of victims) {
+    const id = v.m.id;
+    const fail = (what: string) => out.push(`${caller}: ${v.name}: ${what}`);
+    if ((await store.get(mine, id)) !== null) fail('get returned it');
+    if ((await store.coldGet(mine, id)) !== null) fail('coldGet returned it');
+    const lex = await store.lexical(mine, 'shared canary', 50);
+    if (lex.some((h) => h.id === id)) fail('lexical returned it');
+    const den = await store.dense(mine, v.m.embedding ?? vec(1), 50);
+    if (den.some((h) => h.id === id)) fail('dense returned it');
+    for (const validOnly of [true, false]) {
+      if ((await store.list(mine, { validOnly })).some((m) => m.id === id))
+        fail('list returned it');
+    }
+    await store.recordAccess(mine, [id], new Date(NOW));
+    if ((await store.setTier(mine, id, 'hot')) !== false) fail('setTier reported a write');
+    if ((await store.setTier(mine, id, 'hot', v.m)) !== false)
+      fail('guarded setTier reported a write');
+    const exp = await store.expireMany(mine, [v.m], new Date(NOW));
+    if (!exp.skipped.includes(id)) fail('expireMany did not skip it');
+    for (const r of [await store.coldPut(mine, v.m), await store.coldPutMany(mine, [v.m])]) {
+      if (!r.skipped.includes(id)) fail('coldPut did not skip it');
+    }
+    await store.forget(mine, id);
+    const direct = await settle(store.upsert(mine, v.m));
+    if (!('err' in direct) || !(direct.err instanceof GrantError)) {
+      fail('upsert of its own scope was not refused with GrantError');
+    }
+    const moved = await settle(store.upsert(mine, movedTo(v.m, ISO_SCOPES.mine)));
+    if (!('err' in moved) || !(moved.err instanceof GrantError)) {
+      fail('upsert moving its id into my scope was not refused with GrantError');
+    } else if ('err' in direct && (direct.err as Error).message !== (moved.err as Error).message) {
+      fail('the two refusals have different messages');
+    }
+    const batch = await settle(
+      store.upsertMany(mine, [
+        isoMemory(`batch-${id}`, ISO_SCOPES.mine, 'batch'),
+        movedTo(v.m, ISO_SCOPES.mine),
+      ]),
+    );
+    if (!('err' in batch)) fail('a batch reaching it was not refused');
+    if ((await store.get(mine, `batch-${id}`)) !== null)
+      fail('a refused batch wrote part of itself');
+  }
+  const after = await snapshot();
+  for (const [i, v] of all.entries()) {
+    if (before[i] !== after[i])
+      out.push(`${caller}: ${v.name}: changed through a grant that cannot see it`);
+  }
+  return out;
+}
+
 /** A small seeded PRNG (mulberry32), so a failing seed replays exactly. */
 export function seededRng(seed: number): { int(n: number): number; pick<T>(xs: readonly T[]): T } {
   let a = seed >>> 0;
@@ -381,7 +443,9 @@ const WORDS = ['orbit', 'comet', 'nebula', 'pulsar', 'quasar', 'photon', 'kuiper
  * keys (callers use UUIDs), so a tenant that reuses another tenant's id is
  * refused, which is a collision, not a leak of content.
  */
-function opSequence(seed: number, steps: number, multiNode: boolean): Op[] {
+function opSequence(seed: number, steps: number, mode: 'single' | 'multi' | 'peers'): Op[] {
+  if (mode === 'peers') return peerSequence(seed, steps);
+  const multiNode = mode === 'multi';
   const rng = seededRng(seed);
   const planetA = ['pa', 'pa2', null].map(
     (projectId) => (id: string, t: string, e: Int8Array) =>
@@ -501,6 +565,98 @@ function opSequence(seed: number, steps: number, multiNode: boolean): Op[] {
 }
 
 /**
+ * Two agents of one person (see `nonInterference`'s `peers`): A is `claude-code`, B is `cursor`,
+ * each with its local grant over projects pa, pa2 and global.
+ */
+function peerSequence(seed: number, steps: number): Op[] {
+  const rng = seededRng(seed);
+  const person = { orgId: 'local', customerId: 'self' };
+  const projects = ['pa', 'pa2', null] as const;
+  const aGrant = localGrant({ ...person, agentId: 'claude-code', projectIds: [...projects] });
+  const bGrant = localGrant({ ...person, agentId: 'cursor', projectIds: [...projects] });
+  const star = (agentId: string, projectId: string | null): Address => ({
+    level: 'agent',
+    orgId: 'local',
+    agentId,
+    ...(projectId !== null && { projectId }),
+  });
+  const ops: Op[] = [];
+  const aIds: string[] = [];
+  const aStarIds: string[] = [];
+  const bIds: string[] = [];
+  const text = () => `${rng.pick(WORDS)} ${rng.pick(WORDS)} ${rng.pick(WORDS)}`;
+  const emb = () => Int8Array.from([rng.int(9) - 4, rng.int(9) - 4, rng.int(9) - 4, 1]);
+  for (let i = 0; i < steps; i++) {
+    const who = rng.int(2) === 0 ? 'A' : 'B';
+    const grant = who === 'A' ? aGrant : bGrant;
+    const own = who === 'A' ? aIds : bIds;
+    // B aims at A's Star ids half the time (A's Planet is B's to share); A only at its own.
+    const target = () =>
+      who === 'B' && aStarIds.length > 0 && rng.int(2) === 0
+        ? rng.pick(aStarIds)
+        : own.length > 0
+          ? rng.pick(own)
+          : 'none';
+    const kind = rng.int(12);
+    if (kind <= 2 || own.length === 0) {
+      const id = `${who}-${i}`;
+      own.push(id);
+      const projectId = rng.pick(projects);
+      let m: Memory;
+      if (who === 'B') {
+        m = isoAt(id, star('cursor', projectId), { agentId: 'cursor' }, text(), emb());
+      } else if (rng.int(2) === 0) {
+        aStarIds.push(id);
+        m = isoAt(id, star('claude-code', projectId), { agentId: 'claude-code' }, text(), emb());
+      } else {
+        const scope = {
+          ...person,
+          agentId: 'claude-code',
+          ...(projectId !== null && { projectId }),
+        };
+        m = isoMemory(id, scope, text(), emb());
+      }
+      const salted = { ...m, salience: rng.int(10) / 10 };
+      ops.push({ who, run: (s) => s.upsert(grant, salted) });
+    } else if (kind === 3) {
+      const id = target();
+      ops.push({ who, run: async (s) => render(await s.get(grant, id)) });
+    } else if (kind === 4) {
+      const q = text();
+      ops.push({ who, run: async (s) => (await s.lexical(grant, q, 100)).map((h) => h.id).sort() });
+    } else if (kind === 5) {
+      const v = emb();
+      ops.push({ who, run: async (s) => s.dense(grant, v, 5) });
+    } else if (kind === 6) {
+      ops.push({ who, run: async (s) => (await s.list(grant, { validOnly: false })).map(render) });
+    } else if (kind === 7) {
+      const id = target();
+      ops.push({
+        who,
+        run: async (s) => {
+          const m = await s.get(grant, id);
+          return m === null ? 'none' : s.coldPut(grant, m);
+        },
+      });
+    } else if (kind === 8) {
+      const id = target();
+      ops.push({ who, run: async (s) => render(await s.coldGet(grant, id)) });
+    } else if (kind === 9) {
+      const id = target();
+      const tier = rng.pick(['hot', 'warm'] as const);
+      ops.push({ who, run: (s) => s.setTier(grant, id, tier) });
+    } else if (kind === 10) {
+      const ids = [target(), target()];
+      ops.push({ who, run: (s) => s.recordAccess(grant, ids, new Date(NOW)) });
+    } else {
+      const id = target();
+      ops.push({ who, run: (s) => s.forget(grant, id) });
+    }
+  }
+  return ops;
+}
+
+/**
  * Non-interference: tenant A's observable results (return values, errors,
  * order and scores) are the same whether or not tenant B ran its operations
  * in between, B's attempts on A's ids included. Returns null, or a message
@@ -514,14 +670,23 @@ function opSequence(seed: number, steps: number, multiNode: boolean): Op[] {
  * `multiNode`: A's grant spans its Planet, its agent's Star and a
  * Constellation of another owner; B's spans its own Planet and a sibling
  * Constellation. Same property.
+ *
+ * `peers` (CON-62): A and B are two agents of one person, each with the local
+ * grant (the shared Planet plus its own Star). A writes to the Planet and its
+ * Star; B writes only to its own Star and aims every method at A's Star ids.
+ * Nothing B does through its Star reaches A.
  */
 export async function nonInterference(
   make: () => Promise<MemoryStore>,
   seed: number,
   steps: number,
-  opts: { multiNode?: boolean } = {},
+  opts: { multiNode?: boolean; peers?: boolean } = {},
 ): Promise<string | null> {
-  const ops = opSequence(seed, steps, opts.multiNode === true);
+  const ops = opSequence(
+    seed,
+    steps,
+    opts.peers === true ? 'peers' : opts.multiNode === true ? 'multi' : 'single',
+  );
   const observe = async (withB: boolean): Promise<string[]> => {
     const s = await make();
     const seen: string[] = [];

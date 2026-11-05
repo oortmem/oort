@@ -43,15 +43,28 @@ export interface GrantFilter extends Readonly<Principal> {
  * One node a grant covers (CON-61): the node, the project bindings inside it,
  * and optionally one author. Matching is structural and exact on every field
  * (never a prefix). `authorAgentId` restricts the pattern to memories that
- * agent wrote; the pre-level constructors (`localGrant`, `principalGrant`)
- * set it to the principal's agent, so they see exactly what they saw before
- * levels existed.
+ * agent wrote. The local constructors (`localGrant`, `principalGrant`) name
+ * the principal's Planet with no author restriction (a person's agents share
+ * their Planet, CON-62) and the principal's agent's own Star.
  */
 export interface NodePattern {
   readonly node: NodeRef;
   readonly projectIds: GrantProjects;
   readonly authorAgentId?: string;
 }
+
+/**
+ * Where an agent's new memories land by default (its home node, spec 5.1):
+ * the person's Planet, or the agent's own Star when it is configured as one.
+ */
+export type Home = 'planet' | 'star';
+
+/**
+ * The agent id of a caller that named no agent (an MCP entry written before agents existed, a
+ * terminal without `--agent`). It reads and writes the person's Planet only: it has no Star, so
+ * it can neither see nor create one. No configured agent may use this id.
+ */
+export const ANONYMOUS_AGENT = 'anonymous';
 
 /**
  * The permission every `MemoryStore` method takes. Opaque: built only by
@@ -75,15 +88,24 @@ export class Grant {
   readonly write: GrantFilter;
   readonly readNodes: readonly NodePattern[];
   readonly writeNodes: readonly NodePattern[];
+  /**
+   * The node new memories are written to (the home node): the principal's
+   * Planet unless the agent keeps a Star. Engine code that creates a memory
+   * (observe, remember) addresses it here; edits of existing memories keep
+   * their own address. Covered by `writeNodes` whenever they are not empty.
+   */
+  readonly home: NodeRef;
 
   private constructor(
     principal: Principal,
     readNodes: readonly NodePattern[],
     writeNodes: readonly NodePattern[],
+    home: NodeRef | undefined,
   ) {
     this.principal = Object.freeze({ ...principal });
     this.readNodes = Object.freeze(readNodes.map(freezePattern));
     this.writeNodes = Object.freeze(writeNodes.map(freezePattern));
+    this.home = Object.freeze(homeNode(principal, this.writeNodes, home));
     this.read = Object.freeze({
       ...principal,
       projectIds: legacyProjects(principal, this.readNodes),
@@ -96,19 +118,43 @@ export class Grant {
   }
 
   /** @internal Use `localGrant` or `principalGrant`. */
-  static issue(principal: Principal, read: GrantProjects, write: GrantProjects): Grant {
+  static issue(
+    principal: Principal,
+    read: GrantProjects,
+    write: GrantProjects,
+    home: Home = 'planet',
+  ): Grant {
     checkPrincipal(principal);
-    return new Grant(principal, [ownPlanet(principal, read)], [ownPlanet(principal, write)]);
+    const anonymous = principal.agentId === ANONYMOUS_AGENT;
+    if (anonymous && home === 'star') throw new RangeError('grant: an anonymous agent has no Star');
+    const readSide = anonymous
+      ? [ownPlanet(principal, read)]
+      : [ownPlanet(principal, read), ownStar(principal, read)];
+    // An agent whose home is its Star may read the shared Planet but never change it: its writes
+    // (new memories, forget, pin, tiers, confirmations) stay in its Star.
+    const writeSide =
+      home === 'star'
+        ? [ownStar(principal, write)]
+        : anonymous
+          ? [ownPlanet(principal, write)]
+          : [ownPlanet(principal, write), ownStar(principal, write)];
+    return new Grant(
+      principal,
+      readSide,
+      writeSide,
+      home === 'star' ? starNode(principal) : planetNode(principal),
+    );
   }
 
-  /** @internal Use `nodeGrant`. */
+  /** @internal Use `nodeGrant` or `narrowGrant`. */
   static issueNodes(
     principal: Principal,
     read: readonly NodePattern[],
     write: readonly NodePattern[],
+    home?: NodeRef,
   ): Grant {
     checkPrincipal(principal);
-    return new Grant(principal, read, write);
+    return new Grant(principal, read, write, home);
   }
 
   /** True for a real grant (not a copy, not a look-alike). */
@@ -125,13 +171,43 @@ function checkPrincipal(principal: Principal): void {
   }
 }
 
-/** The pre-level grant side: the principal's own Planet, written by its own agent. */
+/**
+ * The local grant side's Planet: the principal's own Planet, whichever of the
+ * person's agents wrote the memory (CON-62; before it, the pattern was
+ * restricted to the principal's own agent).
+ */
 function ownPlanet(p: Principal, projectIds: GrantProjects): NodePattern {
-  return {
-    node: { level: 'user', orgId: p.orgId, customerId: p.customerId },
-    projectIds,
-    authorAgentId: p.agentId,
-  };
+  return { node: planetNode(p), projectIds };
+}
+
+/** The principal's agent's own Star: private to that agent, never another's. */
+function ownStar(p: Principal, projectIds: GrantProjects): NodePattern {
+  return { node: starNode(p), projectIds };
+}
+
+/** The Star of a principal's agent (owned by the principal's owner). */
+export function starNode(p: Pick<Principal, 'orgId' | 'agentId'>): NodeRef {
+  return { level: 'agent', orgId: p.orgId, agentId: p.agentId };
+}
+
+/**
+ * `home` checked against the write side, or the default: the principal's
+ * Planet when the write side names it, else the first node written, else the
+ * Planet (a read-only grant writes nothing anyway).
+ */
+function homeNode(p: Principal, write: readonly NodePattern[], home: NodeRef | undefined): NodeRef {
+  if (home !== undefined) {
+    assertNode(home);
+    const { level: _l, ...rest } = home;
+    const node = { level: home.level, ...rest } as NodeRef;
+    if (write.length > 0 && !write.some((w) => nodeKey(w.node) === nodeKey(node))) {
+      throw new RangeError('grant: home must be a node the grant writes');
+    }
+    return node;
+  }
+  const planet = planetNode(p);
+  if (write.length === 0 || write.some((w) => nodeKey(w.node) === nodeKey(planet))) return planet;
+  return write[0]!.node;
 }
 
 function freezePattern(p: NodePattern): NodePattern {
@@ -155,12 +231,16 @@ function freezePattern(p: NodePattern): NodePattern {
 
 /**
  * The projects of `patterns` that a pre-level reader may assume: those of
- * patterns naming exactly the principal's Planet, restricted to its agent.
- * Never wider than the patterns themselves.
+ * patterns naming exactly the principal's Planet and covering its agent's
+ * writing (no author restriction, or that agent). Never wider than the
+ * patterns themselves.
  */
 function legacyProjects(p: Principal, patterns: readonly NodePattern[]): GrantProjects {
   const own = nodeKey({ level: 'user', orgId: p.orgId, customerId: p.customerId });
-  const mine = patterns.filter((x) => x.authorAgentId === p.agentId && nodeKey(x.node) === own);
+  const mine = patterns.filter(
+    (x) =>
+      (x.authorAgentId === undefined || x.authorAgentId === p.agentId) && nodeKey(x.node) === own,
+  );
   if (mine.some((x) => x.projectIds === 'all')) return 'all';
   return Object.freeze([
     ...new Set(mine.flatMap((x) => x.projectIds as readonly (string | null)[])),
@@ -183,11 +263,22 @@ function samePrincipal(a: Principal, b: Principal): boolean {
 }
 
 /**
- * The grant for today's single-principal callers: read exactly what `read`
- * names (a one-node grant), and write the same unless `opts.write` narrows it.
- * `write` must name the same principal as `read`.
+ * The grant for one agent of one person (CON-62): read and write the
+ * person's Planet (memories any of their agents wrote) and this agent's own
+ * Star, in the projects `read` names; `opts.write` may narrow the write side.
+ * Another agent's Star is never covered. `opts.home` picks where new memories
+ * land: the Planet (default) or the agent's Star; with `star` the Planet is
+ * read-only (the agent writes only its Star). `ANONYMOUS_AGENT` gets the
+ * Planet alone. `write` must name the same principal as `read`.
+ *
+ * Before CON-62 the Planet side was restricted to memories the principal's
+ * own agent wrote. Every local memory so far was written as `claude-code`,
+ * so a local store sees exactly what it saw; nothing is rewritten.
  */
-export function localGrant(read: ScopeFilter, opts: { write?: ScopeFilter } = {}): Grant {
+export function localGrant(
+  read: ScopeFilter,
+  opts: { write?: ScopeFilter; home?: Home } = {},
+): Grant {
   const write = opts.write ?? read;
   // Only principalGrant widens to every project; a list is required here.
   if (!Array.isArray(read.projectIds) || !Array.isArray(write.projectIds)) {
@@ -196,12 +287,26 @@ export function localGrant(read: ScopeFilter, opts: { write?: ScopeFilter } = {}
   if (!samePrincipal(read, write)) {
     throw new RangeError('localGrant: read and write must name the same org, customer and agent');
   }
-  return Grant.issue(read, read.projectIds, write.projectIds);
+  return Grant.issue(
+    { orgId: read.orgId, customerId: read.customerId, agentId: read.agentId },
+    read.projectIds,
+    write.projectIds,
+    opts.home,
+  );
 }
 
-/** Every project of `p` (and its global memories), for read and write: maintenance such as export. */
-export function principalGrant(p: Principal): Grant {
-  return Grant.issue(p, 'all', 'all');
+/**
+ * Every project of `p` (and its global memories), for read and write:
+ * maintenance such as export. Covers the same nodes as `localGrant`: the
+ * person's Planet and this agent's own Star.
+ */
+export function principalGrant(p: Principal, opts: { home?: Home } = {}): Grant {
+  return Grant.issue(
+    { orgId: p.orgId, customerId: p.customerId, agentId: p.agentId },
+    'all',
+    'all',
+    opts.home,
+  );
 }
 
 /**
@@ -216,11 +321,44 @@ export function nodeGrant(opts: {
   principal: Principal;
   read: readonly NodePattern[];
   write?: readonly NodePattern[];
+  /** Where new memories land (default: the principal's Planet if written, else the first node written). */
+  home?: NodeRef;
 }): Grant {
   if (!Array.isArray(opts.read) || (opts.write !== undefined && !Array.isArray(opts.write))) {
     throw new TypeError('nodeGrant: read and write must be arrays of node patterns');
   }
-  return Grant.issueNodes(opts.principal, opts.read, opts.write ?? opts.read);
+  return Grant.issueNodes(opts.principal, opts.read, opts.write ?? opts.read, opts.home);
+}
+
+/**
+ * `g` narrowed to the nodes `keep` names (by `nodeKey`), on both sides: the
+ * grant recall uses for one node's first stage. Never wider than `g`. The
+ * home stays when it is kept, else the default for what remains.
+ */
+export function narrowGrant(g: Grant, keep: readonly NodeRef[]): Grant {
+  assertGrant(g);
+  const keys = new Set(keep.map((n) => nodeKey(n)));
+  const read = g.readNodes.filter((p) => keys.has(nodeKey(p.node)));
+  const write = g.writeNodes.filter((p) => keys.has(nodeKey(p.node)));
+  const home = write.some((p) => nodeKey(p.node) === nodeKey(g.home)) ? g.home : undefined;
+  return Grant.issueNodes(g.principal, read, write, home);
+}
+
+/** The distinct nodes `g` reads, in the order its patterns name them. */
+export function readableNodes(g: Grant): NodeRef[] {
+  assertGrant(g);
+  const seen = new Map<string, NodeRef>();
+  for (const p of g.readNodes) if (!seen.has(nodeKey(p.node))) seen.set(nodeKey(p.node), p.node);
+  return [...seen.values()];
+}
+
+/** The address a new memory gets under `g`: its home node, bound to `projectId` when given. */
+export function homeAddress(g: Grant, projectId?: string): Address {
+  assertGrant(g);
+  return {
+    ...g.home,
+    ...(projectId !== undefined && { projectId }),
+  } as Address;
 }
 
 /** Rejects anything that is not a real `Grant`; every store calls it first. */

@@ -3,7 +3,14 @@ import * as path from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
-import { localGrant, type Memory, type Scope } from '@oortmem/core';
+import {
+  addressed,
+  localGrant,
+  nodeGrant,
+  type Grant,
+  type Memory,
+  type Scope,
+} from '@oortmem/core';
 import { describe, expect, it } from 'vitest';
 import { harness, memory } from '../test/helpers.js';
 import { createOortServer } from './mcp.js';
@@ -19,23 +26,35 @@ const SELF = { orgId: 'local', customerId: 'self', agentId: 'claude-code' };
 const CANARY_SCOPES: Record<string, Scope> = {
   otherProject: { ...SELF, projectId: 'canary-project' },
   otherCustomer: { ...SELF, customerId: 'canary-customer' },
+  // Another agent's Star (CON-62): the person's Planet is shared by their agents, a Star is not.
   otherAgent: { ...SELF, agentId: 'canary-agent' },
   otherOrg: { ...SELF, orgId: 'canary-org' },
 };
 const MARK = 'zqxcanary';
+const CANARY_STAR = { level: 'agent', orgId: 'local', agentId: 'canary-agent' } as const;
+
+/** Exactly the node a canary group lives in (its Planet project, or the canary agent's Star). */
+function canaryGrant(name: string, scope: Scope): Grant {
+  if (name === 'otherAgent') {
+    return nodeGrant({ principal: scope, read: [{ node: CANARY_STAR, projectIds: [null] }] });
+  }
+  return localGrant({
+    orgId: scope.orgId,
+    customerId: scope.customerId,
+    agentId: scope.agentId,
+    projectIds: [scope.projectId ?? null],
+  });
+}
 
 async function plantCanaries(store: Harness['store']): Promise<string[]> {
   const leaks: string[] = [MARK];
   for (const [name, scope] of Object.entries(CANARY_SCOPES)) {
     for (const cold of [false, true]) {
-      const g = localGrant({
-        orgId: scope.orgId,
-        customerId: scope.customerId,
-        agentId: scope.agentId,
-        projectIds: [scope.projectId ?? null],
-      });
+      const g = canaryGrant(name, scope);
       const m: Memory = memory({
-        scope,
+        ...(name === 'otherAgent'
+          ? addressed(CANARY_STAR, { agentId: 'canary-agent' })
+          : { scope }),
         text: `The auth service port ${MARK} ${name} is secret.`,
         stub: `auth service port ${MARK}`,
         entities: ['auth-service', `${MARK}-${name}`],
@@ -95,13 +114,8 @@ describe('canaries never reach any output channel', () => {
     const log = path.join(h.home, 'logs', 'hooks.log');
     if (fs.existsSync(log)) assertClean('hook log', fs.readFileSync(log, 'utf8'), leaks);
     // The canaries are all still there: the refused forgets and pins changed nothing.
-    for (const [_, scope] of Object.entries(CANARY_SCOPES)) {
-      const g = localGrant({
-        orgId: scope.orgId,
-        customerId: scope.customerId,
-        agentId: scope.agentId,
-        projectIds: [scope.projectId ?? null],
-      });
+    for (const [name, scope] of Object.entries(CANARY_SCOPES)) {
+      const g = canaryGrant(name, scope);
       const left = await h.store.list(g, { validOnly: false });
       expect(left).toHaveLength(2);
       expect(left.every((m) => !m.pinned)).toBe(true);
