@@ -161,6 +161,26 @@ describe('@oortmem/mcp definitions', () => {
     });
   });
 
+  // What the Claude and ChatGPT directory reviews check on every tool: a title, explicit boolean
+  // hints, a short name and a narrow description that says what the tool does, not how the model
+  // should behave or which other tools or products to use.
+  it('mcp.tools-meet-the-directory-review-rules', () => {
+    const hints = ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'] as const;
+    for (const t of TOOLS) {
+      expect(t.name, t.name).toMatch(/^[a-z][a-z_]{0,63}$/);
+      expect(t.annotations.title, t.name).toBe(t.title);
+      expect(t.title.length, t.name).toBeGreaterThan(0);
+      for (const h of hints) expect(typeof t.annotations[h], `${t.name}.${h}`).toBe('boolean');
+      if (t.annotations.readOnlyHint) expect(t.annotations.destructiveHint, t.name).toBe(false);
+      expect(t.description.length, t.name).toBeGreaterThan(20);
+      expect(t.description.length, t.name).toBeLessThanOrEqual(200);
+      expect(t.description, t.name).not.toMatch(
+        /\b(always (call|use)|you must|never call|ignore|instead of|prefer|claude|chatgpt|openai|anthropic)\b/i,
+      );
+    }
+    expect(INSTRUCTIONS).not.toMatch(/\b(ignore|system prompt|instead of|prefer oort)\b/i);
+  });
+
   it('mcp.write-and-destructive-tools-are-marked', () => {
     const by = Object.fromEntries(TOOLS.map((t) => [t.name, t.annotations]));
     expect(by['forget']).toMatchObject({ readOnlyHint: false, destructiveHint: true });
