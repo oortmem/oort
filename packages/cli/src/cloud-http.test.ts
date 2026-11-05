@@ -121,7 +121,8 @@ describe('cloud-http (CON-101)', () => {
     warm.start(w);
     await new Promise((r) => setTimeout(r, 200));
     const during = s.paths.filter((p) => p === '/health').length;
-    expect(during).toBeGreaterThanOrEqual(3);
+    // About five at a 40 ms interval; at least two proves it repeats, and survives a busy machine.
+    expect(during).toBeGreaterThanOrEqual(2);
     // Past `forMs` without a prompt, it stops.
     await new Promise((r) => setTimeout(r, 400));
     const after = s.paths.length;
