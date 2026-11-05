@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 
 export type Env = Record<string, string | undefined>;
 
+/** A hook's stdin is read for at most this long; Claude Code writes it at once and closes it. */
+export const HOOK_STDIN_CAP_MS = 1000;
+
 /**
  * Everything a command touches outside the store and adapters. The bin passes
  * `processIo()`; tests pass a recording double.
@@ -41,7 +44,17 @@ export function binPath(): string {
  * | head`) exits 0 quietly, any other write failure exits 1 with one line. In
  * hook mode every stdout error exits 0, since a hook must never fail.
  */
-export function processIo(entry: string | undefined, opts: { hook?: boolean } = {}): Io {
+export function processIo(
+  entry: string | undefined,
+  opts: {
+    hook?: boolean;
+    /**
+     * Bench only (`OORT_HOOK_TIMING=1`): after the hook's stdout is flushed, one stderr line
+     * `oort-hook <label> <ms since process start>`.
+     */
+    timing?: () => string;
+  } = {},
+): Io {
   process.stdout.on('error', (e: NodeJS.ErrnoException) => {
     if (opts.hook === true || e.code === 'EPIPE') process.exit(0);
     process.stderr.write(`oort: cannot write to stdout (${e.code ?? e.name})\n`);
@@ -129,9 +142,14 @@ export function processIo(entry: string | undefined, opts: { hook?: boolean } = 
       child.unref();
     },
     hookExit(stdout) {
-      const exit = (): never => process.exit(0);
+      const timing = opts.timing;
+      const exit = (): void => {
+        if (timing === undefined) process.exit(0);
+        const line = `oort-hook ${timing()} ${performance.now().toFixed(2)}ms\n`;
+        process.stderr.write(line, () => process.exit(0));
+      };
       if (stdout.length === 0) exit();
-      process.stdout.write(stdout, exit);
+      else process.stdout.write(stdout, exit);
     },
   };
 }

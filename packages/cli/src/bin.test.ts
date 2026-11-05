@@ -400,6 +400,7 @@ describe('oort bin', () => {
     expect([...new Set(report.checks.map((c) => c.group))]).toEqual([
       'keys',
       'hooks',
+      'serve',
       'mcp',
       'store',
       'relay',

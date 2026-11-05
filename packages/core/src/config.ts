@@ -107,6 +107,19 @@ const project = z
   })
   .default({ private: false });
 
+/**
+ * `oort serve`, the local daemon the hooks talk to (CON-18). Read from the home config only: a
+ * repository's `oort.config.json` cannot start processes on this machine.
+ */
+const serve = z
+  .strictObject({
+    /** SessionStart starts a detached daemon when none is running. */
+    autostart: z.boolean().default(false),
+    /** The daemon exits after this many minutes without a hook request. */
+    idleMinutes: z.number().int().min(1).max(1440).default(30),
+  })
+  .default({ autostart: false, idleMinutes: 30 });
+
 export const OortConfig = z.strictObject({
   embed,
   rerank,
@@ -115,6 +128,7 @@ export const OortConfig = z.strictObject({
   activation,
   recall,
   project,
+  serve,
 });
 export type OortConfig = z.infer<typeof OortConfig>;
 

@@ -22,18 +22,68 @@ const fastHook = hook && args.length >= 2 && args.slice(1).every((a) => !a.start
 
 try {
   if (fastHook) {
-    const [{ hookCommand }, { wire }, { keychainFor }, { processIo }] = await Promise.all([
-      import('./commands/hook.js'),
-      import('./wire.js'),
-      import('./keychain.js'),
-      import('./io.js'),
-    ]);
-    const io = processIo(evalMode ? undefined : process.argv[1], { hook });
-    const keychain = keychainFor(io.env, {
-      warn: (m) => io.err(`oort: ${m}\n`),
-      promptSecret: (q) => io.askSecret(q),
+    const startedAt = performance.now();
+    const event = args[1] as string;
+    const { processIo, binPath, HOOK_STDIN_CAP_MS } = await import('./io.js');
+    let via = 'process';
+    const io = processIo(evalMode ? undefined : process.argv[1], {
+      hook,
+      ...(process.env['OORT_HOOK_TIMING'] === '1' && { timing: () => `${event} via=${via}` }),
     });
-    await hookCommand(args[1] as string, { io, wire, keychain });
+    /**
+     * The two events that inject context try `oort serve` first (CON-18): one connect to a local
+     * socket (50 ms at most) and one answer. Anything else (no daemon, a slow or broken one,
+     * another version) runs the hook in-process below, exactly as without a daemon.
+     */
+    let stdin: string | undefined;
+    let served = false;
+    if (event === 'UserPromptSubmit' || event === 'SessionStart') {
+      stdin = await io.readStdin(HOOK_STDIN_CAP_MS);
+      try {
+        const client = await import('./serve-client.js');
+        const r = await client.hookViaDaemon(event, stdin, io.cwd, io.env);
+        if (r.served) {
+          served = true;
+          via = 'daemon';
+          io.hookExit(r.stdout);
+        } else if (event === 'SessionStart' && (r.reason === 'absent' || r.reason === 'refused')) {
+          // `serve.autostart` (home config, default off): start one for the prompts that follow.
+          // Best effort: a failed start never keeps this hook from running.
+          try {
+            const { homeFrom } = await import('./serve-protocol.js');
+            const { homedir } = await import('node:os');
+            const { realpathSync } = await import('node:fs');
+            const home = homeFrom(io.env, homedir);
+            if (client.autostartEnabled(home)) {
+              client.spawnDaemon(realpathSync(binPath()), home, io.env);
+            }
+          } catch {
+            // The hook goes on in-process.
+          }
+        }
+      } catch {
+        // Whatever went wrong talking to the daemon, the hook runs in-process below.
+      }
+    }
+    if (!served) {
+      const [{ hookCommand }, { wire }, { keychainFor }] = await Promise.all([
+        import('./commands/hook.js'),
+        import('./wire.js'),
+        import('./keychain.js'),
+      ]);
+      const keychain = keychainFor(io.env, {
+        warn: (m) => io.err(`oort: ${m}\n`),
+        promptSecret: (q) => io.askSecret(q),
+      });
+      await hookCommand(
+        event,
+        { io, wire, keychain },
+        {
+          ...(stdin !== undefined && { stdin }),
+          startedAt,
+        },
+      );
+    }
     process.exitCode = 0;
   } else {
     const { runCli } = await import('./program.js');

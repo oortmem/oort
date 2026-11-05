@@ -476,6 +476,80 @@ wrapper such as `cd x && oort hook Stop` is left alone. See
 `~/.claude.json` (through `claude mcp add` when `claude` is on `PATH`), so the
 tools are available too.
 
+## The local daemon: `oort serve`
+
+```sh
+oort serve [--idle <duration>]   # run in the foreground
+oort serve --detach              # start in the background and return
+oort serve status [--json]
+oort serve stop
+```
+
+Every hook is a new process that loads the engine, opens SQLite and reads
+keys. `oort serve` keeps one process running that has done all of that
+already, so a hook only connects to it, sends its input and prints the answer.
+It is optional: without it, the hooks work exactly as before.
+
+- **Which hooks.** `UserPromptSubmit` and `SessionStart`, the two that inject
+  context, try the daemon first. `Stop` (which reads the transcript) and the
+  drain always run in-process.
+- **Fallback.** A hook connects with a 50 ms timeout and waits at most 2.5 s
+  (`UserPromptSubmit`) or 1.5 s (`SessionStart`) for the answer. When no daemon
+  runs, or it is slow, answers with an error, dies mid-request, speaks another
+  protocol version or is another oort version, the hook runs in-process as if
+  there were no daemon. A hook always exits 0. The time spent on the daemon
+  comes off the hook's own deadline.
+- **Same answer.** The daemon runs the same handlers, so it injects the same
+  `<oort-memory>` block with the same scrubbing, and it writes the same hook
+  log lines, with `"daemon": 1` in `counts`. Like the in-process hook, it does
+  not use a local reranker for `UserPromptSubmit`.
+- **Socket.** It listens only on a Unix socket, `~/.oort/oort.sock` (or
+  `$OORT_HOME/oort.sock`), with mode 600. There is no TCP listener. When that
+  path is too long for a Unix socket, it uses `/tmp/oort-<uid>/<hash>.sock`
+  instead. It refuses to start when the directory belongs to another user or
+  is writable by group or others, or when something other than one of your
+  sockets sits at the path. A hook never connects to a socket, or a directory,
+  that is not yours alone.
+- **One per Oort home.** `oort.pid` beside the socket is the lock. A second
+  `oort serve` refuses (`already running (pid N)`). A daemon that was killed
+  leaves its socket and pid file behind; the next start replaces them.
+- **Store.** The daemon serves only the store under its own Oort home, and it
+  never migrates it. It refuses to start when the store needs its schema
+  migration (run any other `oort` command first). When it finds that need
+  later, it refuses the request and the hook falls back.
+- **Freshness.** It keeps up to 8 engines warm, one per project
+  configuration, and re-wires each in the background once it is a minute old.
+  Config edits and new keys are picked up within a minute; it uses the
+  environment it was started with.
+- **Stopping.** SIGTERM and SIGINT stop it cleanly, removing its socket and pid
+  file. It also exits after `--idle` without a hook request (default
+  `serve.idleMinutes`, 30 minutes). `--idle` takes `30m`, `45s`, `2h` or
+  `500ms` (from 100 ms to 24 h).
+- **Requests.** Each frame is a 4-byte length and JSON: `{ v, id, method,
+  params }`, answered `{ v, id, ok, result }` or `{ v, id, ok: false, error: {
+  code, message } }`. The methods are `ping`, `status`, `stop`, `hook` and
+  `recall`. Every request is checked against a schema; an unknown method or an
+  unexpected field is refused. No parameter names a file: `cwd` only selects
+  the project, as the hook input's own `cwd` does.
+
+Start it on demand with `serve.autostart` in `~/.oort/config.json` (default
+off). `SessionStart` then starts a detached daemon when none runs, and that
+session's prompts use it. Only the home config is read for `serve`: a
+repository's `oort.config.json` cannot start one.
+
+```json
+{ "serve": { "autostart": true, "idleMinutes": 30 } }
+```
+
+`--detach` and autostart write the daemon's output to `~/.oort/logs/serve.log`
+(mode 600). It holds start and stop lines only, never a prompt or a memory.
+`oort serve status` shows the pid, version, socket, uptime and how many
+requests it served. `oort doctor` shows the same under `serve`.
+
+After upgrading oort, a daemon from the old version keeps running, and the
+hooks ignore it until it exits. Run `oort serve stop` (then `oort serve
+--detach` again) to switch at once.
+
 ## Memory commands
 
 | Command | What it does | Flags |
@@ -939,6 +1013,7 @@ Pro, with no key and a 3 second timeout.
 | --- | --- | --- |
 | `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. A role on a local model instead loads it and runs it once, offline. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort keys set <provider>, or oort login (Oort Pro)`. A model the relay does not serve: use the default model, or set the vendor key. |
 | `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, for this bin. | Missing, from another path, or a command that is not executable: `oort install claude-code`. A hook binary whose `--version` differs from the oort you run is a warning naming both versions and the path (re-run `oort install claude-code` from the oort you want); a path under a Node version manager (`.nvm/`, `fnm_multishells`, `node-versions/`, `.volta/`, `.asdf/`) gets a note that switching Node versions will break the hooks. Unparseable settings: fix the JSON, then `oort install claude-code`. |
+| `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
 | `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
 | `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
