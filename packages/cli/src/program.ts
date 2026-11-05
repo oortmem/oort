@@ -2,6 +2,7 @@ import { Command, CommanderError } from 'commander';
 import { VERSION } from '@oortmem/core';
 import { connectCommand } from './commands/connect.js';
 import {
+  constellationAdoptCommand,
   constellationAttachCommand,
   constellationCreateCommand,
   constellationDeleteCommand,
@@ -20,6 +21,7 @@ import {
   constellationRoleCommand,
   constellationTransferCommand,
 } from './commands/constellation.js';
+import { galaxyCreateCommand, galaxyListCommand, galaxyMembersCommand } from './commands/galaxy.js';
 import { doctorCommand } from './commands/doctor.js';
 import { consolidateCommand } from './commands/consolidate.js';
 import { explainCommand } from './commands/explain.js';
@@ -460,6 +462,27 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
       ),
     );
 
+  const galaxy = p
+    .command('galaxy')
+    .description('Oort Cloud: Galaxies, your team (invite-only beta)');
+  galaxy
+    .command('list', { isDefault: true })
+    .description('your Galaxies and your role in each')
+    .option('--json', 'print JSON')
+    .action(run((o: { json?: boolean }) => galaxyListCommand(o, ctx)));
+  galaxy
+    .command('members')
+    .description('who is in a Galaxy, and their roles')
+    .argument('<galaxy>', 'slug, name or id')
+    .option('--json', 'print JSON')
+    .action(run((g: string, o: { json?: boolean }) => galaxyMembersCommand(g, o, ctx)));
+  galaxy
+    .command('create')
+    .description('create a Galaxy: opens oortcloud.dev, where you create it signed in')
+    .argument('<name>', 'its name')
+    .option('--no-browser', 'print the page instead of opening it')
+    .action(run((name: string, o: { browser?: boolean }) => galaxyCreateCommand(name, o, ctx)));
+
   const constellation = p
     .command('constellation')
     .description('Oort Cloud: Constellations, memory you share with a team (invite-only beta)');
@@ -472,8 +495,13 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .command('create')
     .description('create a Constellation, with you as its maintainer')
     .argument('<name>', 'its name, as labels show it')
+    .option('--galaxy <galaxy>', 'in one of your Galaxies (its admins): slug, name or id')
     .option('--json', 'print JSON')
-    .action(run((name: string, o: { json?: boolean }) => constellationCreateCommand(name, o, ctx)));
+    .action(
+      run((name: string, o: { json?: boolean; galaxy?: string }) =>
+        constellationCreateCommand(name, o, ctx),
+      ),
+    );
   constellation
     .command('invite')
     .description('invite someone by email (maintainers): a single-use link, valid 7 days')
@@ -557,6 +585,14 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<constellation>', 'name or id')
     .option('--yes', 'do not ask first (needed outside a terminal)')
     .action(run((c: string, o: { yes?: boolean }) => constellationDeleteCommand(c, o, ctx)));
+  constellation
+    .command('adopt')
+    .description(
+      "keep an archived Constellation (its team's organization was deleted): move it into your own account (owner)",
+    )
+    .argument('<constellation>', 'name or id')
+    .option('--json', 'print JSON')
+    .action(run((c: string, o: { json?: boolean }) => constellationAdoptCommand(c, o, ctx)));
   constellation
     .command('policy')
     .description(

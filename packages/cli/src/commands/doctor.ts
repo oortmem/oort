@@ -29,6 +29,7 @@ import { ROLES, ROLE_VENDOR, keyLookup, routeFor, type AdapterRole } from '../cr
 import { describeProblem, inspectCredentialsFile } from '../credentials-file.js';
 import { PROVIDER_ENV } from '../keychain.js';
 import { OortCloudError, cloudUrl, createCloudClient, readCloudSettings } from '../cloud.js';
+import { galaxyLine } from './galaxy.js';
 import { spaceLine } from './whoami.js';
 import { LOCAL_INSTALL_HINT, LOCAL_PROVIDER, importLocalModels } from '../local-models.js';
 import { RELAY_MODELS, relayUrl } from '../relay.js';
@@ -864,6 +865,16 @@ async function cloudStoreChecks(
         status: 'info',
         detail: `${agent === undefined ? '' : `as ${agent}: `}${spaces.join('; ')}`,
       },
+      ...(me.galaxies !== undefined && me.galaxies.length > 0
+        ? [
+            {
+              group: 'cloud' as const,
+              name: 'galaxies',
+              status: 'info' as const,
+              detail: me.galaxies.map(galaxyLine).join('; '),
+            },
+          ]
+        : []),
     ];
   } catch (e) {
     const err = e instanceof OortCloudError ? e : new OortCloudError('network', 0);

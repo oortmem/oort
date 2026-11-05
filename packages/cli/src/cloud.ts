@@ -240,6 +240,8 @@ export interface CloudConstellation {
   members: number;
   policy: string;
   joinedAt: string;
+  /** Archived (its team's organization was deleted): read-only, and deleted on this date. */
+  archivedUntil?: string;
 }
 
 export type CloudRole = 'maintainer' | 'member' | 'reader';
@@ -250,12 +252,38 @@ export type CloudSpace =
   | { level: 'planet' }
   | { level: 'constellation'; id: string; name: string; role: CloudRole; rights: CloudRight[] };
 
+/** A Galaxy (a team, CON-97) and your role in it: owner, admin or member. */
+export type CloudGalaxyRole = 'owner' | 'admin' | 'member';
+
+export interface CloudGalaxy {
+  id: string;
+  name: string;
+  slug: string | null;
+  role: CloudGalaxyRole;
+  members: number;
+  constellations: number;
+}
+
+/** A person in a Galaxy, as its people see them: never an account id. */
+export interface CloudGalaxyMember {
+  /** The id to name this member by (`gm_…`). */
+  member: string;
+  role: CloudGalaxyRole;
+  you: boolean;
+  email: string | null;
+  joinedAt: string;
+  /** Added, not yet joined on oortcloud.dev: shown to admins only, and granted nothing. */
+  pending?: boolean;
+}
+
 export interface CloudWhoami {
   account: string;
   plan: string;
   via: string;
   /** What this key (and agent, when one was named) reaches; absent from an older API. */
   spaces?: CloudSpace[];
+  /** Your Galaxies and your role in each (CON-97); absent when you have none. */
+  galaxies?: Pick<CloudGalaxy, 'id' | 'name' | 'slug' | 'role'>[];
   /** `narrowed`: the key was limited to some spaces when it was made. */
   scope?: 'full' | 'narrowed';
 }
@@ -399,7 +427,15 @@ export interface CloudClient {
   }): Promise<RecallResult>;
   /** The account's Constellations (hive beta; 403 `hive_not_enabled` outside it). */
   constellations(): Promise<CloudConstellation[]>;
-  createConstellation(name: string): Promise<CloudConstellation>;
+  /** In a Galaxy (`galaxy`: id, slug or name) when you are its admin or owner (CON-97). */
+  createConstellation(name: string, galaxy?: string): Promise<CloudConstellation>;
+  /** Your Galaxies and your role in each (hive beta; 403 `hive_not_enabled` outside it). */
+  galaxies(): Promise<CloudGalaxy[]>;
+  /** The people of one of your Galaxies, by id, slug or name. */
+  galaxyMembers(galaxy: string): Promise<{
+    galaxy: Pick<CloudGalaxy, 'id' | 'name' | 'slug' | 'role'>;
+    members: CloudGalaxyMember[];
+  }>;
   /**
    * Shares a memory with a Constellation: without `confirm`, a preview of exactly what would be
    * shared (by id or name; a name several of yours share is refused); with it, the copy, which
@@ -450,6 +486,11 @@ export interface CloudClient {
   unbindProject(c: string, project: string): Promise<{ project: string; bound: boolean }>;
   transfer(c: string, member: string): Promise<{ owner: boolean; member: string }>;
   deleteConstellation(c: string): Promise<{ deleted: boolean; memories: number }>;
+  /**
+   * The owner adopts an archived Constellation (its team's organization was deleted, CON-102)
+   * into their own account: theirs, and writable again.
+   */
+  adoptConstellation(c: string): Promise<{ id: string; adopted: boolean }>;
   /** A new Oort Cloud key, narrowed to `scope` when given (`planet`, `<c>[:read|:share]`). */
   createKey(b: { name?: string; scope?: string[] }): Promise<CloudKey>;
   /** The owner's explicit privacy choice for a project (the only way to clear private). */
@@ -657,6 +698,7 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       json('DELETE', cPath(c, `/projects/${encodeURIComponent(project)}`)),
     transfer: (c, member) => json('POST', cPath(c, '/transfer'), { member }),
     deleteConstellation: (c) => json('DELETE', cPath(c)),
+    adoptConstellation: (c) => json('POST', cPath(c, '/adopt'), {}),
     createKey: (b) => json('POST', '/v1/keys', b),
     recall: async (q) => {
       const { res, done } = await timedCall('POST', '/v1/recall', { json: q });
@@ -666,7 +708,10 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
     constellations: async () =>
       (await json<{ constellations: CloudConstellation[] }>('GET', '/v1/constellations'))
         .constellations,
-    createConstellation: (name) => json('POST', '/v1/constellations', { name }),
+    createConstellation: (name, galaxy) =>
+      json('POST', '/v1/constellations', { name, ...(galaxy !== undefined && { galaxy }) }),
+    galaxies: async () => (await json<{ galaxies: CloudGalaxy[] }>('GET', '/v1/galaxies')).galaxies,
+    galaxyMembers: (g) => json('GET', `/v1/galaxies/${encodeURIComponent(g)}/members`),
     share: (to, b) => json('POST', `/v1/constellations/${encodeURIComponent(to)}/share`, b),
     setProjectPrivacy: (project, priv) =>
       json('PUT', `/v1/projects/${encodeURIComponent(project)}/privacy`, { private: priv }),
