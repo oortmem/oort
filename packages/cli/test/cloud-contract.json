@@ -3,7 +3,11 @@
   "baseUrl": "https://api.oortcloud.dev",
   "auth": "Authorization: Bearer oort_sk_…",
   "routes": [
-    { "method": "GET", "path": "/v1/whoami", "response": ["account", "plan", "via"] },
+    {
+      "method": "GET",
+      "path": "/v1/whoami",
+      "response": ["account", "plan", "via"]
+    },
     {
       "method": "POST",
       "path": "/v1/recall",
@@ -13,9 +17,10 @@
         "k": "number?",
         "mode": "string?",
         "asOf": "string?",
-        "knownAt": "string?"
+        "knownAt": "string?",
+        "include": "string[]?"
       },
-      "response": ["memories", "timings", "temporal"]
+      "response": ["memories", "timings", "temporal", "read?", "degraded?", "degradedNodes?"]
     },
     {
       "method": "POST",
@@ -50,13 +55,33 @@
       "method": "POST",
       "path": "/v1/previews",
       "billing": "any",
-      "request": { "ids": "string[]" },
+      "request": {
+        "ids": "string[]"
+      },
       "response": ["previews"]
     },
-    { "method": "GET", "path": "/v1/memories/:id", "response": "memory", "billing": "any" },
-    { "method": "DELETE", "path": "/v1/memories/:id", "status": 204, "billing": "any" },
-    { "method": "POST", "path": "/v1/memories/:id/pin", "status": 204 },
-    { "method": "POST", "path": "/v1/memories/:id/unpin", "status": 204 },
+    {
+      "method": "GET",
+      "path": "/v1/memories/:id",
+      "response": "memory",
+      "billing": "any"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/memories/:id",
+      "status": 204,
+      "billing": "any"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/memories/:id/pin",
+      "status": 204
+    },
+    {
+      "method": "POST",
+      "path": "/v1/memories/:id/unpin",
+      "status": 204
+    },
     {
       "method": "GET",
       "path": "/v1/stats",
@@ -103,13 +128,21 @@
     ],
     "never": ["embedding"]
   },
-  "error": { "shape": { "error": { "code": "string", "message": "string" } } },
+  "error": {
+    "shape": {
+      "error": {
+        "code": "string",
+        "message": "string"
+      }
+    }
+  },
   "errors": {
     "400": "bad-request",
     "401": "unauthorized",
     "402": "payment-required",
     "403:cloud_not_enabled": "not-enabled",
-    "403": "unauthorized",
+    "403:hive_not_enabled": "hive-not-enabled",
+    "403": "refused",
     "404": "not-found",
     "409:ambiguous": "ambiguous-prefix",
     "413": "too-large",
@@ -126,5 +159,87 @@
     "listLimit": 100,
     "previewIds": 100,
     "previewChars": 80
+  },
+  "hive": {
+    "$comment": "Constellations (CON-63): an invite-only beta behind accounts.hive_beta. Outside it every route here answers 403 hive_not_enabled. :c is a Constellation id or its name (URL-encoded); one the caller is not a member of answers 404, exactly like one that does not exist. Recall reads the caller's Constellations (at most 4) on its own; a hive memory carries origin.level 'hive' and origin.node 'Constellation <name>', and a dropped hive leg is listed in degradedNodes as { node, reason } with 'hive-unavailable' in degraded.",
+    "constellation": ["id", "name", "role", "owner", "members", "policy", "joinedAt"],
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/v1/constellations",
+        "response": ["constellations"]
+      },
+      {
+        "method": "POST",
+        "path": "/v1/constellations",
+        "request": {
+          "name": "string"
+        },
+        "status": 201,
+        "response": ["id", "name", "role", "owner", "members", "policy", "joinedAt"]
+      },
+      {
+        "method": "GET",
+        "path": "/v1/constellations/:c",
+        "response": [
+          "id",
+          "name",
+          "role",
+          "owner",
+          "members",
+          "policy",
+          "joinedAt",
+          "memories",
+          "roster"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/v1/constellations/:c/share",
+        "request": {
+          "memoryId": "string",
+          "text": "string?",
+          "confirm": "boolean?",
+          "privateProjects": "string[]?"
+        },
+        "response": ["confirmed", "memoryId", "constellation", "text", "findings", "id?"]
+      },
+      {
+        "method": "GET",
+        "path": "/v1/constellations/:c/memories",
+        "query": ["cursor", "limit"],
+        "response": ["memories", "next?"]
+      },
+      {
+        "method": "GET",
+        "path": "/v1/constellations/:c/memories/:id",
+        "response": "memory"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/constellations/:c/map",
+        "response": ["version", "fields", "projects", "rows", "mine", "contributors"]
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/constellations/:c/memories/:id",
+        "response": ["outcome"]
+      },
+      {
+        "method": "GET",
+        "path": "/v1/memories/:id/shares",
+        "response": ["shares"]
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/memories/:id?everywhere=1",
+        "response": ["withdrawn", "requested", "unreachable"]
+      }
+    ],
+    "limits": {
+      "shareTextChars": 4096,
+      "fanout": 4,
+      "legTimeoutMs": 150
+    }
   }
 }

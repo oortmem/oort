@@ -471,7 +471,7 @@ tools are available too.
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
 | `oort stats` | Counts per tier and validity, store and cold sizes, the hook queue and memory use. | `--json` |
 | `oort observe` | Runs the write path on one turn, from JSON on stdin or from `--user` with `--assistant`. | `--dry-run` (reports scrubbing only) |
-| `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. | `--yes` |
+| `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. In Oort Cloud, a copy shared to a Constellation stays (it is the team's memory now) and the command says so. | `--yes`, `--everywhere` (Oort Cloud: also withdraw the shared copies only you contributed to) |
 | `oort pin <id>` / `oort unpin <id>` | A pinned memory is never sent to cold storage. | |
 | `oort consolidate` | Expires, re-tiers and evicts memories: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each is re-tiered on its own. | |
 | `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. | `--out <file>` (0600), `--force`, `--format 1\|2` |
@@ -482,11 +482,12 @@ plus global memories, as the acting agent (`--agent`, `OORT_AGENT`, else
 `claude-code`): your Planet and that agent's own Star.
 
 `--include` takes a comma list of levels: `self` (where the agent's new
-memories go), `planet`, `star` (the agent's own). `constellation` and
-`galaxy` are names for shared memory this build does not have yet; asking
-for them, or for any level the agent cannot read, exits 2 with
-`scope_denied` rather than an empty answer. In cloud mode a recall reads
-your Planet only.
+memories go), `planet`, `star` (the agent's own), `constellation` and
+`galaxy`. Asking for a level the agent cannot read exits 2 with
+`scope_denied` rather than an empty answer. Locally there are no shared
+levels. In cloud mode a recall reads your Planet and, for accounts in the
+Constellations beta, the Constellations you belong to (see
+[Constellations](#constellations-oort-share)).
 
 ### Time: recall modes
 
@@ -790,6 +791,33 @@ In cloud mode:
 | The drain | Sends queued turns to the cloud, each with a `turnRef` (`<session>:<turn>`), so a drain that crashes after a save and runs again does not save the turn twice. If the account cannot save (signed out, no plan, a limit, an outage), the turns stay queued and are sent on a later run. |
 | `oort mcp` | The same seven tools, answered by the cloud. |
 | `consolidate`, `import claude-code` | Refused: the cloud consolidates itself, and transcript import writes to the local store (import locally, then `oort cloud import`). |
+
+### Constellations: `oort share`
+
+```sh
+oort constellation list [--json]
+oort constellation create <name> [--json]
+oort share <id> --to <constellation> [--text <text>] [--yes] [--json]
+oort forget <id> --everywhere
+```
+
+A Constellation is memory you share with a team, in Oort Cloud (an invite-only beta). Nothing you
+save moves there by itself: `oort share` copies one memory, on purpose.
+
+- `oort share` shows exactly the text that would be shared first: secrets are always redacted,
+  and email addresses, phone numbers, account numbers and IP addresses are marked. Nothing leaves
+  your Planet until you confirm (`--yes` on a non-terminal; it never prompts there). `--text`
+  shares an edited text instead. The copy gets its own id and a record of where it came from;
+  your memory stays as it is. A memory from a project marked `"private": true` in
+  `oort.config.json` is refused.
+- Every member's recall then reads the Constellation too, labelled with its name:
+  `[semantic, Constellation oort-core, 2d ago]`. Shared memories take at most 40% of the injected
+  block, so your own memory comes first. A Constellation that does not answer in time is left out
+  of that recall (`degradedNodes` in `--json`), never an error.
+- `oort forget <id>` leaves a shared copy in place and says where it is; `--everywhere` withdraws
+  the copies only you contributed to.
+- `oort constellation list` shows the Constellations you belong to, your role, and how many
+  members each has. Members never see each other's own memories.
 
 No vendor key is read in cloud mode: Oort Cloud calls the models. `OORT_CLOUD_URL` points the CLI
 at another API (https, or http to localhost for `wrangler dev`). Errors are one line with the fix,

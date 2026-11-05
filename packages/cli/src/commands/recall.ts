@@ -105,17 +105,13 @@ export async function runRecall(
 ): Promise<RecallResult> {
   const cloud = cloudOf(w);
   if (cloud !== undefined) {
-    // Oort Cloud reads the account's Planet; Stars and hives arrive with the cloud's levels.
-    const other = include?.filter((l) => l !== 'planet' && l !== 'self') ?? [];
-    if (other.length > 0) {
-      throw new Refusal(
-        `scope_denied: cloud recall reads your Planet only (not ${other.join(', ')}).`,
-      );
-    }
+    // Oort Cloud reads the account's Planet and, in the hive beta, its Constellations; `include`
+    // narrows that, and a level the account cannot read is the API's own scope_denied.
     // The cloud API reads the same three fields; an older API ignores mode and knownAt.
     return cloud.recall({
       text,
       ...(w.scope.projectId !== undefined && { project: w.scope.projectId }),
+      ...(include !== undefined && { include }),
       ...view,
       k: 10,
     });
