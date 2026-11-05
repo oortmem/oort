@@ -1,4 +1,3 @@
-import * as fs from 'node:fs';
 import type { Database } from 'better-sqlite3';
 import { nodeKey, type NodeRef } from '@oortmem/core';
 
@@ -233,16 +232,23 @@ export function migrateV1toV2(db: Database, dimension: number): void {
  * store holding anything version 1 cannot represent: a memory at another
  * level, an author with an account, or provenance.
  */
+/** How many memories version 1 cannot represent (another level, an account, provenance). */
+export function migrationBlockers(db: Database): number {
+  return (
+    db
+      .prepare<[], { n: number }>(
+        `SELECT COUNT(*) AS n FROM memories
+         WHERE level != 'user' OR author_account_ref IS NOT NULL OR provenance IS NOT NULL`,
+      )
+      .get()?.n ?? 0
+  );
+}
+
 export function migrateV2toV1(db: Database, dimension: number): void {
-  const blocked = db
-    .prepare<[], { n: number }>(
-      `SELECT COUNT(*) AS n FROM memories
-       WHERE level != 'user' OR author_account_ref IS NOT NULL OR provenance IS NOT NULL`,
-    )
-    .get();
-  if ((blocked?.n ?? 0) > 0) {
+  const blocked = migrationBlockers(db);
+  if (blocked > 0) {
     throw new Error(
-      `sqlite store: ${blocked?.n} memories are not plain Planet memories; schema version 1 cannot hold them`,
+      `sqlite store: ${blocked} memories are not plain Planet memories; schema version 1 cannot hold them`,
     );
   }
   db.exec(memoriesV1('memories_v1'));
@@ -271,17 +277,65 @@ export function migrateV2toV1(db: Database, dimension: number): void {
   }
 }
 
+/**
+ * Raised by an open that may not migrate (`migrate: false`) when the store is
+ * at an older schema version. Nothing was changed; any open that may migrate
+ * (any `oort` command but the hooks) brings it up to date.
+ */
+export class StoreMigrationRequiredError extends Error {
+  constructor(
+    readonly path: string,
+    readonly from: number,
+  ) {
+    super(
+      `sqlite store: ${path} is at schema version ${from} and must be migrated to ${SCHEMA_VERSION}; open it once without migrate: false (oort doctor does)`,
+    );
+    this.name = 'StoreMigrationRequiredError';
+  }
+}
+
+/** The schema version recorded in `db`, or undefined for a new (empty) database. */
+export function schemaVersionOf(db: Database): number | undefined {
+  if (!exists(db, 'meta')) return undefined;
+  const v = db
+    .prepare<[], { value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")
+    .get()?.value;
+  return v === undefined ? undefined : Number(v);
+}
+
+/**
+ * Throws, naming how many, when a version 1 store holds memories with an
+ * empty org, customer or agent id. Grants never allowed one, but the 0.1.0
+ * store did not check, and there is no owner or author such a row could be
+ * given without guessing, so the migration refuses rather than move it.
+ */
+export function assertMigratable(db: Database): void {
+  const bad = db
+    .prepare<[], { n: number }>(
+      `SELECT COUNT(*) AS n FROM memories
+       WHERE coalesce(org_id, '') = '' OR coalesce(customer_id, '') = '' OR coalesce(agent_id, '') = ''`,
+    )
+    .get();
+  const n = bad?.n ?? 0;
+  if (n > 0) {
+    throw new Error(
+      `sqlite store: ${n} ${n === 1 ? 'memory has' : 'memories have'} an empty org, customer or agent id, which schema version ${SCHEMA_VERSION} cannot hold; nothing was changed. Export them with Oort 0.2.x (oort export), delete them (DELETE FROM memories WHERE org_id = '' OR customer_id = '' OR agent_id = ''), then open the store again`,
+    );
+  }
+}
+
 export interface ApplySchemaOptions {
   /**
-   * Where to copy the database (owner-only) before migrating it from version
-   * 1, unless a copy is already there. Unset: no copy (an in-memory database).
+   * false: refuse (`StoreMigrationRequiredError`) instead of migrating an
+   * older store. Default true. The caller backs the store up before an open
+   * that migrates; `applySchema` never copies anything.
    */
-  backupPath?: string;
+  migrate?: boolean;
 }
 
 /**
  * Creates every table and index of a new store at the current version, and
- * migrates a version 1 store to it (after copying it to `backupPath`).
+ * migrates a version 1 store to it (unless `migrate` is false).
  * Records `dimension` on first open and refuses a store whose recorded
  * dimension differs, or whose schema version is unknown. Runs in one
  * IMMEDIATE transaction so concurrent first opens (hook processes) serialise:
@@ -312,7 +366,8 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       db.exec(memoriesV2('memories'));
       db.exec(INDEXES_V2);
     } else if (version === '1') {
-      if (opts.backupPath !== undefined) backup(db, opts.backupPath);
+      if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 1);
+      assertMigratable(db);
       migrateV1toV2(db, dimension);
     } else if (version !== String(SCHEMA_VERSION)) {
       throw new Error(
@@ -338,19 +393,6 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     `);
     if (!exists(db, 'memories_vec')) db.exec(vecV2(dimension));
   }).immediate();
-}
-
-/**
- * A consistent copy of the whole database, taken inside the migration's
- * transaction (so no other connection can change it in between), written
- * owner-only. An existing copy is kept: it is the older, untouched one.
- */
-function backup(db: Database, file: string): void {
-  if (fs.existsSync(file)) return;
-  const image = db.serialize();
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, image, { mode: 0o600, flag: 'wx' });
-  fs.renameSync(tmp, file);
 }
 
 /**

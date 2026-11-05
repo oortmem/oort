@@ -14,7 +14,13 @@ import * as sqliteVec from 'sqlite-vec';
 import { afterAll, describe, expect, it } from 'vitest';
 import { localGrant, principalGrant, type Memory, type Principal } from '@oortmem/core';
 import { memoryAt, nodesGrant } from '@oortmem/core/store-conformance';
-import { backupPathFor, downgradeSqliteStore, openSqliteStore } from './index.js';
+import {
+  downgradeSqliteStore,
+  listBackups,
+  openSqliteStore,
+  sqliteSchemaVersion,
+  StoreMigrationRequiredError,
+} from './index.js';
 
 const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), '../test/fixtures/phase1');
 const DIM = 8;
@@ -174,14 +180,127 @@ describe('schema migration 1 to 2', () => {
     const s = copyFixture();
     const before = v1Content(s.dbPath);
     await (await openSqliteStore(optsFor(s))).close();
-    const backup = backupPathFor(s.dbPath);
-    expect(backup).toBe(`${s.dbPath}.pre-v2`);
+    const backups = listBackups(s.dbPath, 'pre-v2');
+    expect(backups).toHaveLength(1);
+    const backup = backups[0]!;
+    expect(path.basename(backup)).toMatch(/^oort\.sqlite\.pre-v2\.\d{8}T\d{9}Z$/);
     if (process.platform !== 'win32') expect(fs.statSync(backup).mode & 0o777).toBe(0o600);
     expect(v1Content(backup)).toEqual(before);
-    // A later open finds version 2 and leaves the copy alone.
-    const mtime = fs.statSync(backup).mtimeMs;
+    // A later open finds version 2: nothing to migrate, no new copy.
     await (await openSqliteStore(optsFor(s))).close();
-    expect(fs.statSync(backup).mtimeMs).toBe(mtime);
+    expect(listBackups(s.dbPath, 'pre-v2')).toEqual([backup]);
+    expect(fs.readdirSync(s.dir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('migrate.every-migration-takes-a-fresh-copy', async () => {
+    const s = copyFixture();
+    await (await openSqliteStore(optsFor(s))).close();
+    downgradeSqliteStore({ path: s.dbPath });
+    expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
+    // Version 1 again, and changed since the first copy.
+    const db = raw(s.dbPath);
+    db.exec("DELETE FROM memories WHERE id = 'p1-47'");
+    db.close();
+    const now = v1Content(s.dbPath);
+    await (await openSqliteStore(optsFor(s))).close();
+    const copies = listBackups(s.dbPath, 'pre-v2');
+    expect(copies).toHaveLength(2);
+    expect(v1Content(copies[1]!)).toEqual(now);
+  });
+
+  it('migrate.keeps-the-newest-copies-and-the-original', async () => {
+    const s = copyFixture();
+    for (let i = 0; i < 5; i++) {
+      await (await openSqliteStore(optsFor(s))).close();
+      downgradeSqliteStore({ path: s.dbPath });
+    }
+    const v2 = listBackups(s.dbPath, 'pre-v2');
+    const down = listBackups(s.dbPath, 'pre-downgrade');
+    expect(v2).toHaveLength(4); // the original and the three newest
+    expect(down).toHaveLength(3);
+    expect(v1Content(v2[0]!)).toEqual(v1Content(path.join(FIXTURE, 'oort.sqlite')));
+  });
+
+  it('migrate.copy-includes-the-wal-and-ignores-stale-temp-files', async () => {
+    const s = copyFixture();
+    // Another connection's write still in the WAL (no checkpoint while it stays open).
+    const other = raw(s.dbPath);
+    other.pragma('journal_mode = WAL');
+    other.pragma('wal_autocheckpoint = 0');
+    other.exec(`INSERT INTO memories (id, org_id, customer_id, agent_id, project_id, scope_extra, type,
+      text, stub, entities, salience, pinned, tier, access_log, valid_from, valid_to, expired_at,
+      end_reason, last_confirmed_at, supersedes, superseded_by, source, created_at, updated_at)
+      SELECT 'in-wal', org_id, customer_id, agent_id, project_id, scope_extra, type, text, stub,
+        entities, salience, pinned, tier, access_log, valid_from, valid_to, expired_at, end_reason,
+        last_confirmed_at, supersedes, superseded_by, source, created_at, updated_at
+      FROM memories WHERE id = 'p1-00'`);
+    // A temp file a crashed copy left under this process id: never in the way.
+    const stale = `${s.dbPath}.pre-v2.${process.pid}.tmp`;
+    fs.writeFileSync(stale, 'stale');
+    try {
+      await (await openSqliteStore(optsFor(s))).close();
+    } finally {
+      other.close();
+    }
+    const [copy] = listBackups(s.dbPath, 'pre-v2');
+    const c = new Database(copy!, { readonly: true });
+    try {
+      expect((c.prepare('SELECT COUNT(*) AS n FROM memories').get() as { n: number }).n).toBe(49);
+    } finally {
+      c.close();
+    }
+    expect(fs.readFileSync(stale, 'utf8')).toBe('stale');
+    expect(fs.readdirSync(s.dir).filter((f) => f.endsWith('.tmp'))).toEqual([path.basename(stale)]);
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'migrate.failed-copy-changes-nothing',
+    async () => {
+      const s = copyFixture();
+      const keep = raw(s.dbPath); // keeps the -wal and -shm files, so a read-only directory still opens
+      keep.pragma('journal_mode = WAL');
+      fs.chmodSync(s.dir, 0o500);
+      try {
+        await expect(openSqliteStore(optsFor(s))).rejects.toThrow(
+          /could not copy .* before migrating it .*nothing was changed/,
+        );
+      } finally {
+        fs.chmodSync(s.dir, 0o700);
+        keep.close();
+      }
+      expect(sqliteSchemaVersion(s.dbPath)).toBe(1);
+      expect(listBackups(s.dbPath, 'pre-v2')).toEqual([]);
+      expect(fs.readdirSync(s.dir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+    },
+  );
+
+  it('migrate.an-open-that-may-not-migrate-changes-nothing', async () => {
+    const s = copyFixture();
+    const before = fs.readFileSync(s.dbPath);
+    const err = await openSqliteStore({ ...optsFor(s), migrate: false }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(StoreMigrationRequiredError);
+    expect(fs.readFileSync(s.dbPath).equals(before)).toBe(true);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(1);
+    expect(listBackups(s.dbPath, 'pre-v2')).toEqual([]);
+    // Once migrated, it opens with migrate: false.
+    await (await openSqliteStore(optsFor(s))).close();
+    await (await openSqliteStore({ ...optsFor(s), migrate: false })).close();
+  });
+
+  it('migrate.empty-ids-are-refused-with-a-count', async () => {
+    const s = copyFixture();
+    const db = raw(s.dbPath);
+    db.exec("UPDATE memories SET customer_id = '' WHERE id = 'p1-01'");
+    db.exec("UPDATE memories SET agent_id = '' WHERE id = 'p1-02'");
+    db.close();
+    await expect(openSqliteStore(optsFor(s))).rejects.toThrow(
+      /2 memories have an empty org, customer or agent id.*nothing was changed/,
+    );
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(1);
+    expect(listBackups(s.dbPath, 'pre-v2')).toEqual([]);
   });
 
   it('migrate.down-and-up-again', async () => {
@@ -271,6 +390,6 @@ describe('schema migration 1 to 2', () => {
     } finally {
       db.close();
     }
-    expect(fs.existsSync(backupPathFor(s.dbPath))).toBe(false);
+    expect(listBackups(s.dbPath, 'pre-v2')).toEqual([]);
   });
 });

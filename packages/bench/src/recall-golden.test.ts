@@ -26,7 +26,7 @@ import {
   type MemoryStore,
   type RecallResult,
 } from '@oortmem/core';
-import { downgradeSqliteStore, openSqliteStore } from '@oortmem/store-sqlite';
+import { downgradeSqliteStore, listBackups, openSqliteStore } from '@oortmem/store-sqlite';
 import { fakeEmbedder } from './fake-embed.js';
 import { buildFixtureRows, FIXTURE_COUNT, FIXTURE_SEED } from './fixture.js';
 import { EMBEDDING_DIMENSION, GENERATOR_NOW, generateMemories } from './generate.js';
@@ -117,7 +117,7 @@ async function sqliteRun(): Promise<GoldenRow[]> {
   }
   await beforeReopen(opts.path);
   const store = await openSqliteStore(opts);
-  expect(fs.existsSync(`${opts.path}.pre-v2`), 'the migration copies the store first').toBe(true);
+  expect(listBackups(opts.path, 'pre-v2'), 'the migration copies the store first').toHaveLength(1);
   try {
     return await run(store, memories);
   } finally {

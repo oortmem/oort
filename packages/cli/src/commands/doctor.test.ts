@@ -8,6 +8,15 @@ import { connectHost } from '../connectors.js';
 import { createKeychain, type Keychain } from '../keychain.js';
 import { hostContext } from './connect.js';
 import { TG } from '@oortmem/core/store-conformance';
+import { resolveConfig } from '@oortmem/core';
+import {
+  downgradeSqliteStore,
+  listBackups,
+  openSqliteStore,
+  sqliteSchemaVersion,
+} from '@oortmem/store-sqlite';
+import { wire as realWire } from '../wire.js';
+import { MIGRATION_PENDING_NOTE } from './hook.js';
 
 interface Check {
   group: string;
@@ -78,6 +87,41 @@ afterEach(() => {
 });
 
 describe('oort doctor', () => {
+  it('doctor.migrates-the-store-the-hooks-left-alone', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    // A version 1 store: written by this version, then taken back down.
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      log: () => {},
+    });
+    await s.upsert(TG, memory({ embedding: undefined }));
+    await s.close();
+    downgradeSqliteStore({ path: db });
+    expect(sqliteSchemaVersion(db)).toBe(1);
+
+    const hook = await h.run(['hook', 'UserPromptSubmit'], {
+      stdin: JSON.stringify({ session_id: 's', cwd: h.cwd, prompt: 'which port?' }),
+    });
+    expect(hook.code).toBe(0);
+    expect(hook.io.hookStdout).toBe('');
+    expect(hook.io.stderr).toBe(MIGRATION_PENDING_NOTE);
+    expect(sqliteSchemaVersion(db)).toBe(1);
+    expect(listBackups(db, 'pre-v2')).toEqual([]);
+
+    const d = await doctor(h);
+    expect(d.human.io.stdout).toContain('migrated the store from schema version 1 to 2');
+    expect(sqliteSchemaVersion(db)).toBe(2);
+    expect(listBackups(db, 'pre-v2')).toHaveLength(1);
+    expect(d.check('store', 'spaces')?.detail).toBe('Planet: 1 memory (every project)');
+    expect(d.check('store', 'backup')?.detail).toContain('oort.sqlite.pre-v2.');
+  });
+
   it('doctor.healthy-setup-passes-and-says-which-key-serves-each-role', async () => {
     const h = harness();
     const bin = fakeBin(h);

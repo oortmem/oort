@@ -40,9 +40,19 @@ import {
   withPrivateUmask,
 } from './blobs.js';
 import { ColdBlobCorruptError, createColdCodec } from './cold.js';
-import { applySchema, downgradeSchema, SCHEMA_VERSION } from './schema.js';
+import { backupDatabase } from './backup.js';
+import {
+  applySchema,
+  assertMigratable,
+  downgradeSchema,
+  migrationBlockers,
+  schemaVersionOf,
+  SCHEMA_VERSION,
+  StoreMigrationRequiredError,
+} from './schema.js';
 
-export { SCHEMA_VERSION } from './schema.js';
+export { SCHEMA_VERSION, StoreMigrationRequiredError } from './schema.js';
+export { BACKUPS_KEPT, listBackups, type BackupKind } from './backup.js';
 
 export {
   ColdBlobCorruptError,
@@ -75,6 +85,15 @@ export interface SqliteStoreOptions {
    * the event loop, so latency-bound callers (hooks) pass a short one.
    */
   busyTimeoutMs?: number;
+  /**
+   * false: never migrate. Opening a store at an older schema version then
+   * rejects with `StoreMigrationRequiredError` and changes nothing. For
+   * latency-bound callers (hooks), which must not hold the store for a
+   * migration. Default true: an older store is copied to
+   * `<path>.pre-v<version>.<UTC time>` (see `listBackups`) and then migrated in
+   * one transaction; if the copy fails, the open fails and nothing changes.
+   */
+  migrate?: boolean;
   /**
    * One-line maintenance notices (orphan sweeps, permissions, corrupt cold
    * blobs). They carry counts, directory paths or memory ids, never memory
@@ -317,24 +336,44 @@ function live(patterns: readonly NodePattern[]): NodePattern[] {
 }
 
 /**
- * Where opening a store copies its database before migrating it to the
- * current schema version: `<path>.pre-v<version>`, owner-only. Cold blobs
- * are not copied (no migration changes them).
+ * The schema version of the store at `dbPath`, read without changing it:
+ * undefined when there is no store (or an empty one) yet.
  */
-export function backupPathFor(dbPath: string): string {
-  return `${path.resolve(dbPath)}.pre-v${SCHEMA_VERSION}`;
+export function sqliteSchemaVersion(dbPath: string): number | undefined {
+  if (!fs.existsSync(dbPath)) return undefined;
+  const db = new Database(path.resolve(dbPath), { readonly: true, fileMustExist: true });
+  try {
+    return schemaVersionOf(db);
+  } finally {
+    db.close();
+  }
 }
 
 /**
  * Takes the store at `path` back to schema version 1, so Oort 0.2.x can open
- * it again. Refuses, changing nothing, when it holds memories version 1
- * cannot represent (any level but Planet, an author with an account,
- * provenance). Close every connection to the store first.
+ * it again. First copies it to `<path>.pre-downgrade.<UTC time>` (the three
+ * newest such copies are kept). Refuses, changing nothing, when it holds
+ * memories version 1 cannot represent (any level but Planet, an author with
+ * an account, provenance). No other Oort process (hooks, the MCP server, a
+ * drain) may have the store open while it runs: one would migrate it straight
+ * back, or fail on the changed schema.
  */
 export function downgradeSqliteStore(opts: { path: string }): void {
-  const db = new Database(path.resolve(opts.path));
+  const dbPath = path.resolve(opts.path);
+  const db = withPrivateUmask(() => new Database(dbPath, { fileMustExist: true }));
   try {
     sqliteVec.load(db);
+    if (schemaVersionOf(db) !== SCHEMA_VERSION) {
+      downgradeSchema(db); // version 1 already: nothing to do; anything else: refused
+      return;
+    }
+    const blocked = migrationBlockers(db);
+    if (blocked > 0) {
+      throw new Error(
+        `sqlite store: ${blocked} memories are not plain Planet memories; schema version 1 cannot hold them`,
+      );
+    }
+    withPrivateUmask(() => backupDatabase(db, dbPath, 'pre-downgrade'));
     downgradeSchema(db);
   } finally {
     db.close();
@@ -376,7 +415,14 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       conn.pragma('journal_mode = WAL');
       conn.pragma('foreign_keys = ON');
       sqliteVec.load(conn);
-      applySchema(conn, dimension, { backupPath: backupPathFor(dbPath) });
+      if (schemaVersionOf(conn) === 1) {
+        // Checked and copied before the migration's transaction starts; a failed
+        // copy fails the open and the store stays as it was.
+        if (opts.migrate === false) throw new StoreMigrationRequiredError(dbPath, 1);
+        assertMigratable(conn);
+        backupDatabase(conn, dbPath, 'pre-v2');
+      }
+      applySchema(conn, dimension, { migrate: opts.migrate !== false });
       return conn;
     } catch (e) {
       conn.close();

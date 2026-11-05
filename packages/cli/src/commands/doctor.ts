@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { filterFor, hookStatus } from '@oortmem/claude-code';
 import { resolveConfig, resolveHome, localGrant, principalGrant } from '@oortmem/core';
-import { backupPathFor } from '@oortmem/store-sqlite';
+import { listBackups, SCHEMA_VERSION, sqliteSchemaVersion } from '@oortmem/store-sqlite';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
 import { ROLES, ROLE_VENDOR, keyLookup, routeFor, type AdapterRole } from '../credentials.js';
 import { describeProblem, inspectCredentialsFile } from '../credentials-file.js';
@@ -276,7 +276,14 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
     ];
   }
   const checks: Check[] = [];
+  let before: number | undefined;
   try {
+    before = sqliteSchemaVersion(db);
+  } catch {
+    before = undefined; // unreadable: the open below reports it
+  }
+  try {
+    // Opening migrates an older store (after copying it): doctor is where the hooks send you.
     const { count, planet } = await withWired(ctx, async (w) => {
       const all = await w.store.list(localGrant(filterFor(w.scope)), { validOnly: false });
       // Every memory this machine's agent wrote lives in your Planet (levels, CON-61).
@@ -293,14 +300,22 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
       status: 'ok',
       detail: `${tilde(db, userHome)} opens; ${count} ${count === 1 ? 'memory' : 'memories'} visible from here`,
     });
+    if (before !== undefined && before < SCHEMA_VERSION) {
+      checks.push({
+        group: 'store',
+        name: 'migration',
+        status: 'ok',
+        detail: `migrated the store from schema version ${before} to ${SCHEMA_VERSION}; your memories now live in your Planet`,
+      });
+    }
     checks.push({
       group: 'store',
       name: 'spaces',
       status: 'info',
       detail: `Planet: ${planet} ${planet === 1 ? 'memory' : 'memories'} (every project)`,
     });
-    const backup = backupPathFor(db);
-    if (fs.existsSync(backup)) {
+    const backup = listBackups(db, 'pre-v2').at(-1);
+    if (backup !== undefined) {
       checks.push({
         group: 'store',
         name: 'backup',

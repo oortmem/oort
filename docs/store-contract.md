@@ -116,9 +116,30 @@ own fields. Vectors are partitioned by node, with project and author as filter c
 
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the
-vector table is rebuilt from the stored embeddings. Before migrating, the store copies the database
-to `<path>.pre-v2` (owner-only). `downgradeSqliteStore({ path })` takes a store back to version 1
-for Oort 0.2.x, and refuses while it holds anything version 1 cannot represent.
+vector table is rebuilt from the stored embeddings.
+
+- **A copy first, every time.** Before the migration's transaction starts, the store copies the
+  database (with `VACUUM INTO`, so the WAL is included) to a new owner-only file
+  `<path>.pre-v2.<UTC time>`: written to a randomly named temporary file, fsynced, reopened to check
+  it holds as many memories as the store, then renamed into place. If the copy fails, the open fails
+  with a message saying so, and nothing changes. The three newest copies are kept, plus the oldest
+  (the original version 1 store). `listBackups(path, 'pre-v2')` lists them. Cold blobs are not
+  copied: no migration changes them.
+- **Not in a hook.** `openSqliteStore({ ..., migrate: false })` never migrates: an older store makes
+  it reject with `StoreMigrationRequiredError`, changing nothing. The Claude Code hooks open the
+  store this way; finding an older store they skip recall and saving for that turn, exit 0, and
+  print one line: "Oort is upgrading its store; run `oort doctor` once". Every other `oort` command
+  and the MCP server migrate on open; `oort doctor` reports the migration and where the copy is.
+- **Rows the migration cannot place.** A version 1 row with an empty org, customer or agent id
+  (grants never allowed one, the 0.1.0 store did not check) has no owner or author to give it, so
+  the migration refuses, naming how many such rows there are, and changes nothing. Export or delete
+  them with Oort 0.2.x, then open the store again.
+
+`downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x. It first copies the
+database to `<path>.pre-downgrade.<UTC time>` (the three newest are kept), and refuses while the
+store holds anything version 1 cannot represent. **Run it with no other Oort process open**: no
+Claude Code session with Oort hooks, no MCP server, no drain. Any of them would fail on the changed
+schema, and the next `oort` command migrates the store straight back up.
 
 ## Testing a store
 

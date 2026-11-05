@@ -3,6 +3,8 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { localScope, parseExport, type Embedder, type Memory } from '@oortmem/core';
+import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
+import { MIGRATION_PENDING_NOTE } from './commands/hook.js';
 import { AWS_KEY, fakeIo, harness, memory, tmpdir, writeTranscript } from '../test/helpers.js';
 import { runCli } from './program.js';
 import { wire as realWire, type WireFn } from './wire.js';
@@ -663,6 +665,36 @@ describe('oort hook (in process)', () => {
     expect(r.io.stdout + r.io.stderr).toBe('');
     const log = readLines(path.join(h.home, 'logs', 'hooks.log'));
     expect(log.map((l) => l['outcome'])).toEqual(['cli-error']);
+  });
+
+  it('cli.hooks-never-migrate-and-fail-open', async () => {
+    const h = harness();
+    const seen: (boolean | undefined)[] = [];
+    const inner = h.wire;
+    h.wire = async (cwd, o) => {
+      seen.push(o?.migrate);
+      return inner(cwd, o);
+    };
+    await h.run(['hook', 'UserPromptSubmit'], { stdin: prompt(h.cwd) });
+    await h.run(['hook', 'SessionStart'], {
+      stdin: JSON.stringify({ session_id: 's', cwd: h.cwd }),
+    });
+    await h.run(['hook', 'Stop'], { stdin: '{}' });
+    await h.run(['hook', 'drain']);
+    await h.run(['recall', 'port']);
+    expect(seen).toEqual([false, false, false, false, undefined]);
+
+    // A store that still needs its migration: no recall, exit 0, one short note.
+    h.wire = async () => {
+      throw new StoreMigrationRequiredError('/x/oort.sqlite', 1);
+    };
+    const r = await h.run(['hook', 'UserPromptSubmit'], { stdin: prompt(h.cwd) });
+    expect(r.code).toBe(0);
+    expect(r.io.hookExits).toBe(1);
+    expect(r.io.hookStdout).toBe('');
+    expect(r.io.stderr).toBe(MIGRATION_PENDING_NOTE);
+    const log = readLines(path.join(h.home, 'logs', 'hooks.log'));
+    expect(log.at(-1)?.['outcome']).toBe('degraded:migration-pending');
   });
 
   it('cli.hook-stop-spawns-drain', async () => {

@@ -1,5 +1,6 @@
 import { HOOK_TIMEOUTS, createHookLogger, runHook, type HookEvent } from '@oortmem/claude-code';
 import { resolveHome, type MemoryStore } from '@oortmem/core';
+import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
 import { cloudRemote } from '../cloud-remote.js';
 import { echo, type Ctx } from '../util.js';
 import type { AdapterRole, Wired } from '../wire.js';
@@ -21,6 +22,9 @@ const DEADLINE_MARGIN_MS = 1000;
  * deadline timer included, so it must stay short. The drain keeps the default.
  */
 export const HOOK_BUSY_TIMEOUT_MS = 250;
+
+/** The one stderr line a hook prints when the store still needs its schema migration. */
+export const MIGRATION_PENDING_NOTE = 'Oort is upgrading its store; run `oort doctor` once\n';
 
 /** SQLite's "another connection holds the lock" errors. */
 function isBusy(e: unknown): boolean {
@@ -119,6 +123,8 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         cloudTimeoutMs: event === 'drain' ? 30_000 : 1400,
         // The drain serves every project's queue: home config only, whatever lies above OORT_HOME.
         ...(event === 'drain' ? { projectConfig: false } : { busyTimeoutMs: HOOK_BUSY_TIMEOUT_MS }),
+        // A schema migration copies and rebuilds the whole store: never inside a hook.
+        migrate: false,
         roles: HOOK_ROLES[event],
       });
       // Config, store open and key lookup (env, then the keychain): the hook log records it (CON-57).
@@ -155,7 +161,11 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
     }
   } catch (e) {
     if (isBusy(e)) busy = true;
-    else log(ctx, w, event, 'cli-error');
+    else if (e instanceof StoreMigrationRequiredError) {
+      // Fail open: no recall and no save this turn, the prompt goes on; any oort command migrates.
+      if (event !== 'drain') io.err(MIGRATION_PENDING_NOTE);
+      log(ctx, w, event, 'degraded:migration-pending', ['migration-pending']);
+    } else log(ctx, w, event, 'cli-error');
   }
   if (busy) {
     // The store was locked: whatever the handler made of it, inject nothing.

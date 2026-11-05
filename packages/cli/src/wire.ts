@@ -87,6 +87,11 @@ export interface WireOptions {
   env?: Env;
   /** How long a store write may wait for another connection's lock (the store's default: 5000). */
   busyTimeoutMs?: number;
+  /**
+   * false: never migrate the store; an older one makes wiring reject with
+   * `StoreMigrationRequiredError` (the hooks). Default true (every command).
+   */
+  migrate?: boolean;
   /** false: read no `oort.config.json` at all, only the home config (the drain). */
   projectConfig?: boolean;
   /**
@@ -276,6 +281,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     dimension: config.embed.dimension,
     d: config.activation.d,
     ...(opts.busyTimeoutMs !== undefined && { busyTimeoutMs: opts.busyTimeoutMs }),
+    ...(opts.migrate === false && { migrate: false }),
   });
   // Env first (set and non-empty), then the keychain, each item read at most once.
   const reader: KeychainReader =
