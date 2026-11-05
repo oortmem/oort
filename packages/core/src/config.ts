@@ -87,7 +87,7 @@ const recall = z
      * relevance gate rank); `lexical` skips the query embedding too (no model call at all). `oort
      * recall`, MCP and SessionStart always recall in full.
      */
-    promptMode: z.enum(['full', 'fast', 'lexical']).default('full'),
+    promptMode: z.enum(['full', 'fast', 'lexical']).default('fast'),
   })
   .default({
     lexicalK: 50,
@@ -104,7 +104,7 @@ const recall = z
     queryCacheTtlSec: 600,
     staleAfterDays: 30,
     specificityPrior: 0,
-    promptMode: 'full',
+    promptMode: 'fast',
   });
 
 const project = z
