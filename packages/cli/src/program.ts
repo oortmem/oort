@@ -2,6 +2,7 @@ import { Command, CommanderError } from 'commander';
 import { VERSION } from '@oortmem/core';
 import { connectCommand } from './commands/connect.js';
 import {
+  constellationAdoptCommand,
   constellationAttachCommand,
   constellationCreateCommand,
   constellationDeleteCommand,
@@ -402,6 +403,14 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<constellation>', 'name or id')
     .option('--yes', 'do not ask first (needed outside a terminal)')
     .action(run((c: string, o: { yes?: boolean }) => constellationDeleteCommand(c, o, ctx)));
+  constellation
+    .command('adopt')
+    .description(
+      "keep an archived Constellation (its team's organization was deleted): move it into your own account (owner)",
+    )
+    .argument('<constellation>', 'name or id')
+    .option('--json', 'print JSON')
+    .action(run((c: string, o: { json?: boolean }) => constellationAdoptCommand(c, o, ctx)));
   constellation
     .command('policy')
     .description(

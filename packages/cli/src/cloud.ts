@@ -231,6 +231,8 @@ export interface CloudConstellation {
   members: number;
   policy: string;
   joinedAt: string;
+  /** Archived (its team's organization was deleted): read-only, and deleted on this date. */
+  archivedUntil?: string;
 }
 
 export type CloudRole = 'maintainer' | 'member' | 'reader';
@@ -471,6 +473,11 @@ export interface CloudClient {
   unbindProject(c: string, project: string): Promise<{ project: string; bound: boolean }>;
   transfer(c: string, member: string): Promise<{ owner: boolean; member: string }>;
   deleteConstellation(c: string): Promise<{ deleted: boolean; memories: number }>;
+  /**
+   * The owner adopts an archived Constellation (its team's organization was deleted, CON-102)
+   * into their own account: theirs, and writable again.
+   */
+  adoptConstellation(c: string): Promise<{ id: string; adopted: boolean }>;
   /** A new Oort Cloud key, narrowed to `scope` when given (`planet`, `<c>[:read|:share]`). */
   createKey(b: { name?: string; scope?: string[] }): Promise<CloudKey>;
   /** The owner's explicit privacy choice for a project (the only way to clear private). */
@@ -602,6 +609,7 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       json('DELETE', cPath(c, `/projects/${encodeURIComponent(project)}`)),
     transfer: (c, member) => json('POST', cPath(c, '/transfer'), { member }),
     deleteConstellation: (c) => json('DELETE', cPath(c)),
+    adoptConstellation: (c) => json('POST', cPath(c, '/adopt'), {}),
     createKey: (b) => json('POST', '/v1/keys', b),
     recall: (q) => json('POST', '/v1/recall', q),
     constellations: async () =>

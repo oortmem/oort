@@ -270,4 +270,32 @@ describe('oort galaxy (CON-97)', () => {
     expect(() => resolveGalaxy(odd as never, 'acme')).toThrow('No such Galaxy');
     expect(resolveGalaxy(odd as never, 'g_cccccccccccccccc').id).toBe('g_cccccccccccccccc');
   });
+
+  it('constellation.archived-shows-in-the-list-and-the-owner-adopts-it', async () => {
+    const e = setup();
+    e.cloud.hive.enabled = true;
+    const C = 'c_aaaaaaaaaaaaaaaa';
+    e.cloud.hive.constellations.set(C, {
+      id: C,
+      name: 'acme-core',
+      role: 'maintainer',
+      owner: true,
+    });
+    e.cloud.hive.archived.set(C, '2026-12-05T12:00:00.000Z');
+    const list = await e.run(['constellation', 'list']);
+    expect(list.io.stdout).toContain('archived: read-only, deleted 2026-12-05');
+    const r = await e.run(['constellation', 'adopt', 'acme-core']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toContain('Adopted "acme-core": it is yours now');
+    expect(e.cloud.seen).toContain('POST /v1/constellations/acme-core/adopt');
+    expect((await e.run(['constellation', 'list'])).io.stdout).not.toContain('archived');
+    // Nothing to adopt now: the API's own refusal is shown.
+    const again = await e.run(['constellation', 'adopt', 'acme-core', '--json']);
+    expect(again.code).not.toBe(0);
+    expect(again.io.stderr).toContain('is not archived');
+    // Someone else's archived Constellation: only its owner adopts it.
+    e.cloud.hive.constellations.set(C, { id: C, name: 'acme-core', role: 'member', owner: false });
+    e.cloud.hive.archived.set(C, '2026-12-05T12:00:00.000Z');
+    expect((await e.run(['constellation', 'adopt', C])).io.stderr).toContain('Only the owner');
+  });
 });

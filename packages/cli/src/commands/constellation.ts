@@ -30,8 +30,13 @@ export async function constellationListCommand(
 }
 
 function row(c: CloudConstellation): string {
-  const who = c.members === 1 ? '1 member' : `${c.members} members`;
-  return `  ${shown(c.name)}  ${shown(c.role)}${c.owner ? ' (owner)' : ''}  ${who}  ${shown(c.id)}`;
+  const n = Number(c.members);
+  const who = n === 1 ? '1 member' : `${n} members`;
+  const archived =
+    typeof c.archivedUntil === 'string'
+      ? `  archived: read-only, deleted ${shown(c.archivedUntil.slice(0, 10))}`
+      : '';
+  return `  ${shown(c.name)}  ${shown(c.role)}${c.owner ? ' (owner)' : ''}  ${who}  ${shown(c.id)}${archived}`;
 }
 
 /**
@@ -325,6 +330,23 @@ export async function constellationDeleteCommand(
   ctx.io.out(
     `Deleted ${echo(c)} (${shown(r.memories)} ${r.memories === 1 ? 'memory' : 'memories'}). Members' own memories are untouched.\n`,
   );
+  return 0;
+}
+
+/**
+ * `oort constellation adopt <c>`: an archived Constellation (its team's organization was deleted)
+ * moves into your own account, within its 30 days. Owner only, with your own Oort Pro, within the
+ * plan's Constellations; the API says why when it can't.
+ */
+export async function constellationAdoptCommand(
+  c: string,
+  opts: { json?: boolean },
+  ctx: Ctx,
+): Promise<number> {
+  const client = await clientFor(ctx);
+  const r = await client.adoptConstellation(c.trim());
+  if (opts.json === true) return json(ctx, r);
+  ctx.io.out(`Adopted ${echo(c)}: it is yours now, outside any team, and no longer archived.\n`);
   return 0;
 }
 

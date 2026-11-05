@@ -67,6 +67,8 @@ export interface FakeHive {
   galaxyMembers: Map<string, Record<string, unknown>[]>;
   /** Bodies sent to POST /v1/constellations. */
   creates: Record<string, unknown>[];
+  /** CON-102: archived Constellations, by id, with the date they are deleted. */
+  archived: Map<string, string>;
   constellations: Map<string, { id: string; name: string; role: string; owner: boolean }>;
   /** Shared copies, by id, with the Constellation they are in. */
   shared: Map<string, FakeMemory & { constellation: string; sourceId: string }>;
@@ -120,6 +122,7 @@ const MATCHERS = [
   ...CONTRACT.routes,
   ...CONTRACT.hive.routes,
   ...CONTRACT.galaxies.routes,
+  ...CONTRACT.archive.routes,
   ...CONTRACT.keys.routes,
 ].map((r) => ({
   method: r.method,
@@ -192,6 +195,7 @@ export function fakeCloud(key: string): FakeCloud {
       galaxies: new Map(),
       galaxyMembers: new Map(),
       creates: [],
+      archived: new Map(),
       constellations: new Map(),
       shared: new Map(),
       requests: [],
@@ -309,6 +313,7 @@ export function fakeCloud(key: string): FakeCloud {
             members: 2,
             policy: 'confirm',
             joinedAt: '2026-11-05T00:00:00.000Z',
+            ...(c.hive.archived.has(x.id) && { archivedUntil: c.hive.archived.get(x.id) }),
           })),
         });
       }
@@ -316,6 +321,16 @@ export function fakeCloud(key: string): FakeCloud {
         [...c.hive.galaxies.values()].find(
           (g) => g.id === ref || g.slug === ref || g.name.toLowerCase() === ref.toLowerCase(),
         );
+      const adoptMatch = /^\/v1\/constellations\/([^/]+)\/adopt$/.exec(p);
+      if (adoptMatch !== null) {
+        const x = byRef(decodeURIComponent(adoptMatch[1] ?? ''));
+        if (x === undefined) return err(404, 'not_found', 'No such Constellation.');
+        const archived = c.hive.archived.get(x.id);
+        if (!x.owner) return err(403, 'role_required', `Only the owner of ${x.name} can adopt it.`);
+        if (archived === undefined) return err(409, 'not_archived', `${x.name} is not archived.`);
+        c.hive.archived.delete(x.id);
+        return Response.json({ id: x.id, adopted: true });
+      }
       if (p === '/v1/galaxies') {
         return Response.json({ galaxies: [...c.hive.galaxies.values()] });
       }
