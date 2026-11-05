@@ -566,6 +566,20 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
       expect(ids(await store.list(localGrant(LOCAL), { tier: 'hot' }))).toEqual(['old']);
     });
 
+    it('list-pinned-only-and-without-embeddings', async () => {
+      await store.upsert(TG, makeMemory({ id: 'pin', pinned: true, embedding: vec(1, 2, 3, 4) }));
+      await store.upsert(TG, makeMemory({ id: 'hot', tier: 'hot', embedding: vec(1, 2, 3, 4) }));
+      await store.upsert(TG, makeMemory({ id: 'plain', embedding: vec(1, 2, 3, 4) }));
+      expect(ids(await store.list(localGrant(LOCAL), { pinned: true }))).toEqual(['pin']);
+      expect(ids(await store.list(localGrant(LOCAL), { pinned: true, tier: 'hot' }))).toEqual([]);
+      // Callers that only read text and metadata (SessionStart) skip the embedding fetch.
+      const bare = await store.list(localGrant(LOCAL), { embeddings: false });
+      expect(bare).toHaveLength(3);
+      for (const m of bare) expect(m.embedding).toBeUndefined();
+      const full = await store.list(localGrant(LOCAL), { tier: 'hot' });
+      expect(full[0]?.embedding).toEqual(vec(1, 2, 3, 4));
+    });
+
     it('list-valid-only-uses-isCurrent', async () => {
       await store.upsert(TG, makeMemory({ id: 'future', validTo: '2999-01-01T00:00:00.000Z' }));
       await store.upsert(

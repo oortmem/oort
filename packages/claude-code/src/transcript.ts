@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import { scrub, type Observation } from '@oortmem/core';
 
 /**
@@ -25,6 +26,8 @@ export interface Turn {
 export interface DetailedTurn {
   turn: Turn;
   rowUuids: string[];
+  /** Byte offset in the file of the turn's first row (the parsed text's `base` plus its position). */
+  offset: number;
 }
 
 /**
@@ -285,9 +288,12 @@ function messageRow(line: string): Row | undefined {
  *   `<oort-memory>` from assistant text; a user row holding only harness output
  *   becomes a user turn with empty text, so the reply to it is a turn of its own.
  */
-export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
+export function parseTranscriptDetailed(jsonl: string, base = 0): DetailedTurn[] {
   const out: DetailedTurn[] = [];
+  let pos = base;
   for (const line of jsonl.split('\n')) {
+    const offset = pos;
+    pos += Buffer.byteLength(line, 'utf8') + 1;
     const row = messageRow(line);
     if (row === undefined) continue;
     const role = row['type'] as 'user' | 'assistant';
@@ -336,6 +342,7 @@ export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
           cwd: str(row['cwd']) ?? '',
         },
         rowUuids: [uuid],
+        offset,
       });
       continue;
     }
@@ -361,6 +368,7 @@ export function parseTranscriptDetailed(jsonl: string): DetailedTurn[] {
         cwd: str(row['cwd']) ?? '',
       },
       rowUuids: [uuid],
+      offset,
     });
   }
   return out;
@@ -479,4 +487,51 @@ export function selectAfterCursor(
     };
   }
   return { fresh: paired.map((p) => p.obs), cursorFound: false };
+}
+
+/** What `readTranscriptFrom` read. */
+export interface TranscriptRead {
+  text: string;
+  /** Byte offset of `text` in the file: the offset asked for, or 0 when the file is shorter. */
+  base: number;
+  bytes: number;
+}
+
+/**
+ * The transcript from byte `offset` to its end. A file shorter than `offset` (truncated, or a new
+ * file at the same path) is read whole, with `base: 0`. A row still being written at the end is
+ * returned as is; it fails to parse and is skipped, and the next read starts before it.
+ */
+export function readTranscriptFrom(file: string, offset: number): TranscriptRead {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    const base = offset > 0 && offset <= size ? offset : 0;
+    const buf = Buffer.allocUnsafe(size - base);
+    let n = 0;
+    while (n < buf.length) {
+      const r = fs.readSync(fd, buf, n, buf.length - n, base + n);
+      if (r === 0) break;
+      n += r;
+    }
+    return { text: buf.toString('utf8', 0, n), base, bytes: n };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Where the next incremental read should start so that it sees `cursor` again with everything
+ * `selectAfterCursor` needs around it: the first of the user turns before the assistant turn
+ * holding `cursor` (so a pair, or a turn that grows later, is re-read whole). Undefined when no
+ * turn holds `cursor`.
+ */
+export function resumeOffset(detailed: DetailedTurn[], cursor: string): number | undefined {
+  for (let i = detailed.length - 1; i >= 0; i--) {
+    if (!detailed[i]?.rowUuids.includes(cursor)) continue;
+    let j = i;
+    while (j > 0 && detailed[j - 1]?.turn.role === 'user') j--;
+    return detailed[j]?.offset;
+  }
+  return undefined;
 }

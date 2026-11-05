@@ -344,8 +344,12 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        RETURNING rid`,
     ),
     setAccess: db.prepare<[string, string]>('UPDATE memories SET access_log = ? WHERE id = ?'),
-    list: db.prepare<[ReturnType<typeof scopeParams> & { tier: Tier | null }], MemoryRow>(
+    list: db.prepare<
+      [ReturnType<typeof scopeParams> & { tier: Tier | null; pinned: number | null }],
+      MemoryRow
+    >(
       `SELECT * FROM memories m WHERE ${SCOPE_SQL} AND (@tier IS NULL OR m.tier = @tier)
+         AND (@pinned IS NULL OR m.pinned = @pinned)
        ORDER BY m.rid`,
     ),
     lexical: db.prepare<
@@ -720,9 +724,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       if (coversNothing(grant.read)) return [];
       const validOnly = listOpts.validOnly ?? true;
       const now = clock();
+      // One vec lookup per row: skipped when the caller does not want embeddings.
+      const withEmbeddings = listOpts.embeddings !== false;
       return q.list
-        .all({ ...scopeParams(grant.read), tier: listOpts.tier ?? null })
-        .map((r) => fromRow(r, embeddingOf(r.id)))
+        .all({
+          ...scopeParams(grant.read),
+          tier: listOpts.tier ?? null,
+          pinned: listOpts.pinned === true ? 1 : null,
+        })
+        .map((r) => fromRow(r, withEmbeddings ? embeddingOf(r.id) : undefined))
         .filter((m) => !validOnly || isCurrent(m, now))
         .sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt));
     },
