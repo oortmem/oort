@@ -183,8 +183,10 @@ function labelChoiceOf(
   const c = a['choice'];
   if (typeof c !== 'string' || !labels.includes(c)) throw bad();
   const probabilities: Record<string, number> = {};
+  const probs = a['probabilities'];
   for (const l of labels) {
-    const p = a['probabilities'][l];
+    // Own properties only: a label such as `constructor` must not read Object's.
+    const p = Object.hasOwn(probs, l) ? probs[l] : undefined;
     if (!isProb(p)) throw bad();
     probabilities[l] = p;
   }
