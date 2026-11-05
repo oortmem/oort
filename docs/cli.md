@@ -500,7 +500,7 @@ It is optional: without it, the hooks work exactly as before.
   there were no daemon. A hook always exits 0. The time spent on the daemon
   comes off the hook's own deadline.
 - **Circuit breaker.** After a hook times out on the daemon, the hooks skip
-  it for 5 minutes; after a protocol or version refusal, for 1 minute. The
+  it for 5 minutes; after a protocol or version refusal, or an answer that is not a hook result, for 1 minute. The
   time is kept in `~/.oort/serve.skip-until` (mode 600, an epoch-ms time and
   the reason), which a hook reads once before anything else. A missing or
   unreadable marker means the daemon is tried. A successful answer removes
@@ -512,11 +512,18 @@ It is optional: without it, the hooks work exactly as before.
   not use a local reranker for `UserPromptSubmit`.
 - **Socket.** It listens only on a Unix socket, `~/.oort/oort.sock` (or
   `$OORT_HOME/oort.sock`), with mode 600. There is no TCP listener. When that
-  path is too long for a Unix socket, it uses `/tmp/oort-<uid>/<hash>.sock`
-  instead. It refuses to start when the directory belongs to another user or
-  is writable by group or others, or when something other than one of your
-  sockets sits at the path. A hook never connects to a socket, or a directory,
-  that is not yours alone.
+  path is too long for a Unix socket, it uses `<hash>.sock` in
+  `$XDG_RUNTIME_DIR/oort` when that is set, else in `/tmp/oort-<uid>`. The
+  directory must be a real directory (never a symlink, which is not followed)
+  of yours that nobody else can write; the daemon creates it 0700 and refuses
+  anything else, as it refuses anything but one of your sockets at the path.
+  A hook never connects to a socket, or a directory, that is not yours alone.
+- **Not a boundary against yourself.** The socket keeps other users out. Code
+  running as your own user can still connect to it, or answer on it, and there
+  is no token file. So a hook prints a daemon's answer only when it is exactly
+  what the in-process hook emits for that event (one `<oort-memory>` block of
+  at most 10,000 characters, no other keys); anything else is ignored, the hook
+  runs in-process, and the circuit breaker opens.
 - **One per Oort home.** `oort.pid` beside the socket is the lock. A second
   `oort serve` refuses (`already running (pid N)`). A daemon that was killed
   leaves its socket and pid file behind; the next start replaces them.
@@ -526,12 +533,18 @@ It is optional: without it, the hooks work exactly as before.
   later, it refuses the request and the hook falls back.
 - **Freshness.** It keeps up to 8 engines warm, one per project
   configuration, and re-wires each in the background once it is a minute old.
-  Config edits and new keys are picked up within a minute; it uses the
-  environment it was started with.
+  An engine is also keyed on the files your stored keys and cloud identity
+  come from (`credentials.json`, `cloud.json`, the login keychain), so
+  `oort logout`, `oort keys set|rm` or `oort cloud use` take effect on the next
+  request. Its environment is frozen: it keeps the variables it was started
+  with (`VOYAGE_API_KEY`, `OORT_CLOUD_URL` and so on), whatever the hook's own
+  environment holds. After changing one, run `oort serve stop`.
 - **Stopping.** SIGTERM and SIGINT stop it cleanly, removing its socket and pid
   file. It also exits after `--idle` without a hook request (default
   `serve.idleMinutes`, 30 minutes). `--idle` takes `30m`, `45s`, `2h` or
   `500ms` (from 100 ms to 24 h).
+- **Limits.** At most 64 connections, 8 requests waiting on one connection,
+  frames of 4 MiB, 10 s without a whole request, and 60 s per connection.
 - **Requests.** Each frame is a 4-byte length and JSON: `{ v, id, method,
   params }`, answered `{ v, id, ok, result }` or `{ v, id, ok: false, error: {
   code, message } }`. The methods are `ping`, `status`, `stop`, `hook` and
@@ -541,8 +554,10 @@ It is optional: without it, the hooks work exactly as before.
 
 Start it on demand with `serve.autostart` in `~/.oort/config.json` (default
 off). `SessionStart` then starts a detached daemon when none runs, and that
-session's prompts use it. Only the home config is read for `serve`: a
-repository's `oort.config.json` cannot start one.
+session's prompts use it. When that start fails, or the daemon refuses to start
+(a pending migration, a bad directory), the circuit breaker opens for a minute,
+so not every session tries again. Only the home config is read for `serve`: a
+`serve` key in a repository's `oort.config.json` is ignored, with a warning.
 
 ```json
 { "serve": { "autostart": true, "idleMinutes": 30 } }

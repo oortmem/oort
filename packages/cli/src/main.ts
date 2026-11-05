@@ -49,16 +49,17 @@ try {
         } else if (event === 'SessionStart' && (r.reason === 'absent' || r.reason === 'refused')) {
           // `serve.autostart` (home config, default off): start one for the prompts that follow.
           // Best effort: a failed start never keeps this hook from running.
+          const { homeFrom } = await import('./serve-protocol.js');
+          const { homedir } = await import('node:os');
+          const home = homeFrom(io.env, homedir);
           try {
-            const { homeFrom } = await import('./serve-protocol.js');
-            const { homedir } = await import('node:os');
-            const { realpathSync } = await import('node:fs');
-            const home = homeFrom(io.env, homedir);
             if (client.autostartEnabled(home)) {
+              const { realpathSync } = await import('node:fs');
               client.spawnDaemon(realpathSync(binPath()), home, io.env);
             }
           } catch {
-            // The hook goes on in-process.
+            // The hook goes on in-process; the breaker keeps the next sessions from retrying at once.
+            client.writeSkip(home, Date.now() + client.SKIP_AFTER_REFUSAL_MS, 'refused');
           }
         }
       } catch {

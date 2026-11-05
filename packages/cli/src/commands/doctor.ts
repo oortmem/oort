@@ -377,7 +377,7 @@ async function hookBinaryChecks(
  */
 async function serveChecks(ctx: Ctx): Promise<Check[]> {
   const home = resolveHome(ctx.io.env);
-  const socket = socketPathFor(home);
+  const socket = socketPathFor(home, ctx.io.env);
   const show = shown(tilde(socket, ctx.io.env['HOME'] ?? ''));
   const base = { group: 'serve' as const, name: 'daemon' };
   const skip = readSkip(home);
@@ -388,7 +388,7 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
             group: 'serve',
             name: 'hooks',
             status: 'warn',
-            detail: `skip the daemon until ${new Date(skip.until).toISOString()}, after ${skip.reason === 'refused' ? 'it refused a hook (another protocol or version)' : 'a hook timed out on it'}; they run in-process (${SKIP_FILE})`,
+            detail: `skip the daemon until ${new Date(skip.until).toISOString()}, after ${skip.reason === 'refused' ? 'a refusal (another protocol or version, an answer that is not a hook result, or a daemon that would not start)' : 'a hook timed out on it'}; they run in-process (${SKIP_FILE})`,
             fix: 'oort serve status (tries it again), or oort serve stop && oort serve --detach',
           },
         ]

@@ -1,15 +1,10 @@
 import * as fs from 'node:fs';
 import * as net from 'node:net';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { z } from 'zod';
 import { filterFor, type HookEvent } from '@oortmem/claude-code';
-import {
-  ensurePrivateDir,
-  formatForInjection,
-  recall,
-  resolveConfig,
-  resolveProject,
-} from '@oortmem/core';
+import { formatForInjection, recall, resolveConfig, resolveProject } from '@oortmem/core';
 import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
 import { readCloudSettings } from './cloud.js';
 import { hookWireOptions, inputCwd, isBusy, runWiredHook } from './commands/hook.js';
@@ -21,7 +16,9 @@ import {
   METHODS,
   PROTOCOL_VERSION,
   SERVED_EVENTS,
+  currentUid,
   encodeFrame,
+  inspectDir,
   lockPathFor,
   socketPathFor,
   type ErrorCode,
@@ -50,8 +47,12 @@ export const ENGINE_TTL_MS = 60_000;
 export const ENGINE_MAX = 8;
 /** A replaced engine is closed this long after, when no request can still be using it. */
 const ENGINE_CLOSE_GRACE_MS = 10_000;
-/** A connection idle this long is dropped. */
+/** A connection without a whole request for this long is dropped. */
 const CONNECTION_IDLE_MS = 10_000;
+/** And any connection after this long. */
+const CONNECTION_LIFETIME_MS = 60_000;
+/** Requests one connection may have waiting for an answer. */
+const MAX_QUEUED_FRAMES = 8;
 const MAX_CONNECTIONS = 64;
 /** How often the daemon checks that its lock and socket are still its own. */
 const SELF_CHECK_MS = 30_000;
@@ -129,31 +130,57 @@ export interface Daemon {
   stop(reason: string): Promise<string>;
 }
 
-/** Why `oort serve` cannot start; the message is printed as is. */
-export class ServeRefusal extends Refusal {}
+/**
+ * Why `oort serve` cannot start; the message is printed as is. `tripsBreaker` false for "another
+ * daemon has it" (the hooks should use that one), true for everything that will not fix itself.
+ */
+export class ServeRefusal extends Refusal {
+  constructor(
+    message: string,
+    readonly tripsBreaker = true,
+  ) {
+    super(message);
+  }
+}
 
-const uid = (): number | undefined =>
-  typeof process.getuid === 'function' ? process.getuid() : undefined;
+const uid = currentUid;
 
 /**
- * The socket directory may hold a socket: it exists (created 0700 when missing), belongs to this
- * user and is writable by nobody else. Group or others' read access is removed, as Oort does for
- * its home everywhere.
+ * The socket directory may hold a socket: a real directory (never followed through a symlink) of
+ * this user's that nobody else can write. Created 0700 when missing (its parent first, when that
+ * is missing too); group or others' read access is removed, but only from a directory this lstat
+ * just verified.
  */
 export function checkSocketDir(dir: string, me = uid()): void {
-  if (!fs.existsSync(dir)) ensurePrivateDir(dir);
-  const st = fs.statSync(dir);
-  if (!st.isDirectory()) throw new ServeRefusal(`${shown(dir)} is not a directory.`);
-  if (me === undefined) return;
-  if (st.uid !== me) {
-    throw new ServeRefusal(`${shown(dir)} belongs to another user; refusing to listen there.`);
+  let state = inspectDir(dir, me);
+  if (state === 'absent') {
+    fs.mkdirSync(path.dirname(dir), { recursive: true, mode: 0o700 });
+    try {
+      fs.mkdirSync(dir, { mode: 0o700 });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    }
+    state = inspectDir(dir, me);
   }
-  if ((st.mode & 0o022) !== 0) {
-    throw new ServeRefusal(
-      `${shown(dir)} is writable by group or others; refusing to listen there. Run \`chmod 700 ${shown(dir)}\`.`,
-    );
+  switch (state) {
+    case 'ok':
+      return;
+    case 'readable-by-others':
+      fs.chmodSync(dir, 0o700);
+      return;
+    case 'symlink':
+      throw new ServeRefusal(
+        `${shown(dir)} is a symlink; refusing to listen there. Point OORT_HOME at the real directory.`,
+      );
+    case 'foreign':
+      throw new ServeRefusal(`${shown(dir)} belongs to another user; refusing to listen there.`);
+    case 'writable-by-others':
+      throw new ServeRefusal(
+        `${shown(dir)} is writable by group or others; refusing to listen there. Run \`chmod 700 ${shown(dir)}\`.`,
+      );
+    default:
+      throw new ServeRefusal(`${shown(dir)} is not a directory.`);
   }
-  if ((st.mode & 0o077) !== 0) fs.chmodSync(dir, 0o700);
 }
 
 /**
@@ -229,19 +256,23 @@ export async function acquireLock(
     if (!st.isFile()) throw new ServeRefusal(`${shown(lock)} is not a regular file; remove it.`);
     const holder = lockHolder(lock);
     if (holder !== undefined) {
-      if (await answers()) throw new ServeRefusal(`oort serve is already running (pid ${holder}).`);
+      if (await answers()) {
+        throw new ServeRefusal(`oort serve is already running (pid ${holder}).`, false);
+      }
       if (now() - st.mtimeMs < LOCK_STARTUP_GRACE_MS) {
-        throw new ServeRefusal(`oort serve is starting (pid ${holder}).`);
+        throw new ServeRefusal(`oort serve is starting (pid ${holder}).`, false);
       }
     }
-    // Stale: the holder is gone (or a reused pid that does not answer). Replace it once.
+    // Stale: the holder is gone (or a reused pid that does not answer). Replace it once, and only
+    // the very file judged stale: another starter may have replaced it since.
     try {
-      fs.unlinkSync(lock);
+      const again = fs.lstatSync(lock);
+      if (again.ino === st.ino && again.mtimeMs === st.mtimeMs) fs.unlinkSync(lock);
     } catch {
       // Removed by another starter; the exclusive create below decides.
     }
   }
-  throw new ServeRefusal('oort serve is starting in another process.');
+  throw new ServeRefusal('oort serve is starting in another process.', false);
 }
 
 /** Removes `file` when it still holds what we put there (our pid, or our socket's inode). */
@@ -283,7 +314,27 @@ class Engines {
       project.untrustedId !== undefined,
       statedProjectPrivacy(cwd, config) ?? null,
       readCloudSettings(config.home).store,
+      // Stored keys and the cloud identity: logging out, `oort keys set|rm` or `oort cloud use`
+      // changes one of these, and the next request wires afresh (not within ENGINE_TTL_MS).
+      ...this.credentialStamps(config.home),
     ]);
+  }
+
+  /** Size and mtime of each file keys or the cloud identity come from (cheap stats). */
+  private credentialStamps(home: string): string[] {
+    const userHome = this.opts.env['HOME'] || os.homedir();
+    return [
+      path.join(home, 'credentials.json'),
+      path.join(home, 'cloud.json'),
+      path.join(userHome, 'Library', 'Keychains', 'login.keychain-db'),
+    ].map((f) => {
+      try {
+        const st = fs.statSync(f);
+        return `${st.size}:${st.mtimeMs}`;
+      } catch {
+        return '-';
+      }
+    });
   }
 
   private wireFor(cwd: string): Promise<Wired> {
@@ -377,7 +428,7 @@ class Engines {
  */
 export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const now = opts.now ?? Date.now;
-  const socket = socketPathFor(opts.home);
+  const socket = socketPathFor(opts.home, opts.env);
   const lock = lockPathFor(socket);
   checkSocketDir(path.dirname(socket));
   const probe = async (): Promise<boolean> => {
@@ -524,11 +575,23 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
 
   server.on('connection', (conn) => {
     connections.add(conn);
-    conn.setTimeout(CONNECTION_IDLE_MS, () => conn.destroy());
-    conn.on('close', () => connections.delete(conn));
+    // An absolute lifetime, and an idle limit that only a whole request resets: a client that
+    // trickles bytes, or holds the connection open, is dropped all the same.
+    const lifetime = setTimeout(() => conn.destroy(), CONNECTION_LIFETIME_MS);
+    let idle = setTimeout(() => conn.destroy(), CONNECTION_IDLE_MS);
+    const rearm = (): void => {
+      clearTimeout(idle);
+      idle = setTimeout(() => conn.destroy(), CONNECTION_IDLE_MS);
+    };
+    conn.on('close', () => {
+      clearTimeout(lifetime);
+      clearTimeout(idle);
+      connections.delete(conn);
+    });
     conn.on('error', () => conn.destroy());
     const decoder = new FrameDecoder();
     let queue = Promise.resolve();
+    let queued = 0;
     conn.on('data', (chunk: Buffer) => {
       let frames: unknown[];
       try {
@@ -537,7 +600,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         conn.end(reply(null, { code: 'bad-frame', message: 'bad frame' }));
         return;
       }
+      if (decoder.buffered > MAX_FRAME_BYTES + 4) {
+        conn.destroy();
+        return;
+      }
       for (const frame of frames) {
+        if (queued >= MAX_QUEUED_FRAMES) {
+          conn.end(reply(null, { code: 'busy', message: 'too many requests on one connection' }));
+          return;
+        }
+        queued++;
+        rearm();
         const id =
           typeof frame === 'object' &&
           frame !== null &&
@@ -554,7 +627,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
                 ? reply(id, { code: e.code, message: e.message })
                 : reply(id, { code: 'internal', message: 'internal error' });
           }
-          if (!conn.destroyed) conn.write(out);
+          queued--;
+          if (!conn.destroyed) {
+            conn.write(out);
+            rearm();
+          }
         });
       }
     });
@@ -563,7 +640,16 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Listen with umask 177 so the socket is born 0600, then make sure of it.
   const previous = process.umask(0o177);
   try {
-    if (checkSocketPath(socket) === 'stale') fs.unlinkSync(socket);
+    // The lock is ours, so a socket left at the path is stale, unless something answers on it
+    // (a daemon whose lock was removed by hand): then it is refused, not replaced.
+    if (checkSocketPath(socket) === 'stale') {
+      const st = fs.lstatSync(socket);
+      const live = await probe();
+      if (live) throw new ServeRefusal(`a daemon already answers on ${shown(socket)}.`, false);
+      const again = fs.lstatSync(socket);
+      if (again.ino !== st.ino) throw new ServeRefusal(`${shown(socket)} changed; try again.`);
+      fs.unlinkSync(socket);
+    }
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
       server.listen({ path: socket, readableAll: false, writableAll: false }, () => {

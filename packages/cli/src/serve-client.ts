@@ -7,7 +7,9 @@ import {
   FrameDecoder,
   PROTOCOL_VERSION,
   cliVersion,
+  currentUid,
   encodeFrame,
+  inspectDir,
   homeFrom,
   socketPathFor,
   type ErrorCode,
@@ -64,23 +66,19 @@ export interface CallOptions {
   budgetMs?: number;
 }
 
-const uid = (): number | undefined =>
-  typeof process.getuid === 'function' ? process.getuid() : undefined;
-
 /**
- * Whether `socket` may be trusted with a prompt: it and its directory belong to this user, and the
- * directory is not writable by anyone else (who could otherwise swap the socket). Two lstats.
+ * Whether `socket` may be trusted with a prompt: its directory is a real directory (not a symlink)
+ * of this user's that nobody else can write (who could otherwise swap the socket), and the socket
+ * is this user's. Two lstats. This guards against other users, not against code running as you:
+ * that code could answer on the socket, which is why `validHookStdout` checks every answer.
  */
 export function socketTrust(socket: string): 'trusted' | 'absent' | 'untrusted' {
   // Unix sockets only; `oort serve` does not run on Windows yet.
   if (process.platform === 'win32') return 'absent';
-  const me = uid();
-  try {
-    const dir = fs.statSync(path.dirname(socket));
-    if (me !== undefined && (dir.uid !== me || (dir.mode & 0o022) !== 0)) return 'untrusted';
-  } catch {
-    return 'absent';
-  }
+  const me = currentUid();
+  const dir = inspectDir(path.dirname(socket), me);
+  if (dir === 'absent') return 'absent';
+  if (dir !== 'ok' && dir !== 'readable-by-others') return 'untrusted';
   try {
     const st = fs.lstatSync(socket);
     if (!st.isSocket()) return 'untrusted';
@@ -176,7 +174,52 @@ function asResult(frame: unknown, id: number): CallResult {
 
 /** The socket for this environment's Oort home. */
 export function daemonSocket(env: Record<string, string | undefined>): string {
-  return socketPathFor(homeFrom(env, os.homedir));
+  return socketPathFor(homeFrom(env, os.homedir), env);
+}
+
+/**
+ * The most context any hook injects: the recall budget (`recall.budgetChars`) is capped at this
+ * (Claude Code moves a longer `additionalContext` to a file), so it bounds every configuration
+ * without reading one.
+ */
+export const HOOK_CONTEXT_MAX_CHARS = 10_000;
+const BLOCK_OPEN = '<oort-memory>\n';
+const BLOCK_CLOSE = '\n</oort-memory>';
+/** The block tags as `escapeBlockTags` in core neutralises them inside memory text. */
+const BLOCK_TAG = /<(?=\s*\/?\s*oort-)/i;
+
+/**
+ * The daemon's answer as the hook may print it, or undefined when it is not exactly what the
+ * in-process hook emits for `event`: nothing, or `{"hookSpecificOutput":{"hookEventName":
+ * <event>,"additionalContext":"<oort-memory>\n…\n</oort-memory>"}}` with no other key, within
+ * HOOK_CONTEXT_MAX_CHARS. Code running as this user could answer on the socket; this keeps it
+ * from injecting anything shaped differently. Re-serialised, so the bytes printed are ours.
+ */
+export function validHookStdout(event: ServedEvent, stdout: string): string | undefined {
+  if (stdout === '') return '';
+  if (stdout.length > HOOK_CONTEXT_MAX_CHARS * 2) return undefined;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  const exactly = (v: unknown, keys: string[]): v is Record<string, unknown> =>
+    typeof v === 'object' &&
+    v !== null &&
+    !Array.isArray(v) &&
+    Object.keys(v).length === keys.length &&
+    keys.every((k) => Object.hasOwn(v, k));
+  if (!exactly(raw, ['hookSpecificOutput'])) return undefined;
+  const out = raw['hookSpecificOutput'];
+  if (!exactly(out, ['hookEventName', 'additionalContext'])) return undefined;
+  const text = out['additionalContext'];
+  if (out['hookEventName'] !== event || typeof text !== 'string') return undefined;
+  if (text.length > HOOK_CONTEXT_MAX_CHARS) return undefined;
+  if (!text.startsWith(BLOCK_OPEN) || !text.endsWith(BLOCK_CLOSE)) return undefined;
+  const inner = text.slice(BLOCK_OPEN.length, text.length - BLOCK_CLOSE.length);
+  if (inner.length === 0 || BLOCK_TAG.test(inner)) return undefined;
+  return JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } });
 }
 
 /**
@@ -271,18 +314,19 @@ export async function hookViaDaemon(
   const skip = parseSkip(marker);
   if (skip !== undefined && skip.until > now()) return { served: false, reason: 'skipped' };
   const r = await callDaemon(
-    socketPathFor(home),
+    socketPathFor(home, env),
     'hook',
     { event, stdin, cwd, version: cliVersion() },
     { budgetMs: HOOK_BUDGET_MS[event], ...opts },
   );
   if (r.ok) {
-    const stdout = r.result['stdout'];
-    if (typeof stdout === 'string') {
+    const raw = r.result['stdout'];
+    const stdout = typeof raw === 'string' ? validHookStdout(event, raw) : undefined;
+    if (stdout !== undefined) {
       if (marker !== undefined) clearSkip(home); // expired or garbled: the daemon is fine again
       return { served: true, stdout };
     }
-    // An answer that is not a hook result: as good as another protocol.
+    // An answer that is not exactly a hook result: as good as another protocol.
     writeSkip(home, now() + SKIP_AFTER_REFUSAL_MS, 'refused');
     return { served: false, reason: 'protocol' };
   }
@@ -313,9 +357,45 @@ export function autostartEnabled(home: string): boolean {
 }
 
 /**
+ * `dir` as a private directory of this user's: created 0700 when missing, refused when it is a
+ * symlink, not a directory or someone else's; group or others' access is removed only after that
+ * lstat. (`ensurePrivateDir` in core does this for commands; the hook client does not load core.)
+ */
+export function privateDir(dir: string): void {
+  try {
+    fs.mkdirSync(dir, { mode: 0o700 });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+  }
+  const state = inspectDir(dir);
+  if (state === 'readable-by-others') fs.chmodSync(dir, 0o700);
+  else if (state !== 'ok') throw new Error(`${dir}: ${state}`);
+}
+
+/**
+ * Opens `file` for appending, 0600, never through a symlink; a wider mode is tightened. The caller
+ * closes the descriptor.
+ */
+export function openPrivateLog(file: string): number {
+  const { O_WRONLY, O_CREAT, O_APPEND } = fs.constants;
+  const fd = fs.openSync(file, O_WRONLY | O_CREAT | O_APPEND | NOFOLLOW, 0o600);
+  try {
+    if (process.platform !== 'win32' && (fs.fstatSync(fd).mode & 0o077) !== 0) {
+      fs.fchmodSync(fd, 0o600);
+    }
+  } catch (e) {
+    fs.closeSync(fd);
+    throw e;
+  }
+  return fd;
+}
+
+/**
  * Starts `oort serve` detached from this process (`bin` is the realpath of the bin), its output
- * appended to `$OORT_HOME/logs/serve.log` (0600). Does not wait: a second daemon started at the
- * same moment finds the lock taken and exits.
+ * appended to `$OORT_HOME/logs/serve.log` (0600). `home` is absolute and goes to the child as its
+ * `OORT_HOME`, so a relative `OORT_HOME` cannot make it serve another home. Does not wait: a
+ * second daemon started at the same moment finds the lock taken and exits. A spawn that fails
+ * opens the circuit breaker, so the next sessions do not try again at once.
  */
 export function spawnDaemon(
   bin: string,
@@ -323,20 +403,59 @@ export function spawnDaemon(
   env: Record<string, string | undefined>,
   extraArgs: readonly string[] = [],
 ): number | undefined {
+  privateDir(home);
   const logs = path.join(home, 'logs');
-  fs.mkdirSync(logs, { recursive: true, mode: 0o700 });
-  const fd = fs.openSync(path.join(logs, 'serve.log'), 'a', 0o600);
+  privateDir(logs);
+  const fd = openPrivateLog(path.join(logs, 'serve.log'));
   try {
     const child = spawn(process.execPath, [bin, 'serve', ...extraArgs], {
       cwd: home,
       detached: true,
       stdio: ['ignore', fd, fd],
-      env: env as NodeJS.ProcessEnv,
+      env: { ...env, OORT_HOME: home } as NodeJS.ProcessEnv,
     });
-    child.on('error', () => {}); // a failed spawn must never crash a hook
+    // A failed spawn must never crash a hook; it only opens the breaker for a minute.
+    child.on('error', () => writeSkip(home, Date.now() + SKIP_AFTER_REFUSAL_MS, 'refused'));
     child.unref();
     return child.pid;
   } finally {
     fs.closeSync(fd);
   }
+}
+
+/**
+ * Removes what a stopped daemon left behind, but only what is plainly ours: a socket of this user's
+ * that nothing answers on (`refused`), and a pid file of this user's whose process is gone.
+ */
+export function removeLeftovers(socket: string, lock: string, socketRefused: boolean): boolean {
+  const me = currentUid();
+  let removed = false;
+  const remove = (file: string, ok: (st: fs.Stats) => boolean): void => {
+    try {
+      const st = fs.lstatSync(file);
+      if ((me === undefined || st.uid === me) && ok(st)) {
+        // The same file we judged, not one swapped in since.
+        const again = fs.lstatSync(file);
+        if (again.ino === st.ino && again.mtimeMs === st.mtimeMs) {
+          fs.unlinkSync(file);
+          removed = true;
+        }
+      }
+    } catch {
+      // Gone already.
+    }
+  };
+  if (socketRefused) remove(socket, (st) => st.isSocket());
+  remove(lock, (st) => {
+    if (!st.isFile()) return false;
+    const pid = Number(fs.readFileSync(lock, 'utf8').trim());
+    if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (e) {
+      return (e as NodeJS.ErrnoException).code === 'ESRCH';
+    }
+  });
+  return removed;
 }

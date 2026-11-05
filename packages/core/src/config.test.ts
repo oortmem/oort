@@ -143,4 +143,20 @@ describe('config', () => {
     );
     expect(() => resolveConfig(cwd, { OORT_HOME: home })).toThrow(/nested/);
   });
+
+  it('config.serve-is-read-from-the-home-config-only', () => {
+    const home = tmp();
+    const cwd = tmp();
+    fs.writeFileSync(path.join(home, 'config.json'), '{"serve":{"idleMinutes":5}}');
+    fs.writeFileSync(
+      path.join(cwd, 'oort.config.json'),
+      '{"serve":{"autostart":true,"idleMinutes":1},"recall":{"budgetChars":100}}',
+    );
+    const c = resolveConfig(cwd, { OORT_HOME: home });
+    expect(c.serve).toEqual({ autostart: false, idleMinutes: 5 });
+    expect(c.sources['serve']).toBe('home');
+    expect(c.ignoredProjectKeys).toEqual(['serve']);
+    expect(c.recall.budgetChars).toBe(100); // other project keys still apply
+    expect(resolveConfig(home, { OORT_HOME: home }).ignoredProjectKeys).toBeUndefined();
+  });
 });

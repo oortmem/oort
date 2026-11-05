@@ -137,7 +137,15 @@ export type ConfigSource = 'project' | 'home' | 'default';
 export type ResolvedConfig = OortConfig & {
   home: string;
   sources: Record<string, ConfigSource>;
+  /**
+   * Keys a project's `oort.config.json` set that only the home config may set (`serve`: a
+   * repository must not start processes on this machine). Ignored; absent when there are none.
+   */
+  ignoredProjectKeys?: string[];
 };
+
+/** Keys read from the home config only; a project file's value is ignored (and reported). */
+const HOME_ONLY_KEYS: ReadonlySet<string> = new Set(['serve']);
 
 const CONFIG_KEYS = Object.keys(OortConfig.shape);
 
@@ -222,8 +230,10 @@ export function resolveConfig(
 
   const merged: Record<string, unknown> = {};
   const sources: Record<string, ConfigSource> = {};
+  const ignored: string[] = [];
   for (const key of CONFIG_KEYS) {
-    if (key in projectRaw) {
+    if (key in projectRaw && HOME_ONLY_KEYS.has(key)) ignored.push(key);
+    if (key in projectRaw && !HOME_ONLY_KEYS.has(key)) {
       merged[key] = projectRaw[key];
       sources[key] = 'project';
     } else if (key in homeRaw) {
@@ -234,5 +244,10 @@ export function resolveConfig(
     }
   }
 
-  return { ...OortConfig.parse(merged), home, sources };
+  return {
+    ...OortConfig.parse(merged),
+    home,
+    sources,
+    ...(ignored.length > 0 && { ignoredProjectKeys: ignored }),
+  };
 }

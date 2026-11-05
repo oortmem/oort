@@ -141,7 +141,8 @@ export interface WireWarning {
     | 'embed-dimension-ignored'
     | 'project-id-untrusted'
     | 'keychain-unreadable'
-    | 'cloud-unavailable';
+    | 'cloud-unavailable'
+    | 'serve-ignored';
   /** One line for stderr; holds config values only. */
   message: string;
 }
@@ -353,6 +354,13 @@ export const wire: WireFn = async (cwd, opts = {}) => {
       });
       config = { ...config, embed: { ...config.embed, dimension } };
     }
+  }
+  // `serve` starts processes on this machine: a repository's oort.config.json cannot set it.
+  if (config.ignoredProjectKeys?.includes('serve') === true) {
+    warnings.push({
+      code: 'serve-ignored',
+      message: 'project config serve ignored; oort serve reads the home config only.',
+    });
   }
   const project = resolveProject(cwd, config.home);
   // A repository file cannot choose a scope without the user's trust binding.

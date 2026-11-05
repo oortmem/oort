@@ -3,7 +3,15 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { VERSION, resolveConfig, resolveHome } from '@oortmem/core';
 import { binPath } from '../io.js';
-import { callDaemon, clearSkip, spawnDaemon, socketTrust } from '../serve-client.js';
+import {
+  SKIP_AFTER_REFUSAL_MS,
+  callDaemon,
+  clearSkip,
+  removeLeftovers,
+  socketTrust,
+  spawnDaemon,
+  writeSkip,
+} from '../serve-client.js';
 import { lockPathFor, socketPathFor } from '../serve-protocol.js';
 import { uiFor } from '../ui.js';
 import { Refusal, echo, shown, tilde, type Ctx } from '../util.js';
@@ -60,13 +68,13 @@ export async function serveCommand(
 ): Promise<number> {
   const { io } = ctx;
   const home = resolveHome(io.env);
-  const socket = socketPathFor(home);
+  const socket = socketPathFor(home, io.env);
   const userHome = io.env['HOME'] || os.homedir();
   const show = (p: string): string => shown(tilde(p, userHome));
   const ui = uiFor(io);
-  // Starting, checking on or stopping the daemon by hand closes the hooks' circuit breaker: the
-  // next prompt tries the daemon again.
-  if (['start', 'status', 'stop'].includes(action ?? 'start')) clearSkip(home);
+  // Checking on or stopping the daemon by hand closes the hooks' circuit breaker: the next prompt
+  // tries the daemon again. A start closes it once the daemon listens.
+  if (action === 'status' || action === 'stop') clearSkip(home);
   switch (action ?? 'start') {
     case 'start':
       break;
@@ -126,19 +134,30 @@ export async function serveCommand(
   }
 
   // The daemon module (and through it the engine) loads only for a foreground start.
-  const { startDaemon } = await import('../serve-daemon.js');
+  const { startDaemon, ServeRefusal } = await import('../serve-daemon.js');
   const stamp = (): string => new Date().toISOString();
   io.out(ui.header('serve', show(socket), `pid ${process.pid}`, `idle exit ${minutes(idleMs)}`));
-  const daemon = await startDaemon({
-    home,
-    env: io.env,
-    wire: ctx.wire,
-    version: VERSION,
-    idleMs,
-    spawnDrain: (cwd) => io.spawnDrain(cwd),
-    log: (line) => io.out(`${ui.dim(stamp())} ${line}\n`),
-    warmCwd: userHome,
-  });
+  let daemon: Awaited<ReturnType<typeof startDaemon>>;
+  try {
+    daemon = await startDaemon({
+      home,
+      env: io.env,
+      wire: ctx.wire,
+      version: VERSION,
+      idleMs,
+      spawnDrain: (cwd) => io.spawnDrain(cwd),
+      log: (line) => io.out(`${ui.dim(stamp())} ${line}\n`),
+      warmCwd: userHome,
+    });
+  } catch (e) {
+    // A daemon that will not start (a pending migration, a bad directory) opens the breaker, so
+    // autostart does not try again on every session; "another one runs" does not.
+    if (!(e instanceof ServeRefusal) || e.tripsBreaker) {
+      writeSkip(home, Date.now() + SKIP_AFTER_REFUSAL_MS, 'refused');
+    }
+    throw e;
+  }
+  clearSkip(home);
   const onSignal = (signal: NodeJS.Signals): void => void daemon.stop(signal);
   const onCrash = (e: unknown): void => {
     io.err(`oort serve: unexpected ${e instanceof Error ? e.name : 'error'}; stopping.\n`);
@@ -161,11 +180,30 @@ export async function serveCommand(
     const r = await callDaemon(socket, 'status', {}, { budgetMs: 1000 });
     const holder = lockHolderPid();
     if (opts.json === true) {
+      // Only known fields, copied by name: nothing the socket sends can add or override one.
+      const fields = [
+        'version',
+        'pid',
+        'protocol',
+        'startedAt',
+        'uptimeMs',
+        'idleMs',
+        'idleExitMs',
+        'served',
+        'engines',
+      ];
+      const known = r.ok
+        ? Object.fromEntries(
+            fields
+              .filter((f) => ['string', 'number'].includes(typeof r.result[f]))
+              .map((f) => [f, r.result[f]]),
+          )
+        : {};
       io.out(
         `${JSON.stringify(
           r.ok
-            ? { running: true, socket, ...r.result }
-            : { running: false, socket, ...(holder !== undefined && { unresponsivePid: holder }) },
+            ? { ...known, running: true, socket }
+            : { ...(holder !== undefined && { unresponsivePid: holder }), running: false, socket },
           null,
           2,
         )}\n`,
@@ -228,21 +266,12 @@ export async function serveCommand(
       const holder = lockHolderPid();
       if (holder !== undefined) {
         io.err(
-          `oort: pid ${holder} holds ${show(lockPathFor(socket))} but does not answer; stop it with \`kill ${holder}\`.\n`,
+          `oort: pid ${holder} holds ${show(lockPathFor(socket))} but does not answer; check what it is with \`ps -p ${holder}\` before stopping it.\n`,
         );
         return 1;
       }
-      // Nobody holds the lock: a socket or pid file left behind is stale; remove ours.
-      let removed = false;
-      if (before.reason === 'refused' && socketTrust(socket) === 'trusted') {
-        fs.rmSync(socket, { force: true });
-        removed = true;
-      }
-      const lock = lockPathFor(socket);
-      if (fs.existsSync(lock) && fs.lstatSync(lock).isFile()) {
-        fs.rmSync(lock, { force: true });
-        removed = true;
-      }
+      // Nobody holds the lock: a socket nothing answers on, or a pid file whose process is gone.
+      const removed = removeLeftovers(socket, lockPathFor(socket), before.reason === 'refused');
       io.out(
         `${ui.ok(`oort serve is not running${removed ? '; removed what a stopped daemon left behind' : ''}.`)}\n`,
       );
