@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "oortmem"
+version = "0.2.0"
+description = "Open-source memory for AI agents. Runs the Oort CLI (Node 22.15 or newer) from Python."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.9"
+authors = [{ name = "Oort" }]
+keywords = ["ai", "agents", "memory", "mcp", "claude", "llm"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://oortcloud.dev"
+Source = "https://github.com/oortmem/oort"
+Documentation = "https://oortcloud.dev/docs"
+
+[project.scripts]
+oort = "oortmem.cli:main"
+oortmem = "oortmem.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/oortmem"]

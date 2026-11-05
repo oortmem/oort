@@ -92,6 +92,7 @@ flowchart LR
 | [`@oortmem/rerank-voyage`](packages/rerank-voyage) | Reranking through Voyage AI                                                                    |
 | [`@oortmem/claude-code`](packages/claude-code)     | Claude Code hooks and transcript import                                                        |
 | [`@oortmem/mcp`](packages/mcp)                     | The MCP tools, schemas, instructions and skill, served over any memory backend                 |
+| [`oortmem` on PyPI](python)                        | A Python launcher for the same `oort` command (still needs Node 22.15 or newer)                |
 
 Install bundles for Claude Desktop, Claude Code, Codex, Cursor and Gemini CLI are in
 [`distribution/`](distribution).
