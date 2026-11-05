@@ -887,3 +887,141 @@ describe('recall modes (CON-34)', () => {
     );
   });
 });
+
+describe('recall touches only what it returns (CON-47)', () => {
+  /** The store, with every upsert and recordAccess counted. */
+  function counting(inner: MemoryStore): MemoryStore & { upserts: string[]; accessed: string[] } {
+    const upserts: string[] = [];
+    const accessed: string[] = [];
+    return {
+      ...inner,
+      upserts,
+      accessed,
+      upsert: (grant, m) => {
+        upserts.push(m.id);
+        return inner.upsert(grant, m);
+      },
+      recordAccess: (grant, ids, at) => {
+        accessed.push(...ids);
+        return inner.recordAccess(grant, ids, at);
+      },
+    };
+  }
+
+  const coldOne = (id: string, text: string, over: Partial<Memory> = {}): Memory =>
+    makeMemory({ id, text, stub: text, embedding: vec(1, 2, 3, 4), ...over });
+
+  it('recall.hydrates-only-the-returned-cold-memory', async () => {
+    const now = new Date(Date.now() + 1000);
+    const inner = await setup([]);
+    // All three match the query lexically; only one can be returned.
+    await seedCold(inner, coldOne('win', 'quokka migration plan quokka', { salience: 0.9 }));
+    await seedCold(inner, coldOne('lose', 'quokka sighting'));
+    await seedCold(
+      inner,
+      coldOne('old', 'quokka migration plan quokka draft', {
+        validFrom: '2026-01-01T00:00:00.000Z',
+        validTo: '2026-02-01T00:00:00.000Z',
+        expiredAt: '2026-02-01T00:00:00.000Z',
+        endReason: 'superseded',
+        supersededBy: 'win',
+      }),
+    );
+    const store = counting(inner);
+    const r = await recall(
+      { text: 'quokka migration plan', scope: SCOPE },
+      { store, config: withRecall({ returnK: 1 }), now },
+    );
+    expect(r.memories.map((m) => m.id)).toEqual(['win']);
+    expect(r.memories[0]?.explanation.hydrated).toBe(true);
+    expect(store.upserts).toEqual(['win']);
+    expect((await inner.get(TG, 'win'))?.tier).toBe('warm');
+    expect((await inner.get(TG, 'lose'))?.tier).toBe('cold');
+    expect((await inner.get(TG, 'old'))?.tier).toBe('cold');
+  });
+
+  it('recall.returns-a-superseded-cold-version-without-hydrating-it', async () => {
+    const now = new Date(Date.now() + 1000);
+    const inner = await setup([]);
+    await seedCold(
+      inner,
+      coldOne('old', 'quokka migration plan', {
+        validFrom: '2026-01-01T00:00:00.000Z',
+        validTo: '2026-02-01T00:00:00.000Z',
+        expiredAt: '2026-02-01T00:00:00.000Z',
+        endReason: 'superseded',
+      }),
+    );
+    const store = counting(inner);
+    const r = await recall(
+      { text: 'quokka migration plan', scope: SCOPE, mode: 'history' },
+      { store, config, now },
+    );
+    // A version that is no longer current is shown, but consolidate would only send it back.
+    expect(r.memories.map((m) => m.id)).toEqual(['old']);
+    expect(r.memories[0]?.text).toBe('quokka migration plan');
+    expect(r.memories[0]?.explanation.hydrated).toBe(false);
+    expect(store.upserts).toEqual([]);
+    expect((await inner.get(TG, 'old'))?.tier).toBe('cold');
+  });
+
+  it('recall.an-abstaining-recall-hydrates-and-records-nothing', async () => {
+    const inner = await setup([]);
+    await seedCold(inner, coldOne('c', 'quokka sighting at the zoo'));
+    const store = counting(inner);
+    const r = await recall(
+      { text: 'quokka migration plan schedule', scope: SCOPE },
+      { store, config: withRecall({ minCoverage: 0.9 }) },
+    );
+    expect(r.abstained).toBe(true);
+    expect(store.upserts).toEqual([]);
+    expect(store.accessed).toEqual([]);
+    expect((await inner.get(TG, 'c'))?.tier).toBe('cold');
+  });
+
+  it('recall.with-a-budget-returns-and-records-only-what-fits', async () => {
+    const now = new Date(Date.now() + 1000);
+    const long = 'auth port 8080 ' + 'x'.repeat(200);
+    const inner = await setup([
+      makeMemory({ id: 'a', text: 'auth port 8080 is the default', salience: 0.9 }),
+    ]);
+    await seedCold(inner, coldOne('b', long));
+    const store = counting(inner);
+    const a = (await inner.get(TG, 'a'))!;
+    const explanation = { fused: 0, rrf: 0, coverage: 0, activation: 0, hydrated: false };
+    // Room for the first memory's line only: the cold one ranks second and does not fit.
+    const budget = formatForInjection(
+      { memories: [{ ...a, explanation }], timings: {} },
+      1e6,
+      now,
+    ).length;
+    const r = await recall(
+      { text: 'auth port 8080', scope: SCOPE, budgetChars: budget },
+      { store, config, now },
+    );
+    expect(r.memories.map((m) => m.id)).toEqual(['a']);
+    expect(formatForInjection(r, budget, now)).toContain('auth port 8080 is the default');
+    expect(store.accessed).toEqual(['a']);
+    expect(store.upserts).toEqual([]);
+    expect((await inner.get(TG, 'a'))?.accessLog.count).toBe(1);
+    expect((await inner.get(TG, 'b'))?.tier).toBe('cold');
+    // Without the budget both are returned (and the cold one comes back to warm).
+    const unbounded = await recall(
+      { text: 'auth port 8080', scope: SCOPE },
+      { store, config, now },
+    );
+    expect(unbounded.memories.map((m) => m.id)).toEqual(['a', 'b']);
+    expect((await inner.get(TG, 'b'))?.tier).toBe('warm');
+  });
+
+  it('recall.a-failed-access-record-degrades-instead-of-rejecting', async () => {
+    const inner = await setup([makeMemory({ id: 'a', text: 'auth port 8080' })]);
+    const busy: MemoryStore = {
+      ...inner,
+      recordAccess: () => Promise.reject(Object.assign(new Error('busy'), { code: 'SQLITE_BUSY' })),
+    };
+    const r = await recall({ text: 'auth port', scope: SCOPE }, { store: busy, config });
+    expect(r.memories.map((m) => m.id)).toEqual(['a']);
+    expect(r.degraded).toContain('access-failed');
+  });
+});

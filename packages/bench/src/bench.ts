@@ -389,7 +389,7 @@ export interface BenchResult {
   coldMb: { before: number; after: number };
   lexical: Latency;
   dense: Latency;
-  /** After consolidate, so queries touch cold memories (first touch hydrates them). One run each. */
+  /** After consolidate, so queries touch cold memories (a returned one is hydrated). One run each. */
   postLexical: Latency;
   postDense: Latency;
   warmup: number;
@@ -514,7 +514,7 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchResult> {
         { store, config: env.config, now: GENERATOR_NOW },
       );
       coldTimes.push(performance.now() - t);
-      // Recall hydrates every cold candidate, returned or not; the target is hydrated when it left cold.
+      // Recall hydrates only the current cold memories it returns (CON-47); the target left cold if so.
       if ((await env.store.get(ALL_GRANT, m.id))?.tier !== 'cold') {
         hydrated++;
         hydrateTimes.push(r.timings['hydrateMs'] ?? 0);

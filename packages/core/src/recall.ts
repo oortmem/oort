@@ -72,7 +72,9 @@ export type Degradation =
   /** The reranker did not answer within `recall.rerankBudgetMs`: the fused order stands. */
   | 'rerank-timeout'
   /** Reading or promoting a cold copy failed: those memories stay cold, unhydrated. */
-  | 'hydrate-failed';
+  | 'hydrate-failed'
+  /** Recording the access failed: the results stand, but their activation was not bumped. */
+  | 'access-failed';
 
 export interface RecallResult {
   memories: RecalledMemory[];
@@ -103,10 +105,12 @@ export interface RecallDeps {
 const clock = (): number => performance.now();
 
 /**
- * Hybrid recall: lexical + dense first stage, cold hydration, activation-aware
- * fusion, optional rerank. Adapter failures degrade, never throw; so do store
- * failures in the dense search and in cold hydration (lexical-only, with the
- * reason in `degraded`). The lexical search is the floor: its failure rejects.
+ * Hybrid recall: lexical + dense first stage, activation-aware fusion, optional
+ * rerank, relevance gate, then (only for what is returned, within `budgetChars`
+ * when set) cold hydration and the access record. Adapter failures degrade,
+ * never throw; so do store failures in the dense search, in cold hydration and
+ * in the access record (with the reason in `degraded`). The lexical search is
+ * the floor: its failure rejects.
  */
 export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallResult> {
   const { store, config } = deps;
@@ -189,42 +193,10 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         ),
   ]);
 
+  // Live rows only: a cold row keeps its text, stub and entities, which is all fusion, the gate
+  // and the reranker read. Hydration waits until we know what is returned (CON-47).
   const ids = [...new Set([...lexical, ...dense].map((h) => h.id))];
-  const coldIds = new Set([...lexical, ...dense].filter((h) => h.tier === 'cold').map((h) => h.id));
-
-  const th = clock();
-  const hydratedIds = new Set<string>();
-  let hydrateFailed = false;
-  const loaded = await Promise.all(
-    ids.map(async (id): Promise<Memory | null> => {
-      const live = await read(id);
-      if (live === null) return null;
-      if (live.tier !== 'cold' && !coldIds.has(id)) return live;
-      try {
-        const blob = await store.coldGet(grant, id);
-        // A lost or torn blob: the memory stays cold, lexical-only.
-        // TODO(Phase 2): re-embed on hydration when an embedder is present.
-        if (!blob?.embedding) return live;
-        const hydrated: Memory = {
-          ...live,
-          text: blob.text,
-          stub: blob.stub,
-          entities: blob.entities,
-          embedding: blob.embedding,
-          tier: 'warm',
-        };
-        await store.upsert(grant, hydrated);
-        hydratedIds.add(id);
-        return hydrated;
-      } catch {
-        hydrateFailed = true;
-        return live;
-      }
-    }),
-  );
-  timings['hydrateMs'] = clock() - th;
-  if (hydrateFailed) degraded.push('hydrate-failed');
-
+  const loaded = await Promise.all(ids.map((id) => read(id)));
   const memories = new Map<string, Memory>();
   for (const m of loaded) if (m !== null) memories.set(m.id, m);
 
@@ -314,21 +286,63 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         coverage: coverage.get(f.id) ?? 0,
         ...(ds !== undefined ? { dense: ds } : {}),
         activation: activation(m.accessLog, m.salience, now, config.activation),
-        hydrated: hydratedIds.has(f.id),
+        hydrated: false,
       },
     });
   }
 
-  await store.recordAccess(
-    grant,
-    out.map((m) => m.id),
-    now,
-  );
-  const result =
+  let result =
     view.mode === 'history' ? await withChains(out, read, now, view, queryTokens, config) : out;
   for (const m of result) {
     if (isCurrent(m, now) && isStale(m, now, config.recall.staleAfterDays)) {
       m.explanation.stale = true;
+    }
+  }
+  // With a budget, return only what the injection block holds, so nothing cut is touched below.
+  if (q.budgetChars !== undefined) result = fitForInjection(result, q.budgetChars, now).kept;
+
+  // Touch only what is returned: the search's own hits (not chain-only versions). Cold ones that
+  // are current come back to warm; a version that is no longer current is shown from its live row,
+  // since consolidate would only send it back to cold.
+  const returned = new Set(result.map((m) => m.id));
+  const touched = new Set(out.filter((m) => returned.has(m.id)).map((m) => m.id));
+  const th = clock();
+  let hydrateFailed = false;
+  result = await Promise.all(
+    result.map(async (m): Promise<RecalledMemory> => {
+      if (!touched.has(m.id) || m.tier !== 'cold' || !isCurrent(m, now)) return m;
+      try {
+        const blob = await store.coldGet(grant, m.id);
+        // A lost or torn blob: the memory stays cold, lexical-only.
+        // TODO(Phase 2): re-embed on hydration when an embedder is present.
+        if (!blob?.embedding) return m;
+        const { explanation, ...live } = m;
+        const hydrated: Memory = {
+          ...live,
+          text: blob.text,
+          stub: blob.stub,
+          entities: blob.entities,
+          embedding: blob.embedding,
+          tier: 'warm',
+        };
+        await store.upsert(grant, hydrated);
+        return { ...hydrated, explanation: { ...explanation, hydrated: true } };
+      } catch {
+        hydrateFailed = true;
+        return m;
+      }
+    }),
+  );
+  timings['hydrateMs'] = clock() - th;
+  if (hydrateFailed) degraded.push('hydrate-failed');
+
+  // Access drives tiering, so it is recorded for the returned memories only. A failed write (e.g.
+  // SQLITE_BUSY) is reported, never a reason to lose the answer.
+  if (touched.size > 0) {
+    try {
+      await store.recordAccess(grant, [...touched], now);
+    } catch {
+      degraded.push('access-failed');
     }
   }
   timings['totalMs'] = clock() - t0;
@@ -531,12 +545,27 @@ function age(validFrom: string, now: Date): string {
  * memory stored before a rule existed, written by another tool, or missed by a regression.
  */
 export function formatForInjection(r: RecallResult, budgetChars: number, now = new Date()): string {
-  if (r.memories.length === 0) return '';
-  const open = '<oort-memory>\n';
-  const close = '\n</oort-memory>';
-  let total = open.length + close.length;
+  const { lines } = fitForInjection(r.memories, budgetChars, now);
+  if (lines.length === 0) return '';
+  return INJECT_OPEN + lines.join('\n') + INJECT_CLOSE;
+}
+
+const INJECT_OPEN = '<oort-memory>\n';
+const INJECT_CLOSE = '\n</oort-memory>';
+
+/**
+ * The memories `formatForInjection` renders within `budgetChars`, in order (a prefix: whole
+ * lines only, stopping at the first that does not fit), with their lines.
+ */
+export function fitForInjection<M extends RecalledMemory>(
+  memories: M[],
+  budgetChars: number,
+  now = new Date(),
+): { kept: M[]; lines: string[] } {
+  let total = INJECT_OPEN.length + INJECT_CLOSE.length;
   const lines: string[] = [];
-  for (const m of r.memories) {
+  const kept: M[] = [];
+  for (const m of memories) {
     const note =
       m.explanation.stale === true
         ? ` (may be outdated; last confirmed ${age(lastConfirmed(m), now)})`
@@ -545,8 +574,8 @@ export function formatForInjection(r: RecallResult, budgetChars: number, now = n
     const cost = line.length + (lines.length > 0 ? 1 : 0);
     if (total + cost > budgetChars) break;
     lines.push(line);
+    kept.push(m);
     total += cost;
   }
-  if (lines.length === 0) return '';
-  return open + lines.join('\n') + close;
+  return { kept, lines };
 }
