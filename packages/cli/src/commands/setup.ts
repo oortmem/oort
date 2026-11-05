@@ -36,6 +36,7 @@ import {
   type GlobalInstall,
 } from './install.js';
 import { keySource } from './keys.js';
+import { modelsPullCommand } from './models.js';
 import { keychainBlocker, runLogin } from './login.js';
 
 export interface SetupOptions {
@@ -168,7 +169,7 @@ function clackPrompter(ui: Ui): Prompter {
   };
 }
 
-type KeysMode = 'byo' | 'pro' | 'skip' | 'have-pro';
+type KeysMode = 'byo' | 'pro' | 'local' | 'skip' | 'have-pro';
 
 interface Plan {
   agents?: Host[];
@@ -196,8 +197,13 @@ function planFrom(opts: SetupOptions, detected: Host[]): Plan {
             );
   }
   if (opts.keys !== undefined) {
-    if (opts.keys !== 'byo' && opts.keys !== 'pro' && opts.keys !== 'skip') {
-      throw new Refusal(`--keys ${echo(opts.keys)} must be byo, pro or skip.`);
+    if (
+      opts.keys !== 'byo' &&
+      opts.keys !== 'pro' &&
+      opts.keys !== 'local' &&
+      opts.keys !== 'skip'
+    ) {
+      throw new Refusal(`--keys ${echo(opts.keys)} must be byo, pro, local or skip.`);
     }
     plan.keys = opts.keys;
   }
@@ -214,7 +220,8 @@ function nonInteractiveHelp(detected: Host[]): string {
     'setup never prompts when stdin is not a terminal. Pass --yes and your choices, for example:',
     `  oort setup --yes --agents ${agents} --keys byo --import skip`,
     `  --agents  detected (the default with --yes), none, or a comma list of: ${HOSTS.join(', ')}`,
-    '  --keys    byo (report missing keys and where to get them), pro (oort login: Oort Pro, no vendor keys), or skip',
+    '  --keys    byo (report missing keys and where to get them), pro (oort login: Oort Pro, no vendor keys),',
+    '            local (download local models, 58 MB: embeddings and rerank with no keys), or skip',
     '  --import  skip (the default) or an age such as 14d: imports Claude Code transcripts, using the writer',
     '  --no-demo skip the remember, recall and forget check',
     '  --install-global  under npx: run `npm i -g oortmem` first, so agents start a stable `oort`',
@@ -414,6 +421,11 @@ export async function setupCommand(
                   hint: 'no keys, $19/month; signs in at oortcloud.dev (oort login)',
                 },
                 { value: 'byo', label: 'Bring my own keys', hint: 'Voyage, TypeSafe, Anthropic' },
+                {
+                  value: 'local',
+                  label: 'Local models',
+                  hint: 'no keys, no account: embed and rerank on this CPU (58 MB download)',
+                },
                 { value: 'skip', label: 'Skip for now', hint: 'recall works lexical-only' },
               ],
               missing.length === 0 ? 'skip' : 'byo',
@@ -494,9 +506,27 @@ export async function setupCommand(
           ),
         );
       }
+    } else if (keys === 'local') {
+      try {
+        await modelsPullCommand([], {}, ctx);
+        done.push({
+          what: 'downloaded the local models to ~/.oort/models and switched embed and rerank to them',
+          undo: 'oort models rm',
+        });
+        p.info(
+          ui.dim(
+            'Recall now embeds and reranks on this machine. Saving new memories still needs the TypeSafe and Anthropic keys (or Oort Pro).',
+          ),
+        );
+      } catch (e) {
+        if (!(e instanceof Refusal)) throw e;
+        p.info(
+          ui.warn(`Local models skipped: ${e.message} Setup continues; recall works lexical-only.`),
+        );
+      }
     } else {
       p.info(
-        'Skipped. Recall works lexical-only until keys are set (`oort keys set <provider>`, or `oort login` for Oort Pro).',
+        'Skipped. Recall works lexical-only until keys are set (`oort keys set <provider>`, or `oort login` for Oort Pro), or local models are pulled (`oort models pull`).',
       );
     }
 

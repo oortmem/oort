@@ -107,7 +107,7 @@ oort setup --yes --agents claude-code,codex --keys byo --import skip
 | --- | --- | --- |
 | `--yes` | Never ask: every choice comes from the flags. | |
 | `--agents <list>` | `detected`, `none`, or a comma list of `claude-code`, `claude-desktop`, `codex`, `cursor`, `gemini`, `vscode`. | `detected` |
-| `--keys <mode>` | `byo`, `pro` or `skip`. | `byo` |
+| `--keys <mode>` | `byo`, `pro`, `local` or `skip`. | `byo` |
 | `--import <age>` | `skip`, or an age such as `14d`, `30d`, `12h` or `2w`. | `skip` |
 | `--no-demo` | Skip the remember, recall and forget check. | the check runs |
 | `--install-global` | Under `npx`: run `npm i -g oortmem` before connecting. | no install |
@@ -137,6 +137,11 @@ The steps:
      page, and the wait for approval. If the sign-in fails, expires or key storage is off,
      setup says why and carries on without it. `--yes --keys pro` signs in
      without a question: it prints the page and the code, and waits.
+   - **Local models.** No keys, no account: runs `oort models pull`, which
+     downloads the small embedder and reranker (58 MB) and switches to them
+     (see [No API keys: local models](#no-api-keys-local-models)). It needs
+     `@oortmem/local-models` installed; if the package or the download is
+     missing, setup says why and carries on. Undo: `oort models rm`.
    - **Skip.** Recall works lexical-only until keys are set.
 
    Setup also shows whether an Oort key exists (`OORT_API_KEY` or Keychain
@@ -500,6 +505,77 @@ Where keys are stored:
 `keys rm`, `login` and `logout` refuse while it is set. See `docs/claude-code.md` for why `ANTHROPIC_API_KEY` should
 stay out of your shell profile.
 
+## No API keys: local models
+
+Embeddings and reranking can run on this machine's CPU instead of through Voyage: no API keys, no
+account, and no network after a one-time download. Saving new memories still needs the decision
+and writer models (TypeSafe and Anthropic keys, or Oort Pro); a local decision model is CON-16.
+
+```sh
+npm i -g @oortmem/local-models   # the runtime: ONNX Runtime, about 115 MB
+oort models pull                 # download the default models (58 MB), verify, and use them
+oort models [list] [--json]      # the catalog: downloaded, in use
+oort models verify [models...]   # re-hash downloaded files against their pins
+oort models rm [models...]       # delete them and switch back to the default provider
+oort reembed [--force] [--yes]   # re-embed every memory with the configured embedder
+```
+
+`oort setup` offers the same as **Local models** in the keys step (`--keys local`).
+
+**Opt-in only.** Nothing is downloaded until you run `oort models pull` (or pick local models in
+`oort setup`): never during a hook, a recall or `oort doctor`. Setting `embed.provider` to
+`local` without pulling changes nothing; recall stays lexical and says to run `oort models pull`.
+Every file is pinned to a Hugging Face commit and its SHA-256, checked as it downloads; a
+mismatch keeps nothing. Files go to `~/.oort/models/<model>` (owner-only), with a manifest
+written last and an optimised copy of the graph that loads about five times faster.
+`OORT_MODELS_URL` points the pull at a mirror with the same layout.
+
+`pull` writes the choice to `~/.oort/config.json`:
+
+```json
+{ "embed": { "provider": "local", "model": "bge-small-en-v1.5" },
+  "rerank": { "provider": "local", "model": "ms-marco-minilm-l6-v2" } }
+```
+
+| Model | Role | Download | Licence | Use |
+| --- | --- | --- | --- | --- |
+| `bge-small-en-v1.5` | embed | 34 MB | MIT ([BAAI](https://huggingface.co/BAAI/bge-small-en-v1.5)) | default; English, 384 dimensions |
+| `ms-marco-minilm-l6-v2` | rerank | 24 MB | Apache-2.0 ([cross-encoder](https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2)) | default; English |
+| `qwen3-embedding-0.6b` | embed | 625 MB | Apache-2.0 ([Qwen](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)) | multilingual; for `oort mcp` |
+| `bge-reranker-v2-m3` | rerank | 588 MB | Apache-2.0 ([BAAI](https://huggingface.co/BAAI/bge-reranker-v2-m3)) | multilingual; for `oort mcp` |
+
+The defaults are small because every Claude Code hook is a new process that loads the model
+from disk. Measured on an Apple M1 Max, one thread, CPU time: bge-small loads in about 110 ms
+(22 ms from the optimised copy) and embeds a query in 6 ms; MiniLM loads in 60 ms (13 ms) and
+scores 16 short documents in 110 ms. The large models take 0.8 to 1 s to load plus up to 1.5 s
+to parse their tokenizer, use about 1 GB of memory, and need 120 ms per query or 2.3 s per 16
+documents, so they suit the long-lived `oort mcp` server. Runtime: `onnxruntime-node` (MIT) and
+`@huggingface/tokenizers` (Apache-2.0), loaded only on first use.
+
+**In the hooks.** The prompt hook (`UserPromptSubmit`) embeds the query locally, loading the
+model only when the lexical search is not already confident and the query is not in the
+10-minute cache. It does not run the local reranker: loading it on every prompt cost about
+450 ms and often ran past the rerank budget, so the hook ranks by fusion and the relevance gate.
+`oort mcp` and `oort recall` load both models once and rerank. On a heavily loaded M1 Max (load
+average about 300), a prompt hook took 400 to 560 ms at p50 with the local embedder against 245 ms
+lexical-only, and found the right memory for 6 of 6 paraphrased questions against 1 of 6. In a
+warm process, recall took 137 ms at p50 with a 10 ms embed and a 114 ms rerank of 30 candidates.
+
+**Switching embedders.** Vectors from two models are not comparable, even at the same dimension
+(a 384-dimension model is zero-padded to the store's 512, which leaves cosine similarity as it
+was). The store records which embedder its vectors come from (`voyage/voyage-3.5-lite`,
+`local/bge-small-en-v1.5`); a store from before this was recorded is Voyage's. When the
+configured embedder differs, dense recall and saving are off (recall stays lexical and, where a
+reranker is set, reranked) until `oort reembed` recomputes every vector, cold copies included,
+from the memory's text. `oort doctor` reports the active embedder and any mismatch. Re-embedding
+through Voyage asks first, since the provider bills it. `oort cloud import` sends text only from
+a store embedded locally, so Oort Cloud embeds it with Voyage.
+
+The reranker's scores are mapped onto the 0 to 1 range that `recall.minRerankScore` assumes
+(MiniLM's raw scores sit near -10 for unrelated pairs); this calibration is provisional until it
+is checked on the eval. On Linux x64, npm runs ONNX Runtime's install script, which downloads
+CUDA libraries Oort does not use; `ONNXRUNTIME_NODE_INSTALL=skip` skips them.
+
 ## Oort Pro: `oort login` / `oort logout`
 
 ```sh
@@ -658,10 +734,10 @@ Pro, with no key and a 3 second timeout.
 
 | Group | Checks | A problem and its fix |
 | --- | --- | --- |
-| `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort keys set <provider>, or oort login (Oort Pro)`. A model the relay does not serve: use the default model, or set the vendor key. |
+| `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. A role on a local model instead loads it and runs it once, offline. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort keys set <provider>, or oort login (Oort Pro)`. A model the relay does not serve: use the default model, or set the vendor key. |
 | `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, for this bin. | Missing, from another path, or a command that is not executable: `oort install claude-code`. Unparseable settings: fix the JSON, then `oort install claude-code`. |
 | `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
-| `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Readable by others: `chmod 700 ~/.oort`. |
+| `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; the embedder its vectors come from matches the configured one; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
 
 Each check has a status: `✓` ok, `!` warn, `✗` fail, `·` info and `?`

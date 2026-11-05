@@ -90,6 +90,7 @@ flowchart LR
 | [`@oortmem/decide-jev`](packages/decide-jev)       | Add, update, supersede or skip decisions, using TypeSafe Jev                                   |
 | [`@oortmem/embed-voyage`](packages/embed-voyage)   | Embeddings through Voyage AI                                                                   |
 | [`@oortmem/rerank-voyage`](packages/rerank-voyage) | Reranking through Voyage AI                                                                    |
+| [`@oortmem/local-models`](packages/local-models)   | Embeddings and reranking on your CPU (ONNX Runtime): no keys, no account                       |
 | [`@oortmem/claude-code`](packages/claude-code)     | Claude Code hooks and transcript import                                                        |
 | [`@oortmem/mcp`](packages/mcp)                     | The MCP tools, schemas, instructions and skill, served over any memory backend                 |
 | [`oortmem` on PyPI](python)                        | A Python launcher for the same `oort` command (still needs Node 22.15 or newer)                |
@@ -102,6 +103,8 @@ This repo is the open-source engine and CLI only. The hosted side (oortcloud.dev
 ## Keys, or Oort Pro
 
 Oort calls three model services: Voyage AI (embeddings and rerank), TypeSafe (decisions) and Anthropic (the writer). Bring your own keys with `oort keys set`. They stay in the macOS Keychain, or in a `0600` credentials file on Linux and Windows.
+
+Or run with **no keys and no account**: `npm i -g @oortmem/local-models && oort models pull` downloads small embedding and rerank models (58 MB, MIT and Apache-2.0) and runs them on your CPU, offline. Saving new memories still needs the decision and writer models. [Local models](docs/cli.md#no-api-keys-local-models).
 
 Or use **Oort Pro**: $19/month, VAT included where applicable. No API keys needed, and your memories stay on your machine. Run `oort login` and the engine reaches the same services through our relay, which stores no content. [Pricing](https://oortcloud.dev/pricing).
 

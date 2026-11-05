@@ -14,10 +14,17 @@ import { loginCommand, logoutCommand, type LoginDeps } from './commands/login.js
 import { inspectCommand } from './commands/inspect.js';
 import { installCommand } from './commands/install.js';
 import { mcpCommand } from './commands/mcp.js';
+import {
+  modelsListCommand,
+  modelsPullCommand,
+  modelsRmCommand,
+  modelsVerifyCommand,
+} from './commands/models.js';
 import { observeCommand } from './commands/observe.js';
 import { pinCommand } from './commands/pin.js';
 import { projectLinkCommand, projectUnlinkCommand } from './commands/project.js';
 import { recallCommand, type RecallOptions } from './commands/recall.js';
+import { reembedCommand } from './commands/reembed.js';
 import { revalidateCommand } from './commands/revalidate.js';
 import { setupCommand, type SetupOptions } from './commands/setup.js';
 import { statsCommand } from './commands/stats.js';
@@ -76,7 +83,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('interactive setup: agents, keys, connect, import, a quick check')
     .option('--yes', 'never ask: take every choice from the flags (detected agents by default)')
     .option('--agents <list>', 'detected, none, or a comma list: claude-code,codex,cursor,…')
-    .option('--keys <mode>', 'byo, pro or skip')
+    .option('--keys <mode>', 'byo, pro, local or skip')
     .option('--import <age>', 'skip, or import Claude Code sessions from this age: 14d, 30d')
     .option('--no-demo', 'skip the remember, recall and forget check')
     .option(
@@ -278,6 +285,39 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('delete a stored key')
     .argument('<provider>', 'voyage, typesafe, anthropic or oort')
     .action(run((provider: string) => keysRmCommand(provider, ctx)));
+
+  const models = p
+    .command('models')
+    .description('local models: embeddings and rerank on this CPU, no keys or account');
+  models
+    .command('list', { isDefault: true })
+    .description('the local models, which are downloaded, and which are in use')
+    .option('--json', 'print JSON')
+    .action(run((o: { json?: boolean }) => modelsListCommand(o, ctx)));
+  models
+    .command('pull')
+    .description(
+      'download (default: the small embedder and reranker, 58 MB), verify each file, and use them',
+    )
+    .argument('[models...]', 'model ids from `oort models list`')
+    .option('--no-use', 'download only; leave ~/.oort/config.json as it is')
+    .action(run((ids: string[], o: { use?: boolean }) => modelsPullCommand(ids, o, ctx)));
+  models
+    .command('verify')
+    .description('re-hash downloaded models against their pinned SHA-256')
+    .argument('[models...]', 'model ids (default: every downloaded one)')
+    .action(run((ids: string[]) => modelsVerifyCommand(ids, ctx)));
+  models
+    .command('rm')
+    .description('delete downloaded models (default: all) and switch back to the default provider')
+    .argument('[models...]', 'model ids (default: every downloaded one)')
+    .action(run((ids: string[]) => modelsRmCommand(ids, ctx)));
+
+  p.command('reembed')
+    .description('re-embed every memory with the configured embedder (after switching embedders)')
+    .option('--force', 're-embed even when the store already uses the configured embedder')
+    .option('--yes', 'do not ask before calling a paid embedder')
+    .action(run((o: { force?: boolean; yes?: boolean }) => reembedCommand(o, ctx)));
 
   p.command('import')
     .description('import existing Claude Code transcripts (estimates first, then asks)')

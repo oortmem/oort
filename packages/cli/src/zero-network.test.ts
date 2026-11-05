@@ -22,6 +22,7 @@ import {
   writeTranscript,
   type FakeIo,
 } from '../test/helpers.js';
+import { fixtureFetch, registerTinyModels } from '../test/local-models.js';
 
 const require = createRequire(import.meta.url);
 
@@ -276,6 +277,81 @@ describe('zero network without keys or Oort Pro', () => {
     }
     expect(r.io.stdout).toBe('');
     expect(guard.attempts).toEqual([]);
+  });
+
+  it('offline.local-models-chosen-but-not-pulled-download-nothing', async () => {
+    // Choosing local models in config is not consent to download: without `oort models pull`,
+    // recall and the hook stay lexical and nothing reaches the network.
+    const s = sandbox();
+    await seed(s);
+    fs.writeFileSync(
+      path.join(s.oortHome, 'config.json'),
+      JSON.stringify({
+        embed: { provider: 'local', model: 'bge-small-en-v1.5' },
+        rerank: { provider: 'local', model: 'ms-marco-minilm-l6-v2' },
+      }),
+    );
+    const r = await oort(s, ['recall', 'which port does the auth service listen on']);
+    expect(r.code).toBe(0);
+    expect(r.io.stdout).toContain('port 5582');
+    expect(r.io.stderr).toContain('oort models pull');
+    expect((await oort(s, ['doctor', '--json'])).code).toBe(0);
+    expect(fs.existsSync(path.join(s.oortHome, 'models'))).toBe(false);
+    expect(guard.attempts).toEqual([]);
+  });
+
+  it('offline.pulled-local-models-recall-without-network', async () => {
+    // After the one opt-in download, embeddings and rerank run on the CPU: recall, the prompt
+    // hook and doctor (which loads both models) make no network call.
+    const unregister = registerTinyModels();
+    try {
+      const s = sandbox();
+      await seed(s);
+      const pull = fakeIo({
+        cwd: s.cwd,
+        env: { HOME: s.home, OORT_HOME: s.oortHome, OORT_NO_KEYCHAIN: '1' },
+      });
+      const calls: string[] = [];
+      expect(
+        await runCli(
+          ['models', 'pull', 'tiny-embed', 'tiny-rerank'],
+          pull,
+          undefined,
+          createKeychain({ platform: 'none' }),
+          {
+            fetch: fixtureFetch(calls),
+          },
+        ),
+      ).toBe(0);
+      expect(calls.length).toBeGreaterThan(0); // through the injected fetch, never the global one
+      expect((await oort(s, ['reembed'])).code).toBe(0);
+      const r = await oort(s, ['recall', 'which port does the auth service listen on']);
+      expect(r.code).toBe(0);
+      expect(r.io.stderr).not.toContain('lexical-only');
+      const hook = fakeIo({
+        cwd: s.cwd,
+        env: { HOME: s.home, OORT_HOME: s.oortHome, OORT_NO_KEYCHAIN: '1' },
+        stdin: JSON.stringify({
+          session_id: 's-offline-local',
+          cwd: s.cwd,
+          hook_event_name: 'UserPromptSubmit',
+          prompt: 'which port does the auth service listen on?',
+        }),
+      });
+      expect(
+        await runCli(
+          ['hook', 'UserPromptSubmit'],
+          hook,
+          undefined,
+          createKeychain({ platform: 'none' }),
+        ),
+      ).toBe(0);
+      const doctor = await oort(s, ['doctor', '--json']);
+      expect(doctor.io.stdout).toContain('local model tiny-embed');
+      expect(guard.attempts).toEqual([]);
+    } finally {
+      unregister();
+    }
   });
 
   it('offline.a-key-does-reach-the-guard (control)', async () => {

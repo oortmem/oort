@@ -53,6 +53,14 @@ import {
 
 export { SCHEMA_VERSION, StoreMigrationRequiredError } from './schema.js';
 export { BACKUPS_KEPT, listBackups, type BackupKind } from './backup.js';
+export {
+  readEmbedderBinding,
+  reembedSqliteStore,
+  writeEmbedderBinding,
+  type EmbedderBinding,
+  type ReembedOptions,
+  type ReembedResult,
+} from './embedder.js';
 
 export {
   ColdBlobCorruptError,

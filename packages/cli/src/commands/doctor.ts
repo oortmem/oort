@@ -2,12 +2,18 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { filterFor, hookStatus } from '@oortmem/claude-code';
 import { resolveConfig, resolveHome, localGrant, principalGrant } from '@oortmem/core';
-import { listBackups, SCHEMA_VERSION, sqliteSchemaVersion } from '@oortmem/store-sqlite';
+import {
+  listBackups,
+  readEmbedderBinding,
+  SCHEMA_VERSION,
+  sqliteSchemaVersion,
+} from '@oortmem/store-sqlite';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
 import { ROLES, ROLE_VENDOR, keyLookup, routeFor, type AdapterRole } from '../credentials.js';
 import { describeProblem, inspectCredentialsFile } from '../credentials-file.js';
 import { PROVIDER_ENV } from '../keychain.js';
 import { OortCloudError, cloudUrl, createCloudClient, readCloudSettings } from '../cloud.js';
+import { LOCAL_INSTALL_HINT, LOCAL_PROVIDER, importLocalModels } from '../local-models.js';
 import { RELAY_MODELS, relayUrl } from '../relay.js';
 import { uiFor, type Ui } from '../ui.js';
 import { Refusal, echo, tilde, withWired, type Ctx } from '../util.js';
@@ -40,6 +46,59 @@ const CONFIG_KEY: Record<AdapterRole, 'embed' | 'rerank' | 'decide' | 'writer'> 
   write: 'writer',
 };
 
+/**
+ * A role served by a local model: the package, the downloaded files, and one real load and
+ * inference (no network; the model was verified when it was pulled).
+ */
+async function localModelCheck(
+  role: 'embed' | 'rerank',
+  config: ReturnType<typeof resolveConfig>,
+): Promise<Check> {
+  const model = config[role].model;
+  const lm = await importLocalModels();
+  if (lm instanceof Error) {
+    return {
+      group: 'keys',
+      name: role,
+      status: 'warn',
+      detail: lm.message,
+      fix: LOCAL_INSTALL_HINT,
+    };
+  }
+  try {
+    const t0 = performance.now();
+    if (role === 'embed') {
+      const e = lm.localEmbedder({ home: config.home, model, dimension: config.embed.dimension });
+      await e.embed(['oort doctor'], 'query');
+    } else {
+      const r = lm.localReranker({ home: config.home, model });
+      await r.rerank('oort doctor', [{ id: 'd', text: 'oort doctor check' }], 1);
+    }
+    const ms = Math.round(performance.now() - t0);
+    return {
+      group: 'keys',
+      name: role,
+      status: 'ok',
+      detail: `local model ${model} on this CPU, no key (loads and runs in ${ms} ms)`,
+    };
+  } catch (e) {
+    const fix =
+      e instanceof lm.LocalModelError && e.kind === 'not-ready'
+        ? `oort models pull ${model}`
+        : 'oort models list';
+    return {
+      group: 'keys',
+      name: role,
+      status: e instanceof lm.LocalModelError && e.kind === 'not-ready' ? 'warn' : 'fail',
+      detail:
+        e instanceof lm.LocalModelError
+          ? e.message
+          : `local model ${model} failed to run (${(e as Error).name})`,
+      fix,
+    };
+  }
+}
+
 /** Keys: which one serves each role (presence only), and whether the relay can serve it. */
 async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean }> {
   const env = ctx.io.env;
@@ -53,6 +112,10 @@ async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean 
   const checks: Check[] = [];
   let relayed = false;
   for (const role of ROLES) {
+    if ((role === 'embed' || role === 'rerank') && config?.[role].provider === LOCAL_PROVIDER) {
+      checks.push(await localModelCheck(role, config));
+      continue;
+    }
     const r = await routeFor(role, lookup);
     const where = (source: 'env' | 'keychain', provider: string): string =>
       source === 'env'
@@ -284,7 +347,7 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
   }
   try {
     // Opening migrates an older store (after copying it): doctor is where the hooks send you.
-    const { count, planet } = await withWired(ctx, async (w) => {
+    const { count, planet, embedder } = await withWired(ctx, async (w) => {
       const all = await w.store.list(localGrant(filterFor(w.scope)), { validOnly: false });
       // Every memory this machine's agent wrote lives in your Planet (levels, CON-61).
       const { orgId, customerId, agentId } = w.scope;
@@ -292,7 +355,7 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
         validOnly: false,
         embeddings: false,
       });
-      return { count: all.length, planet: own.length };
+      return { count: all.length, planet: own.length, embedder: w.embedder };
     });
     checks.push({
       group: 'store',
@@ -306,6 +369,30 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
         name: 'migration',
         status: 'ok',
         detail: `migrated the store from schema version ${before} to ${SCHEMA_VERSION}; your memories now live in your Planet`,
+      });
+    }
+    const bound = readEmbedderBinding(db);
+    if (embedder !== undefined && !embedder.matches) {
+      checks.push({
+        group: 'store',
+        name: 'embedder',
+        status: 'warn',
+        detail: `memories are embedded with ${embedder.bound}, embed is set to ${embedder.active}: dense recall and saving are off`,
+        fix: 'oort reembed',
+      });
+    } else if (embedder !== undefined) {
+      checks.push({
+        group: 'store',
+        name: 'embedder',
+        status: 'ok',
+        detail: `${embedder.active}; the store's vectors match`,
+      });
+    } else if (bound.model !== null) {
+      checks.push({
+        group: 'store',
+        name: 'embedder',
+        status: 'info',
+        detail: `the store's vectors come from ${bound.model}; no embedder is available, so recall is lexical`,
       });
     }
     checks.push({
