@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "oortmem",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Oort: open-source memory for AI agents.",
   "owner": {
     "name": "Oort",
