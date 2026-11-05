@@ -10,6 +10,8 @@ export interface TemporalView {
   asOf?: string;
   /** For `known-at`: the instant in transaction time. */
   knownAt?: string;
+  /** Also show withdrawn judgments (CON-71); every mode leaves them out by default. */
+  includeWithdrawn?: boolean;
 }
 
 /**
@@ -76,6 +78,8 @@ const t = (iso: string): number => Date.parse(iso);
  * - history: every version of a fact, except corrected ones.
  */
 export function isVisible(m: Memory, now: Date, v: TemporalView): boolean {
+  // A withdrawn judgment no longer counts in any slice of time: the expert took it back.
+  if (m.judgment?.withdrawn !== undefined && v.includeWithdrawn !== true) return false;
   switch (v.mode) {
     case 'current':
       return isCurrent(m, now);

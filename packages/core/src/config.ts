@@ -120,6 +120,21 @@ const serve = z
   })
   .default({ autostart: false, idleMinutes: 30 });
 
+/**
+ * Judgment memory (CON-71). Read from the home config only: a repository's `oort.config.json`
+ * cannot name who counts as an expert.
+ * - `experts`: the expert ids an agent may record judgments for over MCP (`record_judgment`).
+ *   Empty (the default): MCP recording is refused.
+ * - `operator`: who withdraws, confirms or purges judgments from this machine (`--by` overrides);
+ *   default `local-user`.
+ */
+const judge = z
+  .strictObject({
+    experts: z.array(z.string().trim().min(1).max(128)).max(200).default([]),
+    operator: z.string().trim().min(1).max(128).optional(),
+  })
+  .default({ experts: [] });
+
 export const OortConfig = z.strictObject({
   embed,
   rerank,
@@ -129,6 +144,7 @@ export const OortConfig = z.strictObject({
   recall,
   project,
   serve,
+  judge,
 });
 export type OortConfig = z.infer<typeof OortConfig>;
 
@@ -139,13 +155,14 @@ export type ResolvedConfig = OortConfig & {
   sources: Record<string, ConfigSource>;
   /**
    * Keys a project's `oort.config.json` set that only the home config may set (`serve`: a
-   * repository must not start processes on this machine). Ignored; absent when there are none.
+   * repository must not start processes on this machine; `judge`: nor name experts). Ignored;
+   * absent when there are none.
    */
   ignoredProjectKeys?: string[];
 };
 
 /** Keys read from the home config only; a project file's value is ignored (and reported). */
-const HOME_ONLY_KEYS: ReadonlySet<string> = new Set(['serve']);
+const HOME_ONLY_KEYS: ReadonlySet<string> = new Set(['serve', 'judge']);
 
 const CONFIG_KEYS = Object.keys(OortConfig.shape);
 

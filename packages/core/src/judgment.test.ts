@@ -227,9 +227,11 @@ describe('judgment memory: applying', () => {
       expect(p.by).toBe('ada');
     }
     expect(r.agreement).toEqual({ rejected: 1 });
-    // The decider saw the precedents' reasons verbatim, and a choice over the verdict set.
+    // The decider saw the precedents' reasons verbatim, and a choice over the verdicts they voted
+    // for: one verdict, offered against "other".
     expect(d.asked).toHaveLength(1);
-    expect(d.asked[0]!.verdicts.sort()).toEqual(['approved', 'rejected']);
+    expect(d.asked[0]!.verdicts).toEqual(['rejected', 'other']);
+    expect(r.verdicts).toEqual(['rejected', 'other']);
     expect(d.asked[0]!.precedents.map((p) => p.reason).sort()).toEqual(
       cures.map((c) => c.reason).sort(),
     );
@@ -292,7 +294,7 @@ describe('judgment memory: applying', () => {
     const store = createMemoryStore({ now: () => NOW });
     await seed(store, cures); // no embedder either: lexical
     const r = await judge(
-      { summary: 'Video claims a vitamin cures the flu overnight', domain: 'content' },
+      { summary: 'Reel says a vitamin cures the flu', domain: 'content' },
       { store, grant: grantOf(), now: NOW },
     );
     expect(r.status).toBe('precedents-only');
@@ -300,8 +302,9 @@ describe('judgment memory: applying', () => {
     expect(r.prediction).toBeUndefined();
     expect(r.similarity).toBe('lexical');
     expect(r.precedents.length).toBeGreaterThan(0);
-    expect(r.precedents[0]!.subject.summary).toBe('Post says a vitamin cures the flu');
-    expect(r.precedents[0]!.reason).toBe('Health claim with no cited source.');
+    const flu = r.precedents.find((p) => p.subject.summary === 'Post says a vitamin cures the flu');
+    expect(flu?.reason).toBe('Health claim with no cited source.');
+    expect(r.precedents.filter((p) => p.near).length).toBeGreaterThanOrEqual(2);
   });
 
   it('judgment.low-confidence-needs-the-expert-but-shows-the-lean', async () => {
@@ -343,7 +346,7 @@ describe('judgment memory: applying', () => {
   it('judgment.withdrawn-judgments-never-count', async () => {
     const store = createMemoryStore({ now: () => NOW });
     const embed = topicEmbedder();
-    const [a, b] = await seed(store, cures.slice(0, 2), embed);
+    const [a, b, c] = await seed(store, cures, embed);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-judgment-'));
     const config = resolveConfig(dir, { OORT_HOME: path.join(dir, 'home') });
     const recalled = async () =>
@@ -364,8 +367,8 @@ describe('judgment memory: applying', () => {
       { summary: 'A vitamin cures colds', domain: 'content' },
       { store, grant: grantOf(), embed, decide: d.decide, now: NOW },
     );
-    expect(r.precedents.map((p) => p.id)).toEqual([a!.id]);
-    expect(d.asked[0]!.precedents).toHaveLength(1);
+    expect(r.precedents.map((p) => p.id).sort()).toEqual([a!.id, c!.id].sort());
+    expect(d.asked[0]!.precedents).toHaveLength(2);
     // Not in packs, and not in recall either.
     const pack = parseJudgmentPack(
       formatJudgmentPack(await store.list(grantOf()), {
@@ -374,7 +377,7 @@ describe('judgment memory: applying', () => {
         exportedAt: NOW,
       }),
     );
-    expect(pack.lines.map((l) => l.id)).toEqual([a!.id]);
+    expect(pack.lines.map((l) => l.id).sort()).toEqual([a!.id, c!.id].sort());
     expect(await recalled()).not.toContain(b!.id);
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -562,6 +565,13 @@ describe('judgment memory: bulk import and evaluation', () => {
           verdict: 'rejected',
           reason: 'Throw, do not return null.',
         }),
+        ada({
+          subject: 'Code swallows a null error in the parser function',
+          domain: 'code-review',
+          by: 'cy',
+          verdict: 'rejected',
+          reason: 'Errors must not be swallowed.',
+        }),
       ],
       embed,
     );
@@ -589,7 +599,7 @@ describe('judgment memory: bulk import and evaluation', () => {
     expect(report.domains['code-review']!.points[0]).toMatchObject({ coverage: 1, agreement: 1 });
     expect(report.domains['(all)']!.items).toBe(4);
     // Nothing was recorded.
-    expect(await store.list(grantOf())).toHaveLength(3);
+    expect(await store.list(grantOf())).toHaveLength(4);
   });
 });
 
@@ -729,7 +739,11 @@ describe('judgment memory: pack security', () => {
     expect((await importJudgmentPack(second, deps)).added).toHaveLength(1);
     // The same decision under a new pack (a re-export) is still recognised, by what it says.
     const reexport = parseJudgmentPack(forgePack({ ...META, name: 'again' }, [packLine('zz')]));
-    expect(await importJudgmentPack(reexport, deps)).toEqual({ added: [], skipped: ['zz'] });
+    expect(await importJudgmentPack(reexport, deps)).toEqual({
+      added: [],
+      skipped: ['zz'],
+      tombstoned: [],
+    });
     // Withdrawn here: no pack, whatever it claims, brings it back.
     const kept = (await to.list(grantOf())).find((m) => m.judgment?.pack?.originalId === 'l1')!;
     await withdrawJudgment(to, grantOf(), kept, 'ada', NOW);
@@ -780,7 +794,8 @@ describe('judgment memory: pack security', () => {
   it('judgment.imported-experts-count-only-when-asked', async () => {
     const store = createMemoryStore({ now: () => NOW });
     const embed = topicEmbedder();
-    await importJudgmentPack(parseJudgmentPack(forgePack(META, [packLine('l1')])), {
+    const two = [packLine('l1'), packLine('l2', { subject: 'Ad says a remedy cures pain' })];
+    await importJudgmentPack(parseJudgmentPack(forgePack(META, two)), {
       store,
       grant: grantOf(),
       scope: SCOPE,
@@ -794,7 +809,7 @@ describe('judgment memory: pack security', () => {
     expect(local).toMatchObject({
       status: 'needs-expert',
       why: 'no-precedents',
-      importedExcluded: 1,
+      importedExcluded: 2,
     });
     expect(d.asked).toEqual([]);
     const withImported = await judge(item, deps, { includeImported: true });
@@ -814,6 +829,8 @@ describe('judgment memory: pack security', () => {
       via: 'cli',
     });
     expect(r.outcome).toBe('added');
-    expect((await judge(item, deps)).precedents.map((p) => p.imported)).toEqual([undefined]);
+    const mine = await judge(item, deps);
+    expect(mine.precedents.map((p) => p.imported)).toEqual([undefined]);
+    expect(mine).toMatchObject({ status: 'needs-expert', why: 'too-few' });
   });
 });
