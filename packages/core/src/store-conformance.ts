@@ -11,8 +11,20 @@
  * more); a store with a fixed dimension must be built by `make()` with it.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  addressed,
+  addressOf,
+  authorOf,
+  canonicalMemory,
+  GALAXY_ROOT,
+  nodeOf,
+  type Address,
+  type Author,
+  type NodeRef,
+  type Provenance,
+} from './address.js';
 import type { MemoryStore, ScopeFilter } from './adapters.js';
-import { localGrant, principalGrant, type Grant } from './grant.js';
+import { GrantError, localGrant, nodeGrant, principalGrant, type Grant } from './grant.js';
 import type { Memory, Scope } from './model.js';
 import { localScope } from './scope.js';
 import { isolationViolations, nonInterference } from './isolation.js';
@@ -650,5 +662,363 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
         expect(await nonInterference(make, seed, 60)).toBeNull();
       }
     }, 120_000);
+
+    it(`isolation.non-interference-multi-node-${seeds}-seeds`, async () => {
+      for (let seed = 1; seed <= seeds; seed++) {
+        expect(await nonInterference(make, seed, 60, { multiNode: true })).toBeNull();
+      }
+    }, 120_000);
+  });
+
+  levelConformance(name, make);
+}
+
+/** The owner every level case belongs to or reads as: the local principal. */
+const OWNER = { orgId: 'local', customerId: 'self', agentId: 'claude-code' };
+
+const PROVENANCE: Provenance = {
+  derivedFrom: [{ vault: 'acct:1', memoryId: 'src-1' }],
+  contributors: [
+    {
+      memberRef: 'mem-1',
+      agentId: 'claude-code',
+      at: '2026-11-01T00:00:00.000Z',
+      action: 'asserted',
+    },
+  ],
+  support: { members: 1, agents: 1 },
+  gate: { policyVersion: 'p1', mode: 'confirmed' },
+};
+
+/** One memory per level (and a Planet memory by another agent), each with a distinct embedding. */
+export const LEVEL_CASES: {
+  name: string;
+  address: Address;
+  author: Author;
+  provenance?: Provenance;
+}[] = [
+  {
+    name: 'planet-other-author',
+    address: { level: 'user', orgId: 'local', customerId: 'self', projectId: 'p1' },
+    author: { agentId: 'cursor' },
+  },
+  {
+    name: 'star',
+    address: { level: 'agent', orgId: 'local', agentId: 'cursor', projectId: 'p1' },
+    author: { agentId: 'cursor' },
+  },
+  {
+    name: 'orbit',
+    address: {
+      level: 'agent-user',
+      orgId: 'org:acme',
+      agentId: 'support-bot',
+      customerId: 'end-user-1',
+    },
+    author: { agentId: 'support-bot' },
+  },
+  {
+    name: 'flyby',
+    address: {
+      level: 'run',
+      orgId: 'local',
+      agentId: 'claude-code',
+      runId: 'run-1',
+      customerId: 'self',
+    },
+    author: { agentId: 'claude-code' },
+  },
+  {
+    name: 'flyby-no-customer',
+    address: { level: 'run', orgId: 'local', agentId: 'claude-code', runId: 'run-2' },
+    author: { agentId: 'claude-code' },
+  },
+  {
+    name: 'constellation',
+    address: { level: 'hive', orgId: 'org:acme', hiveId: 'checkout', projectId: 'p1' },
+    author: { agentId: 'claude-code', accountRef: 'acct:1' },
+    provenance: PROVENANCE,
+  },
+  {
+    name: 'galaxy',
+    address: { level: 'hive', orgId: 'org:acme', hiveId: GALAXY_ROOT },
+    author: { agentId: 'claude-code' },
+  },
+];
+
+/** A memory at `address` by `author` (scope filled to match). */
+export function memoryAt(
+  id: string,
+  address: Address,
+  author: Author,
+  overrides: Partial<Memory> = {},
+): Memory {
+  return makeMemory({ id, ...addressed(address, author), ...overrides });
+}
+
+/** Read and write every project of `nodes` (no author restriction). */
+export function nodesGrant(...nodes: NodeRef[]): Grant {
+  return nodeGrant({
+    principal: OWNER,
+    read: nodes.map((node) => ({ node, projectIds: 'all' as const })),
+  });
+}
+
+function render(m: Memory | null): string {
+  return m === null
+    ? 'null'
+    : JSON.stringify({ ...m, embedding: m.embedding === undefined ? null : [...m.embedding] });
+}
+
+/**
+ * Levels (CON-61): every address round-trips, illegal ones are refused, grants
+ * over node sets see exactly their nodes, and memories written before levels
+ * (and every pre-level grant) behave exactly as they did.
+ */
+function levelConformance(name: string, make: () => Promise<MemoryStore>): void {
+  describe(`store levels: ${name}`, () => {
+    let store: MemoryStore;
+
+    beforeEach(async () => {
+      store = await make();
+    });
+
+    afterEach(async () => {
+      await store.close();
+    });
+
+    const cases = () =>
+      LEVEL_CASES.map((c, i) => {
+        const m = memoryAt(`lv-${c.name}`, c.address, c.author, {
+          text: `levelprobe ${c.name} text`,
+          stub: `levelprobe ${c.name}`,
+          embedding: vec(i + 1, 1, -1, 2),
+          ...(c.provenance !== undefined && { provenance: c.provenance }),
+        });
+        return { ...c, m, g: nodesGrant(nodeOf(c.address)) };
+      });
+
+    it('levels.planet-memories-keep-their-shape', async () => {
+      const m = makeMemory({ id: 'legacy', scope: localScope('p1'), embedding: vec(1, 2, 3, 4) });
+      await store.upsert(TG, m);
+      const got = await store.get(TG, 'legacy');
+      expect(got).toEqual(m);
+      expect(got !== null && ('address' in got || 'author' in got || 'provenance' in got)).toBe(
+        false,
+      );
+      expect(addressOf(got as Memory)).toEqual({
+        level: 'user',
+        orgId: 'local',
+        customerId: 'self',
+        projectId: 'p1',
+      });
+      expect(authorOf(got as Memory)).toEqual({ agentId: 'claude-code' });
+    });
+
+    it('levels.every-level-roundtrips', async () => {
+      for (const c of cases()) {
+        await store.upsert(c.g, c.m);
+        const got = await store.get(c.g, c.m.id);
+        expect(got, c.name).toEqual(canonicalMemory(c.m));
+        expect(addressOf(got as Memory), c.name).toEqual(c.address);
+        expect(authorOf(got as Memory), c.name).toEqual(c.author);
+        expect(got?.provenance ?? null, c.name).toEqual(c.provenance ?? null);
+        expect(ids(await store.list(c.g)), c.name).toEqual([c.m.id]);
+        expect(ids(await store.lexical(c.g, 'levelprobe', 10)), c.name).toEqual([c.m.id]);
+        expect(ids(await store.dense(c.g, c.m.embedding as Int8Array, 10)), c.name).toEqual([
+          c.m.id,
+        ]);
+        const snapshot = (await store.get(c.g, c.m.id)) as Memory;
+        expect((await store.coldPut(c.g, snapshot)).skipped, c.name).toEqual([]);
+        expect(await store.coldGet(c.g, c.m.id), c.name).toEqual(canonicalMemory(snapshot));
+        expect((await store.get(c.g, c.m.id))?.tier, c.name).toBe('cold');
+      }
+    });
+
+    it('levels.pre-level-grants-see-no-other-level', async () => {
+      for (const c of cases()) await store.upsert(c.g, c.m);
+      const legacy = [TG, localGrant({ ...OWNER, projectIds: ['p1', null] })];
+      for (const g of legacy) {
+        for (const c of cases()) expect(await store.get(g, c.m.id), c.name).toBeNull();
+        expect(await store.list(g, { validOnly: false })).toEqual([]);
+        expect(await store.lexical(g, 'levelprobe', 50)).toEqual([]);
+        expect(await store.dense(g, vec(1, 1, -1, 2), 50)).toEqual([]);
+      }
+    });
+
+    it('levels.existing-data-unchanged', async () => {
+      const legacy = [
+        makeMemory({ id: 'old-1', text: 'levelprobe orbit one', embedding: vec(1, 1, -1, 2) }),
+        makeMemory({
+          id: 'old-2',
+          text: 'levelprobe orbit two',
+          scope: localScope('p1'),
+          embedding: vec(2, 1, -1, 2),
+          pinned: true,
+        }),
+        makeMemory({ id: 'old-3', text: 'levelprobe orbit three', scope: localScope('p2') }),
+      ];
+      await store.upsertMany(TG, legacy);
+      await seedCold(
+        store,
+        makeMemory({ id: 'old-4', text: 'levelprobe cold', embedding: vec(3, 1, -1, 2) }),
+      );
+      const view = async () => {
+        const out: string[] = [];
+        for (const id of ['old-1', 'old-2', 'old-3', 'old-4']) {
+          out.push(render(await store.get(TG, id)), render(await store.coldGet(TG, id)));
+        }
+        out.push((await store.list(TG, { validOnly: false })).map(render).join('|'));
+        out.push(JSON.stringify(await store.dense(TG, vec(1, 1, -1, 2), 10)));
+        // bm25 scores use table-wide statistics: compare which memories match.
+        out.push(
+          ids(await store.lexical(TG, 'levelprobe orbit', 50))
+            .sort()
+            .join(','),
+        );
+        return out;
+      };
+      const before = await view();
+      for (const c of cases()) await store.upsert(c.g, c.m);
+      expect(await view()).toEqual(before);
+    });
+
+    it('levels.illegal-addresses-are-refused', async () => {
+      const bad: [string, Partial<Memory>][] = [
+        [
+          'planet without customer',
+          { address: { level: 'user', orgId: 'local' } as unknown as Address },
+        ],
+        [
+          'constellation with a customer',
+          {
+            address: {
+              level: 'hive',
+              orgId: 'o',
+              hiveId: 'h',
+              customerId: 'c',
+            } as unknown as Address,
+          },
+        ],
+        [
+          'star with a customer',
+          {
+            address: {
+              level: 'agent',
+              orgId: 'o',
+              agentId: 'a',
+              customerId: 'c',
+            } as unknown as Address,
+          },
+        ],
+        [
+          'flyby without run',
+          { address: { level: 'run', orgId: 'o', agentId: 'a' } as unknown as Address },
+        ],
+        ['unknown level', { address: { level: 'team', orgId: 'o' } as unknown as Address }],
+        ['empty owner', { address: { level: 'hive', orgId: '', hiveId: 'h' } }],
+        [
+          'unknown field',
+          { address: { level: 'hive', orgId: 'o', hiveId: 'h', extra: 1 } as unknown as Address },
+        ],
+        ['empty author', { author: { agentId: '' } }],
+        [
+          'scope that is not the address',
+          { address: { level: 'agent', orgId: 'local', agentId: 'cursor' }, scope: localScope() },
+        ],
+      ];
+      const all = nodesGrant(
+        { level: 'user', orgId: 'local', customerId: 'self' },
+        { level: 'hive', orgId: 'o', hiveId: 'h' },
+        { level: 'agent', orgId: 'local', agentId: 'cursor' },
+      );
+      for (const [what, overrides] of bad) {
+        const m = makeMemory({ id: 'bad', ...overrides });
+        await expect(store.upsert(all, m), what).rejects.toThrow(RangeError);
+        const ok = makeMemory({ id: 'ok' });
+        await expect(store.upsertMany(all, [ok, m]), what).rejects.toThrow(RangeError);
+        expect(await store.get(all, 'ok'), what).toBeNull();
+        expect(await store.get(all, 'bad'), what).toBeNull();
+      }
+    });
+
+    it('levels.address-and-author-are-fixed-per-id', async () => {
+      const [star, hive] = [LEVEL_CASES[1], LEVEL_CASES[5]] as const;
+      const g = nodesGrant(nodeOf(star!.address), nodeOf(hive!.address));
+      const m = memoryAt('fixed', star!.address, star!.author);
+      await store.upsert(g, m);
+      const moved = memoryAt('fixed', hive!.address, hive!.author);
+      await expect(store.upsert(g, moved)).rejects.toThrow(GrantError);
+      const reauthored = memoryAt('fixed', star!.address, {
+        agentId: 'cursor',
+        accountRef: 'acct:2',
+      });
+      await expect(store.upsert(g, reauthored)).rejects.toThrow(GrantError);
+      expect(await store.get(g, 'fixed')).toEqual(canonicalMemory(m));
+    });
+
+    it('levels.author-restriction-is-exact', async () => {
+      const planet: NodeRef = { level: 'user', orgId: 'local', customerId: 'self' };
+      const mine = makeMemory({ id: 'by-cc', text: 'authorprobe one' });
+      const theirs = memoryAt(
+        'by-cursor',
+        { level: 'user', orgId: 'local', customerId: 'self' },
+        { agentId: 'cursor' },
+        { text: 'authorprobe two' },
+      );
+      const everyone = nodesGrant(planet);
+      await store.upsertMany(everyone, [mine, theirs]);
+      expect(ids(await store.lexical(everyone, 'authorprobe', 10)).sort()).toEqual([
+        'by-cc',
+        'by-cursor',
+      ]);
+      expect(ids(await store.lexical(TG, 'authorprobe', 10))).toEqual(['by-cc']);
+      const cursor = nodeGrant({
+        principal: { ...OWNER, agentId: 'cursor' },
+        read: [{ node: planet, projectIds: 'all', authorAgentId: 'cursor' }],
+      });
+      expect(ids(await store.lexical(cursor, 'authorprobe', 10))).toEqual(['by-cursor']);
+      expect(await store.get(cursor, 'by-cc')).toBeNull();
+    });
+
+    it('levels.multi-node-grant-reads-across-owners', async () => {
+      const all = cases();
+      for (const c of all) await store.upsert(c.g, c.m);
+      const own = makeMemory({ id: 'own', text: 'levelprobe own', embedding: vec(9, 1, -1, 2) });
+      await store.upsert(TG, own);
+      const hive = all.find((c) => c.name === 'constellation')!;
+      const galaxy = all.find((c) => c.name === 'galaxy')!;
+      const star = all.find((c) => c.name === 'star')!;
+      // My Planet (as before levels) plus a Constellation of another owner, read-only.
+      const g = nodeGrant({
+        principal: OWNER,
+        read: [...TG.readNodes, { node: nodeOf(hive.address), projectIds: ['p1'] }],
+        write: TG.writeNodes,
+      });
+      const visible = ['own', hive.m.id].sort();
+      expect(ids(await store.list(g, { validOnly: false })).sort()).toEqual(visible);
+      expect(ids(await store.lexical(g, 'levelprobe', 50)).sort()).toEqual(visible);
+      const dense = await store.dense(g, vec(9, 1, -1, 2), 50);
+      expect(ids(dense).sort()).toEqual(visible);
+      expect(dense.map((h) => h.score)).toEqual(dense.map((h) => h.score).sort((a, b) => b - a));
+      expect(ids(await store.dense(g, vec(9, 1, -1, 2), 1))).toEqual(['own']);
+      expect(await store.get(g, hive.m.id)).toEqual(canonicalMemory(hive.m));
+      for (const c of [galaxy, star]) expect(await store.get(g, c.m.id)).toBeNull();
+      // The hive side is read-only.
+      expect(await store.setTier(g, hive.m.id, 'hot')).toBe(false);
+      await store.forget(g, hive.m.id);
+      expect(await store.get(hive.g, hive.m.id)).not.toBeNull();
+      await expect(
+        store.upsert(g, memoryAt('new-hive', hive.address, hive.author)),
+      ).rejects.toThrow(GrantError);
+      // A project outside the pattern stays out.
+      const other = memoryAt(
+        'hive-p2',
+        { ...hive.address, projectId: 'p2' } as Address,
+        hive.author,
+      );
+      await store.upsert(hive.g, other);
+      expect(await store.get(g, 'hive-p2')).toBeNull();
+    });
   });
 }

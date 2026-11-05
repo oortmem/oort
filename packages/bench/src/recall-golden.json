@@ -1,0 +1,2634 @@
+{
+  "memory": [
+    {
+      "question": "2869 search-gateway development listens",
+      "ids": ["m7-245", "m7-559", "m7-256", "m7-1008", "m7-307"],
+      "explanations": [
+        {
+          "lexicalRank": 9,
+          "denseRank": 7,
+          "fused": 0.029876191156659217,
+          "rrf": 0.029418126757516764,
+          "coverage": 0.8333333333333334,
+          "dense": 0.38575837490522974,
+          "activation": -0.7935056755236697,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 11,
+          "denseRank": 8,
+          "fused": 0.028813627979825056,
+          "rrf": 0.028790389395194696,
+          "coverage": 0.8333333333333334,
+          "dense": 0.38122333887682724,
+          "activation": -4.1099755919652186,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 8,
+          "denseRank": 17,
+          "fused": 0.027724804982802193,
+          "rrf": 0.027692895339954164,
+          "coverage": 0.8333333333333334,
+          "dense": 0.2589525674302253,
+          "activation": -3.746975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 1,
+          "denseRank": 49,
+          "fused": 0.025596308359171087,
+          "rrf": 0.025567754549556326,
+          "coverage": 1,
+          "dense": 0.19559648860511666,
+          "activation": -3.778975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 12,
+          "denseRank": 39,
+          "fused": 0.024528449060488407,
+          "rrf": 0.02398989898989899,
+          "coverage": 0.8333333333333334,
+          "dense": 0.22326759753774597,
+          "activation": -0.20478997204401883,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 5
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "d6c816c83b8a64daaaf3a834666ab2dc49e05a30289ff75fd8c2f32fba108534"
+    },
+    {
+      "question": "2026-05-16 connection pooling tsup",
+      "ids": ["m7-187", "m7-331", "m7-888"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "fused": 0.016513047089362517,
+          "rrf": 0.01639344262295082,
+          "coverage": 1,
+          "activation": -1.7669868088814873,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 2,
+          "fused": 0.016199432712433324,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5714285714285714,
+          "activation": -2.347099907945961,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 3,
+          "fused": 0.015890247002241054,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.5714285714285714,
+          "activation": -3.807975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 7
+      },
+      "embedSkipped": "lexical-confident",
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "315499b393c379a6bb3be2380e8dd01a5949792603251d459bb1058aaa53b5c8"
+    },
+    {
+      "question": "2026-09-04 token footprint",
+      "ids": ["m7-1481", "m7-1003", "m7-1118", "m7-1063", "m7-695", "m7-1228"],
+      "explanations": [
+        {
+          "lexicalRank": 2,
+          "fused": 0.016551411725349317,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "activation": 0.09507370740754523,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 1,
+          "fused": 0.01640691833457824,
+          "rrf": 0.01639344262295082,
+          "coverage": 1,
+          "activation": -4.09143848315164,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 5,
+          "fused": 0.01598127786950927,
+          "rrf": 0.015384615384615385,
+          "coverage": 0.5,
+          "activation": 1.2405585922130855,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 3,
+          "fused": 0.015882718218620435,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.6666666666666666,
+          "activation": -4.391975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 9,
+          "fused": 0.014813608089932139,
+          "rrf": 0.014492753623188406,
+          "coverage": 0.5,
+          "activation": -0.22989049026541852,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 10,
+          "fused": 0.01440079855174772,
+          "rrf": 0.014285714285714285,
+          "coverage": 0.5,
+          "activation": -1.6499332410252765,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 4
+      },
+      "embedSkipped": "lexical-confident",
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "e78d5fd60522aad4bd5bd688bfdd2a024b76bd4e3ce0202153ba7ac9dc4cc794"
+    },
+    {
+      "question": "2026-03-28 rate class",
+      "ids": ["m7-853", "m7-1237", "m7-1336", "m7-1205", "m7-484", "m7-1161"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "fused": 0.016659682880886154,
+          "rrf": 0.01639344262295082,
+          "coverage": 1,
+          "activation": -0.7317395345058759,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 2,
+          "fused": 0.016235159220766564,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "activation": -1.886907874821308,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 3,
+          "fused": 0.016027564635731097,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.5,
+          "activation": -1.4195544516355736,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 4,
+          "fused": 0.015736826470856814,
+          "rrf": 0.015625,
+          "coverage": 0.5,
+          "activation": -1.7894686353264917,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 5,
+          "fused": 0.015630783432239448,
+          "rrf": 0.015384615384615385,
+          "coverage": 0.6666666666666666,
+          "activation": -0.7536869603297313,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 7,
+          "fused": 0.014941433496139264,
+          "rrf": 0.014925373134328358,
+          "coverage": 0.5,
+          "activation": -3.816975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 4
+      },
+      "embedSkipped": "lexical-confident",
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "ed159e1b0ca56cbf2c479fb0a6f7011caa8804b576cca07567837a6a5a35f6f9"
+    },
+    {
+      "question": "than rather ioredis with migrations schema",
+      "ids": [
+        "m7-389",
+        "m7-811",
+        "m7-1160",
+        "m7-477",
+        "m7-216",
+        "m7-743",
+        "m7-1306",
+        "m7-943",
+        "m7-1013"
+      ],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 1,
+          "fused": 0.03286153068511661,
+          "rrf": 0.03278688524590164,
+          "coverage": 1,
+          "dense": 0.5345224838248488,
+          "activation": -3.0426992125989987,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 6,
+          "denseRank": 4,
+          "fused": 0.030982139493570798,
+          "rrf": 0.030776515151515152,
+          "coverage": 0.75,
+          "dense": 0.38122333887682724,
+          "activation": -1.869287486394136,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 13,
+          "denseRank": 2,
+          "fused": 0.029953378686914434,
+          "rrf": 0.029827662395050816,
+          "coverage": 0.75,
+          "dense": 0.4351941398892446,
+          "activation": -2.3853703906369708,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 14,
+          "denseRank": 3,
+          "fused": 0.029403829956381057,
+          "rrf": 0.029386529386529386,
+          "coverage": 0.75,
+          "dense": 0.3904096081507416,
+          "activation": -4.429975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 3,
+          "denseRank": 19,
+          "fused": 0.028550285008017075,
+          "rrf": 0.028531243721117136,
+          "coverage": 0.75,
+          "dense": 0.2561498812846634,
+          "activation": -4.302975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 21,
+          "denseRank": 5,
+          "fused": 0.027998691095043896,
+          "rrf": 0.027730294396961064,
+          "coverage": 0.5,
+          "dense": 0.3481553119113957,
+          "activation": -1.4269361104316778,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 25,
+          "denseRank": 6,
+          "fused": 0.027202800527419708,
+          "rrf": 0.026916221033868093,
+          "coverage": 0.5,
+          "dense": 0.34050261230349943,
+          "activation": -1.3072830169848504,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 24,
+          "denseRank": 7,
+          "fused": 0.027064403170103,
+          "rrf": 0.026830135039090264,
+          "coverage": 0.5,
+          "dense": 0.2811774266867864,
+          "activation": -1.553158147494899,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 18,
+          "denseRank": 11,
+          "fused": 0.027034358591327926,
+          "rrf": 0.02690501986276634,
+          "coverage": 0.5,
+          "dense": 0.2721655269759087,
+          "activation": -2.240815143314166,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 1
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "494842e95db7fc7b5ee1506faac4e87e29be17bfc870a040a2b7af4ba4541a8a"
+    },
+    {
+      "question": "than rather ioredis with limiting rate",
+      "ids": [
+        "m7-1161",
+        "m7-793",
+        "m7-625",
+        "m7-1314",
+        "m7-184",
+        "m7-1336",
+        "m7-448",
+        "m7-1234",
+        "m7-1472",
+        "m7-389"
+      ],
+      "explanations": [
+        {
+          "lexicalRank": 4,
+          "denseRank": 1,
+          "fused": 0.03352488959996566,
+          "rrf": 0.032018442622950824,
+          "coverage": 0.75,
+          "dense": 0.468292905790847,
+          "activation": 2.76917228111105,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 7,
+          "denseRank": 4,
+          "fused": 0.03063334792518575,
+          "rrf": 0.03055037313432836,
+          "coverage": 0.75,
+          "dense": 0.3916177118467594,
+          "activation": -2.85701204989571,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 3,
+          "denseRank": 11,
+          "fused": 0.030121223984889846,
+          "rrf": 0.029957522915269395,
+          "coverage": 0.75,
+          "dense": 0.2867609332809922,
+          "activation": -2.0980264409665508,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 14,
+          "denseRank": 2,
+          "fused": 0.029681851883806204,
+          "rrf": 0.02964254577157803,
+          "coverage": 0.75,
+          "dense": 0.44543540318737396,
+          "activation": -3.602975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 5,
+          "denseRank": 12,
+          "fused": 0.02931445435604449,
+          "rrf": 0.029273504273504274,
+          "coverage": 0.75,
+          "dense": 0.2858309752375147,
+          "activation": -3.5479755919652187,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 16,
+          "denseRank": 8,
+          "fused": 0.029174083016971608,
+          "rrf": 0.02786377708978328,
+          "coverage": 0.75,
+          "dense": 0.34020690871988585,
+          "activation": 2.7605868234986723,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 10,
+          "denseRank": 9,
+          "fused": 0.029104236987198967,
+          "rrf": 0.02877846790890269,
+          "coverage": 0.75,
+          "dense": 0.3390526866147217,
+          "activation": -1.2287642098092508,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 19,
+          "denseRank": 3,
+          "fused": 0.028657195738395865,
+          "rrf": 0.028531243721117136,
+          "coverage": 0.75,
+          "dense": 0.4166666666666667,
+          "activation": -2.334687774757442,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 17,
+          "denseRank": 7,
+          "fused": 0.0280325999870723,
+          "rrf": 0.027912386121341344,
+          "coverage": 0.75,
+          "dense": 0.3431482491909017,
+          "activation": -2.3617470285171516,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 30,
+          "denseRank": 5,
+          "fused": 0.02770997516936,
+          "rrf": 0.0264957264957265,
+          "coverage": 0.5,
+          "dense": 0.3563483225498992,
+          "activation": 2.396524591555597,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": null,
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "25a13d87e55c71333849e31f3a322afa4205f3a95c8667606bb9b53f1a7914e5"
+    },
+    {
+      "question": "which package manager does edge-router-10 use now",
+      "ids": ["m7-827"],
+      "explanations": [
+        {
+          "lexicalRank": 6,
+          "denseRank": 50,
+          "fused": 0.02426868943483987,
+          "rrf": 0.024242424242424242,
+          "coverage": 0.5,
+          "dense": 0.12515262282033723,
+          "activation": -3.8099755919652187,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 9
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "335e1b3dd89f40da11e74428c448bafe966aadf16d11f892b0a26aab6b241089"
+    },
+    {
+      "question": "which library does sync-daemon-4 use to validate requests now",
+      "ids": ["m7-14"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 6,
+          "fused": 0.03168435682643171,
+          "rrf": 0.031544957774465976,
+          "coverage": 0.7142857142857143,
+          "dense": 0.22312119752069454,
+          "activation": -2.333562714797287,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 9
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "3985473539c4804f192b58096554554734e6aa9a3b53d6511d73a919d4461c01"
+    },
+    {
+      "question": "which port does auth-service-22 listen on now",
+      "ids": ["m7-68", "m7-98", "m7-153", "m7-565"],
+      "explanations": [
+        {
+          "lexicalRank": 2,
+          "denseRank": 15,
+          "fused": 0.02949223036458284,
+          "rrf": 0.02946236559139785,
+          "coverage": 0.8333333333333334,
+          "dense": 0.20716651211743714,
+          "activation": -3.877975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 9,
+          "denseRank": 13,
+          "fused": 0.02900300323519802,
+          "rrf": 0.02819138376017471,
+          "coverage": 0.5,
+          "dense": 0.21213203435596426,
+          "activation": 0.3055249450861538,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 18,
+          "denseRank": 14,
+          "fused": 0.026802271447996812,
+          "rrf": 0.026334026334026334,
+          "coverage": 0.5,
+          "dense": 0.21213203435596426,
+          "activation": -0.5944265594439124,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 30,
+          "denseRank": 11,
+          "fused": 0.025829432993354273,
+          "rrf": 0.025195618153364633,
+          "coverage": 0.5,
+          "dense": 0.21650635094610965,
+          "activation": 0.012460696647962344,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 6
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "48ed84bb3bbcd825e218b097b8bfdc02871ae40a2c1b53b9343f5860d394c84f"
+    },
+    {
+      "question": "which package manager does media-proxy-16 use now",
+      "ids": [],
+      "explanations": [],
+      "abstained": true,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 10
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "question": "which package manager does billing-api-15 use back then",
+      "ids": ["m7-46"],
+      "explanations": [
+        {
+          "denseRank": 1,
+          "fused": 0.016404437444241558,
+          "rrf": 0.01639344262295082,
+          "coverage": 0.6666666666666666,
+          "dense": 0.3223291856101521,
+          "activation": -4.297975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 9
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "as-of",
+        "asOf": "2026-04-23T17:29:09.314Z",
+        "inferred": false
+      },
+      "injected": "284aadaa061b90a9b92feff53e205aba8e600eab086838c34972ff0c4195a474"
+    },
+    {
+      "question": "which port does report-builder-17 listen on back then",
+      "ids": ["m7-52", "m7-685", "m7-60", "m7-170"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "fused": 0.016485029732969333,
+          "rrf": 0.01639344262295082,
+          "coverage": 0.8333333333333334,
+          "activation": -2.073127287186587,
+          "hydrated": false
+        },
+        {
+          "denseRank": 2,
+          "fused": 0.01613936964459763,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "dense": 0.31622776601683794,
+          "activation": -4.3439755919652185,
+          "hydrated": false
+        },
+        {
+          "denseRank": 7,
+          "fused": 0.015017599281671129,
+          "rrf": 0.014925373134328358,
+          "coverage": 0.5,
+          "dense": 0.30151134457776363,
+          "activation": -1.9589286642903279,
+          "hydrated": false
+        },
+        {
+          "denseRank": 21,
+          "fused": 0.012359054804779562,
+          "rrf": 0.012345679012345678,
+          "coverage": 0.5,
+          "dense": 0.21895724146267445,
+          "activation": -3.8099755919652187,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 6
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "as-of",
+        "asOf": "2026-02-28T17:15:32.520Z",
+        "inferred": false
+      },
+      "injected": "af901cb83ecb362193aa626c4ba984526760784f1704fd42f061e866948fdc36"
+    },
+    {
+      "question": "which port does auth-service-0 listen on back then",
+      "ids": ["m7-1"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 1,
+          "fused": 0.03281749226116516,
+          "rrf": 0.03278688524590164,
+          "coverage": 0.8333333333333334,
+          "dense": 0.502518907629606,
+          "activation": -3.961975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 9
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "as-of",
+        "asOf": "2026-04-02T16:02:44.017Z",
+        "inferred": false
+      },
+      "injected": "d08bfe75473f24a64b7c8d3cd3a653a375ec99e6affe0afd9f13972b91a16b76"
+    },
+    {
+      "question": "on 8 February 2026, which port did media-proxy-2 listen on",
+      "ids": ["m7-7", "m7-1089"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 1,
+          "fused": 0.033098028535199324,
+          "rrf": 0.03278688524590164,
+          "coverage": 0.8333333333333334,
+          "dense": 0.5698028822981898,
+          "activation": -1.4513271103107905,
+          "hydrated": false
+        },
+        {
+          "denseRank": 3,
+          "fused": 0.015970077454090837,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.5,
+          "dense": 0.3585685828003181,
+          "activation": -1.9708502384789415,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 8
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "as-of",
+        "asOf": "2026-02-08T23:59:59.999Z",
+        "inferred": true
+      },
+      "injected": "a0d0583c42ecdb206926098b0d639aa79f7ef1b1997fffac85c5df8e46f385be"
+    },
+    {
+      "question": "on 16 March 2026, which port did media-proxy-23 listen on",
+      "ids": ["m7-70", "m7-1089", "m7-7", "m7-1131"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 7,
+          "fused": 0.031493755919520215,
+          "rrf": 0.03131881575727918,
+          "coverage": 0.8333333333333334,
+          "dense": 0.2849014411490949,
+          "activation": -2.0733346562872894,
+          "hydrated": false
+        },
+        {
+          "denseRank": 1,
+          "fused": 0.017138372960825366,
+          "rrf": 0.01639344262295082,
+          "coverage": 0.5,
+          "dense": 0.3585685828003181,
+          "activation": 2.2992512905454445,
+          "hydrated": false
+        },
+        {
+          "denseRank": 4,
+          "fused": 0.01636085913295702,
+          "rrf": 0.015625,
+          "coverage": 0.5,
+          "dense": 0.3418817293789138,
+          "activation": 2.785727786615154,
+          "hydrated": false
+        },
+        {
+          "denseRank": 2,
+          "fused": 0.016275940642898435,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "dense": 0.3563483225498992,
+          "activation": -1.5017383566742246,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 6
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "as-of",
+        "asOf": "2026-03-16T23:59:59.999Z",
+        "inferred": true
+      },
+      "injected": "2901661547e83e81b434095ed210056cb1e07aa2f86d7c8acec82846e1d2a479"
+    },
+    {
+      "question": "how has the port of sync-daemon-18 changed over time",
+      "ids": ["m7-54", "m7-55", "m7-56"],
+      "explanations": [
+        {
+          "lexicalRank": 2,
+          "denseRank": 1,
+          "fused": 0.03275066273610946,
+          "rrf": 0.03252247488101534,
+          "coverage": 0.7142857142857143,
+          "dense": 0.420084025208403,
+          "activation": -1.8125828470614895,
+          "hydrated": false
+        },
+        {
+          "fused": 0,
+          "rrf": 0,
+          "coverage": 0.7142857142857143,
+          "activation": -1.8358952167650435,
+          "hydrated": false,
+          "chain": true
+        },
+        {
+          "lexicalRank": 1,
+          "denseRank": 11,
+          "fused": 0.0309188162940889,
+          "rrf": 0.03047794966520434,
+          "coverage": 0.7142857142857143,
+          "dense": 0.2739040796091002,
+          "activation": -0.8987763354505424,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 8
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "history",
+        "inferred": true
+      },
+      "injected": "0b1317d7b75b5f8f64ed1665b79eb7684d18dc069f0c5ee09d15eee6f61083de"
+    },
+    {
+      "question": "2026-09-16",
+      "ids": [
+        "m7-1205",
+        "m7-393",
+        "m7-533",
+        "m7-541",
+        "m7-1284",
+        "m7-280",
+        "m7-1118",
+        "m7-336",
+        "m7-1228",
+        "m7-1147"
+      ],
+      "explanations": [
+        {
+          "lexicalRank": 2,
+          "denseRank": 1,
+          "fused": 0.03404849298517035,
+          "rrf": 0.03252247488101534,
+          "coverage": 1,
+          "dense": 0.2669089661734607,
+          "activation": 2.7241910482225804,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 1,
+          "fused": 0.01641610908082616,
+          "rrf": 0.01639344262295082,
+          "coverage": 1,
+          "activation": -3.5599755919652187,
+          "hydrated": true
+        },
+        {
+          "denseRank": 3,
+          "fused": 0.01616214044662195,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.5,
+          "dense": 0.22447850893100887,
+          "activation": -0.5567621650046363,
+          "hydrated": false
+        },
+        {
+          "denseRank": 2,
+          "fused": 0.016139067930566,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "dense": 0.23809541384364202,
+          "activation": -4.373975591965219,
+          "hydrated": false
+        },
+        {
+          "denseRank": 4,
+          "fused": 0.015738836743953252,
+          "rrf": 0.015625,
+          "coverage": 0.5,
+          "dense": 0.2236739876696309,
+          "activation": -1.7686440769258236,
+          "hydrated": false
+        },
+        {
+          "denseRank": 5,
+          "fused": 0.015539897668576191,
+          "rrf": 0.015384615384615385,
+          "coverage": 0.5,
+          "dense": 0.2236739876696309,
+          "activation": -1.3746663770024374,
+          "hydrated": false
+        },
+        {
+          "denseRank": 8,
+          "fused": 0.015405530652170164,
+          "rrf": 0.014705882352941176,
+          "coverage": 0.5,
+          "dense": 0.209327288924782,
+          "activation": 2.9769459345555704,
+          "hydrated": false
+        },
+        {
+          "denseRank": 6,
+          "fused": 0.015282134444692865,
+          "rrf": 0.015151515151515152,
+          "coverage": 0.5,
+          "dense": 0.2236739876696309,
+          "activation": -1.5685901702773206,
+          "hydrated": false
+        },
+        {
+          "denseRank": 9,
+          "fused": 0.015145024431535745,
+          "rrf": 0.014492753623188406,
+          "coverage": 0.5,
+          "dense": 0.20491990502773075,
+          "activation": 2.1987111890826316,
+          "hydrated": false
+        },
+        {
+          "denseRank": 7,
+          "fused": 0.014941183976046957,
+          "rrf": 0.014925373134328358,
+          "coverage": 0.5,
+          "dense": 0.21403186035534955,
+          "activation": -3.832975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": null,
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "eccbd71de4d46809ec5d2da63786c826d5c993690ae0eb8e1af73fa25736a134"
+    },
+    {
+      "question": "2026-01-21",
+      "ids": [
+        "m7-530",
+        "m7-521",
+        "m7-1161",
+        "m7-378",
+        "m7-1043",
+        "m7-1186",
+        "m7-743",
+        "m7-1217",
+        "m7-1444",
+        "m7-1162"
+      ],
+      "explanations": [
+        {
+          "lexicalRank": 2,
+          "denseRank": 1,
+          "fused": 0.03255904505144498,
+          "rrf": 0.03252247488101534,
+          "coverage": 1,
+          "dense": 0.31233784143483695,
+          "activation": -3.771975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 1,
+          "fused": 0.016671227002864938,
+          "rrf": 0.01639344262295082,
+          "coverage": 1,
+          "activation": -0.6682136780174832,
+          "hydrated": true
+        },
+        {
+          "denseRank": 4,
+          "fused": 0.01638249720089664,
+          "rrf": 0.015625,
+          "coverage": 0.5,
+          "dense": 0.2312149894039937,
+          "activation": 3.4623194616709956,
+          "hydrated": false
+        },
+        {
+          "denseRank": 2,
+          "fused": 0.016271456187583952,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "dense": 0.25196069326095905,
+          "activation": -1.5395158112123526,
+          "hydrated": false
+        },
+        {
+          "denseRank": 3,
+          "fused": 0.015888186601182817,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.5,
+          "dense": 0.25196069326095905,
+          "activation": -3.937975591965219,
+          "hydrated": false
+        },
+        {
+          "denseRank": 5,
+          "fused": 0.015624677075506029,
+          "rrf": 0.015384615384615385,
+          "coverage": 0.5,
+          "dense": 0.224552812854096,
+          "activation": -0.7904120638923324,
+          "hydrated": false
+        },
+        {
+          "denseRank": 7,
+          "fused": 0.01561857254996047,
+          "rrf": 0.014925373134328358,
+          "coverage": 0.5,
+          "dense": 0.21487280118677077,
+          "activation": 2.5697202183799863,
+          "hydrated": false
+        },
+        {
+          "denseRank": 6,
+          "fused": 0.015171008625114245,
+          "rrf": 0.015151515151515152,
+          "coverage": 0.5,
+          "dense": 0.21487280118677077,
+          "activation": -3.6339755919652186,
+          "hydrated": false
+        },
+        {
+          "denseRank": 8,
+          "fused": 0.014720774495998661,
+          "rrf": 0.014705882352941176,
+          "coverage": 0.5,
+          "dense": 0.21487280118677077,
+          "activation": -3.8789755919652187,
+          "hydrated": false
+        },
+        {
+          "denseRank": 9,
+          "fused": 0.014510809362228764,
+          "rrf": 0.014492753623188406,
+          "coverage": 0.5,
+          "dense": 0.21487280118677077,
+          "activation": -3.666975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": null,
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "9a1cb3559dad118515c0b3420a2314e2d133de5907f251ade2532cce2dc63481"
+    },
+    {
+      "question": "2026-06-13",
+      "ids": [
+        "m7-330",
+        "m7-989",
+        "m7-1043",
+        "m7-539",
+        "m7-1023",
+        "m7-280",
+        "m7-891",
+        "m7-617",
+        "m7-1433",
+        "m7-399"
+      ],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 4,
+          "fused": 0.03203850306380354,
+          "rrf": 0.032018442622950824,
+          "coverage": 1,
+          "dense": 0.23265065963692663,
+          "activation": -4.366975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 2,
+          "denseRank": 32,
+          "fused": 0.027491793892983726,
+          "rrf": 0.02699859747545582,
+          "coverage": 1,
+          "dense": 0.14149310965405107,
+          "activation": -0.5522193431373835,
+          "hydrated": false
+        },
+        {
+          "denseRank": 1,
+          "fused": 0.017158932992329748,
+          "rrf": 0.01639344262295082,
+          "coverage": 0.5,
+          "dense": 0.25097460272876476,
+          "activation": 2.64817228111105,
+          "hydrated": false
+        },
+        {
+          "denseRank": 2,
+          "fused": 0.01666709009189035,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "dense": 0.2366211246601458,
+          "activation": 0.695510825176965,
+          "hydrated": false
+        },
+        {
+          "denseRank": 3,
+          "fused": 0.01589323958552032,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.5,
+          "dense": 0.2366211246601458,
+          "activation": -3.643975591965219,
+          "hydrated": false
+        },
+        {
+          "denseRank": 7,
+          "fused": 0.015619863593187823,
+          "rrf": 0.014925373134328358,
+          "coverage": 0.5,
+          "dense": 0.2236739876696309,
+          "activation": 2.5962092540831065,
+          "hydrated": false
+        },
+        {
+          "denseRank": 5,
+          "fused": 0.01540064372500146,
+          "rrf": 0.015384615384615385,
+          "coverage": 0.5,
+          "dense": 0.23166967905667596,
+          "activation": -3.8499755919652188,
+          "hydrated": false
+        },
+        {
+          "denseRank": 6,
+          "fused": 0.015304279764492675,
+          "rrf": 0.015151515151515152,
+          "coverage": 0.5,
+          "dense": 0.2236739876696309,
+          "activation": -1.376017992160651,
+          "hydrated": false
+        },
+        {
+          "denseRank": 8,
+          "fused": 0.014716778028614071,
+          "rrf": 0.014705882352941176,
+          "coverage": 0.5,
+          "dense": 0.2236739876696309,
+          "activation": -4.196975591965219,
+          "hydrated": false
+        },
+        {
+          "denseRank": 9,
+          "fused": 0.014503302628357707,
+          "rrf": 0.014492753623188406,
+          "coverage": 0.5,
+          "dense": 0.21906859324114952,
+          "activation": -4.214975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": null,
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "9d06a454e29423536e9ed49c9e7dfdee2dcba4398c31fc634c90b8c8813b847e"
+    },
+    {
+      "question": "auth service rollback plan for the billing team",
+      "ids": [],
+      "explanations": [],
+      "abstained": true,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 10
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "question": "who approved the quarterly budget for the search gateway",
+      "ids": ["m7-1383", "m7-1309"],
+      "explanations": [
+        {
+          "lexicalRank": 14,
+          "denseRank": 23,
+          "fused": 0.02579685047475142,
+          "rrf": 0.025561706284597852,
+          "coverage": 0.6,
+          "dense": 0.49066451391421534,
+          "activation": -1.4896011036695558,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 22,
+          "denseRank": 32,
+          "fused": 0.023079528227207362,
+          "rrf": 0.023064687168610817,
+          "coverage": 0.6,
+          "dense": 0.4763570689417451,
+          "activation": -4.339975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 8
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "7118ae78dfe8e5036ef84db1e0887f7831e1fc260436a953c5dcebf36939361b"
+    },
+    {
+      "question": "the incident escalation policy for the notify relay",
+      "ids": [],
+      "explanations": [],
+      "abstained": true,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 10
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "question": "media proxy vendor contract renewal for the legal team",
+      "ids": [],
+      "explanations": [],
+      "abstained": true,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 10
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "sqlite": [
+    {
+      "question": "2869 search-gateway development listens",
+      "ids": ["m7-245", "m7-559", "m7-256", "m7-1008", "m7-307"],
+      "explanations": [
+        {
+          "lexicalRank": 5,
+          "denseRank": 7,
+          "fused": 0.03078193993833169,
+          "rrf": 0.030309988518943745,
+          "coverage": 0.8333333333333334,
+          "dense": 0.3857583999633789,
+          "activation": -0.7935056755236697,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 4,
+          "denseRank": 8,
+          "fused": 0.030355364369033324,
+          "rrf": 0.030330882352941176,
+          "coverage": 0.8333333333333334,
+          "dense": 0.38122332096099854,
+          "activation": -4.1099755919652186,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 6,
+          "denseRank": 17,
+          "fused": 0.02817095126988177,
+          "rrf": 0.02813852813852814,
+          "coverage": 0.8333333333333334,
+          "dense": 0.2589525580406189,
+          "activation": -3.746975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 1,
+          "denseRank": 49,
+          "fused": 0.025596308359171087,
+          "rrf": 0.025567754549556326,
+          "coverage": 1,
+          "dense": 0.19559651613235474,
+          "activation": -3.778975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 9,
+          "denseRank": 39,
+          "fused": 0.025145869975054476,
+          "rrf": 0.024593763724198508,
+          "coverage": 0.8333333333333334,
+          "dense": 0.22326761484146118,
+          "activation": -0.20478997204401883,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 5
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "d6c816c83b8a64daaaf3a834666ab2dc49e05a30289ff75fd8c2f32fba108534"
+    },
+    {
+      "question": "2026-05-16 connection pooling tsup",
+      "ids": ["m7-187", "m7-331", "m7-888"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "fused": 0.016513047089362517,
+          "rrf": 0.01639344262295082,
+          "coverage": 1,
+          "activation": -1.7669868088814873,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 2,
+          "fused": 0.016199432712433324,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5714285714285714,
+          "activation": -2.347099907945961,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 7,
+          "fused": 0.014941575539420692,
+          "rrf": 0.014925373134328358,
+          "coverage": 0.5714285714285714,
+          "activation": -3.807975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 7
+      },
+      "embedSkipped": "lexical-confident",
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "315499b393c379a6bb3be2380e8dd01a5949792603251d459bb1058aaa53b5c8"
+    },
+    {
+      "question": "2026-09-04 token footprint",
+      "ids": ["m7-1003", "m7-1063", "m7-1481", "m7-1327", "m7-1118"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "fused": 0.01640691833457824,
+          "rrf": 0.01639344262295082,
+          "coverage": 1,
+          "activation": -4.09143848315164,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 2,
+          "fused": 0.016138891093114314,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.6666666666666666,
+          "activation": -4.391975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 4,
+          "fused": 0.01603418010893215,
+          "rrf": 0.015625,
+          "coverage": 0.5,
+          "activation": 0.09507370740754523,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 3,
+          "fused": 0.015891485384099527,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.6666666666666666,
+          "activation": -3.736975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 6,
+          "fused": 0.015739137295728824,
+          "rrf": 0.015151515151515152,
+          "coverage": 0.5,
+          "activation": 1.2405585922130855,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 5
+      },
+      "embedSkipped": "lexical-confident",
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "f7e04203ca9e79398faa00a13e41b5638e55f1609f2fdb7c378ed392b6f4ebba"
+    },
+    {
+      "question": "2026-03-28 rate class",
+      "ids": ["m7-853", "m7-1336", "m7-1205", "m7-1237", "m7-484", "m7-1161"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "fused": 0.016659682880886154,
+          "rrf": 0.01639344262295082,
+          "coverage": 1,
+          "activation": -0.7317395345058759,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 2,
+          "fused": 0.01628607374275902,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "activation": -1.4195544516355736,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 3,
+          "fused": 0.01598661736721962,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.5,
+          "activation": -1.7894686353264917,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 4,
+          "fused": 0.01572781049511761,
+          "rrf": 0.015625,
+          "coverage": 0.5,
+          "activation": -1.886907874821308,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 5,
+          "fused": 0.015630783432239448,
+          "rrf": 0.015384615384615385,
+          "coverage": 0.6666666666666666,
+          "activation": -0.7536869603297313,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 6,
+          "fused": 0.015167818852141374,
+          "rrf": 0.015151515151515152,
+          "coverage": 0.5,
+          "activation": -3.816975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 4
+      },
+      "embedSkipped": "lexical-confident",
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "9e8c30c2cd9ae54e341c9ad6b3ec2a710dbd5d31278ee883fdd572eb2900d71a"
+    },
+    {
+      "question": "than rather ioredis with migrations schema",
+      "ids": [
+        "m7-389",
+        "m7-1160",
+        "m7-477",
+        "m7-811",
+        "m7-743",
+        "m7-1306",
+        "m7-943",
+        "m7-216",
+        "m7-1013"
+      ],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 1,
+          "fused": 0.03286153068511661,
+          "rrf": 0.03278688524590164,
+          "coverage": 1,
+          "dense": 0.5345224738121033,
+          "activation": -3.0426992125989987,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 2,
+          "denseRank": 2,
+          "fused": 0.03239402435770006,
+          "rrf": 0.03225806451612903,
+          "coverage": 0.75,
+          "dense": 0.43519413471221924,
+          "activation": -2.3853703906369708,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 3,
+          "denseRank": 3,
+          "fused": 0.031764721412732816,
+          "rrf": 0.031746031746031744,
+          "coverage": 0.75,
+          "dense": 0.39040958881378174,
+          "activation": -4.429975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 4,
+          "denseRank": 4,
+          "fused": 0.03145878779347189,
+          "rrf": 0.03125,
+          "coverage": 0.75,
+          "dense": 0.38122332096099854,
+          "activation": -1.869287486394136,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 15,
+          "denseRank": 5,
+          "fused": 0.02899590475048382,
+          "rrf": 0.02871794871794872,
+          "coverage": 0.5,
+          "dense": 0.34815531969070435,
+          "activation": -1.4269361104316778,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 16,
+          "denseRank": 6,
+          "fused": 0.028610822792432544,
+          "rrf": 0.028309409888357256,
+          "coverage": 0.5,
+          "dense": 0.34050261974334717,
+          "activation": -1.3072830169848504,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 19,
+          "denseRank": 7,
+          "fused": 0.02782444802398719,
+          "rrf": 0.027583600982429624,
+          "coverage": 0.5,
+          "dense": 0.2811774015426636,
+          "activation": -1.553158147494899,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 8,
+          "denseRank": 19,
+          "fused": 0.027382372562059464,
+          "rrf": 0.027364110201042444,
+          "coverage": 0.75,
+          "dense": 0.25614988803863525,
+          "activation": -4.302975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 21,
+          "denseRank": 11,
+          "fused": 0.02655724214589311,
+          "rrf": 0.0264301860545992,
+          "coverage": 0.5,
+          "dense": 0.27216553688049316,
+          "activation": -2.240815143314166,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 1
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "4dbbb40f65722603d0b4b3bf884e1df61720f1135b5be370d40d8fa9938b0bee"
+    },
+    {
+      "question": "than rather ioredis with limiting rate",
+      "ids": [
+        "m7-1161",
+        "m7-1314",
+        "m7-1234",
+        "m7-793",
+        "m7-1336",
+        "m7-1472",
+        "m7-448",
+        "m7-625",
+        "m7-389",
+        "m7-743"
+      ],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 1,
+          "fused": 0.034329486950364835,
+          "rrf": 0.03278688524590164,
+          "coverage": 0.75,
+          "dense": 0.46829289197921753,
+          "activation": 2.76917228111105,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 2,
+          "denseRank": 2,
+          "fused": 0.03230083881473028,
+          "rrf": 0.03225806451612903,
+          "coverage": 0.75,
+          "dense": 0.44543540477752686,
+          "activation": -3.602975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 4,
+          "denseRank": 3,
+          "fused": 0.03163706479349975,
+          "rrf": 0.03149801587301587,
+          "coverage": 0.75,
+          "dense": 0.4166666865348816,
+          "activation": -2.334687774757442,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 5,
+          "denseRank": 4,
+          "fused": 0.031093837477085197,
+          "rrf": 0.031009615384615385,
+          "coverage": 0.75,
+          "dense": 0.39161771535873413,
+          "activation": -2.85701204989571,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 7,
+          "denseRank": 8,
+          "fused": 0.03102467783521234,
+          "rrf": 0.029631255487269532,
+          "coverage": 0.75,
+          "dense": 0.34020692110061646,
+          "activation": 2.7605868234986723,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 8,
+          "denseRank": 7,
+          "fused": 0.02975887222892326,
+          "rrf": 0.029631255487269532,
+          "coverage": 0.75,
+          "dense": 0.34314823150634766,
+          "activation": -2.3617470285171516,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 9,
+          "denseRank": 9,
+          "fused": 0.029313619987106874,
+          "rrf": 0.028985507246376812,
+          "coverage": 0.75,
+          "dense": 0.339052677154541,
+          "activation": -1.2287642098092508,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 10,
+          "denseRank": 11,
+          "fused": 0.02852524868419792,
+          "rrf": 0.028370221327967807,
+          "coverage": 0.75,
+          "dense": 0.28676092624664307,
+          "activation": -2.0980264409665508,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 27,
+          "denseRank": 5,
+          "fused": 0.028110675588939173,
+          "rrf": 0.026878868258178604,
+          "coverage": 0.5,
+          "dense": 0.35634833574295044,
+          "activation": 2.396524591555597,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 26,
+          "denseRank": 6,
+          "fused": 0.028023175272867764,
+          "rrf": 0.026779422128259338,
+          "coverage": 0.5,
+          "dense": 0.34815531969070435,
+          "activation": 2.5697202183799863,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": null,
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "c9262a7b1f04139d8bf2af0b5e293084aec0764eb94f382744a25ca52bd392c2"
+    },
+    {
+      "question": "which package manager does edge-router-10 use now",
+      "ids": [],
+      "explanations": [],
+      "abstained": true,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 10
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "question": "which library does sync-daemon-4 use to validate requests now",
+      "ids": ["m7-14"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 6,
+          "fused": 0.03168435682643171,
+          "rrf": 0.031544957774465976,
+          "coverage": 0.7142857142857143,
+          "dense": 0.22312122583389282,
+          "activation": -2.333562714797287,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 9
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "3985473539c4804f192b58096554554734e6aa9a3b53d6511d73a919d4461c01"
+    },
+    {
+      "question": "which port does auth-service-22 listen on now",
+      "ids": ["m7-68", "m7-1240", "m7-565", "m7-98"],
+      "explanations": [
+        {
+          "lexicalRank": 2,
+          "denseRank": 15,
+          "fused": 0.02949223036458284,
+          "rrf": 0.02946236559139785,
+          "coverage": 0.8333333333333334,
+          "dense": 0.20716649293899536,
+          "activation": -3.877975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 28,
+          "denseRank": 6,
+          "fused": 0.02653821417420959,
+          "rrf": 0.026515151515151516,
+          "coverage": 0.5,
+          "dense": 0.23303145170211792,
+          "activation": -4.033975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 44,
+          "denseRank": 11,
+          "fused": 0.024296080365822374,
+          "rrf": 0.02369989165763814,
+          "coverage": 0.5,
+          "dense": 0.21650636196136475,
+          "activation": 0.012460696647962344,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 48,
+          "denseRank": 13,
+          "fused": 0.023618838510979918,
+          "rrf": 0.02295788939624556,
+          "coverage": 0.5,
+          "dense": 0.2121320366859436,
+          "activation": 0.3055249450861538,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 6
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "742d2cf63e1e0f90f773b4f8693f9a35132f90e0144accb497db52118ecab3e6"
+    },
+    {
+      "question": "which package manager does media-proxy-16 use now",
+      "ids": [],
+      "explanations": [],
+      "abstained": true,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 10
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "question": "which package manager does billing-api-15 use back then",
+      "ids": ["m7-46"],
+      "explanations": [
+        {
+          "lexicalRank": 2,
+          "denseRank": 1,
+          "fused": 0.03254428718776954,
+          "rrf": 0.03252247488101534,
+          "coverage": 0.6666666666666666,
+          "dense": 0.32232916355133057,
+          "activation": -4.297975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 9
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "as-of",
+        "asOf": "2026-04-23T17:29:09.314Z",
+        "inferred": false
+      },
+      "injected": "284aadaa061b90a9b92feff53e205aba8e600eab086838c34972ff0c4195a474"
+    },
+    {
+      "question": "which port does report-builder-17 listen on back then",
+      "ids": ["m7-685", "m7-52", "m7-60", "m7-170"],
+      "explanations": [
+        {
+          "denseRank": 2,
+          "fused": 0.01613936964459763,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "dense": 0.3162277936935425,
+          "activation": -4.3439755919652185,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 3,
+          "fused": 0.01596169545573221,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.8333333333333334,
+          "activation": -2.073127287186587,
+          "hydrated": false
+        },
+        {
+          "denseRank": 7,
+          "fused": 0.015017599281671129,
+          "rrf": 0.014925373134328358,
+          "coverage": 0.5,
+          "dense": 0.30151134729385376,
+          "activation": -1.9589286642903279,
+          "hydrated": false
+        },
+        {
+          "denseRank": 21,
+          "fused": 0.012359054804779562,
+          "rrf": 0.012345679012345678,
+          "coverage": 0.5,
+          "dense": 0.21895724534988403,
+          "activation": -3.8099755919652187,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 6
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "as-of",
+        "asOf": "2026-02-28T17:15:32.520Z",
+        "inferred": false
+      },
+      "injected": "afa90b0c5a80a12fc807aa131fec1c0df47f9d0f73c4fdae8025af94cd8f1891"
+    },
+    {
+      "question": "which port does auth-service-0 listen on back then",
+      "ids": ["m7-1"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 1,
+          "fused": 0.03281749226116516,
+          "rrf": 0.03278688524590164,
+          "coverage": 0.8333333333333334,
+          "dense": 0.5025189220905304,
+          "activation": -3.961975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 9
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "as-of",
+        "asOf": "2026-04-02T16:02:44.017Z",
+        "inferred": false
+      },
+      "injected": "d08bfe75473f24a64b7c8d3cd3a653a375ec99e6affe0afd9f13972b91a16b76"
+    },
+    {
+      "question": "on 8 February 2026, which port did media-proxy-2 listen on",
+      "ids": ["m7-7", "m7-1089"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 1,
+          "fused": 0.033098028535199324,
+          "rrf": 0.03278688524590164,
+          "coverage": 0.8333333333333334,
+          "dense": 0.5698028802871704,
+          "activation": -1.4513271103107905,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 15,
+          "denseRank": 3,
+          "fused": 0.029384942515527146,
+          "rrf": 0.029206349206349208,
+          "coverage": 0.5,
+          "dense": 0.35856860876083374,
+          "activation": -1.9708502384789415,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 8
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "as-of",
+        "asOf": "2026-02-08T23:59:59.999Z",
+        "inferred": true
+      },
+      "injected": "a0d0583c42ecdb206926098b0d639aa79f7ef1b1997fffac85c5df8e46f385be"
+    },
+    {
+      "question": "on 16 March 2026, which port did media-proxy-23 listen on",
+      "ids": ["m7-70", "m7-1089", "m7-7", "m7-1131"],
+      "explanations": [
+        {
+          "lexicalRank": 2,
+          "denseRank": 7,
+          "fused": 0.031227868615260154,
+          "rrf": 0.031054405392392875,
+          "coverage": 0.8333333333333334,
+          "dense": 0.2849014401435852,
+          "activation": -2.0733346562872894,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 16,
+          "denseRank": 1,
+          "fused": 0.030894172310961514,
+          "rrf": 0.029551337359792925,
+          "coverage": 0.5,
+          "dense": 0.35856860876083374,
+          "activation": 2.2992512905454445,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 13,
+          "denseRank": 4,
+          "fused": 0.030704626044042622,
+          "rrf": 0.0293236301369863,
+          "coverage": 0.5,
+          "dense": 0.34188175201416016,
+          "activation": 2.785727786615154,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 23,
+          "denseRank": 2,
+          "fused": 0.028433872207473173,
+          "rrf": 0.028177225029148854,
+          "coverage": 0.5,
+          "dense": 0.35634833574295044,
+          "activation": -1.5017383566742246,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 6
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "as-of",
+        "asOf": "2026-03-16T23:59:59.999Z",
+        "inferred": true
+      },
+      "injected": "2901661547e83e81b434095ed210056cb1e07aa2f86d7c8acec82846e1d2a479"
+    },
+    {
+      "question": "how has the port of sync-daemon-18 changed over time",
+      "ids": ["m7-54", "m7-55", "m7-56"],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 1,
+          "fused": 0.033016928286809535,
+          "rrf": 0.03278688524590164,
+          "coverage": 0.7142857142857143,
+          "dense": 0.42008399963378906,
+          "activation": -1.8125828470614895,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 2,
+          "fused": 0.016239949582017212,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.7142857142857143,
+          "activation": -1.8358952167650435,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 3,
+          "denseRank": 11,
+          "fused": 0.03039086151850441,
+          "rrf": 0.029957522915269395,
+          "coverage": 0.7142857142857143,
+          "dense": 0.27390408515930176,
+          "activation": -0.8987763354505424,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 7
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "history",
+        "inferred": true
+      },
+      "injected": "0b1317d7b75b5f8f64ed1665b79eb7684d18dc069f0c5ee09d15eee6f61083de"
+    },
+    {
+      "question": "2026-09-16",
+      "ids": [
+        "m7-1205",
+        "m7-393",
+        "m7-533",
+        "m7-541",
+        "m7-1284",
+        "m7-280",
+        "m7-1118",
+        "m7-336",
+        "m7-1147",
+        "m7-1228"
+      ],
+      "explanations": [
+        {
+          "lexicalRank": 2,
+          "denseRank": 1,
+          "fused": 0.03404849298517035,
+          "rrf": 0.03252247488101534,
+          "coverage": 1,
+          "dense": 0.2669089436531067,
+          "activation": 2.7241910482225804,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 1,
+          "fused": 0.01641610908082616,
+          "rrf": 0.01639344262295082,
+          "coverage": 1,
+          "activation": -3.5599755919652187,
+          "hydrated": true
+        },
+        {
+          "denseRank": 3,
+          "fused": 0.01616214044662195,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.5,
+          "dense": 0.22447848320007324,
+          "activation": -0.5567621650046363,
+          "hydrated": false
+        },
+        {
+          "denseRank": 2,
+          "fused": 0.016139067930566,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "dense": 0.23809540271759033,
+          "activation": -4.373975591965219,
+          "hydrated": false
+        },
+        {
+          "denseRank": 4,
+          "fused": 0.015738836743953252,
+          "rrf": 0.015625,
+          "coverage": 0.5,
+          "dense": 0.2236739993095398,
+          "activation": -1.7686440769258236,
+          "hydrated": false
+        },
+        {
+          "denseRank": 5,
+          "fused": 0.015539897668576191,
+          "rrf": 0.015384615384615385,
+          "coverage": 0.5,
+          "dense": 0.2236739993095398,
+          "activation": -1.3746663770024374,
+          "hydrated": false
+        },
+        {
+          "denseRank": 8,
+          "fused": 0.015405530652170164,
+          "rrf": 0.014705882352941176,
+          "coverage": 0.5,
+          "dense": 0.20932728052139282,
+          "activation": 2.9769459345555704,
+          "hydrated": false
+        },
+        {
+          "denseRank": 6,
+          "fused": 0.015282134444692865,
+          "rrf": 0.015151515151515152,
+          "coverage": 0.5,
+          "dense": 0.2236739993095398,
+          "activation": -1.5685901702773206,
+          "hydrated": false
+        },
+        {
+          "denseRank": 7,
+          "fused": 0.014941183976046957,
+          "rrf": 0.014925373134328358,
+          "coverage": 0.5,
+          "dense": 0.2140318751335144,
+          "activation": -3.832975591965219,
+          "hydrated": false
+        },
+        {
+          "denseRank": 9,
+          "fused": 0.01460950577713537,
+          "rrf": 0.014492753623188406,
+          "coverage": 0.5,
+          "dense": 0.2049199342727661,
+          "activation": -1.6499332410252765,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": null,
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "4510d04fac22d0242cf6bd55b3db963e8c84ab66c91e82a52900d7917f575acf"
+    },
+    {
+      "question": "2026-01-21",
+      "ids": [
+        "m7-530",
+        "m7-521",
+        "m7-1161",
+        "m7-378",
+        "m7-1043",
+        "m7-743",
+        "m7-1186",
+        "m7-1217",
+        "m7-1444",
+        "m7-1162"
+      ],
+      "explanations": [
+        {
+          "lexicalRank": 2,
+          "denseRank": 1,
+          "fused": 0.03255904505144498,
+          "rrf": 0.03252247488101534,
+          "coverage": 1,
+          "dense": 0.31233781576156616,
+          "activation": -3.771975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 1,
+          "fused": 0.016671227002864938,
+          "rrf": 0.01639344262295082,
+          "coverage": 1,
+          "activation": -0.6682136780174832,
+          "hydrated": true
+        },
+        {
+          "denseRank": 4,
+          "fused": 0.01638249720089664,
+          "rrf": 0.015625,
+          "coverage": 0.5,
+          "dense": 0.2312150001525879,
+          "activation": 3.4623194616709956,
+          "hydrated": false
+        },
+        {
+          "denseRank": 2,
+          "fused": 0.016271456187583952,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "dense": 0.2519606947898865,
+          "activation": -1.5395158112123526,
+          "hydrated": false
+        },
+        {
+          "denseRank": 3,
+          "fused": 0.015888186601182817,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.5,
+          "dense": 0.2519606947898865,
+          "activation": -3.937975591965219,
+          "hydrated": false
+        },
+        {
+          "denseRank": 7,
+          "fused": 0.01564388325606346,
+          "rrf": 0.014925373134328358,
+          "coverage": 0.5,
+          "dense": 0.21487277746200562,
+          "activation": 3.253636432936168,
+          "hydrated": false
+        },
+        {
+          "denseRank": 5,
+          "fused": 0.015624677075506029,
+          "rrf": 0.015384615384615385,
+          "coverage": 0.5,
+          "dense": 0.22455281019210815,
+          "activation": -0.7904120638923324,
+          "hydrated": false
+        },
+        {
+          "denseRank": 6,
+          "fused": 0.015171008625114245,
+          "rrf": 0.015151515151515152,
+          "coverage": 0.5,
+          "dense": 0.21487277746200562,
+          "activation": -3.6339755919652186,
+          "hydrated": false
+        },
+        {
+          "denseRank": 8,
+          "fused": 0.014720774495998661,
+          "rrf": 0.014705882352941176,
+          "coverage": 0.5,
+          "dense": 0.21487277746200562,
+          "activation": -3.8789755919652187,
+          "hydrated": false
+        },
+        {
+          "denseRank": 9,
+          "fused": 0.014510809362228764,
+          "rrf": 0.014492753623188406,
+          "coverage": 0.5,
+          "dense": 0.21487277746200562,
+          "activation": -3.666975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": null,
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "cbb28f129749ee7497d235bc3ee24700a5ef1e03eecca3091efd6b57f8b7d20b"
+    },
+    {
+      "question": "2026-06-13",
+      "ids": [
+        "m7-330",
+        "m7-989",
+        "m7-1043",
+        "m7-539",
+        "m7-1023",
+        "m7-280",
+        "m7-891",
+        "m7-617",
+        "m7-1433",
+        "m7-399"
+      ],
+      "explanations": [
+        {
+          "lexicalRank": 1,
+          "denseRank": 4,
+          "fused": 0.03203850306380354,
+          "rrf": 0.032018442622950824,
+          "coverage": 1,
+          "dense": 0.23265063762664795,
+          "activation": -4.366975591965219,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 2,
+          "denseRank": 32,
+          "fused": 0.027491793892983726,
+          "rrf": 0.02699859747545582,
+          "coverage": 1,
+          "dense": 0.1414930820465088,
+          "activation": -0.5522193431373835,
+          "hydrated": false
+        },
+        {
+          "denseRank": 1,
+          "fused": 0.017158932992329748,
+          "rrf": 0.01639344262295082,
+          "coverage": 0.5,
+          "dense": 0.2509745955467224,
+          "activation": 2.64817228111105,
+          "hydrated": false
+        },
+        {
+          "denseRank": 2,
+          "fused": 0.01666709009189035,
+          "rrf": 0.016129032258064516,
+          "coverage": 0.5,
+          "dense": 0.23662114143371582,
+          "activation": 0.695510825176965,
+          "hydrated": false
+        },
+        {
+          "denseRank": 3,
+          "fused": 0.01589323958552032,
+          "rrf": 0.015873015873015872,
+          "coverage": 0.5,
+          "dense": 0.23662114143371582,
+          "activation": -3.643975591965219,
+          "hydrated": false
+        },
+        {
+          "denseRank": 7,
+          "fused": 0.015619863593187823,
+          "rrf": 0.014925373134328358,
+          "coverage": 0.5,
+          "dense": 0.2236739993095398,
+          "activation": 2.5962092540831065,
+          "hydrated": false
+        },
+        {
+          "denseRank": 5,
+          "fused": 0.01540064372500146,
+          "rrf": 0.015384615384615385,
+          "coverage": 0.5,
+          "dense": 0.23166966438293457,
+          "activation": -3.8499755919652188,
+          "hydrated": false
+        },
+        {
+          "denseRank": 6,
+          "fused": 0.015304279764492675,
+          "rrf": 0.015151515151515152,
+          "coverage": 0.5,
+          "dense": 0.2236739993095398,
+          "activation": -1.376017992160651,
+          "hydrated": false
+        },
+        {
+          "denseRank": 8,
+          "fused": 0.014716778028614071,
+          "rrf": 0.014705882352941176,
+          "coverage": 0.5,
+          "dense": 0.2236739993095398,
+          "activation": -4.196975591965219,
+          "hydrated": false
+        },
+        {
+          "denseRank": 9,
+          "fused": 0.014503302628357707,
+          "rrf": 0.014492753623188406,
+          "coverage": 0.5,
+          "dense": 0.21906858682632446,
+          "activation": -4.214975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": null,
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "9d06a454e29423536e9ed49c9e7dfdee2dcba4398c31fc634c90b8c8813b847e"
+    },
+    {
+      "question": "auth service rollback plan for the billing team",
+      "ids": [],
+      "explanations": [],
+      "abstained": true,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 10
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "question": "who approved the quarterly budget for the search gateway",
+      "ids": ["m7-1309"],
+      "explanations": [
+        {
+          "lexicalRank": 49,
+          "denseRank": 32,
+          "fused": 0.020056774451166916,
+          "rrf": 0.02004387714399681,
+          "coverage": 0.6,
+          "dense": 0.47635704278945923,
+          "activation": -4.339975591965219,
+          "hydrated": false
+        }
+      ],
+      "abstained": false,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 9
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "8afc58db7ad9ea1b555e3d03aa4d69bd51c1f0522889afccba9304ff70d784a3"
+    },
+    {
+      "question": "the incident escalation policy for the notify relay",
+      "ids": [],
+      "explanations": [],
+      "abstained": true,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 10
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "question": "media proxy vendor contract renewal for the legal team",
+      "ids": [],
+      "explanations": [],
+      "abstained": true,
+      "gate": {
+        "by": "coverage",
+        "threshold": 0.5,
+        "dropped": 10
+      },
+      "embedSkipped": null,
+      "degraded": ["no-reranker"],
+      "temporal": {
+        "mode": "current",
+        "inferred": true
+      },
+      "injected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

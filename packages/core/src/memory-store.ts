@@ -1,15 +1,14 @@
 import { appendAccess } from './activation.js';
 import type { GuardedWriteResult, Hit, MemoryStore } from './adapters.js';
+import { canonicalMemory } from './address.js';
 import {
   assertGrant,
-  canRead,
-  canWrite,
   cursorKey,
-  filterCovers,
+  grantReads,
+  grantWrites,
   GrantError,
-  sameScope,
+  sameRecordAddress,
   type Grant,
-  type GrantFilter,
 } from './grant.js';
 import { isCurrent, type Memory, type Tier } from './model.js';
 import { tokenizeLexical as tokens } from './tokenize.js';
@@ -75,27 +74,33 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     if (m.tier !== 'cold') cold.delete(m.id);
   }
 
-  function scoped(f: GrantFilter): Memory[] {
-    return [...main.values()].filter((m) => filterCovers(f, m.scope));
+  function scoped(grant: Grant): Memory[] {
+    return [...main.values()].filter((m) => grantReads(grant, m));
   }
 
   /** The live record if `grant` may read it; `undefined` for unknown and out-of-grant alike. */
   function readable(grant: Grant, id: string): Memory | undefined {
     const m = main.get(id);
-    return m !== undefined && canRead(grant, m.scope) ? m : undefined;
+    return m !== undefined && grantReads(grant, m) ? m : undefined;
   }
 
   /** The live record if `grant` may change it. */
   function writable(grant: Grant, id: string): Memory | undefined {
     const m = main.get(id);
-    return m !== undefined && canWrite(grant, m.scope) ? m : undefined;
+    return m !== undefined && grantWrites(grant, m) ? m : undefined;
   }
 
-  /** Every check `upsert` makes, before anything is written. */
-  function checkWrite(grant: Grant, m: Memory): void {
-    if (!canWrite(grant, m.scope)) throw new GrantError();
-    const existing = main.get(m.id);
-    if (existing !== undefined && !sameScope(existing.scope, m.scope)) throw new GrantError();
+  /**
+   * Every check `upsert` makes, before anything is written: a legal address
+   * that matches the scope (`RangeError` otherwise), inside `grant.write`,
+   * and the same address, author and scope as any record already under the id.
+   * Returns the record as stored.
+   */
+  function checkWrite(grant: Grant, m: Memory, existing: Memory | undefined): Memory {
+    const c = canonicalMemory(m);
+    if (!grantWrites(grant, c)) throw new GrantError();
+    if (existing !== undefined && !sameRecordAddress(existing, c)) throw new GrantError();
+    return c;
   }
 
   /** True while the live record still matches the snapshot a guarded write was computed from. */
@@ -156,8 +161,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       open();
       assertGrant(grant);
       const c = structuredClone(m);
-      checkWrite(grant, c);
-      put(c);
+      put(checkWrite(grant, c, main.get(c.id)));
     },
 
     /** Atomic trivially: checks and clones every record before writing any. */
@@ -168,13 +172,13 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       // Later entries may move an id the batch itself created: check against
       // the batch's own earlier entries as well as the store.
       const batch = new Map<string, Memory>();
+      const checked: Memory[] = [];
       for (const c of cs) {
-        if (!canWrite(grant, c.scope)) throw new GrantError();
-        const existing = batch.get(c.id) ?? main.get(c.id);
-        if (existing !== undefined && !sameScope(existing.scope, c.scope)) throw new GrantError();
-        batch.set(c.id, c);
+        const ok = checkWrite(grant, c, batch.get(c.id) ?? main.get(c.id));
+        batch.set(c.id, ok);
+        checked.push(ok);
       }
-      for (const c of cs) put(c);
+      for (const c of checked) put(c);
     },
 
     async get(grant, id) {
@@ -203,7 +207,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       const query = new Set(tokens(q));
       if (query.size === 0) return [];
       const scored: { m: Memory; score: number }[] = [];
-      for (const m of scoped(grant.read)) {
+      for (const m of scoped(grant)) {
         const fields =
           m.tier === 'cold' ? [m.stub, ...m.entities] : [m.text, m.stub, ...m.entities];
         const doc = new Set(tokens(fields.join(' ')));
@@ -218,7 +222,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       open();
       assertGrant(grant);
       const scored: { m: Memory; score: number }[] = [];
-      for (const m of scoped(grant.read)) {
+      for (const m of scoped(grant)) {
         if (m.tier === 'cold' || m.embedding === undefined) continue;
         if (m.embedding.length !== v.length) {
           throw new RangeError(
@@ -244,7 +248,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       assertGrant(grant);
       const validOnly = listOpts.validOnly ?? true;
       const now = clock();
-      return scoped(grant.read)
+      return scoped(grant)
         .filter((m) => !validOnly || isCurrent(m, now))
         .filter((m) => listOpts.tier === undefined || m.tier === listOpts.tier)
         .filter((m) => listOpts.pinned !== true || m.pinned)
@@ -267,7 +271,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       assertGrant(grant);
       if (readable(grant, id) === undefined) return null;
       const m = cold.get(id);
-      return m === undefined || !canRead(grant, m.scope) ? null : structuredClone(m);
+      return m === undefined || !grantReads(grant, m) ? null : structuredClone(m);
     },
 
     async setTier(

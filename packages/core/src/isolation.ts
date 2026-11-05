@@ -4,8 +4,17 @@
  * can require an empty list and a test can prove a broken store is caught.
  * No vitest here; `store-conformance.ts` wires these into `it` blocks.
  */
+import {
+  addressed,
+  addressOf,
+  authorOf,
+  GALAXY_ROOT,
+  nodeOf,
+  type Address,
+  type Author,
+} from './address.js';
 import type { MemoryStore, ScopeFilter } from './adapters.js';
-import { GrantError, localGrant, type Grant } from './grant.js';
+import { GrantError, localGrant, nodeGrant, type Grant, type NodePattern } from './grant.js';
 import type { Memory, Scope } from './model.js';
 
 const NOW = '2026-11-04T12:00:00.000Z';
@@ -44,6 +53,36 @@ export function soleGrant(s: Scope): Grant {
   return localGrant({ ...principal(s), projectIds: [s.projectId ?? null] });
 }
 
+/** The narrowest grant for one memory at any level: its node, its one project, its author. */
+export function soleGrantFor(m: Pick<Memory, 'scope' | 'address' | 'author'>): Grant {
+  const address = addressOf(m);
+  const author = authorOf(m);
+  const pattern: NodePattern = {
+    node: nodeOf(address),
+    projectIds: [address.projectId ?? null],
+    authorAgentId: author.agentId,
+  };
+  return nodeGrant({ principal: ISO_PRINCIPAL, read: [pattern] });
+}
+
+/** `m` moved to `scope`: its address and author dropped, so the scope's Planet is the address. */
+export function movedTo(m: Memory, scope: Scope): Memory {
+  const { address: _a, author: _w, provenance: _p, ...rest } = m;
+  return { ...rest, scope };
+}
+
+/** A memory at `address`, written by `author`, for the isolation checks. */
+export function isoAt(
+  id: string,
+  address: Address,
+  author: Author,
+  marker: string,
+  embedding?: Int8Array,
+): Memory {
+  const at = addressed(address, author);
+  return { ...isoMemory(id, at.scope, marker, embedding), ...at };
+}
+
 /** A stable rendering of a record (embedding as plain numbers) for before/after comparison. */
 function render(m: Memory | null): string {
   if (m === null) return 'null';
@@ -73,6 +112,53 @@ export const ISO_SCOPES = {
   otherOrg: { orgId: 'another-org', customerId: 'self', agentId: 'claude-code', projectId: 'pa' },
 } satisfies Record<string, Scope>;
 
+/** Who the level checks act as: the caller of `ISO_SCOPES.mine`. */
+const ISO_PRINCIPAL = { orgId: 'local', customerId: 'self', agentId: 'claude-code' };
+
+/**
+ * Victims at the other levels, each next to the caller's own Planet: a Planet
+ * memory another of the caller's agents wrote, the caller's agent's own Star,
+ * an Orbit, a Flyby, a Constellation and a Galaxy root of an organisation, and
+ * one of the caller's own owner. A pre-level grant sees none of them.
+ */
+export const ISO_LEVELS: Record<string, { address: Address; author: Author }> = {
+  planetOtherAuthor: {
+    address: { level: 'user', orgId: 'local', customerId: 'self', projectId: 'pa' },
+    author: { agentId: 'cursor' },
+  },
+  star: {
+    address: { level: 'agent', orgId: 'local', agentId: 'claude-code', projectId: 'pa' },
+    author: { agentId: 'claude-code' },
+  },
+  orbit: {
+    address: { level: 'agent-user', orgId: 'local', agentId: 'claude-code', customerId: 'self' },
+    author: { agentId: 'claude-code' },
+  },
+  flyby: {
+    address: {
+      level: 'run',
+      orgId: 'local',
+      agentId: 'claude-code',
+      runId: 'r1',
+      customerId: 'self',
+      projectId: 'pa',
+    },
+    author: { agentId: 'claude-code' },
+  },
+  ownHive: {
+    address: { level: 'hive', orgId: 'local', hiveId: 'self', projectId: 'pa' },
+    author: { agentId: 'claude-code' },
+  },
+  constellation: {
+    address: { level: 'hive', orgId: 'org:acme', hiveId: 'checkout', projectId: 'pa' },
+    author: { agentId: 'claude-code', accountRef: 'acct:member' },
+  },
+  galaxy: {
+    address: { level: 'hive', orgId: 'org:acme', hiveId: GALAXY_ROOT },
+    author: { agentId: 'claude-code' },
+  },
+};
+
 /**
  * Every `MemoryStore` method, called with a grant for `ISO_SCOPES.mine`
  * against memories (warm and cold) in each other scope: nothing is seen,
@@ -91,12 +177,25 @@ export async function isolationViolations(make: () => Promise<MemoryStore>): Pro
 
     const victims: { name: string; m: Memory; g: Grant; cold: boolean }[] = [];
     let n = 2;
-    for (const [name, scope] of Object.entries(ISO_SCOPES)) {
-      if (name === 'mine') continue;
+    const targets: [string, (id: string, marker: string, v: Int8Array) => Memory][] = [
+      ...Object.entries(ISO_SCOPES)
+        .filter(([name]) => name !== 'mine')
+        .map(([name, scope]): [string, (id: string, marker: string, v: Int8Array) => Memory] => [
+          name,
+          (id, marker, v) => isoMemory(id, scope, marker, v),
+        ]),
+      ...Object.entries(ISO_LEVELS).map(
+        ([name, at]): [string, (id: string, marker: string, v: Int8Array) => Memory] => [
+          name,
+          (id, marker, v) => isoAt(id, at.address, at.author, marker, v),
+        ],
+      ),
+    ];
+    for (const [name, build] of targets) {
       for (const cold of [false, true]) {
         const id = `victim-${name}-${cold ? 'cold' : 'warm'}`;
-        const g = soleGrant(scope);
-        const m = isoMemory(id, scope, `shared canary${name}`, vec(n++));
+        const m = build(id, `shared canary${name}`, vec(n++));
+        const g = soleGrantFor(m);
         await store.upsert(g, m);
         if (cold) {
           const { skipped } = await store.coldPut(g, m);
@@ -141,7 +240,7 @@ export async function isolationViolations(make: () => Promise<MemoryStore>): Pro
       if (!('err' in direct) || !(direct.err instanceof GrantError)) {
         fail('upsert of its own scope was not refused with GrantError');
       }
-      const moved = await settle(store.upsert(mine, { ...v.m, scope: ISO_SCOPES.mine }));
+      const moved = await settle(store.upsert(mine, movedTo(v.m, ISO_SCOPES.mine)));
       if (!('err' in moved) || !(moved.err instanceof GrantError)) {
         fail('upsert moving its id into my scope was not refused with GrantError');
       } else if (
@@ -153,7 +252,7 @@ export async function isolationViolations(make: () => Promise<MemoryStore>): Pro
       const batch = await settle(
         store.upsertMany(mine, [
           isoMemory(`batch-${id}`, ISO_SCOPES.mine, 'batch'),
-          { ...v.m, scope: ISO_SCOPES.mine },
+          movedTo(v.m, ISO_SCOPES.mine),
         ]),
       );
       if (!('err' in batch)) fail('a batch reaching it was not refused');
@@ -282,13 +381,62 @@ const WORDS = ['orbit', 'comet', 'nebula', 'pulsar', 'quasar', 'photon', 'kuiper
  * keys (callers use UUIDs), so a tenant that reuses another tenant's id is
  * refused, which is a collision, not a leak of content.
  */
-function opSequence(seed: number, steps: number): Op[] {
+function opSequence(seed: number, steps: number, multiNode: boolean): Op[] {
   const rng = seededRng(seed);
-  const aScope = (i: number): Scope =>
-    i === 0 ? ISO_SCOPES.mine : i === 1 ? ISO_SCOPES.otherProject : ISO_SCOPES.global;
-  const aGrant = localGrant({ ...principal(ISO_SCOPES.mine), projectIds: ['pa', 'pa2', null] });
+  const planetA = ['pa', 'pa2', null].map(
+    (projectId) => (id: string, t: string, e: Int8Array) =>
+      isoMemory(
+        id,
+        projectId === null ? ISO_SCOPES.global : { ...ISO_SCOPES.mine, projectId },
+        t,
+        e,
+      ),
+  );
+  // With multiNode, A also reads and writes a Constellation of another owner and its
+  // agent's own Star; B (another person) its own Planet and a sibling Constellation.
+  const aBuild: ((id: string, t: string, e: Int8Array) => Memory)[] = multiNode
+    ? [
+        ...planetA,
+        (id, t, e) =>
+          isoAt(id, ISO_LEVELS['constellation']!.address, { agentId: 'claude-code' }, t, e),
+        (id, t, e) => isoAt(id, ISO_LEVELS['star']!.address, { agentId: 'claude-code' }, t, e),
+      ]
+    : planetA;
+  const aGrant = multiNode
+    ? nodeGrant({
+        principal: ISO_PRINCIPAL,
+        read: [
+          {
+            node: { level: 'user', orgId: 'local', customerId: 'self' },
+            projectIds: ['pa', 'pa2', null],
+            authorAgentId: 'claude-code',
+          },
+          { node: { level: 'hive', orgId: 'org:acme', hiveId: 'checkout' }, projectIds: 'all' },
+          { node: { level: 'agent', orgId: 'local', agentId: 'claude-code' }, projectIds: 'all' },
+        ],
+      })
+    : localGrant({ ...principal(ISO_SCOPES.mine), projectIds: ['pa', 'pa2', null] });
   const bScope = ISO_SCOPES.otherCustomer;
-  const bGrant = soleGrant(bScope);
+  const payments: Address = { level: 'hive', orgId: 'org:acme', hiveId: 'payments' };
+  const bBuild: ((id: string, t: string, e: Int8Array) => Memory)[] = multiNode
+    ? [
+        (id, t, e) => isoMemory(id, bScope, t, e),
+        (id, t, e) => isoAt(id, payments, { agentId: 'claude-code' }, t, e),
+      ]
+    : [(id, t, e) => isoMemory(id, bScope, t, e)];
+  const bGrant = multiNode
+    ? nodeGrant({
+        principal: principal(bScope),
+        read: [
+          {
+            node: { level: 'user', orgId: 'local', customerId: 'someone-else' },
+            projectIds: ['pa'],
+            authorAgentId: 'claude-code',
+          },
+          { node: nodeOf(payments), projectIds: 'all' },
+        ],
+      })
+    : soleGrant(bScope);
   const ops: Op[] = [];
   const aIds: string[] = [];
   const bIds: string[] = [];
@@ -309,8 +457,10 @@ function opSequence(seed: number, steps: number): Op[] {
     if (kind <= 2 || own.length === 0) {
       const id = `${who}-${i}`;
       own.push(id);
-      const scope = who === 'A' ? aScope(rng.int(3)) : bScope;
-      const m = { ...isoMemory(id, scope, text(), emb()), salience: rng.int(10) / 10 };
+      const builds = who === 'A' ? aBuild : bBuild;
+      // One builder draws no number, so the pre-level sequences replay exactly.
+      const build = builds.length === 1 ? builds[0]! : builds[rng.int(builds.length)]!;
+      const m = { ...build(id, text(), emb()), salience: rng.int(10) / 10 };
       ops.push({ who, run: (s) => s.upsert(grant, m) });
     } else if (kind === 3) {
       const id = target();
@@ -360,13 +510,18 @@ function opSequence(seed: number, steps: number): Op[] {
  * order: SQLite FTS5's bm25 uses table-wide term statistics, so another
  * tenant's text shifts scores (a known side channel; see the PR notes).
  * Every other result is compared exactly, dense scores included.
+ *
+ * `multiNode`: A's grant spans its Planet, its agent's Star and a
+ * Constellation of another owner; B's spans its own Planet and a sibling
+ * Constellation. Same property.
  */
 export async function nonInterference(
   make: () => Promise<MemoryStore>,
   seed: number,
   steps: number,
+  opts: { multiNode?: boolean } = {},
 ): Promise<string | null> {
-  const ops = opSequence(seed, steps);
+  const ops = opSequence(seed, steps, opts.multiNode === true);
   const observe = async (withB: boolean): Promise<string[]> => {
     const s = await make();
     const seen: string[] = [];

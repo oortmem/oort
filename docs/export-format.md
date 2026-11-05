@@ -1,4 +1,4 @@
-# Oort export format, version 1
+# Oort export format, version 2
 
 `oort export` writes the memories visible from the current project as
 [JSON Lines](https://jsonlines.org/) (UTF-8, one JSON value per line, each line
@@ -6,6 +6,12 @@ ending in `\n`). Output goes to stdout, or with `--out <file>` to a new file
 created owner-only (`0600`). An existing file is refused unless `--force` is
 given, and a symlink is never written through. `--json` is accepted and changes
 nothing. This format is the basis for import and migration (CON-36).
+
+Version 2 adds each memory's address, author and provenance (see Levels in
+`docs/store-contract.md`). `oort export --format 1` writes version 1, for
+readers that do not know version 2 yet; it refuses memories outside the Planet.
+Readers accept both versions, version 1 forever. `parseExport` in
+`@oortmem/core` reads either and `formatExport` writes either.
 
 ## What is exported
 
@@ -26,23 +32,28 @@ nothing. This format is the basis for import and migration (CON-36).
 ```json
 {
   "oort": "export",
-  "version": 1,
+  "version": 2,
   "exportedAt": "2026-11-03T20:00:00.000Z",
   "memories": 42,
-  "scopes": [{ "orgId": "local", "customerId": "self", "agentId": "claude-code", "projectId": "oort-1a2b3c4d" }]
+  "scopes": [{ "orgId": "local", "customerId": "self", "agentId": "claude-code", "projectId": "oort-1a2b3c4d" }],
+  "addresses": [{ "level": "user", "orgId": "local", "customerId": "self", "projectId": "oort-1a2b3c4d" }]
 }
 ```
 
 | Field        | Type     | Meaning                                                                 |
 | ------------ | -------- | ----------------------------------------------------------------------- |
 | `oort`       | `"export"` | Identifies the file.                                                   |
-| `version`    | `1`      | Format version. A reader refuses versions it does not know.             |
+| `version`    | `2`      | Format version. A reader refuses versions it does not know.             |
 | `exportedAt` | ISO 8601 | When the export was written (UTC).                                      |
 | `memories`   | integer  | Number of memory lines that follow.                                     |
-| `scopes`     | `Scope[]` | The distinct scopes of the exported memories (empty when there are none). |
+| `scopes`     | `Scope[]` | The distinct scopes of the exported Planet memories (empty when there are none). |
+| `addresses`  | `Address[]` | The distinct addresses of all exported memories. Version 2 only.      |
 
 A `Scope` is `{ "orgId": string, "customerId": string, "agentId": string, "projectId"?: string }`.
-`projectId` is absent for global memories.
+`projectId` is absent for global memories. An `Address` is one of the level
+shapes in `docs/store-contract.md`, for example
+`{ "level": "user", "orgId": "local", "customerId": "self" }` or
+`{ "level": "hive", "orgId": "org:acme", "hiveId": "checkout" }`.
 
 ## Lines 2 to n+1: one memory each
 
@@ -53,7 +64,10 @@ per dimension, two's complement), and is absent when the memory has none.
 | Field             | Type                                                       |
 | ----------------- | ---------------------------------------------------------- |
 | `id`              | string (UUID)                                              |
-| `scope`           | `Scope`                                                    |
+| `scope`           | `Scope`; Planet memories only                              |
+| `address`         | `Address` (version 2)                                      |
+| `author`          | `{ agentId, accountRef? }`: who wrote it (version 2)       |
+| `provenance`      | object \| null: where a shared copy came from (version 2)  |
 | `type`            | `"semantic"` \| `"episodic"` \| `"procedural"` \| `"preference"` |
 | `text`            | string: the de-contextualised claim                        |
 | `stub`            | string: short form kept searchable while cold              |
@@ -84,6 +98,16 @@ const vector = Int8Array.from(Buffer.from(line.embedding, 'base64'));
 
 The export contains memory text, which may be sensitive. Secrets were scrubbed
 before storage, but treat the file like the store itself.
+
+## Version 1
+
+Version 1 is version 2 without `addresses` in the manifest and without
+`address`, `author` and `provenance` on lines; every line has `scope`. It can
+hold only Planet memories. A reader maps a version 1 line to the Planet its
+`scope` names, with `scope.agentId` as the author; an import into another
+account moves it to that account's Planet. `oort cloud import` uploads
+version 1, which Oort Cloud reads, and `oort cloud export` returns what Oort
+Cloud writes.
 
 ## Limitations
 

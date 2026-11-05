@@ -1,5 +1,7 @@
 export const VERSION = '0.2.1';
 export * from './model.js';
+export * from './address.js';
+export * from './export-format.js';
 export * from './scope.js';
 export * from './config.js';
 export * from './activation.js';

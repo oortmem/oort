@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { principalGrant, type Memory, type Scope } from '@oortmem/core';
+import { exportLine, fitsVersion1, principalGrant, type Memory, type Scope } from '@oortmem/core';
 import {
   OortCloudError,
   cloudUrl,
@@ -11,9 +11,9 @@ import {
 } from '../cloud.js';
 import { keyLookup } from '../credentials.js';
 import { uiFor } from '../ui.js';
-import { Refusal, confirm, toJson, withWired, writeOwnerOnly, type Ctx } from '../util.js';
+import { Refusal, confirm, withWired, writeOwnerOnly, type Ctx } from '../util.js';
 import type { Wired } from '../wire.js';
-import { EXPORT_VERSION, decoded, scopeKey, type ExportManifest } from './export.js';
+import { decoded, scopeKey, type ExportManifest } from './export.js';
 
 /** One import request: at most this many memory lines and bytes (the API takes 1,000 and 10 MB). */
 export const IMPORT_CHUNK_LINES = 500;
@@ -34,7 +34,12 @@ async function clientFor(ctx: Ctx): Promise<CloudClient> {
   });
 }
 
-/** Every memory in the local store (all projects of this machine's principal), oldest first. */
+/**
+ * Every memory in the local store (all projects of this machine's principal),
+ * oldest first, in export format version 1: the version Oort Cloud's import
+ * reads. The local store's principal sees only its own Planet, which version
+ * 1 holds exactly.
+ */
 async function localExport(
   w: Wired,
   ctx: Ctx,
@@ -50,12 +55,17 @@ async function localExport(
     const full: Memory = await decoded(m, w.store, grant, ctx);
     if (full.embedding !== undefined && full.embedding.length === w.config.embed.dimension)
       withEmbedding++;
+    if (!fitsVersion1(full)) {
+      throw new Refusal(
+        `memory ${full.id} is outside your Planet; Oort Cloud cannot import it yet.`,
+      );
+    }
     scopes.set(scopeKey(full.scope), full.scope);
-    lines.push(JSON.stringify(toJson(full)));
+    lines.push(JSON.stringify(exportLine(full, 1)));
   }
   const manifest: ExportManifest = {
     oort: 'export',
-    version: EXPORT_VERSION,
+    version: 1,
     exportedAt: new Date().toISOString(),
     memories: lines.length,
     scopes: [...scopes.values()],

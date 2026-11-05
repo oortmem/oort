@@ -1,7 +1,23 @@
+import {
+  addressOf,
+  assertNode,
+  authorOf,
+  nodeKey,
+  nodeOf,
+  planetOf,
+  sameAddress,
+  sameAuthor,
+  type Address,
+  type Author,
+  type NodeRef,
+} from './address.js';
 import type { ScopeFilter } from './adapters.js';
-import type { Scope } from './model.js';
+import type { Memory, Scope } from './model.js';
 
-/** Who a grant acts for: one (org, customer, agent). Grants never span principals. */
+/**
+ * Who a grant acts for: an account (`orgId`, `customerId`) and the agent
+ * acting for it. Cursors belong to the principal.
+ */
 export interface Principal {
   orgId: string;
   customerId: string;
@@ -14,43 +30,84 @@ export interface Principal {
  */
 export type GrantProjects = readonly (string | null)[] | 'all';
 
-/** One side (read or write) of a grant, as stores apply it. */
+/**
+ * One side (read or write) of a pre-level grant: the principal's Planet,
+ * written by the principal's agent, in `projectIds`.
+ * @deprecated Stores read `Grant.readNodes` and `Grant.writeNodes`.
+ */
 export interface GrantFilter extends Readonly<Principal> {
   readonly projectIds: GrantProjects;
 }
 
 /**
+ * One node a grant covers (CON-61): the node, the project bindings inside it,
+ * and optionally one author. Matching is structural and exact on every field
+ * (never a prefix). `authorAgentId` restricts the pattern to memories that
+ * agent wrote; the pre-level constructors (`localGrant`, `principalGrant`)
+ * set it to the principal's agent, so they see exactly what they saw before
+ * levels existed.
+ */
+export interface NodePattern {
+  readonly node: NodeRef;
+  readonly projectIds: GrantProjects;
+  readonly authorAgentId?: string;
+}
+
+/**
  * The permission every `MemoryStore` method takes. Opaque: built only by
- * `localGrant` or `principalGrant`, frozen, and nominal, so a raw
+ * `localGrant`, `principalGrant` or `nodeGrant`, frozen, and nominal, so a raw
  * `ScopeFilter` (or any look-alike object) is rejected by the type checker
  * and, for JavaScript callers, by `assertGrant` inside every store.
  *
- * `read` bounds what can be seen (`get`, `lexical`, `dense`, `list`,
- * `coldGet`, `recordAccess`); `write` bounds what can change (`upsert`,
- * `forget`, `setTier`, `expireMany`, `coldPut`). Cursors belong to the
- * principal. Anything outside a grant behaves exactly like something that
+ * `readNodes` bounds what can be seen (`get`, `lexical`, `dense`, `list`,
+ * `coldGet`, `recordAccess`); `writeNodes` bounds what can change (`upsert`,
+ * `forget`, `setTier`, `expireMany`, `coldPut`). A memory is covered when
+ * any pattern of the side covers its address and author. Cursors belong to
+ * the principal. Anything outside a grant behaves exactly like something that
  * does not exist.
  */
 export class Grant {
   readonly #issued = true;
   readonly principal: Readonly<Principal>;
+  /** @deprecated The pre-level view of `readNodes`; see `GrantFilter`. */
   readonly read: GrantFilter;
+  /** @deprecated The pre-level view of `writeNodes`; see `GrantFilter`. */
   readonly write: GrantFilter;
+  readonly readNodes: readonly NodePattern[];
+  readonly writeNodes: readonly NodePattern[];
 
-  private constructor(principal: Principal, read: GrantProjects, write: GrantProjects) {
+  private constructor(
+    principal: Principal,
+    readNodes: readonly NodePattern[],
+    writeNodes: readonly NodePattern[],
+  ) {
     this.principal = Object.freeze({ ...principal });
-    this.read = Object.freeze({ ...principal, projectIds: freezeProjects(read) });
-    this.write = Object.freeze({ ...principal, projectIds: freezeProjects(write) });
+    this.readNodes = Object.freeze(readNodes.map(freezePattern));
+    this.writeNodes = Object.freeze(writeNodes.map(freezePattern));
+    this.read = Object.freeze({
+      ...principal,
+      projectIds: legacyProjects(principal, this.readNodes),
+    });
+    this.write = Object.freeze({
+      ...principal,
+      projectIds: legacyProjects(principal, this.writeNodes),
+    });
     Object.freeze(this);
   }
 
   /** @internal Use `localGrant` or `principalGrant`. */
   static issue(principal: Principal, read: GrantProjects, write: GrantProjects): Grant {
-    for (const k of ['orgId', 'customerId', 'agentId'] as const) {
-      if (typeof principal[k] !== 'string' || principal[k] === '') {
-        throw new RangeError(`grant: ${k} must be a non-empty string`);
-      }
-    }
+    checkPrincipal(principal);
+    return new Grant(principal, [ownPlanet(principal, read)], [ownPlanet(principal, write)]);
+  }
+
+  /** @internal Use `nodeGrant`. */
+  static issueNodes(
+    principal: Principal,
+    read: readonly NodePattern[],
+    write: readonly NodePattern[],
+  ): Grant {
+    checkPrincipal(principal);
     return new Grant(principal, read, write);
   }
 
@@ -58,6 +115,56 @@ export class Grant {
   static is(x: unknown): x is Grant {
     return typeof x === 'object' && x !== null && #issued in x;
   }
+}
+
+function checkPrincipal(principal: Principal): void {
+  for (const k of ['orgId', 'customerId', 'agentId'] as const) {
+    if (typeof principal[k] !== 'string' || principal[k] === '') {
+      throw new RangeError(`grant: ${k} must be a non-empty string`);
+    }
+  }
+}
+
+/** The pre-level grant side: the principal's own Planet, written by its own agent. */
+function ownPlanet(p: Principal, projectIds: GrantProjects): NodePattern {
+  return {
+    node: { level: 'user', orgId: p.orgId, customerId: p.customerId },
+    projectIds,
+    authorAgentId: p.agentId,
+  };
+}
+
+function freezePattern(p: NodePattern): NodePattern {
+  if (typeof p !== 'object' || p === null)
+    throw new TypeError('grant: a node pattern must be an object');
+  assertNode(p.node);
+  const { level: _l, ...rest } = p.node;
+  const node = Object.freeze({ level: p.node.level, ...rest }) as NodeRef;
+  if (
+    p.authorAgentId !== undefined &&
+    (typeof p.authorAgentId !== 'string' || p.authorAgentId === '')
+  ) {
+    throw new RangeError('grant: authorAgentId must be a non-empty string');
+  }
+  return Object.freeze({
+    node,
+    projectIds: freezeProjects(p.projectIds),
+    ...(p.authorAgentId !== undefined && { authorAgentId: p.authorAgentId }),
+  });
+}
+
+/**
+ * The projects of `patterns` that a pre-level reader may assume: those of
+ * patterns naming exactly the principal's Planet, restricted to its agent.
+ * Never wider than the patterns themselves.
+ */
+function legacyProjects(p: Principal, patterns: readonly NodePattern[]): GrantProjects {
+  const own = nodeKey({ level: 'user', orgId: p.orgId, customerId: p.customerId });
+  const mine = patterns.filter((x) => x.authorAgentId === p.agentId && nodeKey(x.node) === own);
+  if (mine.some((x) => x.projectIds === 'all')) return 'all';
+  return Object.freeze([
+    ...new Set(mine.flatMap((x) => x.projectIds as readonly (string | null)[])),
+  ]);
 }
 
 function freezeProjects(p: GrantProjects): GrantProjects {
@@ -97,14 +204,38 @@ export function principalGrant(p: Principal): Grant {
   return Grant.issue(p, 'all', 'all');
 }
 
+/**
+ * A grant over explicit node patterns, possibly across owners and levels:
+ * `read` bounds what is seen, `write` (default: `read`) what may change.
+ * Trusted: whoever builds one has already decided the principal may use
+ * every node it names (local configuration, or membership checked by a
+ * control plane). Nothing in the engine builds one for its own callers yet:
+ * the CLI, hooks and MCP server keep the pre-level grants.
+ */
+export function nodeGrant(opts: {
+  principal: Principal;
+  read: readonly NodePattern[];
+  write?: readonly NodePattern[];
+}): Grant {
+  if (!Array.isArray(opts.read) || (opts.write !== undefined && !Array.isArray(opts.write))) {
+    throw new TypeError('nodeGrant: read and write must be arrays of node patterns');
+  }
+  return Grant.issueNodes(opts.principal, opts.read, opts.write ?? opts.read);
+}
+
 /** Rejects anything that is not a real `Grant`; every store calls it first. */
 export function assertGrant(g: unknown): asserts g is Grant {
   if (!Grant.is(g)) {
-    throw new TypeError('MemoryStore methods take a Grant (localGrant or principalGrant)');
+    throw new TypeError(
+      'MemoryStore methods take a Grant (localGrant, principalGrant or nodeGrant)',
+    );
   }
 }
 
-/** True iff a memory with `scope` lies inside `f`. Extra scope fields do not widen or narrow it. */
+/**
+ * True iff a memory with `scope` lies inside `f`. Extra scope fields do not widen or narrow it.
+ * @deprecated Use `grantReads` / `grantWrites`.
+ */
 export function filterCovers(f: GrantFilter, scope: Scope): boolean {
   return (
     scope.orgId === f.orgId &&
@@ -114,8 +245,54 @@ export function filterCovers(f: GrantFilter, scope: Scope): boolean {
   );
 }
 
-export const canRead = (g: Grant, scope: Scope): boolean => filterCovers(g.read, scope);
-export const canWrite = (g: Grant, scope: Scope): boolean => filterCovers(g.write, scope);
+/** True iff `p` covers a memory at `address` written by `author`. */
+export function patternCovers(p: NodePattern, address: Address, author: Author): boolean {
+  return (
+    nodeKey(nodeOf(address)) === nodeKey(p.node) &&
+    (p.projectIds === 'all' || p.projectIds.includes(address.projectId ?? null)) &&
+    (p.authorAgentId === undefined || p.authorAgentId === author.agentId)
+  );
+}
+
+function covers(patterns: readonly NodePattern[], m: Pick<Memory, 'scope' | 'address' | 'author'>) {
+  const address = addressOf(m);
+  const author = authorOf(m);
+  return patterns.some((p) => patternCovers(p, address, author));
+}
+
+/** True iff `g` may read `m` (by its address and author). */
+export const grantReads = (g: Grant, m: Pick<Memory, 'scope' | 'address' | 'author'>): boolean =>
+  covers(g.readNodes, m);
+/** True iff `g` may change `m` (by its address and author). */
+export const grantWrites = (g: Grant, m: Pick<Memory, 'scope' | 'address' | 'author'>): boolean =>
+  covers(g.writeNodes, m);
+
+/** True iff `g` may read a Planet memory with `scope` (`scope.agentId` as its author). */
+export const canRead = (g: Grant, scope: Scope): boolean => grantReads(g, { scope });
+/** True iff `g` may change a Planet memory with `scope` (`scope.agentId` as its author). */
+export const canWrite = (g: Grant, scope: Scope): boolean => grantWrites(g, { scope });
+
+/**
+ * Two records occupy the same place: the same address, the same author and
+ * the same scope (extra scope fields included). A write that would change any
+ * of them for an existing id is refused.
+ */
+export function sameRecordAddress(
+  a: Pick<Memory, 'scope' | 'address' | 'author'>,
+  b: Pick<Memory, 'scope' | 'address' | 'author'>,
+): boolean {
+  return (
+    sameAddress(addressOf(a), addressOf(b)) &&
+    sameAuthor(authorOf(a), authorOf(b)) &&
+    sameScope(a.scope, b.scope)
+  );
+}
+
+/** The Planet node of a principal: what pre-level grants cover. */
+export function planetNode(p: Pick<Principal, 'orgId' | 'customerId'>): NodeRef {
+  const { projectId: _p, ...node } = planetOf({ ...p, agentId: '-' });
+  return node;
+}
 
 /**
  * The key a store keeps a cursor under. The local principal (the CLI's own,

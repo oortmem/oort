@@ -1,17 +1,41 @@
 import * as path from 'node:path';
 import { filterFor } from '@oortmem/claude-code';
-import { localGrant, type Grant, type Memory, type MemoryStore, type Scope } from '@oortmem/core';
-import { cloudOf, shapeLinks, toJson, withWired, writeOwnerOnly, type Ctx } from '../util.js';
+import {
+  EXPORT_FORMAT_VERSION,
+  fitsVersion1,
+  formatExport,
+  localGrant,
+  type ExportManifestV1,
+  type ExportVersion,
+  type Grant,
+  type Memory,
+  type MemoryStore,
+  type Scope,
+} from '@oortmem/core';
+import {
+  echo,
+  cloudOf,
+  Refusal,
+  shapeLinks,
+  withWired,
+  writeOwnerOnly,
+  type Ctx,
+} from '../util.js';
 
-/** Version of the export format documented in docs/export-format.md. */
-export const EXPORT_VERSION = 1;
+/** Version of the export format `oort export` writes (docs/export-format.md). */
+export const EXPORT_VERSION = EXPORT_FORMAT_VERSION;
 
-export interface ExportManifest {
-  oort: 'export';
-  version: typeof EXPORT_VERSION;
-  exportedAt: string;
-  memories: number;
-  scopes: Scope[];
+/**
+ * The version 1 manifest. `oort cloud import` still uploads version 1, which
+ * Oort Cloud reads; a local store holds Planet memories only, so nothing is lost.
+ */
+export type ExportManifest = ExportManifestV1;
+
+/** `--format`: 2 (the default) or 1, for readers that do not know version 2 yet. */
+export function exportVersion(raw: string | undefined): ExportVersion {
+  if (raw === undefined || raw === '2') return 2;
+  if (raw === '1') return 1;
+  throw new Refusal(`--format ${echo(raw)} must be 1 or 2.`);
 }
 
 /** A cold memory's main record has only its stub indexed; the cold copy holds the full text and embedding. */
@@ -46,13 +70,15 @@ export async function decoded(
 export const scopeKey = (s: Scope): string => JSON.stringify(Object.entries(s).sort());
 
 /**
- * `oort export [--out <file>]`: the v1 export format, a manifest line and one
- * JSON line per memory (every tier and validity state) visible from the cwd.
+ * `oort export [--out <file>] [--format 1|2]`: a manifest line and one JSON
+ * line per memory (every tier and validity state) visible from the cwd, in
+ * format version 2 unless `--format 1` asks for the old one.
  */
 export async function exportCommand(
-  opts: { out?: string; force?: boolean },
+  opts: { out?: string; force?: boolean; format?: string },
   ctx: Ctx,
 ): Promise<number> {
+  const version = exportVersion(opts.format);
   return withWired(ctx, async (w) => {
     const cloud = cloudOf(w);
     if (cloud !== undefined) {
@@ -78,16 +104,12 @@ export async function exportCommand(
     for (const m of listed) {
       memories.push(await shapeLinks(w.store, filter, await decoded(m, w.store, grant, ctx)));
     }
-    const scopes = new Map<string, Scope>();
-    for (const m of memories) scopes.set(scopeKey(m.scope), m.scope);
-    const manifest: ExportManifest = {
-      oort: 'export',
-      version: EXPORT_VERSION,
-      exportedAt: new Date().toISOString(),
-      memories: memories.length,
-      scopes: [...scopes.values()],
-    };
-    const data = [manifest, ...memories.map(toJson)].map((x) => `${JSON.stringify(x)}\n`).join('');
+    if (version === 1 && !memories.every(fitsVersion1)) {
+      throw new Refusal(
+        'these memories include some outside your Planet, which format 1 cannot hold; use --format 2.',
+      );
+    }
+    const data = formatExport(memories, version);
     if (opts.out === undefined) {
       ctx.io.out(data);
     } else {
