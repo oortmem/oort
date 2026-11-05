@@ -75,6 +75,8 @@ export interface FakeHive {
   policy: Map<string, string>;
   /** Members a Constellation may hold before plan_limit (a test knob, not a plan rule). */
   memberLimit: number;
+  /** Set: invites answer with this note (a daily email limit was reached). */
+  inviteNote?: string;
 }
 
 export interface FakeMember {
@@ -342,6 +344,7 @@ export function fakeCloud(key: string): FakeCloud {
               expiresAt: inv.expiresAt,
               link: `https://oortcloud.dev/invite#oort_iv_${'t'.repeat(43)}`,
               emailed: false,
+              ...(c.hive.inviteNote !== undefined && { note: c.hive.inviteNote }),
             },
             { status: 201 },
           );

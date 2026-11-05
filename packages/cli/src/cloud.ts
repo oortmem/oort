@@ -262,6 +262,8 @@ export interface CloudInvite {
   expiresAt: string;
   link: string;
   emailed: boolean;
+  /** Why nothing was emailed (a daily email limit, or the send failed); the link still works. */
+  note?: string;
 }
 
 export interface CloudPendingInvite {

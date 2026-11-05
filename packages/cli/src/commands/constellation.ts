@@ -108,6 +108,7 @@ export async function constellationInviteCommand(
     `Invited ${shown(inv.email)} to ${shown(inv.constellation)} as ${shown(inv.role)}. ${
       inv.emailed ? 'They have an email with the link;' : 'Nothing was emailed:'
     } send them this link (single use, expires ${shown(inv.expiresAt.slice(0, 10))}):\n\n  ${shown(inv.link)}\n\n` +
+      (inv.note !== undefined ? `${shown(inv.note)}\n\n` : '') +
       ui.dim(
         'They accept it signed in to oortcloud.dev with that email address. Anyone with the link can see the invite, so send it only to them.',
       ) +

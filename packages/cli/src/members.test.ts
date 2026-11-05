@@ -107,6 +107,18 @@ describe('oort constellation invite and join (CON-64)', () => {
     expect(JSON.parse(json.io.stdout)).toMatchObject({ role: 'member', emailed: false });
   });
 
+  it('invite.prints-the-clouds-note-when-no-email-was-sent-and-still-the-link', async () => {
+    const e = setup();
+    team(e);
+    e.cloud.hive.memberLimit = 10;
+    e.cloud.hive.inviteNote = 'No email was sent: you have sent 20 invite emails today.\u001b[2J';
+    const r = await e.run(['constellation', 'invite', 'oort-core', 'sam@example.com']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toContain('No email was sent: you have sent 20 invite emails today.');
+    expect(r.io.stdout).not.toContain('\u001b');
+    expect(r.io.stdout).toMatch(/https:\/\/oortcloud\.dev\/invite#oort_iv_/);
+  });
+
   it('invite.refuses-bad-input-before-calling-the-cloud', async () => {
     const e = setup();
     team(e);
