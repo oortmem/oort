@@ -1,6 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { filterFor, hookStatus } from '@oortmem/claude-code';
+import {
+  CONSOLIDATE_EVERY_SAVES,
+  consolidationDue,
+  filterFor,
+  hookStatus,
+  readConsolidationState,
+} from '@oortmem/claude-code';
 import {
   addressOf,
   localGrant,
@@ -357,7 +363,9 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
   }
   try {
     // Opening migrates an older store (after copying it): doctor is where the hooks send you.
+    let cloudMode = false;
     const { count, planet, star, agent, stars, embedder } = await withWired(ctx, async (w) => {
+      cloudMode = w.mode === 'cloud';
       const all = await w.store.list(localGrant(filterFor(w.scope)), { validOnly: false });
       // Your Planet (shared by your agents) and this agent's own Star, every project (CON-62).
       const { orgId, customerId, agentId } = w.scope;
@@ -436,6 +444,8 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
           ? `no agent named: reads and writes your Planet only, no Star (name one with --agent or OORT_AGENT)${keeping}`
           : `acting as ${agent.id} (from ${agent.source === 'flag' ? '--agent' : 'OORT_AGENT'}): reads your Planet and its own Star; new memories go to ${agent.home === 'star' ? `Star ${agent.id}` : 'your Planet'}${agent.home === 'star' ? ', and it never changes your Planet' : ''}${keeping}`,
     });
+    // Oort Cloud consolidates itself; locally the hook drain does, when due (CON-48).
+    if (!cloudMode) checks.push(consolidationCheck(home));
     const backup = listBackups(db, 'pre-v2').at(-1);
     if (backup !== undefined) {
       checks.push({
@@ -468,6 +478,53 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
     }
   }
   return checks;
+}
+
+/** When the hooks last consolidated the local store, and when they will next. */
+export function consolidationCheck(home: string, now = new Date()): Check {
+  const s = readConsolidationState(home);
+  const due = consolidationDue(s, now);
+  const when = (iso: string): string => {
+    const h = Math.round((now.getTime() - Date.parse(iso)) / 3_600_000);
+    return h < 1
+      ? 'less than an hour ago'
+      : h < 48
+        ? `${h} h ago`
+        : `${Math.round(h / 24)} days ago`;
+  };
+  const next = due.due
+    ? due.reason === 'resume'
+      ? 'the next drain resumes it'
+      : due.reason === 'retry'
+        ? 'the next drain retries it'
+        : 'due: the next drain (after a Claude Code turn) runs it'
+    : `next ${due.nextAt ?? ''}, or after ${CONSOLIDATE_EVERY_SAVES - s.savesSince} more saved turns`;
+  if (s.lastRunAt === null) {
+    return {
+      group: 'store',
+      name: 'consolidation',
+      status: 'info',
+      detail: `never ran from the hooks; ${next}`,
+      fix: 'oort consolidate runs it now',
+    };
+  }
+  const last =
+    s.lastOutcome === 'complete'
+      ? `last ran ${when(s.lastRunAt)}`
+      : s.lastOutcome === 'partial'
+        ? `last run ${when(s.lastRunAt)} stopped at its time budget`
+        : `last run ${when(s.lastRunAt)} failed (see ~/.oort/logs/hooks.log)`;
+  const counts =
+    s.last !== undefined
+      ? ` (${s.last.evicted} to cold, ${s.last.expired} expired, ${s.last.promoted + s.last.demoted - s.last.evicted} re-tiered)`
+      : '';
+  return {
+    group: 'store',
+    name: 'consolidation',
+    status: s.lastOutcome === 'error' ? 'warn' : 'info',
+    detail: `${last}${counts}; ${next}`,
+    ...(s.lastOutcome === 'error' && { fix: 'oort consolidate' }),
+  };
 }
 
 const PROBE_TIMEOUT_MS = 3000;

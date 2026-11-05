@@ -620,6 +620,47 @@ describe('oort forget, pin', () => {
       'oort consolidate · global\npromoted  0\ndemoted   1\nevicted   1\nexpired   1\nskipped   0\n',
     );
   });
+
+  it('cli.consolidate-covers-every-project-and-is-recorded (CON-48)', async () => {
+    const h = harness();
+    // A memory of another project: consolidated too, ranked within its own project.
+    const other = memory({
+      scope: { ...localScope('elsewhere'), agentId: 'claude-code' },
+      validTo: '2026-10-02T00:00:00.000Z',
+    });
+    await h.store.upsert(TG, other);
+    expect((await h.run(['consolidate'])).code).toBe(0);
+    expect((await h.store.get(TG, other.id))?.tier).toBe('cold');
+    const s = JSON.parse((await h.run(['stats', '--json'])).io.stdout) as {
+      consolidation: Record<string, unknown>;
+    };
+    expect(s.consolidation).toMatchObject({ lastOutcome: 'complete', due: false });
+    expect(s.consolidation['nextAt']).toEqual(expect.any(String));
+    // Recorded where the drain looks: the drain does not run it again today.
+    await h.run(['hook', 'drain']);
+    const log = readLines(path.join(h.home, 'logs', 'hooks.log'));
+    expect(log.map((l) => l['event'])).not.toContain('consolidate');
+  });
+
+  it('cli.hook-drain-consolidates-when-due (CON-48)', async () => {
+    const h = harness();
+    const gone = memory({ validTo: '2026-10-02T00:00:00.000Z' });
+    await h.store.upsert(TG, gone);
+    const before = JSON.parse((await h.run(['stats', '--json'])).io.stdout) as {
+      consolidation: Record<string, unknown>;
+    };
+    expect(before.consolidation).toMatchObject({ lastRunAt: null, due: true });
+    const r = await h.run(['hook', 'drain']);
+    expect(r.code).toBe(0);
+    expect((await h.store.get(TG, gone.id))?.tier).toBe('cold');
+    const log = readLines(path.join(h.home, 'logs', 'hooks.log'));
+    expect(log.find((l) => l['event'] === 'consolidate')).toMatchObject({
+      outcome: 'ok',
+      counts: { expired: 1, evicted: 1 },
+    });
+    const text = (await h.run(['stats'])).io.stdout;
+    expect(text).toMatch(/consolidated +\d{4}-\d\d-\d\dT/);
+  });
 });
 
 describe('oort hook (in process)', () => {

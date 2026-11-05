@@ -153,7 +153,8 @@ nodeGrant({
   injection budget.
 
 `consolidate` re-tiers each node of its grant on its own, so the Planet's tiers do not depend on
-which agent ran it.
+which agent ran it. Inside a node it ranks each project, and the global memories, on its own
+(`hotTopN` each), so a global memory's tier does not depend on which project ran it.
 
 A grant is frozen and nominal. A plain object with the same fields is not a grant: TypeScript
 rejects it, and every store rejects it at run time with a `TypeError`.

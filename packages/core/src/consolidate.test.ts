@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { MemoryStore, ScopeFilter } from './adapters.js';
 import { appendAccess } from './activation.js';
 import { resolveConfig } from './config.js';
-import { COLD_EVICT_BATCH, consolidate } from './consolidate.js';
+import { COLD_EVICT_BATCH, consolidate, consolidateGrant } from './consolidate.js';
 import { createMemoryStore } from './memory-store.js';
 import { isCurrent, type AccessLog, type Memory } from './model.js';
 import { makeMemory as baseMemory, vec } from './store-conformance.js';
 import { grantFor, TG } from './store-conformance.js';
-import { localGrant } from './grant.js';
+import { localGrant, principalGrant } from './grant.js';
 import { addressed, canonicalMemory } from './address.js';
 import { soleGrantFor } from './isolation.js';
 
@@ -176,7 +176,14 @@ describe('consolidate', () => {
     const first = await consolidate(SCOPE, deps);
     expect(first.promoted.length + first.demoted.length + first.expired.length).toBeGreaterThan(0);
     const second = await consolidate(SCOPE, deps);
-    expect(second).toEqual({ promoted: [], demoted: [], evicted: [], expired: [], skipped: 0 });
+    expect(second).toEqual({
+      promoted: [],
+      demoted: [],
+      evicted: [],
+      expired: [],
+      skipped: 0,
+      complete: true,
+    });
   });
   it('consolidate.leaves-out-of-scope-untouched', async () => {
     const { store, deps } = setup(50);
@@ -351,4 +358,168 @@ describe('consolidate', () => {
     expect(res.evicted).not.toContain('prior');
     expect(res.skipped).toBe(1);
   });
+
+  it('consolidate.global-tier-independent-of-project (CON-48)', async () => {
+    // Two global memories and a busier project: hotTopN ranks global memories against global only.
+    const run = async (project: 'p1' | 'p2') => {
+      const { store, deps } = setup(1);
+      const base = localScopeOf();
+      await store.upsert(TG, makeMemory({ id: 'g-new', accessLog: logAt(ago(2 * HOUR)) }));
+      await store.upsert(TG, makeMemory({ id: 'g-old', accessLog: logAt(ago(2 * DAY)) }));
+      // Only p1 has memories, busier than any global one.
+      for (const [i, p] of (['p1', 'p1'] as const).entries()) {
+        const m = makeMemory({
+          id: `${p}-${i}`,
+          scope: { ...base, projectId: p },
+          accessLog: logAt(ago(5 * 60_000), ago(10 * 60_000)),
+        });
+        await store.upsert(TG, m);
+      }
+      await consolidate({ ...SCOPE, projectIds: [project, null] }, deps);
+      return {
+        gNew: (await store.get(TG, 'g-new'))?.tier,
+        gOld: (await store.get(TG, 'g-old'))?.tier,
+      };
+    };
+    const fromP1 = await run('p1');
+    const fromP2 = await run('p2');
+    // Before CON-48, run from p1, p1's memories outranked g-new, which stayed warm.
+    expect(fromP1).toEqual({ gNew: 'hot', gOld: 'warm' });
+    expect(fromP2).toEqual(fromP1);
+  });
+
+  it('consolidate.each-project-ranked-alone', async () => {
+    const { store, deps } = setup(1);
+    const base = localScopeOf();
+    for (const p of ['p1', 'p2']) {
+      await store.upsert(
+        TG,
+        makeMemory({ id: `${p}-a`, scope: { ...base, projectId: p }, accessLog: logAt(ago(HOUR)) }),
+      );
+      await store.upsert(
+        TG,
+        makeMemory({ id: `${p}-b`, scope: { ...base, projectId: p }, accessLog: logAt(ago(DAY)) }),
+      );
+    }
+    await consolidateGrant(TG, deps);
+    const hot = (await store.list(TG, { tier: 'hot' })).map((m) => m.id).sort();
+    expect(hot).toEqual(['p1-a', 'p2-a']);
+  });
+
+  it('consolidate.per-node-planet-and-star', async () => {
+    const { store, deps } = setup(1);
+    const star = addressed(
+      { level: 'agent', orgId: 'local', agentId: 'claude-code' },
+      { agentId: 'claude-code' },
+    );
+    // One fresh and one stale memory in each node: the top one of each node is hot.
+    await store.upsert(TG, makeMemory({ id: 'planet-a', accessLog: logAt(ago(HOUR)) }));
+    await store.upsert(TG, makeMemory({ id: 'planet-b', accessLog: logAt(ago(DAY)) }));
+    await store.upsert(TG, makeMemory({ id: 'star-a', ...star, accessLog: logAt(ago(2 * DAY)) }));
+    await store.upsert(
+      TG,
+      makeMemory({ id: 'star-gone', ...star, validTo: ago(HOUR).toISOString() }),
+    );
+    // A Star agent's grant reads the Planet but never changes it.
+    const starOnly = principalGrant(
+      { orgId: 'local', customerId: 'self', agentId: 'claude-code' },
+      { home: 'star' },
+    );
+    const r1 = await consolidateGrant(starOnly, deps);
+    expect(r1.promoted).toEqual(['star-a']);
+    expect(r1.expired).toEqual(['star-gone']);
+    expect((await store.get(TG, 'planet-a'))?.tier).toBe('warm');
+    // The Planet's grant consolidates the Planet on its own: star-a does not take its hot slot.
+    const r2 = await consolidateGrant(TG, deps);
+    expect(r2.promoted).toEqual(['planet-a']);
+    expect((await store.get(TG, 'star-a'))?.tier).toBe('hot');
+    expect((await store.get(TG, 'star-gone'))?.tier).toBe('cold');
+  });
+
+  it('consolidate.should-stop-partial-then-resume', async () => {
+    const seed = async (store: MemoryStore) => {
+      for (let i = 0; i < 30; i++) {
+        await store.upsert(
+          TG,
+          makeMemory({
+            id: `m${i}`,
+            embedding: vec(1, 1, 1, 1),
+            salience: i % 3 === 0 ? 0.1 : 0.6,
+            accessLog: logAt(ago((i % 3 === 0 ? 300 : 1 + i) * DAY)),
+            ...(i % 5 === 0 && { validTo: ago(HOUR).toISOString() }),
+          }),
+        );
+      }
+    };
+    const clean = setup(3);
+    await seed(clean.store);
+    const full = await consolidateGrant(TG, clean.deps);
+    expect(full.complete).toBe(true);
+
+    const cut = setup(3);
+    await seed(cut.store);
+    let calls = 0;
+    const budgeted = { ...cut.deps, evictBatch: 2, shouldStop: () => ++calls > 4 };
+    const first = await consolidateGrant(TG, budgeted);
+    expect(first.complete).toBe(false);
+    // Resume runs until done; each run makes progress.
+    let runs = 1;
+    for (;;) {
+      calls = 0;
+      const r = await consolidateGrant(TG, budgeted);
+      runs++;
+      if (r.complete) break;
+      expect(runs).toBeLessThan(40);
+    }
+    expect(runs).toBeGreaterThan(2);
+    const tiers = async (s: MemoryStore) =>
+      (await s.list(TG, { validOnly: false })).map((m) => [m.id, m.tier, m.expiredAt]).sort();
+    expect(await tiers(cut.store)).toEqual(await tiers(clean.store));
+  });
+
+  it('consolidate.crash-mid-run-leaves-store-consistent', async () => {
+    const { store, deps } = setup(2);
+    for (let i = 0; i < 12; i++) {
+      await store.upsert(
+        TG,
+        makeMemory({
+          id: `m${i}`,
+          embedding: vec(1, 2, 3, 4),
+          salience: 0.1,
+          accessLog: logAt(ago((i + 1) * 40 * DAY)),
+          ...(i % 4 === 0 && { validTo: ago(HOUR).toISOString() }),
+        }),
+      );
+    }
+    const before = await store.list(TG, { validOnly: false });
+    let batches = 0;
+    const crashing: MemoryStore = {
+      ...store,
+      async coldPutMany(grant, ms) {
+        if (++batches === 2) throw new Error('process killed');
+        return store.coldPutMany(grant, ms);
+      },
+    };
+    await expect(consolidateGrant(TG, { ...deps, store: crashing, evictBatch: 3 })).rejects.toThrow(
+      'process killed',
+    );
+    // Nothing lost, and every cold record has its cold copy (with its embedding).
+    const mid = await store.list(TG, { validOnly: false });
+    expect(mid.map((m) => m.id).sort()).toEqual(before.map((m) => m.id).sort());
+    for (const m of mid.filter((x) => x.tier === 'cold')) {
+      expect((await store.coldGet(TG, m.id))?.embedding).toBeDefined();
+    }
+    expect(mid.some((m) => m.tier === 'cold')).toBe(true);
+    expect(mid.some((m) => m.tier !== 'cold')).toBe(true);
+    // The next run finishes the job.
+    const again = await consolidateGrant(TG, deps);
+    expect(again.complete).toBe(true);
+    const after = await store.list(TG, { validOnly: false });
+    expect(after.filter((m) => !isCurrent(m, NOW)).every((m) => m.tier === 'cold')).toBe(true);
+    expect((await consolidateGrant(TG, deps)).evicted).toEqual([]);
+  });
 });
+
+function localScopeOf() {
+  return makeMemory({ id: 'x' }).scope;
+}

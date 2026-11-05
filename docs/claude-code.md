@@ -110,6 +110,31 @@ From Europe a warm Voyage rerank took 200 to 300 ms when measured on 2026-11-04,
 default lets normal reranks finish and only cuts off slow outliers. Lower it (150 ms is the spec's
 target) to trade rerank quality for latency, or set it to 0 to always wait.
 
+## Consolidation
+
+With hooks alone nothing would ever call `oort consolidate`, so the drain that `Stop` starts runs it
+when it is due: a day after the last complete run, or once the drain has saved 200 turns since. It
+runs after the drain's own work, over every project and your global memories (each ranked on its
+own), in every node Claude Code writes: your Planet and Claude Code's Star, or only the Star when
+Claude Code keeps one. Expired and superseded memories reach cold storage there.
+
+- The drain is detached, so a `Stop` never waits for it. A `Stop` with nothing new to queue starts
+  the drain anyway when consolidation is due; checking costs one small file read.
+- `~/.oort/consolidate.lock` keeps two drains from consolidating at once; a lock older than five
+  minutes is from a crashed drain and is broken.
+- A run gets 2 s. It evicts 50 memories per store transaction, so a prompt hook never waits long
+  for the store. A run cut short keeps what it wrote, and a drain a minute or more later resumes
+  it. A run that fails is retried an hour later.
+- Every write is atomic and checked against the record it was computed from, so a crash mid-run
+  leaves a consistent store and the next run finishes the job.
+- Hooks never migrate the store; with a migration pending the drain does nothing.
+- In cloud mode the drain does not consolidate: Oort Cloud does that itself.
+
+`~/.oort/consolidate.json` records the last run (times and counts only). `oort doctor` shows when it
+last ran and when it is next due, `oort stats` shows when the store was last consolidated, and the
+hook log has one `consolidate` line per run (`ok`, `partial`, `locked` or `error`). A manual
+`oort consolidate` counts as that day's run.
+
 ## Phase 1 baseline (dogfood, 2026-11-04)
 
 First real run, on an Apple Silicon laptop under heavy load (load average 50 to
