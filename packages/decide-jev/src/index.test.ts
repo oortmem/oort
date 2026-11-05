@@ -562,3 +562,84 @@ describe('reconcileMany (CON-56)', () => {
     }
   });
 });
+
+describe('jevDecider.judge (CON-71)', () => {
+  const req = {
+    item: { summary: 'Story claims a herbal remedy cures anxiety', domain: 'content' },
+    verdicts: ['approved', 'rejected'],
+    precedents: [
+      {
+        subject: 'Post says a vitamin cures the flu',
+        ref: 'https://example.test/p/1',
+        verdict: 'rejected',
+        reason: 'Health claim with no cited source.',
+        criteria: ['no-source'],
+        decidedAt: '2026-10-01T00:00:00.000Z',
+        similarity: 0.82,
+      },
+    ],
+  };
+
+  it('judge.one-choice-over-the-verdicts-with-the-precedents-as-state', async () => {
+    const s = stub(() => ({
+      verdict: choiceA('rejected', { approved: 0.12, rejected: 0.88 }),
+    }));
+    const c = await jevDecider({ client: s.client }).judge!(req);
+    expect(c).toEqual({
+      verdict: 'rejected',
+      probability: 0.88,
+      probabilities: { approved: 0.12, rejected: 0.88 },
+      decisions: [{ stage: 'judge', question: 'verdict', answer: 'rejected', probability: 0.88 }],
+    });
+    expect(s.calls).toHaveLength(1);
+    const q = s.calls[0]!.questions['verdict'] as {
+      type: string;
+      criteria: Record<string, string>;
+    };
+    expect(q.type).toBe('choice');
+    expect(Object.keys(q.criteria)).toEqual(['approved', 'rejected']);
+    const state = s.calls[0]!.state as { item: unknown; precedents: Record<string, unknown>[] };
+    expect(state.item).toEqual(req.item);
+    // The reason travels verbatim; the link does not.
+    expect(state.precedents[0]).toEqual({
+      subject: 'Post says a vitamin cures the flu',
+      verdict: 'rejected',
+      reason: 'Health claim with no cited source.',
+      criteria: ['no-source'],
+      decidedAt: '2026-10-01T00:00:00.000Z',
+      similarity: 0.82,
+    });
+  });
+
+  it('judge.refuses-an-answer-outside-the-verdicts', async () => {
+    const outside = stub(() => ({ verdict: choiceA('maybe', { maybe: 1 }) }));
+    await expect(jevDecider({ client: outside.client }).judge!(req)).rejects.toMatchObject({
+      kind: 'bad-response',
+    });
+    const missing = stub(() => ({ verdict: choiceA('rejected', { rejected: 0.9 }) }));
+    await expect(jevDecider({ client: missing.client }).judge!(req)).rejects.toBeInstanceOf(
+      DecideError,
+    );
+    const empty = stub(() => ({}));
+    await expect(
+      jevDecider({ client: empty.client }).judge!({ ...req, precedents: [] }),
+    ).rejects.toBeInstanceOf(DecideError);
+    expect(empty.calls).toEqual([]);
+  });
+
+  it('judge.keeps-a-large-request-under-the-relay-cap', async () => {
+    const s = stub(() => ({ verdict: choiceA('approved', { approved: 0.6, rejected: 0.4 }) }));
+    const big = 'x'.repeat(50_000);
+    await jevDecider({ client: s.client }).judge!({
+      item: { summary: big, details: big },
+      verdicts: req.verdicts,
+      precedents: Array.from({ length: 30 }, () => ({
+        ...req.precedents[0]!,
+        reason: big,
+        subject: big,
+      })),
+    });
+    const bytes = new TextEncoder().encode(JSON.stringify(s.calls[0])).byteLength;
+    expect(bytes).toBeLessThan(56 * 1024);
+  });
+});

@@ -19,13 +19,17 @@ import {
   type Decision,
   type DecisionController,
   type GateDecision,
+  type JudgeChoice,
+  type JudgeRequest,
   type Memory,
   type MemoryType,
+  type ObservedMemoryType,
   type Observation,
   type ReconcileAction,
   type ReconcileDecision,
 } from '@oortmem/core';
 import {
+  JUDGE_INSTRUCTIONS,
   NOVEL_CRITERIA,
   NOVEL_INSTRUCTIONS,
   RECONCILE_CRITERIA,
@@ -38,6 +42,7 @@ import {
   novelManyInstructions,
   reconcileInstructions,
   reconcileManyInstructions,
+  verdictCriterion,
 } from './questions.js';
 
 /** The slice of the TypeSafe client this adapter uses; inject a stub in tests. */
@@ -167,9 +172,55 @@ function choiceOf(
   return { action: c as ReconcileAction, probability: p };
 }
 
+/** A choice answer over `labels`: the chosen label and every label's probability. */
+function labelChoiceOf(
+  answers: Record<string, unknown>,
+  id: string,
+  labels: readonly string[],
+): { label: string; probability: number; probabilities: Record<string, number> } {
+  const a = answers[id];
+  if (!isObj(a) || a['type'] !== 'choice' || !isObj(a['probabilities'])) throw bad();
+  const c = a['choice'];
+  if (typeof c !== 'string' || !labels.includes(c)) throw bad();
+  const probabilities: Record<string, number> = {};
+  for (const l of labels) {
+    const p = a['probabilities'][l];
+    if (!isProb(p)) throw bad();
+    probabilities[l] = p;
+  }
+  return { label: c, probability: probabilities[c]!, probabilities };
+}
+
 const clamp = (x: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, x));
 
-const MEMORY_TYPES: MemoryType[] = ['semantic', 'episodic', 'procedural', 'preference'];
+/** Keeps a judge request well under the relay's 56 KB, with up to 20 precedents. */
+const JUDGE_ITEM_MAX_BYTES = 2 * 1024;
+const JUDGE_DETAILS_MAX_BYTES = 4 * 1024;
+const JUDGE_SUBJECT_MAX_BYTES = 512;
+const JUDGE_REASON_MAX_BYTES = 1024;
+
+function judgeState(req: JudgeRequest) {
+  return {
+    item: {
+      summary: truncateUtf8(req.item.summary, JUDGE_ITEM_MAX_BYTES),
+      ...(req.item.details !== undefined && {
+        details: capUtf8(req.item.details, JUDGE_DETAILS_MAX_BYTES),
+      }),
+      ...(req.item.domain !== undefined && { domain: req.item.domain }),
+    },
+    precedents: req.precedents.slice(0, 20).map((p) => ({
+      subject: truncateUtf8(p.subject, JUDGE_SUBJECT_MAX_BYTES),
+      verdict: p.verdict,
+      reason: truncateUtf8(p.reason, JUDGE_REASON_MAX_BYTES),
+      criteria: p.criteria,
+      decidedAt: p.decidedAt,
+      similarity: p.similarity,
+    })),
+  };
+}
+
+// The gate never proposes `judgment`: judgments are recorded explicitly (CON-71).
+const MEMORY_TYPES: ObservedMemoryType[] = ['semantic', 'episodic', 'procedural', 'preference'];
 
 /**
  * Keeps one Jev request body well under the relay's 64 KB limit (56 KB with the questions):
@@ -339,6 +390,28 @@ export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
       };
       const answers = await ask(state, questions);
       return candidates.map((m, i) => one(`c${i}`, m.id, choiceOf(answers, `c${i}`)));
+    },
+
+    /**
+     * Judgment memory (CON-71): one Choice over the verdicts, with the item and the precedents
+     * (their reasons verbatim, cut to size) as state. Links (`ref`) are not sent.
+     */
+    async judge(req: JudgeRequest): Promise<JudgeChoice> {
+      const verdicts = [...new Set(req.verdicts)];
+      if (verdicts.length < 2 || req.precedents.length === 0) throw bad();
+      const criteria = Object.fromEntries(verdicts.map((v) => [v, verdictCriterion(v)]));
+      const answers = await ask(judgeState(req), {
+        verdict: choice(JUDGE_INSTRUCTIONS, criteria),
+      });
+      const a = labelChoiceOf(answers, 'verdict', verdicts);
+      return {
+        verdict: a.label,
+        probability: a.probability,
+        probabilities: a.probabilities,
+        decisions: [
+          { stage: 'judge', question: 'verdict', answer: a.label, probability: a.probability },
+        ],
+      };
     },
 
     async reconcileMany(items) {
