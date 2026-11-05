@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { HOOK_EVENTS, installHooks, uninstallHooks } from '@oortmem/claude-code';
+import { VERSION } from '@oortmem/core';
 import { binPath } from '../io.js';
 import { uiFor } from '../ui.js';
 import { Refusal, echo, type Ctx } from '../util.js';
@@ -51,6 +52,51 @@ export function hookCommandPath(entry: string | undefined, expected = binPath())
   return real;
 }
 
+/** Path pieces of Node version managers: a hook that points into one breaks on a version switch. */
+const VERSION_MANAGER = ['.nvm/', 'fnm_multishells', 'node-versions/', '.volta/', '.asdf/'];
+
+/** The version manager `file` lives under (as its marker), if any. */
+export function versionManagerOf(file: string): string | undefined {
+  const p = file.replaceAll('\\', '/');
+  return VERSION_MANAGER.find((m) => p.includes(m));
+}
+
+/**
+ * The binary path in a hook command `<path> hook <Event>`: the path may be quoted or follow
+ * `node `. Undefined when the command is not that shape.
+ */
+export function hookBinaryOf(command: string): string | undefined {
+  const m = /^(.*) hook [A-Za-z]+$/.exec(command.trim());
+  if (m?.[1] === undefined) return undefined;
+  let bin = m[1].trim();
+  if (bin.startsWith('node ')) bin = bin.slice(5).trim();
+  if (bin.startsWith("'") && bin.endsWith("'") && bin.length >= 2) {
+    bin = bin.slice(1, -1).replaceAll(`'\\''`, "'");
+  } else if (bin.startsWith('"') && bin.endsWith('"') && bin.length >= 2) {
+    bin = bin.slice(1, -1);
+  }
+  return bin === '' ? undefined : bin;
+}
+
+/** The first `oort` on PATH (a lookup in code, no shell), as a realpath; undefined if none. */
+export function whichOort(env: Record<string, string | undefined>): string | undefined {
+  const exts = process.platform === 'win32' ? ['.cmd', '.exe', ''] : [''];
+  for (const dir of (env['PATH'] ?? '').split(path.delimiter)) {
+    if (dir === '') continue;
+    for (const ext of exts) {
+      const candidate = path.join(dir, `oort${ext}`);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        if (!fs.statSync(candidate).isFile()) continue;
+        return fs.realpathSync(candidate);
+      } catch {
+        // not here
+      }
+    }
+  }
+  return undefined;
+}
+
 /** The Claude Code settings file the hooks go in: user scope, or `<cwd>/.claude` with `project`. */
 export function settingsFile(project: boolean, ctx: Ctx): string {
   if (project) return path.join(ctx.io.cwd, '.claude', 'settings.json');
@@ -78,6 +124,21 @@ export async function installCommand(
         ? `Installed Oort hooks (${events}) in ${file}:\n${HOOK_EVENTS.map((e) => `  ${cmd} hook ${e}`).join('\n')}\n`
         : `Oort hooks are already installed in ${file}; nothing changed.\n`,
     );
+    const ui = uiFor(ctx.io);
+    ctx.io.out(`${ui.info(`Hook binary: ${cmd} (oort ${VERSION})`)}\n`);
+    const onPath = whichOort(ctx.io.env);
+    if (onPath !== undefined && onPath !== cmd) {
+      ctx.io.out(
+        `${ui.warn(`Another oort comes first on your PATH: ${onPath}. The hooks run ${cmd}, not that one.`)}\n` +
+          `  To use that one instead, run \`oort install claude-code\` from it.\n`,
+      );
+    }
+    if (versionManagerOf(cmd) !== undefined) {
+      ctx.io.out(
+        `${ui.info('This path is under a Node version manager; switching Node versions will break the hooks.')}\n` +
+          '  Install oortmem somewhere stable (`npm i -g oortmem` with a system Node), then re-run this.\n',
+      );
+    }
   } else {
     const { changed } = uninstallHooks(file, cmd);
     ctx.io.out(

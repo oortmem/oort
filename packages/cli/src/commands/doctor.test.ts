@@ -8,7 +8,7 @@ import { connectHost } from '../connectors.js';
 import { createKeychain, type Keychain } from '../keychain.js';
 import { hostContext } from './connect.js';
 import { TG } from '@oortmem/core/store-conformance';
-import { resolveConfig } from '@oortmem/core';
+import { VERSION, resolveConfig } from '@oortmem/core';
 import {
   downgradeSqliteStore,
   listBackups,
@@ -30,10 +30,10 @@ interface Check {
 const oortKey = (): string => ['oort', 'sk', `doctor${Date.now()}AAAAAAAAAAAA`].join('_');
 
 /** An executable stand-in for the installed bin, so hook and MCP commands resolve. */
-function fakeBin(h: Harness): string {
-  const bin = path.join(h.root, 'lib', 'node_modules', 'oortmem', 'dist', 'main.js');
+function fakeBin(h: Harness, version: string = VERSION, dir = 'lib'): string {
+  const bin = path.join(h.root, dir, 'node_modules', 'oortmem', 'dist', 'main.js');
   fs.mkdirSync(path.dirname(bin), { recursive: true });
-  fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+  fs.writeFileSync(bin, `#!/bin/sh\necho "oort ${version}"\n`, { mode: 0o755 });
   return bin;
 }
 
@@ -156,6 +156,59 @@ describe('oort doctor', () => {
     expect(d.human.io.stdout + d.json.io.stdout).not.toContain(key);
     expect(d.human.io.stdout + d.json.io.stdout).not.toContain('test-voyage-key-for-doctor');
     expect(d.json.io.stdout.trimStart().startsWith('{')).toBe(true);
+  });
+
+  it('doctor.hook-binary-of-another-version-warns-with-both-versions-and-the-path', async () => {
+    const h = harness();
+    const old = fakeBin(h, '0.1.0', 'old');
+    installHooks(path.join(h.root, '.claude', 'settings.json'), old);
+    const d = await doctor(h);
+    const c = d.check('hooks', 'claude-code bin');
+    expect(c).toMatchObject({ status: 'warn' });
+    expect(c?.detail).toContain('0.1.0');
+    expect(c?.detail).toContain(VERSION);
+    expect(c?.detail).toContain(old.replace(h.root, '~'));
+    expect(c?.fix).toContain('oort install claude-code');
+    // One warning for one cause: the generic "another path" row is not added on top.
+    expect(d.check('hooks', 'claude-code')?.status).not.toBe('warn');
+    expect(d.human.io.stdout).toContain('fix: oort install claude-code');
+  });
+
+  it('doctor.hook-binary-that-is-gone-fails-and-is-never-run', async () => {
+    const h = harness();
+    const gone = path.join(h.root, 'gone', 'node_modules', 'oortmem', 'dist', 'main.js');
+    installHooks(path.join(h.root, '.claude', 'settings.json'), gone);
+    const d = await doctor(h);
+    expect(d.check('hooks', 'claude-code')).toMatchObject({
+      status: 'fail',
+      fix: 'oort install claude-code',
+    });
+    expect(d.check('hooks', 'claude-code')?.detail).toContain(gone);
+    expect(d.check('hooks', 'claude-code bin')).toBeUndefined();
+  });
+
+  it('doctor.hook-binary-under-a-node-version-manager-gets-a-note', async () => {
+    const h = harness();
+    const bin = fakeBin(h, VERSION, path.join('.nvm', 'versions', 'node', 'v20.1.0', 'lib'));
+    installHooks(path.join(h.root, '.claude', 'settings.json'), bin);
+    const d = await doctor(h);
+    const note = d.check('hooks', 'claude-code node');
+    expect(note).toMatchObject({ status: 'info' });
+    expect(note?.detail).toContain('switching Node versions will break');
+    expect(note?.fix).toContain('stable');
+    // The version still matches, so the binary row is green and doctor does not fail.
+    expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
+    expect(d.human.code).toBe(0);
+  });
+
+  it('doctor.hook-binary-of-this-version-is-green', async () => {
+    const h = harness();
+    const bin = fakeBin(h);
+    installHooks(path.join(h.root, '.claude', 'settings.json'), bin);
+    const d = await doctor(h);
+    expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
+    expect(d.check('hooks', 'claude-code bin')?.detail).toContain(VERSION);
+    expect(d.check('hooks', 'claude-code node')).toBeUndefined();
   });
 
   it('doctor.every-failure-has-a-one-line-fix-and-exits-1', async () => {

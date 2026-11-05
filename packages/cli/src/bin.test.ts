@@ -519,6 +519,36 @@ describe('oort bin', () => {
     expect(fs.existsSync(path.join(s.cwd, '.claude', 'settings.json'))).toBe(true);
   });
 
+  it('cli.install-prints-the-hook-binary-and-notes-a-different-oort-on-path', async () => {
+    const s = sandbox();
+    const bin = fs.realpathSync(BIN);
+    // A PATH with only node on it, so no real oort on this machine is ahead of the fake one.
+    const nodeOnly = path.join(s.root, 'node-only');
+    fs.mkdirSync(nodeOnly);
+    fs.symlinkSync(process.execPath, path.join(nodeOnly, 'node'));
+    s.env['PATH'] = nodeOnly;
+    const first = await oort(s, ['install', 'claude-code']);
+    expect(first.stdout).toContain(`Hook binary: ${bin}`);
+    expect(first.stdout).not.toContain('first on your PATH');
+
+    // A different oort ahead on PATH is named, with how to switch.
+    const other = path.join(s.root, 'other-bin');
+    fs.mkdirSync(other);
+    fs.writeFileSync(path.join(other, 'oort'), '#!/bin/sh\necho 0.1.0\n', { mode: 0o755 });
+    s.env['PATH'] = `${other}${path.delimiter}${s.env['PATH'] ?? ''}`;
+    const second = await oort(s, ['install', 'claude-code']);
+    expect(second.stdout).toContain(
+      `Another oort comes first on your PATH: ${fs.realpathSync(path.join(other, 'oort'))}`,
+    );
+    expect(second.stdout).toContain(`Hook binary: ${bin}`);
+
+    // The same oort on PATH (a symlink to this bin) is not a difference.
+    fs.rmSync(path.join(other, 'oort'));
+    fs.symlinkSync(bin, path.join(other, 'oort'));
+    const third = await oort(s, ['install', 'claude-code']);
+    expect(third.stdout).not.toContain('first on your PATH');
+  });
+
   it('cli.mcp-stdio-serves-tools-scoped-to-the-start-directory', async () => {
     const s = sandbox();
     const repo = path.join(s.root, 'repo');

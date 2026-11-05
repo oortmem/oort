@@ -49,8 +49,9 @@ function isOurs(h: unknown, cmd: string, event: InstalledEvent): boolean {
     c === commandFor(cmd, event) ||
     new RegExp(`^(?:\\S*/)?oort hook ${event}$`).test(c) ||
     // A package's bin, as `oort install` writes it: `<prefix>/oort(mem)/dist/main.js`.
+    // Also a repo checkout (`<repo>/packages/cli/dist/main.js`), with an optional `node `.
     new RegExp(
-      `^(?:'[^']*/oort(?:mem)?/dist/main\\.js'|[^'\\s]*/oort(?:mem)?/dist/main\\.js) hook ${event}$`,
+      `^(?:node )?(?:'[^']*/(?:oort(?:mem)?|packages/cli)/dist/main\\.js'|[^'\\s]*/(?:oort(?:mem)?|packages/cli)/dist/main\\.js) hook ${event}$`,
     ).test(c)
   );
 }

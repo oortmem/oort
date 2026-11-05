@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -34,7 +35,8 @@ import { RELAY_MODELS, relayUrl } from '../relay.js';
 import { uiFor, type Ui } from '../ui.js';
 import { Refusal, echo, shown, tilde, withWired, type Ctx } from '../util.js';
 import { hostContext } from './connect.js';
-import { hookCommandPath, settingsFile } from './install.js';
+import { VERSION } from '@oortmem/core';
+import { hookBinaryOf, hookCommandPath, settingsFile, versionManagerOf } from './install.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info' | 'unknown';
 
@@ -196,7 +198,7 @@ async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean 
 }
 
 /** The Claude Code hooks in the user settings file. */
-function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Check[] {
+async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Promise<Check[]> {
   const file = settingsFile(false, ctx);
   const show = tilde(file, home);
   if (!fs.existsSync(path.join(home, '.claude'))) {
@@ -235,6 +237,7 @@ function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Check[] {
       },
     ];
   }
+  const binaries = await hookBinaryChecks(ctx, found, cmd);
   const broken = found.filter(
     (e) => e.command !== undefined && !isExecutable(e.command) && e.command !== 'oort',
   );
@@ -247,11 +250,14 @@ function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Check[] {
         name: 'claude-code',
         status: 'fail',
         detail: `${broken.map((e) => e.event).join(', ')} run ${broken[0]?.command ?? ''}, which is not an executable file`,
-        fix: 'oort install claude-code',
+        fix: HOOK_FIX,
       },
+      ...binaries,
     ];
   }
-  if (missing.length > 0 || stale.length > 0) {
+  // A version mismatch says more than "another path"; one warning for one cause.
+  const versionWarned = binaries.some((c) => c.name === 'claude-code bin' && c.status === 'warn');
+  if (missing.length > 0 || (stale.length > 0 && !versionWarned)) {
     return [
       {
         group: 'hooks',
@@ -263,6 +269,7 @@ function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Check[] {
             : `installed from another path (${stale[0]?.command ?? ''})`,
         fix: 'oort install claude-code',
       },
+      ...binaries,
     ];
   }
   return [
@@ -272,7 +279,93 @@ function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Check[] {
       status: 'ok',
       detail: `${found.map((e) => e.event).join(', ')} in ${show}`,
     },
+    ...binaries,
   ];
+}
+
+const HOOK_FIX = 'oort install claude-code';
+const REINSTALL_FIX = `${HOOK_FIX} (run it from the oort you want the hooks to use)`;
+const VERSION_PROBE_MS = 3000;
+
+/** `<bin> --version` through execFile (no shell), with a short timeout; undefined if it fails. */
+function probeVersion(
+  bin: string,
+  env: NodeJS.ProcessEnv,
+  viaNode: boolean,
+): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const [file, args] = viaNode ? ['node', [bin, '--version']] : [bin, ['--version']];
+    execFile(
+      file as string,
+      args as string[],
+      { timeout: VERSION_PROBE_MS, env, encoding: 'utf8', windowsHide: true },
+      (err, stdout) => {
+        const v = /\d+\.\d+\.\d+[^\s]*/.exec(String(stdout))?.[0];
+        resolve(err === null ? (v ?? '') : undefined);
+      },
+    );
+  });
+}
+
+/**
+ * Does each hook's binary exist, and is it the oort that is running? A binary that is missing
+ * is already a failure on the `claude-code` row, so only the version-manager note is added
+ * for it; the file is never run unless it exists.
+ */
+async function hookBinaryChecks(
+  ctx: Ctx,
+  found: readonly { event: string; command?: string }[],
+  cmd: string | undefined,
+): Promise<Check[]> {
+  const seen = new Set<string>();
+  const checks: Check[] = [];
+  const home = ctx.io.env['HOME'] ?? '';
+  for (const e of found) {
+    const raw = e.command ?? cmd;
+    if (raw === undefined || raw === 'oort') continue;
+    const viaNode = raw.startsWith('node ');
+    const bin = hookBinaryOf(`${raw} hook ${e.event}`);
+    if (bin === undefined || seen.has(bin)) continue;
+    seen.add(bin);
+    const show = tilde(bin, home);
+    const manager = versionManagerOf(bin);
+    if (manager !== undefined) {
+      checks.push({
+        group: 'hooks',
+        name: 'claude-code node',
+        status: 'info',
+        detail: `the hooks run ${show}, under a Node version manager: switching Node versions will break them`,
+        fix: 'install oortmem somewhere stable (npm i -g oortmem with a system Node), then oort install claude-code',
+      });
+    }
+    if (!isExecutable(bin)) continue; // never run a path that is not there
+    const got = await probeVersion(bin, { ...process.env, ...ctx.io.env }, viaNode);
+    if (got === undefined || got === '') {
+      checks.push({
+        group: 'hooks',
+        name: 'claude-code bin',
+        status: 'warn',
+        detail: `${show} did not report a version for --version`,
+        fix: REINSTALL_FIX,
+      });
+    } else if (got !== VERSION) {
+      checks.push({
+        group: 'hooks',
+        name: 'claude-code bin',
+        status: 'warn',
+        detail: `the hooks run oort ${got} (${show}), but this is oort ${VERSION}`,
+        fix: REINSTALL_FIX,
+      });
+    } else {
+      checks.push({
+        group: 'hooks',
+        name: 'claude-code bin',
+        status: 'ok',
+        detail: `oort ${got}, the version you are running (${show})`,
+      });
+    }
+  }
+  return checks;
 }
 
 function isExecutable(file: string): boolean {
@@ -725,7 +818,7 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
   const keys = await keyChecks(ctx);
   const checks: Check[] = [
     ...keys.checks,
-    ...hookChecks(ctx, cmd, home),
+    ...(await hookChecks(ctx, cmd, home)),
     ...mcpChecks(ctx, cmd),
     ...(await storeChecks(ctx)),
     ...(await relayChecks(ctx, keys.relayed)),
