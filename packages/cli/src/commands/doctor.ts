@@ -37,7 +37,7 @@ import { Refusal, echo, shown, tilde, withWired, type Ctx } from '../util.js';
 import { hostContext } from './connect.js';
 import { VERSION } from '@oortmem/core';
 import { hookBinaryOf, hookCommandPath, settingsFile, versionManagerOf } from './install.js';
-import { callDaemon } from '../serve-client.js';
+import { SKIP_FILE, callDaemon, readSkip } from '../serve-client.js';
 import { socketPathFor } from '../serve-protocol.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info' | 'unknown';
@@ -376,62 +376,80 @@ async function hookBinaryChecks(
  * socket is reported, never removed.
  */
 async function serveChecks(ctx: Ctx): Promise<Check[]> {
-  const socket = socketPathFor(resolveHome(ctx.io.env));
+  const home = resolveHome(ctx.io.env);
+  const socket = socketPathFor(home);
   const show = shown(tilde(socket, ctx.io.env['HOME'] ?? ''));
   const base = { group: 'serve' as const, name: 'daemon' };
-  const r = await callDaemon(socket, 'ping', {}, { budgetMs: 1000 });
-  if (r.ok) {
-    const version = shown(r.result['version']);
-    const pid = shown(r.result['pid']);
-    if (r.result['version'] !== VERSION) {
-      return [
-        {
-          ...base,
-          status: 'warn',
-          detail: `running oort ${version} (pid ${pid}, ${show}), but this is oort ${VERSION}: hooks run in-process until it restarts`,
-          fix: 'oort serve stop && oort serve --detach',
-        },
-      ];
+  const skip = readSkip(home);
+  const skipping: Check[] =
+    skip !== undefined && skip.until > Date.now()
+      ? [
+          {
+            group: 'serve',
+            name: 'hooks',
+            status: 'warn',
+            detail: `skip the daemon until ${new Date(skip.until).toISOString()}, after ${skip.reason === 'refused' ? 'it refused a hook (another protocol or version)' : 'a hook timed out on it'}; they run in-process (${SKIP_FILE})`,
+            fix: 'oort serve status (tries it again), or oort serve stop && oort serve --detach',
+          },
+        ]
+      : [];
+  return [...(await daemonChecks()), ...skipping];
+
+  async function daemonChecks(): Promise<Check[]> {
+    const r = await callDaemon(socket, 'ping', {}, { budgetMs: 1000 });
+    if (r.ok) {
+      const version = shown(r.result['version']);
+      const pid = shown(r.result['pid']);
+      if (r.result['version'] !== VERSION) {
+        return [
+          {
+            ...base,
+            status: 'warn',
+            detail: `running oort ${version} (pid ${pid}, ${show}), but this is oort ${VERSION}: hooks run in-process until it restarts`,
+            fix: 'oort serve stop && oort serve --detach',
+          },
+        ];
+      }
+      return [{ ...base, status: 'ok', detail: `running, pid ${pid}, oort ${version}, ${show}` }];
     }
-    return [{ ...base, status: 'ok', detail: `running, pid ${pid}, oort ${version}, ${show}` }];
-  }
-  switch (r.reason) {
-    case 'absent':
-      return [
-        {
-          ...base,
-          status: 'info',
-          detail: 'not running; hooks run in-process',
-          fix: 'oort serve --detach',
-        },
-      ];
-    case 'refused':
-      return [
-        {
-          ...base,
-          status: 'info',
-          detail: `not running; a stopped daemon left ${show} behind (the next start replaces it)`,
-          fix: 'oort serve --detach',
-        },
-      ];
-    case 'untrusted':
-      return [
-        {
-          ...base,
-          status: 'warn',
-          detail: `${show} or its directory belongs to another user or is writable by others: hooks never use it`,
-          fix: `remove ${show} and run chmod 700 on its directory`,
-        },
-      ];
-    default:
-      return [
-        {
-          ...base,
-          status: 'warn',
-          detail: `${show} does not answer (${r.reason}): hooks fall back to in-process`,
-          fix: 'oort serve stop && oort serve --detach',
-        },
-      ];
+    switch (r.reason) {
+      case 'absent':
+        return [
+          {
+            ...base,
+            status: 'info',
+            detail: 'not running; hooks run in-process',
+            fix: 'oort serve --detach',
+          },
+        ];
+      case 'refused':
+        return [
+          {
+            ...base,
+            status: 'info',
+            detail: `not running; a stopped daemon left ${show} behind (the next start replaces it)`,
+            fix: 'oort serve --detach',
+          },
+        ];
+      case 'untrusted':
+        return [
+          {
+            ...base,
+            status: 'warn',
+            detail: `${show} or its directory belongs to another user or is writable by others: hooks never use it`,
+            fix: `remove ${show} and run chmod 700 on its directory`,
+          },
+        ];
+      default:
+        return [
+          {
+            ...base,
+            status: 'warn',
+            detail: `${show} does not answer (${r.reason}): hooks fall back to in-process`,
+            fix: 'oort serve stop && oort serve --detach',
+          },
+        ];
+    }
   }
 }
 

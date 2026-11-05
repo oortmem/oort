@@ -51,7 +51,9 @@ export type CallFailure =
   /** The daemon answered with an error. */
   | 'error'
   /** Any other socket error. */
-  | 'io';
+  | 'io'
+  /** Not tried: a recent timeout or refusal opened the circuit breaker (`serve.skip-until`). */
+  | 'skipped';
 
 export type CallResult =
   | { ok: true; result: Record<string, unknown> }
@@ -177,31 +179,120 @@ export function daemonSocket(env: Record<string, string | undefined>): string {
   return socketPathFor(homeFrom(env, os.homedir));
 }
 
+/**
+ * The circuit breaker: `<home>/serve.skip-until` holds an epoch-ms time (and why) until which the
+ * hooks do not try the daemon at all, so a hung or mismatched daemon costs one slow prompt, not
+ * every prompt. Written after a timeout (5 minutes) or a protocol or version refusal (1 minute);
+ * removed by a successful answer and by `oort serve` start, status and stop.
+ */
+export const SKIP_FILE = 'serve.skip-until';
+export const SKIP_AFTER_TIMEOUT_MS = 5 * 60_000;
+export const SKIP_AFTER_REFUSAL_MS = 60_000;
+
+export type SkipReason = 'timeout' | 'refused';
+export interface Skip {
+  until: number;
+  reason?: SkipReason;
+}
+
+const SKIP_LINE = /^(\d{1,16})(?: (timeout|refused))?\s*$/;
+
+/** The marker's text, undefined when there is none. One read. */
+function readSkipText(home: string): string | undefined {
+  try {
+    return fs.readFileSync(path.join(home, SKIP_FILE), 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+function parseSkip(text: string | undefined): Skip | undefined {
+  const m = text === undefined ? null : SKIP_LINE.exec(text);
+  if (m === null) return undefined;
+  const until = Number(m[1]);
+  if (!Number.isSafeInteger(until)) return undefined;
+  return { until, ...(m[2] !== undefined && { reason: m[2] as SkipReason }) };
+}
+
+/** The marker, or undefined when it is missing or garbled (then the daemon is tried). */
+export function readSkip(home: string): Skip | undefined {
+  return parseSkip(readSkipText(home));
+}
+
+const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+
+/** Opens the breaker until `until` (0600, never through a symlink). Best effort. */
+export function writeSkip(home: string, until: number, reason: SkipReason): void {
+  try {
+    const { O_WRONLY, O_CREAT, O_TRUNC } = fs.constants;
+    const fd = fs.openSync(
+      path.join(home, SKIP_FILE),
+      O_WRONLY | O_CREAT | O_TRUNC | NOFOLLOW,
+      0o600,
+    );
+    try {
+      if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
+      fs.writeSync(fd, `${until} ${reason}\n`);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // No marker: the next hook tries the daemon again, which is only slower.
+  }
+}
+
+/** Closes the breaker. Best effort. */
+export function clearSkip(home: string): void {
+  try {
+    fs.unlinkSync(path.join(home, SKIP_FILE));
+  } catch {
+    // Not there.
+  }
+}
+
 export type HookAttempt =
   { served: true; stdout: string } | { served: false; reason: CallFailure; code?: ErrorCode };
 
 /**
  * Asks the daemon to run `event` on `stdin`. `cwd` is the hook's own cwd, used only when the
- * input names none. Served means the daemon ran the same handler the hook would have.
+ * input names none. Served means the daemon ran the same handler the hook would have. While the
+ * breaker is open (`readSkip`), the daemon is not contacted at all.
  */
 export async function hookViaDaemon(
   event: ServedEvent,
   stdin: string,
   cwd: string,
   env: Record<string, string | undefined>,
-  opts: CallOptions = {},
+  opts: CallOptions & { now?: () => number } = {},
 ): Promise<HookAttempt> {
+  const home = homeFrom(env, os.homedir);
+  const now = opts.now ?? Date.now;
+  const marker = readSkipText(home);
+  const skip = parseSkip(marker);
+  if (skip !== undefined && skip.until > now()) return { served: false, reason: 'skipped' };
   const r = await callDaemon(
-    daemonSocket(env),
+    socketPathFor(home),
     'hook',
     { event, stdin, cwd, version: cliVersion() },
     { budgetMs: HOOK_BUDGET_MS[event], ...opts },
   );
   if (r.ok) {
     const stdout = r.result['stdout'];
-    return typeof stdout === 'string'
-      ? { served: true, stdout }
-      : { served: false, reason: 'protocol' };
+    if (typeof stdout === 'string') {
+      if (marker !== undefined) clearSkip(home); // expired or garbled: the daemon is fine again
+      return { served: true, stdout };
+    }
+    // An answer that is not a hook result: as good as another protocol.
+    writeSkip(home, now() + SKIP_AFTER_REFUSAL_MS, 'refused');
+    return { served: false, reason: 'protocol' };
+  }
+  if (r.reason === 'timeout' || r.reason === 'connect-timeout') {
+    writeSkip(home, now() + SKIP_AFTER_TIMEOUT_MS, 'timeout');
+  } else if (
+    r.reason === 'protocol' ||
+    (r.reason === 'error' && (r.code === 'protocol' || r.code === 'version-mismatch'))
+  ) {
+    writeSkip(home, now() + SKIP_AFTER_REFUSAL_MS, 'refused');
   }
   return { served: false, reason: r.reason, ...(r.code !== undefined && { code: r.code }) };
 }

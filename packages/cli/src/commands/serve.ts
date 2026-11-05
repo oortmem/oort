@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { VERSION, resolveConfig, resolveHome } from '@oortmem/core';
 import { binPath } from '../io.js';
-import { callDaemon, spawnDaemon, socketTrust } from '../serve-client.js';
+import { callDaemon, clearSkip, spawnDaemon, socketTrust } from '../serve-client.js';
 import { lockPathFor, socketPathFor } from '../serve-protocol.js';
 import { uiFor } from '../ui.js';
 import { Refusal, echo, shown, tilde, type Ctx } from '../util.js';
@@ -64,6 +64,9 @@ export async function serveCommand(
   const userHome = io.env['HOME'] || os.homedir();
   const show = (p: string): string => shown(tilde(p, userHome));
   const ui = uiFor(io);
+  // Starting, checking on or stopping the daemon by hand closes the hooks' circuit breaker: the
+  // next prompt tries the daemon again.
+  if (['start', 'status', 'stop'].includes(action ?? 'start')) clearSkip(home);
   switch (action ?? 'start') {
     case 'start':
       break;

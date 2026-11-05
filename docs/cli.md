@@ -499,6 +499,13 @@ It is optional: without it, the hooks work exactly as before.
   protocol version or is another oort version, the hook runs in-process as if
   there were no daemon. A hook always exits 0. The time spent on the daemon
   comes off the hook's own deadline.
+- **Circuit breaker.** After a hook times out on the daemon, the hooks skip
+  it for 5 minutes; after a protocol or version refusal, for 1 minute. The
+  time is kept in `~/.oort/serve.skip-until` (mode 600, an epoch-ms time and
+  the reason), which a hook reads once before anything else. A missing or
+  unreadable marker means the daemon is tried. A successful answer removes
+  it, and so do `oort serve`, `oort serve status` and `oort serve stop`.
+  `oort doctor` shows when the hooks skip the daemon, and until when.
 - **Same answer.** The daemon runs the same handlers, so it injects the same
   `<oort-memory>` block with the same scrubbing, and it writes the same hook
   log lines, with `"daemon": 1` in `counts`. Like the in-process hook, it does
@@ -1013,7 +1020,7 @@ Pro, with no key and a 3 second timeout.
 | --- | --- | --- |
 | `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. A role on a local model instead loads it and runs it once, offline. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort keys set <provider>, or oort login (Oort Pro)`. A model the relay does not serve: use the default model, or set the vendor key. |
 | `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, for this bin. | Missing, from another path, or a command that is not executable: `oort install claude-code`. A hook binary whose `--version` differs from the oort you run is a warning naming both versions and the path (re-run `oort install claude-code` from the oort you want); a path under a Node version manager (`.nvm/`, `fnm_multishells`, `node-versions/`, `.volta/`, `.asdf/`) gets a note that switching Node versions will break the hooks. Unparseable settings: fix the JSON, then `oort install claude-code`. |
-| `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
+| `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. Whether the hooks skip the daemon after a timeout or refusal, and until when. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
 | `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
 | `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |

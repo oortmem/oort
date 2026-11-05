@@ -8,7 +8,7 @@ import { TG } from '@oortmem/core/store-conformance';
 import type { Memory } from '@oortmem/core';
 import { downgradeSqliteStore, openSqliteStore, sqliteSchemaVersion } from '@oortmem/store-sqlite';
 import { memory, tmpdir } from '../test/helpers.js';
-import { callDaemon } from './serve-client.js';
+import { SKIP_FILE, callDaemon, readSkip } from './serve-client.js';
 import { checkSocketPath } from './serve-daemon.js';
 import {
   FrameDecoder,
@@ -456,7 +456,7 @@ describe('a hook falls back to in-process whatever the daemon does', () => {
     expect(r.durationMs).toBeGreaterThanOrEqual(2400);
     expect(r.durationMs).toBeLessThan(6000);
     expect(lastPrompt(s)).toEqual({ outcome: 'injected', daemon: false });
-  });
+  }, 20_000);
 
   it('serve.fallback-daemon-returns-an-error', async () => {
     const { s, baseline } = await seededWithBaseline();
@@ -480,6 +480,8 @@ describe('a hook falls back to in-process whatever the daemon does', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toBe(baseline);
 
+    expect(readSkip(s.oortHome)?.reason).toBe('refused');
+    fs.rmSync(path.join(s.oortHome, SKIP_FILE)); // so the next hook tries the daemon again
     for (const srv of servers.splice(0)) await new Promise((res) => srv.close(res));
     await fakeDaemon(s, (_f, conn) => conn.end(Buffer.from([0xff, 0xff, 0xff, 0xff, 1, 2])));
     const g = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
@@ -549,5 +551,112 @@ describe('a hook falls back to in-process whatever the daemon does', () => {
     } finally {
       fs.chmodSync(path.dirname(s.socket), 0o700);
     }
+  });
+});
+
+describe('the hooks skip a daemon that hung or refused (circuit breaker)', () => {
+  const marker = (s: Sandbox): string => path.join(s.oortHome, SKIP_FILE);
+
+  it('serve.breaker-after-a-hang-the-next-hook-does-not-connect', async () => {
+    const { s, baseline } = await seededWithBaseline();
+    let connections = 0;
+    await fakeDaemon(s, () => {}); // never answers
+    servers[0]?.on('connection', () => connections++);
+
+    const before = Date.now();
+    const hung = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
+    expect(hung.stdout).toBe(baseline);
+    expect(hung.durationMs).toBeGreaterThanOrEqual(2400);
+    expect(connections).toBe(1);
+    const skip = readSkip(s.oortHome);
+    expect(skip?.reason).toBe('timeout');
+    expect(skip!.until).toBeGreaterThanOrEqual(before + 5 * 60_000);
+    expect(skip!.until).toBeLessThanOrEqual(Date.now() + 5 * 60_000);
+    expect(fs.statSync(marker(s)).mode & 0o777).toBe(0o600);
+
+    // Skipped: no connection at all, straight to in-process.
+    const next = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
+    expect(next.exitCode).toBe(0);
+    expect(next.stdout).toBe(baseline);
+    expect(next.durationMs).toBeLessThan(1500);
+    const start = await oort(s, ['hook', 'SessionStart'], {
+      input: JSON.stringify({ session_id: 's-serve', cwd: s.cwd, source: 'startup' }),
+    });
+    expect(start.exitCode).toBe(0);
+    expect(connections).toBe(1);
+    expect(lastPrompt(s)).toEqual({ outcome: 'injected', daemon: false });
+
+    const doctor = await oort(s, ['doctor', '--json']);
+    const row = (
+      JSON.parse(doctor.stdout) as {
+        checks: { group: string; name: string; status: string; detail: string }[];
+      }
+    ).checks.find((c) => c.group === 'serve' && c.name === 'hooks');
+    expect(row?.status).toBe('warn');
+    expect(row?.detail).toContain(new Date(skip!.until).toISOString());
+    expect(row?.detail).toContain('timed out');
+
+    // Checking on the daemon by hand closes the breaker.
+    await oort(s, ['serve', 'status']);
+    expect(fs.existsSync(marker(s))).toBe(false);
+  }, 20_000);
+
+  it('serve.breaker-a-refusal-skips-for-a-minute', async () => {
+    const { s, baseline } = await seededWithBaseline();
+    await fakeDaemon(s, (f, conn) =>
+      conn.write(
+        encodeFrame({
+          v: 1,
+          id: f.id,
+          ok: false,
+          error: { code: 'version-mismatch', message: 'this daemon is oort 0.0.1' },
+        }),
+      ),
+    );
+    const before = Date.now();
+    const r = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
+    expect(r.stdout).toBe(baseline);
+    const skip = readSkip(s.oortHome);
+    expect(skip?.reason).toBe('refused');
+    expect(skip!.until).toBeGreaterThanOrEqual(before + 60_000);
+    expect(skip!.until).toBeLessThanOrEqual(Date.now() + 60_000);
+  });
+
+  it('serve.breaker-after-the-window-tries-again-and-a-success-clears-it', async () => {
+    const { s } = await seededWithBaseline();
+    let connections = 0;
+    await fakeDaemon(s, (f, conn) => {
+      connections++;
+      conn.write(encodeFrame({ v: 1, id: f.id, ok: true, result: { stdout: 'from the daemon' } }));
+    });
+    // Still inside the window: not tried.
+    fs.writeFileSync(marker(s), `${Date.now() + 60_000} timeout\n`, { mode: 0o600 });
+    await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
+    expect(connections).toBe(0);
+    // The window has passed: tried, answered, and the marker is gone.
+    fs.writeFileSync(marker(s), `${Date.now() - 1000} timeout\n`, { mode: 0o600 });
+    const r = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
+    expect(connections).toBe(1);
+    expect(r.stdout).toBe('from the daemon');
+    expect(fs.existsSync(marker(s))).toBe(false);
+  });
+
+  it('serve.breaker-a-garbled-marker-is-ignored', async () => {
+    const { s, baseline } = await seededWithBaseline();
+    const serve = await startServe(s);
+    for (const garbage of ['soon', '', '12abc', `${Number.MAX_SAFE_INTEGER}9 timeout`, '\u0000']) {
+      fs.writeFileSync(marker(s), garbage);
+      expect(readSkip(s.oortHome)).toBeUndefined();
+      const r = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
+      expect(r.stdout).toBe(baseline);
+      expect(lastPrompt(s)).toEqual({ outcome: 'injected', daemon: true });
+      // A success clears even a garbled marker.
+      expect(fs.existsSync(marker(s))).toBe(false);
+    }
+    // `oort serve stop` clears a live marker too.
+    fs.writeFileSync(marker(s), `${Date.now() + 60_000} refused\n`);
+    expect((await oort(s, ['serve', 'stop'])).exitCode).toBe(0);
+    expect(fs.existsSync(marker(s))).toBe(false);
+    await serve.exited;
   });
 });
