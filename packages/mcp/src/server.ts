@@ -59,7 +59,8 @@ export interface RememberOutcome {
  */
 export interface MemoryBackend {
   recall(input: ToolInput<'recall'>): Promise<RecallOutput>;
-  remember(input: ToolInput<'remember'>): Promise<{ results: RememberOutcome[] }>;
+  /** `note`: what the person should know, e.g. that a suggested share still needs confirming. */
+  remember(input: ToolInput<'remember'>): Promise<{ results: RememberOutcome[]; note?: string }>;
   forget(input: ToolInput<'forget'>): Promise<{ forgotten: string }>;
   pin(input: ToolInput<'pin'>): Promise<{ id: string; pinned: boolean; changed: boolean }>;
   explain(input: ToolInput<'explain'>): Promise<Record<string, unknown>>;
