@@ -239,6 +239,47 @@ describe('installHooks', () => {
   });
 });
 
+describe('re-installing from another oort', () => {
+  const count = (file: string, event: string): string[] => {
+    const groups =
+      (read(file)['hooks'] as Record<string, { hooks: { command: string }[] }[]>)[event] ?? [];
+    return groups.flatMap((g) => g.hooks.map((h) => h.command));
+  };
+
+  it('install.reinstall-replaces-old-hook-paths-without-duplicating', () => {
+    const oldBin = '/Users/x/.oort/cli/lib/node_modules/oortmem/dist/main.js';
+    const newBin = '/opt/oort/lib/node_modules/oortmem/dist/main.js';
+    const file = settingsFile();
+    installHooks(file, oldBin);
+    expect(installHooks(file, newBin).changed).toBe(true);
+    for (const event of ['UserPromptSubmit', 'Stop', 'SessionStart']) {
+      expect(count(file, event)).toEqual([`${newBin} hook ${event}`]);
+    }
+  });
+
+  it('install.reinstall-replaces-a-repo-checkout-and-a-node-prefixed-path', () => {
+    const file = settingsFile();
+    installHooks(file, '/home/me/oort/packages/cli/dist/main.js');
+    installHooks(file, '/opt/oort/lib/node_modules/oortmem/dist/main.js');
+    expect(count(file, 'Stop')).toEqual([
+      '/opt/oort/lib/node_modules/oortmem/dist/main.js hook Stop',
+    ]);
+    const wrapped = settingsFile({
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: 'command', command: 'node /old/node_modules/oortmem/dist/main.js hook Stop' },
+            ],
+          },
+        ],
+      },
+    });
+    installHooks(wrapped, '/new/node_modules/oortmem/dist/main.js');
+    expect(count(wrapped, 'Stop')).toEqual(['/new/node_modules/oortmem/dist/main.js hook Stop']);
+  });
+});
+
 describe('hookStatus', () => {
   it('install.status-reports-each-event-presence-only', () => {
     const file = settingsFile();
