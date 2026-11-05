@@ -1,7 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { filterFor, hookStatus } from '@oortmem/claude-code';
-import { resolveConfig, resolveHome, localGrant } from '@oortmem/core';
+import { resolveConfig, resolveHome, localGrant, principalGrant } from '@oortmem/core';
+import { backupPathFor } from '@oortmem/store-sqlite';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
 import { ROLES, ROLE_VENDOR, keyLookup, routeFor, type AdapterRole } from '../credentials.js';
 import { describeProblem, inspectCredentialsFile } from '../credentials-file.js';
@@ -276,9 +277,15 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
   }
   const checks: Check[] = [];
   try {
-    const count = await withWired(ctx, async (w) => {
+    const { count, planet } = await withWired(ctx, async (w) => {
       const all = await w.store.list(localGrant(filterFor(w.scope)), { validOnly: false });
-      return all.length;
+      // Every memory this machine's agent wrote lives in your Planet (levels, CON-61).
+      const { orgId, customerId, agentId } = w.scope;
+      const own = await w.store.list(principalGrant({ orgId, customerId, agentId }), {
+        validOnly: false,
+        embeddings: false,
+      });
+      return { count: all.length, planet: own.length };
     });
     checks.push({
       group: 'store',
@@ -286,6 +293,22 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
       status: 'ok',
       detail: `${tilde(db, userHome)} opens; ${count} ${count === 1 ? 'memory' : 'memories'} visible from here`,
     });
+    checks.push({
+      group: 'store',
+      name: 'spaces',
+      status: 'info',
+      detail: `Planet: ${planet} ${planet === 1 ? 'memory' : 'memories'} (every project)`,
+    });
+    const backup = backupPathFor(db);
+    if (fs.existsSync(backup)) {
+      checks.push({
+        group: 'store',
+        name: 'backup',
+        status: 'info',
+        detail: `the copy taken before the last schema migration is at ${tilde(backup, userHome)}`,
+        fix: `delete it once Oort works as before`,
+      });
+    }
   } catch (e) {
     checks.push({
       group: 'store',

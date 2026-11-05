@@ -2,25 +2,34 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
+import type { Statement } from 'better-sqlite3';
 import {
   appendAccess,
   assertGrant,
-  canRead,
-  canWrite,
+  canonicalMemory,
   cursorKey,
   GrantError,
+  grantReads,
+  grantWrites,
   isCurrent,
-  sameScope,
+  nodeKey,
+  nodeOf,
+  resolveAddressing,
+  sameRecordAddress,
+  scopeOf,
   tokenizeLexical,
   type AccessLog,
+  type Address,
+  type Author,
   type Grant,
-  type GrantFilter,
   type GuardedWriteResult,
   type Hit,
+  type Level,
   type Memory,
   type MemorySource,
   type MemoryStore,
-  type Scope,
+  type NodePattern,
+  type Provenance,
   type Tier,
 } from '@oortmem/core';
 import {
@@ -31,7 +40,9 @@ import {
   withPrivateUmask,
 } from './blobs.js';
 import { ColdBlobCorruptError, createColdCodec } from './cold.js';
-import { applySchema } from './schema.js';
+import { applySchema, downgradeSchema, SCHEMA_VERSION } from './schema.js';
+
+export { SCHEMA_VERSION } from './schema.js';
 
 export {
   ColdBlobCorruptError,
@@ -78,11 +89,17 @@ const MAX_KNN = 4096;
 interface MemoryRow {
   rid: number;
   id: string;
+  level: Level;
   org_id: string;
-  customer_id: string;
-  agent_id: string;
+  customer_id: string | null;
+  agent_id: string | null;
+  hive_id: string | null;
+  run_id: string | null;
   project_id: string | null;
   scope_extra: string | null;
+  author_agent_id: string;
+  author_account_ref: string | null;
+  provenance: string | null;
   type: Memory['type'];
   text: string;
   stub: string;
@@ -116,11 +133,6 @@ function indexed(text: string): string {
   return tokenizeLexical(text).join(' ');
 }
 
-/** The vec0 partition for a scope's (org, customer, agent). */
-function scopeKey(orgId: string, customerId: string, agentId: string): string {
-  return JSON.stringify([orgId, customerId, agentId]);
-}
-
 /** vec0 metadata cannot be NULL, so global (no project) gets its own key. */
 function projectKey(projectId: string | null | undefined): string {
   return projectId === null || projectId === undefined ? 'g' : `p:${projectId}`;
@@ -130,15 +142,31 @@ function toBytes(v: Int8Array): Buffer {
   return Buffer.from(v.buffer, v.byteOffset, v.byteLength);
 }
 
-function toRow(m: Memory): RowParams {
-  const { orgId, customerId, agentId, projectId, ...extra } = m.scope;
+/** The address columns of `a`: each level fills only its own fields (the table's CHECK). */
+function addressColumns(a: Address) {
+  const x = a as Partial<Record<'customerId' | 'agentId' | 'hiveId' | 'runId', string>>;
+  return {
+    level: a.level,
+    org_id: a.orgId,
+    customer_id: x.customerId ?? null,
+    agent_id: x.agentId ?? null,
+    hive_id: x.hiveId ?? null,
+    run_id: x.runId ?? null,
+  };
+}
+
+/** `m` (as `canonicalMemory` returns it) as a row, at `address`, written by `author`. */
+function toRow(m: Memory, address: Address, author: Author): RowParams {
+  const { orgId: _o, customerId: _c, agentId: _a, projectId: _p, ...extra } = m.scope;
   return {
     id: m.id,
-    org_id: orgId,
-    customer_id: customerId,
-    agent_id: agentId,
-    project_id: projectId ?? null,
+    ...addressColumns(address),
+    project_id: address.projectId ?? null,
     scope_extra: Object.keys(extra).length === 0 ? null : JSON.stringify(extra),
+    author_agent_id: author.agentId,
+    author_account_ref: author.accountRef ?? null,
+    provenance:
+      m.provenance === undefined || m.provenance === null ? null : JSON.stringify(m.provenance),
     type: m.type,
     text: m.text,
     stub: m.stub,
@@ -160,17 +188,33 @@ function toRow(m: Memory): RowParams {
   };
 }
 
+function addressOfRow(r: MemoryRow): Address {
+  const a: Record<string, string> = { level: r.level, orgId: r.org_id };
+  if (r.customer_id !== null) a['customerId'] = r.customer_id;
+  if (r.agent_id !== null) a['agentId'] = r.agent_id;
+  if (r.hive_id !== null) a['hiveId'] = r.hive_id;
+  if (r.run_id !== null) a['runId'] = r.run_id;
+  if (r.project_id !== null) a['projectId'] = r.project_id;
+  return a as unknown as Address;
+}
+
+/** The record as stores return it: `address`, `author` and `provenance` only where needed. */
 function fromRow(r: MemoryRow, embedding: Int8Array | undefined): Memory {
-  const scope: Scope = {
-    orgId: r.org_id,
-    customerId: r.customer_id,
-    agentId: r.agent_id,
-    ...(r.project_id !== null && { projectId: r.project_id }),
+  const address = addressOfRow(r);
+  const author: Author =
+    r.author_account_ref === null
+      ? { agentId: r.author_agent_id }
+      : { agentId: r.author_agent_id, accountRef: r.author_account_ref };
+  const scope = {
+    ...scopeOf(address, author),
     ...(r.scope_extra !== null && (JSON.parse(r.scope_extra) as object)),
   };
   const m: Memory = {
     id: r.id,
     scope,
+    ...(address.level !== 'user' && { address }),
+    ...((author.accountRef !== undefined || author.agentId !== scope.agentId) && { author }),
+    ...(r.provenance !== null && { provenance: JSON.parse(r.provenance) as Provenance }),
     type: r.type,
     text: r.text,
     stub: r.stub,
@@ -196,11 +240,17 @@ function fromRow(r: MemoryRow, embedding: Int8Array | undefined): Memory {
 
 const COLUMNS: (keyof RowParams)[] = [
   'id',
+  'level',
   'org_id',
   'customer_id',
   'agent_id',
+  'hive_id',
+  'run_id',
   'project_id',
   'scope_extra',
+  'author_agent_id',
+  'author_account_ref',
+  'provenance',
   'type',
   'text',
   'stub',
@@ -222,28 +272,73 @@ const COLUMNS: (keyof RowParams)[] = [
 ];
 
 /**
- * Grant predicate over `memories` aliased `m`; bound with `scopeParams`. The
- * principal always matches exactly; `@all` admits every project of it.
+ * The predicate for pattern `i` of a grant side over `memories` aliased `m`:
+ * the node matches column by column (`IS`, so an absent field matches only
+ * NULL), then the project list, then the author when the pattern names one.
+ * Bound with `patternParams`.
  */
-const SCOPE_SQL = `m.org_id = @org AND m.customer_id = @customer AND m.agent_id = @agent
-  AND (@all OR m.project_id IN (SELECT value FROM json_each(@projects))
-    OR (@global AND m.project_id IS NULL))`;
+function patternSql(i: number): string {
+  return `(m.level = @l${i} AND m.org_id = @o${i} AND m.customer_id IS @c${i}
+    AND m.agent_id IS @a${i} AND m.hive_id IS @h${i} AND m.run_id IS @r${i}
+    AND (@all${i} OR m.project_id IN (SELECT value FROM json_each(@p${i}))
+      OR (@g${i} AND m.project_id IS NULL))
+    AND (@au${i} IS NULL OR m.author_agent_id = @au${i}))`;
+}
 
-function scopeParams(f: GrantFilter) {
-  const ids = f.projectIds === 'all' ? [] : f.projectIds;
+/** A grant side of `n` patterns as one predicate (any pattern covers). */
+function grantSql(n: number): string {
+  return `(${Array.from({ length: n }, (_, i) => patternSql(i)).join(' OR ')})`;
+}
+
+function patternParams(p: NodePattern, i: number): Record<string, string | number | null> {
+  const ids = p.projectIds === 'all' ? [] : p.projectIds;
+  const node = addressColumns(p.node as Address);
   return {
-    org: f.orgId,
-    customer: f.customerId,
-    agent: f.agentId,
-    all: f.projectIds === 'all' ? 1 : 0,
-    projects: JSON.stringify(ids.filter((p): p is string => p !== null)),
-    global: f.projectIds === 'all' || ids.includes(null) ? 1 : 0,
+    [`l${i}`]: node.level,
+    [`o${i}`]: node.org_id,
+    [`c${i}`]: node.customer_id,
+    [`a${i}`]: node.agent_id,
+    [`h${i}`]: node.hive_id,
+    [`r${i}`]: node.run_id,
+    [`all${i}`]: p.projectIds === 'all' ? 1 : 0,
+    [`p${i}`]: JSON.stringify(ids.filter((x): x is string => x !== null)),
+    [`g${i}`]: p.projectIds === 'all' || ids.includes(null) ? 1 : 0,
+    [`au${i}`]: p.authorAgentId ?? null,
   };
 }
 
-/** True when `f` can match nothing, so a search can skip the query. */
-function coversNothing(f: GrantFilter): boolean {
-  return f.projectIds !== 'all' && f.projectIds.length === 0;
+function grantParams(patterns: readonly NodePattern[]): Record<string, string | number | null> {
+  return Object.assign({}, ...patterns.map((p, i) => patternParams(p, i)));
+}
+
+/** Patterns that can match something (a project list that is not empty). */
+function live(patterns: readonly NodePattern[]): NodePattern[] {
+  return patterns.filter((p) => p.projectIds === 'all' || p.projectIds.length > 0);
+}
+
+/**
+ * Where opening a store copies its database before migrating it to the
+ * current schema version: `<path>.pre-v<version>`, owner-only. Cold blobs
+ * are not copied (no migration changes them).
+ */
+export function backupPathFor(dbPath: string): string {
+  return `${path.resolve(dbPath)}.pre-v${SCHEMA_VERSION}`;
+}
+
+/**
+ * Takes the store at `path` back to schema version 1, so Oort 0.2.x can open
+ * it again. Refuses, changing nothing, when it holds memories version 1
+ * cannot represent (any level but Planet, an author with an account,
+ * provenance). Close every connection to the store first.
+ */
+export function downgradeSqliteStore(opts: { path: string }): void {
+  const db = new Database(path.resolve(opts.path));
+  try {
+    sqliteVec.load(db);
+    downgradeSchema(db);
+  } finally {
+    db.close();
+  }
 }
 
 /**
@@ -281,7 +376,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       conn.pragma('journal_mode = WAL');
       conn.pragma('foreign_keys = ON');
       sqliteVec.load(conn);
-      applySchema(conn, dimension);
+      applySchema(conn, dimension, { backupPath: backupPathFor(dbPath) });
       return conn;
     } catch (e) {
       conn.close();
@@ -316,10 +411,6 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        RETURNING rid`,
     ),
     getRow: db.prepare<[string], MemoryRow>('SELECT * FROM memories WHERE id = ?'),
-    // The one way a by-id read or change finds its row: inside the grant or not at all.
-    getScoped: db.prepare<[ReturnType<typeof scopeParams> & { id: string }], MemoryRow>(
-      `SELECT * FROM memories m WHERE m.id = @id AND ${SCOPE_SQL}`,
-    ),
     deleteRow: db.prepare<[string], { rid: number }>(
       'DELETE FROM memories WHERE id = ? RETURNING rid',
     ),
@@ -344,66 +435,6 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        RETURNING rid`,
     ),
     setAccess: db.prepare<[string, string]>('UPDATE memories SET access_log = ? WHERE id = ?'),
-    list: db.prepare<
-      [ReturnType<typeof scopeParams> & { tier: Tier | null; pinned: number | null }],
-      MemoryRow
-    >(
-      `SELECT * FROM memories m WHERE ${SCOPE_SQL} AND (@tier IS NULL OR m.tier = @tier)
-         AND (@pinned IS NULL OR m.pinned = @pinned)
-       ORDER BY m.rid`,
-    ),
-    lexical: db.prepare<
-      [ReturnType<typeof scopeParams> & { match: string; k: number }],
-      { id: string; tier: Tier; rank: number }
-    >(
-      `SELECT m.id AS id, m.tier AS tier, bm25(memories_fts) AS rank
-       FROM memories_fts JOIN memories m ON m.rid = memories_fts.rowid
-       WHERE memories_fts MATCH @match AND ${SCOPE_SQL}
-       ORDER BY rank, m.updated_at DESC, m.id
-       LIMIT @k`,
-    ),
-    dense: db.prepare<
-      [
-        ReturnType<typeof scopeParams> & {
-          v: Buffer;
-          k: number;
-          scopeKey: string;
-          projectKeys: string;
-        },
-      ],
-      { id: string; distance: number; tier: Tier }
-    >(
-      `WITH knn AS (
-         SELECT id, distance FROM memories_vec
-         WHERE embedding MATCH vec_int8(@v) AND k = @k AND scope_key = @scopeKey
-           AND project_key IN (SELECT value FROM json_each(@projectKeys)) AND tier != 'cold'
-       )
-       SELECT knn.id AS id, knn.distance AS distance, m.tier AS tier
-       FROM knn JOIN memories m ON m.id = knn.id
-       WHERE m.tier != 'cold' AND ${SCOPE_SQL}
-       ORDER BY knn.distance, m.updated_at DESC, m.id`,
-    ),
-    // A whole-principal grant: the vec0 partition alone bounds the KNN.
-    denseAll: db.prepare<
-      [
-        ReturnType<typeof scopeParams> & {
-          v: Buffer;
-          k: number;
-          scopeKey: string;
-        },
-      ],
-      { id: string; distance: number; tier: Tier }
-    >(
-      `WITH knn AS (
-         SELECT id, distance FROM memories_vec
-         WHERE embedding MATCH vec_int8(@v) AND k = @k AND scope_key = @scopeKey
-           AND tier != 'cold'
-       )
-       SELECT knn.id AS id, knn.distance AS distance, m.tier AS tier
-       FROM knn JOIN memories m ON m.id = knn.id
-       WHERE m.tier != 'cold' AND ${SCOPE_SQL}
-       ORDER BY knn.distance, m.updated_at DESC, m.id`,
-    ),
     ftsDelete: db.prepare<[number]>('DELETE FROM memories_fts WHERE rowid = ?'),
     ftsInsert: db.prepare<[number, string, string, string]>(
       'INSERT INTO memories_fts (rowid, text, stub, entities) VALUES (?, ?, ?, ?)',
@@ -412,9 +443,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       'SELECT embedding FROM memories_vec WHERE id = ?',
     ),
     vecDelete: db.prepare<[string]>('DELETE FROM memories_vec WHERE id = ?'),
-    vecInsert: db.prepare<[string, Buffer, string, string, Tier]>(
-      `INSERT INTO memories_vec (id, embedding, scope_key, project_key, tier)
-       VALUES (?, vec_int8(?), ?, ?, ?)`,
+    vecInsert: db.prepare<[string, Buffer, string, string, string, Tier]>(
+      `INSERT INTO memories_vec (id, embedding, node_key, project_key, author_key, tier)
+       VALUES (?, vec_int8(?), ?, ?, ?, ?)`,
     ),
     vecSetTier: db.prepare<[Tier, string]>('UPDATE memories_vec SET tier = ? WHERE id = ?'),
     coldPath: db.prepare<[string], { path: string }>('SELECT path FROM cold_index WHERE id = ?'),
@@ -431,6 +462,68 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
     ),
   };
+
+  /**
+   * Statements whose grant predicate depends on how many patterns a grant
+   * side has: prepared once per (kind, count) and reused.
+   */
+  const prepared = new Map<string, Statement>();
+  function cached<P extends unknown[], R>(key: string, sql: () => string): Statement<P, R> {
+    let st = prepared.get(key);
+    if (st === undefined) {
+      st = db.prepare(sql());
+      prepared.set(key, st);
+    }
+    return st as unknown as Statement<P, R>;
+  }
+
+  type Params = Record<string, unknown>;
+
+  /** The one way a by-id read or change finds its row: inside the grant or not at all. */
+  const getScoped = (n: number) =>
+    cached<[Params], MemoryRow>(
+      `get:${n}`,
+      () => `SELECT * FROM memories m WHERE m.id = @id AND ${grantSql(n)}`,
+    );
+  const listScoped = (n: number) =>
+    cached<[Params], MemoryRow>(
+      `list:${n}`,
+      () => `SELECT * FROM memories m WHERE ${grantSql(n)} AND (@tier IS NULL OR m.tier = @tier)
+         AND (@pinned IS NULL OR m.pinned = @pinned)
+       ORDER BY m.rid`,
+    );
+  const lexicalScoped = (n: number) =>
+    cached<[Params], { id: string; tier: Tier; rank: number }>(
+      `lexical:${n}`,
+      () => `SELECT m.id AS id, m.tier AS tier, bm25(memories_fts) AS rank
+       FROM memories_fts CROSS JOIN memories m ON m.rid = memories_fts.rowid
+       WHERE memories_fts MATCH @match AND ${grantSql(n)}
+       ORDER BY rank, m.updated_at DESC, m.id
+       LIMIT @k`,
+    );
+  /**
+   * KNN for one pattern: filtered inside vec0 by the node's partition, the
+   * project list (unless every project) and the author (when the pattern names
+   * one) before k is taken, then by the pattern again on the joined row. The
+   * KNN is materialised and joined first (`CROSS JOIN` fixes the order):
+   * otherwise the planner may drive from the `memories` index and rerun the
+   * KNN once per row.
+   */
+  const densePattern = (allProjects: boolean, byAuthor: boolean) =>
+    cached<[Params], { id: string; distance: number; tier: Tier; updated_at: string }>(
+      `dense:${allProjects}:${byAuthor}`,
+      () => `WITH knn AS MATERIALIZED (
+         SELECT id, distance FROM memories_vec
+         WHERE embedding MATCH vec_int8(@v) AND k = @k AND node_key = @nodeKey
+           ${allProjects ? '' : 'AND project_key IN (SELECT value FROM json_each(@projectKeys))'}
+           ${byAuthor ? 'AND author_key = @author' : ''}
+           AND tier != 'cold'
+       )
+       SELECT knn.id AS id, knn.distance AS distance, m.tier AS tier, m.updated_at AS updated_at
+       FROM knn CROSS JOIN memories m ON m.id = knn.id
+       WHERE m.tier != 'cold' AND ${grantSql(1)}
+       ORDER BY knn.distance, m.updated_at DESC, m.id`,
+    );
 
   let closed = false;
 
@@ -468,25 +561,27 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
    * Writes one memory's row, FTS row and vec row. Call inside a transaction.
    * Returns the blob to unlink after commit when a non-cold write dropped the cold copy.
    */
-  function writeMemory(grant: Grant, m: Memory): string[] {
-    if (m.embedding !== undefined) checkDimension(m.embedding, `upsert ${m.id}`);
+  function writeMemory(grant: Grant, input: Memory): string[] {
+    if (input.embedding !== undefined) checkDimension(input.embedding, `upsert ${input.id}`);
     // Inside the transaction, so a rejection rolls back the whole batch.
-    if (!canWrite(grant, m.scope)) throw new GrantError();
+    const m = canonicalMemory(input);
+    const { address, author } = resolveAddressing(m);
+    if (!grantWrites(grant, m)) throw new GrantError();
     const existing = q.getRow.get(m.id);
-    if (existing !== undefined && !sameScope(fromRow(existing, undefined).scope, m.scope)) {
+    if (existing !== undefined && !sameRecordAddress(fromRow(existing, undefined), m)) {
       throw new GrantError();
     }
-    const row = q.upsertRow.get(toRow(m));
+    const row = q.upsertRow.get(toRow(m, address, author));
     if (row === undefined) throw new Error(`upsert ${m.id}: no row returned`);
     writeFts(row.rid, m.tier, m.text, m.stub, m.entities);
     q.vecDelete.run(m.id);
     if (m.embedding !== undefined) {
-      const s = m.scope;
       q.vecInsert.run(
         m.id,
         toBytes(m.embedding),
-        scopeKey(s.orgId, s.customerId, s.agentId),
-        projectKey(s.projectId),
+        nodeKey(nodeOf(address)),
+        projectKey(address.projectId),
+        author.agentId,
         m.tier,
       );
     }
@@ -519,13 +614,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     removeAfterCommit(writeAll.immediate(grant, ms));
   }
 
-  /** The row for `id` if it lies inside `f`; unknown and out-of-grant read the same. */
-  function scopedRow(f: GrantFilter, id: string): MemoryRow | undefined {
-    return q.getScoped.get({ ...scopeParams(f), id });
+  /** The row for `id` if a pattern of `side` covers it; unknown and out-of-grant read the same. */
+  function scopedRow(side: readonly NodePattern[], id: string): MemoryRow | undefined {
+    const patterns = live(side);
+    if (patterns.length === 0) return undefined;
+    return getScoped(patterns.length).get({ ...grantParams(patterns), id });
   }
 
   const forgetTx = db.transaction((grant: Grant, id: string): string | undefined => {
-    if (scopedRow(grant.write, id) === undefined) return undefined;
+    if (scopedRow(grant.writeNodes, id) === undefined) return undefined;
     const row = q.deleteRow.get(id);
     if (row !== undefined) q.ftsDelete.run(row.rid);
     q.vecDelete.run(id);
@@ -534,7 +631,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
 
   const recordAccessTx = db.transaction((grant: Grant, ids: string[], at: Date) => {
     for (const id of ids) {
-      const row = scopedRow(grant.read, id);
+      const row = scopedRow(grant.readNodes, id);
       if (row === undefined) continue;
       const log = appendAccess(JSON.parse(row.access_log) as AccessLog, at, { d });
       q.setAccess.run(JSON.stringify(log), id);
@@ -558,7 +655,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       tier: Tier,
       snapshot?: Pick<Memory, 'updatedAt' | 'tier'>,
     ): boolean => {
-      if (scopedRow(grant.write, id) === undefined) return false;
+      if (scopedRow(grant.writeNodes, id) === undefined) return false;
       const row =
         snapshot === undefined
           ? q.setTierRow.get(tier, id)
@@ -578,7 +675,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     ms
       .filter(
         (m) =>
-          scopedRow(grant.write, m.id) === undefined ||
+          scopedRow(grant.writeNodes, m.id) === undefined ||
           q.expireIfUnchanged.get({ id: m.id, at, updatedAt: m.updatedAt, was: m.tier }) ===
             undefined,
       )
@@ -596,7 +693,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       const skipped: number[] = [];
       const previous: string[] = [];
       for (const [i, m] of ms.entries()) {
-        if (scopedRow(grant.write, m.id) === undefined) {
+        if (scopedRow(grant.writeNodes, m.id) === undefined) {
           skipped.push(i);
           continue;
         }
@@ -666,7 +763,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     async get(grant, id) {
       open();
       assertGrant(grant);
-      const row = scopedRow(grant.read, id);
+      const row = scopedRow(grant.readNodes, id);
       return row === undefined ? null : fromRow(row, embeddingOf(id));
     },
 
@@ -682,33 +779,50 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       open();
       assertGrant(grant);
       const match = matchQuery(text);
-      if (match === null || k <= 0 || coversNothing(grant.read)) return [];
-      return q.lexical
-        .all({ ...scopeParams(grant.read), match, k: Math.floor(k) })
+      const patterns = live(grant.readNodes);
+      if (match === null || k <= 0 || patterns.length === 0) return [];
+      return lexicalScoped(patterns.length)
+        .all({ ...grantParams(patterns), match, k: Math.floor(k) })
         .map((r): Hit => ({ id: r.id, score: -r.rank, tier: r.tier }));
     },
 
     /**
-     * KNN filtered inside vec0 by the principal's partition (and, for a project
-     * list, project metadata), then by the grant again on the joined row;
-     * `score` is cosine similarity.
+     * One KNN per read pattern (see `densePattern`), merged best first when a
+     * grant has several; `score` is cosine similarity.
      */
     async dense(grant, v, k) {
       open();
       assertGrant(grant);
       checkDimension(v, 'dense');
-      const f = grant.read;
-      if (k <= 0 || coversNothing(f)) return [];
-      const params = {
-        ...scopeParams(f),
-        v: toBytes(v),
-        k: Math.min(Math.floor(k), MAX_KNN),
-        scopeKey: scopeKey(f.orgId, f.customerId, f.agentId),
-      };
-      const rows =
-        f.projectIds === 'all'
-          ? q.denseAll.all(params)
-          : q.dense.all({ ...params, projectKeys: JSON.stringify(f.projectIds.map(projectKey)) });
+      const patterns = live(grant.readNodes);
+      if (k <= 0 || patterns.length === 0) return [];
+      const kk = Math.min(Math.floor(k), MAX_KNN);
+      const runs = patterns.map((p) => {
+        const all = p.projectIds === 'all';
+        return densePattern(all, p.authorAgentId !== undefined).all({
+          ...patternParams(p, 0),
+          v: toBytes(v),
+          k: kk,
+          nodeKey: nodeKey(p.node),
+          ...(!all && {
+            projectKeys: JSON.stringify((p.projectIds as (string | null)[]).map(projectKey)),
+          }),
+          ...(p.authorAgentId !== undefined && { author: p.authorAgentId }),
+        });
+      });
+      let rows = runs[0] ?? [];
+      if (runs.length > 1) {
+        // Patterns may overlap: one row per id, in the order a single query would give.
+        const byId = new Map(runs.flat().map((r) => [r.id, r]));
+        rows = [...byId.values()]
+          .sort(
+            (x, y) =>
+              x.distance - y.distance ||
+              (x.updated_at < y.updated_at ? 1 : x.updated_at > y.updated_at ? -1 : 0) ||
+              (x.id < y.id ? -1 : x.id > y.id ? 1 : 0),
+          )
+          .slice(0, kk);
+      }
       return rows.map((r): Hit => ({ id: r.id, score: 1 - r.distance, tier: r.tier }));
     },
 
@@ -721,14 +835,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     async list(grant, listOpts = {}) {
       open();
       assertGrant(grant);
-      if (coversNothing(grant.read)) return [];
+      const patterns = live(grant.readNodes);
+      if (patterns.length === 0) return [];
       const validOnly = listOpts.validOnly ?? true;
       const now = clock();
       // One vec lookup per row: skipped when the caller does not want embeddings.
       const withEmbeddings = listOpts.embeddings !== false;
-      return q.list
+      return listScoped(patterns.length)
         .all({
-          ...scopeParams(grant.read),
+          ...grantParams(patterns),
           tier: listOpts.tier ?? null,
           pinned: listOpts.pinned === true ? 1 : null,
         })
@@ -753,7 +868,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     async coldGet(grant, id) {
       open();
       assertGrant(grant);
-      if (scopedRow(grant.read, id) === undefined) return null;
+      if (scopedRow(grant.readNodes, id) === undefined) return null;
       const row = q.coldPath.get(id);
       if (row === undefined) return null;
       const blob = blobs.read(row.path);
@@ -766,8 +881,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         log(`oort store: cold blob for memory ${id} is corrupt; ignoring it`);
         return null;
       }
-      // The blob carries its own scope; a mismatched one is treated as missing.
-      return canRead(grant, m.scope) ? m : null;
+      // The blob carries its own address; a mismatched one is treated as missing.
+      return grantReads(grant, m) ? m : null;
     },
 
     async setTier(grant, id, tier, snapshot) {

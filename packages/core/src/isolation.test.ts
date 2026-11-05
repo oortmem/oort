@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MemoryStore } from './adapters.js';
 import { Grant, localGrant } from './grant.js';
-import { isolationViolations, nonInterference, soleGrant } from './isolation.js';
+import { isolationViolations, nonInterference, soleGrantFor } from './isolation.js';
 import { createMemoryStore } from './memory-store.js';
 import type { Memory } from './model.js';
 
@@ -36,7 +36,7 @@ describe('isolation suite catches broken stores (mutation check)', () => {
     const make = broken((inner, seen) => ({
       async get(_g, id) {
         const m = seen.get(id);
-        return m === undefined ? null : inner.get(soleGrant(m.scope), id);
+        return m === undefined ? null : inner.get(soleGrantFor(m), id);
       },
     }));
     expect((await isolationViolations(make)).some((v) => v.includes('get returned it'))).toBe(true);
@@ -63,7 +63,7 @@ describe('isolation suite catches broken stores (mutation check)', () => {
     const make = broken((inner, seen) => ({
       async setTier(_g, id, tier, snap) {
         const m = seen.get(id);
-        return m === undefined ? false : inner.setTier(soleGrant(m.scope), id, tier, snap);
+        return m === undefined ? false : inner.setTier(soleGrantFor(m), id, tier, snap);
       },
     }));
     const v = await isolationViolations(make);
@@ -91,7 +91,7 @@ describe('isolation suite catches broken stores (mutation check)', () => {
       async recordAccess(_g, ids, at) {
         for (const id of ids) {
           const m = seen.get(id);
-          if (m !== undefined) await inner.recordAccess(soleGrant(m.scope), [id], at);
+          if (m !== undefined) await inner.recordAccess(soleGrantFor(m), [id], at);
         }
       },
     }));

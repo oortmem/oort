@@ -405,7 +405,7 @@ tools are available too.
 | `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. | `--yes` |
 | `oort pin <id>` / `oort unpin <id>` | A pinned memory is never sent to cold storage. | |
 | `oort consolidate` | Expires, re-tiers and evicts memories. | |
-| `oort export` | Writes every visible memory as v1 JSON Lines. | `--out <file>` (0600), `--force` |
+| `oort export` | Writes every visible memory as v2 JSON Lines (`--format 1` for v1). | `--out <file>` (0600), `--force`, `--format 1\|2` |
 | `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
 
 Ids are full ids or unique prefixes. Every command reads the cwd's project

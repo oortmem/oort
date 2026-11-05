@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { localScope, type Embedder, type Memory } from '@oortmem/core';
+import { localScope, parseExport, type Embedder, type Memory } from '@oortmem/core';
 import { AWS_KEY, fakeIo, harness, memory, tmpdir, writeTranscript } from '../test/helpers.js';
 import { runCli } from './program.js';
 import { wire as realWire, type WireFn } from './wire.js';
@@ -288,7 +288,7 @@ describe('oort stats', () => {
   });
 });
 
-/** The v1 export format as documented in docs/export-format.md. */
+/** The export format (versions 1 and 2) as documented in docs/export-format.md. */
 const ScopeSchema = z.strictObject({
   orgId: z.string(),
   customerId: z.string(),
@@ -302,6 +302,16 @@ const ManifestSchema = z.strictObject({
   exportedAt: iso,
   memories: z.number().int().min(0),
   scopes: z.array(ScopeSchema),
+});
+const AddressSchema = z.strictObject({
+  level: z.literal('user'),
+  orgId: z.string(),
+  customerId: z.string(),
+  projectId: z.string().optional(),
+});
+const ManifestV2Schema = ManifestSchema.extend({
+  version: z.literal(2),
+  addresses: z.array(AddressSchema),
 });
 const MemoryLineSchema = z.strictObject({
   id: z.string(),
@@ -346,6 +356,12 @@ const MemoryLineSchema = z.strictObject({
   createdAt: iso,
   updatedAt: iso,
 });
+/** Version 2 lines: version 1's fields plus the address, the author and provenance. */
+const MemoryLineV2Schema = MemoryLineSchema.extend({
+  address: AddressSchema,
+  author: z.strictObject({ agentId: z.string(), accountRef: z.string().optional() }),
+  provenance: z.null(),
+});
 
 describe('oort export', () => {
   it('cli.export-roundtrip-format', async () => {
@@ -378,12 +394,14 @@ describe('oort export', () => {
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
 
     const [head, ...rest] = readLines(file);
-    const manifest = ManifestSchema.parse(head);
+    const manifest = ManifestV2Schema.parse(head);
     expect(manifest.memories).toBe(3);
     expect(manifest.scopes).toEqual([
       { orgId: 'local', customerId: 'self', agentId: 'claude-code' },
     ]);
-    const lines = rest.map((l) => MemoryLineSchema.parse(l));
+    expect(manifest.addresses).toEqual([{ level: 'user', orgId: 'local', customerId: 'self' }]);
+    const lines = rest.map((l) => MemoryLineV2Schema.parse(l));
+    expect(lines.map((l) => l.author)).toEqual(Array(3).fill({ agentId: 'claude-code' }));
     // Phase 1: the cwd's project plus global only (docs/export-format.md, Limitations).
     expect(lines.map((l) => l.id)).toEqual([warm.id, cold.id, noEmbedding.id]);
     const c = lines[1];
@@ -402,6 +420,30 @@ describe('oort export', () => {
     expect(stdoutLines.slice(1)).toEqual(
       fs.readFileSync(file, 'utf8').trimEnd().split('\n').slice(1),
     );
+
+    // Reading it back gives the store's records (cold ones decoded).
+    const parsed = parseExport(fs.readFileSync(file, 'utf8'));
+    expect(parsed.memories.map((m) => m.id)).toEqual([warm.id, cold.id, noEmbedding.id]);
+    expect(parsed.memories[0]).toEqual(await h.store.get(TG, warm.id));
+  });
+
+  it('cli.export-format-1', async () => {
+    const h = harness();
+    const m = memory({ text: 'a planet fact', embedding: Int8Array.from([1, 2, 3, 4]) });
+    await h.store.upsert(TG, m);
+    const r = await h.run(['export', '--format', '1']);
+    expect(r.code).toBe(0);
+    const [head, line] = r.io.stdout
+      .trimEnd()
+      .split('\n')
+      .map((l) => JSON.parse(l) as unknown);
+    expect(ManifestSchema.parse(head).version).toBe(1);
+    expect(MemoryLineSchema.parse(line).id).toBe(m.id);
+    // Version 1 still reads, as the Planet.
+    expect(parseExport(r.io.stdout).memories).toEqual([await h.store.get(TG, m.id)]);
+    const bad = await h.run(['export', '--format', '3']);
+    expect(bad.code).toBe(2);
+    expect(bad.io.stderr).toMatch(/--format "3" must be 1 or 2/);
   });
 });
 
@@ -425,7 +467,7 @@ describe('oort export, scope', () => {
       .trimEnd()
       .split('\n')
       .slice(1)
-      .map((l) => MemoryLineSchema.parse(JSON.parse(l)));
+      .map((l) => MemoryLineV2Schema.parse(JSON.parse(l)));
     expect(
       lines.map((l) => [
         l.id,

@@ -101,6 +101,7 @@ describe('oort doctor', () => {
     expect(d.check('mcp', 'codex')).toMatchObject({ status: 'info' });
     expect(d.check('store', 'store')).toMatchObject({ status: 'ok' });
     expect(d.check('store', 'store')?.detail).toMatch(/1 memor/);
+    expect(d.check('store', 'spaces')?.detail).toBe('Planet: 1 memory (every project)');
     expect(d.check('relay', 'relay')).toMatchObject({ status: 'ok' });
     expect(d.check('relay', 'relay')?.detail).toContain('https://relay.oortcloud.dev');
     expect(d.check('relay', 'relay')?.detail).toContain('reachable');

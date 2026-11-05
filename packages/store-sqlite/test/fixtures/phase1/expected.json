@@ -1,0 +1,3525 @@
+{
+  "coldIds": ["p1-03", "p1-08", "p1-13", "p1-23", "p1-28", "p1-33", "p1-38", "p1-43"],
+  "principals": [
+    {
+      "principal": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "list": [
+        {
+          "id": "p1-35",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "procedural",
+          "text": "Memory 35: redis aurora photon token35 for the fixture.",
+          "stub": "redis aurora 35",
+          "entities": ["redis", "e0"],
+          "salience": 0.85,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 0,
+            "recent": [],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-16T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s0",
+            "turnRef": "t35",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-16T00:00:00.000Z",
+          "updatedAt": "2026-04-17T00:00:00.000Z",
+          "embedding": [-37, -75, -11, -108, -9, -17, -89, -80]
+        },
+        {
+          "id": "p1-34",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "procedural",
+          "text": "Memory 34: pulsar deploy vitest token34 for the fixture.",
+          "stub": "pulsar deploy 34",
+          "entities": ["pulsar", "e4"],
+          "salience": 0.42,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 4,
+            "recent": [
+              "2026-04-14T00:00:00.000Z",
+              "2026-04-15T00:00:00.000Z",
+              "2026-04-16T00:00:00.000Z",
+              "2026-04-17T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-13T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s6",
+            "turnRef": "t34",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-13T00:00:00.000Z",
+          "updatedAt": "2026-04-14T00:00:00.000Z",
+          "embedding": [1, -81, -85, 116, -53, -17, -55, 111]
+        },
+        {
+          "id": "p1-33",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "episodic",
+          "text": "Memory 33: deploy deploy redis token33 for the fixture.",
+          "stub": "deploy deploy 33",
+          "entities": ["deploy", "e3"],
+          "salience": 0.25,
+          "pinned": false,
+          "tier": "cold",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-04-11T00:00:00.000Z",
+              "2026-04-12T00:00:00.000Z",
+              "2026-04-13T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-10T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s5",
+            "turnRef": "t33",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-10T00:00:00.000Z",
+          "updatedAt": "2026-04-11T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-32",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "preference",
+          "text": "Memory 32: comet quasar kuiper token32 for the fixture.",
+          "stub": "comet quasar 32",
+          "entities": ["comet", "e2"],
+          "salience": 0.3,
+          "pinned": false,
+          "tier": "hot",
+          "accessLog": {
+            "count": 2,
+            "recent": ["2026-04-08T00:00:00.000Z", "2026-04-09T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-07T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s4",
+            "turnRef": "t32",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-07T00:00:00.000Z",
+          "updatedAt": "2026-04-08T00:00:00.000Z",
+          "embedding": [-106, 107, 118, 85, 45, -104, -34, -47]
+        },
+        {
+          "id": "p1-31",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code"
+          },
+          "type": "procedural",
+          "text": "Memory 31: aurora redis quasar token31 for the fixture.",
+          "stub": "aurora redis 31",
+          "entities": ["aurora", "e1"],
+          "salience": 0.76,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 1,
+            "recent": ["2026-04-05T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-04T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s3",
+            "turnRef": "t31",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-04T00:00:00.000Z",
+          "updatedAt": "2026-04-05T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-30",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "preference",
+          "text": "Memory 30: vitest vitest pnpm token30 for the fixture.",
+          "stub": "vitest vitest 30",
+          "entities": ["vitest", "e0"],
+          "salience": 0.01,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 0,
+            "recent": [],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-01T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": "2026-04-03T00:00:00.000Z",
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s2",
+            "turnRef": "t30",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-01T00:00:00.000Z",
+          "updatedAt": "2026-04-02T00:00:00.000Z",
+          "embedding": [-42, 115, 72, -54, 98, -8, -11, -21]
+        },
+        {
+          "id": "p1-29",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "preference",
+          "text": "Memory 29: vitest aurora vitest token29 for the fixture.",
+          "stub": "vitest aurora 29",
+          "entities": ["vitest", "e4"],
+          "salience": 0.49,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 4,
+            "recent": [
+              "2026-03-30T00:00:00.000Z",
+              "2026-03-31T00:00:00.000Z",
+              "2026-04-01T00:00:00.000Z",
+              "2026-04-02T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-29T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s1",
+            "turnRef": "t29",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-29T00:00:00.000Z",
+          "updatedAt": "2026-03-30T00:00:00.000Z",
+          "embedding": [98, -87, -115, -48, -45, -29, -108, 70]
+        },
+        {
+          "id": "p1-28",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "cfg:shared"
+          },
+          "type": "semantic",
+          "text": "Memory 28: quasar quasar photon token28 for the fixture.",
+          "stub": "quasar quasar 28",
+          "entities": ["quasar", "e3"],
+          "salience": 0.93,
+          "pinned": false,
+          "tier": "cold",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-03-27T00:00:00.000Z",
+              "2026-03-28T00:00:00.000Z",
+              "2026-03-29T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-26T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s0",
+            "turnRef": "t28",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-26T00:00:00.000Z",
+          "updatedAt": "2026-03-27T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-27",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "cfg:shared"
+          },
+          "type": "semantic",
+          "text": "Memory 27: comet pnpm kuiper token27 for the fixture.",
+          "stub": "comet pnpm 27",
+          "entities": ["comet", "e2"],
+          "salience": 0.82,
+          "pinned": true,
+          "tier": "warm",
+          "accessLog": {
+            "count": 2,
+            "recent": ["2026-03-24T00:00:00.000Z", "2026-03-25T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-23T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s6",
+            "turnRef": "t27",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-23T00:00:00.000Z",
+          "updatedAt": "2026-03-24T00:00:00.000Z",
+          "embedding": [-99, -81, 82, 96, -103, 122, -41, 37]
+        },
+        {
+          "id": "p1-26",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "episodic",
+          "text": "Memory 26: nebula vitest nebula token26 for the fixture.",
+          "stub": "nebula vitest 26",
+          "entities": ["nebula", "e1"],
+          "salience": 0.97,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 1,
+            "recent": ["2026-03-21T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-20T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s5",
+            "turnRef": "t26",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-20T00:00:00.000Z",
+          "updatedAt": "2026-03-21T00:00:00.000Z",
+          "embedding": [-63, -28, 93, 33, -35, 24, 115, -65]
+        },
+        {
+          "id": "p1-25",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "episodic",
+          "text": "Memory 25: pulsar quasar pulsar token25 for the fixture.",
+          "stub": "pulsar quasar 25",
+          "entities": ["pulsar", "e0"],
+          "salience": 0.31,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 0,
+            "recent": [],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-17T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s4",
+            "turnRef": "t25",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-17T00:00:00.000Z",
+          "updatedAt": "2026-03-18T00:00:00.000Z",
+          "embedding": [-113, -23, -61, 59, 68, 103, -77, -51]
+        },
+        {
+          "id": "p1-24",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "cfg:shared"
+          },
+          "type": "preference",
+          "text": "Memory 24: vitest deploy comet token24 for the fixture.",
+          "stub": "vitest deploy 24",
+          "entities": ["vitest", "e4"],
+          "salience": 0.18,
+          "pinned": false,
+          "tier": "hot",
+          "accessLog": {
+            "count": 4,
+            "recent": [
+              "2026-03-15T00:00:00.000Z",
+              "2026-03-16T00:00:00.000Z",
+              "2026-03-17T00:00:00.000Z",
+              "2026-03-18T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-14T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": "2026-03-16T00:00:00.000Z",
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s3",
+            "turnRef": "t24",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-14T00:00:00.000Z",
+          "updatedAt": "2026-03-15T00:00:00.000Z",
+          "embedding": [123, -93, 91, -27, -63, -121, -51, 10]
+        },
+        {
+          "id": "p1-23",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code"
+          },
+          "type": "procedural",
+          "text": "Memory 23: nebula aurora aurora token23 for the fixture.",
+          "stub": "nebula aurora 23",
+          "entities": ["nebula", "e3"],
+          "salience": 0.75,
+          "pinned": false,
+          "tier": "cold",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-03-12T00:00:00.000Z",
+              "2026-03-13T00:00:00.000Z",
+              "2026-03-14T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-11T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s2",
+            "turnRef": "t23",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-11T00:00:00.000Z",
+          "updatedAt": "2026-03-12T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-22",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "cfg:shared"
+          },
+          "type": "semantic",
+          "text": "Memory 22: orbit aurora deploy token22 for the fixture.",
+          "stub": "orbit aurora 22",
+          "entities": ["orbit", "e2"],
+          "salience": 0.15,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 2,
+            "recent": ["2026-03-09T00:00:00.000Z", "2026-03-10T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-08T00:00:00.000Z",
+          "validTo": "2026-07-20T00:00:00.000Z",
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s1",
+            "turnRef": "t22",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-08T00:00:00.000Z",
+          "updatedAt": "2026-03-09T00:00:00.000Z",
+          "embedding": [34, -104, 109, -60, 41, 8, 44, 16]
+        },
+        {
+          "id": "p1-21",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "episodic",
+          "text": "Memory 21: vitest redis aurora token21 for the fixture.",
+          "stub": "vitest redis 21",
+          "entities": ["vitest", "e1"],
+          "salience": 0.1,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 1,
+            "recent": ["2026-03-06T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-05T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s0",
+            "turnRef": "t21",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-05T00:00:00.000Z",
+          "updatedAt": "2026-03-06T00:00:00.000Z",
+          "embedding": [103, 32, 121, -63, 41, -17, 113, 83]
+        },
+        {
+          "id": "p1-20",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code"
+          },
+          "type": "procedural",
+          "text": "Memory 20: aurora nebula pulsar token20 for the fixture.",
+          "stub": "aurora nebula 20",
+          "entities": ["aurora", "e0"],
+          "salience": 0.42,
+          "pinned": false,
+          "tier": "hot",
+          "accessLog": {
+            "count": 0,
+            "recent": [],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-02T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": "2026-03-22T00:00:00.000Z",
+          "endReason": "expired",
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s6",
+            "turnRef": "t20",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-02T00:00:00.000Z",
+          "updatedAt": "2026-03-03T00:00:00.000Z",
+          "embedding": [-67, -9, -11, -100, 37, 59, 82, -115]
+        },
+        {
+          "id": "p1-19",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "cfg:shared"
+          },
+          "type": "procedural",
+          "text": "Memory 19: comet deploy kuiper token19 for the fixture.",
+          "stub": "comet deploy 19",
+          "entities": ["comet", "e4"],
+          "salience": 0.3,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 4,
+            "recent": [
+              "2026-02-28T00:00:00.000Z",
+              "2026-03-01T00:00:00.000Z",
+              "2026-03-02T00:00:00.000Z",
+              "2026-03-03T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-02-27T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s5",
+            "turnRef": "t19",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-02-27T00:00:00.000Z",
+          "updatedAt": "2026-02-28T00:00:00.000Z",
+          "embedding": [21, 52, 117, -110, -111, 8, -51, -39]
+        },
+        {
+          "id": "p1-18",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code"
+          },
+          "type": "semantic",
+          "text": "Memory 18: redis redis quasar token18 for the fixture.",
+          "stub": "redis redis 18",
+          "entities": ["redis", "e3"],
+          "salience": 0.28,
+          "pinned": true,
+          "tier": "warm",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-02-25T00:00:00.000Z",
+              "2026-02-26T00:00:00.000Z",
+              "2026-02-27T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-02-24T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": "2026-02-26T00:00:00.000Z",
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s4",
+            "turnRef": "t18",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-02-24T00:00:00.000Z",
+          "updatedAt": "2026-02-25T00:00:00.000Z",
+          "embedding": [-20, 57, -86, 36, 90, -15, 97, -96]
+        },
+        {
+          "id": "p1-17",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "cfg:shared"
+          },
+          "type": "episodic",
+          "text": "Memory 17: quasar quasar redis token17 for the fixture.",
+          "stub": "quasar quasar 17",
+          "entities": ["quasar", "e2"],
+          "salience": 0.63,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 2,
+            "recent": ["2026-02-22T00:00:00.000Z", "2026-02-23T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-02-21T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s3",
+            "turnRef": "t17",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-02-21T00:00:00.000Z",
+          "updatedAt": "2026-02-22T00:00:00.000Z",
+          "embedding": [83, 42, -23, -126, -116, -118, -37, 5]
+        },
+        {
+          "id": "p1-16",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "semantic",
+          "text": "Memory 16: comet nebula orbit token16 for the fixture.",
+          "stub": "comet nebula 16",
+          "entities": ["comet", "e1"],
+          "salience": 0.71,
+          "pinned": false,
+          "tier": "hot",
+          "accessLog": {
+            "count": 1,
+            "recent": ["2026-02-19T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-02-18T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s2",
+            "turnRef": "t16",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-02-18T00:00:00.000Z",
+          "updatedAt": "2026-02-19T00:00:00.000Z",
+          "embedding": [-108, -86, 48, -94, -83, -127, -90, 88]
+        },
+        {
+          "id": "p1-15",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "preference",
+          "text": "Memory 15: redis aurora orbit token15 for the fixture.",
+          "stub": "redis aurora 15",
+          "entities": ["redis", "e0"],
+          "salience": 0.57,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 0,
+            "recent": [],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-02-15T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s1",
+            "turnRef": "t15",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-02-15T00:00:00.000Z",
+          "updatedAt": "2026-02-16T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-14",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "preference",
+          "text": "Memory 14: kuiper kuiper vitest token14 for the fixture.",
+          "stub": "kuiper kuiper 14",
+          "entities": ["kuiper", "e4"],
+          "salience": 0.83,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 4,
+            "recent": [
+              "2026-02-13T00:00:00.000Z",
+              "2026-02-14T00:00:00.000Z",
+              "2026-02-15T00:00:00.000Z",
+              "2026-02-16T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-02-12T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": "p1-02",
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s0",
+            "turnRef": "t14",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-02-12T00:00:00.000Z",
+          "updatedAt": "2026-02-13T00:00:00.000Z",
+          "embedding": [93, -115, -27, -25, -118, -7, 45, 29]
+        },
+        {
+          "id": "p1-13",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "procedural",
+          "text": "Memory 13: kuiper photon redis token13 for the fixture.",
+          "stub": "kuiper photon 13",
+          "entities": ["kuiper", "e3"],
+          "salience": 0.67,
+          "pinned": false,
+          "tier": "cold",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-02-10T00:00:00.000Z",
+              "2026-02-11T00:00:00.000Z",
+              "2026-02-12T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-02-09T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s6",
+            "turnRef": "t13",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-02-09T00:00:00.000Z",
+          "updatedAt": "2026-02-10T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-12",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "episodic",
+          "text": "Memory 12: pulsar orbit nebula token12 for the fixture.",
+          "stub": "pulsar orbit 12",
+          "entities": ["pulsar", "e2"],
+          "salience": 0.04,
+          "pinned": false,
+          "tier": "hot",
+          "accessLog": {
+            "count": 2,
+            "recent": ["2026-02-07T00:00:00.000Z", "2026-02-08T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-02-06T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": "2026-02-08T00:00:00.000Z",
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s5",
+            "turnRef": "t12",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-02-06T00:00:00.000Z",
+          "updatedAt": "2026-02-07T00:00:00.000Z",
+          "embedding": [81, -125, 95, -109, 52, -78, 71, -46]
+        },
+        {
+          "id": "p1-11",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "procedural",
+          "text": "Memory 11: orbit kuiper pnpm token11 for the fixture.",
+          "stub": "orbit kuiper 11",
+          "entities": ["orbit", "e1"],
+          "salience": 0.24,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 1,
+            "recent": ["2026-02-04T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-02-03T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s4",
+            "turnRef": "t11",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-02-03T00:00:00.000Z",
+          "updatedAt": "2026-02-04T00:00:00.000Z",
+          "embedding": [67, 112, -84, -119, -65, -81, -12, -66]
+        },
+        {
+          "id": "p1-10",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "cfg:shared"
+          },
+          "type": "semantic",
+          "text": "Memory 10: photon kuiper nebula token10 for the fixture.",
+          "stub": "photon kuiper 10",
+          "entities": ["photon", "e0"],
+          "salience": 0.09,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 0,
+            "recent": [],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-31T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s3",
+            "turnRef": "t10",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-31T00:00:00.000Z",
+          "updatedAt": "2026-02-01T00:00:00.000Z",
+          "embedding": [-43, 125, 34, -69, 52, -54, 53, 98]
+        },
+        {
+          "id": "p1-09",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "semantic",
+          "text": "Memory 9: quasar redis kuiper token9 for the fixture.",
+          "stub": "quasar redis 9",
+          "entities": ["quasar", "e4"],
+          "salience": 0.09,
+          "pinned": true,
+          "tier": "warm",
+          "accessLog": {
+            "count": 4,
+            "recent": [
+              "2026-01-29T00:00:00.000Z",
+              "2026-01-30T00:00:00.000Z",
+              "2026-01-31T00:00:00.000Z",
+              "2026-02-01T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-28T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": "p1-05",
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s2",
+            "turnRef": "t9",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-28T00:00:00.000Z",
+          "updatedAt": "2026-01-29T00:00:00.000Z",
+          "embedding": [10, -13, 115, -120, 114, 111, 28, 31]
+        },
+        {
+          "id": "p1-08",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "cfg:shared"
+          },
+          "type": "preference",
+          "text": "Memory 8: aurora comet comet token8 for the fixture.",
+          "stub": "aurora comet 8",
+          "entities": ["aurora", "e3"],
+          "salience": 0.67,
+          "pinned": false,
+          "tier": "cold",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-01-26T00:00:00.000Z",
+              "2026-01-27T00:00:00.000Z",
+              "2026-01-28T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-25T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s1",
+            "turnRef": "t8",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-25T00:00:00.000Z",
+          "updatedAt": "2026-01-26T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-07",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "semantic",
+          "text": "Memory 7: deploy pnpm aurora token7 for the fixture.",
+          "stub": "deploy pnpm 7",
+          "entities": ["deploy", "e2"],
+          "salience": 0.95,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 2,
+            "recent": ["2026-01-23T00:00:00.000Z", "2026-01-24T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-22T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s0",
+            "turnRef": "t7",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-22T00:00:00.000Z",
+          "updatedAt": "2026-01-23T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-06",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "procedural",
+          "text": "Memory 6: photon pnpm nebula token6 for the fixture.",
+          "stub": "photon pnpm 6",
+          "entities": ["photon", "e1"],
+          "salience": 0.53,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 1,
+            "recent": ["2026-01-20T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-19T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": "2026-01-21T00:00:00.000Z",
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s6",
+            "turnRef": "t6",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-19T00:00:00.000Z",
+          "updatedAt": "2026-01-20T00:00:00.000Z",
+          "embedding": [67, 33, -4, -21, -68, -125, -44, 10]
+        },
+        {
+          "id": "p1-05",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "semantic",
+          "text": "Memory 5: photon orbit orbit token5 for the fixture.",
+          "stub": "photon orbit 5",
+          "entities": ["photon", "e0"],
+          "salience": 0.36,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 0,
+            "recent": [],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-16T00:00:00.000Z",
+          "validTo": "2026-01-28T00:00:00.000Z",
+          "expiredAt": "2026-01-28T00:00:00.000Z",
+          "endReason": "superseded",
+          "lastConfirmedAt": null,
+          "supersedes": "p1-01",
+          "supersededBy": "p1-09",
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s5",
+            "turnRef": "t5",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-16T00:00:00.000Z",
+          "updatedAt": "2026-01-17T00:00:00.000Z",
+          "embedding": [11, 126, -19, -31, -37, 33, -22, -122]
+        },
+        {
+          "id": "p1-04",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "preference",
+          "text": "Memory 4: aurora redis aurora token4 for the fixture.",
+          "stub": "aurora redis 4",
+          "entities": ["aurora", "e4"],
+          "salience": 0.61,
+          "pinned": false,
+          "tier": "hot",
+          "accessLog": {
+            "count": 4,
+            "recent": [
+              "2026-01-14T00:00:00.000Z",
+              "2026-01-15T00:00:00.000Z",
+              "2026-01-16T00:00:00.000Z",
+              "2026-01-17T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-13T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s4",
+            "turnRef": "t4",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-13T00:00:00.000Z",
+          "updatedAt": "2026-01-14T00:00:00.000Z",
+          "embedding": [31, -105, -59, -107, 102, 121, -67, 80]
+        },
+        {
+          "id": "p1-03",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "preference",
+          "text": "Memory 3: nebula vitest photon token3 for the fixture.",
+          "stub": "nebula vitest 3",
+          "entities": ["nebula", "e3"],
+          "salience": 0.14,
+          "pinned": false,
+          "tier": "cold",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-01-11T00:00:00.000Z",
+              "2026-01-12T00:00:00.000Z",
+              "2026-01-13T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-10T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s3",
+            "turnRef": "t3",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-10T00:00:00.000Z",
+          "updatedAt": "2026-01-11T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-02",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "procedural",
+          "text": "Memory 2: aurora orbit pulsar token2 for the fixture.",
+          "stub": "aurora orbit 2",
+          "entities": ["aurora", "e2"],
+          "salience": 0.77,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 2,
+            "recent": ["2026-01-08T00:00:00.000Z", "2026-01-09T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-07T00:00:00.000Z",
+          "validTo": "2026-02-12T00:00:00.000Z",
+          "expiredAt": "2026-02-12T00:00:00.000Z",
+          "endReason": "corrected",
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": "p1-14",
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s2",
+            "turnRef": "t2",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-07T00:00:00.000Z",
+          "updatedAt": "2026-01-08T00:00:00.000Z",
+          "embedding": [-58, 4, -127, 20, 14, 39, 52, 90]
+        },
+        {
+          "id": "p1-01",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "preference",
+          "text": "Memory 1: pulsar comet vitest token1 for the fixture.",
+          "stub": "pulsar comet 1",
+          "entities": ["pulsar", "e1"],
+          "salience": 0.84,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 1,
+            "recent": ["2026-01-05T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-04T00:00:00.000Z",
+          "validTo": "2026-01-16T00:00:00.000Z",
+          "expiredAt": "2026-01-16T00:00:00.000Z",
+          "endReason": "superseded",
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": "p1-05",
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s1",
+            "turnRef": "t1",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-04T00:00:00.000Z",
+          "updatedAt": "2026-01-05T00:00:00.000Z",
+          "embedding": [-12, -56, 87, -116, 68, 118, 78, -98]
+        },
+        {
+          "id": "p1-00",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "cfg:shared"
+          },
+          "type": "preference",
+          "text": "Memory 0: kuiper vitest redis token0 for the fixture.",
+          "stub": "kuiper vitest 0",
+          "entities": ["kuiper", "e0"],
+          "salience": 0.69,
+          "pinned": true,
+          "tier": "hot",
+          "accessLog": {
+            "count": 0,
+            "recent": [],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-01T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": "2026-01-03T00:00:00.000Z",
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s0",
+            "turnRef": "t0",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-01T00:00:00.000Z",
+          "updatedAt": "2026-01-02T00:00:00.000Z",
+          "embedding": [5, -89, -115, -70, -54, 127, 54, 44]
+        }
+      ],
+      "current": [
+        "p1-35",
+        "p1-34",
+        "p1-33",
+        "p1-32",
+        "p1-31",
+        "p1-30",
+        "p1-29",
+        "p1-28",
+        "p1-27",
+        "p1-26",
+        "p1-25",
+        "p1-24",
+        "p1-23",
+        "p1-21",
+        "p1-19",
+        "p1-18",
+        "p1-17",
+        "p1-16",
+        "p1-15",
+        "p1-14",
+        "p1-13",
+        "p1-12",
+        "p1-11",
+        "p1-10",
+        "p1-09",
+        "p1-08",
+        "p1-07",
+        "p1-06",
+        "p1-04",
+        "p1-03",
+        "p1-00"
+      ],
+      "cold": {
+        "p1-03": {
+          "id": "p1-03",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "preference",
+          "text": "Memory 3: nebula vitest photon token3 for the fixture.",
+          "stub": "nebula vitest 3",
+          "entities": ["nebula", "e3"],
+          "salience": 0.14,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-01-11T00:00:00.000Z",
+              "2026-01-12T00:00:00.000Z",
+              "2026-01-13T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-10T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s3",
+            "turnRef": "t3",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-10T00:00:00.000Z",
+          "updatedAt": "2026-01-11T00:00:00.000Z",
+          "embedding": [88, -54, -123, -3, -121, -88, 111, -66]
+        },
+        "p1-08": {
+          "id": "p1-08",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "cfg:shared"
+          },
+          "type": "preference",
+          "text": "Memory 8: aurora comet comet token8 for the fixture.",
+          "stub": "aurora comet 8",
+          "entities": ["aurora", "e3"],
+          "salience": 0.67,
+          "pinned": false,
+          "tier": "hot",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-01-26T00:00:00.000Z",
+              "2026-01-27T00:00:00.000Z",
+              "2026-01-28T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-01-25T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s1",
+            "turnRef": "t8",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-01-25T00:00:00.000Z",
+          "updatedAt": "2026-01-26T00:00:00.000Z",
+          "embedding": [-9, 71, 37, 94, -42, -95, -11, -110]
+        },
+        "p1-13": {
+          "id": "p1-13",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "procedural",
+          "text": "Memory 13: kuiper photon redis token13 for the fixture.",
+          "stub": "kuiper photon 13",
+          "entities": ["kuiper", "e3"],
+          "salience": 0.67,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-02-10T00:00:00.000Z",
+              "2026-02-11T00:00:00.000Z",
+              "2026-02-12T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-02-09T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s6",
+            "turnRef": "t13",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-02-09T00:00:00.000Z",
+          "updatedAt": "2026-02-10T00:00:00.000Z",
+          "embedding": [-23, -48, 27, 74, 106, -27, -114, -109]
+        },
+        "p1-23": {
+          "id": "p1-23",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code"
+          },
+          "type": "procedural",
+          "text": "Memory 23: nebula aurora aurora token23 for the fixture.",
+          "stub": "nebula aurora 23",
+          "entities": ["nebula", "e3"],
+          "salience": 0.75,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-03-12T00:00:00.000Z",
+              "2026-03-13T00:00:00.000Z",
+              "2026-03-14T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-11T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s2",
+            "turnRef": "t23",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-11T00:00:00.000Z",
+          "updatedAt": "2026-03-12T00:00:00.000Z",
+          "embedding": null
+        },
+        "p1-28": {
+          "id": "p1-28",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "cfg:shared"
+          },
+          "type": "semantic",
+          "text": "Memory 28: quasar quasar photon token28 for the fixture.",
+          "stub": "quasar quasar 28",
+          "entities": ["quasar", "e3"],
+          "salience": 0.93,
+          "pinned": false,
+          "tier": "hot",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-03-27T00:00:00.000Z",
+              "2026-03-28T00:00:00.000Z",
+              "2026-03-29T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-03-26T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s0",
+            "turnRef": "t28",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-03-26T00:00:00.000Z",
+          "updatedAt": "2026-03-27T00:00:00.000Z",
+          "embedding": [79, -117, 20, -46, -78, 63, -42, 33]
+        },
+        "p1-33": {
+          "id": "p1-33",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "claude-code",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "episodic",
+          "text": "Memory 33: deploy deploy redis token33 for the fixture.",
+          "stub": "deploy deploy 33",
+          "entities": ["deploy", "e3"],
+          "salience": 0.25,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-04-11T00:00:00.000Z",
+              "2026-04-12T00:00:00.000Z",
+              "2026-04-13T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-10T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s5",
+            "turnRef": "t33",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-10T00:00:00.000Z",
+          "updatedAt": "2026-04-11T00:00:00.000Z",
+          "embedding": [-41, -100, 25, 58, 126, -27, -114, 102]
+        }
+      },
+      "lexical": {
+        "orbit comet": [
+          {
+            "id": "p1-16",
+            "score": 3.9044374748338173,
+            "tier": "hot"
+          },
+          {
+            "id": "p1-32",
+            "score": 2.4754748095412165,
+            "tier": "hot"
+          },
+          {
+            "id": "p1-27",
+            "score": 2.4754748095412165,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-19",
+            "score": 2.4754748095412165,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-22",
+            "score": 2.2888097993178422,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-11",
+            "score": 2.2888097993178422,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-05",
+            "score": 2.2888097993178422,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-01",
+            "score": 2.151778376610426,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-08",
+            "score": 2.1408148318926417,
+            "tier": "cold"
+          },
+          {
+            "id": "p1-12",
+            "score": 1.9895219354944442,
+            "tier": "hot"
+          },
+          {
+            "id": "p1-02",
+            "score": 1.9895219354944442,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-24",
+            "score": 1.545502419100524,
+            "tier": "hot"
+          },
+          {
+            "id": "p1-15",
+            "score": 1.4289626652926009,
+            "tier": "warm"
+          }
+        ],
+        "token7": [
+          {
+            "id": "p1-07",
+            "score": 3.4674729146431544,
+            "tier": "warm"
+          }
+        ],
+        "pnpm deploy": [
+          {
+            "id": "p1-07",
+            "score": 4.89202183557724,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-33",
+            "score": 3.4085630745437268,
+            "tier": "cold"
+          },
+          {
+            "id": "p1-34",
+            "score": 2.522965088976033,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-24",
+            "score": 2.522965088976033,
+            "tier": "hot"
+          },
+          {
+            "id": "p1-19",
+            "score": 2.522965088976033,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-27",
+            "score": 1.9895219354944442,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-06",
+            "score": 1.9895219354944442,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-22",
+            "score": 1.8121051362459049,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-30",
+            "score": 1.4289626652926009,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-11",
+            "score": 1.4289626652926009,
+            "tier": "warm"
+          }
+        ],
+        "redis": [
+          {
+            "id": "p1-18",
+            "score": 2.601942199081633,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-35",
+            "score": 2.2888097993178422,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-15",
+            "score": 2.2888097993178422,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-31",
+            "score": 1.9895219354944442,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-21",
+            "score": 1.9895219354944442,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-09",
+            "score": 1.9895219354944442,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-04",
+            "score": 1.9895219354944442,
+            "tier": "hot"
+          },
+          {
+            "id": "p1-17",
+            "score": 1.4289626652926009,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-00",
+            "score": 1.4289626652926009,
+            "tier": "hot"
+          }
+        ]
+      },
+      "dense": [
+        {
+          "v": [-100, -63, -26, 11, 48, 85, -78, -41],
+          "hits": [
+            {
+              "id": "p1-25",
+              "score": 0.9317618682980537,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-35",
+              "score": 0.4844093918800354,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-27",
+              "score": 0.47624194622039795,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-04",
+              "score": 0.46780431270599365,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-20",
+              "score": 0.32497143745422363,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-01",
+              "score": 0.28664201498031616,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-00",
+              "score": 0.2377033829689026,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-09",
+              "score": 0.1658373475074768,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-02",
+              "score": 0.1647104024887085,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-34",
+              "score": 0.1107606291770935,
+              "tier": "warm"
+            }
+          ]
+        },
+        {
+          "v": [-89, -52, -15, 22, 59, 96, -67, -30],
+          "hits": [
+            {
+              "id": "p1-25",
+              "score": 0.9437112398445606,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-27",
+              "score": 0.5005306303501129,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-04",
+              "score": 0.4873194098472595,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-35",
+              "score": 0.35634469985961914,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-01",
+              "score": 0.31751567125320435,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-20",
+              "score": 0.2992214560508728,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-09",
+              "score": 0.24862271547317505,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-00",
+              "score": 0.22002357244491577,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-02",
+              "score": 0.18404990434646606,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-34",
+              "score": 0.09672105312347412,
+              "tier": "warm"
+            }
+          ]
+        },
+        {
+          "v": [-78, -41, -4, 33, 70, -93, -56, -19],
+          "hits": [
+            {
+              "id": "p1-32",
+              "score": 0.5534891188144684,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-16",
+              "score": 0.42606091499328613,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-25",
+              "score": 0.3664100170135498,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-35",
+              "score": 0.33600664138793945,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-34",
+              "score": 0.18172228336334229,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-30",
+              "score": 0.17389655113220215,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-18",
+              "score": 0.1517379879951477,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-06",
+              "score": 0.06950557231903076,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-12",
+              "score": 0.06703269481658936,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-24",
+              "score": 0.06604582071304321,
+              "tier": "hot"
+            }
+          ]
+        },
+        {
+          "v": [-67, -30, 7, 44, 81, -82, -45, -8],
+          "hits": [
+            {
+              "id": "p1-32",
+              "score": 0.6098234951496124,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-25",
+              "score": 0.35816025733947754,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-16",
+              "score": 0.3293207883834839,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-30",
+              "score": 0.2451443076133728,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-35",
+              "score": 0.18881577253341675,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-18",
+              "score": 0.18513965606689453,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-34",
+              "score": 0.17246735095977783,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-10",
+              "score": 0.058767735958099365,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-12",
+              "score": 0.05383855104446411,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-24",
+              "score": 0.02941805124282837,
+              "tier": "hot"
+            }
+          ]
+        }
+      ],
+      "narrowLexical": [
+        {
+          "id": "p1-16",
+          "score": 5.743266589870156,
+          "tier": "hot"
+        },
+        {
+          "id": "p1-11",
+          "score": 2.2888097993178422,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-05",
+          "score": 2.2888097993178422,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-26",
+          "score": 2.2875049810751475,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-23",
+          "score": 2.2802415232605564,
+          "tier": "cold"
+        },
+        {
+          "id": "p1-01",
+          "score": 2.151778376610426,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-02",
+          "score": 1.9895219354944442,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-20",
+          "score": 1.8388291150363385,
+          "tier": "hot"
+        }
+      ],
+      "narrowDense": [
+        {
+          "id": "p1-04",
+          "score": 0.46780431270599365,
+          "tier": "hot"
+        },
+        {
+          "id": "p1-20",
+          "score": 0.32497143745422363,
+          "tier": "hot"
+        },
+        {
+          "id": "p1-01",
+          "score": 0.28664201498031616,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-09",
+          "score": 0.1658373475074768,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-02",
+          "score": 0.1647104024887085,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-16",
+          "score": 0.05459624528884888,
+          "tier": "hot"
+        },
+        {
+          "id": "p1-18",
+          "score": 0.01284801959991455,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-30",
+          "score": 0.007098376750946045,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-26",
+          "score": 0.0019458532333374023,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-05",
+          "score": -0.03390228748321533,
+          "tier": "warm"
+        }
+      ],
+      "cursor": "t7"
+    },
+    {
+      "principal": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "other-agent"
+      },
+      "list": [
+        {
+          "id": "p1-41",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "other-agent",
+            "projectId": "web-9f8e7d6c"
+          },
+          "type": "preference",
+          "text": "Memory 41: pnpm pnpm vitest token41 for the fixture.",
+          "stub": "pnpm pnpm 41",
+          "entities": ["pnpm", "e1"],
+          "salience": 0.19,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 1,
+            "recent": ["2026-05-05T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-05-04T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s6",
+            "turnRef": "t41",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-05-04T00:00:00.000Z",
+          "updatedAt": "2026-05-05T00:00:00.000Z",
+          "embedding": [35, -36, 118, 13, 125, -104, -37, 114]
+        },
+        {
+          "id": "p1-40",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "other-agent",
+            "projectId": "cfg:shared"
+          },
+          "type": "preference",
+          "text": "Memory 40: quasar vitest orbit token40 for the fixture.",
+          "stub": "quasar vitest 40",
+          "entities": ["quasar", "e0"],
+          "salience": 0.76,
+          "pinned": false,
+          "tier": "hot",
+          "accessLog": {
+            "count": 0,
+            "recent": [],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-05-01T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s5",
+            "turnRef": "t40",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-05-01T00:00:00.000Z",
+          "updatedAt": "2026-05-02T00:00:00.000Z",
+          "embedding": [70, 81, 7, -5, 25, 52, 39, 65]
+        },
+        {
+          "id": "p1-39",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "other-agent"
+          },
+          "type": "preference",
+          "text": "Memory 39: vitest pnpm quasar token39 for the fixture.",
+          "stub": "vitest pnpm 39",
+          "entities": ["vitest", "e4"],
+          "salience": 0.87,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 4,
+            "recent": [
+              "2026-04-29T00:00:00.000Z",
+              "2026-04-30T00:00:00.000Z",
+              "2026-05-01T00:00:00.000Z",
+              "2026-05-02T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-28T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s4",
+            "turnRef": "t39",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-28T00:00:00.000Z",
+          "updatedAt": "2026-04-29T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-38",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "other-agent"
+          },
+          "type": "procedural",
+          "text": "Memory 38: deploy deploy nebula token38 for the fixture.",
+          "stub": "deploy deploy 38",
+          "entities": ["deploy", "e3"],
+          "salience": 0.02,
+          "pinned": false,
+          "tier": "cold",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-04-26T00:00:00.000Z",
+              "2026-04-27T00:00:00.000Z",
+              "2026-04-28T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-25T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s3",
+            "turnRef": "t38",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-25T00:00:00.000Z",
+          "updatedAt": "2026-04-26T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-37",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "other-agent",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "procedural",
+          "text": "Memory 37: vitest pnpm pnpm token37 for the fixture.",
+          "stub": "vitest pnpm 37",
+          "entities": ["vitest", "e2"],
+          "salience": 0.64,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 2,
+            "recent": ["2026-04-23T00:00:00.000Z", "2026-04-24T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-22T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s2",
+            "turnRef": "t37",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-22T00:00:00.000Z",
+          "updatedAt": "2026-04-23T00:00:00.000Z",
+          "embedding": [8, 98, 65, 88, 82, -57, -81, -58]
+        },
+        {
+          "id": "p1-36",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "other-agent",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "semantic",
+          "text": "Memory 36: pulsar nebula comet token36 for the fixture.",
+          "stub": "pulsar nebula 36",
+          "entities": ["pulsar", "e1"],
+          "salience": 0.84,
+          "pinned": true,
+          "tier": "hot",
+          "accessLog": {
+            "count": 1,
+            "recent": ["2026-04-20T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-19T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": "2026-04-21T00:00:00.000Z",
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s1",
+            "turnRef": "t36",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-19T00:00:00.000Z",
+          "updatedAt": "2026-04-20T00:00:00.000Z",
+          "embedding": [-127, -70, 111, -20, 86, -13, 65, 66]
+        }
+      ],
+      "current": ["p1-41", "p1-40", "p1-39", "p1-38", "p1-37", "p1-36"],
+      "cold": {
+        "p1-38": {
+          "id": "p1-38",
+          "scope": {
+            "orgId": "local",
+            "customerId": "self",
+            "agentId": "other-agent"
+          },
+          "type": "procedural",
+          "text": "Memory 38: deploy deploy nebula token38 for the fixture.",
+          "stub": "deploy deploy 38",
+          "entities": ["deploy", "e3"],
+          "salience": 0.02,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-04-26T00:00:00.000Z",
+              "2026-04-27T00:00:00.000Z",
+              "2026-04-28T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-04-25T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s3",
+            "turnRef": "t38",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-04-25T00:00:00.000Z",
+          "updatedAt": "2026-04-26T00:00:00.000Z",
+          "embedding": [-10, -77, 46, 88, 69, 52, -118, -84]
+        }
+      },
+      "lexical": {
+        "orbit comet": [
+          {
+            "id": "p1-36",
+            "score": 1.545502419100524,
+            "tier": "hot"
+          },
+          {
+            "id": "p1-40",
+            "score": 1.4289626652926009,
+            "tier": "hot"
+          }
+        ],
+        "token7": [],
+        "pnpm deploy": [
+          {
+            "id": "p1-38",
+            "score": 3.4085630745437268,
+            "tier": "cold"
+          },
+          {
+            "id": "p1-41",
+            "score": 2.601942199081633,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-37",
+            "score": 2.2888097993178422,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-39",
+            "score": 1.9895219354944442,
+            "tier": "warm"
+          }
+        ],
+        "redis": []
+      },
+      "dense": [
+        {
+          "v": [-100, -63, -26, 11, 48, 85, -78, -41],
+          "hits": [
+            {
+              "id": "p1-36",
+              "score": 0.23129916191101074,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-37",
+              "score": 0.002493739128112793,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-41",
+              "score": -0.2047520875930786,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-40",
+              "score": -0.4834432601928711,
+              "tier": "hot"
+            }
+          ]
+        },
+        {
+          "v": [-89, -52, -15, 22, 59, 96, -67, -30],
+          "hits": [
+            {
+              "id": "p1-36",
+              "score": 0.26959019899368286,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-37",
+              "score": 0.048231303691864014,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-41",
+              "score": -0.15272116661071777,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-40",
+              "score": -0.3554648160934448,
+              "tier": "hot"
+            }
+          ]
+        },
+        {
+          "v": [-78, -41, -4, 33, 70, -93, -56, -19],
+          "hits": [
+            {
+              "id": "p1-37",
+              "score": 0.44747066497802734,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-41",
+              "score": 0.4414937496185303,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-36",
+              "score": 0.389518678188324,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-40",
+              "score": -0.669761061668396,
+              "tier": "hot"
+            }
+          ]
+        },
+        {
+          "v": [-67, -30, 7, 44, 81, -82, -45, -8],
+          "hits": [
+            {
+              "id": "p1-41",
+              "score": 0.5406287312507629,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-37",
+              "score": 0.5295036435127258,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-36",
+              "score": 0.4477553963661194,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-40",
+              "score": -0.5451993942260742,
+              "tier": "hot"
+            }
+          ]
+        }
+      ],
+      "narrowLexical": [
+        {
+          "id": "p1-36",
+          "score": 3.3843315341368623,
+          "tier": "hot"
+        }
+      ],
+      "narrowDense": [
+        {
+          "id": "p1-36",
+          "score": 0.23129916191101074,
+          "tier": "hot"
+        },
+        {
+          "id": "p1-37",
+          "score": 0.002493739128112793,
+          "tier": "warm"
+        }
+      ],
+      "cursor": null
+    },
+    {
+      "principal": {
+        "orgId": "acct:demo",
+        "customerId": "self",
+        "agentId": "default"
+      },
+      "list": [
+        {
+          "id": "p1-47",
+          "scope": {
+            "orgId": "acct:demo",
+            "customerId": "self",
+            "agentId": "default"
+          },
+          "type": "procedural",
+          "text": "Memory 47: redis photon pnpm token47 for the fixture.",
+          "stub": "redis photon 47",
+          "entities": ["redis", "e2"],
+          "salience": 0.06,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 2,
+            "recent": ["2026-05-23T00:00:00.000Z", "2026-05-24T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-05-22T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s5",
+            "turnRef": "t47",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-05-22T00:00:00.000Z",
+          "updatedAt": "2026-05-23T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-46",
+          "scope": {
+            "orgId": "acct:demo",
+            "customerId": "self",
+            "agentId": "default",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "preference",
+          "text": "Memory 46: pnpm pulsar kuiper token46 for the fixture.",
+          "stub": "pnpm pulsar 46",
+          "entities": ["pnpm", "e1"],
+          "salience": 0.4,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 1,
+            "recent": ["2026-05-20T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-05-19T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s4",
+            "turnRef": "t46",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-05-19T00:00:00.000Z",
+          "updatedAt": "2026-05-20T00:00:00.000Z",
+          "embedding": [4, 48, 24, 61, 7, -81, -87, 125]
+        },
+        {
+          "id": "p1-45",
+          "scope": {
+            "orgId": "acct:demo",
+            "customerId": "self",
+            "agentId": "default"
+          },
+          "type": "semantic",
+          "text": "Memory 45: photon orbit photon token45 for the fixture.",
+          "stub": "photon orbit 45",
+          "entities": ["photon", "e0"],
+          "salience": 0.18,
+          "pinned": true,
+          "tier": "warm",
+          "accessLog": {
+            "count": 0,
+            "recent": [],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-05-16T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s3",
+            "turnRef": "t45",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-05-16T00:00:00.000Z",
+          "updatedAt": "2026-05-17T00:00:00.000Z",
+          "embedding": [55, 104, -10, 114, -126, 71, 14, -57]
+        },
+        {
+          "id": "p1-44",
+          "scope": {
+            "orgId": "acct:demo",
+            "customerId": "self",
+            "agentId": "default",
+            "projectId": "cfg:shared"
+          },
+          "type": "preference",
+          "text": "Memory 44: kuiper kuiper aurora token44 for the fixture.",
+          "stub": "kuiper kuiper 44",
+          "entities": ["kuiper", "e4"],
+          "salience": 0.35,
+          "pinned": false,
+          "tier": "hot",
+          "accessLog": {
+            "count": 4,
+            "recent": [
+              "2026-05-14T00:00:00.000Z",
+              "2026-05-15T00:00:00.000Z",
+              "2026-05-16T00:00:00.000Z",
+              "2026-05-17T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-05-13T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s2",
+            "turnRef": "t44",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-05-13T00:00:00.000Z",
+          "updatedAt": "2026-05-14T00:00:00.000Z",
+          "embedding": [31, 57, -16, -34, -55, 62, -6, -57]
+        },
+        {
+          "id": "p1-43",
+          "scope": {
+            "orgId": "acct:demo",
+            "customerId": "self",
+            "agentId": "default",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "procedural",
+          "text": "Memory 43: nebula comet pnpm token43 for the fixture.",
+          "stub": "nebula comet 43",
+          "entities": ["nebula", "e3"],
+          "salience": 0.61,
+          "pinned": false,
+          "tier": "cold",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-05-11T00:00:00.000Z",
+              "2026-05-12T00:00:00.000Z",
+              "2026-05-13T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-05-10T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s1",
+            "turnRef": "t43",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-05-10T00:00:00.000Z",
+          "updatedAt": "2026-05-11T00:00:00.000Z",
+          "embedding": null
+        },
+        {
+          "id": "p1-42",
+          "scope": {
+            "orgId": "acct:demo",
+            "customerId": "self",
+            "agentId": "default",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "preference",
+          "text": "Memory 42: aurora orbit nebula token42 for the fixture.",
+          "stub": "aurora orbit 42",
+          "entities": ["aurora", "e2"],
+          "salience": 0.41,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 2,
+            "recent": ["2026-05-08T00:00:00.000Z", "2026-05-09T00:00:00.000Z"],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-05-07T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": "2026-05-09T00:00:00.000Z",
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s0",
+            "turnRef": "t42",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-05-07T00:00:00.000Z",
+          "updatedAt": "2026-05-08T00:00:00.000Z",
+          "embedding": [119, 30, -71, -13, -62, -2, 72, -92]
+        }
+      ],
+      "current": ["p1-47", "p1-46", "p1-45", "p1-44", "p1-43", "p1-42"],
+      "cold": {
+        "p1-43": {
+          "id": "p1-43",
+          "scope": {
+            "orgId": "acct:demo",
+            "customerId": "self",
+            "agentId": "default",
+            "projectId": "oort-1a2b3c4d"
+          },
+          "type": "procedural",
+          "text": "Memory 43: nebula comet pnpm token43 for the fixture.",
+          "stub": "nebula comet 43",
+          "entities": ["nebula", "e3"],
+          "salience": 0.61,
+          "pinned": false,
+          "tier": "warm",
+          "accessLog": {
+            "count": 3,
+            "recent": [
+              "2026-05-11T00:00:00.000Z",
+              "2026-05-12T00:00:00.000Z",
+              "2026-05-13T00:00:00.000Z"
+            ],
+            "compactedSum": 0,
+            "compactedAt": null
+          },
+          "validFrom": "2026-05-10T00:00:00.000Z",
+          "validTo": null,
+          "expiredAt": null,
+          "endReason": null,
+          "lastConfirmedAt": null,
+          "supersedes": null,
+          "supersededBy": null,
+          "source": {
+            "harness": "claude-code",
+            "sessionId": "s1",
+            "turnRef": "t43",
+            "decisions": [
+              {
+                "stage": "gate",
+                "question": "store?",
+                "answer": "yes",
+                "probability": 0.8
+              }
+            ]
+          },
+          "createdAt": "2026-05-10T00:00:00.000Z",
+          "updatedAt": "2026-05-11T00:00:00.000Z",
+          "embedding": [98, 10, 101, -102, -89, 45, 65, 64]
+        }
+      },
+      "lexical": {
+        "orbit comet": [
+          {
+            "id": "p1-43",
+            "score": 2.1408148318926417,
+            "tier": "cold"
+          },
+          {
+            "id": "p1-45",
+            "score": 1.9895219354944442,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-42",
+            "score": 1.9895219354944442,
+            "tier": "warm"
+          }
+        ],
+        "token7": [],
+        "pnpm deploy": [
+          {
+            "id": "p1-46",
+            "score": 2.2888097993178422,
+            "tier": "warm"
+          },
+          {
+            "id": "p1-47",
+            "score": 1.4289626652926009,
+            "tier": "warm"
+          }
+        ],
+        "redis": [
+          {
+            "id": "p1-47",
+            "score": 2.2888097993178422,
+            "tier": "warm"
+          }
+        ]
+      },
+      "dense": [
+        {
+          "v": [-100, -63, -26, 11, 48, 85, -78, -41],
+          "hits": [
+            {
+              "id": "p1-44",
+              "score": -0.05398070812225342,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-45",
+              "score": -0.22947049140930176,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-46",
+              "score": -0.24187171459197998,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-42",
+              "score": -0.4907649755477905,
+              "tier": "warm"
+            }
+          ]
+        },
+        {
+          "v": [-89, -52, -15, 22, 59, 96, -67, -30],
+          "hits": [
+            {
+              "id": "p1-44",
+              "score": -0.06554126739501953,
+              "tier": "hot"
+            },
+            {
+              "id": "p1-45",
+              "score": -0.1928253173828125,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-46",
+              "score": -0.218550443649292,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-42",
+              "score": -0.5185813903808594,
+              "tier": "warm"
+            }
+          ]
+        },
+        {
+          "v": [-78, -41, -4, 33, 70, -93, -56, -19],
+          "hits": [
+            {
+              "id": "p1-46",
+              "score": 0.3306020498275757,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-45",
+              "score": -0.5451180934906006,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-42",
+              "score": -0.5464228391647339,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-44",
+              "score": -0.6928763389587402,
+              "tier": "hot"
+            }
+          ]
+        },
+        {
+          "v": [-67, -30, 7, 44, 81, -82, -45, -8],
+          "hits": [
+            {
+              "id": "p1-46",
+              "score": 0.391470730304718,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-45",
+              "score": -0.5287078619003296,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-42",
+              "score": -0.5903623104095459,
+              "tier": "warm"
+            },
+            {
+              "id": "p1-44",
+              "score": -0.7500028610229492,
+              "tier": "hot"
+            }
+          ]
+        }
+      ],
+      "narrowLexical": [
+        {
+          "id": "p1-43",
+          "score": 4.4210563551531985,
+          "tier": "cold"
+        },
+        {
+          "id": "p1-42",
+          "score": 3.3102503508797887,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-45",
+          "score": 1.9895219354944442,
+          "tier": "warm"
+        }
+      ],
+      "narrowDense": [
+        {
+          "id": "p1-45",
+          "score": -0.22947049140930176,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-46",
+          "score": -0.24187171459197998,
+          "tier": "warm"
+        },
+        {
+          "id": "p1-42",
+          "score": -0.4907649755477905,
+          "tier": "warm"
+        }
+      ],
+      "cursor": "t3"
+    }
+  ],
+  "queries": ["orbit comet", "token7", "pnpm deploy", "redis"]
+}

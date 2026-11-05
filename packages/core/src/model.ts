@@ -1,6 +1,14 @@
+import type { Address, Author, Provenance } from './address.js';
+
 export type MemoryType = 'semantic' | 'episodic' | 'procedural' | 'preference';
 export type Tier = 'hot' | 'warm' | 'cold';
 
+/**
+ * The pre-level view of where a memory lives. For a Planet memory (every
+ * memory written before levels) it is the whole story: the Planet is
+ * (org, customer, project) and `agentId` is the author. For other levels see
+ * `scopeOf` in `address.ts`. Grants are checked against `address` and `author`.
+ */
 export interface Scope {
   orgId: string;
   customerId: string;
@@ -43,6 +51,16 @@ export interface MemorySource {
 export interface Memory {
   id: string;
   scope: Scope;
+  /**
+   * Where the memory lives. Absent: the Planet `scope` names, which is where
+   * every memory written before levels lives, so stores return it only for
+   * other levels. Read it with `addressOf(m)`.
+   */
+  address?: Address;
+  /** Who wrote it. Absent: the agent `scope.agentId` names. Read it with `authorOf(m)`. */
+  author?: Author;
+  /** Where a shared copy came from; absent (or null) on ordinary memories. */
+  provenance?: Provenance | null;
   type: MemoryType;
   text: string;
   stub: string;

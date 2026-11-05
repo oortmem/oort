@@ -308,11 +308,12 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     );
 
   p.command('export')
-    .description('write every visible memory in the v1 export format (docs/export-format.md)')
+    .description('write every visible memory in the v2 export format (docs/export-format.md)')
     .option('--out <file>', 'write to a new file (0600) instead of stdout')
     .option('--force', 'with --out, overwrite an existing file (never a symlink)')
+    .option('--format <version>', 'export format version: 2 (default) or 1 (Planet memories only)')
     .option('--json', 'accepted for compatibility; the format is always JSON Lines')
-    .action(run((o: { out?: string; force?: boolean }) => exportCommand(o, ctx)));
+    .action(run((o: { out?: string; force?: boolean; format?: string }) => exportCommand(o, ctx)));
 
   return p;
 }

@@ -276,6 +276,13 @@ async function copyStore(
  * scoping): the (org, customer, agent) with the most memories, over all of its
  * project ids and global. Read from the temp copy.
  */
+function hasColumn(db: Database.Database, column: string): boolean {
+  return db
+    .prepare<[], { name: string }>("SELECT name FROM pragma_table_info('memories')")
+    .all()
+    .some((c) => c.name === column);
+}
+
 export function discoverScope(dbPath: string): ScopeFilter {
   const db = new Database(dbPath, { readonly: true });
   try {
@@ -290,8 +297,14 @@ export function discoverScope(dbPath: string): ScopeFilter {
           n: number;
         }
       >(
-        `SELECT org_id, customer_id, agent_id, project_id, COUNT(*) AS n FROM memories
-         GROUP BY org_id, customer_id, agent_id, project_id`,
+        // Schema version 2 keeps the writing agent in author_agent_id; only Planet
+        // memories map onto a scope filter. Version 1 (a copy not yet opened) has agent_id.
+        hasColumn(db, 'author_agent_id')
+          ? `SELECT org_id, customer_id, author_agent_id AS agent_id, project_id, COUNT(*) AS n
+             FROM memories WHERE level = 'user'
+             GROUP BY org_id, customer_id, author_agent_id, project_id`
+          : `SELECT org_id, customer_id, agent_id, project_id, COUNT(*) AS n FROM memories
+             GROUP BY org_id, customer_id, agent_id, project_id`,
       )
       .all();
     const totals = new Map<string, number>();
