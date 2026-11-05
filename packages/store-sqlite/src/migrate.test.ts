@@ -22,6 +22,20 @@ import {
   StoreMigrationRequiredError,
 } from './index.js';
 
+/**
+ * Floats rounded to 12 significant digits for golden comparisons: Math.log/exp differ in the last
+ * bit between platforms (macOS arm64 vs Linux x64), so exact float equality is not portable.
+ * Ids, order, tiers, strings and integers still compare exactly.
+ */
+function portable<T>(v: T): T {
+  if (typeof v === 'number') return (Number.isInteger(v) ? v : Number(v.toPrecision(12))) as T;
+  if (Array.isArray(v)) return v.map(portable) as T;
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, portable(x)])) as T;
+  }
+  return v;
+}
+
 const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), '../test/fixtures/phase1');
 const DIM = 8;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-migrate-'));
@@ -157,7 +171,7 @@ describe('schema migration 1 to 2', () => {
     const s = copyFixture();
     const blobs = hashDir(s.coldDir);
     const got = await readBack(s);
-    expect(got).toEqual(expected);
+    expect(portable(got)).toEqual(portable(expected));
     expect(hashDir(s.coldDir), 'cold blobs are untouched').toBe(blobs);
     const db = raw(s.dbPath);
     try {
@@ -310,7 +324,7 @@ describe('schema migration 1 to 2', () => {
     downgradeSqliteStore({ path: s.dbPath });
     expect(v1Content(s.dbPath)).toEqual(original);
     downgradeSqliteStore({ path: s.dbPath }); // already version 1: nothing to do
-    expect(await readBack(s)).toEqual(expected);
+    expect(portable(await readBack(s))).toEqual(portable(expected));
   });
 
   it('migrate.down-refuses-memories-version-1-cannot-hold', async () => {

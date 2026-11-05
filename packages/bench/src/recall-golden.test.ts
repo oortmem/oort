@@ -32,6 +32,20 @@ import { buildFixtureRows, FIXTURE_COUNT, FIXTURE_SEED } from './fixture.js';
 import { EMBEDDING_DIMENSION, GENERATOR_NOW, generateMemories } from './generate.js';
 import { ALL_GRANT, ALL_SCOPE, seedStore } from './seed.js';
 
+/**
+ * Floats rounded to 12 significant digits for golden comparisons: Math.log/exp differ in the last
+ * bit between platforms (macOS arm64 vs Linux x64), so exact float equality is not portable.
+ * Ids, order, tiers, strings and integers still compare exactly.
+ */
+function portable<T>(v: T): T {
+  if (typeof v === 'number') return (Number.isInteger(v) ? v : Number(v.toPrecision(12))) as T;
+  if (Array.isArray(v)) return v.map(portable) as T;
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, portable(x)])) as T;
+  }
+  return v;
+}
+
 const GOLDEN = path.join(path.dirname(fileURLToPath(import.meta.url)), 'recall-golden.json');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-recall-golden-'));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -147,6 +161,6 @@ it('recall-golden.bench-fixture-unchanged', { timeout: 300_000 }, async () => {
   const want = JSON.parse(fs.readFileSync(GOLDEN, 'utf8')) as Golden;
   // A sanity floor, so an empty golden cannot pass by accident.
   expect(want.sqlite.filter((r) => r.ids.length > 0).length).toBeGreaterThan(15);
-  expect(got.memory).toEqual(want.memory);
-  expect(got.sqlite).toEqual(want.sqlite);
+  expect(portable(got.memory)).toEqual(portable(want.memory));
+  expect(portable(got.sqlite)).toEqual(portable(want.sqlite));
 });
