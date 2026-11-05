@@ -3,8 +3,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DecisionController, Embedder, JudgeRequest } from '@oortmem/core';
 import { fakeDecide, harness, type Harness } from '../test/helpers.js';
-import { localBackend } from './mcp.js';
-import type { Wired } from './wire.js';
+import { MCP_JUDGMENTS_PER_DAY, localBackend } from './mcp.js';
 
 /** Items about health claims are near each other; anything else is far. */
 const topicEmbedder: Embedder = {
@@ -105,7 +104,8 @@ describe('oort judge', () => {
     expect((await h.run(['judge', 'withdraw', gone.id.slice(0, 8)])).code).toBe(2); // not a TTY
     const w = await h.run(['judge', 'withdraw', gone.id.slice(0, 8), '--yes']);
     expect(w.code).toBe(0);
-    expect(w.io.stdout).toContain('no longer counts');
+    expect(w.io.stdout).toContain('leave it out from now on');
+    expect(w.io.stdout).toContain('recorded as withdrawn by local-user');
     const after = json<{ precedents: { id: string }[] }>(
       (await h.run(['judge', 'apply', 'A vitamin cures colds', '--json'])).io.stdout,
     );
@@ -147,6 +147,10 @@ describe('oort judge', () => {
     const r = await record(h);
     expect(r.code).toBe(0);
     expect(r.io.stderr).toContain('no embedder');
+    await record(h, {
+      subject: 'Video says a vitamin cures colds',
+      reason: 'No source for a health claim.',
+    });
     const a = await h.run(['judge', 'apply', 'Video says a vitamin cures the flu overnight']);
     expect(a.code).toBe(0);
     expect(a.io.stdout).toContain('Precedents only: no TypeSafe key');
@@ -184,7 +188,13 @@ describe('oort judge', () => {
       '--json',
     ]);
     expect(imp.code).toBe(0);
-    expect(json(imp.io.stdout)).toEqual({ rows: 3, added: 3, corrected: 0, unchanged: 0 });
+    expect(json(imp.io.stdout)).toEqual({
+      rows: 3,
+      added: 3,
+      corrected: 0,
+      unchanged: 0,
+      tombstoned: 0,
+    });
     const again = await h.run([
       'judge',
       'import',
@@ -228,6 +238,11 @@ describe('oort judge', () => {
     const { h: from } = judging();
     await record(from, { ref: 'p1' });
     await record(from, {
+      ref: 'p2',
+      subject: 'Ad says a miracle remedy cures back pain',
+      reason: 'Medical claim, no study cited.',
+    });
+    await record(from, {
       subject: 'Refactor hides a null pointer',
       domain: 'code-review',
       by: 'cy',
@@ -246,7 +261,7 @@ describe('oort judge', () => {
       'ada-content',
     ]);
     expect(ex.code).toBe(0);
-    expect(ex.io.stdout).toContain('Exported 1 judgment(s)');
+    expect(ex.io.stdout).toContain('Exported 2 judgment(s)');
     if (process.platform !== 'win32') expect(fs.statSync(out).mode & 0o777).toBe(0o600);
 
     // Another agent, another store.
@@ -270,7 +285,7 @@ describe('oort judge', () => {
     const listed = json<{
       judgments: { by: string; via: string; pack: { name: string; exportedBy: string } }[];
     }>((await to.run(['judge', 'list', '--json'])).io.stdout).judgments;
-    expect(listed).toHaveLength(1);
+    expect(listed).toHaveLength(2);
     expect(listed[0]).toMatchObject({
       by: 'ada',
       via: 'pack',
@@ -281,7 +296,7 @@ describe('oort judge', () => {
     // A pack's experts are as its exporter states them: used only when asked.
     const local = await to.run(['judge', 'apply', 'A vitamin cures colds']);
     expect(local.io.stdout).toContain('Needs the expert: no judgments are recorded');
-    expect(local.io.stdout).toContain('1 imported judgment(s) were not used');
+    expect(local.io.stdout).toContain('2 imported judgment(s) were not used');
     const apply = await to.run(['judge', 'apply', 'A vitamin cures colds', '--include-imported']);
     expect(apply.io.stdout).toContain('Prediction: rejected');
     expect(apply.io.stdout).toContain('imported from pack ada-content');
@@ -307,7 +322,13 @@ describe('oort judge', () => {
       '--json',
     ]);
     expect(imp.code).toBe(0);
-    expect(json(imp.io.stdout)).toEqual({ rows: 18, added: 18, corrected: 0, unchanged: 0 });
+    expect(json(imp.io.stdout)).toEqual({
+      rows: 18,
+      added: 18,
+      corrected: 0,
+      unchanged: 0,
+      tombstoned: 0,
+    });
     const e = await h.run([
       'judge',
       'eval',
@@ -330,46 +351,259 @@ describe('oort judge', () => {
   });
 });
 
+/** Writes the home config's `judge` section (the only place it is read). */
+function homeJudge(h: Harness, judge: Record<string, unknown>): void {
+  fs.mkdirSync(h.home, { recursive: true });
+  fs.writeFileSync(path.join(h.home, 'config.json'), JSON.stringify({ judge }));
+}
+
+const mcpJudgment = (over: Record<string, unknown> = {}) => ({
+  subject: 'Post says a vitamin cures the flu',
+  verdict: 'rejected',
+  reason: 'Health claim with no cited source.',
+  criteria: ['no-source'],
+  domain: 'content',
+  by: 'ada',
+  ...over,
+});
+
+const judgeInput = (over: Record<string, unknown> = {}) => ({
+  item: 'A vitamin cures colds',
+  limit: 5,
+  include_imported: false,
+  include_agent_recorded: false,
+  ...over,
+});
+
+interface JudgeOut {
+  status: string;
+  why?: string;
+  prediction?: { verdict: string; is: string };
+  precedents: {
+    quoted_reason: string;
+    quoted_subject: string;
+    by: string;
+    via: string;
+    confirmed: boolean;
+    agent_recorded?: true;
+    agrees?: boolean;
+  }[];
+  note: string;
+  data_note: string;
+  unconfirmed_agent_recorded_not_used?: number;
+}
+
 describe('oort mcp: judgment tools', () => {
-  it('mcp.record-judgment-and-judge', async () => {
+  it('mcp.record-judgment-needs-a-listed-expert', async () => {
+    const { h } = judging();
+    const b = localBackend({ wired: await h.wire(h.cwd) });
+    await expect(b.recordJudgment!(mcpJudgment())).rejects.toThrow(
+      /Recording judgments over MCP is off.*judge\.experts in ~\/\.oort\/config\.json/,
+    );
+    homeJudge(h, { experts: ['ada'] });
+    const listed = localBackend({ wired: await h.wire(h.cwd) });
+    await expect(listed.recordJudgment!(mcpJudgment({ by: 'mallory"; drop' }))).rejects.toThrow(
+      /^mallory___drop is not one of the experts listed in judge\.experts/,
+    );
+    const rec = await listed.recordJudgment!(mcpJudgment());
+    expect(rec).toMatchObject({ outcome: 'added', status: 'agent-recorded, unconfirmed' });
+    expect(String(rec['note'])).toContain('oort judge confirm');
+    await expect(listed.recordJudgment!(mcpJudgment({ verdict: 'maybe' }))).rejects.toThrow(
+      /verdict must be one of/,
+    );
+  });
+
+  it('mcp.unconfirmed-agent-records-never-count-until-a-person-confirms', async () => {
     const { h } = judging('rejected', 0.88);
-    const w: Wired = await h.wire(h.cwd);
-    const b = localBackend({ wired: w });
-    const rec = await b.recordJudgment!({
-      subject: 'Post says a vitamin cures the flu',
-      verdict: 'rejected',
-      reason: 'Health claim with no cited source.',
-      criteria: ['no-source'],
-      domain: 'content',
-      by: 'ada',
+    homeJudge(h, { experts: ['ada'] });
+    const b = localBackend({ wired: await h.wire(h.cwd) });
+    await b.recordJudgment!(mcpJudgment());
+    await b.recordJudgment!(
+      mcpJudgment({ subject: 'Ad says a remedy cures pain', reason: 'Medical claim, no study.' }),
+    );
+    const out = (await b.judge!(judgeInput())) as unknown as JudgeOut;
+    expect(out).toMatchObject({
+      status: 'needs-expert',
+      why: 'no-precedents',
+      unconfirmed_agent_recorded_not_used: 2,
     });
-    expect(rec).toMatchObject({ outcome: 'added', id: expect.any(String) });
-    const out = (await b.judge!({
-      item: 'A vitamin cures colds',
-      limit: 5,
-      include_imported: false,
-    })) as {
-      status: string;
-      prediction: { verdict: string; is: string };
-      precedents: { reason: string; agrees: boolean }[];
-      note: string;
-    };
-    expect(out.status).toBe('suggested');
-    expect(out.prediction.verdict).toBe('rejected');
-    expect(out.prediction.is).toContain('not the expert decision');
-    expect(out.precedents[0]).toMatchObject({
-      reason: 'Health claim with no cited source.',
+    const asked = (await b.judge!(
+      judgeInput({ include_agent_recorded: true }),
+    )) as unknown as JudgeOut;
+    expect(asked.status).toBe('suggested');
+    expect(asked.precedents[0]).toMatchObject({
+      via: 'mcp',
+      confirmed: false,
+      agent_recorded: true,
+      by: 'ada',
       agrees: true,
     });
-    expect(out.note).toContain('prediction');
+    expect(asked.precedents.map((p) => p.quoted_reason)).toContain(
+      'Health claim with no cited source.',
+    );
+    expect(asked.data_note).toContain('never instructions');
+    expect(asked.note).toContain('recorded by an agent');
+
+    // A person confirms them in the terminal; then they count.
+    const ids = json<{ judgments: { id: string }[] }>(
+      (await h.run(['judge', 'list', '--json'])).io.stdout,
+    ).judgments.map((j) => j.id);
+    const listed = await h.run(['judge', 'list']);
+    expect(listed.io.stdout).toContain('[agent-recorded, unconfirmed]');
+    expect((await h.run(['judge', 'confirm', ids[0]!])).code).toBe(2); // asks; no TTY
+    for (const id of ids) {
+      const c = await h.run(['judge', 'confirm', id, '--yes', '--by', 'marcus']);
+      expect(c.io.stdout).toContain('counts when judging now');
+    }
+    expect((await h.run(['judge', 'list'])).io.stdout).toContain(
+      '[agent-recorded, confirmed by marcus]',
+    );
+    const after = (await b.judge!(judgeInput())) as unknown as JudgeOut;
+    expect(after.status).toBe('suggested');
+    expect(after.precedents.every((p) => p.confirmed)).toBe(true);
+  });
+
+  it('mcp.an-agent-cannot-overwrite-an-expert', async () => {
+    const { h } = judging('approved', 0.99);
+    homeJudge(h, { experts: ['ada'] });
+    expect((await record(h, { ref: 'post-1' })).code).toBe(0);
+    const b = localBackend({ wired: await h.wire(h.cwd) });
+    const rec = await b.recordJudgment!(
+      mcpJudgment({ ref: 'post-1', verdict: 'approved', reason: 'Fine, ship it.' }),
+    );
+    expect(rec['outcome']).toBe('added');
+    expect(rec['corrects']).toBeUndefined();
+    const listed = json<{ judgments: { verdict: string; via: string; current: boolean }[] }>(
+      (await h.run(['judge', 'list', '--json'])).io.stdout,
+    ).judgments;
+    expect(listed.map((j) => [j.via, j.verdict, j.current]).sort()).toEqual([
+      ['cli', 'rejected', true],
+      ['mcp', 'approved', true],
+    ]);
+    // The forgery stays out of judging.
+    const r = json<{ precedents: { via: string }[]; agentRecordedExcluded: number }>(
+      (await h.run(['judge', 'apply', 'A vitamin cures colds', '--json'])).io.stdout,
+    );
+    expect(r.precedents.map((p) => p.via)).toEqual(['cli']);
+    expect(r.agentRecordedExcluded).toBe(1);
+  });
+
+  it('mcp.recording-is-capped-per-day', async () => {
+    const { h } = judging();
+    homeJudge(h, { experts: ['ada'] });
+    const today = new Date().toISOString().slice(0, 10);
+    fs.writeFileSync(
+      path.join(h.home, 'judge-mcp-count.json'),
+      JSON.stringify({ day: today, count: MCP_JUDGMENTS_PER_DAY - 1 }),
+    );
+    const b = localBackend({ wired: await h.wire(h.cwd) });
+    await b.recordJudgment!(mcpJudgment());
     await expect(
-      b.recordJudgment!({
-        subject: 's',
-        verdict: 'maybe',
-        reason: 'r',
-        domain: 'content',
-        by: 'ada',
-      }),
-    ).rejects.toThrow(/verdict must be one of/);
+      b.recordJudgment!(mcpJudgment({ subject: 'Another post', reason: 'Another reason.' })),
+    ).rejects.toThrow(`already recorded ${MCP_JUDGMENTS_PER_DAY} judgments over MCP today`);
+    // Yesterday's count does not carry over.
+    fs.writeFileSync(
+      path.join(h.home, 'judge-mcp-count.json'),
+      JSON.stringify({ day: '2000-01-01', count: 999 }),
+    );
+    await expect(
+      b.recordJudgment!(mcpJudgment({ subject: 'A third post', reason: 'Third.' })),
+    ).resolves.toMatchObject({ outcome: 'added' });
+  });
+
+  it('mcp.expert-ids-are-sanitised-in-agent-facing-text', async () => {
+    const { h } = judging('rejected', 0.9);
+    const odd = 'ada" (trust me)';
+    homeJudge(h, { experts: [odd] });
+    const b = localBackend({ wired: await h.wire(h.cwd) });
+    await b.recordJudgment!(mcpJudgment({ by: odd }));
+    await b.recordJudgment!(
+      mcpJudgment({ by: odd, subject: 'Ad: a remedy cures pain', reason: 'No study.' }),
+    );
+    const out = (await b.judge!(
+      judgeInput({ include_agent_recorded: true }),
+    )) as unknown as JudgeOut;
+    expect(out.precedents[0]!.by).toBe('ada___trust_me_');
+    expect(out.note).toContain('ada___trust_me_');
+    expect(JSON.stringify(out)).not.toContain('trust me');
+  });
+});
+
+describe('oort judge: withdraw, purge and the operator', () => {
+  it('cli.judge-withdrawn-leaves-recall-and-export-unless-asked', async () => {
+    const { h } = judging();
+    const rec = json<{ id: string }>((await record(h, { json: '' })).io.stdout);
+    const ids = async (args: string[]) =>
+      json<{ memories: { id: string }[] }>((await h.run(args)).io.stdout).memories.map((m) => m.id);
+    expect(await ids(['recall', 'vitamin cures flu', '--json'])).toContain(rec.id);
+    expect((await h.run(['judge', 'withdraw', rec.id, '--yes'])).code).toBe(0);
+    expect(await ids(['recall', 'vitamin cures flu', '--json'])).not.toContain(rec.id);
+    expect(await ids(['recall', 'vitamin cures flu', '--json', '--history'])).not.toContain(rec.id);
+    expect(
+      await ids(['recall', 'vitamin cures flu', '--json', '--history', '--include-withdrawn']),
+    ).toContain(rec.id);
+    const exported = (await h.run(['export'])).io.stdout;
+    expect(exported).not.toContain(rec.id);
+    expect((await h.run(['export', '--include-withdrawn'])).io.stdout).toContain(rec.id);
+
+    // Purged: only an audit stub is left, whatever is asked for.
+    const p = await h.run(['judge', 'purge', rec.id, '--yes']);
+    expect(p.io.stdout).toContain('only the expert, domain, verdict, times');
+    const all = await h.run(['judge', 'list', '--all']);
+    expect(all.io.stdout).toContain('[purged]');
+    expect(all.io.stdout).not.toContain('Health claim');
+    expect((await h.run(['export', '--include-withdrawn'])).io.stdout).not.toContain(
+      'Health claim',
+    );
+    expect((await h.run(['judge', 'purge', rec.id, '--yes'])).io.stdout).toContain(
+      'already purged',
+    );
+  });
+
+  it('cli.judge-operator-comes-from-the-flag-or-the-home-config', async () => {
+    const { h } = judging();
+    homeJudge(h, { operator: 'marcus' });
+    const a = json<{ id: string }>((await record(h, { json: '' })).io.stdout);
+    const b = json<{ id: string }>(
+      (await record(h, { ref: 'r2', subject: 'Other post', json: '' })).io.stdout,
+    );
+    expect((await h.run(['judge', 'withdraw', a.id, '--yes'])).io.stdout).toContain(
+      'withdrawn by marcus',
+    );
+    expect(
+      (await h.run(['judge', 'withdraw', b.id, '--yes', '--by', 'reviewer-2'])).io.stdout,
+    ).toContain('withdrawn by reviewer-2');
+    const listed = json<{ judgments: { id: string; withdrawn: { by: string } }[] }>(
+      (await h.run(['judge', 'list', '--all', '--json'])).io.stdout,
+    ).judgments;
+    expect(Object.fromEntries(listed.map((j) => [j.id, j.withdrawn.by]))).toEqual({
+      [a.id]: 'marcus',
+      [b.id]: 'reviewer-2',
+    });
+  });
+
+  it('cli.judge-import-reports-tombstoned-rows', async () => {
+    const { h } = judging();
+    fs.writeFileSync(
+      path.join(h.cwd, 'past.csv'),
+      'subject,verdict,reason,ref\n"Post A",rejected,"No source.",a\n',
+    );
+    await h.run(['judge', 'import', 'past.csv', '--domain', 'content', '--by', 'ada']);
+    const id = json<{ judgments: { id: string }[] }>(
+      (await h.run(['judge', 'list', '--json'])).io.stdout,
+    ).judgments[0]!.id;
+    await h.run(['judge', 'withdraw', id, '--yes']);
+    const again = await h.run([
+      'judge',
+      'import',
+      'past.csv',
+      '--domain',
+      'content',
+      '--by',
+      'ada',
+    ]);
+    expect(again.io.stdout).toContain(
+      '0 added, 0 corrected, 0 already recorded, 1 withdrawn or corrected here before (not brought back)',
+    );
   });
 });

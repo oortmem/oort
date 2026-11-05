@@ -198,6 +198,10 @@ export function inputSchemasFor(spaces: ToolSpaces) {
         .describe(
           'Also use judgments imported from packs, whose experts are as the pack states them',
         ),
+      include_agent_recorded: z
+        .boolean()
+        .default(false)
+        .describe('Also use agent-recorded judgments nobody has confirmed'),
     }),
   } as const satisfies Record<ToolName, z.ZodType>;
 }
@@ -313,11 +317,12 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'record_judgment',
     title: 'Record a judgment',
     description:
-      'Record one decision an expert explicitly made (a verdict such as approved or rejected), with their reason in their own words. Only what the expert stated, never inferred.',
+      'Record one decision an expert explicitly made, with their reason verbatim. Saved as agent-recorded and unconfirmed until a person confirms it; only for experts this machine lists.',
     annotations: {
       title: 'Record a judgment',
       readOnlyHint: false,
-      destructiveHint: false,
+      // It can change what judging answers for an expert, so hosts should ask first.
+      destructiveHint: true,
       idempotentHint: false,
       openWorldHint: false,
     },
@@ -326,8 +331,9 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'judge',
     title: "Apply an expert's judgments",
     description:
-      "Predict an expert's verdict on a new item from their recorded judgments: probability, precedents and reasons, or that it needs the expert. A prediction, not their decision.",
-    annotations: read("Apply an expert's judgments"),
+      "Predict an expert's verdict on a new item from their judgments, with probability and cited precedents, or say it needs the expert. Sends the item and reasons to TypeSafe.",
+    // Reads only, but sends the item and the precedents' reasons to TypeSafe for the prediction.
+    annotations: { ...read("Apply an expert's judgments"), openWorldHint: true },
   },
 ];
 

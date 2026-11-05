@@ -1,17 +1,22 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
+  DISPLAY_UNSAFE_SOURCE,
   EVAL_THRESHOLDS,
   JudgmentInputError,
   JudgmentPackError,
   activeJudgments,
+  confirmJudgment,
   evaluateJudgments,
   formatJudgmentPack,
   importJudgmentPack,
+  importJudgments,
   isActiveJudgment,
+  isUnconfirmedAgentJudgment,
   judge,
   parseJudgmentPack,
   parseJudgmentRows,
+  purgeJudgment,
   recordJudgment,
   withdrawJudgment,
   type JudgeOptions,
@@ -110,6 +115,29 @@ function formatOf(file: string, flag: string | undefined): 'csv' | 'jsonl' {
 /** A judgment for human eyes: every stored string through `shown`. */
 function judgmentLine(j: Judgment): string {
   return `${shown(j.verdict)} "${shown(clip(j.subject.summary, 70))}" (${shown(j.domain)}, by ${shown(j.by)}, ${j.decidedAt.slice(0, 10)})`;
+}
+
+/** Characters an operator id may not hold: controls, bidi and invisible format characters. */
+const OPERATOR_UNSAFE = new RegExp(DISPLAY_UNSAFE_SOURCE);
+
+/**
+ * Who withdraws, confirms or purges from this machine: `--by`, else `judge.operator` in the home
+ * config, else `local-user`. Never the expert who made the judgment.
+ */
+function operatorOf(w: Wired, flag: string | undefined): string {
+  const by = flag ?? w.config.judge.operator ?? 'local-user';
+  if (by.trim() === '' || by.length > 128 || OPERATOR_UNSAFE.test(by)) {
+    throw new Refusal('--by must be one line of text, at most 128 characters.');
+  }
+  return by.trim();
+}
+
+/** How a precedent or judgment was recorded, for labels. */
+function recordedLabel(j: Pick<Judgment, 'via' | 'confirmed'>): string {
+  if (j.via !== 'mcp') return '';
+  return j.confirmed === undefined
+    ? ' [agent-recorded, unconfirmed]'
+    : ` [agent-recorded, confirmed by ${shown(j.confirmed.by)}]`;
 }
 
 function plainJudgment(m: Memory & { judgment: Judgment }) {
@@ -229,6 +257,7 @@ export interface JudgeApplyOptions {
   threshold?: string;
   minSimilarity?: string;
   includeImported?: boolean;
+  includeAgentRecorded?: boolean;
   json?: boolean;
 }
 
@@ -237,6 +266,7 @@ function judgeOptions(o: {
   threshold?: string;
   minSimilarity?: string;
   includeImported?: boolean;
+  includeAgentRecorded?: boolean;
 }): JudgeOptions {
   const k = number('--k', o.k, 1, 20);
   const threshold = number('--threshold', o.threshold, 0, 1);
@@ -246,12 +276,14 @@ function judgeOptions(o: {
     ...(threshold !== undefined && { threshold }),
     ...(minSimilarity !== undefined && { minSimilarity }),
     ...(o.includeImported === true && { includeImported: true }),
+    ...(o.includeAgentRecorded === true && { includeAgentRecorded: true }),
   };
 }
 
 const WHY: Record<NonNullable<JudgeResult['why']>, string> = {
   'no-precedents': 'no judgments are recorded for this domain or expert yet',
   'too-far': 'no recorded judgment is close enough to this item',
+  'too-few': 'fewer than two close judgments back an answer',
   'precedents-disagree': 'the closest judgments disagree',
   'low-confidence': 'the prediction is below the confidence threshold',
   'no-decider':
@@ -313,6 +345,11 @@ function printJudgeResult(ctx: Ctx, w: Wired, r: JudgeResult): void {
         `It leans ${shown(r.prediction.verdict)} at ${fixed(r.prediction.probability)}, below ${fixed(r.threshold)}.\n`,
       );
     }
+    if (r.why === 'too-few' && r.prediction !== undefined) {
+      ctx.io.out(
+        `It leans ${shown(r.prediction.verdict)} at ${fixed(r.prediction.probability)}, but a suggestion needs two close judgments that agree.\n`,
+      );
+    }
     if (r.why === 'precedents-disagree') {
       const split = Object.entries(r.agreement)
         .map(([v, s]) => `${shown(v)} ${fixed(s)}`)
@@ -325,6 +362,11 @@ function printJudgeResult(ctx: Ctx, w: Wired, r: JudgeResult): void {
       `${r.importedExcluded} imported judgment(s) were not used: a pack's experts are as its exporter states them. Add --include-imported to use them.\n`,
     );
   }
+  if (r.agentRecordedExcluded !== undefined && r.status !== 'suggested') {
+    ctx.io.out(
+      `${r.agentRecordedExcluded} agent-recorded judgment(s) nobody confirmed were not used: confirm one with \`oort judge confirm <id>\`, or add --include-agent-recorded.\n`,
+    );
+  }
   if (r.precedents.length === 0) return;
   const near = r.precedents.some((p) => p.near);
   ctx.io.out(
@@ -333,8 +375,14 @@ function printJudgeResult(ctx: Ctx, w: Wired, r: JudgeResult): void {
   for (const [i, p] of r.precedents.entries()) {
     const mark = p.agrees === undefined ? '' : p.agrees ? ' agrees' : ' differs';
     const from = p.pack === undefined ? '' : `, imported from pack ${shown(p.pack.name)}`;
+    const agent =
+      p.via !== 'mcp'
+        ? ''
+        : p.confirmed
+          ? ', agent-recorded (confirmed)'
+          : ', agent-recorded (unconfirmed)';
     ctx.io.out(
-      `${i + 1}. ${shown(p.verdict)}  ${fixed(p.similarity)}${mark}  "${shown(clip(p.subject.summary, 70))}"  by ${shown(p.by)}, ${p.decidedAt.slice(0, 10)}${from}  ${short(p.id)}\n`,
+      `${i + 1}. ${shown(p.verdict)}  ${fixed(p.similarity)}${mark}  "${shown(clip(p.subject.summary, 70))}"  by ${shown(p.by)}, ${p.decidedAt.slice(0, 10)}${from}${agent}  ${short(p.id)}\n`,
     );
     ctx.io.out(`   reason: ${shown(clip(p.reason, 200))}\n`);
   }
@@ -357,7 +405,13 @@ export async function judgeListCommand(
               (o.domain === undefined || m.judgment.domain === o.domain.toLowerCase()) &&
               (o.by === undefined || m.judgment.by === o.by),
           )
-        : activeJudgments(w.store, writeGrant(w), { ...o, includeImported: true }, now, false),
+        : activeJudgments(
+            w.store,
+            writeGrant(w),
+            { ...o, includeImported: true, includeAgentRecorded: true },
+            now,
+            false,
+          ),
     );
     if (o.json === true) {
       ctx.io.out(`${safeJson({ judgments: items.map(plainJudgment) })}\n`);
@@ -377,11 +431,14 @@ export async function judgeListCommand(
     }
     for (const m of items) {
       const state =
-        (m.judgment.withdrawn !== undefined
-          ? ' [withdrawn]'
-          : m.endReason === 'corrected'
-            ? ` [corrected by ${short(m.supersededBy ?? '')}]`
-            : '') +
+        (m.judgment.purged !== undefined
+          ? ' [purged]'
+          : m.judgment.withdrawn !== undefined
+            ? ' [withdrawn]'
+            : m.endReason === 'corrected'
+              ? ` [corrected by ${short(m.supersededBy ?? '')}]`
+              : '') +
+        recordedLabel(m.judgment) +
         (m.judgment.pack === undefined
           ? ''
           : ` [imported from pack ${shown(m.judgment.pack.name)}]`);
@@ -416,8 +473,82 @@ export async function judgeWithdrawCommand(
       ctx.io.out('Kept.\n');
       return 0;
     }
-    await withdrawJudgment(w.store, grant, m, o.by ?? m.judgment.by);
-    ctx.io.out(`Withdrew ${short(m.id)}: it no longer counts in judging, recall or packs.\n`);
+    const by = operatorOf(w, o.by);
+    await withdrawJudgment(w.store, grant, m, by);
+    ctx.io.out(
+      `Withdrew ${short(m.id)} (recorded as withdrawn by ${shown(by)}). Judging, recall, export and packs leave it out from now on, and no import brings the same decision back. Its record and text stay in this store (\`oort judge list --all\`); \`oort judge purge ${short(m.id)}\` removes the text.\n`,
+    );
+    return 0;
+  });
+}
+
+/** `oort judge confirm <id>`: a person vouches for an agent-recorded judgment. CLI only. */
+export async function judgeConfirmCommand(
+  id: string,
+  o: { yes?: boolean; by?: string },
+  ctx: Ctx,
+): Promise<number> {
+  return withWired(ctx, async (w) => {
+    localOnly(w);
+    const m = await findJudgment(w, id);
+    const grant = writeGrantFor(w, m);
+    if (!isUnconfirmedAgentJudgment(m.judgment)) {
+      ctx.io.out(
+        m.judgment.via === 'mcp'
+          ? `${short(m.id)} is already confirmed.\n`
+          : `${short(m.id)} was recorded by a person; there is nothing to confirm.\n`,
+      );
+      return 0;
+    }
+    if (m.expiredAt !== null || m.judgment.withdrawn !== undefined) {
+      throw new Refusal(`${short(m.id)} is not a current judgment; it cannot be confirmed.`);
+    }
+    const by = operatorOf(w, o.by);
+    const ok = await confirm(
+      ctx.io,
+      `Confirm that ${shown(m.judgment.by)} really decided this? ${judgmentLine(m.judgment)}\n  reason: ${shown(clip(m.judgment.reason, 200))}\nIt will count when judging.`,
+      o.yes === true,
+      'confirm it',
+    );
+    if (!ok) {
+      ctx.io.out('Not confirmed.\n');
+      return 0;
+    }
+    await confirmJudgment(w.store, grant, m, by);
+    ctx.io.out(`Confirmed ${short(m.id)} (by ${shown(by)}): it counts when judging now.\n`);
+    return 0;
+  });
+}
+
+/** `oort judge purge <id>`: blank a judgment's text, keeping an audit stub. */
+export async function judgePurgeCommand(
+  id: string,
+  o: { yes?: boolean; by?: string },
+  ctx: Ctx,
+): Promise<number> {
+  return withWired(ctx, async (w) => {
+    localOnly(w);
+    const m = await findJudgment(w, id);
+    const grant = writeGrantFor(w, m);
+    if (m.judgment.purged !== undefined) {
+      ctx.io.out(`${short(m.id)} was already purged.\n`);
+      return 0;
+    }
+    const by = operatorOf(w, o.by);
+    const ok = await confirm(
+      ctx.io,
+      `Purge ${short(m.id)}: ${judgmentLine(m.judgment)}? Its subject, link, reason and embedding are removed for good; an audit stub stays.`,
+      o.yes === true,
+      'purge it',
+    );
+    if (!ok) {
+      ctx.io.out('Kept.\n');
+      return 0;
+    }
+    await purgeJudgment(w.store, grant, m, by);
+    ctx.io.out(
+      `Purged ${short(m.id)}: only the expert, domain, verdict, times and who withdrew and purged it are left. Copies made earlier (exports, packs, backups) are not touched.\n`,
+    );
     return 0;
   });
 }
@@ -438,29 +569,27 @@ export async function judgeImportCommand(
   );
   return withWired(ctx, async (w) => {
     localOnly(w);
-    const grant = writeGrant(w);
-    const counts = { added: 0, corrected: 0, unchanged: 0 };
-    let redacted = 0;
-    for (const input of rows) {
-      const r = await refusing(() =>
-        recordJudgment(input, {
-          store: w.store,
-          grant,
-          scope: w.scope,
-          ...(w.embed !== undefined && { embed: w.embed }),
-          via: 'import',
-          harness: 'import',
-        }),
+    const r = await refusing(() =>
+      importJudgments(rows, {
+        store: w.store,
+        grant: writeGrant(w),
+        scope: w.scope,
+        ...(w.embed !== undefined && { embed: w.embed }),
+        harness: 'import',
+      }),
+    );
+    if (r.redacted > 0) ctx.io.err(`oort: redacted secrets from ${r.redacted} judgment(s).\n`);
+    if (r.embedFailed > 0) {
+      ctx.io.err(
+        `oort: the embedder failed on ${r.embedFailed} judgment(s); they are matched by their words only.\n`,
       );
-      counts[r.outcome]++;
-      if (r.redacted.length > 0) redacted++;
     }
-    if (redacted > 0) ctx.io.err(`oort: redacted secrets from ${redacted} judgment(s).\n`);
+    const { redacted: _r, embedFailed: _e, ...counts } = r;
     if (o.json === true) {
       ctx.io.out(`${safeJson({ rows: rows.length, ...counts })}\n`);
     } else {
       ctx.io.out(
-        `Imported ${rows.length} judgment(s): ${counts.added} added, ${counts.corrected} corrected, ${counts.unchanged} already recorded.\n`,
+        `Imported ${rows.length} judgment(s): ${r.added} added, ${r.corrected} corrected, ${r.unchanged} already recorded${r.tombstoned > 0 ? `, ${r.tombstoned} withdrawn or corrected here before (not brought back)` : ''}.\n`,
       );
     }
     return 0;
@@ -478,6 +607,7 @@ export async function judgeEvalCommand(
     k?: string;
     minSimilarity?: string;
     includeImported?: boolean;
+    includeAgentRecorded?: boolean;
     json?: boolean;
   },
   ctx: Ctx,
@@ -616,7 +746,7 @@ export async function judgePackImportCommand(
       ctx.io.out(`${safeJson({ pack: m.digest.slice(0, 16), name: m.name, ...r })}\n`);
     } else {
       ctx.io.out(
-        `Imported ${r.added.length} judgment(s) from pack ${shown(clip(m.name, 40))} (${m.digest.slice(0, 16)}); ${r.skipped.length} already here.\n`,
+        `Imported ${r.added.length} judgment(s) from pack ${shown(clip(m.name, 40))} (${m.digest.slice(0, 16)}); ${r.skipped.length} already here${r.tombstoned.length > 0 ? `, ${r.tombstoned.length} withdrawn or corrected here before (not brought back)` : ''}.\n`,
       );
     }
     return 0;

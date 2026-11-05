@@ -107,7 +107,7 @@ export function exportGrant(w: Wired, version: ExportVersion): Grant {
  * format version 2 unless `--format 1` asks for the old one.
  */
 export async function exportCommand(
-  opts: { out?: string; force?: boolean; format?: string },
+  opts: { out?: string; force?: boolean; format?: string; includeWithdrawn?: boolean },
   ctx: Ctx,
 ): Promise<number> {
   const version = exportVersion(opts.format);
@@ -126,7 +126,10 @@ export async function exportCommand(
       return 0;
     }
     const grant = exportGrant(w, version);
-    const listed = await w.store.list(grant, { validOnly: false });
+    // A withdrawn judgment (CON-71) stays out unless asked for: the expert took it back.
+    const listed = (await w.store.list(grant, { validOnly: false })).filter(
+      (m) => opts.includeWithdrawn === true || m.judgment?.withdrawn === undefined,
+    );
     // Oldest first, so an importer replays supersede chains in order.
     listed.sort(
       (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.id < b.id ? -1 : 1),

@@ -32,9 +32,11 @@ import {
   judgeApplyCommand,
   judgeEvalCommand,
   judgeImportCommand,
+  judgeConfirmCommand,
   judgeListCommand,
   judgePackExportCommand,
   judgePackImportCommand,
+  judgePurgeCommand,
   judgeRecordCommand,
   judgeWithdrawCommand,
   type JudgeApplyOptions,
@@ -219,6 +221,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--known-at <iso>', 'recall what was believed at this time, corrected facts included')
     .option('--history', 'recall every version of the matching facts, oldest first')
     .option('--include <levels>', 'read only these levels: self, planet, star (comma list)')
+    .option('--include-withdrawn', 'also show withdrawn judgments')
     .action(run((t: string, o: RecallOptions) => recallCommand(t, o, ctx)));
 
   p.command('explain')
@@ -229,6 +232,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--known-at <iso>', 'explain a recall of what was believed at this time')
     .option('--history', 'explain a recall of every version of the matching facts')
     .option('--include <levels>', 'read only these levels: self, planet, star (comma list)')
+    .option('--include-withdrawn', 'also show withdrawn judgments')
     .action(run((q: string, o: RecallOptions) => explainCommand(q, o, ctx)));
 
   p.command('revalidate')
@@ -311,6 +315,10 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--threshold <p>', 'probability a prediction needs (default 0.7)')
     .option('--min-similarity <s>', 'similarity a precedent needs to count')
     .option('--include-imported', 'also use judgments imported from packs (off by default)')
+    .option(
+      '--include-agent-recorded',
+      'also use agent-recorded judgments nobody confirmed (off by default)',
+    )
     .option('--json', 'print the full result as JSON')
     .action(run((item: string, o: JudgeApplyOptions) => judgeApplyCommand(item, o, ctx)));
   judge
@@ -327,13 +335,31 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     );
   judge
     .command('withdraw')
-    .description('withdraw a judgment: it stops counting in judging, recall and packs at once')
+    .description(
+      'withdraw a judgment: judging, recall, export and packs leave it out from now on (its record stays)',
+    )
     .argument('<id>', 'judgment id or unique prefix')
-    .option('--by <expert>', 'who withdraws it (default: the expert who made it)')
+    .option('--by <operator>', 'who withdraws it (default: judge.operator, else local-user)')
     .option('--yes', 'do not ask')
     .action(
       run((id: string, o: { yes?: boolean; by?: string }) => judgeWithdrawCommand(id, o, ctx)),
     );
+  judge
+    .command('confirm')
+    .description('confirm an agent-recorded judgment, so it counts when judging (never over MCP)')
+    .argument('<id>', 'judgment id or unique prefix')
+    .option('--by <operator>', 'who confirms it (default: judge.operator, else local-user)')
+    .option('--yes', 'do not ask')
+    .action(
+      run((id: string, o: { yes?: boolean; by?: string }) => judgeConfirmCommand(id, o, ctx)),
+    );
+  judge
+    .command('purge')
+    .description("remove a judgment's subject, link, reason and embedding, keeping an audit stub")
+    .argument('<id>', 'judgment id or unique prefix')
+    .option('--by <operator>', 'who purges it (default: judge.operator, else local-user)')
+    .option('--yes', 'do not ask')
+    .action(run((id: string, o: { yes?: boolean; by?: string }) => judgePurgeCommand(id, o, ctx)));
   judge
     .command('import')
     .description('import past decisions from CSV or JSON Lines (see docs/cli.md for the columns)')
@@ -360,6 +386,10 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--k <n>', 'precedents to use (default 5)')
     .option('--min-similarity <s>', 'similarity a precedent needs to count')
     .option('--include-imported', 'also use judgments imported from packs (off by default)')
+    .option(
+      '--include-agent-recorded',
+      'also use agent-recorded judgments nobody confirmed (off by default)',
+    )
     .option('--json', 'print JSON')
     .action(
       run(
@@ -373,6 +403,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
             k?: string;
             minSimilarity?: string;
             includeImported?: boolean;
+            includeAgentRecorded?: boolean;
             json?: boolean;
           },
         ) => judgeEvalCommand(file, o, ctx),
@@ -778,7 +809,12 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--force', 'with --out, overwrite an existing file (never a symlink)')
     .option('--format <version>', 'export format version: 2 (default) or 1 (Planet memories only)')
     .option('--json', 'accepted for compatibility; the format is always JSON Lines')
-    .action(run((o: { out?: string; force?: boolean; format?: string }) => exportCommand(o, ctx)));
+    .option('--include-withdrawn', 'also export withdrawn judgments')
+    .action(
+      run((o: { out?: string; force?: boolean; format?: string; includeWithdrawn?: boolean }) =>
+        exportCommand(o, ctx),
+      ),
+    );
 
   return p;
 }

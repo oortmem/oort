@@ -58,7 +58,7 @@ const ANNOTATIONS: Record<string, Record<string, boolean>> = {
   explain: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   list_recent: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   whoami: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-  record_judgment: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  record_judgment: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   judge: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 };
 
@@ -71,7 +71,11 @@ describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
       ALL_TOOL_NAMES.filter((n) => n !== 'share').sort(),
     );
     for (const t of tools) {
-      expect(t.annotations, t.name).toMatchObject({ ...ANNOTATIONS[t.name], openWorldHint: false });
+      // Only `judge` reaches outside this machine (it sends the item and reasons to TypeSafe).
+      expect(t.annotations, t.name).toMatchObject({
+        ...ANNOTATIONS[t.name],
+        openWorldHint: t.name === 'judge',
+      });
       expect(t.annotations?.title, t.name).toBeTruthy();
       expect(t.description?.length ?? 0, t.name).toBeGreaterThan(10);
       expect(t.description?.length ?? 999, t.name).toBeLessThan(200);
