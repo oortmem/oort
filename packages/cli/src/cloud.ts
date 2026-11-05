@@ -5,6 +5,7 @@ import {
   TIMING_HEADER,
   connectedSince,
   keepAliveFetch,
+  poolKnowsConnections,
   timedFetch,
   parseServerTiming,
   type CloudTiming,
@@ -606,7 +607,9 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       done: () => {
         const t2 = performance.now();
         return {
-          ...(pooled && { connected: conn !== undefined }),
+          // Behind a proxy the pool cannot see connections, so no record says nothing.
+          ...(pooled &&
+            (conn !== undefined || poolKnowsConnections()) && { connected: conn !== undefined }),
           ...(conn?.dnsMs !== undefined && { dnsMs: conn.dnsMs }),
           ...(conn?.tcpMs !== undefined && { tcpMs: conn.tcpMs }),
           ...(conn?.tlsMs !== undefined && { tlsMs: conn.tlsMs }),

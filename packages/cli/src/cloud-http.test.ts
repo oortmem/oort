@@ -2,9 +2,12 @@ import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RecallResult } from '@oortmem/core';
+import * as undici from 'undici';
 import {
   closeCloudPool,
   connectedSince,
+  createDispatcher,
+  proxyFrom,
   keepAliveFetch,
   parseServerTiming,
   timedFetch,
@@ -240,5 +243,91 @@ describe('the prompt hook recall in cloud mode (CON-101)', () => {
       { rerank: false, embed: false },
     ]);
     for (const b of bodies) expect(bytes(b['text'] as string)).toBeLessThanOrEqual(2048);
+  });
+});
+
+describe('the pool behind a proxy (CON-101)', () => {
+  it('cloud-http.a-proxy-in-the-environment-selects-the-env-proxy-agent', async () => {
+    expect(proxyFrom({})).toBeUndefined();
+    expect(proxyFrom({ HTTPS_PROXY: '' })).toBeUndefined();
+    expect(
+      proxyFrom({ https_proxy: 'http://proxy.invalid:3128', NO_PROXY: 'localhost,.internal' }),
+    ).toEqual({ httpsProxy: 'http://proxy.invalid:3128', noProxy: 'localhost,.internal' });
+    for (const kind of ['keep-alive', 'timed'] as const) {
+      const direct = createDispatcher(undici, kind, {});
+      expect(direct.proxied).toBe(false);
+      expect(direct.dispatcher).toBeInstanceOf(undici.Agent);
+      expect(direct.dispatcher).not.toBeInstanceOf(undici.EnvHttpProxyAgent);
+      const viaProxy = createDispatcher(undici, kind, { HTTPS_PROXY: 'http://proxy.invalid:3128' });
+      expect(viaProxy.proxied).toBe(true);
+      expect(viaProxy.dispatcher).toBeInstanceOf(undici.EnvHttpProxyAgent);
+      await direct.dispatcher.close();
+      await viaProxy.dispatcher.close();
+    }
+  });
+
+  it('cloud-http.no-proxy-hosts-go-direct', async () => {
+    const s = await server();
+    closers.push(s.close);
+    // Nothing listens on the "proxy": a request sent to it fails, one that goes direct answers.
+    const dead = 'http://127.0.0.1:9';
+    const bypass = createDispatcher(undici, 'keep-alive', {
+      HTTP_PROXY: dead,
+      NO_PROXY: '127.0.0.1',
+    });
+    const r = await undici.fetch(`${s.url}/direct`, { dispatcher: bypass.dispatcher });
+    expect(await r.text()).toBe('{"ok":true}');
+    const proxiedOnly = createDispatcher(undici, 'keep-alive', { HTTP_PROXY: dead });
+    await expect(
+      undici.fetch(`${s.url}/via-proxy`, { dispatcher: proxiedOnly.dispatcher }),
+    ).rejects.toThrow();
+    expect(s.paths).toEqual(['/direct']);
+    await bypass.dispatcher.close();
+    await proxiedOnly.dispatcher.close();
+  });
+});
+
+describe('clipping at the 2 KB boundary (CON-101)', () => {
+  const enc = new TextEncoder();
+  const bytes = (s: string): number => enc.encode(s).byteLength;
+  const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  const valid = (s: string): void => {
+    expect(bytes(s)).toBeLessThanOrEqual(RECALL_TEXT_MAX_BYTES);
+    expect(s).not.toMatch(loneSurrogate);
+    expect(new TextDecoder('utf-8', { fatal: true }).decode(enc.encode(s))).toBe(s);
+  };
+
+  it('cloud.clip-exactly-at-the-limit-and-one-byte-over', () => {
+    const at = 'a'.repeat(RECALL_TEXT_MAX_BYTES - 4) + '😀';
+    expect(bytes(at)).toBe(RECALL_TEXT_MAX_BYTES);
+    expect(clipRecallText(at)).toBe(at);
+    const over = `b${at}`;
+    expect(bytes(over)).toBe(RECALL_TEXT_MAX_BYTES + 1);
+    const c = clipRecallText(over);
+    valid(c);
+    expect(c).not.toBe(over);
+  });
+
+  it('cloud.clip-never-splits-a-surrogate-pair-at-the-cut', () => {
+    // The head keeps half of what the ellipsis leaves (2043 bytes): 1021. An emoji (4 bytes, a
+    // surrogate pair) starting at byte 1019 straddles that cut, and one in the tail likewise.
+    for (const pad of [1017, 1018, 1019, 1020, 1021]) {
+      const text =
+        'h'.repeat(pad) + '👩‍💻'.repeat(40) + 'm'.repeat(600) + '🎉'.repeat(300) + 't'.repeat(pad);
+      expect(bytes(text)).toBeGreaterThan(RECALL_TEXT_MAX_BYTES);
+      const c = clipRecallText(text);
+      valid(c);
+      expect(c.startsWith('h'.repeat(pad))).toBe(true);
+      expect(c.endsWith('t'.repeat(Math.min(pad, 1000)))).toBe(true);
+    }
+  });
+
+  it('cloud.clip-mixed-multibyte-text', () => {
+    for (const unit of ['é', '漢字', '𝄞', 'ab😀', 'Ελληνικά ', '🇳🇴']) {
+      for (const extra of [0, 1, 2, 3]) {
+        const text = 'x'.repeat(extra) + unit.repeat(Math.ceil(3000 / bytes(unit)));
+        valid(clipRecallText(text));
+      }
+    }
   });
 });
