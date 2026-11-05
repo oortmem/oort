@@ -169,7 +169,8 @@ export async function runWiredHook(
   // and the relevance gate instead; `oort mcp` and `oort recall` keep it (CON-15). `oort serve`
   // follows the hook, so a prompt gets the same context whichever process answers it.
   // `recall.promptMode` (CON-101) trades more for speed on the prompt hook only: `fast` drops any
-  // reranker, `lexical` the query embedding too. In cloud mode the API is asked to do the same.
+  // reranker, `lexical` the query embedding too. In cloud mode the API is asked to do the same,
+  // and to follow `recall.lexicalFirst` (skip the embedding when the lexical answer is clear).
   const prompt = event === 'UserPromptSubmit';
   const promptMode = w.config.recall.promptMode;
   const hookRerank =
@@ -214,6 +215,7 @@ export async function runWiredHook(
         },
         agent.source === 'none' ? undefined : agent.id,
         promptMode,
+        w.config.recall.lexicalFirst,
       ),
     }),
   });

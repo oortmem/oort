@@ -9,6 +9,7 @@ import {
   createDispatcher,
   proxyFrom,
   keepAliveFetch,
+  lexicalFirstOf,
   parseServerTiming,
   timedFetch,
   warmCloud,
@@ -244,6 +245,46 @@ describe('the prompt hook recall in cloud mode (CON-101)', () => {
       { rerank: false, embed: false },
     ]);
     for (const b of bodies) expect(bytes(b['text'] as string)).toBeLessThanOrEqual(2048);
+  });
+
+  it('cloud.lexical-first-is-sent-as-configured-except-where-nothing-embeds', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const client = {
+      recall: async (q: Record<string, unknown>) => {
+        bodies.push(q);
+        return { memories: [], timings: {} };
+      },
+    } as unknown as CloudClient;
+    const cases = [
+      ['fast', true],
+      ['fast', false],
+      ['full', true],
+      ['fast', undefined],
+      ['lexical', true],
+    ] as const;
+    for (const [mode, lexicalFirst] of cases) {
+      await cloudRemote(client, undefined, undefined, undefined, mode, lexicalFirst).recall({
+        text: 'which port does auth use',
+      });
+    }
+    expect(bodies.map((b) => ('lexicalFirst' in b ? b['lexicalFirst'] : 'absent'))).toEqual([
+      true,
+      false,
+      true,
+      'absent',
+      // `lexical` never embeds, so there is nothing to skip.
+      'absent',
+    ]);
+  });
+
+  it('cloud-http.reads-what-lexical-first-decided-from-server-timing', () => {
+    expect(lexicalFirstOf('auth;dur=4, lexfirst;desc=hit, total;dur=9')).toBe('hit');
+    expect(lexicalFirstOf('lexfirst;desc=miss')).toBe('miss');
+    expect(lexicalFirstOf('auth;dur=4, total;dur=9')).toBeUndefined();
+    expect(lexicalFirstOf('lexfirst;desc=maybe')).toBeUndefined();
+    expect(lexicalFirstOf(null)).toBeUndefined();
+    // A description is not a duration: the metrics stay numbers only.
+    expect(parseServerTiming('auth;dur=4, lexfirst;desc=hit')).toEqual({ auth: 4 });
   });
 });
 

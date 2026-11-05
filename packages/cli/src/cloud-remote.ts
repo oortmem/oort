@@ -70,6 +70,12 @@ export function cloudRemote(
   agent?: string,
   /** `recall.promptMode`: what the prompt hook's recall may skip. An older API ignores it. */
   promptMode: PromptMode = 'full',
+  /**
+   * `recall.lexicalFirst`: whether a clear lexical answer may skip the prompt's embedding (CON-101).
+   * Sent as it is (Oort Cloud runs lexical first unless told otherwise); not sent in `lexical`
+   * mode, which never embeds. An older API ignores it.
+   */
+  lexicalFirst?: boolean,
 ): RemoteMemory {
   // Calls about the project this process runs in state its privacy when its own config file sets
   // it, so the cloud knows whether that project's memories may be shared. A default states
@@ -100,6 +106,7 @@ export function cloudRemote(
         ...(agent !== undefined && { agent }),
         k: 10,
         ...PROMPT_MODE[promptMode],
+        ...(lexicalFirst !== undefined && promptMode !== 'lexical' && { lexicalFirst }),
       }),
     sessionMemories: async ({ projectId }) => {
       const project = projectId !== undefined && { project: projectId };
