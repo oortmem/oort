@@ -3,8 +3,9 @@ import { resolveHome, type MemoryStore } from '@oortmem/core';
 import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
 import { cloudRemote } from '../cloud-remote.js';
 import { LOCAL_PROVIDER } from '../local-models.js';
+import { HOOK_STDIN_CAP_MS, type Env } from '../io.js';
 import { echo, starInCloudMessage, type Ctx } from '../util.js';
-import type { AdapterRole, Wired } from '../wire.js';
+import type { AdapterRole, WireOptions, Wired } from '../wire.js';
 
 export const HOOK_COMMAND_EVENTS: readonly HookEvent[] = [
   'UserPromptSubmit',
@@ -13,8 +14,7 @@ export const HOOK_COMMAND_EVENTS: readonly HookEvent[] = [
   'drain',
 ];
 
-/** Stdin is read for at most this long; Claude Code writes it at once and closes it. */
-export const HOOK_STDIN_CAP_MS = 1000;
+export { HOOK_STDIN_CAP_MS } from '../io.js';
 /** Exit this long before Claude Code's own hook timeout would discard the output. */
 const DEADLINE_MARGIN_MS = 1000;
 /**
@@ -28,7 +28,7 @@ export const HOOK_BUSY_TIMEOUT_MS = 250;
 export const MIGRATION_PENDING_NOTE = 'Oort is upgrading its store; run `oort doctor` once\n';
 
 /** SQLite's "another connection holds the lock" errors. */
-function isBusy(e: unknown): boolean {
+export function isBusy(e: unknown): boolean {
   const code = (e as { code?: unknown } | null)?.code;
   return (
     typeof code === 'string' && (code.startsWith('SQLITE_BUSY') || code.startsWith('SQLITE_LOCKED'))
@@ -57,7 +57,7 @@ const isEvent = (e: string): e is HookEvent =>
   (HOOK_COMMAND_EVENTS as readonly string[]).includes(e);
 
 /** The session's cwd from the hook input, so config and scope follow the session, not our cwd. */
-function inputCwd(stdin: string): string | undefined {
+export function inputCwd(stdin: string): string | undefined {
   try {
     const raw: unknown = JSON.parse(stdin);
     if (typeof raw === 'object' && raw !== null && 'cwd' in raw) {
@@ -71,17 +71,6 @@ function inputCwd(stdin: string): string | undefined {
 }
 
 /**
- * `oort hook <event>`. Prints exactly the hook JSON (or nothing) on stdout and
- * always exits 0, through `io.hookExit`, which exits the moment the write is
- * flushed: after a recall timeout the losing full recall is still pending and
- * would otherwise hold the process past Claude Code's timeout. Every failure
- * (bad config, a store that will not open, a throwing handler) is logged to
- * the hook log and swallowed. A store locked by another writer (a drain) makes
- * the open or a write fail after 250 ms: stdout is then empty and the log
- * records `degraded:busy`. A deadline exits 0 with empty stdout should
- * anything hang.
- */
-/**
  * The adapters each event needs. UserPromptSubmit only recalls; Stop and SessionStart call no
  * model; the drain writes memories. Loading fewer adapters skips their key reads and SDK imports.
  */
@@ -92,7 +81,159 @@ const HOOK_ROLES: Record<HookEvent, readonly AdapterRole[]> = {
   drain: ['embed', 'rerank', 'decide', 'write'],
 };
 
-export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
+/**
+ * How a hook wires the engine, in-process or in `oort serve`: never migrating, a short lock wait,
+ * the adapters `roles` (default: the event's own), always as Claude Code.
+ */
+export function hookWireOptions(
+  event: HookEvent,
+  env: Env,
+  roles: readonly AdapterRole[] = HOOK_ROLES[event],
+): WireOptions {
+  return {
+    env,
+    // Oort Cloud: a recall must answer inside the hook's own budget.
+    cloudTimeoutMs: event === 'drain' ? 30_000 : 1400,
+    // The drain serves every project's queue: home config only, whatever lies above OORT_HOME.
+    ...(event === 'drain' ? { projectConfig: false } : { busyTimeoutMs: HOOK_BUSY_TIMEOUT_MS }),
+    // A schema migration copies and rebuilds the whole store: never inside a hook.
+    migrate: false,
+    roles,
+    // The hooks are Claude Code's: they always act as that agent.
+    agent: 'claude-code',
+  };
+}
+
+export interface WiredHookOptions {
+  /** How long wiring took (0 for the daemon's warm engine); the hook log records it. */
+  wireMs: number;
+  /** Where the one stderr line of a Stop in cloud mode goes. */
+  err: (text: string) => void;
+  /** Starts a detached drain in `home`. */
+  spawnDrain: (home: string) => void;
+  /** Set by `oort serve`: its log lines carry `daemon: 1`. */
+  daemon?: boolean;
+}
+
+/**
+ * Runs `event` on an engine already wired for it, as the in-process hook and `oort serve` both
+ * do: the same handlers, the same injection format and scrubbing. Resolves the hook's stdout,
+ * empty when the store was locked (the log then records `degraded:busy`), or `skipped` when a Star
+ * agent in cloud mode must not save. Never throws for a handler's failure (runHook swallows it).
+ */
+export async function runWiredHook(
+  event: HookEvent,
+  stdin: string,
+  w: Wired,
+  opts: WiredHookOptions,
+): Promise<{ stdout: string; skipped?: true }> {
+  const logEntry = (outcome: string, degraded?: string[]): void =>
+    w.harnessLog.write({
+      event,
+      session: null,
+      project: null,
+      outcome,
+      counts: opts.daemon === true ? { daemon: 1 } : {},
+      timings: {},
+      ...(degraded !== undefined && { degraded }),
+    });
+  for (const warning of w.warnings) logEntry(`config:${warning.code}`);
+  const home = w.config.home;
+  const {
+    harnessLog,
+    unavailable: _u,
+    close: _c,
+    scope: _s,
+    agent,
+    warnings: _w,
+    store,
+    mode: _m,
+    cloud: _cl,
+    cloudProblem: _cp,
+    embedder: _e,
+    reembedWith: _r,
+    rerank,
+    ...engine
+  } = w;
+  // Claude Code keeps a Star, which Oort Cloud does not have: saving would put its memories
+  // on the shared Planet. Fail open: nothing is saved, recall still works, one stderr line.
+  const starInCloud = w.mode === 'cloud' && agent.home === 'star';
+  if (starInCloud && event === 'Stop') opts.err(`oort: ${starInCloudMessage(agent.id)}\n`);
+  if (starInCloud && (event === 'Stop' || event === 'drain')) {
+    logEntry('skipped:star-in-cloud');
+    return { stdout: '', skipped: true };
+  }
+  // A local reranker would load in this short-lived process on every prompt: about 450 ms
+  // and 600 ms of CPU, often past the rerank budget anyway. The prompt hook ranks by fusion
+  // and the relevance gate instead; `oort mcp` and `oort recall` keep it (CON-15). `oort serve`
+  // follows the hook, so a prompt gets the same context whichever process answers it.
+  const hookRerank =
+    event === 'UserPromptSubmit' && w.config.rerank.provider === LOCAL_PROVIDER
+      ? undefined
+      : rerank;
+  let busy = false;
+  // The scope is left out: each handler derives it from the session's cwd.
+  const out = await runHook(event, stdin, {
+    ...engine,
+    ...(hookRerank !== undefined && { rerank: hookRerank }),
+    store: busyAware(store, () => {
+      busy = true;
+    }),
+    home: agent.home,
+    log: {
+      write: (e) =>
+        harnessLog.write({
+          ...e,
+          timings: { ...e.timings, wireMs: opts.wireMs },
+          ...(opts.daemon === true && { counts: { ...e.counts, daemon: 1 } }),
+        }),
+    },
+    // The drain runs in the home directory, so it resolves the home config only:
+    // project config never affects the write path.
+    spawnDrain: () => opts.spawnDrain(home),
+    ...(w.mode === 'cloud' && {
+      remote: cloudRemote(
+        w.cloud,
+        w.cloudProblem,
+        {
+          projectId: w.scope.projectId,
+          ...(w.statedPrivacy !== undefined && { private: w.statedPrivacy }),
+        },
+        agent.source === 'none' ? undefined : agent.id,
+      ),
+    }),
+  });
+  if (busy) {
+    // The store was locked: whatever the handler made of it, inject nothing.
+    logEntry('degraded:busy', ['busy']);
+    return { stdout: '' };
+  }
+  return { stdout: out.stdout };
+}
+
+export interface HookRunOptions {
+  /** The hook input, when the caller already read it (the bin, after trying `oort serve`). */
+  stdin?: string;
+  /** `performance.now()` when the hook started: the deadline counts from there. */
+  startedAt?: number;
+}
+
+/**
+ * `oort hook <event>`. Prints exactly the hook JSON (or nothing) on stdout and
+ * always exits 0, through `io.hookExit`, which exits the moment the write is
+ * flushed: after a recall timeout the losing full recall is still pending and
+ * would otherwise hold the process past Claude Code's timeout. Every failure
+ * (bad config, a store that will not open, a throwing handler) is logged to
+ * the hook log and swallowed. A store locked by another writer (a drain) makes
+ * the open or a write fail after 250 ms: stdout is then empty and the log
+ * records `degraded:busy`. A deadline exits 0 with empty stdout should
+ * anything hang.
+ */
+export async function hookCommand(
+  event: string,
+  ctx: Ctx,
+  opts: HookRunOptions = {},
+): Promise<void> {
   const { io } = ctx;
   let exited = false;
   const exit = (stdout: string): void => {
@@ -102,13 +243,16 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
     io.hookExit(stdout);
   };
   const budget = event in HOOK_TIMEOUTS ? HOOK_TIMEOUTS[event as keyof typeof HOOK_TIMEOUTS] : 0;
+  // Time already spent (on stdin, or on a daemon that did not answer) comes off the deadline.
+  const spent = opts.startedAt === undefined ? 0 : performance.now() - opts.startedAt;
   const deadline =
-    budget > 0 ? setTimeout(() => exit(''), budget * 1000 - DEADLINE_MARGIN_MS) : undefined;
+    budget > 0
+      ? setTimeout(() => exit(''), Math.max(0, budget * 1000 - DEADLINE_MARGIN_MS - spent))
+      : undefined;
   deadline?.unref();
 
   let w: Wired | undefined;
   let stdout = '';
-  let busy = false;
   try {
     if (!isEvent(event)) {
       io.err(
@@ -116,97 +260,30 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
       );
       log(ctx, undefined, event, 'unknown-event');
     } else {
-      const stdin = event === 'drain' ? '' : await io.readStdin(HOOK_STDIN_CAP_MS);
+      const stdin =
+        event === 'drain' ? '' : (opts.stdin ?? (await io.readStdin(HOOK_STDIN_CAP_MS)));
       const wireStart = performance.now();
-      w = await ctx.wire(inputCwd(stdin) ?? io.cwd, {
-        env: io.env,
-        // Oort Cloud: a recall must answer inside the hook's own budget.
-        cloudTimeoutMs: event === 'drain' ? 30_000 : 1400,
-        // The drain serves every project's queue: home config only, whatever lies above OORT_HOME.
-        ...(event === 'drain' ? { projectConfig: false } : { busyTimeoutMs: HOOK_BUSY_TIMEOUT_MS }),
-        // A schema migration copies and rebuilds the whole store: never inside a hook.
-        migrate: false,
-        roles: HOOK_ROLES[event],
-        // The hooks are Claude Code's: they always act as that agent.
-        agent: 'claude-code',
-      });
+      w = await ctx.wire(inputCwd(stdin) ?? io.cwd, hookWireOptions(event, io.env));
       // Config, store open and key lookup (env, then the keychain): the hook log records it (CON-57).
       const wireMs = performance.now() - wireStart;
-      for (const warning of w.warnings) log(ctx, w, event, `config:${warning.code}`);
-      const home = w.config.home;
-      const {
-        harnessLog,
-        unavailable: _u,
-        close: _c,
-        scope: _s,
-        agent,
-        warnings: _w,
-        store,
-        mode: _m,
-        cloud: _cl,
-        cloudProblem: _cp,
-        embedder: _e,
-        reembedWith: _r,
-        rerank,
-        ...engine
-      } = w;
-      // Claude Code keeps a Star, which Oort Cloud does not have: saving would put its memories
-      // on the shared Planet. Fail open: nothing is saved, recall still works, one stderr line.
-      const starInCloud = w.mode === 'cloud' && agent.home === 'star';
-      if (starInCloud && event === 'Stop') io.err(`oort: ${starInCloudMessage(agent.id)}\n`);
-      if (starInCloud && (event === 'Stop' || event === 'drain')) {
-        log(ctx, w, event, 'skipped:star-in-cloud');
-        if (event === 'drain') await w.close();
-        exit('');
-        return;
-      }
-      // A local reranker would load in this short-lived process on every prompt: about 450 ms
-      // and 600 ms of CPU, often past the rerank budget anyway. The prompt hook ranks by fusion
-      // and the relevance gate instead; `oort mcp` and `oort recall` keep it (CON-15).
-      const hookRerank =
-        event === 'UserPromptSubmit' && w.config.rerank.provider === LOCAL_PROVIDER
-          ? undefined
-          : rerank;
-      // The scope is left out: each handler derives it from the session's cwd.
-      const out = await runHook(event, stdin, {
-        ...engine,
-        ...(hookRerank !== undefined && { rerank: hookRerank }),
-        store: busyAware(store, () => {
-          busy = true;
-        }),
-        home: agent.home,
-        log: { write: (e) => harnessLog.write({ ...e, timings: { ...e.timings, wireMs } }) },
-        // The drain runs in the home directory, so it resolves the home config only:
-        // project config never affects the write path.
-        spawnDrain: () => io.spawnDrain(home),
-        ...(w.mode === 'cloud' && {
-          remote: cloudRemote(
-            w.cloud,
-            w.cloudProblem,
-            {
-              projectId: w.scope.projectId,
-              ...(w.statedPrivacy !== undefined && { private: w.statedPrivacy }),
-            },
-            agent.source === 'none' ? undefined : agent.id,
-          ),
-        }),
+      const out = await runWiredHook(event, stdin, w, {
+        wireMs,
+        err: (t) => io.err(t),
+        spawnDrain: (home) => io.spawnDrain(home),
       });
       stdout = out.stdout;
       // The drain is detached and nothing waits on it, so it closes the store cleanly.
       if (event === 'drain') await w.close();
     }
   } catch (e) {
-    if (isBusy(e)) busy = true;
-    else if (e instanceof StoreMigrationRequiredError) {
+    if (isBusy(e)) {
+      stdout = '';
+      log(ctx, w, event, 'degraded:busy', ['busy']);
+    } else if (e instanceof StoreMigrationRequiredError) {
       // Fail open: no recall and no save this turn, the prompt goes on; any oort command migrates.
       if (event !== 'drain') io.err(MIGRATION_PENDING_NOTE);
       log(ctx, w, event, 'degraded:migration-pending', ['migration-pending']);
     } else log(ctx, w, event, 'cli-error');
-  }
-  if (busy) {
-    // The store was locked: whatever the handler made of it, inject nothing.
-    stdout = '';
-    log(ctx, w, event, 'degraded:busy', ['busy']);
   }
   exit(stdout);
 }

@@ -13,7 +13,8 @@ Other commands you will use:
 
 - `oort doctor` checks keys, hooks, connectors and the store.
 - `oort mcp` runs the local MCP server for any MCP client.
-- `oort connect <host>` and `oort disconnect <host>` add or remove one agent.
+- `oort connect <host>` and `oort disconnect <host>` add or remove one agent (`oort install <host>` does the same).
+- `oort serve --detach` starts a local daemon that makes the Claude Code hooks faster; they work without it.
 - `oort login` uses Oort Pro, so you need no vendor keys.
 - `oort keys set <provider>` stores your own Voyage, TypeSafe or Anthropic key.
 

@@ -54,6 +54,7 @@ import {
 import { recallCommand, type RecallOptions } from './commands/recall.js';
 import { reembedCommand } from './commands/reembed.js';
 import { revalidateCommand } from './commands/revalidate.js';
+import { serveCommand, type ServeOptions } from './commands/serve.js';
 import { setupCommand, type SetupOptions } from './commands/setup.js';
 import { shareCommand } from './commands/share.js';
 import { statsCommand } from './commands/stats.js';
@@ -135,14 +136,16 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .action(run((o: { project?: boolean }) => initCommand(o, ctx)));
 
   p.command('install')
-    .description('install the Claude Code hooks')
-    .argument('<harness>', 'claude-code')
+    .description(
+      'install Oort into a harness: the Claude Code hooks, or the MCP server for any other (as `oort connect`)',
+    )
+    .argument('<harness>', 'claude-code, codex, cursor, claude-desktop, gemini or vscode')
     .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
     .action(run((h: string, o: { project?: boolean }) => installCommand('install', h, o, ctx)));
 
   p.command('uninstall')
-    .description('remove the Claude Code hooks')
-    .argument('<harness>', 'claude-code')
+    .description('remove the Claude Code hooks, or the MCP server from any other harness')
+    .argument('<harness>', 'claude-code, codex, cursor, claude-desktop, gemini or vscode')
     .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
     .action(run((h: string, o: { project?: boolean }) => installCommand('uninstall', h, o, ctx)));
 
@@ -173,6 +176,19 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<event>', 'UserPromptSubmit | Stop | SessionStart | drain')
     .allowExcessArguments()
     .action(run((event: string) => hookCommand(event, ctx)));
+
+  p.command('serve')
+    .description(
+      'run the local daemon the hooks prefer (a Unix socket; they fall back to in-process without it)',
+    )
+    .argument('[action]', 'start (the default), status or stop')
+    .option('--detach', 'start in the background and return')
+    .option(
+      '--idle <duration>',
+      'exit after this long without a request (default serve.idleMinutes, 30m)',
+    )
+    .option('--json', 'status: print JSON')
+    .action(run((action: string | undefined, o: ServeOptions) => serveCommand(action, o, ctx)));
 
   p.command('mcp')
     .description(

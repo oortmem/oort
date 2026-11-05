@@ -107,6 +107,19 @@ const project = z
   })
   .default({ private: false });
 
+/**
+ * `oort serve`, the local daemon the hooks talk to (CON-18). Read from the home config only: a
+ * repository's `oort.config.json` cannot start processes on this machine.
+ */
+const serve = z
+  .strictObject({
+    /** SessionStart starts a detached daemon when none is running. */
+    autostart: z.boolean().default(false),
+    /** The daemon exits after this many minutes without a hook request. */
+    idleMinutes: z.number().int().min(1).max(1440).default(30),
+  })
+  .default({ autostart: false, idleMinutes: 30 });
+
 export const OortConfig = z.strictObject({
   embed,
   rerank,
@@ -115,6 +128,7 @@ export const OortConfig = z.strictObject({
   activation,
   recall,
   project,
+  serve,
 });
 export type OortConfig = z.infer<typeof OortConfig>;
 
@@ -123,7 +137,15 @@ export type ConfigSource = 'project' | 'home' | 'default';
 export type ResolvedConfig = OortConfig & {
   home: string;
   sources: Record<string, ConfigSource>;
+  /**
+   * Keys a project's `oort.config.json` set that only the home config may set (`serve`: a
+   * repository must not start processes on this machine). Ignored; absent when there are none.
+   */
+  ignoredProjectKeys?: string[];
 };
+
+/** Keys read from the home config only; a project file's value is ignored (and reported). */
+const HOME_ONLY_KEYS: ReadonlySet<string> = new Set(['serve']);
 
 const CONFIG_KEYS = Object.keys(OortConfig.shape);
 
@@ -208,8 +230,10 @@ export function resolveConfig(
 
   const merged: Record<string, unknown> = {};
   const sources: Record<string, ConfigSource> = {};
+  const ignored: string[] = [];
   for (const key of CONFIG_KEYS) {
-    if (key in projectRaw) {
+    if (key in projectRaw && HOME_ONLY_KEYS.has(key)) ignored.push(key);
+    if (key in projectRaw && !HOME_ONLY_KEYS.has(key)) {
       merged[key] = projectRaw[key];
       sources[key] = 'project';
     } else if (key in homeRaw) {
@@ -220,5 +244,10 @@ export function resolveConfig(
     }
   }
 
-  return { ...OortConfig.parse(merged), home, sources };
+  return {
+    ...OortConfig.parse(merged),
+    home,
+    sources,
+    ...(ignored.length > 0 && { ignoredProjectKeys: ignored }),
+  };
 }

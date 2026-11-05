@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { HOOK_EVENTS, installHooks, uninstallHooks } from '@oortmem/claude-code';
 import { VERSION } from '@oortmem/core';
+import { HOSTS, isHost } from '../connectors.js';
 import { binPath } from '../io.js';
 import { uiFor } from '../ui.js';
 import { Refusal, echo, type Ctx } from '../util.js';
@@ -103,7 +104,11 @@ export function settingsFile(project: boolean, ctx: Ctx): string {
   return path.join(ctx.io.env['HOME'] || os.homedir(), '.claude', 'settings.json');
 }
 
-/** `oort install claude-code [--project]` / `oort uninstall claude-code [--project]` */
+/**
+ * `oort install <harness> [--project]` / `oort uninstall <harness> [--project]`. Claude Code gets
+ * its hooks; every other harness (Codex, Cursor, …) gets the MCP server entry, exactly as
+ * `oort connect <harness>` writes it (CON-18).
+ */
 export async function installCommand(
   action: 'install' | 'uninstall',
   harness: string,
@@ -111,7 +116,16 @@ export async function installCommand(
   ctx: Ctx,
 ): Promise<number> {
   if (harness !== 'claude-code') {
-    throw new Refusal(`unknown harness ${echo(harness)}; Phase 1 supports claude-code.`);
+    if (!isHost(harness)) {
+      throw new Refusal(`unknown harness ${echo(harness)}; expected one of ${HOSTS.join(', ')}.`);
+    }
+    if (opts.project === true) {
+      throw new Refusal(
+        `--project is for the Claude Code hooks; ${harness} is configured per user.`,
+      );
+    }
+    const { connectCommand } = await import('./connect.js');
+    return connectCommand(action === 'install' ? 'connect' : 'disconnect', [harness], {}, ctx);
   }
   const cmd = hookCommandPath(ctx.io.entry);
   const file = settingsFile(opts.project === true, ctx);

@@ -37,11 +37,13 @@ import { Refusal, echo, shown, tilde, withWired, type Ctx } from '../util.js';
 import { hostContext } from './connect.js';
 import { VERSION } from '@oortmem/core';
 import { hookBinaryOf, hookCommandPath, settingsFile, versionManagerOf } from './install.js';
+import { SKIP_FILE, callDaemon, readSkip } from '../serve-client.js';
+import { socketPathFor } from '../serve-protocol.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info' | 'unknown';
 
 export interface Check {
-  group: 'keys' | 'hooks' | 'mcp' | 'store' | 'relay' | 'cloud';
+  group: 'keys' | 'hooks' | 'serve' | 'mcp' | 'store' | 'relay' | 'cloud';
   name: string;
   status: CheckStatus;
   /** One line; never a key or a memory. */
@@ -366,6 +368,89 @@ async function hookBinaryChecks(
     }
   }
   return checks;
+}
+
+/**
+ * `oort serve`: running or not, its pid, version and socket, and a warning when it is another
+ * oort than this one (the hooks then run in-process until it restarts). Reads only; a stale
+ * socket is reported, never removed.
+ */
+async function serveChecks(ctx: Ctx): Promise<Check[]> {
+  const home = resolveHome(ctx.io.env);
+  const socket = socketPathFor(home, ctx.io.env);
+  const show = shown(tilde(socket, ctx.io.env['HOME'] ?? ''));
+  const base = { group: 'serve' as const, name: 'daemon' };
+  const skip = readSkip(home);
+  const skipping: Check[] =
+    skip !== undefined && skip.until > Date.now()
+      ? [
+          {
+            group: 'serve',
+            name: 'hooks',
+            status: 'warn',
+            detail: `skip the daemon until ${new Date(skip.until).toISOString()}, after ${skip.reason === 'refused' ? 'a refusal (another protocol or version, an answer that is not a hook result, or a daemon that would not start)' : 'a hook timed out on it'}; they run in-process (${SKIP_FILE})`,
+            fix: 'oort serve status (tries it again), or oort serve stop && oort serve --detach',
+          },
+        ]
+      : [];
+  return [...(await daemonChecks()), ...skipping];
+
+  async function daemonChecks(): Promise<Check[]> {
+    const r = await callDaemon(socket, 'ping', {}, { budgetMs: 1000 });
+    if (r.ok) {
+      const version = shown(r.result['version']);
+      const pid = shown(r.result['pid']);
+      if (r.result['version'] !== VERSION) {
+        return [
+          {
+            ...base,
+            status: 'warn',
+            detail: `running oort ${version} (pid ${pid}, ${show}), but this is oort ${VERSION}: hooks run in-process until it restarts`,
+            fix: 'oort serve stop && oort serve --detach',
+          },
+        ];
+      }
+      return [{ ...base, status: 'ok', detail: `running, pid ${pid}, oort ${version}, ${show}` }];
+    }
+    switch (r.reason) {
+      case 'absent':
+        return [
+          {
+            ...base,
+            status: 'info',
+            detail: 'not running; hooks run in-process',
+            fix: 'oort serve --detach',
+          },
+        ];
+      case 'refused':
+        return [
+          {
+            ...base,
+            status: 'info',
+            detail: `not running; a stopped daemon left ${show} behind (the next start replaces it)`,
+            fix: 'oort serve --detach',
+          },
+        ];
+      case 'untrusted':
+        return [
+          {
+            ...base,
+            status: 'warn',
+            detail: `${show} or its directory belongs to another user or is writable by others: hooks never use it`,
+            fix: `remove ${show} and run chmod 700 on its directory`,
+          },
+        ];
+      default:
+        return [
+          {
+            ...base,
+            status: 'warn',
+            detail: `${show} does not answer (${r.reason}): hooks fall back to in-process`,
+            fix: 'oort serve stop && oort serve --detach',
+          },
+        ];
+    }
+  }
 }
 
 function isExecutable(file: string): boolean {
@@ -819,6 +904,7 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
   const checks: Check[] = [
     ...keys.checks,
     ...(await hookChecks(ctx, cmd, home)),
+    ...(await serveChecks(ctx)),
     ...mcpChecks(ctx, cmd),
     ...(await storeChecks(ctx)),
     ...(await relayChecks(ctx, keys.relayed)),
@@ -837,7 +923,7 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
       problems === 0 ? ui.success('no problems') : ui.warning(`${problems} to fix`),
     ),
   );
-  for (const group of ['keys', 'hooks', 'mcp', 'store', 'relay', 'cloud'] as const) {
+  for (const group of ['keys', 'hooks', 'serve', 'mcp', 'store', 'relay', 'cloud'] as const) {
     const rows = checks.filter((c) => c.group === group);
     ctx.io.out(`${group === 'keys' ? '' : '\n'}${ui.bold(group)}\n`);
     ctx.io.out(

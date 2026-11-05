@@ -400,6 +400,7 @@ describe('oort bin', () => {
     expect([...new Set(report.checks.map((c) => c.group))]).toEqual([
       'keys',
       'hooks',
+      'serve',
       'mcp',
       'store',
       'relay',
@@ -643,6 +644,41 @@ describe('oort bin', () => {
     expect(un.exitCode).toBe(0);
     expect(fs.readFileSync(cursor, 'utf8')).toBe(original);
     expect(fs.readFileSync(codex, 'utf8')).toBe('');
+  });
+
+  it('cli.install-cursor-and-codex-add-the-mcp-server (CON-18)', async () => {
+    const s = sandbox();
+    const bin = fs.realpathSync(BIN);
+    const cursor = path.join(s.home, '.cursor', 'mcp.json');
+    const codex = path.join(s.home, '.codex', 'config.toml');
+    for (const harness of ['cursor', 'codex']) {
+      const r = await oort(s, ['install', harness]);
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain(`oort connect ${harness}`);
+    }
+    const entry = (
+      JSON.parse(fs.readFileSync(cursor, 'utf8')) as { mcpServers: Record<string, unknown> }
+    ).mcpServers['oort'];
+    expect(entry).toEqual({
+      type: 'stdio',
+      command: bin,
+      args: ['mcp', '--agent', 'cursor', '--project', '${workspaceFolder}'],
+    });
+    const toml = fs.readFileSync(codex, 'utf8');
+    expect(toml).toContain('[mcp_servers.oort]');
+    expect(toml).toContain(`command = ${JSON.stringify(bin)}`);
+
+    const project = await oort(s, ['install', 'cursor', '--project']);
+    expect(project.exitCode).toBe(2);
+    const unknown = await oort(s, ['install', 'emacs']);
+    expect(unknown.exitCode).toBe(2);
+    expect(unknown.stderr).toContain('expected one of');
+
+    for (const harness of ['cursor', 'codex']) {
+      expect((await oort(s, ['uninstall', harness])).exitCode).toBe(0);
+    }
+    expect(fs.readFileSync(cursor, 'utf8')).not.toContain('"oort"');
+    expect(fs.readFileSync(codex, 'utf8')).not.toContain('mcp_servers.oort');
   });
 
   it('cli.setup-yes-connects-and-runs-the-demo', async () => {
