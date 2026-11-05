@@ -9,7 +9,7 @@ import { cloudBackend, cloudSpaces } from './mcp.js';
 import { parseKeyScope } from './commands/keys.js';
 import { createKeychain } from './keychain.js';
 import { runCli } from './program.js';
-import { echo, shown } from './util.js';
+import { DISPLAY_UNSAFE_SAMPLES, echo, shown } from './util.js';
 import { wire as realWire, type WireFn } from './wire.js';
 
 /**
@@ -473,6 +473,22 @@ describe('server strings never reach the terminal raw (CON-64 review)', () => {
     expect(shown('one\ntwo', { newlines: true })).toBe('one\ntwo');
     expect(shown('one\ntwo')).toBe('one\\u{a}two');
     expect(raw(echo(`x${CSI}y`))).toBe(false);
+  });
+
+  it('display.shown-covers-the-shared-set-including-invisible-characters', () => {
+    // The same list as Oort Cloud's DISPLAY_UNSAFE_SAMPLES and the site's (CON-64 fix wave).
+    expect([...DISPLAY_UNSAFE_SAMPLES]).toEqual([
+      0x00, 0x1b, 0x1f, 0x7f, 0x9b, 0x9f, 0x61c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a,
+      0x202e, 0x2060, 0x2064, 0x2066, 0x2069, 0xfeff,
+    ]);
+    for (const cp of DISPLAY_UNSAFE_SAMPLES) {
+      expect(shown(`a${String.fromCodePoint(cp)}b`), cp.toString(16)).toBe(
+        `a\\u{${cp.toString(16)}}b`,
+      );
+    }
+    for (const fine of ['é', '中', 'ß', '\u00a0', '\u2010', '\u2070', '\u2065', 'a.b-c']) {
+      expect(shown(fine)).toBe(fine);
+    }
   });
 
   it('display.members-and-agents-with-escape-sequences-are-printed-escaped', async () => {

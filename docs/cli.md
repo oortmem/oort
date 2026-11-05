@@ -887,9 +887,19 @@ Constellation. What you shared stays in it.
 
 An agent reads a Constellation only once you attach it: `oort constellation attach oort-core --agent
 claude-code` lets Claude Code's hooks and MCP server read it, and `--share` also lets that agent
-share into it. An agent never gets more than your own role allows: attaching with `--share` as a
-reader is refused. Commands with no agent named (`oort recall` without `--agent`) read every
-Constellation you belong to.
+share into it. An agent never gets more than your own role allows: a reader can attach agents,
+and they read only (`--share` is accepted but capped to read while you are a reader). Commands
+with no agent named (`oort recall` without `--agent`) read every Constellation you belong to.
+
+**Limit: attaching narrows only clients that name their agent.** The cloud applies an agent's
+attachments when the request names that agent (the CLI does whenever `--agent` or `OORT_AGENT`
+is set, and `oort connect` sets it for each host). An agent name is a label, not a credential: a
+client using the same key without naming an agent reads every Constellation the key reaches. To
+really confine an agent, give it its own narrowed key: `oort keys create --scope planet,<c>:read`.
+
+Changing membership (invite, revoke, remove, roles, leave, attach, detach, transfer), maintaining
+(policy, project links, delete) and making keys need a full key or the signed-in dashboard; a
+narrowed key is refused.
 
 No vendor key is read in cloud mode: Oort Cloud calls the models. `OORT_CLOUD_URL` points the CLI
 at another API (https, or http to localhost for `wrangler dev`). Errors are one line with the fix,

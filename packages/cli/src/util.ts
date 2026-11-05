@@ -196,16 +196,30 @@ export function age(iso: string, now: Date): string {
 }
 
 /**
+ * Characters `shown` makes visible: C0 and C1 controls (ESC, CSI \u009b, newlines), DEL, ALM, the
+ * zero-width and direction marks U+200B-U+200F, the bidi embeddings and overrides, the invisible
+ * operators U+2060-U+2064, the isolates and the BOM. The same set as Oort Cloud's CONTROL_CHARS
+ * and the site's displayText; DISPLAY_UNSAFE_SAMPLES is the shared test vector.
+ */
+// eslint-disable-next-line no-control-regex
+const DISPLAY_UNSAFE =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+
+/** One code point from each range of DISPLAY_UNSAFE and its edges (the same list in each repo). */
+export const DISPLAY_UNSAFE_SAMPLES = [
+  0x00, 0x1b, 0x1f, 0x7f, 0x9b, 0x9f, 0x61c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202e,
+  0x2060, 0x2064, 0x2066, 0x2069, 0xfeff,
+] as const;
+
+/**
  * A string from Oort Cloud (another member's email hint, an agent or Constellation name, an API
- * message) as it may be printed: every C0 and C1 control character (ESC, CSI \u009b, newlines,
- * DEL) and bidi override becomes a visible `\u{…}` escape, so nobody can plant terminal escape
- * sequences that rewrite or hide output. Never truncates.
+ * message) as it may be printed: every character in DISPLAY_UNSAFE becomes a visible `\u{…}`
+ * escape, so nobody can plant terminal escape sequences or invisible text that rewrites or hides
+ * output. Never truncates.
  */
 export function shown(s: unknown, opts: { newlines?: boolean } = {}): string {
-  return String(s).replace(
-    // eslint-disable-next-line no-control-regex
-    /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
-    (c) => (opts.newlines === true && c === '\n' ? c : `\\u{${c.charCodeAt(0).toString(16)}}`),
+  return String(s).replace(DISPLAY_UNSAFE, (c) =>
+    opts.newlines === true && c === '\n' ? c : `\\u{${c.charCodeAt(0).toString(16)}}`,
   );
 }
 
