@@ -456,7 +456,7 @@ describe('server strings never reach the terminal raw (CON-64 review)', () => {
   const raw = (s: string) => s.includes(ESC) || s.includes(CSI);
 
   it('display.shown-escapes-controls-and-never-truncates', () => {
-    expect(shown(`a${ESC}[2Jb${CSI}31mc‮d`)).toBe('a\\u{1b}[2Jb\\u{9b}31mc\\u{202e}d');
+    expect(shown(`a${ESC}[2Jb${CSI}31mc\u202ed`)).toBe('a\\u{1b}[2Jb\\u{9b}31mc\\u{202e}d');
     expect(shown('x'.repeat(500))).toHaveLength(500);
     expect(shown('one\ntwo', { newlines: true })).toBe('one\ntwo');
     expect(shown('one\ntwo')).toBe('one\\u{a}two');

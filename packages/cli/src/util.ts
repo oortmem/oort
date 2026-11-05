@@ -204,7 +204,7 @@ export function age(iso: string, now: Date): string {
 export function shown(s: unknown, opts: { newlines?: boolean } = {}): string {
   return String(s).replace(
     // eslint-disable-next-line no-control-regex
-    /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
     (c) => (opts.newlines === true && c === '\n' ? c : `\\u{${c.charCodeAt(0).toString(16)}}`),
   );
 }
