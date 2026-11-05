@@ -26,7 +26,7 @@ runs in the GitHub environment `npm`, which needs Marcus's approval before it ca
 3. **Trust the workflow** for each package (npm 11.5.1 or later):
 
    ```sh
-   scripts/npm-trust.sh           # runs `npm trust github` for all nine packages
+   scripts/npm-trust.sh           # `npm trust github` for every package; already-trusted ones are skipped
    ```
 
    Or on npmjs.com: each package → Settings → Trusted Publisher → GitHub Actions, with
