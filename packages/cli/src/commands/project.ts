@@ -7,7 +7,7 @@ import {
   resolveHome,
   unlinkProject,
 } from '@oortmem/core';
-import { Refusal, echo, type Ctx } from '../util.js';
+import { Refusal, cloudOf, confirm, echo, withWired, type Ctx } from '../util.js';
 
 function rootOrRefuse(ctx: Ctx, action: string): string {
   const root = projectRootFor(ctx.io.cwd);
@@ -66,4 +66,51 @@ export async function projectUnlinkCommand(ctx: Ctx): Promise<number> {
   const removed = unlinkProject(resolveHome(ctx.io.env), root);
   ctx.io.out(removed ? `Unlinked ${root}\n` : `No link for ${root}\n`);
   return 0;
+}
+
+/**
+ * `oort project privacy public|private [--yes]` (Oort Cloud): the owner's explicit choice for
+ * this repository's project. Oort Cloud keeps a project it was told is private private, whatever
+ * a later client says; this is the only way to make its memories shareable again. `public` asks
+ * first (a non-terminal needs --yes); `private` is always allowed.
+ */
+export async function projectPrivacyCommand(
+  state: string,
+  opts: { yes?: boolean },
+  ctx: Ctx,
+): Promise<number> {
+  if (state !== 'public' && state !== 'private') {
+    throw new Refusal('project privacy takes public or private.');
+  }
+  return withWired(ctx, async (w) => {
+    const cloud = cloudOf(w);
+    if (cloud === undefined) {
+      throw new Refusal(
+        'Project privacy is kept in Oort Cloud: run this on a machine that uses it.',
+      );
+    }
+    const project = w.scope.projectId;
+    if (project === undefined) {
+      throw new Refusal('project privacy needs a git repository; none found above the cwd.');
+    }
+    if (state === 'public') {
+      const ok = await confirm(
+        ctx.io,
+        `Mark project ${echo(project)} as not private in Oort Cloud? Its memories can then be shared to Constellations.`,
+        opts.yes === true,
+        'mark it public',
+      );
+      if (!ok) {
+        ctx.io.out('Unchanged.\n');
+        return 0;
+      }
+    }
+    await cloud.setProjectPrivacy(project, state === 'private');
+    ctx.io.out(
+      state === 'private'
+        ? `Project ${project} is private: its memories never leave it.\n`
+        : `Project ${project} is not private: its memories can be shared with \`oort share\`.\n`,
+    );
+    return 0;
+  });
 }

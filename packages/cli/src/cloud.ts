@@ -300,6 +300,8 @@ export interface CloudClient {
       acknowledgedFindings?: boolean;
     },
   ): Promise<CloudShareResult>;
+  /** The owner's explicit privacy choice for a project (the only way to clear private). */
+  setProjectPrivacy(project: string, priv: boolean): Promise<{ project: string; private: boolean }>;
   /** The Constellation copies of one memory. */
   shares(id: string): Promise<CloudShareEdge[]>;
   /** Forgets a memory and withdraws the copies only this person contributed to. */
@@ -406,6 +408,8 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
         .constellations,
     createConstellation: (name) => json('POST', '/v1/constellations', { name }),
     share: (to, b) => json('POST', `/v1/constellations/${encodeURIComponent(to)}/share`, b),
+    setProjectPrivacy: (project, priv) =>
+      json('PUT', `/v1/projects/${encodeURIComponent(project)}/privacy`, { private: priv }),
     shares: async (id) =>
       (await json<{ shares: CloudShareEdge[] }>('GET', `${idPath(id)}/shares`)).shares,
     forgetEverywhere: (id) => json('DELETE', `${idPath(id)}?everywhere=1`),

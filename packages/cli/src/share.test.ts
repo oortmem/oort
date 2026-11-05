@@ -136,7 +136,7 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
     // From no repository: nobody has said whether p-secret is private.
     const unknown = await e.run(['share', p, '--to', 'oort-core', '--yes']);
     expect(unknown.code).toBe(2);
-    expect(unknown.io.stderr).toContain('from inside that project');
+    expect(unknown.io.stderr).toContain('oort project privacy public');
     // A recall inside p-secret states it is private; from then on it is refused.
     e.cloud.hive.privacy.set('p-secret', true);
     const priv = await e.run(['share', p, '--to', 'oort-core', '--yes']);
@@ -339,5 +339,90 @@ describe('hooks state the privacy of the project they run in (cloud mode)', () =
     await remote.observe(obs as never, 'p1', undefined);
     await remote.observe(obs as never, 'p2', undefined);
     expect(sent.map((x) => x['projectPrivate'])).toEqual([true, undefined, true, undefined]);
+  });
+});
+
+describe('project privacy is stated only when the project config sets it, and private is sticky', () => {
+  const inRepo = (e: ReturnType<typeof setup>, config?: unknown) => {
+    fs.mkdirSync(path.join(e.cwd, '.git'), { recursive: true });
+    if (config !== undefined) {
+      fs.writeFileSync(path.join(e.cwd, 'oort.config.json'), JSON.stringify(config));
+    }
+  };
+  const lastRecall = (e: ReturnType<typeof setup>) => e.cloud.hive.privacy;
+
+  it('privacy.a-default-config-states-nothing', async () => {
+    for (const config of [undefined, { project: { id: 'x' } }, { recall: { budgetChars: 4000 } }]) {
+      const e = setup();
+      e.cloud.hive.enabled = true;
+      inRepo(e, config);
+      await e.run(['recall', 'anything at all here']);
+      await e.run(['observe', '--user', 'a fact', '--assistant', 'noted']);
+      expect(lastRecall(e).size).toBe(0);
+      expect(e.cloud.observed.at(-1)).not.toHaveProperty('projectPrivate');
+    }
+  });
+
+  it('privacy.an-explicit-false-records-not-private', async () => {
+    const e = setup();
+    e.cloud.hive.enabled = true;
+    inRepo(e, { project: { private: false } });
+    await e.run(['recall', 'anything at all here']);
+    expect([...lastRecall(e).values()]).toEqual([false]);
+  });
+
+  it('privacy.a-recorded-true-survives-a-later-false-and-only-the-command-clears-it', async () => {
+    const e = setup();
+    e.cloud.hive.enabled = true;
+    inRepo(e, { project: { private: true } });
+    await e.run(['recall', 'anything at all here']);
+    fs.writeFileSync(
+      path.join(e.cwd, 'oort.config.json'),
+      JSON.stringify({ project: { private: false } }),
+    );
+    await e.run(['recall', 'anything at all here']);
+    expect([...lastRecall(e).values()]).toEqual([true]);
+    // The explicit command: it asks, and a non-terminal needs --yes.
+    const asked = await e.run(['project', 'privacy', 'public']);
+    expect(asked.code).toBe(2);
+    expect(asked.io.stderr).toContain('--yes');
+    expect([...lastRecall(e).values()]).toEqual([true]);
+    const no = await e.run(['project', 'privacy', 'public'], { tty: true, answer: 'n' });
+    expect(no.io.stdout).toContain('Unchanged');
+    const yes = await e.run(['project', 'privacy', 'public', '--yes']);
+    expect(yes.io.stderr).toBe('');
+    expect(yes.code).toBe(0);
+    expect([...lastRecall(e).values()]).toEqual([false]);
+    expect((await e.run(['project', 'privacy', 'private'])).code).toBe(0);
+    expect([...lastRecall(e).values()]).toEqual([true]);
+    expect((await e.run(['project', 'privacy', 'maybe', '--yes'])).code).toBe(2);
+  });
+
+  it('privacy.the-drain-states-nothing', async () => {
+    const e = setup();
+    inRepo(e, { project: { private: true } });
+    const { wire, statedProjectPrivacy } = await import('./wire.js');
+    const env = { HOME: e.root, OORT_HOME: e.home, OORT_NO_KEYCHAIN: '1' };
+    const drain = await wire(e.cwd, { env, projectConfig: false, keychain: async () => undefined });
+    expect(drain.statedPrivacy).toBeUndefined();
+    await drain.close();
+    const here = await wire(e.cwd, { env, keychain: async () => undefined });
+    expect(here.statedPrivacy).toBe(true);
+    expect(statedProjectPrivacy(e.cwd, here.config)).toBe(true);
+    await here.close();
+    // And a remote built without an explicit statement sends none.
+    const { cloudRemote } = await import('./cloud-remote.js');
+    const sent: Record<string, unknown>[] = [];
+    const client = {
+      recall: async (q: Record<string, unknown>) => {
+        sent.push(q);
+        return { memories: [], timings: {} };
+      },
+    } as unknown as Parameters<typeof cloudRemote>[0];
+    await cloudRemote(client, undefined, { projectId: 'p1' }).recall({
+      text: 'x',
+      projectId: 'p1',
+    } as never);
+    expect(sent[0]).not.toHaveProperty('projectPrivate');
   });
 });

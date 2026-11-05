@@ -15,7 +15,7 @@ import {
   shapeLinks,
   writeGrantFor,
 } from './util.js';
-import type { Wired } from './wire.js';
+import { privacyStatement, type Wired } from './wire.js';
 
 /**
  * `oort mcp`: the shared Oort tool set (`@oortmem/mcp`) over a local store. One server
@@ -261,7 +261,7 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
       const results = [];
       for (const [i, fact] of facts.entries()) {
         const r = await client.observe({
-          ...(project !== undefined && { project, projectPrivate: w.config.project.private }),
+          ...(project !== undefined && { project, ...privacyStatement(w) }),
           observation: {
             user: `Remember this${hint}: ${fact}`,
             assistant: `Noted: ${fact}`,

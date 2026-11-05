@@ -1,3 +1,4 @@
+import { privacyStatement } from '../wire.js';
 import { z } from 'zod';
 import { observe, scrubObservation, type Observation } from '@oortmem/core';
 import { Refusal, cloudOf, writePath, withWired, type Ctx, refuseStarInCloud } from '../util.js';
@@ -78,7 +79,7 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
       const result = await cloud.observe({
         ...(w.scope.projectId !== undefined && {
           project: w.scope.projectId,
-          projectPrivate: w.config.project.private,
+          ...privacyStatement(w),
         }),
         observation: {
           user: obs.userText,

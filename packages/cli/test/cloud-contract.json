@@ -163,7 +163,7 @@
     "previewChars": 80
   },
   "hive": {
-    "$comment": "Constellations (CON-63): an invite-only beta behind accounts.hive_beta. Outside it every route here answers 403 hive_not_enabled. :c is a Constellation id or its name (URL-encoded); one the caller is not a member of answers 404, exactly like one that does not exist. Recall reads the caller's Constellations (at most 4) on its own; a hive memory carries origin.level 'hive' and origin.node 'Constellation <name>', and a dropped hive leg is listed in degradedNodes as { node, reason } with 'hive-unavailable' in degraded. A share is two calls: the preview (by id or name; a name several of yours share answers 409 ambiguous_constellation listing them with their ids) returns constellationId, and a previewToken; the confirm (confirm: true) must name that id in the path (a name is refused with 400 confirm_by_id), present the previewToken and exactly the previewed text (409 preview_required otherwise), and send acknowledgedFindings: true when the preview found personal data (409 findings_unacknowledged). A memory whose project's privacy no client has stated is refused with 409 project_privacy_unknown; observe and share carry projectPrivate for the current project. A member may share 30 memories a day per Constellation and a Constellation holds at most 5,000 (429 share_limit); sharing the same memory again updates its one copy.",
+    "$comment": "Constellations (CON-63): an invite-only beta behind accounts.hive_beta. Outside it every route here answers 403 hive_not_enabled. :c is a Constellation id or its name (URL-encoded); one the caller is not a member of answers 404, exactly like one that does not exist. Recall reads the caller's Constellations (at most 4) on its own; a hive memory carries origin.level 'hive' and origin.node 'Constellation <name>', and a dropped hive leg is listed in degradedNodes as { node, reason } with 'hive-unavailable' in degraded. A share is two calls: the preview (by id or name; a name several of yours share answers 409 ambiguous_constellation listing them with their ids) returns constellationId, and a previewToken; the confirm (confirm: true) must name that id in the path (a name is refused with 400 confirm_by_id), present the previewToken and exactly the previewed text (409 preview_required otherwise), and send acknowledgedFindings: true when the preview found personal data (409 findings_unacknowledged). A memory whose project's privacy no client has stated is refused with 409 project_privacy_unknown; observe, recall and share carry projectPrivate for the current project only when its config file sets it; a recorded true is never cleared by a later false, only by PUT /v1/projects/:project/privacy (the owner's explicit choice). A member may share 30 memories a day per Constellation and a Constellation holds at most 5,000 (429 share_limit); sharing the same memory again updates its one copy.",
     "constellation": ["id", "name", "role", "owner", "members", "policy", "joinedAt"],
     "routes": [
       {
@@ -248,6 +248,14 @@
         "method": "DELETE",
         "path": "/v1/memories/:id?everywhere=1",
         "response": ["withdrawn", "requested", "unreachable"]
+      },
+      {
+        "method": "PUT",
+        "path": "/v1/projects/:project/privacy",
+        "request": {
+          "private": "boolean"
+        },
+        "response": ["project", "private"]
       }
     ],
     "limits": {

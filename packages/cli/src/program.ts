@@ -23,7 +23,11 @@ import {
 } from './commands/models.js';
 import { observeCommand } from './commands/observe.js';
 import { pinCommand } from './commands/pin.js';
-import { projectLinkCommand, projectUnlinkCommand } from './commands/project.js';
+import {
+  projectLinkCommand,
+  projectPrivacyCommand,
+  projectUnlinkCommand,
+} from './commands/project.js';
 import { recallCommand, type RecallOptions } from './commands/recall.js';
 import { reembedCommand } from './commands/reembed.js';
 import { revalidateCommand } from './commands/revalidate.js';
@@ -270,6 +274,14 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .command('unlink')
     .description("remove this repository's binding (back to the derived id)")
     .action(run(() => projectUnlinkCommand(ctx)));
+  project
+    .command('privacy')
+    .description(
+      "Oort Cloud: mark this repository's project public (its memories can be shared) or private",
+    )
+    .argument('<state>', 'public or private')
+    .option('--yes', 'do not ask')
+    .action(run((state: string, o: { yes?: boolean }) => projectPrivacyCommand(state, o, ctx)));
 
   const cloud = p
     .command('cloud')

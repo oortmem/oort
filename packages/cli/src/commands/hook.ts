@@ -182,7 +182,7 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         ...(w.mode === 'cloud' && {
           remote: cloudRemote(w.cloud, w.cloudProblem, {
             projectId: w.scope.projectId,
-            private: w.config.project.private,
+            ...(w.statedPrivacy !== undefined && { private: w.statedPrivacy }),
           }),
         }),
       });

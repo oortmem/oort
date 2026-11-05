@@ -23,12 +23,13 @@ const SESSION_LIMIT = 100;
 export function cloudRemote(
   client: CloudClient | undefined,
   problem?: string,
-  here?: { projectId: string | undefined; private: boolean },
+  here?: { projectId: string | undefined; private?: boolean },
 ): RemoteMemory {
-  // Calls about the project this process runs in state its privacy, so the cloud knows whether
-  // that project's memories may ever be shared. Another project (a drained turn) states nothing.
+  // Calls about the project this process runs in state its privacy when its own config file sets
+  // it, so the cloud knows whether that project's memories may be shared. A default states
+  // nothing, and so does another project (a drained turn).
   const privacy = (projectId: string | undefined) =>
-    projectId !== undefined && here !== undefined && projectId === here.projectId
+    projectId !== undefined && here?.private !== undefined && projectId === here.projectId
       ? { projectPrivate: here.private }
       : {};
   const missing = (): never => {

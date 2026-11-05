@@ -812,9 +812,12 @@ save moves there by itself: `oort share` copies one memory, on purpose.
   gets its own id and a record of where it came from; your memory stays as it is, and sharing it
   again updates that one copy.
 - A memory from a project marked `"private": true` in `oort.config.json` never leaves it. Oort
-  Cloud decides from the memory's own project: recalls, saves and shares made inside a project
-  tell it whether that project is private. If it doesn't know yet, the share is refused until
-  you run `oort share` once from inside that project.
+  Cloud decides from the memory's own project. Recalls, saves and shares made inside a project
+  tell it, but only when that project's `oort.config.json` sets `"private"` (true or false); a
+  default says nothing. Once a project is recorded as private it stays private, whatever a later
+  client says, until you run `oort project privacy public` inside it (it asks; `--yes` on a
+  non-terminal). If Oort Cloud doesn't know a project's privacy, its memories are refused: set
+  `"private": false` in its config or run `oort project privacy public`, then share again.
 - Every member's recall then reads the Constellation too, labelled with its name:
   `[semantic, Constellation oort-core, 2d ago]`. Shared memories take at most 40% of the injected
   block, so your own memory comes first. A Constellation that does not answer in time is left out

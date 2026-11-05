@@ -21,7 +21,7 @@ import {
   echo,
   type Ctx,
 } from '../util.js';
-import type { Wired } from '../wire.js';
+import { privacyStatement, type Wired } from '../wire.js';
 
 export interface RecallOptions extends TemporalFlags {
   json?: boolean;
@@ -112,7 +112,7 @@ export async function runRecall(
       text,
       ...(w.scope.projectId !== undefined && {
         project: w.scope.projectId,
-        projectPrivate: w.config.project.private,
+        ...privacyStatement(w),
       }),
       ...(include !== undefined && { include }),
       ...view,

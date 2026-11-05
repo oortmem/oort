@@ -58,7 +58,9 @@ export interface FakeHive {
 
 const MATCHERS = [...CONTRACT.routes, ...CONTRACT.hive.routes].map((r) => ({
   method: r.method,
-  re: new RegExp(`^${r.path.replace(/\?.*$/, '').replace(':c', '[^/]+').replace(':id', '[^/]+')}$`),
+  re: new RegExp(
+    `^${r.path.replace(/\?.*$/, '').replace(':c', '[^/]+').replace(':project', '[^/]+').replace(':id', '[^/]+')}$`,
+  ),
 }));
 
 /** What the API's share gate marks: here, email addresses only. */
@@ -146,8 +148,9 @@ export function fakeCloud(key: string): FakeCloud {
         return err(403, 'hive_not_enabled', 'Constellations are in an invite-only beta.');
       }
       const state = (project: unknown, priv: unknown) => {
+        // As the API: private is sticky; a later false never clears it.
         if (typeof project === 'string' && typeof priv === 'boolean') {
-          c.hive.privacy.set(project, priv);
+          c.hive.privacy.set(project, priv || c.hive.privacy.get(project) === true);
         }
       };
       const byRef = (ref: string) =>
@@ -171,6 +174,15 @@ export function fakeCloud(key: string): FakeCloud {
           { ...x, members: 1, policy: 'confirm', joinedAt: '2026-11-05T00:00:00.000Z' },
           { status: 201 },
         );
+      }
+      const privacyMatch = /^\/v1\/projects\/([^/]+)\/privacy$/.exec(p);
+      if (privacyMatch !== null && req.method === 'PUT') {
+        if (!c.hive.enabled) return err(403, 'hive_not_enabled', 'invite-only beta');
+        const project = decodeURIComponent(privacyMatch[1] ?? '');
+        const b = (await req.json()) as { private?: unknown };
+        if (typeof b.private !== 'boolean') return err(400, 'bad_request', 'private');
+        c.hive.privacy.set(project, b.private);
+        return Response.json({ project, private: b.private });
       }
       const shareMatch = /^\/v1\/constellations\/([^/]+)\/share$/.exec(p);
       if (shareMatch !== null) {
@@ -227,7 +239,7 @@ export function fakeCloud(key: string): FakeCloud {
             return err(
               409,
               'project_privacy_unknown',
-              "Oort doesn't know yet whether this memory's project is private. Run `oort share` once from inside that project.",
+              "Oort doesn't know whether this memory's project is private. Set \"private\": false in that project's oort.config.json, or run `oort project privacy public` inside it, then share again.",
             );
           }
         }

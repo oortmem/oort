@@ -1,3 +1,4 @@
+import { privacyStatement } from '../wire.js';
 import { findCloudMemory, type CloudShareResult, type ShareFinding } from '../cloud.js';
 import { uiFor, type Ui } from '../ui.js';
 import { Refusal, clip, cloudOf, confirm, echo, short, withWired, type Ctx } from '../util.js';
@@ -75,7 +76,7 @@ export async function shareCommand(
     const body = {
       memoryId: m.id,
       ...(opts.text !== undefined && { text: opts.text }),
-      ...(project !== undefined && { project, projectPrivate: w.config.project.private }),
+      ...(project !== undefined && { project, ...privacyStatement(w) }),
     };
     const ui = uiFor(ctx.io);
     const p = await cloud.share(to, body);
