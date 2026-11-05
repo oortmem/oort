@@ -243,6 +243,8 @@ export interface CloudShareResult {
   confirmed: boolean;
   memoryId: string;
   constellation: string;
+  /** The Constellation the preview resolved; the confirm names this id, never the name again. */
+  constellationId: string;
   /** Exactly the text that is (or would be) shared: secrets already redacted. */
   text: string;
   findings: ShareFinding[];
@@ -275,8 +277,9 @@ export interface CloudClient {
   constellations(): Promise<CloudConstellation[]>;
   createConstellation(name: string): Promise<CloudConstellation>;
   /**
-   * Shares a memory with a Constellation (by id or name): without `confirm`, a preview of exactly
-   * what would be shared; with it, the copy.
+   * Shares a memory with a Constellation: without `confirm`, a preview of exactly what would be
+   * shared (by id or name; a name several of yours share is refused); with it, the copy, which
+   * the API accepts only against the preview's `constellationId`.
    */
   share(
     to: string,

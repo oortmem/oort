@@ -158,15 +158,33 @@ export function fakeCloud(key: string): FakeCloud {
       }
       const shareMatch = /^\/v1\/constellations\/([^/]+)\/share$/.exec(p);
       if (shareMatch !== null) {
-        const to = byRef(decodeURIComponent(shareMatch[1] ?? ''));
-        if (to === undefined) return err(404, 'not_found', 'No such Constellation.');
+        const ref = decodeURIComponent(shareMatch[1] ?? '');
         const b = (await req.json()) as {
           memoryId: string;
           text?: string;
           confirm?: boolean;
           privateProjects?: string[];
         };
-        c.hive.requests.push(b);
+        c.hive.requests.push({ to: ref, ...b });
+        // As the API: a confirm names the previewed id; a name several share is refused.
+        const isId = /^c_[a-z0-9]{16}$/.test(ref);
+        if (b.confirm === true && !isId) {
+          return err(400, 'confirm_by_id', 'Confirm with the constellationId of the preview.');
+        }
+        const named = [...c.hive.constellations.values()].filter((x) => x.name === ref);
+        if (!isId && named.length > 1) {
+          const list = named.map((x) => `${x.name} (${x.id.slice(0, 6)})`).join(', ');
+          return err(
+            409,
+            'ambiguous_constellation',
+            `Several of your Constellations have this name: ${list}.`,
+          );
+        }
+        const to = isId ? c.hive.constellations.get(ref) : byRef(ref);
+        if (to === undefined) return err(404, 'not_found', 'No such Constellation.');
+        if (b.confirm === true && to.role === 'reader') {
+          return err(403, 'share_denied', 'Your role in this Constellation cannot share.');
+        }
         const m = c.memories.get(b.memoryId);
         if (m === undefined) return err(404, 'not_found', 'No memory with this id.');
         const project = m.scope['projectId'];
@@ -174,7 +192,13 @@ export function fakeCloud(key: string): FakeCloud {
           return err(403, 'share_denied', 'Memories from a private project stay inside it.');
         }
         const text = b.text ?? m.text;
-        const base = { memoryId: m.id, constellation: to.name, text, findings: findings(text) };
+        const base = {
+          memoryId: m.id,
+          constellation: to.name,
+          constellationId: to.id,
+          text,
+          findings: findings(text),
+        };
         if (b.confirm !== true) return Response.json({ confirmed: false, ...base });
         const copy = { ...fakeMemory({ text }), constellation: to.id, sourceId: m.id };
         c.hive.shared.set(copy.id, copy);

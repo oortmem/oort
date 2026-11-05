@@ -25,9 +25,15 @@ export function marked(text: string, findings: readonly ShareFinding[], ui: Ui):
   return out + text.slice(at);
 }
 
+/** A Constellation as people tell them apart: its name and the start of its id. */
+export const labelOf = (p: Pick<CloudShareResult, 'constellation' | 'constellationId'>): string =>
+  `${p.constellation} (${p.constellationId.slice(0, 6)})`;
+
+const CONSTELLATION_ID = /^c_[a-z0-9]{16}$/;
+
 function preview(p: CloudShareResult, ui: Ui): string {
   const lines = [
-    `Share to Constellation ${p.constellation} (a copy; your memory stays as it is):`,
+    `Share to Constellation ${labelOf(p)} (a copy; your memory stays as it is):`,
     '',
     `  ${marked(p.text, p.findings, ui).replace(/\n/g, '\n  ')}`,
     '',
@@ -73,10 +79,15 @@ export async function shareCommand(
     };
     const ui = uiFor(ctx.io);
     const p = await cloud.share(to, body);
+    // The confirm goes to exactly the Constellation this preview resolved, by id: never the
+    // typed name again, so a rename or a same-named Constellation can't redirect the share.
+    if (typeof p.constellationId !== 'string' || !CONSTELLATION_ID.test(p.constellationId)) {
+      throw new Refusal('Oort Cloud did not say which Constellation this is; nothing was shared.');
+    }
     if (opts.json !== true) ctx.io.out(preview(p, ui));
     const ok = await confirm(
       ctx.io,
-      `Share ${short(m.id)} "${clip(p.text, 40)}" with ${echo(p.constellation)}?`,
+      `Share ${short(m.id)} "${clip(p.text, 40)}" with ${echo(p.constellation)} (${p.constellationId.slice(0, 6)})?`,
       opts.yes === true,
       'share it',
     );
@@ -85,13 +96,13 @@ export async function shareCommand(
       return 0;
     }
     // Confirm exactly the text that was shown.
-    const done = await cloud.share(to, { ...body, text: p.text, confirm: true });
+    const done = await cloud.share(p.constellationId, { ...body, text: p.text, confirm: true });
     if (opts.json === true) {
       ctx.io.out(`${JSON.stringify(done, null, 2)}\n`);
       return 0;
     }
     ctx.io.out(
-      `Shared to Constellation ${done.constellation} as ${done.id ?? '?'}. Members' agents recall it labelled with the Constellation.\n`,
+      `Shared to Constellation ${labelOf(done)} as ${done.id ?? '?'}. Members' agents recall it labelled with the Constellation.\n`,
     );
     return 0;
   });

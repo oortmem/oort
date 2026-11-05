@@ -63,11 +63,14 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
     expect(r.io.stdout).toContain('Share to Constellation oort-core');
     expect(r.io.stdout).toContain('»maya@example.com«');
     expect(r.io.stdout).toContain('an email address');
-    expect(r.io.stdout).toMatch(/Shared to Constellation oort-core as [0-9a-f-]{36}/);
-    // The preview first, then the confirmation with exactly the text that was shown.
+    expect(r.io.stdout).toContain('Share to Constellation oort-core (c_aaaa)');
+    expect(r.io.stdout).toMatch(/Shared to Constellation oort-core \(c_aaaa\) as [0-9a-f-]{36}/);
+    // The preview by the typed name, then the confirmation against the id the preview resolved,
+    // with exactly the text that was shown.
     expect(e.cloud.hive.requests).toEqual([
-      { memoryId: ID },
+      { to: 'oort-core', memoryId: ID },
       {
+        to: 'c_aaaaaaaaaaaaaaaa',
         memoryId: ID,
         text: 'We deploy oortcloud with wrangler; ask maya@example.com.',
         confirm: true,
@@ -192,5 +195,66 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
         ui,
       ),
     ).toBe('mail »a@b.co« now');
+  });
+
+  it('share.confirms-the-previewed-id-even-if-the-name-now-means-another', async () => {
+    const e = setup();
+    withTeam(e);
+    // Between preview and confirm, the user joins another "oort-core" and the first is renamed.
+    const answered = e.cloud.fetch;
+    e.cloud.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const res = await answered(input, init);
+      if (String(input instanceof Request ? input.url : input).endsWith('/oort-core/share')) {
+        e.cloud.hive.constellations.get('c_aaaaaaaaaaaaaaaa')!.name = 'renamed';
+        e.cloud.hive.constellations.set('c_bbbbbbbbbbbbbbbb', {
+          id: 'c_bbbbbbbbbbbbbbbb',
+          name: 'oort-core',
+          role: 'member',
+          owner: false,
+        });
+      }
+      return res;
+    }) as typeof fetch;
+    const r = await e.run(['share', ID, '--to', 'oort-core', '--yes']);
+    expect(r.code).toBe(0);
+    expect([...e.cloud.hive.shared.values()].map((x) => x.constellation)).toEqual([
+      'c_aaaaaaaaaaaaaaaa',
+    ]);
+  });
+
+  it('share.an-ambiguous-name-refuses-and-lists-the-candidates', async () => {
+    const e = setup();
+    withTeam(e);
+    e.cloud.hive.constellations.set('c_bbbbbbbbbbbbbbbb', {
+      id: 'c_bbbbbbbbbbbbbbbb',
+      name: 'oort-core',
+      role: 'member',
+      owner: false,
+    });
+    const r = await e.run(['share', ID, '--to', 'oort-core', '--yes']);
+    expect(r.code).toBe(2);
+    expect(r.io.stderr).toContain('oort-core (c_aaaa)');
+    expect(r.io.stderr).toContain('oort-core (c_bbbb)');
+    expect(e.cloud.hive.shared.size).toBe(0);
+    // By id, it works.
+    expect((await e.run(['share', ID, '--to', 'c_bbbbbbbbbbbbbbbb', '--yes'])).code).toBe(0);
+  });
+
+  it('share.a-confirm-after-losing-write-access-is-refused', async () => {
+    const e = setup();
+    withTeam(e);
+    const answered = e.cloud.fetch;
+    e.cloud.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const res = await answered(input, init);
+      // Made a reader right after the preview.
+      if (String(input instanceof Request ? input.url : input).endsWith('/oort-core/share')) {
+        e.cloud.hive.constellations.get('c_aaaaaaaaaaaaaaaa')!.role = 'reader';
+      }
+      return res;
+    }) as typeof fetch;
+    const r = await e.run(['share', ID, '--to', 'oort-core', '--yes']);
+    expect(r.code).toBe(2);
+    expect(r.io.stderr).toContain('cannot share');
+    expect(e.cloud.hive.shared.size).toBe(0);
   });
 });
