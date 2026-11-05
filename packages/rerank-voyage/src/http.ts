@@ -1,5 +1,5 @@
 // NOTE: duplicated in @oortmem/embed-voyage (src/http.ts). It is small, and the
-// two packages must not depend on each other; keep both copies in sync.
+// two packages must not depend on each other. scripts/check-voyage-http.mjs fails if they drift.
 
 export type VoyageErrorKind =
   'auth' | 'rate-limit' | 'server' | 'network' | 'timeout' | 'bad-response';
@@ -34,6 +34,7 @@ async function relayMessageOf(res: Response): Promise<string | undefined> {
     const body: unknown = JSON.parse(await res.text());
     const msg = (body as { error?: unknown } | null)?.error;
     if (typeof msg !== 'string') return undefined;
+    // oxlint-disable-next-line no-control-regex -- stripping control characters is the point
     const clean = msg.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
     return clean === '' ? undefined : clean.slice(0, 400);
   } catch {

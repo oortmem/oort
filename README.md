@@ -113,7 +113,7 @@ Memories are scoped to a project. By default its id comes from the main reposito
 
 ```sh
 pnpm install
-pnpm verify   # public-repo check, format, lint, build, typecheck and every test
+pnpm verify   # public-repo and copy checks, format, lint, build, typecheck and every test
 ```
 
 The export format is documented in [docs/export-format.md](docs/export-format.md).

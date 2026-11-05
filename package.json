@@ -15,7 +15,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check:public": "node scripts/check-public.mjs",
-    "verify": "pnpm check:public && pnpm format:check && pnpm lint && pnpm build && pnpm typecheck && pnpm test",
+    "check:copies": "node scripts/check-voyage-http.mjs",
+    "verify": "pnpm check:public && pnpm check:copies && pnpm format:check && pnpm lint && pnpm build && pnpm typecheck && pnpm test",
     "bench": "pnpm --filter @oortmem/bench run bench",
     "eval": "pnpm --filter @oortmem/bench run eval --",
     "bundle:mcpb": "node distribution/claude-desktop/build.mjs"
