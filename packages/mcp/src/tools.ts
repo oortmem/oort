@@ -23,7 +23,7 @@ export const FACT_MAX_CHARS = 500;
 /** The first paragraph stands alone (hosts may keep only the first 512 characters). */
 export const INSTRUCTIONS = [
   "Oort is the user's own long-term memory, which they connected on purpose. `recall` searches facts the user chose to keep from earlier sessions: decisions, preferences, project details. Use it when the user refers to earlier work, or when their past context would change the answer; skip it for self-contained questions. Use `remember` only for durable facts the user stated or confirmed, one standalone sentence each, never secrets or credentials. `forget` deletes permanently.",
-  'Memories belong to the project directory this server was started in, plus global ones. `recall` returns facts that are current; pass `as_of` for what was true at an earlier time, `mode: "history"` for every version of a fact, or `known_at` for what was believed then. Without them Oort reads the mode from the query, and the result says which it used. A newer fact can supersede an older one: the older one stays visible to `explain` and history. A fact marked stale may be outdated; confirm it with the user. Batch the facts of one decision into a single `remember` call. Ids from `recall` and `list_recent` feed `forget`, `pin` and `explain`.',
+  'Memories are scoped to this connection: a local server reads the project directory it was started in plus global memories, a remote connection reads the signed-in account; `whoami` says which. `recall` returns facts that are current; pass `as_of` for what was true at an earlier time, `mode: "history"` for every version of a fact, or `known_at` for what was believed then. Without them Oort reads the mode from the query, and the result says which it used. A newer fact can supersede an older one: the older one stays visible to `explain` and history. A fact marked stale may be outdated; confirm it with the user. Batch the facts of one decision into a single `remember` call. Ids from `recall` and `list_recent` feed `forget`, `pin` and `explain`.',
 ].join('\n\n');
 
 const Id = z.string().trim().min(1).max(64).describe('A memory id from recall or list_recent');
@@ -113,7 +113,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'remember',
     title: 'Remember facts',
     description:
-      'Save one to five self-contained facts the user stated or confirmed. Oort skips secrets and dedupes, reinforces or supersedes older facts.',
+      'Save one to five self-contained facts the user stated or confirmed. Oort skips secrets and dedupes, reinforces or supersedes older facts; a superseded fact stays in history.',
     annotations: {
       title: 'Remember facts',
       readOnlyHint: false,
