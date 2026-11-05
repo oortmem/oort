@@ -94,6 +94,7 @@ function relayMessageFrom(raw: string | undefined): string | undefined {
   try {
     const msg = (JSON.parse(raw) as { error?: unknown } | null)?.error;
     if (typeof msg !== 'string') return undefined;
+    // oxlint-disable-next-line no-control-regex -- stripping control characters is the point
     const clean = msg.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
     return clean === '' ? undefined : clean.slice(0, 400);
   } catch {
