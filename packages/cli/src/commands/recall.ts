@@ -110,7 +110,10 @@ export async function runRecall(
     // The cloud API reads the same three fields; an older API ignores mode and knownAt.
     return cloud.recall({
       text,
-      ...(w.scope.projectId !== undefined && { project: w.scope.projectId }),
+      ...(w.scope.projectId !== undefined && {
+        project: w.scope.projectId,
+        projectPrivate: w.config.project.private,
+      }),
       ...(include !== undefined && { include }),
       ...view,
       k: 10,

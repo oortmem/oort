@@ -50,6 +50,10 @@ export interface FakeHive {
   shared: Map<string, FakeMemory & { constellation: string; sourceId: string }>;
   /** Every share request body, in order. */
   requests: Record<string, unknown>[];
+  /** Each project's privacy as clients stated it (absent: unknown). */
+  privacy: Map<string, boolean>;
+  /** Preview tokens handed out: what each one binds. */
+  previews: Map<string, { mem: string; cid: string; text: string; pii: boolean }>;
 }
 
 const MATCHERS = [...CONTRACT.routes, ...CONTRACT.hive.routes].map((r) => ({
@@ -106,7 +110,14 @@ export function fakeCloud(key: string): FakeCloud {
     turns: new Map(),
     importFroms: [],
     key,
-    hive: { enabled: false, constellations: new Map(), shared: new Map(), requests: [] },
+    hive: {
+      enabled: false,
+      constellations: new Map(),
+      shared: new Map(),
+      requests: [],
+      privacy: new Map(),
+      previews: new Map(),
+    },
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
       const req = new Request(input, init);
       const url = new URL(req.url);
@@ -134,6 +145,11 @@ export function fakeCloud(key: string): FakeCloud {
       if (hiveRoute && !c.hive.enabled) {
         return err(403, 'hive_not_enabled', 'Constellations are in an invite-only beta.');
       }
+      const state = (project: unknown, priv: unknown) => {
+        if (typeof project === 'string' && typeof priv === 'boolean') {
+          c.hive.privacy.set(project, priv);
+        }
+      };
       const byRef = (ref: string) =>
         [...c.hive.constellations.values()].find((x) => x.id === ref || x.name === ref);
       if (p === '/v1/constellations' && req.method === 'GET') {
@@ -163,9 +179,13 @@ export function fakeCloud(key: string): FakeCloud {
           memoryId: string;
           text?: string;
           confirm?: boolean;
-          privateProjects?: string[];
+          project?: string;
+          projectPrivate?: boolean;
+          previewToken?: string;
+          acknowledgedFindings?: boolean;
         };
         c.hive.requests.push({ to: ref, ...b });
+        state(b.project, b.projectPrivate);
         // As the API: a confirm names the previewed id; a name several share is refused.
         const isId = /^c_[a-z0-9]{16}$/.test(ref);
         if (b.confirm === true && !isId) {
@@ -182,14 +202,34 @@ export function fakeCloud(key: string): FakeCloud {
         }
         const to = isId ? c.hive.constellations.get(ref) : byRef(ref);
         if (to === undefined) return err(404, 'not_found', 'No such Constellation.');
+        const m = c.memories.get(b.memoryId);
+        if (m === undefined) return err(404, 'not_found', 'No memory with this id.');
+        if (b.confirm === true) {
+          const pv = b.previewToken === undefined ? undefined : c.hive.previews.get(b.previewToken);
+          if (pv === undefined || pv.mem !== m.id || pv.cid !== to.id || pv.text !== b.text) {
+            return err(409, 'preview_required', 'Preview this share again, then confirm it.');
+          }
+          if (pv.pii && b.acknowledgedFindings !== true) {
+            return err(409, 'findings_unacknowledged', 'Acknowledge the personal data first.');
+          }
+        }
         if (b.confirm === true && to.role === 'reader') {
           return err(403, 'share_denied', 'Your role in this Constellation cannot share.');
         }
-        const m = c.memories.get(b.memoryId);
-        if (m === undefined) return err(404, 'not_found', 'No memory with this id.');
+        // The memory's own project decides, as stated by a client inside it.
         const project = m.scope['projectId'];
-        if (typeof project === 'string' && b.privateProjects?.includes(project)) {
-          return err(403, 'share_denied', 'Memories from a private project stay inside it.');
+        if (typeof project === 'string') {
+          const priv = c.hive.privacy.get(project);
+          if (priv === true) {
+            return err(403, 'share_denied', 'Memories from a private project stay inside it.');
+          }
+          if (priv === undefined) {
+            return err(
+              409,
+              'project_privacy_unknown',
+              "Oort doesn't know yet whether this memory's project is private. Run `oort share` once from inside that project.",
+            );
+          }
         }
         const text = b.text ?? m.text;
         const base = {
@@ -199,13 +239,30 @@ export function fakeCloud(key: string): FakeCloud {
           text,
           findings: findings(text),
         };
-        if (b.confirm !== true) return Response.json({ confirmed: false, ...base });
-        const copy = { ...fakeMemory({ text }), constellation: to.id, sourceId: m.id };
+        if (b.confirm !== true) {
+          const previewToken = `pv_${randomUUID()}`;
+          c.hive.previews.set(previewToken, {
+            mem: m.id,
+            cid: to.id,
+            text,
+            pii: base.findings.length > 0,
+          });
+          return Response.json({ confirmed: false, ...base, previewToken });
+        }
+        // One live copy per (source, Constellation): sharing again updates it.
+        const copyId = `copy-${m.id}-${to.id}`;
+        const copy = { ...fakeMemory({ id: copyId, text }), constellation: to.id, sourceId: m.id };
         c.hive.shared.set(copy.id, copy);
         return Response.json({ confirmed: true, ...base, id: copy.id });
       }
       if (p === '/v1/recall') {
-        const b = (await req.json()) as { text: string; project?: string; k?: number };
+        const b = (await req.json()) as {
+          text: string;
+          project?: string;
+          k?: number;
+          projectPrivate?: boolean;
+        };
+        state(b.project, b.projectPrivate);
         if (c.hangRecall === true) return new Promise<Response>(() => {});
         const words = b.text
           .toLowerCase()
@@ -251,6 +308,7 @@ export function fakeCloud(key: string): FakeCloud {
       if (p === '/v1/observe') {
         const b = (await req.json()) as Record<string, unknown>;
         c.observed.push(b);
+        state(b['project'], b['projectPrivate']);
         const o = b['observation'] as { user: string };
         const ref = typeof b['turnRef'] === 'string' ? b['turnRef'] : undefined;
         if (ref !== undefined && ref.length > 128)

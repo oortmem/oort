@@ -20,7 +20,17 @@ const SESSION_LIMIT = 100;
  * then inject nothing, and the drain keeps account-level refusals queued). With no client (no Oort
  * key, a bad URL), every call rejects the same way.
  */
-export function cloudRemote(client: CloudClient | undefined, problem?: string): RemoteMemory {
+export function cloudRemote(
+  client: CloudClient | undefined,
+  problem?: string,
+  here?: { projectId: string | undefined; private: boolean },
+): RemoteMemory {
+  // Calls about the project this process runs in state its privacy, so the cloud knows whether
+  // that project's memories may ever be shared. Another project (a drained turn) states nothing.
+  const privacy = (projectId: string | undefined) =>
+    projectId !== undefined && here !== undefined && projectId === here.projectId
+      ? { projectPrivate: here.private }
+      : {};
   const missing = (): never => {
     throw Object.assign(new Error(problem ?? 'Oort Cloud is not set up on this machine.'), {
       holdQueue: true,
@@ -35,7 +45,12 @@ export function cloudRemote(client: CloudClient | undefined, problem?: string): 
   }
   return {
     recall: ({ text, projectId }) =>
-      client.recall({ text, ...(projectId !== undefined && { project: projectId }), k: 10 }),
+      client.recall({
+        text,
+        ...(projectId !== undefined && { project: projectId }),
+        ...privacy(projectId),
+        k: 10,
+      }),
     sessionMemories: async ({ projectId }) => {
       const project = projectId !== undefined && { project: projectId };
       // Pinned first (any tier), then the hot tier; a memory in both appears once.
@@ -57,6 +72,7 @@ export function cloudRemote(client: CloudClient | undefined, problem?: string): 
         // A repeat of the same turnRef answers `duplicate: true`: already saved, so success.
         await client.observe({
           ...(projectId !== undefined && { project: projectId }),
+          ...privacy(projectId),
           ...(turnRef !== undefined && { turnRef: cloudTurnRef(turnRef) }),
           observation: {
             user: obs.userText,

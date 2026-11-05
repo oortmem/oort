@@ -69,13 +69,13 @@ export async function shareCommand(
       );
     }
     const m = await findCloudMemory(cloud, id);
-    // A private project's memories stay inside it: the cloud remembers the project as private.
+    // State this project's privacy: the cloud decides from the shared memory's own project, and
+    // refuses one whose privacy no client inside it has stated yet.
     const project = w.scope.projectId;
-    const privateProjects = w.config.project.private && project !== undefined ? [project] : [];
     const body = {
       memoryId: m.id,
       ...(opts.text !== undefined && { text: opts.text }),
-      ...(privateProjects.length > 0 && { privateProjects }),
+      ...(project !== undefined && { project, projectPrivate: w.config.project.private }),
     };
     const ui = uiFor(ctx.io);
     const p = await cloud.share(to, body);
@@ -95,8 +95,19 @@ export async function shareCommand(
       ctx.io.out('Not shared.\n');
       return 0;
     }
-    // Confirm exactly the text that was shown.
-    const done = await cloud.share(p.constellationId, { ...body, text: p.text, confirm: true });
+    // Confirm exactly the text that was shown, with the preview's token. Personal data it found
+    // is acknowledged only here: after the person said yes (or passed --yes).
+    if (p.previewToken === undefined) {
+      throw new Refusal('Oort Cloud did not return a preview to confirm; nothing was shared.');
+    }
+    const pii = p.findings.some((f) => f.kind !== 'secret');
+    const done = await cloud.share(p.constellationId, {
+      ...body,
+      text: p.text,
+      previewToken: p.previewToken,
+      confirm: true,
+      ...(pii && { acknowledgedFindings: true }),
+    });
     if (opts.json === true) {
       ctx.io.out(`${JSON.stringify(done, null, 2)}\n`);
       return 0;

@@ -261,7 +261,7 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
       const results = [];
       for (const [i, fact] of facts.entries()) {
         const r = await client.observe({
-          ...(project !== undefined && { project }),
+          ...(project !== undefined && { project, projectPrivate: w.config.project.private }),
           observation: {
             user: `Remember this${hint}: ${fact}`,
             assistant: `Noted: ${fact}`,

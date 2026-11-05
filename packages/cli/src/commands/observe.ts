@@ -76,7 +76,10 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
     if (cloud !== undefined) {
       refuseStarInCloud(w);
       const result = await cloud.observe({
-        ...(w.scope.projectId !== undefined && { project: w.scope.projectId }),
+        ...(w.scope.projectId !== undefined && {
+          project: w.scope.projectId,
+          projectPrivate: w.config.project.private,
+        }),
         observation: {
           user: obs.userText,
           assistant: obs.assistantText,

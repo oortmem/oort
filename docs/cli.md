@@ -807,9 +807,14 @@ save moves there by itself: `oort share` copies one memory, on purpose.
 - `oort share` shows exactly the text that would be shared first: secrets are always redacted,
   and email addresses, phone numbers, account numbers and IP addresses are marked. Nothing leaves
   your Planet until you confirm (`--yes` on a non-terminal; it never prompts there). `--text`
-  shares an edited text instead. The copy gets its own id and a record of where it came from;
-  your memory stays as it is. A memory from a project marked `"private": true` in
-  `oort.config.json` is refused.
+  shares an edited text instead. The confirmation shares exactly the previewed text, to exactly
+  the previewed Constellation (shown with the start of its id), within a few minutes. The copy
+  gets its own id and a record of where it came from; your memory stays as it is, and sharing it
+  again updates that one copy.
+- A memory from a project marked `"private": true` in `oort.config.json` never leaves it. Oort
+  Cloud decides from the memory's own project: recalls, saves and shares made inside a project
+  tell it whether that project is private. If it doesn't know yet, the share is refused until
+  you run `oort share` once from inside that project.
 - Every member's recall then reads the Constellation too, labelled with its name:
   `[semantic, Constellation oort-core, 2d ago]`. Shared memories take at most 40% of the injected
   block, so your own memory comes first. A Constellation that does not answer in time is left out

@@ -64,18 +64,19 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
     expect(r.io.stdout).toContain('»maya@example.com«');
     expect(r.io.stdout).toContain('an email address');
     expect(r.io.stdout).toContain('Share to Constellation oort-core (c_aaaa)');
-    expect(r.io.stdout).toMatch(/Shared to Constellation oort-core \(c_aaaa\) as [0-9a-f-]{36}/);
+    expect(r.io.stdout).toMatch(/Shared to Constellation oort-core \(c_aaaa\) as copy-/);
     // The preview by the typed name, then the confirmation against the id the preview resolved,
-    // with exactly the text that was shown.
-    expect(e.cloud.hive.requests).toEqual([
-      { to: 'oort-core', memoryId: ID },
-      {
-        to: 'c_aaaaaaaaaaaaaaaa',
-        memoryId: ID,
-        text: 'We deploy oortcloud with wrangler; ask maya@example.com.',
-        confirm: true,
-      },
-    ]);
+    // with exactly the text that was shown, the preview's token, and the email acknowledged.
+    const [first, second] = e.cloud.hive.requests as Record<string, unknown>[];
+    expect(first).toEqual({ to: 'oort-core', memoryId: ID });
+    expect(second).toEqual({
+      to: 'c_aaaaaaaaaaaaaaaa',
+      memoryId: ID,
+      text: 'We deploy oortcloud with wrangler; ask maya@example.com.',
+      previewToken: expect.stringMatching(/^pv_/),
+      acknowledgedFindings: true,
+      confirm: true,
+    });
     expect(e.cloud.hive.shared.size).toBe(1);
   });
 
@@ -110,9 +111,62 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
       '--yes',
     ]);
     expect(r.code).toBe(0);
-    const first = e.cloud.hive.requests[0] as { text: string; privateProjects?: string[] };
+    const first = e.cloud.hive.requests[0] as {
+      text: string;
+      project?: string;
+      projectPrivate?: boolean;
+    };
     expect(first.text).toBe('We deploy with wrangler.');
-    expect(first.privateProjects).toHaveLength(1);
+    expect(first.project).toBeDefined();
+    expect(first.projectPrivate).toBe(true);
+  });
+
+  it('share.a-memory-from-an-unknown-or-private-project-is-refused-by-the-cloud', async () => {
+    const e = setup();
+    withTeam(e);
+    const p = '44444444-5555-4666-8777-888888888888';
+    e.cloud.memories.set(
+      p,
+      fakeMemory({
+        id: p,
+        text: 'The secret project uses rust.',
+        scope: { projectId: 'p-secret' },
+      }),
+    );
+    // From no repository: nobody has said whether p-secret is private.
+    const unknown = await e.run(['share', p, '--to', 'oort-core', '--yes']);
+    expect(unknown.code).toBe(2);
+    expect(unknown.io.stderr).toContain('from inside that project');
+    // A recall inside p-secret states it is private; from then on it is refused.
+    e.cloud.hive.privacy.set('p-secret', true);
+    const priv = await e.run(['share', p, '--to', 'oort-core', '--yes']);
+    expect(priv.code).toBe(2);
+    expect(priv.io.stderr).toContain('private project');
+    expect(e.cloud.hive.shared.size).toBe(0);
+  });
+
+  it('share.sharing-again-updates-the-one-copy', async () => {
+    const e = setup();
+    withTeam(e);
+    await e.run(['share', ID, '--to', 'oort-core', '--yes']);
+    await e.run(['share', ID, '--to', 'oort-core', '--text', 'We deploy with wrangler.', '--yes']);
+    expect([...e.cloud.hive.shared.values()].map((x) => x.text)).toEqual([
+      'We deploy with wrangler.',
+    ]);
+  });
+
+  it('share.states-privacy-on-recall-observe-and-remember-from-inside-a-project', async () => {
+    const e = setup();
+    e.cloud.hive.enabled = true;
+    fs.writeFileSync(
+      path.join(e.cwd, 'oort.config.json'),
+      JSON.stringify({ project: { private: true } }),
+    );
+    fs.mkdirSync(path.join(e.cwd, '.git'));
+    await e.run(['recall', 'anything at all here']);
+    expect([...e.cloud.hive.privacy.values()]).toEqual([true]);
+    await e.run(['observe', '--user', 'a fact', '--assistant', 'noted']);
+    expect(e.cloud.observed.at(-1)?.['projectPrivate']).toBe(true);
   });
 
   it('share.outside-the-beta-and-in-local-mode-is-a-plain-refusal', async () => {
@@ -256,5 +310,34 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
     expect(r.code).toBe(2);
     expect(r.io.stderr).toContain('cannot share');
     expect(e.cloud.hive.shared.size).toBe(0);
+  });
+});
+
+describe('hooks state the privacy of the project they run in (cloud mode)', () => {
+  it('cloud-remote.states-privacy-only-for-its-own-project', async () => {
+    const { cloudRemote } = await import('./cloud-remote.js');
+    const sent: Record<string, unknown>[] = [];
+    const client = {
+      recall: async (q: Record<string, unknown>) => {
+        sent.push(q);
+        return { memories: [], timings: {} };
+      },
+      observe: async (b: Record<string, unknown>) => {
+        sent.push(b);
+        return { outcome: 'added', memories: [], counts: {} };
+      },
+    } as unknown as Parameters<typeof cloudRemote>[0];
+    const remote = cloudRemote(client, undefined, { projectId: 'p1', private: true });
+    await remote.recall({ text: 'x', projectId: 'p1' } as never);
+    await remote.recall({ text: 'x', projectId: 'p2' } as never);
+    const obs = {
+      userText: 'u',
+      assistantText: 'a',
+      toolSummaries: [],
+      at: '2026-11-05T00:00:00Z',
+    };
+    await remote.observe(obs as never, 'p1', undefined);
+    await remote.observe(obs as never, 'p2', undefined);
+    expect(sent.map((x) => x['projectPrivate'])).toEqual([true, undefined, true, undefined]);
   });
 });

@@ -248,6 +248,8 @@ export interface CloudShareResult {
   /** Exactly the text that is (or would be) shared: secrets already redacted. */
   text: string;
   findings: ShareFinding[];
+  /** A preview's signed token, valid for a few minutes: the confirm presents it. */
+  previewToken?: string;
   id?: string;
 }
 
@@ -272,6 +274,8 @@ export interface CloudClient {
     mode?: RecallMode;
     /** Levels to read; the API answers 400 `scope_denied` for one this account cannot read. */
     include?: IncludeLevel[];
+    /** Whether `project` (the one this runs in) is private: the cloud records it for sharing. */
+    projectPrivate?: boolean;
   }): Promise<RecallResult>;
   /** The account's Constellations (hive beta; 403 `hive_not_enabled` outside it). */
   constellations(): Promise<CloudConstellation[]>;
@@ -283,7 +287,18 @@ export interface CloudClient {
    */
   share(
     to: string,
-    b: { memoryId: string; text?: string; confirm?: boolean; privateProjects?: string[] },
+    b: {
+      memoryId: string;
+      text?: string;
+      confirm?: boolean;
+      /** The project the share runs in, and whether it is private (recorded by the cloud). */
+      project?: string;
+      projectPrivate?: boolean;
+      /** The preview's token: a confirm must present it with exactly the previewed text. */
+      previewToken?: string;
+      /** The person read the personal data the preview found and shares it anyway. */
+      acknowledgedFindings?: boolean;
+    },
   ): Promise<CloudShareResult>;
   /** The Constellation copies of one memory. */
   shares(id: string): Promise<CloudShareEdge[]>;
@@ -294,6 +309,8 @@ export interface CloudClient {
   /** `turnRef` makes a retry safe: the API saves each turn once and answers `duplicate`. */
   observe(b: {
     project?: string;
+    /** Whether `project` (the one this runs in) is private: the cloud records it for sharing. */
+    projectPrivate?: boolean;
     observation: CloudObservation;
     turnRef?: string;
   }): Promise<CloudObserveResult>;
