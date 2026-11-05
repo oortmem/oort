@@ -63,6 +63,39 @@ async function login(
 }
 
 describe('oort login', () => {
+  it('login.success-shows-the-mark-only-on-a-colour-terminal', async () => {
+    const braille = /[\u2800-\u28ff]/;
+    const plain = await login(await site({ approveAtPoll: 1 }), { keychain: memoryKeychain().kc });
+    expect(plain.code).toBe(0);
+    expect(plain.io.stdout).not.toMatch(braille);
+    expect(plain.io.stdout).not.toContain('\u001b[');
+    const forced = await login(await site({ approveAtPoll: 1 }), {
+      keychain: memoryKeychain().kc,
+      env: { FORCE_COLOR: '3' },
+    });
+    // Colour forced into a pipe: coloured, but no art.
+    expect(forced.io.stdout).toContain('\u001b[');
+    expect(forced.io.stdout).not.toMatch(braille);
+    const tty = await login(await site({ approveAtPoll: 1 }), {
+      keychain: memoryKeychain().kc,
+      env: { COLORTERM: 'truecolor' },
+      tty: true,
+      deps: { openBrowser: async () => true },
+    });
+    expect(tty.code).toBe(0);
+    expect(tty.io.stdout).toMatch(braille);
+    // The mark comes once, right before the signed-in line.
+    expect(tty.io.stdout.indexOf('●')).toBeLessThan(tty.io.stdout.indexOf('Signed in'));
+    const noColor = await login(await site({ approveAtPoll: 1 }), {
+      keychain: memoryKeychain().kc,
+      env: { NO_COLOR: '1', COLORTERM: 'truecolor' },
+      tty: true,
+      deps: { openBrowser: async () => true },
+    });
+    expect(noColor.io.stdout).not.toMatch(braille);
+    expect(noColor.io.stdout).not.toContain('\u001b[');
+  });
+
   it('login.polls-until-approved-stores-the-key-and-never-prints-it', async () => {
     const s = await site({ approveAtPoll: 3 });
     const k = memoryKeychain();

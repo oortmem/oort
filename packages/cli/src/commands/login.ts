@@ -142,7 +142,7 @@ export async function runLogin(
   ctx: Ctx,
   say: (text: string) => void,
   ui: Ui,
-  opts: { browser?: boolean } = {},
+  opts: { browser?: boolean; mark?: boolean } = {},
   deps: LoginDeps = ctx.login ?? {},
 ): Promise<LoginOutcome> {
   const blocker = keychainBlocker(ctx);
@@ -200,7 +200,7 @@ export async function runLogin(
     ui.kv([
       [
         'code',
-        `${ui.bold(code)}  ${ui.dim('type it on the page; approve only if you started this login yourself')}`,
+        `${ui.bold(ui.accent(code))}  ${ui.dim('type it on the page; approve only if you started this login yourself')}`,
       ],
     ]),
   );
@@ -249,7 +249,7 @@ export async function runLogin(
               message: `The site sent no usable key. Check ${ACCOUNT_URL}: a key named "CLI on <date>" may need revoking.`,
             };
           }
-          return await keep(ctx, key, say, ui);
+          return await keep(ctx, key, say, ui, opts.mark === true);
         }
         if (res.status === 410) {
           return body.status === 'used'
@@ -310,6 +310,7 @@ async function keep(
   key: string,
   say: (t: string) => void,
   ui: Ui,
+  mark: boolean,
 ): Promise<LoginOutcome> {
   const code = await ctx.keychain.store('oort', key);
   const back = code === 0 ? await ctx.keychain.read('oort') : undefined;
@@ -320,6 +321,16 @@ async function keep(
       message: `${ctx.keychain.kind === 'file' ? 'Oort could not store the key in credentials.json (see the line above)' : 'The Keychain did not store the key'}, so nothing was saved. The key the site made for this sign-in ("CLI on <date>") is unused: ${REVOKE_HINT}.`,
     };
   }
+  // A finished sign-in is one of the few moments with the mark (colour terminals only).
+  const art = mark
+    ? ui.mark([
+        '',
+        '',
+        `${ui.bold(ui.gradient('oort'))} ${ui.bold('Pro')}`,
+        ui.dim('signed in on this machine'),
+      ])
+    : '';
+  if (art !== '') say(`\n${art}`);
   say(
     ui.ok(
       ctx.keychain.kind === 'file'
@@ -361,7 +372,7 @@ async function keep(
 export async function loginCommand(opts: { browser?: boolean }, ctx: Ctx): Promise<number> {
   const ui = uiFor(ctx.io);
   ctx.io.out(ui.header('login', 'Oort Pro'));
-  const r = await runLogin(ctx, (t) => ctx.io.out(`${t.trimEnd()}\n`), ui, opts);
+  const r = await runLogin(ctx, (t) => ctx.io.out(`${t.trimEnd()}\n`), ui, { ...opts, mark: true });
   if (r.ok) return 0;
   ctx.io.err(`oort: ${r.message}\n`);
   return 1;

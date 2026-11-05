@@ -29,6 +29,7 @@ import {
   cloudStatusCommand,
   cloudUseCommand,
 } from './commands/cloud.js';
+import { uiFor } from './ui.js';
 import { Refusal, echo, type Ctx } from './util.js';
 import { wire as defaultWire, type WireFn } from './wire.js';
 
@@ -39,17 +40,36 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
       const code = await fn(...args);
       if (typeof code === 'number') setCode(code);
     };
+  const ui = uiFor(ctx.io);
+  // The help's banner: the mark beside the wordmark, on a colour terminal only.
+  const banner = ui.mark([
+    '',
+    `${ui.bold(ui.gradient('oort'))}  ${ui.dim(VERSION)}`,
+    ui.dim('tiered memory for coding agents'),
+    '',
+    `${ui.tier('hot')} ${ui.dim('Photosphere')}   ${ui.tier('warm')} ${ui.dim('Kuiper Belt')}   ${ui.tier('cold')} ${ui.dim('Oort Cloud')}`,
+  ]);
   const p = new Command('oort')
-    .description('Oort: tiered memory for coding agents.')
+    .description(banner === '' ? 'Oort: tiered memory for coding agents.' : '')
     .version(VERSION)
     .option('--debug', 'print stack traces for unexpected errors')
     .exitOverride()
     .configureOutput({
       writeOut: (s) => ctx.io.out(s),
       writeErr: (s) => ctx.io.err(s),
+      getOutHasColors: () => ui.color,
+      getErrHasColors: () => ui.color,
       // Commander quotes the offending argument ('…'): scrub and clip it like our own refusals.
       outputError: (s, write) => write(s.replace(/'([^'\n]*)'/g, (_m, a: string) => echo(a))),
     })
+    .configureHelp({
+      styleTitle: (s) => ui.bold(s),
+      styleCommandText: (s) => ui.bold(s),
+      styleSubcommandText: (s) => (s === '[command]' ? ui.dim(s) : ui.glow(s)),
+      styleOptionText: (s) => (s === '[options]' ? ui.dim(s) : ui.glow(s)),
+      styleArgumentText: (s) => ui.dim(s),
+    })
+    .addHelpText('before', ({ error }) => (error ? '' : banner))
     .showHelpAfterError('(run `oort --help` for usage)');
 
   p.command('setup')
@@ -318,7 +338,8 @@ export async function runCli(
     code = c;
   });
   try {
-    await p.parseAsync(args, { from: 'user' });
+    // Plain `oort` is the front door: the help on stdout, exit 0.
+    await p.parseAsync(args.length === 0 ? ['--help'] : args, { from: 'user' });
     return code;
   } catch (e) {
     if (e instanceof CommanderError) return e.exitCode === 0 ? 0 : 2;

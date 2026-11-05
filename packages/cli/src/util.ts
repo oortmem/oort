@@ -87,16 +87,24 @@ export function writePath(
   throw new Refusal(`${what} needs the ${missing.join(', ')} adapter(s).\n${reasons.join('\n')}`);
 }
 
-/** One stderr hint when recall runs without its dense or rerank stage. */
+/**
+ * One stderr hint when recall runs without its dense or rerank stage. In cloud mode the server
+ * embeds and reranks, so no local adapter is expected: only what the server reports counts.
+ */
 export function degradedHint(io: Io, w: Wired, degraded: string[] | undefined): void {
+  const reported = degraded !== undefined && degraded.length > 0;
+  if (w.mode === 'cloud') {
+    if (reported) io.err(`oort: recall degraded (${degraded.join(', ')}).\n`);
+    return;
+  }
   // A relay refusal (Oort Pro) is the reason, and it has its own fix.
   const refused = w.relayErrors?.at(-1);
   if (refused !== undefined) {
     io.err(`oort: recall degraded. ${refused.message}\n`);
   } else if (w.embed === undefined || w.rerank === undefined) {
     const why = w.unavailable.embed ?? w.unavailable.rerank;
-    io.err(`oort: lexical-only recall. ${why?.message ?? ''}\n`);
-  } else if (degraded !== undefined && degraded.length > 0) {
+    io.err(`oort: lexical-only recall.${why === undefined ? '' : ` ${why.message}`}\n`);
+  } else if (reported) {
     io.err(`oort: recall degraded (${degraded.join(', ')}).\n`);
   }
 }

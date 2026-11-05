@@ -484,10 +484,15 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
   }
   const ui = uiFor(ctx.io);
   const problems = checks.filter((c) => c.status === 'warn' || c.status === 'fail').length;
-  ctx.io.out(ui.header('doctor', problems === 0 ? 'no problems' : `${problems} to fix`));
+  ctx.io.out(
+    ui.header(
+      'doctor',
+      problems === 0 ? ui.success('no problems') : ui.warning(`${problems} to fix`),
+    ),
+  );
   for (const group of ['keys', 'hooks', 'mcp', 'store', 'relay', 'cloud'] as const) {
     const rows = checks.filter((c) => c.group === group);
-    ctx.io.out(`${ui.bold(group)}\n`);
+    ctx.io.out(`${group === 'keys' ? '' : '\n'}${ui.bold(group)}\n`);
     ctx.io.out(
       ui.kv(
         rows.flatMap((c) => [

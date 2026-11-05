@@ -541,6 +541,65 @@ describe('cloud API follow-ups (CON-76, oortcloud PR #3)', () => {
     expect(r.io.stderr).toContain('not active');
     expect(r.io.stderr).toContain('oort cloud export');
   });
+
+  it('cloud.recall-reports-only-what-the-server-reports', async () => {
+    // Cloud mode loads no local embed or rerank adapter: the server embeds and reranks.
+    const e = setup('cloud');
+    await seed(e, 'cloud');
+    for (const cmd of ['recall', 'explain']) {
+      const ok = await e.run([cmd, 'auth service port 5582']);
+      expect(ok.code, ok.io.stderr).toBe(0);
+      expect(ok.io.stderr, cmd).toBe('');
+    }
+    e.cloud.recallDegraded = ['rerank-timeout'];
+    for (const cmd of ['recall', 'explain']) {
+      const slow = await e.run([cmd, 'auth service port 5582']);
+      expect(slow.code, slow.io.stderr).toBe(0);
+      expect(slow.io.stderr, cmd).toBe('oort: recall degraded (rerank-timeout).\n');
+    }
+  });
+
+  it('cloud.use-says-when-the-local-store-is-already-imported', async () => {
+    const e = setup('local');
+    const w = await realWire(e.cwd, {
+      env: { HOME: e.root, OORT_HOME: e.home, OORT_NO_KEYCHAIN: '1' },
+      keychain: async () => undefined,
+    });
+    const grant = localGrant({ ...localScope(undefined), projectIds: [null] });
+    const mem = (i: number) =>
+      memory({
+        id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        text: `Memory number ${i}.`,
+        embedding: undefined,
+        createdAt: new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString(),
+      });
+    await w.store.upsertMany(grant, [0, 1, 2].map(mem));
+    await w.close();
+
+    const before = await e.run(['cloud', 'use'], { withKey: true });
+    expect(before.code, before.io.stderr).toBe(0);
+    expect(before.io.stdout).toContain('3 memories stay in the local store');
+
+    const imp = await e.run(['cloud', 'import', '--yes'], { withKey: true });
+    expect(imp.code, imp.io.stderr).toBe(0);
+    const after = await e.run(['cloud', 'use'], { withKey: true });
+    expect(after.code, after.io.stderr).toBe(0);
+    expect(after.io.stdout).not.toContain('stay in the local store');
+    expect(after.io.stdout).not.toContain('until you run `oort cloud import`');
+    expect(after.io.stdout).toContain('All 3 local memories are already in Oort Cloud.');
+
+    // A memory saved locally after the import is the only one left to upload.
+    const w2 = await realWire(e.cwd, {
+      env: { HOME: e.root, OORT_HOME: e.home, OORT_NO_KEYCHAIN: '1' },
+      keychain: async () => undefined,
+    });
+    await w2.store.upsert(grant, mem(3));
+    await w2.close();
+    const grown = await e.run(['cloud', 'use'], { withKey: true });
+    expect(grown.io.stdout).toContain(
+      '1 memory stays in the local store until you run `oort cloud import`',
+    );
+  });
 });
 
 describe('cloud mode, time modes (review 12)', () => {
