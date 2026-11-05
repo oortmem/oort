@@ -7,6 +7,7 @@ import { filterFor, type HookEvent } from '@oortmem/claude-code';
 import { formatForInjection, recall, resolveConfig, resolveProject } from '@oortmem/core';
 import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
 import { readCloudSettings } from './cloud.js';
+import { KEEP_ALIVE_MS, closeCloudPool, warmCloud } from './cloud-http.js';
 import { hookWireOptions, inputCwd, isBusy, runWiredHook } from './commands/hook.js';
 import type { Env } from './io.js';
 import { LOCAL_PROVIDER } from './local-models.js';
@@ -86,6 +87,8 @@ const PARAMS = {
     stdin: z.string().max(MAX_FRAME_BYTES),
     cwd: AbsPath,
     version: Version,
+    /** `OORT_HOOK_TIMING=1` in the hook: answer with the event's timings too (numbers only). */
+    timing: z.boolean().optional(),
   }),
   recall: z.strictObject({
     text: z.string().min(1).max(10_000),
@@ -120,6 +123,64 @@ export interface DaemonOptions {
   /** Where the daemon warms its first engine: the user's home directory (global scope). */
   warmCwd: string;
   now?: () => number;
+  /** Tests: how often an idle cloud connection is refreshed, and for how long after a prompt. */
+  keepWarm?: { everyMs: number; forMs: number };
+}
+
+/**
+ * In cloud mode, the daemon keeps its Oort Cloud connection open while prompts are coming
+ * (CON-101): opening one costs about 200 ms (DNS, TCP, TLS), as much as a third of a recall. The
+ * pool closes a connection after KEEP_ALIVE_MS idle; until WARM_FOR_MS after the last prompt, an
+ * idle connection is refreshed shortly before that with `GET /health` (no key, nothing read,
+ * nothing metered). After that the daemon lets it close: the next prompt opens a new one.
+ */
+export const WARM_FOR_MS = 15 * 60_000;
+const WARM_EVERY_MS = KEEP_ALIVE_MS - 20_000;
+
+export class KeepWarm {
+  private timer: NodeJS.Timeout | undefined;
+  private until = 0;
+  private url: string | undefined;
+  private stopped = false;
+
+  constructor(
+    private readonly now: () => number,
+    private readonly every = WARM_EVERY_MS,
+    private readonly forMs = WARM_FOR_MS,
+  ) {}
+
+  /** A cloud engine is ready: open its connection now, then keep it open for a while. */
+  start(w: Wired): void {
+    if (!this.track(w)) return;
+    void warmCloud(this.url as string).finally(() => this.schedule());
+  }
+
+  /** A prompt just used the connection: keep it open until WARM_FOR_MS from now. */
+  touch(w: Wired): void {
+    if (this.track(w)) this.schedule();
+  }
+
+  private track(w: Wired): boolean {
+    if (this.stopped || w.mode !== 'cloud' || w.cloud === undefined) return false;
+    this.url = w.cloud.url;
+    this.until = this.now() + this.forMs;
+    return true;
+  }
+
+  private schedule(): void {
+    clearTimeout(this.timer);
+    if (this.stopped || this.now() >= this.until) return;
+    this.timer = setTimeout(() => {
+      if (this.stopped || this.url === undefined) return;
+      void warmCloud(this.url).finally(() => this.schedule());
+    }, this.every);
+    this.timer.unref();
+  }
+
+  stop(): void {
+    this.stopped = true;
+    clearTimeout(this.timer);
+  }
 }
 
 export interface Daemon {
@@ -339,7 +400,11 @@ class Engines {
 
   private wireFor(cwd: string): Promise<Wired> {
     // Both served events wire as UserPromptSubmit does (embed and rerank): SessionStart ignores them.
-    return this.opts.wire(cwd, hookWireOptions('UserPromptSubmit', this.opts.env));
+    // A long-lived process: Oort Cloud requests reuse the connection (CON-101).
+    return this.opts.wire(cwd, {
+      ...hookWireOptions('UserPromptSubmit', this.opts.env),
+      cloudKeepAlive: true,
+    });
   }
 
   /** The engine for `cwd`, and how long wiring took (0 when it was warm). */
@@ -440,8 +505,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const ownsLock = (st: fs.Stats): boolean => st.isFile() && readPid(lock) === process.pid;
 
   const engines = new Engines(opts, now);
+  const warm = new KeepWarm(now, opts.keepWarm?.everyMs, opts.keepWarm?.forMs);
+  let firstEngine: Wired;
   try {
     const first = await engines.get(opts.warmCwd);
+    firstEngine = first.w;
     // Local models load lazily; one query embedding now keeps the first prompt fast. A vendor
     // embedder is never called here (that would bill an embedding nobody asked for).
     if (first.w.config.embed.provider === LOCAL_PROVIDER && first.w.embed !== undefined) {
@@ -527,7 +595,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
           spawnDrain: (home) => opts.spawnDrain(home),
         });
         served++;
-        return { stdout: out.stdout };
+        warm.touch(w);
+        return {
+          stdout: out.stdout,
+          ...(p.timing === true && out.timings !== undefined && { timings: out.timings }),
+        };
       }
       case 'recall': {
         const p = parsed.data as z.infer<(typeof PARAMS)['recall']>;
@@ -695,7 +767,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
           for (const c of connections) c.destroy();
         }, 250).unref();
       });
+      warm.stop();
       await engines.closeAll();
+      await closeCloudPool();
       unlinkIfOurs(socket, ownsSocket);
       unlinkIfOurs(lock, ownsLock);
       opts.log(`stopped (${reason})`);
@@ -706,6 +780,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   };
 
   touch();
+  // Listening: open the Oort Cloud connection now, so the first prompt finds it warm.
+  warm.start(firstEngine);
   opts.log(`listening on ${shown(socket)}, pid ${process.pid}, oort ${shown(opts.version)}`);
   return { socket, pid: process.pid, closed, stop };
 }

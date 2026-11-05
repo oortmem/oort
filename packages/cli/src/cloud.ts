@@ -1,6 +1,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { IncludeLevel, Memory, RecallMode, RecallResult, Tier } from '@oortmem/core';
+import {
+  TIMING_HEADER,
+  connectedSince,
+  keepAliveFetch,
+  poolKnowsConnections,
+  timedFetch,
+  parseServerTiming,
+  type CloudTiming,
+} from './cloud-http.js';
 import type { Env } from './io.js';
 import { ACCOUNT_URL } from './relay.js';
 import { Refusal, shown, writeOwnerOnly } from './util.js';
@@ -411,6 +420,10 @@ export interface CloudClient {
     projectPrivate?: boolean;
     /** The agent asking: it reads only the Constellations it is attached to (CON-64). */
     agent?: string;
+    /** false: rank without the reranker (CON-101). An older API ignores it. */
+    rerank?: boolean;
+    /** false: no query embedding, lexical recall only (CON-101). An older API ignores it. */
+    embed?: boolean;
   }): Promise<RecallResult>;
   /** The account's Constellations (hive beta; 403 `hive_not_enabled` outside it). */
   constellations(): Promise<CloudConstellation[]>;
@@ -525,12 +538,57 @@ export interface CloudClientOptions {
   fetch?: typeof fetch;
   /** Per-request timeout; the hooks pass their own budget. */
   timeoutMs?: number;
+  /**
+   * Keep connections open between requests (`oort serve`, `oort mcp`): requests go through the
+   * process's keep-alive pool (`cloud-http.ts`) instead of the global fetch. Ignored with `fetch`.
+   */
+  keepAlive?: boolean;
+  /**
+   * `OORT_HOOK_TIMING=1`: ask the API for its Server-Timing breakdown, and time the connection's
+   * own phases too (through a pool that connects exactly as the global fetch does).
+   */
+  serverTiming?: boolean;
+}
+
+/**
+ * A recall's result with where its time went added to `timings` (numbers only), so the hook log
+ * shows it beside the API's own stages: `cloudMs` (the whole request), `cloudHeadersMs` and
+ * `cloudBodyMs`, `cloudConnected` (1 when it opened a connection, 0 when it reused one; only
+ * known for the keep-alive pool), `cloudDnsMs`, `cloudTcpMs` and
+ * `cloudTlsMs` when known, `cloudRecallMs` (the API's recall itself), and each Server-Timing
+ * metric as `server<Name>Ms`.
+ */
+export function withCloudTimings(r: RecallResult, t: CloudTiming): RecallResult {
+  const timings: Record<string, number> = { ...r.timings };
+  const serverTotal = r.timings?.['totalMs'];
+  if (typeof serverTotal === 'number') timings['cloudRecallMs'] = serverTotal;
+  timings['cloudMs'] = t.totalMs;
+  timings['cloudHeadersMs'] = t.headersMs;
+  timings['cloudBodyMs'] = t.bodyMs;
+  if (t.connected !== undefined) timings['cloudConnected'] = t.connected ? 1 : 0;
+  if (t.dnsMs !== undefined) timings['cloudDnsMs'] = t.dnsMs;
+  if (t.tcpMs !== undefined) timings['cloudTcpMs'] = t.tcpMs;
+  if (t.tlsMs !== undefined) timings['cloudTlsMs'] = t.tlsMs;
+  for (const [name, ms] of Object.entries(t.server ?? {})) {
+    timings[
+      `server${name.charAt(0).toUpperCase()}${name.slice(1).replace(/[^A-Za-z0-9]/g, '')}Ms`
+    ] = ms;
+  }
+  return { ...r, timings };
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 export function createCloudClient(opts: CloudClientOptions): CloudClient {
-  const doFetch = opts.fetch ?? globalThis.fetch;
+  const pooled =
+    opts.fetch === undefined && (opts.keepAlive === true || opts.serverTiming === true);
+  const doFetch =
+    opts.fetch ??
+    (opts.keepAlive === true
+      ? keepAliveFetch
+      : opts.serverTiming === true
+        ? timedFetch
+        : globalThis.fetch);
   const timeout = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   async function call(
@@ -538,9 +596,20 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
     route: string,
     body?: { json?: unknown; text?: string },
   ): Promise<Response> {
+    return (await timedCall(method, route, body)).res;
+  }
+
+  /** `call`, with a clock: `done()` after reading the body says where the time went. */
+  async function timedCall(
+    method: string,
+    route: string,
+    body?: { json?: unknown; text?: string },
+  ): Promise<{ res: Response; done: () => CloudTiming }> {
+    const t0 = performance.now();
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeout);
     const headers: Record<string, string> = { authorization: `Bearer ${opts.key}` };
+    if (opts.serverTiming === true) headers[TIMING_HEADER] = '1';
     let payload: string | undefined;
     if (body?.json !== undefined) {
       headers['content-type'] = 'application/json';
@@ -571,7 +640,27 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       const message = typeof err.error?.message === 'string' ? err.error.message : undefined;
       throw new OortCloudError(cloudErrorKind(res.status, code), res.status, message);
     }
-    return res;
+    const t1 = performance.now();
+    const conn = connectedSince(t0);
+    const server = parseServerTiming(res.headers.get('server-timing'));
+    return {
+      res,
+      done: () => {
+        const t2 = performance.now();
+        return {
+          // Behind a proxy the pool cannot see connections, so no record says nothing.
+          ...(pooled &&
+            (conn !== undefined || poolKnowsConnections()) && { connected: conn !== undefined }),
+          ...(conn?.dnsMs !== undefined && { dnsMs: conn.dnsMs }),
+          ...(conn?.tcpMs !== undefined && { tcpMs: conn.tcpMs }),
+          ...(conn?.tlsMs !== undefined && { tlsMs: conn.tlsMs }),
+          headersMs: t1 - t0,
+          bodyMs: t2 - t1,
+          totalMs: t2 - t0,
+          ...(Object.keys(server).length > 0 && { server }),
+        };
+      },
+    };
   }
   const json = async <T>(method: string, route: string, body?: unknown): Promise<T> =>
     (await (
@@ -611,7 +700,11 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
     deleteConstellation: (c) => json('DELETE', cPath(c)),
     adoptConstellation: (c) => json('POST', cPath(c, '/adopt'), {}),
     createKey: (b) => json('POST', '/v1/keys', b),
-    recall: (q) => json('POST', '/v1/recall', q),
+    recall: async (q) => {
+      const { res, done } = await timedCall('POST', '/v1/recall', { json: q });
+      const r = (await res.json()) as RecallResult;
+      return withCloudTimings(r, done());
+    },
     constellations: async () =>
       (await json<{ constellations: CloudConstellation[] }>('GET', '/v1/constellations'))
         .constellations,

@@ -31,6 +31,20 @@ import { hookCommand } from './commands/hook.js';
 import { importCommand } from './commands/import.js';
 import { initCommand } from './commands/init.js';
 import {
+  judgeApplyCommand,
+  judgeEvalCommand,
+  judgeImportCommand,
+  judgeConfirmCommand,
+  judgeListCommand,
+  judgePackExportCommand,
+  judgePackImportCommand,
+  judgePurgeCommand,
+  judgeRecordCommand,
+  judgeWithdrawCommand,
+  type JudgeApplyOptions,
+  type JudgeRecordOptions,
+} from './commands/judge.js';
+import {
   keysCreateCommand,
   keysListCommand,
   keysRmCommand,
@@ -209,6 +223,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--known-at <iso>', 'recall what was believed at this time, corrected facts included')
     .option('--history', 'recall every version of the matching facts, oldest first')
     .option('--include <levels>', 'read only these levels: self, planet, star (comma list)')
+    .option('--include-withdrawn', 'also show withdrawn judgments')
     .action(run((t: string, o: RecallOptions) => recallCommand(t, o, ctx)));
 
   p.command('explain')
@@ -219,6 +234,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--known-at <iso>', 'explain a recall of what was believed at this time')
     .option('--history', 'explain a recall of every version of the matching facts')
     .option('--include <levels>', 'read only these levels: self, planet, star (comma list)')
+    .option('--include-withdrawn', 'also show withdrawn judgments')
     .action(run((q: string, o: RecallOptions) => explainCommand(q, o, ctx)));
 
   p.command('revalidate')
@@ -265,6 +281,172 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     )
     .action(
       run((id: string, o: { yes?: boolean; everywhere?: boolean }) => forgetCommand(id, o, ctx)),
+    );
+
+  const judge = p
+    .command('judge')
+    .description(
+      "judgment memory: record an expert's decisions with their reasons, and apply them to new items",
+    );
+  judge
+    .command('record')
+    .description('record one decision the expert made, with their reason in their own words')
+    .option('--subject <text>', 'what was judged, in one line')
+    .option('--ref <link>', 'a link or id of the item itself')
+    .option('--verdict <label>', 'approved or rejected, or a label from --verdicts')
+    .option('--verdicts <list>', 'the verdict set, comma list (default approved,rejected)')
+    .option('--reason <text>', "the expert's reason, verbatim")
+    .option('--criteria <list>', 'tags the reason relies on, comma list (no-source,pii)')
+    .option('--domain <name>', 'the domain: legal, content, code-review, …')
+    .option('--by <expert>', "the expert's id")
+    .option('--decided-at <iso>', 'when the expert decided (default now)')
+    .option('--corrects <id>', 'replace this earlier judgment (it stops counting)')
+    .option('--json', 'print JSON')
+    .action(run((o: JudgeRecordOptions) => judgeRecordCommand(o, ctx)));
+  judge
+    .command('apply')
+    .description(
+      "predict the expert's verdict on a new item from their precedents, or say it needs the expert",
+    )
+    .argument('<item>', 'the new item, summarised in one line')
+    .option('--details <text>', 'more about the item')
+    .option('--ref <link>', 'a link or id of the item')
+    .option('--domain <name>', 'use only judgments of this domain')
+    .option('--by <expert>', "use only this expert's judgments")
+    .option('--k <n>', 'precedents to use (default 5)')
+    .option('--threshold <p>', 'probability a prediction needs (default 0.7)')
+    .option('--min-similarity <s>', 'similarity a precedent needs to count')
+    .option('--include-imported', 'also use judgments imported from packs (off by default)')
+    .option(
+      '--include-agent-recorded',
+      'also use agent-recorded judgments nobody confirmed (off by default)',
+    )
+    .option('--json', 'print the full result as JSON')
+    .action(run((item: string, o: JudgeApplyOptions) => judgeApplyCommand(item, o, ctx)));
+  judge
+    .command('list')
+    .description('the judgments this agent reads (current ones; --all for withdrawn and corrected)')
+    .option('--domain <name>', 'only this domain')
+    .option('--by <expert>', 'only this expert')
+    .option('--all', 'include withdrawn and corrected judgments')
+    .option('--json', 'print JSON')
+    .action(
+      run((o: { domain?: string; by?: string; all?: boolean; json?: boolean }) =>
+        judgeListCommand(o, ctx),
+      ),
+    );
+  judge
+    .command('withdraw')
+    .description(
+      'withdraw a judgment: judging, recall, export and packs leave it out from now on (its record stays)',
+    )
+    .argument('<id>', 'judgment id or unique prefix')
+    .option('--by <operator>', 'who withdraws it (default: judge.operator, else local-user)')
+    .option('--yes', 'do not ask')
+    .action(
+      run((id: string, o: { yes?: boolean; by?: string }) => judgeWithdrawCommand(id, o, ctx)),
+    );
+  judge
+    .command('confirm')
+    .description('confirm an agent-recorded judgment, so it counts when judging (never over MCP)')
+    .argument('<id>', 'judgment id or unique prefix')
+    .option('--by <operator>', 'who confirms it (default: judge.operator, else local-user)')
+    .option('--yes', 'do not ask')
+    .action(
+      run((id: string, o: { yes?: boolean; by?: string }) => judgeConfirmCommand(id, o, ctx)),
+    );
+  judge
+    .command('purge')
+    .description("remove a judgment's subject, link, reason and embedding, keeping an audit stub")
+    .argument('<id>', 'judgment id or unique prefix')
+    .option('--by <operator>', 'who purges it (default: judge.operator, else local-user)')
+    .option('--yes', 'do not ask')
+    .action(run((id: string, o: { yes?: boolean; by?: string }) => judgePurgeCommand(id, o, ctx)));
+  judge
+    .command('import')
+    .description('import past decisions from CSV or JSON Lines (see docs/cli.md for the columns)')
+    .argument('<file>')
+    .option('--format <format>', 'csv or jsonl (default: from the file name)')
+    .option('--domain <name>', 'the domain for rows without one')
+    .option('--by <expert>', 'the expert for rows without one')
+    .option('--json', 'print JSON')
+    .action(
+      run((file: string, o: { format?: string; domain?: string; by?: string; json?: boolean }) =>
+        judgeImportCommand(file, o, ctx),
+      ),
+    );
+  judge
+    .command('eval')
+    .description(
+      'judge held-out decisions (never recorded) and report agreement and coverage per domain',
+    )
+    .argument('<file>', 'held-out decisions, CSV or JSON Lines, as for import')
+    .option('--format <format>', 'csv or jsonl (default: from the file name)')
+    .option('--domain <name>', 'the domain for rows without one')
+    .option('--by <expert>', 'the expert for rows without one')
+    .option('--thresholds <list>', 'confidence thresholds, comma list (default 0.5,…,0.9)')
+    .option('--k <n>', 'precedents to use (default 5)')
+    .option('--min-similarity <s>', 'similarity a precedent needs to count')
+    .option('--include-imported', 'also use judgments imported from packs (off by default)')
+    .option(
+      '--include-agent-recorded',
+      'also use agent-recorded judgments nobody confirmed (off by default)',
+    )
+    .option('--json', 'print JSON')
+    .action(
+      run(
+        (
+          file: string,
+          o: {
+            format?: string;
+            domain?: string;
+            by?: string;
+            thresholds?: string;
+            k?: string;
+            minSimilarity?: string;
+            includeImported?: boolean;
+            includeAgentRecorded?: boolean;
+            json?: boolean;
+          },
+        ) => judgeEvalCommand(file, o, ctx),
+      ),
+    );
+  const pack = judge
+    .command('pack')
+    .description("judgment packs: an expert's judgments as a file another agent can import");
+  pack
+    .command('export')
+    .description('write the current judgments (optionally one domain or expert) as a pack')
+    .option('--out <file>', 'write to a new file (0600) instead of stdout')
+    .option('--force', 'with --out, overwrite an existing file (never a symlink)')
+    .option('--name <name>', 'the pack name')
+    .option('--domain <name>', 'only this domain')
+    .option('--by <expert>', 'only this expert')
+    .option('--include-imported', 'also export judgments imported from packs')
+    .action(
+      run(
+        (o: {
+          out?: string;
+          force?: boolean;
+          name?: string;
+          domain?: string;
+          by?: string;
+          includeImported?: boolean;
+        }) => judgePackExportCommand(o, ctx),
+      ),
+    );
+  pack
+    .command('import')
+    .description(
+      'import a pack (shows what it holds first); each judgment keeps its expert and origin',
+    )
+    .argument('<file>')
+    .option('--yes', 'do not ask')
+    .option('--json', 'print JSON')
+    .action(
+      run((file: string, o: { yes?: boolean; json?: boolean }) =>
+        judgePackImportCommand(file, o, ctx),
+      ),
     );
 
   p.command('share')
@@ -663,7 +845,12 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--force', 'with --out, overwrite an existing file (never a symlink)')
     .option('--format <version>', 'export format version: 2 (default) or 1 (Planet memories only)')
     .option('--json', 'accepted for compatibility; the format is always JSON Lines')
-    .action(run((o: { out?: string; force?: boolean; format?: string }) => exportCommand(o, ctx)));
+    .option('--include-withdrawn', 'also export withdrawn judgments')
+    .action(
+      run((o: { out?: string; force?: boolean; format?: string; includeWithdrawn?: boolean }) =>
+        exportCommand(o, ctx),
+      ),
+    );
 
   return p;
 }

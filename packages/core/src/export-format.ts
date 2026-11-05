@@ -61,10 +61,15 @@ export class ExportFormatError extends Error {
 const base64 = (v: Int8Array): string =>
   Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('base64');
 
-/** True when version 1 can hold `m`: a Planet memory whose author is its scope's agent. */
+/**
+ * True when version 1 can hold `m`: a Planet memory whose author is its scope's agent, and not a
+ * judgment (CON-71; version 1 readers know four memory types and no `judgment` field).
+ */
 export function fitsVersion1(m: Memory): boolean {
   const author = authorOf(m);
   return (
+    m.type !== 'judgment' &&
+    m.judgment === undefined &&
     addressOf(m).level === 'user' &&
     author.accountRef === undefined &&
     author.agentId === m.scope.agentId &&

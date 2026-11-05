@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { TOOL_NAMES } from './index.js';
+import { ALL_TOOL_NAMES } from './index.js';
 
 // The install bundles under distribution/ are plain files hosts read directly from git, so these
 // tests keep them consistent with the packages they describe.
@@ -68,9 +68,10 @@ describe('distribution', () => {
         args: ['${__dirname}/server/node_modules/oortmem/dist/main.js', 'mcp'],
       },
     });
-    // `share` is offered only by the remote connector, to a grant with memory.share (CON-64).
+    // `share` is offered only by the remote connector, to a grant with memory.share (CON-64);
+    // the judgment tools (CON-71) only by the local server, which is what the bundle runs.
     expect(m.tools.map((t: { name: string }) => t.name)).toEqual(
-      TOOL_NAMES.filter((n) => n !== 'share'),
+      ALL_TOOL_NAMES.filter((n) => n !== 'share'),
     );
     // Every env value comes from a user setting; key settings are sensitive and optional.
     for (const [k, v] of Object.entries(m.server.mcp_config.env as Record<string, string>)) {

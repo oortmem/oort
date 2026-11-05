@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   CONTRADICTS,
+  DISPLAY_UNSAFE_SOURCE,
   Grant,
   grantWrites,
   localGrant,
@@ -122,12 +123,13 @@ export function cloudOf(w: Wired): CloudClient | undefined {
 export async function withWired<T>(
   ctx: Ctx,
   fn: (w: Wired) => Promise<T>,
-  opts: { agent?: string } = {},
+  opts: { agent?: string; cloudKeepAlive?: boolean } = {},
 ): Promise<T> {
   const agent = opts.agent ?? ctx.agent;
   const w = await ctx.wire(ctx.io.cwd, {
     env: ctx.io.env,
     ...(agent !== undefined && { agent }),
+    ...(opts.cloudKeepAlive === true && { cloudKeepAlive: true }),
   });
   for (const warning of w.warnings) ctx.io.err(`oort: ${warning.message}\n`);
   try {
@@ -201,9 +203,9 @@ export function age(iso: string, now: Date): string {
  * operators U+2060-U+2064, the isolates and the BOM. The same set as Oort Cloud's CONTROL_CHARS
  * and the site's displayText; DISPLAY_UNSAFE_SAMPLES is the shared test vector.
  */
-// eslint-disable-next-line no-control-regex
-const DISPLAY_UNSAFE =
-  /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+// The character class lives in core (DISPLAY_UNSAFE_SOURCE), shared with judgment memory's
+// input checks.
+const DISPLAY_UNSAFE = new RegExp(DISPLAY_UNSAFE_SOURCE, 'g');
 
 /** One code point from each range of DISPLAY_UNSAFE and its edges (the same list in each repo). */
 export const DISPLAY_UNSAFE_SAMPLES = [

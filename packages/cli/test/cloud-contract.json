@@ -21,7 +21,9 @@
         "asOf": "string?",
         "knownAt": "string?",
         "include": "string[]?",
-        "agent": "string?"
+        "agent": "string?",
+        "rerank": "boolean?",
+        "embed": "boolean?"
       },
       "response": ["memories", "timings", "temporal", "read?", "degraded?", "degradedNodes?"]
     },

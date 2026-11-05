@@ -6,8 +6,10 @@ import { nodeKey, type NodeRef } from '@oortmem/core';
  * 2: levels (CON-61). Every memory has an address (`level` plus the fields
  *    that level has) and an author; Phase 1 memories become the owner's
  *    Planet, written by the agent that was their `agent_id`.
+ * 3: judgment memory (CON-71). One nullable column, `judgment`, holds a `judgment` memory's
+ *    decision as JSON; every other row has NULL. Additive: nothing else changes.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * FTS5 tokenizer. The store indexes pre-tokenised text (core's
@@ -72,8 +74,11 @@ const BODY = [
   'updated_at',
 ].join(', ');
 
-/** Version 2 `memories`: one column per Memory field except embedding (in memories_vec). */
-function memoriesV2(table: string): string {
+/**
+ * Version 2 `memories`: one column per Memory field except embedding (in memories_vec). Version 3
+ * is the same table plus `judgment` (`withJudgment`), which a new store gets directly.
+ */
+function memoriesV2(table: string, withJudgment = false): string {
   return `CREATE TABLE ${table} (
         rid INTEGER PRIMARY KEY,
         id TEXT NOT NULL UNIQUE,
@@ -88,7 +93,7 @@ function memoriesV2(table: string): string {
         author_agent_id TEXT NOT NULL,
         author_account_ref TEXT,
         provenance TEXT,
-        ${BODY_COLUMNS},
+        ${BODY_COLUMNS},${withJudgment ? '\n        judgment TEXT,' : ''}
         ${LEVEL_CHECK}
       )`;
 }
@@ -227,22 +232,66 @@ export function migrateV1toV2(db: Database, dimension: number): void {
 }
 
 /**
+ * Version 2 to 3, inside the caller's transaction: adds the nullable `judgment` column. Every
+ * existing row keeps its rid, FTS row and vector; nothing is rewritten.
+ */
+export function migrateV2toV3(db: Database): void {
+  db.exec('ALTER TABLE memories ADD COLUMN judgment TEXT');
+}
+
+/**
+ * Version 3 back to 2, inside the caller's transaction: drops the `judgment` column. Refuses
+ * (throws) while any judgment is stored: version 2 has nowhere to keep it.
+ */
+export function migrateV3toV2(db: Database): void {
+  const n = judgmentCount(db);
+  if (n > 0) {
+    throw new Error(
+      `sqlite store: ${n} ${n === 1 ? 'memory is a judgment' : 'memories are judgments'}; schema version 2 cannot hold them`,
+    );
+  }
+  db.exec('ALTER TABLE memories DROP COLUMN judgment');
+}
+
+/** How many judgment memories the store holds (schema version 3). */
+export function judgmentCount(db: Database): number {
+  return (
+    db
+      .prepare<[], { n: number }>(
+        `SELECT COUNT(*) AS n FROM memories WHERE type = 'judgment' OR judgment IS NOT NULL`,
+      )
+      .get()?.n ?? 0
+  );
+}
+
+/**
  * Version 2 back to 1, inside the caller's transaction: the reverse of
  * `migrateV1toV2`. Refuses (throws, so the caller's transaction rolls back) a
  * store holding anything version 1 cannot represent: a memory at another
  * level, an author with an account, or provenance.
  */
-/** How many memories version 1 cannot represent (another level, an account, provenance). */
+/**
+ * How many memories version 1 cannot represent (another level, an account, provenance, or a
+ * judgment).
+ */
 export function migrationBlockers(db: Database): number {
+  const judgments = hasColumn(db, 'memories', 'judgment') ? ' OR judgment IS NOT NULL' : '';
   return (
     db
       .prepare<[], { n: number }>(
         `SELECT COUNT(*) AS n FROM memories
-         WHERE level != 'user' OR author_account_ref IS NOT NULL OR provenance IS NOT NULL`,
+         WHERE level != 'user' OR author_account_ref IS NOT NULL OR provenance IS NOT NULL
+           OR type = 'judgment'${judgments}`,
       )
       .get()?.n ?? 0
   );
 }
+
+const hasColumn = (db: Database, table: string, column: string): boolean =>
+  db
+    .prepare<[], { name: string }>(`SELECT name FROM pragma_table_info('${table}')`)
+    .all()
+    .some((c) => c.name === column);
 
 export function migrateV2toV1(db: Database, dimension: number): void {
   const blocked = migrationBlockers(db);
@@ -251,6 +300,8 @@ export function migrateV2toV1(db: Database, dimension: number): void {
       `sqlite store: ${blocked} memories are not plain Planet memories; schema version 1 cannot hold them`,
     );
   }
+  // The version 1 table is built from named columns: a version 3 store's `judgment` (all NULL,
+  // checked above) is simply left behind.
   db.exec(memoriesV1('memories_v1'));
   db.exec(`INSERT INTO memories_v1 (rid, id, org_id, customer_id, agent_id, project_id, scope_extra,
              ${BODY})
@@ -335,11 +386,11 @@ export interface ApplySchemaOptions {
 
 /**
  * Creates every table and index of a new store at the current version, and
- * migrates a version 1 store to it (unless `migrate` is false).
+ * migrates a version 1 or 2 store to it (unless `migrate` is false).
  * Records `dimension` on first open and refuses a store whose recorded
  * dimension differs, or whose schema version is unknown. Runs in one
  * IMMEDIATE transaction so concurrent first opens (hook processes) serialise:
- * exactly one of them migrates, the others find version 2.
+ * exactly one of them migrates, the others find the current version.
  */
 export function applySchema(db: Database, dimension: number, opts: ApplySchemaOptions = {}): void {
   db.transaction(() => {
@@ -363,12 +414,16 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
 
     const version = get.get('schema_version')?.value;
     if (version === undefined && !exists(db, 'memories')) {
-      db.exec(memoriesV2('memories'));
+      db.exec(memoriesV2('memories', true));
       db.exec(INDEXES_V2);
     } else if (version === '1') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 1);
       assertMigratable(db);
       migrateV1toV2(db, dimension);
+      migrateV2toV3(db);
+    } else if (version === '2') {
+      if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 2);
+      migrateV2toV3(db);
     } else if (version !== String(SCHEMA_VERSION)) {
       throw new Error(
         `sqlite store: schema version ${version ?? 'unknown'} is not supported (expected ${SCHEMA_VERSION})`,
@@ -396,21 +451,28 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
 }
 
 /**
- * Takes a store's database back to schema version 1, for running an older
- * Oort (0.2.x) against it again. Refuses, changing nothing, when the store
- * holds anything version 1 cannot represent (see `migrateV2toV1`). No other
+ * Takes a store's database back to schema version `to`: 1 for running Oort 0.2.x against it
+ * again (the default), 2 for Oort 0.3 to 0.5. Refuses, changing nothing, when the store holds
+ * anything that version cannot represent (see `migrateV2toV1` and `migrateV3toV2`). No other
  * connection may have the store open.
  */
-export function downgradeSchema(db: Database): void {
+export function downgradeSchema(db: Database, to: 1 | 2 = 1): void {
   db.transaction(() => {
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
-    const version = get.get('schema_version')?.value;
-    if (version === '1') return;
-    if (version !== String(SCHEMA_VERSION)) {
-      throw new Error(`sqlite store: cannot downgrade schema version ${version ?? 'unknown'}`);
+    const version = Number(get.get('schema_version')?.value);
+    if (version <= to && version >= 1) return;
+    if (version !== 2 && version !== 3) {
+      throw new Error(
+        `sqlite store: cannot downgrade schema version ${Number.isNaN(version) ? 'unknown' : version}`,
+      );
     }
-    const dimension = Number(get.get('dimension')?.value);
-    migrateV2toV1(db, dimension);
-    db.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
+    // Version 1 is built from named columns (and refuses judgments), so going to 1 needs no
+    // separate drop of `judgment` on the way.
+    if (version === 3 && to === 2) migrateV3toV2(db);
+    if (to === 1) {
+      const dimension = Number(get.get('dimension')?.value);
+      migrateV2toV1(db, dimension);
+    }
+    db.prepare('UPDATE meta SET value = ? WHERE key = ?').run(String(to), 'schema_version');
   }).immediate();
 }

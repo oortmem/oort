@@ -60,6 +60,8 @@ export interface RecallQuery {
    * or `knownAt`, the mode is read from the query ("on 2 April", "how has … changed").
    */
   mode?: RecallMode;
+  /** Also return withdrawn judgments (CON-71), in any mode. Default false. */
+  includeWithdrawn?: boolean;
 }
 
 /** The temporal view a recall used, and whether it was read from the query. */
@@ -162,6 +164,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   // Scrub once: the query text reaches embedders and rerankers, which may be remote. Temporal
   // words ("on 2 April", "changed over time") pick the view and are not searched for.
   const { view, temporal, text } = viewFor(q, scrub(q.text).text, now);
+  if (q.includeWithdrawn === true) view.includeWithdrawn = true;
   const t0 = clock();
   const degraded: Degradation[] = [];
   const timings: Record<string, number> = {

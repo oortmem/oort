@@ -294,7 +294,23 @@ export function clearSkip(home: string): void {
 }
 
 export type HookAttempt =
-  { served: true; stdout: string } | { served: false; reason: CallFailure; code?: ErrorCode };
+  | { served: true; stdout: string; timings?: Record<string, number> }
+  | { served: false; reason: CallFailure; code?: ErrorCode };
+
+/** The daemon's timings for `OORT_HOOK_TIMING=1`: at most 64 finite numbers, else none. */
+export function validTimings(raw: unknown): Record<string, number> | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+  const entries = Object.entries(raw);
+  if (entries.length > 64) return undefined;
+  const out: Record<string, number> = {};
+  for (const [k, v] of entries) {
+    if (!/^[A-Za-z0-9_]{1,48}$/.test(k) || typeof v !== 'number' || !Number.isFinite(v)) {
+      return undefined;
+    }
+    out[k] = v;
+  }
+  return out;
+}
 
 /**
  * Asks the daemon to run `event` on `stdin`. `cwd` is the hook's own cwd, used only when the
@@ -306,25 +322,27 @@ export async function hookViaDaemon(
   stdin: string,
   cwd: string,
   env: Record<string, string | undefined>,
-  opts: CallOptions & { now?: () => number } = {},
+  opts: CallOptions & { now?: () => number; timing?: boolean } = {},
 ): Promise<HookAttempt> {
   const home = homeFrom(env, os.homedir);
   const now = opts.now ?? Date.now;
   const marker = readSkipText(home);
   const skip = parseSkip(marker);
   if (skip !== undefined && skip.until > now()) return { served: false, reason: 'skipped' };
+  const { timing, now: _now, ...callOpts } = opts;
   const r = await callDaemon(
     socketPathFor(home, env),
     'hook',
-    { event, stdin, cwd, version: cliVersion() },
-    { budgetMs: HOOK_BUDGET_MS[event], ...opts },
+    { event, stdin, cwd, version: cliVersion(), ...(timing === true && { timing: true }) },
+    { budgetMs: HOOK_BUDGET_MS[event], ...callOpts },
   );
   if (r.ok) {
     const raw = r.result['stdout'];
     const stdout = typeof raw === 'string' ? validHookStdout(event, raw) : undefined;
     if (stdout !== undefined) {
       if (marker !== undefined) clearSkip(home); // expired or garbled: the daemon is fine again
-      return { served: true, stdout };
+      const timings = timing === true ? validTimings(r.result['timings']) : undefined;
+      return { served: true, stdout, ...(timings !== undefined && { timings }) };
     }
     // An answer that is not exactly a hook result: as good as another protocol.
     writeSkip(home, now() + SKIP_AFTER_REFUSAL_MS, 'refused');

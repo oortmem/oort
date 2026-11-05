@@ -1,0 +1,11 @@
+subject,verdict,reason,criteria,domain,by,ref,decided_at
+"Story claims garlic cures colds, no source",rejected,"Health claim with no source.",no-source;health-claim,content,ada,content-101,2026-10-01
+"Post says exercise lowers blood pressure, links a medical journal study",approved,"Cites a study and promises no cure.",cited-source;health-claim,content,ada,content-102,2026-10-02
+"Comment posts a neighbour's licence plate and street",rejected,"Personal data of a private person.",personal-data,content,ada,content-103,2026-10-03
+"Review calls a restaurant's pasta bland",approved,"Opinion about a product.",opinion,content,ada,content-104,2026-10-04
+"Video says a crystal cures anxiety",rejected,"Cure claim, no source.",no-source;health-claim,content,ada,content-105,2026-10-05
+"Pull request ignores the error returned by the file write",rejected,"Errors must not be swallowed.",swallowed-error,code-review,cy,code-101,2026-10-01
+"Pull request adds an AWS secret key to a test fixture",rejected,"Secrets never go in the repository.",secret-in-code,code-review,cy,code-102,2026-10-02
+"Pull request fixes a null pointer bug and adds a failing-first test",approved,"Fix with a test.",tests,code-review,cy,code-103,2026-10-03
+"Pull request fixes a race condition with no test",rejected,"A bug fix needs a test.",missing-test,code-review,cy,code-104,2026-10-04
+"Pull request reorders imports, tests pass",approved,"Small refactor, tests unchanged.",refactor;tests,code-review,cy,code-105,2026-10-05

@@ -43,6 +43,7 @@ describe('config', () => {
       rerankBudgetMs: 400,
       queryCacheTtlSec: 600,
       staleAfterDays: 30,
+      promptMode: 'full',
     });
     expect(c.project).toEqual({ private: false });
     expect(c.sources['embed']).toBe('default');

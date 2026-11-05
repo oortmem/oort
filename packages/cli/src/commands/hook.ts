@@ -4,6 +4,7 @@ import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
 import { cloudRemote } from '../cloud-remote.js';
 import { LOCAL_PROVIDER } from '../local-models.js';
 import { HOOK_STDIN_CAP_MS, type Env } from '../io.js';
+import { timingLine } from '../timing-line.js';
 import { echo, starInCloudMessage, type Ctx } from '../util.js';
 import type { AdapterRole, WireOptions, Wired } from '../wire.js';
 
@@ -126,7 +127,7 @@ export async function runWiredHook(
   stdin: string,
   w: Wired,
   opts: WiredHookOptions,
-): Promise<{ stdout: string; skipped?: true }> {
+): Promise<{ stdout: string; skipped?: true; timings?: Record<string, number> }> {
   const logEntry = (outcome: string, degraded?: string[]): void =>
     w.harnessLog.write({
       event,
@@ -167,26 +168,38 @@ export async function runWiredHook(
   // and 600 ms of CPU, often past the rerank budget anyway. The prompt hook ranks by fusion
   // and the relevance gate instead; `oort mcp` and `oort recall` keep it (CON-15). `oort serve`
   // follows the hook, so a prompt gets the same context whichever process answers it.
+  // `recall.promptMode` (CON-101) trades more for speed on the prompt hook only: `fast` drops any
+  // reranker, `lexical` the query embedding too. In cloud mode the API is asked to do the same.
+  const prompt = event === 'UserPromptSubmit';
+  const promptMode = w.config.recall.promptMode;
   const hookRerank =
-    event === 'UserPromptSubmit' && w.config.rerank.provider === LOCAL_PROVIDER
+    prompt && (promptMode !== 'full' || w.config.rerank.provider === LOCAL_PROVIDER)
       ? undefined
       : rerank;
+  const hookEmbed = prompt && promptMode === 'lexical' ? undefined : engine.embed;
+  const { embed: _embed, ...rest } = engine;
   let busy = false;
+  // The event's own timings as its log line records them (numbers only), for OORT_HOOK_TIMING.
+  let timings: Record<string, number> | undefined;
   // The scope is left out: each handler derives it from the session's cwd.
   const out = await runHook(event, stdin, {
-    ...engine,
+    ...rest,
+    ...(hookEmbed !== undefined && { embed: hookEmbed }),
     ...(hookRerank !== undefined && { rerank: hookRerank }),
     store: busyAware(store, () => {
       busy = true;
     }),
     home: agent.home,
     log: {
-      write: (e) =>
+      write: (e) => {
+        const t = { ...e.timings, wireMs: opts.wireMs };
+        if (e.event === event) timings = t;
         harnessLog.write({
           ...e,
-          timings: { ...e.timings, wireMs: opts.wireMs },
+          timings: t,
           ...(opts.daemon === true && { counts: { ...e.counts, daemon: 1 } }),
-        }),
+        });
+      },
     },
     // The drain runs in the home directory, so it resolves the home config only:
     // project config never affects the write path.
@@ -200,15 +213,16 @@ export async function runWiredHook(
           ...(w.statedPrivacy !== undefined && { private: w.statedPrivacy }),
         },
         agent.source === 'none' ? undefined : agent.id,
+        promptMode,
       ),
     }),
   });
   if (busy) {
     // The store was locked: whatever the handler made of it, inject nothing.
     logEntry('degraded:busy', ['busy']);
-    return { stdout: '' };
+    return { stdout: '', ...(timings !== undefined && { timings }) };
   }
-  return { stdout: out.stdout };
+  return { stdout: out.stdout, ...(timings !== undefined && { timings }) };
 }
 
 export interface HookRunOptions {
@@ -272,6 +286,9 @@ export async function hookCommand(
         spawnDrain: (home) => io.spawnDrain(home),
       });
       stdout = out.stdout;
+      if (io.env['OORT_HOOK_TIMING'] === '1' && out.timings !== undefined) {
+        io.err(timingLine('process', out.timings));
+      }
       // The drain is detached and nothing waits on it, so it closes the store cleanly.
       if (event === 'drain') await w.close();
     }

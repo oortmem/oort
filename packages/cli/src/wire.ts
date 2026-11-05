@@ -142,7 +142,8 @@ export interface WireWarning {
     | 'project-id-untrusted'
     | 'keychain-unreadable'
     | 'cloud-unavailable'
-    | 'serve-ignored';
+    | 'serve-ignored'
+    | 'judge-ignored';
   /** One line for stderr; holds config values only. */
   message: string;
 }
@@ -172,6 +173,11 @@ export interface WireOptions {
   roles?: readonly AdapterRole[];
   /** Per-request timeout for the Oort Cloud client (the hooks pass their budget). */
   cloudTimeoutMs?: number;
+  /**
+   * Keep Oort Cloud connections open between requests: set by the long-lived processes
+   * (`oort serve`, `oort mcp`), so a warm one sends each request on an open connection.
+   */
+  cloudKeepAlive?: boolean;
   /** The agent to act as (`--agent`); default `OORT_AGENT`, else anonymous (Planet only). */
   agent?: string;
 }
@@ -362,6 +368,13 @@ export const wire: WireFn = async (cwd, opts = {}) => {
       message: 'project config serve ignored; oort serve reads the home config only.',
     });
   }
+  // Who counts as an expert is the person's call, not a repository's.
+  if (config.ignoredProjectKeys?.includes('judge') === true) {
+    warnings.push({
+      code: 'judge-ignored',
+      message: 'project config judge ignored; judgment memory reads the home config only.',
+    });
+  }
   const project = resolveProject(cwd, config.home);
   // A repository file cannot choose a scope without the user's trust binding.
   if (project.untrustedId !== undefined && opts.projectConfig !== false) {
@@ -433,6 +446,9 @@ export const wire: WireFn = async (cwd, opts = {}) => {
         key: key.key,
         ...fetchOpt,
         ...(opts.cloudTimeoutMs !== undefined && { timeoutMs: opts.cloudTimeoutMs }),
+        ...(opts.cloudKeepAlive === true && { keepAlive: true }),
+        // Diagnostics only: the API's Server-Timing breakdown, beside the CLI's own clock.
+        ...(env['OORT_HOOK_TIMING'] === '1' && { serverTiming: true }),
       });
     if (out.cloudProblem !== undefined)
       warnings.push({ code: 'cloud-unavailable', message: out.cloudProblem });

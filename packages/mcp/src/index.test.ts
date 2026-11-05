@@ -8,6 +8,7 @@ import {
   MemoryToolError,
   REMEMBER_MAX_FACTS,
   TOOLS,
+  ALL_TOOL_NAMES,
   TOOL_NAMES,
   createMcpServer,
   toolJsonSchemas,
@@ -279,7 +280,7 @@ describe('@oortmem/mcp definitions', () => {
 
   it('mcp.json-schemas-cover-every-tool', () => {
     const schemas = toolJsonSchemas();
-    expect(Object.keys(schemas)).toEqual([...TOOL_NAMES]);
+    expect(Object.keys(schemas)).toEqual([...ALL_TOOL_NAMES]);
     expect(schemas.remember).toMatchObject({
       type: 'object',
       properties: { facts: { type: 'array', maxItems: REMEMBER_MAX_FACTS } },

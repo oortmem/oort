@@ -41,10 +41,17 @@ try {
       stdin = await io.readStdin(HOOK_STDIN_CAP_MS);
       try {
         const client = await import('./serve-client.js');
-        const r = await client.hookViaDaemon(event, stdin, io.cwd, io.env);
+        const timing = io.env['OORT_HOOK_TIMING'] === '1';
+        const asked = performance.now();
+        const r = await client.hookViaDaemon(event, stdin, io.cwd, io.env, { timing });
         if (r.served) {
           served = true;
           via = 'daemon';
+          if (timing && r.timings !== undefined) {
+            // The daemon's own timings, and the whole socket exchange as this process saw it.
+            const { timingLine } = await import('./timing-line.js');
+            io.err(timingLine('daemon', { ...r.timings, socketMs: performance.now() - asked }));
+          }
           io.hookExit(r.stdout);
         } else if (event === 'SessionStart' && (r.reason === 'absent' || r.reason === 'refused')) {
           // `serve.autostart` (home config, default off): start one for the prompts that follow.
