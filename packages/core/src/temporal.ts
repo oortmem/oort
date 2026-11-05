@@ -1,4 +1,5 @@
-import * as chrono from 'chrono-node';
+import type * as chrono from 'chrono-node';
+import { loadChrono, mayHaveDateCue } from './date-cue.js';
 
 /**
  * Time handling in code, never in a model (CON-34): relative expressions are resolved with
@@ -11,6 +12,18 @@ const MIN_MS = 60_000;
 
 /** chrono's reference: the instant, and the offset in minutes east of UTC. */
 const ref = (at: Date, offset = 0) => ({ instant: at, timezone: offset });
+
+/**
+ * chrono's parse, loading chrono only for a text with a date cue (CON-82): a text without one
+ * is a text chrono reads nothing the functions below act on.
+ */
+function parse(
+  text: string,
+  reference: chrono.ParsingReference,
+  option: chrono.ParsingOption,
+): chrono.ParsedResult[] {
+  return mayHaveDateCue(text) ? loadChrono().parse(text, reference, option) : [];
+}
 
 /** Midnight of `d`'s day in the given offset, as an instant. */
 const startOfDay = (d: Date, offset = 0): Date => {
@@ -69,8 +82,8 @@ export interface FactInterval {
  */
 export function factInterval(text: string, at: Date, offset = 0): FactInterval {
   const out: FactInterval = {};
-  const forward = chrono.parse(text, ref(at, offset), { forwardDate: true });
-  const backward = chrono.parse(text, ref(at, offset), { forwardDate: false });
+  const forward = parse(text, ref(at, offset), { forwardDate: true });
+  const backward = parse(text, ref(at, offset), { forwardDate: false });
   const day = (d: Date) => startOfDay(d, offset);
   for (const r of forward) {
     const lead = leadIn(text, r);
@@ -148,9 +161,9 @@ export function checkWriterDate(
   const days = [...new Set(factText.match(ISO_DAY) ?? [])];
   if (relatives.length !== 1 || days.length !== 1) return { text: factText };
   const isRelative = new RegExp(RELATIVE.source, 'i');
-  const parsed = chrono
-    .parse(turnText, ref(at, offset), { forwardDate: false })
-    .filter((r) => isRelative.test(r.text));
+  const parsed = parse(turnText, ref(at, offset), { forwardDate: false }).filter((r) =>
+    isRelative.test(r.text),
+  );
   if (parsed.length !== 1) return { text: factText };
   const resolved = ymd(parsed[0]!.start.date(), offset);
   const written = days[0]!;
@@ -208,7 +221,7 @@ function without(query: string, part: string, dangling = false): string {
  * in November is this year's March).
  */
 export function temporalIntent(query: string, now: Date): TemporalIntent {
-  const r = chrono.parse(query, ref(now), { forwardDate: false })[0];
+  const r = parse(query, ref(now), { forwardDate: false })[0];
   let day: Date | undefined;
   if (r !== undefined) {
     let d = r.start.date();

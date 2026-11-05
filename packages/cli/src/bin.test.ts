@@ -254,6 +254,53 @@ describe('oort bin', () => {
     );
   });
 
+  it('cli.hook-loads-chrono-only-for-a-date-cue (CON-82)', async () => {
+    const s = sandbox();
+    await seed(s, [memory({ embedding: new Int8Array(512).fill(3) })]);
+    const recorder = path.join(s.root, 'record.mjs');
+    fs.writeFileSync(
+      recorder,
+      [
+        "import { registerHooks } from 'node:module';",
+        "import { writeFileSync } from 'node:fs';",
+        'const seen = [];',
+        'registerHooks({ resolve(s, c, next) { const r = next(s, c); seen.push(r.url); return r; } });',
+        "process.on('exit', () => writeFileSync(process.env.LOADED, seen.join('\\n')));",
+      ].join('\n'),
+    );
+    const resolved = async (prompt: string): Promise<string[]> => {
+      const loaded = path.join(s.root, `loaded-${prompt.length}.txt`);
+      const r = await execa(
+        process.execPath,
+        ['--import', pathToFileURL(recorder).href, BIN, 'hook', 'UserPromptSubmit'],
+        {
+          cwd: s.cwd,
+          env: { ...s.env, LOADED: loaded },
+          extendEnv: false,
+          reject: false,
+          timeout: 20_000,
+          input: JSON.stringify({
+            session_id: 's1',
+            cwd: s.cwd,
+            hook_event_name: 'UserPromptSubmit',
+            prompt,
+          }),
+        },
+      );
+      expect(r.exitCode).toBe(0);
+      return fs.readFileSync(loaded, 'utf8').split('\n');
+    };
+    // A prompt without a date recalls without ever resolving chrono-node.
+    const plain = await resolved('which port does the auth service listen on?');
+    expect(plain.some((u) => u.endsWith('/temporal.js'))).toBe(true);
+    expect(plain.filter((u) => u.includes('chrono-node'))).toEqual([]);
+    // A dated one loads it, from the built bin, on demand.
+    const dated = await resolved('which port did the auth service use on 2 April 2026?');
+    expect(dated.some((u) => u.includes('/chrono-node/'))).toBe(true);
+    const log = fs.readFileSync(path.join(s.oortHome, 'logs', 'hooks.log'), 'utf8');
+    expect(log).not.toContain('error');
+  });
+
   it('cli.hook-yields-when-store-locked', async () => {
     const s = sandbox();
     const dbPath = path.join(s.oortHome, 'oort.sqlite');
