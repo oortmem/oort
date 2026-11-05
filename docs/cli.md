@@ -910,9 +910,10 @@ oort constellation resolve <c> <id> --keep <id> [--json]   # maintainers
 
 A shared memory is compared with what the Constellation already holds, the way your own memory
 compares a new fact with what you saved before. `oort share` then says what happened when it was
-more than a new copy: your share confirmed a memory already there, added detail to it, replaced an
-earlier one (which stays in its history, with whoever shared it), or corrected one that was never
-right. Order follows when each fact was observed, not when it was shared: an older fact shared
+more than a new copy: your share confirmed a memory already there (counted, never making you its
+author), added detail to it, replaced an earlier one, or corrected one that was never right. Detail,
+replacement and correction each make a new version that is yours; the earlier version stays in
+the history, still its author's. Order follows when each fact was observed, not when it was shared: an older fact shared
 late is kept as history and never replaces a newer one.
 
 Trust comes from your role: maintainer, then member (readers never share). A share through a
@@ -922,7 +923,12 @@ replace someone else's memory. Below it, both memories stay current and recalls 
 labelled `[semantic, Constellation oort-core · contested, 2d ago]`, until a maintainer decides:
 `contested` lists each pair (the current memory and the challenger), and `resolve <c> <id> --keep
 <id>` keeps one. Keeping the challenger replaces (or corrects) the current memory; keeping the
-current memory retracts the challenger. Both stay in the history either way.
+current memory retracts the challenger. Both stay in the history either way. A held claim stays
+held when its member replaces it with a newer one. Contest labels rest on the model's judgment of
+what contradicts what: they are advisory, and someone who words a claim to avoid contradicting it
+outright can get it in unlabelled. Withdrawing your copy (`oort forget --everywhere`) or deleting
+your account removes the versions you shared and your confirmations; when yours was the current
+version, the one before it comes back if its author is still a member.
 
 What you save in your own Planet never changes a Constellation's memory: if you disagree with
 one, your own memory says so, and only you see it.

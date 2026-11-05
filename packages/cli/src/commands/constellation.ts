@@ -1,7 +1,7 @@
 import { ANONYMOUS_AGENT, isAgentId } from '@oortmem/core';
 import { OortCloudError, type CloudConstellation } from '../cloud.js';
 import { uiFor } from '../ui.js';
-import { Refusal, clip, confirm, echo, shown, type Ctx } from '../util.js';
+import { Refusal, clip, confirm, echo, safeJson, shown, type Ctx } from '../util.js';
 import { clientFor } from './cloud.js';
 import { platformOpener } from './login.js';
 
@@ -15,7 +15,7 @@ export async function constellationListCommand(
   const client = await clientFor(ctx);
   const all = await client.constellations();
   if (opts.json === true) {
-    ctx.io.out(`${JSON.stringify(all, null, 2)}\n`);
+    ctx.io.out(`${safeJson(all)}\n`);
     return 0;
   }
   const ui = uiFor(ctx.io);
@@ -47,7 +47,7 @@ export async function constellationCreateCommand(
   }
   const client = await clientFor(ctx);
   const c = await client.createConstellation(n);
-  if (opts.json === true) ctx.io.out(`${JSON.stringify(c, null, 2)}\n`);
+  if (opts.json === true) ctx.io.out(`${safeJson(c)}\n`);
   else
     ctx.io.out(
       `Created Constellation ${shown(c.name)} (${shown(c.id)}). Share a memory with \`oort share <id> --to ${shown(c.name)}\`.\n`,
@@ -86,7 +86,7 @@ function agentArg(agent: string | undefined): string {
 }
 
 const json = (ctx: Ctx, v: unknown): number => {
-  ctx.io.out(`${JSON.stringify(v, null, 2)}\n`);
+  ctx.io.out(`${safeJson(v)}\n`);
   return 0;
 };
 
@@ -423,7 +423,9 @@ export async function constellationResolveCommand(
   });
   if (opts.json === true) return json(ctx, r);
   ctx.io.out(
-    `Kept ${shown(r.kept)} in ${echo(c)}; ${shown(r.ended)} is ${ENDED[r.action] ?? shown(r.action.toLowerCase())}.\n`,
+    `Kept ${shown(r.kept)} in ${echo(c)}; ${shown(r.ended)} is ${
+      Object.hasOwn(ENDED, r.action) ? ENDED[r.action] : shown(String(r.action).toLowerCase())
+    }.\n`,
   );
   return 0;
 }

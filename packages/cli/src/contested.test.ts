@@ -6,7 +6,7 @@ import { fakeIo, tmpdir } from '../test/helpers.js';
 import { writeCloudSettings } from './cloud.js';
 import { createKeychain } from './keychain.js';
 import { runCli } from './program.js';
-import { DISPLAY_UNSAFE_SAMPLES } from './util.js';
+import { DISPLAY_UNSAFE_SAMPLES, safeJson } from './util.js';
 import { wire as realWire, type WireFn } from './wire.js';
 
 /**
@@ -210,5 +210,55 @@ describe('oort constellation contested and resolve (CON-66)', () => {
     contest(e);
     const res = await e.run(['constellation', 'resolve', 'oort-core', CHAL, '--keep', CHAL]);
     expect(raw(res.io.stdout)).toBe(false);
+  });
+});
+
+describe("--json never plants other members' control or bidi characters (CON-66 review)", () => {
+  const hostile = DISPLAY_UNSAFE_SAMPLES.map((cp) => `x${String.fromCodePoint(cp)}`).join('');
+  /** Any DISPLAY_UNSAFE character above C0 left raw (JSON escapes C0 itself). */
+  const rawUnsafe = (s: string) =>
+    DISPLAY_UNSAFE_SAMPLES.some((cp) => cp > 0x1f && s.includes(String.fromCodePoint(cp)));
+
+  it('json.safe-json-escapes-the-shown-set-and-parses-back-to-the-same-values', () => {
+    const v = { text: `a${hostile}b`, list: [`\u202eevil`], n: 1 };
+    const out = safeJson(v);
+    expect(rawUnsafe(out)).toBe(false);
+    expect(out).toContain('\\u202e');
+    expect(out).toContain('\\u009b');
+    expect(JSON.parse(out)).toEqual(v);
+    // Pretty-printed as before: same lines, only the escapes differ.
+    expect(out.split('\n')).toHaveLength(JSON.stringify(v, null, 2).split('\n').length);
+  });
+
+  it('json.contested-resolve-members-and-recall-print-escaped-json', async () => {
+    const e = setup();
+    contest(e, `evil ${hostile}`);
+    const j = await e.run(['constellation', 'contested', 'oort-core', '--json']);
+    expect(j.code, j.io.stderr).toBe(0);
+    expect(rawUnsafe(j.io.stdout)).toBe(false);
+    const parsed = JSON.parse(j.io.stdout) as { challenger: { text: string } }[];
+    expect(parsed[0]!.challenger.text).toBe(`evil ${hostile}`);
+    e.cloud.hive.constellations.get(C)!.name = `oort${CSI}\u202e-core`;
+    const list = await e.run(['constellation', 'list', '--json']);
+    expect(rawUnsafe(list.io.stdout)).toBe(false);
+    const res = await e.run(['constellation', 'resolve', C, CHAL, '--keep', CHAL, '--json']);
+    expect(res.code, res.io.stderr).toBe(0);
+    expect(rawUnsafe(res.io.stdout)).toBe(false);
+  });
+
+  it('json.an-unknown-action-or-outcome-named-like-a-prototype-key-prints-nothing-odd', async () => {
+    const e = setup();
+    contest(e);
+    e.cloud.hive.contests.get(C)![0]!.action = 'constructor' as never;
+    const r = await e.run(['constellation', 'resolve', 'oort-core', CHAL, '--keep', CHAL]);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toContain('is constructor.');
+    const ID = '44444444-dddd-4ddd-8ddd-444444444444';
+    const s = setup();
+    s.cloud.memories.set(ID, fakeMemory({ id: ID }));
+    s.cloud.hive.shareOutcome = '__proto__';
+    const sh = await s.run(['share', ID, '--to', 'oort-core', '--yes']);
+    expect(sh.code, sh.io.stderr).toBe(0);
+    expect(sh.io.stdout).not.toContain('[object');
   });
 });

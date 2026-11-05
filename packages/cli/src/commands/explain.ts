@@ -9,6 +9,7 @@ import {
   short,
   withWired,
   type Ctx,
+  safeJson,
 } from '../util.js';
 import type { RecallResult } from '@oortmem/core';
 import {
@@ -75,7 +76,7 @@ export async function explainCommand(
         timings: result.timings,
         ...(result.degraded !== undefined && { degraded: result.degraded }),
       };
-      ctx.io.out(`${JSON.stringify(out, null, 2)}\n`);
+      ctx.io.out(`${safeJson(out)}\n`);
       return 0;
     }
     const ui = uiFor(ctx.io);

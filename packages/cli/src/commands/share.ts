@@ -11,6 +11,7 @@ import {
   shown,
   withWired,
   type Ctx,
+  safeJson,
 } from '../util.js';
 
 /** What each kind of finding is called in the preview. */
@@ -137,13 +138,16 @@ export async function shareCommand(
       ...(pii && { acknowledgedFindings: true }),
     });
     if (opts.json === true) {
-      ctx.io.out(`${JSON.stringify(done, null, 2)}\n`);
+      ctx.io.out(`${safeJson(done)}\n`);
       return 0;
     }
     ctx.io.out(
       `Shared to Constellation ${labelOf(done)} as ${shown(done.id ?? '?')}. Members' agents recall it labelled with the Constellation.\n`,
     );
-    const note = done.outcome === undefined ? undefined : OUTCOME_NOTES[done.outcome];
+    const note =
+      typeof done.outcome === 'string' && Object.hasOwn(OUTCOME_NOTES, done.outcome)
+        ? OUTCOME_NOTES[done.outcome]
+        : undefined;
     if (note !== undefined) ctx.io.out(`${note}\n`);
     return 0;
   });
