@@ -22,7 +22,7 @@ import {
   type Scope,
 } from '@oortmem/core';
 import { createHookLogger, type HookLogger } from '@oortmem/claude-code';
-import { openSqliteStore } from '@oortmem/store-sqlite';
+import { openSqliteStore, readEmbedderBinding, writeEmbedderBinding } from '@oortmem/store-sqlite';
 import type { Env } from './io.js';
 import {
   keyLookup,
@@ -34,6 +34,13 @@ import {
   type RouteSummary,
 } from './credentials.js';
 import { diskEmbeddingCache } from './embed-cache-disk.js';
+import {
+  EmbedderMismatchError,
+  LOCAL_PROVIDER,
+  embedderId,
+  legacyEmbedderId,
+  loadLocal,
+} from './local-models.js';
 import { createKeychain, type KeychainReader } from './keychain.js';
 import { RELAY_MODELS, RELAY_PATHS, relayUrl, viaRelay, type OortRelayError } from './relay.js';
 import { Refusal, echo } from './util.js';
@@ -61,6 +68,13 @@ export interface Wired {
   rerank?: Reranker;
   decide?: DecisionController;
   write?: MemoryWriter;
+  /**
+   * The embedder the config selects and the one the store's vectors come from (local mode, when
+   * an embedder was wired). When they differ, `embed` is left unset (dense recall and writes
+   * would mix vector spaces) and `reembedWith` holds the configured embedder for `oort reembed`.
+   */
+  embedder?: { active: string; bound: string; matches: boolean };
+  reembedWith?: Embedder;
   /** Why each absent adapter is absent (usually a `MissingCredentialError`). */
   unavailable: Partial<Record<AdapterRole, Error>>;
   /** Which key serves each role (never the key itself). Absent in test doubles. */
@@ -286,6 +300,29 @@ function homeDimension(home: string): number {
 }
 
 /**
+ * Compares the configured embedder with the one the store is bound to. A store with no memories
+ * takes the configured one; a store with memories but no binding predates bindings, so its
+ * vectors are Voyage's. `write` false (the hooks): nothing is recorded, only compared.
+ */
+function bindEmbedder(
+  storePath: string,
+  config: ResolvedConfig,
+  write: boolean,
+): { active: string; bound: string; matches: boolean } {
+  const active = embedderId(config.embed);
+  const recorded = readEmbedderBinding(storePath);
+  const bound = !recorded.hasMemories ? active : (recorded.model ?? legacyEmbedderId(config.embed));
+  if (write && recorded.model !== bound) {
+    try {
+      writeEmbedderBinding(storePath, bound);
+    } catch {
+      // Best effort: the comparison below does not depend on it.
+    }
+  }
+  return { active, bound, matches: bound === active };
+}
+
+/**
  * Builds the engine for `cwd`: resolved config, the cwd's project scope, the
  * SQLite store under `$OORT_HOME`, and each adapter whose key is set. A
  * missing key leaves that adapter undefined (recorded in `unavailable`);
@@ -320,8 +357,9 @@ export const wire: WireFn = async (cwd, opts = {}) => {
   }
   const agent = resolveAgent(config.home, env, opts.agent);
   const scope: Scope = { ...localScope(project.projectId), agentId: agent.id };
+  const storePath = path.join(config.home, 'oort.sqlite');
   const store = await openSqliteStore({
-    path: path.join(config.home, 'oort.sqlite'),
+    path: storePath,
     coldDir: path.join(config.home, 'cold'),
     dimension: config.embed.dimension,
     d: config.activation.d,
@@ -388,46 +426,49 @@ export const wire: WireFn = async (cwd, opts = {}) => {
   await Promise.all([
     want.has('embed') &&
       (async () => {
-        const embed = await load(
-          EMBED,
-          config,
-          await routeOf(EMBED),
-          relay,
-          onRelayError,
-          async (r) =>
-            (await import('@oortmem/embed-voyage')).voyageEmbedder({
-              apiKey: r.key,
-              model: config.embed.model,
-              dimension: config.embed.dimension,
-              ...(r.relay !== undefined && {
-                baseUrl: `${r.relay}${RELAY_PATHS.voyage}`,
-                relay: true,
-              }),
-              ...fetchOpt,
-            }),
-        );
-        if ('ok' in embed) out.embed = withQueryCache(embed.ok, config);
-        else out.unavailable.embed = embed.error;
+        const embed =
+          config.embed.provider === LOCAL_PROVIDER
+            ? await loadLocal('embed', config)
+            : await load(EMBED, config, await routeOf(EMBED), relay, onRelayError, async (r) =>
+                (await import('@oortmem/embed-voyage')).voyageEmbedder({
+                  apiKey: r.key,
+                  model: config.embed.model,
+                  dimension: config.embed.dimension,
+                  ...(r.relay !== undefined && {
+                    baseUrl: `${r.relay}${RELAY_PATHS.voyage}`,
+                    relay: true,
+                  }),
+                  ...fetchOpt,
+                }),
+              );
+        if ('error' in embed) {
+          out.unavailable.embed = embed.error;
+          return;
+        }
+        const bound = bindEmbedder(storePath, config, opts.migrate !== false);
+        out.embedder = bound;
+        if (bound.matches) out.embed = withQueryCache(embed.ok, config);
+        else {
+          out.reembedWith = embed.ok;
+          out.unavailable.embed = new EmbedderMismatchError(bound.bound, bound.active);
+        }
       })(),
     want.has('rerank') &&
       (async () => {
-        const rerank = await load(
-          RERANK,
-          config,
-          await routeOf(RERANK),
-          relay,
-          onRelayError,
-          async (r) =>
-            (await import('@oortmem/rerank-voyage')).voyageReranker({
-              apiKey: r.key,
-              model: config.rerank.model,
-              ...(r.relay !== undefined && {
-                baseUrl: `${r.relay}${RELAY_PATHS.voyage}`,
-                relay: true,
-              }),
-              ...fetchOpt,
-            }),
-        );
+        const rerank =
+          config.rerank.provider === LOCAL_PROVIDER
+            ? await loadLocal('rerank', config)
+            : await load(RERANK, config, await routeOf(RERANK), relay, onRelayError, async (r) =>
+                (await import('@oortmem/rerank-voyage')).voyageReranker({
+                  apiKey: r.key,
+                  model: config.rerank.model,
+                  ...(r.relay !== undefined && {
+                    baseUrl: `${r.relay}${RELAY_PATHS.voyage}`,
+                    relay: true,
+                  }),
+                  ...fetchOpt,
+                }),
+              );
         if ('ok' in rerank) out.rerank = rerank.ok;
         else out.unavailable.rerank = rerank.error;
       })(),

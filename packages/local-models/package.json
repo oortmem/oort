@@ -1,0 +1,61 @@
+{
+  "name": "@oortmem/local-models",
+  "version": "0.2.1",
+  "description": "Oort embeddings and reranking on this machine's CPU (ONNX Runtime): no API keys, no account.",
+  "keywords": [
+    "oort",
+    "agent-memory",
+    "ai-agents",
+    "llm-memory",
+    "embeddings",
+    "reranker",
+    "onnx",
+    "offline"
+  ],
+  "homepage": "https://oortcloud.dev",
+  "bugs": {
+    "url": "https://github.com/oortmem/oort/issues",
+    "email": "hello@oortcloud.dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oortmem/oort.git",
+    "directory": "packages/local-models"
+  },
+  "license": "Apache-2.0",
+  "author": "Oort <hello@oortcloud.dev>",
+  "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.typecheck.json"
+  },
+  "dependencies": {
+    "@huggingface/tokenizers": "0.2.0",
+    "@oortmem/core": "workspace:*",
+    "onnxruntime-node": "1.31.1"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
+  }
+}

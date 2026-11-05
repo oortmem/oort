@@ -60,8 +60,17 @@
     "smol-toml": "1.9.1",
     "zod": "4.6.7"
   },
+  "peerDependencies": {
+    "@oortmem/local-models": "workspace:^"
+  },
+  "peerDependenciesMeta": {
+    "@oortmem/local-models": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.4.0",
+    "@oortmem/local-models": "workspace:*",
     "@types/better-sqlite3": "9.6.0",
     "better-sqlite3": "13.0.3",
     "execa": "10.2.1",

@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { readEmbedderBinding } from '@oortmem/store-sqlite';
 import {
   ANONYMOUS_AGENT,
   addressOf,
@@ -70,8 +71,13 @@ async function localExport(
   const lines: string[] = [];
   const scopes = new Map<string, Scope>();
   let withEmbedding = 0;
+  // Oort Cloud's vectors are Voyage's: a store embedded by a local model sends text only.
+  const bound = readEmbedderBinding(path.join(w.config.home, 'oort.sqlite')).model;
+  const voyageVectors = bound === null || bound.startsWith('voyage/');
   for (const m of all) {
-    const full: Memory = await shapeLinks(w.store, grant, await decoded(m, w.store, grant, ctx));
+    const read: Memory = await shapeLinks(w.store, grant, await decoded(m, w.store, grant, ctx));
+    const { embedding, ...rest } = read;
+    const full: Memory = voyageVectors || embedding === undefined ? read : rest;
     if (full.embedding !== undefined && full.embedding.length === w.config.embed.dimension)
       withEmbedding++;
     if (!fitsVersion1(full)) {

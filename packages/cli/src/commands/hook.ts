@@ -2,6 +2,7 @@ import { HOOK_TIMEOUTS, createHookLogger, runHook, type HookEvent } from '@oortm
 import { resolveHome, type MemoryStore } from '@oortmem/core';
 import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
 import { cloudRemote } from '../cloud-remote.js';
+import { LOCAL_PROVIDER } from '../local-models.js';
 import { echo, starInCloudMessage, type Ctx } from '../util.js';
 import type { AdapterRole, Wired } from '../wire.js';
 
@@ -144,6 +145,9 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         mode: _m,
         cloud: _cl,
         cloudProblem: _cp,
+        embedder: _e,
+        reembedWith: _r,
+        rerank,
         ...engine
       } = w;
       // Claude Code keeps a Star, which Oort Cloud does not have: saving would put its memories
@@ -156,9 +160,17 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         exit('');
         return;
       }
+      // A local reranker would load in this short-lived process on every prompt: about 450 ms
+      // and 600 ms of CPU, often past the rerank budget anyway. The prompt hook ranks by fusion
+      // and the relevance gate instead; `oort mcp` and `oort recall` keep it (CON-15).
+      const hookRerank =
+        event === 'UserPromptSubmit' && w.config.rerank.provider === LOCAL_PROVIDER
+          ? undefined
+          : rerank;
       // The scope is left out: each handler derives it from the session's cwd.
       const out = await runHook(event, stdin, {
         ...engine,
+        ...(hookRerank !== undefined && { rerank: hookRerank }),
         store: busyAware(store, () => {
           busy = true;
         }),
