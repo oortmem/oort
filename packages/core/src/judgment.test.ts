@@ -16,10 +16,12 @@ import {
   judgmentText,
   parseCsv,
   parseJudgmentPack,
+  packDigest,
   parseJudgmentRows,
   recordJudgment,
   withdrawJudgment,
   type JudgmentInput,
+  type PackMeta,
 } from './judgment.js';
 import { createMemoryStore } from './memory-store.js';
 import type { Memory, Scope } from './model.js';
@@ -588,5 +590,230 @@ describe('judgment memory: bulk import and evaluation', () => {
     expect(report.domains['(all)']!.items).toBe(4);
     // Nothing was recorded.
     expect(await store.list(grantOf())).toHaveLength(3);
+  });
+});
+
+/** Built at runtime, so no literal bidi control sits in this file. */
+const RLO = String.fromCharCode(0x202e);
+
+/** A pack written by hand: lines as given, the digest computed honestly over `meta` and them. */
+function forgePack(
+  meta: PackMeta,
+  lines: Record<string, unknown>[],
+  over: Record<string, unknown> = {},
+): string {
+  const body = lines.map((l) => JSON.stringify(l));
+  const js = lines.map((l) => l['judgment'] as { domain: string; by: string });
+  const manifest = {
+    oort: 'judgment-pack',
+    version: 1,
+    ...meta,
+    count: body.length,
+    digest: packDigest(meta, body),
+    domains: [...new Set(js.map((j) => j.domain))].sort(),
+    experts: [...new Set(js.map((j) => j.by))].sort(),
+    ...over,
+  };
+  return [JSON.stringify(manifest), ...body].join('\n') + '\n';
+}
+
+const META: PackMeta = { name: 'pack', exportedAt: NOW.toISOString(), exportedBy: 'mallory' };
+const packLine = (
+  id: string,
+  over: Partial<JudgmentInput> = {},
+  extra: Record<string, unknown> = {},
+) => {
+  const j = ada(over);
+  return {
+    id,
+    judgment: {
+      subject: { summary: j.subject },
+      verdict: j.verdict,
+      verdicts: ['approved', 'rejected'],
+      reason: j.reason,
+      criteria: j.criteria,
+      domain: j.domain,
+      by: j.by,
+      decidedAt: j.decidedAt,
+      via: 'cli',
+      ...extra,
+    },
+  };
+};
+const claim = (over: Record<string, unknown> = {}) => ({
+  id: 'aaaaaaaaaaaaaaaa',
+  name: 'the official ada pack',
+  exportedAt: '2026-01-01T00:00:00.000Z',
+  exportedBy: 'ada',
+  originalId: 'orig-1',
+  importedAt: '2026-01-02T00:00:00.000Z',
+  ...over,
+});
+
+describe('judgment memory: pack security', () => {
+  it('judgment.pack-refuses-a-malformed-claimed-origin', () => {
+    const bad: [Record<string, unknown>, RegExp][] = [
+      [{ ...claim(), extra: 'x' }, /exactly/],
+      [{ ...claim(), name: undefined }, /exactly|plain text/],
+      [claim({ name: `ada${RLO}kcap` }), /pack.name must be one line of plain text/],
+      [claim({ exportedBy: 'ada\u0007' }), /pack.exportedBy/],
+      [claim({ originalId: 'x'.repeat(500) }), /pack.originalId/],
+      [claim({ exportedAt: 'yesterday' }), /pack.exportedAt is not an ISO time/],
+      [claim({ id: 7 }), /pack.id/],
+    ];
+    for (const [pack, re] of bad) {
+      const text = forgePack(META, [packLine('l1', {}, { pack })]);
+      expect(() => parseJudgmentPack(text), re.source).toThrow(re);
+    }
+    // An expert id with a bidi control is refused like any other bad judgment.
+    expect(() => parseJudgmentPack(forgePack(META, [packLine('l1', { by: `ada${RLO}` })]))).toThrow(
+      /bidi/,
+    );
+  });
+
+  it('judgment.pack-origin-comes-from-the-pack-not-the-line', async () => {
+    const to = createMemoryStore({ now: () => NOW });
+    const deps = { store: to, grant: grantOf(), scope: SCOPE, now: NOW };
+    const pack = parseJudgmentPack(forgePack(META, [packLine('l1', {}, { pack: claim() })]));
+    const r = await importJudgmentPack(pack, deps);
+    expect(r.added).toHaveLength(1);
+    const m = (await to.get(grantOf(), r.added[0]!))!;
+    // Stored origin: this pack's digest id, its digest-bound metadata, the line's id.
+    expect(m.judgment!.pack).toEqual({
+      id: pack.manifest.digest.slice(0, 16),
+      name: 'pack',
+      exportedAt: NOW.toISOString(),
+      exportedBy: 'mallory',
+      originalId: 'l1',
+      importedAt: NOW.toISOString(),
+      // The line's claim, kept apart and marked untrusted (importedAt is not carried over).
+      claimedEarlier: {
+        untrusted: true,
+        id: 'aaaaaaaaaaaaaaaa',
+        name: 'the official ada pack',
+        exportedAt: '2026-01-01T00:00:00.000Z',
+        exportedBy: 'ada',
+        originalId: 'orig-1',
+      },
+    });
+    // Unknown fields on a line never reach the store.
+    const odd = parseJudgmentPack(
+      forgePack(META, [
+        packLine('l9', { subject: 'Another post' }, { withdrawn: { at: 'x', by: 'y' }, evil: 1 }),
+      ]),
+    );
+    expect(odd.lines[0]!.judgment).not.toHaveProperty('withdrawn');
+    expect(odd.lines[0]!.judgment).not.toHaveProperty('evil');
+  });
+
+  it('judgment.pack-dedup-ignores-claimed-origins', async () => {
+    const to = createMemoryStore({ now: () => NOW });
+    const deps = { store: to, grant: grantOf(), scope: SCOPE, now: NOW };
+    // First pack: a genuine judgment, which records its origin as (digest id, l1).
+    const first = parseJudgmentPack(forgePack(META, [packLine('l1')]));
+    await importJudgmentPack(first, deps);
+    const firstId = first.manifest.digest.slice(0, 16);
+    // A second pack claims that very origin for a different decision. Before, the claim alone made
+    // the import skip it (a way to suppress judgments); now the claim is ignored.
+    const second = parseJudgmentPack(
+      forgePack({ ...META, name: 'other' }, [
+        packLine(
+          'x',
+          { subject: 'A different post', verdict: 'approved', reason: 'Fine.' },
+          {
+            pack: claim({ id: firstId, originalId: 'l1' }),
+          },
+        ),
+      ]),
+    );
+    expect((await importJudgmentPack(second, deps)).added).toHaveLength(1);
+    // The same decision under a new pack (a re-export) is still recognised, by what it says.
+    const reexport = parseJudgmentPack(forgePack({ ...META, name: 'again' }, [packLine('zz')]));
+    expect(await importJudgmentPack(reexport, deps)).toEqual({ added: [], skipped: ['zz'] });
+    // Withdrawn here: no pack, whatever it claims, brings it back.
+    const kept = (await to.list(grantOf())).find((m) => m.judgment?.pack?.originalId === 'l1')!;
+    await withdrawJudgment(to, grantOf(), kept, 'ada', NOW);
+    const third = parseJudgmentPack(
+      forgePack({ ...META, name: 'third' }, [packLine('q', {}, { pack: claim({ id: 'ffff' }) })]),
+    );
+    expect((await importJudgmentPack(third, deps)).added).toEqual([]);
+  });
+
+  it('judgment.pack-manifest-metadata-is-bound-to-the-content', () => {
+    const honest = forgePack(META, [packLine('l1')]);
+    expect(parseJudgmentPack(honest).manifest).toMatchObject({
+      name: 'pack',
+      exportedBy: 'mallory',
+      domains: ['content'],
+      experts: ['ada'],
+    });
+    const [head, ...rest] = honest.trim().split('\n');
+    const m = JSON.parse(head!) as Record<string, unknown>;
+    // Name, exporter or time changed after the fact: the digest no longer matches.
+    for (const over of [
+      { name: 'Official Legal Pack' },
+      { exportedBy: 'ada' },
+      { exportedAt: '2020-01-01T00:00:00.000Z' },
+    ]) {
+      expect(() =>
+        parseJudgmentPack([JSON.stringify({ ...m, ...over }), ...rest].join('\n')),
+      ).toThrow(/digest/);
+    }
+    // Domains and experts must be the lines' own, whatever the digest says.
+    expect(() =>
+      parseJudgmentPack(forgePack(META, [packLine('l1')], { experts: ['the-chief-justice'] })),
+    ).toThrow(/domains or experts do not match/);
+    expect(() =>
+      parseJudgmentPack(forgePack(META, [packLine('l1')], { domains: ['content', 'legal'] })),
+    ).toThrow(/domains or experts do not match/);
+    // Metadata a person reads is plain text with length caps.
+    for (const meta of [
+      { ...META, name: `pack${RLO}` },
+      { ...META, name: 'x'.repeat(200) },
+      { ...META, exportedBy: 'a\nb' },
+      { ...META, exportedAt: 'soon' },
+    ]) {
+      expect(() => parseJudgmentPack(forgePack(meta, [packLine('l1')]))).toThrow(JudgmentPackError);
+    }
+  });
+
+  it('judgment.imported-experts-count-only-when-asked', async () => {
+    const store = createMemoryStore({ now: () => NOW });
+    const embed = topicEmbedder();
+    await importJudgmentPack(parseJudgmentPack(forgePack(META, [packLine('l1')])), {
+      store,
+      grant: grantOf(),
+      scope: SCOPE,
+      embed,
+      now: NOW,
+    });
+    const d = decider('rejected', 0.9);
+    const deps = { store, grant: grantOf(), embed, decide: d.decide, now: NOW };
+    const item = { summary: 'A vitamin cures colds', domain: 'content' };
+    const local = await judge(item, deps);
+    expect(local).toMatchObject({
+      status: 'needs-expert',
+      why: 'no-precedents',
+      importedExcluded: 1,
+    });
+    expect(d.asked).toEqual([]);
+    const withImported = await judge(item, deps, { includeImported: true });
+    expect(withImported.status).toBe('suggested');
+    expect(withImported.importedExcluded).toBeUndefined();
+    expect(withImported.precedents[0]).toMatchObject({
+      by: 'ada',
+      imported: true,
+      pack: { name: 'pack' },
+    });
+    // A local record of the same item never corrects the imported judgment: it is its own.
+    const r = await recordJudgment(ada({ verdict: 'approved', reason: 'Local view.' }), {
+      store,
+      grant: grantOf(),
+      scope: SCOPE,
+      now: NOW,
+      via: 'cli',
+    });
+    expect(r.outcome).toBe('added');
+    expect((await judge(item, deps)).precedents.map((p) => p.imported)).toEqual([undefined]);
   });
 });

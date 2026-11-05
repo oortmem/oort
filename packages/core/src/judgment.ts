@@ -39,17 +39,37 @@ export interface JudgmentSubject {
 /** Where a judgment came from, besides the expert who made it. */
 export type JudgmentVia = 'cli' | 'mcp' | 'import' | 'pack' | 'sdk';
 
-/** A judgment that arrived in a pack: which pack, and the id it had where it was made. */
+/**
+ * A judgment that arrived in a pack: the pack it was imported from here (its digest id and the
+ * manifest's name, exporter and time, all bound by the digest) and the id the line carried. Every
+ * field comes from the pack this store imported, never from what a line claims about itself.
+ */
 export interface JudgmentPackOrigin {
-  /** The pack's digest id (`packDigest`). */
+  /** The pack's digest id (the first 16 hex characters of `packDigest`). */
   id: string;
   name: string;
   exportedAt: string;
   /** The agent that exported it. */
   exportedBy: string;
-  /** The judgment's id in the store it was exported from. */
+  /** The id the judgment had in the pack (its id in the exporting store). */
   originalId: string;
   importedAt: string;
+  /**
+   * What the line said about an earlier pack it came from, when the exporter had imported it
+   * itself. Untrusted: the exporter could have written anything here, so nothing uses it for
+   * deduplication, attribution or judging; it is kept only to be shown as a claim.
+   */
+  claimedEarlier?: ClaimedPackOrigin;
+}
+
+/** An earlier pack origin as a pack line claims it. Checked for shape only; never trusted. */
+export interface ClaimedPackOrigin {
+  untrusted: true;
+  id: string;
+  name: string;
+  exportedAt: string;
+  exportedBy: string;
+  originalId: string;
 }
 
 /** The decision itself. Everything an expert said is kept as they said it (secrets redacted). */
@@ -96,6 +116,8 @@ export class JudgmentInputError extends Error {
 
 // oxlint-disable-next-line no-control-regex -- rejecting control characters is the point
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
+/** Bidi controls (Trojan Source): never in an id or a label a person reads to decide. */
+const BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 const LABEL = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const DOMAIN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
@@ -107,6 +129,13 @@ function text(field: string, v: unknown, max: number, multiline = false): string
   if (CONTROL.test(t) || (!multiline && /[\r\n]/.test(t))) {
     throw new JudgmentInputError(`${field} holds control characters`);
   }
+  return t;
+}
+
+/** An expert id: one line of plain text, no bidi controls (it names whose judgment it is). */
+function expertId(v: unknown): string {
+  const t = text('by', v, JUDGMENT_LIMITS.by);
+  if (BIDI.test(t)) throw new JudgmentInputError('by holds bidi control characters');
   return t;
 }
 
@@ -166,7 +195,7 @@ export function normaliseJudgment(
     reason: text('reason', input.reason, JUDGMENT_LIMITS.reason, true),
     criteria,
     domain: judgmentLabel('domain', input.domain, DOMAIN),
-    by: text('by', input.by, JUDGMENT_LIMITS.by),
+    by: expertId(input.by),
     decidedAt,
   };
 }
@@ -318,9 +347,11 @@ async function sameItem(
 ): Promise<Memory | undefined> {
   if (j.subject.ref === undefined) return undefined;
   const all = await store.list(grant, { embeddings: false });
+  // Only a judgment made here: one imported from a pack is never corrected by a local record.
   return all.find(
     (m) =>
       isActiveJudgment(m, now) &&
+      m.judgment.pack === undefined &&
       m.judgment.subject.ref === j.subject.ref &&
       m.judgment.domain === j.domain &&
       m.judgment.by === j.by,
@@ -418,6 +449,11 @@ export interface JudgeOptions {
   minSimilarity?: number;
   /** The share of the near precedents' weight one verdict needs; below it they disagree. Default 0.6. */
   minAgreement?: number;
+  /**
+   * Also use judgments imported from packs. Default false: a pack's experts are whoever its
+   * exporter says they are, so only judgments made here count unless the caller asks.
+   */
+  includeImported?: boolean;
 }
 
 export const JUDGE_DEFAULTS = Object.freeze({
@@ -452,7 +488,9 @@ export interface Precedent {
   near: boolean;
   /** Its verdict is the predicted one. */
   agrees?: boolean;
+  /** Imported from this pack: its expert is as the pack's exporter states it. */
   pack?: { id: string; name: string };
+  imported?: true;
 }
 
 /**
@@ -492,6 +530,8 @@ export interface JudgeResult {
   minSimilarity: number;
   degraded?: ('embed-failed' | 'decider-failed')[];
   decisions: Decision[];
+  /** Imported judgments that matched the filters but were left out (`includeImported` false). */
+  importedExcluded?: number;
 }
 
 function cosine(a: Int8Array, b: Int8Array): number {
@@ -516,11 +556,14 @@ function lexicalSimilarity(q: Set<string>, d: Set<string>): number {
   return shared / Math.sqrt(q.size * d.size);
 }
 
-/** The judgments `item` may be judged by: active, and of its domain and expert when it names them. */
+/**
+ * The active judgments of `filter`'s domain and expert (when it names them). Judgments imported
+ * from packs only with `includeImported`.
+ */
 export async function activeJudgments(
   store: MemoryStore,
   grant: Grant,
-  filter: { domain?: string; by?: string },
+  filter: { domain?: string; by?: string; includeImported?: boolean },
   now: Date,
   embeddings = true,
 ): Promise<(Memory & { judgment: Judgment })[]> {
@@ -529,6 +572,7 @@ export async function activeJudgments(
   return (await store.list(grant, { embeddings })).filter(
     (m): m is Memory & { judgment: Judgment } =>
       isActiveJudgment(m, now) &&
+      (filter.includeImported === true || m.judgment.pack === undefined) &&
       (domain === undefined || m.judgment.domain === domain) &&
       (filter.by === undefined || m.judgment.by === filter.by),
   );
@@ -552,7 +596,15 @@ export async function judge(
   const minAgreement = opts.minAgreement ?? JUDGE_DEFAULTS.minAgreement;
   const summary = scrub(item.summary).text;
   const details = item.details === undefined ? undefined : scrub(item.details).text;
-  const all = await activeJudgments(deps.store, deps.grant, item, now);
+  const includeImported = opts.includeImported === true;
+  const every = await activeJudgments(
+    deps.store,
+    deps.grant,
+    { ...item, includeImported: true },
+    now,
+  );
+  const all = includeImported ? every : every.filter((m) => m.judgment.pack === undefined);
+  const importedExcluded = every.length - all.length;
   const degraded: NonNullable<JudgeResult['degraded']> = [];
 
   // Similarity: dense when an embedder is wired (precedents recorded without a vector are embedded
@@ -619,6 +671,7 @@ export async function judge(
     minSimilarity,
     decisions: [] as Decision[],
     ...(degraded.length > 0 && { degraded }),
+    ...(importedExcluded > 0 && { importedExcluded }),
   };
 
   if (all.length === 0) return { status: 'needs-expert', why: 'no-precedents', ...base };
@@ -707,7 +760,10 @@ function precedentOf(
     decidedAt: j.decidedAt,
     similarity: round(similarity),
     near: similarity >= minSimilarity,
-    ...(j.pack !== undefined && { pack: { id: j.pack.id, name: j.pack.name } }),
+    ...(j.pack !== undefined && {
+      pack: { id: j.pack.id, name: j.pack.name },
+      imported: true as const,
+    }),
   };
 }
 
@@ -726,17 +782,27 @@ export interface JudgmentPackManifest {
   /** The agent that exported it. */
   exportedBy: string;
   count: number;
-  /** sha256 over the judgment lines, as `packDigest` computes it: the pack's id. */
+  /**
+   * sha256 over the manifest's metadata (version, name, exportedAt, exportedBy) and the judgment
+   * lines, as `packDigest` computes it. Its first 16 hex characters are the pack's id.
+   */
   digest: string;
-  /** The domains and experts inside, for a reader deciding whether to import it. */
+  /** The domains and experts inside. A reader checks them against the lines (they must match). */
   domains: string[];
   experts: string[];
 }
 
-/** One judgment in a pack: the decision and its original id, without vectors or local state. */
+/** One judgment in a pack: the decision and its id, without vectors or local state. */
 export interface JudgmentPackLine {
   id: string;
-  judgment: Omit<Judgment, 'withdrawn' | 'via'> & { via: JudgmentVia };
+  judgment: Omit<Judgment, 'withdrawn' | 'via' | 'pack'> & {
+    via: JudgmentVia;
+    /**
+     * Where the exporter got it, when it was itself imported: the exporter's own record, which a
+     * reader keeps only as an untrusted claim (`claimedEarlier`).
+     */
+    pack?: Omit<JudgmentPackOrigin, 'claimedEarlier'>;
+  };
 }
 
 /** Raised for a file that is not a readable judgment pack. */
@@ -744,23 +810,116 @@ export class JudgmentPackError extends Error {
   override readonly name = 'JudgmentPackError';
 }
 
+/** Length caps for pack metadata. */
+export const PACK_LIMITS = Object.freeze({ name: 120, exportedBy: 128, id: 128, time: 40 });
+
+const PACK_ORIGIN_KEYS = [
+  'id',
+  'name',
+  'exportedAt',
+  'exportedBy',
+  'originalId',
+  'importedAt',
+] as const;
+
+/** Plain one-line text: a string, not empty, at most `max`, no control or bidi characters. */
+function packText(field: string, v: unknown, max: number): string {
+  if (
+    typeof v !== 'string' ||
+    v === '' ||
+    v.length > max ||
+    CONTROL.test(v) ||
+    /[\n\r]/.test(v) ||
+    BIDI.test(v)
+  ) {
+    throw new JudgmentPackError(
+      `${field} must be one line of plain text, at most ${max} characters`,
+    );
+  }
+  return v;
+}
+
+function packTime(field: string, v: unknown): string {
+  const t = packText(field, v, PACK_LIMITS.time);
+  if (Number.isNaN(Date.parse(t))) throw new JudgmentPackError(`${field} is not an ISO time`);
+  return t;
+}
+
+/** A line's claimed earlier origin: exactly the six fields, each plain text. */
+function claimedOrigin(v: unknown, where: string): ClaimedPackOrigin {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw new JudgmentPackError(`${where}: pack must be an object`);
+  }
+  const o = v as Record<string, unknown>;
+  const keys = Object.keys(o).sort();
+  if (keys.join(',') !== [...PACK_ORIGIN_KEYS].sort().join(',')) {
+    throw new JudgmentPackError(`${where}: pack must have exactly ${PACK_ORIGIN_KEYS.join(', ')}`);
+  }
+  packTime(`${where}: pack.importedAt`, o['importedAt']);
+  return {
+    untrusted: true,
+    id: packText(`${where}: pack.id`, o['id'], PACK_LIMITS.id),
+    name: packText(`${where}: pack.name`, o['name'], PACK_LIMITS.name),
+    exportedAt: packTime(`${where}: pack.exportedAt`, o['exportedAt']),
+    exportedBy: packText(`${where}: pack.exportedBy`, o['exportedBy'], PACK_LIMITS.exportedBy),
+    originalId: packText(`${where}: pack.originalId`, o['originalId'], PACK_LIMITS.id),
+  };
+}
+
 const lineOf = (m: Memory & { judgment: Judgment }): JudgmentPackLine => {
-  const { withdrawn: _w, ...j } = m.judgment;
-  return { id: m.id, judgment: j };
+  const { withdrawn: _w, pack, ...j } = m.judgment;
+  // The exporter's own import record travels, field by field; a claim it holds itself does not.
+  return {
+    id: m.id,
+    judgment: {
+      ...j,
+      ...(pack !== undefined && {
+        pack: {
+          id: pack.id,
+          name: pack.name,
+          exportedAt: pack.exportedAt,
+          exportedBy: pack.exportedBy,
+          originalId: pack.originalId,
+          importedAt: pack.importedAt,
+        },
+      }),
+    },
+  };
 };
 
-/** The digest of a pack's judgment lines (each serialised as written), hex sha256. */
-export function packDigest(lines: readonly string[]): string {
+/** What the digest binds besides the lines. */
+export interface PackMeta {
+  name: string;
+  exportedAt: string;
+  exportedBy: string;
+}
+
+/**
+ * The digest of a pack: hex sha256 over its metadata (version, name, exportedAt, exportedBy, as a
+ * JSON array) and then each judgment line as written. Changing the name, the exporter, the time or
+ * any line changes it.
+ */
+export function packDigest(meta: PackMeta, lines: readonly string[]): string {
   const h = createHash('sha256');
+  h.update(
+    JSON.stringify([
+      'judgment-pack',
+      JUDGMENT_PACK_VERSION,
+      meta.name,
+      meta.exportedAt,
+      meta.exportedBy,
+    ]),
+  ).update('\n');
   for (const l of lines) h.update(l).update('\n');
   return h.digest('hex');
 }
 
+const sortedUnique = (xs: readonly string[]): string[] => [...new Set(xs)].sort();
+
 /**
  * A pack of `judgments` (active ones only; withdrawn and corrected ones never travel), as JSON
- * Lines: a manifest, then one line per judgment in id order. Attribution (`by`, `decidedAt`) and
- * any earlier pack origin travel with each judgment; embeddings do not (the importer embeds them
- * with its own model).
+ * Lines: a manifest, then one line per judgment in id order. Attribution (`by`, `decidedAt`)
+ * travels with each judgment; embeddings do not (the importer embeds them with its own model).
  */
 export function formatJudgmentPack(
   judgments: readonly Memory[],
@@ -771,16 +930,19 @@ export function formatJudgmentPack(
     .filter((m): m is Memory & { judgment: Judgment } => isActiveJudgment(m, now))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const lines = active.map((m) => JSON.stringify(lineOf(m)));
+  const bound: PackMeta = {
+    name: packText('name', meta.name, PACK_LIMITS.name),
+    exportedAt: meta.exportedAt.toISOString(),
+    exportedBy: packText('exportedBy', meta.exportedBy, PACK_LIMITS.exportedBy),
+  };
   const manifest: JudgmentPackManifest = {
     oort: 'judgment-pack',
     version: JUDGMENT_PACK_VERSION,
-    name: meta.name,
-    exportedAt: meta.exportedAt.toISOString(),
-    exportedBy: meta.exportedBy,
+    ...bound,
     count: lines.length,
-    digest: packDigest(lines),
-    domains: [...new Set(active.map((m) => m.judgment.domain))].sort(),
-    experts: [...new Set(active.map((m) => m.judgment.by))].sort(),
+    digest: packDigest(bound, lines),
+    domains: sortedUnique(active.map((m) => m.judgment.domain)),
+    experts: sortedUnique(active.map((m) => m.judgment.by)),
   };
   return [JSON.stringify(manifest), ...lines].join('\n') + '\n';
 }
@@ -791,9 +953,12 @@ export interface ParsedJudgmentPack {
 }
 
 /**
- * Reads a pack, checking the manifest, the count and the digest (integrity, not authorship: a
- * pack is as trustworthy as whoever handed it over). Every judgment is checked as `recordJudgment`
- * would check it. Throws `JudgmentPackError`.
+ * Reads a pack and checks everything a person is shown before importing it: the manifest's
+ * metadata (plain text, length caps), the count, the digest over the metadata and the lines, every
+ * judgment as `recordJudgment` would check it, any claimed earlier origin (exact shape), and that
+ * the manifest's domains and experts are exactly those of the lines. The lines come back rebuilt
+ * from their checked fields only. The digest proves integrity, not authorship: a pack is as
+ * trustworthy as whoever handed it over. Throws `JudgmentPackError`.
  */
 export function parseJudgmentPack(textIn: string): ParsedJudgmentPack {
   const raw = textIn.split('\n').filter((l) => l.trim() !== '');
@@ -811,39 +976,86 @@ export function parseJudgmentPack(textIn: string): ParsedJudgmentPack {
   if (head.version !== JUDGMENT_PACK_VERSION) {
     throw new JudgmentPackError(`judgment pack version ${String(head.version)} is not supported`);
   }
+  const meta: PackMeta = {
+    name: packText('the manifest name', head.name, PACK_LIMITS.name),
+    exportedAt: packTime('the manifest exportedAt', head.exportedAt),
+    exportedBy: packText('the manifest exportedBy', head.exportedBy, PACK_LIMITS.exportedBy),
+  };
   const body = raw.slice(1);
   if (head.count !== body.length) {
     throw new JudgmentPackError(
       `the manifest says ${String(head.count)} judgments, the file holds ${body.length}`,
     );
   }
-  if (head.digest !== packDigest(body)) {
+  const digest = packDigest(meta, body);
+  if (head.digest !== digest) {
     throw new JudgmentPackError('the digest does not match: the pack was changed or cut short');
   }
-  for (const f of ['name', 'exportedAt', 'exportedBy'] as const) {
-    if (typeof head[f] !== 'string' || head[f] === '') {
-      throw new JudgmentPackError(`the manifest has no ${f}`);
-    }
-  }
-  const lines = body.map((l, i) => {
-    const x = parse(l, i + 2) as Partial<JudgmentPackLine> | null;
+  const lines = body.map((l, i): JudgmentPackLine => {
+    const where = `line ${i + 2}`;
+    const x = parse(l, i + 2) as { id?: unknown; judgment?: unknown } | null;
     if (
-      typeof x?.id !== 'string' ||
-      x.id === '' ||
+      typeof x !== 'object' ||
+      x === null ||
       typeof x.judgment !== 'object' ||
       x.judgment === null
     ) {
-      throw new JudgmentPackError(`line ${i + 2} is not a judgment`);
+      throw new JudgmentPackError(`${where} is not a judgment`);
     }
-    const j = x.judgment;
+    const id = packText(`${where}: id`, x.id, PACK_LIMITS.id);
+    const j = x.judgment as JudgmentPackLine['judgment'];
+    if (typeof j.decidedAt !== 'string')
+      throw new JudgmentPackError(`${where}: decidedAt is missing`);
+    let n: ReturnType<typeof normaliseJudgment>;
     try {
-      normaliseJudgment(packInput(j), new Date(0));
+      n = normaliseJudgment(packInput(j), new Date(0));
     } catch (e) {
-      throw new JudgmentPackError(`line ${i + 2}: ${(e as Error).message}`);
+      throw new JudgmentPackError(`${where}: ${(e as Error).message}`);
     }
-    return x as JudgmentPackLine;
+    const claim = j.pack === undefined ? undefined : claimedOrigin(j.pack, where);
+    const via: JudgmentVia = (['cli', 'mcp', 'import', 'pack', 'sdk'] as const).includes(j.via)
+      ? j.via
+      : 'pack';
+    return {
+      id,
+      judgment: {
+        ...n,
+        via,
+        ...(claim !== undefined && {
+          pack: {
+            id: claim.id,
+            name: claim.name,
+            exportedAt: claim.exportedAt,
+            exportedBy: claim.exportedBy,
+            originalId: claim.originalId,
+            importedAt: (j.pack as { importedAt: string }).importedAt,
+          },
+        }),
+      },
+    };
   });
-  return { manifest: head as JudgmentPackManifest, lines };
+  const domains = sortedUnique(lines.map((l) => l.judgment.domain));
+  const experts = sortedUnique(lines.map((l) => l.judgment.by));
+  const same = (a: unknown, b: string[]) =>
+    Array.isArray(a) &&
+    a.every((x) => typeof x === 'string') &&
+    JSON.stringify(sortedUnique(a)) === JSON.stringify(b) &&
+    a.length === b.length;
+  if (!same(head.domains, domains) || !same(head.experts, experts)) {
+    throw new JudgmentPackError("the manifest's domains or experts do not match its judgments");
+  }
+  return {
+    manifest: {
+      oort: 'judgment-pack',
+      version: JUDGMENT_PACK_VERSION,
+      ...meta,
+      count: lines.length,
+      digest,
+      domains,
+      experts,
+    },
+    lines,
+  };
 }
 
 /** A pack line's judgment as recording input. */
@@ -861,61 +1073,84 @@ export function packInput(j: JudgmentPackLine['judgment']): JudgmentInput {
   };
 }
 
+/** The decision a judgment records, for spotting the same one again whatever its origin. */
+function fingerprint(j: Omit<Judgment, 'via' | 'pack' | 'withdrawn'>): string {
+  return JSON.stringify([
+    j.by,
+    j.domain,
+    j.subject.summary,
+    j.subject.ref ?? null,
+    j.verdict,
+    j.reason,
+    j.decidedAt,
+  ]);
+}
+
 export interface ImportPackResult {
   added: string[];
   /**
-   * Original ids already here: imported from this pack before (kept or withdrawn since), or made
-   * in this very store. Never re-added.
+   * Line ids not added: already imported from this very pack, or the same decision is already
+   * here (made here, imported from any pack, or withdrawn here since). Never re-added.
    */
   skipped: string[];
 }
 
 /**
  * Imports a parsed pack into the grant's home node. Each judgment keeps its expert and decision
- * time, and records where it came from (`judgment.pack`: the pack's id and name, who exported it,
- * its original id). A judgment already imported, including one withdrawn here since, is skipped:
- * importing a pack again never brings back what an expert withdrew.
+ * time, and records where it came from: `judgment.pack`, built only from this pack (its digest
+ * id, the digest-bound name, exporter and time, and the line's id). An earlier origin the line
+ * claims is kept apart as `claimedEarlier`, marked untrusted, and used for nothing.
+ *
+ * A line is skipped when this pack was imported before (same digest and line id), or when the same
+ * decision (expert, domain, subject, verdict, reason, decision time) is already in the store in any
+ * state, so importing again, or a re-exported copy, never brings back what an expert withdrew.
  */
 export async function importJudgmentPack(
   pack: ParsedJudgmentPack,
   deps: RecordJudgmentDeps,
 ): Promise<ImportPackResult> {
   const now = deps.now ?? new Date();
-  const existing = await deps.store.list(deps.grant, { validOnly: false, embeddings: false });
-  const seen = new Set(
+  const existing = (
+    await deps.store.list(deps.grant, { validOnly: false, embeddings: false })
+  ).filter((m): m is Memory & { judgment: Judgment } => m.judgment !== undefined);
+  const imported = new Set(
     existing.flatMap((m) =>
-      m.judgment?.pack === undefined ? [] : [`${m.judgment.pack.id}:${m.judgment.pack.originalId}`],
+      m.judgment.pack === undefined ? [] : [`${m.judgment.pack.id}:${m.judgment.pack.originalId}`],
     ),
   );
-  // A pack imported back into the store it came from finds its own judgments: nothing to add.
-  const here = new Set(existing.map((m) => m.id));
+  const decisions = new Set(existing.map((m) => fingerprint(m.judgment)));
   const id = pack.manifest.digest.slice(0, 16);
   const out: ImportPackResult = { added: [], skipped: [] };
   for (const line of pack.lines) {
-    // A pack re-exported from an import keeps its first origin.
-    const first = line.judgment.pack;
-    const origin: JudgmentPackOrigin =
-      first !== undefined
-        ? { ...first, importedAt: now.toISOString() }
-        : {
-            id,
-            name: pack.manifest.name,
-            exportedAt: pack.manifest.exportedAt,
-            exportedBy: pack.manifest.exportedBy,
-            originalId: line.id,
-            importedAt: now.toISOString(),
-          };
-    if (here.has(line.id) || seen.has(`${origin.id}:${origin.originalId}`)) {
+    const key = `${id}:${line.id}`;
+    const input = packInput(line.judgment);
+    const decision = fingerprint(redactJudgment(normaliseJudgment(input, now)).judgment);
+    if (imported.has(key) || decisions.has(decision)) {
       out.skipped.push(line.id);
       continue;
     }
-    const r = await recordJudgment(packInput(line.judgment), {
-      ...deps,
-      now,
-      via: 'pack',
-      pack: origin,
-    });
-    seen.add(`${origin.id}:${origin.originalId}`);
+    const claim = line.judgment.pack;
+    const origin: JudgmentPackOrigin = {
+      id,
+      name: pack.manifest.name,
+      exportedAt: pack.manifest.exportedAt,
+      exportedBy: pack.manifest.exportedBy,
+      originalId: line.id,
+      importedAt: now.toISOString(),
+      ...(claim !== undefined && {
+        claimedEarlier: {
+          untrusted: true,
+          id: claim.id,
+          name: claim.name,
+          exportedAt: claim.exportedAt,
+          exportedBy: claim.exportedBy,
+          originalId: claim.originalId,
+        },
+      }),
+    };
+    const r = await recordJudgment(input, { ...deps, now, via: 'pack', pack: origin });
+    imported.add(key);
+    decisions.add(decision);
     if (r.outcome === 'unchanged') out.skipped.push(line.id);
     else out.added.push(r.memory.id);
   }
