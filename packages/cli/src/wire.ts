@@ -61,6 +61,13 @@ export interface Wired {
   cloudProblem?: string;
   /** `scope.agentId` is the acting agent (`agent.id`). */
   scope: Scope;
+  /**
+   * Whether this project is private, only when its own `oort.config.json` sets `project.private`
+   * (true or false); undefined when the value is a default or comes from the home config, and
+   * whenever the project config was not read (the drain). Oort Cloud records what it is told, so
+   * only an explicit setting is ever stated.
+   */
+  statedPrivacy?: boolean;
   /** Which of the person's agents this run acts as, and where its new memories land. */
   agent: WiredAgent;
   store: MemoryStore;
@@ -398,6 +405,11 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     warnings,
     close: () => store.close(),
   };
+  const stated =
+    opts.projectConfig === false || scope.projectId === undefined
+      ? undefined
+      : statedProjectPrivacy(cwd, config);
+  if (stated !== undefined) out.statedPrivacy = stated;
   const settings = readCloudSettings(config.home);
   if (settings.store === 'cloud') {
     out.mode = 'cloud';
@@ -520,3 +532,34 @@ export const wire: WireFn = async (cwd, opts = {}) => {
   out.routes = ordered;
   return out;
 };
+
+/**
+ * `project.private` exactly as the nearest `oort.config.json` at or above `cwd` writes it, when
+ * the resolved config took its `project` from that file; undefined for a default (or a home
+ * config's value) and for an unreadable file.
+ */
+export function statedProjectPrivacy(cwd: string, config: ResolvedConfig): boolean | undefined {
+  if (config.sources['project'] !== 'project') return undefined;
+  let dir = path.resolve(cwd);
+  for (;;) {
+    const file = path.join(dir, 'oort.config.json');
+    if (fs.existsSync(file)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+          project?: { private?: unknown };
+        };
+        const v = raw.project?.private;
+        return typeof v === 'boolean' ? v : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+/** The privacy statement to send with a call about this project: only an explicit one. */
+export const privacyStatement = (w: Pick<Wired, 'statedPrivacy'>): { projectPrivate?: boolean } =>
+  w.statedPrivacy === undefined ? {} : { projectPrivate: w.statedPrivacy };

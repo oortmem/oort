@@ -179,7 +179,12 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         // The drain runs in the home directory, so it resolves the home config only:
         // project config never affects the write path.
         spawnDrain: () => io.spawnDrain(home),
-        ...(w.mode === 'cloud' && { remote: cloudRemote(w.cloud, w.cloudProblem) }),
+        ...(w.mode === 'cloud' && {
+          remote: cloudRemote(w.cloud, w.cloudProblem, {
+            projectId: w.scope.projectId,
+            ...(w.statedPrivacy !== undefined && { private: w.statedPrivacy }),
+          }),
+        }),
       });
       stdout = out.stdout;
       // The drain is detached and nothing waits on it, so it closes the store cleanly.

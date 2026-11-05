@@ -3,25 +3,32 @@
   "baseUrl": "https://api.oortcloud.dev",
   "auth": "Authorization: Bearer oort_sk_…",
   "routes": [
-    { "method": "GET", "path": "/v1/whoami", "response": ["account", "plan", "via"] },
+    {
+      "method": "GET",
+      "path": "/v1/whoami",
+      "response": ["account", "plan", "via"]
+    },
     {
       "method": "POST",
       "path": "/v1/recall",
       "request": {
         "text": "string",
         "project": "string?",
+        "projectPrivate": "boolean?",
         "k": "number?",
         "mode": "string?",
         "asOf": "string?",
-        "knownAt": "string?"
+        "knownAt": "string?",
+        "include": "string[]?"
       },
-      "response": ["memories", "timings", "temporal"]
+      "response": ["memories", "timings", "temporal", "read?", "degraded?", "degradedNodes?"]
     },
     {
       "method": "POST",
       "path": "/v1/observe",
       "request": {
         "project": "string?",
+        "projectPrivate": "boolean?",
         "turnRef": "string?",
         "observation": {
           "user": "string",
@@ -50,13 +57,33 @@
       "method": "POST",
       "path": "/v1/previews",
       "billing": "any",
-      "request": { "ids": "string[]" },
+      "request": {
+        "ids": "string[]"
+      },
       "response": ["previews"]
     },
-    { "method": "GET", "path": "/v1/memories/:id", "response": "memory", "billing": "any" },
-    { "method": "DELETE", "path": "/v1/memories/:id", "status": 204, "billing": "any" },
-    { "method": "POST", "path": "/v1/memories/:id/pin", "status": 204 },
-    { "method": "POST", "path": "/v1/memories/:id/unpin", "status": 204 },
+    {
+      "method": "GET",
+      "path": "/v1/memories/:id",
+      "response": "memory",
+      "billing": "any"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/memories/:id",
+      "status": 204,
+      "billing": "any"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/memories/:id/pin",
+      "status": 204
+    },
+    {
+      "method": "POST",
+      "path": "/v1/memories/:id/unpin",
+      "status": 204
+    },
     {
       "method": "GET",
       "path": "/v1/stats",
@@ -103,13 +130,21 @@
     ],
     "never": ["embedding"]
   },
-  "error": { "shape": { "error": { "code": "string", "message": "string" } } },
+  "error": {
+    "shape": {
+      "error": {
+        "code": "string",
+        "message": "string"
+      }
+    }
+  },
   "errors": {
     "400": "bad-request",
     "401": "unauthorized",
     "402": "payment-required",
     "403:cloud_not_enabled": "not-enabled",
-    "403": "unauthorized",
+    "403:hive_not_enabled": "hive-not-enabled",
+    "403": "refused",
     "404": "not-found",
     "409:ambiguous": "ambiguous-prefix",
     "413": "too-large",
@@ -126,5 +161,107 @@
     "listLimit": 100,
     "previewIds": 100,
     "previewChars": 80
+  },
+  "hive": {
+    "$comment": "Constellations (CON-63): an invite-only beta behind accounts.hive_beta. Outside it every route here answers 403 hive_not_enabled. :c is a Constellation id or its name (URL-encoded); one the caller is not a member of answers 404, exactly like one that does not exist. Recall reads the caller's Constellations (at most 4) on its own; a hive memory carries origin.level 'hive' and origin.node 'Constellation <name>', and a dropped hive leg is listed in degradedNodes as { node, reason } with 'hive-unavailable' in degraded. A share is two calls: the preview (by id or name; a name several of yours share answers 409 ambiguous_constellation listing them with their ids) returns constellationId, and a previewToken; the confirm (confirm: true) must name that id in the path (a name is refused with 400 confirm_by_id), present the previewToken and exactly the previewed text (409 preview_required otherwise), and send acknowledgedFindings: true when the preview found personal data (409 findings_unacknowledged). A memory whose project's privacy no client has stated is refused with 409 project_privacy_unknown; observe, recall and share carry projectPrivate for the current project only when its config file sets it; a recorded true is never cleared by a later false, only by PUT /v1/projects/:project/privacy (the owner's explicit choice). A member may share 30 memories a day per Constellation and a Constellation holds at most 5,000 (429 share_limit); sharing the same memory again updates its one copy.",
+    "constellation": ["id", "name", "role", "owner", "members", "policy", "joinedAt"],
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/v1/constellations",
+        "response": ["constellations"]
+      },
+      {
+        "method": "POST",
+        "path": "/v1/constellations",
+        "request": {
+          "name": "string"
+        },
+        "status": 201,
+        "response": ["id", "name", "role", "owner", "members", "policy", "joinedAt"]
+      },
+      {
+        "method": "GET",
+        "path": "/v1/constellations/:c",
+        "response": [
+          "id",
+          "name",
+          "role",
+          "owner",
+          "members",
+          "policy",
+          "joinedAt",
+          "memories",
+          "roster"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/v1/constellations/:c/share",
+        "request": {
+          "memoryId": "string",
+          "text": "string?",
+          "confirm": "boolean?",
+          "project": "string?",
+          "projectPrivate": "boolean?",
+          "previewToken": "string?",
+          "acknowledgedFindings": "boolean?"
+        },
+        "response": [
+          "confirmed",
+          "memoryId",
+          "constellation",
+          "constellationId",
+          "text",
+          "findings",
+          "previewToken?",
+          "id?"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/v1/constellations/:c/memories",
+        "query": ["cursor", "limit"],
+        "response": ["memories", "next?"]
+      },
+      {
+        "method": "GET",
+        "path": "/v1/constellations/:c/memories/:id",
+        "response": "memory"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/constellations/:c/map",
+        "response": ["version", "fields", "projects", "rows", "mine", "contributors"]
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/constellations/:c/memories/:id",
+        "response": ["outcome"]
+      },
+      {
+        "method": "GET",
+        "path": "/v1/memories/:id/shares",
+        "response": ["shares"]
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/memories/:id?everywhere=1",
+        "response": ["withdrawn", "requested", "unreachable"]
+      },
+      {
+        "method": "PUT",
+        "path": "/v1/projects/:project/privacy",
+        "request": {
+          "private": "boolean"
+        },
+        "response": ["project", "private"]
+      }
+    ],
+    "limits": {
+      "shareTextChars": 4096,
+      "fanout": 4,
+      "legTimeoutMs": 150
+    }
   }
 }

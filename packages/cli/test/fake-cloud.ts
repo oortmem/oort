@@ -39,12 +39,38 @@ export interface FakeCloud {
   /** Every `from` sent to /v1/import, in order. */
   importFroms: number[];
   key: string;
+  /** The hive beta (CON-63): off answers 403 hive_not_enabled on every Constellation route. */
+  hive: FakeHive;
 }
 
-const MATCHERS = CONTRACT.routes.map((r) => ({
+export interface FakeHive {
+  enabled: boolean;
+  constellations: Map<string, { id: string; name: string; role: string; owner: boolean }>;
+  /** Shared copies, by id, with the Constellation they are in. */
+  shared: Map<string, FakeMemory & { constellation: string; sourceId: string }>;
+  /** Every share request body, in order. */
+  requests: Record<string, unknown>[];
+  /** Each project's privacy as clients stated it (absent: unknown). */
+  privacy: Map<string, boolean>;
+  /** Preview tokens handed out: what each one binds. */
+  previews: Map<string, { mem: string; cid: string; text: string; pii: boolean }>;
+}
+
+const MATCHERS = [...CONTRACT.routes, ...CONTRACT.hive.routes].map((r) => ({
   method: r.method,
-  re: new RegExp(`^${r.path.replace(':id', '[^/]+')}$`),
+  re: new RegExp(
+    `^${r.path.replace(/\?.*$/, '').replace(':c', '[^/]+').replace(':project', '[^/]+').replace(':id', '[^/]+')}$`,
+  ),
 }));
+
+/** What the API's share gate marks: here, email addresses only. */
+function findings(text: string): { kind: string; start: number; end: number }[] {
+  return [...text.matchAll(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g)].map((m) => ({
+    kind: 'email',
+    start: m.index,
+    end: m.index + m[0].length,
+  }));
+}
 
 const err = (status: number, code: string, message: string): Response =>
   Response.json({ error: { code, message } }, { status });
@@ -86,6 +112,14 @@ export function fakeCloud(key: string): FakeCloud {
     turns: new Map(),
     importFroms: [],
     key,
+    hive: {
+      enabled: false,
+      constellations: new Map(),
+      shared: new Map(),
+      requests: [],
+      privacy: new Map(),
+      previews: new Map(),
+    },
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
       const req = new Request(input, init);
       const url = new URL(req.url);
@@ -106,19 +140,177 @@ export function fakeCloud(key: string): FakeCloud {
           ? true
           : m.scope['projectId'] === want || m.scope['projectId'] === undefined;
       if (p === '/v1/whoami') return Response.json({ account: 'a1', plan: 'pro', via: 'key' });
+      const hiveRoute =
+        p.startsWith('/v1/constellations') ||
+        /^\/v1\/memories\/[^/]+\/shares$/.test(p) ||
+        (req.method === 'DELETE' && url.searchParams.has('everywhere'));
+      if (hiveRoute && !c.hive.enabled) {
+        return err(403, 'hive_not_enabled', 'Constellations are in an invite-only beta.');
+      }
+      const state = (project: unknown, priv: unknown) => {
+        // As the API: private is sticky; a later false never clears it.
+        if (typeof project === 'string' && typeof priv === 'boolean') {
+          c.hive.privacy.set(project, priv || c.hive.privacy.get(project) === true);
+        }
+      };
+      const byRef = (ref: string) =>
+        [...c.hive.constellations.values()].find((x) => x.id === ref || x.name === ref);
+      if (p === '/v1/constellations' && req.method === 'GET') {
+        return Response.json({
+          constellations: [...c.hive.constellations.values()].map((x) => ({
+            ...x,
+            members: 2,
+            policy: 'confirm',
+            joinedAt: '2026-11-05T00:00:00.000Z',
+          })),
+        });
+      }
+      if (p === '/v1/constellations' && req.method === 'POST') {
+        const b = (await req.json()) as { name: string };
+        if (c.hive.constellations.size >= 1) return err(403, 'plan_limit', 'One Constellation.');
+        const x = { id: 'c_aaaaaaaaaaaaaaaa', name: b.name, role: 'maintainer', owner: true };
+        c.hive.constellations.set(x.id, x);
+        return Response.json(
+          { ...x, members: 1, policy: 'confirm', joinedAt: '2026-11-05T00:00:00.000Z' },
+          { status: 201 },
+        );
+      }
+      const privacyMatch = /^\/v1\/projects\/([^/]+)\/privacy$/.exec(p);
+      if (privacyMatch !== null && req.method === 'PUT') {
+        if (!c.hive.enabled) return err(403, 'hive_not_enabled', 'invite-only beta');
+        const project = decodeURIComponent(privacyMatch[1] ?? '');
+        const b = (await req.json()) as { private?: unknown };
+        if (typeof b.private !== 'boolean') return err(400, 'bad_request', 'private');
+        c.hive.privacy.set(project, b.private);
+        return Response.json({ project, private: b.private });
+      }
+      const shareMatch = /^\/v1\/constellations\/([^/]+)\/share$/.exec(p);
+      if (shareMatch !== null) {
+        const ref = decodeURIComponent(shareMatch[1] ?? '');
+        const b = (await req.json()) as {
+          memoryId: string;
+          text?: string;
+          confirm?: boolean;
+          project?: string;
+          projectPrivate?: boolean;
+          previewToken?: string;
+          acknowledgedFindings?: boolean;
+        };
+        c.hive.requests.push({ to: ref, ...b });
+        state(b.project, b.projectPrivate);
+        // As the API: a confirm names the previewed id; a name several share is refused.
+        const isId = /^c_[a-z0-9]{16}$/.test(ref);
+        if (b.confirm === true && !isId) {
+          return err(400, 'confirm_by_id', 'Confirm with the constellationId of the preview.');
+        }
+        const named = [...c.hive.constellations.values()].filter((x) => x.name === ref);
+        if (!isId && named.length > 1) {
+          const list = named.map((x) => `${x.name} (${x.id.slice(0, 6)})`).join(', ');
+          return err(
+            409,
+            'ambiguous_constellation',
+            `Several of your Constellations have this name: ${list}.`,
+          );
+        }
+        const to = isId ? c.hive.constellations.get(ref) : byRef(ref);
+        if (to === undefined) return err(404, 'not_found', 'No such Constellation.');
+        const m = c.memories.get(b.memoryId);
+        if (m === undefined) return err(404, 'not_found', 'No memory with this id.');
+        if (b.confirm === true) {
+          const pv = b.previewToken === undefined ? undefined : c.hive.previews.get(b.previewToken);
+          if (pv === undefined || pv.mem !== m.id || pv.cid !== to.id || pv.text !== b.text) {
+            return err(409, 'preview_required', 'Preview this share again, then confirm it.');
+          }
+          if (pv.pii && b.acknowledgedFindings !== true) {
+            return err(409, 'findings_unacknowledged', 'Acknowledge the personal data first.');
+          }
+        }
+        if (b.confirm === true && to.role === 'reader') {
+          return err(403, 'share_denied', 'Your role in this Constellation cannot share.');
+        }
+        // The memory's own project decides, as stated by a client inside it.
+        const project = m.scope['projectId'];
+        if (typeof project === 'string') {
+          const priv = c.hive.privacy.get(project);
+          if (priv === true) {
+            return err(403, 'share_denied', 'Memories from a private project stay inside it.');
+          }
+          if (priv === undefined) {
+            return err(
+              409,
+              'project_privacy_unknown',
+              "Oort doesn't know whether this memory's project is private. Set \"private\": false in that project's oort.config.json, or run `oort project privacy public` inside it, then share again.",
+            );
+          }
+        }
+        const text = b.text ?? m.text;
+        const base = {
+          memoryId: m.id,
+          constellation: to.name,
+          constellationId: to.id,
+          text,
+          findings: findings(text),
+        };
+        if (b.confirm !== true) {
+          const previewToken = `pv_${randomUUID()}`;
+          c.hive.previews.set(previewToken, {
+            mem: m.id,
+            cid: to.id,
+            text,
+            pii: base.findings.length > 0,
+          });
+          return Response.json({ confirmed: false, ...base, previewToken });
+        }
+        // One live copy per (source, Constellation): sharing again updates it.
+        const copyId = `copy-${m.id}-${to.id}`;
+        const copy = { ...fakeMemory({ id: copyId, text }), constellation: to.id, sourceId: m.id };
+        c.hive.shared.set(copy.id, copy);
+        return Response.json({ confirmed: true, ...base, id: copy.id });
+      }
       if (p === '/v1/recall') {
-        const b = (await req.json()) as { text: string; project?: string; k?: number };
+        const b = (await req.json()) as {
+          text: string;
+          project?: string;
+          k?: number;
+          projectPrivate?: boolean;
+        };
+        state(b.project, b.projectPrivate);
         if (c.hangRecall === true) return new Promise<Response>(() => {});
         const words = b.text
           .toLowerCase()
           .split(/\W+/)
           .filter((w) => w.length > 3);
-        const hits = [...c.memories.values()].filter(
-          (m) => project(m, b.project) && words.some((w) => m.text.toLowerCase().includes(w)),
-        );
-        return Response.json({
-          memories: hits.slice(0, b.k ?? 10).map((m) => ({
+        const include = (b as { include?: string[] }).include;
+        const wantsHive = include === undefined || include.includes('constellation');
+        const wantsPlanet =
+          include === undefined || include.includes('planet') || include.includes('self');
+        if (include?.includes('constellation') && c.hive.constellations.size === 0) {
+          return err(400, 'scope_denied', 'This recall cannot read constellation.');
+        }
+        const match = (m: FakeMemory) => words.some((w) => m.text.toLowerCase().includes(w));
+        const own = wantsPlanet
+          ? [...c.memories.values()].filter((m) => project(m, b.project) && match(m))
+          : [];
+        const shared = wantsHive ? [...c.hive.shared.values()].filter(match) : [];
+        const hits = [
+          ...own.map((m) => ({ ...m, origin: undefined as unknown })),
+          ...shared.map(({ constellation, sourceId: _s, ...m }) => ({
             ...m,
+            address: { level: 'hive', orgId: 'org:g1', hiveId: constellation },
+            origin: {
+              level: 'hive',
+              space: 'Constellation',
+              node: `Constellation ${c.hive.constellations.get(constellation)?.name ?? constellation}`,
+              from: 'from a Constellation',
+              home: false,
+              author: 'default',
+            },
+          })),
+        ];
+        return Response.json({
+          memories: hits.slice(0, b.k ?? 10).map(({ origin, ...m }) => ({
+            ...m,
+            ...(origin !== undefined && { origin }),
             explanation: { fused: 1, rrf: 1, coverage: 1, activation: 0, hydrated: false },
           })),
           timings: { totalMs: 2 },
@@ -128,6 +320,7 @@ export function fakeCloud(key: string): FakeCloud {
       if (p === '/v1/observe') {
         const b = (await req.json()) as Record<string, unknown>;
         c.observed.push(b);
+        state(b['project'], b['projectPrivate']);
         const o = b['observation'] as { user: string };
         const ref = typeof b['turnRef'] === 'string' ? b['turnRef'] : undefined;
         if (ref !== undefined && ref.length > 128)
@@ -172,6 +365,33 @@ export function fakeCloud(key: string): FakeCloud {
           memories: page,
           ...(next < all.length && { next: next.toString(36) }),
         });
+      }
+      const sharesMatch = /^\/v1\/memories\/([^/]+)\/shares$/.exec(p);
+      if (sharesMatch !== null) {
+        const id = decodeURIComponent(sharesMatch[1] ?? '');
+        return Response.json({
+          shares: [...c.hive.shared.values()]
+            .filter((x) => x.sourceId === id)
+            .map((x) => ({
+              constellation: x.constellation,
+              name: c.hive.constellations.get(x.constellation)?.name ?? null,
+              id: x.id,
+              at: '2026-11-05T00:00:00.000Z',
+              withdrawnAt: null,
+            })),
+        });
+      }
+      if (req.method === 'DELETE' && url.searchParams.has('everywhere')) {
+        const id = decodeURIComponent(p.split('/').pop() ?? '');
+        if (!c.memories.has(id)) return err(404, 'not_found', 'No such memory.');
+        c.memories.delete(id);
+        const withdrawn: string[] = [];
+        for (const x of c.hive.shared.values()) {
+          if (x.sourceId !== id) continue;
+          c.hive.shared.delete(x.id);
+          withdrawn.push(x.constellation);
+        }
+        return Response.json({ withdrawn, requested: [], unreachable: [] });
       }
       const idMatch = /^\/v1\/memories\/([^/]+)(\/(pin|unpin))?$/.exec(p);
       if (idMatch !== null) {

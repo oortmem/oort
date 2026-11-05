@@ -1,6 +1,7 @@
 import { Command, CommanderError } from 'commander';
 import { VERSION } from '@oortmem/core';
 import { connectCommand } from './commands/connect.js';
+import { constellationCreateCommand, constellationListCommand } from './commands/constellation.js';
 import { doctorCommand } from './commands/doctor.js';
 import { consolidateCommand } from './commands/consolidate.js';
 import { explainCommand } from './commands/explain.js';
@@ -22,11 +23,16 @@ import {
 } from './commands/models.js';
 import { observeCommand } from './commands/observe.js';
 import { pinCommand } from './commands/pin.js';
-import { projectLinkCommand, projectUnlinkCommand } from './commands/project.js';
+import {
+  projectLinkCommand,
+  projectPrivacyCommand,
+  projectUnlinkCommand,
+} from './commands/project.js';
 import { recallCommand, type RecallOptions } from './commands/recall.js';
 import { reembedCommand } from './commands/reembed.js';
 import { revalidateCommand } from './commands/revalidate.js';
 import { setupCommand, type SetupOptions } from './commands/setup.js';
+import { shareCommand } from './commands/share.js';
 import { statsCommand } from './commands/stats.js';
 import type { Io } from './io.js';
 import { keychainFor, type Keychain } from './keychain.js';
@@ -210,7 +216,41 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('delete a memory everywhere')
     .argument('<id>', 'memory id or unique prefix')
     .option('--yes', 'do not ask')
-    .action(run((id: string, o: { yes?: boolean }) => forgetCommand(id, o, ctx)));
+    .option(
+      '--everywhere',
+      'Oort Cloud: also withdraw its shared copies where you are the only contributor',
+    )
+    .action(
+      run((id: string, o: { yes?: boolean; everywhere?: boolean }) => forgetCommand(id, o, ctx)),
+    );
+
+  p.command('share')
+    .description('Oort Cloud: share a copy of a memory with a Constellation (shows it first)')
+    .argument('<id>', 'memory id or unique prefix')
+    .requiredOption('--to <constellation>', 'the Constellation, by name or id')
+    .option('--text <text>', 'share this edited text instead')
+    .option('--yes', 'do not ask')
+    .option('--json', 'print JSON')
+    .action(
+      run((id: string, o: { to?: string; text?: string; yes?: boolean; json?: boolean }) =>
+        shareCommand(id, o, ctx),
+      ),
+    );
+
+  const constellation = p
+    .command('constellation')
+    .description('Oort Cloud: Constellations, memory you share with a team (invite-only beta)');
+  constellation
+    .command('list', { isDefault: true })
+    .description('the Constellations you belong to')
+    .option('--json', 'print JSON')
+    .action(run((o: { json?: boolean }) => constellationListCommand(o, ctx)));
+  constellation
+    .command('create')
+    .description('create a Constellation, with you as its maintainer')
+    .argument('<name>', 'its name, as labels show it')
+    .option('--json', 'print JSON')
+    .action(run((name: string, o: { json?: boolean }) => constellationCreateCommand(name, o, ctx)));
 
   p.command('pin')
     .description('pin a memory (never sent to cold)')
@@ -234,6 +274,14 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .command('unlink')
     .description("remove this repository's binding (back to the derived id)")
     .action(run(() => projectUnlinkCommand(ctx)));
+  project
+    .command('privacy')
+    .description(
+      "Oort Cloud: mark this repository's project public (its memories can be shared) or private",
+    )
+    .argument('<state>', 'public or private')
+    .option('--yes', 'do not ask')
+    .action(run((state: string, o: { yes?: boolean }) => projectPrivacyCommand(state, o, ctx)));
 
   const cloud = p
     .command('cloud')

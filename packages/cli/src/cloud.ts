@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { Memory, RecallMode, RecallResult, Tier } from '@oortmem/core';
+import type { IncludeLevel, Memory, RecallMode, RecallResult, Tier } from '@oortmem/core';
 import type { Env } from './io.js';
 import { ACCOUNT_URL } from './relay.js';
 import { Refusal, writeOwnerOnly } from './util.js';
@@ -104,7 +104,9 @@ export type CloudErrorKind =
   | 'ambiguous-prefix'
   | 'bad-request'
   | 'busy'
-  | 'network';
+  | 'network'
+  | 'hive-not-enabled'
+  | 'refused';
 
 /** Kinds the account has to fix, or that pass with time: a hook's queue waits instead. */
 const HOLD: ReadonlySet<CloudErrorKind> = new Set([
@@ -156,6 +158,10 @@ function messageFor(kind: CloudErrorKind, status: number, api?: string): string 
       return `Oort Cloud refused the request (HTTP ${status})${api !== undefined ? `: ${api}` : '.'}`;
     case 'busy':
       return `Oort Cloud is busy or down, try again shortly (HTTP ${status}).`;
+    case 'hive-not-enabled':
+      return 'Constellations are not enabled for this account yet (an invite-only beta). Your memories stay in your Planet.';
+    case 'refused':
+      return `Oort Cloud refused this (HTTP ${status})${api !== undefined ? `: ${api}` : '.'}`;
     case 'network':
       return 'Oort Cloud is unreachable: check your network, then try again.';
   }
@@ -165,7 +171,12 @@ function messageFor(kind: CloudErrorKind, status: number, api?: string): string 
 export function cloudErrorKind(status: number, code?: string): CloudErrorKind {
   if (status === 401) return 'unauthorized';
   if (status === 402) return 'payment-required';
-  if (status === 403) return code === 'cloud_not_enabled' ? 'not-enabled' : 'unauthorized';
+  if (status === 403) {
+    if (code === 'cloud_not_enabled') return 'not-enabled';
+    if (code === 'hive_not_enabled') return 'hive-not-enabled';
+    // Any other 403 explains itself (a Constellation's rules, a plan limit).
+    return 'refused';
+  }
   if (status === 404) return 'not-found';
   if (status === 409 && code === 'ambiguous') return 'ambiguous-prefix';
   if (status === 413) return 'too-large';
@@ -209,6 +220,48 @@ export interface CloudImportResult {
   next?: number;
 }
 
+/** A Constellation as one of its members sees it (hive beta). */
+export interface CloudConstellation {
+  id: string;
+  name: string;
+  role: 'maintainer' | 'member' | 'reader';
+  owner: boolean;
+  members: number;
+  policy: string;
+  joinedAt: string;
+}
+
+/** Something the share gate found in the text that would be shared. */
+export interface ShareFinding {
+  kind: string;
+  start: number;
+  end: number;
+}
+
+/** A share's answer: a preview (`confirmed: false`), or the new copy's id once confirmed. */
+export interface CloudShareResult {
+  confirmed: boolean;
+  memoryId: string;
+  constellation: string;
+  /** The Constellation the preview resolved; the confirm names this id, never the name again. */
+  constellationId: string;
+  /** Exactly the text that is (or would be) shared: secrets already redacted. */
+  text: string;
+  findings: ShareFinding[];
+  /** A preview's signed token, valid for a few minutes: the confirm presents it. */
+  previewToken?: string;
+  id?: string;
+}
+
+/** A copy of one of the account's memories in a Constellation. */
+export interface CloudShareEdge {
+  constellation: string;
+  name: string | null;
+  id: string;
+  at: string;
+  withdrawnAt: string | null;
+}
+
 export interface CloudClient {
   readonly url: string;
   whoami(): Promise<{ account: string; plan: string; via: string }>;
@@ -219,10 +272,47 @@ export interface CloudClient {
     asOf?: string;
     knownAt?: string;
     mode?: RecallMode;
+    /** Levels to read; the API answers 400 `scope_denied` for one this account cannot read. */
+    include?: IncludeLevel[];
+    /** Whether `project` (the one this runs in) is private: the cloud records it for sharing. */
+    projectPrivate?: boolean;
   }): Promise<RecallResult>;
+  /** The account's Constellations (hive beta; 403 `hive_not_enabled` outside it). */
+  constellations(): Promise<CloudConstellation[]>;
+  createConstellation(name: string): Promise<CloudConstellation>;
+  /**
+   * Shares a memory with a Constellation: without `confirm`, a preview of exactly what would be
+   * shared (by id or name; a name several of yours share is refused); with it, the copy, which
+   * the API accepts only against the preview's `constellationId`.
+   */
+  share(
+    to: string,
+    b: {
+      memoryId: string;
+      text?: string;
+      confirm?: boolean;
+      /** The project the share runs in, and whether it is private (recorded by the cloud). */
+      project?: string;
+      projectPrivate?: boolean;
+      /** The preview's token: a confirm must present it with exactly the previewed text. */
+      previewToken?: string;
+      /** The person read the personal data the preview found and shares it anyway. */
+      acknowledgedFindings?: boolean;
+    },
+  ): Promise<CloudShareResult>;
+  /** The owner's explicit privacy choice for a project (the only way to clear private). */
+  setProjectPrivacy(project: string, priv: boolean): Promise<{ project: string; private: boolean }>;
+  /** The Constellation copies of one memory. */
+  shares(id: string): Promise<CloudShareEdge[]>;
+  /** Forgets a memory and withdraws the copies only this person contributed to. */
+  forgetEverywhere(
+    id: string,
+  ): Promise<{ withdrawn: string[]; requested: string[]; unreachable: string[] }>;
   /** `turnRef` makes a retry safe: the API saves each turn once and answers `duplicate`. */
   observe(b: {
     project?: string;
+    /** Whether `project` (the one this runs in) is private: the cloud records it for sharing. */
+    projectPrivate?: boolean;
     observation: CloudObservation;
     turnRef?: string;
   }): Promise<CloudObserveResult>;
@@ -313,6 +403,16 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
     url: opts.url,
     whoami: () => json('GET', '/v1/whoami'),
     recall: (q) => json('POST', '/v1/recall', q),
+    constellations: async () =>
+      (await json<{ constellations: CloudConstellation[] }>('GET', '/v1/constellations'))
+        .constellations,
+    createConstellation: (name) => json('POST', '/v1/constellations', { name }),
+    share: (to, b) => json('POST', `/v1/constellations/${encodeURIComponent(to)}/share`, b),
+    setProjectPrivacy: (project, priv) =>
+      json('PUT', `/v1/projects/${encodeURIComponent(project)}/privacy`, { private: priv }),
+    shares: async (id) =>
+      (await json<{ shares: CloudShareEdge[] }>('GET', `${idPath(id)}/shares`)).shares,
+    forgetEverywhere: (id) => json('DELETE', `${idPath(id)}?everywhere=1`),
     observe: (b) => json('POST', '/v1/observe', b),
     list: (q = {}) => {
       const p = new URLSearchParams();

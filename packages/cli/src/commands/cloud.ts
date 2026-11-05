@@ -30,7 +30,7 @@ export const IMPORT_CHUNK_LINES = 500;
 export const IMPORT_CHUNK_BYTES = 8 * 1024 * 1024;
 
 /** A client for this machine's Oort key, whichever store mode is set. */
-async function clientFor(ctx: Ctx): Promise<CloudClient> {
+export async function clientFor(ctx: Ctx): Promise<CloudClient> {
   const url = cloudUrl(ctx.io.env);
   if ('error' in url) throw new Refusal(url.error);
   const key = await keyLookup(ctx.io.env, ctx.keychain.read)('oort');
