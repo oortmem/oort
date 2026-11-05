@@ -228,10 +228,16 @@ export interface JudgeApplyOptions {
   k?: string;
   threshold?: string;
   minSimilarity?: string;
+  includeImported?: boolean;
   json?: boolean;
 }
 
-function judgeOptions(o: { k?: string; threshold?: string; minSimilarity?: string }): JudgeOptions {
+function judgeOptions(o: {
+  k?: string;
+  threshold?: string;
+  minSimilarity?: string;
+  includeImported?: boolean;
+}): JudgeOptions {
   const k = number('--k', o.k, 1, 20);
   const threshold = number('--threshold', o.threshold, 0, 1);
   const minSimilarity = number('--min-similarity', o.minSimilarity, 0, 1);
@@ -239,6 +245,7 @@ function judgeOptions(o: { k?: string; threshold?: string; minSimilarity?: strin
     ...(k !== undefined && { k: Math.round(k) }),
     ...(threshold !== undefined && { threshold }),
     ...(minSimilarity !== undefined && { minSimilarity }),
+    ...(o.includeImported === true && { includeImported: true }),
   };
 }
 
@@ -313,6 +320,11 @@ function printJudgeResult(ctx: Ctx, w: Wired, r: JudgeResult): void {
       ctx.io.out(`Weighted by similarity: ${split}.\n`);
     }
   }
+  if (r.importedExcluded !== undefined && r.status !== 'suggested') {
+    ctx.io.out(
+      `${r.importedExcluded} imported judgment(s) were not used: a pack's experts are as its exporter states them. Add --include-imported to use them.\n`,
+    );
+  }
   if (r.precedents.length === 0) return;
   const near = r.precedents.some((p) => p.near);
   ctx.io.out(
@@ -320,7 +332,7 @@ function printJudgeResult(ctx: Ctx, w: Wired, r: JudgeResult): void {
   );
   for (const [i, p] of r.precedents.entries()) {
     const mark = p.agrees === undefined ? '' : p.agrees ? ' agrees' : ' differs';
-    const from = p.pack === undefined ? '' : `, from pack ${shown(p.pack.name)}`;
+    const from = p.pack === undefined ? '' : `, imported from pack ${shown(p.pack.name)}`;
     ctx.io.out(
       `${i + 1}. ${shown(p.verdict)}  ${fixed(p.similarity)}${mark}  "${shown(clip(p.subject.summary, 70))}"  by ${shown(p.by)}, ${p.decidedAt.slice(0, 10)}${from}  ${short(p.id)}\n`,
     );
@@ -345,7 +357,7 @@ export async function judgeListCommand(
               (o.domain === undefined || m.judgment.domain === o.domain.toLowerCase()) &&
               (o.by === undefined || m.judgment.by === o.by),
           )
-        : activeJudgments(w.store, writeGrant(w), o, now, false),
+        : activeJudgments(w.store, writeGrant(w), { ...o, includeImported: true }, now, false),
     );
     if (o.json === true) {
       ctx.io.out(`${safeJson({ judgments: items.map(plainJudgment) })}\n`);
@@ -365,11 +377,14 @@ export async function judgeListCommand(
     }
     for (const m of items) {
       const state =
-        m.judgment.withdrawn !== undefined
+        (m.judgment.withdrawn !== undefined
           ? ' [withdrawn]'
           : m.endReason === 'corrected'
             ? ` [corrected by ${short(m.supersededBy ?? '')}]`
-            : '';
+            : '') +
+        (m.judgment.pack === undefined
+          ? ''
+          : ` [imported from pack ${shown(m.judgment.pack.name)}]`);
       ctx.io.out(`${short(m.id)}  ${judgmentLine(m.judgment)}${state}\n`);
       ctx.io.out(`          reason: ${shown(clip(m.judgment.reason, 200))}\n`);
     }
@@ -462,6 +477,7 @@ export async function judgeEvalCommand(
     thresholds?: string;
     k?: string;
     minSimilarity?: string;
+    includeImported?: boolean;
     json?: boolean;
   },
   ctx: Ctx,
@@ -535,7 +551,14 @@ export async function judgeEvalCommand(
 
 /** `oort judge pack export`: the current judgments (optionally one domain or expert) as a pack. */
 export async function judgePackExportCommand(
-  o: { out?: string; force?: boolean; name?: string; domain?: string; by?: string },
+  o: {
+    out?: string;
+    force?: boolean;
+    name?: string;
+    domain?: string;
+    by?: string;
+    includeImported?: boolean;
+  },
   ctx: Ctx,
 ): Promise<number> {
   return withWired(ctx, async (w) => {
@@ -572,7 +595,7 @@ export async function judgePackImportCommand(
     const m = pack.manifest;
     const ok = await confirm(
       ctx.io,
-      `Import pack ${shown(clip(m.name, 40))}: ${m.count} judgment(s) by ${m.experts.map((e) => shown(e)).join(', ')} (${m.domains.map((d) => shown(d)).join(', ')}), exported by ${shown(m.exportedBy)} on ${m.exportedAt.slice(0, 10)}?`,
+      `Import pack ${shown(clip(m.name, 40))}: ${m.count} judgment(s) naming ${m.experts.map((e) => shown(e)).join(', ')} as expert (${m.domains.map((d) => shown(d)).join(', ')}), exported by ${shown(m.exportedBy)} on ${m.exportedAt.slice(0, 10)}. The pack states who decided; nothing verifies it, so its judgments count only with --include-imported. Import?`,
       o.yes === true,
       'import it',
     );

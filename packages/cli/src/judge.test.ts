@@ -278,8 +278,16 @@ describe('oort judge', () => {
     });
     const again = await to.run(['judge', 'pack', 'import', out, '--yes']);
     expect(again.io.stdout).toContain('Imported 0 judgment(s)');
-    const apply = await to.run(['judge', 'apply', 'A vitamin cures colds']);
-    expect(apply.io.stdout).toContain('from pack ada-content');
+    // A pack's experts are as its exporter states them: used only when asked.
+    const local = await to.run(['judge', 'apply', 'A vitamin cures colds']);
+    expect(local.io.stdout).toContain('Needs the expert: no judgments are recorded');
+    expect(local.io.stdout).toContain('1 imported judgment(s) were not used');
+    const apply = await to.run(['judge', 'apply', 'A vitamin cures colds', '--include-imported']);
+    expect(apply.io.stdout).toContain('Prediction: rejected');
+    expect(apply.io.stdout).toContain('imported from pack ada-content');
+    expect((await to.run(['judge', 'list'])).io.stdout).toContain(
+      '[imported from pack ada-content]',
+    );
 
     // A changed pack is refused.
     fs.writeFileSync(out, fs.readFileSync(out, 'utf8').replace('Health claim', 'Wealth claim'));
@@ -336,7 +344,11 @@ describe('oort mcp: judgment tools', () => {
       by: 'ada',
     });
     expect(rec).toMatchObject({ outcome: 'added', id: expect.any(String) });
-    const out = (await b.judge!({ item: 'A vitamin cures colds', limit: 5 })) as {
+    const out = (await b.judge!({
+      item: 'A vitamin cures colds',
+      limit: 5,
+      include_imported: false,
+    })) as {
       status: string;
       prediction: { verdict: string; is: string };
       precedents: { reason: string; agrees: boolean }[];

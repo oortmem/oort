@@ -415,7 +415,7 @@ Tools:
 | `list_recent` | `since?` (ISO), `limit?` (1–50, default 20) | read-only, idempotent | memories by `updated_at`, newest first, each with `status` (`current`, `superseded` or `expired`) |
 | `whoami` | none | read-only, idempotent | `mode: "local"`, `project`, `version`, `agent`, `reads` (`your Planet`, `Star <agent>`), `writes_to`, which adapters are available, and per role whether it uses `oort-pro`, an `own-key` or is `missing`; no account or email |
 | `record_judgment` | `subject` (1–500 chars), `ref?`, `verdict`, `verdicts?` (2–12 labels; default `approved`, `rejected`), `reason` (1–2000 chars, the expert's own words), `criteria?` (up to 12 tags), `domain`, `by` (the expert), `decided_at?` (ISO) | write, not destructive, not idempotent | `outcome` (`added`, `corrected` or `unchanged`), `id`, `corrects` (the judgment it replaced) |
-| `judge` | `item` (1–2000 chars), `details?`, `domain?`, `by?`, `limit?` (precedents, 1–10, default 5) | read-only, idempotent | `status` (`suggested`, `needs-expert` or `precedents-only`), `why`, `prediction` (`verdict`, `probability`, labelled as a prediction), `note`, and the `precedents` with each `reason`, `similarity`, `near` and `agrees` |
+| `judge` | `item` (1–2000 chars), `details?`, `domain?`, `by?`, `limit?` (precedents, 1–10, default 5), `include_imported?` (default false: only judgments made here) | read-only, idempotent | `status` (`suggested`, `needs-expert` or `precedents-only`), `why`, `prediction` (`verdict`, `probability`, labelled as a prediction), `note`, the `precedents` with each `reason`, `similarity`, `near`, `agrees` and `imported_from_pack`, and `imported_not_used` when imported judgments were left out |
 
 Every tool sets `openWorldHint: false` and has a `title`.
 
@@ -690,8 +690,8 @@ owns what is recorded. They belong to the expert, not to a repository: a judgmen
 bound to the cwd's project), lives in the acting agent's home (your Planet, or the agent's Star),
 and is pinned, so it never goes cold. Recall shows judgments like any memory, as precedent (`[judgment, 2d ago] Judgment by ada (content): rejected "…". Reason: …`).
 
-**Seeing, correcting, withdrawing.** `oort judge list` shows the current judgments (`--all` adds
-withdrawn and corrected ones, `--domain` and `--by` filter). Recording the same item again (same
+**Seeing, correcting, withdrawing.** `oort judge list` shows the current judgments, marking those
+imported from a pack (`--all` adds withdrawn and corrected ones, `--domain` and `--by` filter). Recording the same item again (same
 `ref`, domain and expert) corrects the earlier judgment, as does `--corrects <id>`: the old one is
 kept for the record but no longer counts. The same judgment again changes nothing.
 `oort judge withdraw <id>` (asks first; `--yes`) withdraws one: it stops counting in judging,
@@ -710,7 +710,11 @@ prediction with its probability and the precedents behind it. The answer is one 
 | `needs-expert` | No trustworthy prediction. `why` says which: `no-precedents` (nothing recorded for this domain or expert), `too-far` (nothing at least `--min-similarity` close; default 0.45 by embedding, 0.25 by words), `precedents-disagree` (no verdict holds 60% of the close precedents, weighted by similarity), `low-confidence` (below the threshold; the lean is shown) or `decider-failed`. The closest precedents are shown either way. |
 | `precedents-only` | No TypeSafe key: the close precedents and their reasons, and no verdict. |
 
-`--k <n>` sets how many precedents count (default 5); `--json` prints the whole result. Nothing
+`--k <n>` sets how many precedents count (default 5); `--json` prints the whole result. Only
+judgments made in this store count unless you add `--include-imported`: a pack's experts are
+whoever its exporter says they are, so judgments imported from packs are used only when you ask,
+and are then marked `imported from pack <name>`. When some were left out, the answer says how many
+(`importedExcluded` in JSON). Nothing
 is decided for anyone: in a regulated domain, treat every answer as a suggestion a person
 confirms.
 
@@ -749,12 +753,28 @@ oort --agent cursor judge pack import ada-content.pack.jsonl
 A pack is JSON Lines: a manifest (`oort: "judgment-pack"`, `version: 1`, `name`, `exportedAt`,
 `exportedBy`, `count`, `digest`, `domains`, `experts`), then one line per current judgment
 (`id`, `judgment`). Withdrawn and corrected judgments never travel, and neither do embeddings (the
-importer embeds with its own model). Import shows what the pack holds and asks first (`--yes`).
-Each imported judgment keeps its expert and decision time and records where it came from
-(`judgment.pack`: the pack's id, name, who exported it and when, and its original id). Importing
-the same pack again adds nothing, and never brings back a judgment withdrawn since. The digest
-catches a changed or truncated file; it does not prove who made the pack, so import packs only from
-people you trust.
+importer embeds with its own model). Export includes only judgments made here unless you add
+`--include-imported`.
+
+Import checks the whole pack before it asks (`--yes` skips the question):
+
+- The `digest` is sha256 over the manifest's `name`, `exportedAt` and `exportedBy` and every
+  line, so none of them can change afterwards. Those three must be one line of plain text (no
+  control or bidi characters, length-capped).
+- `domains` and `experts` must be exactly those of the lines, so the question shows what is
+  really inside.
+- Every judgment is checked as `oort judge record` checks it, and is rebuilt from its known fields
+  only.
+
+Each imported judgment keeps its expert and decision time, and records where it came from in
+`judgment.pack`: this pack's id (from its digest), its name, who exported it and when, and the
+line's id. A line may say it came from an earlier pack (when the exporter had imported it
+itself). That claim is kept apart as `judgment.pack.claimedEarlier`, marked `untrusted: true`, and
+used for nothing. Importing the same pack again adds nothing; so does any pack holding a decision
+already here (the same expert, domain, subject, verdict, reason and time), which also means a pack
+never brings back a judgment withdrawn here. The digest catches a changed or truncated file, but
+it does not prove who made the pack or that its experts really decided: import packs only from
+people you trust, and use their judgments with `--include-imported`.
 
 Judgment memory is local for now: in cloud mode the `oort judge` commands refuse, and
 `oort cloud import` leaves judgments on this machine.

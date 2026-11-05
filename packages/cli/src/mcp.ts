@@ -342,7 +342,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
             ...(w.decide !== undefined && { decide: w.decide }),
             now: now(),
           },
-          { k: i.limit },
+          { k: i.limit, includeImported: i.include_imported },
         ),
       );
       return judgeOutput(r);
@@ -398,7 +398,11 @@ function judgeOutput(r: JudgeResult): Record<string, unknown> {
       similarity: p.similarity,
       near: p.near,
       ...(p.agrees !== undefined && { agrees: p.agrees }),
+      ...(p.pack !== undefined && { imported_from_pack: p.pack.name }),
     })),
+    ...(r.importedExcluded !== undefined && {
+      imported_not_used: r.importedExcluded,
+    }),
   };
 }
 

@@ -192,6 +192,12 @@ export function inputSchemasFor(spaces: ToolSpaces) {
       domain: z.string().trim().min(1).max(64).optional().describe('Use only this domain'),
       by: z.string().trim().min(1).max(128).optional().describe("Use only this expert's judgments"),
       limit: z.number().int().min(1).max(10).default(5).describe('Precedents to use'),
+      include_imported: z
+        .boolean()
+        .default(false)
+        .describe(
+          'Also use judgments imported from packs, whose experts are as the pack states them',
+        ),
     }),
   } as const satisfies Record<ToolName, z.ZodType>;
 }

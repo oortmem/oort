@@ -310,6 +310,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--k <n>', 'precedents to use (default 5)')
     .option('--threshold <p>', 'probability a prediction needs (default 0.7)')
     .option('--min-similarity <s>', 'similarity a precedent needs to count')
+    .option('--include-imported', 'also use judgments imported from packs (off by default)')
     .option('--json', 'print the full result as JSON')
     .action(run((item: string, o: JudgeApplyOptions) => judgeApplyCommand(item, o, ctx)));
   judge
@@ -358,6 +359,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--thresholds <list>', 'confidence thresholds, comma list (default 0.5,…,0.9)')
     .option('--k <n>', 'precedents to use (default 5)')
     .option('--min-similarity <s>', 'similarity a precedent needs to count')
+    .option('--include-imported', 'also use judgments imported from packs (off by default)')
     .option('--json', 'print JSON')
     .action(
       run(
@@ -370,6 +372,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
             thresholds?: string;
             k?: string;
             minSimilarity?: string;
+            includeImported?: boolean;
             json?: boolean;
           },
         ) => judgeEvalCommand(file, o, ctx),
@@ -386,9 +389,17 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--name <name>', 'the pack name')
     .option('--domain <name>', 'only this domain')
     .option('--by <expert>', 'only this expert')
+    .option('--include-imported', 'also export judgments imported from packs')
     .action(
-      run((o: { out?: string; force?: boolean; name?: string; domain?: string; by?: string }) =>
-        judgePackExportCommand(o, ctx),
+      run(
+        (o: {
+          out?: string;
+          force?: boolean;
+          name?: string;
+          domain?: string;
+          by?: string;
+          includeImported?: boolean;
+        }) => judgePackExportCommand(o, ctx),
       ),
     );
   pack
