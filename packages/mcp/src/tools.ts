@@ -125,7 +125,7 @@ export const TOOLS: readonly ToolDefinition[] = [
   {
     name: 'forget',
     title: 'Forget a memory',
-    description: 'Permanently delete one memory by id, everywhere it is stored.',
+    description: 'Permanently delete one memory by id, from every storage tier.',
     annotations: {
       title: 'Forget a memory',
       readOnlyHint: false,
