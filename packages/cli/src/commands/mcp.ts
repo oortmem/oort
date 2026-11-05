@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
-import { createOortServer } from '../mcp.js';
+import { cloudSpaces, createOortServer, localSpaces } from '../mcp.js';
 import { Refusal, echo, withWired, type Ctx } from '../util.js';
 
 /** Serves `factory` on this process's stdin/stdout until the host closes stdin. */
@@ -48,8 +48,12 @@ export async function mcpCommand(
     );
   }
   return withWired({ ...ctx, io: { ...ctx.io, cwd } }, async (w) => {
+    // What the tools may reach is fixed here, once, from trusted config (CON-64): the model can
+    // pick inside it and never widen it.
+    const spaces =
+      w.mode === 'cloud' && w.cloud !== undefined ? await cloudSpaces(w, w.cloud) : localSpaces(w);
     await serve(
-      () => createOortServer({ wired: w }),
+      () => createOortServer({ wired: w, spaces }),
       (e) => ctx.io.err(`oort: mcp: ${e.message}\n`),
     );
     return 0;

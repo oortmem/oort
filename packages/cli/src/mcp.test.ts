@@ -64,7 +64,7 @@ describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
     const { client } = await connect(era);
     expect(client.getProtocolEra()).toBe(era);
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual([...TOOL_NAMES].sort());
+    expect(tools.map((t) => t.name).sort()).toEqual(TOOL_NAMES.filter((n) => n !== 'share').sort());
     for (const t of tools) {
       expect(t.annotations, t.name).toMatchObject({ ...ANNOTATIONS[t.name], openWorldHint: false });
       expect(t.annotations?.title, t.name).toBeTruthy();

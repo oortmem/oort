@@ -688,9 +688,9 @@ describe('Stars and Oort Cloud (CON-62 review)', () => {
       agent: 'cursor',
     });
     const backend = cloudBackend({ wired: w, client: w.cloud! });
-    await expect(backend.remember({ facts: ['ci runs on arm'] })).rejects.toThrow(
-      /keeps its memories in its own Star/,
-    );
+    await expect(
+      backend.remember({ facts: ['ci runs on arm'], visibility: 'private' }),
+    ).rejects.toThrow(/keeps its memories in its own Star/);
     expect(e.cloud.observed).toEqual([]);
     await w.close();
   });

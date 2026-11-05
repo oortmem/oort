@@ -115,6 +115,8 @@ export async function runRecall(
         ...privacyStatement(w),
       }),
       ...(include !== undefined && { include }),
+      // A named agent reads only the Constellations it is attached to (CON-64).
+      ...(w.agent.source !== 'none' && { agent: w.agent.id }),
       ...view,
       k: 10,
     });
