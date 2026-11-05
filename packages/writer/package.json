@@ -1,6 +1,6 @@
 {
   "name": "@oortmem/writer",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Oort writer: turns conversation turns into short, self-contained facts with Claude.",
   "keywords": [
     "oort",
