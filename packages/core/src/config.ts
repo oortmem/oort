@@ -75,6 +75,12 @@ const recall = z
      * marked "may be outdated" when injected, and listed by `oort revalidate`. 0 turns it off.
      */
     staleAfterDays: z.number().int().min(0).default(30),
+    /**
+     * The specificity prior ε (spec 7.2): when a recall reads several nodes, each fused score is
+     * scaled by 1 + ε × specificity / 3 (an agent's Star 3, the Planet 2, a Constellation 1, a
+     * Galaxy 0). 0, the default, turns it off: it is turned on only if the eval shows a gain.
+     */
+    specificityPrior: z.number().min(0).max(1).default(0),
   })
   .default({
     lexicalK: 50,
@@ -90,6 +96,7 @@ const recall = z
     rerankBudgetMs: 400,
     queryCacheTtlSec: 600,
     staleAfterDays: 30,
+    specificityPrior: 0,
   });
 
 const project = z

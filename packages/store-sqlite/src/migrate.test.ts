@@ -12,7 +12,13 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { afterAll, describe, expect, it } from 'vitest';
-import { localGrant, principalGrant, type Memory, type Principal } from '@oortmem/core';
+import {
+  nodeGrant,
+  type Grant,
+  type GrantProjects,
+  type Memory,
+  type Principal,
+} from '@oortmem/core';
 import { memoryAt, nodesGrant } from '@oortmem/core/store-conformance';
 import {
   downgradeSqliteStore,
@@ -80,13 +86,30 @@ const optsFor = (s: { dbPath: string; coldDir: string }) => ({
 const render = (m: Memory | null) =>
   m === null ? null : { ...m, embedding: m.embedding === undefined ? null : [...m.embedding] };
 
+/**
+ * The grant 0.2.1 read with: the principal's Planet, memories its own agent wrote. Since CON-62 the
+ * local grants also read the Planet's other authors; this proves the stored data is unchanged.
+ */
+function preLevel(p: Principal, projectIds: GrantProjects): Grant {
+  return nodeGrant({
+    principal: p,
+    read: [
+      {
+        node: { level: 'user', orgId: p.orgId, customerId: p.customerId },
+        projectIds,
+        authorAgentId: p.agentId,
+      },
+    ],
+  });
+}
+
 /** Everything the 0.2.1 store read back, read again through the current store. */
 async function readBack(s: { dbPath: string; coldDir: string }): Promise<Expected> {
   const store = await openSqliteStore(optsFor(s));
   try {
     const principals: Expected['principals'] = [];
     for (const { principal: p } of expected.principals) {
-      const g = principalGrant(p);
+      const g = preLevel(p, 'all');
       const cold: Record<string, unknown> = {};
       for (const id of expected.coldIds) {
         const c = await store.coldGet(g, id);
@@ -99,7 +122,7 @@ async function readBack(s: { dbPath: string; coldDir: string }): Promise<Expecte
         const v = Int8Array.from({ length: DIM }, (_, j) => ((j * 37 + k * 11) % 200) - 100);
         dense.push({ v: [...v], hits: await store.dense(g, v, 10) });
       }
-      const narrow = localGrant({ ...p, projectIds: ['oort-1a2b3c4d', null] });
+      const narrow = preLevel(p, ['oort-1a2b3c4d', null]);
       principals.push({
         principal: p,
         list: (await store.list(g, { validOnly: false })).map(render),

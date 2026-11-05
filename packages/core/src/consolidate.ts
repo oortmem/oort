@@ -1,7 +1,7 @@
 import { activation, tierFor } from './activation.js';
 import type { MemoryStore, ScopeFilter } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
-import { localGrant, type Grant } from './grant.js';
+import { localGrant, narrowGrant, readableNodes, type Grant } from './grant.js';
 import { isCurrent, type Memory, type Tier } from './model.js';
 
 export interface ConsolidateResult {
@@ -45,13 +45,17 @@ const RANK: Record<Tier, number> = { cold: 0, warm: 1, hot: 2 };
  * left in its current tier (hot or warm); consolidate never promotes cold to warm/hot, since
  * hydration is recall's job.
  * Idempotent for a fixed `now`.
+ *
+ * Each node the scope's grant covers (the person's Planet, this agent's Star)
+ * is consolidated on its own, so the Planet's tiers do not depend on which of
+ * the person's agents ran consolidation.
  */
 export async function consolidate(
   scope: ScopeFilter,
   deps: { store: MemoryStore; config: ResolvedConfig; now?: Date },
 ): Promise<ConsolidateResult> {
   const { store, config } = deps;
-  const grant = localGrant(scope);
+  const full = localGrant(scope);
   const now = deps.now ?? new Date();
   const result: ConsolidateResult = {
     promoted: [],
@@ -60,7 +64,19 @@ export async function consolidate(
     expired: [],
     skipped: 0,
   };
+  for (const node of readableNodes(full)) {
+    await consolidateNode(store, narrowGrant(full, [node]), config, now, result);
+  }
+  return result;
+}
 
+async function consolidateNode(
+  store: MemoryStore,
+  grant: Grant,
+  config: ResolvedConfig,
+  now: Date,
+  result: ConsolidateResult,
+): Promise<void> {
   // 1. Expire.
   const due = (await store.list(grant, { validOnly: false })).filter(
     (m) => m.validTo !== null && m.expiredAt === null && Date.parse(m.validTo) <= now.getTime(),
@@ -103,8 +119,6 @@ export async function consolidate(
     evictions.push(m);
   }
   await evictAll(store, grant, evictions, result);
-
-  return result;
 }
 
 async function evictAll(

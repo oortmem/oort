@@ -13,7 +13,18 @@ import {
   spaceName,
   type Address,
 } from './address.js';
-import { canRead, Grant, localGrant, nodeGrant, principalGrant } from './grant.js';
+import {
+  canRead,
+  Grant,
+  grantReads,
+  grantWrites,
+  homeAddress,
+  localGrant,
+  narrowGrant,
+  nodeGrant,
+  principalGrant,
+  readableNodes,
+} from './grant.js';
 import { localScope } from './scope.js';
 import { makeMemory } from './store-conformance.js';
 
@@ -108,18 +119,62 @@ describe('addresses', () => {
 describe('node grants', () => {
   const p = { orgId: 'local', customerId: 'self', agentId: 'claude-code' };
 
-  it('grant.pre-level-grants-are-one-author-restricted-planet-pattern', () => {
+  it('grant.local-grants-read-the-planet-and-own-star', () => {
+    // CON-62: the person's Planet, whichever of their agents wrote it, plus this agent's own Star.
     const g = localGrant({ ...p, projectIds: ['pa', null] });
     expect(g.readNodes).toEqual([
+      { node: { level: 'user', orgId: 'local', customerId: 'self' }, projectIds: ['pa', null] },
       {
-        node: { level: 'user', orgId: 'local', customerId: 'self' },
+        node: { level: 'agent', orgId: 'local', agentId: 'claude-code' },
         projectIds: ['pa', null],
-        authorAgentId: 'claude-code',
       },
     ]);
+    expect(g.writeNodes).toEqual(g.readNodes);
+    expect(g.home).toEqual({ level: 'user', orgId: 'local', customerId: 'self' });
+    expect(g.read.projectIds).toEqual(['pa', null]);
     expect(principalGrant(p).writeNodes[0]?.projectIds).toBe('all');
     expect(canRead(g, localScope('pa'))).toBe(true);
-    expect(canRead(g, { ...localScope('pa'), agentId: 'cursor' })).toBe(false);
+    expect(canRead(g, { ...localScope('pa'), agentId: 'cursor' })).toBe(true);
+    const star = (agentId: string) =>
+      addressed({ level: 'agent', orgId: 'local', agentId, projectId: 'pa' }, { agentId });
+    expect(grantReads(g, star('claude-code'))).toBe(true);
+    expect(grantReads(g, star('cursor'))).toBe(false);
+    expect(grantWrites(g, star('cursor'))).toBe(false);
+  });
+
+  it('grant.home-picks-where-new-memories-land', () => {
+    const cursor = { ...p, agentId: 'cursor' };
+    const g = localGrant({ ...cursor, projectIds: ['pa', null] }, { home: 'star' });
+    expect(g.home).toEqual({ level: 'agent', orgId: 'local', agentId: 'cursor' });
+    expect(homeAddress(g, 'pa')).toEqual({
+      level: 'agent',
+      orgId: 'local',
+      agentId: 'cursor',
+      projectId: 'pa',
+    });
+    expect(principalGrant(cursor, { home: 'star' }).home).toEqual(g.home);
+    const hive = { level: 'hive', orgId: 'org:acme', hiveId: 'checkout' } as const;
+    expect(() =>
+      nodeGrant({
+        principal: p,
+        read: [{ node: hive, projectIds: 'all' }],
+        home: { level: 'user', orgId: 'local', customerId: 'self' },
+      }),
+    ).toThrow(RangeError);
+    expect(nodeGrant({ principal: p, read: [{ node: hive, projectIds: 'all' }] }).home).toEqual(
+      hive,
+    );
+  });
+
+  it('grant.narrow-keeps-only-named-nodes', () => {
+    const g = localGrant({ ...p, projectIds: ['pa'] }, { home: 'star' });
+    const [planet, star] = readableNodes(g);
+    const onlyPlanet = narrowGrant(g, [planet!]);
+    expect(onlyPlanet.readNodes.map((x) => x.node)).toEqual([planet]);
+    expect(onlyPlanet.home).toEqual(planet);
+    expect(narrowGrant(g, [star!]).home).toEqual(star);
+    expect(narrowGrant(g, []).readNodes).toEqual([]);
+    expect(Grant.is(onlyPlanet)).toBe(true);
   });
 
   it('grant.node-grants-validate-and-freeze', () => {
