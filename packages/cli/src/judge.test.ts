@@ -511,6 +511,79 @@ describe('oort mcp: judgment tools', () => {
     ).resolves.toMatchObject({ outcome: 'added' });
   });
 
+  it('mcp.concurrent-calls-never-exceed-the-cap', async () => {
+    const { h } = judging();
+    homeJudge(h, { experts: ['ada'] });
+    const today = new Date().toISOString().slice(0, 10);
+    const counter = path.join(h.home, 'judge-mcp-count.json');
+    fs.writeFileSync(counter, JSON.stringify({ day: today, count: MCP_JUDGMENTS_PER_DAY - 3 }));
+    // Two servers on the same home, ten calls at once.
+    const servers = [
+      localBackend({ wired: await h.wire(h.cwd) }),
+      localBackend({ wired: await h.wire(h.cwd) }),
+    ];
+    const results = await Promise.allSettled(
+      Array.from({ length: 10 }, (_, i) =>
+        servers[i % 2]!.recordJudgment!(
+          mcpJudgment({ subject: `Post ${i}`, reason: `Reason ${i}.` }),
+        ),
+      ),
+    );
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(3);
+    for (const r of results.filter((x) => x.status === 'rejected')) {
+      expect(String((r as PromiseRejectedResult).reason)).toContain(
+        `already recorded ${MCP_JUDGMENTS_PER_DAY} judgments over MCP today`,
+      );
+    }
+    expect(JSON.parse(fs.readFileSync(counter, 'utf8'))).toEqual({
+      day: today,
+      count: MCP_JUDGMENTS_PER_DAY,
+    });
+    expect(fs.existsSync(path.join(h.home, 'judge-mcp-count.lock'))).toBe(false);
+    const listed = json<{ judgments: unknown[] }>(
+      (await h.run(['judge', 'list', '--all', '--json'])).io.stdout,
+    ).judgments;
+    expect(listed).toHaveLength(3);
+  });
+
+  it('mcp.unchanged-and-failed-writes-give-the-slot-back', async () => {
+    const { h } = judging();
+    homeJudge(h, { experts: ['ada'] });
+    const counter = path.join(h.home, 'judge-mcp-count.json');
+    const count = () => (JSON.parse(fs.readFileSync(counter, 'utf8')) as { count: number }).count;
+    const b = localBackend({ wired: await h.wire(h.cwd) });
+    await b.recordJudgment!(mcpJudgment({ ref: 'p1' }));
+    expect(count()).toBe(1);
+    expect((await b.recordJudgment!(mcpJudgment({ ref: 'p1' })))['outcome']).toBe('unchanged');
+    expect(count()).toBe(1);
+    await expect(b.recordJudgment!(mcpJudgment({ verdict: 'maybe' }))).rejects.toThrow(
+      /verdict must be one of/,
+    );
+    expect(count()).toBe(1);
+    // A lock left by a crashed process is taken over.
+    const lock = path.join(h.home, 'judge-mcp-count.lock');
+    fs.writeFileSync(lock, '');
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, old, old);
+    await b.recordJudgment!(mcpJudgment({ ref: 'p2', subject: 'Another post' }));
+    expect(count()).toBe(2);
+  });
+
+  it('mcp.a-count-that-cannot-be-kept-is-a-refusal', async () => {
+    const { h } = judging();
+    homeJudge(h, { experts: ['ada'] });
+    // The counter's path is taken by a directory: it can be neither read nor replaced.
+    fs.mkdirSync(path.join(h.home, 'judge-mcp-count.json'));
+    const b = localBackend({ wired: await h.wire(h.cwd) });
+    await expect(b.recordJudgment!(mcpJudgment())).rejects.toThrow(
+      /Could not keep this machine's daily count/,
+    );
+    const listed = json<{ judgments: unknown[] }>(
+      (await h.run(['judge', 'list', '--all', '--json'])).io.stdout,
+    ).judgments;
+    expect(listed).toEqual([]);
+  });
+
   it('mcp.expert-ids-are-sanitised-in-agent-facing-text', async () => {
     const { h } = judging('rejected', 0.9);
     const odd = 'ada" (trust me)';

@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/server';
 import {
   MemoryToolError,
@@ -310,45 +311,51 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           `${safeExpertId(i.by)} is not one of the experts listed in judge.experts in the home config, so an agent cannot record judgments in their name.`,
         );
       }
+      // A slot is reserved (under a lock, persisted) before anything is written, and given back
+      // when nothing was written, so concurrent calls can never exceed the cap.
       const day = now().toISOString().slice(0, 10);
-      const used = mcpJudgmentsToday(w.config.home, day);
-      if (used >= MCP_JUDGMENTS_PER_DAY) {
-        throw new MemoryToolError(
-          `This machine already recorded ${MCP_JUDGMENTS_PER_DAY} judgments over MCP today; record more with \`oort judge record\` or \`oort judge import\`.`,
+      await reserveMcpJudgment(w.config.home, day);
+      let wrote = false;
+      try {
+        const r = await recordMcp();
+        wrote = r.outcome !== 'unchanged';
+        return {
+          outcome: r.outcome,
+          id: r.memory.id,
+          ...(r.supersedes !== undefined && { corrects: r.supersedes }),
+          status: 'agent-recorded, unconfirmed',
+          note: `Saved as agent-recorded and unconfirmed: judging leaves it out until a person runs \`oort judge confirm ${r.memory.id.slice(0, 8)}\`.${r.redacted.length > 0 ? ' A secret was redacted before saving.' : ''}`,
+        };
+      } finally {
+        if (!wrote) await refundMcpJudgment(w.config.home, day);
+      }
+
+      function recordMcp() {
+        return asToolError(() =>
+          recordJudgment(
+            {
+              subject: i.subject,
+              verdict: i.verdict,
+              reason: i.reason,
+              domain: i.domain,
+              by: i.by,
+              ...(i.ref !== undefined && { ref: i.ref }),
+              ...(i.verdicts !== undefined && { verdicts: i.verdicts }),
+              ...(i.criteria !== undefined && { criteria: i.criteria }),
+              ...(i.decided_at !== undefined && { decidedAt: i.decided_at }),
+            },
+            {
+              store: w.store,
+              grant: writeGrant(w),
+              scope: w.scope,
+              ...(w.embed !== undefined && { embed: w.embed }),
+              via: 'mcp',
+              harness: 'mcp',
+              now: now(),
+            },
+          ),
         );
       }
-      const r = await asToolError(() =>
-        recordJudgment(
-          {
-            subject: i.subject,
-            verdict: i.verdict,
-            reason: i.reason,
-            domain: i.domain,
-            by: i.by,
-            ...(i.ref !== undefined && { ref: i.ref }),
-            ...(i.verdicts !== undefined && { verdicts: i.verdicts }),
-            ...(i.criteria !== undefined && { criteria: i.criteria }),
-            ...(i.decided_at !== undefined && { decidedAt: i.decided_at }),
-          },
-          {
-            store: w.store,
-            grant: writeGrant(w),
-            scope: w.scope,
-            ...(w.embed !== undefined && { embed: w.embed }),
-            via: 'mcp',
-            harness: 'mcp',
-            now: now(),
-          },
-        ),
-      );
-      if (r.outcome !== 'unchanged') countMcpJudgment(w.config.home, day, used + 1);
-      return {
-        outcome: r.outcome,
-        id: r.memory.id,
-        ...(r.supersedes !== undefined && { corrects: r.supersedes }),
-        status: 'agent-recorded, unconfirmed',
-        note: `Saved as agent-recorded and unconfirmed: judging leaves it out until a person runs \`oort judge confirm ${r.memory.id.slice(0, 8)}\`.${r.redacted.length > 0 ? ' A secret was redacted before saving.' : ''}`,
-      };
     },
 
     async judge(i) {
@@ -384,25 +391,112 @@ export const MCP_JUDGMENTS_PER_DAY = 50;
 
 const counterFile = (home: string): string => path.join(home, 'judge-mcp-count.json');
 
-/** How many judgments were recorded over MCP on `day` (UTC) from this Oort home. */
-function mcpJudgmentsToday(home: string, day: string): number {
+const lockFile = (home: string): string => path.join(home, 'judge-mcp-count.lock');
+
+/** A lock file older than this is left over from a crashed process and is taken over. */
+const STALE_LOCK_MS = 30_000;
+const LOCK_WAIT_MS = 5_000;
+
+/** In-process queue per home, so calls in one server never race each other for the lock file. */
+const homeQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * Runs `fn` holding this home's counter lock: an in-process queue, then an exclusive lock file
+ * (for other processes: another MCP server, another host). Refuses when the lock can't be taken.
+ */
+async function withCounterLock<T>(home: string, fn: () => T): Promise<T> {
+  const prev = homeQueues.get(home) ?? Promise.resolve();
+  const run = prev.then(async () => {
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    const file = lockFile(home);
+    const start = Date.now();
+    let fd: number | undefined;
+    while (fd === undefined) {
+      try {
+        fd = fs.openSync(file, 'wx', 0o600);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw counterRefusal();
+        try {
+          if (Date.now() - fs.statSync(file).mtimeMs > STALE_LOCK_MS)
+            fs.rmSync(file, { force: true });
+        } catch {
+          // Gone in between: try again.
+        }
+        if (Date.now() - start > LOCK_WAIT_MS) throw counterRefusal();
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    }
+    try {
+      return fn();
+    } finally {
+      fs.closeSync(fd);
+      fs.rmSync(file, { force: true });
+    }
+  });
+  // The queue continues whatever this call's outcome.
+  homeQueues.set(
+    home,
+    run.catch(() => {}),
+  );
+  return run;
+}
+
+const counterRefusal = (): MemoryToolError =>
+  new MemoryToolError(
+    "Could not keep this machine's daily count of judgments recorded over MCP, so nothing was saved; try again, or record it with `oort judge record`.",
+  );
+
+/** Today's count, read under the lock. A missing file is 0; an unreadable one is a refusal. */
+function readCounter(home: string, day: string): number {
+  let text: string;
   try {
-    const raw = JSON.parse(fs.readFileSync(counterFile(home), 'utf8')) as {
-      day?: unknown;
-      count?: unknown;
-    };
+    text = fs.readFileSync(counterFile(home), 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw counterRefusal();
+  }
+  try {
+    const raw = JSON.parse(text) as { day?: unknown; count?: unknown };
     return raw.day === day && typeof raw.count === 'number' && raw.count >= 0 ? raw.count : 0;
   } catch {
-    return 0;
+    throw counterRefusal();
   }
 }
 
-function countMcpJudgment(home: string, day: string, count: number): void {
+/** Writes the count atomically (a temporary file, then a rename); a failure is a refusal. */
+function writeCounter(home: string, day: string, count: number): void {
+  const tmp = `${counterFile(home)}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(counterFile(home), JSON.stringify({ day, count }), { mode: 0o600 });
+    fs.writeFileSync(tmp, JSON.stringify({ day, count }), { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, counterFile(home));
   } catch {
-    // Best effort: the store write already happened.
+    fs.rmSync(tmp, { force: true });
+    throw counterRefusal();
+  }
+}
+
+/** Takes one of today's slots, or refuses at the cap. */
+async function reserveMcpJudgment(home: string, day: string): Promise<void> {
+  await withCounterLock(home, () => {
+    const used = readCounter(home, day);
+    if (used >= MCP_JUDGMENTS_PER_DAY) {
+      throw new MemoryToolError(
+        `This machine already recorded ${MCP_JUDGMENTS_PER_DAY} judgments over MCP today; record more with \`oort judge record\` or \`oort judge import\`.`,
+      );
+    }
+    writeCounter(home, day, used + 1);
+  });
+}
+
+/** Gives a slot back (the write was unchanged or failed). Best effort. */
+async function refundMcpJudgment(home: string, day: string): Promise<void> {
+  try {
+    await withCounterLock(home, () => {
+      const used = readCounter(home, day);
+      if (used > 0) writeCounter(home, day, used - 1);
+    });
+  } catch {
+    // The slot stays taken: the cap errs on the safe side.
   }
 }
 
