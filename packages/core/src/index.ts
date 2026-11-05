@@ -1,4 +1,4 @@
-export const VERSION = '0.5.1';
+export const VERSION = '0.5.2';
 export * from './model.js';
 export * from './address.js';
 export * from './export-format.js';
