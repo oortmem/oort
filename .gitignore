@@ -13,3 +13,5 @@ dist/
 .nitro
 dist-ssr
 .npmrc
+__pycache__/
+*.egg-info/

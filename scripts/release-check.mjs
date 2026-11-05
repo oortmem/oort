@@ -22,6 +22,13 @@ for (const file of [
   const v = JSON.parse(readFileSync(file, 'utf8')).version;
   if (v !== want) bad.push(`${file} is ${v}`);
 }
+// The Python launcher (python/) pins the npm release it runs, so it moves in lockstep.
+const py = readFileSync('python/pyproject.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m);
+if (py?.[1] !== want) bad.push(`python/pyproject.toml is ${py?.[1] ?? 'missing'}`);
+const pyInit = readFileSync('python/src/oortmem/__init__.py', 'utf8').match(
+  /__version__\s*=\s*"([^"]+)"/,
+);
+if (pyInit?.[1] !== want) bad.push(`python __version__ is ${pyInit?.[1] ?? 'missing'}`);
 const core = readFileSync('packages/core/src/index.ts', 'utf8').match(/VERSION\s*=\s*'([^']+)'/);
 if (core?.[1] !== want) bad.push(`core VERSION is ${core?.[1] ?? 'missing'}`);
 if (bad.length) {
