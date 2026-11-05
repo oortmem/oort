@@ -77,7 +77,7 @@ flowchart LR
 
 - **Write path.** Every turn is scrubbed of secrets first. A small writer model distils it into short facts, and a decision model compares each fact with what is already stored: add it, update it, supersede the old one, or skip it.
 - **Read path.** Keyword (SQLite FTS5) and vector (sqlite-vec) search run together. Facts that are no longer valid are filtered out before ranking. Results are fused, reranked when it helps, and freshness only breaks ties, so a newer fact never beats a better match.
-- **Local first.** Everything lives in `~/.oort` on your machine, in one SQLite file plus compressed cold blobs. Nothing is hosted. With no API keys and no Oort Pro login, the local commands make no network call at all (recall falls back to keyword search), and a test runs them with every socket blocked.
+- **Local first.** Everything lives in `~/.oort` on your machine, in one SQLite file plus compressed cold blobs. Nothing is hosted unless you choose Oort Cloud. With no API keys and no Oort Pro login, the local commands make no network call at all (recall falls back to keyword search), and a test runs them with every socket blocked.
 
 ## Packages
 
@@ -97,13 +97,13 @@ flowchart LR
 Install bundles for Claude Desktop, Claude Code, Codex, Cursor and Gemini CLI are in
 [`distribution/`](distribution).
 
-This repo is the open-source engine and CLI only. The hosted side (oortcloud.dev and the Oort Pro relay) is a separate service; the engine and CLI reach it only over HTTPS when you use Oort Pro.
+This repo is the open-source engine and CLI only. The hosted side (oortcloud.dev, Oort Cloud and the Oort Pro relay) is a separate service; the engine and CLI reach it only over HTTPS when you use Oort Pro.
 
 ## Keys, or Oort Pro
 
 Oort calls three model services: Voyage AI (embeddings and rerank), TypeSafe (decisions) and Anthropic (the writer). Bring your own keys with `oort keys set`. They stay in the macOS Keychain, or in a `0600` credentials file on Linux and Windows.
 
-Or use **Oort Pro**: $19/month, VAT included where applicable. No API keys needed, and your memories stay on your machine. Run `oort login` and the engine reaches the same services through our relay, which stores no content. [Pricing](https://oortcloud.dev/pricing).
+Or use **Oort Pro**: $19/month, VAT included where applicable. No API keys needed. Run `oort login`, then `oort cloud use` to keep your memories in Oort Cloud in the EU, with a dashboard, a star map and a connector for claude.ai and ChatGPT. You can export or delete them at any time, or keep them on your machine and use only the relay, which stores no content. [Pricing](https://oortcloud.dev/pricing).
 
 ## Projects and trust
 
