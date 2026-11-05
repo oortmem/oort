@@ -3,7 +3,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AWS_KEY, harness, memory, type Harness } from '../test/helpers.js';
-import { INSTRUCTIONS, TOOL_NAMES, createOortServer, localBackend } from './mcp.js';
+import { ALL_TOOL_NAMES } from '@oortmem/mcp';
+import { INSTRUCTIONS, createOortServer, localBackend } from './mcp.js';
 import type { CloudClient } from './cloud.js';
 import { TG } from '@oortmem/core/store-conformance';
 
@@ -57,6 +58,8 @@ const ANNOTATIONS: Record<string, Record<string, boolean>> = {
   explain: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   list_recent: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   whoami: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  record_judgment: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  judge: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 };
 
 describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
@@ -64,7 +67,9 @@ describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
     const { client } = await connect(era);
     expect(client.getProtocolEra()).toBe(era);
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(TOOL_NAMES.filter((n) => n !== 'share').sort());
+    expect(tools.map((t) => t.name).sort()).toEqual(
+      ALL_TOOL_NAMES.filter((n) => n !== 'share').sort(),
+    );
     for (const t of tools) {
       expect(t.annotations, t.name).toMatchObject({ ...ANNOTATIONS[t.name], openWorldHint: false });
       expect(t.annotations?.title, t.name).toBeTruthy();

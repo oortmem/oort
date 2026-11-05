@@ -6,7 +6,18 @@ import {
   type ToolSpaces,
 } from '@oortmem/mcp';
 import { filterFor } from '@oortmem/claude-code';
-import { VERSION, activation, isCurrent, scrub, type Memory, localGrant } from '@oortmem/core';
+import {
+  JudgmentInputError,
+  VERSION,
+  activation,
+  isCurrent,
+  judge,
+  recordJudgment,
+  scrub,
+  type JudgeResult,
+  type Memory,
+  localGrant,
+} from '@oortmem/core';
 import { supersedeChain } from './commands/inspect.js';
 import { timeMode } from './commands/explain.js';
 import { runRecall, viewIgnored, type TemporalView } from './commands/recall.js';
@@ -18,6 +29,7 @@ import {
   fixed,
   refuseStarInCloud,
   shapeLinks,
+  writeGrant,
   writeGrantFor,
 } from './util.js';
 import { privacyStatement, type Wired } from './wire.js';
@@ -280,6 +292,113 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
         ),
       };
     },
+
+    async recordJudgment(i) {
+      const r = await asToolError(() =>
+        recordJudgment(
+          {
+            subject: i.subject,
+            verdict: i.verdict,
+            reason: i.reason,
+            domain: i.domain,
+            by: i.by,
+            ...(i.ref !== undefined && { ref: i.ref }),
+            ...(i.verdicts !== undefined && { verdicts: i.verdicts }),
+            ...(i.criteria !== undefined && { criteria: i.criteria }),
+            ...(i.decided_at !== undefined && { decidedAt: i.decided_at }),
+          },
+          {
+            store: w.store,
+            grant: writeGrant(w),
+            scope: w.scope,
+            ...(w.embed !== undefined && { embed: w.embed }),
+            via: 'mcp',
+            harness: 'mcp',
+            now: now(),
+          },
+        ),
+      );
+      return {
+        outcome: r.outcome,
+        id: r.memory.id,
+        ...(r.supersedes !== undefined && { corrects: r.supersedes }),
+        ...(r.redacted.length > 0 && { note: 'A secret was redacted before saving.' }),
+      };
+    },
+
+    async judge(i) {
+      const r = await asToolError(() =>
+        judge(
+          {
+            summary: i.item,
+            ...(i.details !== undefined && { details: i.details }),
+            ...(i.domain !== undefined && { domain: i.domain }),
+            ...(i.by !== undefined && { by: i.by }),
+          },
+          {
+            store: w.store,
+            grant: writeGrant(w),
+            ...(w.embed !== undefined && { embed: w.embed }),
+            ...(w.decide !== undefined && { decide: w.decide }),
+            now: now(),
+          },
+          { k: i.limit },
+        ),
+      );
+      return judgeOutput(r);
+    },
+  };
+}
+
+/** A judgment input problem as the tool's own refusal; anything else as it is. */
+async function asToolError<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof JudgmentInputError) throw new MemoryToolError(e.message);
+    throw e;
+  }
+}
+
+const JUDGE_NOTES: Record<NonNullable<JudgeResult['why']>, string> = {
+  'no-precedents': 'No judgments are recorded for this domain or expert: ask the expert.',
+  'too-far': 'No recorded judgment is close enough to this item: ask the expert.',
+  'precedents-disagree': "The expert's closest judgments disagree: ask the expert.",
+  'low-confidence': 'The prediction is below the confidence threshold: ask the expert.',
+  'no-decider':
+    'No prediction is available (no TypeSafe key): weigh the precedents yourself, or ask the expert.',
+  'decider-failed': 'The prediction call failed: ask the expert.',
+};
+
+/** What the `judge` tool returns: the status, the labelled prediction, and the cited precedents. */
+function judgeOutput(r: JudgeResult): Record<string, unknown> {
+  const experts = [...new Set(r.precedents.map((p) => p.by))].join(', ');
+  return {
+    status: r.status,
+    ...(r.why !== undefined && { why: r.why }),
+    ...(r.prediction !== undefined && {
+      prediction: {
+        verdict: r.prediction.verdict,
+        probability: Number(r.prediction.probability.toFixed(3)),
+        is: 'a prediction from precedents, not the expert decision',
+      },
+    }),
+    note:
+      r.status === 'suggested'
+        ? `Predicted from ${experts}'s precedents below; present it as a prediction with its sources, and let a person confirm it.`
+        : JUDGE_NOTES[r.why ?? 'low-confidence'],
+    precedents: r.precedents.map((p) => ({
+      id: p.id,
+      verdict: p.verdict,
+      reason: clean(p.reason),
+      subject: clean(p.subject.summary),
+      ...(p.subject.ref !== undefined && { ref: clean(p.subject.ref) }),
+      by: p.by,
+      decided_at: p.decidedAt,
+      similarity: p.similarity,
+      near: p.near,
+      ...(p.agrees !== undefined && { agrees: p.agrees }),
+    })),
   };
 }
 

@@ -1,0 +1,19 @@
+subject,verdict,reason,criteria,domain,by,ref,decided_at
+"Post says a vitamin cures the flu",rejected,"Health claim with no cited source.",no-source;health-claim,content,ada,content-001,2026-09-01
+"Ad claims a miracle remedy cures back pain",rejected,"Medical claim and no study cited. We do not run cure claims.",no-source;health-claim,content,ada,content-002,2026-09-02
+"Reel says vitamin D lowers infection risk, links a peer-reviewed trial",approved,"Health claim, but it cites a peer-reviewed trial and does not promise a cure.",cited-source;health-claim,content,ada,content-003,2026-09-03
+"Comment posts a stranger's home address",rejected,"Personal data about a private person. Always remove.",personal-data,content,ada,content-004,2026-09-04
+"Review says the new phone camera is disappointing",approved,"Opinion about a product. Negative is fine.",opinion,content,ada,content-005,2026-09-05
+"Post shares a full name and phone number of a teacher",rejected,"Personal data of a private person.",personal-data,content,ada,content-006,2026-09-06
+"Thread claims a herbal tea cures diabetes",rejected,"Cure claim for a serious illness with no source.",no-source;health-claim,content,ada,content-007,2026-09-07
+"Blog says the city budget rose 4 percent, links the council report",approved,"Factual claim with its source linked.",cited-source,content,ada,content-008,2026-09-08
+"Meme mocks a football team's season",approved,"Satire and opinion, no harm to a person.",opinion,content,ada,content-009,2026-09-09
+"Post says a supplement reverses ageing, citing nothing",rejected,"Health claim with no source.",no-source;health-claim,content,ada,content-010,2026-09-10
+"Pull request catches an exception and ignores it",rejected,"Errors must not be swallowed; log or rethrow.",swallowed-error,code-review,cy,code-001,2026-09-01
+"Pull request hard-codes an API token in the config file",rejected,"Secrets never go in the repository.",secret-in-code,code-review,cy,code-002,2026-09-02
+"Pull request renames variables in the parser, tests unchanged and passing",approved,"Small refactor and the tests still cover it.",refactor;tests,code-review,cy,code-003,2026-09-03
+"Pull request fixes an off-by-one bug without adding a test",rejected,"A bug fix needs a test that fails without it.",missing-test,code-review,cy,code-004,2026-09-04
+"Pull request adds a regression test with the fix for the date parser",approved,"The fix comes with a test that reproduces the bug.",tests,code-review,cy,code-005,2026-09-05
+"Pull request wraps a call in try/catch and returns null on any error",rejected,"Returning null on every error hides failures; handle or rethrow.",swallowed-error,code-review,cy,code-006,2026-09-06
+"Pull request extracts a helper function, with its unit tests",approved,"A refactor with tests.",refactor;tests,code-review,cy,code-007,2026-09-07
+"Pull request commits a .env file with a database password",rejected,"Secrets never go in the repository.",secret-in-code,code-review,cy,code-008,2026-09-08

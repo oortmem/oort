@@ -414,6 +414,8 @@ Tools:
 | `explain` | `id` | read-only, idempotent | the memory, its stored decisions, and its supersede chain |
 | `list_recent` | `since?` (ISO), `limit?` (1–50, default 20) | read-only, idempotent | memories by `updated_at`, newest first, each with `status` (`current`, `superseded` or `expired`) |
 | `whoami` | none | read-only, idempotent | `mode: "local"`, `project`, `version`, `agent`, `reads` (`your Planet`, `Star <agent>`), `writes_to`, which adapters are available, and per role whether it uses `oort-pro`, an `own-key` or is `missing`; no account or email |
+| `record_judgment` | `subject` (1–500 chars), `ref?`, `verdict`, `verdicts?` (2–12 labels; default `approved`, `rejected`), `reason` (1–2000 chars, the expert's own words), `criteria?` (up to 12 tags), `domain`, `by` (the expert), `decided_at?` (ISO) | write, not destructive, not idempotent | `outcome` (`added`, `corrected` or `unchanged`), `id`, `corrects` (the judgment it replaced) |
+| `judge` | `item` (1–2000 chars), `details?`, `domain?`, `by?`, `limit?` (precedents, 1–10, default 5) | read-only, idempotent | `status` (`suggested`, `needs-expert` or `precedents-only`), `why`, `prediction` (`verdict`, `probability`, labelled as a prediction), `note`, and the `precedents` with each `reason`, `similarity`, `near` and `agrees` |
 
 Every tool sets `openWorldHint: false` and has a `title`.
 
@@ -654,6 +656,108 @@ version, an owner, a deadline). One not confirmed within `recall.staleAfterDays`
 turns it off) is injected with "(may be outdated; last confirmed 2mo ago)" and listed by `oort
 revalidate`. Confirming it in a session clears the mark. The gate answers this once per turn, so
 facts split from a multi-fact turn are not marked yet (a per-fact question is a follow-up).
+
+## Judgment memory: `oort judge`
+
+An expert (a lawyer, a content reviewer, a code reviewer) approves or rejects items and says why.
+Judgment memory keeps those decisions, with the reason in the expert's own words, so an agent can
+apply them to a new item, show which precedents it used, and say when it is not sure.
+
+```sh
+oort judge record --subject "Post says a vitamin cures the flu" --verdict rejected \
+  --reason "Health claim with no cited source." --criteria no-source,health-claim \
+  --domain content --by ada --ref https://example.test/posts/1
+oort judge apply "Story says a herbal remedy cures anxiety" --domain content
+oort judge list
+oort judge withdraw <id>
+```
+
+A judgment is a memory of type `judgment`. It holds:
+
+| Field | What it is |
+| --- | --- |
+| `subject` | A one-line summary of what was judged, and optionally `ref`, a link or id of the item. |
+| `verdict` | `approved` or `rejected`, or a label from `verdicts`, the defined set (`--verdicts approve,escalate,reject`). |
+| `reason` | The expert's own words, kept verbatim (secrets are redacted). Nothing paraphrases it: the write path never refines, supersedes or merges a judgment. |
+| `criteria` | Tags the reason relies on (`no-source`, `pii`). |
+| `domain` | `content`, `legal`, `code-review`, …: judging only uses precedents of the item's domain when one is given. |
+| `by` | The expert's id. A prediction always names whose judgments it came from. |
+| `decidedAt` | When the expert decided (`--decided-at`; default now). |
+
+Judgments are recorded only on purpose: by `oort judge record`, `oort judge import`, a pack, or
+the MCP tool `record_judgment`. They are never inferred from a conversation, because the expert
+owns what is recorded. They belong to the expert, not to a repository: a judgment is global (not
+bound to the cwd's project), lives in the acting agent's home (your Planet, or the agent's Star),
+and is pinned, so it never goes cold. Recall shows judgments like any memory, as precedent (`[judgment, 2d ago] Judgment by ada (content): rejected "…". Reason: …`).
+
+**Seeing, correcting, withdrawing.** `oort judge list` shows the current judgments (`--all` adds
+withdrawn and corrected ones, `--domain` and `--by` filter). Recording the same item again (same
+`ref`, domain and expert) corrects the earlier judgment, as does `--corrects <id>`: the old one is
+kept for the record but no longer counts. The same judgment again changes nothing.
+`oort judge withdraw <id>` (asks first; `--yes`) withdraws one: it stops counting in judging,
+recall and packs at once.
+
+### Applying judgments: `oort judge apply`
+
+`oort judge apply <item>` finds the closest current judgments (`--domain`, `--by` narrow them):
+by embedding when an embedder is set up, by shared words otherwise. With a TypeSafe key it asks
+Jev for a choice over the verdicts, with the precedents and their reasons as state, and prints the
+prediction with its probability and the precedents behind it. The answer is one of:
+
+| Status | When |
+| --- | --- |
+| `suggested` | A prediction at or above `--threshold` (default 0.7). It is labelled as a prediction, never as the expert's decision, and cites every precedent it used with its reason. |
+| `needs-expert` | No trustworthy prediction. `why` says which: `no-precedents` (nothing recorded for this domain or expert), `too-far` (nothing at least `--min-similarity` close; default 0.45 by embedding, 0.25 by words), `precedents-disagree` (no verdict holds 60% of the close precedents, weighted by similarity), `low-confidence` (below the threshold; the lean is shown) or `decider-failed`. The closest precedents are shown either way. |
+| `precedents-only` | No TypeSafe key: the close precedents and their reasons, and no verdict. |
+
+`--k <n>` sets how many precedents count (default 5); `--json` prints the whole result. Nothing
+is decided for anyone: in a regulated domain, treat every answer as a suggestion a person
+confirms.
+
+### Past decisions in bulk: `oort judge import`
+
+`oort judge import <file>` reads CSV (a header row) or JSON Lines (one object per line), chosen by
+the file name or `--format csv|jsonl`. Columns: `subject`, `verdict`, `reason`, `domain`, `by`, and
+optionally `ref`, `criteria` and `verdicts` (lists separated by `;` in CSV; arrays in JSON Lines)
+and `decided_at`. `--domain` and `--by` fill a missing column. Every row is checked before anything
+is written. A row whose item (`ref`) the same expert already judged the same way is skipped, and
+one they judged differently corrects the earlier judgment, so importing a file with refs twice adds
+nothing. Rows without a `ref` are added each time.
+
+### How well it agrees: `oort judge eval`
+
+`oort judge eval <file>` judges held-out decisions (same format as import; they are never
+recorded) against the judgments in the store, and reports per domain, and for all of them, the
+coverage (the share of items predicted) and the agreement with the expert's actual verdict at each
+confidence threshold (`--thresholds 0.5,0.7,0.9`; default 0.5 to 0.9), plus why the rest were not
+predicted. It needs a TypeSafe key. `docs/examples/judgments-train.csv` and
+`docs/examples/judgments-heldout.csv` are a small synthetic set (content moderation and code
+review) to try it on:
+
+```sh
+oort judge import docs/examples/judgments-train.csv
+oort judge eval docs/examples/judgments-heldout.csv
+```
+
+### Judgment packs: `oort judge pack`
+
+```sh
+oort judge pack export --domain content --name ada-content --out ada-content.pack.jsonl
+oort --agent cursor judge pack import ada-content.pack.jsonl
+```
+
+A pack is JSON Lines: a manifest (`oort: "judgment-pack"`, `version: 1`, `name`, `exportedAt`,
+`exportedBy`, `count`, `digest`, `domains`, `experts`), then one line per current judgment
+(`id`, `judgment`). Withdrawn and corrected judgments never travel, and neither do embeddings (the
+importer embeds with its own model). Import shows what the pack holds and asks first (`--yes`).
+Each imported judgment keeps its expert and decision time and records where it came from
+(`judgment.pack`: the pack's id, name, who exported it and when, and its original id). Importing
+the same pack again adds nothing, and never brings back a judgment withdrawn since. The digest
+catches a changed or truncated file; it does not prove who made the pack, so import packs only from
+people you trust.
+
+Judgment memory is local for now: in cloud mode the `oort judge` commands refuse, and
+`oort cloud import` leaves judgments on this machine.
 
 ## Keys: `oort keys`
 
@@ -1101,6 +1205,9 @@ oort project unlink
 A repository's `oort.config.json` can name a `project.id`. That id is ignored
 until you link it, because a cloned repository could otherwise read another
 project's memories. See `docs/claude-code.md`.
+
+`record_judgment` and `judge` ([judgment memory](#judgment-memory-oort-judge)) are offered by the
+local server only; in cloud mode the server has the other tools.
 
 The derived id comes from the main repository root, resolved the way the
 operating system sees it: symlinks followed and the case as stored on disk. A

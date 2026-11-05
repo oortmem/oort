@@ -64,8 +64,9 @@ async function localExport(
     customerId: s.customerId,
     agentId: ANONYMOUS_AGENT,
   });
+  // Judgments (CON-71) are local-only for now: Oort Cloud has no judgment memory yet.
   const all = (await w.store.list(grant, { validOnly: false })).filter(
-    (m) => addressOf(m).level === 'user',
+    (m) => addressOf(m).level === 'user' && m.type !== 'judgment',
   );
   all.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.id < b.id ? -1 : 1));
   const lines: string[] = [];

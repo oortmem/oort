@@ -40,7 +40,15 @@
     { "name": "pin", "description": "Keep a memory always available, or release it." },
     { "name": "explain", "description": "Show why a memory was stored and what it replaced." },
     { "name": "list_recent", "description": "List recently saved or changed memories." },
-    { "name": "whoami", "description": "Describe this Oort connection." }
+    { "name": "whoami", "description": "Describe this Oort connection." },
+    {
+      "name": "record_judgment",
+      "description": "Record a decision an expert made, with their reason."
+    },
+    {
+      "name": "judge",
+      "description": "Predict an expert's verdict on a new item from their judgments."
+    }
   ],
   "user_config": {
     "oort_home": {
