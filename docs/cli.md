@@ -94,6 +94,7 @@ an error message is scrubbed and clipped to 24 characters.
 | `OORT_SITE_URL` | The site `oort login` signs in at, for local development (default `https://oortcloud.dev`). The same rule applies. |
 | `OORT_NO_KEYCHAIN=1` | Switches stored keys (Keychain and `credentials.json`) off for every command (see `oort keys`). |
 | `OORT_HOME` | The store directory (default `~/.oort`). |
+| `OORT_HOOK_TIMING=1` | Diagnostics. A `UserPromptSubmit` or `SessionStart` hook prints two stderr lines: `oort-hook <event> via=<process\|daemon> <ms>ms`, and `oort-timing {…}` with the hook log's timings for that prompt (numbers only). In cloud mode these include `cloudMs` (the whole request), `cloudHeadersMs`, `cloudBodyMs`, `cloudConnected` (1 when the request opened a connection) with `cloudDnsMs`, `cloudTcpMs` and `cloudTlsMs`, `cloudRecallMs` (the API's recall itself) and the API's own stages as `server<Name>Ms`: the hook asks Oort Cloud for its `Server-Timing` breakdown. A daemon adds `socketMs`, and asks Oort Cloud for Server-Timing only when it was itself started with the variable. |
 | `NO_COLOR`, `FORCE_COLOR`, `COLORTERM`, `COLORFGBG` | See Colour above. |
 
 ## `oort setup`
@@ -543,6 +544,13 @@ It is optional: without it, the hooks work exactly as before.
   file. It also exits after `--idle` without a hook request (default
   `serve.idleMinutes`, 30 minutes). `--idle` takes `30m`, `45s`, `2h` or
   `500ms` (from 100 ms to 24 h).
+- **Oort Cloud connection.** In cloud mode the daemon keeps its HTTPS
+  connection to Oort Cloud open, so a prompt's recall does not pay for DNS,
+  TCP and TLS (about 200 ms from Europe). It opens the connection when it
+  starts listening, keeps an idle one for 2 minutes, and for 15 minutes after
+  the last prompt refreshes an idle one shortly before that with
+  `GET /health` (no key, nothing read, nothing metered). `oort mcp` keeps its
+  connection open the same way, without the refresh.
 - **Limits.** At most 64 connections, 8 requests waiting on one connection,
   frames of 4 MiB, 10 s without a whole request, and 60 s per connection.
 - **Requests.** Each frame is a 4-byte length and JSON: `{ v, id, method,

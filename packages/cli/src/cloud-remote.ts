@@ -12,6 +12,48 @@ export function cloudTurnRef(ref: string): string {
     : createHash('sha256').update(ref).digest('hex');
 }
 
+/**
+ * The API reads at most this many bytes of recall text (`recallTextBytes` in the contract) and
+ * refuses a longer one with 413, so a long prompt (a pasted log, a diff) would recall nothing.
+ */
+export const RECALL_TEXT_MAX_BYTES = 2048;
+const ELLIPSIS = '\n…\n';
+
+/**
+ * `text` within RECALL_TEXT_MAX_BYTES of UTF-8: unchanged when it fits, else its start and its end
+ * (where a question after a paste usually is) joined by an ellipsis, never splitting a character.
+ */
+export function clipRecallText(text: string, max = RECALL_TEXT_MAX_BYTES): string {
+  const enc = new TextEncoder();
+  if (enc.encode(text).byteLength <= max) return text;
+  const room = max - enc.encode(ELLIPSIS).byteLength;
+  const chars = [...text];
+  const take = (from: 'start' | 'end', budget: number): string => {
+    const out: string[] = [];
+    let used = 0;
+    for (let i = 0; i < chars.length; i++) {
+      const c = from === 'start' ? chars[i]! : chars[chars.length - 1 - i]!;
+      const n = enc.encode(c).byteLength;
+      if (used + n > budget) break;
+      used += n;
+      out.push(c);
+    }
+    return from === 'start' ? out.join('') : out.reverse().join('');
+  };
+  const head = take('start', Math.floor(room / 2));
+  const tail = take('end', room - enc.encode(head).byteLength);
+  return `${head}${ELLIPSIS}${tail}`;
+}
+
+/** What the prompt hook asks of the API for `recall.promptMode` (CON-101). */
+const PROMPT_MODE: Record<PromptMode, { rerank?: false; embed?: false }> = {
+  full: {},
+  fast: { rerank: false },
+  lexical: { rerank: false, embed: false },
+};
+
+export type PromptMode = 'full' | 'fast' | 'lexical';
+
 /** Pinned and hot memories SessionStart injects: at most this many of each from the API. */
 const SESSION_LIMIT = 100;
 
@@ -26,6 +68,8 @@ export function cloudRemote(
   here?: { projectId: string | undefined; private?: boolean },
   /** The agent the hooks act as: it reads only the Constellations it is attached to (CON-64). */
   agent?: string,
+  /** `recall.promptMode`: what the prompt hook's recall may skip. An older API ignores it. */
+  promptMode: PromptMode = 'full',
 ): RemoteMemory {
   // Calls about the project this process runs in state its privacy when its own config file sets
   // it, so the cloud knows whether that project's memories may be shared. A default states
@@ -47,13 +91,15 @@ export function cloudRemote(
     };
   }
   return {
+    // Only the prompt hook recalls through here.
     recall: ({ text, projectId }) =>
       client.recall({
-        text,
+        text: clipRecallText(text),
         ...(projectId !== undefined && { project: projectId }),
         ...privacy(projectId),
         ...(agent !== undefined && { agent }),
         k: 10,
+        ...PROMPT_MODE[promptMode],
       }),
     sessionMemories: async ({ projectId }) => {
       const project = projectId !== undefined && { project: projectId };
