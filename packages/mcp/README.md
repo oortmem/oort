@@ -22,6 +22,13 @@ Every method acts inside the scope the backend was built for; no tool argument c
 Throw `MemoryToolError` for a refusal the user should read. Text in every result is scrubbed for
 secrets once more before it reaches the host.
 
+Hosts that render [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) also get two
+in-chat widgets: a recall card (the memories, their tier, dates and why each was picked) and a
+memory card (`explain`'s history and decisions, or what `remember` saved). They are `ui://`
+resources linked from the tool's `_meta.ui`, built from the tool's own result, with no network
+access and no remote scripts. Tool results are the same text either way, and a host that
+declares no MCP Apps support is not offered them. Pass `widgets: false` to turn them off.
+
 Also exported: `TOOLS`, `TOOL_NAMES`, `INSTRUCTIONS`, `inputSchemas` (zod), `toolJsonSchemas()`
 (JSON Schema), `REMEMBER_MAX_FACTS` and `FACT_MAX_CHARS`. The skill is at
 `@oortmem/mcp/skill/SKILL.md`.

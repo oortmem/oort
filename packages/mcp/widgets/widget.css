@@ -1,0 +1,309 @@
+/* Oort in-chat widgets. The host draws the card; this paints on a transparent background and
+   prefers the host's tokens (applyHostStyleVariables) with Oort's palette as the fallback. */
+:root {
+  color-scheme: light dark;
+  --ink: var(--color-text-primary, #11152a);
+  --sub: var(--color-text-secondary, #4b5268);
+  --line: var(--color-border-tertiary, rgb(17 21 42 / 0.1));
+  --well: var(--color-background-secondary, rgb(17 21 42 / 0.035));
+  --photon: oklch(0.5 0.17 255);
+  --hot: oklch(0.55 0.12 225);
+  --warm: oklch(0.58 0.14 60);
+  --cold: oklch(0.52 0.05 260);
+  --ok: oklch(0.5 0.13 155);
+  --muted-ink: oklch(0.55 0.13 60);
+  --iris: linear-gradient(
+    120deg,
+    oklch(0.78 0.15 65),
+    oklch(0.8 0.13 225) 40%,
+    oklch(0.66 0.19 250) 70%,
+    oklch(0.65 0.2 300)
+  );
+  --font: var(--font-sans, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif);
+  --mono: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
+  --radius: var(--border-radius-md, 10px);
+}
+
+:root[data-theme='dark'] {
+  --ink: var(--color-text-primary, #f3f5fb);
+  --sub: var(--color-text-secondary, #a3aac0);
+  --line: var(--color-border-tertiary, rgb(255 255 255 / 0.1));
+  --well: var(--color-background-secondary, rgb(255 255 255 / 0.04));
+  --photon: oklch(0.8 0.13 225);
+  --hot: oklch(0.8 0.13 225);
+  --warm: oklch(0.78 0.15 65);
+  --cold: oklch(0.72 0.05 260);
+  --ok: oklch(0.78 0.13 155);
+  --muted-ink: oklch(0.8 0.12 65);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --ink: #f3f5fb;
+    --sub: #a3aac0;
+    --line: rgb(255 255 255 / 0.1);
+    --well: rgb(255 255 255 / 0.04);
+    --photon: oklch(0.8 0.13 225);
+    --hot: oklch(0.8 0.13 225);
+    --warm: oklch(0.78 0.15 65);
+    --cold: oklch(0.72 0.05 260);
+    --ok: oklch(0.78 0.13 155);
+    --muted-ink: oklch(0.8 0.12 65);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 14px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  padding: 14px 16px 16px;
+}
+
+.card {
+  position: relative;
+  display: grid;
+  gap: 12px;
+}
+
+.card::before {
+  /* The iris hairline: Oort's one flourish. */
+  content: '';
+  position: absolute;
+  inset: -14px -16px auto;
+  height: 2px;
+  background: var(--iris);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+header {
+  display: grid;
+  gap: 4px;
+}
+
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--sub);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.eyebrow svg {
+  flex: none;
+  color: var(--photon);
+}
+
+h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+
+.summary {
+  margin: 0;
+  color: var(--sub);
+  font-size: 12px;
+}
+
+ol,
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.items {
+  display: grid;
+  gap: 8px;
+}
+
+.item {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--well);
+}
+
+.text {
+  margin: 0;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+.ended .text,
+h1.ended {
+  color: var(--sub);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  margin: 0;
+  color: var(--sub);
+  font-size: 12px;
+}
+
+.sep {
+  color: color-mix(in oklab, var(--sub) 55%, transparent);
+}
+
+.tier {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tier, var(--cold));
+  box-shadow: 0 0 6px var(--tier, var(--cold));
+}
+
+.tier-hot {
+  --tier: var(--hot);
+}
+.tier-warm {
+  --tier: var(--warm);
+}
+.tier-cold {
+  --tier: var(--cold);
+}
+
+.flag {
+  color: var(--muted-ink);
+  font-weight: 500;
+}
+
+.why {
+  margin: 0;
+  color: var(--photon);
+  font-size: 12px;
+}
+
+.why b {
+  color: var(--sub);
+  font-weight: 500;
+}
+
+.note,
+.empty {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--well);
+  color: var(--sub);
+  font-size: 12px;
+}
+
+.error {
+  color: var(--color-text-danger, var(--ink));
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  color: var(--ok);
+}
+
+.outcome.skipped {
+  color: var(--sub);
+}
+
+section h2 {
+  margin: 0 0 6px;
+  color: var(--sub);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.chain {
+  display: grid;
+  gap: 6px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+}
+
+details {
+  font-size: 12px;
+}
+
+summary {
+  width: fit-content;
+  min-height: 24px;
+  color: var(--sub);
+  cursor: pointer;
+}
+
+summary:focus-visible {
+  outline: 2px solid var(--photon);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.decisions {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  color: var(--sub);
+}
+
+.pending {
+  color: var(--sub);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .item {
+    animation: rise 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    animation-delay: calc(var(--i, 0) * 45ms);
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+}
+
+@media (forced-colors: active) {
+  .dot {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+  }
+}

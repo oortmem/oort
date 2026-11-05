@@ -21,3 +21,12 @@ export {
   type RecalledFact,
   type RememberOutcome,
 } from './server.js';
+export {
+  TOOL_WIDGETS,
+  UI_EXTENSION_ID,
+  UI_MIME_TYPE,
+  WIDGETS,
+  uiSupport,
+  type UiSupport,
+  type WidgetName,
+} from './ui.js';
