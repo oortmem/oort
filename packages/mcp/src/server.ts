@@ -73,6 +73,12 @@ export interface MemoryBackend {
    * text holds personal data.
    */
   share?(input: ToolInput<'share'>): Promise<ShareOutcome>;
+  /**
+   * Judgment memory (CON-71). Optional: a server offers `record_judgment` and `judge` only when
+   * the backend has them. `judge` must label a prediction as one and cite its precedents.
+   */
+  recordJudgment?(input: ToolInput<'record_judgment'>): Promise<Record<string, unknown>>;
+  judge?(input: ToolInput<'judge'>): Promise<Record<string, unknown>>;
 }
 
 /** What `share` returns. */
@@ -193,9 +199,21 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
       }
       return b.share(i);
     },
+    record_judgment: (i) => {
+      if (b.recordJudgment === undefined) throw new MemoryToolError('No judgment memory here.');
+      return b.recordJudgment(i);
+    },
+    judge: (i) => {
+      if (b.judge === undefined) throw new MemoryToolError('No judgment memory here.');
+      return b.judge(i);
+    },
   };
-  const offered = (name: ToolName): boolean =>
-    name !== 'share' || (spaces.share.length > 0 && b.share !== undefined);
+  const offered = (name: ToolName): boolean => {
+    if (name === 'share') return spaces.share.length > 0 && b.share !== undefined;
+    if (name === 'record_judgment') return b.recordJudgment !== undefined;
+    if (name === 'judge') return b.judge !== undefined;
+    return true;
+  };
   const registered = new Map<ToolName, RegisteredTool>();
   for (const t of TOOLS) {
     if (!offered(t.name)) continue;

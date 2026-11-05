@@ -14,7 +14,16 @@ export const TOOL_NAMES = [
   'whoami',
   'share',
 ] as const;
-export type ToolName = (typeof TOOL_NAMES)[number];
+/**
+ * Judgment memory (CON-71): offered only by a backend that implements them (the local store
+ * today), so the remote connector's tool set is unchanged until it does.
+ */
+export const JUDGMENT_TOOL_NAMES = ['record_judgment', 'judge'] as const;
+
+export type ToolName = (typeof TOOL_NAMES)[number] | (typeof JUDGMENT_TOOL_NAMES)[number];
+
+/** Every tool a server can offer, in registration order. */
+export const ALL_TOOL_NAMES: readonly ToolName[] = [...TOOL_NAMES, ...JUDGMENT_TOOL_NAMES];
 
 /** `remember` takes at most this many facts per call: distilled facts, never a transcript. */
 export const REMEMBER_MAX_FACTS = 5;
@@ -40,6 +49,13 @@ const Fact = z
   .describe('One standalone claim, true without the conversation around it');
 
 export const MEMORY_TYPES = ['semantic', 'episodic', 'procedural', 'preference'] as const;
+
+const Label = z
+  .string()
+  .trim()
+  .min(1)
+  .max(32)
+  .describe('A short lowercase label: letters, digits, "-" or "_"');
 
 /** The temporal views `recall` reads (CON-34). */
 export const RECALL_MODES = ['current', 'as-of', 'history', 'known-at'] as const;
@@ -139,6 +155,53 @@ export function inputSchemasFor(spaces: ToolSpaces) {
         .max(SHARE_TEXT_MAX_CHARS)
         .optional()
         .describe('An edited text to share instead of the memory as it is'),
+    }),
+    record_judgment: z.object({
+      subject: z.string().trim().min(1).max(500).describe('What was judged, in one line'),
+      ref: z.string().trim().min(1).max(2000).optional().describe('A link or id of the item'),
+      verdict: Label.describe("The expert's verdict: approved or rejected, or one of `verdicts`"),
+      verdicts: z
+        .array(Label)
+        .min(2)
+        .max(12)
+        .optional()
+        .describe('The verdict set, when it is not approved and rejected'),
+      reason: z
+        .string()
+        .trim()
+        .min(1)
+        .max(2000)
+        .describe("The expert's reason, exactly as they gave it; never reworded"),
+      criteria: z
+        .array(z.string().trim().min(1).max(64))
+        .max(12)
+        .optional()
+        .describe('Tags the reason relies on, e.g. no-source'),
+      domain: z
+        .string()
+        .trim()
+        .min(1)
+        .max(64)
+        .describe('The domain: legal, content, code-review, …'),
+      by: z.string().trim().min(1).max(128).describe("The expert's id"),
+      decided_at: IsoTime.optional().describe('When the expert decided (default now)'),
+    }),
+    judge: z.object({
+      item: z.string().trim().min(1).max(2000).describe('The new item, summarised'),
+      details: z.string().trim().min(1).max(4000).optional().describe('More about the item'),
+      domain: z.string().trim().min(1).max(64).optional().describe('Use only this domain'),
+      by: z.string().trim().min(1).max(128).optional().describe("Use only this expert's judgments"),
+      limit: z.number().int().min(1).max(10).default(5).describe('Precedents to use'),
+      include_imported: z
+        .boolean()
+        .default(false)
+        .describe(
+          'Also use judgments imported from packs, whose experts are as the pack states them',
+        ),
+      include_agent_recorded: z
+        .boolean()
+        .default(false)
+        .describe('Also use agent-recorded judgments nobody has confirmed'),
     }),
   } as const satisfies Record<ToolName, z.ZodType>;
 }
@@ -250,6 +313,28 @@ export const TOOLS: readonly ToolDefinition[] = [
       openWorldHint: true,
     },
   },
+  {
+    name: 'record_judgment',
+    title: 'Record a judgment',
+    description:
+      'Record one decision an expert explicitly made, with their reason verbatim. Saved as agent-recorded and unconfirmed until a person confirms it; only for experts this machine lists.',
+    annotations: {
+      title: 'Record a judgment',
+      readOnlyHint: false,
+      // It can change what judging answers for an expert, so hosts should ask first.
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: 'judge',
+    title: "Apply an expert's judgments",
+    description:
+      "Predict an expert's verdict on a new item from their judgments, with probability and cited precedents, or say it needs the expert. Sends the item and reasons to TypeSafe.",
+    // Reads only, but sends the item and the precedents' reasons to TypeSafe for the prediction.
+    annotations: { ...read("Apply an expert's judgments"), openWorldHint: true },
+  },
 ];
 
 /** The JSON Schema of every tool's input, for hosts and docs that need it without zod. */
@@ -258,6 +343,6 @@ export function toolJsonSchemas(
 ): Record<ToolName, Record<string, unknown>> {
   const schemas = inputSchemasFor(spaces);
   return Object.fromEntries(
-    TOOL_NAMES.map((n) => [n, z.toJSONSchema(schemas[n], { io: 'input' })]),
+    ALL_TOOL_NAMES.map((n) => [n, z.toJSONSchema(schemas[n], { io: 'input' })]),
   ) as unknown as Record<ToolName, Record<string, unknown>>;
 }

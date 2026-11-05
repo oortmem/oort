@@ -28,6 +28,8 @@ export interface RecallOptions extends TemporalFlags {
   json?: boolean;
   /** `--include planet,star`: the levels to read (comma list). */
   include?: string;
+  /** `--include-withdrawn`: also show withdrawn judgments (CON-71). */
+  includeWithdrawn?: boolean;
 }
 
 /** `--include`, checked: known level names, no repeats kept. Undefined: read every level. */
@@ -103,6 +105,7 @@ export async function runRecall(
   view: TemporalView,
   now: Date,
   include?: IncludeLevel[],
+  includeWithdrawn = false,
 ): Promise<RecallResult> {
   const cloud = cloudOf(w);
   if (cloud !== undefined) {
@@ -130,6 +133,7 @@ export async function runRecall(
         home: w.agent.home,
         ...(include !== undefined && { include }),
         ...view,
+        ...(includeWithdrawn && { includeWithdrawn: true }),
       },
       {
         store: w.store,
@@ -155,7 +159,7 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
   const include = includeLevels(opts.include);
   return withWired(ctx, async (w) => {
     const now = new Date();
-    const result = await runRecall(w, text, view, now, include);
+    const result = await runRecall(w, text, view, now, include, opts.includeWithdrawn === true);
     degradedHint(ctx.io, w, result.degraded);
     if (viewIgnored(view, result)) ctx.io.err(viewIgnoredWarning(view));
     if (opts.json === true) {

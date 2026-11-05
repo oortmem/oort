@@ -142,7 +142,8 @@ export interface WireWarning {
     | 'project-id-untrusted'
     | 'keychain-unreadable'
     | 'cloud-unavailable'
-    | 'serve-ignored';
+    | 'serve-ignored'
+    | 'judge-ignored';
   /** One line for stderr; holds config values only. */
   message: string;
 }
@@ -360,6 +361,13 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     warnings.push({
       code: 'serve-ignored',
       message: 'project config serve ignored; oort serve reads the home config only.',
+    });
+  }
+  // Who counts as an expert is the person's call, not a repository's.
+  if (config.ignoredProjectKeys?.includes('judge') === true) {
+    warnings.push({
+      code: 'judge-ignored',
+      message: 'project config judge ignored; judgment memory reads the home config only.',
     });
   }
   const project = resolveProject(cwd, config.home);

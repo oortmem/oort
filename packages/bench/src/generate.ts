@@ -1,4 +1,4 @@
-import { localScope, type Memory, type MemoryType } from '@oortmem/core';
+import { localScope, type Memory, type MemoryType, type ObservedMemoryType } from '@oortmem/core';
 import { fakeEmbedding } from './fake-embed.js';
 import { createRng, type Rng } from './prng.js';
 
@@ -124,7 +124,7 @@ function path(rng: Rng): string {
   return `${rng.pick(DIRS)}/${rng.pick(FILES)}.ts`;
 }
 
-const TEMPLATES: Record<MemoryType, ((rng: Rng, now: Date) => Draft)[]> = {
+const TEMPLATES: Record<ObservedMemoryType, ((rng: Rng, now: Date) => Draft)[]> = {
   semantic: [
     (r) => {
       const s = r.pick(SERVICES);
@@ -246,14 +246,14 @@ const TEMPLATES: Record<MemoryType, ((rng: Rng, now: Date) => Draft)[]> = {
 };
 
 /** Weights for the four types: facts are the largest group, as in a real store. */
-const TYPE_WEIGHTS: [MemoryType, number][] = [
+const TYPE_WEIGHTS: [ObservedMemoryType, number][] = [
   ['semantic', 0.4],
   ['episodic', 0.3],
   ['procedural', 0.15],
   ['preference', 0.15],
 ];
 
-function pickType(rng: Rng): MemoryType {
+function pickType(rng: Rng): ObservedMemoryType {
   let x = rng.next();
   for (const [t, w] of TYPE_WEIGHTS) {
     if (x < w) return t;

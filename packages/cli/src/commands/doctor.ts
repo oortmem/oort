@@ -578,7 +578,10 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
         group: 'store',
         name: 'migration',
         status: 'ok',
-        detail: `migrated the store from schema version ${before} to ${SCHEMA_VERSION}; your memories now live in your Planet`,
+        detail:
+          before === 1
+            ? `migrated the store from schema version ${before} to ${SCHEMA_VERSION}; your memories now live in your Planet`
+            : `migrated the store from schema version ${before} to ${SCHEMA_VERSION}; it can now hold judgments (oort judge)`,
       });
     }
     const bound = readEmbedderBinding(db);
@@ -627,7 +630,14 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
     });
     // Oort Cloud consolidates itself; locally the hook drain does, when due (CON-48).
     if (!cloudMode) checks.push(consolidationCheck(home));
-    const backup = listBackups(db, 'pre-v2').at(-1);
+    // The newest copy taken before a migration (the names sort by time within each kind).
+    const backup = [listBackups(db, 'pre-v2').at(-1), listBackups(db, 'pre-v3').at(-1)]
+      .filter((f): f is string => f !== undefined)
+      .sort((a, b) => {
+        const at = (f: string) => f.slice(f.lastIndexOf('.') + 1);
+        return at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : 0;
+      })
+      .at(-1);
     if (backup !== undefined) {
       checks.push({
         group: 'store',

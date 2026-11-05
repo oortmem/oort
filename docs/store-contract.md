@@ -187,6 +187,13 @@ database files when score independence matters.
 `author_account_ref`) and `provenance` per memory, with a `CHECK` that each level fills exactly its
 own fields. Vectors are partitioned by node, with project and author as filter columns.
 
+Schema version 3 (judgment memory, CON-71) adds one nullable column, `judgment`: the JSON
+`judgment` record of a `judgment` memory, NULL on every other row. Opening a version 2 store adds
+the column in one transaction (`ALTER TABLE … ADD COLUMN`); nothing else is rewritten. It takes the
+same copy first as the version 1 migration below, to `<path>.pre-v3.<UTC time>`
+(`listBackups(path, 'pre-v3')`), and the hooks leave it to the next `oort` command the same way.
+A version 1 store goes to version 2 and then 3 in one transaction, with one `pre-v2` copy.
+
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the
 vector table is rebuilt from the stored embeddings.
@@ -208,9 +215,11 @@ vector table is rebuilt from the stored embeddings.
   the migration refuses, naming how many such rows there are, and changes nothing. Export or delete
   them with Oort 0.2.x, then open the store again.
 
-`downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x. It first copies the
+`downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x, and
+`downgradeSqliteStore({ path, to: 2 })` to version 2 for Oort 0.3 to 0.5. It first copies the
 database to `<path>.pre-downgrade.<UTC time>` (the three newest are kept), and refuses while the
-store holds anything version 1 cannot represent. **Run it with no other Oort process open**: no
+store holds anything the target version cannot represent (for version 2, any judgment; for version
+1, also any memory outside the Planet, an author with an account, or provenance). **Run it with no other Oort process open**: no
 Claude Code session with Oort hooks, no MCP server, no drain. Any of them would fail on the changed
 schema, and the next `oort` command migrates the store straight back up.
 

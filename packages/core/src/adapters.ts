@@ -242,6 +242,41 @@ export interface DecisionController {
   reconcileMany?(
     items: { obs: Observation; candidates: Memory[] }[],
   ): Promise<ReconcileDecision[][]>;
+  /**
+   * Judgment memory (CON-71): which verdict the expert behind `req.precedents` would most likely
+   * give `req.item`, as a choice over `req.verdicts` with a probability per verdict. Optional; a
+   * controller without it leaves judging at precedents only.
+   */
+  judge?(req: JudgeRequest): Promise<JudgeChoice>;
+}
+
+/** One past decision as the controller sees it: the expert's reason verbatim. */
+export interface JudgePrecedent {
+  subject: string;
+  ref?: string;
+  verdict: string;
+  reason: string;
+  criteria: string[];
+  decidedAt: string;
+  /** How close it is to the item, 0 to 1 (dense cosine, or lexical overlap). */
+  similarity: number;
+}
+
+/** What `DecisionController.judge` is asked. */
+export interface JudgeRequest {
+  item: { summary: string; details?: string; ref?: string; domain?: string };
+  /** The verdicts to choose from; the precedents' own verdicts are among them. */
+  verdicts: string[];
+  /** Nearest first. Never empty. */
+  precedents: JudgePrecedent[];
+}
+
+/** The controller's answer: the likeliest verdict, its probability, and every verdict's. */
+export interface JudgeChoice {
+  verdict: string;
+  probability: number;
+  probabilities: Record<string, number>;
+  decisions: Decision[];
 }
 
 /** One memory as the writer authors it. */

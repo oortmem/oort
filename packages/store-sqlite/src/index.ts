@@ -24,6 +24,7 @@ import {
   type Grant,
   type GuardedWriteResult,
   type Hit,
+  type Judgment,
   type Level,
   type Memory,
   type MemorySource,
@@ -45,6 +46,7 @@ import {
   applySchema,
   assertMigratable,
   downgradeSchema,
+  judgmentCount,
   migrationBlockers,
   schemaVersionOf,
   SCHEMA_VERSION,
@@ -145,6 +147,8 @@ interface MemoryRow {
   source: string;
   created_at: string;
   updated_at: string;
+  /** The `judgment` record as JSON (schema version 3, CON-71); NULL for every other memory. */
+  judgment: string | null;
 }
 
 type RowParams = Omit<MemoryRow, 'rid'>;
@@ -212,6 +216,7 @@ function toRow(m: Memory, address: Address, author: Author): RowParams {
     source: JSON.stringify(m.source),
     created_at: m.createdAt,
     updated_at: m.updatedAt,
+    judgment: m.judgment === undefined ? null : JSON.stringify(m.judgment),
   };
 }
 
@@ -261,6 +266,7 @@ function fromRow(r: MemoryRow, embedding: Int8Array | undefined): Memory {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
+  if (r.judgment !== null) m.judgment = JSON.parse(r.judgment) as Judgment;
   if (embedding !== undefined) m.embedding = embedding;
   return m;
 }
@@ -296,6 +302,7 @@ const COLUMNS: (keyof RowParams)[] = [
   'source',
   'created_at',
   'updated_at',
+  'judgment',
 ];
 
 /**
@@ -358,31 +365,41 @@ export function sqliteSchemaVersion(dbPath: string): number | undefined {
 }
 
 /**
- * Takes the store at `path` back to schema version 1, so Oort 0.2.x can open
- * it again. First copies it to `<path>.pre-downgrade.<UTC time>` (the three
- * newest such copies are kept). Refuses, changing nothing, when it holds
- * memories version 1 cannot represent (any level but Planet, an author with
- * an account, provenance). No other Oort process (hooks, the MCP server, a
- * drain) may have the store open while it runs: one would migrate it straight
- * back, or fail on the changed schema.
+ * Takes the store at `path` back to schema version `to`: 1 (the default) so Oort 0.2.x can open
+ * it again, or 2 for Oort 0.3 to 0.5. First copies it to `<path>.pre-downgrade.<UTC time>` (the
+ * three newest such copies are kept). Refuses, changing nothing, when it holds memories that
+ * version cannot represent: for 1, any level but Planet, an author with an account, provenance or
+ * a judgment; for 2, a judgment. No other Oort process (hooks, the MCP server, a drain) may have
+ * the store open while it runs: one would migrate it straight back, or fail on the changed schema.
  */
-export function downgradeSqliteStore(opts: { path: string }): void {
+export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 }): void {
+  const to = opts.to ?? 1;
   const dbPath = path.resolve(opts.path);
   const db = withPrivateUmask(() => new Database(dbPath, { fileMustExist: true }));
   try {
     sqliteVec.load(db);
-    if (schemaVersionOf(db) !== SCHEMA_VERSION) {
-      downgradeSchema(db); // version 1 already: nothing to do; anything else: refused
+    const version = schemaVersionOf(db);
+    if (version === undefined || version <= to || version > SCHEMA_VERSION) {
+      downgradeSchema(db, to); // at or below `to` already: nothing to do; anything else: refused
       return;
     }
-    const blocked = migrationBlockers(db);
-    if (blocked > 0) {
-      throw new Error(
-        `sqlite store: ${blocked} memories are not plain Planet memories; schema version 1 cannot hold them`,
-      );
+    if (to === 1) {
+      const blocked = migrationBlockers(db);
+      if (blocked > 0) {
+        throw new Error(
+          `sqlite store: ${blocked} memories are not plain Planet memories; schema version 1 cannot hold them`,
+        );
+      }
+    } else {
+      const n = judgmentCount(db);
+      if (n > 0) {
+        throw new Error(
+          `sqlite store: ${n} ${n === 1 ? 'memory is a judgment' : 'memories are judgments'}; schema version 2 cannot hold them`,
+        );
+      }
     }
     withPrivateUmask(() => backupDatabase(db, dbPath, 'pre-downgrade'));
-    downgradeSchema(db);
+    downgradeSchema(db, to);
   } finally {
     db.close();
   }
@@ -423,12 +440,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       conn.pragma('journal_mode = WAL');
       conn.pragma('foreign_keys = ON');
       sqliteVec.load(conn);
-      if (schemaVersionOf(conn) === 1) {
+      const from = schemaVersionOf(conn);
+      if (from === 1 || from === 2) {
         // Checked and copied before the migration's transaction starts; a failed
         // copy fails the open and the store stays as it was.
-        if (opts.migrate === false) throw new StoreMigrationRequiredError(dbPath, 1);
-        assertMigratable(conn);
-        backupDatabase(conn, dbPath, 'pre-v2');
+        if (opts.migrate === false) throw new StoreMigrationRequiredError(dbPath, from);
+        if (from === 1) assertMigratable(conn);
+        backupDatabase(conn, dbPath, from === 1 ? 'pre-v2' : 'pre-v3');
       }
       applySchema(conn, dimension, { migrate: opts.migrate !== false });
       return conn;

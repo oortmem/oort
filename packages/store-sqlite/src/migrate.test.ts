@@ -24,6 +24,7 @@ import {
   downgradeSqliteStore,
   listBackups,
   openSqliteStore,
+  SCHEMA_VERSION,
   sqliteSchemaVersion,
   StoreMigrationRequiredError,
 } from './index.js';
@@ -198,7 +199,7 @@ describe('schema migration 1 to 2', () => {
     expect(hashDir(s.coldDir), 'cold blobs are untouched').toBe(blobs);
     const db = raw(s.dbPath);
     try {
-      expect(version(db)).toBe('2');
+      expect(version(db)).toBe(String(SCHEMA_VERSION));
       const rows = db
         .prepare('SELECT level, agent_id, hive_id, run_id, author_agent_id FROM memories')
         .all() as { level: string; agent_id: null; author_agent_id: string }[];
@@ -359,7 +360,7 @@ describe('schema migration 1 to 2', () => {
     expect(() => downgradeSqliteStore({ path: s.dbPath })).toThrow(/not plain Planet memories/);
     const db = raw(s.dbPath);
     try {
-      expect(version(db)).toBe('2');
+      expect(version(db)).toBe(String(SCHEMA_VERSION));
     } finally {
       db.close();
     }
@@ -417,16 +418,174 @@ describe('schema migration 1 to 2', () => {
     }
   });
 
-  it('migrate.new-store-starts-at-version-2', async () => {
+  it('migrate.new-store-starts-at-the-current-version', async () => {
     const dir = fs.mkdtempSync(path.join(root, 'fresh-'));
     const s = { dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
     await (await openSqliteStore(optsFor(s))).close();
     const db = raw(s.dbPath);
     try {
-      expect(version(db)).toBe('2');
+      expect(version(db)).toBe(String(SCHEMA_VERSION));
     } finally {
       db.close();
     }
     expect(listBackups(s.dbPath, 'pre-v2')).toEqual([]);
+  });
+});
+
+/**
+ * Schema version 2 to 3 (judgment memory, CON-71) on a real version 2 store:
+ * `test/fixtures/schema2` was written by the schema version 2 store, and its `expected.json` is
+ * what that store read back: every record, the current ids, lexical and dense hits, a cold copy
+ * and a cursor, over a Planet and a Star.
+ */
+describe('schema migration 2 to 3', () => {
+  const FIXTURE2 = path.join(path.dirname(FIXTURE), 'schema2');
+  const expected2 = JSON.parse(fs.readFileSync(path.join(FIXTURE2, 'expected.json'), 'utf8')) as {
+    list: unknown[];
+    current: string[];
+    lexical: unknown;
+    dense: unknown;
+    cold: unknown;
+    cursor: string | null;
+  };
+  const g2 = nodeGrant({
+    principal: { orgId: 'local', customerId: 'self', agentId: 'cursor' },
+    read: [
+      { node: { level: 'user', orgId: 'local', customerId: 'self' }, projectIds: 'all' },
+      { node: { level: 'agent', orgId: 'local', agentId: 'cursor' }, projectIds: 'all' },
+    ],
+  });
+  const vec = (k: number) =>
+    Int8Array.from({ length: DIM }, (_, j) => ((j * 29 + k * 13) % 200) - 100);
+
+  function copy2(): { dir: string; dbPath: string; coldDir: string } {
+    const dir = fs.mkdtempSync(path.join(root, 'store2-'));
+    fs.cpSync(FIXTURE2, dir, { recursive: true });
+    fs.rmSync(path.join(dir, 'expected.json'));
+    return { dir, dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
+  }
+
+  const columns = (dbPath: string): string[] => {
+    const db = raw(dbPath);
+    try {
+      return (
+        db.prepare("SELECT name FROM pragma_table_info('memories')").all() as { name: string }[]
+      ).map((c) => c.name);
+    } finally {
+      db.close();
+    }
+  };
+
+  async function readBack2(s: { dbPath: string; coldDir: string }) {
+    const store = await openSqliteStore(optsFor(s));
+    try {
+      return {
+        list: (await store.list(g2, { validOnly: false })).map(render),
+        current: (await store.list(g2)).map((m) => m.id),
+        lexical: await store.lexical(g2, 'auth service port staging', 10),
+        dense: await store.dense(g2, vec(2), 10),
+        cold: render(await store.coldGet(g2, 'v2-e')),
+        cursor: await store.getCursor(g2, 'claude-code:s1'),
+      };
+    } finally {
+      await store.close();
+    }
+  }
+
+  const judgmentMemory = (id: string): Memory => ({
+    id,
+    scope: { orgId: 'local', customerId: 'self', agentId: 'cursor' },
+    type: 'judgment',
+    text: 'Judgment by ada (content): rejected "Post claims a cure". Reason: No cited source.',
+    stub: 'rejected: Post claims a cure',
+    entities: ['content', 'no-source'],
+    salience: 0.8,
+    pinned: true,
+    tier: 'hot',
+    accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
+    validFrom: '2026-10-20T00:00:00.000Z',
+    validTo: null,
+    expiredAt: null,
+    endReason: null,
+    lastConfirmedAt: null,
+    supersedes: null,
+    supersededBy: null,
+    source: { harness: 'cli', decisions: [] },
+    judgment: {
+      subject: { summary: 'Post claims a cure', ref: 'https://example.test/p/1' },
+      verdict: 'rejected',
+      verdicts: ['approved', 'rejected'],
+      reason: 'No cited source.',
+      criteria: ['no-source'],
+      domain: 'content',
+      by: 'ada',
+      decidedAt: '2026-10-20T00:00:00.000Z',
+      via: 'cli',
+    },
+    embedding: vec(7),
+    createdAt: '2026-10-20T00:00:00.000Z',
+    updatedAt: '2026-10-20T00:00:00.000Z',
+  });
+
+  it('migrate.v2-store-reads-back-identically-at-v3', async () => {
+    const s = copy2();
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(2);
+    expect(columns(s.dbPath)).not.toContain('judgment');
+    const blobs = hashDir(s.coldDir);
+    expect(portable(await readBack2(s))).toEqual(portable(expected2));
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(3);
+    expect(columns(s.dbPath)).toContain('judgment');
+    expect(hashDir(s.coldDir), 'cold blobs are untouched').toBe(blobs);
+  });
+
+  it('migrate.v2-copies-the-store-first', async () => {
+    const s = copy2();
+    await (await openSqliteStore(optsFor(s))).close();
+    const backups = listBackups(s.dbPath, 'pre-v3');
+    expect(backups).toHaveLength(1);
+    const backup = backups[0]!;
+    expect(path.basename(backup)).toMatch(/^oort\.sqlite\.pre-v3\.\d{8}T\d{9}Z$/);
+    if (process.platform !== 'win32') expect(fs.statSync(backup).mode & 0o777).toBe(0o600);
+    expect(sqliteSchemaVersion(backup)).toBe(2);
+    expect(listBackups(s.dbPath, 'pre-v2')).toEqual([]);
+    // A later open finds version 3: nothing to migrate, no new copy.
+    await (await openSqliteStore(optsFor(s))).close();
+    expect(listBackups(s.dbPath, 'pre-v3')).toEqual([backup]);
+  });
+
+  it('migrate.v2-open-that-may-not-migrate-changes-nothing', async () => {
+    const s = copy2();
+    const before = fs.readFileSync(s.dbPath);
+    const err = await openSqliteStore({ ...optsFor(s), migrate: false }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StoreMigrationRequiredError);
+    expect((err as StoreMigrationRequiredError).from).toBe(2);
+    expect(fs.readFileSync(s.dbPath).equals(before)).toBe(true);
+    expect(listBackups(s.dbPath, 'pre-v3')).toEqual([]);
+  });
+
+  it('migrate.v3-keeps-a-judgment-and-refuses-to-go-down-with-it', async () => {
+    const s = copy2();
+    const store = await openSqliteStore(optsFor(s));
+    const j = judgmentMemory('j-1');
+    await store.upsert(g2, j);
+    expect(render(await store.get(g2, 'j-1'))).toEqual(render(j));
+    await store.close();
+    expect(() => downgradeSqliteStore({ path: s.dbPath, to: 2 })).toThrow(/judgment/);
+    expect(() => downgradeSqliteStore({ path: s.dbPath })).toThrow(/not plain Planet memories/);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(3);
+    expect(listBackups(s.dbPath, 'pre-downgrade')).toEqual([]);
+  });
+
+  it('migrate.v3-down-to-2-and-up-again', async () => {
+    const s = copy2();
+    await (await openSqliteStore(optsFor(s))).close();
+    downgradeSqliteStore({ path: s.dbPath, to: 2 });
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(2);
+    expect(columns(s.dbPath)).not.toContain('judgment');
+    expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
+    downgradeSqliteStore({ path: s.dbPath, to: 2 }); // already version 2: nothing to do
+    expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
+    expect(portable(await readBack2(s))).toEqual(portable(expected2));
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(3);
   });
 });

@@ -14,6 +14,7 @@ import {
   listBackups,
   openSqliteStore,
   sqliteSchemaVersion,
+  SCHEMA_VERSION,
 } from '@oortmem/store-sqlite';
 import { wire as realWire } from '../wire.js';
 import { MIGRATION_PENDING_NOTE } from './hook.js';
@@ -116,8 +117,10 @@ describe('oort doctor', () => {
     expect(listBackups(db, 'pre-v2')).toEqual([]);
 
     const d = await doctor(h);
-    expect(d.human.io.stdout).toContain('migrated the store from schema version 1 to 2');
-    expect(sqliteSchemaVersion(db)).toBe(2);
+    expect(d.human.io.stdout).toContain(
+      `migrated the store from schema version 1 to ${SCHEMA_VERSION}`,
+    );
+    expect(sqliteSchemaVersion(db)).toBe(SCHEMA_VERSION);
     expect(listBackups(db, 'pre-v2')).toHaveLength(1);
     expect(d.check('store', 'spaces')?.detail).toBe('Planet: 1 memory (every project)');
     expect(d.check('store', 'backup')?.detail).toContain('oort.sqlite.pre-v2.');

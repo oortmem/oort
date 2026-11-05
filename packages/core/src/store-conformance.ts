@@ -842,6 +842,36 @@ function levelConformance(name: string, make: () => Promise<MemoryStore>): void 
       expect(authorOf(got as Memory)).toEqual({ agentId: 'claude-code' });
     });
 
+    it('levels.judgment-roundtrips', async () => {
+      // CON-71: a judgment memory keeps its `judgment` record exactly, cold copy included.
+      const m = makeMemory({
+        id: 'judgment-1',
+        scope: localScope(undefined),
+        type: 'judgment',
+        pinned: true,
+        embedding: vec(4, 3, 2, 1),
+        judgment: {
+          subject: { summary: 'Post claims a cure', ref: 'https://example.test/p/1' },
+          verdict: 'rejected',
+          verdicts: ['approved', 'rejected'],
+          reason: 'No cited source.\nSecond line, verbatim.',
+          criteria: ['no-source'],
+          domain: 'content',
+          by: 'ada',
+          decidedAt: '2026-01-01T00:00:00.000Z',
+          via: 'cli',
+          withdrawn: { at: '2026-02-01T00:00:00.000Z', by: 'ada' },
+        },
+      });
+      await store.upsert(TG, m);
+      expect(await store.get(TG, 'judgment-1')).toEqual(m);
+      const plain = makeMemory({ id: 'plain-1', scope: localScope(undefined) });
+      await store.upsert(TG, plain);
+      expect('judgment' in ((await store.get(TG, 'plain-1')) as Memory)).toBe(false);
+      expect((await store.coldPut(TG, m)).skipped).toEqual([]);
+      expect(await store.coldGet(TG, 'judgment-1')).toEqual(m);
+    });
+
     it('levels.every-level-roundtrips', async () => {
       for (const c of cases()) {
         await store.upsert(c.g, c.m);

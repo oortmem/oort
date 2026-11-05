@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
-import { TOOL_NAMES } from '@oortmem/mcp';
+import { ALL_TOOL_NAMES } from '@oortmem/mcp';
 import { VERSION } from '@oortmem/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { tmpdir } from '../test/helpers.js';
@@ -50,7 +50,7 @@ describe('oort mcp conformance smoke', () => {
         expect(names).toContain(n);
       }
       for (const t of tools) {
-        expect((TOOL_NAMES as readonly string[]).includes(t.name)).toBe(true);
+        expect((ALL_TOOL_NAMES as readonly string[]).includes(t.name)).toBe(true);
         expect(t.inputSchema.type).toBe('object');
         expect(typeof t.description).toBe('string');
         expect(typeof t.annotations?.readOnlyHint).toBe('boolean');

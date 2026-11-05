@@ -47,14 +47,14 @@ export function fromLabel(o: RecallResult['memories'][number]['origin']): string
 /** `oort explain "<query>" [--json] [temporal flags]`: recall, with each stage's rank and score. */
 export async function explainCommand(
   query: string,
-  opts: { json?: boolean; include?: string } & TemporalFlags,
+  opts: { json?: boolean; include?: string; includeWithdrawn?: boolean } & TemporalFlags,
   ctx: Ctx,
 ): Promise<number> {
   const view = temporalView(opts);
   const include = includeLevels(opts.include);
   return withWired(ctx, async (w) => {
     const now = new Date();
-    const result = await runRecall(w, query, view, now, include);
+    const result = await runRecall(w, query, view, now, include, opts.includeWithdrawn === true);
     degradedHint(ctx.io, w, result.degraded);
     if (viewIgnored(view, result)) ctx.io.err(viewIgnoredWarning(view));
     if (opts.json === true) {

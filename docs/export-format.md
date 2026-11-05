@@ -68,7 +68,7 @@ per dimension, two's complement), and is absent when the memory has none.
 | `address`         | `Address` (version 2)                                      |
 | `author`          | `{ agentId, accountRef? }`: who wrote it (version 2)       |
 | `provenance`      | object \| null: where a shared copy came from (version 2)  |
-| `type`            | `"semantic"` \| `"episodic"` \| `"procedural"` \| `"preference"` |
+| `type`            | `"semantic"` \| `"episodic"` \| `"procedural"` \| `"preference"` \| `"judgment"` |
 | `text`            | string: the de-contextualised claim                        |
 | `stub`            | string: short form kept searchable while cold              |
 | `entities`        | string[]                                                   |
@@ -86,11 +86,13 @@ per dimension, two's complement), and is absent when the memory has none.
 | `supersedesHidden`   | `true`, optional: `supersedes` was nulled (see Limitations)   |
 | `supersededByHidden` | `true`, optional: `supersededBy` was nulled (see Limitations) |
 | `source`          | `{ harness, sessionId?, turnRef?, decisions: { stage, question, answer, probability }[] }` |
+| `judgment`        | object, `judgment` memories only (version 2): the expert's decision, see `docs/cli.md` |
 | `embedding`       | base64 string, optional                                    |
 | `createdAt`       | ISO 8601                                                   |
 | `updatedAt`       | ISO 8601                                                   |
 
-No other fields appear. The two `…Hidden` flags appear only when set. Decoding an embedding in Node:
+No other fields appear. The two `…Hidden` flags appear only when set, and `judgment` only on a
+`judgment` memory (version 1 cannot hold judgments). Decoding an embedding in Node:
 
 ```js
 const vector = Int8Array.from(Buffer.from(line.embedding, 'base64'));
