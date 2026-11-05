@@ -390,6 +390,14 @@ keeps serving.
 
   No tool argument can choose another scope. An id from another project is
   "not found", exactly like a missing one.
+- **Spaces.** What the tools may reach is fixed at start too: your Planet, the
+  agent's own Star when an agent is named, and in Oort Cloud the
+  Constellations that agent is attached to. `recall` takes `include` (only
+  those levels) and `remember` takes `visibility` (`private`, or a
+  Constellation it may share to); those are the only space arguments, and a
+  `scope`, `project` or `agent` argument from the model is ignored. A
+  `remember` meant for a Constellation is saved privately: sharing it stays
+  your step, with `oort share`.
 - **Agent.** `--agent <id>` (written by `oort connect`) names the agent the
   server acts as: it reads your Planet and that agent's own Star, and writes
   new memories to the Planet, or to the Star when the agent keeps one. A
@@ -551,6 +559,14 @@ oort keys set voyage      # prompts for the value, hidden (Keychain on macOS, cr
 oort keys list [--json]   # where each key comes from: env, keychain or missing
 oort keys rm voyage
 ```
+
+`oort keys create [--name <n>] [--scope <list>] [--json]` makes a new Oort Cloud key for your
+account and prints it once (Oort never stores it; revoke it at oortcloud.dev/account). Without
+`--scope` it carries everything your account may do. `--scope` narrows it: `planet` (always
+first: a key always reads and writes your own Planet), then Constellations by name or id, each
+optionally `:read` (recall only) or `:share` (recall and share), such as
+`--scope planet,checkout:read`. A narrowed key cannot see any other Constellation, and can only make
+keys inside its own scope.
 
 The providers are `voyage` (`VOYAGE_API_KEY`), `typesafe`
 (`TYPESAFE_API_KEY`), `anthropic` (`ANTHROPIC_API_KEY`) and `oort`
@@ -818,7 +834,8 @@ save moves there by itself: `oort share` copies one memory, on purpose.
   client says, until you run `oort project privacy public` inside it (it asks; `--yes` on a
   non-terminal). If Oort Cloud doesn't know a project's privacy, its memories are refused: set
   `"private": false` in its config or run `oort project privacy public`, then share again.
-- Every member's recall then reads the Constellation too, labelled with its name:
+- Every member's own recall (no agent named) then reads the Constellation too, and so do the
+  agents they attached to it (`oort constellation attach`), labelled with its name:
   `[semantic, Constellation oort-core, 2d ago]`. Shared memories take at most 40% of the injected
   block, so your own memory comes first. A Constellation that does not answer in time is left out
   of that recall (`degradedNodes` in `--json`), never an error.
@@ -827,9 +844,68 @@ save moves there by itself: `oort share` copies one memory, on purpose.
 - `oort constellation list` shows the Constellations you belong to, your role, and how many
   members each has. Members never see each other's own memories.
 
+### Teammates: invites, members and agents
+
+```sh
+oort constellation invite <c> <email> [--role maintainer|member|reader] [--json]
+oort constellation join <link> [--no-browser]
+oort constellation invites <c> [--json]          # open invites (maintainers)
+oort constellation revoke <c> <invite id>
+oort constellation members <c> [--json]
+oort constellation role <c> <member> <role>       # maintainers
+oort constellation remove <c> <member> [--yes]    # maintainers
+oort constellation leave <c> [--yes]
+oort constellation transfer <c> <member> [--yes]  # the owner
+oort constellation delete <c> [--yes]             # the owner
+oort constellation policy <c> --confirm|--open    # maintainers
+oort constellation attach <c> --agent <name> [--share]
+oort constellation detach <c> --agent <name>
+oort project link --constellation <c>             # maintainers; unlink to undo
+```
+
+Joining is by invitation only. `invite` prints a single-use link, valid for 7 days (Oort Cloud also
+emails it when it can); send it only to the person invited. They accept it on oortcloud.dev,
+signed in with an account whose verified email address is the invited one: `join <link>` opens
+that page. Anyone else's account is refused, and there is no public link to join.
+
+Roles:
+
+| Role | Can |
+| --- | --- |
+| maintainer | everything a member can, plus invite, remove, change roles, bind projects and set the policy |
+| member | recall, share, and attach their own agents |
+| reader | recall only |
+
+The owner (who created it) is a maintainer who can't be removed or leave; only the owner can
+transfer ownership (`transfer`) or delete the Constellation (`delete`, which removes every memory
+shared in it; members' own memories are untouched). `<member>` is the `mb_…` id `members` prints, or
+the member's invited email address. A plan's member limit, and every other rule, is Oort Cloud's:
+a refusal prints its own message.
+
+Leaving, or being removed, ends access within a minute: your next recall no longer reads the
+Constellation. What you shared stays in it.
+
+An agent reads a Constellation only once you attach it: `oort constellation attach oort-core --agent
+claude-code` lets Claude Code's hooks and MCP server read it, and `--share` also lets that agent
+share into it. An agent never gets more than your own role allows: attaching with `--share` as a
+reader is refused. Commands with no agent named (`oort recall` without `--agent`) read every
+Constellation you belong to.
+
 No vendor key is read in cloud mode: Oort Cloud calls the models. `OORT_CLOUD_URL` points the CLI
 at another API (https, or http to localhost for `wrangler dev`). Errors are one line with the fix,
 and never contain your key.
+
+## `oort whoami`
+
+```sh
+oort whoami [--json]
+oort --agent cursor whoami
+```
+
+Which store this runs against, as which agent, and the spaces it reaches: your Planet, the agent's
+own Star (local), and in Oort Cloud each Constellation with your role and the rights this key and
+agent have there (`Constellation oort-core (member: read, share)`). `oort doctor` lists the same
+spaces in its `cloud` group, and the MCP `whoami` tool returns them too.
 
 ## `oort doctor`
 

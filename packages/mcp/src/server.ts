@@ -1,6 +1,14 @@
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { VERSION, scrub } from '@oortmem/core';
-import { INSTRUCTIONS, TOOLS, inputSchemas, type ToolInput, type ToolName } from './tools.js';
+import {
+  INSTRUCTIONS,
+  PLANET_ONLY,
+  TOOLS,
+  inputSchemasFor,
+  type ToolInput,
+  type ToolName,
+  type ToolSpaces,
+} from './tools.js';
 import { attachWidgets } from './ui.js';
 
 /** One recalled fact, as `recall` returns it. */
@@ -51,12 +59,32 @@ export interface RememberOutcome {
  */
 export interface MemoryBackend {
   recall(input: ToolInput<'recall'>): Promise<RecallOutput>;
-  remember(input: ToolInput<'remember'>): Promise<{ results: RememberOutcome[] }>;
+  /** `note`: what the person should know, e.g. that a suggested share still needs confirming. */
+  remember(input: ToolInput<'remember'>): Promise<{ results: RememberOutcome[]; note?: string }>;
   forget(input: ToolInput<'forget'>): Promise<{ forgotten: string }>;
   pin(input: ToolInput<'pin'>): Promise<{ id: string; pinned: boolean; changed: boolean }>;
   explain(input: ToolInput<'explain'>): Promise<Record<string, unknown>>;
   listRecent(input: ToolInput<'list_recent'>): Promise<{ memories: Record<string, unknown>[] }>;
   whoami(input: ToolInput<'whoami'>): Promise<Record<string, unknown>>;
+  /**
+   * Copies one memory into a Constellation (CON-64). Optional: a server offers the `share` tool
+   * only when the backend has it and the connection's spaces name somewhere to share to. A backend
+   * must refuse (MemoryToolError) rather than share text a person has not been shown when the
+   * text holds personal data.
+   */
+  share?(input: ToolInput<'share'>): Promise<ShareOutcome>;
+}
+
+/** What `share` returns. */
+export interface ShareOutcome {
+  shared: boolean;
+  /** The Constellation, as people name it. */
+  constellation: string;
+  /** The shared copy's id. */
+  id?: string;
+  /** Exactly the text that was shared (secrets redacted). */
+  text: string;
+  note?: string;
 }
 
 /** A refusal whose message is shown to the user as the tool error. */
@@ -115,37 +143,69 @@ export interface CreateMcpServerOptions {
    * card for explain and remember. Tool results are the same either way. Default true.
    */
   widgets?: boolean;
+  /**
+   * What this connection may reach, from trusted configuration (never from the model): the
+   * levels `recall` may include, where `remember` may suggest sharing, and where `share` may
+   * copy to. Default: the Planet alone, and no `share` tool.
+   */
+  spaces?: ToolSpaces;
 }
 
 /**
- * A new server with the seven Oort tools over `backend`, plus the widget resources for hosts that
+ * A new server with the Oort tools over `backend` (`share` only where `spaces` allow it), plus the widget resources for hosts that
  * render MCP Apps. Build one per connection (or per request, for stateless HTTP).
  */
 export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
   const b = opts.backend;
   const isRefusal = opts.isRefusal ?? (() => false);
+  const spaces = opts.spaces ?? PLANET_ONLY;
+  const schemas = inputSchemasFor(spaces);
+  const visibility = new Set(['private', ...spaces.visibility]);
   const server = new McpServer(
     { name: 'oort', title: 'Oort memory', version: opts.version ?? VERSION },
     { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
   );
+  // Zod already limits both to the spaces; these are the second line, so a schema change can't
+  // widen what a connection reaches.
   const handlers: { [N in ToolName]: (input: ToolInput<N>) => Promise<unknown> } = {
-    recall: (i) => b.recall(i),
-    remember: (i) => b.remember({ ...i, facts: [...new Set(i.facts)] }),
+    recall: (i) => {
+      if (i.include === undefined) return b.recall(i);
+      const include = i.include.filter((l) => spaces.include.includes(l));
+      if (include.length === 0) {
+        throw new MemoryToolError('This connection cannot read those levels.');
+      }
+      return b.recall({ ...i, include });
+    },
+    remember: (i) =>
+      b.remember({
+        ...i,
+        facts: [...new Set(i.facts)],
+        visibility: visibility.has(i.visibility) ? i.visibility : 'private',
+      }),
     forget: (i) => b.forget(i),
     pin: (i) => b.pin(i),
     explain: (i) => b.explain(i),
     list_recent: (i) => b.listRecent(i),
     whoami: (i) => b.whoami(i),
+    share: (i) => {
+      if (b.share === undefined || !spaces.share.includes(i.to)) {
+        throw new MemoryToolError('This connection cannot share there.');
+      }
+      return b.share(i);
+    },
   };
+  const offered = (name: ToolName): boolean =>
+    name !== 'share' || (spaces.share.length > 0 && b.share !== undefined);
   const registered = new Map<ToolName, RegisteredTool>();
   for (const t of TOOLS) {
+    if (!offered(t.name)) continue;
     const handler = handlers[t.name] as (input: unknown) => Promise<unknown>;
     const tool = server.registerTool(
       t.name,
       {
         title: t.title,
         description: t.description,
-        inputSchema: inputSchemas[t.name],
+        inputSchema: schemas[t.name],
         annotations: t.annotations,
       },
       ((input: unknown) => run(() => handler(input), isRefusal)) as never,

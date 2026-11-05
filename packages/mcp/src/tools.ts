@@ -12,6 +12,7 @@ export const TOOL_NAMES = [
   'explain',
   'list_recent',
   'whoami',
+  'share',
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
@@ -43,39 +44,109 @@ export const MEMORY_TYPES = ['semantic', 'episodic', 'procedural', 'preference']
 /** The temporal views `recall` reads (CON-34). */
 export const RECALL_MODES = ['current', 'as-of', 'history', 'known-at'] as const;
 
-export const inputSchemas = {
-  recall: z.object({
-    query: z.string().trim().min(1).max(500).describe('What to look for, in plain words'),
-    as_of: IsoTime.optional().describe('Recall what was true at this time instead of now'),
-    known_at: IsoTime.optional().describe(
-      'Recall what was believed at this time, including facts corrected since',
-    ),
-    mode: z
-      .enum(RECALL_MODES)
-      .optional()
-      .describe(
-        'current, as-of (requires as_of), history (every version, oldest first) or known-at (requires known_at). Omit it to let Oort read the mode from the query.',
-      ),
-    limit: z.number().int().min(1).max(10).default(5),
-  }),
-  remember: z.object({
-    facts: z.array(Fact).min(1).max(REMEMBER_MAX_FACTS),
-    type: z
-      .enum(MEMORY_TYPES)
-      .optional()
-      .describe('A hint for the kind of fact; Oort decides the final type'),
-  }),
-  forget: z.object({ id: Id }),
-  pin: z.object({ id: Id, pinned: z.boolean() }),
-  explain: z.object({ id: Id }),
-  list_recent: z.object({
-    since: IsoTime.optional().describe('Only memories changed at or after this time'),
-    limit: z.number().int().min(1).max(50).default(20),
-  }),
-  whoami: z.object({}),
-} as const satisfies Record<ToolName, z.ZodType>;
+/** The levels a recall can name (core's `IncludeLevel`, CON-62). */
+export const INCLUDE_LEVELS = ['self', 'planet', 'star', 'constellation', 'galaxy'] as const;
+export type IncludeLevel = (typeof INCLUDE_LEVELS)[number];
 
-export type ToolInput<N extends ToolName> = z.output<(typeof inputSchemas)[N]>;
+/** A shared text is at most this long (the cloud's share cap). */
+export const SHARE_TEXT_MAX_CHARS = 4096;
+
+/**
+ * What one connection may reach (hive spec §9.1, CON-64), fixed when the server is built from
+ * trusted configuration: the local config, or the grant a person approved on a consent screen.
+ * The model can only choose inside it; no tool argument can widen it.
+ */
+export interface ToolSpaces {
+  /** The levels `recall.include` may name. At least `planet`. */
+  include: readonly IncludeLevel[];
+  /** Constellation names `remember.visibility` may name, besides `private`. */
+  visibility: readonly string[];
+  /** Constellation names `share.to` may name. `share` is offered only when this is not empty. */
+  share: readonly string[];
+}
+
+/** One person's Planet and nothing else: the default for every server. */
+export const PLANET_ONLY: ToolSpaces = Object.freeze({
+  include: Object.freeze(['planet'] as IncludeLevel[]),
+  visibility: Object.freeze([] as string[]),
+  share: Object.freeze([] as string[]),
+});
+
+/** A zod enum over `values`, which may be empty (then nothing passes). */
+function oneOf(values: readonly string[], none: string): z.ZodType<string> {
+  const v = [...new Set(values)];
+  return v.length === 0 ? z.string().refine(() => false, none) : z.enum(v as [string, ...string[]]);
+}
+
+/**
+ * The tool input schemas for one connection's spaces: `recall.include` lists only the levels it
+ * may read, `remember.visibility` only `private` and the Constellations it may share to, and
+ * `share.to` only those. Unknown arguments (a `scope`, `project` or `agent` a model invents) are
+ * stripped by zod and never reach a backend.
+ */
+export function inputSchemasFor(spaces: ToolSpaces) {
+  const include = spaces.include.filter((l) => (INCLUDE_LEVELS as readonly string[]).includes(l));
+  return {
+    recall: z.object({
+      query: z.string().trim().min(1).max(500).describe('What to look for, in plain words'),
+      as_of: IsoTime.optional().describe('Recall what was true at this time instead of now'),
+      known_at: IsoTime.optional().describe(
+        'Recall what was believed at this time, including facts corrected since',
+      ),
+      mode: z
+        .enum(RECALL_MODES)
+        .optional()
+        .describe(
+          'current, as-of (requires as_of), history (every version, oldest first) or known-at (requires known_at). Omit it to let Oort read the mode from the query.',
+        ),
+      limit: z.number().int().min(1).max(10).default(5),
+      include: z
+        .array(oneOf(include, 'This connection cannot read that level.') as z.ZodType<IncludeLevel>)
+        .min(1)
+        .max(INCLUDE_LEVELS.length)
+        .optional()
+        .describe(
+          'Only these levels: planet is your own memory; omit it to read everything allowed',
+        ),
+    }),
+    remember: z.object({
+      facts: z.array(Fact).min(1).max(REMEMBER_MAX_FACTS),
+      type: z
+        .enum(MEMORY_TYPES)
+        .optional()
+        .describe('A hint for the kind of fact; Oort decides the final type'),
+      visibility: oneOf(['private', ...spaces.visibility], 'Not a space this connection can use.')
+        .default('private')
+        .describe('private (the default), or a Constellation to suggest sharing the fact with'),
+    }),
+    forget: z.object({ id: Id }),
+    pin: z.object({ id: Id, pinned: z.boolean() }),
+    explain: z.object({ id: Id }),
+    list_recent: z.object({
+      since: IsoTime.optional().describe('Only memories changed at or after this time'),
+      limit: z.number().int().min(1).max(50).default(20),
+    }),
+    whoami: z.object({}),
+    share: z.object({
+      id: Id,
+      to: oneOf(spaces.share, 'This connection cannot share there.').describe(
+        'The Constellation to share the memory with',
+      ),
+      text: z
+        .string()
+        .trim()
+        .min(1)
+        .max(SHARE_TEXT_MAX_CHARS)
+        .optional()
+        .describe('An edited text to share instead of the memory as it is'),
+    }),
+  } as const satisfies Record<ToolName, z.ZodType>;
+}
+
+/** The schemas of a Planet-only connection (kept for importers from before spaces). */
+export const inputSchemas = inputSchemasFor(PLANET_ONLY);
+
+export type ToolInput<N extends ToolName> = z.output<ReturnType<typeof inputSchemasFor>[N]>;
 
 export interface ToolAnnotations {
   title: string;
@@ -163,14 +234,30 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'whoami',
     title: 'Oort account',
     description:
-      'Describe this Oort connection: local or cloud mode, the scope, and which services are available.',
+      'Describe this Oort connection: local or cloud mode, the spaces it can reach, and which services are available.',
     annotations: read('Oort account'),
+  },
+  {
+    name: 'share',
+    title: 'Share with a Constellation',
+    description:
+      'Copy one memory into a Constellation the user belongs to, so its members can recall it. Secrets are redacted; the copy records who shared it.',
+    annotations: {
+      title: 'Share with a Constellation',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
   },
 ];
 
 /** The JSON Schema of every tool's input, for hosts and docs that need it without zod. */
-export function toolJsonSchemas(): Record<ToolName, Record<string, unknown>> {
+export function toolJsonSchemas(
+  spaces: ToolSpaces = PLANET_ONLY,
+): Record<ToolName, Record<string, unknown>> {
+  const schemas = inputSchemasFor(spaces);
   return Object.fromEntries(
-    TOOL_NAMES.map((n) => [n, z.toJSONSchema(inputSchemas[n], { io: 'input' })]),
+    TOOL_NAMES.map((n) => [n, z.toJSONSchema(schemas[n], { io: 'input' })]),
   ) as unknown as Record<ToolName, Record<string, unknown>>;
 }

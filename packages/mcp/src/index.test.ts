@@ -12,6 +12,7 @@ import {
   createMcpServer,
   toolJsonSchemas,
   type MemoryBackend,
+  type ToolSpaces,
 } from './index.js';
 
 // A synthetic AWS key, assembled at runtime so no credential-shaped literal sits in the repo.
@@ -56,10 +57,20 @@ afterEach(async () => {
   for (const close of open.splice(0)) await close();
 });
 
-async function connect(era: Era, backend: MemoryBackend, isRefusal?: (e: unknown) => boolean) {
+async function connect(
+  era: Era,
+  backend: MemoryBackend,
+  isRefusal?: (e: unknown) => boolean,
+  spaces?: ToolSpaces,
+) {
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   const handle = serveStdio(
-    () => createMcpServer({ backend, ...(isRefusal !== undefined && { isRefusal }) }),
+    () =>
+      createMcpServer({
+        backend,
+        ...(isRefusal !== undefined && { isRefusal }),
+        ...(spaces !== undefined && { spaces }),
+      }),
     { transport: serverSide },
   );
   const client = new Client(
@@ -81,7 +92,8 @@ describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp (%s era)', (era) => {
   it('mcp.serves-the-seven-tools-with-their-annotations-and-instructions', async () => {
     const client = await connect(era, fakeBackend());
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).toEqual([...TOOL_NAMES]);
+    // `share` is offered only to a connection whose spaces allow it (CON-64).
+    expect(tools.map((t) => t.name)).toEqual(TOOL_NAMES.filter((n) => n !== 'share'));
     for (const t of tools) {
       const def = TOOLS.find((d) => d.name === t.name);
       expect(t.annotations, t.name).toMatchObject(def?.annotations ?? {});
@@ -114,7 +126,9 @@ describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp (%s era)', (era) => {
   it('mcp.remember-dedupes-facts-before-the-backend', async () => {
     const client = await connect(era, fakeBackend());
     await client.callTool({ name: 'remember', arguments: { facts: ['a', 'a', 'b'] } });
-    expect(calls).toEqual([{ method: 'remember', input: { facts: ['a', 'b'] } }]);
+    expect(calls).toEqual([
+      { method: 'remember', input: { facts: ['a', 'b'], visibility: 'private' } },
+    ]);
   });
 
   it('mcp.scrubs-text-fields-before-they-reach-the-host', async () => {
@@ -151,7 +165,118 @@ describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp (%s era)', (era) => {
   });
 });
 
+const TEAM: ToolSpaces = {
+  include: ['planet', 'constellation'],
+  visibility: ['oort-core'],
+  share: ['oort-core'],
+};
+const share = async (input: unknown) => {
+  calls.push({ method: 'share', input });
+  return { shared: true, constellation: 'oort-core', id: 'c1', text: 'x' };
+};
+
+describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp spaces (%s era, CON-64)', (era) => {
+  it('mcp.spaces.share-is-listed-only-when-the-spaces-and-backend-allow-it', async () => {
+    const names = async (backend: MemoryBackend, spaces?: ToolSpaces) =>
+      (await (await connect(era, backend, undefined, spaces)).listTools()).tools.map((t) => t.name);
+    expect(await names(fakeBackend({ share }))).not.toContain('share');
+    expect(await names(fakeBackend({ share }), { ...TEAM, share: [] })).not.toContain('share');
+    expect(await names(fakeBackend(), TEAM)).not.toContain('share');
+    expect(await names(fakeBackend({ share }), TEAM)).toEqual([...TOOL_NAMES]);
+    const client = await connect(era, fakeBackend({ share }), undefined, TEAM);
+    const listed = (await client.listTools()).tools.find((t) => t.name === 'share');
+    expect(listed?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+  });
+
+  it('mcp.spaces.a-model-supplied-scope-argument-never-reaches-the-backend', async () => {
+    const client = await connect(era, fakeBackend(), undefined, TEAM);
+    await client.callTool({
+      name: 'recall',
+      arguments: {
+        query: 'deploy',
+        scope: { orgId: 'acct:someone-else', customerId: 'self' },
+        project: 'other-project',
+        agent: 'cursor',
+        orgId: 'org:evil',
+      },
+    });
+    await client.callTool({
+      name: 'remember',
+      arguments: {
+        facts: ['a fact'],
+        scope: { orgId: 'acct:x' },
+        project: 'p',
+        visibility: 'private',
+      },
+    });
+    expect(calls).toEqual([
+      { method: 'recall', input: { query: 'deploy', limit: 5 } },
+      { method: 'remember', input: { facts: ['a fact'], visibility: 'private' } },
+    ]);
+  });
+
+  it('mcp.spaces.include-is-limited-to-the-levels-the-connection-reads', async () => {
+    const planet = await connect(era, fakeBackend());
+    const refused = await planet.callTool({
+      name: 'recall',
+      arguments: { query: 'q', include: ['constellation'] },
+    });
+    expect(refused.isError).toBe(true);
+    const team = await connect(era, fakeBackend(), undefined, TEAM);
+    const galaxy = await team.callTool({
+      name: 'recall',
+      arguments: { query: 'q', include: ['galaxy'] },
+    });
+    expect(galaxy.isError).toBe(true);
+    const ok = await team.callTool({
+      name: 'recall',
+      arguments: { query: 'q', include: ['constellation'] },
+    });
+    expect(ok.isError).toBeUndefined();
+    expect(calls).toEqual([
+      { method: 'recall', input: { query: 'q', limit: 5, include: ['constellation'] } },
+    ]);
+  });
+
+  it('mcp.spaces.remember-visibility-and-share-target-only-granted-constellations', async () => {
+    const client = await connect(era, fakeBackend({ share }), undefined, TEAM);
+    const elsewhere = await client.callTool({
+      name: 'remember',
+      arguments: { facts: ['f'], visibility: 'someone-elses-team' },
+    });
+    expect(elsewhere.isError).toBe(true);
+    await client.callTool({
+      name: 'remember',
+      arguments: { facts: ['f'], visibility: 'oort-core' },
+    });
+    const out = await client.callTool({ name: 'share', arguments: { id: 'm1', to: 'other-team' } });
+    expect(out.isError).toBe(true);
+    await client.callTool({ name: 'share', arguments: { id: 'm1', to: 'oort-core', extra: 1 } });
+    expect(calls).toEqual([
+      { method: 'remember', input: { facts: ['f'], visibility: 'oort-core' } },
+      { method: 'share', input: { id: 'm1', to: 'oort-core' } },
+    ]);
+    const planet = await connect(era, fakeBackend());
+    const r = await planet.callTool({
+      name: 'remember',
+      arguments: { facts: ['g'], visibility: 'oort-core' },
+    });
+    expect(r.isError).toBe(true);
+  });
+});
+
 describe('@oortmem/mcp definitions', () => {
+  it('mcp.json-schemas-follow-the-spaces', () => {
+    const team = toolJsonSchemas(TEAM) as Record<string, any>;
+    expect(team.recall.properties.include.items.enum).toEqual(['planet', 'constellation']);
+    expect(team.remember.properties.visibility.enum).toEqual(['private', 'oort-core']);
+    expect(team.share.properties.to.enum).toEqual(['oort-core']);
+    const planet = toolJsonSchemas() as Record<string, any>;
+    expect(planet.recall.properties.include.items.enum).toEqual(['planet']);
+    expect(planet.remember.properties.visibility.enum).toEqual(['private']);
+    for (const s of Object.values(team)) expect(JSON.stringify(s)).not.toMatch(/"scope"/);
+  });
+
   it('mcp.json-schemas-cover-every-tool', () => {
     const schemas = toolJsonSchemas();
     expect(Object.keys(schemas)).toEqual([...TOOL_NAMES]);

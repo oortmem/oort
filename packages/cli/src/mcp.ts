@@ -1,5 +1,10 @@
 import type { McpServer } from '@modelcontextprotocol/server';
-import { MemoryToolError, createMcpServer, type MemoryBackend } from '@oortmem/mcp';
+import {
+  MemoryToolError,
+  createMcpServer,
+  type MemoryBackend,
+  type ToolSpaces,
+} from '@oortmem/mcp';
 import { filterFor } from '@oortmem/claude-code';
 import { VERSION, activation, isCurrent, scrub, type Memory, localGrant } from '@oortmem/core';
 import { supersedeChain } from './commands/inspect.js';
@@ -73,6 +78,43 @@ function viewOf(
 export interface OortServerDeps {
   wired: Wired;
   now?: () => Date;
+  /** What the tools may reach (default: `localSpaces`); from trusted config, never the model. */
+  spaces?: ToolSpaces;
+}
+
+/**
+ * The spaces of a local server (CON-64): the person's Planet, plus the agent's own Star when an
+ * agent is named. A store on this machine has no Constellations, so nothing to share to.
+ */
+export function localSpaces(w: Wired): ToolSpaces {
+  return {
+    include: w.agent.source === 'none' ? ['planet'] : ['planet', 'star'],
+    visibility: [],
+    share: [],
+  };
+}
+
+/**
+ * The spaces of a cloud-mode server, from `/v1/whoami` for this agent: the Planet, plus the
+ * Constellations this key and agent may read; `remember` may suggest sharing with the ones it may
+ * share to. There is no `share` tool here: `oort share` previews and confirms in the terminal.
+ * Any failure falls back to the Planet alone.
+ */
+export async function cloudSpaces(w: Wired, client: CloudClient): Promise<ToolSpaces> {
+  try {
+    const me = await client.whoami(w.agent.source === 'none' ? undefined : w.agent.id);
+    const hives = (me.spaces ?? []).filter(
+      (s): s is Extract<typeof s, { level: 'constellation' }> =>
+        s.level === 'constellation' && s.rights.includes('read'),
+    );
+    return {
+      include: hives.length > 0 ? ['planet', 'constellation'] : ['planet'],
+      visibility: hives.filter((s) => s.rights.includes('share')).map((s) => s.name),
+      share: [],
+    };
+  } catch {
+    return { include: ['planet'], visibility: [], share: [] };
+  }
 }
 
 /** The local store as an MCP memory backend. */
@@ -81,9 +123,9 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
   const now = deps.now ?? (() => new Date());
   const filter = filterFor(w.scope);
   return {
-    async recall({ query, as_of, known_at, mode, limit }) {
+    async recall({ query, as_of, known_at, mode, limit, include }) {
       const view = viewOf(mode, as_of, known_at);
-      const result = await runRecall(w, query, view, now());
+      const result = await runRecall(w, query, view, now(), include);
       const ignored = viewIgnored(view, result);
       if (result.abstained === true) {
         // Candidates were found, but none answers the question: say so rather than hand over noise.
@@ -220,6 +262,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
         // `writes_to`. With no --agent (an entry from before agents) it is anonymous: Planet only.
         agent: w.agent.source === 'none' ? null : w.agent.id,
         reads: w.agent.source === 'none' ? ['your Planet'] : ['your Planet', `Star ${w.agent.id}`],
+        spaces: w.agent.source === 'none' ? ['your Planet'] : ['your Planet', `Star ${w.agent.id}`],
         writes_to: w.agent.home === 'star' ? `Star ${w.agent.id}` : 'your Planet',
         version: VERSION,
         adapters: {
@@ -254,7 +297,7 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
   return {
     recall: local.recall,
 
-    async remember({ facts, type }) {
+    async remember({ facts, type, visibility }) {
       refuseStarInCloud(w);
       // The same turn the local engine observes for a fact, sent to the cloud's write path.
       const hint = type === undefined ? '' : ` (a ${type} fact)`;
@@ -275,6 +318,15 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
           ...(first?.id !== undefined && { id: first.id }),
           ...(r.outcome === 'skipped' && { reason: 'not durable' }),
         });
+      }
+      // No proposals yet (hive slice 9): a fact meant for a Constellation is saved privately, and
+      // sharing it stays the person's confirmed step.
+      if (visibility !== 'private') {
+        const id = results.find((x) => x.id !== undefined)?.id ?? '<id>';
+        return {
+          results,
+          note: `Saved privately to your Planet. Sharing it with ${visibility} needs the person's confirmation: \`oort share ${id} --to ${visibility}\`.`,
+        };
       }
       return { results };
     },
@@ -357,7 +409,8 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
     },
 
     async whoami() {
-      const me = await client.whoami();
+      const agent = w.agent.source === 'none' ? undefined : w.agent.id;
+      const me = await client.whoami(agent);
       return {
         mode: 'cloud',
         account: me.account,
@@ -365,6 +418,12 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
         note: 'Memories live in Oort Cloud (EU) for this account.',
         project: project ?? null,
         scope: project === undefined ? 'global' : 'project, plus global memories',
+        agent: agent ?? null,
+        spaces: (me.spaces ?? [{ level: 'planet' }]).map((s) =>
+          s.level === 'planet'
+            ? 'your Planet'
+            : `Constellation ${s.name} (${s.role}: ${s.rights.join(', ')})`,
+        ),
         version: VERSION,
       };
     },
@@ -382,6 +441,7 @@ export function createOortServer(deps: OortServerDeps): McpServer {
       w.mode === 'cloud' && w.cloud !== undefined
         ? cloudBackend({ ...deps, client: w.cloud })
         : localBackend(deps),
+    spaces: deps.spaces ?? localSpaces(w),
     version: VERSION,
     isRefusal: (e) => e instanceof Refusal,
   });

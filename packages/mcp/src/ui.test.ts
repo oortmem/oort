@@ -165,7 +165,7 @@ describe.each<Route>(['stdio', 'http-modern', 'http-legacy'])(
     it('ui.hosts-that-render-mcp-apps-get-the-widget-links-and-resources', async () => {
       const client = await connect(route, UI_CAPS);
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name)).toEqual([...TOOL_NAMES]);
+      expect(tools.map((t) => t.name)).toEqual(TOOL_NAMES.filter((n) => n !== 'share'));
       expect(linked(tools)).toEqual({
         recall: WIDGETS.recall.uri,
         remember: WIDGETS.memory.uri,
@@ -195,7 +195,7 @@ describe.each<Route>(['stdio', 'http-modern', 'http-legacy'])(
     it.skipIf(route === 'http-legacy')('ui.hosts-without-mcp-apps-get-no-widgets', async () => {
       const client = await connect(route, {});
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name)).toEqual([...TOOL_NAMES]);
+      expect(tools.map((t) => t.name)).toEqual(TOOL_NAMES.filter((n) => n !== 'share'));
       expect(tools.every((t) => t._meta === undefined)).toBe(true);
       const { resources } = await client.listResources();
       expect(resources).toEqual([]);

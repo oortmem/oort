@@ -232,7 +232,7 @@ export async function cloudStatusCommand(opts: { json?: boolean }, ctx: Ctx): Pr
     let stats: Record<string, unknown> | undefined;
     try {
       const client = await clientFor(ctx);
-      account = await client.whoami();
+      account = (await client.whoami()) as unknown as Record<string, unknown>;
       stats = (await client.stats()) as unknown as Record<string, unknown>;
     } catch (e) {
       if (!(e instanceof Refusal)) throw e;

@@ -24,6 +24,8 @@ export function cloudRemote(
   client: CloudClient | undefined,
   problem?: string,
   here?: { projectId: string | undefined; private?: boolean },
+  /** The agent the hooks act as: it reads only the Constellations it is attached to (CON-64). */
+  agent?: string,
 ): RemoteMemory {
   // Calls about the project this process runs in state its privacy when its own config file sets
   // it, so the cloud knows whether that project's memories may be shared. A default states
@@ -50,6 +52,7 @@ export function cloudRemote(
         text,
         ...(projectId !== undefined && { project: projectId }),
         ...privacy(projectId),
+        ...(agent !== undefined && { agent }),
         k: 10,
       }),
     sessionMemories: async ({ projectId }) => {

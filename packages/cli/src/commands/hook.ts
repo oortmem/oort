@@ -180,10 +180,15 @@ export async function hookCommand(event: string, ctx: Ctx): Promise<void> {
         // project config never affects the write path.
         spawnDrain: () => io.spawnDrain(home),
         ...(w.mode === 'cloud' && {
-          remote: cloudRemote(w.cloud, w.cloudProblem, {
-            projectId: w.scope.projectId,
-            ...(w.statedPrivacy !== undefined && { private: w.statedPrivacy }),
-          }),
+          remote: cloudRemote(
+            w.cloud,
+            w.cloudProblem,
+            {
+              projectId: w.scope.projectId,
+              ...(w.statedPrivacy !== undefined && { private: w.statedPrivacy }),
+            },
+            agent.source === 'none' ? undefined : agent.id,
+          ),
         }),
       });
       stdout = out.stdout;
