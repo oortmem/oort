@@ -4,7 +4,7 @@
 // Runs first in `pnpm verify`. Test fixtures that need secret-shaped values keep them
 // base64-encoded or build them at runtime, so they never match these patterns.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 
 const SELF = 'scripts/check-public.mjs';
 
@@ -26,12 +26,37 @@ const RULES = [
   ['Swedish phone number', /\+46[\s-]?\d{2}[\s-]?\d{3}[\s-]?\d{2}/],
 ];
 
+// Large binaries bloat every clone forever (history keeps them). New files above this size fail;
+// the brand kit's existing high-resolution sources are grandfathered at their current size.
+const MAX_BYTES = 600_000;
+const KNOWN_LARGE = new Map([
+  ['assets/brand/hero/hero-inspiration-1280x720.png', 1_289_956],
+  ['assets/brand/source/app-icon-dark-bg-1024.png', 1_254_179],
+  ['assets/brand/source/app-icon-light-bg-1024.png', 1_167_851],
+  ['assets/brand/icons/app-icon-rounded-1024.png', 997_526],
+  ['assets/brand/icons/app-icon-1024.png', 996_910],
+  ['assets/brand/source/social-card-1280x720.png', 980_130],
+  ['assets/brand/social/social-card-1280x720.png', 635_434],
+]);
+
 const files = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' })
   .split('\0')
   .filter((f) => f !== '' && f !== SELF);
 
 const hits = [];
 for (const file of files) {
+  let size;
+  try {
+    size = statSync(file).size;
+  } catch {
+    size = 0;
+  }
+  const cap = KNOWN_LARGE.get(file) ?? MAX_BYTES;
+  if (size > cap) {
+    hits.push(
+      `${file}  ${(size / 1000).toFixed(0)} kB is over the ${(cap / 1000).toFixed(0)} kB limit`,
+    );
+  }
   let buf;
   try {
     buf = readFileSync(file);
@@ -53,7 +78,8 @@ if (hits.length > 0) {
   console.error('check-public: found content that must not be in the public repo:\n');
   for (const h of hits) console.error(`  ${h}`);
   console.error(
-    '\nRemove it, or for a test fixture keep the value base64-encoded or built at runtime.',
+    '\nRemove it, or for a test fixture keep the value base64-encoded or built at runtime.\n' +
+      'For a large file: compress it, or keep it outside the repo.',
   );
   process.exit(1);
 }
