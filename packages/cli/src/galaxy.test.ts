@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeCloud, type FakeCloud } from '../test/fake-cloud.js';
 import { fakeIo, tmpdir } from '../test/helpers.js';
 import { writeCloudSettings } from './cloud.js';
-import { GALAXY_PAGE, galaxyLine } from './commands/galaxy.js';
+import { GALAXY_PAGE, galaxyLine, resolveGalaxy } from './commands/galaxy.js';
 import { createKeychain } from './keychain.js';
 import { runCli } from './program.js';
 import { wire as realWire, type WireFn } from './wire.js';
@@ -233,5 +233,41 @@ describe('oort galaxy (CON-97)', () => {
       checks: { name: string }[];
     };
     expect(d2.checks.some((c) => c.name === 'galaxies')).toBe(false);
+  });
+
+  it('galaxy.members-marks-pending-people', async () => {
+    const e = setup();
+    acme(e);
+    e.cloud.hive.galaxyMembers.get(G)![2]!['pending'] = true;
+    const r = await e.run(['galaxy', 'members', 'acme']);
+    expect(r.io.stdout).toContain(
+      'gm_000000000003  member  a member  joined 2026-11-03  (pending: not joined yet)',
+    );
+    expect(r.io.stdout).not.toMatch(/gm_000000000001.*pending/);
+  });
+
+  it('galaxy.counts-and-names-from-the-server-are-never-trusted', async () => {
+    const e = setup();
+    acme(e);
+    const g = e.cloud.hive.galaxies.get(G)! as unknown as Record<string, unknown>;
+    g['members'] = '3\u001b[2J';
+    g['constellations'] = { evil: true };
+    const r = await e.run(['galaxy', 'list']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).not.toContain(String.fromCodePoint(0x1b));
+    expect(r.io.stdout).toContain('NaN people  NaN Constellations');
+    // A Galaxy without a string name can't be matched, and never throws.
+    const odd = [
+      {
+        id: 'g_cccccccccccccccc',
+        name: 42,
+        slug: null,
+        role: 'admin',
+        members: 1,
+        constellations: 0,
+      },
+    ];
+    expect(() => resolveGalaxy(odd as never, 'acme')).toThrow('No such Galaxy');
+    expect(resolveGalaxy(odd as never, 'g_cccccccccccccccc').id).toBe('g_cccccccccccccccc');
   });
 });

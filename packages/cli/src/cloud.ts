@@ -261,6 +261,8 @@ export interface CloudGalaxyMember {
   you: boolean;
   email: string | null;
   joinedAt: string;
+  /** Added, not yet joined on oortcloud.dev: shown to admins only, and granted nothing. */
+  pending?: boolean;
 }
 
 export interface CloudWhoami {

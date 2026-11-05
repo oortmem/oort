@@ -28,8 +28,10 @@ export function galaxyLine(g: Pick<CloudGalaxy, 'name' | 'slug' | 'id' | 'role'>
  */
 export function resolveGalaxy(all: CloudGalaxy[], ref: string): CloudGalaxy {
   const low = ref.toLowerCase();
+  // Whatever the server sent, only strings can match (a missing or odd name never throws).
+  const str = (x: unknown): string | null => (typeof x === 'string' ? x : null);
   const matches = all.filter(
-    (g) => g.id === ref || (g.slug !== null && g.slug === low) || g.name.toLowerCase() === low,
+    (g) => str(g.id) === ref || str(g.slug) === low || (str(g.name) ?? '').toLowerCase() === low,
   );
   if (matches.length > 1) {
     throw new Refusal(
@@ -58,8 +60,11 @@ export async function galaxyListCommand(opts: { json?: boolean }, ctx: Ctx): Pro
     return 0;
   }
   for (const g of all) {
-    const people = g.members === 1 ? '1 person' : `${g.members} people`;
-    const cs = g.constellations === 1 ? '1 Constellation' : `${g.constellations} Constellations`;
+    // Counts are printed as numbers, never as whatever the server sent.
+    const n = Number(g.members);
+    const k = Number(g.constellations);
+    const people = n === 1 ? '1 person' : `${n} people`;
+    const cs = k === 1 ? '1 Constellation' : `${k} Constellations`;
     ctx.io.out(
       `  ${shown(g.name)}  ${roleOf(g.role)}  ${people}  ${cs}  ${shown(g.slug ?? g.id)}\n`,
     );
@@ -94,11 +99,17 @@ export async function galaxyMembersCommand(
   ctx.io.out(ui.header('members', `${shown(r.galaxy.name)} · ${r.members.length}`));
   for (const m of r.members) {
     const who = m.you ? 'you' : shown(m.email ?? 'a member');
+    // Added in Clerk, not yet joined: listed to admins only, and granted nothing.
+    const pending = m.pending === true ? '  (pending: not joined yet)' : '';
     ctx.io.out(
-      `  ${shown(m.member)}  ${roleOf(m.role)}  ${who}  joined ${shown(String(m.joinedAt).slice(0, 10))}\n`,
+      `  ${shown(m.member)}  ${roleOf(m.role)}  ${who}  joined ${shown(String(m.joinedAt).slice(0, 10))}${pending}\n`,
     );
   }
-  ctx.io.out(ui.dim(`Invite people and change roles at ${GALAXY_PAGE}, signed in.`) + '\n');
+  ctx.io.out(
+    ui.dim(
+      `Invite people and change roles at ${GALAXY_PAGE}, signed in. People join there too: being added grants nothing until they do.`,
+    ) + '\n',
+  );
   return 0;
 }
 
