@@ -15,3 +15,4 @@ dist-ssr
 .npmrc
 __pycache__/
 *.egg-info/
+packages/mcp/src/widgets.generated.ts

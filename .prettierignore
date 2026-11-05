@@ -5,3 +5,4 @@ LICENSE
 docs
 .superpowers
 .worktrees
+packages/mcp/src/widgets.generated.ts
