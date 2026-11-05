@@ -1,6 +1,7 @@
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { VERSION, scrub } from '@oortmem/core';
 import { INSTRUCTIONS, TOOLS, inputSchemas, type ToolInput, type ToolName } from './tools.js';
+import { attachWidgets } from './ui.js';
 
 /** One recalled fact, as `recall` returns it. */
 export interface RecalledFact {
@@ -105,9 +106,17 @@ export interface CreateMcpServerOptions {
   version?: string;
   /** Extra error classes whose messages are user-facing refusals (e.g. the CLI's `Refusal`). */
   isRefusal?: (e: unknown) => boolean;
+  /**
+   * Offer the in-chat widgets (MCP Apps) to hosts that render them: a recall card, and a memory
+   * card for explain and remember. Tool results are the same either way. Default true.
+   */
+  widgets?: boolean;
 }
 
-/** A new server with the seven Oort tools over `backend`. Build one per connection. */
+/**
+ * A new server with the seven Oort tools over `backend`, plus the widget resources for hosts that
+ * render MCP Apps. Build one per connection (or per request, for stateless HTTP).
+ */
 export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
   const b = opts.backend;
   const isRefusal = opts.isRefusal ?? (() => false);
@@ -124,9 +133,10 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
     list_recent: (i) => b.listRecent(i),
     whoami: (i) => b.whoami(i),
   };
+  const registered = new Map<ToolName, RegisteredTool>();
   for (const t of TOOLS) {
     const handler = handlers[t.name] as (input: unknown) => Promise<unknown>;
-    server.registerTool(
+    const tool = server.registerTool(
       t.name,
       {
         title: t.title,
@@ -136,6 +146,8 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
       },
       ((input: unknown) => run(() => handler(input), isRefusal)) as never,
     );
+    registered.set(t.name, tool);
   }
+  if (opts.widgets !== false) attachWidgets(server, registered);
   return server;
 }
