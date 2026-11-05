@@ -656,8 +656,9 @@ oort logout
 ```
 
 Oort Pro ($19 a month) means no vendor keys: one Oort key reaches Voyage,
-TypeSafe and Anthropic through the relay at `relay.oortcloud.dev`, and your
-memories stay on your machine. Subscribe at https://oortcloud.dev/account.
+TypeSafe and Anthropic through the relay at `relay.oortcloud.dev`. Your
+memories stay on your machine, or in Oort Cloud in the EU after
+`oort cloud use` (see `oort cloud`). Subscribe at https://oortcloud.dev/account.
 
 `oort login` signs this machine in, in the style of the OAuth device flow
 (RFC 8628):
@@ -732,9 +733,10 @@ Every adapter role picks its key on its own:
   with another model is unavailable through Oort Pro, with a message that
   names the served model and the vendor key to set instead.
 - **Refusals.** A relay 402 (subscription not active), 429 (60 requests per 10
-  seconds per key or per account, or a monthly cap used up: the 25,000 saves
-  or 50,000 recalls, or a fair-use limit on embedding inputs, rerank calls or
-  Jev calls) or 401 (key unknown or revoked) becomes one line with the fix and
+  seconds per key or per account; a daily or monthly cap used up: 5,000 saves
+  or 25,000 recalls a month, a twentieth of those a day, or a limit on
+  embedding inputs, rerank calls or Jev calls; or the monthly fair-use limit on
+  model costs) or 401 (key unknown or revoked) becomes one line with the fix and
   https://oortcloud.dev/account, never a stack trace. A relay 503 means a
   provider is busy for every Pro user, not your cap: "Oort Pro is busy, try
   again shortly". `oort observe` prints it and exits 1; `oort recall` degrades
