@@ -316,6 +316,45 @@ export interface CloudShareResult {
   /** A preview's signed token, valid for a few minutes: the confirm presents it. */
   previewToken?: string;
   id?: string;
+  /**
+   * What the Constellation did with a confirmed share (CON-66): `added`, `updated` (shared
+   * again), `reinforced` or `refined` (an existing memory), `superseded` or `corrected` (an
+   * earlier memory ended), `history` (an older claim), or `contested` (held for a maintainer).
+   * Absent from an older API.
+   */
+  outcome?: string;
+}
+
+/** A Constellation's policy, as the policy route answers it. */
+export interface CloudPolicy {
+  policy: string;
+  /** Absent from an older API. */
+  supersedeTrust?: string;
+  policyVersion: number;
+}
+
+/** A hive memory as a contest shows it (only what the CLI prints). */
+export interface CloudContestMemory {
+  id: string;
+  text: string;
+  validFrom: string;
+}
+
+/** Two current memories held against each other until a maintainer keeps one (CON-66). */
+export interface CloudContest {
+  /** What the challenger asked for: SUPERSEDE or CORRECT. */
+  action: string;
+  openedAt: string;
+  current: CloudContestMemory;
+  challenger: CloudContestMemory;
+}
+
+export interface CloudResolved {
+  kept: string;
+  ended: string;
+  /** SUPERSEDE or CORRECT (the challenger kept), or RETRACT (the challenger turned down). */
+  action: string;
+  nodeVersion: number;
 }
 
 /** A copy of one of the account's memories in a Constellation. */
@@ -385,10 +424,15 @@ export interface CloudClient {
     share?: boolean,
   ): Promise<{ agent: string; asked: string[]; rights: string[] }>;
   detach(c: string, agent: string): Promise<{ detached: boolean }>;
+  /** Sets the share policy, `supersedeTrust`, or both (maintainers only). */
   setPolicy(
     c: string,
-    policy: 'confirm' | 'open',
-  ): Promise<{ policy: string; policyVersion: number }>;
+    set: { policy?: 'confirm' | 'open'; supersedeTrust?: 'member' | 'maintainer' },
+  ): Promise<CloudPolicy>;
+  /** The open contests in a Constellation (CON-66). */
+  contested(c: string): Promise<CloudContest[]>;
+  /** Keeps `keep` of the open contest holding `id` and `keep` (maintainers only). */
+  resolve(c: string, id: string, keep: string): Promise<CloudResolved>;
   bindProject(c: string, project: string): Promise<{ project: string; bound: boolean }>;
   unbindProject(c: string, project: string): Promise<{ project: string; bound: boolean }>;
   transfer(c: string, member: string): Promise<{ owner: boolean; member: string }>;
@@ -514,7 +558,11 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
     attach: (c, agent, share) =>
       json('POST', cPath(c, '/stars'), { agent, ...(share === true && { share: true }) }),
     detach: (c, agent) => json('DELETE', cPath(c, `/stars/${encodeURIComponent(agent)}`)),
-    setPolicy: (c, policy) => json('PUT', cPath(c, '/policy'), { policy }),
+    setPolicy: (c, set) => json('PUT', cPath(c, '/policy'), set),
+    contested: async (c) =>
+      (await json<{ contested: CloudContest[] }>('GET', cPath(c, '/contested'))).contested,
+    resolve: (c, id, keep) =>
+      json('POST', cPath(c, `/contested/${encodeURIComponent(id)}`), { keep }),
     bindProject: (c, project) => json('PUT', cPath(c, `/projects/${encodeURIComponent(project)}`)),
     unbindProject: (c, project) =>
       json('DELETE', cPath(c, `/projects/${encodeURIComponent(project)}`)),

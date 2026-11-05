@@ -857,7 +857,7 @@ oort constellation remove <c> <member> [--yes]    # maintainers
 oort constellation leave <c> [--yes]
 oort constellation transfer <c> <member> [--yes]  # the owner
 oort constellation delete <c> [--yes]             # the owner
-oort constellation policy <c> --confirm|--open    # maintainers
+oort constellation policy <c> [--confirm|--open] [--supersede-trust member|maintainer]  # maintainers
 oort constellation attach <c> --agent <name> [--share]
 oort constellation detach <c> --agent <name>
 oort project link --constellation <c>             # maintainers; unlink to undo
@@ -872,7 +872,7 @@ Roles:
 
 | Role | Can |
 | --- | --- |
-| maintainer | everything a member can, plus invite, remove, change roles, bind projects and set the policy |
+| maintainer | everything a member can, plus invite, remove, change roles, bind projects, set the policy and resolve contested memories |
 | member | recall, share, and attach their own agents |
 | reader | recall only |
 
@@ -898,8 +898,34 @@ client using the same key without naming an agent reads every Constellation the 
 really confine an agent, give it its own narrowed key: `oort keys create --scope planet,<c>:read`.
 
 Changing membership (invite, revoke, remove, roles, leave, attach, detach, transfer), maintaining
-(policy, project links, delete) and making keys need a full key or the signed-in dashboard; a
-narrowed key is refused.
+(policy, project links, resolving contests, delete) and making keys need a full key or the
+signed-in dashboard; a narrowed key is refused.
+
+### When teammates disagree
+
+```sh
+oort constellation contested <c> [--json]
+oort constellation resolve <c> <id> --keep <id> [--json]   # maintainers
+```
+
+A shared memory is compared with what the Constellation already holds, the way your own memory
+compares a new fact with what you saved before. `oort share` then says what happened when it was
+more than a new copy: your share confirmed a memory already there, added detail to it, replaced an
+earlier one (which stays in its history, with whoever shared it), or corrected one that was never
+right. Order follows when each fact was observed, not when it was shared: an older fact shared
+late is kept as history and never replaces a newer one.
+
+Trust comes from your role: maintainer, then member (readers never share). A share through a
+narrowed key or a connector, or of one of your agent's own memories, counts as a member's. The
+policy's `--supersede-trust` (member by default, or maintainer) is the least trust needed to
+replace someone else's memory. Below it, both memories stay current and recalls show both,
+labelled `[semantic, Constellation oort-core · contested, 2d ago]`, until a maintainer decides:
+`contested` lists each pair (the current memory and the challenger), and `resolve <c> <id> --keep
+<id>` keeps one. Keeping the challenger replaces (or corrects) the current memory; keeping the
+current memory retracts the challenger. Both stay in the history either way.
+
+What you save in your own Planet never changes a Constellation's memory: if you disagree with
+one, your own memory says so, and only you see it.
 
 No vendor key is read in cloud mode: Oort Cloud calls the models. `OORT_CLOUD_URL` points the CLI
 at another API (https, or http to localhost for `wrangler dev`). Errors are one line with the fix,

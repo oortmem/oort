@@ -165,7 +165,7 @@
     "previewChars": 80
   },
   "hive": {
-    "$comment": "Constellations (CON-63): an invite-only beta behind accounts.hive_beta. Outside it every route here answers 403 hive_not_enabled. :c is a Constellation id or its name (URL-encoded); one the caller is not a member of answers 404, exactly like one that does not exist. Recall reads the caller's Constellations (at most 4) on its own; a hive memory carries origin.level 'hive' and origin.node 'Constellation <name>', and a dropped hive leg is listed in degradedNodes as { node, reason } with 'hive-unavailable' in degraded. A share is two calls: the preview (by id or name; a name several of yours share answers 409 ambiguous_constellation listing them with their ids) returns constellationId, and a previewToken; the confirm (confirm: true) must name that id in the path (a name is refused with 400 confirm_by_id), present the previewToken and exactly the previewed text (409 preview_required otherwise), and send acknowledgedFindings: true when the preview found personal data (409 findings_unacknowledged). A memory whose project's privacy no client has stated is refused with 409 project_privacy_unknown; observe, recall and share carry projectPrivate for the current project only when its config file sets it; a recorded true is never cleared by a later false, only by PUT /v1/projects/:project/privacy (the owner's explicit choice). A member may share 30 memories a day per Constellation and a Constellation holds at most 5,000 (429 share_limit); sharing the same memory again updates its one copy. Members (CON-64): joining is by invitation only. A maintainer invites an email address with a role (maintainer, member or reader); the invite is a single-use token, valid 7 days, stored only as a hash, shown to the inviter as a link (and emailed when the service can send mail). It is looked up and accepted only from the signed-in dashboard with the person's verified addresses: lookup names the Constellation and role (matches: true) only when one of them is the invited address, and otherwise only whom the invite is for (matches: false); accept refuses a mismatch (403 email_mismatch). Roles: a maintainer invites, removes, changes roles, binds projects and sets policy; a member recalls, shares and attaches their own agents; a reader recalls, and may attach agents that read only. The owner is a maintainer who cannot be removed or leave; only the owner transfers ownership or deletes the Constellation. A refusal for a role answers 403 role_required; a plan's member limit answers 403 plan_limit. :member is the id members lists (mb_…) or the member's invited email address. An attached agent (a Star) reads, and with share: true shares, a Constellation only within its owner's role; a recall or whoami that names an agent reads only the Constellations that agent is attached to, and one that names none reads all of the caller's. A narrowed key (POST /v1/keys with scope) or a connector reaches only the Constellations it was granted: others answer 404 as if they did not exist, and a right it lacks answers 403 scope_denied. Membership changes reach every vault within 60 seconds. Invites are limited: 10 pending per Constellation (429 invite_limit). Invite emails are limited per inviter and per address per day; past those the invite is still made and the link returned, with emailed: false and a note saying why. A narrowed key cannot change membership or maintain (invite, revoke, remove, role, leave, attach, detach, transfer, policy, projects, delete: 403 scope_denied). When an inviter stops being a maintainer their pending invites are revoked; one whose inviter lost the role since answers 410 invite_revoked.",
+    "$comment": "Constellations (CON-63): an invite-only beta behind accounts.hive_beta. Outside it every route here answers 403 hive_not_enabled. :c is a Constellation id or its name (URL-encoded); one the caller is not a member of answers 404, exactly like one that does not exist. Recall reads the caller's Constellations (at most 4) on its own; a hive memory carries origin.level 'hive' and origin.node 'Constellation <name>' ('Constellation <name> · contested' while it is held against another memory for a maintainer), and a dropped hive leg is listed in degradedNodes as { node, reason } with 'hive-unavailable' in degraded. A share is two calls: the preview (by id or name; a name several of yours share answers 409 ambiguous_constellation listing them with their ids) returns constellationId, and a previewToken; the confirm (confirm: true) must name that id in the path (a name is refused with 400 confirm_by_id), present the previewToken and exactly the previewed text (409 preview_required otherwise), and send acknowledgedFindings: true when the preview found personal data (409 findings_unacknowledged). A memory whose project's privacy no client has stated is refused with 409 project_privacy_unknown; observe, recall and share carry projectPrivate for the current project only when its config file sets it; a recorded true is never cleared by a later false, only by PUT /v1/projects/:project/privacy (the owner's explicit choice). A member may share 30 memories a day per Constellation and a Constellation holds at most 5,000 (429 share_limit); sharing the same memory again updates its one copy. Members (CON-64): joining is by invitation only. A maintainer invites an email address with a role (maintainer, member or reader); the invite is a single-use token, valid 7 days, stored only as a hash, shown to the inviter as a link (and emailed when the service can send mail). It is looked up and accepted only from the signed-in dashboard with the person's verified addresses: lookup names the Constellation and role (matches: true) only when one of them is the invited address, and otherwise only whom the invite is for (matches: false); accept refuses a mismatch (403 email_mismatch). Roles: a maintainer invites, removes, changes roles, binds projects and sets policy; a member recalls, shares and attaches their own agents; a reader recalls, and may attach agents that read only. The owner is a maintainer who cannot be removed or leave; only the owner transfers ownership or deletes the Constellation. A refusal for a role answers 403 role_required; a plan's member limit answers 403 plan_limit. :member is the id members lists (mb_…) or the member's invited email address. An attached agent (a Star) reads, and with share: true shares, a Constellation only within its owner's role; a recall or whoami that names an agent reads only the Constellations that agent is attached to, and one that names none reads all of the caller's. A narrowed key (POST /v1/keys with scope) or a connector reaches only the Constellations it was granted: others answer 404 as if they did not exist, and a right it lacks answers 403 scope_denied. Membership changes reach every vault within 60 seconds. Invites are limited: 10 pending per Constellation (429 invite_limit). Invite emails are limited per inviter and per address per day; past those the invite is still made and the link returned, with emailed: false and a note saying why. A narrowed key cannot change membership or maintain (invite, revoke, remove, role, leave, attach, detach, transfer, policy, projects, delete: 403 scope_denied). When an inviter stops being a maintainer their pending invites are revoked; one whose inviter lost the role since answers 410 invite_revoked. Disagreements (CON-66): a share is compared with the Constellation's current memories, and a confirmed share answers outcome: added, updated (the same memory shared again), reinforced or refined (id is then the memory it confirmed or rewrote), superseded or corrected (an earlier memory ended; it keeps its contributors), history (an older claim, stored already ended) or contested. Trust is maintainer > member > reader; a narrowed key or a connector carries member at most. supersedeTrust (member by default, or maintainer; set with the policy route, which takes policy, supersedeTrust or both) is the least trust a contradiction of someone else's memory needs: below it the share is stored as its own memory, both stay current, labelled contested, and GET /v1/constellations/:c/contested lists the pairs (current and challenger). A maintainer resolves one with POST /v1/constellations/:c/contested/:id and { keep }: keeping the challenger applies what it asked for (SUPERSEDE or CORRECT), keeping the current memory retracts the challenger (RETRACT); a narrowed key answers 403 scope_denied, a member 403 role_required, and no open contest holding both ids 404 not_found.",
     "constellation": ["id", "name", "role", "owner", "members", "policy", "joinedAt"],
     "routes": [
       {
@@ -193,6 +193,7 @@
           "members",
           "policy",
           "joinedAt",
+          "supersedeTrust",
           "memories",
           "roster",
           "projects?"
@@ -218,7 +219,8 @@
           "text",
           "findings",
           "previewToken?",
-          "id?"
+          "id?",
+          "outcome?"
         ]
       },
       {
@@ -341,9 +343,23 @@
         "method": "PUT",
         "path": "/v1/constellations/:c/policy",
         "request": {
-          "policy": "string"
+          "policy": "string?",
+          "supersedeTrust": "string?"
         },
-        "response": ["policy", "policyVersion"]
+        "response": ["policy", "supersedeTrust", "policyVersion"]
+      },
+      {
+        "method": "GET",
+        "path": "/v1/constellations/:c/contested",
+        "response": ["contested"]
+      },
+      {
+        "method": "POST",
+        "path": "/v1/constellations/:c/contested/:id",
+        "request": {
+          "keep": "string"
+        },
+        "response": ["kept", "ended", "action", "nodeVersion"]
       },
       {
         "method": "PUT",
@@ -385,7 +401,8 @@
       "legTimeoutMs": 150,
       "inviteDays": 7
     },
-    "member": ["member", "role", "owner", "you", "email", "joinedAt", "stars"]
+    "member": ["member", "role", "owner", "you", "email", "joinedAt", "stars"],
+    "contest": ["action", "openedAt", "current", "challenger"]
   },
   "keys": {
     "$comment": "API keys (CON-64). A key carries everything its account may do unless it was narrowed when it was made. scope lists 'planet' (always required: a key always reads and writes its own Planet) and Constellations by id or name, each optionally ':read' (recall only) or ':share' (recall and share); a bare Constellation carries every right the account's role has there. Only a full key or the signed-in dashboard makes keys (403 scope_denied for a narrowed key); a key made by a key is revoked with it. The response's scope is canonical (ids, not names), or null for a full key; the key itself is shown once and never stored.",

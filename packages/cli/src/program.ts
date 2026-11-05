@@ -13,6 +13,8 @@ import {
   constellationListCommand,
   constellationMembersCommand,
   constellationPolicyCommand,
+  constellationContestedCommand,
+  constellationResolveCommand,
   constellationRemoveCommand,
   constellationRevokeCommand,
   constellationRoleCommand,
@@ -359,13 +361,37 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .action(run((c: string, o: { yes?: boolean }) => constellationDeleteCommand(c, o, ctx)));
   constellation
     .command('policy')
-    .description('how shares are accepted (maintainers): --confirm or --open')
+    .description(
+      'how shares are accepted and who may supersede (maintainers): --confirm, --open, --supersede-trust',
+    )
     .argument('<constellation>', 'name or id')
     .option('--confirm', 'every share is confirmed by a person (the default)')
     .option('--open', 'shares are accepted without a review step')
+    .option(
+      '--supersede-trust <trust>',
+      "member (the default) or maintainer: who may supersede someone else's memory",
+    )
     .action(
-      run((c: string, o: { open?: boolean; confirm?: boolean }) =>
+      run((c: string, o: { open?: boolean; confirm?: boolean; supersedeTrust?: string }) =>
         constellationPolicyCommand(c, o, ctx),
+      ),
+    );
+  constellation
+    .command('contested')
+    .description('memories held against each other until a maintainer decides')
+    .argument('<constellation>', 'name or id')
+    .option('--json', 'print JSON')
+    .action(run((c: string, o: { json?: boolean }) => constellationContestedCommand(c, o, ctx)));
+  constellation
+    .command('resolve')
+    .description('settle a contest by keeping one memory (maintainers)')
+    .argument('<constellation>', 'name or id')
+    .argument('<id>', 'a contested memory id (from `contested`)')
+    .requiredOption('--keep <id>', 'the memory that stays current')
+    .option('--json', 'print JSON')
+    .action(
+      run((c: string, id: string, o: { keep?: string; json?: boolean }) =>
+        constellationResolveCommand(c, id, o, ctx),
       ),
     );
   constellation
