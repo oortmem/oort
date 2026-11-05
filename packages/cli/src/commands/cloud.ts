@@ -149,7 +149,7 @@ export async function cloudUseCommand(opts: { local?: boolean }, ctx: Ctx): Prom
     writeCloudSettings(home, { ...settings, store: 'local' });
     ctx.io.out(ui.header('cloud', 'local store'));
     ctx.io.out(
-      'This machine now uses the local store. Memories already in Oort Cloud stay there; `oort cloud export` downloads them.\n',
+      `${ui.ok('This machine now uses the local store.')} Memories already in Oort Cloud stay there; \`oort cloud export\` downloads them.\n`,
     );
     return 0;
   }
@@ -168,13 +168,14 @@ export async function cloudUseCommand(opts: { local?: boolean }, ctx: Ctx): Prom
     ]),
   );
   ctx.io.out(
-    `\nHooks, MCP and the oort commands now read and save in Oort Cloud.\n` +
+    `\n${ui.ok('Hooks, MCP and the oort commands now read and save in Oort Cloud.')}\n` +
       (left > 0
         ? `${left} ${left === 1 ? 'memory stays' : 'memories stay'} in the local store until you run \`oort cloud import\`.\n`
         : local > 0
           ? `${local === 1 ? 'The local memory is' : `All ${local} local memories are`} already in Oort Cloud.\n`
           : '') +
-      'Switch back any time with `oort cloud use --local`.\n',
+      ui.dim('Switch back any time with `oort cloud use --local`.') +
+      '\n',
   );
   return 0;
 }
@@ -210,7 +211,7 @@ export async function cloudStatusCommand(opts: { json?: boolean }, ctx: Ctx): Pr
     const ui = uiFor(ctx.io);
     const acct =
       'error' in account
-        ? ui.yellow(String(account['error']))
+        ? ui.warn(String(account['error']))
         : `${String(account['account'])} (${String(account['plan'])})`;
     ctx.io.out(ui.header('cloud', settings.store === 'cloud' ? 'Oort Cloud' : 'local store'));
     ctx.io.out(
@@ -224,7 +225,11 @@ export async function cloudStatusCommand(opts: { json?: boolean }, ctx: Ctx): Pr
           ? [
               [
                 'import',
-                `${settings.import.done}/${settings.import.total} uploaded${settings.import.done < settings.import.total ? ' (run `oort cloud import` to resume)' : ''}`,
+                settings.import.done < settings.import.total
+                  ? ui.warn(
+                      `${settings.import.done}/${settings.import.total} uploaded (run \`oort cloud import\` to resume)`,
+                    )
+                  : ui.ok(`${settings.import.done}/${settings.import.total} uploaded`),
               ] as [string, string],
             ]
           : []),
@@ -292,7 +297,11 @@ export async function cloudImportCommand(
       imported += r.imported;
       skipped += r.skipped;
       reembedded += r.reembedded;
-      ctx.io.out(`  uploaded ${done}/${lines.length}\n`);
+      ctx.io.out(
+        ui.color
+          ? `  ${ui.bar(done, lines.length)} ${ui.dim('uploaded')} ${done}/${lines.length}\n`
+          : `  uploaded ${done}/${lines.length}\n`,
+      );
     }
     ctx.io.out(
       `${ui.ok('done')}: ${imported} imported, ${skipped} already in the cloud, ${reembedded} re-embedded.\n`,

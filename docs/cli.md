@@ -40,14 +40,26 @@ tiers     hot 8, warm 40, cold 0
 ...
 ```
 
-Tier names are coloured: hot is cyan, warm is yellow and cold is blue. Where a
-row shows a tier with its glyph, the glyphs are `●` hot, `◐` warm and `○` cold.
-A one-line confirmation (`pin`, `forget`, `project link`, `keys set`) is its
-own header.
+On a colour terminal the header starts with the wordmark (`◉ oort stats · …`),
+keys are muted and status symbols are coloured: `✓` done, `!` needs a look, `✗`
+failed, `•` for information. Tier names use the oortcloud.dev tier colours: hot
+(Photosphere) is cyan, warm (Kuiper Belt) is ember orange and cold (Oort Cloud)
+is slate blue. Where a row shows a tier with its glyph, the glyphs are `●` hot,
+`◐` warm and `○` cold. A one-line confirmation (`pin`, `forget`, `project link`,
+`keys set`) is its own header.
+
+`oort` with no arguments prints the help, like `oort --help`. On a colour
+terminal the help, the start of `oort setup` and a finished `oort login` show
+the Oort mark (a dotted spiral with a comet); nowhere else, and never in a pipe.
 
 **Colour.** Colour is on when stdout is a terminal. `NO_COLOR` (set and
 non-empty) turns it off and wins over everything else. `FORCE_COLOR=1` turns it
 on for a pipe, `FORCE_COLOR=0` turns it off, and `TERM=dumb` turns it off.
+`COLORTERM=truecolor` (or `24bit`, or `FORCE_COLOR=3`) uses the exact brand
+colours; a `*-256color` `TERM` (or `FORCE_COLOR=2`) the nearest 256-colour
+ones; otherwise the terminal's own 16 colours. When `COLORFGBG` says the
+background is light (iTerm2, Konsole and rxvt set it), darker shades keep the
+contrast.
 
 **`--json`.** These commands print data rather than a report: `recall`,
 `explain`, `revalidate`, `inspect`, `stats`, `keys list` and `doctor`. With `--json` they print JSON
@@ -82,7 +94,7 @@ an error message is scrubbed and clipped to 24 characters.
 | `OORT_SITE_URL` | The site `oort login` signs in at, for local development (default `https://oortcloud.dev`). The same rule applies. |
 | `OORT_NO_KEYCHAIN=1` | Switches stored keys (Keychain and `credentials.json`) off for every command (see `oort keys`). |
 | `OORT_HOME` | The store directory (default `~/.oort`). |
-| `NO_COLOR`, `FORCE_COLOR` | See Colour above. |
+| `NO_COLOR`, `FORCE_COLOR`, `COLORTERM`, `COLORFGBG` | See Colour above. |
 
 ## `oort setup`
 

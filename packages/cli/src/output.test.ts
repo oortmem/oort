@@ -74,4 +74,102 @@ describe('consistent output', () => {
     const json = await h.run(['stats', '--json'], { stdoutTTY: true });
     expect(json.io.stdout).not.toContain(ESC);
   });
+
+  const BRAILLE = /[\u2800-\u28ff]/;
+  /** A truecolor terminal, as far as the CLI can tell. */
+  const colourTty = (h: { root: string; home: string }, extra: Record<string, string> = {}) => ({
+    stdoutTTY: true,
+    env: { HOME: h.root, OORT_HOME: h.home, COLORTERM: 'truecolor', FORCE_COLOR: '3', ...extra },
+  });
+
+  it('output.help-banner-only-with-colour-on-a-terminal', async () => {
+    const h = harness();
+    const plain = await h.run(['--help']);
+    expect(plain.code).toBe(0);
+    expect(plain.io.stdout).not.toContain(ESC);
+    expect(plain.io.stdout).not.toMatch(BRAILLE);
+    expect(plain.io.stdout.startsWith('Usage: oort [options] [command]\n')).toBe(true);
+    expect(plain.io.stdout).toContain('Oort: tiered memory for coding agents.');
+    // Plain `oort` is the help on stdout, exit 0.
+    const bare = await h.run([]);
+    expect(bare.code).toBe(0);
+    expect(bare.io.stdout).toBe(plain.io.stdout);
+    expect(bare.io.stderr).toBe('');
+    // FORCE_COLOR into a pipe: coloured help, no art.
+    const forced = await h.run(['--help'], { env: { HOME: h.root, FORCE_COLOR: '3' } });
+    expect(forced.io.stdout).toContain(ESC);
+    expect(forced.io.stdout).not.toMatch(BRAILLE);
+    const tty = await h.run(['--help'], colourTty(h));
+    expect(tty.io.stdout).toMatch(BRAILLE);
+    expect(tty.io.stdout).toContain('Kuiper Belt');
+    const noColor = await h.run(['--help'], colourTty(h, { NO_COLOR: '1' }));
+    expect(noColor.io.stdout).toBe(plain.io.stdout);
+    // Subcommand help never carries the mark.
+    const sub = await h.run(['stats', '--help'], colourTty(h));
+    expect(sub.io.stdout).not.toMatch(BRAILLE);
+  });
+
+  it('output.setup-mark-only-with-colour-on-a-terminal', async () => {
+    const args = ['setup', '--yes', '--agents', 'none', '--keys', 'skip', '--no-demo'];
+    const h = harness();
+    const plain = await h.run(args);
+    expect(plain.code, plain.io.stderr).toBe(0);
+    expect(plain.io.stdout).not.toMatch(BRAILLE);
+    expect(plain.io.stdout.split('\n')[0]).toBe('oort setup · non-interactive (--yes)');
+    const tty = await h.run(args, colourTty(h));
+    expect(tty.code, tty.io.stderr).toBe(0);
+    expect(tty.io.stdout).toMatch(BRAILLE);
+    const noColor = await h.run(args, colourTty(h, { NO_COLOR: '1' }));
+    expect(noColor.io.stdout).not.toMatch(BRAILLE);
+    expect(noColor.io.stdout).not.toContain(ESC);
+  });
+
+  it('output.data-output-is-plain-on-a-colour-terminal', async () => {
+    const h = harness();
+    await h.store.upsert(TG, memory({ tier: 'hot' }));
+    const tty = colourTty(h);
+    for (const args of [
+      ['stats', '--json'],
+      ['inspect', '--json'],
+      ['recall', 'auth service port', '--json'],
+      ['explain', 'auth service port', '--json'],
+      ['keys', 'list', '--json'],
+      ['doctor', '--json'],
+      ['export'],
+    ]) {
+      const coloured = await h.run(args, tty);
+      const plain = await h.run(args);
+      expect(coloured.io.stdout, args.join(' ')).not.toContain(ESC);
+      expect(coloured.io.stdout, args.join(' ')).not.toMatch(BRAILLE);
+      const docs =
+        args[0] === 'export' ? coloured.io.stdout.trimEnd().split('\n') : [coloured.io.stdout];
+      for (const d of docs) expect(() => JSON.parse(d), args.join(' ')).not.toThrow();
+      // Read-only commands answer the same bytes (recall and explain record the access).
+      if (['stats', 'inspect', 'keys'].includes(args[0] ?? '')) {
+        const strip = (o: string): string =>
+          o.replace(/"[a-zA-Z]*Ms": [0-9.]+/g, '').replace(/"rssBytes": \d+/, '');
+        expect(strip(coloured.io.stdout), args.join(' ')).toBe(strip(plain.io.stdout));
+      }
+    }
+    // The recall block agents read is the same bytes; only the header line above it is styled.
+    const human = await h.run(['recall', 'auth service port'], tty);
+    const plainHuman = await h.run(['recall', 'auth service port']);
+    const block = (o: string): string => o.slice(o.indexOf('<oort-memory'));
+    expect(human.io.stdout.split('\n')[0]).toContain(ESC);
+    expect(block(human.io.stdout)).toBe(block(plainHuman.io.stdout));
+    expect(block(human.io.stdout)).not.toContain(ESC);
+    expect(block(human.io.stdout)).toContain('<oort-memory');
+    // Hook stdout is JSON for Claude Code, whatever the terminal.
+    const stdin = JSON.stringify({
+      session_id: 's-1',
+      cwd: h.cwd,
+      hook_event_name: 'UserPromptSubmit',
+      prompt: 'which port does the auth service use?',
+    });
+    const hook = await h.run(['hook', 'UserPromptSubmit'], { ...tty, stdin });
+    expect(hook.io.hookStdout).toBeDefined();
+    expect(hook.io.hookStdout).not.toContain(ESC);
+    expect(hook.io.stdout).toBe('');
+    expect(() => JSON.parse(hook.io.hookStdout ?? '')).not.toThrow();
+  });
 });

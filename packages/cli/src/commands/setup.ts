@@ -7,6 +7,7 @@ import {
   localScope,
   recall,
   resolveHome,
+  VERSION,
   type Memory,
   type Scope,
   type ScopeFilter,
@@ -128,7 +129,7 @@ function plainPrompter(ctx: Ctx, ui: Ui): Prompter {
   return {
     interactive: false,
     intro: (t) => ctx.io.out(ui.header('setup', t)),
-    step: (n, t) => ctx.io.out(`\n${ui.bold(`${n}/${STEPS} ${t}`)}\n`),
+    step: (n, t) => ctx.io.out(`\n${ui.dim(`${n}/${STEPS}`)} ${ui.bold(t)}\n`),
     info: (t) => ctx.io.out(`${indent(t)}\n`),
     outro: (t) => ctx.io.out(`\n${t.trimEnd()}\n`),
     multiselect: no,
@@ -138,12 +139,12 @@ function plainPrompter(ctx: Ctx, ui: Ui): Prompter {
 }
 
 /** clack on the terminal. */
-function clackPrompter(): Prompter {
+function clackPrompter(ui: Ui): Prompter {
   const val = <T>(v: T | symbol): T | null => (clack.isCancel(v) ? null : (v as T));
   return {
     interactive: true,
     intro: (t) => clack.intro(t),
-    step: (n, t) => clack.log.step(`${n}/${STEPS} ${t}`),
+    step: (n, t) => clack.log.step(`${ui.dim(`${n}/${STEPS}`)} ${ui.bold(t)}`),
     info: (t) => clack.log.message(t.trimEnd()),
     outro: (t) => clack.outro(t.trimEnd()),
     async multiselect<T extends string>(message: string, options: Choice<T>[], initial: T[]) {
@@ -325,7 +326,7 @@ export async function setupCommand(
   if (opts.yes !== true && !terminal) throw new Refusal(nonInteractiveHelp(detected));
   const ui = uiFor(ctx.io);
   const interactive = opts.yes !== true;
-  const p = interactive ? (deps.prompter ?? clackPrompter()) : plainPrompter(ctx, ui);
+  const p = interactive ? (deps.prompter ?? clackPrompter(ui)) : plainPrompter(ctx, ui);
   if (plan.agents === undefined && !interactive) plan.agents = detected;
   if (plan.keys === undefined && !interactive) plan.keys = 'byo';
   if (plan.import === undefined && !interactive) plan.import = 'skip';
@@ -334,7 +335,21 @@ export async function setupCommand(
   const storeHome = resolveHome(ctx.io.env);
   const hadStore = fs.existsSync(storeHome);
 
-  p.intro(interactive ? 'oort setup' : 'non-interactive (--yes)');
+  // The mark opens setup on a colour terminal; the header line follows either way.
+  const art = ui.mark([
+    '',
+    `${ui.bold(ui.gradient('oort'))}  ${ui.dim(VERSION)}`,
+    ui.dim('Six short steps: agents, keys, connect, import, a check.'),
+    ui.dim('Every step can be skipped, and the last one shows how to undo.'),
+  ]);
+  if (art !== '') ctx.io.out(`${art}\n`);
+  p.intro(
+    interactive
+      ? ui.color
+        ? `${ui.wordmark()} ${ui.bold('setup')}`
+        : 'oort setup'
+      : 'non-interactive (--yes)',
+  );
   try {
     // 1. Detect agents.
     p.step(1, 'Detect agents');
