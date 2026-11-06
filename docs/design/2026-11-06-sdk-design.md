@@ -986,8 +986,10 @@ does the client.
   - the CLI and the SDK warn (`network-filesystem`).
 - **ECS on Fargate with EBS** is unverified for a long-lived store (Q13). The AWS recipe uses ECS
   on EC2 or EKS.
-- **Backups.** Take volume snapshots, and run a scheduled `oort export` (JSON Lines) to S3 or GCS.
-  Restore with `oort import`.
+- **Backups.** Take volume snapshots (EBS or persistent-disk snapshots of the volume holding
+  `OORT_HOME`), with the service stopped or the SQLite file checkpointed. `oort export` is not a
+  full backup of a multi-user store: it acts as the person, so end users' Planets are left out, and
+  `oort import` imports Claude Code transcripts, not an export.
 
 **A server-grade store (Postgres with pgvector, on RDS or Cloud SQL) is not built for 0.6 or
 0.7.** The seam is ready for it:
