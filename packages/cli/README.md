@@ -12,6 +12,7 @@ oort setup
 Other commands you will use:
 
 - `oort doctor` checks keys, hooks, connectors and the store.
+- `oort update` updates every copy of oort on the machine (the one the hooks run included) to the latest release. Once a day oort checks npm for one and says so; `OORT_NO_UPDATE_CHECK=1` turns that off.
 - `oort mcp` runs the local MCP server for any MCP client.
 - `oort connect <host>` and `oort disconnect <host>` add or remove one agent (`oort install <host>` does the same).
 - `oort serve --detach` starts a local daemon that makes the Claude Code hooks faster; they work without it.
