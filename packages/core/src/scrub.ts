@@ -540,6 +540,8 @@ const RULES: Rule[] = (
     { kind: 'github-token', re: /(?<![A-Za-z0-9_-])(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b/g },
     { kind: 'github-token', re: /(?<![A-Za-z0-9_-])github_pat_[A-Za-z0-9_]{22,}\b/g },
     { kind: 'anthropic-key', re: /(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}/g },
+    // Oort's own keys (oort keys create, oort login): the same shape `oort login` accepts.
+    { kind: 'oort-key', re: /(?<![A-Za-z0-9_-])oort_sk_[A-Za-z0-9_-]{16,}/g },
     { kind: 'stripe-key', re: /(?<![A-Za-z0-9_-])(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
     { kind: 'typesafe-key', re: /(?<![A-Za-z0-9_-])ts_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
     // Vendor tokens shorter than 32 chars or with hex bodies (two character
