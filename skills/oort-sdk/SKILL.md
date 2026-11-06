@@ -2,9 +2,9 @@
 name: oort-sdk
 description: Integrate Oort, open-source long-term memory for AI agents, into an app, service or agent framework with the oortmem TypeScript SDK (createOort, recall, observe, remember, formatForPrompt, scoped, judgments, OortError) or the oort CLI's oort.v1 JSON. Use when adding memory to a Node.js or TypeScript agent, a Vercel AI SDK, LangGraph.js or OpenAI Agents JS app, a multi-user or serverless backend, or a Python program that calls the oort CLI, and when choosing between Oort's hooks, MCP server, SDK and CLI.
 license: Apache-2.0
-compatibility: Written for oortmem 0.6.2. The SDK needs Node.js 22.15 or newer and is ESM. The CLI is `npm i -g oortmem`, or `pipx install oortmem`, which still runs Node.
+compatibility: Written for oortmem 0.6.3. The SDK needs Node.js 22.15 or newer and is ESM. The CLI is `npm i -g oortmem`, or `pipx install oortmem`, which still runs Node.
 metadata:
-  oortmem-version: '0.6.2'
+  oortmem-version: '0.6.3'
 ---
 
 # Building with Oort
@@ -14,7 +14,7 @@ facts that change instead of overwriting them, and recalls what is true now. The
 `oortmem` is both the `oort` command line and, since 0.6.0, a TypeScript library:
 `createOort()` gives code the same memory the CLI, the Claude Code hooks and the MCP server use.
 
-This skill describes `oortmem` 0.6.2. Use only the names it and its references give. When
+This skill describes `oortmem` 0.6.3. Use only the names it and its references give. When
 something is not covered, read the installed package's declarations
 (`node_modules/oortmem/dist/sdk/index.d.ts` and `node_modules/oortmem/dist/sdk/adapters/ai-sdk.d.ts`) or
 the generated reference at https://github.com/oortmem/oort/blob/main/docs/sdk-reference.md. Do

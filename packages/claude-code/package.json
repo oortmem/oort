@@ -1,6 +1,6 @@
 {
   "name": "@oortmem/claude-code",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Oort for Claude Code: hooks that recall and save memories, and transcript import.",
   "keywords": [
     "oort",

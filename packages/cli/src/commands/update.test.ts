@@ -21,7 +21,13 @@ import {
   type UpdateDeps,
 } from './update.js';
 
-const LATEST = '0.6.3';
+// Relative to the version under test, so a release bump never makes these plans "up to date".
+const bump = (v: string, by: number): string => {
+  const [maj, min, pat] = v.split('.').map(Number) as [number, number, number];
+  return `${maj}.${min}.${pat + by}`;
+};
+const LATEST = bump(VERSION, 1);
+const LATER = bump(VERSION, 2);
 const NO_TMP = '/nonexistent-tmp-for-tests';
 
 /** An npm prefix with oortmem `version` in it: `<prefix>/bin/oort` → the package's main.js. */
@@ -439,7 +445,7 @@ describe('oort update: the plan for each machine', () => {
       action: 'update',
     });
     // The human lines name the version manager.
-    const human = await update(m, ['--check', '--version', '0.6.4'], fakes(), {
+    const human = await update(m, ['--check', '--version', LATER], fakes(), {
       script: fs.realpathSync(shell.bin),
       entry: shell.bin,
     });
@@ -700,8 +706,7 @@ describe('oort update: the plan for each machine', () => {
 });
 
 describe("oort update: npm's lag after a release", () => {
-  const ETARGET =
-    'npm error code ETARGET\nnpm error notarget No matching version found for oortmem@0.6.3.\n';
+  const ETARGET = `npm error code ETARGET\nnpm error notarget No matching version found for oortmem@${LATEST}.\n`;
 
   it('update.retries-etarget-with-backoff-and-a-progress-line', async () => {
     const m = machine();
@@ -860,14 +865,14 @@ describe('oort update: --check, --json and --version', () => {
         throw new Error('the registry must not be asked');
       },
     });
-    const r = await update(m, ['--version', '0.6.4', '--yes', '--json'], f, {
+    const r = await update(m, ['--version', LATER, '--yes', '--json'], f, {
       script: managed.main,
       entry: managed.bin,
     });
     expect(r.code, r.io.stderr).toBe(0);
-    expect(argv(f)[0]).toContain('oortmem@0.6.4');
-    expect(data(r.io.stdout, 'update')).toMatchObject({ latest: '0.6.4', from: '--version' });
-    const bad = await update(m, ['--version', '0.6.4; rm -rf ~', '--json'], fakes(), {
+    expect(argv(f)[0]).toContain(`oortmem@${LATER}`);
+    expect(data(r.io.stdout, 'update')).toMatchObject({ latest: LATER, from: '--version' });
+    const bad = await update(m, ['--version', `${LATER}; rm -rf ~`, '--json'], fakes(), {
       script: managed.main,
     });
     expect(bad.code).toBe(2);
@@ -919,13 +924,13 @@ describe('oort update: after installing', () => {
       restarted: true,
       now: { version: LATEST, pid: 4242 },
     });
-    const human = await update(m, ['--yes', '--version', '0.6.4'], fakes(), {
+    const human = await update(m, ['--yes', '--version', LATER], fakes(), {
       script: managed.main,
       entry: managed.bin,
     });
     expect(human.io.stdout).toContain('store: migrated the store from schema version 3 to 4');
     expect(human.io.stdout).toContain(
-      'Release notes: https://github.com/oortmem/oort/releases/tag/v0.6.4',
+      `Release notes: https://github.com/oortmem/oort/releases/tag/v${LATER}`,
     );
   });
 
@@ -1019,7 +1024,7 @@ describe('oort update: an install counts only when the copy is the target (I1)',
       ok: true,
       version: LATEST,
     });
-    expect(verifyInstall({ path: fresh.bin, prefix: p }, '0.6.4')).toMatchObject({
+    expect(verifyInstall({ path: fresh.bin, prefix: p }, LATER)).toMatchObject({
       ok: false,
       version: LATEST,
     });
