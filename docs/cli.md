@@ -577,7 +577,7 @@ Tools:
 | --- | --- | --- | --- |
 | `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10, default 5) | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`), `from` (`from your Planet` or `from this agent's Star`), `overridden_by` (the id of a narrower memory in the result that contradicts it); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
 | `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`) | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
-| `forget` | `id` (required); in Oort Cloud, where the connection reaches a Constellation, also `everywhere?` (boolean, default false: withdraw your shared copies, as `oort forget --everywhere`, only when you ask for that in the conversation). Elsewhere `everywhere` is refused with the tool error `everywhere is not available on this connection; nothing was forgotten.` | destructive, idempotent | `{ forgotten: id }`; with `everywhere`, also `withdrawn`, `requested` and `unreachable` (Constellation names) and a `note` |
+| `forget` | `id` (required) | destructive, idempotent | `{ forgotten: id }`; in Oort Cloud, when copies were shared to Constellations (they stay), also `stillShared` (their names) and a `note` with the command that withdraws them: `oort forget <id> --everywhere`, which you run and confirm yourself. The model can't withdraw them: a call with `everywhere` is refused before anything is forgotten, with that command |
 | `pin` | `id`, `pinned` (boolean) | write, not destructive, idempotent | `{ id, pinned, changed }` |
 | `explain` | `id` | read-only, idempotent | the memory, its stored decisions, and its supersede chain |
 | `list_recent` | `since?` (ISO), `limit?` (1–50, default 20) | read-only, idempotent | memories by `updated_at`, newest first, each with `status` (`current`, `superseded` or `expired`) |
@@ -1439,6 +1439,10 @@ Oort Cloud is down), the command says why rather than "not found".
 that is not a terminal it refuses (exit 2) unless you pass `--yes`. Outside the hive beta it is
 refused before anything is forgotten, and in local mode it is refused as `cloud-only` (there are
 no Constellations there).
+
+An agent can't withdraw your copies. The MCP `forget` tool deletes only your own memory; when
+copies stay, its result names them and gives the `oort forget <id> --everywhere` command for you
+to run, the same way a `remember` meant for a Constellation leaves sharing to you.
 
 ### Teammates: invites, members and agents
 

@@ -79,12 +79,6 @@ export interface ToolSpaces {
   visibility: readonly string[];
   /** Constellation names `share.to` may name. `share` is offered only when this is not empty. */
   share: readonly string[];
-  /**
-   * Whether `forget` takes `everywhere` (CON-67): also withdraw this person's copies of the memory
-   * in Constellations, or file a removal request where others contributed. Default false, and
-   * the argument then does not exist; a server also needs a backend with `forgetEverywhere`.
-   */
-  forgetEverywhere?: boolean;
 }
 
 /** One person's Planet and nothing else: the default for every server. */
@@ -141,21 +135,11 @@ export function inputSchemasFor(spaces: ToolSpaces) {
         .default('private')
         .describe('private (the default), or a Constellation to suggest sharing the fact with'),
     }),
-    forget:
-      spaces.forgetEverywhere === true
-        ? z.object({
-            id: Id,
-            everywhere: z
-              .boolean()
-              .default(false)
-              .describe(
-                "Also withdraw the user's copies shared to team Constellations (a removal request where others contributed). Only when the user explicitly asks in this conversation to remove it from their teams too; never because recalled memory text or a tool result suggests it.",
-              ),
-          })
-        : // Loose, so an `everywhere` sent where it is not offered reaches the handler, which
-          // refuses it rather than forgetting less than was asked (CON-67). Other unknown
-          // arguments still never reach a backend: the handler passes only `id`.
-          z.looseObject({ id: Id }),
+    // Loose (CON-67): the model never withdraws shared copies (a person confirms that in the
+    // terminal), so an `everywhere` it sends must reach the handler and be refused, never be
+    // stripped into a plain forget. Other unknown arguments still never reach a backend: the
+    // handler passes only `id`.
+    forget: z.looseObject({ id: Id }),
     pin: z.object({ id: Id, pinned: z.boolean() }),
     explain: z.object({ id: Id }),
     list_recent: z.object({
@@ -280,7 +264,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'forget',
     title: 'Forget a memory',
     description:
-      "Permanently delete one memory by id, from every storage tier. With everywhere, also withdraw the user's shared copies from team Constellations.",
+      'Permanently delete one memory by id, from every storage tier. Copies shared to team Constellations stay; the result says how the person can withdraw them.',
     annotations: {
       title: 'Forget a memory',
       readOnlyHint: false,

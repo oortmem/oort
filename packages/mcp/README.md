@@ -33,9 +33,11 @@ What a connection may reach comes from trusted configuration, never from the mod
 `spaces: { include, visibility, share }` (default `PLANET_ONLY`). `recall.include` then lists only
 those levels, `remember.visibility` only `private` and the Constellations named, and the `share`
 tool is offered only when `share` names a Constellation and the backend implements `share()`.
-`forget` takes `everywhere` (a boolean, default false) only when `spaces.forgetEverywhere` is set
-and the backend implements `forgetEverywhere()`; otherwise the argument does not exist, and a
-call that sends it anyway is refused (`EVERYWHERE_UNAVAILABLE`) before anything is forgotten.
+`forget` never withdraws a Constellation's copy of a memory: that is the person's confirmed step
+(`oort forget <id> --everywhere`), like sharing. A call that sends `everywhere` anyway (any value
+but `false`) is refused before anything is forgotten, with that command for the person to run. A
+backend may return `stillShared` (the Constellations still holding a copy) and a `note` saying how
+the person withdraws them.
 Arguments a model invents (a `scope`, `project` or `agent`) are dropped before the backend.
 
 Also exported: `TOOLS`, `TOOL_NAMES`, `INSTRUCTIONS`, `inputSchemas` (zod), `inputSchemasFor()`,

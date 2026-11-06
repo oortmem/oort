@@ -3,7 +3,6 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  EVERYWHERE_UNAVAILABLE,
   FACT_MAX_CHARS,
   INSTRUCTIONS,
   MemoryToolError,
@@ -267,85 +266,69 @@ describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp spaces (%s era, CON-64)',
   });
 });
 
-const forgetEverywhere = async (input: unknown) => {
-  calls.push({ method: 'forgetEverywhere', input });
-  return { forgotten: 'm1', withdrawn: ['oort-core'], requested: [], unreachable: [] };
+/** origin/main's published `forget` input schema (0.6.1), before CON-67. */
+const FORGET_SCHEMA_0_6_1 = {
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  type: 'object',
+  properties: {
+    id: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 64,
+      description: 'A memory id from recall or list_recent',
+    },
+  },
+  required: ['id'],
 };
 
-describe.each<Era>(['legacy', 'modern'])(
-  '@oortmem/mcp forget everywhere (%s era, CON-67)',
-  (era) => {
-    const forgetSchema = async (backend: MemoryBackend, spaces?: ToolSpaces) =>
-      (await (await connect(era, backend, undefined, spaces)).listTools()).tools.find(
-        (t) => t.name === 'forget',
-      )?.inputSchema as { properties: Record<string, any>; required?: string[] };
-
-    it('mcp.forget.everywhere-exists-only-when-the-spaces-and-backend-allow-it', async () => {
-      const team = { ...TEAM, forgetEverywhere: true };
-      expect((await forgetSchema(fakeBackend())).properties).not.toHaveProperty('everywhere');
-      expect(
-        (await forgetSchema(fakeBackend({ forgetEverywhere }), TEAM)).properties,
-      ).not.toHaveProperty('everywhere');
-      expect((await forgetSchema(fakeBackend(), team)).properties).not.toHaveProperty('everywhere');
-      const s = await forgetSchema(fakeBackend({ forgetEverywhere }), team);
-      // A destructive widening: optional, false unless the model asks for it.
-      expect(s.properties['everywhere']).toMatchObject({ type: 'boolean', default: false });
-      expect(s.required).toEqual(['id']);
-    });
-
-    it('mcp.forget.defaults-to-the-plain-forget-and-everywhere-calls-the-backend-for-it', async () => {
-      const team = { ...TEAM, forgetEverywhere: true };
-      const client = await connect(era, fakeBackend({ forgetEverywhere }), undefined, team);
-      await client.callTool({ name: 'forget', arguments: { id: 'm1' } });
-      await client.callTool({ name: 'forget', arguments: { id: 'm1', everywhere: false } });
-      const r = await client.callTool({
-        name: 'forget',
-        arguments: { id: 'm1', everywhere: true },
-      });
-      expect(JSON.parse(text(r))).toEqual({
-        forgotten: 'm1',
-        withdrawn: ['oort-core'],
-        requested: [],
-        unreachable: [],
-      });
-      expect(calls).toEqual([
-        { method: 'forget', input: { id: 'm1' } },
-        { method: 'forget', input: { id: 'm1' } },
-        { method: 'forgetEverywhere', input: { id: 'm1' } },
-      ]);
-      // Where the argument does not exist, a model that sends it is refused and nothing is
-      // forgotten: never a quiet downgrade to the plain forget.
-      calls.length = 0;
-      for (const [backend, spaces] of [
-        [fakeBackend({ forgetEverywhere }), undefined],
-        [fakeBackend({ forgetEverywhere }), TEAM],
-        [fakeBackend(), team],
-      ] as const) {
-        const other = await connect(era, backend, undefined, spaces);
-        for (const everywhere of [true, 'yes', 1]) {
-          const refused = await other.callTool({
-            name: 'forget',
-            arguments: { id: 'm1', everywhere },
-          });
-          expect(refused.isError).toBe(true);
-          expect(text(refused)).toBe(EVERYWHERE_UNAVAILABLE);
-        }
+describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp forget (%s era, CON-67)', (era) => {
+  it('mcp.forget.everywhere-is-refused-with-the-command-and-nothing-is-forgotten', async () => {
+    for (const spaces of [undefined, TEAM]) {
+      const client = await connect(era, fakeBackend(), undefined, spaces);
+      for (const everywhere of [true, 'yes', 1]) {
+        const id = '11111111-2222-4333-8444-555555555555';
+        const refused = await client.callTool({ name: 'forget', arguments: { id, everywhere } });
+        expect(refused.isError).toBe(true);
+        expect(text(refused)).toBe(
+          `Withdrawing shared copies needs the person's confirmation. Nothing was forgotten. Ask them to run: oort forget ${id} --everywhere`,
+        );
       }
-      expect(EVERYWHERE_UNAVAILABLE).toBe(
-        'everywhere is not available on this connection; nothing was forgotten.',
-      );
-      expect(calls).toEqual([]);
-      // `everywhere: false` is the plain forget, and other invented arguments are still dropped.
-      const planet = await connect(era, fakeBackend());
-      await planet.callTool({ name: 'forget', arguments: { id: 'm1', everywhere: false } });
-      await planet.callTool({ name: 'forget', arguments: { id: 'm1', scope: { orgId: 'x' } } });
-      expect(calls).toEqual([
-        { method: 'forget', input: { id: 'm1' } },
-        { method: 'forget', input: { id: 'm1' } },
-      ]);
-    });
-  },
-);
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it('mcp.forget.everywhere-false-and-invented-arguments-are-the-plain-forget', async () => {
+    const client = await connect(era, fakeBackend(), undefined, TEAM);
+    await client.callTool({ name: 'forget', arguments: { id: 'm1', everywhere: false } });
+    await client.callTool({ name: 'forget', arguments: { id: 'm1', scope: { orgId: 'x' } } });
+    expect(calls).toEqual([
+      { method: 'forget', input: { id: 'm1' } },
+      { method: 'forget', input: { id: 'm1' } },
+    ]);
+  });
+
+  it('mcp.forget.passes-on-what-the-backend-says-about-shared-copies', async () => {
+    const said = {
+      forgotten: 'm1',
+      stillShared: ['oort-core'],
+      note: 'Still shared to oort-core. To withdraw those copies, the person runs: oort forget m1 --everywhere',
+    };
+    const client = await connect(era, fakeBackend({ forget: async () => said }), undefined, TEAM);
+    expect(
+      JSON.parse(text(await client.callTool({ name: 'forget', arguments: { id: 'm1' } }))),
+    ).toEqual(said);
+  });
+
+  it('mcp.forget.published-schema-is-0.6.1s-plus-additional-properties', async () => {
+    const client = await connect(era, fakeBackend(), undefined, TEAM);
+    const listed = (await client.listTools()).tools.find((t) => t.name === 'forget')!.inputSchema;
+    const { $schema: _a, additionalProperties, ...rest } = listed as Record<string, unknown>;
+    // `additionalProperties: {}` allows any extra key, as an absent one does: not breaking.
+    expect(additionalProperties ?? {}).toEqual({});
+    const { $schema: _b, ...want } = FORGET_SCHEMA_0_6_1;
+    expect(rest).toEqual(want);
+  });
+});
 
 describe('@oortmem/mcp definitions', () => {
   it('mcp.json-schemas-follow-the-spaces', () => {
@@ -356,14 +339,10 @@ describe('@oortmem/mcp definitions', () => {
     const planet = toolJsonSchemas() as Record<string, any>;
     expect(planet.recall.properties.include.items.enum).toEqual(['planet']);
     expect(planet.remember.properties.visibility.enum).toEqual(['private']);
-    expect(planet.forget.properties).not.toHaveProperty('everywhere');
-    expect(team.forget.properties).not.toHaveProperty('everywhere');
-    const withdraw = toolJsonSchemas({ ...TEAM, forgetEverywhere: true }) as Record<string, any>;
-    expect(withdraw.forget.properties.everywhere).toMatchObject({
-      type: 'boolean',
-      default: false,
-    });
-    expect(withdraw.forget.required).toEqual(['id']);
+    // `forget` is the same for every connection: 0.6.1's schema, plus `additionalProperties: {}`.
+    for (const s of [planet, team]) {
+      expect(s.forget).toEqual({ ...FORGET_SCHEMA_0_6_1, additionalProperties: {} });
+    }
     for (const s of Object.values(team)) expect(JSON.stringify(s)).not.toMatch(/"scope"/);
   });
 

@@ -476,15 +476,12 @@ describe('oort mcp in cloud mode: spaces from whoami (CON-64)', () => {
       include: ['planet'],
       visibility: [],
       share: [],
-      forgetEverywhere: false,
     });
     e.cloud.hive.stars.set(C, new Map([['cursor', ['read', 'share']]]));
     expect(await cloudSpaces(cursor, cursor.cloud!)).toEqual({
       include: ['planet', 'constellation'],
       visibility: ['oort-core'],
       share: [],
-      // CON-67: `forget` takes `everywhere` where the connection reaches a Constellation.
-      forgetEverywhere: true,
     });
     expect(e.cloud.whoamiAgents.at(-1)).toBe('cursor');
     // remember for a Constellation saves privately and says the share needs a person.
@@ -502,14 +499,13 @@ describe('oort mcp in cloud mode: spaces from whoami (CON-64)', () => {
   });
 });
 
-describe('oort mcp in cloud mode: forget everywhere (CON-67)', () => {
-  it('mcp.cloud-forget-everywhere-names-what-it-withdrew-and-what-it-could-not', async () => {
+describe('oort mcp in cloud mode: forget and shared copies (CON-67)', () => {
+  const ID = '44444444-5555-4666-8777-888888888888';
+  async function shared() {
     const e = setup();
     team(e, 'member', false);
     const D = 'c_dddddddddddddddd';
     e.cloud.hive.constellations.set(D, { id: D, name: 'design', role: 'member', owner: false });
-    e.cloud.hive.withdrawOutcome.set(D, 'requested');
-    const ID = '44444444-5555-4666-8777-888888888888';
     e.cloud.memories.set(ID, fakeMemory({ id: ID, text: 'Release on Tuesdays.' }));
     for (const [n, cid] of [C, D].entries()) {
       e.cloud.hive.shared.set(`copy-${n}`, {
@@ -523,16 +519,39 @@ describe('oort mcp in cloud mode: forget everywhere (CON-67)', () => {
       keychain: async () => undefined,
       fetch: e.cloud.fetch,
     });
-    const backend = cloudBackend({ wired: w, client: w.cloud! });
-    expect(await backend.forgetEverywhere!({ id: ID.slice(0, 8) })).toEqual({
+    return { e, w, backend: cloudBackend({ wired: w, client: w.cloud! }) };
+  }
+
+  it('mcp.cloud-forget-of-a-shared-memory-says-where-and-how-the-person-withdraws-it', async () => {
+    const { e, w, backend } = await shared();
+    expect(await backend.forget({ id: ID.slice(0, 8) })).toEqual({
       forgotten: ID,
-      withdrawn: ['oort-core'],
-      requested: ['design'],
-      unreachable: [],
-      note: 'Where others contributed, a removal request went to the maintainers; the copy stays until they decide.',
+      stillShared: ['oort-core', 'design'],
+      note: `Still shared to oort-core, design. To withdraw those copies, the person runs: oort forget ${ID} --everywhere`,
     });
+    // The model never withdraws: the copies stay, and no everywhere call was made.
     expect(e.cloud.memories.has(ID)).toBe(false);
-    expect(e.cloud.seen).toContain(`DELETE /v1/memories/${ID}`);
+    expect(e.cloud.hive.shared.size).toBe(2);
+    expect(e.cloud.seen).toContain(`GET /v1/memories/${ID}/shares`);
+    expect(e.cloud.seen.filter((s) => s.startsWith('DELETE'))).toEqual([
+      `DELETE /v1/memories/${ID}`,
+    ]);
+    await w.close();
+  });
+
+  it('mcp.cloud-forget-with-a-failed-shares-lookup-still-forgets-without-a-note', async () => {
+    const { e, w, backend } = await shared();
+    e.cloud.fail = { 'GET /v1/memories/:id/shares': 503 };
+    expect(await backend.forget({ id: ID })).toEqual({ forgotten: ID });
+    expect(e.cloud.memories.has(ID)).toBe(false);
+    await w.close();
+  });
+
+  it('mcp.cloud-forget-of-a-memory-never-shared-is-the-plain-answer', async () => {
+    const { e, w, backend } = await shared();
+    const other = '66666666-7777-4888-8999-aaaaaaaaaaaa';
+    e.cloud.memories.set(other, fakeMemory({ id: other, text: 'Private.' }));
+    expect(await backend.forget({ id: other })).toEqual({ forgotten: other });
     await w.close();
   });
 });

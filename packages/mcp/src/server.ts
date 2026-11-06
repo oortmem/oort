@@ -61,13 +61,14 @@ export interface MemoryBackend {
   recall(input: ToolInput<'recall'>): Promise<RecallOutput>;
   /** `note`: what the person should know, e.g. that a suggested share still needs confirming. */
   remember(input: ToolInput<'remember'>): Promise<{ results: RememberOutcome[]; note?: string }>;
-  forget(input: { id: string }): Promise<{ forgotten: string }>;
   /**
-   * `forget` with `everywhere: true` (CON-67): forgets the memory and withdraws the person's
-   * copies in Constellations, filing a removal request where others contributed. Optional: a
-   * server offers `everywhere` only when the backend has it and `spaces.forgetEverywhere` is set.
+   * Forgets one memory. A copy shared to a Constellation stays (it is the team's memory): a
+   * backend that can tell lists those Constellations in `stillShared` and says in `note` how the
+   * person withdraws them. The model never withdraws them itself (CON-67).
    */
-  forgetEverywhere?(input: { id: string }): Promise<ForgetEverywhereOutcome>;
+  forget(input: {
+    id: string;
+  }): Promise<{ forgotten: string; stillShared?: string[]; note?: string }>;
   pin(input: ToolInput<'pin'>): Promise<{ id: string; pinned: boolean; changed: boolean }>;
   explain(input: ToolInput<'explain'>): Promise<Record<string, unknown>>;
   listRecent(input: ToolInput<'list_recent'>): Promise<{ memories: Record<string, unknown>[] }>;
@@ -87,18 +88,6 @@ export interface MemoryBackend {
   judge?(input: ToolInput<'judge'>): Promise<Record<string, unknown>>;
 }
 
-/** What `forget` with `everywhere` returns: Constellations as people name them. */
-export interface ForgetEverywhereOutcome {
-  forgotten: string;
-  /** Copies only this person contributed to: withdrawn. */
-  withdrawn: string[];
-  /** Others contributed: the maintainers got a removal request, and the copy stays. */
-  requested: string[];
-  /** Not reached: the copy stays. */
-  unreachable: string[];
-  note?: string;
-}
-
 /** What `share` returns. */
 export interface ShareOutcome {
   shared: boolean;
@@ -111,9 +100,12 @@ export interface ShareOutcome {
   note?: string;
 }
 
-/** The tool error for `forget` with `everywhere` on a connection that does not offer it. */
-export const EVERYWHERE_UNAVAILABLE =
-  'everywhere is not available on this connection; nothing was forgotten.';
+/**
+ * The tool error for `forget` with `everywhere` (CON-67): withdrawing shared copies is the
+ * person's confirmed step, like sharing, so the model gets the command to suggest instead.
+ */
+const everywhereNeedsPerson = (id: string): string =>
+  `Withdrawing shared copies needs the person's confirmation. Nothing was forgotten. Ask them to run: oort forget ${id} --everywhere`;
 
 /** A refusal whose message is shown to the user as the tool error. */
 export class MemoryToolError extends Error {
@@ -186,12 +178,7 @@ export interface CreateMcpServerOptions {
 export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
   const b = opts.backend;
   const isRefusal = opts.isRefusal ?? (() => false);
-  const given = opts.spaces ?? PLANET_ONLY;
-  // `everywhere` exists only where the backend can withdraw copies and the connection allows it.
-  const spaces: ToolSpaces = {
-    ...given,
-    forgetEverywhere: given.forgetEverywhere === true && b.forgetEverywhere !== undefined,
-  };
+  const spaces = opts.spaces ?? PLANET_ONLY;
   const schemas = inputSchemasFor(spaces);
   const visibility = new Set(['private', ...spaces.visibility]);
   const server = new McpServer(
@@ -216,14 +203,13 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
         visibility: visibility.has(i.visibility) ? i.visibility : 'private',
       }),
     forget: (i) => {
-      // Never forget less than was asked: `everywhere` where it is not offered is refused before
-      // anything is forgotten, so the model can ask again without it (CON-67).
+      // Never forget less than was asked: `everywhere` is refused before anything is forgotten,
+      // with the command the person runs to confirm it (CON-67).
       const asked = (i as Record<string, unknown>)['everywhere'];
-      if (asked === undefined || asked === false) return b.forget({ id: i.id });
-      if (asked !== true || b.forgetEverywhere === undefined || spaces.forgetEverywhere !== true) {
-        throw new MemoryToolError(EVERYWHERE_UNAVAILABLE);
+      if (asked !== undefined && asked !== false) {
+        throw new MemoryToolError(everywhereNeedsPerson(i.id));
       }
-      return b.forgetEverywhere({ id: i.id });
+      return b.forget({ id: i.id });
     },
     pin: (i) => b.pin(i),
     explain: (i) => b.explain(i),
