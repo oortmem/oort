@@ -576,9 +576,10 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
       status: 'ok',
       detail: `${tilde(db, userHome)} opens; ${count} ${count === 1 ? 'memory' : 'memories'} visible from here`,
     });
+    // The store opened at the current schema (migrated now, or earlier by another command): a
+    // daemon refused for a pending migration may start, and the hooks may try it again.
+    if (readSkip(home)?.reason === 'migration') clearSkip(home);
     if (before !== undefined && before < SCHEMA_VERSION) {
-      // The daemon refused to start on the old store; the hooks may try it again now.
-      if (readSkip(home)?.reason === 'migration') clearSkip(home);
       checks.push({
         group: 'store',
         name: 'migration',

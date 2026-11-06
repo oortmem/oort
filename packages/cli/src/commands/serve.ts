@@ -194,7 +194,8 @@ export async function serveCommand(
   async function status(): Promise<number> {
     const r = await callDaemon(socket, 'status', {}, { budgetMs: 1000 });
     const holder = lockHolderPid();
-    const needsMigration = priorSkip?.reason === 'migration';
+    // Only a live marker: any oort command migrates the store, so an expired one may be stale.
+    const needsMigration = priorSkip?.reason === 'migration' && priorSkip.until > Date.now();
     if (opts.json === true) {
       // Only known fields, copied by name: nothing the socket sends can add or override one.
       const fields = [

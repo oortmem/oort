@@ -786,6 +786,21 @@ describe('oort serve security review fixes', () => {
     expect((await oort(s, ['serve', 'stop'])).exitCode).toBe(0);
   });
 
+  it('serve.a-stale-migration-marker-is-not-reported-and-doctor-clears-it', async () => {
+    const s = sandbox();
+    await seed(s, [memory({ embedding: new Int8Array(512).fill(3) })]);
+    // The store is current (another command migrated it); the marker is left over and expired.
+    fs.writeFileSync(path.join(s.oortHome, SKIP_FILE), `${Date.now() - 1000} migration\n`);
+    const json = await oort(s, ['serve', 'status', '--json']);
+    expect(JSON.parse(json.stdout)).not.toHaveProperty('needsMigration');
+    // A live marker on a current store: doctor clears it even though it migrated nothing.
+    fs.writeFileSync(path.join(s.oortHome, SKIP_FILE), `${Date.now() + 60_000} migration\n`);
+    const doc = await oort(s, ['doctor', '--json']);
+    const checks = (JSON.parse(doc.stdout) as { checks: { name: string }[] }).checks;
+    expect(checks.some((c) => c.name === 'migration')).toBe(false);
+    expect(readSkip(s.oortHome)).toBeUndefined();
+  });
+
   it('serve.one-connection-may-queue-at-most-8-requests (L3)', async () => {
     const s = sandbox();
     const serve = await startServe(s);
