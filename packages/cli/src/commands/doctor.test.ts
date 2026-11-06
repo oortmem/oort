@@ -333,6 +333,45 @@ describe('oort doctor', () => {
     }
   });
 
+  it('doctor.hooks-on-a-newer-stable-copy-are-fine (--this-copy)', async () => {
+    const h = harness();
+    const bin = fakeBin(h, '99.0.0', 'checkout');
+    installHooks(path.join(h.root, '.claude', 'settings.json'), bin);
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    const d = await doctor(h);
+    expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
+    expect(d.check('hooks', 'claude-code bin')?.detail).toContain(
+      `oort 99.0.0, newer than this oort ${VERSION}`,
+    );
+    expect(d.check('hooks', 'claude-code node')).toBeUndefined();
+    for (const c of d.report.checks.filter((c) => c.group === 'hooks')) {
+      expect(['ok', 'info'], c.name).toContain(c.status);
+    }
+    // An older one still warns.
+    const h2 = harness();
+    installHooks(path.join(h2.root, '.claude', 'settings.json'), fakeBin(h2, '0.1.0', 'checkout'));
+    expect((await doctor(h2)).check('hooks', 'claude-code bin')?.status).toBe('warn');
+  });
+
+  it('doctor.an-mcp-entry-on-another-stable-copy-of-this-version-is-fine (--this-copy)', async () => {
+    const h = harness();
+    fs.mkdirSync(path.join(h.root, '.cursor'));
+    // A managed copy is there, but cursor runs another copy (`oort connect cursor --this-copy`).
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    const hc = hostContext({ io: { env: { HOME: h.root } } } as never);
+    const other = npmPrefixCopy(path.join(h.root, 'checkout'), VERSION);
+    connectHost('cursor', hc, other.main);
+    const d = await doctor(h);
+    expect(d.check('mcp', 'cursor')).toMatchObject({ status: 'ok' });
+    expect(d.check('mcp', 'cursor')?.detail).toContain(`from another copy, oort ${VERSION}`);
+    // An older copy is still outdated.
+    npmPrefixCopy(path.join(h.root, 'checkout'), '0.1.0');
+    expect((await doctor(h)).check('mcp', 'cursor')).toMatchObject({
+      status: 'warn',
+      fix: 'oort connect cursor',
+    });
+  });
+
   it('doctor.hook-binary-of-this-version-is-green', async () => {
     const h = harness();
     const bin = fakeBin(h);

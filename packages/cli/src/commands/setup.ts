@@ -40,6 +40,7 @@ import {
   plannedMain,
   runningUnstable,
   shownPrefix,
+  thisCopyRefusal,
 } from './managed.js';
 import { managedPrefixFor } from './update.js';
 import { keySource } from './keys.js';
@@ -58,6 +59,11 @@ export interface SetupOptions {
   demo?: boolean;
   /** No longer needed (setup installs the managed copy itself); accepted and ignored. */
   installGlobal?: boolean;
+  /**
+   * `--this-copy`, for developers testing their own build: agents run this copy even when a
+   * managed copy is there, and nothing is installed. A copy that does not stay put is refused.
+   */
+  thisCopy?: boolean;
 }
 
 export interface Choice<T extends string> {
@@ -595,7 +601,24 @@ export async function setupCommand(
       };
       const current = managedCopy(env);
       let plan: { bin: string; install: boolean } | undefined;
-      if (managedIsCurrent(current)) {
+      if (opts.thisCopy === true) {
+        managed.reason = 'this-copy';
+        if (current !== undefined) managed.version = current.version;
+        if (running !== undefined) {
+          plan = { bin: running, install: false };
+          p.info(
+            ui.info(
+              `--this-copy: agents run this copy, ${show(running)}${current !== undefined ? `, not the managed copy in ${prefix}` : ''}.`,
+            ),
+          );
+        } else {
+          p.info(
+            ui.warn(
+              `Skipped connecting: ${why !== undefined ? thisCopyRefusal(why, env, 'setup') : problem}`,
+            ),
+          );
+        }
+      } else if (managedIsCurrent(current)) {
         plan = { bin: current.main, install: false };
         managed.status = 'reused';
         managed.version = current.version;
@@ -841,6 +864,12 @@ export async function setupCommand(
         import: importOutcome,
         demo: runDemo,
         command: written ?? null,
+        binary:
+          written === undefined
+            ? null
+            : managed.status === 'reused' || managed.status === 'installed'
+              ? 'managed'
+              : 'running',
         managed,
         changed: done,
       });

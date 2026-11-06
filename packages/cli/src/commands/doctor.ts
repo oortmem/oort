@@ -61,7 +61,7 @@ export { unstableCopy };
 import { binPath } from '../io.js';
 import { compareVersions } from '../serve-protocol.js';
 import { availableUpdate, noticeText, readUpdateCache, updateCheckOff } from '../update-check.js';
-import { managedPrefixFor } from './update.js';
+import { managedPrefixFor, nearestPackageVersion } from './update.js';
 import { managedCopy, managedIsCurrent, manualInstall } from './managed.js';
 import { SKIP_FILE, callDaemon, clearSkip, readSkip } from '../serve-client.js';
 import { socketPathFor } from '../serve-protocol.js';
@@ -457,6 +457,14 @@ async function hookBinaryChecks(
         fix: reinstall,
         fixCommand: 'oort update',
       });
+    } else if ((compareVersions(got, VERSION) ?? -1) > 0 && drifting(bin) === undefined) {
+      // A newer copy that stays put (a build of your own, one `--this-copy` wrote): fine.
+      checks.push({
+        group: 'hooks',
+        name: 'claude-code bin',
+        status: 'ok',
+        detail: `oort ${got}, newer than this oort ${VERSION} (${show})`,
+      });
     } else if (got !== VERSION) {
       checks.push({
         group: 'hooks',
@@ -478,6 +486,39 @@ async function hookBinaryChecks(
   return checks;
 }
 
+/**
+ * Why a copy agents run will not stay put (a Node version manager, fnm's per-shell link, a package
+ * cache), or undefined. A temp directory is left out: no `oort install` ever writes one.
+ */
+function drifting(bin: string): string | undefined {
+  let real: string | undefined;
+  try {
+    real = fs.realpathSync(bin);
+  } catch {
+    real = undefined;
+  }
+  const why = unstableCopy(bin, real);
+  return why === undefined || UNSTABLE_HOOKS[why] === undefined ? undefined : why;
+}
+
+/**
+ * The version of another copy of oort (an MCP entry's binary) when it is fine to leave it: an
+ * executable that stays put and is this version or newer, read from its files. Else undefined.
+ */
+function fineOtherCopy(bin: string): string | undefined {
+  if (!isExecutable(bin) || drifting(bin) !== undefined) return undefined;
+  let real: string | undefined;
+  try {
+    real = fs.realpathSync(bin);
+  } catch {
+    return undefined;
+  }
+  const version = nearestPackageVersion(real);
+  return version !== undefined && (compareVersions(version, VERSION) ?? -1) >= 0
+    ? version
+    : undefined;
+}
+
 const UNSTABLE_HOOKS: Record<string, string> = {
   'a Node version manager': 'under a Node version manager: switching Node versions will break them',
   "fnm's link for this shell": "in fnm's link for one shell: it goes away when that shell ends",
@@ -492,13 +533,7 @@ const UNSTABLE_HOOKS: Record<string, string> = {
  * directory is left out: no `oort install` ever writes one (`hookCommandPath` refuses it).
  */
 function unstableHooksNote(ctx: Ctx, bin: string, show: string): Check | undefined {
-  let real: string | undefined;
-  try {
-    real = fs.realpathSync(bin);
-  } catch {
-    real = undefined;
-  }
-  const why = unstableCopy(bin, real);
+  const why = drifting(bin);
   const detail = why === undefined ? undefined : UNSTABLE_HOOKS[why];
   if (detail === undefined) return undefined;
   const home = ctx.io.env['HOME'] ?? '';
@@ -637,7 +672,17 @@ function mcpChecks(ctx: Ctx, cmd: string | undefined): Check[] {
     switch (s.state) {
       case 'connected':
         return { ...base, status: 'ok', detail: `${HOST_LABEL[host]} starts oort mcp (${show})` };
-      case 'outdated':
+      case 'outdated': {
+        // Another copy of oort, stable and this version or newer (one `--this-copy` wrote, a
+        // build of your own): fine, as for the hooks (CON-113).
+        const other = s.otherCopy === undefined ? undefined : fineOtherCopy(s.otherCopy);
+        if (other !== undefined) {
+          return {
+            ...base,
+            status: 'ok',
+            detail: `${HOST_LABEL[host]} starts oort mcp from another copy, oort ${shown(other)} (${shown(tilde(s.otherCopy ?? '', hc.home))})`,
+          };
+        }
         return {
           ...base,
           status: 'warn',
@@ -647,6 +692,7 @@ function mcpChecks(ctx: Ctx, cmd: string | undefined): Check[] {
               : `Oort's entry in ${show} is from another install path or an older version`,
           fix: `oort connect ${host}`,
         };
+      }
       case 'broken':
         return {
           ...base,

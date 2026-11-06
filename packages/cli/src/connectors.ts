@@ -711,6 +711,11 @@ export interface HostStatus {
   state: 'connected' | 'outdated' | 'broken' | 'absent' | 'foreign' | 'invalid';
   /** `outdated` only: the entry names no `--agent` (written before agents existed). */
   noAgent?: true;
+  /**
+   * `outdated` only: the entry is exactly what `oort connect` writes, but for another binary,
+   * this one (another copy of oort, such as one `--this-copy` wrote).
+   */
+  otherCopy?: string;
   /** Why the file is `invalid` (holds no config values). */
   message?: string;
 }
@@ -766,5 +771,9 @@ export function inspectHost(host: Host, hc: HostContext, cmd?: string): HostStat
   if (same(entry, serverEntry(host, cmd ?? command))) return status('connected');
   // An entry from before agents (no --agent) runs as an anonymous, Planet-only agent.
   const args = isObject(entry) && Array.isArray(entry['args']) ? entry['args'] : [];
-  return { ...status('outdated'), ...(!args.includes('--agent') && { noAgent: true }) };
+  return {
+    ...status('outdated'),
+    ...(!args.includes('--agent') && { noAgent: true }),
+    ...(same(entry, serverEntry(host, command)) && { otherCopy: command }),
+  };
 }

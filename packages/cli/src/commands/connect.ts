@@ -119,7 +119,7 @@ function memoryRows(host: Host, star: boolean): [string, string][] {
 export async function connectCommand(
   action: 'connect' | 'disconnect',
   args: string[],
-  opts: { dryRun?: boolean; star?: boolean },
+  opts: { dryRun?: boolean; star?: boolean; thisCopy?: boolean },
   ctx: Ctx,
 ): Promise<number> {
   const hosts = hostArgs(args);
@@ -145,6 +145,7 @@ export async function connectCommand(
       action: `connect ${hosts.join(' ')}`,
       dryRun,
       say: (line) => ctx.io.out(ui.info(line)),
+      thisCopy: opts.thisCopy === true,
     });
     cmd = bin.path;
     from = bin.from;

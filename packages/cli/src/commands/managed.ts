@@ -204,6 +204,8 @@ export interface AgentBinary {
   installed?: boolean;
   /** A managed copy older than this one, left as it is (`oort update` updates it). */
   olderManaged?: Managed;
+  /** `--this-copy`: a managed copy there is, passed over for this one. */
+  passedOver?: Managed;
 }
 
 /**
@@ -212,14 +214,18 @@ export interface AgentBinary {
  * and never a package cache, temp directory, fnm link or version manager). When this copy is not
  * stable, the managed copy is installed first (`say` prints the line); if it cannot be, a refusal
  * names the commands to run. `dryRun` installs nothing: it returns where the managed copy would be.
+ * `thisCopy` (`--this-copy`, for developers testing their own build) writes this copy even when a
+ * managed copy is there, and installs nothing; an unstable copy is still refused, since it breaks
+ * later whatever is intended.
  */
 export async function agentBinary(
   ctx: Ctx,
-  opts: { say: (line: string) => void; dryRun?: boolean; action: string },
+  opts: { say: (line: string) => void; dryRun?: boolean; action: string; thisCopy?: boolean },
 ): Promise<AgentBinary> {
   const env = ctx.io.env;
+  const thisCopy = opts.thisCopy === true;
   const managed = managedCopy(env);
-  if (managedIsCurrent(managed)) {
+  if (!thisCopy && managedIsCurrent(managed)) {
     return { path: managed.main, from: 'managed', version: managed.version };
   }
   const why = runningUnstable(ctx);
@@ -229,11 +235,13 @@ export async function agentBinary(
       path: running,
       from: 'running',
       version: VERSION,
-      ...(managed !== undefined && { olderManaged: managed }),
+      ...(managed !== undefined &&
+        (thisCopy ? { passedOver: managed } : { olderManaged: managed })),
     };
   }
   const prefix = shownPrefix(env);
   const manual = `\`${manualInstall(env)}\`, then \`${prefix}/bin/oort ${opts.action}\``;
+  if (thisCopy) throw new Refusal(thisCopyRefusal(why, env, opts.action), { code: 'refused' });
   if (opts.dryRun === true) {
     opts.say(
       `This oort is in ${why}, so agents would lose it later: \`oort ${opts.action}\` installs oort ${VERSION} in ${prefix} first (${installCommandFor(env)}).\n`,
@@ -251,4 +259,17 @@ export async function agentBinary(
     );
   }
   return { path: r.managed.main, from: 'managed', version: r.managed.version, installed: true };
+}
+
+/**
+ * `--this-copy` from a copy that does not stay put: refused, because the path breaks later
+ * whatever is intended. The same sentence for install, connect and setup.
+ */
+export function thisCopyRefusal(
+  why: string,
+  env: Record<string, string | undefined>,
+  action: string,
+): string {
+  const prefix = shownPrefix(env);
+  return `This oort is in ${why}, which agents would lose later, so --this-copy will not write it. Run \`${manualInstall(env)}\`, then \`${prefix}/bin/oort ${action}\`, or run --this-copy from a copy that stays put (a build of your own, an npm global outside a Node version manager).`;
 }

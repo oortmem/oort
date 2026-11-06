@@ -672,6 +672,61 @@ describe('oort bin', () => {
     expect(fs.existsSync(s.npmRan)).toBe(false);
   });
 
+  it('cli.this-copy-writes-this-build-even-with-a-managed-copy', async () => {
+    // This bin is a source checkout (packages/cli/dist/main.js): a developer's own build.
+    const s = sandbox();
+    const bin = fs.realpathSync(BIN);
+    const settings = path.join(s.home, '.claude', 'settings.json');
+    const cursor = path.join(s.home, '.cursor', 'mcp.json');
+    fs.mkdirSync(path.dirname(cursor), { recursive: true });
+    const managed = npmPrefixCopy(path.join(s.oortHome, 'cli'), VERSION);
+    type Env = { data: Record<string, unknown> };
+    const i = await oort(s, ['install', 'claude-code', '--this-copy', '--json']);
+    expect(i.exitCode, i.stderr).toBe(0);
+    expect((JSON.parse(i.stdout) as Env).data).toMatchObject({
+      command: bin,
+      binary: 'running',
+      installedManaged: false,
+    });
+    expect(fs.readFileSync(settings, 'utf8')).toContain(`${bin} hook Stop`);
+    expect(fs.readFileSync(settings, 'utf8')).not.toContain(managed.main);
+    expect(i.stderr).toContain('--this-copy: the hooks run this copy, not the managed copy');
+    const c = await oort(s, ['connect', 'cursor', '--this-copy', '--json']);
+    expect(c.exitCode, c.stderr).toBe(0);
+    expect((JSON.parse(c.stdout) as Env).data).toMatchObject({ command: bin, binary: 'running' });
+    expect(fs.readFileSync(cursor, 'utf8')).toContain(bin);
+    // `oort install <host> --this-copy` is `oort connect <host> --this-copy`.
+    fs.mkdirSync(path.join(s.home, '.codex'));
+    expect((await oort(s, ['install', 'codex', '--this-copy'])).exitCode).toBe(0);
+    expect(fs.readFileSync(path.join(s.home, '.codex', 'config.toml'), 'utf8')).toContain(bin);
+    // Without the flag, the managed copy again.
+    const back = await oort(s, ['install', 'claude-code', '--json']);
+    expect((JSON.parse(back.stdout) as Env).data).toMatchObject({
+      command: managed.main,
+      binary: 'managed',
+    });
+    // setup --this-copy: this build, nothing installed, and the envelope says so.
+    const st = await oort(s, [
+      'setup',
+      '--yes',
+      '--agents',
+      'claude-code',
+      '--keys',
+      'skip',
+      '--no-demo',
+      '--this-copy',
+      '--json',
+    ]);
+    expect(st.exitCode, st.stderr).toBe(0);
+    expect((JSON.parse(st.stdout) as Env).data).toMatchObject({
+      command: bin,
+      binary: 'running',
+      managed: { status: 'skipped', reason: 'this-copy', version: VERSION },
+    });
+    expect(fs.readFileSync(settings, 'utf8')).toContain(`${bin} hook Stop`);
+    expect(fs.existsSync(s.npmRan)).toBe(false);
+  });
+
   it('cli.mcp-stdio-serves-tools-scoped-to-the-start-directory', async () => {
     const s = sandbox();
     const repo = path.join(s.root, 'repo');

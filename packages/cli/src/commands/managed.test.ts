@@ -168,4 +168,39 @@ describe('the managed copy', () => {
     expect(npm.calls).toEqual([]);
     expect(fs.readFileSync(settings(h), 'utf8')).not.toContain(m.main);
   });
+
+  it('this-copy.from-a-transient-copy-still-refuses-and-installs-nothing', async () => {
+    const h = harness();
+    fs.mkdirSync(path.join(h.root, '.cursor'));
+    // A managed copy is there, and npm too: --this-copy uses neither.
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    const npm = fakeNpm();
+    const io = {
+      env: { HOME: h.root, OORT_HOME: h.home, PATH: npmTrap(h.root).dir },
+      entry: npxEntry(h),
+    };
+    for (const args of [
+      ['install', 'claude-code', '--this-copy'],
+      ['connect', 'cursor', '--this-copy'],
+      ['install', 'cursor', '--this-copy', '--json'],
+    ]) {
+      const r = await h.run(args, io, undefined, { updateDeps: npm.deps });
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(r.io.stderr + r.io.stdout).toContain(
+        'This oort is in a package cache, which agents would lose later, so --this-copy will not write it.',
+      );
+    }
+    expect(npm.calls).toEqual([]);
+    expect(fs.existsSync(settings(h))).toBe(false);
+    expect(fs.existsSync(path.join(h.root, '.cursor', 'mcp.json'))).toBe(false);
+  });
+
+  it('tests.never-reach-the-real-npm (test/no-real-npm.ts)', async () => {
+    // The guard's stand-in comes first on this process's PATH, so on any child's that copies it.
+    const guard = process.env['OORT_TEST_NPM_GUARD'];
+    expect(guard).toBeDefined();
+    const { onPath } = await import('./update.js');
+    expect(onPath('npm', process.env)[0]).toBe(path.join(guard!, 'npm'));
+    expect(onPath('npx', process.env)[0]).toBe(path.join(guard!, 'npx'));
+  });
 });

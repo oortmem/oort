@@ -64,8 +64,17 @@ current.
   back to the copy you ran if it stays put, with a one-line warning and the
   manual command. If the copy you ran does not stay put, setup skips
   connecting and says what to run.
-- **Windows:** the managed copy is not set up there yet; agents run the copy
-  you ran.
+- **Windows:** the managed copy is not set up there yet. `oort setup`,
+  `oort install` and `oort connect` skip it and write the copy you ran.
+- **`--this-copy`**, for developers testing their own build: `oort setup`,
+  `oort install <host>` and `oort connect <host>` write the copy you ran (a
+  build from a checkout, say) even when a managed copy is there, and install
+  nothing. A copy that does not stay put (a package cache, a temp directory,
+  `fnm_multishells`, a version manager) is still refused, because its path
+  breaks later whatever you intend: `This oort is in a package cache, which
+  agents would lose later, so --this-copy will not write it.` Run the command
+  again without the flag to go back to the managed copy. `oort doctor` does not
+  flag a copy written this way when it stays put and is this version or newer.
 
 ## Updating: `oort update`
 
@@ -461,6 +470,7 @@ oort setup --yes --agents claude-code,codex --keys byo --import skip
 | `--keys <mode>` | `byo`, `pro`, `local` or `skip`. | `byo` |
 | `--import <age>` | `skip`, or an age such as `14d`, `30d`, `12h` or `2w`. | `skip` |
 | `--no-demo` | Skip the remember, recall and forget check. | the check runs |
+| `--this-copy` | For developers testing their own build: agents run the copy you ran, not the [managed copy](#the-managed-copy-oortcli); nothing is installed. | the managed copy |
 
 On a terminal, a flag answers its question and the other steps still ask. When
 stdin or stdout is not a terminal and `--yes` is missing, setup prompts for
@@ -520,15 +530,18 @@ The steps:
    Under `npx oortmem setup` the copy you ran is in npx's cache, so without
    the managed copy setup skips connecting and says what to run. The npx path
    is never written, and neither is `npx -y oortmem`. With no agents chosen,
-   nothing is installed. `--install-global`, from before the managed copy, is
+   nothing is installed. On Windows the managed copy is skipped and agents run
+   the copy you ran. `--this-copy` skips it too (see the flags above).
+   `--install-global`, from before the managed copy, is
    still accepted and does nothing. An agent whose file Oort will not edit
    (invalid JSON, or an `oort` entry you wrote yourself) is reported and
    skipped, and the others still connect.
 
-   With `--json`, `data.command` is the path written (or `null`), and
-   `data.managed` is `{ "prefix", "status", "version", "command", "reason" }`.
+   With `--json`, `data.command` is the path written (or `null`),
+   `data.binary` is `managed`, `running` or `null`, and `data.managed` is `{ "prefix", "status", "version", "command", "reason" }`.
    `status` is `installed`, `reused`, `declined`, `failed`, `unavailable`
-   (`reason`: `no-npm` or `unsupported`) or `skipped` (no agents).
+   (`reason`: `no-npm` or `unsupported`) or `skipped` (no agents, or
+   `reason` `this-copy`).
    `failed` gives `reason` `failed` or `unverified`.
 4. **Import.** This step appears only when `~/.claude/projects` exists. It
    runs `oort import claude-code --since <age>`: it prints the estimate (the
@@ -561,6 +574,7 @@ changed, with each undo command, and exits 1.
 oort connect cursor codex
 oort connect cursor --star         # Cursor keeps its new memories in its own Star
 oort connect vscode --dry-run      # print the diff, write nothing
+oort connect cursor --this-copy    # for developers testing their own build: this copy, not ~/.oort/cli
 oort disconnect cursor
 ```
 
@@ -824,9 +838,9 @@ up the next time the host restarts it.
 ## Claude Code hooks: `oort install` / `oort uninstall`
 
 ```sh
-oort install claude-code [--project]
+oort install claude-code [--project] [--this-copy]
 oort uninstall claude-code [--project]
-oort install <harness>      # codex, cursor, claude-desktop, gemini or vscode
+oort install <harness> [--this-copy]   # codex, cursor, claude-desktop, gemini or vscode
 oort uninstall <harness>
 ```
 
@@ -853,7 +867,9 @@ When it cannot, it refuses (exit 2) and names `npm i -g --prefix ~/.oort/cli
 oortmem`, then `~/.oort/cli/bin/oort install claude-code`. A managed copy
 older than the copy you ran is left alone: the hooks run the copy you ran, and
 a line names `oort update`. `oort uninstall` needs no bin and never installs
-anything. The first change keeps a one-time backup at
+anything. `--this-copy`, for developers testing their own build, writes the
+copy you ran even when a managed copy is there (see [The managed
+copy](#the-managed-copy-oortcli)); `data.binary` is then `running`. The first change keeps a one-time backup at
 `settings.json.oort-backup`. Only exact Oort entries are touched: `<bin> hook
 <event>` for this bin, or an older one (a bare `oort` bin, or a package's
 `oort/dist/main.js` or `oortmem/dist/main.js`), which is replaced in place. A
@@ -1799,9 +1815,9 @@ Pro, with no key and a 3 second timeout.
 | Group | Checks | A problem and its fix |
 | --- | --- | --- |
 | `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. A role on a local model instead loads it and runs it once, offline. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort models pull (free local embed and rerank, no keys), oort keys set <provider>, or oort login (Oort Pro)`; for decide and write, which no local model does, the key or Oort Pro. Without a Keychain or `credentials.json`, the variable to set in your agent's environment instead. A model the relay does not serve: use the default model, or set the vendor key. |
-| `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, and the binary they run. Hooks that run another executable copy of this same version (the managed `~/.oort/cli`, while you run a copy from `PATH`) are fine: an info line names both. | Missing, or a command that is not executable: `oort install claude-code`. A hook binary whose `--version` differs from the oort you run is a warning naming both versions and the path: `oort update` (or `oort install claude-code` from the oort you want). When the oort you run lives somewhere temporary or under a Node version manager (the npx or pnpm dlx cache, a temp directory, `fnm_multishells`, `.nvm/`, `node-versions/`, `.volta/`, `.asdf/`), the fix never points the hooks at it: it names the managed copy instead, `~/.oort/cli/bin/oort install claude-code` (with `npm i -g --prefix ~/.oort/cli oortmem &&` first when there is none). Hooks that run a copy that does not stay put (under a version manager, in `fnm_multishells`, or in the npx or pnpm dlx cache) get an info line (`claude-code node`) naming the fix: with no managed copy, `oort setup, or npm i -g --prefix ~/.oort/cli oortmem and then oort install claude-code`; with one, `~/.oort/cli/bin/oort install claude-code`. Unparseable settings: fix the JSON, then the same fix. |
+| `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, and the binary they run. Hooks that run another executable copy of this same version (the managed `~/.oort/cli`, while you run a copy from `PATH`) are fine: an info line names both. | Missing, or a command that is not executable: `oort install claude-code`. A hook binary whose `--version` is older than the oort you run, or newer but somewhere that does not stay put, is a warning naming both versions and the path (a newer copy that stays put, such as your own build written with `--this-copy`, is fine): `oort update` (or `oort install claude-code` from the oort you want). When the oort you run lives somewhere temporary or under a Node version manager (the npx or pnpm dlx cache, a temp directory, `fnm_multishells`, `.nvm/`, `node-versions/`, `.volta/`, `.asdf/`), the fix never points the hooks at it: it names the managed copy instead, `~/.oort/cli/bin/oort install claude-code` (with `npm i -g --prefix ~/.oort/cli oortmem &&` first when there is none). Hooks that run a copy that does not stay put (under a version manager, in `fnm_multishells`, or in the npx or pnpm dlx cache) get an info line (`claude-code node`) naming the fix: with no managed copy, `oort setup, or npm i -g --prefix ~/.oort/cli oortmem and then oort install claude-code`; with one, `~/.oort/cli/bin/oort install claude-code`. Unparseable settings: fix the JSON, then the same fix. |
 | `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. Whether the hooks skip the daemon after a timeout or refusal, and until when. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
-| `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. Entries are judged against the binary `oort connect` would write now: the managed copy when it checks out, else the copy you ran. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
+| `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. Entries are judged against the binary `oort connect` would write now: the managed copy when it checks out, else the copy you ran. An entry `oort connect` wrote for another copy that stays put and is this version or newer (one written with `--this-copy`) is fine. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
 | `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
 | `updates` | From the [update check](#the-update-notice)'s file only (doctor makes no request for it): a newer release, or that this one is the latest. Shown to people only, never in `--json`, and not when the check is off. | A newer release (information): `oort update`. |

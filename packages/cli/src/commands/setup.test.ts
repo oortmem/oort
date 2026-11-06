@@ -773,6 +773,51 @@ describe('oort setup', () => {
       expect(npm.calls).toEqual([]);
     });
 
+    it('setup.this-copy-writes-this-copy-and-installs-nothing', async () => {
+      const { h, run } = setupHarness();
+      const npm = fakeNpm();
+      const m = agentsAndNpm(h);
+      npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+      const r = await run(
+        { ...flags, thisCopy: true },
+        {},
+        undefined,
+        undefined,
+        undefined,
+        {},
+        {
+          ...m,
+          updateDeps: npm.deps,
+        },
+      );
+      expect(r.code, r.io.stderr).toBe(0);
+      expect(npm.calls).toEqual([]);
+      expect(hooksText(h)).toContain(`${CMD} hook Stop`);
+      expect(codexText(h)).toContain(CMD);
+      expect(r.io.stdout).toContain(
+        `--this-copy: agents run this copy, ${CMD}, not the managed copy in ~/oort-home/cli.`,
+      );
+      // From a transient copy it is refused all the same: nothing connected, nothing installed.
+      const b = setupHarness();
+      const mb = agentsAndNpm(b.h);
+      const npmB = fakeNpm();
+      const t = await b.run(
+        { ...flags, thisCopy: true },
+        {},
+        undefined,
+        undefined,
+        undefined,
+        { unstable: () => 'a package cache', bin: () => '/x/_npx/1/oortmem/dist/main.js' },
+        { ...mb, updateDeps: npmB.deps },
+      );
+      expect(t.code).toBe(0);
+      expect(npmB.calls).toEqual([]);
+      expect(fs.existsSync(path.join(b.h.root, '.claude', 'settings.json'))).toBe(false);
+      expect(t.io.stdout).toContain(
+        'Skipped connecting: This oort is in a package cache, which agents would lose later, so --this-copy will not write it.',
+      );
+    });
+
     it('setup.install-global-is-accepted-and-changes-nothing', async () => {
       const h = harness();
       const r = await h.run([

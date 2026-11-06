@@ -142,7 +142,7 @@ export function settingsFile(project: boolean, ctx: Ctx): string {
 export async function installCommand(
   action: 'install' | 'uninstall',
   harness: string,
-  opts: { project?: boolean },
+  opts: { project?: boolean; thisCopy?: boolean },
   ctx: Ctx,
 ): Promise<number> {
   if (harness !== 'claude-code') {
@@ -155,7 +155,12 @@ export async function installCommand(
       );
     }
     const { connectCommand } = await import('./connect.js');
-    return connectCommand(action === 'install' ? 'connect' : 'disconnect', [harness], {}, ctx);
+    return connectCommand(
+      action === 'install' ? 'connect' : 'disconnect',
+      [harness],
+      opts.thisCopy === true ? { thisCopy: true } : {},
+      ctx,
+    );
   }
   const { agentBinary, managedCopy } = await import('./managed.js');
   const file = settingsFile(opts.project === true, ctx);
@@ -175,6 +180,7 @@ export async function installCommand(
     const bin = await agentBinary(ctx, {
       action: `install claude-code${opts.project === true ? ' --project' : ''}`,
       say: (line) => ctx.io.out(ui.info(line)),
+      thisCopy: opts.thisCopy === true,
     });
     cmd = bin.path;
     from = bin.from;
@@ -189,6 +195,11 @@ export async function installCommand(
     ctx.io.out(
       `${ui.info(`Hook binary: ${show(cmd)} (oort ${version}${from === 'managed' ? ', the managed copy: oort update keeps it current' : ''})`)}\n`,
     );
+    if (bin.passedOver !== undefined) {
+      ctx.io.out(
+        `${ui.info(`--this-copy: the hooks run this copy, not the managed copy in ${show(bin.passedOver.prefix)} (oort ${shown(bin.passedOver.version)}). \`oort install claude-code\` without it points them back.`)}\n`,
+      );
+    }
     if (bin.olderManaged !== undefined) {
       ctx.io.out(
         `${ui.info(`The managed copy (${show(bin.olderManaged.prefix)}) is oort ${shown(bin.olderManaged.version)}, older than this one, so the hooks run this copy; \`oort update\` brings both to the latest.`)}\n`,

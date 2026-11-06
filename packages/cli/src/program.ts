@@ -190,6 +190,10 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--no-demo', 'skip the remember, recall and forget check')
     // Before CON-114: `npm i -g oortmem` under npx. Setup now installs ~/.oort/cli itself.
     .addOption(new Option('--install-global').hideHelp())
+    .option(
+      '--this-copy',
+      'for developers testing their own build: write this copy, even when ~/.oort/cli is there',
+    )
     .option('--json', 'print oort.v1 JSON')
     .action(run((o: SetupOptions) => setupCommand(o, ctx)));
 
@@ -205,8 +209,16 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     )
     .argument('<harness>', 'claude-code, codex, cursor, claude-desktop, gemini or vscode')
     .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
+    .option(
+      '--this-copy',
+      'for developers testing their own build: write this copy, even when ~/.oort/cli is there',
+    )
     .option('--json', 'print oort.v1 JSON')
-    .action(run((h: string, o: { project?: boolean }) => installCommand('install', h, o, ctx)));
+    .action(
+      run((h: string, o: { project?: boolean; thisCopy?: boolean }) =>
+        installCommand('install', h, o, ctx),
+      ),
+    );
 
   p.command('uninstall')
     .description('remove the Claude Code hooks, or the MCP server from any other harness')
@@ -221,9 +233,13 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--dry-run', 'print the diff without writing')
     .option('--star', "keep this agent's new memories in its own Star (it still reads your Planet)")
     .option('--no-star', "write this agent's new memories to your Planet again (the default)")
+    .option(
+      '--this-copy',
+      'for developers testing their own build: write this copy, even when ~/.oort/cli is there',
+    )
     .option('--json', 'print oort.v1 JSON')
     .action(
-      run((hosts: string[], o: { dryRun?: boolean; star?: boolean }) =>
+      run((hosts: string[], o: { dryRun?: boolean; star?: boolean; thisCopy?: boolean }) =>
         connectCommand('connect', hosts, o, ctx),
       ),
     );
