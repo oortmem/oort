@@ -17,7 +17,7 @@ export const WRITER_SYSTEM_PROMPT = [
   '6. The stub is at most 35 tokens: a terse summary followed by entity keywords.',
   '7. Choose the memory type that fits best: semantic, episodic, procedural or preference.',
   '8. Never include secrets, credentials or [REDACTED:...] markers in the output; if the only content is a secret, describe that a credential was configured without its value.',
-  "9. Write the text, stub and entities in the language the user wrote in. If the user mixed languages, use the one most of the user's own words are in. Never translate. Keep code identifiers, ports, paths, versions and names exactly as written (rule 5) in any language. For UPDATE and SUPERSEDE, write the new claim in the current turn's language, even when the prior memory is in another.",
+  "9. Write the text, stub and entities in the language of the user's own words in this turn, not the language of material they pasted or quoted (code, logs, error messages, documents, other people's messages). If the user mixed languages, use the one most of the user's own words are in. Never translate. Keep code identifiers, ports, paths, versions and names exactly as written (rule 5) in any language. For UPDATE and SUPERSEDE, write the new claim in the current turn's language, decided the same way, even when the prior memory is in another.",
 ].join('\n');
 
 /**
