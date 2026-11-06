@@ -115,6 +115,12 @@ describe('scrub', () => {
     }
   });
 
+  it('scrub.a-bare-value-that-starts-with-a-bracket-is-redacted', () => {
+    const value = 'Tr0ub4dor' + '-and-3';
+    expect(scrub(`token=[${value}]`).text).not.toContain(value);
+    expect(scrub(`password: [${value}`).text).not.toContain(value);
+  });
+
   it('scrub.leaves-lookalikes', () => {
     const lines = fixture('lookalikes.txt');
     expect(lines.length).toBeGreaterThanOrEqual(20);
