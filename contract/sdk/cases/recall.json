@@ -1,0 +1,223 @@
+[
+  {
+    "id": "recall.finds-a-seeded-memory",
+    "transports": ["local", "cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "when do we deploy the billing service"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$some": {
+                "id": "11111111-0000-4000-8000-000000000001",
+                "text": "We deploy the billing service on Fridays.",
+                "type": "semantic",
+                "status": "current",
+                "pinned": false,
+                "score": {
+                  "$type": "number"
+                },
+                "why": {
+                  "coverage": {
+                    "$type": "number"
+                  }
+                }
+              }
+            },
+            "abstained": false,
+            "temporal": {
+              "mode": "current"
+            },
+            "read": {
+              "$type": "array"
+            },
+            "degraded": [],
+            "warnings": []
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "recall.limit-caps-the-results",
+    "transports": ["local", "cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "auth service port billing deploy",
+          "limit": 1
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$len": 1
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "recall.lexical-speed-is-not-degraded",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "billing service deploy",
+          "speed": "lexical"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$some": {
+                "id": "11111111-0000-4000-8000-000000000001"
+              }
+            },
+            "degraded": [],
+            "warnings": []
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "recall.without-models-is-lexical-only",
+    "transports": ["local"],
+    "seed": "basic",
+    "adapters": "none",
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "billing service deploy"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$some": {
+                "id": "11111111-0000-4000-8000-000000000001"
+              }
+            },
+            "warnings": {
+              "$some": {
+                "code": "lexical-only"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "recall.a-hive-level-is-cloud-only-locally",
+    "transports": ["local"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "anything",
+          "include": ["constellation"]
+        },
+        "expect": {
+          "error": {
+            "code": "cloud-only",
+            "reason": "hive-level",
+            "fix": "oort cloud use"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "recall.a-level-the-grant-lacks-is-refused",
+    "transports": ["local"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "anything",
+          "include": ["star"]
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "scope-denied"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "recall.cloud-scope-denied-is-refused",
+    "transports": ["cloud"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "anything",
+          "include": ["constellation"]
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "scope-denied",
+            "status": 400
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "recall.another-project-stays-hidden",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "mobile app ships weekly"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$none": {
+                "id": "eeeeeeee-0000-4000-8000-000000000001"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "project": "other"
+        },
+        "as": "other"
+      },
+      {
+        "call": "recall",
+        "on": "other",
+        "args": {
+          "query": "mobile app ships weekly"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$some": {
+                "id": "eeeeeeee-0000-4000-8000-000000000001"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+]

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import CONTRACT from './cloud-contract.json' with { type: 'json' };
+import CONTRACT from '../cloud-contract.json' with { type: 'json' };
 
 /**
  * An in-process Oort Cloud that follows `cloud-contract.json`: the routes, the request and response
@@ -26,6 +26,13 @@ export interface FakeCloud {
   failImportsAfter?: number;
   /** Forced status for every route (402, 403 cloud_not_enabled, 429, 503…). */
   refuse?: { status: number; code: string; message: string };
+  /**
+   * Forced failures per route (the SDK contract suite, CON-108 §10.2): `METHOD /path`, with
+   * `:id`-style segments matching any one segment. A number answers that status with the API's
+   * usual code for it; `network` drops the connection; `garbage` answers 200 with a body that is
+   * not JSON.
+   */
+  fail?: Record<string, number | 'network' | 'garbage' | { status: number; code: string }>;
   /** Never answers a recall (for hook timeouts). */
   hangRecall?: boolean;
   /** What a recall reports in `degraded` (a server-side stage that was skipped). */
@@ -153,6 +160,40 @@ function findings(text: string): { kind: string; start: number; end: number }[] 
 const err = (status: number, code: string, message: string): Response =>
   Response.json({ error: { code, message } }, { status });
 
+/** The API's usual error code for a status, for a forced failure given as a number. */
+const STATUS_CODE: Record<number, string> = {
+  400: 'bad_request',
+  401: 'unauthorized',
+  402: 'payment_required',
+  403: 'cloud_not_enabled',
+  404: 'not_found',
+  409: 'ambiguous',
+  413: 'too_large',
+  429: 'rate_limit',
+  500: 'internal',
+  503: 'busy',
+};
+
+/** The forced failure for one request, if `fail` names its route. */
+function forcedFailure(
+  fail: FakeCloud['fail'],
+  method: string,
+  pathname: string,
+): Response | undefined {
+  if (fail === undefined) return undefined;
+  for (const [route, what] of Object.entries(fail)) {
+    const [m = '', p = ''] = route.split(' ');
+    const re = new RegExp(`^${p.replace(/:[a-zA-Z]+/g, '[^/]+')}$`);
+    if (m !== method || !re.test(pathname)) continue;
+    if (what === 'network') throw new TypeError('fetch failed');
+    if (what === 'garbage') return new Response('<html>not json</html>', { status: 200 });
+    const { status, code } =
+      typeof what === 'number' ? { status: what, code: STATUS_CODE[what] ?? 'error' } : what;
+    return err(status, code, `forced ${status}`);
+  }
+  return undefined;
+}
+
 export function fakeMemory(over: Partial<FakeMemory> & { id?: string } = {}): FakeMemory {
   const iso = '2026-10-01T00:00:00.000Z';
   return {
@@ -224,6 +265,8 @@ export function fakeCloud(key: string): FakeCloud {
         return err(401, 'unauthorized', 'unknown key');
       }
       if (c.refuse !== undefined) return err(c.refuse.status, c.refuse.code, c.refuse.message);
+      const forced = forcedFailure(c.fail, req.method, url.pathname);
+      if (forced !== undefined) return forced;
       const p = url.pathname;
       const byName = (ref: string) =>
         [...c.hive.constellations.values()].find((x) => x.id === ref || x.name === ref);

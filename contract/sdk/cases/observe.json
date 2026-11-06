@@ -1,0 +1,163 @@
+[
+  {
+    "id": "observe.adds-a-memory",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "observe",
+        "args": { "user": "Our staging database runs on port 6543.", "assistant": "Noted." },
+        "expect": {
+          "result": {
+            "outcome": "added",
+            "memories": [{ "outcome": "added", "id": { "$type": "string" } }],
+            "counts": { "added": 1 },
+            "warnings": []
+          }
+        },
+        "save": { "id": "$.memories[0].id" }
+      },
+      {
+        "call": "explain",
+        "args": { "id": "${id}" },
+        "expect": { "result": { "memory": { "id": "${id}", "status": "current" } } }
+      }
+    ]
+  },
+  {
+    "id": "observe.small-talk-is-skipped",
+    "transports": ["local"],
+    "steps": [
+      {
+        "call": "observe",
+        "args": { "user": "hello there", "assistant": "Hi!" },
+        "expect": { "result": { "outcome": "skipped" } }
+      }
+    ]
+  },
+  {
+    "id": "observe.tool-summaries-are-truncated-never-refused",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "observe",
+        "args": {
+          "user": "The nightly job rebuilds the search index.",
+          "assistant": "Noted.",
+          "tools": [
+            "${repeat:1000:a}",
+            "${repeat:1000:b}",
+            "${repeat:1000:c}",
+            "${repeat:1000:d}",
+            "${repeat:1000:e}",
+            "${repeat:1000:f}",
+            "${repeat:1000:g}",
+            "${repeat:1000:h}",
+            "${repeat:1000:i}",
+            "${repeat:1000:j}",
+            "${repeat:1000:k}",
+            "${repeat:1000:l}",
+            "${repeat:1000:m}",
+            "${repeat:1000:n}",
+            "${repeat:1000:o}",
+            "${repeat:1000:p}",
+            "${repeat:1000:q}",
+            "${repeat:1000:r}",
+            "${repeat:1000:s}",
+            "${repeat:1000:t}"
+          ],
+          "at": "2026-11-06T11:00:00.000Z",
+          "sessionId": "s-1"
+        },
+        "expect": { "result": { "outcome": "added" } }
+      }
+    ]
+  },
+  {
+    "id": "observe.turn-ref-is-deduplicated-by-the-cloud",
+    "transports": ["cloud"],
+    "steps": [
+      {
+        "call": "observe",
+        "args": {
+          "user": "The cache TTL is 300 seconds.",
+          "assistant": "Noted.",
+          "turnRef": "t-1"
+        },
+        "expect": { "result": { "outcome": "added", "duplicate": { "$absent": true } } }
+      },
+      {
+        "call": "observe",
+        "args": {
+          "user": "The cache TTL is 300 seconds.",
+          "assistant": "Noted.",
+          "turnRef": "t-1"
+        },
+        "expect": { "result": { "duplicate": true } }
+      }
+    ]
+  },
+  {
+    "id": "observe.place-is-refused-until-spatial-memory",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "observe",
+        "args": {
+          "user": "The wrench is on shelf B3.",
+          "assistant": "Noted.",
+          "place": { "nodeId": "shelf:B3" }
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "invalid-argument",
+            "message": { "$regex": "place" }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "observe.a-turn-over-128-kib-is-refused",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "observe",
+        "args": { "user": "${repeat:131073:x}", "assistant": "ok" },
+        "expect": { "error": { "code": "usage", "reason": "invalid-argument" } }
+      }
+    ]
+  },
+  {
+    "id": "observe.turn-ref-is-at-most-128-characters",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "observe",
+        "args": { "user": "a", "assistant": "b", "turnRef": "${repeat:129:r}" },
+        "expect": { "error": { "code": "usage", "reason": "invalid-argument" } }
+      }
+    ]
+  },
+  {
+    "id": "observe.without-a-model-needs-a-key",
+    "transports": ["local"],
+    "adapters": "none",
+    "steps": [
+      {
+        "call": "observe",
+        "args": { "user": "Deploys need two approvals.", "assistant": "Noted." },
+        "expect": {
+          "error": {
+            "name": "OortNeedsKeyError",
+            "code": "needs-key",
+            "reason": "missing-key",
+            "role": "embed",
+            "envVar": "VOYAGE_API_KEY",
+            "fix": "oort models pull"
+          }
+        }
+      }
+    ]
+  }
+]

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { addressed, localGrant, localScope, readAgents, setAgentStar } from '@oortmem/core';
 import { nodesGrant } from '@oortmem/core/store-conformance';
 import { cloudBackend } from './mcp.js';
-import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
+import { fakeCloud, fakeMemory, type FakeCloud } from '../test/helpers/fake-cloud.js';
 import {
   PIPED_YES,
   expectAsked,

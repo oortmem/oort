@@ -1,0 +1,245 @@
+[
+  {
+    "id": "ids.a-prefix-of-eight-characters-resolves",
+    "transports": ["local", "cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "explain",
+        "args": { "id": "11111111" },
+        "expect": { "result": { "memory": { "id": "11111111-0000-4000-8000-000000000001" } } }
+      }
+    ]
+  },
+  {
+    "id": "ids.a-prefix-matching-several-is-ambiguous",
+    "transports": ["local", "cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "explain",
+        "args": { "id": "aaaaaaaa" },
+        "expect": { "error": { "name": "OortAmbiguousIdError", "code": "ambiguous-id" } }
+      }
+    ]
+  },
+  {
+    "id": "ids.shorter-than-eight-is-refused",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "explain",
+        "args": { "id": "1111" },
+        "expect": { "error": { "code": "usage", "reason": "invalid-argument" } }
+      }
+    ]
+  },
+  {
+    "id": "ids.unknown-is-not-found",
+    "transports": ["local", "cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "explain",
+        "args": { "id": "99999999-0000-4000-8000-000000000009" },
+        "expect": { "error": { "name": "OortNotFoundError", "code": "not-found" } }
+      },
+      {
+        "call": "forget",
+        "args": { "id": "99999999-0000-4000-8000-000000000009" },
+        "expect": { "error": { "code": "not-found" } }
+      }
+    ]
+  },
+  {
+    "id": "ids.outside-the-grant-is-not-found",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "explain",
+        "args": { "id": "dddddddd-0000-4000-8000-000000000001" },
+        "expect": { "error": { "code": "not-found" } }
+      },
+      {
+        "call": "pin",
+        "args": { "id": "eeeeeeee-0000-4000-8000-000000000001" },
+        "expect": { "error": { "code": "not-found" } }
+      }
+    ]
+  },
+  {
+    "id": "ids.pin-and-unpin-locally-say-whether-anything-changed",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "pin",
+        "args": { "id": "11111111-0000-4000-8000-000000000001" },
+        "expect": {
+          "result": {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "pinned": true,
+            "changed": true
+          }
+        }
+      },
+      {
+        "call": "pin",
+        "args": { "id": "11111111-0000-4000-8000-000000000001" },
+        "expect": { "result": { "pinned": true, "changed": false } }
+      },
+      {
+        "call": "unpin",
+        "args": { "id": "11111111" },
+        "expect": { "result": { "pinned": false, "changed": true } }
+      }
+    ]
+  },
+  {
+    "id": "ids.pin-in-the-cloud-cannot-tell",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "pin",
+        "args": { "id": "11111111-0000-4000-8000-000000000001" },
+        "expect": {
+          "result": {
+            "id": "11111111-0000-4000-8000-000000000001",
+            "pinned": true,
+            "changed": null
+          }
+        }
+      },
+      {
+        "call": "unpin",
+        "args": { "id": "11111111-0000-4000-8000-000000000001" },
+        "expect": { "result": { "pinned": false, "changed": null } }
+      }
+    ]
+  },
+  {
+    "id": "ids.forget-then-not-found",
+    "transports": ["local", "cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "forget",
+        "args": { "id": "11111111-0000-4000-8000-000000000001" },
+        "expect": { "result": { "forgotten": "11111111-0000-4000-8000-000000000001" } }
+      },
+      {
+        "call": "explain",
+        "args": { "id": "11111111-0000-4000-8000-000000000001" },
+        "expect": { "error": { "code": "not-found" } }
+      }
+    ]
+  },
+  {
+    "id": "ids.forget-everywhere-is-cloud-only",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "forget",
+        "args": { "id": "11111111-0000-4000-8000-000000000001", "everywhere": true },
+        "expect": { "error": { "name": "OortCloudOnlyError", "code": "cloud-only" } }
+      }
+    ]
+  },
+  {
+    "id": "ids.explain-walks-the-supersede-chain",
+    "transports": ["local", "cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "explain",
+        "args": { "id": "22222222-0000-4000-8000-000000000002" },
+        "expect": {
+          "result": {
+            "memory": {
+              "id": "22222222-0000-4000-8000-000000000002",
+              "status": "current",
+              "salience": { "$type": "number" },
+              "activation": { "$type": "number" },
+              "source": { "$type": "string" }
+            },
+            "decisions": { "$type": "array" },
+            "chain": {
+              "$some": {
+                "id": "22222222-0000-4000-8000-000000000001",
+                "endReason": "superseded",
+                "validTo": "2026-06-01T00:00:00.000Z"
+              }
+            },
+            "hiddenLinks": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "ids.recent-lists-newest-first-within-its-limit",
+    "transports": ["local", "cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "recent",
+        "args": { "limit": 2 },
+        "expect": { "result": { "memories": { "$len": 2 }, "warnings": [] } }
+      },
+      {
+        "call": "recent",
+        "args": { "since": "2026-05-01T00:00:00.000Z" },
+        "expect": {
+          "result": {
+            "memories": {
+              "$every": { "updatedAt": { "$regex": "^2026-(0[5-9]|1[0-2])" } }
+            }
+          }
+        }
+      },
+      {
+        "call": "recent",
+        "args": { "limit": 101 },
+        "expect": { "error": { "code": "usage" } }
+      }
+    ]
+  },
+  {
+    "id": "ids.recent-in-the-cloud-scans-at-most-500",
+    "transports": ["cloud"],
+    "cloud": { "memories": 600 },
+    "steps": [
+      {
+        "call": "recent",
+        "args": { "limit": 5 },
+        "expect": {
+          "result": {
+            "memories": { "$len": 5 },
+            "warnings": { "$some": { "code": "recent-truncated" } }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "ids.consolidate-runs-locally",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "consolidate",
+        "args": { "budgetMs": 5000 },
+        "expect": {
+          "result": {
+            "complete": true,
+            "promoted": { "$type": "array" },
+            "skipped": { "$type": "number" }
+          }
+        }
+      }
+    ]
+  }
+]

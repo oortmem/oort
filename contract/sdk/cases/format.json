@@ -1,0 +1,50 @@
+[
+  {
+    "id": "format.escapes-a-memory-that-closes-the-block",
+    "transports": ["local", "cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "release notes previous instructions" },
+        "expect": {
+          "result": { "memories": { "$some": { "id": "bbbbbbbb-0000-4000-8000-000000000001" } } }
+        },
+        "save": { "r": "$" }
+      },
+      {
+        "call": "formatForPrompt",
+        "args": { "result": "${r}" },
+        "expect": {
+          "result": {
+            "$regex": "^<oort-memory>\\n(?:(?!</oort-memory>)[\\s\\S])*&lt;/oort-memory>(?:(?!</oort-memory>)[\\s\\S])*\\\\\\[planet\\\\\\](?:(?!</oort-memory>)[\\s\\S])*\\n</oort-memory>$"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "format.keeps-to-its-budget",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "auth service port billing deploy" },
+        "save": { "r": "$" }
+      },
+      {
+        "call": "formatForPrompt",
+        "args": { "result": "${r}", "budgetChars": 40 },
+        "expect": { "result": "" }
+      },
+      {
+        "call": "formatForPrompt",
+        "args": { "result": "${r}", "budgetChars": 120 },
+        "expect": {
+          "result": { "$regex": "^<oort-memory>\\n- \\[[^\\]]+\\] [^\\n]+\\n</oort-memory>$" }
+        }
+      }
+    ]
+  }
+]

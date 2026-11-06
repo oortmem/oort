@@ -172,7 +172,10 @@ export function formatForPrompt(r: RecallResult, opts: { budgetChars?: number } 
     const ids = new Map(r.memories.map((m, i) => [m.id, i]));
     const memories = known.core.memories
       .filter((m) => ids.has(m.id))
-      .sort((a, b) => ids.get(a.id)! - ids.get(b.id)!);
+      .sort((a, b) => ids.get(a.id)! - ids.get(b.id)!)
+      // Scrubbed before the block escapes it: an escape inside a secret would hide it from the
+      // block's own scrub (an Oort Cloud memory arrives as the cloud stored it).
+      .map((m) => ({ ...m, text: clean(m.text) }));
     return formatForInjection({ ...known.core, memories }, budget, known.now);
   }
   // A result rebuilt elsewhere (deserialised, copied): rendered from its documented fields.

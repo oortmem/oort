@@ -1,0 +1,68 @@
+[
+  {
+    "id": "limits.query",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "${repeat:2049:q}" },
+        "expect": { "error": { "code": "usage", "reason": "invalid-argument" } }
+      },
+      {
+        "call": "recall",
+        "args": { "query": "${repeat:2048:q}" },
+        "expect": { "result": { "memories": { "$type": "array" } } }
+      },
+      {
+        "call": "recall",
+        "args": { "query": "   " },
+        "expect": { "error": { "code": "usage" } }
+      }
+    ]
+  },
+  {
+    "id": "limits.recall-limit-is-1-to-50",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "q", "limit": 0 },
+        "expect": { "error": { "code": "usage" } }
+      },
+      {
+        "call": "recall",
+        "args": { "query": "q", "limit": 51 },
+        "expect": { "error": { "code": "usage" } }
+      },
+      {
+        "call": "recall",
+        "args": { "query": "q", "limit": 50 },
+        "expect": { "result": { "memories": { "$type": "array" } } }
+      }
+    ]
+  },
+  {
+    "id": "limits.recent-limit-is-1-to-100",
+    "transports": ["local", "cloud"],
+    "steps": [
+      { "call": "recent", "args": { "limit": 0 }, "expect": { "error": { "code": "usage" } } },
+      { "call": "recent", "args": { "limit": 100 }, "expect": { "result": { "memories": [] } } }
+    ]
+  },
+  {
+    "id": "limits.unknown-recall-options-are-refused",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "q", "near": { "radius": 2 } },
+        "expect": { "error": { "code": "usage", "message": { "$regex": "near" } } }
+      },
+      {
+        "call": "recall",
+        "args": { "query": "q", "include": [] },
+        "expect": { "error": { "code": "usage" } }
+      }
+    ]
+  }
+]

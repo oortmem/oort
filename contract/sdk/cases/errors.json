@@ -1,0 +1,503 @@
+[
+  {
+    "id": "errors.cloud-401-is-needs-login",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/recall": 401
+      }
+    },
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "billing deploy"
+        },
+        "expect": {
+          "error": {
+            "name": "OortNeedsLoginError",
+            "code": "needs-login",
+            "reason": "key-rejected",
+            "fix": "oort login",
+            "status": 401,
+            "retryable": false
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-402-is-refused",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/observe": 402
+      }
+    },
+    "steps": [
+      {
+        "call": "observe",
+        "args": {
+          "user": "a",
+          "assistant": "b"
+        },
+        "expect": {
+          "error": {
+            "name": "OortRefusedError",
+            "code": "refused",
+            "reason": "payment-required",
+            "status": 402
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-403-not-enabled",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/recall": {
+          "status": 403,
+          "code": "cloud_not_enabled"
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "billing deploy"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "not-enabled",
+            "status": 403
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-403-hive-not-enabled",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/recall": {
+          "status": 403,
+          "code": "hive_not_enabled"
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "billing deploy"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "hive-not-enabled"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-403-other-explains-itself",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "DELETE /v1/memories/:id": {
+          "status": 403,
+          "code": "role_required"
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "forget",
+        "args": {
+          "id": "11111111-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "forbidden"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-429-is-refused",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/recall": 429
+      }
+    },
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "billing deploy"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "rate-limit",
+            "status": 429,
+            "retryable": false
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-413-is-usage",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/observe": 413
+      }
+    },
+    "steps": [
+      {
+        "call": "observe",
+        "args": {
+          "user": "a",
+          "assistant": "b"
+        },
+        "expect": {
+          "error": {
+            "name": "OortUsageError",
+            "code": "usage",
+            "reason": "too-large"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-400-is-usage",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/observe": 400
+      }
+    },
+    "steps": [
+      {
+        "call": "remember",
+        "args": {
+          "facts": ["x"]
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-request"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-404-is-not-found",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "GET /v1/memories/:id": 404
+      }
+    },
+    "steps": [
+      {
+        "call": "explain",
+        "args": {
+          "id": "11111111-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found",
+            "status": 404
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-409-ambiguous",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "GET /v1/memories/:id": 409
+      }
+    },
+    "steps": [
+      {
+        "call": "pin",
+        "args": {
+          "id": "11111111"
+        },
+        "expect": {
+          "error": {
+            "code": "ambiguous-id",
+            "status": 409
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-409-preview-required-needs-confirmation",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/observe": {
+          "status": 409,
+          "code": "preview_required"
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "observe",
+        "args": {
+          "user": "a",
+          "assistant": "b"
+        },
+        "expect": {
+          "error": {
+            "name": "OortNeedsConfirmationError",
+            "code": "needs-confirmation",
+            "reason": "preview-required",
+            "status": 409
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-409-findings-unacknowledged",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/observe": {
+          "status": 409,
+          "code": "findings_unacknowledged"
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "observe",
+        "args": {
+          "user": "a",
+          "assistant": "b"
+        },
+        "expect": {
+          "error": {
+            "code": "needs-confirmation",
+            "reason": "findings-unacknowledged"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-5xx-is-network-retryable",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/recall": 503
+      }
+    },
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "billing deploy"
+        },
+        "expect": {
+          "error": {
+            "name": "OortNetworkError",
+            "code": "network",
+            "reason": "busy",
+            "status": 503,
+            "retryable": true
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-500-is-network",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "GET /v1/whoami": 500
+      }
+    },
+    "steps": [
+      {
+        "call": "whoami",
+        "args": {},
+        "expect": {
+          "error": {
+            "code": "network",
+            "reason": "busy",
+            "retryable": true
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.connection-dropped-is-network",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/recall": "network"
+      }
+    },
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "billing deploy"
+        },
+        "expect": {
+          "error": {
+            "code": "network",
+            "reason": "unreachable",
+            "retryable": true
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.a-garbled-answer-is-internal",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/recall": "garbage"
+      }
+    },
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "billing deploy"
+        },
+        "expect": {
+          "error": {
+            "name": "OortInternalError",
+            "code": "internal",
+            "retryable": false
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.recent-forced-429",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "GET /v1/memories": 429
+      }
+    },
+    "steps": [
+      {
+        "call": "recent",
+        "args": {},
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "rate-limit"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.unpin-forced-402",
+    "transports": ["cloud"],
+    "seed": "basic",
+    "cloud": {
+      "fail": {
+        "POST /v1/memories/:id/unpin": 402
+      }
+    },
+    "steps": [
+      {
+        "call": "unpin",
+        "args": {
+          "id": "11111111-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "payment-required"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "errors.cloud-without-a-key-needs-login",
+    "transports": ["cloud"],
+    "cloud": {
+      "noKey": true
+    },
+    "expectCreate": {
+      "error": {
+        "code": "needs-login",
+        "reason": "no-key",
+        "fix": "oort login"
+      }
+    },
+    "steps": []
+  },
+  {
+    "id": "errors.local-errors-name-no-values",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "x",
+          "limit": 51
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "message": {
+              "$regex": "limit"
+            }
+          }
+        }
+      }
+    ]
+  }
+]

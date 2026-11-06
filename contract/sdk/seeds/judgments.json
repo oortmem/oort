@@ -1,0 +1,34 @@
+{
+  "memories": [],
+  "judgments": [
+    {
+      "subject": "Post claims a miracle cure for cancer",
+      "verdict": "rejected",
+      "reason": "Medical claim with no source.",
+      "domain": "content",
+      "by": "ada"
+    },
+    {
+      "subject": "Post claims a herbal cure for cancer",
+      "verdict": "rejected",
+      "reason": "Unsourced medical claim.",
+      "domain": "content",
+      "by": "ada"
+    },
+    {
+      "subject": "Post claims a secret cure for cancer",
+      "verdict": "rejected",
+      "reason": "Medical misinformation.",
+      "domain": "content",
+      "by": "ada"
+    },
+    {
+      "subject": "Post claims a miracle cure for cancer works",
+      "verdict": "approved",
+      "reason": "Recorded by an agent; nobody confirmed it.",
+      "domain": "content",
+      "by": "ada",
+      "via": "mcp"
+    }
+  ]
+}
