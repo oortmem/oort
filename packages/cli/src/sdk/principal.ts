@@ -56,6 +56,22 @@ export function checkUser(user: string | undefined, org: string | undefined): vo
   }
 }
 
+/**
+ * A `user` key that is present must name a user: `undefined`, `null` or an empty string is a
+ * dropped id (`req.user?.id` with no user), never a fallback to the operator's own principal.
+ * Only an options object without the key at all acts as the person.
+ */
+export function requireUserIfNamed(input: unknown): void {
+  if (input === null || typeof input !== 'object' || !('user' in input)) return;
+  const u = (input as { user?: unknown }).user;
+  if (typeof u !== 'string' || u.trim() === '') {
+    throw new OortUsageError(
+      'user was given but is empty: a missing end-user id never falls back to the operator. Leave the user key out to act as the person.',
+      { reason: 'user-missing' },
+    );
+  }
+}
+
 /** An agent configured as a Star keeps one Star per org, shared by every user: refused with `user`. */
 export function refuseStarWithUser(agent: WiredAgent, user: string | null): void {
   if (user !== null && agent.home === 'star') {

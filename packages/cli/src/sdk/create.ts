@@ -10,6 +10,7 @@ import {
   agentFor,
   agentName,
   checkUser,
+  requireUserIfNamed,
   principalOf,
   projectIdFor,
   refuseStarWithUser,
@@ -231,6 +232,7 @@ class OortHandle implements Oort {
       throw new OortUsageError('This Oort handle is closed.', { reason: 'closed' });
     }
     try {
+      requireUserIfNamed(s);
       const o = check(ScopedSchema, s, 'scoped options');
       const { ctx, org } = this.#s;
       const engine = this.#root.engine;
@@ -321,6 +323,7 @@ export async function createOort(options: OortOptions = {}): Promise<Oort> {
 export async function createOortWith(options: OortOptions, internals: Internals): Promise<Oort> {
   let engine: Engine | undefined;
   try {
+    requireUserIfNamed(options);
     const o = check(OptionsSchema, options, 'options') as OortOptions;
     if (o.config !== undefined && 'serve' in o.config) {
       throw new OortUsageError('config.serve cannot be set from code (the home config only).', {

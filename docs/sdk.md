@@ -203,8 +203,11 @@ const mem = oort.scoped({ user: req.user.id, agent: 'support-bot' });
   `refused`, and an agent configured as a Star together with `user` is refused (`star-with-user`).
   Per-user agent memory comes with CON-92.
 - **`user` needs an explicit `org` other than `local`**, and `scoped({ user: 'self' })` is refused
-  (`self-not-derivable`), so a server bug that drops the user id fails loudly instead of reading
-  the person's own memories.
+  (`self-not-derivable`).
+- **A dropped user id fails loudly.** When the `user` key is present, it must hold a user id:
+  `scoped({ user: req.user?.id })` with no user (`undefined`, `null` or an empty string) throws
+  `OortUsageError` (`user-missing`). Only an options object without a `user` key at all acts as
+  the person, so a server bug can never fall back to the tenant's own Planet and the agent's Star.
 - `include` only narrows: a Constellation or Galaxy in local mode is `cloud-only` (`hive-level`),
   any other level the scope lacks is `refused` (`scope-denied`).
 - `agent` and `user` are configuration, not authentication. Every process running as the same OS
@@ -228,7 +231,7 @@ own error is reported by its class name only.
 
 | Class                          | `code`               | Typical `reason`                                                                    |
 | ------------------------------ | -------------------- | ----------------------------------------------------------------------------------- |
-| `OortUsageError`               | `usage`              | `invalid-argument`, `principal-required`, `self-not-derivable`, `closed`, `embedder-mismatch` (fix `oort reembed`), `bad-request`, `too-large` |
+| `OortUsageError`               | `usage`              | `invalid-argument`, `principal-required`, `self-not-derivable`, `user-missing`, `closed`, `embedder-mismatch` (fix `oort reembed`), `bad-request`, `too-large` |
 | `OortNotFoundError`            | `not-found`          |                                                                                     |
 | `OortAmbiguousIdError`         | `ambiguous-id`       |                                                                                     |
 | `OortNeedsKeyError`            | `needs-key`          | `missing-key`, with `role` and `envVar` (fix `oort models pull` or `oort keys set <vendor>`) |
