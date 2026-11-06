@@ -444,16 +444,208 @@ class DaemonTrustAndAutostart(unittest.TestCase):
             f.write("#!/usr/bin/env python3\nfrom oortmem.cli import main\nmain()\n")
         os.chmod(launcher, 0o755)
         env = {**self.box.env, "PATH": bin_dir}
-        self.assertIsNone(find_oort(self.box.home, env))  # only the launcher, and no npx
+        sandbox = {"temp": [], "trust_from": self.box.tmp}  # the sandbox sits in /tmp
+        find = lambda: find_oort(self.box.home, env, **sandbox)  # noqa: E731
+        self.assertIsNone(find())  # only the launcher, and no npx
         managed = os.path.join(self.box.home, "cli", "bin", "oort")
         os.makedirs(os.path.dirname(managed))
         with open(managed, "w") as f:
             f.write(f"#!/bin/sh\necho {__version__}\n")
         os.chmod(managed, 0o755)
-        self.assertEqual(find_oort(self.box.home, env), [managed])
+        self.assertEqual(find(), [os.path.realpath(managed)])
         with open(managed, "w") as f:
             f.write("#!/bin/sh\necho 0.1.0\n")
-        self.assertIsNone(find_oort(self.box.home, env))
+        self.assertIsNone(find())
+
+    def _fake_oort(self, directory: str, version: str, mode: int = 0o755) -> str:
+        """An `oort` that says its version and records that it ran, and with what environment."""
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, "oort")
+        with open(path, "w") as f:
+            f.write(f"#!/bin/sh\nenv > {os.path.join(directory, 'ran.txt')}\necho {version}\n")
+        os.chmod(path, mode)
+        return path
+
+    def _sandboxed(self, **over: Any) -> Dict[str, Any]:
+        return {"temp": [], "trust_from": self.box.tmp, **over}  # the sandbox sits in /tmp
+
+    def test_a_relative_path_entry_is_never_executed(self) -> None:
+        from oortmem import __version__
+        from oortmem._daemon import find_oort
+
+        here = os.path.join(self.box.tmp, "work")
+        self._fake_oort(here, __version__)
+        self._fake_oort(os.path.join(here, "bin"), __version__)
+        ran = [os.path.join(here, "ran.txt"), os.path.join(here, "bin", "ran.txt")]
+        old = os.getcwd()
+        os.chdir(here)
+        try:
+            for entry in (".", "bin", "./bin", "", ":", "../work"):
+                env = {**self.box.env, "PATH": entry}
+                self.assertIsNone(find_oort(self.box.home, env, **self._sandboxed()), entry)
+        finally:
+            os.chdir(old)
+        self.assertEqual([os.path.exists(r) for r in ran], [False, False])  # not even for --version
+
+    def test_a_group_or_other_writable_candidate_is_skipped_unrun(self) -> None:
+        from oortmem import __version__
+        from oortmem._daemon import find_oort
+
+        cases = {"file-other": (0o757, 0o755), "file-group": (0o775, 0o755), "dir-other": (0o755, 0o757), "dir-group": (0o755, 0o775)}
+        for name, (fmode, dmode) in cases.items():
+            with self.subTest(name):
+                d = os.path.join(self.box.tmp, name)
+                self._fake_oort(d, __version__, fmode)
+                os.chmod(d, dmode)
+                env = {**self.box.env, "PATH": d}
+                try:
+                    self.assertIsNone(find_oort(self.box.home, env, **self._sandboxed()))
+                    self.assertFalse(os.path.exists(os.path.join(d, "ran.txt")))
+                finally:
+                    os.chmod(d, 0o755)
+        d = os.path.join(self.box.tmp, "fine")
+        p = self._fake_oort(d, __version__)
+        env = {**self.box.env, "PATH": d}
+        self.assertEqual(find_oort(self.box.home, env, **self._sandboxed()), [os.path.realpath(p)])
+
+    def test_the_managed_copy_is_strict_and_a_path_copy_may_use_a_root_group(self) -> None:
+        from oortmem import __version__
+        from oortmem._daemon import find_oort
+
+        managed = self._fake_oort(os.path.join(self.box.home, "cli", "bin"), __version__, 0o775)
+        env = {**self.box.env, "PATH": "/nonexistent"}
+        self.assertIsNone(find_oort(self.box.home, env, **self._sandboxed(group_ok=lambda gid: True)))  # no group write at all
+        os.chmod(managed, 0o755)
+        self.assertEqual(find_oort(self.box.home, env, **self._sandboxed()), [os.path.realpath(managed)])
+        # A PATH copy outside HOME may be group-writable by a group that can become root.
+        outside = os.path.join(self.box.tmp, "elsewhere")
+        p = self._fake_oort(outside, __version__, 0o775)
+        env = {**self.box.env, "PATH": outside, "HOME": os.path.join(self.box.tmp, "not-home")}
+        os.remove(managed)
+        self.assertEqual(find_oort(self.box.home, env, **self._sandboxed(group_ok=lambda gid: True)), [os.path.realpath(p)])
+        self.assertIsNone(find_oort(self.box.home, env, **self._sandboxed(group_ok=lambda gid: False)))
+
+    def test_a_candidate_in_a_temp_dir_is_skipped(self) -> None:
+        from oortmem import __version__
+        from oortmem._daemon import find_oort
+
+        d = os.path.join(self.box.tmp, "tmpbin")
+        self._fake_oort(d, __version__)
+        env = {**self.box.env, "PATH": d}
+        self.assertIsNone(find_oort(self.box.home, env, temp=[os.path.realpath(self.box.tmp)], trust_from=self.box.tmp))
+        self.assertFalse(os.path.exists(os.path.join(d, "ran.txt")))
+
+    def test_the_version_probe_sees_no_keys(self) -> None:
+        from oortmem import __version__
+        from oortmem._daemon import find_oort
+
+        d = os.path.join(self.box.tmp, "probe")
+        p = self._fake_oort(d, __version__)
+        secrets = {"VOYAGE_API_KEY": "pa-x", "ANTHROPIC_API_KEY": "sk-x", "OORT_API_KEY": "k", "OORT_SERVE_TOKEN": "t", "AWS_SECRET_ACCESS_KEY": "a", "MY_DB_PASSWORD": "h"}
+        env = {**self.box.env, **secrets, "PATH": f"relative:{d}:/usr/bin:/bin", "LANG": "C", "HTTPS_PROXY": "http://127.0.0.1:9", "TMPDIR": "/x"}
+        self.assertEqual(find_oort(self.box.home, env, **self._sandboxed()), [os.path.realpath(p)])
+        with open(os.path.join(d, "ran.txt")) as f:
+            seen = dict(line.split("=", 1) for line in f.read().splitlines() if "=" in line)
+        for k in secrets:
+            self.assertNotIn(k, seen)
+        self.assertNotIn("TMPDIR", seen)
+        self.assertEqual((seen["HOME"], seen["OORT_HOME"], seen["LANG"], seen["HTTPS_PROXY"]), (self.box.tmp, self.box.home, "C", "http://127.0.0.1:9"))
+        self.assertEqual(seen["PATH"], f"{d}:/usr/bin:/bin")  # the relative entry is gone
+
+    def test_node_comes_only_from_a_trusted_absolute_path_entry(self) -> None:
+        from oortmem import __version__
+        from oortmem._daemon import daemon_env, find_oort
+
+        here = os.path.join(self.box.tmp, "work")
+        rel = os.path.join(here, "rel")
+        os.makedirs(rel)
+        with open(os.path.join(rel, "node"), "w") as f:
+            f.write(f"#!/bin/sh\necho x > {os.path.join(here, 'node-ran.txt')}\necho v99.0.0\n")
+        os.chmod(os.path.join(rel, "node"), 0o755)
+        js = os.path.join(self.box.tmp, "jsbin", "oort")
+        os.makedirs(os.path.dirname(js))
+        with open(js, "w") as f:
+            f.write("#!/usr/bin/env node\nconsole.log('x')\n")
+        os.chmod(js, 0o755)
+        env = {**self.box.env, "PATH": f"rel:{os.path.dirname(js)}"}
+        old = os.getcwd()
+        os.chdir(here)
+        try:
+            self.assertIsNone(find_oort(self.box.home, env, **self._sandboxed()))
+        finally:
+            os.chdir(old)
+        self.assertFalse(os.path.exists(os.path.join(here, "node-ran.txt")))
+        self.assertEqual(daemon_env(env, self.box.home, **self._sandboxed())["PATH"], os.path.dirname(js))
+        # With a trusted absolute node, a JavaScript oort runs as `node <file>`, not by shebang.
+        node_dir = os.path.join(self.box.tmp, "nodebin")
+        os.makedirs(node_dir)
+        with open(os.path.join(node_dir, "node"), "w") as f:
+            f.write(f"#!/bin/sh\necho {__version__}\n")
+        os.chmod(os.path.join(node_dir, "node"), 0o755)
+        env = {**self.box.env, "PATH": f"rel:{node_dir}:{os.path.dirname(js)}"}
+        self.assertEqual(find_oort(self.box.home, env, **self._sandboxed()), [os.path.realpath(os.path.join(node_dir, "node")), os.path.realpath(js)])
+
+    def _fake_node(self, directory: str, version: str = "v22.20.0") -> str:
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, "node")
+        with open(path, "w") as f:
+            f.write(f"#!/bin/sh\necho {version}\n")
+        os.chmod(path, 0o755)
+        return os.path.realpath(path)
+
+    def test_npx_is_trusted_like_the_cli_and_runs_under_the_trusted_node(self) -> None:
+        from oortmem import __version__
+        from oortmem._daemon import find_oort
+
+        node = self._fake_node(os.path.join(self.box.tmp, "nodebin"))
+        bad = os.path.join(self.box.tmp, "badbin")
+        os.makedirs(bad)
+        npx_bad = os.path.join(bad, "npx")
+        with open(npx_bad, "w") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(npx_bad, 0o757)  # others can write it: never used
+        env = {**self.box.env, "PATH": f"{os.path.dirname(node)}:{bad}"}
+        self.assertIsNone(find_oort(self.box.home, env, **self._sandboxed()))
+        good = os.path.join(self.box.tmp, "goodbin")
+        os.makedirs(good)
+        npx = os.path.join(good, "npx")
+        with open(npx, "w") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(npx, 0o755)
+        env = {**self.box.env, "PATH": f"{bad}:{os.path.dirname(node)}:{good}"}
+        self.assertEqual(find_oort(self.box.home, env, **self._sandboxed()), [node, os.path.realpath(npx), "--yes", f"oortmem@{__version__}"])
+        # An npx in a temp dir is skipped, however clean it is.
+        self.assertIsNone(find_oort(self.box.home, env, temp=[os.path.realpath(good)], trust_from=self.box.tmp))
+
+    def test_the_childs_path_holds_no_relative_or_untrusted_entry(self) -> None:
+        from oortmem._daemon import daemon_env, safe_path
+
+        node_dir = os.path.dirname(self._fake_node(os.path.join(self.box.tmp, "nodebin")))
+        open_dir = os.path.join(self.box.tmp, "open")
+        os.makedirs(open_dir)
+        os.chmod(open_dir, 0o777)
+        temp_dir = os.path.join(self.box.tmp, "tempish")
+        os.makedirs(temp_dir)
+        fine = os.path.join(self.box.tmp, "fine")
+        os.makedirs(fine)
+        env = {**self.box.env, "PATH": os.pathsep.join(["rel", ".", "", open_dir, temp_dir, "/nonexistent", fine])}
+        try:
+            for got in (
+                safe_path(env, node_dir, temp=[os.path.realpath(temp_dir)], trust_from=self.box.tmp),
+                daemon_env(env, self.box.home, node_dir, temp=[os.path.realpath(temp_dir)], trust_from=self.box.tmp)["PATH"],
+            ):
+                self.assertEqual(got.split(os.pathsep), [node_dir, fine])
+        finally:
+            os.chmod(open_dir, 0o755)
+
+    def test_a_command_that_cannot_run_is_a_typed_error_with_a_fix(self) -> None:
+        from oortmem import OortUsageError
+        from oortmem._daemon import start_daemon
+
+        for cmd in (["/nonexistent/oort"], [self.box.tmp]):
+            with self.assertRaises(OortUsageError) as e:
+                start_daemon(cmd, self.box.env, self.box.home)
+            self.assertEqual((e.exception.reason, e.exception.fix), ("autostart-failed", "oort serve --detach"))
 
 
 @NEEDS_310
