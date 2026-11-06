@@ -105,7 +105,13 @@ export interface ShareOutcome {
  * person's confirmed step, like sharing, so the model gets the command to suggest instead.
  */
 const everywhereNeedsPerson = (id: string): string =>
-  `Withdrawing shared copies needs the person's confirmation. Nothing was forgotten. Ask them to run: oort forget ${id} --everywhere`;
+  `Withdrawing shared copies needs the person's confirmation. Nothing was forgotten. Ask them to run: oort forget ${commandSafeId(id)} --everywhere`;
+
+/**
+ * The id as it may appear in a command the person copies into a shell: the model chose it, so
+ * anything but a plain id (letters, digits, hyphens) becomes a placeholder instead of shell text.
+ */
+const commandSafeId = (id: string): string => (/^[A-Za-z0-9-]{1,64}$/.test(id) ? id : '<id>');
 
 /** A refusal whose message is shown to the user as the tool error. */
 export class MemoryToolError extends Error {
