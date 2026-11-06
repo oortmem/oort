@@ -661,7 +661,7 @@ class RemoteMode(unittest.TestCase):
     def test_the_token_travels_as_a_bearer_and_no_cwd_is_sent(self) -> None:
         from oortmem import Oort
 
-        o = Oort(mode="remote", url=self.svc.url, env={"OORT_SERVE_TOKEN": TOKEN})
+        o = Oort(mode="remote", url=self.svc.url, env={"OORT_SERVE_TOKEN": TOKEN}, agent_level=True)
         w = o.scoped(agent="bot").whoami()
         self.assertEqual(w.mode, "remote")
         h = self.rec.seen[-1]["headers"]
@@ -670,24 +670,50 @@ class RemoteMode(unittest.TestCase):
         self.assertNotIn("oort-cwd", h)
         self.assertNotIn(TOKEN, repr(o))
 
+    def test_remote_mode_needs_a_user_or_an_explicit_agent_level(self) -> None:
+        from oortmem import Oort, OortUsageError
+
+        with self.assertRaises(OortUsageError) as e:
+            Oort(mode="remote", url=self.svc.url, token=TOKEN)
+        self.assertEqual(e.exception.reason, "user-missing")
+        for kw in ({"agent_level": True, "user": "u1"}, {"agent_level": "yes"}):
+            with self.assertRaises(OortUsageError):
+                Oort(mode="remote", url=self.svc.url, token=TOKEN, **kw)
+        # agent_level belongs to remote mode only.
+        with self.assertRaises(OortUsageError):
+            Oort(mode="local", agent_level=True, env={"PATH": "/nonexistent"})
+        with self.assertRaises(OortUsageError):
+            Oort(mode="cloud", agent_level=True, api_key="k", key_sources=["explicit"])
+
+    def test_the_user_header_is_always_sent_in_remote_mode(self) -> None:
+        from oortmem import Oort
+
+        org = Oort(mode="remote", url=self.svc.url, token=TOKEN, agent_level=True)
+        org.whoami()
+        self.assertEqual(self.rec.seen[-1]["headers"]["oort-user"], "-")
+        org.scoped(user="u1", agent="bot").whoami()
+        self.assertEqual(self.rec.seen[-1]["headers"]["oort-user"], "u1")
+        Oort(mode="remote", url=self.svc.url, token=TOKEN, user="u2").whoami()
+        self.assertEqual(self.rec.seen[-1]["headers"]["oort-user"], "u2")
+
     def test_a_token_is_never_sent_over_plain_http_to_another_host(self) -> None:
         from oortmem import Oort, OortUsageError
 
         with self.assertRaises(OortUsageError):
-            Oort(mode="remote", url="http://10.0.0.5:7807", token=TOKEN)
+            Oort(mode="remote", agent_level=True, url="http://10.0.0.5:7807", token=TOKEN)
         with self.assertRaises(OortUsageError):
-            Oort(mode="remote", url="https://user:pw@svc.internal", token=TOKEN)
+            Oort(mode="remote", agent_level=True, url="https://user:pw@svc.internal", token=TOKEN)
         with self.assertRaises(OortUsageError):
-            Oort(mode="remote", url=self.svc.url, token=TOKEN, judge_role="expert")
+            Oort(mode="remote", agent_level=True, url=self.svc.url, token=TOKEN, judge_role="expert")
         with self.assertRaises(OortUsageError):
-            Oort(mode="remote", url=self.svc.url, token=TOKEN, org="acme")
-        Oort(mode="remote", url="https://svc.internal:7807", token=TOKEN)  # fine: TLS
+            Oort(mode="remote", agent_level=True, url=self.svc.url, token=TOKEN, org="acme")
+        Oort(mode="remote", url="https://svc.internal:7807", token=TOKEN, agent_level=True)  # fine: TLS
 
     def test_no_token_is_needs_login(self) -> None:
         from oortmem import Oort, OortNeedsLoginError
 
         with self.assertRaises(OortNeedsLoginError):
-            Oort(mode="remote", url=self.svc.url, env={}).whoami()
+            Oort(mode="remote", url=self.svc.url, env={}, agent_level=True).whoami()
         self.assertEqual(self.rec.seen, [])
 
 

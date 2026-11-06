@@ -105,7 +105,7 @@ class _Root:
 class _Scope:
     """One handle's fixed principal."""
 
-    __slots__ = ("agent", "user", "user_given", "org", "project", "cwd", "project_config", "judge_role", "operator")
+    __slots__ = ("agent", "user", "user_given", "agent_level", "org", "project", "cwd", "project_config", "judge_role", "operator")
 
     def __init__(self, **kw: Any) -> None:
         for k in self.__slots__:
@@ -142,6 +142,7 @@ class Oort:
         project_config: bool = True,
         agent: Optional[str] = None,
         user: Any = UNSET,
+        agent_level: bool = False,
         org: Optional[str] = None,
         api_key: Optional[str] = None,
         key_sources: Optional[Sequence[str]] = None,
@@ -188,6 +189,10 @@ class Oort:
         name = agent if agent is not None else (self._env.get("OORT_AGENT") or None)
         check_agent(name, from_env=from_env and name is not None)
         check_user(user, org, given=user is not UNSET, org_required=mode != "remote")
+        if not isinstance(agent_level, bool):
+            raise _usage("options: invalid field agent_level.")
+        if agent_level and user is not UNSET:
+            raise _usage("agent_level=True and user cannot both be given: an end user is not org-level memory.")
         self._home = home_from(self._env)
         self._options = {
             "mode": mode,
@@ -197,6 +202,7 @@ class Oort:
             "token": None if token is None else True,
             "api_key": None if api_key is None else True,
             "user_given": user is not UNSET,
+            "agent_level": agent_level,
             "org": org,
             "judge_role": judge_role,
             "operator": operator,
@@ -216,6 +222,7 @@ class Oort:
             agent=name,
             user=None if user is UNSET else user,
             user_given=user is not UNSET,
+            agent_level=agent_level,
             org=org,
             project=project,
             cwd=os.path.abspath(cwd) if cwd is not None else os.getcwd(),
@@ -233,6 +240,8 @@ class Oort:
         """An option the mode does not take is a usage error, never silently ignored."""
         o = self._options
         explicit = o["mode"] == mode
+        if o["agent_level"] and mode != "remote":
+            raise _not_in_mode("agent_level", mode)
         if mode == "local":
             for k in ("url", "token", "api_key"):
                 if o[k] is not None:
@@ -259,6 +268,11 @@ class Oort:
         for k in ("api_key", "org", "cwd", "home"):
             if o[k] is not None:
                 raise _not_in_mode(k, mode)
+        if not o["user_given"] and not o["agent_level"]:
+            raise _usage(
+                "mode='remote' needs user= (the end user whose Planet this is) or agent_level=True (deliberate org-level or agent-level memory): a service acts for no one by default.",
+                "user-missing",
+            )
         if o["judge_role"] != "agent":
             raise _usage(
                 "judge_role='expert' is refused in remote mode: a service token is not a person.", "expert-only"
@@ -389,6 +403,8 @@ class Oort:
             h["Oort-Agent"] = s.agent
         if s.user_given:
             h["Oort-User"] = s.user
+        elif remote:
+            h["Oort-User"] = "-"  # agent_level=True: deliberate org-level memory
         if s.org is not None and not remote:
             h["Oort-Org"] = s.org
         if s.judge_role == "expert":
