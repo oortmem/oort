@@ -1,0 +1,34 @@
+{"question":"checkout-web लोकल पर देखने के लिए कौन सा पोर्ट खोलना होगा?","expectedMemoryIds":["hi-f01"],"category":"single-fact","lang":"hi"}
+{"question":"ledger-sync किस Kafka topic से पढ़ता है?","expectedMemoryIds":["hi-f02"],"category":"single-fact","lang":"hi"}
+{"question":"invoice-renderer PDF बनाने के लिए क्या इस्तेमाल करता है?","expectedMemoryIds":["hi-f03"],"category":"single-fact","lang":"hi"}
+{"question":"staging database के passwords कहाँ रखे हुए हैं?","expectedMemoryIds":["hi-f04"],"category":"single-fact","lang":"hi"}
+{"question":"refund jobs में हाथ डालने से पहले किसको कॉल करूँ?","expectedMemoryIds":["hi-f05"],"category":"single-fact","lang":"hi"}
+{"question":"GraphQL types दोबारा generate कैसे करते हैं?","expectedMemoryIds":["hi-f07"],"category":"single-fact","lang":"hi"}
+{"question":"अक्टूबर में geo-lookup crash क्यों हुआ था?","expectedMemoryIds":["hi-f08"],"category":"single-fact","lang":"hi"}
+{"question":"reporting API एक tenant का डेटा दूसरे tenant से अलग कैसे रखता है?","expectedMemoryIds":["hi-f10"],"category":"single-fact","lang":"hi"}
+{"question":"pull request कितना बड़ा हो जाए तो उसे split कर देना चाहिए?","expectedMemoryIds":["hi-f11"],"category":"single-fact","lang":"hi"}
+{"question":"session-broker में कोई session कितनी देर idle पड़ा रहे तो expire हो जाता है?","expectedMemoryIds":["hi-f13"],"category":"single-fact","lang":"hi"}
+{"question":"ब्राज़ील के कितने परसेंट यूज़र्स को new-checkout-flow flag मिल रहा है?","expectedMemoryIds":["hi-f15"],"category":"single-fact","lang":"hi"}
+{"question":"TypeScript फ़ाइल में default export यूज़ करना ठीक है क्या?","expectedMemoryIds":["hi-f16"],"category":"single-fact","lang":"hi"}
+{"question":"flaky login test को अपनी मशीन पर fail कैसे करवाऊँ?","expectedMemoryIds":["hi-f17"],"category":"single-fact","lang":"hi"}
+{"question":"Elasticsearch का reindex होने में कितना टाइम लगा था?","expectedMemoryIds":["hi-f20"],"category":"single-fact","lang":"hi"}
+{"question":"v1 API कब बंद होने वाला है?","expectedMemoryIds":["hi-f23"],"category":"single-fact","lang":"hi"}
+{"question":"production में एक migration टूट गई है, क्या मैं सीधे migration फ़ाइल ही ठीक कर दूँ?","expectedMemoryIds":["hi-f24"],"category":"single-fact","lang":"hi"}
+{"question":"push-gateway iPhones तक notifications कैसे पहुँचाता है?","expectedMemoryIds":["hi-f26"],"category":"single-fact","lang":"hi"}
+{"question":"public API पर एक API key को एक मिनट में कितनी requests मिलती हैं?","expectedMemoryIds":["hi-f30"],"category":"single-fact","lang":"hi"}
+{"question":"BigQuery warehouse कौन से region में है?","expectedMemoryIds":["hi-f32"],"category":"single-fact","lang":"hi"}
+{"question":"हम passwords को किस algorithm से hash करते हैं?","expectedMemoryIds":["hi-f37"],"category":"single-fact","lang":"hi"}
+{"question":"checkout-web आजकल कहाँ host हो रहा है?","expectedMemoryIds":["hi-u01b"],"notExpectedMemoryIds":["hi-u01a"],"category":"knowledge-update","lang":"hi"}
+{"question":"रिलीज़ से पहले code freeze कितने दिन का होता है?","expectedMemoryIds":["hi-u02b"],"notExpectedMemoryIds":["hi-u02a"],"category":"knowledge-update","lang":"hi"}
+{"question":"design review कब होता है?","expectedMemoryIds":["hi-u04b"],"notExpectedMemoryIds":["hi-u04a"],"category":"knowledge-update","lang":"hi"}
+{"question":"मोबाइल टीम किस CI पर build करती है?","expectedMemoryIds":["hi-u05b"],"notExpectedMemoryIds":["hi-u05a"],"category":"knowledge-update","lang":"hi"}
+{"question":"अगर मैं page size न बताऊँ तो orders-api एक page में कितने items देता है?","expectedMemoryIds":["hi-u06b"],"notExpectedMemoryIds":["hi-u06a"],"category":"knowledge-update","lang":"hi"}
+{"question":"staging कब wipe होता है?","expectedMemoryIds":["hi-u09b"],"notExpectedMemoryIds":["hi-u09a"],"category":"knowledge-update","lang":"hi"}
+{"question":"invoice-renderer इनवॉइस पर कौन सा font लगाता है?","expectedMemoryIds":["hi-u10b"],"notExpectedMemoryIds":["hi-u10a"],"category":"knowledge-update","lang":"hi"}
+{"question":"मई में ledger-sync कौन से Node.js version पर चल रहा था?","expectedMemoryIds":["hi-u03a"],"notExpectedMemoryIds":["hi-u03b"],"asOf":"2026-05-20T12:00:00Z","category":"temporal","lang":"hi"}
+{"question":"अप्रैल में search team को कौन lead कर रहा था?","expectedMemoryIds":["hi-u07a"],"notExpectedMemoryIds":["hi-u07b"],"asOf":"2026-04-15T12:00:00Z","category":"temporal","lang":"hi"}
+{"question":"गर्मियों की शुरुआत में geo-lookup cached results कितनी देर तक रखता था?","expectedMemoryIds":["hi-u08a"],"notExpectedMemoryIds":["hi-u08b"],"asOf":"2026-06-05T12:00:00Z","category":"temporal","lang":"hi"}
+{"question":"notification-scheduler किस पोर्ट पर listen करता है?","expectedMemoryIds":[],"category":"abstention","lang":"hi"}
+{"question":"EU customers की data retention policy का owner कौन है?","expectedMemoryIds":[],"category":"abstention","lang":"hi"}
+{"question":"ML training pipeline कौन सा Python version यूज़ करती है?","expectedMemoryIds":[],"category":"abstention","lang":"hi"}
+{"question":"SendGrid API key को rotate कैसे करूँ?","expectedMemoryIds":[],"category":"abstention","lang":"hi"}

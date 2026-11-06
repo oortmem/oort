@@ -17,6 +17,7 @@ import {
   resolveAddressing,
   sameRecordAddress,
   scopeOf,
+  lexicalIcuVersion,
   tokenizeLexical,
   type AccessLog,
   type Address,
@@ -41,11 +42,13 @@ import {
   withPrivateUmask,
 } from './blobs.js';
 import { ColdBlobCorruptError, createColdCodec } from './cold.js';
-import { backupDatabase } from './backup.js';
+import { backupDatabase, sweepStaleCopies } from './backup.js';
 import {
   applySchema,
   assertMigratable,
   downgradeSchema,
+  FTS_TABLE,
+  lexicalIndexState,
   judgmentCount,
   migrationBlockers,
   schemaVersionOf,
@@ -53,7 +56,13 @@ import {
   StoreMigrationRequiredError,
 } from './schema.js';
 
-export { SCHEMA_VERSION, StoreMigrationRequiredError } from './schema.js';
+export {
+  FTS_TABLE,
+  FTS_TOKENIZE,
+  FTS_TOKENIZE_V1,
+  SCHEMA_VERSION,
+  StoreMigrationRequiredError,
+} from './schema.js';
 export { BACKUPS_KEPT, listBackups, type BackupKind } from './backup.js';
 export {
   readEmbedderBinding,
@@ -110,7 +119,18 @@ export interface SqliteStoreOptions {
    * content. Defaults to stderr.
    */
   log?: (message: string) => void;
+  /**
+   * The runtime's ICU version, for the lexical index's drift guard. Default
+   * `lexicalIcuVersion()` (`process.versions.icu`); for runtimes that report it some other way.
+   */
+  icu?: string;
 }
+
+/**
+ * How long an open that rebuilds the lexical index (a migration) waits for another connection's
+ * write lock, whatever `busyTimeoutMs` says: it runs once, and failing it would only repeat it.
+ */
+export const MIGRATION_BUSY_TIMEOUT_MS = 60_000;
 
 /** sqlite-vec's upper bound on `k` in a KNN query. */
 const MAX_KNN = 4096;
@@ -366,13 +386,14 @@ export function sqliteSchemaVersion(dbPath: string): number | undefined {
 
 /**
  * Takes the store at `path` back to schema version `to`: 1 (the default) so Oort 0.2.x can open
- * it again, or 2 for Oort 0.3 to 0.5. First copies it to `<path>.pre-downgrade.<UTC time>` (the
+ * it again, 2 for Oort 0.3 to 0.5, or 3 for Oort before tokeniser v2 (CON-110; the lexical index
+ * is rebuilt with tokeniser v1). First copies it to `<path>.pre-downgrade.<UTC time>` (the
  * three newest such copies are kept). Refuses, changing nothing, when it holds memories that
  * version cannot represent: for 1, any level but Planet, an author with an account, provenance or
  * a judgment; for 2, a judgment. No other Oort process (hooks, the MCP server, a drain) may have
  * the store open while it runs: one would migrate it straight back, or fail on the changed schema.
  */
-export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 }): void {
+export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 }): void {
   const to = opts.to ?? 1;
   const dbPath = path.resolve(opts.path);
   const db = withPrivateUmask(() => new Database(dbPath, { fileMustExist: true }));
@@ -390,7 +411,7 @@ export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 }): void {
           `sqlite store: ${blocked} memories are not plain Planet memories; schema version 1 cannot hold them`,
         );
       }
-    } else {
+    } else if (to === 2) {
       const n = judgmentCount(db);
       if (n > 0) {
         throw new Error(
@@ -427,9 +448,12 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const d = opts.d ?? 0.5;
   const clock = opts.now ?? (() => new Date());
   const log = opts.log ?? ((message: string) => process.stderr.write(`${message}\n`));
+  const icu = opts.icu ?? lexicalIcuVersion();
   const dbPath = path.resolve(opts.path);
   const coldDir = path.resolve(opts.coldDir);
   prepareDbDir(path.dirname(dbPath), log);
+  const swept = sweepStaleCopies(dbPath);
+  if (swept > 0) log(`oort store: removed ${swept} temporary copy file(s) a stopped backup left`);
   const blobs = openBlobDir(coldDir, log);
   if (!fs.existsSync(dbPath)) fs.closeSync(fs.openSync(dbPath, 'a', 0o600));
 
@@ -441,14 +465,26 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       conn.pragma('foreign_keys = ON');
       sqliteVec.load(conn);
       const from = schemaVersionOf(conn);
-      if (from === 1 || from === 2) {
+      if (from === 1 || from === 2 || from === 3) {
         // Checked and copied before the migration's transaction starts; a failed
         // copy fails the open and the store stays as it was.
         if (opts.migrate === false) throw new StoreMigrationRequiredError(dbPath, from);
         if (from === 1) assertMigratable(conn);
-        backupDatabase(conn, dbPath, from === 1 ? 'pre-v2' : 'pre-v3');
+        backupDatabase(conn, dbPath, from === 1 ? 'pre-v2' : from === 2 ? 'pre-v3' : 'pre-v4');
       }
-      applySchema(conn, dimension, { migrate: opts.migrate !== false });
+      // Every migration from version 3 or older, and a stale version 4 index, rebuilds the lexical
+      // index (applySchema says so): wait as long as another process holds the lock rather than
+      // fail and repeat the migration later.
+      const rebuilds =
+        opts.migrate !== false &&
+        from !== undefined &&
+        (from < SCHEMA_VERSION ||
+          (from === SCHEMA_VERSION && lexicalIndexState(conn, icu) === 'rebuild'));
+      if (rebuilds) {
+        conn.pragma(`busy_timeout = ${Math.max(busyTimeoutMs, MIGRATION_BUSY_TIMEOUT_MS)}`);
+      }
+      applySchema(conn, dimension, { migrate: opts.migrate !== false, log, icu });
+      if (rebuilds) conn.pragma(`busy_timeout = ${busyTimeoutMs}`);
       return conn;
     } catch (e) {
       conn.close();
@@ -507,9 +543,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        RETURNING rid`,
     ),
     setAccess: db.prepare<[string, string]>('UPDATE memories SET access_log = ? WHERE id = ?'),
-    ftsDelete: db.prepare<[number]>('DELETE FROM memories_fts WHERE rowid = ?'),
+    ftsDelete: db.prepare<[number]>(`DELETE FROM ${FTS_TABLE} WHERE rowid = ?`),
     ftsInsert: db.prepare<[number, string, string, string]>(
-      'INSERT INTO memories_fts (rowid, text, stub, entities) VALUES (?, ?, ?, ?)',
+      `INSERT INTO ${FTS_TABLE} (rowid, text, stub, entities) VALUES (?, ?, ?, ?)`,
     ),
     vecGet: db.prepare<[string], { embedding: Buffer }>(
       'SELECT embedding FROM memories_vec WHERE id = ?',
@@ -567,9 +603,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const lexicalScoped = (n: number) =>
     cached<[Params], { id: string; tier: Tier; rank: number }>(
       `lexical:${n}`,
-      () => `SELECT m.id AS id, m.tier AS tier, bm25(memories_fts) AS rank
-       FROM memories_fts CROSS JOIN memories m ON m.rid = memories_fts.rowid
-       WHERE memories_fts MATCH @match AND ${grantSql(n)}
+      () => `SELECT m.id AS id, m.tier AS tier, bm25(${FTS_TABLE}) AS rank
+       FROM ${FTS_TABLE} CROSS JOIN memories m ON m.rid = ${FTS_TABLE}.rowid
+       WHERE ${FTS_TABLE} MATCH @match AND ${grantSql(n)}
        ORDER BY rank, m.updated_at DESC, m.id
        LIMIT @k`,
     );

@@ -830,6 +830,16 @@ When the turn says "yesterday" and the writer put a day one or two off in the fa
 fixed. A date the turn states itself, or one further off, is kept and the difference is logged
 (`temporal` / `writer-date`).
 
+**Other languages.** The date words above are read in English only, for now. A query in another
+language ("¿qué puerto usaba auth en marzo?", "5月の時点では？") falls back to `current`, which is
+what a query without a date gets; nothing is misread. A memory written in another language gets
+no stated end or start, so "hasta el viernes" does not end the fact by itself. Numeric dates
+(`2026-11-06`) are found in any language, as keywords. In any language, `--as-of`,
+`--known-at` and `--history` (and the MCP `recall` tool's `as_of`, `known_at` and `mode`) choose
+the mode explicitly. The writer still turns a relative date in any language into an absolute
+`YYYY-MM-DD` in the fact's text. Reading dates in Spanish, Brazilian Portuguese, German, French,
+Japanese and Chinese is planned (CON-110).
+
 **Volatile facts.** The write gate marks facts likely to change within weeks (a status, a current
 version, an owner, a deadline). One not confirmed within `recall.staleAfterDays` (default 30; 0
 turns it off) is injected with "(may be outdated; last confirmed 2mo ago)" and listed by `oort
@@ -1075,6 +1085,14 @@ written last and an optimised copy of the graph that loads about five times fast
 | `ms-marco-minilm-l6-v2` | rerank | 24 MB | Apache-2.0 ([cross-encoder](https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2)) | default; English |
 | `qwen3-embedding-0.6b` | embed | 625 MB | Apache-2.0 ([Qwen](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)) | multilingual; for `oort mcp` |
 | `bge-reranker-v2-m3` | rerank | 588 MB | Apache-2.0 ([BAAI](https://huggingface.co/BAAI/bge-reranker-v2-m3)) | multilingual; for `oort mcp` |
+
+**Other languages.** Both defaults are English-only. On the multilingual eval
+(`packages/bench/eval/multilingual`, 12 languages), bge-small still finds a memory written in the
+question's language, mostly through the identifiers it shares, but its dense floor lets through
+questions nothing answers, and a question in another language finds the English memory in its
+top 10 for 47% to 73% of questions. MiniLM lowers that to 3% to 47%. A multilingual local embedder is
+planned (CON-96). Lexical search handles Chinese, Japanese, Korean, Thai and Indic text in any
+setup (store schema version 4).
 
 The defaults are small because every Claude Code hook is a new process that loads the model
 from disk. Measured on an Apple M1 Max, one thread, CPU time: bge-small loads in about 110 ms

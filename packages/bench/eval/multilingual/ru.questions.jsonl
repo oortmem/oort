@@ -1,0 +1,34 @@
+{"question":"на каком порту открыть checkout-web локально?","expectedMemoryIds":["ru-f01"],"category":"single-fact","lang":"ru"}
+{"question":"из какого Kafka-топика читает ledger-sync?","expectedMemoryIds":["ru-f02"],"category":"single-fact","lang":"ru"}
+{"question":"чем invoice-renderer генерит PDF-ки?","expectedMemoryIds":["ru-f03"],"category":"single-fact","lang":"ru"}
+{"question":"где лежат пароли от staging-базы?","expectedMemoryIds":["ru-f04"],"category":"single-fact","lang":"ru"}
+{"question":"кому звонить, прежде чем трогать джобы рефандов?","expectedMemoryIds":["ru-f05"],"category":"single-fact","lang":"ru"}
+{"question":"как перегенерить типы GraphQL?","expectedMemoryIds":["ru-f07"],"category":"single-fact","lang":"ru"}
+{"question":"почему geo-lookup падал в октябре?","expectedMemoryIds":["ru-f08"],"category":"single-fact","lang":"ru"}
+{"question":"как reporting API не даёт одному тенанту увидеть данные другого?","expectedMemoryIds":["ru-f10"],"category":"single-fact","lang":"ru"}
+{"question":"насколько большим может быть PR, прежде чем его пора дробить?","expectedMemoryIds":["ru-f11"],"category":"single-fact","lang":"ru"}
+{"question":"через сколько простоя сессия в session-broker протухает?","expectedMemoryIds":["ru-f13"],"category":"single-fact","lang":"ru"}
+{"question":"какой доле пользователей из Бразилии включён флаг new-checkout-flow?","expectedMemoryIds":["ru-f15"],"category":"single-fact","lang":"ru"}
+{"question":"норм ли делать default export в TypeScript-файле?","expectedMemoryIds":["ru-f16"],"category":"single-fact","lang":"ru"}
+{"question":"как заставить флакующий тест логина упасть у меня на машине?","expectedMemoryIds":["ru-f17"],"category":"single-fact","lang":"ru"}
+{"question":"сколько шла переиндексация Elasticsearch?","expectedMemoryIds":["ru-f20"],"category":"single-fact","lang":"ru"}
+{"question":"когда выключают API v1?","expectedMemoryIds":["ru-f23"],"category":"single-fact","lang":"ru"}
+{"question":"на проде сломалась миграция, можно просто поправить её файл?","expectedMemoryIds":["ru-f24"],"category":"single-fact","lang":"ru"}
+{"question":"как push-gateway достукивается до айфонов?","expectedMemoryIds":["ru-f26"],"category":"single-fact","lang":"ru"}
+{"question":"сколько запросов в минуту даётся одному API-ключу в публичном API?","expectedMemoryIds":["ru-f30"],"category":"single-fact","lang":"ru"}
+{"question":"в каком регионе живёт хранилище BigQuery?","expectedMemoryIds":["ru-f32"],"category":"single-fact","lang":"ru"}
+{"question":"каким алгоритмом мы хешируем пароли?","expectedMemoryIds":["ru-f37"],"category":"single-fact","lang":"ru"}
+{"question":"где сейчас хостится checkout-web?","expectedMemoryIds":["ru-u01b"],"notExpectedMemoryIds":["ru-u01a"],"category":"knowledge-update","lang":"ru"}
+{"question":"сколько длится код-фриз перед релизом?","expectedMemoryIds":["ru-u02b"],"notExpectedMemoryIds":["ru-u02a"],"category":"knowledge-update","lang":"ru"}
+{"question":"когда у нас дизайн-ревью?","expectedMemoryIds":["ru-u04b"],"notExpectedMemoryIds":["ru-u04a"],"category":"knowledge-update","lang":"ru"}
+{"question":"на каком CI собирается мобильная команда?","expectedMemoryIds":["ru-u05b"],"notExpectedMemoryIds":["ru-u05a"],"category":"knowledge-update","lang":"ru"}
+{"question":"сколько элементов на страницу отдаёт orders-api, если ничего не указывать?","expectedMemoryIds":["ru-u06b"],"notExpectedMemoryIds":["ru-u06a"],"category":"knowledge-update","lang":"ru"}
+{"question":"когда сносят staging?","expectedMemoryIds":["ru-u09b"],"notExpectedMemoryIds":["ru-u09a"],"category":"knowledge-update","lang":"ru"}
+{"question":"какой шрифт invoice-renderer ставит в счета?","expectedMemoryIds":["ru-u10b"],"notExpectedMemoryIds":["ru-u10a"],"category":"knowledge-update","lang":"ru"}
+{"question":"на какой версии Node.js был ledger-sync в мае?","expectedMemoryIds":["ru-u03a"],"notExpectedMemoryIds":["ru-u03b"],"asOf":"2026-05-20T12:00:00Z","category":"temporal","lang":"ru"}
+{"question":"кто был техлидом команды поиска в апреле?","expectedMemoryIds":["ru-u07a"],"notExpectedMemoryIds":["ru-u07b"],"asOf":"2026-04-15T12:00:00Z","category":"temporal","lang":"ru"}
+{"question":"сколько geo-lookup держал результаты в кэше в начале лета?","expectedMemoryIds":["ru-u08a"],"notExpectedMemoryIds":["ru-u08b"],"asOf":"2026-06-05T12:00:00Z","category":"temporal","lang":"ru"}
+{"question":"на каком порту слушает notification-scheduler?","expectedMemoryIds":[],"category":"abstention","lang":"ru"}
+{"question":"кто отвечает за политику хранения данных клиентов из ЕС?","expectedMemoryIds":[],"category":"abstention","lang":"ru"}
+{"question":"какая версия Python в пайплайне обучения ML?","expectedMemoryIds":[],"category":"abstention","lang":"ru"}
+{"question":"как ротировать API-ключ SendGrid?","expectedMemoryIds":[],"category":"abstention","lang":"ru"}

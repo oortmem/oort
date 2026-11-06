@@ -26,7 +26,8 @@ const DEADLINE_MARGIN_MS = 1000;
 export const HOOK_BUSY_TIMEOUT_MS = 250;
 
 /** The one stderr line a hook prints when the store still needs its schema migration. */
-export const MIGRATION_PENDING_NOTE = 'Oort is upgrading its store; run `oort doctor` once\n';
+export const MIGRATION_PENDING_NOTE =
+  'Oort is upgrading its store; run `oort doctor` once, then restart any Oort MCP server started before the upgrade\n';
 
 /** SQLite's "another connection holds the lock" errors. */
 export function isBusy(e: unknown): boolean {

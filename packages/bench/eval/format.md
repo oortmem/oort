@@ -20,6 +20,8 @@ one question with the memory ids that should (and should not) come back.
 | `asOf`                 | string, optional                                                                         | ISO timestamp: recall what was true then (`RecallQuery.asOf`).                                                           |
 | `category`             | `single-fact`, `knowledge-update`, `temporal`, `multi-session` or `abstention`, optional | Groups the report. Rows without one are reported as `uncategorized`.                                                     |
 | `notExpectedMemoryIds` | string[], optional                                                                       | Superseded or corrected memories that must not be returned as current. Any of them in the top 10 counts as a stale leak. |
+| `lang`                 | string, optional                                                                         | BCP 47 code of the question's language (`ja`, `pt-BR`). The multilingual set fills it.                                   |
+| `condition`            | `mono`, `cross` or `mixed`, optional                                                     | Pins a multilingual row to one condition; rows without it run in all three (`multilingual/README.md`).                   |
 
 Unknown keys are ignored, so the `memoryId` the importer adds is harmless.
 
@@ -60,6 +62,7 @@ empty question, reporting how many.
 ```sh
 pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>] [--k 5,10] [--min-recall10 0.8] [--json]
 pnpm eval --demo        # a synthetic 1,500-memory store and the bundled 20-row eval/fixture.jsonl
+pnpm eval --set multilingual [--embed …] [--rerank …]   # 13 languages, three conditions (multilingual/README.md)
 ```
 
 - The bundled demo is a smoke test of the eval pipeline, not a quality benchmark. Its 1,500

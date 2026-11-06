@@ -6,9 +6,10 @@ import Database from 'better-sqlite3';
 /**
  * The copies a store takes of its database before changing its schema:
  * `pre-v2` before migrating a version 1 store, `pre-v3` before migrating a
- * version 2 store, `pre-downgrade` before taking a store back to an older version.
+ * version 2 store, `pre-v4` before migrating a version 3 store, `pre-downgrade` before taking a
+ * store back to an older version.
  */
-export type BackupKind = 'pre-v2' | 'pre-v3' | 'pre-downgrade';
+export type BackupKind = 'pre-v2' | 'pre-v3' | 'pre-v4' | 'pre-downgrade';
 
 /** How many of the newest copies of each kind are kept. */
 export const BACKUPS_KEPT = 3;
@@ -101,6 +102,43 @@ export function backupDatabase(db: Database.Database, dbPath: string, kind: Back
   }
   prune(file, kind);
   return target;
+}
+
+/** A temporary copy older than this is one a killed process left; a live copy is never this old. */
+export const STALE_COPY_MS = 3600_000;
+
+/**
+ * Removes the temporary copies (and their rollback journals) that a process killed during
+ * `backupDatabase` left next to `dbPath`, once they are over an hour old: `VACUUM INTO` writes
+ * `.<name>.<kind>.<16 hex>.tmp`, and the rename into place never happened. Best effort; returns
+ * how many were removed.
+ */
+export function sweepStaleCopies(dbPath: string, now = Date.now()): number {
+  const file = path.resolve(dbPath);
+  const dir = path.dirname(file);
+  const base = path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(
+    `^\\.${base}\\.(?:pre-v\\d+|pre-downgrade)\\.[0-9a-f]{16}\\.tmp(?:-journal|-wal|-shm)?$`,
+  );
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const n of names) {
+    if (!pattern.test(n)) continue;
+    const p = path.join(dir, n);
+    try {
+      if (now - fs.statSync(p).mtimeMs < STALE_COPY_MS) continue;
+      fs.rmSync(p, { force: true });
+      removed++;
+    } catch {
+      // Gone already, or not ours to remove: leave it.
+    }
+  }
+  return removed;
 }
 
 /** Removes all but the newest copies of `kind` (and the oldest migration copy). Best effort. */

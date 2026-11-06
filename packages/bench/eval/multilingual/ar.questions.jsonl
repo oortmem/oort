@@ -1,0 +1,34 @@
+{"question":"ما المنفذ الذي أفتحه لأرى checkout-web محليًا؟","expectedMemoryIds":["ar-f01"],"category":"single-fact","lang":"ar"}
+{"question":"من أي Kafka topic يقرأ ledger-sync؟","expectedMemoryIds":["ar-f02"],"category":"single-fact","lang":"ar"}
+{"question":"ما الذي يستخدمه invoice-renderer لإنتاج ملفات PDF؟","expectedMemoryIds":["ar-f03"],"category":"single-fact","lang":"ar"}
+{"question":"أين تُحفظ كلمات مرور قاعدة بيانات staging؟","expectedMemoryIds":["ar-f04"],"category":"single-fact","lang":"ar"}
+{"question":"بمن يجب أن أتصل قبل أن ألمس مهام الـ refund؟","expectedMemoryIds":["ar-f05"],"category":"single-fact","lang":"ar"}
+{"question":"كيف أعيد توليد أنواع GraphQL؟","expectedMemoryIds":["ar-f07"],"category":"single-fact","lang":"ar"}
+{"question":"لماذا تعطّل geo-lookup في أكتوبر؟","expectedMemoryIds":["ar-f08"],"category":"single-fact","lang":"ar"}
+{"question":"كيف يفصل reporting API بيانات كل tenant عن بيانات الآخرين؟","expectedMemoryIds":["ar-f10"],"category":"single-fact","lang":"ar"}
+{"question":"ما الحجم الذي يمكن أن يصل إليه الـ pull request قبل أن أقسّمه؟","expectedMemoryIds":["ar-f11"],"category":"single-fact","lang":"ar"}
+{"question":"كم يمكن أن تبقى الجلسة خاملة في session-broker قبل أن تنتهي صلاحيتها؟","expectedMemoryIds":["ar-f13"],"category":"single-fact","lang":"ar"}
+{"question":"ما نسبة المستخدمين في البرازيل الذين يظهر لهم الـ flag المسمّى new-checkout-flow؟","expectedMemoryIds":["ar-f15"],"category":"single-fact","lang":"ar"}
+{"question":"هل يصح استخدام default export في ملف TypeScript؟","expectedMemoryIds":["ar-f16"],"category":"single-fact","lang":"ar"}
+{"question":"كيف أجعل اختبار تسجيل الدخول المتقلّب يفشل على جهازي؟","expectedMemoryIds":["ar-f17"],"category":"single-fact","lang":"ar"}
+{"question":"كم استغرقت إعادة فهرسة Elasticsearch؟","expectedMemoryIds":["ar-f20"],"category":"single-fact","lang":"ar"}
+{"question":"متى سيتم إيقاف الإصدار v1 من الـ API؟","expectedMemoryIds":["ar-f23"],"category":"single-fact","lang":"ar"}
+{"question":"تعطّل migration في الإنتاج، هل يمكنني ببساطة أن أصلح ملف الـ migration نفسه؟","expectedMemoryIds":["ar-f24"],"category":"single-fact","lang":"ar"}
+{"question":"كيف يوصل push-gateway الإشعارات إلى أجهزة iPhone؟","expectedMemoryIds":["ar-f26"],"category":"single-fact","lang":"ar"}
+{"question":"كم طلبًا في الدقيقة يُسمح به لكل API key في الـ API العام؟","expectedMemoryIds":["ar-f30"],"category":"single-fact","lang":"ar"}
+{"question":"في أي region يوجد مستودع البيانات على BigQuery؟","expectedMemoryIds":["ar-f32"],"category":"single-fact","lang":"ar"}
+{"question":"بأي خوارزمية نعمل hash لكلمات المرور؟","expectedMemoryIds":["ar-f37"],"category":"single-fact","lang":"ar"}
+{"question":"أين يُستضاف checkout-web حاليًا؟","expectedMemoryIds":["ar-u01b"],"notExpectedMemoryIds":["ar-u01a"],"category":"knowledge-update","lang":"ar"}
+{"question":"كم تستمر فترة الـ code freeze قبل الإصدار؟","expectedMemoryIds":["ar-u02b"],"notExpectedMemoryIds":["ar-u02a"],"category":"knowledge-update","lang":"ar"}
+{"question":"متى موعد مراجعة التصميم؟","expectedMemoryIds":["ar-u04b"],"notExpectedMemoryIds":["ar-u04a"],"category":"knowledge-update","lang":"ar"}
+{"question":"على أي منصة CI يبني فريق الجوال تطبيقاته؟","expectedMemoryIds":["ar-u05b"],"notExpectedMemoryIds":["ar-u05a"],"category":"knowledge-update","lang":"ar"}
+{"question":"كم عنصرًا في الصفحة يُرجع orders-api إذا لم أحدّد العدد؟","expectedMemoryIds":["ar-u06b"],"notExpectedMemoryIds":["ar-u06a"],"category":"knowledge-update","lang":"ar"}
+{"question":"متى يتم مسح بيئة staging؟","expectedMemoryIds":["ar-u09b"],"notExpectedMemoryIds":["ar-u09a"],"category":"knowledge-update","lang":"ar"}
+{"question":"ما الخط الذي يستخدمه invoice-renderer في الفواتير؟","expectedMemoryIds":["ar-u10b"],"notExpectedMemoryIds":["ar-u10a"],"category":"knowledge-update","lang":"ar"}
+{"question":"على أي إصدار من Node.js كان يعمل ledger-sync في مايو؟","expectedMemoryIds":["ar-u03a"],"notExpectedMemoryIds":["ar-u03b"],"asOf":"2026-05-20T12:00:00Z","category":"temporal","lang":"ar"}
+{"question":"من كان يقود فريق البحث في أبريل؟","expectedMemoryIds":["ar-u07a"],"notExpectedMemoryIds":["ar-u07b"],"asOf":"2026-04-15T12:00:00Z","category":"temporal","lang":"ar"}
+{"question":"كم كانت مدة احتفاظ geo-lookup بالنتائج المخزّنة مؤقتًا في بداية الصيف؟","expectedMemoryIds":["ar-u08a"],"notExpectedMemoryIds":["ar-u08b"],"asOf":"2026-06-05T12:00:00Z","category":"temporal","lang":"ar"}
+{"question":"على أي منفذ يستمع notification-scheduler؟","expectedMemoryIds":[],"category":"abstention","lang":"ar"}
+{"question":"من المسؤول عن سياسة الاحتفاظ بالبيانات لعملاء الاتحاد الأوروبي؟","expectedMemoryIds":[],"category":"abstention","lang":"ar"}
+{"question":"ما إصدار Python الذي يستخدمه الـ ML training pipeline؟","expectedMemoryIds":[],"category":"abstention","lang":"ar"}
+{"question":"كيف أدوّر (rotate) الـ API key الخاص بـ SendGrid؟","expectedMemoryIds":[],"category":"abstention","lang":"ar"}

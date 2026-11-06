@@ -57,7 +57,7 @@ function elapsed(ms: number): string {
 }
 
 const NEEDS_DOCTOR =
-  'The daemon did not start: the store needs its schema migration (after an upgrade), and `oort serve` never migrates it. Run `oort doctor`, then `oort serve --detach`.';
+  'The daemon did not start: the store needs its schema migration (after an upgrade), and `oort serve` never migrates it. Run `oort doctor`, then `oort serve --detach`, and restart any Oort MCP server started before the upgrade.';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 

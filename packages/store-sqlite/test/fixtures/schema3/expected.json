@@ -1,0 +1,426 @@
+{
+  "list": [
+    {
+      "id": "en-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "auth-service listens on port 8080 in staging.",
+      "stub": "auth-service listens on port 8080 in staging.",
+      "entities": ["auth-service"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-87, -58, -29, 0, 29, 58, 87, -84]
+    },
+    {
+      "id": "en-2",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "The billing worker retries webhooks three times before giving up.",
+      "stub": "The billing worker retries webhooks three times before givin",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-74, -45, -16, 13, 42, 71, -100, -71]
+    },
+    {
+      "id": "zh-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "认证服务使用端口8080",
+      "stub": "认证服务使用端口8080",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-61, -32, -3, 26, 55, 84, -87, -58]
+    },
+    {
+      "id": "ja-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "認証サービスはポート8080を使います",
+      "stub": "認証サービスはポート8080を使います",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-48, -19, 10, 39, 68, 97, -74, -45]
+    },
+    {
+      "id": "ko-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "인증 서비스는 포트 8080을 사용합니다",
+      "stub": "인증 서비스는 포트 8080을 사용합니다",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-35, -6, 23, 52, 81, -90, -61, -32]
+    },
+    {
+      "id": "th-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "บริการยืนยันตัวตนใช้พอร์ต 8080",
+      "stub": "บริการยืนยันตัวตนใช้พอร์ต 8080",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-22, 7, 36, 65, 94, -77, -48, -19]
+    },
+    {
+      "id": "hi-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "प्रमाणीकरण सेवा पोर्ट 8080 का उपयोग करती है",
+      "stub": "प्रमाणीकरण सेवा पोर्ट 8080 का उपयोग करती है",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-9, 20, 49, 78, -93, -64, -35, -6]
+    },
+    {
+      "id": "es-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "El servicio de autenticación usa el puerto 8443 en producción.",
+      "stub": "El servicio de autenticación usa el puerto 8443 en producció",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [4, 33, 62, 91, -80, -51, -22, 7]
+    },
+    {
+      "id": "ja-cold",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "請求サービスは毎週金曜日にデプロイする。",
+      "stub": "請求サービスのデプロイは金曜日",
+      "entities": ["billing-service"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "cold",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": null
+    },
+    {
+      "id": "j-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "judgment",
+      "text": "Judgment by ada (content): rejected \"Post claims a cure\". Reason: No cited source.",
+      "stub": "rejected: Post claims a cure",
+      "entities": ["content", "no-source"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "judgment": {
+        "subject": {
+          "summary": "Post claims a cure"
+        },
+        "verdict": "rejected",
+        "verdicts": ["approved", "rejected"],
+        "reason": "No cited source.",
+        "criteria": ["no-source"],
+        "domain": "content",
+        "by": "ada",
+        "decidedAt": "2026-10-01T00:00:00.000Z",
+        "via": "cli"
+      },
+      "embedding": [30, 59, 88, -83, -54, -25, 4, 33]
+    }
+  ],
+  "lexical": {
+    "auth service port staging": [
+      {
+        "id": "en-1",
+        "score": 5.083804558574241,
+        "tier": "warm"
+      }
+    ],
+    "billing webhooks retries": [
+      {
+        "id": "en-2",
+        "score": 7.0310278485362145,
+        "tier": "warm"
+      }
+    ],
+    "auth-service 8080": [
+      {
+        "id": "en-1",
+        "score": 4.099082277460505,
+        "tier": "warm"
+      },
+      {
+        "id": "th-1",
+        "score": 1.1350651203985616,
+        "tier": "warm"
+      },
+      {
+        "id": "hi-1",
+        "score": 0.8799653544066032,
+        "tier": "warm"
+      }
+    ],
+    "认证 端口": [],
+    "認証サービスのポート": [],
+    "서비스": [],
+    "พอร์ต": [
+      {
+        "id": "th-1",
+        "score": 4.978534395156787,
+        "tier": "warm"
+      }
+    ],
+    "सेवा": [
+      {
+        "id": "hi-1",
+        "score": 3.8596356321136036,
+        "tier": "warm"
+      }
+    ],
+    "autenticacion": [],
+    "autenticación": [
+      {
+        "id": "es-1",
+        "score": 2.298857730659126,
+        "tier": "warm"
+      }
+    ],
+    "請求サービス": []
+  }
+}

@@ -3,11 +3,27 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { resolveHome } from '@oortmem/core';
+import { resolveConfig, resolveHome, type Embedder, type Reranker } from '@oortmem/core';
+import { voyageEmbedder } from '@oortmem/embed-voyage';
+import {
+  DEFAULT_EMBED_MODEL,
+  DEFAULT_RERANK_MODEL,
+  localEmbedder,
+  localReranker,
+} from '@oortmem/local-models';
+import { voyageReranker } from '@oortmem/rerank-voyage';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import { cell, loadEvalRows, renderReport, runEval } from './eval.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { FIXTURE_COUNT, FIXTURE_SEED } from './fixture.js';
+import {
+  CONDITIONS,
+  LANGUAGES,
+  renderMultilingual,
+  runMultilingual,
+  type Condition,
+  type Language,
+} from './multilingual.js';
 import { EMBEDDING_DIMENSION, GENERATOR_NOW, generateMemories } from './generate.js';
 import { seedStore } from './seed.js';
 
@@ -15,6 +31,9 @@ const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>]
                  [--min-recall10 <0..1>] [--dimension <n>] [--dense] [--now <iso>]
                  [--abstain-threshold <n>] [--no-gate] [--json]
        pnpm eval --demo [--json]    synthetic 1500-memory store + the bundled 23-row fixture
+       pnpm eval --set multilingual [--embed none|fake|local[:model]|voyage[:model]]
+                 [--rerank none|local[:model]|voyage[:model]] [--home <dir>]
+                 [--lang en,ja,...] [--condition mono,cross,mixed] [--json] [--out <file>]
 
 Runs recall for each row against a temp copy of the store (the live store is never written).`;
 
@@ -37,12 +56,23 @@ async function main(): Promise<number> {
       'no-gate': { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
       demo: { type: 'boolean', default: false },
+      set: { type: 'string' },
+      embed: { type: 'string', default: 'none' },
+      rerank: { type: 'string', default: 'none' },
+      home: { type: 'string' },
+      lang: { type: 'string' },
+      condition: { type: 'string' },
+      out: { type: 'string' },
       help: { type: 'boolean', default: false },
     },
   });
   if (values.help) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
+  }
+  if (values.set !== undefined) {
+    if (values.set !== 'multilingual') throw new Error(`unknown --set "${values.set}"`);
+    return multilingual(values);
   }
   const ks = values.k.split(',').map((s) => Number(s.trim()));
   if (ks.some((k) => !Number.isInteger(k) || k <= 0))
@@ -116,6 +146,66 @@ async function main(): Promise<number> {
   } finally {
     if (tmp !== undefined) fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+/** A comma list, each item checked against `allowed`. */
+function list<T extends string>(raw: string | undefined, allowed: readonly T[], what: string): T[] {
+  if (raw === undefined) return [...allowed];
+  const items = raw.split(',').map((s) => s.trim());
+  const bad = items.filter((s) => !(allowed as readonly string[]).includes(s));
+  if (bad.length > 0) throw new Error(`unknown ${what}: ${bad.join(', ')}`);
+  return items as T[];
+}
+
+/**
+ * `--set multilingual` (CON-110): the multilingual eval in `eval/multilingual/`. `--embed` and
+ * `--rerank` pick the models: `local` reads already-pulled models from `--home` (default
+ * `$OORT_HOME`) and never downloads; `voyage` needs `VOYAGE_API_KEY` and is run by hand.
+ */
+async function multilingual(values: {
+  embed: string;
+  rerank: string;
+  home?: string | undefined;
+  lang?: string | undefined;
+  condition?: string | undefined;
+  json: boolean;
+  out?: string | undefined;
+}): Promise<number> {
+  const home = values.home !== undefined ? fromUser(values.home) : resolveHome();
+  const defaults = resolveConfig(home, { OORT_HOME: home }, { projectConfig: false });
+  const [embedKind, embedModel] = values.embed.split(/:(.*)/s) as [string, string | undefined];
+  const [rerankKind, rerankModel] = values.rerank.split(/:(.*)/s) as [string, string | undefined];
+  let embed: Embedder | undefined;
+  if (embedKind === 'fake') embed = fakeEmbedder(EMBEDDING_DIMENSION);
+  else if (embedKind === 'local') {
+    embed = localEmbedder({
+      home,
+      model: embedModel ?? DEFAULT_EMBED_MODEL,
+      dimension: EMBEDDING_DIMENSION,
+    });
+  } else if (embedKind === 'voyage') {
+    embed = voyageEmbedder({
+      model: embedModel ?? defaults.embed.model,
+      dimension: EMBEDDING_DIMENSION,
+    });
+  } else if (embedKind !== 'none') throw new Error(`unknown --embed "${values.embed}"`);
+  let rerank: Reranker | undefined;
+  if (rerankKind === 'local') {
+    rerank = localReranker({ home, model: rerankModel ?? DEFAULT_RERANK_MODEL });
+  } else if (rerankKind === 'voyage') {
+    rerank = voyageReranker({ model: rerankModel ?? defaults.rerank.model });
+  } else if (rerankKind !== 'none') throw new Error(`unknown --rerank "${values.rerank}"`);
+  const report = await runMultilingual({
+    languages: list<Language>(values.lang, LANGUAGES, 'language'),
+    conditions: list<Condition>(values.condition, CONDITIONS, 'condition'),
+    ...(embed !== undefined && { embed }),
+    ...(rerank !== undefined && { rerank }),
+    log: (m) => process.stderr.write(`${m}\n`),
+  });
+  const json = `${JSON.stringify({ embed: values.embed, rerank: values.rerank, ...report }, null, 2)}\n`;
+  if (values.out !== undefined) fs.writeFileSync(fromUser(values.out), json);
+  process.stdout.write(values.json ? json : `${renderMultilingual(report)}\n`);
+  return 0;
 }
 
 try {

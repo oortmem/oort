@@ -1,0 +1,34 @@
+{"question":"buka port berapa ya buat lihat checkout-web di lokal?","expectedMemoryIds":["id-f01"],"category":"single-fact","lang":"id"}
+{"question":"ledger-sync baca dari topic Kafka yang mana?","expectedMemoryIds":["id-f02"],"category":"single-fact","lang":"id"}
+{"question":"invoice-renderer pakai apa buat bikin PDF-nya?","expectedMemoryIds":["id-f03"],"category":"single-fact","lang":"id"}
+{"question":"password database staging disimpan di mana?","expectedMemoryIds":["id-f04"],"category":"single-fact","lang":"id"}
+{"question":"sebelum ngutak-atik job refund, harus hubungi siapa dulu?","expectedMemoryIds":["id-f05"],"category":"single-fact","lang":"id"}
+{"question":"gimana cara generate ulang type GraphQL?","expectedMemoryIds":["id-f07"],"category":"single-fact","lang":"id"}
+{"question":"kenapa geo-lookup crash bulan Oktober?","expectedMemoryIds":["id-f08"],"category":"single-fact","lang":"id"}
+{"question":"reporting API gimana caranya misahin data satu tenant dari tenant lain?","expectedMemoryIds":["id-f10"],"category":"single-fact","lang":"id"}
+{"question":"pull request boleh segede apa sebelum harus dipecah?","expectedMemoryIds":["id-f11"],"category":"single-fact","lang":"id"}
+{"question":"session di session-broker bisa idle berapa lama sebelum expired?","expectedMemoryIds":["id-f13"],"category":"single-fact","lang":"id"}
+{"question":"berapa persen user Brasil yang dapat flag new-checkout-flow?","expectedMemoryIds":["id-f15"],"category":"single-fact","lang":"id"}
+{"question":"boleh nggak pakai default export di file TypeScript?","expectedMemoryIds":["id-f16"],"category":"single-fact","lang":"id"}
+{"question":"gimana caranya bikin test login yang flaky itu gagal di laptop aku?","expectedMemoryIds":["id-f17"],"category":"single-fact","lang":"id"}
+{"question":"reindex Elasticsearch kemarin makan waktu berapa lama?","expectedMemoryIds":["id-f20"],"category":"single-fact","lang":"id"}
+{"question":"kapan API v1 dimatikan?","expectedMemoryIds":["id-f23"],"category":"single-fact","lang":"id"}
+{"question":"migration rusak di production, boleh langsung benerin file migration-nya aja?","expectedMemoryIds":["id-f24"],"category":"single-fact","lang":"id"}
+{"question":"push-gateway kirim notif ke iPhone lewat apa?","expectedMemoryIds":["id-f26"],"category":"single-fact","lang":"id"}
+{"question":"satu API key dapat jatah berapa request per menit di API publik?","expectedMemoryIds":["id-f30"],"category":"single-fact","lang":"id"}
+{"question":"warehouse BigQuery-nya ada di region mana?","expectedMemoryIds":["id-f32"],"category":"single-fact","lang":"id"}
+{"question":"password kita di-hash pakai algoritma apa?","expectedMemoryIds":["id-f37"],"category":"single-fact","lang":"id"}
+{"question":"checkout-web sekarang di-host di mana?","expectedMemoryIds":["id-u01b"],"notExpectedMemoryIds":["id-u01a"],"category":"knowledge-update","lang":"id"}
+{"question":"code freeze sebelum rilis berapa lama?","expectedMemoryIds":["id-u02b"],"notExpectedMemoryIds":["id-u02a"],"category":"knowledge-update","lang":"id"}
+{"question":"design review-nya kapan ya?","expectedMemoryIds":["id-u04b"],"notExpectedMemoryIds":["id-u04a"],"category":"knowledge-update","lang":"id"}
+{"question":"tim mobile build pakai CI apa?","expectedMemoryIds":["id-u05b"],"notExpectedMemoryIds":["id-u05a"],"category":"knowledge-update","lang":"id"}
+{"question":"kalau nggak di-set, orders-api balikin berapa item per halaman?","expectedMemoryIds":["id-u06b"],"notExpectedMemoryIds":["id-u06a"],"category":"knowledge-update","lang":"id"}
+{"question":"staging di-wipe kapan?","expectedMemoryIds":["id-u09b"],"notExpectedMemoryIds":["id-u09a"],"category":"knowledge-update","lang":"id"}
+{"question":"invoice-renderer pakai font apa di invoice?","expectedMemoryIds":["id-u10b"],"notExpectedMemoryIds":["id-u10a"],"category":"knowledge-update","lang":"id"}
+{"question":"waktu bulan Mei ledger-sync pakai Node.js versi berapa?","expectedMemoryIds":["id-u03a"],"notExpectedMemoryIds":["id-u03b"],"asOf":"2026-05-20T12:00:00Z","category":"temporal","lang":"id"}
+{"question":"siapa yang jadi lead tim search waktu April?","expectedMemoryIds":["id-u07a"],"notExpectedMemoryIds":["id-u07b"],"asOf":"2026-04-15T12:00:00Z","category":"temporal","lang":"id"}
+{"question":"di awal Juni geo-lookup nyimpen hasil cache berapa lama?","expectedMemoryIds":["id-u08a"],"notExpectedMemoryIds":["id-u08b"],"asOf":"2026-06-05T12:00:00Z","category":"temporal","lang":"id"}
+{"question":"notification-scheduler listen di port berapa?","expectedMemoryIds":[],"category":"abstention","lang":"id"}
+{"question":"siapa yang pegang kebijakan retensi data untuk customer EU?","expectedMemoryIds":[],"category":"abstention","lang":"id"}
+{"question":"pipeline training ML pakai Python versi berapa?","expectedMemoryIds":[],"category":"abstention","lang":"id"}
+{"question":"gimana cara rotate API key SendGrid?","expectedMemoryIds":[],"category":"abstention","lang":"id"}

@@ -9,6 +9,7 @@ import {
   type Observation,
 } from '@oortmem/core';
 import {
+  WRITER_MANY_SYSTEM_PROMPT,
   WRITER_SYSTEM_PROMPT,
   WriterError,
   WriterOutputError,
@@ -177,6 +178,31 @@ describe('aiSdkWriter', () => {
     ]) {
       expect(WRITER_SYSTEM_PROMPT).toMatch(re);
     }
+  });
+
+  it('writer.system-prompt-keeps-the-user-language (CON-110)', () => {
+    for (const prompt of [WRITER_SYSTEM_PROMPT, WRITER_MANY_SYSTEM_PROMPT]) {
+      const rule = prompt.split('\n').find((l) => l.startsWith('9. '));
+      expect(rule).toBeDefined();
+      // The fact, its stub and entities stay in the user's language, untranslated.
+      expect(rule).toMatch(/text, stub and entities in the language of the user's own words/);
+      expect(rule).toMatch(/Never translate/);
+      // Mixed-language turns: the language of most of the user's own words.
+      expect(rule).toMatch(/mixed languages, use the one most of the user's own words are in/);
+      // Identifiers stay verbatim in any language (rule 5).
+      expect(rule).toMatch(/exactly as written \(rule 5\) in any language/);
+      // An update follows the current turn, not the prior memory.
+      expect(rule).toMatch(/UPDATE and SUPERSEDE.*current turn's language/);
+      // The user's own words decide, not material they pasted or quoted.
+      expect(rule).toMatch(/the user's own words in this turn/);
+      expect(rule).toMatch(/not the language of material they pasted or quoted/);
+      // Relative dates are resolved in any language, not only English.
+      expect(prompt).toMatch(/date or time, in any language/);
+    }
+    // Rule 9 comes after rule 8 and is the last rule.
+    const lines = WRITER_SYSTEM_PROMPT.split('\n');
+    expect(lines.findIndex((l) => l.startsWith('9. '))).toBe(lines.length - 1);
+    expect(lines.findIndex((l) => l.startsWith('8. '))).toBe(lines.length - 2);
   });
 });
 

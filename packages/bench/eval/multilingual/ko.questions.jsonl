@@ -1,0 +1,34 @@
+{"question":"checkout-web 로컬에서 띄워 보려면 몇 번 포트로 들어가야 해요?","expectedMemoryIds":["ko-f01"],"category":"single-fact","lang":"ko"}
+{"question":"ledger-sync는 어떤 Kafka 토픽에서 메시지를 읽어요?","expectedMemoryIds":["ko-f02"],"category":"single-fact","lang":"ko"}
+{"question":"invoice-renderer는 PDF 만들 때 뭘 써요?","expectedMemoryIds":["ko-f03"],"category":"single-fact","lang":"ko"}
+{"question":"스테이징 DB 비밀번호는 어디에 저장돼 있어요?","expectedMemoryIds":["ko-f04"],"category":"single-fact","lang":"ko"}
+{"question":"환불 잡 건드리기 전에 누구한테 연락해야 해요?","expectedMemoryIds":["ko-f05"],"category":"single-fact","lang":"ko"}
+{"question":"GraphQL 타입 다시 생성하려면 어떻게 해야 해요?","expectedMemoryIds":["ko-f07"],"category":"single-fact","lang":"ko"}
+{"question":"10월에 geo-lookup이 왜 죽었던 거예요?","expectedMemoryIds":["ko-f08"],"category":"single-fact","lang":"ko"}
+{"question":"reporting API에서 테넌트끼리 데이터가 안 섞이게 어떻게 막고 있어요?","expectedMemoryIds":["ko-f10"],"category":"single-fact","lang":"ko"}
+{"question":"PR이 어느 정도 커지면 쪼개야 해요?","expectedMemoryIds":["ko-f11"],"category":"single-fact","lang":"ko"}
+{"question":"session-broker에서 세션을 아무것도 안 하고 두면 얼마 만에 만료돼요?","expectedMemoryIds":["ko-f13"],"category":"single-fact","lang":"ko"}
+{"question":"브라질 사용자 중 몇 퍼센트한테 new-checkout-flow 플래그가 켜져 있어요?","expectedMemoryIds":["ko-f15"],"category":"single-fact","lang":"ko"}
+{"question":"TypeScript 파일에서 default export 써도 괜찮아요?","expectedMemoryIds":["ko-f16"],"category":"single-fact","lang":"ko"}
+{"question":"flaky한 로그인 테스트를 제 로컬에서 실패하게 만들려면 어떻게 해요?","expectedMemoryIds":["ko-f17"],"category":"single-fact","lang":"ko"}
+{"question":"Elasticsearch 리인덱스는 얼마나 걸렸어요?","expectedMemoryIds":["ko-f20"],"category":"single-fact","lang":"ko"}
+{"question":"v1 API는 언제 내려가요?","expectedMemoryIds":["ko-f23"],"category":"single-fact","lang":"ko"}
+{"question":"프로덕션에서 마이그레이션이 깨졌는데, 그냥 그 마이그레이션 파일 고치면 되나요?","expectedMemoryIds":["ko-f24"],"category":"single-fact","lang":"ko"}
+{"question":"push-gateway는 아이폰에 어떻게 알림을 보내요?","expectedMemoryIds":["ko-f26"],"category":"single-fact","lang":"ko"}
+{"question":"퍼블릭 API는 API 키 하나로 분당 몇 번까지 호출할 수 있어요?","expectedMemoryIds":["ko-f30"],"category":"single-fact","lang":"ko"}
+{"question":"BigQuery 웨어하우스는 어느 리전에 있어요?","expectedMemoryIds":["ko-f32"],"category":"single-fact","lang":"ko"}
+{"question":"비밀번호는 어떤 알고리즘으로 해시하고 있어요?","expectedMemoryIds":["ko-f37"],"category":"single-fact","lang":"ko"}
+{"question":"checkout-web 요즘 어디에 호스팅돼 있어요?","expectedMemoryIds":["ko-u01b"],"notExpectedMemoryIds":["ko-u01a"],"category":"knowledge-update","lang":"ko"}
+{"question":"릴리스 전에 코드 프리즈는 며칠이에요?","expectedMemoryIds":["ko-u02b"],"notExpectedMemoryIds":["ko-u02a"],"category":"knowledge-update","lang":"ko"}
+{"question":"디자인 리뷰 언제 해요?","expectedMemoryIds":["ko-u04b"],"notExpectedMemoryIds":["ko-u04a"],"category":"knowledge-update","lang":"ko"}
+{"question":"모바일 팀은 어떤 CI에서 빌드해요?","expectedMemoryIds":["ko-u05b"],"notExpectedMemoryIds":["ko-u05a"],"category":"knowledge-update","lang":"ko"}
+{"question":"orders-api는 따로 지정 안 하면 페이지당 몇 개 돌려줘요?","expectedMemoryIds":["ko-u06b"],"notExpectedMemoryIds":["ko-u06a"],"category":"knowledge-update","lang":"ko"}
+{"question":"스테이징은 언제 싹 밀려요?","expectedMemoryIds":["ko-u09b"],"notExpectedMemoryIds":["ko-u09a"],"category":"knowledge-update","lang":"ko"}
+{"question":"invoice-renderer는 인보이스에 무슨 폰트를 써요?","expectedMemoryIds":["ko-u10b"],"notExpectedMemoryIds":["ko-u10a"],"category":"knowledge-update","lang":"ko"}
+{"question":"5월에 ledger-sync는 Node.js 몇 버전이었어요?","expectedMemoryIds":["ko-u03a"],"notExpectedMemoryIds":["ko-u03b"],"asOf":"2026-05-20T12:00:00Z","category":"temporal","lang":"ko"}
+{"question":"4월 당시에 검색팀은 누가 이끌고 있었어요?","expectedMemoryIds":["ko-u07a"],"notExpectedMemoryIds":["ko-u07b"],"asOf":"2026-04-15T12:00:00Z","category":"temporal","lang":"ko"}
+{"question":"초여름에 geo-lookup은 캐시 결과를 얼마 동안 들고 있었어요?","expectedMemoryIds":["ko-u08a"],"notExpectedMemoryIds":["ko-u08b"],"asOf":"2026-06-05T12:00:00Z","category":"temporal","lang":"ko"}
+{"question":"notification-scheduler는 몇 번 포트에서 리슨해요?","expectedMemoryIds":[],"category":"abstention","lang":"ko"}
+{"question":"EU 고객 데이터 보관 정책은 누가 맡고 있어요?","expectedMemoryIds":[],"category":"abstention","lang":"ko"}
+{"question":"ML 학습 파이프라인은 Python 몇 버전 써요?","expectedMemoryIds":[],"category":"abstention","lang":"ko"}
+{"question":"SendGrid API 키는 어떻게 교체해요?","expectedMemoryIds":[],"category":"abstention","lang":"ko"}

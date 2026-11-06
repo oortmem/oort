@@ -424,9 +424,11 @@ indexes about three times as many terms.
 **Why not ICU?** It is not compiled into `better-sqlite3`, as checked above, and Oort Cloud's
 SQLite cannot load extensions.
 
-**FTS5 declaration.** Recreate `memories_fts` with `unicode61 remove_diacritics 0 categories
-'L* N* Co M*' tokenchars '-_.'`, so FTS5 does not re-split at the marks v2 keeps. Folding stays in
-the JS tokeniser, so FTS5 sees folded text.
+**FTS5 declaration.** Create the index as `memories_fts2` (locally; the cloud's name is in §14)
+with `unicode61 remove_diacritics 0 categories 'L* N* Co M*' tokenchars '-_.'`, so FTS5 does not
+re-split at the marks v2 keeps. Folding stays in the JS tokeniser, so FTS5 sees folded text. The
+new name makes an older Oort that still has the store open (an MCP server or daemon started before
+the upgrade) fail on its next write, instead of writing v1 tokens that no v2 query finds.
 
 **Invariant, tested.** For text with no combining marks, no CJK, Southeast Asian or
 diacritic-bearing Latin, and only NFKC-stable characters, v2's output equals v1's. That covers
@@ -443,16 +445,24 @@ The FTS table is contentless, and it is filled by the store, which already knows
 memory's FTS row (`packages/store-sqlite/src/index.ts:621-633`). A rebuild therefore needs only
 stored text, with no vendor calls:
 
-- **Local [0.6.x].** Schema version 4. On open, in one transaction: drop `memories_fts`, create it
-  with the v2 declaration and re-insert every row from `memories`. Cold rows index only their stub
-  and entities, as today. Record `lexical_version = 2` in `meta`. A prototype rebuilt 20,000 rows
-  in 0.29 s, single-threaded on an M1 Max. The downgrade (the existing `to` path, `schema.ts`)
-  rebuilds with v1. Older Oort versions refuse a v4 store, as they refuse any newer one.
+- **Local [0.6.x].** Schema version 4. On open, in one transaction: drop `memories_fts`, create
+  `memories_fts2` with the v2 declaration, re-insert every row from `memories` and run FTS5's
+  `optimize`. Cold rows index only their stub and entities, as today. Record `lexical_version = 2`
+  in `meta`. A prototype rebuilt 20,000 rows in 0.29 s, single-threaded on an M1 Max. BM25's
+  totals restart from the live rows (the old index also counted every rewritten row), so lexical
+  rankings change once. The downgrade (the existing `to` path, `schema.ts`) rebuilds with v1, as
+  `memories_fts` again. Older Oort versions refuse a v4 store, as they refuse any newer one. A hook
+  (`migrate: false`) never builds or repairs the index; it refuses and leaves it to `oort doctor`
+  or the next command.
 - **Oort Cloud [0.6.x].** The same rebuild runs in batches. Queries meanwhile use both
-  tokenisations (§14).
-- **Drift guard.** Store the tokeniser version and, where the runtime exposes it, the ICU version.
-  If either changes on open, rebuild. That costs under a second locally, and it covers Thai
-  segmentation drift across Node upgrades.
+  tokenisations (§14). The cloud must not bump to the core release that contains tokeniser v2
+  until its own rebuild ships with that bump: core's v2 query tokens against a v1 index would miss
+  CJK, Thai, Indic and accented text, and the cloud would index v2 tokens into a table declared
+  for v1.
+- **Drift guard.** Store the tokeniser version and ICU's major version. Rebuild on open when the
+  tokeniser version differs, or when ICU's major is newer and the store holds Thai, Lao, Khmer or
+  Myanmar text (the only scripts whose tokens come from ICU). An index recorded by a newer ICU is
+  left alone, so two Node versions do not rebuild in turn, and an unknown ICU never rebuilds.
 
 ## 6. Date cues
 
@@ -721,8 +731,8 @@ core release and a dependency bump.
    organisation default, then `auto`.
 9. **Local reranker in `multi`?** None in hooks (`fast` mode is the default anyway). Keep
    `bge-reranker-v2-m3` as an opt-in for `oort mcp`. Add the small mMiniLM reranker later.
-10. **Thai segmentation drift across ICU versions?** Accept it, record the ICU version and
-    rebuild on change (§5.2).
+10. **Thai segmentation drift across ICU versions?** Accept it, record ICU's major version and
+    rebuild when a newer major meets segmented text (§5.2).
 
 ## 14. Oort Cloud operational notes (may move to the private repo)
 
@@ -730,9 +740,11 @@ core release and a dependency bump.
   `unicode61` declaration as `store-sqlite`, and indexes core's `tokenizeLexical` output. It has
   the same bug, and it gets the same fix.
 - **Rebuild.** Ship it as a numbered schema migration that creates `memories_fts_v2` and sets a
-  `lexical_version` cursor. A background task then re-inserts rows in batches of a few thousand,
-  between requests, so no request runs long. When it finishes, it swaps the tables and drops the
-  old one. Until the cursor completes, lexical queries search both tables, each with its own
+  `lexical_version` cursor, in the same release that bumps core to tokeniser v2 (§5.2). A
+  background task then re-inserts rows in batches of a few thousand, between requests, so no
+  request runs long. When it finishes, it drops the old `memories_fts`, keeps `memories_fts_v2` as
+  the index's name (renaming it back would let an older build write v1 tokens into it unnoticed)
+  and runs `optimize`. Until the cursor completes, lexical queries search both tables, each with its own
   tokenisation, and merge by best rank. Shared-node legs do the same with their own cursor, since
   every node tokenises queries with the deployed core. The rebuild makes no vendor calls; it
   writes rows only.

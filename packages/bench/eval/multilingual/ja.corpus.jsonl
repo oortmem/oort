@@ -1,0 +1,60 @@
+{"fact":"f01","text":"checkout-webはローカル開発だとポート4173で動いていて、APIコールはポート8081のバックエンドにプロキシしている。"}
+{"fact":"f02","text":"ledger-sync ワーカーは Kafka トピック ledger.events.v2 をコンシュームしている。オフセットのコミットはDBのトランザクションが成功してから。"}
+{"fact":"f03","text":"invoice-rendererは請求書PDFをPlaywrightで生成しているので、DockerイメージにヘッドレスChromiumを入れておく必要がある。"}
+{"fact":"f04","text":"ステージングのPostgresの認証情報はVaultのsecret/staging/postgresに置いてある。.envファイルには絶対にコピーしないこと。"}
+{"fact":"f05","text":"決済のオンコール当番表は Marta Oliveira さんの担当。返金ジョブを触る前に、まず彼女を呼び出すこと。"}
+{"fact":"f06","text":"ユーザーの希望：コミットメッセージは命令形で書き、末尾にLinearのイシューキーを付ける。例：「Fix retry backoff (PAY-212)」"}
+{"fact":"f07","text":"GraphQLの型を再生成するには、リポジトリのルートでpnpm codegenを実行してから開発サーバーを再起動する。"}
+{"fact":"f08","text":"2026-10-14、MaxMindのデータベース更新後にgeo-lookupがメモリ不足で落ちた。コンテナのメモリ上限を1 GiBに引き上げて対応済み。"}
+{"fact":"f09","text":"モバイルアプリのサポート対象は iOS 16 以降。iOS 15 のサポート打ち切りはプロダクトチームと合意済み。"}
+{"fact":"f10","text":"reporting-apiではテナントの分離をアプリ側のフィルタリングではなく、PostgreSQLの行レベルセキュリティ（RLS）でやっている。以前WHERE句の書き忘れで別の顧客のデータが漏れたことがあるため。"}
+{"fact":"f11","text":"ユーザーはプルリクを変更400行未満に収めたい派。それより大きくなったらレビュー前に分割する。"}
+{"fact":"f12","text":"リリース前に pnpm changeset version でバージョンを上げて、ユーザーに影響する変更がすべて CHANGELOG.md に書かれているか確認すること。"}
+{"fact":"f13","text":"session-brokerはセッションをRedisに保存している。アイドルタイムアウトは30分、絶対的な有効期限は12時間。"}
+{"fact":"f14","text":"夜間バックアップが3日連続で失敗していた。原因はS3のライフサイクルルールがステージングのプレフィックスを削除していたこと。"}
+{"fact":"f15","text":"フィーチャーフラグはUnleashで管理している。new-checkout-flowはブラジルのユーザーの10%に対して有効化中。"}
+{"fact":"f16","text":"ユーザーはデフォルトエクスポートが嫌いで、TypeScriptのモジュールはすべて名前付きエクスポートにしてほしいとのこと。"}
+{"fact":"f17","text":"たまに落ちるログインテスト（flaky）は、SLOW_NETWORK=1 を付けてまっさらなブラウザプロファイルで実行するとローカルで再現できる。"}
+{"fact":"f18","text":"support-etlジョブは15分ごとにZendeskのサポートチケットをデータウェアハウスにコピーしている。"}
+{"fact":"f19","text":"デザインシステムはpackages/uiにあって、Tailwindのトークンがベース。色は必ずトークンファイルから取ること。hex値のハードコードは禁止。"}
+{"fact":"f20","text":"2026-09-03、アナライザーを変更したため catalog-indexer で Elasticsearch のインデックスを一から再構築した。再構築にはだいたい6時間かかった。"}
+{"fact":"f21","text":"画像アップロードの上限は10 MB。メディアパイプラインで幅が最大2048ピクセルになるようリサイズされる。"}
+{"fact":"f22","text":"タイムスタンプはすべてUTCで保存し、ユーザーのタイムゾーンへの変換はブラウザ側でのみ行う。"}
+{"fact":"f23","text":"公開APIはURLパス（/v1、/v2）でバージョン管理している。/v1は2027-03-31に停止予定。"}
+{"fact":"f24","text":"本番でマイグレーションが失敗しても、そのマイグレーション自体は絶対に編集しないこと。新しいフォワードマイグレーションを書いて pnpm db:migrate で適用する。"}
+{"fact":"f25","text":"エラーメッセージはエンドユーザー向けに書いてほしい、スタックトレースや内部エラーコードは出さないで、というのがユーザーの要望。"}
+{"fact":"f26","text":"push-gatewayの通知配信は、AndroidはFirebase Cloud Messaging（FCM）、iOSはAPNs経由。"}
+{"fact":"f27","text":"2026-08-21の負荷試験で、2,000リクエスト/秒のときcheckoutのレイテンシが800 msを超えた。ボトルネックは税計算の呼び出しだった。"}
+{"fact":"f28","text":"翻訳は Crowdin で管理。ソース文字列は locales/en.json にあり、他のロケールは CI がプルしてくる。"}
+{"fact":"f29","text":"モノレポはpnpm workspacesのままでいき、Nxは導入しないとチームで決定。ビルドのレイヤーをこれ以上増やしたくないため。"}
+{"fact":"f30","text":"公開APIのレート制限はAPIキーごとに毎分100リクエストで、ゲートウェイ側で制御している。"}
+{"fact":"f31","text":"本番に近いデータをローカルで使いたいときはscripts/seed-anonymised.shを実行する。実際のメールアドレスがコピーされることはない。"}
+{"fact":"f32","text":"データウェアハウスは europe-west1 リージョンの BigQuery で、アナリストは Metabase 経由でクエリしている。"}
+{"fact":"f33","text":"レビューコメントでは問題を指摘するだけでなく、具体的な修正案まで出してほしいとユーザーに言われている。"}
+{"fact":"f34","text":"2026-07-02、証明書の期限切れでパートナー向けのWebhookエンドポイントが落ちた。今はcert-managerで証明書を自動更新している。"}
+{"fact":"f35","text":"AndroidアプリはKotlin＋Jetpack Compose、iOSアプリはSwiftUIで書かれている。"}
+{"fact":"f36","text":"リリース候補は毎回 axe でアクセシビリティ監査をする。コントラストのエラーが出たらリリースはブロック。"}
+{"fact":"f37","text":"パスワードはArgon2idでハッシュ化している。旧システムのbcryptハッシュは、ユーザーが次にログインしたタイミングで再ハッシュする。"}
+{"fact":"f38","text":"StripeのWebhookシークレットをローテーションするときは、先にVaultで更新してからbilling-workerを再デプロイする。"}
+{"fact":"f39","text":"アプリのログは Grafana Loki に送られ、保持期間は30日。エラーは Sentry にも送っている。"}
+{"fact":"f40","text":"ユーザーは長い理論的な説明より、短いコード例付きの説明のほうが好み。"}
+{"fact":"u01a","text":"checkout-webはVercelにデプロイしている。"}
+{"fact":"u01b","text":"checkout-webのデプロイ先はVercelからCloudflare Pagesに変わった。"}
+{"fact":"u02a","text":"リリース前のコードフリーズは2日間。"}
+{"fact":"u02b","text":"リリース前のコードフリーズは1日に短縮された。"}
+{"fact":"u03a","text":"ledger-sync は Node.js 20 で動いている。"}
+{"fact":"u03b","text":"ledger-syncはNode.js 24にアップグレード済み。"}
+{"fact":"u04a","text":"週次のデザインレビューは毎週火曜の10:00から。"}
+{"fact":"u04b","text":"週次のデザインレビューは木曜の14:00に変更になった。"}
+{"fact":"u05a","text":"モバイルチームはアプリのCIビルドにBitriseを使っている。"}
+{"fact":"u05b","text":"モバイルチームはCIのビルドを Bitrise から GitHub Actions に移行した。"}
+{"fact":"u06a","text":"orders-apiはデフォルトで1ページ50件返す。"}
+{"fact":"u06b","text":"orders-apiのデフォルトのページサイズが25件に下げられた。"}
+{"fact":"u07a","text":"検索チームのテックリードはJonas Weberさん。"}
+{"fact":"u07b","text":"検索チームのテックリードは Priya Raman さんが引き継いだ。"}
+{"fact":"u08a","text":"geo-lookupはルックアップ結果を24時間キャッシュしている。"}
+{"fact":"u08b","text":"geo-lookupのルックアップ結果のキャッシュは、今は6時間だけになった。"}
+{"fact":"u09a","text":"ステージング環境は毎週日曜の夜にリセットされる。"}
+{"fact":"u09b","text":"ステージング環境は今は毎晩02:00 UTCにリセットされる。"}
+{"fact":"u10a","text":"invoice-renderer は請求書に Inter フォントを使っている。"}
+{"fact":"u10b","text":"invoice-rendererは請求書のフォントをNoto Sansに切り替えた。ラテン文字以外の顧客名も正しく表示されるようにするため。"}

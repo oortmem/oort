@@ -1,0 +1,60 @@
+{"fact":"f01","text":"checkout-web은 로컬 개발 환경에서 4173 포트로 뜨고, API 호출은 8081 포트의 백엔드로 프록시한다."}
+{"fact":"f02","text":"ledger-sync 워커는 Kafka 토픽 ledger.events.v2를 컨슘하고, DB 트랜잭션이 성공한 뒤에만 오프셋을 커밋한다."}
+{"fact":"f03","text":"invoice-renderer는 Playwright로 인보이스 PDF를 만들기 때문에 Docker 이미지에 headless Chromium이 꼭 들어 있어야 한다."}
+{"fact":"f04","text":"스테이징 Postgres 접속 정보는 Vault의 secret/staging/postgres에 보관한다. .env 파일에 복사하는 건 절대 금지."}
+{"fact":"f05","text":"결제 쪽 온콜 로테이션은 Marta Oliveira 담당이다. 환불 잡을 누가 건드리든 그 전에 먼저 Marta를 호출할 것."}
+{"fact":"f06","text":"사용자는 커밋 메시지를 명령형으로 쓰고 끝에 Linear 이슈 키를 붙이길 원한다. 예: \"Fix retry backoff (PAY-212)\""}
+{"fact":"f07","text":"GraphQL 타입을 다시 생성하려면 저장소 루트에서 pnpm codegen을 실행한 뒤 dev 서버를 재시작하면 된다."}
+{"fact":"f08","text":"2026-10-14에 MaxMind 데이터베이스 업데이트 후 geo-lookup이 메모리 부족(OOM)으로 죽었다. 그래서 컨테이너 메모리 제한을 1 GiB로 올렸다."}
+{"fact":"f09","text":"모바일 앱은 iOS 16 이상을 지원한다. iOS 15 지원 중단은 제품팀과 합의한 사항이다."}
+{"fact":"f10","text":"reporting-api는 애플리케이션 코드에서 필터링하는 대신 PostgreSQL row-level security(RLS)로 테넌트를 격리한다. 예전에 WHERE 절 하나가 빠지는 바람에 다른 고객 데이터가 노출된 적이 있어서다."}
+{"fact":"f11","text":"사용자는 PR 변경량을 400줄 미만으로 유지하길 선호한다. 그보다 커지면 리뷰 전에 쪼갠다."}
+{"fact":"f12","text":"릴리스 전에는 pnpm changeset version으로 버전을 올리고, 사용자에게 보이는 변경 사항이 CHANGELOG.md에 빠짐없이 들어갔는지 확인한다."}
+{"fact":"f13","text":"session-broker는 세션을 Redis에 저장한다. 유휴 타임아웃은 30분이고, 절대 만료 시간은 12시간이다."}
+{"fact":"f14","text":"S3 라이프사이클 규칙이 staging 프리픽스를 지우고 있어서 야간 백업이 사흘 연속 실패했다."}
+{"fact":"f15","text":"피처 플래그는 Unleash에서 관리한다. new-checkout-flow는 브라질 사용자의 10%에게 켜져 있다."}
+{"fact":"f16","text":"사용자는 default export를 싫어하고, 모든 TypeScript 모듈에서 named export를 쓰길 원한다."}
+{"fact":"f17","text":"자주 깨지는(flaky) 로그인 테스트는 SLOW_NETWORK=1을 주고 새 브라우저 프로필로 돌리면 로컬에서 재현된다."}
+{"fact":"f18","text":"support-etl 잡은 15분마다 Zendesk의 고객지원 티켓을 데이터 웨어하우스로 복사한다."}
+{"fact":"f19","text":"디자인 시스템은 packages/ui에 있고 Tailwind 토큰 기반이다. 색상은 hex 값을 하드코딩하지 말고 반드시 토큰 파일에서 가져와야 한다."}
+{"fact":"f20","text":"2026-09-03에 analyzer를 바꾼 뒤 catalog-indexer가 Elasticsearch 인덱스를 처음부터 다시 빌드했다. 리빌드에 6시간 정도 걸렸다."}
+{"fact":"f21","text":"이미지 업로드는 최대 10 MB까지이고, 미디어 파이프라인에서 가로 최대 2048픽셀로 리사이즈한다."}
+{"fact":"f22","text":"모든 타임스탬프는 UTC로 저장하고, 사용자 시간대로 변환하는 건 브라우저에서만 한다."}
+{"fact":"f23","text":"퍼블릭 API는 URL 경로(/v1, /v2)로 버전을 나누며, /v1은 2027-03-31에 종료된다."}
+{"fact":"f24","text":"프로덕션에서 마이그레이션이 실패해도 해당 마이그레이션은 절대 수정하지 않는다. 새 forward 마이그레이션을 작성해서 pnpm db:migrate로 적용할 것."}
+{"fact":"f25","text":"사용자는 에러 메시지를 최종 사용자가 이해할 수 있게 쓰길 원한다. 스택 트레이스나 내부 에러 코드는 넣지 않는다."}
+{"fact":"f26","text":"push-gateway는 Android에서는 Firebase Cloud Messaging(FCM)으로, iOS에서는 APNs로 알림을 보낸다."}
+{"fact":"f27","text":"2026-08-21 부하 테스트에서 초당 2,000 요청일 때 checkout 지연 시간이 800 ms를 넘었다. 병목은 세금 계산 호출이었다."}
+{"fact":"f28","text":"번역은 Crowdin에서 관리한다. 원본 문자열은 locales/en.json에 있고, 나머지 로케일은 CI가 받아온다."}
+{"fact":"f29","text":"팀은 모노레포를 계속 pnpm workspaces로 가져가기로 했다. 빌드 레이어가 하나 더 늘어나는 걸 피하려고 Nx는 도입하지 않는다."}
+{"fact":"f30","text":"퍼블릭 API는 API 키당 분당 100회까지 요청할 수 있고, 이 제한은 게이트웨이에서 건다."}
+{"fact":"f31","text":"로컬에서 프로덕션 같은 데이터가 필요하면 scripts/seed-anonymised.sh를 실행한다. 실제 이메일 주소는 절대 복사하지 않는다."}
+{"fact":"f32","text":"데이터 웨어하우스는 europe-west1 리전의 BigQuery이고, 분석가들은 Metabase로 쿼리한다."}
+{"fact":"f33","text":"사용자는 리뷰 코멘트에서 문제만 지적하지 말고 구체적인 수정안까지 제시해 주길 원한다."}
+{"fact":"f34","text":"2026-07-02에 인증서가 만료돼서 파트너 웹훅 엔드포인트가 다운됐다. 지금은 cert-manager가 인증서를 자동으로 갱신한다."}
+{"fact":"f35","text":"Android 앱은 Kotlin과 Jetpack Compose로, iOS 앱은 SwiftUI로 개발한다."}
+{"fact":"f36","text":"릴리스 후보(RC)는 매번 axe로 접근성 점검을 하고, 명도 대비에서 실패가 나오면 릴리스가 막힌다."}
+{"fact":"f37","text":"비밀번호는 Argon2id로 해시한다. 구 시스템의 bcrypt 해시는 사용자가 다음에 로그인할 때 다시 해시한다."}
+{"fact":"f38","text":"Stripe 웹훅 시크릿을 교체할 때는 Vault에서 먼저 값을 바꾸고, 그다음 billing-worker를 재배포한다."}
+{"fact":"f39","text":"애플리케이션 로그는 Grafana Loki로 쌓이고 30일간 보관된다. 에러는 Sentry로도 전송된다."}
+{"fact":"f40","text":"사용자는 긴 이론 설명보다 짧은 코드 예제가 곁들여진 설명을 선호한다."}
+{"fact":"u01a","text":"checkout-web은 Vercel에 배포된다."}
+{"fact":"u01b","text":"checkout-web은 이제 Vercel 대신 Cloudflare Pages에 배포된다."}
+{"fact":"u02a","text":"릴리스 전 코드 프리즈는 이틀 동안이다."}
+{"fact":"u02b","text":"릴리스 전 코드 프리즈가 하루로 줄었다."}
+{"fact":"u03a","text":"ledger-sync는 Node.js 20에서 돌아간다."}
+{"fact":"u03b","text":"ledger-sync를 Node.js 24로 업그레이드했다."}
+{"fact":"u04a","text":"주간 디자인 리뷰는 매주 화요일 10:00에 한다."}
+{"fact":"u04b","text":"주간 디자인 리뷰가 목요일 14:00로 옮겨졌다."}
+{"fact":"u05a","text":"모바일 팀은 CI로 Bitrise를 써서 앱을 빌드한다."}
+{"fact":"u05b","text":"모바일 팀은 CI 빌드를 Bitrise에서 GitHub Actions로 옮겼다."}
+{"fact":"u06a","text":"orders-api는 기본적으로 페이지당 50개 항목을 반환한다."}
+{"fact":"u06b","text":"orders-api의 기본 페이지 크기가 25개로 줄었다."}
+{"fact":"u07a","text":"검색팀 테크 리드는 Jonas Weber다."}
+{"fact":"u07b","text":"검색팀 테크 리드를 Priya Raman이 이어받았다."}
+{"fact":"u08a","text":"geo-lookup은 조회 결과를 24시간 동안 캐시한다."}
+{"fact":"u08b","text":"geo-lookup은 이제 조회 결과를 6시간만 캐시한다."}
+{"fact":"u09a","text":"스테이징 환경은 매주 일요일 밤에 초기화된다."}
+{"fact":"u09b","text":"스테이징 환경은 이제 매일 밤 02:00 UTC에 초기화된다."}
+{"fact":"u10a","text":"invoice-renderer는 인보이스에 Inter 폰트를 쓴다."}
+{"fact":"u10b","text":"invoice-renderer는 라틴 문자가 아닌 고객 이름도 제대로 렌더링되도록 인보이스 폰트를 Noto Sans로 바꿨다."}

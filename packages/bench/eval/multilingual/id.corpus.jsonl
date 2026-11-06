@@ -1,0 +1,60 @@
+{"fact":"f01","text":"checkout-web jalan di port 4173 waktu development lokal, dan API call-nya di-proxy ke backend di port 8081."}
+{"fact":"f02","text":"Worker ledger-sync consume topic Kafka ledger.events.v2 dan baru commit offset setelah transaksi database berhasil."}
+{"fact":"f03","text":"invoice-renderer bikin PDF invoice pakai Playwright, jadi Docker image-nya wajib ada headless Chromium."}
+{"fact":"f04","text":"Credential Postgres staging disimpan di Vault di secret/staging/postgres dan jangan pernah di-copy ke file .env."}
+{"fact":"f05","text":"Jadwal on-call payments dipegang Marta Oliveira; page dia dulu sebelum ada yang ngutak-atik job refund."}
+{"fact":"f06","text":"User mau commit message pakai kalimat perintah (imperative) dengan issue key Linear di akhir, contohnya \"Fix retry backoff (PAY-212)\"."}
+{"fact":"f07","text":"Untuk generate ulang type GraphQL, jalankan pnpm codegen dari root repo, lalu restart dev server."}
+{"fact":"f08","text":"Tanggal 2026-10-14 geo-lookup kehabisan memory setelah update database MaxMind; limit memory container-nya dinaikkan jadi 1 GiB."}
+{"fact":"f09","text":"Aplikasi mobile support iOS 16 ke atas; drop iOS 15 sudah disepakati dengan tim product."}
+{"fact":"f10","text":"reporting-api mengisolasi tenant pakai row-level security PostgreSQL, bukan filter di kode aplikasi, karena dulu pernah ada WHERE yang ketinggalan dan data customer lain bocor."}
+{"fact":"f11","text":"User lebih suka pull request di bawah 400 baris perubahan; yang lebih besar dipecah dulu sebelum review."}
+{"fact":"f12","text":"Sebelum rilis, naikkan versi pakai pnpm changeset version dan cek apakah CHANGELOG.md sudah mencantumkan semua perubahan yang kelihatan oleh user."}
+{"fact":"f13","text":"session-broker menyimpan session di Redis dengan idle timeout 30 menit dan batas absolut 12 jam."}
+{"fact":"f14","text":"Backup malam gagal tiga malam berturut-turut karena ada lifecycle rule S3 yang menghapus prefix staging."}
+{"fact":"f15","text":"Feature flag dikelola di Unleash; new-checkout-flow dinyalakan untuk 10% user di Brasil."}
+{"fact":"f16","text":"User nggak suka default export dan mau named export di semua module TypeScript."}
+{"fact":"f17","text":"Test login yang flaky bisa direproduksi di lokal dengan menjalankannya pakai SLOW_NETWORK=1 dan profil browser yang masih fresh."}
+{"fact":"f18","text":"Job support-etl menyalin tiket support dari Zendesk ke data warehouse setiap 15 menit."}
+{"fact":"f19","text":"Design system ada di packages/ui dan dibangun di atas token Tailwind; warna harus diambil dari file token, jangan pernah hardcode nilai hex."}
+{"fact":"f20","text":"Tanggal 2026-09-03 catalog-indexer rebuild index Elasticsearch dari nol setelah analyzer-nya diganti; rebuild-nya makan waktu sekitar enam jam."}
+{"fact":"f21","text":"Upload gambar dibatasi 10 MB, dan media pipeline me-resize gambarnya jadi lebar maksimal 2048 piksel."}
+{"fact":"f22","text":"Semua timestamp disimpan dalam UTC, dan baru dikonversi ke zona waktu user di browser."}
+{"fact":"f23","text":"API publik di-versioning lewat path URL (/v1, /v2), dan /v1 bakal dimatikan tanggal 2027-03-31."}
+{"fact":"f24","text":"Kalau migration gagal di production, jangan diedit: bikin forward migration baru lalu apply pakai pnpm db:migrate."}
+{"fact":"f25","text":"User mau pesan error ditulis untuk end user, tanpa stack trace atau kode error internal."}
+{"fact":"f26","text":"push-gateway mengirim notifikasi lewat Firebase Cloud Messaging (FCM) di Android dan APNs di iOS."}
+{"fact":"f27","text":"Load test tanggal 2026-08-21 menunjukkan latency checkout di atas 800 ms pada 2000 request per detik; bottleneck-nya ada di call perhitungan pajak."}
+{"fact":"f28","text":"Terjemahan dikelola di Crowdin; source string-nya ada di locales/en.json dan locale lainnya ditarik oleh CI."}
+{"fact":"f29","text":"Tim memutuskan tetap pakai pnpm workspaces untuk monorepo dan nggak adopsi Nx, biar nggak nambah satu layer build lagi."}
+{"fact":"f30","text":"API publik membolehkan 100 request per menit per API key, dan limit-nya di-enforce di gateway."}
+{"fact":"f31","text":"Untuk dapat data yang mirip production di lokal, jalankan scripts/seed-anonymised.sh; script ini nggak pernah meng-copy alamat email asli."}
+{"fact":"f32","text":"Data warehouse-nya BigQuery di region europe-west1, dan analis query ke sana lewat Metabase."}
+{"fact":"f33","text":"User mau komentar review langsung mengusulkan fix yang konkret, bukan cuma nunjukin masalahnya."}
+{"fact":"f34","text":"Sertifikat yang expired bikin endpoint webhook partner down tanggal 2026-07-02; sekarang sertifikat di-renew otomatis oleh cert-manager."}
+{"fact":"f35","text":"Aplikasi Android ditulis pakai Kotlin dengan Jetpack Compose, sedangkan aplikasi iOS pakai SwiftUI."}
+{"fact":"f36","text":"Setiap release candidate diaudit aksesibilitasnya pakai axe, dan kalau ada yang gagal di kontras, rilisnya diblok."}
+{"fact":"f37","text":"Password di-hash pakai Argon2id; hash bcrypt dari sistem lama di-rehash waktu user login berikutnya."}
+{"fact":"f38","text":"Untuk rotate webhook secret Stripe, update dulu di Vault, baru redeploy billing-worker."}
+{"fact":"f39","text":"Log aplikasi dikirim ke Grafana Loki dan disimpan 30 hari; error juga dikirim ke Sentry."}
+{"fact":"f40","text":"User lebih suka penjelasan dengan contoh kode singkat daripada jawaban teori yang panjang lebar."}
+{"fact":"u01a","text":"checkout-web di-deploy ke Vercel."}
+{"fact":"u01b","text":"checkout-web sekarang di-deploy ke Cloudflare Pages, bukan ke Vercel lagi."}
+{"fact":"u02a","text":"Code freeze sebelum setiap rilis berlangsung dua hari."}
+{"fact":"u02b","text":"Code freeze sebelum setiap rilis sudah dipersingkat jadi satu hari."}
+{"fact":"u03a","text":"ledger-sync jalan di Node.js 20."}
+{"fact":"u03b","text":"ledger-sync sudah di-upgrade ke Node.js 24."}
+{"fact":"u04a","text":"Design review mingguan diadakan setiap Selasa jam 10:00."}
+{"fact":"u04b","text":"Design review mingguan sudah pindah ke hari Kamis jam 14:00."}
+{"fact":"u05a","text":"Tim mobile build aplikasinya di Bitrise untuk CI."}
+{"fact":"u05b","text":"Tim mobile sudah memindahkan build CI-nya dari Bitrise ke GitHub Actions."}
+{"fact":"u06a","text":"orders-api secara default mengembalikan 50 item per halaman."}
+{"fact":"u06b","text":"Page size default orders-api diturunkan jadi 25 item."}
+{"fact":"u07a","text":"Jonas Weber adalah tech lead tim search."}
+{"fact":"u07b","text":"Priya Raman sekarang mengambil alih posisi tech lead tim search."}
+{"fact":"u08a","text":"geo-lookup meng-cache hasil lookup selama 24 jam."}
+{"fact":"u08b","text":"geo-lookup sekarang meng-cache hasil lookup cuma 6 jam."}
+{"fact":"u09a","text":"Environment staging di-reset setiap Minggu malam."}
+{"fact":"u09b","text":"Environment staging sekarang di-reset setiap malam jam 02:00 UTC."}
+{"fact":"u10a","text":"invoice-renderer pakai font Inter di invoice."}
+{"fact":"u10b","text":"invoice-renderer ganti ke Noto Sans di invoice supaya nama customer yang pakai aksara non-Latin tampil dengan benar."}

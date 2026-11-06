@@ -1,5 +1,12 @@
 import type { Database } from 'better-sqlite3';
-import { nodeKey, type NodeRef } from '@oortmem/core';
+import {
+  hasSegmentedScript,
+  lexicalIcuVersion,
+  LEXICAL_VERSION,
+  nodeKey,
+  tokenizerForVersion,
+  type NodeRef,
+} from '@oortmem/core';
 
 /**
  * 1: the Phase 1 store, one (org, customer, agent) scope per memory.
@@ -8,15 +15,34 @@ import { nodeKey, type NodeRef } from '@oortmem/core';
  *    Planet, written by the agent that was their `agent_id`.
  * 3: judgment memory (CON-71). One nullable column, `judgment`, holds a `judgment` memory's
  *    decision as JSON; every other row has NULL. Additive: nothing else changes.
+ * 4: tokeniser v2 (CON-110). The lexical index is `memories_fts2` (`FTS_TABLE`, renamed from
+ *    `memories_fts`), declared with `FTS_TOKENIZE`, and holds core's
+ *    version 2 tokens (CJK bigrams, Thai words, combining marks kept, Latin accents folded).
+ *    `meta` records `lexical_version` and the ICU version the index was built with. The
+ *    migration rebuilds the index from stored text; nothing else changes.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
- * FTS5 tokenizer. The store indexes pre-tokenised text (core's
- * `tokenizeLexical` joined by spaces), so `-`, `_` and `.` must stay token
- * characters here and case-folding is the only other normalisation.
+ * FTS5 tokenizer. The store indexes pre-tokenised text (core's `tokenizeLexical` joined by
+ * spaces), so `-`, `_` and `.` must stay token characters here and case-folding is the only other
+ * normalisation. `M*` keeps combining marks inside tokens, as core's tokeniser v2 does: without it
+ * FTS5 would split `हिंदी` or `ใช้` again at their vowel signs. Oort Cloud declares the same string.
  */
-const TOKENIZE = `unicode61 remove_diacritics 0 tokenchars '-_.'`;
+export const FTS_TOKENIZE = `unicode61 remove_diacritics 0 categories 'L* N* Co M*' tokenchars '-_.'`;
+
+/** The declaration of schema versions 1 to 3, for tokeniser v1's index. */
+export const FTS_TOKENIZE_V1 = `unicode61 remove_diacritics 0 tokenchars '-_.'`;
+
+/**
+ * The lexical index's table at schema version 4. It has a new name so that an older Oort still
+ * running against the store (an MCP server or daemon started before the upgrade) fails loudly on
+ * its next write, `no such table: memories_fts`, instead of indexing tokeniser v1's tokens where
+ * no version 2 query would find them.
+ */
+export const FTS_TABLE = 'memories_fts2';
+/** The table of schema versions 1 to 3. */
+export const FTS_TABLE_V1 = 'memories_fts';
 
 /** Which address fields each level has; anything else is NULL. Mirrors core's `Address` union. */
 const LEVEL_CHECK = `CHECK (
@@ -232,6 +258,166 @@ export function migrateV1toV2(db: Database, dimension: number): void {
 }
 
 /**
+ * Drops the lexical index and creates it again for tokeniser `version`: `memories_fts` with v1's
+ * declaration for 1, `memories_fts2` (`FTS_TABLE`) with `FTS_TOKENIZE` for 2. Indexes every memory
+ * again from its stored text, inside the caller's transaction: no vendor call, no vector touched.
+ * A row's FTS rowid is its `rid`; a cold row indexes only its stub and entities, as the store
+ * writes them. Records the tokeniser and ICU versions in `meta` (version 2), or removes them
+ * (version 1, which older Oort versions do not know).
+ *
+ * BM25's row and token totals start again from the live rows. A long-lived contentless-delete
+ * index never subtracts a rewritten row from them, so lexical scores shift once at the rebuild,
+ * by the history the old index carried. That is accepted: carrying the history over would grow
+ * without bound with every past rewrite.
+ */
+export function rebuildFts(db: Database, version: 1 | 2, icu = lexicalIcuVersion()): number {
+  const tokenize = tokenizerForVersion(version);
+  const indexed = (text: string): string => tokenize(text).join(' ');
+  const table = version === 1 ? FTS_TABLE_V1 : FTS_TABLE;
+  db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE_V1}`);
+  db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE}`);
+  db.exec(ftsTable(version === 1 ? FTS_TOKENIZE_V1 : FTS_TOKENIZE, table));
+  const insert = db.prepare<[number, string, string, string]>(
+    `INSERT INTO ${table} (rowid, text, stub, entities) VALUES (?, ?, ?, ?)`,
+  );
+  // Paged by rid: better-sqlite3 cannot write while a statement is still iterating.
+  const page = db.prepare<
+    [number],
+    { rid: number; tier: string; text: string; stub: string; entities: string }
+  >('SELECT rid, tier, text, stub, entities FROM memories WHERE rid > ? ORDER BY rid LIMIT 1000');
+  let n = 0;
+  let after = -Infinity;
+  for (;;) {
+    const rows = page.all(after);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const entities = JSON.parse(r.entities) as string[];
+      insert.run(
+        r.rid,
+        r.tier === 'cold' ? '' : indexed(r.text),
+        indexed(r.stub),
+        indexed(entities.join(' ')),
+      );
+      n++;
+      after = r.rid;
+    }
+  }
+  // One segment: the rebuild leaves the index as compact as a fresh one, and merges nothing later.
+  db.exec(`INSERT INTO ${table} (${table}) VALUES ('optimize')`);
+  if (version === 2) recordLexical(db, icu);
+  else db.exec("DELETE FROM meta WHERE key IN ('lexical_version', 'lexical_icu')");
+  return n;
+}
+
+function recordLexical(db: Database, icu = lexicalIcuVersion()): void {
+  const put = db.prepare(
+    `INSERT INTO meta (key, value) VALUES (?, ?)
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+  );
+  put.run('lexical_version', String(LEXICAL_VERSION));
+  // The major only: Node versions that share it segment alike, and do not rewrite it in turn.
+  put.run('lexical_icu', icuMajor(icu)?.toString() ?? '');
+}
+
+/**
+ * Contentless (content = '', contentless_delete = 1). Nothing syncs it automatically: the store
+ * inserts and deletes every row explicitly, in the same transaction as the memories write, and
+ * keeps rowid = memories.rid. It indexes core's tokenizeLexical output joined by spaces (so token
+ * boundaries match the in-memory store), and an empty text column for cold rows so they match
+ * lexically only through stub and entities. An external content table (content = memories)
+ * cannot express either.
+ */
+function ftsTable(tokenize: string, table: string): string {
+  return `CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(
+        text, stub, entities,
+        content = '', contentless_delete = 1,
+        tokenize = "${tokenize}"
+      )`;
+}
+
+/** Version 3 to 4, inside the caller's transaction: the lexical index rebuilt with tokeniser v2. */
+export function migrateV3toV4(db: Database): void {
+  rebuildFts(db, 2);
+}
+
+/**
+ * A version 4 store whose index is not the version 2 index of its memories: one a pre-release
+ * build left under the old name (`memories_fts`), none at all, or an empty `memories_fts2` beside
+ * stored memories. Rebuilt on the next migrating open; an open that may not migrate refuses.
+ */
+export function indexNeedsRepair(db: Database): boolean {
+  if (exists(db, FTS_TABLE_V1) || !exists(db, FTS_TABLE)) return true;
+  const empty = db.prepare(`SELECT rowid FROM ${FTS_TABLE} LIMIT 1`).get() === undefined;
+  return empty && db.prepare('SELECT 1 FROM memories LIMIT 1').get() !== undefined;
+}
+
+/** An ICU version's major number, or undefined when it is empty or not a version at all. */
+function icuMajor(v: string | undefined): number | undefined {
+  const m = /^(\d+)(?:\.\d+)*$/.exec(v ?? '');
+  return m === null ? undefined : Number(m[1]);
+}
+
+/** Each connection's answer to `holdsSegmentedText`: scanned at most once per open. */
+const segmentedSeen = new WeakMap<Database, boolean>();
+
+/**
+ * Whether any memory's indexed text is in a dictionary-segmented script. Read only when needed,
+ * and at most once per connection: the open's check and its schema transaction share the answer.
+ */
+function holdsSegmentedText(db: Database): boolean {
+  const seen = segmentedSeen.get(db);
+  if (seen !== undefined) return seen;
+  const found = scanSegmentedText(db);
+  segmentedSeen.set(db, found);
+  return found;
+}
+
+function scanSegmentedText(db: Database): boolean {
+  db.function('oort_segmented', { deterministic: true }, (t: unknown) =>
+    typeof t === 'string' && hasSegmentedScript(t) ? 1 : 0,
+  );
+  return (
+    db
+      .prepare(
+        `SELECT 1 FROM memories
+         WHERE oort_segmented(text) OR oort_segmented(stub) OR oort_segmented(entities) LIMIT 1`,
+      )
+      .get() !== undefined
+  );
+}
+
+/**
+ * What a version 4 store's lexical index needs on a migrating open (design §5.2):
+ *
+ * - `rebuild`: it was built by another tokeniser version, or by an older ICU major while the
+ *   store holds Thai, Lao, Khmer or Myanmar text (their word breaks come from ICU's
+ *   dictionaries; nothing else changes with ICU). Only a newer major counts, so processes on two
+ *   Node versions do not rebuild in turn.
+ * - `record-icu`: nothing to rebuild, but the recorded ICU major is older (or unknown). An index
+ *   recorded by a newer ICU is left as it is. Only the major is recorded.
+ * - `unknown-icu`: this runtime reports no usable ICU version and the store holds segmented
+ *   text, so drift cannot be checked. Never a rebuild.
+ * - `current`: nothing to do.
+ */
+export function lexicalIndexState(
+  db: Database,
+  icu: string = lexicalIcuVersion(),
+): 'rebuild' | 'record-icu' | 'unknown-icu' | 'current' {
+  const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
+  if (get.get('lexical_version')?.value !== String(LEXICAL_VERSION)) return 'rebuild';
+  if (indexNeedsRepair(db)) return 'rebuild';
+  const now = icuMajor(icu);
+  if (now === undefined) return holdsSegmentedText(db) ? 'unknown-icu' : 'current';
+  // Recorded as a major (`78`), or as a full version by an earlier build (`78.3`).
+  const was = icuMajor(get.get('lexical_icu')?.value);
+  if (was === now) return 'current';
+  // Built by a newer ICU (another Node on this machine): leave it, and its record, alone.
+  if (was !== undefined && now < was) return 'current';
+  if (was !== undefined && now > was && holdsSegmentedText(db)) return 'rebuild';
+  return 'record-icu';
+}
+
+/**
  * Version 2 to 3, inside the caller's transaction: adds the nullable `judgment` column. Every
  * existing row keeps its rid, FTS row and vector; nothing is rewritten.
  */
@@ -339,7 +525,9 @@ export class StoreMigrationRequiredError extends Error {
     readonly from: number,
   ) {
     super(
-      `sqlite store: ${path} is at schema version ${from} and must be migrated to ${SCHEMA_VERSION}; open it once without migrate: false (oort doctor does)`,
+      from === SCHEMA_VERSION
+        ? `sqlite store: ${path} needs its search index rebuilt; open it once without migrate: false (oort doctor does)`
+        : `sqlite store: ${path} is at schema version ${from} and must be migrated to ${SCHEMA_VERSION}; open it once without migrate: false (oort doctor does)`,
     );
     this.name = 'StoreMigrationRequiredError';
   }
@@ -382,11 +570,16 @@ export interface ApplySchemaOptions {
    * that migrates; `applySchema` never copies anything.
    */
   migrate?: boolean;
+  /** One-line notices (the rebuild, an unknown ICU). Default: none. */
+  log?: (message: string) => void;
+  /** The runtime's ICU version, for the drift guard (default `lexicalIcuVersion()`). */
+  icu?: string;
 }
 
 /**
  * Creates every table and index of a new store at the current version, and
- * migrates a version 1 or 2 store to it (unless `migrate` is false).
+ * migrates a version 1, 2 or 3 store to it (unless `migrate` is false). A version 4 store whose
+ * lexical index is stale (`lexicalIndexState`) has it rebuilt, unless `migrate` is false.
  * Records `dimension` on first open and refuses a store whose recorded
  * dimension differs, or whose schema version is unknown. Runs in one
  * IMMEDIATE transaction so concurrent first opens (hook processes) serialise:
@@ -413,18 +606,53 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     }
 
     const version = get.get('schema_version')?.value;
-    if (version === undefined && !exists(db, 'memories')) {
+    // Said only by the process that rebuilds, inside its transaction: another open that waited
+    // for the lock finds the work done and says nothing.
+    const rebuilding = (): void => {
+      const n = db.prepare<[], { n: number }>('SELECT count(*) AS n FROM memories').get()?.n ?? 0;
+      opts.log?.(`Rebuilding the search index (${n} ${n === 1 ? 'memory' : 'memories'})…`);
+    };
+    const fresh = version === undefined && !exists(db, 'memories');
+    if (fresh) {
       db.exec(memoriesV2('memories', true));
       db.exec(INDEXES_V2);
     } else if (version === '1') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 1);
       assertMigratable(db);
+      rebuilding();
       migrateV1toV2(db, dimension);
       migrateV2toV3(db);
+      migrateV3toV4(db);
     } else if (version === '2') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 2);
+      rebuilding();
       migrateV2toV3(db);
-    } else if (version !== String(SCHEMA_VERSION)) {
+      migrateV3toV4(db);
+    } else if (version === '3') {
+      if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 3);
+      rebuilding();
+      migrateV3toV4(db);
+    } else if (version === String(SCHEMA_VERSION)) {
+      // An index to repair is a migration: an open that may not migrate (a hook) refuses, changing
+      // nothing, rather than create an empty index that would then look current.
+      if (opts.migrate === false && indexNeedsRepair(db)) {
+        throw new StoreMigrationRequiredError(db.name, SCHEMA_VERSION);
+      }
+      // The drift guard needs a write; an open that may not migrate (a hook) leaves it to the next.
+      if (opts.migrate !== false) {
+        const icu = opts.icu ?? lexicalIcuVersion();
+        const state = lexicalIndexState(db, icu);
+        if (state === 'rebuild') {
+          rebuilding();
+          rebuildFts(db, 2, icu);
+        } else if (state === 'record-icu') recordLexical(db, icu);
+        else if (state === 'unknown-icu') {
+          opts.log?.(
+            `sqlite store: this runtime reports no usable ICU version (${JSON.stringify(icu)}); Thai, Lao, Khmer and Myanmar words are matched as the index was built`,
+          );
+        }
+      }
+    } else {
       throw new Error(
         `sqlite store: schema version ${version ?? 'unknown'} is not supported (expected ${SCHEMA_VERSION})`,
       );
@@ -432,39 +660,37 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     put.run('schema_version', String(SCHEMA_VERSION));
     if (stored === undefined) put.run('dimension', String(dimension));
 
-    // Contentless (content = '', contentless_delete = 1). Nothing syncs it
-    // automatically: the store inserts and deletes every row explicitly, in the
-    // same transaction as the memories write, and keeps rowid = memories.rid.
-    // It indexes core's tokenizeLexical output joined by spaces (so token
-    // boundaries match the in-memory store), and an empty text column for cold
-    // rows so they match lexically only through stub and entities. An external
-    // content table (content = memories) cannot express either.
-    db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-        text, stub, entities,
-        content = '', contentless_delete = 1,
-        tokenize = "${TOKENIZE}"
-      );
-    `);
+    // A new store gets the version 2 index here (see `ftsTable`); a migrated one has it already,
+    // and one whose index needs repair was rebuilt above or refused.
+    if (fresh) {
+      db.exec(ftsTable(FTS_TOKENIZE, FTS_TABLE));
+      recordLexical(db, opts.icu ?? lexicalIcuVersion());
+    }
     if (!exists(db, 'memories_vec')) db.exec(vecV2(dimension));
   }).immediate();
 }
 
 /**
  * Takes a store's database back to schema version `to`: 1 for running Oort 0.2.x against it
- * again (the default), 2 for Oort 0.3 to 0.5. Refuses, changing nothing, when the store holds
- * anything that version cannot represent (see `migrateV2toV1` and `migrateV3toV2`). No other
- * connection may have the store open.
+ * again (the default), 2 for Oort 0.3 to 0.5, 3 for Oort before tokeniser v2. Refuses, changing
+ * nothing, when the store holds anything that version cannot represent (see `migrateV2toV1` and
+ * `migrateV3toV2`). Leaving version 4 rebuilds the lexical index with tokeniser v1. No other
+ * connection may have the store open. Opening a store never does this: migrations only roll
+ * forward.
  */
-export function downgradeSchema(db: Database, to: 1 | 2 = 1): void {
+export function downgradeSchema(db: Database, to: 1 | 2 | 3 = 1): void {
   db.transaction(() => {
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
-    const version = Number(get.get('schema_version')?.value);
+    let version = Number(get.get('schema_version')?.value);
     if (version <= to && version >= 1) return;
-    if (version !== 2 && version !== 3) {
+    if (version !== 2 && version !== 3 && version !== 4) {
       throw new Error(
         `sqlite store: cannot downgrade schema version ${Number.isNaN(version) ? 'unknown' : version}`,
       );
+    }
+    if (version === 4) {
+      rebuildFts(db, 1);
+      version = 3;
     }
     // Version 1 is built from named columns (and refuses judgments), so going to 1 needs no
     // separate drop of `judgment` on the way.

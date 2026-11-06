@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installHooks } from '@oortmem/claude-code';
 import { harness, memory, memoryKeychain, type Harness, data } from '../../test/helpers.js';
@@ -129,6 +130,78 @@ describe('oort doctor', () => {
     expect(listBackups(db, 'pre-v2')).toHaveLength(1);
     expect(d.check('store', 'spaces')?.detail).toBe('Planet: 1 memory (every project)');
     expect(d.check('store', 'backup')?.detail).toContain('oort.sqlite.pre-v2.');
+  });
+
+  it('doctor.says-it-is-rebuilding-the-search-index (CON-110)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      log: () => {},
+    });
+    await s.upsert(TG, memory({ embedding: undefined }));
+    await s.close();
+    downgradeSqliteStore({ path: db, to: 3 });
+    expect(sqliteSchemaVersion(db)).toBe(3);
+    // The store's one-line notices go to stderr, before the migration's transaction.
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let said: string[];
+    try {
+      const d = await doctor(h);
+      expect(d.human.io.stdout).toContain(
+        `migrated the store from schema version 3 to ${SCHEMA_VERSION}`,
+      );
+      // An Oort started before the upgrade cannot write to the renamed index.
+      expect(d.human.io.stdout).toContain('restart any Oort MCP server started before the upgrade');
+    } finally {
+      said = err.mock.calls.map((c) => String(c[0]));
+      err.mockRestore();
+    }
+    expect(said).toContain('Rebuilding the search index (1 memory)…\n');
+    expect(said.filter((l) => l.startsWith('Rebuilding'))).toHaveLength(1);
+    expect(sqliteSchemaVersion(db)).toBe(SCHEMA_VERSION);
+    expect(listBackups(db, 'pre-v4')).toHaveLength(1);
+  });
+
+  it('doctor.a-hook-first-leaves-a-pre-rename-index-for-the-cli-to-repair (CON-110)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      log: () => {},
+    });
+    await s.upsert(TG, memory({ embedding: undefined }));
+    await s.close();
+    // A version 4 store migrated by the pre-rename build: the index still named memories_fts.
+    const raw = new Database(db);
+    raw.exec('ALTER TABLE memories_fts2 RENAME TO memories_fts');
+    raw.close();
+
+    const hook = await h.run(['hook', 'UserPromptSubmit'], {
+      stdin: JSON.stringify({ session_id: 's', cwd: h.cwd, prompt: 'which port does auth use?' }),
+    });
+    expect(hook.code).toBe(0);
+    expect(hook.io.stderr).toBe(MIGRATION_PENDING_NOTE);
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const r = await h.run(['recall', 'auth service port', '--json'], {
+        env: { HOME: h.root, OORT_HOME: h.home },
+      });
+      expect(r.code, r.io.stderr).toBe(0);
+      expect(r.io.stdout).toContain('5582');
+    } finally {
+      err.mockRestore();
+    }
   });
 
   it('doctor.healthy-setup-passes-and-says-which-key-serves-each-role', async () => {

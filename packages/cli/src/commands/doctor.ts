@@ -636,10 +636,17 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
         group: 'store',
         name: 'migration',
         status: 'ok',
-        detail:
+        detail: `migrated the store from schema version ${before} to ${SCHEMA_VERSION}; ${
           before === 1
-            ? `migrated the store from schema version ${before} to ${SCHEMA_VERSION}; your memories now live in your Planet`
-            : `migrated the store from schema version ${before} to ${SCHEMA_VERSION}; it can now hold judgments (oort judge)`,
+            ? 'your memories now live in your Planet'
+            : before === 2
+              ? 'it can now hold judgments (oort judge)'
+              : 'lexical search now finds Chinese, Japanese, Korean, Thai and Indic words'
+        }${
+          before <= 3
+            ? '. Then restart any Oort MCP server started before the upgrade (quit and reopen Claude Code, Claude Desktop or Cursor): an older Oort cannot write to the new search index'
+            : ''
+        }`,
       });
     }
     const bound = readEmbedderBinding(db);
@@ -689,7 +696,8 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
     // Oort Cloud consolidates itself; locally the hook drain does, when due (CON-48).
     if (!cloudMode) checks.push(consolidationCheck(home));
     // The newest copy taken before a migration (the names sort by time within each kind).
-    const backup = [listBackups(db, 'pre-v2').at(-1), listBackups(db, 'pre-v3').at(-1)]
+    const backup = (['pre-v2', 'pre-v3', 'pre-v4'] as const)
+      .map((kind) => listBackups(db, kind).at(-1))
       .filter((f): f is string => f !== undefined)
       .sort((a, b) => {
         const at = (f: string) => f.slice(f.lastIndexOf('.') + 1);
