@@ -239,8 +239,8 @@ describe('rebuild cost (CON-110 review)', () => {
   });
 
   it('fts-rebuild.icu-rebuild-only-for-a-new-major-with-segmented-text', async () => {
-    const icu = process.versions.icu ?? '';
-    const major = Number(icu.split('.')[0]);
+    const major = Number((process.versions.icu ?? '').split('.')[0]);
+    const icu = String(major); // the store records the major only
     // With Thai in the store: an older major rebuilds; the same major does not.
     const thai = copy3();
     await (await openSqliteStore(optsFor(thai))).close();
@@ -269,6 +269,57 @@ describe('rebuild cost (CON-110 review)', () => {
     await (await openSqliteStore(optsFor(en))).close();
     expect(english(), 'no segmented text: no rebuild').toBe(true);
     expect(getMeta(en.dbPath, 'lexical_icu')).toBe(icu);
+  });
+});
+
+describe('ICU bookkeeping (CON-110 re-review)', () => {
+  const major = (process.versions.icu ?? '').split('.')[0] ?? '';
+
+  /** Counts the segmented-script scans (the oort_segmented query) the callback causes. */
+  async function scans(fn: () => Promise<void>): Promise<number> {
+    const proto = Database.prototype as unknown as { prepare: (sql: string) => unknown };
+    const real = proto.prepare;
+    let n = 0;
+    proto.prepare = function (this: unknown, sql: string) {
+      if (sql.includes('oort_segmented(text)')) n++;
+      return real.call(this, sql);
+    };
+    try {
+      await fn();
+    } finally {
+      proto.prepare = real;
+    }
+    return n;
+  }
+
+  it('fts-rebuild.records-the-icu-major-only', async () => {
+    const dir = fs.mkdtempSync(path.join(root, 'icu-'));
+    const s = { dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
+    await (await openSqliteStore(optsFor(s))).close();
+    expect(getMeta(s.dbPath, 'lexical_icu')).toBe(major);
+    // Another Node on the same major (78.1 against 78.3): nothing to write, nothing rewritten.
+    setMeta(s.dbPath, 'lexical_icu', major);
+    await (await openSqliteStore(optsFor(s))).close();
+    expect(getMeta(s.dbPath, 'lexical_icu')).toBe(major);
+    // A full version recorded by the earlier build reads as its major: no rewrite either.
+    setMeta(s.dbPath, 'lexical_icu', `${major}.0`);
+    await (await openSqliteStore(optsFor(s))).close();
+    expect(getMeta(s.dbPath, 'lexical_icu')).toBe(`${major}.0`);
+  });
+
+  it('fts-rebuild.scans-for-segmented-text-once-per-open', async () => {
+    const s = copy3();
+    await (await openSqliteStore(optsFor(s))).close();
+    // A newer ICU major with Thai in the store: one scan decides the rebuild.
+    setMeta(s.dbPath, 'lexical_icu', String(Number(major) - 1));
+    expect(await scans(async () => (await openSqliteStore(optsFor(s))).close())).toBe(1);
+    // An unknown runtime ICU: one scan, one warning, no rebuild.
+    const lines: string[] = [];
+    const n = await scans(async () =>
+      (await openSqliteStore({ ...optsFor(s), icu: '', log: (m) => lines.push(m) })).close(),
+    );
+    expect(n).toBe(1);
+    expect(lines.filter((l) => /no usable ICU/.test(l))).toHaveLength(1);
   });
 });
 

@@ -212,7 +212,7 @@ into one segment. Its BM25 row and token totals count the live rows only, where 
 counted every row ever rewritten (a contentless-delete index never subtracts one), so lexical scores
 shift once, and so can the order of results: a one-time ranking change from correcting the index's
 statistics. Which memories match does not change. `meta` records
-`lexical_version` (2) and the ICU version. A migrating open rebuilds the index again when the
+`lexical_version` (2) and ICU's major version. A migrating open rebuilds the index again when the
 tokeniser version differs, or when ICU's major version is newer than the one recorded and the store
 holds Thai, Lao, Khmer or Myanmar text (their word breaks come from ICU's dictionaries; nothing else
 changes with ICU). An index recorded by a newer ICU is left alone, so two Node versions on one

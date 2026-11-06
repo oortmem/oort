@@ -17,6 +17,7 @@ import {
   resolveAddressing,
   sameRecordAddress,
   scopeOf,
+  lexicalIcuVersion,
   tokenizeLexical,
   type AccessLog,
   type Address,
@@ -118,6 +119,11 @@ export interface SqliteStoreOptions {
    * content. Defaults to stderr.
    */
   log?: (message: string) => void;
+  /**
+   * The runtime's ICU version, for the lexical index's drift guard. Default
+   * `lexicalIcuVersion()` (`process.versions.icu`); for runtimes that report it some other way.
+   */
+  icu?: string;
 }
 
 /**
@@ -442,6 +448,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const d = opts.d ?? 0.5;
   const clock = opts.now ?? (() => new Date());
   const log = opts.log ?? ((message: string) => process.stderr.write(`${message}\n`));
+  const icu = opts.icu ?? lexicalIcuVersion();
   const dbPath = path.resolve(opts.path);
   const coldDir = path.resolve(opts.coldDir);
   prepareDbDir(path.dirname(dbPath), log);
@@ -472,11 +479,11 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         opts.migrate !== false &&
         from !== undefined &&
         (from < SCHEMA_VERSION ||
-          (from === SCHEMA_VERSION && lexicalIndexState(conn) === 'rebuild'));
+          (from === SCHEMA_VERSION && lexicalIndexState(conn, icu) === 'rebuild'));
       if (rebuilds) {
         conn.pragma(`busy_timeout = ${Math.max(busyTimeoutMs, MIGRATION_BUSY_TIMEOUT_MS)}`);
       }
-      applySchema(conn, dimension, { migrate: opts.migrate !== false, log });
+      applySchema(conn, dimension, { migrate: opts.migrate !== false, log, icu });
       if (rebuilds) conn.pragma(`busy_timeout = ${busyTimeoutMs}`);
       return conn;
     } catch (e) {

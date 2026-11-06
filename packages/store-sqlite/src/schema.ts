@@ -315,7 +315,8 @@ function recordLexical(db: Database, icu = lexicalIcuVersion()): void {
      ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
   );
   put.run('lexical_version', String(LEXICAL_VERSION));
-  put.run('lexical_icu', icu);
+  // The major only: Node versions that share it segment alike, and do not rewrite it in turn.
+  put.run('lexical_icu', icuMajor(icu)?.toString() ?? '');
 }
 
 /**
@@ -356,8 +357,22 @@ function icuMajor(v: string | undefined): number | undefined {
   return m === null ? undefined : Number(m[1]);
 }
 
-/** Whether any memory's indexed text is in a dictionary-segmented script. Read only when needed. */
+/** Each connection's answer to `holdsSegmentedText`: scanned at most once per open. */
+const segmentedSeen = new WeakMap<Database, boolean>();
+
+/**
+ * Whether any memory's indexed text is in a dictionary-segmented script. Read only when needed,
+ * and at most once per connection: the open's check and its schema transaction share the answer.
+ */
 function holdsSegmentedText(db: Database): boolean {
+  const seen = segmentedSeen.get(db);
+  if (seen !== undefined) return seen;
+  const found = scanSegmentedText(db);
+  segmentedSeen.set(db, found);
+  return found;
+}
+
+function scanSegmentedText(db: Database): boolean {
   db.function('oort_segmented', { deterministic: true }, (t: unknown) =>
     typeof t === 'string' && hasSegmentedScript(t) ? 1 : 0,
   );
@@ -378,8 +393,8 @@ function holdsSegmentedText(db: Database): boolean {
  *   store holds Thai, Lao, Khmer or Myanmar text (their word breaks come from ICU's
  *   dictionaries; nothing else changes with ICU). Only a newer major counts, so processes on two
  *   Node versions do not rebuild in turn.
- * - `record-icu`: nothing to rebuild, but the recorded ICU version is older (or unknown). An
- *   index recorded by a newer ICU is left as it is.
+ * - `record-icu`: nothing to rebuild, but the recorded ICU major is older (or unknown). An index
+ *   recorded by a newer ICU is left as it is. Only the major is recorded.
  * - `unknown-icu`: this runtime reports no usable ICU version and the store holds segmented
  *   text, so drift cannot be checked. Never a rebuild.
  * - `current`: nothing to do.
@@ -391,11 +406,11 @@ export function lexicalIndexState(
   const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
   if (get.get('lexical_version')?.value !== String(LEXICAL_VERSION)) return 'rebuild';
   if (indexNeedsRepair(db)) return 'rebuild';
-  const recorded = get.get('lexical_icu')?.value;
   const now = icuMajor(icu);
   if (now === undefined) return holdsSegmentedText(db) ? 'unknown-icu' : 'current';
-  if (recorded === icu) return 'current';
-  const was = icuMajor(recorded);
+  // Recorded as a major (`78`), or as a full version by an earlier build (`78.3`).
+  const was = icuMajor(get.get('lexical_icu')?.value);
+  if (was === now) return 'current';
   // Built by a newer ICU (another Node on this machine): leave it, and its record, alone.
   if (was !== undefined && now < was) return 'current';
   if (was !== undefined && now > was && holdsSegmentedText(db)) return 'rebuild';

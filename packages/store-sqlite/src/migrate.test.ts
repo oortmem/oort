@@ -62,6 +62,9 @@ function scoreless<T>(v: T): T {
   return v;
 }
 
+/** The ICU major version the store records (CON-110): two Node versions on one major agree. */
+const ICU_MAJOR = (process.versions.icu ?? '').split('.')[0] ?? '';
+
 const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), '../test/fixtures/phase1');
 const DIM = 8;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-migrate-'));
@@ -709,7 +712,7 @@ describe('schema migration 3 to 4', () => {
     for (const q of ENGLISH) expect(order(out[q])).toEqual(order(expected3.lexical[q]));
     const after = inspect(s.dbPath);
     expect(after.sql).toContain(`categories 'L* N* Co M*'`);
-    expect(after.meta).toEqual({ lexical_version: '2', lexical_icu: process.versions.icu ?? '' });
+    expect(after.meta).toEqual({ lexical_version: '2', lexical_icu: ICU_MAJOR });
     expect(after.vec, 'vectors are untouched').toEqual(before.vec);
     expect(hashDir(s.coldDir), 'cold blobs are untouched').toBe(blobs);
   });
@@ -785,7 +788,7 @@ describe('schema migration 3 to 4', () => {
     setMeta('lexical_icu', '1.0');
     const again = await lexical(s, [...ENGLISH, '认证 端口', 'พอร์ต']);
     expect(portable(again.out)).toEqual(portable(first.out));
-    expect(inspect(s.dbPath).meta['lexical_icu']).toBe(process.versions.icu ?? '');
+    expect(inspect(s.dbPath).meta['lexical_icu']).toBe(ICU_MAJOR);
     // Built with a newer ICU (another Node on this machine): left alone, no rebuild back and forth.
     setMeta('lexical_icu', '999.0');
     await (await openSqliteStore(optsFor(s))).close();
@@ -831,6 +834,6 @@ describe('schema migration 3 to 4', () => {
     expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
     const fresh = inspect(s.dbPath);
     expect(fresh.sql).toContain(`categories 'L* N* Co M*'`);
-    expect(fresh.meta).toEqual({ lexical_version: '2', lexical_icu: process.versions.icu ?? '' });
+    expect(fresh.meta).toEqual({ lexical_version: '2', lexical_icu: ICU_MAJOR });
   });
 });
