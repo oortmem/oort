@@ -836,8 +836,11 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
     // One line for the hooks' copy and this one (PR #78 review, N5): the bin row.
     const info = d.check('hooks', 'claude-code bin');
     expect(info?.detail).toContain('\\u{1b}[31mRED');
-    expect(d.human.io.stdout).not.toMatch(/[\u0007]|\u001b\]0;/);
-    expect(d.json.io.stdout).not.toMatch(/[\u0007\u001b]/);
+    // String checks, not a regex: oxlint flags control characters in patterns, escaped or not.
+    expect(d.human.io.stdout.includes('\u0007') || d.human.io.stdout.includes('\u001b]0;')).toBe(
+      false,
+    );
+    expect(['\u0007', '\u001b'].some((c) => d.json.io.stdout.includes(c))).toBe(false);
   });
 
   it('doctor.fix-commands-quote-a-home-with-a-space-and-shell-metacharacters (M2)', async () => {

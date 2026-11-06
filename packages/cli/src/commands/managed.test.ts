@@ -21,7 +21,10 @@ import {
 } from '../../test/helpers.js';
 import {
   clearTreeCache,
+  forgetSearched,
+  globalFolders,
   groupCanBecomeRoot,
+  searchedFolders,
   tempDirs,
   trustedPath,
   trustedTree,
@@ -898,7 +901,7 @@ describe('PR #78 review: kernel paths, the walk after an install, own builds', (
     clearTreeCache();
     expect(() => checkAgentPath(main, ctx)).toThrow(
       new RegExp(
-        `is a link to ${payload.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, where .* can be written by group or others`,
+        `is a link to ${payload.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, where .* can be written by (group or )?others`,
       ),
     );
   });
@@ -960,7 +963,7 @@ describe('PR #78 review: kernel paths, the walk after an install, own builds', (
     fs.chmodSync(store, 0o777);
     clearTreeCache();
     expect(() => checkAgentPath(main, ctx)).toThrow(
-      /is a link to .*commander, where .* can be written by group or others/,
+      /is a link to .*commander, where .* can be written by (group or )?others/,
     );
   });
 });
@@ -1091,5 +1094,137 @@ describe('PR #78 review: link text, closures, ancestor node_modules', () => {
     fs.chmodSync(planted, 0o755);
     clearTreeCache();
     expect(inspectManaged(env).state).toBe('ok');
+  });
+
+  /** One run of the managed-copy checks with `NODE_PATH` as given, from a fresh walk. */
+  const managedWith = (
+    h: Harness,
+    extra: Record<string, string> = {},
+  ): ReturnType<typeof inspectManaged> => {
+    clearTreeCache();
+    return inspectManaged({ HOME: h.root, OORT_HOME: h.home, PATH: '', ...extra });
+  };
+
+  it('ancestors.what-is-inside-a-node_modules-above-the-copy-is-walked-and-capped (review a)', () => {
+    const h = harness({ trusted: true });
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    expect(managedWith(h).state).toBe('ok');
+    // Deep inside a package nobody declares: a name-level check would miss it.
+    const planted = path.join(h.root, 'node_modules');
+    const deep = dep(path.join(planted, 'some-pkg', 'lib', 'deeper'), 'x.js');
+    expect(managedWith(h).state).toBe('ok');
+    fs.chmodSync(deep, 0o666);
+    forgetSearched(planted); // a change below a folder that passed (the folder itself is unchanged)
+    const s = managedWith(h);
+    expect(s).toMatchObject({ state: 'untrusted', problem: { dir: deep } });
+    expect(s.state === 'untrusted' && s.problem.why).toContain(
+      `can be written by others, and Node loads modules from ${planted} for anything not found nearer`,
+    );
+    expect(s.state === 'untrusted' && s.problem.fix).toBe(
+      `move ${planted} aside (Node searches it), or make everything in it writable only by you`,
+    );
+    // Past the shared cap: refused too, to move aside, never chmod or chown. Only this folder is
+    // searched, so nothing above the machine's checkout is looked at.
+    fs.chmodSync(deep, 0o644);
+    for (let i = 0; i < 6; i++) dep(path.join(planted, `many-${i}`));
+    const rules = { home: h.root, strictFor: () => false };
+    const state = { count: 0, visited: new Set<string>() };
+    const over = searchedFolders([planted], rules, state, 5);
+    expect(over).toMatchObject({ dir: planted });
+    expect(over?.why).toMatch(/holds more than 5 entries to check/);
+    expect(over?.fix).toBe(
+      `move ${planted} aside (Node searches it), or make everything in it writable only by you`,
+    );
+    expect(over?.fix).not.toMatch(/chmod|chown/);
+    expect(
+      searchedFolders([planted], rules, { count: 0, visited: new Set() }, 5_000),
+    ).toBeUndefined();
+  });
+
+  it("globals.node's-global-folders-are-checked-and-walked-like-an-ancestor-node_modules (review b)", () => {
+    const h = harness({ trusted: true });
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    // The list: NODE_PATH entries (absolute only), ~/.node_modules, ~/.node_libraries and
+    // <node prefix>/lib/node.
+    expect(
+      globalFolders(
+        { NODE_PATH: ['/a/b', 'rel', '', '/c'].join(path.delimiter) },
+        '/home/u',
+        '/n/bin/node',
+      ),
+    ).toEqual([
+      '/a/b',
+      '/c',
+      path.join('/home/u', '.node_modules'),
+      path.join('/home/u', '.node_libraries'),
+      path.join('/n', 'lib', 'node'),
+    ]);
+    // A NODE_PATH folder with something writable deep inside: refused, by the file.
+    const globals = path.join(trustedTmpdir('oort-nodepath-'), 'libs');
+    const file = dep(path.join(globals, 'cjs-dep', 'lib'), 'index.js');
+    const withPath = { NODE_PATH: globals };
+    expect(managedWith(h, withPath).state).toBe('ok');
+    fs.chmodSync(file, 0o666);
+    forgetSearched(globals);
+    const s = managedWith(h, withPath);
+    expect(s).toMatchObject({ state: 'untrusted', problem: { dir: file } });
+    expect(s.state === 'untrusted' && s.problem.why).toContain(
+      `and Node loads modules from ${globals} for anything not found nearer`,
+    );
+    // Without NODE_PATH it is not searched: fine. The same for ~/.node_modules.
+    expect(managedWith(h).state).toBe('ok');
+    const dot = path.join(h.root, '.node_modules');
+    const dotFile = dep(path.join(dot, 'cjs-dep'), 'index.js', 0o666);
+    expect(managedWith(h)).toMatchObject({ state: 'untrusted', problem: { dir: dotFile } });
+    fs.rmSync(dot, { recursive: true });
+    expect(managedWith(h).state).toBe('ok');
+    // A copy of your own: a dependency found only through NODE_PATH is walked as well.
+    const pkg = path.join(h.root, 'build', 'oortmem');
+    const main = pkgAt(pkg, { dependencies: { 'only-global': '1' } });
+    const ctx = {
+      io: { env: { HOME: h.root, OORT_HOME: h.home, PATH: '', ...withPath } },
+    } as never;
+    fs.chmodSync(file, 0o644);
+    forgetSearched(globals);
+    const found = dep(path.join(globals, 'only-global', 'lib'), 'g.js');
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).not.toThrow();
+    fs.chmodSync(found, 0o666);
+    forgetSearched(globals);
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).toThrow(`${found} can be written by others`);
+  });
+
+  it('closure.a-linked-directory-gets-the-ancestor-check-and-its-dependencies-are-walked (review c)', () => {
+    const h = harness({ trusted: true });
+    const pkg = path.join(h.root, 'build', 'oortmem');
+    const main = pkgAt(pkg);
+    // dist/vendor is a link (not a dependency link) to <store>/vendor, which needs `needed`,
+    // found beside it in <store>/node_modules.
+    const store = trustedTmpdir('oort-linked-');
+    const vendor = path.join(store, 'vendor');
+    dep(vendor, 'lib.js');
+    fs.writeFileSync(
+      path.join(vendor, 'package.json'),
+      JSON.stringify({ name: 'vendor', dependencies: { needed: '1' } }),
+    );
+    const needed = dep(path.join(store, 'node_modules', 'needed'), 'n.js');
+    fs.symlinkSync(vendor, path.join(pkg, 'dist', 'vendor'));
+    const ctx = { io: { env: { HOME: h.root, OORT_HOME: h.home, PATH: '' } } } as never;
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).not.toThrow();
+    // Its runtime dependency is in the closure: a writable file in it is refused.
+    fs.chmodSync(needed, 0o666);
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).toThrow(`${needed} can be written by others`);
+    fs.chmodSync(needed, 0o644);
+    // The ancestor check runs on the link's realpath: a writable node_modules above <store>/vendor.
+    const above = path.join(store, 'node_modules');
+    fs.chmodSync(above, 0o777);
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).toThrow(`and Node loads modules from ${above}`);
+    fs.chmodSync(above, 0o755);
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).not.toThrow();
   });
 });

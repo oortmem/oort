@@ -7,11 +7,15 @@ import { isNewerVersion } from '../serve-protocol.js';
 import {
   inside,
   tempDirs,
+  OWN_TREE_CAP,
   ancestorModules,
+  globalFolders,
+  searchedFolders,
   trustedClosure,
   trustedPath,
   trustedTree,
   untrustedText,
+  type SearchRules,
   type Untrusted,
 } from '../trust.js';
 import { Refusal, shellWord as sh, shown, tilde, type Ctx } from '../util.js';
@@ -107,7 +111,7 @@ export function inspectManaged(env: Record<string, string | undefined>): Managed
     let anchor = path.dirname(oortHome);
     while (!exists(anchor) && path.dirname(anchor) !== anchor) anchor = path.dirname(anchor);
     const unsafe =
-      trustedPath(anchor, { home, strict: true }) ?? temporary(anchor, env, 'OORT_HOME');
+      temporary(anchor, env, 'OORT_HOME') ?? trustedPath(anchor, { home, strict: true });
     return unsafe === undefined ? { state: 'absent' } : { state: 'absent', unsafeHome: unsafe };
   }
   if (lst.isSymbolicLink() && realpathOf(oortHome) === undefined) {
@@ -129,8 +133,10 @@ export function inspectManaged(env: Record<string, string | undefined>): Managed
     state: 'untrusted',
     problem: { ...u, fix: again, command: again },
   });
+  // The more telling reason first: a temp directory, then who can write it (on Linux /tmp is
+  // itself writable by everyone, and would be named instead).
   const homeProblem =
-    trustedPath(oortHome, { home, strict: true }) ?? temporary(oortHome, env, 'OORT_HOME');
+    temporary(oortHome, env, 'OORT_HOME') ?? trustedPath(oortHome, { home, strict: true });
   if (homeProblem !== undefined) {
     if (!hasPrefix) return { state: 'absent', unsafeHome: homeProblem };
     // OORT_HOME itself is yours and only too open: tighten it after the copy is gone. Anything
@@ -152,18 +158,16 @@ export function inspectManaged(env: Record<string, string | undefined>): Managed
   }
   if (!hasPrefix) return { state: 'absent' };
   const prefixProblem =
-    trustedPath(prefix, { home, strict: true }) ?? temporary(prefix, env, 'the managed copy');
+    temporary(prefix, env, 'the managed copy') ?? trustedPath(prefix, { home, strict: true });
   if (prefixProblem !== undefined) return remove(prefixProblem);
   // main.js loads the rest of the package and its dependencies, and Node looks in the prefix's
   // other node_modules for what is missing: all of it is walked, links and all, before the copy
   // is used, or installed into (an install leaves what else is there).
   const treeProblem = trustedTree(prefix);
   if (treeProblem !== undefined) return remove(treeProblem);
-  // Node also searches every node_modules above the prefix for what the copy does not ship.
-  const above = ancestorModules(path.dirname(realpathOf(prefix) ?? prefix), {
-    home,
-    strict: true,
-  });
+  // Node also searches every node_modules above the prefix, and its global folders, for what the
+  // copy does not ship: checked and walked (strict inside OORT_HOME, lenient elsewhere).
+  const above = searched(path.dirname(realpathOf(prefix) ?? prefix), env);
   if (above !== undefined) return { state: 'untrusted', problem: above };
   const bin = path.join(prefix, 'bin', 'oort');
   const version = packageVersion(realpathOf(bin));
@@ -451,8 +455,24 @@ export function copyTree(
   // your own: everything Node loads from it at run time (`trustedClosure`).
   return strict
     ? (trustedTree(root, { strict: true, home: userHome(env) }) ??
-        ancestorModules(path.dirname(root), { home: userHome(env), strict: true }))
-    : trustedClosure(root, { home: userHome(env) });
+        searched(path.dirname(root), env))
+    : trustedClosure(root, { home: userHome(env), env });
+}
+
+/**
+ * Every folder Node searches above `start` for what is not found nearer, and its global folders
+ * (`NODE_PATH`, `~/.node_modules`, `~/.node_libraries`, `<node prefix>/lib/node`): checked and
+ * walked, strict inside OORT_HOME and lenient elsewhere (`searchedFolders`).
+ */
+function searched(start: string, env: Record<string, string | undefined>): Untrusted | undefined {
+  const home = userHome(env);
+  const oortHome = realpathOf(resolveHome(env)) ?? resolveHome(env);
+  const rules: SearchRules = { home, strictFor: (d) => inside(realpathOf(d) ?? d, [oortHome]) };
+  const state = { count: 0, visited: new Set<string>(), passed: new Set<string>() };
+  return (
+    ancestorModules(start, rules, state, OWN_TREE_CAP) ??
+    searchedFolders(globalFolders(env, home), rules, state, OWN_TREE_CAP)
+  );
 }
 
 /** What a copy in `why` risks, for the sentence `This oort is in <why>, <risk>`. */
@@ -544,7 +564,13 @@ export async function agentBinary(
     return { path: plannedMain(env), from: 'managed', version: VERSION };
   }
   opts.say(`${lead}: installing oort ${VERSION} in ${prefix} first (${installCommandFor(env)}).\n`);
-  const r = await installManaged(ctx);
+  let r: ManagedInstall;
+  try {
+    r = await installManaged(ctx);
+  } catch (e) {
+    if (!(e instanceof Refusal)) throw e;
+    r = { ok: false, reason: 'failed', command: installCommandFor(env), detail: e.message };
+  }
   if (!r.ok) {
     throw new Refusal(
       `${lead}, and the managed copy could not be installed (${r.detail}). Run ${manual}.`,

@@ -524,7 +524,8 @@ describe('oort bin', () => {
   });
 
   it('cli.install-refuses-without-bin', async () => {
-    const s = sandbox();
+    // Trusted: on Linux the OS temp dir is /tmp, and a HOME in it is refused before the cache is.
+    const s = sandbox({ trusted: true });
     const settings = path.join(s.home, '.claude', 'settings.json');
 
     // Not started as the bin: `node -e "import(...)"`.

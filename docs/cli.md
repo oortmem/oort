@@ -66,7 +66,10 @@ current.
   oortmem`, then `~/.oort/cli/bin/oort install claude-code`.
 - **Only a copy nobody else can change.** Agents run the path oort writes on
   every prompt, so before it reuses the managed copy, and again right before
-  any config is written, oort walks the path from `/` down to `main.js`:
+  any config is written, oort walks the path from `/` down to `main.js`. The
+  trust boundary is: nothing that anyone other than you (or root) can write.
+  Paths that are yours and writable only by you are trusted; write access to
+  your own files is already full compromise of your account.
   - inside `OORT_HOME` (the managed copy), every directory and the file must
     be yours (or root's, above your home directory) and not writable by group
     or others;
@@ -93,9 +96,24 @@ current.
     9,500 entries and 0.3 s from a pnpm checkout of this repository, with a cap
     of 50,000;
   - every `node_modules` Node searches above the managed copy, or above a copy
-    of your own and its dependencies (`~/.oort/node_modules`,
-    `~/node_modules`, …), must pass the same path rules: Node loads from them
-    whatever is not found nearer.
+    of your own and every package of its run-time closure (`~/.oort/node_modules`,
+    `~/node_modules`, …), must pass the same path rules, and everything in it
+    is walked: Node loads from them whatever is not found nearer. Inside
+    `OORT_HOME` the strict rules apply, elsewhere the lenient ones, under one
+    cap shared with the rest of the check (100,000 entries for a copy of your
+    own). Past the cap the fix is `move <dir> aside`; oort never `chmod`s or
+    `chown`s what is in such a folder. A passing folder is remembered for the
+    process;
+  - Node's global folders are treated the same way, checked and walked:
+    each absolute `NODE_PATH` entry, `~/.node_modules`, `~/.node_libraries` and
+    `<node prefix>/lib/node`. oortmem is an ES module, and ES modules ignore
+    `NODE_PATH`; some of its CommonJS dependencies do not, so the folders count.
+    The hook command oort writes does not clear `NODE_PATH`, so hooks inherit
+    whatever the agent was started with; oort checks the value it sees when it
+    runs;
+  - every directory a link leads to inside a copy of your own is a package of
+    that closure: its real path gets the same ancestor `node_modules` check,
+    and its `package.json` run-time dependencies are walked as well.
 
   A temporary directory never counts: `os.tmpdir()`, `$TMPDIR`, `/tmp`,
   `/private/tmp`, `/var/tmp`, `/private/var/tmp` and `/dev/shm`. A managed

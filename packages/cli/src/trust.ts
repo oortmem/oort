@@ -122,7 +122,9 @@ export function groupCanBecomeRoot(gid: number, sys?: SystemGroups): boolean {
 
 /**
  * Walks `file`'s realpath from `/` down to the file itself; every step must be one nobody else can
- * change:
+ * change. The trust boundary is: nothing that anyone other than you (or root) can write. Paths
+ * that are yours and writable only by you are trusted; write access to your own files is already
+ * full compromise of your account.
  *
  * - **Owner.** This user's inside `home` (the user's HOME); this user's or root's above it, and
  *   for a copy outside it (`/usr/local`, `/opt/homebrew`).
@@ -139,7 +141,16 @@ export function groupCanBecomeRoot(gid: number, sys?: SystemGroups): boolean {
  */
 export function trustedPath(
   file: string,
-  opts: { home: string; strict: boolean; groupOk?: (gid: number) => boolean },
+  opts: {
+    home: string;
+    strict: boolean;
+    groupOk?: (gid: number) => boolean;
+    /**
+     * Directories that already passed during this one check (a closure asks about the same
+     * ancestors thousands of times): skipped. Scoped to one check, never kept across checks.
+     */
+    passed?: Set<string>;
+  },
 ): Untrusted | undefined {
   if (process.platform === 'win32') return undefined;
   const real = realpathOf(file);
@@ -161,7 +172,10 @@ export function trustedPath(
     p = up;
   }
   const elsewhere = 'use a copy in a directory of your own';
+  const memo = opts.passed;
+  const tag = `\0${opts.strict ? 's' : 'l'}`;
   for (const p of steps) {
+    if (memo !== undefined && p !== real && memo.has(p + tag)) continue;
     let st: fs.Stats;
     try {
       st = fs.statSync(p);
@@ -193,6 +207,7 @@ export function trustedPath(
               }),
       };
     }
+    if (memo !== undefined && p !== real) memo.add(p + tag);
   }
   return undefined;
 }
@@ -206,9 +221,22 @@ export const TREE_CAP = 20_000;
  * The cap for a copy of your own (lenient): its package and everything its links lead to, which
  * for a pnpm checkout is the whole dependency closure, dev dependencies included.
  */
-export const OWN_TREE_CAP = 50_000;
+export const OWN_TREE_CAP = 100_000;
 
 const treeCache = new Map<string, Untrusted | null>();
+/**
+ * Searched folders that passed (`searchedFolders`), for the rest of the process: a dev checkout's
+ * `node_modules` is tens of thousands of entries, and every check above it asks again. Keyed by
+ * the folder's realpath, rules and its own stat, so a change to the folder itself (a chmod, a
+ * package added or removed) is seen; a change deeper in is not, until `forgetSearched`.
+ */
+const searchCache = new Set<string>();
+
+/** Forgets what passed in the searched folder `dir` (something below it has just changed). */
+export function forgetSearched(dir: string): void {
+  const root = realpathOf(dir) ?? path.resolve(dir);
+  for (const k of searchCache) if (k.startsWith(`${root}\0`)) searchCache.delete(k);
+}
 
 /** Forgets every `trustedTree` result (tests change trees between checks). */
 export function clearTreeCache(): void {
@@ -380,6 +408,7 @@ function walk(
           home: opts.home ?? '/',
           strict: false,
           ...(opts.groupOk !== undefined && { groupOk: opts.groupOk }),
+          ...(state.passed !== undefined && { passed: state.passed }),
         });
         if (u !== undefined) return bad(p, `is a link to ${real}, where ${u.dir} ${u.why}`);
         // A directory it leads to is code Node may load: walk it too, once. A package in a
@@ -398,12 +427,15 @@ function walk(
             path.basename(path.dirname(parent)) === 'node_modules');
         if (tst?.isDirectory() === true && !depLink && !visited.has(real) && !inRoot(real)) {
           visited.add(real);
-          stack.push(real);
+          if (state.queueDir !== undefined) state.queueDir(real);
+          else stack.push(real);
         }
       }
       continue;
     }
     if (st.isDirectory()) {
+      // Walked already, as a package of the closure: not twice.
+      if (p !== root && visited.has(p)) continue;
       let names: string[];
       try {
         names = fs.readdirSync(p);
@@ -422,6 +454,13 @@ function walk(
 interface WalkState {
   count: number;
   visited: Set<string>;
+  /** `trustedPath`'s memo for this one check. */
+  passed?: Set<string>;
+  /**
+   * The closure takes over a directory a link leads to (`trustedClosure`): walked, its ancestors
+   * checked and its runtime dependencies queued, as for any package. Without it, `walk` walks it.
+   */
+  queueDir?: (real: string) => void;
 }
 
 /**
@@ -438,35 +477,156 @@ function lookupDirs(start: string): string[] {
 }
 
 /**
- * Every existing `node_modules` Node would search above `start`, held to `trustedPath`'s rules
- * (PR #78 review): a planted, writable `~/node_modules` would serve any module oort does not ship.
- * Only the path to each is walked, not what is in it. `checked` remembers the ones that passed.
+ * Node's global folders, searched by CommonJS `require` after every `node_modules`: each absolute
+ * `NODE_PATH` entry (from `env`, at check time), `~/.node_modules`, `~/.node_libraries` and
+ * `<node prefix>/lib/node`. oortmem itself is ESM, which ignores them; its CommonJS dependencies
+ * do not.
+ */
+export function globalFolders(
+  env: Record<string, string | undefined>,
+  home: string,
+  execPath: string = process.execPath,
+): string[] {
+  const fromEnv = (env['NODE_PATH'] ?? '')
+    .split(path.delimiter)
+    .filter((p) => p !== '' && path.isAbsolute(p));
+  return [
+    ...new Set([
+      ...fromEnv,
+      path.join(home, '.node_modules'),
+      path.join(home, '.node_libraries'),
+      path.join(path.dirname(path.dirname(execPath)), 'lib', 'node'),
+    ]),
+  ];
+}
+
+/** The rules a searched folder is held to: strict inside `OORT_HOME`, lenient elsewhere. */
+export interface SearchRules {
+  home: string;
+  /** Strict for this directory (the managed copy: inside OORT_HOME). */
+  strictFor: (dir: string) => boolean;
+  groupOk?: (gid: number) => boolean;
+}
+
+/**
+ * Folders Node searches for anything not found nearer (`lookupDirs` above a package, or the
+ * global folders), held to the trust boundary: nothing that anyone other than you (or root) can
+ * write. Paths that are yours and writable only by you are trusted; write access to your own
+ * files is already full compromise of your account. Each existing folder must pass
+ * `trustedPath`, and everything in it is walked with the rules of its place (strict inside
+ * OORT_HOME, lenient elsewhere), sharing the one cap of the check; a link in it is judged by
+ * where the kernel takes it. A folder that passes is remembered for the process. Past the cap, or
+ * on anything someone else can write, the fix is to move the folder aside: never chmod or chown
+ * what is in a folder like this.
+ */
+export function searchedFolders(
+  dirs: readonly string[],
+  rules: SearchRules,
+  state: WalkState,
+  cap: number,
+): Untrusted | undefined {
+  if (process.platform === 'win32') return undefined;
+  const me = typeof process.getuid === 'function' ? process.getuid() : undefined;
+  for (const dir of dirs) {
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(dir);
+    } catch {
+      continue; // not there: nothing to load from it
+    }
+    const strict = rules.strictFor(dir);
+    const ruleSet = {
+      home: rules.home,
+      strict,
+      ...(rules.groupOk !== undefined && { groupOk: rules.groupOk }),
+      ...(state.passed !== undefined && { passed: state.passed }),
+    };
+    const aside = (u: Pick<Untrusted, 'dir' | 'why'>): Untrusted => ({
+      dir: u.dir,
+      why: `${u.why}, and Node loads modules from ${dir} for anything not found nearer`,
+      fix: `move ${sh(dir)} aside (Node searches it), or make everything in it writable only by you`,
+    });
+    const top = trustedPath(dir, ruleSet);
+    if (top !== undefined) return aside(top);
+    if (!st.isDirectory()) continue;
+    const real = realpathOf(dir) ?? dir;
+    // HOME only matters to a folder in it (or holding it): elsewhere the same folder passes or
+    // fails the same for every HOME, so tests with a HOME each share the walk of a checkout above.
+    const related = inside(real, [rules.home]) || inside(rules.home, [real]);
+    const key = `${real}\0${strict ? 's' : 'l'}\0${related ? rules.home : ''}\0${cap}\0${st.mtimeMs}\0${st.ctimeMs}`;
+    if (rules.groupOk === undefined && searchCache.has(key)) continue;
+    const home = realpathOf(rules.home) ?? rules.home;
+    let names: string[];
+    try {
+      names = fs.readdirSync(real);
+    } catch {
+      return aside({ dir: real, why: 'cannot be read' });
+    }
+    for (const n of names) {
+      if (++state.count > cap) {
+        return aside({ dir: real, why: `holds more than ${cap} entries to check` });
+      }
+      const p = path.join(real, n);
+      let e: fs.Stats;
+      try {
+        e = fs.lstatSync(p);
+      } catch {
+        continue;
+      }
+      if (e.isSymbolicLink()) {
+        const inHome = p === home || p.startsWith(home + path.sep);
+        if (me !== undefined && e.uid !== me && (strict || inHome || e.uid !== 0)) {
+          return aside({ dir: p, why: 'belongs to another user' });
+        }
+        let target: string;
+        try {
+          target = fs.realpathSync.native(p);
+        } catch {
+          continue; // leads nowhere: nothing to load
+        }
+        const u = trustedPath(target, ruleSet);
+        if (u !== undefined) {
+          return aside({ dir: p, why: `is a link to ${target}, where ${u.dir} ${u.why}` });
+        }
+        continue;
+      }
+      // A package, a scope folder or a file: all of it, by the same rules as the closure, under
+      // the one cap. A package the closure walks as well is walked once (`visited`).
+      if (e.isDirectory() && state.visited.has(p)) continue;
+      const w = walk(
+        p,
+        cap,
+        {
+          strict,
+          home: rules.home,
+          ...(rules.groupOk !== undefined && { groupOk: rules.groupOk }),
+        },
+        state,
+      );
+      if (w !== undefined) {
+        const capped = /holds more than/.test(w.why);
+        return aside(capped ? { dir: real, why: `holds more than ${cap} entries to check` } : w);
+      }
+    }
+    if (rules.groupOk === undefined) searchCache.add(key);
+  }
+  return undefined;
+}
+
+/**
+ * Every existing `node_modules` Node would search above `start` (`lookupDirs`), checked and walked
+ * as `searchedFolders` does. `checked` remembers the ones already done in this closure.
  */
 export function ancestorModules(
   start: string,
-  opts: { home: string; strict: boolean; groupOk?: (gid: number) => boolean },
+  rules: SearchRules,
+  state: WalkState = { count: 0, visited: new Set() },
+  cap: number = OWN_TREE_CAP,
   checked: Set<string> = new Set(),
 ): Untrusted | undefined {
-  if (process.platform === 'win32') return undefined;
-  for (const dir of lookupDirs(start)) {
-    if (checked.has(dir)) continue;
-    try {
-      fs.lstatSync(dir);
-    } catch {
-      checked.add(dir);
-      continue;
-    }
-    const u = trustedPath(dir, opts);
-    if (u !== undefined) {
-      return {
-        dir: u.dir,
-        why: `${u.why}, and Node loads modules from ${dir} for anything not found nearer`,
-        fix: `move ${sh(dir)} out of the way (Node searches it), or make it a directory only you can write`,
-      };
-    }
-    checked.add(dir);
-  }
-  return undefined;
+  const dirs = lookupDirs(start).filter((d) => !checked.has(d));
+  for (const d of dirs) checked.add(d);
+  return searchedFolders(dirs, rules, state, cap);
 }
 
 /** A package name as package.json may give it: `name` or `@scope/name`, never a path. */
@@ -491,9 +651,16 @@ function runtimeDeps(pkg: string): string[] {
   return [...names].filter((n) => PACKAGE_NAME.test(n));
 }
 
-/** Where Node finds package `name` from a package at `fromReal` (its realpath), or undefined. */
-function resolvePackage(fromReal: string, name: string): string | undefined {
-  for (const dir of lookupDirs(fromReal)) {
+/**
+ * Where Node finds package `name` from a package at `fromReal` (its realpath): its `node_modules`
+ * folders up to `/`, then the global folders (`NODE_PATH` and the rest). Undefined when none has it.
+ */
+function resolvePackage(
+  fromReal: string,
+  name: string,
+  globals: readonly string[] = [],
+): string | undefined {
+  for (const dir of [...lookupDirs(fromReal), ...globals]) {
     const candidate = path.join(dir, name);
     try {
       if (fs.statSync(candidate).isDirectory()) return candidate;
@@ -518,7 +685,12 @@ const closureCache = new Map<string, Untrusted | null>();
  */
 export function trustedClosure(
   pkgRoot: string,
-  opts: { home: string; groupOk?: (gid: number) => boolean; cap?: number },
+  opts: {
+    home: string;
+    env?: Record<string, string | undefined>;
+    groupOk?: (gid: number) => boolean;
+    cap?: number;
+  },
 ): Untrusted | undefined {
   if (process.platform === 'win32') return undefined;
   const root = realpathOf(pkgRoot);
@@ -526,7 +698,7 @@ export function trustedClosure(
     return { dir: pkgRoot, why: 'does not exist', fix: 'rebuild or reinstall it' };
   }
   const cap = opts.cap ?? OWN_TREE_CAP;
-  const key = `${root}\0closure\0${cap}\0${opts.home}`;
+  const key = `${root}\0closure\0${cap}\0${opts.home}\0${opts.env?.['NODE_PATH'] ?? ''}`;
   const cached = opts.groupOk === undefined ? closureCache.get(key) : undefined;
   if (cached !== undefined) return cached ?? undefined;
   const rules = {
@@ -534,22 +706,35 @@ export function trustedClosure(
     strict: false,
     ...(opts.groupOk !== undefined && { groupOk: opts.groupOk }),
   };
-  const state: WalkState = { count: 0, visited: new Set() };
   const checked = new Set<string>();
   const queue = [root];
   const queued = new Set([root]);
-  let found: Untrusted | undefined;
+  const enqueue = (real: string): void => {
+    if (!queued.has(real)) {
+      queued.add(real);
+      queue.push(real);
+    }
+  };
+  // A directory a link leads to is code too: walked, its ancestors checked, its deps queued.
+  const state: WalkState = { count: 0, visited: new Set(), passed: new Set(), queueDir: enqueue };
+  const search: SearchRules = {
+    home: opts.home,
+    strictFor: () => false,
+    ...(opts.groupOk !== undefined && { groupOk: opts.groupOk }),
+  };
+  const globals = globalFolders(opts.env ?? {}, opts.home);
+  let found: Untrusted | undefined = searchedFolders(globals, search, state, cap);
   while (found === undefined && queue.length > 0) {
     const pkg = queue.shift() as string;
     state.visited.add(pkg);
     found =
       walk(pkg, cap, { ...rules, strict: false }, state) ??
-      ancestorModules(path.dirname(pkg), rules, checked);
+      ancestorModules(path.dirname(pkg), search, state, cap, checked);
     if (found !== undefined) break;
     for (const name of runtimeDeps(pkg)) {
-      const dep = resolvePackage(pkg, name);
+      const dep = resolvePackage(pkg, name, globals);
       if (dep === undefined) continue; // not installed (an optional or peer one): nothing to load
-      const u = trustedPath(dep, rules);
+      const u = trustedPath(dep, { ...rules, passed: state.passed as Set<string> });
       if (u !== undefined) {
         found = {
           dir: u.dir,
@@ -559,10 +744,7 @@ export function trustedClosure(
         break;
       }
       const real = realpathOf(dep);
-      if (real !== undefined && !queued.has(real)) {
-        queued.add(real);
-        queue.push(real);
-      }
+      if (real !== undefined) enqueue(real);
     }
   }
   if (opts.groupOk === undefined) closureCache.set(key, found ?? null);
