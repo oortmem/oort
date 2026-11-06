@@ -1,99 +1,171 @@
 # SDKs: `createOort()` for TypeScript and `Oort` for Python, one API shape
 
-Date: 2026-11-06. Status: proposed design, for review before 0.6.0. Issues: CON-108 (this spec),
-CON-24 (Python client), CON-107 (the `oort.v1` contract), CON-84 (spatial `Place`), CON-92 (end
-users, B2B2C). Releases: **0.6.0** (TypeScript SDK, before the 18 November launch) and **0.7.0**
-(native Python client, about 25 November).
+Date: 2026-11-06. Status: proposed design, revised the same day after an independent review of the
+build effort and security. Issues: CON-108 (this spec), CON-24 (Python client), CON-107 (the
+`oort.v1` contract), CON-84 (spatial `Place`), CON-92 (end users, B2B2C). Releases: **0.6.0**
+(TypeScript SDK, before the 18 November launch) and **0.7.0** (native Python client, about 25
+November).
 
-This spec is about the developer surface only. It changes no ranking, write-path or storage
-behaviour, except where a section says so (each change is listed in §12).
+This spec covers the developer surface. It changes no ranking, write-path or storage behaviour,
+except where a section says so. Every such change is listed in §14.
+
+**How to read it.** §1 is the 0.6.0 scope, and it is binding: whatever §1 leaves out is 0.7 or
+later, even where a later section describes it in full. The later sections give the complete
+design, so that 0.6.0 does not paint 0.7 into a corner. Each item is tagged **[0.6]**, **[0.7]**
+or **[later]** where its release is not obvious.
 
 ## 0. Decisions in brief
 
-1. **One API, four transports.** TypeScript runs the engine in-process (local) or calls Oort
-   Cloud over HTTPS. Python calls `oort serve` over HTTP (a Unix socket on a laptop, TCP with a
-   bearer token in a VPC) or Oort Cloud over HTTPS. TypeScript can also call `oort serve`
-   (`mode: 'remote'`, 0.7.0). Every method has the same name, arguments, result fields and error
-   codes on every transport.
-2. **New package `@oortmem/sdk`.** It holds the facade and the wiring that today lives in
-   `packages/cli/src` (wire, credentials, keychain, relay, cloud client, local-model loader).
-   `oortmem` re-exports it from an `exports` map, keeps its `bin`, and the CLI becomes a
-   consumer of the SDK.
+1. **One API shape, several transports.** In 0.6.0, TypeScript runs the engine in-process
+   (`local`) or calls Oort Cloud over HTTPS (`cloud`). 0.7.0 adds Python, which talks to `oort
+   serve` (a Unix socket on one machine, or an opt-in TCP listener with a token in a VPC) or to
+   Oort Cloud. It also adds a TypeScript `remote` mode against `oort serve`. Method names,
+   arguments, result fields and error codes are the same on every transport.
+2. **0.6.0 is one package.** The facade ships from `oortmem`'s root export
+   (`packages/cli/src/sdk/`). A separate `@oortmem/sdk` package, and moving the wiring files into
+   it, wait until 0.7. The public import path, `oortmem`, stays the same either way.
 3. **ESM only, Node 22.15 or newer.** `require('oortmem')` still works through Node's
-   `require(esm)`, because the library graph has no top-level await. That is tested.
-4. **Errors are typed classes that carry the `oort.v1` code and the same `fix` as the CLI.**
-   There are ten codes: CON-107's nine plus `refused`, which the `oort.v1` branch added. A
-   `reason` field gives finer detail without growing the contract.
-5. **An SDK caller is an agent.** Judgments it records are unconfirmed (`via: 'sdk-agent'`),
-   allowed only for experts in `judge.experts`, and count against the same daily cap as MCP.
-   Expert mode is an explicit construction option. Model-facing tools always run as an agent.
-6. **Scope is fixed per handle.** No method takes an org, user, agent or project. `scoped()`
-   derives a handle for another user or project from trusted host code. `include` can only
-   narrow what the handle reads.
-7. **Python ships with no runtime dependencies** (standard library only) and needs Python 3.10
-   or newer. `AsyncOort` mirrors `Oort`.
-8. **`oort serve` gains a memory protocol.** It is HTTP/1.1 with JSON, on the same Unix socket
-   (told apart from hook frames by the first byte), and on an opt-in TCP listener with a token,
-   TLS and health endpoints. Its routes mirror Oort Cloud's `/v1`, so Python has one HTTP client
-   for both.
-9. **One JSON contract suite** under `contract/sdk/`, run by both SDKs against an in-process
-   engine, a fixture daemon and the fake cloud.
-10. **Self-hosting.** 0.6.0 supports the TypeScript library embedded in your service, and cloud
-    mode in serverless functions. 0.7.0 adds service mode, a container image and
-    AWS and GCP recipes. A Postgres store and a Helm chart come later. Integrations at
-    launch: Vercel AI SDK, LangGraph.js and OpenAI Agents JS for TypeScript; LangGraph, OpenAI
-    Agents and CrewAI for Python.
+   `require(esm)`, because the library's import graph has no top-level await. A test checks it.
+4. **Errors are typed classes carrying the `oort.v1` code and a `reason`.** There are ten codes:
+   CON-107's nine, plus `refused`. They are built on CON-107 step 2's `describeError`, which must
+   merge first (Q2).
+5. **An SDK caller is an agent.** Its judgments are stored exactly like MCP's (`via: 'mcp'`, with
+   `source.harness: 'sdk'`), so every reader, 0.5.x included, treats them as unconfirmed. They
+   are allowed only for experts listed in `judge.experts`, and they share MCP's daily cap and its
+   counter file. Expert mode is an explicit option that records `via: 'sdk'`. Model-facing tools
+   never expose expert mode or the options that widen judging.
+6. **Scope is fixed per handle, and safe by default.** No method takes a scope argument.
+   `scoped()` derives handles from trusted host code. A handle for an end user (`user`) needs an
+   explicit `org` and gets that user's Planet only, never a Star, until CON-92: today's Star is
+   keyed by org and agent, not by user, so a Star would leak between users.
+7. **Cloud mode touches no disk and loads no native module.** The store import becomes dynamic,
+   and `oort.sqlite` is no longer opened before the cloud check. Import-graph tests enforce this.
+8. **Python (0.7.0) has no runtime dependencies** and needs 3.10 or newer, while `import oortmem`
+   keeps working on 3.9 for the launcher. `oort serve` gains an HTTP memory protocol whose routes
+   mirror Oort Cloud's `/v1`. It is served on the existing socket, with routing by the first
+   byte, and on an opt-in TCP listener that requires TLS (or an explicit proxy flag) and a
+   256-bit token.
+9. **One JSON contract suite** under `contract/sdk/`. 0.6.0 ships its TypeScript runner, laid out
+   so the Python runner drops in for 0.7.0.
+10. **Integrations.** 0.6.0 ships one adapter, `oortmem/ai-sdk` (Vercel AI SDK,
+    `@experimental`), and docs examples for LangGraph.js and OpenAI Agents JS. 0.7.0 adds
+    LangGraph, OpenAI Agents and CrewAI for Python, and the self-hosting pieces: service mode,
+    the container image, and AWS and GCP recipes.
 
-## 1. Goals and non-goals
+## 1. 0.6.0 scope (launch, binding)
+
+The estimate for the full design was 11 to 14 days, which does not fit before 18 November. 0.6.0
+ships only what follows. Anything else in this spec is **0.7 or later**.
+
+| Area      | In 0.6.0                                                                                                                                                                                                                                       |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package   | `oortmem` only. The facade lives in `packages/cli/src/sdk/` and is reached through `exports["."]` → `dist/sdk/index.js`, with the `bin` kept. No new npm package (a new one would need a manual first publish before trusted publishing can take over). |
+| Modes     | `'auto' \| 'local' \| 'cloud'`. `remote` is absent from the types.                                                                                                                                                                             |
+| Options   | `mode`, `home`, `cwd`, `project`, `projectConfig`, `agent`, `user`, `org`, `keys`, `keySources`, `config`, `url`, `timeoutMs`, `migrate`, `env`, `fetch`, `judge.role` (with `judge.operator`).                                                |
+| Methods   | `recall`, `observe`, `remember`, `forget`, `pin`, `unpin`, `recent`, `explain`, `whoami`, `scoped`, `close` and `[Symbol.asyncDispose]`, the `formatForPrompt` function, `judge.record`, `judge.apply`, `judge.list`, `judge.confirm` (expert role only), and `consolidate` (local only). |
+| Errors    | The ten codes plus `reason`, built on CON-107 step 2's merged `describeError`, without the CLI-only fixes ("again with `--yes`", `oort --help`).                                                                                             |
+| Cloud     | No native module loaded and nothing written to disk: a dynamic `@oortmem/store-sqlite` import, the cloud check before any store is opened, and no hook logger or query cache. Tests check the import graph and `require('oortmem')`.        |
+| Security  | §6.3 (judgments as `via: 'mcp'`, the `isAgentVia()` helper), §6.4 (Planet only for end users, an explicit `org`), and §6.6 (key handling).                                                                                                     |
+| Tests     | The contract suite: JSON cases under `contract/sdk/` with a TypeScript runner, run against the local engine and the shared fake cloud (§10).                                                                                                 |
+| Adapters  | `oortmem/ai-sdk` (`@experimental`). LangGraph.js and OpenAI Agents JS appear as docs examples only.                                                                                                                                         |
+| Docs      | `docs/sdk.md`: the five-line examples, every option and method, the error table, the billing table, library and serverless use, and the migration notes (§13.2).                                                                            |
+
+**Deferred to 0.7 or later**, even though the design below covers them:
+
+- `@oortmem/sdk` and the file move (§7.1);
+- `mode: 'remote'` and all daemon and service-mode work (§8.1, §9.4);
+- `forgetAll`;
+- the `node:diagnostics_channel` events;
+- the `Place` type and the `near` and `within` options (0.6 reserves these names in the docs
+  only; §12);
+- loading adapters lazily per role;
+- client-side scrubbing of cloud requests;
+- a configurable judgment cap;
+- the LangGraph.js and OpenAI Agents JS adapter subpaths;
+- the Python client.
+
+**Order of work (each step independently testable):**
+
+1. Merge CON-107 step 2.
+2. Add `isAgentVia()` in core and switch every site to it (§6.3).
+3. Split wiring: `wireEngine()` (principal-free), `principalFor()`, and the cloud check before the
+   store (§3.5).
+4. Build the facade, types and error mapping.
+5. Add the judge rules and the shared counter.
+6. Add the contract runner, the cases, and the fake cloud moved into a shared helper.
+7. Build the `ai-sdk` adapter.
+8. Write `docs/sdk.md`.
+9. Before the release tag, run the gated live smoke test against Oort Cloud (§10.3).
+
+## 2. Goals and non-goals
 
 Goals:
 
-- G1. A five-line TypeScript example and a five-line Python example that recall and observe,
-  both locally and against Oort Cloud.
+- G1. A five-line TypeScript example (0.6.0) and a five-line Python example (0.7.0) that recall
+  and observe, locally and against Oort Cloud.
 - G2. Every memory feature from code: temporal recall, scopes, judgments (record, apply,
   confirm, list) and consolidation, with the CLI's safety rules.
-- G3. Integration with agent frameworks and self-hosted harnesses on AWS and GCP without
-  reading engine internals.
+- G3. Integrating with agent frameworks and self-hosted harnesses on AWS and GCP without reading
+  engine internals.
 - G4. One contract that both SDKs pass, so they cannot drift apart.
 
-Non-goals for 0.6 and 0.7: sharing to Constellations, invites and keys (these stay in the CLI and
-the dashboard), judgment packs, import, eval and purge, a browser or edge-runtime build, and
-spatial recall (reserved, §11).
+Non-goals for 0.6 and 0.7:
 
-## 2. Architecture
+- sharing to Constellations, invites and keys (the CLI and the dashboard keep these);
+- judgment packs, import, eval, withdraw and purge;
+- a browser or edge-runtime build;
+- spatial recall (§12).
+
+## 3. Architecture
 
 ```
-TypeScript app ──► @oortmem/sdk ──┬─ local:  @oortmem/core + store-sqlite, in-process
-                                  ├─ cloud:  HTTPS ─► api.oortcloud.dev /v1
-                                  └─ remote: HTTP  ─► oort serve (0.7.0)
-Python app ──────► oortmem (py) ──┬─ local:  HTTP over the Unix socket ─► oort serve ─► core
-                                  ├─ remote: HTTPS/HTTP over TCP + token ─► oort serve
-                                  └─ cloud:  HTTPS ─► api.oortcloud.dev /v1
+0.6.0
+TypeScript app ──► oortmem (root export, packages/cli/src/sdk) ──┬─ local: @oortmem/core + store-sqlite, in-process
+                                                                └─ cloud: HTTPS ─► api.oortcloud.dev /v1
+0.7.0 adds
+TypeScript app ──► @oortmem/sdk (re-exported by oortmem) ──────── remote: HTTP(S) ─► oort serve
+Python app ──────► oortmem (PyPI) ──┬─ local:  HTTP over the Unix socket ─► oort serve ─► core
+                                    ├─ remote: HTTPS over TCP + token ─► oort serve
+                                    └─ cloud:  HTTPS ─► api.oortcloud.dev /v1
 ```
 
-| Layer                                  | Owns                                                                                          | Stability                                              |
-| -------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `@oortmem/core`                        | Engine building blocks (recall, observe, judgment, grants, scrub)                             | No promise: advanced use only                          |
-| `@oortmem/sdk` (new)                   | `createOort`, option resolution, keys, wiring, transports, the error mapping, result views    | Semver (§6.4)                                          |
-| `oortmem` (npm)                        | Re-exports `@oortmem/sdk`, ships the `oort` bin and the framework adapters (subpath exports) | Semver for the root export; adapters `@experimental` |
-| `oort serve`                           | Hook frames (unchanged), and the HTTP memory protocol (§7.1)                                  | Protocol `v1`                                          |
-| `oortmem` (PyPI)                       | `Oort`, `AsyncOort`, errors, integrations, and the existing `oort` launcher                  | Semver, in lockstep with npm                           |
+| Layer                     | Owns                                                                                              | Stability                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `@oortmem/core`           | Engine building blocks (recall, observe, judgment, grants, scrub)                                 | No promise; for advanced use only                     |
+| `oortmem` root export     | `createOort`, options, keys, wiring, transports, error mapping, result views. Lives in `packages/cli/src/sdk/` in 0.6 and moves to `@oortmem/sdk` in 0.7 | Semver (§7.4)                                         |
+| `oortmem/ai-sdk`          | The Vercel AI SDK adapter                                                                         | `@experimental`                                       |
+| `oort serve`              | Hook frames (unchanged); the HTTP memory protocol (§8.1) **[0.7]**                                | Protocol `v1`                                         |
+| `oortmem` (PyPI)          | `Oort`, `AsyncOort`, errors, integrations, and the existing `oort` launcher **[0.7]**             | Semver, versioned in lockstep with npm                |
 
-The CLI, the MCP server and the hooks call `@oortmem/sdk` internals (`wireEngine`) instead of
-`packages/cli/src/wire.ts`. Every surface then shares one wiring path, so an engine-rule fix
-reaches all of them at once.
+### 3.1 Engine and principal (resolves how wiring splits)
 
-## 3. API surface
+`wire()` today resolves config, project, agent, store and adapters in one call, all for one cwd.
+The SDK splits it in two:
 
-### 3.1 Construction and configuration
+- **`wireEngine(opts)`** returns a principal-free `Engine`: `{ config, mode, store?, cloud?,
+  embed?, rerank?, decide?, write?, unavailable, routes, warnings, close }`. It resolves config
+  once, from `home`, `cwd` and `projectConfig`, then lays `options.config` on top. In cloud mode
+  it reads the Oort key and returns without opening or creating anything under `OORT_HOME`.
+- **`principalFor(engine, { org, user, agent, project })`** returns a `Principal`:
+  `{ scope, home, filter }`. Every operation takes `(engine, principal)`.
+- **`scoped({ project })`** reuses the root's resolved config. It does not resolve a project
+  config file for the new project, so a derived handle can never load another repository's
+  `oort.config.json`.
+
+The CLI and the MCP server keep calling `wire()`, now a thin wrapper over the two. They behave
+exactly as before.
+
+## 4. API surface
+
+### 4.1 Construction and configuration
 
 TypeScript:
 
 ```ts
 import { createOort } from 'oortmem';
 
-const oort = await createOort(); // what `oort setup` chose on this machine
-const cloud = await createOort({ mode: 'cloud' }); // the Oort key from the env or the keychain
+const oort = await createOort(); // what `oort setup` chose on this machine (scripts, laptops)
+const cloud = await createOort({ mode: 'cloud' }); // the Oort key, from the env or the keychain
 const mine = await createOort({ mode: 'local', keys: { voyage, typesafe, anthropic } });
 const offline = await createOort({ config: { embed: { provider: 'local' }, rerank: { provider: 'local' } } });
 await using svc = await createOort({ mode: 'remote', url: 'https://oort.internal:7807' }); // 0.7.0
@@ -101,7 +173,7 @@ await using svc = await createOort({ mode: 'remote', url: 'https://oort.internal
 export function createOort(options?: OortOptions): Promise<Oort>;
 ```
 
-Python:
+Python **[0.7]**:
 
 ```python
 from oortmem import Oort, AsyncOort
@@ -112,82 +184,85 @@ svc = Oort(mode="remote", url="https://oort.internal:7807", token=os.environ["OO
 async with AsyncOort(mode="cloud") as aoort: ...
 ```
 
-`createOort` is async because a local engine opens SQLite and reads key sources. `Oort(...)` does
-no I/O: Python connects on the first call. Neither makes a network request at construction.
+`createOort` is async because a local engine opens SQLite and reads key sources. `Oort(...)`
+does no I/O: Python connects on the first call. Neither makes a network request at construction.
 
-| Option (TS / Python)          | Type                                                  | Modes                         | Default                                                                         |
-| ----------------------------- | ----------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------- |
-| `mode`                        | `'auto' \| 'local' \| 'cloud' \| 'remote'`            | all                           | `'auto'`: the store in `$OORT_HOME/cloud.json` (as the CLI), else `local`       |
-| `home`                        | `string`                                              | local, auto                   | `OORT_HOME`, else `~/.oort`                                                     |
-| `cwd`                         | `string`                                              | local, cloud                  | `process.cwd()` / `os.getcwd()`; used only to find the project                  |
-| `project`                     | `string \| null`                                      | all                           | derived from `cwd` (§3.1.2); `null` reads and writes global memories only       |
-| `agent`                       | `string`                                              | all                           | `OORT_AGENT`, else anonymous (the Planet only)                                  |
-| `user`                        | `string`                                              | local, remote                 | `'self'` (§8.3)                                                                 |
-| `org`                         | `string`                                              | local                         | `'local'`; in remote mode the token decides it                                  |
-| `keys`                        | `{ voyage?, typesafe?, anthropic?, oort? }`           | TS local; TS and Py cloud (`oort` / `api_key`) | none                                                                            |
-| `keySources` / `key_sources`  | `('explicit' \| 'env' \| 'keychain')[]`               | local, cloud                  | all three; `keychain` is dropped when `OORT_NO_KEYCHAIN=1`                      |
-| `config`                      | deep partial of the home config                       | TS local                      | none; laid over the resolved config (§3.1.3)                                    |
-| `url`                         | `string`                                              | cloud, remote                 | cloud: `OORT_CLOUD_URL`, else `https://api.oortcloud.dev`; remote: required     |
-| `token`                       | `string`                                              | remote                        | `OORT_SERVE_TOKEN`                                                              |
-| `judge`                       | `{ role: 'agent' \| 'expert', operator?: string }`    | all                           | `{ role: 'agent' }` (§5.3). Python: `judge_role=`, `operator=`                  |
-| `harness`                     | `string`                                              | all                           | `'sdk'`, recorded in `source.harness`                                           |
-| `timeoutMs` / `timeout` (s)   | `number`                                              | cloud, remote, Py local       | 30 s per request                                                                |
-| `migrate`                     | `boolean`                                             | TS local                      | `true` (as every CLI command). `false`: an older store is refused with fix `oort doctor` |
-| `autostart`                   | `boolean`                                             | Py local                      | `True` (§7.1.6)                                                                 |
-| `env`                         | `Record<string, string \| undefined>`                 | all                           | `process.env` / `os.environ`                                                    |
-| `fetch`                       | `typeof fetch`                                        | TS cloud, remote              | global `fetch`, or the keep-alive pool for long-lived processes                |
+| Option (TS / Python)         | Type                                                 | Modes                       | Default                                                                                          |
+| ---------------------------- | ---------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------ |
+| `mode`                       | `'auto' \| 'local' \| 'cloud'` (+ `'remote'` [0.7])  | all                         | `'auto'`: the store named in `$OORT_HOME/cloud.json`, as the CLI does, else `local`              |
+| `home`                       | `string`                                             | local, auto                 | `OORT_HOME`, else `~/.oort`                                                                      |
+| `cwd`                        | `string`                                             | local, cloud                | `process.cwd()`; used only to find the project and its config                                    |
+| `project`                    | `string \| null`                                     | all                         | derived from `cwd` (§4.1.2); `null` means global memories only                                   |
+| `projectConfig`              | `boolean`                                            | local                       | `true`. `false` skips the repository's `oort.config.json`, for a server whose cwd is a checkout  |
+| `agent`                      | `string`                                             | all                         | `OORT_AGENT`, else anonymous (the Planet only)                                                   |
+| `user`                       | `string`                                             | local (+ remote [0.7])      | unset, meaning the person (`self`). Setting it requires `org` (§6.4)                             |
+| `org`                        | `string`                                             | local                       | `'local'`. Required, and not `'local'`, whenever `user` is set                                    |
+| `keys`                       | `{ voyage?, typesafe?, anthropic?, oort? }`          | local; cloud (`oort` only)  | none. Held in `#private` fields (§6.6)                                                           |
+| `keySources` / `key_sources` | `('explicit' \| 'env' \| 'keychain')[]`              | local, cloud                | all three; `keychain` is dropped when `OORT_NO_KEYCHAIN=1`                                       |
+| `config`                     | deep partial of the home config                      | local                       | none. Laid over the resolved config (§4.1.3)                                                     |
+| `url`                        | `string`                                             | cloud (+ remote)            | `OORT_CLOUD_URL`, else `https://api.oortcloud.dev`                                               |
+| `token`                      | `string`                                             | remote [0.7]                | `OORT_SERVE_TOKEN`                                                                               |
+| `judge`                      | `{ role: 'agent' \| 'expert'; operator?: string }`   | local                       | `{ role: 'agent' }` (§6.3). Python: `judge_role=`, `operator=`                                   |
+| `timeoutMs` / `timeout` (s)  | `number`                                             | cloud (+ remote, Py local)  | 30 s per request                                                                                 |
+| `migrate`                    | `boolean`                                            | local                       | `true`, as every CLI command. `false` refuses an older store (fix `oort doctor`); see §13.1      |
+| `env`                        | `Record<string, string \| undefined>`                | all                         | `process.env`                                                                                    |
+| `fetch`                      | `typeof fetch`                                       | cloud (+ remote)            | the keep-alive pool (§4.4)                                                                       |
+| `autostart`                  | `boolean`                                            | Py local [0.7]              | `True` (§8.1.6)                                                                                  |
 
-A combination that a mode does not take (for example `token` with `mode: 'local'`) throws
-`OortUsageError` at construction. It is never silently ignored.
+An option that a mode does not take (for example `keys.voyage` with `mode: 'cloud'`) throws
+`OortUsageError` at construction. It is never silently ignored. Every input object is checked
+against a strict schema at runtime, so an unknown key is a usage error too. This is what makes
+the reserved `place` field safe before it exists (§12).
 
-**Asymmetry, on purpose.** Python local mode runs the engine inside `oort serve`, which reads its
-own keys and config. So Python takes no `keys` (except the Oort key for cloud) and no `config`
-overlay in local mode. Passing either is a usage error that names the daemon's environment and
-`oort keys set` as the fix.
+**Python local mode is asymmetric, on purpose.** The engine runs inside `oort serve`, which reads
+its own keys and config. So Python takes no vendor `keys` and no `config` overlay in local mode.
+Passing either is a usage error that points at the daemon's environment and `oort keys set`.
 
-#### 3.1.1 Key resolution
+#### 4.1.1 Key resolution
 
-For each role (embed, rerank, decide, write) the first key found wins. The order matches the CLI
-(`credentials.ts`), with explicit keys placed first:
+Each role (embed, rerank, decide, write) uses the first key found. The order matches the CLI's
+`credentials.ts`, with explicit keys placed first:
 
-| Order | Source                                                                                    | Notes                                                                                                                        |
-| ----- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| 1     | `keys.<vendor>` (explicit)                                                                | Held in memory only. Never written to disk, logged or put in an error.                                                       |
-| 2     | `VOYAGE_API_KEY`, `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY` (env, non-empty)                |                                                                                                                              |
-| 3     | Keychain item `oort.<vendor>`, or `credentials.json` (mode 600) where there is no Keychain | Skipped with `OORT_NO_KEYCHAIN=1` or when `keySources` leaves out `keychain`. Servers set it (§8.6).                        |
-| 4     | The Oort key (`keys.oort`, `OORT_API_KEY`, Keychain `oort.oort`)                          | Routes the role through the Oort Pro relay. It is metered (§5.5), and `whoami().routes` reports it.                          |
-| 5     | `local` provider in config                                                                | `oort models pull` models. No key, no network.                                                                               |
-| —     | none                                                                                      | The role is unavailable. Recall degrades (`lexical-only` warning). A write throws `OortNeedsKeyError`.                       |
+| Order | Source                                                                                          | Notes                                                                                                                  |
+| ----- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 1     | `keys.<vendor>`, given explicitly                                                               | Held in memory only, and never written, logged or put into an error (§6.6)                                            |
+| 2     | `VOYAGE_API_KEY`, `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY` (env, non-empty)                      |                                                                                                                        |
+| 3     | Keychain item `oort.<vendor>`, or `credentials.json` (mode 600) where there is no Keychain      | Skipped with `OORT_NO_KEYCHAIN=1`, or when `keySources` leaves out `keychain`                                          |
+| 4     | The Oort key (`keys.oort`, then `OORT_API_KEY`, then Keychain `oort.oort`)                      | Routes the role through the Oort Pro relay. It is metered (§6.5), and `whoami().routes` shows it                       |
+| —     | none                                                                                            | The role is unavailable. Recall degrades (warning `lexical-only`). A write throws `OortNeedsKeyError`                  |
 
-Cloud mode needs only the Oort key, found by steps 1 to 3 for `oort`. Without it, the SDK throws
+**A local provider is a config choice, not a fallback.** With `embed.provider` or
+`rerank.provider` set to `local` (by `oort models pull`, or by `options.config`), that role uses
+the local model and reads no key at all. Without that setting, a missing key never falls back to
+local models.
+
+Cloud mode needs only the Oort key, found by steps 1 to 3 for `oort`. Without one it throws
 `OortNeedsLoginError` (fix `oort login`).
 
-#### 3.1.2 Project resolution
+#### 4.1.2 Project resolution
 
-| Input                    | Project id                                                                                                                                                     |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `project: 'acme-web'`    | `cfg:acme-web`. The same namespace as `oort project link`, because the host's own code is trusted to choose.                                                   |
-| `project: null`          | No project: global memories only.                                                                                                                              |
-| omitted                  | `resolveProject(cwd, home)`, exactly as the CLI does. A repository's `oort.config.json` `project.id` counts only with a trust link, and otherwise gives the `project-id-untrusted` warning. |
+| Input                 | Project id                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `project: 'acme-web'` | `cfg:acme-web`, the same namespace as `oort project link`. Host code is trusted to choose it.                                                    |
+| `project: null`       | No project: global memories only                                                                                                                 |
+| omitted               | `resolveProject(cwd, home)`, exactly as the CLI. A repository's `project.id` counts only with a trust link (otherwise warning `project-id-untrusted`) |
 
-Python cloud mode has no Node, so it ports `projectIdFor` (`<basename>-<sha256(main root)[:8]>`,
-worktrees resolved to the main checkout, and links from `project-links.json`). On macOS it
-canonicalises case with `fcntl.F_GETPATH`, matching Node's `realpathSync.native`. Shared vectors
-in the contract suite pin the result (§9). Services should pass `project` explicitly.
+Python cloud mode **[0.7]** ports `projectIdFor`. The id is `<basename>-<sha256(main root)[:8]>`,
+with worktrees resolved to the main checkout and links read from `project-links.json`. On macOS
+it canonicalises case with `fcntl.F_GETPATH`, matching Node's `realpathSync.native`. Shared
+vectors pin the port (§10). Services should pass `project` explicitly.
 
-#### 3.1.3 Config
+#### 4.1.3 Config
 
-TypeScript local mode resolves config as the CLI does: the home `config.json`, then the
-project's `oort.config.json`, with `serve` and `judge` read from the home config only. Then
-`options.config` is laid on top. The overlay may set `judge` (the host's code is the operator),
-but it may not set `serve`. `projectConfig: false` skips the repository file. That is what a
-server wants when its own working directory happens to be a git checkout.
+Local mode resolves config as the CLI does: the home `config.json`, then the project's
+`oort.config.json` (unless `projectConfig: false`), with `serve` and `judge` read from the home
+config only. `options.config` is laid on top. The overlay may set `judge`, because the host's code
+is the operator, but not `serve`.
 
-### 3.2 Result types (TypeScript; Python mirrors them as frozen dataclasses)
+### 4.2 Result types (TypeScript; Python mirrors them as frozen dataclasses)
 
-Field names are camelCase in TypeScript and on the wire, and snake_case in Python. The mapping is
-mechanical (`validFrom` → `valid_from`). Ids are always full ids, and times are ISO 8601 strings
-(`datetime` in Python).
+Fields are camelCase in TypeScript and on the wire, and snake_case in Python, converted
+mechanically (`validFrom` → `valid_from`). Ids are always full ids, and times are ISO 8601.
 
 ```ts
 export type MemoryType = 'semantic' | 'episodic' | 'procedural' | 'preference' | 'judgment';
@@ -197,26 +272,24 @@ export type RecallMode = 'current' | 'as-of' | 'history' | 'known-at';
 
 export interface MemoryView {
   id: string;
-  text: string; // scrubbed again on read (§5.1)
+  text: string; // scrubbed again on read (§6.1)
   type: MemoryType;
   tier: 'hot' | 'warm' | 'cold';
   pinned: boolean;
-  status: MemoryStatus;
+  status: MemoryStatus; // mapping below
   validFrom: string;
   validTo: string | null;
-  recordedAt: string; // createdAt: transaction time
+  recordedAt: string; // createdAt, the transaction time
   updatedAt: string;
   entities: string[];
   origin?: { level: IncludeLevel; space: string; author?: string; overriddenBy?: string };
   judgment?: JudgmentView;
-  /** @experimental Reserved for CON-84. Never set before spatial memory ships. */
-  place?: Place;
 }
 
 export interface RecalledMemory extends MemoryView {
-  score: number; // fused score; comparable within one result only
-  stale?: true; // a volatile fact nobody confirmed within recall.staleAfterDays
-  /** @experimental Diagnostic; fields may change in a minor release. */
+  score: number; // the fused score, comparable only within one result
+  stale?: true;
+  /** @experimental Diagnostic; may change in a minor release. */
   why: { lexicalRank?: number; denseRank?: number; reranked?: number; coverage: number; dense?: number; activation: number; chain?: true };
 }
 
@@ -224,36 +297,39 @@ export interface Warning { code: string; message: string } // the oort.v1 warnin
 
 export interface RecallResult {
   memories: RecalledMemory[];
-  abstained: boolean; // candidates were found, none relevant: answer without memory
+  abstained: boolean;
   temporal: { mode: RecallMode; asOf?: string; knownAt?: string; inferred: boolean };
-  read: string[]; // spaces read, as labels: "your Planet", "Star cursor", "Constellation web"
-  degraded: string[]; // core's Degradation values, plus 'hive-unavailable' in cloud
+  read: string[]; // the spaces read, as labels
+  degraded: string[]; // core's Degradation values, plus 'hive-unavailable' in cloud mode
   warnings: Warning[];
 }
 
 export type Outcome = 'added' | 'reinforced' | 'updated' | 'superseded' | 'corrected' | 'skipped';
 export interface ObserveResult {
-  outcome: Outcome; // the turn's headline
+  outcome: Outcome;
   memories: { outcome: Outcome; id?: string; supersedes?: string; reason?: string }[];
   counts: Partial<Record<Outcome, number>>;
-  duplicate?: true; // the same turnRef was saved before
+  duplicate?: true; // cloud mode only: this turnRef was saved before (§4.4)
   warnings: Warning[];
 }
 export interface RememberResult { results: { fact: number; outcome: Outcome; id?: string; supersedes?: string; reason?: string }[]; warnings: Warning[] }
+export interface PinResult { id: string; pinned: boolean; changed: boolean | null } // null: cloud mode cannot tell (204)
 
 export interface Explanation {
   memory: MemoryView & { salience: number; activation: number; source: string };
   decisions: { stage: string; question: string; answer: string; probability: number }[];
   chain: { id: string; text: string; validFrom: string; validTo: string | null; endReason: 'superseded' | 'corrected' | 'expired' | null }[];
-  hiddenLinks: number; // links into memories this handle cannot read
+  hiddenLinks: number;
 }
+
+export interface RecordJudgmentView { outcome: 'added' | 'corrected' | 'unchanged'; id: string; corrects?: string; status: 'agent-recorded' | 'recorded'; redacted: string[]; embedFailed?: true }
 
 export interface Whoami {
   mode: 'local' | 'cloud' | 'remote';
   account: string | null;
   agent: string | null;
   project: string | null;
-  user: string;
+  user: string | null;
   reads: string[];
   writesTo: string;
   version: string;
@@ -261,27 +337,45 @@ export interface Whoami {
 }
 ```
 
-### 3.3 Methods
+**`MemoryStatus` mapping.** The first matching rule wins. This extends the MCP server's `status()`,
+which has only four values, and every transport uses the same function.
 
-| TypeScript                                                       | Python (`Oort`; `AsyncOort` has the same with `async def`)                          | Returns                                     | Local | Cloud                        |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------- | ----- | ---------------------------- |
-| `recall(query: string, opts?: RecallOptions)`                    | `recall(query, *, limit=10, mode=None, as_of=None, known_at=None, include=None, budget_chars=None, include_withdrawn=False, speed="full", infer_time=True)` | `RecallResult`                              | yes   | yes                          |
-| `observe(turn: Turn, opts?: { signal? })`                        | `observe(turn: Turn \| Mapping)`                                                    | `ObserveResult`                             | yes   | yes                          |
-| `remember(facts: string \| readonly string[], opts?: { type? })` | `remember(facts, *, type=None)`                                                     | `RememberResult`                            | yes   | yes                          |
-| `forget(id: string, opts?: { everywhere?: boolean })`            | `forget(id, *, everywhere=False)`                                                   | `{ forgotten: string; withdrawn?: string[] }` | yes   | yes (`everywhere`: cloud only) |
-| `pin(id)` / `unpin(id)`                                          | `pin(id)` / `unpin(id)`                                                             | `{ id; pinned; changed }`                   | yes   | yes                          |
-| `explain(id)`                                                    | `explain(id)`                                                                       | `Explanation`                               | yes   | yes                          |
-| `recent(opts?: { since?: string \| Date; limit?: number })`      | `recent(*, since=None, limit=20)`                                                   | `{ memories: MemoryView[] }`                | yes   | yes                          |
-| `judge.record(input: JudgmentInput)`                             | `judge.record(*, subject, verdict, reason, domain, by, ref=None, verdicts=None, criteria=None, decided_at=None)` | `RecordJudgmentResult`                      | yes   | `refused`                    |
-| `judge.apply(item: string \| JudgeItem, opts?: JudgeOptions)`    | `judge.apply(item, *, details=None, domain=None, by=None, limit=5, threshold=0.7, include_imported=False, include_agent_recorded=False)` | `JudgeResult`                               | yes   | `refused`                    |
-| `judge.confirm(id)`                                              | `judge.confirm(id)`                                                                 | `{ id; changed }`                           | expert | `refused`                   |
-| `judge.list(opts?: { domain?; by?; all?; limit? })`              | `judge.list(*, domain=None, by=None, all=False, limit=100)`                         | `{ judgments: JudgmentView[] }`             | yes   | `refused`                    |
-| `consolidate(opts?: { budgetMs?; signal? })`                     | `consolidate(*, budget_ms=None)`                                                    | `ConsolidateResult`                         | yes   | `refused` (the cloud consolidates) |
-| `forgetAll(opts: { confirm: 'forget-all' })` `@experimental`     | `forget_all(*, confirm)`                                                            | `{ forgotten: number }`                     | 0.7.0 | `refused`                    |
-| `whoami()`                                                       | `whoami()`                                                                          | `Whoami`                                    | yes   | yes                          |
-| `scoped(s: { user?; project?; agent?; judgeRole?: 'agent' })`    | `scoped(*, user=None, project=None, agent=None, judge_role=None)`                   | a new handle                                | yes   | `project`, `agent` only      |
-| `close()`, `[Symbol.asyncDispose]()`                             | `close()`, `__enter__`/`__exit__` (`__aenter__`/`__aexit__`)                        | `void`                                      |       |                              |
-| `formatForPrompt(r: RecallResult, opts?: { budgetChars? })` (function) | `format_for_prompt(r, *, budget_chars=None)`                                  | `string`                                    | both  | both                         |
+| Order | Condition                                                         | Status          |
+| ----- | ----------------------------------------------------------------- | --------------- |
+| 1     | `judgment.withdrawn` is set                                       | `withdrawn`     |
+| 2     | `isCurrent(m, now)`                                               | `current`       |
+| 3     | `endReason === 'corrected'`                                       | `corrected`     |
+| 4     | `endReason === 'superseded'`                                      | `superseded`    |
+| 5     | `expiredAt !== null`, or `validTo` is at or before now            | `expired`       |
+| 6     | otherwise (`validFrom` is after now)                              | `not-yet-valid` |
+
+`JudgeResult`, `JudgmentView` and `ConsolidateResult` are core's types (`judgment.ts`,
+`consolidate.ts`) cut down to their documented fields. Every `Memory` becomes an id, embeddings
+are dropped, and `JudgeResult.decisions` is `@experimental`. `JudgmentView` adds `status`,
+`confirmed: boolean` and `agentRecorded: boolean`, where `agentRecorded` is `isAgentVia(via) &&
+!confirmed`.
+
+### 4.3 Methods
+
+| TypeScript                                                      | Python [0.7] (`AsyncOort`: the same, `async def`)                                                                 | Returns                       | Local       | Cloud                      |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------- | ----------- | -------------------------- |
+| `recall(query: string, opts?: RecallOptions)`                   | `recall(query, *, limit=10, mode=None, as_of=None, known_at=None, include=None, budget_chars=None, include_withdrawn=False, speed="full", infer_time=True)` | `RecallResult`                | yes         | yes                        |
+| `observe(turn: Turn, opts?: { signal? })`                       | `observe(turn: Turn \| Mapping)`                                                                                  | `ObserveResult`               | yes         | yes                        |
+| `remember(facts: string \| readonly string[], opts?: { type? })` | `remember(facts, *, type=None)`                                                                                  | `RememberResult`              | yes         | yes                        |
+| `forget(id: string, opts?: { everywhere?: boolean })`           | `forget(id, *, everywhere=False)`                                                                                 | `{ forgotten; withdrawn? }`   | yes         | yes (`everywhere` is cloud-only) |
+| `pin(id)` / `unpin(id)`                                         | `pin(id)` / `unpin(id)`                                                                                           | `PinResult`                   | yes         | yes (`changed: null`)      |
+| `explain(id)`                                                   | `explain(id)`                                                                                                     | `Explanation`                 | yes         | yes                        |
+| `recent(opts?: { since?: string \| Date; limit?: number })`     | `recent(*, since=None, limit=20)`                                                                                 | `{ memories: MemoryView[] }`  | yes         | yes (`since` filtered on the client, §4.4) |
+| `judge.record(input: JudgmentInput)`                            | `judge.record(*, subject, verdict, reason, domain, by, ref=None, verdicts=None, criteria=None, decided_at=None)` | `RecordJudgmentView`          | yes         | `refused`                  |
+| `judge.apply(item: string \| JudgeItem, opts?: JudgeOptions)`   | `judge.apply(item, *, details=None, domain=None, by=None, limit=5, threshold=0.7, include_imported=False, include_agent_recorded=False)` | `JudgeResult`                 | yes         | `refused`                  |
+| `judge.confirm(id)`                                             | `judge.confirm(id)`                                                                                               | `{ id; changed }`             | expert only | `refused`                  |
+| `judge.list(opts?: { domain?; by?; all?; limit? })`             | `judge.list(*, domain=None, by=None, all=False, limit=100)`                                                       | `{ judgments: JudgmentView[] }` | yes       | `refused`                  |
+| `consolidate(opts?: { budgetMs?; signal? })`                    | `consolidate(*, budget_ms=None)`                                                                                  | `ConsolidateResult`           | yes         | `refused`                  |
+| `whoami()`                                                      | `whoami()`                                                                                                        | `Whoami`                      | yes         | yes                        |
+| `scoped(s: { user?; project?; agent?; judgeRole?: 'agent' })`   | `scoped(*, user=None, project=None, agent=None, judge_role=None)`                                                 | a new handle                  | yes         | `project`, `agent` only    |
+| `close()`, `[Symbol.asyncDispose]()`                            | `close()`, `__enter__`/`__exit__` (`__aenter__`/`__aexit__`)                                                      | `void`                        |             |                            |
+| `formatForPrompt(r, opts?: { budgetChars? })` (a function)      | `format_for_prompt(r, *, budget_chars=None)`                                                                      | `string`                      | both        | both                       |
+| `forgetAll({ confirm: 'forget-all' })` **[0.7]** `@experimental` | `forget_all(*, confirm)`                                                                                         | `{ forgotten: number }`       | yes         | `refused`                  |
 
 ```ts
 export interface RecallOptions {
@@ -289,23 +383,21 @@ export interface RecallOptions {
   mode?: RecallMode;
   asOf?: string | Date; // valid time
   knownAt?: string | Date; // transaction time
-  include?: IncludeLevel[]; // narrows; a level the handle cannot read → OortRefusedError
-  budgetChars?: number; // cap on returned text, as the hooks use
-  includeWithdrawn?: boolean; // withdrawn judgments too
-  speed?: 'full' | 'fast' | 'lexical'; // full: embed + rerank; fast: no rerank; lexical: no model call
-  inferTime?: boolean; // default true: "on 2 April" picks as-of, as in the CLI and MCP
+  include?: IncludeLevel[]; // narrows only (§5 for the error codes)
+  budgetChars?: number;
+  includeWithdrawn?: boolean;
+  speed?: 'full' | 'fast' | 'lexical'; // full: embed and rerank; fast: no rerank; lexical: no model call
+  inferTime?: boolean; // default true: "on 2 April" picks as-of, as the CLI and MCP do
   signal?: AbortSignal;
 }
 
 export interface Turn {
   user: string;
   assistant: string;
-  tools?: string[]; // tool-call summaries (exit codes, file edits), at most 16 × 512 bytes
+  tools?: string[]; // tool-call summaries; truncated to 16 × 512 bytes, never refused
   at?: string | Date; // default now
   sessionId?: string;
-  turnRef?: string; // makes a retry safe: the same turn is saved once
-  /** @experimental Reserved for CON-84. */
-  place?: Place;
+  turnRef?: string; // at most 128 characters; deduplicated in cloud mode only (§4.4)
 }
 
 export interface JudgmentInput {
@@ -316,57 +408,71 @@ export interface JudgeItem { summary: string; details?: string; ref?: string; do
 export interface JudgeOptions { limit?: number; threshold?: number; minSimilarity?: number; minAgreement?: number; includeImported?: boolean; includeAgentRecorded?: boolean }
 ```
 
-`RecordJudgmentResult`, `JudgeResult`, `JudgmentView` and `ConsolidateResult` are core's types
-(`judgment.ts`, `consolidate.ts`) restricted to their documented fields. Every `Memory` becomes
-an `id`, every `Int8Array` is dropped, and `JudgeResult.decisions` is marked `@experimental`.
-`JudgmentView` adds `status`, `confirmed: boolean` and `agentRecorded: boolean`.
+### 4.4 Semantics worth pinning down
 
-### 3.4 Semantics worth pinning down
-
-- **Temporal rules** match the MCP `viewOf` exactly. `mode: 'as-of'` needs `asOf`, and
-  `'known-at'` needs `knownAt`. `'current'` and `'history'` take neither. `asOf` together with
-  `knownAt` is a usage error. Without `mode`, a single date picks the view. Without either,
-  `inferTime` decides.
-- **Ids.** Every id argument takes a full id or a unique prefix of at least 8 characters (Oort
-  Cloud's `MIN_ID_PREFIX`). Locally that is stricter than the CLI's any-length prefix, so behaviour
-  is the same on every transport. Several matches throw `OortAmbiguousIdError`. An id this handle
-  cannot read throws `OortNotFoundError`, indistinguishable from an unknown id (store contract).
+- **Temporal rules** match the MCP server's `viewOf` exactly:
+  - `mode: 'as-of'` needs `asOf`, and `'known-at'` needs `knownAt`;
+  - `'current'` and `'history'` take neither date;
+  - giving both `asOf` and `knownAt` is a usage error;
+  - without `mode`, a single date picks the view;
+  - with neither, `inferTime` decides.
+- **Ids.** An id is either a full id or a unique prefix of at least 8 characters, which is Oort
+  Cloud's `MIN_ID_PREFIX`. That is stricter than the CLI's any-length prefix locally, so the
+  behaviour is the same everywhere.
+  - Several matches throw `OortAmbiguousIdError`.
+  - An id outside the handle's grant throws `OortNotFoundError`. It is indistinguishable from an
+    unknown id.
 - **`remember`** frames each fact as a user statement and runs it through the write path, as the
-  MCP tool and the cloud backend do (`remember.ts`). Up to 5 facts per call, each at most 500
-  characters (the MCP constants). Raising either limit later is not a breaking change.
-- **`observe`** is the full write path: scrub, gate, writer, reconcile. It can take seconds. In
-  a request handler, call it after answering the user. In a serverless function, await it before
-  returning, because the runtime freezes after the response.
-- **Star agents in cloud mode.** An agent configured as a Star cannot write in cloud mode, the
-  same as `refuseStarInCloud`. `observe`, `remember`, `forget` and `pin` throw `OortRefusedError`.
-- **`scoped()`** shares the engine and its connections and returns a cheap immutable handle.
-  `child.close()` does nothing. `root.close()` closes every handle derived from it. Calling any
-  handle after that throws `OortUsageError` with reason `closed`. `scoped()` can switch the judge
-  role from expert to agent, never the other way.
-- **Concurrency.** One handle is safe for concurrent calls. Locally, writes wait on SQLite's lock
-  (`busyTimeoutMs` 5000) and then throw `OortInternalError` with reason `store-busy` and
-  `retryable: true`.
-- **Lifecycle.** TypeScript loads adapters lazily, per role, on first use: the first recall loads
-  embed and rerank, and the first write loads decide and write. A process that only recalls never
-  imports the writer's dependencies. That keeps cold starts short (§8.1). `close()` is idempotent
-  and closes the store, the keep-alive pool and any local model sessions.
+  MCP tool and the cloud backend do. Each call takes up to 5 facts of at most 500 characters.
+- **`observe`** runs the full write path (scrub, gate, writer, reconcile) and can take seconds.
+  - In a request handler, call it after answering.
+  - In a serverless function, await it before returning.
+  - `turnRef` is deduplicated by Oort Cloud only (it answers `duplicate: true`). The local engine
+    records `turnRef` but does not deduplicate on it, so a local retry may write twice. Local
+    deduplication is [later].
+- **Abort.** An aborted `signal` stops the SDK from waiting and rejects with the abort reason. A
+  write already sent (cloud) or already started (local) may still land. In cloud mode, retry with
+  the same `turnRef`.
+- **`recent`, cloud.** `GET /v1/memories` has no `since`, so the SDK pages through at most 500
+  memories (5 pages of 100), filters on `updatedAt >= since`, sorts newest first and returns
+  `limit`. When the cap cuts the scan, it adds warning `recent-truncated`.
+- **Star agents in cloud mode** cannot write (`refuseStarInCloud`). `observe`, `remember`,
+  `forget`, `pin` and `unpin` throw `OortRefusedError` (`star-in-cloud`).
+- **`scoped()`** shares the root's engine and connections and returns a cheap, immutable handle.
+  - `child.close()` does nothing. `root.close()` closes everything.
+  - Calling any handle after `root.close()` throws `OortUsageError` (`closed`).
+  - `judgeRole` can only go from `expert` to `agent`.
+  - `scoped({ user: 'self' })` is refused, so a derived handle can never reach the person's own
+    memories (§6.4).
+- **Concurrency.** One handle is safe for concurrent calls. A local SQLite lock wait past
+  `busyTimeoutMs` (5000) throws `OortInternalError` (`store-busy`, retryable).
+- **Lifecycle [0.6].**
+  - Local mode imports and builds the adapters for every role during `createOort`. The vendor
+    packages load through `import()`, but eagerly, at wire time, as `wire()` does today. Lazy
+    loading per role is [0.7].
+  - Cloud mode imports none of them.
+  - `close()` is idempotent and closes the store and the local model sessions.
+- **The keep-alive pool** (`cloud-http.ts`) is process-global today. The SDK reference-counts it:
+  each root handle in cloud mode takes a reference, and `closeCloudPool()` runs when the last one
+  closes. Pool sockets are `unref()`'d, so a process that never calls `close()` can still exit.
 
-### 3.5 Limits (the same on every transport)
+### 4.5 Limits (the same on every transport)
 
-| Input                 | Limit                                         | Source                                      |
-| --------------------- | --------------------------------------------- | ------------------------------------------- |
-| `recall` query        | 2,048 UTF-8 bytes                             | cloud `recallTextBytes`                     |
-| `recall` `limit`      | 1 to 50                                       | cloud `recallK`                             |
-| `observe` turn        | 128 KiB in total; the engine keeps 32 KiB after scrubbing | cloud `observeBytes`, core `cap.ts` |
-| `tools` summaries     | 16 × 512 bytes                                | core `cap.ts`                               |
-| `remember`            | 5 facts × 500 characters                      | `@oortmem/mcp`                              |
-| Judgment fields       | `JUDGMENT_LIMITS`                             | core `judgment.ts`                          |
-| `recent` `limit`      | 1 to 100                                      | cloud `listLimit`                           |
+| Input              | Limit                                                                 | Source                    |
+| ------------------ | --------------------------------------------------------------------- | ------------------------- |
+| `recall` query     | 2,048 UTF-8 bytes                                                     | cloud `recallTextBytes`   |
+| `recall` `limit`   | 1 to 50                                                               | cloud `recallK`           |
+| `observe` turn     | 128 KiB total, the only hard limit. The engine keeps 32 KiB of text after scrubbing | cloud `observeBytes`, core `cap.ts` |
+| `tools` summaries  | Truncated to 16 × 512 bytes; never an error                           | core `capObservation`     |
+| `turnRef`          | 128 characters                                                        | SDK                       |
+| `remember`         | 5 facts × 500 characters                                              | `@oortmem/mcp`            |
+| Judgment fields    | `JUDGMENT_LIMITS`                                                     | core                      |
+| `recent` `limit`   | 1 to 100                                                              | cloud `listLimit`         |
 
-Anything over a limit throws `OortUsageError` before any I/O, naming the field but never its
-value.
+Anything over a hard limit throws `OortUsageError` before any I/O. The error names the field,
+never its value.
 
-## 4. Errors
+## 5. Errors
 
 ```ts
 export type OortErrorCode =
@@ -375,659 +481,783 @@ export type OortErrorCode =
 
 export class OortError extends Error {
   readonly code: OortErrorCode;
-  readonly fix: string | null; // the oort.v1 fix: a runnable `oort …` command, or null
-  readonly reason?: string; // finer detail, stable strings (below)
-  readonly status?: number; // HTTP status, for cloud and remote
+  readonly fix: string | null; // a runnable `oort …` command where one fixes it, else null
+  readonly reason?: string; // finer, stable strings (table below)
+  readonly status?: number; // HTTP status (cloud, remote)
   readonly retryable: boolean;
-  // `cause` holds the original error (never a key or a request body)
 }
-export class OortUsageError extends OortError {}            // code 'usage'
-export class OortNotFoundError extends OortError {}         // 'not-found'
-export class OortAmbiguousIdError extends OortError {}      // 'ambiguous-id'
+export class OortUsageError extends OortError {}
+export class OortNotFoundError extends OortError {}
+export class OortAmbiguousIdError extends OortError {}
 export class OortNeedsKeyError extends OortError { readonly role: 'embed' | 'rerank' | 'decide' | 'write'; readonly envVar: string }
-export class OortNeedsLoginError extends OortError {}       // 'needs-login'
-export class OortNeedsConfirmationError extends OortError {} // 'needs-confirmation'
-export class OortCloudOnlyError extends OortError {}        // 'cloud-only'
-export class OortNetworkError extends OortError {}          // 'network', retryable
-export class OortRefusedError extends OortError {}          // 'refused'
-export class OortInternalError extends OortError {}         // 'internal'
+export class OortNeedsLoginError extends OortError {}
+export class OortNeedsConfirmationError extends OortError {}
+export class OortCloudOnlyError extends OortError {}
+export class OortNetworkError extends OortError {}
+export class OortRefusedError extends OortError {}
+export class OortInternalError extends OortError {}
 ```
 
-Python uses the same class names, subclassing `OortError(Exception)`, with the attributes
-`code`, `fix`, `reason`, `status` and `retryable`. Use `isinstance` or match on `code`.
+Python **[0.7]** uses the same class names, subclassing `OortError(Exception)`, with the
+attributes `code`, `fix`, `reason`, `status` and `retryable`.
 
-`refused` is the tenth code. It is not in CON-107's first draft, but the `oort.v1` branch added
-it (docs/cli.md, "JSON output"). Without it, a plan limit or a role rule would read as `usage` and
+`refused` is the tenth code. CON-107's first draft did not list it, but CON-107 step 2 adds it
+(docs/cli.md, "JSON output"). Without it, a plan limit or a role rule would read as `usage` and
 tell an agent to change its arguments.
 
-**Mapping.** This is the same table as the CLI's `describeError`, moved into `@oortmem/sdk` so
-the CLI and both SDKs share it.
+**Built on `describeError`.** CON-107 step 2's `describeError` (`packages/cli/src/output.ts`,
+which is not on main yet) holds the cloud-kind mapping, the network-error detection and the
+usage and refused error sets. The facade calls it, then:
 
-| Source                                                           | Code                                                         | `reason`                                    |
-| ---------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------- |
-| Option or argument validation, `JudgmentInputError`, `ExportFormatError` | `usage`                                              | `invalid-argument`                          |
-| `EmbedderMismatchError`                                          | `usage` (fix `oort reembed`)                                 | `embedder-mismatch`                         |
-| `MissingCredentialError`, missing role for a write               | `needs-key` (fix `oort models pull` or `oort keys set <p>`)  | `missing-key`                               |
-| No Oort key, cloud 401, relay 401, service token rejected        | `needs-login` (fix `oort login`; for a token: none)          | `no-key`, `key-rejected`, `token-rejected`  |
-| `GrantError`, `ScopeDeniedError`, Star agent writing in cloud    | `refused`                                                    | `scope-denied`, `star-in-cloud`             |
-| Judgments, `consolidate` or `forgetAll` in cloud mode            | `refused`                                                    | `local-only`                                |
-| Agent-role judgment rules (§5.3)                                 | `refused`                                                    | `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only` |
-| Cloud 402, 403 (`cloud_not_enabled`, `hive_not_enabled`, other), 429 | `refused`                                                | `payment-required`, `not-enabled`, `hive-not-enabled`, `rate-limit` |
-| Cloud 400, 413                                                   | `usage`                                                      | `bad-request`, `too-large`                  |
-| Cloud 404, store miss                                            | `not-found`                                                  |                                             |
-| Cloud 409 `ambiguous`, local prefix match > 1                    | `ambiguous-id`                                               |                                             |
-| Cloud 409 `preview_required`, `findings_unacknowledged`; `forgetAll` without `confirm` | `needs-confirmation`                   |                                             |
-| A cloud-only option locally (`forget({ everywhere })`, `include: ['constellation']`) | `cloud-only` (fix `oort cloud use`)      |                                             |
-| Connection refused, reset, DNS, timeout; cloud 5xx               | `network`, retryable                                         | `unreachable`, `timeout`, `busy`            |
-| `StoreMigrationRequiredError` with `migrate: false`              | `refused` (fix `oort doctor`)                                | `migration-required`                        |
-| SQLite busy                                                      | `internal`, retryable                                        | `store-busy`                                |
-| Python local: no Node, or the daemon is too old                  | `usage`                                                      | `node-missing`, `daemon-outdated`           |
-| `place`, `near` or `within` before CON-84                        | `usage`                                                      | `spatial-unavailable`                       |
-| Anything else                                                    | `internal`                                                   | none                                        |
+- drops the CLI-only fixes ("again with `--yes`", `oort --help`);
+- adds `reason`;
+- adds the cases below that the CLI never raises.
+
+| Source                                                                                     | Code                                                         | `reason`                                                               |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| Option or argument validation, `JudgmentInputError`, `ExportFormatError`                   | `usage`                                                      | `invalid-argument`                                                     |
+| `user` without `org`, `org: 'local'` with `user`, `scoped({ user: 'self' })`               | `usage`                                                      | `principal-required`, `self-not-derivable`                             |
+| `EmbedderMismatchError`                                                                    | `usage` (fix `oort reembed`)                                 | `embedder-mismatch`                                                    |
+| `MissingCredentialError`, or a role missing for a write                                    | `needs-key` (fix `oort models pull` or `oort keys set <p>`)  | `missing-key`                                                          |
+| No Oort key; cloud or relay 401                                                            | `needs-login` (fix `oort login`)                             | `no-key`, `key-rejected`                                               |
+| `include` naming `constellation` or `galaxy` in local mode                                 | `cloud-only` (fix `oort cloud use`)                          | `hive-level`                                                           |
+| Any other `include` level the grant lacks (`star` for an anonymous agent or an end user), `GrantError`, `ScopeDeniedError` | `refused`                         | `scope-denied`                                                         |
+| A Star agent writing in cloud mode, or a Star agent with `user` set                        | `refused`                                                    | `star-in-cloud`, `star-with-user`                                      |
+| Judgments or `consolidate` in cloud mode                                                   | `refused`                                                    | `local-only`                                                           |
+| Agent-role judgment rules (§6.3)                                                           | `refused`                                                    | `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`    |
+| Cloud 402, or 403 (`cloud_not_enabled`, `hive_not_enabled`, other), or 429                 | `refused`                                                    | `payment-required`, `not-enabled`, `hive-not-enabled`, `rate-limit`    |
+| Cloud 400, 413                                                                             | `usage`                                                      | `bad-request`, `too-large`                                             |
+| Cloud 404, or a store miss                                                                 | `not-found`                                                  |                                                                        |
+| Cloud 409 `ambiguous`, or several local prefix matches                                     | `ambiguous-id`                                               |                                                                        |
+| Cloud 409 `preview_required` or `findings_unacknowledged`                                  | `needs-confirmation`. **Defined in the facade:** today `cloudErrorKind` turns any 409 other than `ambiguous` into `bad-request`, which `describeError` maps to `usage` | `preview-required`, `findings-unacknowledged`                          |
+| A cloud-only option in local mode (`forget({ everywhere })`)                               | `cloud-only`                                                 |                                                                        |
+| Connection refused, reset, DNS failure or timeout; cloud 5xx                               | `network`, retryable                                         | `unreachable`, `timeout`, `busy`                                       |
+| `StoreMigrationRequiredError` with `migrate: false`                                        | `refused` (fix `oort doctor`)                                | `migration-required`                                                   |
+| SQLite busy                                                                                | `internal`, retryable                                        | `store-busy`                                                           |
+| Python local: no Node, or the daemon is too old [0.7]                                      | `usage`                                                      | `node-missing`, `daemon-outdated`                                      |
+| An unknown input key such as `place`, `near` or `within` before CON-84                     | `usage`                                                      | `invalid-argument` (`spatial-unavailable` from 0.7, once the names are reserved in the schemas) |
+| Anything else                                                                              | `internal`                                                   | none                                                                   |
 
 A **degraded recall is not an error.** It returns results and fills `degraded` and `warnings`
-with the codes `oort.v1` uses (`lexical-only`, `recall-degraded`, `time-mode-unreported`). The
-SDK never prompts, so the only `needs-confirmation` cases are those the server or `forgetAll`
-raise.
+with the `oort.v1` codes (`lexical-only`, `recall-degraded`, `time-mode-unreported`). The SDK
+never prompts.
 
-## 5. Safety parity with the CLI
+## 6. Safety parity with the CLI
 
-### 5.1 Secrets
+### 6.1 Secrets in memory text
 
-- **Locally**, the engine scrubs: `observe` drops a turn that holds a secret
-  (`scrubObservation`), `recall` scrubs the query before any embedder or reranker sees it, and
-  judgments redact secrets from their text. The SDK passes data straight to core, so it inherits
-  all of this.
-- **On read**, every text field the SDK returns goes through `scrub()` again (the MCP server's
-  `clean`). That catches memories stored before a rule existed.
-- **In cloud mode**, TypeScript scrubs the turn, the facts and the query on the client before
-  sending them. The code is the same, and it costs nothing. Oort Cloud scrubs again before
-  anything is stored or reaches a model.
-- **Python** does not port the scrubber in 0.7.0. Secrets are still never *stored* or *sent to a
-  model vendor* in any mode, because scrubbing runs wherever the engine runs (in-process, in `oort
-  serve`, or in Oort Cloud). A secret in a Python cloud call does reach Oort Cloud over TLS before
-  it is dropped. The contract suite asserts, for both SDKs and every transport, that no fixture
-  secret ever comes back in a result (§9). Client-side scrubbing for Python is open question Q3.
+- **Locally,** core scrubs.
+  - `observe` drops a turn that holds a secret (`scrubObservation`).
+  - `recall` scrubs the query before an embedder or reranker sees it.
+  - Judgments redact secrets from their text.
+  - The SDK passes data straight to core, so it inherits all three.
+- **On read,** every text field the SDK returns goes through `scrub()` again, like the MCP
+  server's `clean`. That catches memories stored before a rule existed.
+- **Cloud mode [0.6]** works as the CLI does today. Turns and queries are sent as given (`oort
+  observe` and `oort recall` send them raw), and Oort Cloud scrubs before anything is stored or
+  reaches a model. The hooks are the exception: they scrub before queueing, and they keep doing
+  so. Client-side scrubbing in the SDK is [later] (Q3), done from one shared rule table rather
+  than a port.
+- **Guarantee in every mode:** a secret is never stored and never sent to a model vendor, because
+  scrubbing runs wherever the engine runs. The contract suite asserts that no fixture secret ever
+  comes back in a result (§10).
 
-### 5.2 Output escaping
+### 6.2 Output escaping
 
-The SDK returns data, not rendered text. Nothing in it is HTML- or terminal-escaped, because the
-caller decides where text goes. Two exceptions:
+The SDK returns data, not rendered text. Nothing in it is escaped for HTML or a terminal, because
+the caller decides where the text goes. Two exceptions:
 
-- `formatForPrompt` / `format_for_prompt` builds the same `<oort-memory>` block the hooks inject.
-  It escapes block tags (`escapeBlockTags`) and space labels (`escapeLabelText`), so a stored
-  memory cannot close the block or forge a label. Adapters (§10) inject only through it. Python
-  ports these two functions, about 20 lines, checked by contract cases.
-- Expert ids in agent-facing strings go through `safeExpertId`, as in the MCP server.
+- **`formatForPrompt`** builds the `<oort-memory>` block the hooks inject. It escapes block tags
+  (`escapeBlockTags`) and space labels (`escapeLabelText`), so a stored memory cannot close the
+  block or forge a label. Adapters inject memory only through it. Python ports these two
+  functions [0.7].
+- **Expert ids** in agent-facing strings pass through `safeExpertId`.
 
-Judgment text fields already refuse control, bidi and invisible characters on the way in (core).
+### 6.3 Judgment expert rules
 
-### 5.3 Judgment expert rules
-
-| Rule                                  | `judge.role: 'agent'` (default)                                                                                          | `judge.role: 'expert'`                                                                 |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| Who may be named in `by`              | Only experts listed in `judge.experts` in the home config (or the TS `config` overlay). None listed: `refused`, `experts-not-listed`. | Anyone, as `oort judge record --by` allows                                             |
-| Daily cap                             | 50 a day per Oort home, shared with MCP (`MCP_JUDGMENTS_PER_DAY`, the same locked counter file, renamed in code to "agent-recorded judgments") | None                                                                                   |
-| Stored as                             | `via: 'sdk-agent'`: agent-recorded and unconfirmed. Judging leaves it out unless `includeAgentRecorded`. It never corrects a person's judgment. | `via: 'sdk'`: counts as a person's, which is what `'sdk'` means in core today          |
-| `judge.confirm`                       | `refused`, `expert-only`                                                                                                 | Allowed. Recorded as `confirmed: { by: operator }`                                     |
-| Over the TCP service listener (§8.4)  | Allowed                                                                                                                  | Refused. A service token is not a person.                                              |
-| Through framework tools (§10)         | Always                                                                                                                   | Never. The adapters call `scoped({ judgeRole: 'agent' })`.                             |
+| Rule                                         | `judge.role: 'agent'` (default)                                                                                                                                 | `judge.role: 'expert'`                                       |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Who may appear in `by`                       | Only experts in `judge.experts`, read from the home config or the `config` overlay. With none listed: `refused`, reason `experts-not-listed`                    | Anyone, as `oort judge record --by` allows                   |
+| Daily cap                                    | `MCP_JUDGMENTS_PER_DAY` (50) per Oort home, shared with MCP. Same counter and lock files (`judge-mcp-count.json`, `judge-mcp-count.lock`), names unchanged, so 0.5.x and the SDK count against one cap | None                                                         |
+| Stored as                                    | `via: 'mcp'`, `source.harness: 'sdk'`. Agent-recorded and unconfirmed for every reader, 0.5.x included. It never corrects a person's judgment                    | `via: 'sdk'`, which counts as a person's, as core means today |
+| `judge.confirm`                              | `refused`, reason `expert-only`                                                                                                                                 | Allowed. Records `confirmed: { by: operator }`               |
+| Through framework tools                      | Always this role                                                                                                                                                | Never: adapters call `scoped({ judgeRole: 'agent' })`        |
+| Over the TCP service listener [0.7]          | Allowed                                                                                                                                                         | Refused: a service token is not a person                     |
 
 `operator` defaults to `judge.operator` in the home config, else `local-user`.
 
-**Core change (required, 0.6.0).** Add `'sdk-agent'` to `JudgmentVia`. Make
-`isUnconfirmedAgentJudgment` true for `via` in `{ 'mcp', 'sdk-agent' }` with no `confirmed`, and
-let the pack parser accept the new value. Older readers map an unknown `via` to `'pack'`, which
-judging already leaves out by default, so packs stay safe both ways. `'sdk'` keeps its current
-meaning, so no stored judgment changes meaning.
+**Core change [0.6]: one `isAgentVia()` helper.** Add `isAgentVia(via: JudgmentVia): boolean`
+(true for `'mcp'`) to `judgment.ts`. Replace every literal `via === 'mcp'` and `via !== 'mcp'`
+with it:
 
-**Why the agent default.** The SDK caller is usually code that an LLM drives. The rule protects
-the expert's record from the model, not from the developer, so expert mode stays one explicit
-option for host code paths where a person really decided (a review UI, an import job).
+- `judgment.ts`: 256, 269 (`isUnconfirmedAgentJudgment`), 453, 473 and 553;
+- `commands/judge.ts`: 137, 379 and 497;
+- `mcp.ts`: 532 and 562.
 
-### 5.4 Grants and scopes
+The helper defines agent-recorded in one place. A later agent `via` value then cannot slip past
+the "an agent never retracts a person's judgment" rule at one site while the others hold it. No
+new `via` value ships in 0.6.
 
-- Each handle has one principal: `org`, `user` (customerId), `agent` and `project`. It is fixed
-  at construction or by `scoped()`. No method takes a scope argument. Reads and writes go through
-  `localGrant` with the agent's home, so the store enforces isolation, including another agent's
-  Star (store contract, "What a store guarantees").
-- `include` is intersected with the grant. A level outside it throws `OortRefusedError`
-  (`ScopeDeniedError`), never a wider read.
-- `agent` and `user` are validated (`isAgentId`, and for `user`
-  `^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$`). Like agent ids, they are configuration, not
-  authentication. Any code holding the root handle can derive any user's handle, so the trust
-  boundary is the handle that host code passes to model-facing tools.
-- Cloud mode: the Oort key's scope applies (a narrowed key reads only its Constellations), and
-  `agent` reads only the Constellations that agent is attached to.
-- Remote mode: the token fixes `org`. Requests name `user`, `project` and `agent` (§7.1.3).
+**The cap counter** moves out of `mcp.ts` into a shared module (`reserveAgentJudgment` and
+`refundAgentJudgment`) that both the MCP server and the SDK call. The file and lock names do not
+change.
 
-### 5.5 Billing: which calls cost what
+**Adapters never pass `includeAgentRecorded` or `includeImported` to the model.** Their judge tool
+has no such parameter, so a model cannot widen what counts as precedent. A host that wants
+agent-recorded precedents calls `judge.apply` itself.
 
-No model is called at construction, by `whoami`, or by any read of stored records. "Vendor"
-below means your own key, billed by that vendor, or the Oort key through the Oort Pro relay,
-metered against your Oort account. `whoami().routes` says which applies to each role.
+**Documented limits.**
 
-| Call                                       | Local, own keys or Oort Pro relay                                                                                    | Local models only           | Cloud mode                                         |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | --------------------------- | -------------------------------------------------- |
-| `recall`                                   | Voyage embed (skipped on a cache hit or a confident lexical answer), Voyage rerank (skipped when confident, or with `speed: 'fast'`). `speed: 'lexical'`: none. | none                        | Metered Oort Cloud recall                          |
-| `observe`                                  | TypeSafe gate, always. If the turn is kept: one Anthropic writer call, one batched Voyage embed, and one TypeSafe reconcile per fact (or one batched call) | Gate, writer and reconcile still need keys | Metered Oort Cloud observe                         |
-| `remember`                                 | One `observe` per fact                                                                                               | as above                    | One metered observe per fact                       |
-| `judge.record`                             | One Voyage embed                                                                                                     | none                        | `refused`                                          |
-| `judge.apply`                              | One Voyage embed and one TypeSafe judge call                                                                         | TypeSafe judge only         | `refused`                                          |
-| `forget`, `pin`, `unpin`, `explain`, `recent`, `judge.list`, `judge.confirm`, `consolidate`, `whoami` | none                                                                            | none                        | No model call. Reads and deletes are `billing: any` routes in the cloud contract (they work on every plan) |
+- The cap is per Oort home, not per agent or per user.
+- Every process running as the same OS user can use the same home, and the same daemon socket in
+  0.7, as that person. That is the same trust as the CLI and the hooks.
+
+**Why the agent default.** The rule protects the expert's record from the model, not from the
+developer. So expert mode is one explicit option, meant for host code paths where a person really
+decided, such as a review UI or an import job.
+
+### 6.4 Grants, scopes and the default principal
+
+- Each handle has one principal: org, user (stored as `customerId`), agent and project. It is set
+  at construction or by `scoped()`, and no method takes a scope argument. Reads and writes go
+  through `localGrant` with the agent's home, so the store enforces isolation.
+- **End users get the Planet only [0.6].** `starNode` is keyed by `(orgId, agentId)` alone
+  (`grant.ts`, `starNode`). So two end users served by the same agent in one org would share one
+  Star, and what the agent learned about one user would be readable for the other. Until CON-92
+  adds per-user agent memory (Orbits):
+  - a handle with `user` set gets a Planet-only grant: `nodeGrant` with the agent as principal and
+    the user's Planet as its only read and write node, so there is no Star;
+  - `include: ['star']` on such a handle throws `refused`;
+  - an agent configured as a Star (`agents.json`) together with `user` is refused at construction
+    (`star-with-user`);
+  - the agent id is still recorded as the author.
+- **Explicit principal for end users.**
+  - Setting `user` requires `org` to be set and not `'local'`.
+  - `scoped({ user: 'self' })` is refused.
+  - So a server bug that drops the user id cannot fall back to the person's own memories. It
+    fails with `usage` (`principal-required`).
+- **`mode: 'auto'` stays the default** for scripts and laptops. Server docs always pass `mode`,
+  `home`, `org`, `project` (or `null`), `projectConfig: false` and `keySources` explicitly.
+- `include` is intersected with the grant. A hive level in local mode throws `cloud-only`, and any
+  other gap throws `refused`. It is never a wider read.
+- `agent` and `user` are validated: `isAgentId`, and for `user` the pattern
+  `^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$`. They are configuration, not authentication. The trust
+  boundary is the handle that host code gives to model-facing tools.
+- **Cloud mode.** The Oort key's scope applies, and `agent` reads only the Constellations that
+  agent is attached to. `user` is a usage error in cloud mode until CON-92.
+
+### 6.5 Billing: which calls cost what
+
+No model is called at construction, by `whoami`, or by any read of stored records. "Vendor" means
+either your own key (billed by that vendor) or the Oort key through the Oort Pro relay (metered
+against your Oort account). `whoami().routes` shows which one applies to each role.
+
+| Call                                                                                                  | Local, own keys or Oort Pro relay                                                                                                     | Local models                  | Cloud mode                                              |
+| ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------------- |
+| `recall`                                                                                              | Voyage embed (skipped on a cache hit or a confident lexical answer) and Voyage rerank (skipped when confident, or with `speed: 'fast'`). `speed: 'lexical'`: no model call | none                          | Metered Oort Cloud recall                               |
+| `observe`                                                                                             | TypeSafe gate, always. If kept: one Anthropic writer call, one batched Voyage embed, and a TypeSafe reconcile per fact (or one batched call) | Gate, writer and reconcile still need keys | Metered Oort Cloud observe                              |
+| `remember`                                                                                            | One `observe` per fact                                                                                                                | as above                      | One metered observe per fact                            |
+| `judge.record`                                                                                        | One Voyage embed                                                                                                                      | none                          | `refused`                                               |
+| `judge.apply`                                                                                         | One Voyage embed and one TypeSafe judge call                                                                                          | TypeSafe judge only           | `refused`                                               |
+| `forget`, `pin`, `unpin`, `explain`, `recent`, `judge.list`, `judge.confirm`, `consolidate`, `whoami` | none                                                                                                                                  | none                          | No model call. Reads and deletes are `billing: any` routes in the cloud contract |
 
 The relay is used only when a role has no vendor key and an Oort key is present, as in the CLI.
-`keySources: ['explicit']` turns off every implicit source, for hosts that want no surprises.
+`keySources: ['explicit']` turns off every implicit source.
 
-## 6. Packaging (TypeScript)
+### 6.6 Key and secret handling in the SDK
 
-### 6.1 Packages and exports
+- **Explicit keys stay private.** TypeScript keeps them in `#private` class fields, never on an
+  enumerable property. So `console.log(oort)`, `JSON.stringify` and `util.inspect` cannot show
+  them, and a custom `[util.inspect.custom]` prints `Oort { mode, scope }`.
+- **Wrapped vendor and constructor errors keep the error's `name` only**, as `wire.ts`'s
+  `load()` does today ("could not be constructed (Name)"). They never keep a message or a cause
+  that could echo an option. Cloud errors use the CLI's fixed messages (`OortCloudError`).
+- **Python [0.7]** wraps the Oort key and the service token in a `_Secret` type whose `repr` and
+  `str` print `'***'`. It refuses to read `credentials.json` when the file is readable by group
+  or others. It autostarts the daemon with an allowlisted environment only (§8.1.6).
 
-New `packages/sdk` (`@oortmem/sdk`):
+## 7. Packaging (TypeScript)
 
-```json
-{
-  "name": "@oortmem/sdk",
-  "type": "module",
-  "sideEffects": false,
-  "engines": { "node": ">=22.15.0" },
-  "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-    "./package.json": "./package.json"
-  },
-  "dependencies": {
-    "@oortmem/core": "workspace:*",
-    "@oortmem/store-sqlite": "workspace:*",
-    "@oortmem/embed-voyage": "workspace:*",
-    "@oortmem/rerank-voyage": "workspace:*",
-    "@oortmem/decide-jev": "workspace:*",
-    "@oortmem/writer": "workspace:*",
-    "undici": "7.30.1"
-  },
-  "peerDependencies": { "@oortmem/local-models": "workspace:^" },
-  "peerDependenciesMeta": { "@oortmem/local-models": { "optional": true } }
-}
-```
+### 7.1 Packages and exports
 
-These move from `packages/cli/src` into `packages/sdk/src`: `wire.ts` (as `wireEngine`, with
-explicit `project`, `user` and `org`), `credentials.ts`, `keychain.ts`,
-`credentials-file.ts`, `relay.ts`, `local-models.ts`, `embed-cache-disk.ts`, `cloud.ts`, `cloud-http.ts`, and the
-error mapping from `output.ts`. `createHookLogger` stays in `@oortmem/claude-code`. The SDK takes
-an optional logger and does not import it.
-
-`packages/cli` (`oortmem`) gains:
+**0.6.0.** `packages/cli` (`oortmem`):
 
 ```json
 {
   "sideEffects": ["./dist/main.js"],
   "exports": {
-    ".": { "types": "./dist/sdk.d.ts", "default": "./dist/sdk.js" },
-    "./ai-sdk": { "types": "./dist/adapters/ai-sdk.d.ts", "default": "./dist/adapters/ai-sdk.js" },
-    "./langgraph": { "types": "./dist/adapters/langgraph.d.ts", "default": "./dist/adapters/langgraph.js" },
-    "./openai-agents": { "types": "./dist/adapters/openai-agents.d.ts", "default": "./dist/adapters/openai-agents.js" },
+    ".": { "types": "./dist/sdk/index.d.ts", "default": "./dist/sdk/index.js" },
+    "./ai-sdk": { "types": "./dist/sdk/adapters/ai-sdk.d.ts", "default": "./dist/sdk/adapters/ai-sdk.js" },
     "./package.json": "./package.json"
   },
   "bin": { "oort": "dist/main.js", "oortmem": "dist/main.js" },
-  "peerDependencies": { "ai": "^7", "@langchain/langgraph": "*", "@openai/agents": "*" },
-  "peerDependenciesMeta": { "ai": { "optional": true }, "@langchain/langgraph": { "optional": true }, "@openai/agents": { "optional": true } }
+  "peerDependencies": { "ai": "^7" },
+  "peerDependenciesMeta": { "ai": { "optional": true } }
 }
 ```
 
-`dist/sdk.js` is `export * from '@oortmem/sdk'` and nothing more. Before release, each framework
-peer's range is pinned to the major the adapter was tested on.
+`packages/cli/src/sdk/` holds `index.ts` (the exports), `create.ts`, `types.ts` (hand-written
+public types; core's internals never leak into the `.d.ts`), `errors.ts`, `principal.ts`,
+`local.ts`, `cloud.ts`, `judge.ts`, `views.ts` (the result shaping and `MemoryStatus`) and
+`adapters/ai-sdk.ts`.
 
-### 6.2 What a library user pulls in
+The SDK must not import `commands/*.ts`. `commands/recall.ts`, `explain.ts` and `inspect.ts` import
+`ui.ts`, and through it `picocolors`. So `runRecall`, `timeMode` and `supersedeChain` move into
+UI-free modules (`src/engine/`) that both the commands and the SDK import.
 
-| Concern                 | Decision                                                                                                                                                                                                                         |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Load time               | The root export never imports `commander`, `@clack/prompts`, `@modelcontextprotocol/server`, `picocolors`, `smol-toml`, `jsonc-parser` or `@oortmem/claude-code`. A test walks the module graph of `import('oortmem')` and fails on any of them. |
-| Install size            | `oortmem` still installs the CLI dependencies (they are small and pure JS). If that matters, use `@oortmem/sdk`, which has the same API minus the bin and the adapters.                                                          |
-| Native modules          | `better-sqlite3` and `sqlite-vec` are installed (local is the default), but `@oortmem/store-sqlite` is imported only when a local engine opens. Cloud and remote mode never load a native module, which suits Lambda.             |
-| Vendor SDKs             | `@typesafe-ai/sdk`, `ai` and `@ai-sdk/anthropic` are installed and dynamically imported on a role's first use, as `wire.ts` does today.                                                                                          |
-| Tree-shaking            | `sideEffects: false` on `@oortmem/sdk` and on every engine package. Only `dist/main.js` (the bin) is marked as having effects. Adapters are subpath exports, so a bundler never sees a framework the app does not use.           |
-| ESM / CJS               | ESM only. Node 22.12 and later load ESM from `require()`, and the floor is 22.15, so CJS apps can `require('oortmem')` as long as the graph has no top-level await. A CI test runs `require('oortmem')`. No dual build.             |
-| Node floor              | 22.15.0 (`engines` on every package, as today). Bun and Deno are best effort, not tested.                                                                                                                                       |
-| Types                   | Hand-written public types in `packages/sdk/src/types.ts`, not core's. Core's internals never leak into `.d.ts`, so core can change freely.                                                                                      |
+**0.7.0: `@oortmem/sdk`.** The facade and its wiring move into `packages/sdk`, and `oortmem`'s root
+becomes `export * from '@oortmem/sdk'`. The modules to move form the wiring's import closure:
 
-### 6.3 `@oortmem/core`
+| File                                     | Why it moves                                   | Notes                                                                                                      |
+| ---------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `wire.ts`                                | Becomes `wireEngine` and `principalFor`        | Its `@oortmem/claude-code` import (`createHookLogger`) stays in the CLI wrapper                           |
+| `credentials.ts`, `keychain.ts`, `credentials-file.ts` | Key resolution                   |                                                                                                            |
+| `relay.ts`                               | Oort Pro routing                               |                                                                                                            |
+| `local-models.ts`                        | The local provider loader                      |                                                                                                            |
+| `embed-cache-disk.ts`                    | The query embedding cache (local mode)         |                                                                                                            |
+| `cloud.ts`, `cloud-http.ts`              | The Oort Cloud client and the keep-alive pool  | `cloud.ts` also holds the `cloud.json` settings read and write                                             |
+| `util.ts` (part)                         | `Refusal`, `echo`, `shown`, `writeGrant`, `findMemory` | Split: the prompt and confirm helpers and `Ctx` stay in the CLI                                            |
+| `io.ts` (type only)                      | `Env`                                          | The type moves; `io.ts` itself stays                                                                       |
+| `remember.ts`, `src/engine/*`            | Used by `remember`, `recall` and `explain`     | `remember.ts` imports `commands/observe.ts` for `turnObservation`, which moves too                         |
+| `output.ts` (part)                       | `describeError` and its tables                 | The envelope and printing stay in the CLI                                                                  |
+
+`@oortmem/sdk` takes `sideEffects: false` and `exports["."]`. Its dependencies are core,
+store-sqlite, the four adapter packages and `undici`, with `@oortmem/local-models` as an optional
+peer. The first publish of the new package is a manual bootstrap, before trusted publishing takes
+over, so it needs its own release step.
+
+### 7.2 What a library user pulls in
+
+| Concern          | Decision                                                                                                                                                                                                                                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Load time [0.6]  | The root export never imports `commander`, `@clack/prompts`, `@modelcontextprotocol/server`, `picocolors`, `smol-toml`, `jsonc-parser` or `ui.ts`. A test walks the module graph of `import('oortmem')` and fails on any of them.                                                       |
+| Cloud mode [0.6] | `@oortmem/store-sqlite` is imported dynamically, only when a local engine opens. The cloud check (`cloud.json`, the explicit `mode`) runs before any store is opened. Today `wire.ts` imports the store statically (line 25), opens `oort.sqlite` at line 395 and checks the cloud mode only at line 442. A second test asserts that cloud mode loads no `.node` binary and creates no file under a temporary `OORT_HOME`. |
+| Install size     | `oortmem` still installs the CLI's dependencies, which are small and pure JS. From 0.7, `@oortmem/sdk` gives the same API without them.                                                                                                                                                 |
+| Native modules   | `better-sqlite3` and `sqlite-vec` are installed with `oortmem`. Bundlers for serverless should mark `@oortmem/store-sqlite` as external (§9.1.1).                                                                                                                                       |
+| Vendor SDKs      | Installed with `oortmem`, loaded by `import()` at wire time in local mode, and not at all in cloud mode.                                                                                                                                                                                |
+| Tree-shaking     | `sideEffects` is limited to `dist/main.js`, the bin, so everything else can be dropped. Adapters are subpath exports, so a bundler never sees a framework the app doesn't use.                                                                                                          |
+| ESM and CJS      | ESM only. Node 22.12 and later load ESM from `require()`, so with the 22.15 floor, `require('oortmem')` works as long as the graph has no top-level await. A CI test runs it. There is no dual build.                                                                                    |
+| Node floor       | 22.15.0. Bun and Deno are best effort and untested.                                                                                                                                                                                                                                     |
+
+### 7.3 `@oortmem/core`
 
 `@oortmem/core` keeps its building-block exports for store authors and advanced users. Its README
-says plainly that it has no stability promise and that apps should use `oortmem`.
+says it carries no stability promise and that apps should use `oortmem`.
 
-### 6.4 Stability promise
+### 7.4 Stability promise
 
-- **Before 1.0:** a breaking change to anything not marked `@experimental` lands only in a minor
-  release (0.6 → 0.7). It is listed under "Breaking" in the release notes, and where possible it
-  is deprecated (a JSDoc `@deprecated` plus a one-time warning) for one minor first. A patch
-  release only adds or fixes.
-- **`@experimental`** (may change in any minor): `mode: 'remote'`, the three adapter subpaths,
-  `Place` and every `place` field, `RecalledMemory.why`, `JudgeResult.decisions`, `forgetAll`,
-  and the diagnostics channel payloads (§8.7). Python marks the same with a docstring line and
-  `oortmem.experimental` re-exports.
-- **Additive changes are always allowed.** That means new optional options, new result fields,
-  new `reason` and warning strings, and higher limits. Callers must ignore unknown fields.
+- **Before 1.0.** A breaking change to anything not marked `@experimental` lands only in a minor
+  release (0.6 to 0.7). It is listed under "Breaking" in the notes, and where possible it is
+  deprecated for one minor first. A patch release only adds or fixes.
+- **`@experimental`, may change in any minor:**
+  - the `ai-sdk` adapter and every later adapter;
+  - `RecalledMemory.why` and `JudgeResult.decisions`;
+  - from 0.7: `mode: 'remote'`, `forgetAll`, `Place`, and the diagnostics payloads.
+- **Additive changes are always allowed.** That means new optional options, result fields,
+  `reason` and warning strings, and higher limits. Callers must ignore unknown fields.
 - **1.0** comes when both SDKs pass the shared suite and the stable surface has gone one minor
   without a breaking change.
-- Python versions move with npm (0.7.x and 0.7.x), and the Python client accepts any daemon with
-  protocol `v1` and version 0.7.0 or newer (§7.1.5).
+- **Versions move in lockstep** on npm and PyPI (0.7.x).
 
-## 7. Python
+## 8. Python [0.7]
 
 Package: `oortmem` on PyPI. It keeps the `oort` and `oortmem` console scripts (the launcher) and
 adds:
 
 ```
 oortmem/
-  __init__.py        Oort, AsyncOort, format_for_prompt, errors, types
-  _transport.py      HTTP over a Unix socket and over TCP/TLS (http.client, ssl, socket)
-  _cloud.py          the Oort Cloud mapping (§7.2)
-  _project.py        project id derivation (§3.1.2)
-  _keys.py           Oort key lookup: explicit, env, credentials.json, macOS Keychain via /usr/bin/security
-  _daemon.py         find, check and autostart oort serve (reuses cli.py's Node/npx resolution)
-  types.py           frozen dataclasses (slots=True)
-  errors.py
-  integrations/langgraph.py, openai_agents.py, crewai.py   (import the framework lazily)
-  py.typed
+  __init__.py        __version__, plus lazy (PEP 562 __getattr__) access to Oort, AsyncOort, format_for_prompt, errors
+  _transport.py      HTTP/1.1 over AF_UNIX and over TCP/TLS (http.client, socket, ssl); never follows redirects
+  _cloud.py          the Oort Cloud mapping (§8.2)
+  _project.py        project id derivation (§4.1.2)
+  _keys.py           Oort key lookup: explicit, env, credentials.json (mode-checked), macOS Keychain via /usr/bin/security
+  _secret.py         _Secret: repr and str print '***'
+  _daemon.py         find, version-check and autostart oort serve
+  types.py, errors.py, integrations/{langgraph,openai_agents,crewai}.py (frameworks imported lazily), py.typed
 ```
 
-| Decision          | Choice                                                                                                                                                                                                                          |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dependencies      | **None at runtime.** HTTP/1.1 over `http.client`, with a small subclass that connects over `AF_UNIX`, plus `ssl`, `json` and `dataclasses`. Extras install frameworks only: `oortmem[langgraph]`, `oortmem[openai-agents]`, `oortmem[crewai]`. |
-| Async             | `AsyncOort` runs the sync client in `asyncio.to_thread`, with a bounded connection pool (default 8). Cancellation stops waiting but not the request in flight. A native async transport (an optional `httpx` extra) is open question Q5. |
-| Python floor      | **3.10.** 3.9 is past end of life, and LangGraph and CrewAI need 3.10. The launcher keeps working on 3.9 for `oort` only: importing `Oort` on 3.9 raises a clear `ImportError`.                                               |
-| Version lockstep  | `oortmem==0.7.x` launches or autostarts `oortmem@0.7.x` through npx when no `oort` is installed.                                                                                                                                |
-| Typing            | Full annotations, `py.typed`, and `Literal` types for modes and codes. Results are dataclasses, inputs are keyword arguments (or a `Mapping` for `observe`).                                                                    |
+| Decision         | Choice                                                                                                                                                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dependencies     | **None at runtime**: only `http.client`, `ssl`, `json` and `dataclasses`. Extras install frameworks only: `oortmem[langgraph]`, `oortmem[openai-agents]`, `oortmem[crewai]`.                                                                            |
+| Async            | `AsyncOort` runs the sync client through `asyncio.to_thread` with a bounded pool (default 8). Cancelling stops the wait, but a request already in flight still runs. A native async transport is Q5.                                                   |
+| Python floor     | **3.10** for the client. `import oortmem` must keep working on 3.9, because the launcher's entry point (`oortmem.cli:main`) imports the package. So `__init__` imports nothing 3.10-only, and its `__getattr__` raises `ImportError("oortmem.Oort needs Python 3.10 or newer")` when `Oort` is accessed on 3.9. |
+| Typing           | Full annotations, `py.typed`, `Literal` modes and codes, frozen dataclasses (`slots=True`).                                                                                                                                                              |
+| Windows          | Cloud and remote modes are supported. Local mode is not (§13.3).                                                                                                                                                                                        |
 
-### 7.1 Local transport: the memory protocol on `oort serve`
+### 8.1 Local transport: the memory protocol on `oort serve`
 
-#### 7.1.1 Choice: HTTP on the existing socket, plus an opt-in TCP listener
+#### 8.1.1 HTTP on the existing socket, plus an opt-in TCP listener
 
-`oort serve` today speaks length-prefixed JSON frames on a Unix socket for the hooks, with
-methods `ping`, `status`, `stop`, `hook` and `recall`. The SDK protocol adds **HTTP/1.1 with
-JSON** instead of more frame methods:
+`oort serve` today speaks length-prefixed JSON frames on a Unix socket, with the methods `ping`,
+`status`, `stop`, `hook` and `recall`. The SDK adds **HTTP/1.1 with JSON** rather than more frame
+methods:
 
-- **One protocol for every network shape.** The same routes serve a laptop (Unix socket), a
-  sidecar or a VPC service (TCP), and they mirror Oort Cloud's `/v1`. So Python has one
-  HTTP client, the TypeScript `remote` mode reuses the cloud client's code, and any language can
-  call it with `curl --unix-socket`.
-- **Hooks keep frames.** The hook path has a millisecond budget and loads no HTTP parser.
-- **One socket.** A frame always starts with byte `0x00`, because its 4-byte big-endian length is
-  at most 4 MiB. An HTTP request starts with an ASCII method letter. The daemon reads the first
-  byte of each connection and hands it to the frame decoder or to `node:http`'s parser (by
-  emitting the socket as a `connection` on an internal `http.Server`). There is no second socket
-  file, and the directory and permission checks are unchanged.
+- **One protocol for every network shape.** The same routes serve a laptop (the socket) and a
+  sidecar or VPC service (TCP), and they mirror Oort Cloud's `/v1`. Python has one HTTP client,
+  TypeScript's `remote` mode reuses the cloud client's code, and `curl --unix-socket` works.
+- **Hooks keep frames.** Their path has a budget of a few milliseconds and loads no HTTP parser.
+- **First-byte routing on each connection.** A frame always starts with `0x00`, because its
+  big-endian length is at most 4 MiB. An HTTP request starts with an ASCII method letter. For
+  each connection, the daemon:
+  - reads the first chunk, then `socket.unshift(chunk)`s it back;
+  - hands the socket either to the frame decoder or to an internal `http.Server`
+    (`server.emit('connection', socket)`);
+  - never mixes the two protocols on one connection.
+- **Hardened socket.**
+  - The two protocols have separate connection caps: hook frames keep 64, HTTP gets 32.
+  - The HTTP side sets `maxHeaderSize` 16 KiB, a 4 MiB body limit, `headersTimeout` 10 s and
+    `requestTimeout` 30 s.
+  - Requests with an `Origin` header are refused, so a browser page cannot reach the daemon.
+  - No response carries CORS headers.
 
-#### 7.1.2 Routes
+#### 8.1.2 Routes
 
 Every route answers in the `oort.v1` envelope: `{ schema: "oort.v1", ok: true, data, warnings }`
-or `{ schema: "oort.v1", ok: false, error: { code, message, fix } }`. Bodies are checked against
-strict zod schemas: an unknown field is refused, and `place` is a reserved field (§11).
+or `{ schema: "oort.v1", ok: false, error: { code, message, fix, reason? } }`. Bodies are checked
+against strict zod schemas. From 0.7, `place`, `near` and `within` are named, reserved fields that
+answer `spatial-unavailable` (§12).
 
-| Method and path                                       | SDK call                   | Oort Cloud equivalent                       |
-| ----------------------------------------------------- | -------------------------- | ------------------------------------------- |
-| `GET /v1/health`                                      | (handshake)                | `GET /health`                               |
-| `GET /v1/whoami`                                      | `whoami`                   | `GET /v1/whoami`                            |
-| `POST /v1/recall`                                     | `recall`                   | `POST /v1/recall` (`limit` → `k`)           |
-| `POST /v1/observe`                                    | `observe`                  | `POST /v1/observe`                          |
-| `POST /v1/remember`                                   | `remember`                 | none: the client maps it to `observe` (§7.2) |
-| `GET /v1/memories?since=&limit=`                      | `recent`                   | `GET /v1/memories`                          |
-| `GET /v1/memories/:id`                                | (`explain` uses it)        | `GET /v1/memories/:id`                      |
-| `GET /v1/memories/:id/explain`                        | `explain`                  | none: the client builds it from `GET`       |
-| `DELETE /v1/memories/:id`                             | `forget`                   | `DELETE /v1/memories/:id`                   |
-| `POST /v1/memories/:id/pin`, `/unpin`                 | `pin`, `unpin`             | same                                        |
-| `POST /v1/judgments`                                  | `judge.record`             | none (`refused`)                            |
-| `POST /v1/judgments/apply`                            | `judge.apply`              | none                                        |
-| `POST /v1/judgments/:id/confirm`                      | `judge.confirm`            | none                                        |
-| `GET /v1/judgments?domain=&by=&all=&limit=`           | `judge.list`               | none                                        |
-| `POST /v1/consolidate`                                | `consolidate`              | none                                        |
-| `POST /v1/forget-all`                                 | `forgetAll`                | none                                        |
-| `GET /healthz`, `GET /readyz`, `GET /metrics`         | (operations, §8.4)         |                                             |
+| Method and path                                 | SDK call            | Oort Cloud equivalent                        |
+| ----------------------------------------------- | ------------------- | -------------------------------------------- |
+| `GET /v1/health`                                | (handshake)         | `GET /health`                                |
+| `GET /v1/whoami`                                | `whoami`            | `GET /v1/whoami`                             |
+| `POST /v1/recall`                               | `recall`            | `POST /v1/recall` (`limit` → `k`)            |
+| `POST /v1/observe`                              | `observe`           | `POST /v1/observe`                           |
+| `POST /v1/remember`                             | `remember`          | none; the client maps it to `observe` (§8.2) |
+| `GET /v1/memories?since=&limit=`                | `recent`            | `GET /v1/memories`                           |
+| `GET /v1/memories/:id`                          | (used by `explain`) | `GET /v1/memories/:id`                       |
+| `GET /v1/memories/:id/explain`                  | `explain`           | none; built from `GET`                       |
+| `DELETE /v1/memories/:id`                       | `forget`            | `DELETE /v1/memories/:id`                    |
+| `POST /v1/memories/:id/pin`, `/unpin`           | `pin`, `unpin`      | same                                         |
+| `POST /v1/judgments`                            | `judge.record`      | none (`refused`)                             |
+| `POST /v1/judgments/apply`                      | `judge.apply`       | none                                         |
+| `POST /v1/judgments/:id/confirm`                | `judge.confirm`     | none                                         |
+| `GET /v1/judgments?domain=&by=&all=&limit=`     | `judge.list`        | none                                         |
+| `POST /v1/consolidate`                          | `consolidate`       | none                                         |
+| `POST /v1/forget-all`                           | `forgetAll`         | none                                         |
+| `GET /healthz`, `GET /readyz`, `GET /metrics`   | operations (§9.4)   |                                              |
 
-HTTP status: 200 on success. Errors map 400 → `usage`, 401 → `needs-login`, 403 → `refused` or
-`cloud-only`, 404 → `not-found`, 409 → `ambiguous-id` or `needs-confirmation`, 413 → `usage`,
-503 → `network` (with `reason: busy` or `shutting-down`), and 500 → `internal`. The client
-always trusts the envelope's `code` over the status.
+HTTP status codes:
 
-#### 7.1.3 Scope on each request
+| Status | Codes                                       |
+| ------ | ------------------------------------------- |
+| 200    | success                                     |
+| 400    | `usage`                                     |
+| 401    | `needs-login`                               |
+| 403    | `refused`, `cloud-only`                     |
+| 404    | `not-found`                                 |
+| 409    | `ambiguous-id`, `needs-confirmation`        |
+| 413    | `usage`                                     |
+| 503    | `network` (`busy`, `shutting-down`)         |
+| 500    | `internal`                                  |
 
-The scope travels in headers, so every route carries it the same way:
+The envelope's `code` wins over the status.
 
-| Header                     | Meaning                                                                                                    | Unix socket                    | TCP listener                                     |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------ |
-| `Oort-Cwd`                 | Absolute path used to find the project, as the hook's `cwd`. Only selects; never read as a file to load.   | yes                            | refused                                          |
-| `Oort-Project`             | An explicit project id (becomes `cfg:<id>`), or `-` for none                                               | yes                            | yes (required, `-` allowed)                      |
-| `Oort-Agent`               | Agent id                                                                                                   | yes                            | yes                                              |
-| `Oort-User`                | End user (customerId)                                                                                      | yes                            | yes                                              |
-| `Oort-Judge-Role`          | `agent` or `expert`, plus `Oort-Operator`                                                                  | yes                            | `agent` only                                     |
-| `Authorization: Bearer …`  | Service token                                                                                              | not needed (file permissions)  | required                                         |
+#### 8.1.3 Scope on each request
 
-The daemon keeps engines warm per (configuration, project), up to `ENGINE_MAX`, as it does for
-the hooks. A request's grant is built from its headers on a warm engine, which is cheap.
+| Header                    | Meaning                                                                                                                                                                                                   | Unix socket        | TCP listener                  |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ----------------------------- |
+| `Oort-Cwd`                | Absolute path that selects the project, as the hook's `cwd` does. Like the hooks, the daemon then **reads that project's `oort.config.json`** (only its non-home keys; `serve` and `judge` are ignored there) and its trust link. No header names a file to write. | yes                | refused                       |
+| `Oort-Project`            | An explicit project id (becomes `cfg:<id>`), or `-` for none. Uses the home config only                                                                                                                  | yes                | yes (required; `-` allowed)   |
+| `Oort-Agent`              | Agent id                                                                                                                                                                                                  | yes                | yes                           |
+| `Oort-User`, `Oort-Org`   | End user and org, under the §6.4 rules. On TCP, `Oort-Org` is refused because the token decides it                                                                                                        | yes                | `Oort-User` only              |
+| `Oort-Judge-Role`         | `agent` or `expert`, plus `Oort-Operator`                                                                                                                                                                 | yes                | `agent` only                  |
+| `Authorization`           | `Bearer <token>`                                                                                                                                                                                          | not used           | required                      |
 
-#### 7.1.4 Auth
+The daemon keeps engines warm per configuration (up to `ENGINE_MAX`) and builds each request's
+principal on a warm engine, so `principalFor` costs microseconds.
 
-- **Unix socket:** file permissions, as today. The socket is mode 600 in a 700 directory owned by
-  this user, checked with `lstat`, with no symlinks followed. The client runs the same
-  `inspectDir` check before it connects. Anyone running as the same user is trusted as the person
-  (the same rule as the CLI and the hooks), so expert mode is allowed here.
-- **TCP:** a bearer token (§8.4). There is no anonymous TCP access, ever.
+#### 8.1.4 Auth
 
-#### 7.1.5 Versioning
+- **Unix socket:** file permissions, as today. The socket has mode 600, inside a 700 directory
+  owned by this user, checked with `lstat`, and no symlink is followed. The client runs the same
+  `inspectDir` check before connecting. **Same-user trust:** any process of this OS user can
+  connect and act as the person, including in expert mode. That is the CLI's trust model, and the
+  docs state it.
+- **TCP:** a bearer token (§9.4). There is no anonymous TCP access.
 
-- The path carries the protocol major (`/v1`). `GET /v1/health` returns
-  `{ version, protocol: 1, mode, capabilities: string[] }`. `capabilities` names optional
-  features (`judgments`, `consolidate`, `forget-all`, `spatial`), so a newer client can test for
-  a feature instead of comparing versions.
-- Unlike the hooks, the SDK accepts a daemon of any version that speaks protocol 1 at version
-  0.7.0 or newer. Any change that is not additive bumps the path to `/v2`, and the daemon serves
-  both for one minor.
-- A daemon older than 0.7.0 reads the HTTP request's first bytes as a frame length larger than 4
-  MiB and drops the connection with `bad-frame`. The client takes that as an outdated daemon and
-  throws `OortUsageError` (reason `daemon-outdated`, fix `oort serve stop`). It never stops
-  another version's daemon by itself.
+#### 8.1.5 Versioning
 
-#### 7.1.6 Autostart, idle exit and life without Node
+- The path carries the protocol major (`/v1`). `GET /v1/health` returns `{ version, protocol: 1,
+  mode, capabilities: string[] }`, where `capabilities` lists `judgments`, `consolidate`,
+  `forget-all` and later `spatial`.
+- The SDK accepts any daemon that speaks protocol 1 at version 0.7.0 or newer. A non-additive
+  change moves to `/v2`, and the daemon serves both for one minor.
+- **A daemon older than 0.7.0** reads `GET ` as a frame length of about 1.2 GB, over
+  `MAX_FRAME_BYTES`. It answers with one length-prefixed frame, `{ v: 1, id: null, ok: false,
+  error: { code: 'bad-frame' } }`, then ends the connection. The client treats any reply that
+  does not start with `HTTP/` as an outdated daemon and throws `OortUsageError`
+  (`daemon-outdated`, fix `oort serve stop`). It never stops another version's daemon itself.
 
-- If the socket does not answer, the client tries once to start the daemon. With
-  `autostart=True` (the default) it runs `oort serve --detach`, finding `oort` the way the
-  launcher does (an installed `oort`, else `npx oortmem@<same version>`). It then waits up to 5
-  s for `GET /v1/health`. The hook circuit breaker file is not touched.
-- SDK requests count as activity for `--idle` (default 30 minutes). A long-lived Python service
-  should run `oort serve` under its own supervisor instead of relying on autostart.
-- **Without Node 22.15 or newer,** local and auto-resolved-local mode throw `OortUsageError`
-  (reason `node-missing`). The message says to install Node, or to use `Oort(mode="cloud")` or
-  `mode="remote"`, which need no Node.
-- The daemon never migrates the store (unchanged). On an older store it answers
-  `refused`/`migration-required` with fix `oort doctor`. Service mode may opt in with
-  `--migrate` (§8.4).
+#### 8.1.6 Autostart, idle exit and life without Node
 
-### 7.2 Cloud transport
+- **Starting the daemon.** If the socket does not answer and `autostart=True` (the default), the
+  client starts `oort serve --detach` once, then waits up to 5 s for `GET /v1/health`.
+  - **Version check.** Today's launcher runs any `oort` found on `PATH`, whatever its version.
+    For autostart, the client first runs `oort --version` and uses that `oort` only if it is
+    0.7.0 or newer. Otherwise it runs `npx oortmem@<its own version>`.
+  - **Minimal environment.** The child gets only an allowlist:
+    - `PATH`, `HOME`, `LANG`, `TMPDIR`, `XDG_RUNTIME_DIR`;
+    - the `OORT_*` variables except `OORT_SERVE_TOKEN`;
+    - `VOYAGE_API_KEY`, `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY`;
+    - `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY`, `NO_PROXY`.
 
-Python calls `https://api.oortcloud.dev` directly (or `OORT_CLOUD_URL`), using
-`packages/cli/test/cloud-contract.json` as the source of truth:
+    The Python app's other secrets never reach the daemon.
+- **Idle exit.** SDK requests count as activity for `--idle` (30 minutes by default). A long-lived
+  service should run `oort serve` under its own supervisor instead of relying on autostart.
+- **Without Node 22.15,** local mode throws `OortUsageError` (`node-missing`). The message says to
+  install Node, or to use `mode="cloud"` or `mode="remote"`.
+- **Migration.** The daemon never migrates the store (unchanged). It answers `refused`
+  (`migration-required`, fix `oort doctor`), unless service mode was started with `--migrate`.
 
-| SDK call                                              | Cloud request                                                                                                                                         |
-| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `recall`                                              | `POST /v1/recall` `{ text, project?, projectPrivate?, k, mode?, asOf?, knownAt?, include?, agent?, rerank?, embed? }`. `speed: 'fast'` sends `rerank: false`, and `'lexical'` also sends `embed: false` |
-| `observe`                                             | `POST /v1/observe` `{ project?, turnRef?, observation: { user, assistant, at?, session?, tools? } }`                                                  |
-| `remember`                                            | One `observe` per fact, framed exactly as `cloudBackend.remember` does (`Remember this: …` / `Noted: …`)                                             |
-| `forget`                                              | `DELETE /v1/memories/:id`, or `?everywhere=1` with `everywhere`                                                                                       |
-| `pin` / `unpin`                                       | `POST /v1/memories/:id/pin` / `unpin`                                                                                                                 |
-| `explain`                                             | `GET /v1/memories/:id`, shaped as `cloudBackend.explain` does                                                                                         |
-| `recent`                                              | `GET /v1/memories?project=&limit=`                                                                                                                    |
-| `whoami`                                              | `GET /v1/whoami?agent=`                                                                                                                               |
-| judgments, `consolidate`, `forgetAll`                 | not sent: `OortRefusedError` (`local-only`)                                                                                                           |
+### 8.2 Cloud transport
 
-Both SDKs map errors with the contract's `errors` table and §4. `projectPrivate` is sent only when
-the project's own config file states it (`privacyStatement`). TypeScript reuses `CloudClient`
-unchanged, and keep-alive is on for any handle that lives longer than one call.
+Python calls `https://api.oortcloud.dev`, or `OORT_CLOUD_URL`. A key is never sent over plain
+`http://` to a host that is not loopback, and redirects are never followed. The source of truth is
+`packages/cli/test/cloud-contract.json`:
 
-## 8. Running in your own infrastructure
+| SDK call                                | Cloud request                                                                                                                                       |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `recall`                                | `POST /v1/recall` `{ text, project?, projectPrivate?, k, mode?, asOf?, knownAt?, include?, agent?, rerank?, embed? }`. `speed: 'fast'` → `rerank: false`; `'lexical'` → also `embed: false` |
+| `observe`                               | `POST /v1/observe` `{ project?, turnRef?, observation: { user, assistant, at?, session?, tools? } }`                                                |
+| `remember`                              | One `observe` per fact, framed as `cloudBackend.remember` frames it                                                                                 |
+| `forget`                                | `DELETE /v1/memories/:id`, or `?everywhere=1`                                                                                                       |
+| `pin` / `unpin`                         | `POST /v1/memories/:id/pin` / `unpin`, with `changed: null`                                                                                         |
+| `explain`                               | `GET /v1/memories/:id`, shaped as `cloudBackend.explain` shapes it                                                                                  |
+| `recent`                                | `GET /v1/memories?project=&limit=`, with paging, a client-side `since` and a cap (§4.4)                                                             |
+| `whoami`                                | `GET /v1/whoami?agent=`                                                                                                                             |
+| judgments, `consolidate`, `forgetAll`   | Not sent: `OortRefusedError` (`local-only`)                                                                                                         |
 
-### 8.1 Deployment shapes
+`projectPrivate` is sent only when the project's own config states it (`privacyStatement`).
 
-| Shape                                                           | Works today (0.5.4)                                                                                                       | 0.6.0                                                                                                                                                   | 0.7.0                                                                                                                       | Missing or later                                                                                                     |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **Library in the agent process** (Node)                         | Only by hand-wiring `@oortmem/core`                                                                                       | `createOort()`: local engine in-process (SQLite on a volume), or cloud mode                                                                             | unchanged                                                                                                                   | Python cannot embed the engine; it goes through the daemon                                                           |
-| **Long-running service** (ECS, Cloud Run, GKE, EKS)             | `oort mcp` over stdio only                                                                                                | A Node service embedding the SDK, **one replica**, store on a block volume                                                                              | `oort serve --listen` as the memory service for any language: token, TLS, health, metrics; the official image                | Several replicas need a server-grade store (§8.2). Cloud Run has no block volumes, so use cloud mode or GKE           |
-| **Serverless** (Lambda, Cloud Functions)                        | No: the CLI expects a home directory and a keychain                                                                       | TS **cloud mode**: no native module loaded, no disk writes, adapters lazy. Keep the handle in module scope across invocations                          | Python cloud mode (standard library only, small cold start). Either SDK in remote mode against an Oort service in the VPC   | A local store in serverless is not supported: `/tmp` is ephemeral and per instance                                   |
-| **Sidecar daemon** next to the agent                            | `oort serve`, hooks only                                                                                                  | none                                                                                                                                                    | `oort serve` in the same pod or task: a shared `emptyDir` Unix socket (same uid), or `--listen 127.0.0.1:7807` with a token | None for one agent per store. For many pods, use the service shape                                                    |
+## 9. Running in your own infrastructure
 
-Cold starts (TypeScript): `createOort({ mode: 'cloud' })` reads env and options only. The first
-call opens one HTTPS connection. Nothing under `better-sqlite3`, `onnxruntime-node` or the
-writer's SDKs is imported. A test asserts this by checking the import graph in cloud mode.
+### 9.1 Deployment shapes
 
-### 8.2 Storage
+| Shape                                                  | Works today (0.5.4)                                                     | 0.6.0                                                                                                                         | 0.7.0                                                                                                                       | Missing or later                                                                                         |
+| ------------------------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Library in the agent process** (Node)                | Only by hand-wiring `@oortmem/core`                                     | `createOort()`: local engine in-process (SQLite on a volume), or cloud mode                                                   | unchanged                                                                                                                   | Python cannot embed the engine; it uses the daemon                                                       |
+| **Long-running service** (ECS, Cloud Run, GKE, EKS)    | `oort mcp` over stdio only                                              | A Node service embedding the SDK, **one replica**, with the store on a block volume                                           | `oort serve --listen` as the memory service for any language (token, TLS, probes, metrics); the official image              | More than one replica needs a server-grade store (§9.2). Cloud Run has no block volumes: use cloud mode or GKE |
+| **Serverless** (Lambda, Cloud Functions)               | No: the CLI expects a writable home and a keychain                      | **TS cloud mode** (§9.1.1)                                                                                                    | Python cloud mode, and either SDK in remote mode against an Oort service in the VPC                                         | A local store in serverless is unsupported: `/tmp` is ephemeral and per instance                         |
+| **Sidecar daemon**                                     | `oort serve` for hooks only                                             | none                                                                                                                          | `oort serve` in the same pod: a shared-volume socket (§9.1.2), or `--listen 127.0.0.1:7807` with a token                    | none                                                                                                     |
+
+#### 9.1.1 Serverless details [0.6, TS cloud mode]
+
+- **No disk writes, even with a read-only or unset `HOME`.** `mode: 'cloud'` reads `OORT_HOME`
+  (`cloud.json`, `config.json`, `credentials.json`) only if those files exist. It never creates
+  the directory, a store, the hook log or the query embedding cache.
+- **Keys.** Pass `keySources: ['explicit', 'env']` (or set `OORT_NO_KEYCHAIN=1`). There is no
+  `security` binary to spawn in Lambda.
+- **Handle lifetime.** Create the handle at module scope, so warm invocations reuse its
+  connection. The pool's sockets are `unref()`'d, so a function that never calls `close()` does
+  not hang the runtime.
+- **Bundling.** Mark `@oortmem/store-sqlite`, `better-sqlite3` and `sqlite-vec` as external in
+  esbuild or webpack. Cloud mode never imports them, so the native build never has to match the
+  Lambda architecture. Making `@oortmem/store-sqlite` an optional dependency of `@oortmem/sdk` is
+  [0.7] (Q14).
+- **Await `observe` before returning.** The runtime freezes after the response.
+
+#### 9.1.2 The Kubernetes socket directory
+
+An `emptyDir` is created world-writable (mode 1777 or 777), and the daemon refuses to put its
+socket in a directory that others can write. So mount the `emptyDir` at `/run/oort` and set
+`OORT_HOME=/run/oort/home` (or `XDG_RUNTIME_DIR=/run/oort`). The daemon then creates its own 0700
+subdirectory.
+
+Both containers must run as the same uid, through `securityContext.runAsUser` and a matching
+`fsGroup`. The daemon's `inspectDir` check refuses a socket directory owned by another uid, and so
+does the client.
+
+### 9.2 Storage
 
 **SQLite on a persistent block volume is the supported self-hosted store for 0.6 and 0.7.**
 
-- Use EBS (EKS StatefulSet with the EBS CSI driver, or ECS on EC2) or a GCE persistent disk (a GKE
-  StatefulSet). `OORT_HOME` lives on the volume. It holds `oort.sqlite` with its WAL, `cold/` (the
-  zstd blobs), `models/` and the key-free config.
-- **One host per store.** SQLite WAL needs shared memory on one host. Several processes on that
-  host are fine, as with the CLI, hooks, MCP and daemon today. Several hosts are not, so run one
-  replica per store (`replicas: 1`, `ReadWriteOnce`). Use a rolling update with
-  `maxSurge: 0`, or `Recreate`.
-- **No network filesystems.** EFS, Filestore and other NFS, SMB, and FUSE mounts such as GCS
-  FUSE break WAL's shared memory and its locking guarantees. In 0.7.0, `openSqliteStore` checks
-  `fs.statfsSync(dir).type` against the NFS, SMB and FUSE magic numbers. `oort serve --listen`
-  refuses to start on one. The CLI and SDK warn (`network-filesystem`) and keep going, for
-  compatibility.
-- **ECS on Fargate** attaches EBS volumes per task. Whether that fits a single long-lived store
-  (data surviving task replacement) is **unverified**. Until it is checked, the AWS recipe uses
-  ECS on EC2 or EKS.
-- **Backups:** volume snapshots, plus a scheduled `oort export` (JSON Lines, `docs/export-format.md`)
-  to S3 or GCS. A restore is `oort import`. The store's own pre-migration copies
-  (`VACUUM INTO`) stay as they are.
+- Use EBS (an EKS StatefulSet with the EBS CSI driver, or ECS on EC2) or a GCE persistent disk (a
+  GKE StatefulSet). `OORT_HOME` on the volume holds `oort.sqlite` with its WAL, `cold/`,
+  `models/` and the key-free config.
+- **One host per store.** SQLite WAL needs shared memory on a single host.
+  - Several processes on that host are fine, as with the CLI, hooks, MCP and the daemon.
+  - Several hosts are not: run one replica per store (`replicas: 1`, `ReadWriteOnce`), and roll
+    out with `maxSurge: 0` or `Recreate`.
+- **No network filesystems.** EFS, Filestore and other NFS, SMB and FUSE mounts (GCS FUSE
+  included) break WAL's shared memory and its locking. In 0.7, `openSqliteStore` checks
+  `fs.statfsSync(dir).type` against the NFS, SMB and FUSE magic numbers:
+  - `oort serve --listen` refuses to start on one;
+  - the CLI and the SDK warn (`network-filesystem`).
+- **ECS on Fargate with EBS** is unverified for a long-lived store (Q13). The AWS recipe uses ECS
+  on EC2 or EKS.
+- **Backups.** Take volume snapshots, and run a scheduled `oort export` (JSON Lines) to S3 or GCS.
+  Restore with `oort import`.
 
-**A server-grade store (Postgres with pgvector on RDS or Cloud SQL) is not built for 0.6 or 0.7.**
-It is the right next store, and the seam is ready for it:
+**A server-grade store (Postgres with pgvector, on RDS or Cloud SQL) is not built for 0.6 or
+0.7.** The seam is ready for it:
 
-- `MemoryStore` takes a `Grant` on every method and enforces it inside the store. `storeConformance`
-  (`@oortmem/core/store-conformance`) already runs the contract and isolation suites against any
-  store, so `@oortmem/store-postgres` is "pass the suite", not a redesign.
-- The mapping: one `memories` table with the address columns (level, org, customer, agent, hive,
-  run, project, author) and the same `CHECK`s as schema v3, a `tsvector` column for `lexical`
-  (recall fuses by rank, so `ts_rank` versus `bm25` does not break fusion), pgvector for `dense`
-  partitioned or filtered by node, and cold blobs in a table or in S3/GCS behind the
-  existing cold methods. Row-level security per `org_id` as a second line of defence, never the
-  first.
-- **Trigger to build it:** the first self-hosting user who needs more than one replica, or high
-  availability, that Oort Cloud does not meet. Until then: one replica plus snapshots, or Oort
-  Cloud. Target: after 0.7.0, decided by demand (Q8).
+- **`MemoryStore` enforces grants inside the store,** and `storeConformance`
+  (`@oortmem/core/store-conformance`) runs the contract and isolation suites against any store.
+  So `@oortmem/store-postgres` means passing that suite, not a redesign.
+- **The mapping.**
+  - One `memories` table with the address columns and schema v3's `CHECK`s.
+  - A `tsvector` column for `lexical`. Recall fuses by rank, so `ts_rank` instead of `bm25`
+    does not break fusion.
+  - pgvector for `dense`, filtered by node.
+  - Cold blobs in a table, or in S3 or GCS.
+  - Row-level security per `org_id` as a second line of defence, never the first.
+- **When to build it:** for the first self-hosting user who needs more than one replica, or high
+  availability, that Oort Cloud does not meet (Q8).
 
-### 8.3 Multi-tenant use
+### 9.3 Multi-tenant use
 
-| Option                                                                    | Isolation                                                                                    | Use when                                                                                                         |
-| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Scopes in one store**: `org` = your tenant, `user` = their end user     | Grants enforced in the store, covered by the conformance and isolation suites                | **Default.** Many end users per tenant                                                                           |
-| **One store per tenant** (one `OORT_HOME` or volume per org)              | Physical. Separate files, keys and backups                                                   | Contractual separation, per-tenant residency, per-tenant deletion by file                                        |
-| **One store per end user**                                                | Physical                                                                                     | Only when lexical *score* independence matters. FTS5 `bm25` statistics are per table (store contract, "Known limit"), but results never cross tenants either way |
-
-The SDK maps a host app's identities like this:
+| Option                                                                 | Isolation                                                                  | Use when                                                                                                                                              |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Scopes in one store:** `org` is your tenant, `user` is the end user  | Grants enforced in the store, covered by the conformance and isolation suites | **The default:** many end users per tenant                                                                                                            |
+| **One store per tenant** (one `OORT_HOME` per org)                     | Physical: separate files, backups and deletion                             | Contractual separation, per-tenant residency                                                                                                          |
+| **One store per end user**                                             | Physical                                                                   | Only when lexical *score* independence matters. FTS5 `bm25` statistics are per table (store contract, "Known limit"), but results never cross tenants either way |
 
 ```ts
-const oort = await createOort({ mode: 'local', home: '/data/oort', org: tenantId, project: null });
-const forUser = (userId: string) => oort.scoped({ user: userId, agent: 'support-bot' });
-const mem = forUser(req.user.id); // hand only this handle to the model's tools
+const oort = await createOort({ mode: 'local', home: '/data/oort', org: tenantId, project: null, projectConfig: false, keySources: ['env'] });
+const mem = oort.scoped({ user: req.user.id, agent: 'support-bot' }); // hand only this handle to the model's tools
 ```
 
-- `org` is the owner: the storage, key and deletion boundary. `user` gives each end user their own
-  Planet. `agent` is the host's agent and gets a Star. What one agent learns about one user (an
-  Orbit, `agent-user` level) and promotion to a shared Galaxy are **CON-92 (B2B2C)**. The address
-  model already has room for them, and the SDK will expose them as `scoped({ user, agent, orbit:
-  true })` when that epic ships. Not before.
-- Memories written for a `user` other than `self` are invisible to the `oort` CLI, which always
-  acts as `self`. A `--user` flag for operators is open question Q9.
-- In **cloud mode**, an Oort key is one account (one person's Planet and their Constellations),
-  so a multi-tenant app cannot keep its end users apart through the cloud until CON-92. 0.6 and
-  0.7 say so in the docs, and `user` is a usage error in cloud mode.
-- `forgetAll({ confirm: 'forget-all' })` (0.7.0, `@experimental`) erases every memory a handle
-  can write: one end user's Planet and the agent's Star for them. It is built from `list` and
-  `forget`, needs no store change, and gives a self-hosted multi-tenant app a GDPR erasure path
-  ahead of CON-92's `forgetCustomer`.
+- **`org`** is the owner: the storage, key and deletion boundary.
+- **`user`** gives each end user their own Planet. Per §6.4, an end user's handle has no Star.
+  What an agent learns about one user (Orbits, the `agent-user` level) and promoting knowledge to
+  a Galaxy belong to **CON-92 (B2B2C)**. The SDK exposes them only when that epic ships.
+- **The CLI acts as the person.** Memories written for a `user` are invisible to the `oort` CLI.
+  An operator `--user`/`--org` flag is Q9.
+- **Cloud mode cannot separate end users** until CON-92. One Oort key is one account, so `user`
+  is a usage error in cloud mode.
+- **Erasure.** `forgetAll` [0.7] erases what an end user's handle can write (their Planet). It is
+  built from `list` and `forget`, so it needs no store change, and it gives self-hosted apps an
+  erasure path ahead of CON-92's `forgetCustomer`.
+- **Who consolidates.** Consolidation (tiers, expiry, cold eviction) runs per grant. The hooks'
+  drain consolidates only the person's own principal, so nothing consolidates other users'
+  Planets on its own. A multi-tenant host calls `scoped({ user }).consolidate({ budgetMs })` at
+  the end of each user's session, or from a scheduled job over its active users. It is cheap and
+  calls no model. In 0.7, service mode adds `oort serve --consolidate-every 1h`, which sweeps the
+  users seen since the last sweep, from an in-memory set that is never persisted.
 
-### 8.4 Service mode: `oort serve --listen`
+### 9.4 Service mode: `oort serve --listen` [0.7]
 
-**Decision: yes, in 0.7.0, and the Python client's remote transport is this API.** The local
-transport stays the Unix socket, carrying the same HTTP protocol (§7.1). There is one protocol
-and two listeners: the socket for one machine's processes, TCP for the network.
+**Decision: yes.** Python's `remote` transport is this API. Its local transport stays on the Unix
+socket, with the same HTTP protocol.
 
 ```sh
-oort serve --listen 0.0.0.0:7807 --tls-cert /run/tls/tls.crt --tls-key /run/tls/tls.key
-oort serve --listen 127.0.0.1:7807 --plaintext        # sidecar, or behind a TLS-terminating proxy
-PORT=8080 oort serve --listen 0.0.0.0:$PORT --plaintext --migrate   # one-replica service
+oort serve token                                     # prints a new 256-bit token (base64url, 43 characters)
+oort serve --listen 0.0.0.0:7807 --tls-cert /run/tls/tls.crt --tls-key /run/tls/tls.key [--tls-client-ca /run/tls/ca.crt]
+oort serve --listen 127.0.0.1:7807 --plaintext        # sidecar on loopback
+oort serve --listen 0.0.0.0:8080 --plaintext --behind-tls-proxy --migrate   # behind an ALB, a Cloud Run front end or a mesh
 ```
 
-| Concern           | Decision                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Opt-in            | TCP opens only with `--listen` (or `serve.listen` in the home config or `OORT_CONFIG`). A repository config cannot set it (`serve` is home-only). The Unix socket stays on beside it. The sentence "No TCP listener, ever" in the daemon's doc comment and docs/cli.md becomes "never unless `--listen` is given".                                                                                                    |
-| Auth              | `Authorization: Bearer <token>`. The token comes from `OORT_SERVE_TOKEN` or `OORT_SERVE_TOKEN_FILE` (a mounted secret: AWS Secrets Manager through the ECS `secrets` field or the Secrets Store CSI driver, GCP Secret Manager through Cloud Run secret env vars or the CSI driver). It must be at least 32 bytes of entropy. It refuses to start without a token. Comparison uses `timingSafeEqual` on SHA-256 digests. Up to two comma-separated tokens are accepted, for rotation. |
-| What a token may do | Everything in its org (`OORT_SERVE_ORG`, default `local`): any `user`, `project` and `agent`, agent-role judgments only, and no `Oort-Cwd`. Per-token scopes (one token per user group, read-only tokens) come later (Q10). Treat the token like a database password: it reaches every end user of that org.                                                                                                    |
-| TLS               | Built-in TLS via `node:https` with `--tls-cert`/`--tls-key` (reloaded on `SIGHUP`). Plaintext needs `--plaintext` and is allowed only for a loopback address or when stated explicitly (behind an ALB, a Cloud Run front end, or a service mesh with mTLS). A non-loopback `--listen` without either refuses to start. mTLS client certificates come later.                                                          |
-| Health            | `GET /healthz`: 200 when the process serves (no auth, no store access). `GET /readyz`: 200 when the store is open and at the current schema, else 503 with `{ ready: false, store: 'migration-required' \| 'locked' \| 'network-filesystem' }` (no auth, no data). Use them as the liveness and readiness probes or target-group health checks.                                                                       |
-| Migration         | `--migrate` lets the service migrate on start (it is the only writer). Without it, it reports not-ready with `migration-required`. A one-off job running `oort doctor` (which migrates) also works.                                                                                                                                                                                                                                |
-| Limits            | The current per-connection limits stay for the socket. TCP: 256 connections, 4 MiB bodies, 30 s per request, keep-alive 60 s. Rate limiting belongs to the platform (ALB, Cloud Armor, mesh).                                                                                                                                                                                                                           |
-| Idle exit         | Off with `--listen` (a service does not exit when idle).                                                                                                                                                                                                                                                                                                                                                              |
-| Port              | No default; `--listen` is explicit. Docs use 7807. `PORT` is honoured in `--listen 0.0.0.0:$PORT` by the shell, not by magic.                                                                                                                                                                                                                                                                                       |
+| Concern            | Decision                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Opt-in             | TCP opens only with `--listen`, or with `serve.listen` in the home config or `OORT_CONFIG`. A repository config cannot set it, because `serve` is home-only. The daemon's "no TCP listener, ever" becomes "none unless `--listen` is given".                                                                                                                                                 |
+| Token              | `OORT_SERVE_TOKEN`, or `OORT_SERVE_TOKEN_FILE` (a mounted secret: AWS Secrets Manager through ECS `secrets` or the Secrets Store CSI driver; GCP Secret Manager through Cloud Run secret env vars or the CSI driver). It must be **at least 43 base64url characters** (256 bits), and `oort serve token` makes one. The daemon refuses to start without one. Up to two comma-separated tokens are accepted for rotation, compared with `timingSafeEqual` on SHA-256 digests. The token variables are **removed from the environment of every child the daemon spawns** (the drain, autostarted processes). |
+| What a token may do | Everything in its org (`OORT_SERVE_ORG`, which must not be `local`): any `user`, `project` and `agent`. Judgments in agent role only, and no `Oort-Cwd` or `Oort-Org`. Treat the token like a database password. Per-token scopes are Q10.                                                                                                                                              |
+| TLS                | Built-in TLS (`node:https`) with `--tls-cert` and `--tls-key`, reloaded on `SIGHUP`. `--tls-client-ca` requires client certificates (mTLS) in addition to the token. **A non-loopback `--listen` without TLS refuses to start unless it has both `--plaintext` and `--behind-tls-proxy`.** A loopback listener needs `--plaintext`.                                                          |
+| Clients            | Both SDKs refuse to send a token over `http://` to a host that is not loopback, never follow redirects, and pin nothing beyond the system or `NODE_EXTRA_CA_CERTS` trust store (Python: `ssl.create_default_context(cafile=…)`).                                                                                                                                                              |
+| Browsers           | No CORS headers. Any request with an `Origin` header is refused. That blocks cross-site requests and DNS rebinding against a loopback listener.                                                                                                                                                                                                                                              |
+| Health             | `GET /healthz`: 200 when the process serves (no auth, no store access). `GET /readyz`: 200 when the store is open and current, else 503 with `{ ready: false, store: 'migration-required' \| 'locked' \| 'network-filesystem' }` (no auth, no data).                                                                                                                                          |
+| Migration          | `--migrate` lets the service migrate the store on start, because it is the only writer. Otherwise `/readyz` reports `migration-required` until `oort doctor` has run, for example as a one-off job.                                                                                                                                                                                          |
+| Limits             | 256 TCP connections, 16 KiB of headers, 4 MiB bodies, 30 s per request, 60 s keep-alive. Rate limiting is the platform's job (ALB, Cloud Armor, a mesh).                                                                                                                                                                                                                                     |
+| Idle exit          | Off with `--listen`.                                                                                                                                                                                                                                                                                                                                                                         |
 
-### 8.5 Model keys, local models and egress
+### 9.5 Model keys, local models and egress
 
-- **Keys come from the environment only on servers.** Inject `VOYAGE_API_KEY`,
-  `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY` (or `OORT_API_KEY` for the relay) from AWS Secrets
-  Manager or GCP Secret Manager through the platform's secret injection. The image sets
-  `OORT_NO_KEYCHAIN=1`. Keys are never written to the volume.
-- **Local models in containers:** `@oortmem/local-models` (ONNX Runtime, CPU only, about 115 MB)
-  plus the default models (about 58 MB) give embedding and reranking with no egress. Saving
-  memories still calls the decision and writer models (a local decision model is CON-16), so a
-  fully air-gapped deployment can recall and judge by precedent but cannot observe. The large
-  multilingual models (600 MB or more each, about 1 GB of memory) suit a long-lived service, not
-  serverless.
-- **Egress list** for a VPC firewall: the Voyage, TypeSafe and Anthropic APIs for own keys, or
-  the Oort Pro relay for an Oort key, or `api.oortcloud.dev` for cloud mode, and the model mirror
-  at pull time only (`OORT_MODELS_URL`).
-- **Data residency:** Oort Cloud stores memories in the EU. Self-hosted, the store is wherever
+- **Keys come only from the environment on servers.** Inject the vendor keys, or `OORT_API_KEY`
+  for the relay, from AWS Secrets Manager or GCP Secret Manager. The image sets
+  `OORT_NO_KEYCHAIN=1`, and keys are never written to the volume.
+- **Local models in containers.** `@oortmem/local-models` (ONNX Runtime, CPU only, about 115 MB)
+  plus the default models (about 58 MB) give embedding and reranking with no egress.
+  - Saving memories still needs the decision and writer models. A local decision model is CON-16.
+  - So an air-gapped deployment can recall and judge by precedent, but it cannot observe.
+  - The large multilingual models (more than 600 MB each, about 1 GB of memory) suit a long-lived
+    service, not serverless.
+- **Egress list.** One of three, depending on how keys are set up:
+  - the Voyage, TypeSafe and Anthropic APIs, with your own keys;
+  - the Oort Pro relay, with an Oort key;
+  - `api.oortcloud.dev`, in cloud mode.
+
+  Plus the model mirror at pull time only (`OORT_MODELS_URL`).
+- **Data residency.** Oort Cloud stores memories in the EU. A self-hosted store lives wherever
   your volume is. Text still reaches the model vendors your keys point at, under your agreements
-  with them. For EU-only processing of embeddings, use local models. The decision and writer
-  calls stay with their vendors until CON-16.
+  with them. For EU-only processing of embeddings, use local models.
 
-### 8.6 Packaging for servers
+### 9.6 Packaging for servers
 
-| Item                       | Decision                                                                                                                                                                                                                                                                                      | Release        |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| Official image             | `ghcr.io/oortmem/oort:<version>`, multi-arch (amd64, arm64), built from `gcr.io/distroless/nodejs22-debian12:nonroot` (glibc, for `better-sqlite3` prebuilds). Runs as uid 65532 with a read-only root filesystem, `OORT_HOME=/data` as the one writable volume, `OORT_NO_KEYCHAIN=1`, and the entrypoint `oort serve`. Signed with build provenance from the release workflow. | 0.7.0          |
-| Local-models variant       | `…:<version>-local`, with `@oortmem/local-models` and the two default models in the image, pinned by SHA-256 as `oort models pull` pins them                                                                                                                                                  | 0.7.0          |
-| Env-only config            | `OORT_CONFIG` holds a JSON overlay of the home config, read after `config.json`. It may set `serve` and `judge`, because the operator controls the environment. With it, a container needs no config file.                                                                                     | 0.7.0          |
-| Deployment examples        | `docs/self-hosting.md`, with a docker-compose file, a Kubernetes StatefulSet (`replicas: 1`, PVC, probes, Secret), an ECS-on-EC2 task definition snippet and a Cloud Run cloud-mode example (an app using the SDK, no Oort service)                                                           | 0.7.0          |
-| Helm chart, Terraform module | Later. A chart for a single-replica StatefulSet adds little over the example manifest. Revisit with the Postgres store, when replicas > 1 make a chart worth maintaining.                                                                                                                   | later          |
+| Item                         | Decision                                                                                                                                                                                                                                                                                       | Release |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| Official image               | `ghcr.io/oortmem/oort:<version>`, multi-arch (amd64 and arm64), from `gcr.io/distroless/nodejs22-debian12:nonroot` (glibc, for the `better-sqlite3` prebuilds). It runs as uid 65532 with a read-only root filesystem, `OORT_HOME=/data` as the one writable volume, `OORT_NO_KEYCHAIN=1`, and the entrypoint `oort serve`. Signed, with build provenance. | 0.7     |
+| Local-models variant         | `…:<version>-local`: the runtime and the two default models baked in, pinned by SHA-256                                                                                                                                                                                                        | 0.7     |
+| Env-only config              | `OORT_CONFIG`: a JSON overlay of the home config, read after `config.json`. It may set `serve` and `judge`, because the operator owns the environment.                                                                                                                                          | 0.7     |
+| Examples                     | `docs/self-hosting.md`: docker-compose, a Kubernetes StatefulSet (`replicas: 1`, PVC, probes, Secret, the §9.1.2 socket note), an ECS-on-EC2 task definition, and a Cloud Run example in cloud mode                                                                                           | 0.7     |
+| Helm chart, Terraform module | Later, together with the Postgres store, when more than one replica makes a chart worth maintaining                                                                                                                                                                                            | later   |
 
-### 8.7 Observability
+### 9.7 Observability
 
-- **Never in logs or metrics:** memory text, queries, turn text, judgment text, keys, tokens, or
-  scope values (user, project, agent ids can be personal data). Ids of memories are omitted too.
-- **Service logs:** one JSON line per request on stdout:
-  `{ ts, level, msg: "request", route, status, ms, mode, degraded: [...], counts: {...}, requestId }`.
-  Start, stop, config and migration lines follow the same shape. `serve.log` keeps its current
-  start and stop lines for `--detach`.
-- **Metrics:** `GET /metrics` (Prometheus text, bearer token, or a separate `--metrics-listen
-  127.0.0.1:9464` without a token). It exports `oort_requests_total{route,status}`,
-  `oort_request_duration_seconds{route}`, `oort_recall_degraded_total{reason}`,
-  `oort_model_calls_total{role,via}` (billing visibility: `via` is `own-key`, `oort-pro` or
-  `local`), `oort_observe_outcomes_total{outcome}` and `oort_store_bytes`.
-- **The hook log** is unchanged: counts and timings, never text (docs/claude-code.md).
-- **TypeScript SDK:** it publishes to `node:diagnostics_channel` (`oortmem:call`) one event per
-  call, `{ op, mode, ms, outcome, degraded, modelCalls }`, with no text. Hosts forward it to
-  OpenTelemetry or their logger. There is no logging dependency, and nothing is printed by
-  default. `@experimental` payload.
-- OpenTelemetry tracing comes later, on top of the same channel.
+- **Never in logs or metrics:** memory, query, turn or judgment text; keys or tokens; scope values
+  (user, project and agent ids can be personal data); memory ids.
+- **Service logs [0.7]:** one JSON line per request on stdout:
+  `{ ts, level, msg: "request", route, status, ms, mode, degraded, counts, requestId }`. Start,
+  stop and migration lines follow the same shape.
+- **Metrics [0.7]:** `GET /metrics` in Prometheus text, behind the token or on a separate
+  `--metrics-listen 127.0.0.1:9464`. It exports:
+  - `oort_requests_total{route,status}`;
+  - `oort_request_duration_seconds{route}`;
+  - `oort_recall_degraded_total{reason}`;
+  - `oort_model_calls_total{role,via}`, so model costs are visible;
+  - `oort_observe_outcomes_total{outcome}`;
+  - `oort_store_bytes`.
+- **The hook log** is unchanged: counts and timings, never text.
+- **TypeScript diagnostics [0.7]:** `node:diagnostics_channel` `oortmem:call` events, `{ op, mode,
+  ms, outcome, degraded, modelCalls }`, with no text and an `@experimental` payload. In 0.6, a host
+  times calls itself and reads `warnings` and `degraded` from the results.
 
-### 8.8 What lands when
+### 9.8 What lands when
 
-| Release   | Self-hosting scope                                                                                                                                                                                                                                                                             |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **0.6.0** | TS SDK embedded in a one-replica service on a block volume. TS cloud mode in serverless (lazy native modules, `OORT_NO_KEYCHAIN`, `keySources`). The diagnostics channel. Docs: "Using Oort from your service" (library and serverless shapes only).                                       |
-| **0.7.0** | `oort serve` HTTP protocol (socket and `--listen`), token, TLS, `/healthz`, `/readyz`, `/metrics`, `--migrate`, network-filesystem refusal, `OORT_CONFIG`, the image and its `-local` variant, `forgetAll`, TS `mode: 'remote'`, Python local, remote and cloud, and `docs/self-hosting.md` with AWS and GCP recipes. |
-| **Later** | `@oortmem/store-postgres` (by demand), Helm and Terraform, per-token scopes and mTLS, a server-side observe queue (Q6), OpenTelemetry, multi-tenant cloud (CON-92).                                                                                                                         |
+| Release   | Self-hosting scope                                                                                                                                                                                                                                                                                  |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **0.6.0** | The TS SDK embedded in a one-replica service on a block volume, and TS cloud mode in serverless. `docs/sdk.md` covers library and serverless use.                                                                                                                                                   |
+| **0.7.0** | `@oortmem/sdk`. The HTTP protocol (socket and `--listen`): token, TLS, mTLS option, probes, metrics, `--migrate`, `--consolidate-every`. Network-filesystem refusal, `OORT_CONFIG`, the image and its `-local` variant, `forgetAll`, diagnostics, TS `remote`, Python, and `docs/self-hosting.md`. |
+| **Later** | `@oortmem/store-postgres` (on demand), Helm and Terraform, per-token scopes, a server-side observe queue, OpenTelemetry, multi-tenant cloud (CON-92).                                                                                                                                              |
 
-## 9. Shared contract tests
+## 10. Shared contract tests
 
-One suite, `contract/sdk/`, at the repository root, versioned with the protocol:
+### 10.1 Layout and format
 
 ```
 contract/sdk/
-  cases/*.json          one file per area: recall, temporal, observe, remember, ids, judge, scope, errors, scrub, format, place, limits
-  seeds/*.json          stores to start from, as export-format v2 lines plus judgments
-  vectors/project-id.json   cwd layouts → expected project ids (Python port)
-  secrets.b64.txt       a symlink to packages/core/test/fixtures/secrets.b64.txt (base64, so check-public stays clean)
+  cases/*.json          by area: recall, temporal, observe, remember, ids, judge, scope, errors, scrub, format, limits
+  seeds/*.json          starting stores: export-format v2 lines plus judgments
+  vectors/project-id.json   cwd layouts and their expected project ids (the Python port, 0.7)
   schema.json           JSON Schema of a case
 ```
 
-A case:
+Secrets come from `packages/core/test/fixtures/secrets.b64.txt` (base64, so `check-public` stays
+clean). The runner decodes them at runtime.
 
 ```json
 {
   "id": "judge.agent-record-is-unconfirmed",
-  "transports": ["local", "remote"],
-  "seed": "judge-basic",
+  "transports": ["local"],
+  "seed": "empty",
   "options": { "agent": "bot", "config": { "judge": { "experts": ["ada"] } } },
   "now": "2026-11-06T12:00:00Z",
   "steps": [
-    { "call": "judge.record", "args": { "subject": "Post claims a cure", "verdict": "rejected", "reason": "No source.", "domain": "content", "by": "ada" },
-      "expect": { "result": { "outcome": "added", "memory": { "$type": "string" } } }, "save": { "id": "$.memory" } },
-    { "call": "judge.list", "args": {},
-      "expect": { "result": { "judgments": { "$some": { "id": "${id}", "agentRecorded": true, "confirmed": false } } } } },
-    { "call": "judge.confirm", "args": { "id": "${id}" }, "expect": { "error": { "code": "refused", "reason": "expert-only" } } }
+    {
+      "call": "judge.record",
+      "args": { "subject": "Post claims a cure", "verdict": "rejected", "reason": "No source.", "domain": "content", "by": "ada" },
+      "expect": { "result": { "outcome": "added", "id": { "$type": "string" }, "status": "agent-recorded" } },
+      "save": { "judgment": "$.id" }
+    },
+    {
+      "call": "judge.list",
+      "args": {},
+      "expect": { "result": { "judgments": { "$some": { "id": "${judgment}", "via": "mcp", "agentRecorded": true, "confirmed": false } } } }
+    },
+    { "call": "judge.confirm", "args": { "id": "${judgment}" }, "expect": { "error": { "code": "refused", "reason": "expert-only" } } }
   ]
 }
 ```
 
-- **Arguments and expectations use the camelCase wire names.** The Python runner converts names
-  with the documented mechanical rule, so one file serves both SDKs. Matchers: `$type`, `$len`,
-  `$some`, `$every`, `$absent`, `$regex`, `$approx`. Unknown result fields are ignored (the
-  additive rule, §6.4).
-- **Determinism.** Fake adapters from core's test helpers (a hash embedder, a rule-based
-  decider, an echo writer), a fixed `now`, and seeded stores. Real models are never called.
-- **Transports.**
-  - TypeScript `local`: the in-process engine with the fakes.
-  - Both SDKs, `remote` and Python `local`: `packages/sdk/test/fixture-daemon.ts`, which starts
-    `oort serve` with the fakes on a temporary socket or port. It is test-only and never in the
-    npm `files`, so no shipped binary can swap in fake models.
-  - `cloud`: the fake cloud the CLI's tests already run against `cloud-contract.json`.
-- **Runners.** `packages/sdk/test/contract.test.ts` (vitest) and `python/tests/test_contract.py`
-  (pytest, Python 3.10 and 3.13 in CI, Node 22.15 for the fixture daemon). `pnpm verify` runs the
-  TypeScript side. The release workflow runs both and blocks publishing on failure.
-- **Must-have areas for 0.6.0** (TypeScript runner, `local` and `cloud`):
-  - every §3.5 limit and §3.4 temporal rule;
-  - each error code at least once;
-  - scope isolation (two users, two agents, and `include` narrowing);
-  - all §5.3 judgment rules, including the daily cap (with the counter at 49) and `via` values;
-  - scrubbing: every fixture secret, observed, remembered or used as a query, never appears in
-    any result;
-  - `formatForPrompt` escaping of a memory that contains `</oort-memory>`;
-  - `place` refused with `spatial-unavailable`.
+- `call` names a method; dotted names reach the `judge` namespace. `args` are the method's
+  arguments in camelCase wire names: for `recall`, `{ query, ...options }`; for one-argument
+  methods, the argument's fields.
+- `save` binds JSONPath values from the result, and `${name}` substitutes them in later steps.
+- The matchers are `$type`, `$len`, `$some`, `$every`, `$absent`, `$regex` and `$approx`. Unknown
+  result fields are ignored (the additive rule, §7.4).
+- The Python runner converts names mechanically, so one file serves both SDKs.
 
-  0.7.0 adds the Python runner, `remote`, the project-id vectors and daemon versioning.
+### 10.2 Determinism and transports
 
-## 10. Framework integrations
+- **Fakes.** Core's test helpers supply a hash embedder, a rule-based decider and an echo writer,
+  with a fixed `now` and seeded stores. Real models are never called.
+- **`local` [0.6].** The in-process engine with the fakes, through an internal `createOort` test
+  hook. The hook is not exported from the package root.
+- **`cloud` [0.6].** The fake cloud server that the CLI's tests use today, moved to a shared
+  helper (`packages/cli/test/helpers/fake-cloud.ts`) that follows `cloud-contract.json`. Each
+  case can force an error per route, `{ "cloud": { "fail": { "POST /v1/recall": 429 } } }`, so
+  every cloud row of the §5 table is exercised.
+- **`remote` and Python `local` [0.7].** `packages/sdk/test/fixture-daemon.ts` starts `oort
+  serve` with the fakes, on a temporary socket or port. It is test-only and never in the npm
+  `files`, so no shipped binary can swap in fake models.
+- **Runners.** `packages/cli/src/sdk/contract.test.ts` (vitest) runs in `pnpm verify` [0.6].
+  `python/tests/test_contract.py` (pytest on Python 3.10 and 3.13, with Node 22.15 for the fixture
+  daemon) is added in 0.7. The release workflow runs both and blocks publishing on a failure.
 
-What was checked: each framework's current interface, through Context7 (`ctx7`) on 2026-11-06.
-The library ids used: `/websites/ai-sdk_dev` (Vercel AI SDK, including the v6 → v7 migration
-guide), `/websites/langchain_oss_javascript_langgraph` and
-`/websites/reference_langchain_javascript_langchain-langgraph` (LangGraph.js),
-`/websites/reference_langchain_python_langgraph` and `/langchain-ai/langgraph` (LangGraph Python,
-`store/base`), `/websites/openai_github_io_openai-agents-js` and `/openai/openai-agents-python`
-(OpenAI Agents SDK), `/llmstxt/crewai_llms_txt` (docs v1.15.23) and `/crewaiinc/crewai`
-(CrewAI), and `/llmstxt/mastra_ai_llms_txt` and `/mastra-ai/mastra` (Mastra). Re-check each
-before its adapter ships, because these interfaces move fast.
+### 10.3 0.6.0 must-haves
 
-| Framework                       | Current memory or tool interface (as checked)                                                                                                                                                                                                       | Thinnest good adapter                                                                                                                                                                           | Launch? |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| **Vercel AI SDK** (TS, v7)      | `tool({ description, inputSchema, execute })` (`parameters` became `inputSchema` in v5). Tools are passed as `tools: {…}` to `generateText`/`streamText`. In v7, approval is call-level (`toolApproval`). There is no memory interface.            | `oortTools(oort)` → `{ recall, remember, forget }`. `oortObserve(oort, prompt)` returns an `onFinish` callback that calls `observe`. `formatForPrompt` goes into `system`.                    | **TS, 0.6.0** |
-| **LangGraph.js**                | `BaseStore` with `batch(ops)` and `put`/`get`/`search(namespacePrefix, { query, filter, limit, offset })`/`delete`, passed by `compile({ store })` and read in nodes as `runtime.store`                                                            | `OortStore extends BaseStore`: `search` with `query` → `recall`, `put` → `remember`, `delete` → `forget`, `get` by Oort id. A `namespaceToScope(ns)` function (host code) maps a namespace to `scoped({ user, project })`. Plus the tools. | **TS, 0.6.0** |
-| **OpenAI Agents JS**            | `Session`: `getSessionId`, `getItems(limit?)`, `addItems(items)`, `popItem`, `clearSession`, passed by `run(agent, input, { session })`. `tool({ name, description, parameters, execute(args, context, details) })`.                                | `oortSession(inner, oort)` wraps any `Session`: it delegates storage, and `addItems` pairs the user and assistant items and calls `observe`. Recall goes through dynamic `instructions` (`oortInstructions(oort)`) and `oortTools`, never through rewritten history. | **TS, 0.6.0** |
-| **LangGraph (Python)**          | `BaseStore(ABC)`: abstract `batch(ops)` and `abatch(ops)`. `get`, `put`, `search(namespace_prefix, *, query, filter, limit…)`, `delete` and `list_namespaces` are built on them. `Item` has `namespace`, `key`, `value`, `created_at` and `updated_at`; `SearchItem` adds a score. | `OortStore(BaseStore)` dispatches `GetOp`, `PutOp` and `SearchOp` the same way as the TS adapter. `list_namespaces` returns only the namespaces the mapping knows. Async goes through `AsyncOort`. | **Py, 0.7.0** |
-| **OpenAI Agents (Python)**      | `Session` protocol (no base class needed): `get_items`, `add_items`, `pop_item`, `clear_session`, passed by `Runner.run(..., session=)`. Tools via `@function_tool`; the docs now also show `@tool` from `agents.decorators`.                    | Same as JS: `OortSession(inner, oort)`, `oort_instructions(oort)`, and `oort_tools(oort)` built with `function_tool`                                                                         | **Py, 0.7.0** |
-| **CrewAI**                      | Unified `Memory(storage=StorageBackend)`. The backend's `search` receives `query_embedding: list[float]`, not text. Tools are `BaseTool` subclasses (`args_schema`, `_run`) or `@tool`.                                                            | **Tools only:** `OortRecallTool`, `OortRememberTool` and `OortForgetTool`. A `StorageBackend` adapter would bypass Oort's ranking, because CrewAI embeds the query itself.                  | **Py, 0.7.0** |
-| **Mastra**                      | `createTool({ id, description, inputSchema, outputSchema?, execute(inputData, context) })`. `Memory` storage is thread- and message-oriented (`MemoryStorage.saveMessages`, threads, resources).                                                  | Tools only, through `createTool`. A docs example, not a subpath.                                                                                                                             | Example after launch |
+- **Inputs:** every §4.5 limit and every §4.4 temporal rule.
+- **Errors:** each error code at least once, including the facade-defined `needs-confirmation` and
+  the `cloud-only` versus `refused` split for `include`.
+- **Scope isolation:**
+  - two users in one org, and the same agent for both: neither sees the other, and no Star exists
+    for either;
+  - two agents;
+  - `include` narrowing;
+  - `user` without `org`, and `scoped({ user: 'self' })`.
+- **Judgments:** every §6.3 rule, including the daily cap (with the counter seeded at 49), the
+  `via` and `harness` values, and a 0.5.x-style reader (core's `isUnconfirmedAgentJudgment`)
+  agreeing on the result.
+- **Secrets:** every fixture secret, whether observed, remembered or used as a query, never
+  appears in a result.
+- **Escaping:** `formatForPrompt` escapes a memory containing `</oort-memory>`.
+- **Unknown keys:** `place` on a turn is refused (`usage`).
+- **Gated live smoke test, before the launch tag.** `OORT_LIVE_SMOKE=1` with a test account's key
+  runs `recall`, `observe` (with a unique `turnRef`), `pin`, `unpin` and `forget` against
+  `api.oortcloud.dev`. It runs in the release workflow and never on pull requests.
+
+## 11. Framework integrations
+
+**What was checked.** Context7 (`ctx7`) docs on 2026-11-06. The library ids:
+
+- Vercel AI SDK: `/websites/ai-sdk_dev`, including the v6 to v7 migration guide.
+- LangGraph.js: `/websites/langchain_oss_javascript_langgraph` and
+  `/websites/reference_langchain_javascript_langchain-langgraph`.
+- LangGraph (Python): `/websites/reference_langchain_python_langgraph` and
+  `/langchain-ai/langgraph` (`store/base`).
+- OpenAI Agents SDK: `/websites/openai_github_io_openai-agents-js` and
+  `/openai/openai-agents-python`.
+- CrewAI: `/llmstxt/crewai_llms_txt` (docs v1.15.23) and `/crewaiinc/crewai`.
+- Mastra: `/llmstxt/mastra_ai_llms_txt` and `/mastra-ai/mastra`.
+
+Re-check each one before its adapter ships.
+
+| Framework                   | Interface as checked                                                                                                                                                                                                | Thinnest good adapter                                                                                                                                                                                                 | Release                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Vercel AI SDK** (TS, v7)  | `tool({ description, inputSchema, execute })` (`parameters` became `inputSchema` in v5), passed as `tools` to `generateText` and `streamText`. In v7, approval is set per call (`toolApproval`). No memory interface. | `oortTools(oort)` → `{ recall, remember, forget }` (with `judge: true`, also `judge` and `record_judgment`). `oortObserve(oort, prompt)` returns an `onFinish` callback that calls `observe`. `formatForPrompt` output goes in `system`. | **0.6.0 adapter**, `oortmem/ai-sdk` |
+| **LangGraph.js**            | `BaseStore`: `batch(ops)`, `put`, `get`, `search(namespacePrefix, { query, filter, limit, offset })` and `delete`. Passed with `compile({ store })`, read in a node as `runtime.store`.                            | `OortStore extends BaseStore`: `search` with a query → `recall`, `put` → `remember`, `delete` → `forget`, `get` by Oort id. A host-written `namespaceToScope(ns)` picks `scoped({ user, project })`.                 | 0.6 docs example; adapter 0.7       |
+| **OpenAI Agents JS**        | `Session`: `getSessionId`, `getItems(limit?)`, `addItems`, `popItem` and `clearSession`, passed with `run(agent, input, { session })`. `tool({ name, description, parameters, execute })`.                        | `oortSession(inner, oort)` wraps any `Session`: storage is delegated, and `addItems` pairs the user and assistant items and calls `observe`. Recall goes through dynamic `instructions` and tools, never by rewriting history. | 0.6 docs example; adapter 0.7       |
+| **LangGraph (Python)**      | `BaseStore(ABC)`: abstract `batch` and `abatch`; `get`, `put`, `search`, `delete` and `list_namespaces` are built on them. `Item` and `SearchItem` (with a score).                                                 | `OortStore(BaseStore)`, dispatching `GetOp`, `PutOp` and `SearchOp` as in TypeScript, with async through `AsyncOort`                                                                                                 | **0.7.0**                           |
+| **OpenAI Agents (Python)**  | `Session` protocol: `get_items`, `add_items`, `pop_item` and `clear_session`, passed with `Runner.run(..., session=)`. `@function_tool`; the docs also show `@tool`.                                                | `OortSession(inner, oort)`, `oort_instructions(oort)` and `oort_tools(oort)`                                                                                                                                         | **0.7.0**                           |
+| **CrewAI**                  | `Memory(storage=StorageBackend)`, whose `search` receives a `query_embedding`, not text. `BaseTool` (with `args_schema` and `_run`) or `@tool`.                                                                   | **Tools only:** `OortRecallTool`, `OortRememberTool` and `OortForgetTool`. A storage backend would bypass Oort's ranking                                                                                               | **0.7.0**                           |
+| **Mastra**                  | `createTool({ id, description, inputSchema, outputSchema?, execute(inputData, context) })`. Memory storage is built on threads and messages.                                                                     | Tools via `createTool`, as a docs example                                                                                                                                                                            | after launch                        |
 
 Rules for every adapter:
 
-- It takes a handle and calls `scoped({ judgeRole: 'agent' })`.
-- It injects memory only through `formatForPrompt`.
-- It exposes `record_judgment`/`judge` tools only when `judge: true` is passed.
-- It lives in a subpath (TS) or an extra (Python), so the core install never depends on a
-  framework.
+- **Agent role only.** It calls `scoped({ judgeRole: 'agent' })`.
+- **Prompt injection.** It injects memory only through `formatForPrompt`.
+- **Judgment tools are opt-in.** They appear only with `judge: true`. Their schema never includes
+  `includeAgentRecorded` or `includeImported`, and the expert role is unreachable through them.
+- **Separate install.** Each adapter lives in a subpath (TypeScript) or an extra (Python).
 
-Each ships with a 20-line example in `docs/sdk.md`. Any MCP-capable framework can also use `oort
-mcp` today with no code.
+Any MCP-capable framework can also use `oort mcp` today, with no code.
 
-## 11. Spatial readiness
+## 12. Spatial readiness
 
-The `Place` type is reserved now, in the shape CON-84 proposes, so that adding spatial memory later
-breaks nothing:
+**0.6 reserves the names in the docs only.**
+
+- `docs/sdk.md` says that `place` (on turns, `remember` and memory views) and `near` and `within`
+  (on recall) are reserved for spatial memory (CON-84), and that no other field will use those
+  names.
+- There is no `Place` type in 0.6.
+- Because every input is checked by a strict schema (§4.1), passing `place` today is a usage
+  error, never a silent drop. A robot must not believe it stored a location.
+
+**0.7** adds the type, marked `@experimental`, and names the fields as reserved in the daemon's
+schemas. They then answer `spatial-unavailable`.
 
 ```ts
-/** @experimental Reserved for CON-84; calls that pass it are refused until spatial memory ships. */
+/** @experimental [0.7] Reserved for CON-84. */
 export interface Place {
   nodeId?: string; // place-tree node, e.g. "site:hq/floor:2/room:B/shelf:B3"
   frame?: string; // coordinate frame, e.g. "map"; never "odom"
@@ -1040,53 +1270,103 @@ export interface Place {
 }
 ```
 
-| Where                                                    | Now (0.6, 0.7)                                                                                                          | After CON-84                                         |
-| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `Turn.place`, `remember(…, { place })`                   | Shape-validated, then `OortUsageError` (`spatial-unavailable`). Never silently dropped: a robot must not believe it stored a location. | Stored on the memory                                 |
-| `RecallOptions.near`, `.within` (names reserved, types `never`) | Not accepted by the types. At runtime: `spatial-unavailable`                                                      | `near: { pose, radius, mapId }`, `within: { nodeId } \| { box, mapId }` |
-| `MemoryView.place`                                       | Never set                                                                                                               | Set when stored                                      |
-| `RecalledMemory.why`                                     | none                                                                                                                    | `placePath`, `distanceM`, `stalePose`                |
-| Daemon schemas                                           | `place`, `near` and `within` are named reserved fields (strict schemas would otherwise refuse them as unknown)          | Accepted                                             |
-| `/v1/health` capabilities                                | no `spatial`                                                                                                            | `spatial`                                            |
-| Python                                                   | A `Place` dataclass that mirrors the shape                                                                              | Same                                                 |
+After CON-84:
 
-Moving a call from refused to accepted, and filling an optional field, are additive changes
-(§6.4). The export format and the store contract gain their optional `place` in CON-84 itself.
+- `Turn.place` and `remember(…, { place })` store a place.
+- `RecallOptions` gains `near: { pose, radius, mapId }` and `within: { nodeId } | { box, mapId }`.
+- `MemoryView.place` is filled, and `why` gains `placePath`, `distanceM` and `stalePose`.
+- `/v1/health` lists `spatial`.
 
-## 12. Changes outside the new packages
+Going from refused to accepted, and filling an optional field, are additive changes (§7.4). The
+export format and the store contract gain their optional `place` field in CON-84 itself.
 
-| Package             | Change                                                                                                                                                   | Release |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `@oortmem/core`     | `JudgmentVia` gains `'sdk-agent'`, `isUnconfirmedAgentJudgment` covers it, and the pack parser accepts it (§5.3)                                          | 0.6.0   |
-| `oortmem` (CLI)     | Imports wiring from `@oortmem/sdk`. `exports` map and adapters. The daily-cap counter is shared with the SDK. `docs/cli.md` judgment `via` table adds `sdk` and `sdk-agent` | 0.6.0   |
-| `oortmem` (CLI)     | `oort serve`: HTTP on the socket, `--listen`, token, TLS, probes, metrics, `--migrate`; `OORT_CONFIG`                                | 0.7.0   |
-| `@oortmem/store-sqlite` | Network-filesystem detection (§8.2)                                                                                                                  | 0.7.0   |
-| `docs/`             | `docs/sdk.md` (0.6.0); `docs/self-hosting.md` and the Python section (0.7.0)                                                                              |         |
+## 13. Compatibility
 
-## 13. Out of scope (0.6 and 0.7)
+### 13.1 Version skew on one machine
 
-- Constellation sharing, invites, members, keys and Galaxies from the SDK. They need a person's
-  confirmed preview, so they stay in the CLI and the dashboard.
-- Judgment packs, bulk import, `judge eval`, `judge withdraw` and `judge purge` from the SDK.
-- `export`/`import`, `reembed`, `models pull` and `project link` (CLI tasks).
-- A browser or edge-runtime build (no SQLite there; cloud mode in edge runtimes is open question
-  Q7).
+One `OORT_HOME` can be shared by an app's `oortmem` dependency (say 0.6.x), a global CLI (0.5.x or
+0.7), the Claude Code hooks, `oort mcp` and `oort serve`.
+
+| Shared thing                        | Rule                                                                                                                                                                                                                                                                          |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Store schema                        | 0.6 ships no schema change. When a future version migrates the store, older binaries refuse to open it until they are upgraded (the store copies itself before migrating, and `downgradeSqliteStore` exists). Hosts that share a developer's home and want no surprise migration pass `migrate: false`, and get `refused`/`migration-required` instead. |
+| Judgments                           | Agent-role SDK judgments are stored as `via: 'mcp'`, which 0.5.x readers already treat as unconfirmed. No new `via` value is introduced.                                                                                                                                     |
+| Daily cap                           | The same counter and lock files, so every version counts against one cap.                                                                                                                                                                                                    |
+| Config                              | The SDK never writes `config.json`. An overlay passed in code stays in that process.                                                                                                                                                                                         |
+| Daemon                              | The hooks use only a daemon of their exact version (unchanged). The Python SDK accepts protocol 1 at 0.7.0 or newer (§8.1.5).                                                                                                                                                |
+| `cloud.json`, `credentials.json`    | Read only. Login and `cloud use` stay CLI commands.                                                                                                                                                                                                                          |
+
+### 13.2 Migration notes for 0.6.0 (in the release notes and `docs/sdk.md`)
+
+- **The CLI's `--json` output changes shape** to the `oort.v1` envelope (CON-107 step 2). Scripts
+  that parse the old arrays and objects must read `data`.
+- **The new `exports` map blocks deep imports** such as `oortmem/dist/wire.js`. These paths were
+  never documented. Use the root export, or `@oortmem/core` for engine pieces.
+- **`oortmem` gains a root export.** `import 'oortmem'` used to resolve to nothing useful. It now
+  returns the SDK. The bin is unchanged.
+
+### 13.3 Windows
+
+- **TypeScript 0.6.** Cloud mode is supported. Local mode is best effort, at the same level as the
+  CLI on Windows: SQLite works, there is no Keychain (`credentials.json`), and it is not in CI.
+- **The daemon's HTTP protocol and Python local mode are not supported on Windows** in 0.7.
+  `process.getuid` is undefined there, so the uid and permission checks in `inspectDir` pass
+  without checking anything. The socket would not be a real trust boundary. On Windows, the
+  daemon refuses HTTP on its socket, and Python points to `mode="cloud"` or `mode="remote"`. A
+  TCP `--listen` with TLS and a token works the same on every OS.
+
+### 13.4 Known performance limits
+
+- **Id prefixes.** `findMemory` resolves a prefix by listing every memory in the grant (O(n)).
+  The SDK tries an exact `get` first, so full ids stay O(1).
+- **`recent`, local.** It lists the grant's memories and sorts them in JS, as the MCP server's
+  `list_recent` does (O(n)). In cloud mode it is capped at 500 memories (§4.4).
+- **`judge.list` and `judge.apply`** scan the active judgments of the home node.
+- **Expected scale.** These are fine up to tens of thousands of memories per principal. A store
+  `list` with `orderBy` and `limit`, and a prefix index, are [later] (§14).
+- **Multi-tenant scaling.** Every scan above is per grant, so tenants in one store do not slow
+  each other down. Only file size and lexical statistics are shared.
+
+## 14. Changes by release
+
+| Package or file                           | Change                                                                                                                                                                                                                                                       | Release |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| CON-107 step 2                            | Merged first: `describeError`, `refused`, the `--json` envelope                                                                                                                                                                                             | 0.6.0   |
+| `@oortmem/core`                           | `isAgentVia()`, used at every agent-`via` site (§6.3). No new `JudgmentVia` value                                                                                                                                                                            | 0.6.0   |
+| `oortmem` (CLI)                           | `src/sdk/` facade and the `ai-sdk` adapter. The `exports` map and `sideEffects`. `wire()` split into `wireEngine` and `principalFor`, with the cloud check before the store and a dynamic store import. `runRecall`, `timeMode` and `supersedeChain` moved to UI-free `src/engine/`. The cap counter moved to a shared module (file names kept). The fake cloud moved to a test helper | 0.6.0   |
+| `docs/`                                   | `docs/sdk.md`. In `docs/cli.md`, the judgment `via` table adds `sdk` (expert-recorded from code), and notes that `mcp` also covers SDK agent records (`source.harness: 'sdk'`)                                                                              | 0.6.0   |
+| `@oortmem/sdk` (new)                      | The facade and wiring move here (§7.1), and `oortmem` re-exports it. Lazy per-role adapter loading. `@oortmem/store-sqlite` as an optional dependency (Q14)                                                                                                 | 0.7.0   |
+| `oortmem` (CLI)                           | `oort serve`: HTTP on the socket (first-byte routing, separate caps, limits, no `Origin`), `--listen`, `oort serve token`, TLS and `--tls-client-ca`, `--plaintext --behind-tls-proxy`, probes, metrics, `--migrate`, `--consolidate-every`, token stripped from child processes. `OORT_CONFIG`. `forgetAll`. `remote` mode. Diagnostics channel. `Place` type. `judge.agentDailyLimit` | 0.7.0   |
+| `@oortmem/store-sqlite`                   | Network-filesystem detection (§9.2)                                                                                                                                                                                                                          | 0.7.0   |
+| `python/`                                 | The client, integrations, contract runner, `_Secret`, credential-file mode check, autostart version check and minimal environment                                                                                                                           | 0.7.0   |
+| `docs/`                                   | `docs/self-hosting.md` and the Python half of `docs/sdk.md`                                                                                                                                                                                                  | 0.7.0   |
+| Later                                     | `@oortmem/store-postgres`, Helm and Terraform, per-token scopes, an observe queue, client-side scrubbing from a shared rule table, store `list` ordering, OpenTelemetry, Orbits in the SDK (CON-92), spatial (CON-84)                                         | later   |
+
+## 15. Out of scope (0.6 and 0.7)
+
+- Constellation sharing, invites, members, keys and Galaxies from the SDK. These need a person's
+  confirmed preview.
+- Judgment packs, bulk import, `judge eval`, `judge withdraw` and `judge purge`.
+- `export`, `import`, `reembed`, `models pull` and `project link`, which are CLI tasks.
+- A browser or edge-runtime build (Q7).
 - Orbits and end-user Planets in the cloud (CON-92), and spatial recall (CON-84 onwards).
 
-## 14. Open questions, with recommendations
+## 16. Open questions, with recommendations
 
-| #   | Question                                                                                               | Recommendation                                                                                                                                                                                                                                       |
-| --- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Q1  | Should `refused` be in the SDK even though CON-107's issue lists nine codes?                           | **Yes.** It is already in the `oort.v1` branch and docs. Update CON-107's notes so the issue matches the code.                                                                                                                                      |
-| Q2  | Should the SDK depend on the `oort.v1` branch landing first?                                           | **Yes, for 0.6.0.** The error mapping moves into `@oortmem/sdk` in the same release. Merge CON-107 step 2 before the SDK branch.                                                                                                                  |
-| Q3  | Should Python scrub on the client in cloud mode?                                                       | **Not in 0.7.0.** Instead, export the scrub rule table from `scrub.ts` as generated JSON in a later release, so both languages run one rule set, checked by the shared secret fixtures. A hand port would drift.                                |
-| Q4  | Should the agent-role daily cap be configurable?                                                       | **Yes, in 0.7.0:** `judge.agentDailyLimit` in the home config or `OORT_CONFIG`, default 50, maximum 5,000. Services with many end users need more than 50 a day per home.                                                                          |
-| Q5  | Should `AsyncOort` get a native async transport?                                                       | **Threads for 0.7.0.** Add an optional `oortmem[httpx]` extra only if benchmarks show thread offload limits throughput.                                                                                                                             |
-| Q6  | Should there be a server-side observe queue (fire and forget)?                                         | **Later (0.8).** `POST /v1/observe?async=1` → 202 with `turnRef`, drained like the hooks' queue. Until then, callers await `observe` off the response path.                                                                                        |
-| Q7  | Should cloud mode run in edge runtimes (Cloudflare Workers, Vercel Edge)?                              | **After 0.7.0.** It needs a `oortmem/cloud` subpath that imports no `node:` modules. It is cheap once the cloud client is isolated, but not needed for launch.                                                                                      |
-| Q8  | When should the Postgres store be built?                                                               | **On the first concrete need** for more than one replica or HA in self-hosting. Write its slices then, against `storeConformance`. Not on the 0.6 or 0.7 path.                                                                                     |
-| Q9  | Should the CLI gain `--user` and `--org` for operators of multi-tenant stores?                         | **Yes, in 0.7.0,** for `recall`, `inspect`, `forget` and `export` only, so an operator can inspect and erase one end user's memories.                                                                                                             |
-| Q10 | Should there be per-token scopes in service mode?                                                      | **Later.** It would be a token file with hashed tokens, each bound to an org and optionally users, read-only, or judge role. One full token per org is enough for 0.7.0's VPC use, and is documented as such.                                     |
-| Q11 | Should `remember` get a cloud route instead of the client-side `observe` mapping?                      | **Yes, in the cloud API's next contract change.** Add `POST /v1/remember`, so the framing lives in one place. Both SDKs switch when the contract file lists it.                                                                                     |
-| Q12 | Should `createOort()` with no options in a server pick up a developer's `~/.oort`?                     | **Keep CLI parity** (`mode: 'auto'`) for the five-line example. Docs for servers always pass `mode`, `home`, `project` and `keySources` explicitly. `whoami()` shows what was resolved.                                                            |
-| Q13 | Is ECS on Fargate with EBS suitable for a long-lived store?                                            | **Verify before the 0.7.0 AWS recipe.** Until then, recommend ECS on EC2 or EKS with the EBS CSI driver.                                                                                                                                            |
+| #   | Question                                                                                   | Recommendation                                                                                                                                                                                       |
+| --- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q1  | Should `refused` be part of the SDK, although CON-107's issue lists nine codes?            | **Yes.** It is in the `oort.v1` branch and its docs. Update CON-107's notes to match.                                                                                                                 |
+| Q2  | Does the SDK depend on CON-107 step 2 landing first?                                       | **Yes.** Merge it before the SDK branch; the facade builds on `describeError`.                                                                                                                       |
+| Q3  | Should the client scrub before calling the cloud (TS and Python)?                          | **Later.** Generate the scrub rule table from `scrub.ts` as JSON, so both languages run one rule set, checked by the shared fixtures. Oort Cloud scrubs server-side meanwhile.                        |
+| Q4  | Should the agent-role daily cap be configurable?                                           | **Yes, in 0.7:** `judge.agentDailyLimit` (home config or `OORT_CONFIG`), default 50, maximum 5,000. The counter file stays the same.                                                                   |
+| Q5  | Should `AsyncOort` get native async?                                                       | **Threads in 0.7.** Add an optional `httpx` extra only if benchmarks show the need.                                                                                                                   |
+| Q6  | Should there be a server-side observe queue?                                               | **0.8:** `POST /v1/observe?async=1` → 202, drained like the hooks' queue.                                                                                                                            |
+| Q7  | Should cloud mode run in edge runtimes?                                                    | **After 0.7:** an `oortmem/cloud` subpath with no `node:` imports.                                                                                                                                   |
+| Q8  | When should the Postgres store be built?                                                   | **At the first real need** for more than one replica or HA in self-hosting, against `storeConformance`.                                                                                               |
+| Q9  | Should the CLI get `--user` and `--org` for operators of multi-tenant stores?              | **Yes, in 0.7**, for `recall`, `inspect`, `forget` and `export`.                                                                                                                                     |
+| Q10 | Should service mode get per-token scopes?                                                  | **Later:** a file of hashed tokens, each bound to an org and optionally to users, read-only access or a judge role.                                                                                 |
+| Q11 | Should the cloud gain a `POST /v1/remember` route?                                         | **Yes, at the next cloud contract change**, so the framing lives in one place.                                                                                                                       |
+| Q12 | Should a no-option `createOort()` keep CLI parity?                                         | **Yes**, for scripts. Server docs always pass explicit options. With `user` set, `org` is required anyway (§6.4).                                                                                    |
+| Q13 | Is ECS Fargate with EBS fit for a long-lived store?                                        | **Verify before the 0.7 AWS recipe.** Until then, recommend ECS on EC2 or EKS.                                                                                                                       |
+| Q14 | Should `@oortmem/store-sqlite` become optional for cloud-only installs?                    | **Yes, in `@oortmem/sdk` (0.7)** as an optional dependency, with local mode throwing `usage` (`store-not-installed`) when it is absent. `oortmem`, which ships the CLI, keeps it as a regular dependency. |
+| Q15 | Should local mode deduplicate on `turnRef`?                                                | **Later:** a unique index on `(principal, turnRef)` in store-sqlite, behind a schema bump. In 0.6 it is documented as cloud-only.                                                                    |
