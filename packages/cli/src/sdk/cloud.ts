@@ -7,6 +7,7 @@ import {
   type CloudMemory,
   type CloudObserveResult,
 } from '../cloud.js';
+import { rememberTurn } from '../remember.js';
 import { starInCloudMessage } from '../util.js';
 import { privacyStatement } from '../wire.js';
 import type { Ctx } from './context.js';
@@ -109,16 +110,11 @@ export async function remember(
   type: MemoryType | undefined,
 ): Promise<RememberResult> {
   refuseStar(ctx);
-  const hint = type === undefined ? '' : ` (a ${type} fact)`;
   const results: RememberResult['results'] = [];
   for (const [i, fact] of facts.entries()) {
     const r = await clientOf(ctx).observe({
       ...project(ctx),
-      observation: {
-        user: `Remember this${hint}: ${fact}`,
-        assistant: `Noted: ${fact}`,
-        at: ctx.now().toISOString(),
-      },
+      observation: { ...rememberTurn(fact, type), at: ctx.now().toISOString() },
     });
     const first = r.memories[0];
     results.push({

@@ -1,17 +1,22 @@
 import { filterFor } from '@oortmem/claude-code';
 import { formatForInjection, type RecallResult } from '@oortmem/core';
 import {
+  RECALL_SPEEDS,
+  chosenDegradations,
   includeLevels,
   runRecall,
   temporalView,
   viewIgnored,
   viewIgnoredWarning,
+  type RecallSpeed,
   type TemporalFlags,
   type TemporalView,
 } from '../engine/recall.js';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
+import { LIMITS } from '../sdk/validate.js';
 import {
+  Refusal,
   agentLabel,
   degradedHint,
   scopeLabel,
@@ -40,22 +45,84 @@ export interface RecallOptions extends TemporalFlags {
   include?: string;
   /** `--include-withdrawn`: also show withdrawn judgments (CON-71). */
   includeWithdrawn?: boolean;
+  /** `--limit <n>`: at most this many memories, 1 to 50 (the SDK's `limit`). */
+  limit?: string;
+  /** `--speed full|fast|lexical` (the SDK's `speed`). */
+  speed?: string;
+  /** `--budget-chars <n>`: the printed block's size (the SDK's `budgetChars`). */
+  budgetChars?: string;
+}
+
+/** The SDK's recall options from the flags, checked before anything is wired. */
+export interface RecallTuning {
+  k?: number;
+  speed: RecallSpeed;
+  budgetChars?: number;
+}
+
+const WHOLE = /^[0-9]+$/;
+
+/** `--limit`, `--speed` and `--budget-chars`, with the SDK's bounds; a bad value is a usage error. */
+export function recallTuning(
+  o: Pick<RecallOptions, 'limit' | 'speed' | 'budgetChars'>,
+): RecallTuning {
+  const t: RecallTuning = { speed: 'full' };
+  if (o.limit !== undefined) {
+    const n = WHOLE.test(o.limit.trim()) ? Number(o.limit.trim()) : NaN;
+    if (!(n >= 1 && n <= LIMITS.recallLimit)) {
+      throw new Refusal(`--limit must be a whole number from 1 to ${LIMITS.recallLimit}.`);
+    }
+    t.k = n;
+  }
+  if (o.speed !== undefined) {
+    const s = o.speed.trim().toLowerCase();
+    if (!(RECALL_SPEEDS as readonly string[]).includes(s)) {
+      throw new Refusal('--speed must be full, fast (no rerank) or lexical (no model call).');
+    }
+    t.speed = s as RecallSpeed;
+  }
+  if (o.budgetChars !== undefined) {
+    const n = WHOLE.test(o.budgetChars.trim()) ? Number(o.budgetChars.trim()) : NaN;
+    if (!(n >= 1 && Number.isSafeInteger(n))) {
+      throw new Refusal('--budget-chars must be a whole number of characters, 1 or more.');
+    }
+    t.budgetChars = n;
+  }
+  return t;
 }
 
 /** Recall's warnings, on stderr and in the envelope: a degraded stage, an ignored time mode. */
-export function recallWarnings(ctx: Ctx, w: Wired, view: TemporalView, result: RecallResult): void {
-  degradedHint(ctx, w, result.degraded);
+export function recallWarnings(
+  ctx: Ctx,
+  w: Wired,
+  view: TemporalView,
+  result: RecallResult,
+  speed: RecallSpeed = 'full',
+): void {
+  degradedHint(ctx, w, result.degraded, speed);
   if (viewIgnored(view, result)) warn(ctx, 'time-mode-unreported', viewIgnoredWarning(view));
 }
 
-/** `oort recall "<text>" [--json] [--as-of <iso> | --known-at <iso> | --history]` */
+/**
+ * `oort recall "<text>" [--json] [--as-of <iso> | --known-at <iso> | --history] [--limit <n>]
+ * [--speed full|fast|lexical] [--budget-chars <n>]`
+ */
 export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx): Promise<number> {
   const view = temporalView(opts);
   const include = includeLevels(opts.include);
+  const tuning = recallTuning(opts);
   return withWired(ctx, async (w) => {
     const now = new Date();
-    const result = await runRecall(w, text, view, now, include, opts.includeWithdrawn === true);
-    recallWarnings(ctx, w, view, result);
+    const raw = await runRecall(w, text, view, now, include, opts.includeWithdrawn === true, {
+      ...(tuning.k !== undefined && { k: tuning.k }),
+      speed: tuning.speed,
+    });
+    // A stage `--speed` turned off is the caller's choice, not a degradation (as the SDK).
+    const result: RecallResult =
+      raw.degraded === undefined
+        ? raw
+        : { ...raw, degraded: chosenDegradations(raw.degraded, tuning.speed) };
+    recallWarnings(ctx, w, view, result, tuning.speed);
     if (jsonMode(ctx)) {
       const filter = filterFor(w.scope);
       // Cloud memories arrive already shaped for this account.
@@ -65,7 +132,11 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
           : await Promise.all(result.memories.map((m) => shapeLinks(w.store, filter, m)));
       emit(ctx, { ...result, memories: shaped.map(withoutEmbedding) });
     } else {
-      const block = formatForInjection(result, w.config.recall.budgetChars, now);
+      const block = formatForInjection(
+        result,
+        tuning.budgetChars ?? w.config.recall.budgetChars,
+        now,
+      );
       const ui = uiFor(ctx.io);
       const n = result.memories.length;
       ctx.io.out(

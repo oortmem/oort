@@ -1,8 +1,20 @@
 import { observe, type Grant, type MemoryType, type Scope } from '@oortmem/core';
+import type { CloudClient } from './cloud.js';
 import { turnObservation } from './engine/observe.js';
 import { writePath } from './util.js';
 import type { Wired } from './wire.js';
 import { grantFor } from '@oortmem/claude-code';
+
+/**
+ * A fact as the turn the write path observes: the user's own statement ("Remember this: …"),
+ * acknowledged by the assistant ("Noted: …"), so the gate and the writer treat it as user-stated
+ * rather than as a suggestion. The one framing the MCP `remember` tool, the SDK's `remember()` and
+ * `oort remember` share, locally and in Oort Cloud.
+ */
+export function rememberTurn(fact: string, type?: MemoryType): { user: string; assistant: string } {
+  const hint = type === undefined ? '' : ` (a ${type} fact)`;
+  return { user: `Remember this${hint}: ${fact}`, assistant: `Noted: ${fact}` };
+}
 
 export interface RememberResult {
   /** The fact's position in the request, from 0. */
@@ -51,11 +63,11 @@ export async function rememberFacts(
 ): Promise<RememberResult[]> {
   const adapters = writePath(w, 'remember');
   const scope = opts.scope ?? w.scope;
-  const hint = opts.type === undefined ? '' : ` (a ${opts.type} fact)`;
   const results: RememberResult[] = [];
   for (const [i, fact] of facts.entries()) {
     const at = (opts.now ?? new Date()).toISOString();
-    const obs = turnObservation(`Remember this${hint}: ${fact}`, `Noted: ${fact}`, at);
+    const turn = rememberTurn(fact, opts.type);
+    const obs = turnObservation(turn.user, turn.assistant, at);
     const r = await observe({ ...obs, turnRef: `remember:${i}` }, scope, {
       store: w.store,
       ...adapters,
@@ -73,6 +85,40 @@ export async function rememberFacts(
     }
     if (r.outcome === 'skipped') out.reason = r.reason ?? 'not durable';
     results.push(out);
+  }
+  return results;
+}
+
+/**
+ * The same in Oort Cloud: one observe per fact, framed as `rememberTurn` frames it, for the
+ * project `project` names (with its privacy statement). A `skipped` fact's reason is `not durable`:
+ * the API does not say more.
+ */
+export async function rememberFactsInCloud(
+  client: Pick<CloudClient, 'observe'>,
+  facts: readonly string[],
+  opts: {
+    type?: MemoryType;
+    now?: () => Date;
+    project?: { project: string; projectPrivate?: boolean };
+  },
+): Promise<RememberResult[]> {
+  const results: RememberResult[] = [];
+  for (const [i, fact] of facts.entries()) {
+    const r = await client.observe({
+      ...opts.project,
+      observation: {
+        ...rememberTurn(fact, opts.type),
+        at: (opts.now?.() ?? new Date()).toISOString(),
+      },
+    });
+    const first = r.memories[0];
+    results.push({
+      fact: i,
+      outcome: r.outcome as RememberResult['outcome'],
+      ...(first?.id !== undefined && { id: first.id }),
+      ...(r.outcome === 'skipped' && { reason: 'not durable' }),
+    });
   }
   return results;
 }

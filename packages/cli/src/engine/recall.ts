@@ -113,6 +113,20 @@ export interface RecallTarget extends Pick<
 /** How much of the model pipeline a recall uses: everything, no rerank, or no model at all. */
 export type RecallSpeed = 'full' | 'fast' | 'lexical';
 
+/** The speeds, as `--speed` and the SDK's `speed` take them. */
+export const RECALL_SPEEDS: readonly RecallSpeed[] = ['full', 'fast', 'lexical'];
+
+/** Degradations the caller chose (`speed`) are not reported as degradations. */
+export function chosenDegradations<T extends string>(
+  degraded: readonly T[],
+  speed: RecallSpeed,
+): T[] {
+  return degraded.filter(
+    (d) =>
+      !(speed !== 'full' && d === 'no-reranker') && !(speed === 'lexical' && d === 'no-embedder'),
+  );
+}
+
 /**
  * Recall for the scope's project plus global memories, as `w.agent`: the person's Planet and this
  * agent's own Star (`include` narrows it); lexical-only without a Voyage key. A level the agent

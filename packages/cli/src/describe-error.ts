@@ -16,6 +16,14 @@ export interface ErrorInfo {
   /** A command that fixes it, or null where none does. */
   fix: string | null;
   exitCode: number;
+  /**
+   * `true` when trying the same again later can succeed: a network failure, a service that is
+   * busy or down, a rate limit, a store locked by another process. Absent otherwise (optional and
+   * additive, as `OortError.retryable` is for the SDK).
+   */
+  retryable?: true;
+  /** Seconds the service asked to wait (its `Retry-After`), when it sent one. */
+  retryAfter?: number;
 }
 
 const shownOrNull = (fix: string | undefined): string | null =>
@@ -93,13 +101,27 @@ export function describeError(e: unknown, rerun: (flag: string) => string): Erro
   // for one coded `internal`), 1 for anything raised outside them (an adapter's relay or key
   // error, a network failure), whatever its code.
   const own = err instanceof Refusal;
-  const make = (code: ErrorCode, message: string, fix?: string, exitCode?: number): ErrorInfo => ({
+  const make = (
+    code: ErrorCode,
+    message: string,
+    fix?: string,
+    exitCode?: number,
+    retry: { retryable?: boolean; retryAfter?: number | undefined } = {},
+  ): ErrorInfo => ({
     code,
     message,
     fix: shownOrNull(fix ?? fixInMessage(message)),
     exitCode: exitCode ?? (own && code !== 'internal' ? 2 : 1),
+    // As the SDK's errors: every network error is retryable, and so is a rate limit.
+    ...((retry.retryable === true || code === 'network') && { retryable: true as const }),
+    ...(retry.retryAfter !== undefined && { retryAfter: retry.retryAfter }),
   });
-  if (err instanceof OortCloudError) return make(CLOUD_CODE[err.kind], err.message);
+  if (err instanceof OortCloudError) {
+    return make(CLOUD_CODE[err.kind], err.message, undefined, undefined, {
+      retryable: err.kind === 'rate-limit',
+      retryAfter: err.retryAfterSec,
+    });
+  }
   if (err instanceof Refusal) {
     const fix = err.fix ?? (err.code === 'needs-confirmation' ? rerun('--yes') : undefined);
     return make(err.code, err.message, fix, err.exitCode);
@@ -107,7 +129,10 @@ export function describeError(e: unknown, rerun: (flag: string) => string): Erro
   if (err instanceof OortRelayError) {
     const code: ErrorCode =
       err.kind === 'unauthorized' ? 'needs-login' : err.kind === 'busy' ? 'network' : 'refused';
-    return make(code, err.message, code === 'needs-login' ? 'oort login' : undefined);
+    return make(code, err.message, code === 'needs-login' ? 'oort login' : undefined, undefined, {
+      retryable: err.kind === 'rate-limit',
+      retryAfter: err.retryAfterSec,
+    });
   }
   if (err instanceof MissingCredentialError) {
     const provider = ENV_PROVIDER[err.envVar];
@@ -124,5 +149,9 @@ export function describeError(e: unknown, rerun: (flag: string) => string): Erro
   if (USAGE_ERRORS.has(err.name)) return make('usage', err.message);
   if (REFUSED_ERRORS.has(err.name)) return make('refused', err.message);
   if (isNetworkError(err)) return make('network', err.message);
+  // The local store stayed locked by another process: the SDK's `store-busy`, retryable.
+  if ((err as { code?: unknown }).code === 'SQLITE_BUSY') {
+    return make('internal', err.message, undefined, undefined, { retryable: true });
+  }
   return make('internal', err.message);
 }
