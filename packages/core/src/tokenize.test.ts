@@ -212,3 +212,18 @@ describe('tokeniser v2 consumers (CON-110)', () => {
     expect((await store.lexical(g, 'ポート', 10)).map((h) => h.id)).toEqual(['ja']);
   });
 });
+
+describe('tokenizeLexical cost (CON-110 review)', () => {
+  it('tokenize.joiner-runs-are-linear', () => {
+    // A trimming regex took 2.5 s for 40,000 dashes (quadratic); trimming is linear now.
+    // The slow case: a long run of joiners inside a word, so a trailing-joiner match fails late.
+    const inner = `a${'-'.repeat(100_000)}b`;
+    const text = `--${inner}.. ${'_'.repeat(100_000)}c${'.'.repeat(100_000)}`;
+    const t0 = performance.now();
+    const v2 = tokenizeLexical(text);
+    const v1 = tokenizeLexicalV1(text);
+    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(v2).toEqual([inner, 'c']);
+    expect(v1).toEqual([inner, 'c']);
+  });
+});

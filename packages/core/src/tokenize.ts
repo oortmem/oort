@@ -85,7 +85,7 @@ export function tokenizeLexicalV1(text: string): string[] {
   return text
     .toLowerCase()
     .split(/[^\p{L}\p{N}\-_.]+/u)
-    .map((t) => t.replace(/^[-_.]+|[-_.]+$/g, ''))
+    .map(trimJoiners)
     .filter((t) => t.length > 0);
 }
 
@@ -126,7 +126,16 @@ function normalise(text: string): string {
 
 const WORD_SEPARATOR = /[^\p{L}\p{M}\p{N}\-_.]+/u;
 
-const trimJoiners = (t: string): string => t.replace(/^[-_.]+|[-_.]+$/g, '');
+const isJoiner = (c: number): boolean => c === 0x2d || c === 0x5f || c === 0x2e; // - _ .
+
+/** `-`, `_` and `.` trimmed from both ends, in linear time (a regex was quadratic on long runs). */
+function trimJoiners(t: string): string {
+  let start = 0;
+  let end = t.length;
+  while (start < end && isJoiner(t.charCodeAt(start))) start++;
+  while (end > start && isJoiner(t.charCodeAt(end - 1))) end--;
+  return start === 0 && end === t.length ? t : t.slice(start, end);
+}
 
 /** Letters, digits and joiners only from scripts that need nothing more than v1 did. */
 const PLAIN = /^[a-z0-9\-_.]+$/;
