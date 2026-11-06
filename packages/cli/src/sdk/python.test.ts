@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { VERSION, linkProject, resolveProject, setAgentStar } from '@oortmem/core';
+import { VERSION, linkProject, resolveProject, scrub, setAgentStar } from '@oortmem/core';
 import { tmpdir } from '../../test/helpers.js';
 import {
   CASES,
@@ -441,6 +441,61 @@ describe('golden vectors (contract/sdk/vectors)', () => {
     }
   });
 
+  it('scrub: raw secrets in, redacted text out (inputs are base64, built at runtime)', () => {
+    // Secrets are assembled here, never written in source; the file keeps them as base64.
+    const pw = 'Tr0ub4dor' + '-and-3';
+    const hex = (n: number): string => 'a1b2c3d4e5f60718'.repeat(n).slice(0, n);
+    const aws = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const gh = 'ghp_' + 'x7Kq2Lm9Zp4Rt8Vw1Yb5Nc3Dg6Hj0Fs2Aq9W'.slice(0, 36);
+    const inputs: { name: string; text: string }[] = [
+      { name: 'aws access key in a sentence', text: `use ${aws} for the bucket` },
+      { name: 'github token', text: `export it as ${gh} please` },
+      { name: 'env secret, bare value', text: `DB_PASSWORD=${pw}` },
+      { name: 'env secret, quoted json value', text: JSON.stringify({ password: pw, user: 'x' }) },
+      { name: 'list-shaped secret (oort #67)', text: `password: ["${pw}", "second-${pw}"]` },
+      { name: 'list-shaped secret, single quotes', text: `secret: ['${pw}', 'x']` },
+      { name: 'brackets inside a secret', text: `password: ${pw}[0]{x}(y) and more` },
+      { name: 'brackets around a bare secret', text: `token=[${pw}]` },
+      {
+        name: 'secret inside a json string with escapes',
+        text: JSON.stringify(`line1\npassword=${pw}\nline3`),
+      },
+      { name: 'authorization header', text: `Authorization: Bearer ${hex(40)}` },
+      { name: 'basic auth argument', text: `curl -u bob:${pw} https://example.com` },
+      { name: 'url credentials', text: `clone https://bob:${pw}@example.com/repo.git` },
+      { name: 'jwt', text: `jwt eyJ${'abcdefghijk'}.${'lmnopqrstuv'}.${'wxyzabcdefg'}` },
+      {
+        name: 'high entropy token',
+        text: `key ${'q9Zk3Xv7Lm2Pw8Rt5Yb1Nc4Dg6Hj0Fs'.repeat(2)} end`,
+      },
+      {
+        name: 'pem block',
+        text: `-----BEGIN RSA ${'PRIVATE'} KEY-----\n${'MIIEowIBAAKCAQEA'.repeat(4)}\n-----END RSA ${'PRIVATE'} KEY-----`,
+      },
+      { name: 'redaction marker already present', text: 'password: [REDACTED:env-secret] stays' },
+      { name: 'counters are not credentials', text: 'max_tokens: 4096 and input_tokens: 1234' },
+      {
+        name: 'uuid and git sha stay',
+        text: `id 550e8400-e29b-41d4-a716-446655440000 sha ${hex(40)}`,
+      },
+      { name: 'astral characters count as two units', text: `\u{1F600}\u{1F600} password=${pw}` },
+      { name: 'empty', text: '' },
+    ];
+    vector(
+      'scrub.json',
+      inputs.map(({ name, text }) => {
+        const r = scrub(text);
+        return {
+          name,
+          inputB64: Buffer.from(text, 'utf8').toString('base64'),
+          expected: r.text,
+          secretRatio: r.secretRatio,
+          redactions: r.redactions,
+        };
+      }),
+    );
+  });
+
   it('Oort Cloud refusals as SDK errors', () => {
     const inputs: { status: number; code?: string; message?: string; retryAfter?: string }[] = [
       { status: 0 },
@@ -587,4 +642,53 @@ describePy('project ids: Python derives what core derives', () => {
       expect(JSON.parse(py.stdout)).toBe(ts);
     });
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// The scrubber: Python's port against core, on the shared secret corpus and its lookalikes.
+
+describePy('scrub: Python gives what core gives, line for line', () => {
+  const fixture = (name: string): string[] =>
+    fs
+      .readFileSync(path.join(REPO, 'packages/core/test/fixtures', name), 'utf8')
+      .split('\n')
+      .filter((l) => l.length > 0);
+  // `<kind>\t<base64 of "secret\ttext">`: decoded here, never written in source.
+  const secrets = fixture('secrets.b64.txt').flatMap((l) => {
+    const decoded = Buffer.from(l.slice(l.indexOf('\t') + 1), 'base64').toString('utf8');
+    const [secret = '', ...rest] = decoded.split('\t');
+    return [rest.join('\t'), secret];
+  });
+  const lookalikes = fixture('lookalikes.txt');
+  const base = [...secrets, ...lookalikes];
+  // The same lines serialised (what tool inputs look like) and nested, to meet the escape rules.
+  const inputs = [
+    ...base,
+    ...base.map((l) => JSON.stringify(l)),
+    ...base.map((l) => JSON.stringify({ a: [l, { b: l }] })),
+    ...base.map((l) => `password: ["${l.replaceAll('"', '')}", "x"]`),
+    ...base.map((l) => `\u{1F600} ${l} [${l}]`),
+  ];
+
+  it('is identical on every line (text, ratio and redaction counts)', () => {
+    const py = spawnSync(PYTHON!, ['-I', path.join(REPO, 'python/tests/scrub_batch.py')], {
+      input: JSON.stringify(inputs),
+      encoding: 'utf8',
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    expect(py.stderr).toBe('');
+    const got = JSON.parse(py.stdout) as [string, number, [string, number][]][];
+    expect(got.length).toBe(inputs.length);
+    const diffs: string[] = [];
+    inputs.forEach((line, i) => {
+      const r = scrub(line);
+      const want = [r.text, r.secretRatio, r.redactions.map((x) => [x.kind, x.count])];
+      if (JSON.stringify(want) !== JSON.stringify(got[i])) diffs.push(JSON.stringify(line));
+    });
+    expect(diffs).toEqual([]);
+  });
+
+  it('leaves the lookalikes alone, as core does', () => {
+    for (const l of lookalikes) expect(scrub(l).text).toBe(l);
+  });
 });

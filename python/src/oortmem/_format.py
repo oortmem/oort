@@ -8,8 +8,10 @@ Constellation quota, and the same escaping. The shared vectors in
 
 Escaping: a memory's ``[`` and ``]`` become ``\\[`` and ``\\]`` (so text cannot pass for a label),
 and the ``<`` of any ``<oort-...`` or ``</oort-...`` tag becomes ``&lt;`` (so text cannot close
-the block). The scrubber's ``[REDACTED:kind]`` markers stay as they are. Memory text is scrubbed
-by the engine (``oort serve``) or by Oort Cloud before it reaches Python.
+the block). The scrubber's ``[REDACTED:kind]`` markers stay as they are. Each text is scrubbed
+here first, with the port of core's scrubber (``_scrub.py``), and only then escaped: an escape
+inside a secret would hide it from a scrub that ran after it, and a memory from Oort Cloud arrives
+as the cloud stored it (a secret stored before a rule existed, or while a deploy lags a rule).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, List, Mapping, Optional, Union
 
+from ._scrub import clean as _scrub_text
 from .types import RecallResult, RecalledMemory, from_wire
 
 __all__ = ["format_for_prompt", "DEFAULT_BUDGET_CHARS"]
@@ -126,8 +129,9 @@ def _escape(part: str) -> str:
 
 
 def injectable_text(text: str) -> str:
-    """Memory text as it goes into the block: escaped, the redaction markers kept readable."""
-    pieces = _REDACTED.split(text)
+    """Memory text as it goes into the block: scrubbed, then escaped, the redaction markers kept
+    readable."""
+    pieces = _REDACTED.split(_scrub_text(text))
     return "".join(p if i % 2 == 1 else _escape(p) for i, p in enumerate(pieces))
 
 

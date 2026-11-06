@@ -2,6 +2,7 @@
 check: ``format_for_prompt`` character for character, Oort Cloud's refusals as typed errors, and
 the daemon's error envelope as typed errors."""
 
+import base64
 import json
 import os
 import sys
@@ -51,6 +52,90 @@ class FormatForPrompt(unittest.TestCase):
         for bad in (0, -1, True, 1.5):
             with self.assertRaises(OortUsageError):
                 format_for_prompt(r, budget_chars=bad)
+
+
+FIXTURES = os.path.join(ROOT, "packages", "core", "test", "fixtures")
+
+
+def corpus(name):
+    with open(os.path.join(FIXTURES, name), encoding="utf-8") as f:
+        return [line for line in f.read().split("\n") if line]
+
+
+@NEEDS_310
+class Scrub(unittest.TestCase):
+    """The Python scrubber against core's: the golden vectors (raw secrets as base64) and the
+    shared corpus, whose secrets are decoded here and never written in source."""
+
+    def test_every_vector_scrubs_exactly_as_typescript(self):
+        from oortmem._scrub import scrub
+
+        cases = load("scrub.json")
+        self.assertGreater(len(cases), 15)
+        for c in cases:
+            with self.subTest(c["name"]):
+                text = base64.b64decode(c["inputB64"]).decode("utf-8")
+                r = scrub(text)
+                self.assertEqual(r.text, c["expected"])
+                self.assertEqual(r.secret_ratio, c["secretRatio"])
+                self.assertEqual([[x.kind, x.count] for x in r.redactions], [[x["kind"], x["count"]] for x in c["redactions"]])
+
+    def test_the_corpus_secrets_do_not_survive(self):
+        from oortmem._scrub import scrub
+
+        lines = corpus("secrets.b64.txt")
+        self.assertGreaterEqual(len(lines), 20)
+        for line in lines:
+            kind, _, b64 = line.partition("\t")
+            secret, *rest = base64.b64decode(b64).decode("utf-8").split("\t")
+            text = "\t".join(rest)
+            with self.subTest(kind):
+                out = scrub(text).text
+                self.assertIn(f"[REDACTED:{kind}]", out)
+                self.assertFalse(any(secret[i : i + 8] in out for i in range(len(secret) - 7)))
+
+    def test_the_lookalikes_are_left_alone(self):
+        from oortmem._scrub import scrub
+
+        lines = corpus("lookalikes.txt")
+        self.assertGreaterEqual(len(lines), 20)
+        for line in lines:
+            with self.subTest(line):
+                r = scrub(line)
+                self.assertEqual((r.text, r.redactions, r.secret_ratio), (line, [], 0.0))
+
+    def test_a_second_pass_changes_nothing(self):
+        from oortmem._scrub import scrub
+
+        for line in corpus("secrets.b64.txt"):
+            text = base64.b64decode(line.partition("\t")[2]).decode("utf-8")
+            once = scrub(text).text
+            self.assertEqual(scrub(once).text, once)
+
+    def test_long_serialised_text_is_scrubbed_in_linear_time(self):
+        import time
+
+        from oortmem._scrub import scrub
+
+        text = json.dumps({"a": "word " * 200_000, "b": ["x" * 40] * 2000})
+        t = time.process_time()
+        scrub(text)
+        self.assertLess(time.process_time() - t, 30)
+
+    def test_format_for_prompt_scrubs_before_it_escapes(self):
+        from oortmem import format_for_prompt
+
+        pw = "Tr0ub4dor" + "-and-3"
+        aws = "AKIA" + "IOSFODNN7EXAMPLE"
+        base = load("format-for-prompt.json")[0]["result"]
+        for text in (f"use {aws} here", f'password: ["{pw}", "x"]', f"token=[{pw}]", f"DB_PASSWORD={pw}"):
+            with self.subTest(text):
+                m = {**base["memories"][0], "text": text}
+                out = format_for_prompt({**base, "memories": [m]})
+                for secret in (pw, aws):
+                    self.assertNotIn(secret, out)
+                    self.assertNotIn(secret.replace("[", "\\["), out)
+                self.assertIn("[REDACTED:", out)
 
 
 @NEEDS_310

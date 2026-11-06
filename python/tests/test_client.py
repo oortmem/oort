@@ -529,6 +529,25 @@ class CloudMode(unittest.TestCase):
         self.assertEqual((m.origin.level, m.origin.space, m.origin.author), ("constellation", "Constellation checkout", "ada"))
         self.assertEqual(r.degraded, [])  # chosen by speed, not a degradation
 
+    def test_a_secret_in_a_stored_cloud_memory_never_reaches_the_caller(self) -> None:
+        pw = "Tr0ub4dor" + "-and-3"
+        aws = "AKIA" + "IOSFODNN7EXAMPLE"
+        stored = {**{k: v for k, v in RECALL["memories"][0].items() if k not in ("status", "score", "why", "recordedAt")}, "createdAt": "2026-11-01T00:00:00.000Z", "expiredAt": None, "endReason": None, "explanation": {"fused": 0.5, "coverage": 1, "activation": 0}}
+        stored = {**stored, "text": f'password: ["{pw}", "x"]', "entities": [aws], "supersedes": "a1b2c3d5", "source": {"harness": "h", "decisions": [{"stage": "s", "question": f"token={pw}", "answer": f"use {aws}", "probability": 0.5}]}}
+        old = {**stored, "id": "a1b2c3d5", "text": f"DB_PASSWORD={pw}", "supersedes": None, "supersededBy": None}
+        self.rec.answers["POST /v1/recall"] = (200, {"memories": [stored], "timings": {}, "temporal": {"mode": "current", "inferred": False}, "degraded": []})
+        self.rec.answers["GET /v1/memories/a1b2c3d4"] = (200, stored)
+        self.rec.answers["GET /v1/memories/a1b2c3d5"] = (200, old)
+        from oortmem import format_for_prompt
+
+        with self.oort() as o:
+            r = o.recall("deploy")
+            x = o.explain("a1b2c3d4")
+        for secret in (pw, aws):
+            self.assertNotIn(secret, json.dumps([r.memories[0].text, r.memories[0].entities, x.memory.text, x.memory.entities, [(d.question, d.answer) for d in x.decisions], [c.text for c in x.chain]]))
+            self.assertNotIn(secret, format_for_prompt(r))
+        self.assertIn("[REDACTED:env-secret]", r.memories[0].text)
+
     def test_limits_and_temporal_rules_hold_before_any_request(self) -> None:
         from oortmem import OortUsageError
 

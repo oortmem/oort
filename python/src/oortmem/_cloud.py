@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from . import __version__
 from ._format import _ms
+from ._scrub import clean_field as _clean
 from ._secret import _Secret
 from ._transport import DaemonOutdated, TcpTransport, Unreachable
 from ._validate import iso
@@ -101,7 +102,7 @@ def _origin(o: Any) -> Optional[Dict[str, Any]]:
 def memory_view(m: Mapping[str, Any], now_ms: float) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "id": m.get("id"),
-        "text": m.get("text"),
+        "text": _clean(m.get("text")),
         "type": m.get("type"),
         "tier": m.get("tier"),
         "pinned": m.get("pinned") is True,
@@ -110,7 +111,7 @@ def memory_view(m: Mapping[str, Any], now_ms: float) -> Dict[str, Any]:
         "validTo": m.get("validTo"),
         "recordedAt": m.get("createdAt"),
         "updatedAt": m.get("updatedAt"),
-        "entities": list(m.get("entities") or []),
+        "entities": [_clean(e) for e in (m.get("entities") or [])],
     }
     origin = _origin(m.get("origin"))
     if origin is not None:
@@ -430,7 +431,7 @@ class CloudOps:
             chain.append(
                 {
                     "id": lk.get("id"),
-                    "text": lk.get("text"),
+                    "text": _clean(lk.get("text")),
                     "validFrom": lk.get("validFrom"),
                     "validTo": lk.get("validTo"),
                     "endReason": lk.get("endReason"),
@@ -445,7 +446,12 @@ class CloudOps:
                 "source": source.get("harness"),
             },
             "decisions": [
-                {k: d.get(k) for k in ("stage", "question", "answer", "probability")}
+                {
+                    "stage": d.get("stage"),
+                    "question": _clean(d.get("question")),
+                    "answer": _clean(d.get("answer")),
+                    "probability": d.get("probability"),
+                }
                 for d in (source.get("decisions") or [])
                 if isinstance(d, Mapping)
             ],
@@ -464,7 +470,7 @@ class CloudOps:
             "project": p.project,
             "user": None,
             "reads": [
-                "your Planet" if s.get("level") == "planet" else f"Constellation {s.get('name')}"
+                "your Planet" if s.get("level") == "planet" else f"Constellation {_clean(s.get('name'))}"
                 for s in spaces
                 if isinstance(s, Mapping)
             ],

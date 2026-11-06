@@ -1,0 +1,222 @@
+[
+  {
+    "name": "aws access key in a sentence",
+    "inputB64": "dXNlIEFLSUFJT1NGT0ROTjdFWEFNUExFIGZvciB0aGUgYnVja2V0",
+    "expected": "use [REDACTED:aws-access-key] for the bucket",
+    "secretRatio": 0.5128205128205128,
+    "redactions": [
+      {
+        "kind": "aws-access-key",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "github token",
+    "inputB64": "ZXhwb3J0IGl0IGFzIGdocF94N0txMkxtOVpwNFJ0OFZ3MVliNU5jM0RnNkhqMEZzMkFxOVcgcGxlYXNl",
+    "expected": "export it as [REDACTED:github-token] please",
+    "secretRatio": 0.6666666666666666,
+    "redactions": [
+      {
+        "kind": "github-token",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "env secret, bare value",
+    "inputB64": "REJfUEFTU1dPUkQ9VHIwdWI0ZG9yLWFuZC0z",
+    "expected": "DB_PASSWORD=[REDACTED:env-secret]",
+    "secretRatio": 0.5555555555555556,
+    "redactions": [
+      {
+        "kind": "env-secret",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "env secret, quoted json value",
+    "inputB64": "eyJwYXNzd29yZCI6IlRyMHViNGRvci1hbmQtMyIsInVzZXIiOiJ4In0=",
+    "expected": "{\"password\":\"[REDACTED:env-secret]\",\"user\":\"x\"}",
+    "secretRatio": 0.36585365853658536,
+    "redactions": [
+      {
+        "kind": "env-secret",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "list-shaped secret (oort #67)",
+    "inputB64": "cGFzc3dvcmQ6IFsiVHIwdWI0ZG9yLWFuZC0zIiwgInNlY29uZC1UcjB1YjRkb3ItYW5kLTMiXQ==",
+    "expected": "password: [\"[REDACTED:env-secret]\", \"[REDACTED:env-secret]\"]",
+    "secretRatio": 0.6727272727272727,
+    "redactions": [
+      {
+        "kind": "env-secret",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "list-shaped secret, single quotes",
+    "inputB64": "c2VjcmV0OiBbJ1RyMHViNGRvci1hbmQtMycsICd4J10=",
+    "expected": "secret: ['[REDACTED:env-secret]', '[REDACTED:env-secret]']",
+    "secretRatio": 0.5,
+    "redactions": [
+      {
+        "kind": "env-secret",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "brackets inside a secret",
+    "inputB64": "cGFzc3dvcmQ6IFRyMHViNGRvci1hbmQtM1swXXt4fSh5KSBhbmQgbW9yZQ==",
+    "expected": "password: [REDACTED:env-secret]) and more",
+    "secretRatio": 0.5348837209302325,
+    "redactions": [
+      {
+        "kind": "env-secret",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "brackets around a bare secret",
+    "inputB64": "dG9rZW49W1RyMHViNGRvci1hbmQtM10=",
+    "expected": "token=[REDACTED:env-secret]]",
+    "secretRatio": 0.6956521739130435,
+    "redactions": [
+      {
+        "kind": "env-secret",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "secret inside a json string with escapes",
+    "inputB64": "ImxpbmUxXG5wYXNzd29yZD1UcjB1YjRkb3ItYW5kLTNcbmxpbmUzIg==",
+    "expected": "\"line1\\npassword=[REDACTED:env-secret]\"",
+    "secretRatio": 0.55,
+    "redactions": [
+      {
+        "kind": "env-secret",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "authorization header",
+    "inputB64": "QXV0aG9yaXphdGlvbjogQmVhcmVyIGExYjJjM2Q0ZTVmNjA3MThhMWIyYzNkNGU1ZjYwNzE4YTFiMmMzZDQ=",
+    "expected": "Authorization: Bearer [REDACTED:auth-header]",
+    "secretRatio": 0.6451612903225806,
+    "redactions": [
+      {
+        "kind": "auth-header",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "basic auth argument",
+    "inputB64": "Y3VybCAtdSBib2I6VHIwdWI0ZG9yLWFuZC0zIGh0dHBzOi8vZXhhbXBsZS5jb20=",
+    "expected": "curl -u bob:[REDACTED:basic-auth-arg] https://example.com",
+    "secretRatio": 0.3191489361702128,
+    "redactions": [
+      {
+        "kind": "basic-auth-arg",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "url credentials",
+    "inputB64": "Y2xvbmUgaHR0cHM6Ly9ib2I6VHIwdWI0ZG9yLWFuZC0zQGV4YW1wbGUuY29tL3JlcG8uZ2l0",
+    "expected": "clone https://[REDACTED:url-credentials]@example.com/repo.git",
+    "secretRatio": 0.35185185185185186,
+    "redactions": [
+      {
+        "kind": "url-credentials",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "jwt",
+    "inputB64": "and0IGV5SmFiY2RlZmdoaWprLmxtbm9wcXJzdHV2Lnd4eXphYmNkZWZn",
+    "expected": "jwt [REDACTED:jwt]",
+    "secretRatio": 0.9047619047619048,
+    "redactions": [
+      {
+        "kind": "jwt",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "high entropy token",
+    "inputB64": "a2V5IHE5WmszWHY3TG0yUHc4UnQ1WWIxTmM0RGc2SGowRnNxOVprM1h2N0xtMlB3OFJ0NVliMU5jNERnNkhqMEZzIGVuZA==",
+    "expected": "key [REDACTED:high-entropy] end",
+    "secretRatio": 0.8857142857142857,
+    "redactions": [
+      {
+        "kind": "high-entropy",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "pem block",
+    "inputB64": "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBTUlJRW93SUJBQUtDQVFFQU1JSUVvd0lCQUFLQ0FRRUFNSUlFb3dJQkFBS0NBUUVBCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0t",
+    "expected": "[REDACTED:pem-private-key]",
+    "secretRatio": 1,
+    "redactions": [
+      {
+        "kind": "pem-private-key",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "redaction marker already present",
+    "inputB64": "cGFzc3dvcmQ6IFtSRURBQ1RFRDplbnYtc2VjcmV0XSBzdGF5cw==",
+    "expected": "password: [REDACTED:env-secret] stays",
+    "secretRatio": 0,
+    "redactions": []
+  },
+  {
+    "name": "counters are not credentials",
+    "inputB64": "bWF4X3Rva2VuczogNDA5NiBhbmQgaW5wdXRfdG9rZW5zOiAxMjM0",
+    "expected": "max_tokens: 4096 and input_tokens: 1234",
+    "secretRatio": 0,
+    "redactions": []
+  },
+  {
+    "name": "uuid and git sha stay",
+    "inputB64": "aWQgNTUwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMDAwIHNoYSBhMWIyYzNkNGU1ZjYwNzE4YTFiMmMzZDRlNWY2MDcxOGExYjJjM2Q0",
+    "expected": "id 550e8400-e29b-41d4-a716-446655440000 sha a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4",
+    "secretRatio": 0,
+    "redactions": []
+  },
+  {
+    "name": "astral characters count as two units",
+    "inputB64": "8J+YgPCfmIAgcGFzc3dvcmQ9VHIwdWI0ZG9yLWFuZC0z",
+    "expected": "\ud83d\ude00\ud83d\ude00 password=[REDACTED:env-secret]",
+    "secretRatio": 0.5172413793103449,
+    "redactions": [
+      {
+        "kind": "env-secret",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "name": "empty",
+    "inputB64": "",
+    "expected": "",
+    "secretRatio": 0,
+    "redactions": []
+  }
+]
