@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { generateText, isStepCount, tool } from 'ai';
+import { generateText, isStepCount, tool, type ToolSet } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -78,6 +78,21 @@ describe('oortmem/ai-sdk (@experimental)', () => {
     await oort.close();
   });
 
+  it('oortTools(oort) is an AI SDK ToolSet as it is, with no spread', async () => {
+    const oort = await handle();
+    // A typecheck test: an interface has no index signature, so `OortToolSet` must stay a type.
+    const tools: ToolSet = oortTools(oort, { judge: true });
+    const r = await generateText({
+      model: toolThenText('recall', { query: 'anything' }),
+      tools: oortTools(oort),
+      stopWhen: isStepCount(3),
+      prompt: 'Recall anything.',
+    });
+    expect(r.steps[0]!.toolResults[0]!.toolName).toBe('recall');
+    expect(Object.keys(tools)).toHaveLength(5);
+    await oort.close();
+  });
+
   it('offers the judgment tools only on request, without the widening options', async () => {
     const oort = await handle();
     expect(Object.keys(oortTools(oort))).toEqual(['recall', 'remember', 'forget']);
@@ -90,7 +105,7 @@ describe('oortmem/ai-sdk (@experimental)', () => {
       'record_judgment',
     ]);
     for (const t of Object.values(tools)) {
-      const shape = Object.keys((t.inputSchema as z.ZodObject).shape);
+      const shape = Object.keys((t.inputSchema as unknown as z.ZodObject).shape);
       expect(shape).not.toContain('includeAgentRecorded');
       expect(shape).not.toContain('includeImported');
     }

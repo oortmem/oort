@@ -13,27 +13,43 @@ Python (0.7) and a `remote` mode against `oort serve` (0.7) come later; the desi
 npm i oortmem
 ```
 
+Every TypeScript block on this page is a file in [`examples/`](../examples), typechecked against
+the real libraries and run in CI (the framework ones with each framework's own fake model). A
+test fails when a block here and its file differ by one byte. Every exported name and type is in
+the generated [API reference](sdk-reference.md).
+
 ## Quick start
 
 On a machine where `oort setup` has run (it chose local or cloud, and the keys):
 
+<!-- example: examples/src/local-quick-start.ts -->
+
 ```ts
 import { createOort, formatForPrompt } from 'oortmem';
 
-const oort = await createOort();
-const memory = formatForPrompt(await oort.recall('how do we deploy?'));
+// What `oort setup` chose on this machine (local by default), with its keys.
+await using oort = await createOort();
+
 await oort.observe({ user: 'We deploy on Fridays now.', assistant: 'Noted.' });
-await oort.close();
+
+// Put this block in your model's system prompt: it is escaped, so a memory cannot break out.
+const memory = formatForPrompt(await oort.recall('how do we deploy?'));
+console.log(memory);
 ```
 
 Against Oort Cloud, with the Oort key from the environment (`OORT_API_KEY`):
 
+<!-- example: examples/src/cloud-quick-start.ts -->
+
 ```ts
 import { createOort } from 'oortmem';
 
-const oort = await createOort({ mode: 'cloud', keySources: ['env'] });
-const { memories } = await oort.recall('where does the user live?');
+// Oort Cloud, with the Oort key from the environment (OORT_API_KEY).
+await using oort = await createOort({ mode: 'cloud', keySources: ['env'] });
+
 await oort.remember('The user lives in Lund.');
+const { memories } = await oort.recall('where does the user live?');
+console.log(memories.map((m) => m.text));
 ```
 
 Put `formatForPrompt(result)` in your model's system prompt. It builds the `<oort-memory>` block
@@ -163,11 +179,42 @@ its value.
 The same judgment memory as `oort judge`: record an expert's decisions, then predict how they
 would judge a new item from those precedents.
 
+<!-- example: examples/src/judgments.ts -->
+
 ```ts
-const oort = await createOort({ config: { judge: { experts: ['ada'] } } });
-await oort.judge.record({ subject: 'Post claims a cure', verdict: 'rejected', reason: 'No source.', domain: 'content', by: 'ada' });
-const r = await oort.judge.apply({ summary: 'Post claims a miracle cure', domain: 'content' });
-// r.status: 'suggested' | 'needs-expert' | 'precedents-only'; r.prediction is never the expert's decision
+import { createOort } from 'oortmem';
+
+// The expert role is for code paths where a person really decided: a review UI, an import job.
+await using expert = await createOort({
+  mode: 'local',
+  judge: { role: 'expert', operator: 'ada' },
+  config: { judge: { experts: ['ada'] } },
+});
+
+await expert.judge.record({
+  subject: 'Post claims a cure for diabetes',
+  verdict: 'rejected',
+  reason: 'A medical claim with no source.',
+  domain: 'content',
+  by: 'ada',
+});
+
+// Model-facing code runs in the agent role: it records only for listed experts, and what it
+// records waits for a person to confirm it before it counts as a precedent.
+const agent = expert.scoped({ judgeRole: 'agent' });
+const draft = await agent.judge.record({
+  subject: 'Post claims a miracle cure for colds',
+  verdict: 'rejected',
+  reason: 'No source.',
+  domain: 'content',
+  by: 'ada',
+});
+console.log(draft.status); // 'agent-recorded'
+await expert.judge.confirm(draft.id);
+
+const r = await agent.judge.apply({ summary: 'Post claims a miracle cure', domain: 'content' });
+// 'suggested' | 'needs-expert' | 'precedents-only'. A prediction is never the expert's decision.
+console.log(r.status, r.prediction?.verdict, r.precedents.length);
 ```
 
 **Your code is an agent by default** (`judge.role: 'agent'`), because the rule protects the
@@ -193,11 +240,34 @@ it. Framework tools always run in the agent role.
 A handle's scope is fixed when it is made: no method takes a scope argument. `scoped()` derives
 a cheap handle from trusted host code; hand only that handle to the model's tools.
 
+<!-- example: examples/src/multi-user.ts -->
+
 ```ts
+import { createOort, formatForPrompt } from 'oortmem';
+
+// One root handle per tenant (`org`), kept in trusted host code: it can reach every user.
 const oort = await createOort({
-  mode: 'local', home: '/data/oort', org: tenantId, project: null, projectConfig: false, keySources: ['env'],
+  mode: 'local',
+  home: process.env['OORT_HOME'] ?? '/data/oort',
+  org: 'acme',
+  project: null,
+  projectConfig: false,
+  keySources: ['env'],
 });
-const mem = oort.scoped({ user: req.user.id, agent: 'support-bot' });
+
+// Per request: a handle fixed to one end user. Hand only this one to the model's tools.
+const forUser = (userId: string) => oort.scoped({ user: userId, agent: 'support-bot' });
+
+await forUser('user-ada').remember('My order number is 1042.');
+
+const ada = await forUser('user-ada').recall('what is my order number?');
+const bob = await forUser('user-bob').recall('what is my order number?');
+console.log(formatForPrompt(ada)); // Ada's Planet holds her order number
+console.log(bob.memories.length); // 0: each end user has a Planet of their own
+
+// At the end of a user's session (or from a scheduled job): no model call.
+await forUser('user-ada').consolidate({ budgetMs: 200 });
+await oort.close();
 ```
 
 - **A handle is the whole org.** `scoped()` moves sideways as well as down: from any handle it
@@ -250,17 +320,50 @@ own error is reported by its class name only.
 | `OortNeedsConfirmationError`   | `needs-confirmation` | `preview-required`, `findings-unacknowledged` (Oort Cloud 409)                      |
 | `OortCloudOnlyError`           | `cloud-only`         | `hive-level`, or `forget({ everywhere })` locally                                   |
 | `OortNetworkError`             | `network`            | `unreachable`, `timeout`, `busy` (retryable)                                        |
-| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
+| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
 | `OortInternalError`            | `internal`           | `store-busy` (retryable), else none                                                 |
 
+Retry what is `retryable`, then branch on `code`:
+
+<!-- example: examples/src/errors.ts -->
+
 ```ts
-import { OortError, OortRefusedError } from 'oortmem';
+import { createOort, OortError } from 'oortmem';
+
+/** Retries what Oort marks `retryable`, waiting `retryAfter` seconds when the service sent it. */
+async function withRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!(e instanceof OortError) || !e.retryable || attempt >= tries) throw e;
+      await new Promise((done) => setTimeout(done, (e.retryAfter ?? attempt) * 1000));
+    }
+  }
+}
+
 try {
-  await mem.observe(turn);
+  await using oort = await createOort({ mode: 'cloud', keySources: ['env'] });
+  const r = await withRetry(() =>
+    oort.observe({ user: 'Our staging database runs on port 6543.', assistant: 'Noted.' }),
+  );
+  console.log('saved:', r.outcome);
 } catch (e) {
-  if (e instanceof OortRefusedError && e.reason === 'rate-limit') backOff(e.retryAfter);
-  else if (e instanceof OortError && e.retryable) retry();
-  else throw e;
+  if (!(e instanceof OortError)) throw e;
+  // Branch on `code` first: new `reason` strings may appear in any release.
+  switch (e.code) {
+    case 'needs-login':
+      console.error(`No usable Oort key (${e.reason}). Fix: ${e.fix}`);
+      break;
+    case 'refused':
+      console.error(`Refused (${e.reason}): ${e.message}`);
+      break;
+    case 'network':
+      console.error(`Oort Cloud is unreachable (${e.reason}); try again later.`);
+      break;
+    default:
+      throw e;
+  }
 }
 ```
 
@@ -307,36 +410,73 @@ FUSE).
   sockets do not keep the process alive, so a function that never calls `close()` still ends.
 - **Await `observe` before returning**: the runtime freezes after the response.
 
-```ts
-const oort = await createOort({ mode: 'cloud', keySources: ['env'], project: 'support-site' });
+<!-- example: examples/src/serverless.ts -->
 
-export const handler = async (event) => {
+```ts
+import { createOort, formatForPrompt } from 'oortmem';
+
+// Module scope: warm invocations reuse the handle and its connection. Cloud mode writes nothing
+// to disk and loads no native module.
+const oort = await createOort({
+  mode: 'cloud',
+  keySources: ['explicit', 'env'],
+  project: 'support-site',
+  projectConfig: false,
+});
+
+export async function handler(event: { question: string; requestId: string }): Promise<string> {
   const memory = formatForPrompt(await oort.recall(event.question, { speed: 'fast' }));
   const answer = await answerWith(memory, event.question);
+  // Await before returning: the runtime freezes after the response. `turnRef` makes a retried
+  // invocation save the turn once.
   await oort.observe({ user: event.question, assistant: answer, turnRef: event.requestId });
   return answer;
-};
+}
+
+// A one-shot job (a cron function, a queue consumer) closes its own handle when it ends.
+export async function importFacts(facts: string[]): Promise<number> {
+  await using job = await createOort({
+    mode: 'cloud',
+    keySources: ['explicit', 'env'],
+    project: 'support-site',
+    projectConfig: false,
+  });
+  const { results } = await job.remember(facts);
+  return results.length;
+}
+
+/** Your model call goes here. */
+async function answerWith(memory: string, question: string): Promise<string> {
+  return `(an answer to "${question}", written with ${memory.length} characters of memory)`;
+}
 ```
 
 ## Frameworks
 
 ### Vercel AI SDK: `oortmem/ai-sdk` (`@experimental`)
 
+Tested with `ai` 7.0.162; the test resolves the model string through the AI SDK's global
+provider to its `MockLanguageModelV4` (`ai/test`).
+
+<!-- example: examples/src/ai-sdk.ts -->
+
 ```ts
 import { generateText, isStepCount } from 'ai';
 import { createOort } from 'oortmem';
 import { oortInstructions, oortObserve, oortTools } from 'oortmem/ai-sdk';
 
-const oort = await createOort();
+await using oort = await createOort();
+
 const prompt = 'When do we deploy billing?';
 const { text } = await generateText({
-  model,
+  model: 'anthropic/claude-sonnet-5.5', // any AI SDK model; a string goes through the AI Gateway
   instructions: await oortInstructions(oort, prompt), // `system` before AI SDK 7
   tools: oortTools(oort), // recall, remember, forget; { judge: true } adds judge and record_judgment
   stopWhen: isStepCount(5),
   prompt,
   onEnd: oortObserve(oort, prompt), // `onFinish` before AI SDK 7
 });
+console.log(text);
 ```
 
 The tools always run in the agent role, return memory only as a `formatForPrompt` block, and
@@ -344,68 +484,158 @@ never offer `includeAgentRecorded` or `includeImported`: a model cannot widen wh
 precedent. A refusal comes back to the model as `{ error: { code, message } }`. The adapter does
 not import `ai` itself; `ai` 7 is an optional peer dependency.
 
+With `oortmem` 0.6.0, write `tools: { ...oortTools(oort) }`: its `OortToolSet` was an interface,
+which TypeScript does not assign to the AI SDK's `ToolSet`. Later releases accept
+`oortTools(oort)` as it is.
+
 ### LangGraph.js (example, not a shipped adapter)
 
-A `BaseStore` that maps LangGraph's store calls onto a scoped handle. Your own
-`namespaceToScope` decides which namespace is which user and project.
+Tested with `@langchain/langgraph` 1.7.0 and `@langchain/core` 1.3.4; the test swaps
+`ChatAnthropic` for LangChain's own `FakeListChatModel`.
+
+`OortStore` is a LangGraph `BaseStore` over a scoped handle, passed with `compile({ store })`:
+`search` with a query is `recall`, `put` of `{ text }` is `remember`, `delete` is `forget` and
+`get` is `explain`. Oort assigns memory ids, so a put's key is not kept, and `get` and `delete`
+take Oort ids. Your own `scopeOf` decides which namespace is which end user. A node prompts with
+`formatForPrompt` on that user's handle, never with raw store values, and observes the turn.
+
+<!-- example: examples/src/langgraph.ts -->
 
 ```ts
-import { BaseStore, type Item, type Operation, type SearchItem } from '@langchain/langgraph';
-import { createOort, formatForPrompt, type Oort } from 'oortmem';
+import { ChatAnthropic } from '@langchain/anthropic';
+import {
+  BaseStore,
+  MessagesValue,
+  START,
+  StateGraph,
+  StateSchema,
+  type GraphNode,
+  type Item,
+  type Operation,
+  type OperationResults,
+} from '@langchain/langgraph';
+import {
+  createOort,
+  formatForPrompt,
+  OortNotFoundError,
+  type Oort,
+  type ScopedOptions,
+} from 'oortmem';
+import { z } from 'zod';
 
-class OortStore extends BaseStore {
-  constructor(
-    private oort: Oort,
-    private namespaceToScope: (ns: string[]) => { user?: string; project?: string | null },
-  ) {
+/**
+ * A LangGraph `BaseStore` over Oort: `search` with a query recalls, `put` remembers `{ text }`,
+ * a `null` put (`delete`) forgets, and `get` explains. Oort assigns the ids, so a put's key is not
+ * kept: `get` and `delete` take Oort ids. `scopeOf` (your code) maps a namespace to a scope.
+ */
+export class OortStore extends BaseStore {
+  readonly oort: Oort;
+  readonly scopeOf: (namespace: string[]) => ScopedOptions;
+
+  constructor(oort: Oort, scopeOf: (namespace: string[]) => ScopedOptions) {
     super();
+    this.oort = oort;
+    this.scopeOf = scopeOf;
   }
-  private h(ns: string[]) {
-    return this.oort.scoped({ ...this.namespaceToScope(ns), judgeRole: 'agent' });
+
+  handle(namespace: string[]): Oort {
+    return this.oort.scoped({ ...this.scopeOf(namespace), judgeRole: 'agent' });
   }
-  async batch<Op extends Operation[]>(ops: Op): Promise<unknown[]> {
-    return Promise.all(
-      ops.map(async (op) => {
-        if ('query' in op && 'namespacePrefix' in op) {
-          const r = await this.h(op.namespacePrefix).recall(op.query ?? '', { limit: op.limit ?? 10 });
-          return r.memories.map(
-            (m): SearchItem => ({ namespace: op.namespacePrefix, key: m.id, value: { text: m.text }, score: m.score, createdAt: new Date(m.recordedAt), updatedAt: new Date(m.updatedAt) }),
-          );
-        }
-        if ('value' in op) {
-          if (op.value === null) return void (await this.h(op.namespace).forget(op.key));
-          return void (await this.h(op.namespace).remember(String(op.value['text'])));
-        }
-        if ('key' in op) {
-          const m = (await this.h(op.namespace).explain(op.key).catch(() => null))?.memory;
-          return m === undefined ? null : ({ namespace: op.namespace, key: m.id, value: { text: m.text }, createdAt: new Date(m.recordedAt), updatedAt: new Date(m.updatedAt) } satisfies Item);
-        }
-        return [];
-      }),
-    );
+
+  async batch<Op extends Operation[]>(operations: Op): Promise<OperationResults<Op>> {
+    const results = await Promise.all(operations.map((op) => this.run(op)));
+    return results as OperationResults<Op>;
+  }
+
+  private async run(op: Operation): Promise<Item | Item[] | string[][] | null | void> {
+    if ('namespacePrefix' in op) {
+      if (op.query === undefined) return []; // Oort lists by relevance only
+      const r = await this.handle(op.namespacePrefix).recall(op.query, { limit: op.limit ?? 10 });
+      return r.memories.map((m) => ({ ...item(op.namespacePrefix, m), score: m.score }));
+    }
+    if ('value' in op) {
+      const mem = this.handle(op.namespace);
+      const text: unknown = op.value?.['text'];
+      if (op.value === null) await mem.forget(op.key);
+      else if (typeof text === 'string') await mem.remember(text);
+      else throw new TypeError('OortStore stores values of the form { text: string }');
+      return;
+    }
+    if ('key' in op) {
+      try {
+        return item(op.namespace, (await this.handle(op.namespace).explain(op.key)).memory);
+      } catch (e) {
+        if (e instanceof OortNotFoundError) return null;
+        throw e;
+      }
+    }
+    return []; // listNamespaces: users are your app's, not Oort's
   }
 }
 
-const graph = workflow.compile({ store: new OortStore(await createOort(), ([user]) => ({ user, project: null })) });
-// In a node: const block = formatForPrompt(await oort.scoped({ user }).recall(question));
+const item = (
+  namespace: string[],
+  m: { id: string; text: string; recordedAt: string; updatedAt: string },
+): Item => ({
+  namespace,
+  key: m.id,
+  value: { text: m.text },
+  createdAt: new Date(m.recordedAt),
+  updatedAt: new Date(m.updatedAt),
+});
+
+const oort = await createOort({ mode: 'local', org: 'acme', project: null, projectConfig: false });
+// The first namespace part is the end user. A missing one throws (`user-missing`), never
+// falling back to the tenant's own memory.
+const store = new OortStore(oort, ([user]) => ({ user: user ?? '' }));
+const model = new ChatAnthropic({ model: 'claude-haiku-5-5' });
+
+const State = new StateSchema({ messages: MessagesValue });
+const Context = z.object({ userId: z.string() });
+const answer: GraphNode<typeof State, z.infer<typeof Context>> = async (state, runtime) => {
+  const userId = runtime.context?.userId ?? '';
+  const question = state.messages.at(-1)?.text ?? '';
+  const mem = store.handle([userId]);
+  const memory = formatForPrompt(await mem.recall(question));
+  const reply = await model.invoke([
+    { role: 'system', content: `You help customers.\n${memory}` },
+    ...state.messages,
+  ]);
+  await mem.observe({ user: question, assistant: reply.text });
+  return { messages: [reply] };
+};
+
+const graph = new StateGraph(State, Context)
+  .addNode('answer', answer)
+  .addEdge(START, 'answer')
+  .compile({ store });
+
+await store.put(['user-ada'], 'order', { text: 'My order number is 1042.' });
+const out = await graph.invoke(
+  { messages: [{ role: 'user', content: 'What is my order number?' }] },
+  { context: { userId: 'user-ada' } },
+);
+console.log(out.messages.at(-1)?.text);
+await oort.close();
 ```
 
 ### OpenAI Agents JS (example, not a shipped adapter)
 
-Wrap any `Session` so storage stays where it is, and each user and assistant pair is observed.
-Recall goes through dynamic `instructions`, never by rewriting history.
+Tested with `@openai/agents` 0.21.0; the test answers with the SDK's own `ScriptedModel`
+(`@openai/agents/testing`) as the default model provider, with tracing off.
+
+`oortSession` wraps any `Session` (here the SDK's `MemorySession`): storage stays where it is,
+and each user and assistant pair is observed. Recall goes through dynamic `instructions`, never
+by rewriting history.
+
+<!-- example: examples/src/openai-agents.ts -->
 
 ```ts
-import { Agent, run, type Session, type AgentInputItem } from '@openai/agents';
+import { Agent, MemorySession, run, type AgentInputItem, type Session } from '@openai/agents';
 import { createOort, formatForPrompt, type Oort } from 'oortmem';
 
-function oortSession(inner: Session, oort: Oort): Session {
-  const textOf = (i: AgentInputItem): string =>
-    'content' in i && typeof i.content === 'string'
-      ? i.content
-      : 'content' in i && Array.isArray(i.content)
-        ? i.content.map((c) => ('text' in c ? c.text : '')).join('')
-        : '';
+/** Wraps any `Session`: storage stays where it is, and each user and assistant pair is observed. */
+export function oortSession(inner: Session, oort: Oort): Session {
   let pending: string | undefined;
   return {
     getSessionId: () => inner.getSessionId(),
@@ -415,8 +645,9 @@ function oortSession(inner: Session, oort: Oort): Session {
     async addItems(items) {
       await inner.addItems(items);
       for (const i of items) {
-        if ('role' in i && i.role === 'user') pending = textOf(i);
-        else if ('role' in i && i.role === 'assistant' && pending !== undefined) {
+        if (!('role' in i)) continue;
+        if (i.role === 'user') pending = textOf(i);
+        else if (i.role === 'assistant' && pending !== undefined) {
           await oort.observe({ user: pending, assistant: textOf(i) });
           pending = undefined;
         }
@@ -425,12 +656,28 @@ function oortSession(inner: Session, oort: Oort): Session {
   };
 }
 
-const oort = (await createOort()).scoped({ agent: 'support-bot', judgeRole: 'agent' });
-const agent = new Agent({
+function textOf(i: AgentInputItem): string {
+  if (!('content' in i)) return '';
+  if (typeof i.content === 'string') return i.content;
+  return i.content.map((c) => ('text' in c ? c.text : '')).join('');
+}
+
+await using root = await createOort();
+const oort = root.scoped({ agent: 'support-bot', judgeRole: 'agent' });
+
+// Recall goes through dynamic instructions, never by rewriting the history.
+const agent = new Agent<{ question: string }>({
   name: 'support',
-  instructions: async (ctx) => `You help customers.\n${formatForPrompt(await oort.recall(String(ctx.context.question)))}`,
+  instructions: async (ctx) =>
+    `You help customers.\n${formatForPrompt(await oort.recall(ctx.context.question))}`,
 });
-await run(agent, question, { session: oortSession(mySession, oort), context: { question } });
+
+const question = 'When do we deploy billing?';
+const result = await run(agent, question, {
+  session: oortSession(new MemorySession(), oort),
+  context: { question },
+});
+console.log(result.finalOutput);
 ```
 
 Any MCP-capable framework can also use `oort mcp` with no code at all.
