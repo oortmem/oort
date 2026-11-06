@@ -200,6 +200,12 @@ const oort = await createOort({
 const mem = oort.scoped({ user: req.user.id, agent: 'support-bot' });
 ```
 
+- **A handle is the whole org.** `scoped()` moves sideways as well as down: from any handle it
+  derives any user, project or agent in the same org (only the judge role is one-way). So the
+  root handle, and an anonymous one, are as powerful as the org itself: keep them in trusted host
+  code and never hand them to untrusted code or a model. Give a model only a handle already
+  scoped to one user, through tools that do not expose `scoped` (the `oortmem/ai-sdk` tools
+  never do).
 - **`org`** is your tenant: the storage and deletion boundary. **`user`** gives each end user
   their own Planet. The agent is still recorded as the author.
 - **An end user gets their Planet only, never a Star.** Today an agent's Star is kept per org and
