@@ -1,6 +1,6 @@
 {
   "name": "@oortmem/core",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "description": "Oort core: the tiered hot, warm and cold memory engine for AI agents (types, scoring, recall, consolidation).",
   "keywords": [
     "oort",
