@@ -353,8 +353,20 @@ export async function installManaged(ctx: Ctx, target = VERSION): Promise<Manage
     target,
     env['HOME'] || os.homedir(),
   );
-  const managed = r.ok ? managedCopy(env) : undefined;
-  if (managed !== undefined) return { ok: true, managed, command, attempts: r.attempts };
+  // Checked afresh (runInstaller forgot the walk from before npm ran): the whole new tree.
+  const after = r.ok ? inspectManaged(env) : undefined;
+  if (after?.state === 'ok') {
+    return { ok: true, managed: after.managed, command, attempts: r.attempts };
+  }
+  if (after?.state === 'untrusted') {
+    return {
+      ok: false,
+      reason: 'unverified',
+      command,
+      detail: `npm finished, but the copy it left is not safe for agents to run: ${shown(untrustedText(after.problem))}`,
+      attempts: r.attempts,
+    };
+  }
   return r.ok || r.unverified === true
     ? {
         ok: false,
@@ -386,8 +398,47 @@ export function runningUnstable(ctx: Ctx): string | undefined {
   const real = realpathOf(entry) ?? realpathOf(ctx.binPath ?? binPath());
   const why = unstableCopy(entry, real, tempDirs(ctx.io.env));
   if (why !== undefined || real === undefined) return why;
-  const u = trustedPath(real, { home: userHome(ctx.io.env), strict: false });
+  const u =
+    trustedPath(real, { home: userHome(ctx.io.env), strict: false }) ??
+    copyTree(real, ctx.io.env, false);
   return u === undefined ? undefined : `${WRITABLE} (${shown(untrustedText(u))})`;
+}
+
+/**
+ * The package a copy's script belongs to: the nearest directory above it, at most six levels up,
+ * whose package.json is oortmem's. Undefined when there is none (nothing more to walk).
+ */
+export function oortPackageRoot(real: string): string | undefined {
+  let dir = path.dirname(real);
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as {
+        name?: unknown;
+      };
+      if (pkg.name === 'oortmem') return dir;
+    } catch {
+      // Not here.
+    }
+    const up = path.dirname(dir);
+    if (up === dir) return undefined;
+    dir = up;
+  }
+  return undefined;
+}
+
+/**
+ * The whole package a copy outside the managed one belongs to (`--this-copy`, the fallback,
+ * another copy doctor finds), walked as `trustedTree` walks the managed copy, but with the lenient
+ * rules (PR #78 review): `main.js` loads all of it. Links out (a pnpm checkout's node_modules)
+ * are judged by the path to what they open, not walked into.
+ */
+export function copyTree(
+  real: string,
+  env: Record<string, string | undefined>,
+  strict: boolean,
+): Untrusted | undefined {
+  const root = oortPackageRoot(real);
+  return root === undefined ? undefined : trustedTree(root, { strict, home: userHome(env) });
 }
 
 /** What a copy in `why` risks, for the sentence `This oort is in <why>, <risk>`. */
@@ -414,7 +465,9 @@ export function checkAgentPath(p: string, ctx: Ctx): void {
   const oortHome = realpathOf(resolveHome(env)) ?? resolveHome(env);
   const strict = inside(real as string, [oortHome]);
   if (strict && s.state === 'untrusted') refuse(shown(untrustedText(s.problem)));
-  const u = trustedPath(real as string, { home: userHome(env), strict });
+  const u =
+    trustedPath(real as string, { home: userHome(env), strict }) ??
+    copyTree(real as string, env, strict);
   if (u !== undefined) refuse(shown(untrustedText(u)));
 }
 

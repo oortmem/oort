@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { hookStatus } from '@oortmem/claude-code';
 import { VERSION, resolveHome } from '@oortmem/core';
 import { binPath, runForwarding, runNodeScript } from '../io.js';
+import { forgetTree } from '../trust.js';
 import { emit, jsonMode } from '../output.js';
 import { callDaemon } from '../serve-client.js';
 import { isNewerVersion, socketPathFor } from '../serve-protocol.js';
@@ -731,6 +732,8 @@ export async function runInstaller(
     let delay = 5000;
     for (let attempts = 1; ; attempts++) {
       const r = await deps.run(file, args, ctx.io.env as NodeJS.ProcessEnv, cwd);
+      // npm has rewritten the prefix: whatever was walked before it is stale.
+      if (c.prefix !== undefined) forgetTree(c.prefix);
       const base = { path: c.path, command: c.command ?? '', attempts };
       if (r.code === 0) {
         const v = verifyInstall(c, target);

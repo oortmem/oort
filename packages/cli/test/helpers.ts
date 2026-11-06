@@ -25,8 +25,11 @@ export function tmpdir(prefix = 'oort-cli-'): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
-/** Where `trustedTmpdir` makes its roots: in this package, ignored by git, removed on exit. */
-const TRUSTED_ROOT = path.join(import.meta.dirname, '..', '.test-homes');
+/**
+ * Where `trustedTmpdir` makes its roots: at the top of the checkout (not inside this package, whose
+ * whole tree is walked when it runs as `--this-copy`), ignored by git, removed after each file.
+ */
+const TRUSTED_ROOT = path.join(import.meta.dirname, '..', '..', '..', '.test-homes');
 /** Shared with test/no-real-npm.ts, which removes them after each test file. */
 const ROOTS = Symbol.for('oort.test.trustedRoots');
 const trustedRoots: string[] = ((globalThis as Record<symbol, string[]>)[ROOTS] ??= []);

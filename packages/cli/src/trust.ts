@@ -22,7 +22,7 @@ export function tempDirs(env: Record<string, string | undefined> = process.env):
     if (p === undefined || p === '' || !path.isAbsolute(p)) return;
     out.add(path.resolve(p));
     try {
-      out.add(fs.realpathSync(p));
+      out.add(fs.realpathSync.native(p));
     } catch {
       // Not on this system.
     }
@@ -47,9 +47,10 @@ export interface Untrusted {
   command?: string;
 }
 
+// What the kernel opens, not Node's own resolution of link text (PR #78 review).
 const realpathOf = (p: string): string | undefined => {
   try {
-    return fs.realpathSync(p);
+    return fs.realpathSync.native(p);
   } catch {
     return undefined;
   }
@@ -204,41 +205,114 @@ export const TREE_CAP = 20_000;
 
 const treeCache = new Map<string, Untrusted | null>();
 
-/** Forgets what `trustedTree` found (tests change trees between checks; a process never does). */
+/** Forgets every `trustedTree` result (tests change trees between checks). */
 export function clearTreeCache(): void {
   treeCache.clear();
 }
 
 /**
- * Walks everything under `prefix` (the managed copy: `bin/`, and `lib/node_modules` with oortmem,
- * its `dist/` and every dependency Node could resolve from there), with lstat and no symlink
- * followed (PR #78 follow-up review). `main.js` loads all of it, so every directory and file must
- * be this user's with no group or other write; a symlink may point only inside the prefix; any
- * other kind of entry (a FIFO, a socket, a device) does not belong. Iterative, at most `cap`
- * entries; past that it is not vouched for. The result is kept for the rest of the process, so
- * setup's reuse, the check before each write and doctor walk it once.
+ * Forgets what `trustedTree` found under `prefix`: an install has just rewritten it, so the
+ * check after it walks it again (PR #78 review: a stale ok after npm ran).
  */
-export function trustedTree(prefix: string, opts: { cap?: number } = {}): Untrusted | undefined {
+export function forgetTree(prefix: string): void {
+  const root = realpathOf(prefix) ?? path.resolve(prefix);
+  for (const k of treeCache.keys()) if (k.startsWith(`${root}\0`)) treeCache.delete(k);
+}
+
+/** How `trustedTree` judges a tree. */
+export interface TreeOptions {
+  cap?: number;
+  /**
+   * `true` (the default; the managed copy): every entry this user's, no group or other write,
+   * links only inside the tree. `false` (a copy of the user's own elsewhere: `--this-copy`, the
+   * fallback): `trustedPath`'s lenient rules for every entry, and a link may lead anywhere whose
+   * path passes them; it is not walked into (a pnpm checkout's node_modules links to its store).
+   */
+  strict?: boolean;
+  /** The user's HOME (non-strict: owner and group rules depend on it). */
+  home?: string;
+  groupOk?: (gid: number) => boolean;
+}
+
+/**
+ * Walks everything under `prefix` (the managed copy: `bin/`, and `lib/node_modules` with oortmem,
+ * its `dist/` and every dependency Node could resolve from there; or a copy's own package root),
+ * with lstat and no symlink followed (PR #78 follow-up review). `main.js` loads all of it. A
+ * link's own owner counts, and where it leads is what the kernel opens (`realpathSync.native`),
+ * never what its text says. Any other kind of entry (a FIFO, a socket, a device) does not belong.
+ * Iterative, at most `cap` entries; past that it is not vouched for. The result is kept for the
+ * rest of the process (setup's reuse, the check before each write and doctor walk once) until an
+ * install rewrites the tree (`forgetTree`).
+ */
+export function trustedTree(prefix: string, opts: TreeOptions = {}): Untrusted | undefined {
   if (process.platform === 'win32') return undefined;
   const root = realpathOf(prefix);
   if (root === undefined) {
     return { dir: prefix, why: 'does not exist', fix: 'oort setup', command: 'oort setup' };
   }
   const cap = opts.cap ?? TREE_CAP;
-  const key = `${root}\0${cap}`;
-  const seen = treeCache.get(key);
+  const strict = opts.strict !== false;
+  const key = `${root}\0${cap}\0${strict ? 'strict' : `lenient\0${opts.home ?? ''}`}`;
+  const seen = opts.groupOk === undefined ? treeCache.get(key) : undefined;
   if (seen !== undefined) return seen ?? undefined;
-  const found = walk(root, cap);
-  treeCache.set(key, found ?? null);
+  const found = walk(root, cap, { ...opts, strict });
+  if (opts.groupOk === undefined) treeCache.set(key, found ?? null);
   return found;
 }
 
-function walk(root: string, cap: number): Untrusted | undefined {
+/**
+ * The two link shapes npm writes with `..` in them: `node_modules/.bin/<x>` →
+ * `../<pkg>/<path>` (or `../@scope/<pkg>/<path>`), and a global install's `<prefix>/bin/<x>` →
+ * `../lib/node_modules/<pkg>/<path>`. Only one leading `..`, then plain names. Their realpath is
+ * still checked.
+ */
+function npmLink(p: string, raw: string, root: string): boolean {
+  const segs = raw.split('/');
+  if (segs[0] !== '..') return false;
+  const rest = segs.slice(1);
+  if (rest.length < 2 || rest.some((x) => x === '..' || x === '.' || x === '')) return false;
+  const dir = path.dirname(p);
+  if (path.basename(dir) === '.bin' && path.basename(path.dirname(dir)) === 'node_modules') {
+    return rest[0]?.startsWith('@') === true ? rest.length >= 3 : true;
+  }
+  if (dir === path.join(root, 'bin')) {
+    return rest[0] === 'lib' && rest[1] === 'node_modules' && rest.length >= 4;
+  }
+  return false;
+}
+
+function walk(
+  root: string,
+  cap: number,
+  opts: TreeOptions & { strict: boolean },
+): Untrusted | undefined {
   const me = typeof process.getuid === 'function' ? process.getuid() : undefined;
+  const home = opts.home === undefined ? undefined : (realpathOf(opts.home) ?? opts.home);
+  const groupOk = opts.groupOk ?? ((gid: number) => groupCanBecomeRoot(gid));
   // Never chmod or chown a tree like this: its files may not be what npm put there, and either
-  // would make them yours. Remove it and install it again (PR #78 review, N1).
-  const again = `rm -r ${sh(root)} && oort setup`;
-  const bad = (p: string, why: string): Untrusted => ({ dir: p, why, fix: again, command: again });
+  // would make them yours. Remove it and install it again (PR #78 review, N1). A copy of the
+  // user's own: rebuild or reinstall it, or use the managed copy.
+  const again = opts.strict
+    ? `rm -r ${sh(root)} && oort setup`
+    : `rebuild or reinstall ${sh(root)} somewhere only you can write, or use the managed copy (oort setup)`;
+  const bad = (p: string, why: string): Untrusted =>
+    opts.strict ? { dir: p, why, fix: again, command: again } : { dir: p, why, fix: again };
+  /** Owner and mode of one entry (not a link's target): undefined when fine. */
+  const judge = (p: string, st: fs.Stats): Untrusted | undefined => {
+    const inHome = home !== undefined && (p === home || p.startsWith(home + path.sep));
+    if (me !== undefined && st.uid !== me && (opts.strict || inHome || st.uid !== 0)) {
+      return bad(p, 'belongs to another user');
+    }
+    if (st.isSymbolicLink()) return undefined; // a link's own mode means nothing
+    if (opts.strict) {
+      return (st.mode & 0o022) !== 0 ? bad(p, 'can be written by group or others') : undefined;
+    }
+    if ((st.mode & 0o002) !== 0) return bad(p, 'can be written by others');
+    if ((st.mode & 0o020) !== 0 && (inHome || !groupOk(st.gid))) {
+      return bad(p, 'can be written by its group');
+    }
+    return undefined;
+  };
   const stack = [root];
   let count = 0;
   while (stack.length > 0) {
@@ -252,20 +326,51 @@ function walk(root: string, cap: number): Untrusted | undefined {
     } catch {
       return bad(p, 'cannot be read');
     }
+    const own = judge(p, st);
+    if (own !== undefined) return own;
     if (st.isSymbolicLink()) {
-      let target: string;
+      // Judged by where the kernel takes it, not by its text: `x/../../y` through a link `x`
+      // resolves elsewhere than it reads (PR #78 review). In the managed copy, `..` only in npm's
+      // own link shapes, and only into the copy.
+      let raw: string;
       try {
-        target = path.resolve(path.dirname(p), fs.readlinkSync(p));
+        raw = fs.readlinkSync(p);
       } catch {
         return bad(p, 'is a link that cannot be read');
       }
-      if (target !== root && !target.startsWith(root + path.sep)) {
-        return bad(p, `is a link out of the managed copy (to ${target})`);
+      if (opts.strict && raw.split(/[\\/]/).includes('..') && !npmLink(p, raw, root)) {
+        return bad(p, `is a link with .. in it (${raw}) that is not one of npm's`);
+      }
+      let real: string;
+      try {
+        real = fs.realpathSync.native(p);
+      } catch {
+        return bad(p, 'is a link that leads nowhere');
+      }
+      if (opts.strict) {
+        if (real !== root && !real.startsWith(root + path.sep)) {
+          return bad(p, `is a link out of the managed copy (to ${real})`);
+        }
+        // What it leads to is walked anyway; checked here too, explicitly.
+        let tst: fs.Stats;
+        try {
+          tst = fs.lstatSync(real);
+        } catch {
+          return bad(p, 'is a link that leads nowhere');
+        }
+        const target = judge(real, tst);
+        if (target !== undefined) return target;
+      } else {
+        // A copy of your own may link out (pnpm's store): every step to what it opens must pass.
+        const u = trustedPath(real, {
+          home: opts.home ?? '/',
+          strict: false,
+          ...(opts.groupOk !== undefined && { groupOk: opts.groupOk }),
+        });
+        if (u !== undefined) return bad(p, `is a link to ${real}, where ${u.dir} ${u.why}`);
       }
       continue;
     }
-    if (me !== undefined && st.uid !== me) return bad(p, 'belongs to another user');
-    if ((st.mode & 0o022) !== 0) return bad(p, 'can be written by group or others');
     if (st.isDirectory()) {
       let names: string[];
       try {

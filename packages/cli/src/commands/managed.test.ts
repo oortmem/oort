@@ -564,7 +564,7 @@ describe('PR #78 follow-up: the whole managed tree', () => {
     const bin = path.join(prefix, 'lib', 'node_modules', '.bin');
     fs.mkdirSync(bin, { mode: 0o755 });
     fs.chmodSync(bin, 0o755);
-    fs.symlinkSync('../commander/index.js', path.join(bin, 'inside'));
+    fs.symlinkSync('../oortmem/package.json', path.join(bin, 'inside'));
     clearTreeCache();
     expect(trustedTree(prefix)).toBeUndefined();
     const outside = path.join(trustedTmpdir('oort-outside-'), 'evil.js');
@@ -738,5 +738,224 @@ describe('PR #78 review N2: group write', () => {
     ).checks.find((c) => c.name === 'claude-code bin');
     expect(bin?.status).toBe('fail');
     expect(bin?.detail).toContain('can be written by its group');
+  });
+});
+
+/** Links in the managed copy are judged by where they really lead (PR #78 review, 7b18e5c). */
+describe('PR #78 review: links in the managed copy', () => {
+  function copyIn(h: Harness): { prefix: string; nm: string } {
+    const prefix = path.join(h.home, 'cli');
+    npmPrefixCopy(prefix, VERSION);
+    const nm = path.join(prefix, 'lib', 'node_modules', 'oortmem', 'node_modules');
+    fs.mkdirSync(path.join(nm, 'a'), { recursive: true, mode: 0o755 });
+    for (const d of [nm, path.join(nm, 'a')]) fs.chmodSync(d, 0o755);
+    clearTreeCache();
+    return { prefix, nm };
+  }
+  const envOf = (h: Harness) => ({ HOME: h.root, OORT_HOME: h.home, PATH: '' });
+
+  it('links.an-x-dot-dot-chain-that-reads-inside-but-leads-outside-is-refused', () => {
+    const h = harness({ trusted: true });
+    const { prefix, nm } = copyIn(h);
+    // `x` leads to the prefix itself (inside); `x/../../outside` reads as inside the tree, but
+    // the kernel follows `x` first: prefix/.. /.. is two levels above the managed copy.
+    fs.writeFileSync(path.join(h.root, 'outside'), 'module.exports = 1;\n', { mode: 0o644 });
+    fs.symlinkSync(prefix, path.join(nm, 'a', 'x'));
+    const link = path.join(nm, 'a', 'escape');
+    fs.symlinkSync('x/../../outside', link);
+    expect(path.resolve(path.dirname(link), 'x/../../outside').startsWith(prefix)).toBe(true);
+    clearTreeCache();
+    expect(inspectManaged(envOf(h))).toMatchObject({
+      state: 'untrusted',
+      problem: {
+        dir: link,
+        why: "is a link with .. in it (x/../../outside) that is not one of npm's",
+      },
+    });
+  });
+
+  it('links.a-dangling-link-is-refused', () => {
+    const h = harness({ trusted: true });
+    const { nm } = copyIn(h);
+    const link = path.join(nm, 'a', 'gone.js');
+    fs.symlinkSync('nowhere.js', link);
+    clearTreeCache();
+    expect(inspectManaged(envOf(h))).toMatchObject({
+      state: 'untrusted',
+      problem: { dir: link, why: 'is a link that leads nowhere' },
+    });
+  });
+
+  it('links.npm-bin-links-are-fine-and-only-while-their-realpath-stays-inside', () => {
+    const h = harness({ trusted: true });
+    const { prefix } = copyIn(h);
+    const nm = path.join(prefix, 'lib', 'node_modules');
+    const dep = path.join(nm, 'commander');
+    const scoped = path.join(nm, '@scope', 'tool');
+    for (const d of [dep, scoped, path.join(nm, '.bin')]) fs.mkdirSync(d, { recursive: true });
+    for (const d of [dep, path.join(nm, '@scope'), scoped, path.join(nm, '.bin')]) {
+      fs.chmodSync(d, 0o755);
+    }
+    fs.writeFileSync(path.join(dep, 'index.js'), '\n', { mode: 0o644 });
+    fs.writeFileSync(path.join(scoped, 'cli.js'), '\n', { mode: 0o644 });
+    fs.symlinkSync('../commander/index.js', path.join(nm, '.bin', 'commander'));
+    fs.symlinkSync('../@scope/tool/cli.js', path.join(nm, '.bin', 'tool'));
+    // And the global bin link npm writes: bin/oort -> ../lib/node_modules/oortmem/dist/main.js.
+    clearTreeCache();
+    expect(inspectManaged(envOf(h)).state).toBe('ok');
+    // The same shape, but the package it names is a link out of the copy: refused.
+    const elsewhere = path.join(trustedTmpdir('oort-elsewhere-'), 'evil');
+    fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere, 'index.js'), '\n', { mode: 0o644 });
+    fs.symlinkSync(elsewhere, path.join(nm, 'evil'));
+    fs.symlinkSync('../evil/index.js', path.join(nm, '.bin', 'evil'));
+    clearTreeCache();
+    expect(inspectManaged(envOf(h))).toMatchObject({
+      state: 'untrusted',
+      problem: { why: expect.stringMatching(/^is a link out of the managed copy/) },
+    });
+  });
+
+  it('links.dot-dot-outside-npm-shapes-is-refused-even-when-it-stays-inside', () => {
+    const h = harness({ trusted: true });
+    const { nm } = copyIn(h);
+    fs.writeFileSync(path.join(nm, 'inside.js'), '\n', { mode: 0o644 });
+    const link = path.join(nm, 'a', 'up.js');
+    fs.symlinkSync('../inside.js', link);
+    clearTreeCache();
+    expect(inspectManaged(envOf(h))).toMatchObject({
+      state: 'untrusted',
+      problem: {
+        dir: link,
+        why: "is a link with .. in it (../inside.js) that is not one of npm's",
+      },
+    });
+    // Without `..`, a link to a file inside is fine.
+    fs.rmSync(link);
+    fs.symlinkSync(path.join(nm, 'inside.js'), link);
+    clearTreeCache();
+    expect(inspectManaged(envOf(h)).state).toBe('ok');
+  });
+});
+
+/** The final check of 7b18e5c: kernel paths, a stale walk after npm, and your own builds. */
+describe('PR #78 review: kernel paths, the walk after an install, own builds', () => {
+  /** The reviewer's run5 escape, built under `root`: a link whose text stays inside. */
+  function escape(root: string, deep: string): { link: string; payload: string } {
+    const depth = root.split('/').length - 1;
+    const ups = Array(depth).fill('..').join('/');
+    const t = tmpdir('oort-esc-');
+    fs.writeFileSync(path.join(t, 'payload.js'), 'export const pwned = 1;\n');
+    fs.chmodSync(t, 0o777);
+    let nest = deep;
+    for (let i = 0; i < depth + 2; i++) nest = path.join(nest, `n${i}`);
+    fs.mkdirSync(nest, { recursive: true });
+    let d = nest;
+    while (d !== deep) {
+      fs.chmodSync(d, 0o755);
+      d = path.dirname(d);
+    }
+    fs.symlinkSync(root, path.join(nest, 'L2'));
+    const link = path.join(deep, 'esc.js');
+    fs.symlinkSync(`${nest}/L2/${ups}${t}/payload.js`, link);
+    // Read as text, it stays inside; the kernel follows L2 first and lands in the temp dir.
+    expect(path.resolve(`${nest}/L2/${ups}${t}/payload.js`).startsWith(root + path.sep)).toBe(true);
+    expect(fs.realpathSync.native(link)).toBe(path.join(t, 'payload.js'));
+    return { link, payload: path.join(t, 'payload.js') };
+  }
+
+  it('kernel.the-run5-escape-is-refused-in-the-managed-copy', () => {
+    const h = harness({ trusted: true });
+    const prefix = path.join(h.home, 'cli');
+    npmPrefixCopy(prefix, VERSION);
+    const root = fs.realpathSync(prefix);
+    const deep = path.join(root, 'lib', 'node_modules', 'oortmem', 'dist');
+    const { link } = escape(root, deep);
+    clearTreeCache();
+    const s = inspectManaged({ HOME: h.root, OORT_HOME: h.home, PATH: '' });
+    expect(s).toMatchObject({ state: 'untrusted', problem: { dir: link } });
+    expect(s.state === 'untrusted' && s.problem.why).toMatch(/is a link with \.\. in it/);
+  });
+
+  it('kernel.the-run5-escape-is-refused-in-a-copy-of-your-own-by-where-it-really-leads', () => {
+    const h = harness({ trusted: true });
+    const pkg = path.join(h.root, 'build', 'oortmem');
+    fs.mkdirSync(path.join(pkg, 'dist'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkg, 'package.json'),
+      JSON.stringify({ name: 'oortmem', version: VERSION }),
+    );
+    const main = path.join(pkg, 'dist', 'main.js');
+    fs.writeFileSync(main, '#!/bin/sh\n', { mode: 0o755 });
+    const ctx = { io: { env: { HOME: h.root, OORT_HOME: h.home, PATH: '' } } } as never;
+    expect(() => checkAgentPath(main, ctx)).not.toThrow();
+    const { payload } = escape(fs.realpathSync(pkg), fs.realpathSync(path.join(pkg, 'dist')));
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).toThrow(
+      new RegExp(
+        `is a link to ${payload.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, where .* can be written by group or others`,
+      ),
+    );
+  });
+
+  it('cache.the-walk-after-npm-is-fresh (probe run7/run7b)', async () => {
+    const h = harness({ trusted: true });
+    const prefix = path.join(h.home, 'cli');
+    npmPrefixCopy(prefix, '0.0.1');
+    const env = { HOME: h.root, OORT_HOME: h.home, PATH: npmTrap(h.root).dir };
+    clearTreeCache();
+    expect(inspectManaged(env).state).toBe('ok'); // walked and cached before npm runs
+    const npm = fakeNpm();
+    const run = npm.deps.run!;
+    const r = await installManaged({
+      io: { env, err() {}, out() {} },
+      updateDeps: {
+        ...npm.deps,
+        run: async (...a: Parameters<typeof run>) => {
+          const out = await run(...a);
+          // What an npm with `umask=0` in .npmrc might leave.
+          const commands = path.join(prefix, 'lib', 'node_modules', 'oortmem', 'dist', 'commands');
+          fs.mkdirSync(commands);
+          fs.chmodSync(commands, 0o777);
+          return out;
+        },
+      },
+    } as never);
+    expect(r).toMatchObject({ ok: false, reason: 'unverified' });
+    expect(!r.ok && r.detail).toContain('the copy it left is not safe for agents to run');
+    expect(inspectManaged(env).state).toBe('untrusted');
+  });
+
+  it('own.a-build-of-yours-is-walked-whole-with-the-lenient-rules', () => {
+    const h = harness({ trusted: true });
+    const pkg = path.join(h.root, 'build', 'oortmem');
+    const deep = path.join(pkg, 'dist', 'commands', 'x.js');
+    fs.mkdirSync(path.dirname(deep), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkg, 'package.json'),
+      JSON.stringify({ name: 'oortmem', version: VERSION }),
+    );
+    const main = path.join(pkg, 'dist', 'main.js');
+    fs.writeFileSync(main, '#!/bin/sh\n', { mode: 0o755 });
+    fs.writeFileSync(deep, '\n', { mode: 0o644 });
+    // A pnpm-like link out of the package, to a directory of yours: fine, not walked into.
+    const store = path.join(trustedTmpdir('oort-store-'), 'commander');
+    fs.mkdirSync(store);
+    fs.mkdirSync(path.join(pkg, 'node_modules'));
+    fs.symlinkSync(store, path.join(pkg, 'node_modules', 'commander'));
+    const ctx = { io: { env: { HOME: h.root, OORT_HOME: h.home, PATH: '' } } } as never;
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).not.toThrow();
+    // A group-writable file deep in it, inside HOME: refused, by its path.
+    fs.chmodSync(deep, 0o664);
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).toThrow(`${deep} can be written by its group`);
+    fs.chmodSync(deep, 0o644);
+    // A link out to somewhere others can write: refused.
+    fs.chmodSync(store, 0o777);
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).toThrow(
+      /is a link to .*commander, where .* can be written by group or others/,
+    );
   });
 });

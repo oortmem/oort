@@ -66,6 +66,7 @@ import {
   managedCopy,
   managedIsCurrent,
   manualInstall,
+  copyTree,
   runningUnstable,
   shellPath,
 } from './managed.js';
@@ -478,7 +479,9 @@ function judgeCopy(ctx: Ctx, bin: string): Judged {
     home: env['HOME'] ?? '',
     strict: real === oortReal || real.startsWith(oortReal + path.sep),
   });
-  if (u !== undefined) return { kind: 'unsafe', why: shown(untrustedText(u)) };
+  // The whole package it belongs to, as for the running copy (PR #78 review).
+  const t = u ?? copyTree(real, env, real === oortReal || real.startsWith(oortReal + path.sep));
+  if (t !== undefined) return { kind: 'unsafe', why: shown(untrustedText(t)) };
   const version = nearestPackageVersion(real);
   return {
     kind: where === undefined ? 'other' : 'drifting',
