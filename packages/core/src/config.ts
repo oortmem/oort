@@ -143,6 +143,18 @@ const judge = z
   })
   .default({ experts: [] });
 
+/**
+ * The once-a-day update check (CON-114): one GET of npm's `latest` for `oortmem`, nothing about
+ * you sent, and the notice it shows (SessionStart, interactive commands, doctor, serve status).
+ * Read from the home config only: it is your preference, not a repository's.
+ */
+const updates = z
+  .strictObject({
+    /** false: never check, and never show the notice (`oort update` still asks npm when run). */
+    check: z.boolean().default(true),
+  })
+  .default({ check: true });
+
 export const OortConfig = z.strictObject({
   embed,
   rerank,
@@ -153,6 +165,7 @@ export const OortConfig = z.strictObject({
   project,
   serve,
   judge,
+  updates,
 });
 export type OortConfig = z.infer<typeof OortConfig>;
 
@@ -163,14 +176,15 @@ export type ResolvedConfig = OortConfig & {
   sources: Record<string, ConfigSource>;
   /**
    * Keys a project's `oort.config.json` set that only the home config may set (`serve`: a
-   * repository must not start processes on this machine; `judge`: nor name experts). Ignored;
+   * repository must not start processes on this machine; `judge`: nor name experts; `updates`:
+   * the update check is your preference). Ignored;
    * absent when there are none.
    */
   ignoredProjectKeys?: string[];
 };
 
 /** Keys read from the home config only; a project file's value is ignored (and reported). */
-const HOME_ONLY_KEYS: ReadonlySet<string> = new Set(['serve', 'judge']);
+const HOME_ONLY_KEYS: ReadonlySet<string> = new Set(['serve', 'judge', 'updates']);
 
 const CONFIG_KEYS = Object.keys(OortConfig.shape);
 

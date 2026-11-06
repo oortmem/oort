@@ -160,4 +160,18 @@ describe('config', () => {
     expect(c.recall.budgetChars).toBe(100); // other project keys still apply
     expect(resolveConfig(home, { OORT_HOME: home }).ignoredProjectKeys).toBeUndefined();
   });
+
+  it('config.updates-check-defaults-on-and-is-read-from-the-home-config-only (CON-114)', () => {
+    const home = tmp();
+    const cwd = tmp();
+    expect(resolveConfig(cwd, { OORT_HOME: home }).updates).toEqual({ check: true });
+    fs.writeFileSync(path.join(cwd, 'oort.config.json'), '{"updates":{"check":false}}');
+    const fromRepo = resolveConfig(cwd, { OORT_HOME: home });
+    expect(fromRepo.updates).toEqual({ check: true });
+    expect(fromRepo.ignoredProjectKeys).toEqual(['updates']);
+    fs.writeFileSync(path.join(home, 'config.json'), '{"updates":{"check":false}}');
+    expect(resolveConfig(cwd, { OORT_HOME: home }).updates).toEqual({ check: false });
+    fs.writeFileSync(path.join(home, 'config.json'), '{"updates":{"check":"no"}}');
+    expect(() => resolveConfig(home, { OORT_HOME: home })).toThrow(/updates/);
+  });
 });

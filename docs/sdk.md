@@ -59,7 +59,8 @@ label. Inject memory into a prompt only through it.
 ## Options
 
 `createOort(options?)` is async: local mode opens SQLite and reads key sources. It never makes a
-network request. Every option object is checked strictly: an unknown key, or an option the mode
+network request, and never checks for updates (the once-a-day check belongs to the command line:
+[Updating](cli.md#updating-oort-update)). Every option object is checked strictly: an unknown key, or an option the mode
 does not take (`keys.voyage` with `mode: 'cloud'`), throws `OortUsageError`. It is never silently
 ignored.
 

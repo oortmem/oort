@@ -46,6 +46,7 @@ import {
   Refusal,
   echo,
   fixForRoles,
+  shellWord as sh,
   keyRemedy,
   shown,
   tilde,
@@ -55,13 +56,18 @@ import {
 import { hostContext } from './connect.js';
 import { VERSION } from '@oortmem/core';
 import { hookBinaryOf, hookCommandPath, settingsFile, versionManagerOf } from './install.js';
+import { binPath } from '../io.js';
+import { compareVersions } from '../serve-protocol.js';
+import { availableUpdate, noticeText, readUpdateCache, updateCheckOff } from '../update-check.js';
+import { managedPrefixFor } from './update.js';
+import * as os from 'node:os';
 import { SKIP_FILE, callDaemon, clearSkip, readSkip } from '../serve-client.js';
 import { socketPathFor } from '../serve-protocol.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info' | 'unknown';
 
 export interface Check {
-  group: 'keys' | 'hooks' | 'serve' | 'mcp' | 'store' | 'relay' | 'cloud';
+  group: 'keys' | 'hooks' | 'serve' | 'mcp' | 'store' | 'relay' | 'cloud' | 'updates';
   name: string;
   status: CheckStatus;
   /** One line; never a key or a memory. */
@@ -248,8 +254,61 @@ async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean 
   return { checks, relayed };
 }
 
+/**
+ * Why the running copy is no place to point the hooks at, or undefined when it is one: a package
+ * runner's cache (npx, pnpm dlx), a temp directory, fnm's per-shell link, or a Node version
+ * manager (switching Node versions breaks it). `entry` is the path as typed, `real` its realpath.
+ */
+export function unstableCopy(
+  entry: string | undefined,
+  real: string | undefined,
+  tmp: string = realTmp(),
+): string | undefined {
+  const paths = [entry, real].filter((p): p is string => p !== undefined);
+  const segments = (p: string): string[] => p.replaceAll('\\', '/').split('/');
+  if (paths.some((p) => segments(p).includes('_npx') || segments(p).includes('dlx'))) {
+    return 'a package cache';
+  }
+  if (paths.some((p) => p.includes('fnm_multishells'))) return "fnm's link for this shell";
+  if (paths.some((p) => versionManagerOf(p) !== undefined)) return 'a Node version manager';
+  if (paths.some((p) => p === tmp || p.startsWith(tmp + path.sep))) return 'a temporary directory';
+  return undefined;
+}
+
+function realTmp(): string {
+  try {
+    return fs.realpathSync(os.tmpdir());
+  } catch {
+    return os.tmpdir();
+  }
+}
+
+/**
+ * The fix that (re)points the hooks: `oort install claude-code` run from this copy, unless this
+ * copy is temporary or under a version manager (CON-113), when it would write a path that breaks
+ * later; then it names the managed copy (`~/.oort/cli`), installing it first when it is missing.
+ */
+function hookFix(ctx: Ctx, running: string | undefined): { fix: string; fixCommand: string } {
+  const why = unstableCopy(ctx.io.entry, running);
+  if (why === undefined) return { fix: HOOK_FIX, fixCommand: HOOK_FIX };
+  const home = ctx.io.env['HOME'] ?? '';
+  const prefix = managedPrefixFor(ctx.io.env);
+  const bin = path.join(prefix, 'bin', 'oort');
+  // fixCommand runs as printed: every path one shell word (a HOME with a space or a `$`).
+  const run = `${sh(bin)} install claude-code`;
+  const show = `${shown(sh(tilde(bin, home)))} install claude-code`;
+  if (isExecutable(bin)) {
+    return { fix: `${show} (this oort is in ${why})`, fixCommand: run };
+  }
+  return {
+    fix: `npm i -g --prefix ${shown(sh(tilde(prefix, home)))} oortmem && ${show} (this oort is in ${why})`,
+    fixCommand: `npm i -g --prefix ${sh(prefix)} oortmem && ${run}`,
+  };
+}
+
 /** The Claude Code hooks in the user settings file. */
 async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Promise<Check[]> {
+  const fixHooks = hookFix(ctx, cmd);
   const file = settingsFile(false, ctx);
   const show = tilde(file, home);
   if (!fs.existsSync(path.join(home, '.claude'))) {
@@ -272,8 +331,8 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
         name: 'claude-code',
         status: 'fail',
         detail: (e as Error).message.split('\n')[0] ?? 'unreadable settings',
-        fix: `fix the JSON in ${show}, then oort install claude-code`,
-        fixCommand: HOOK_FIX,
+        fix: `fix the JSON in ${show}, then ${fixHooks.fix}`,
+        fixCommand: fixHooks.fixCommand,
       },
     ];
   }
@@ -285,11 +344,11 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
         name: 'claude-code',
         status: 'info',
         detail: `not installed in ${show}`,
-        fix: 'oort install claude-code',
+        ...fixHooks,
       },
     ];
   }
-  const binaries = await hookBinaryChecks(ctx, found, cmd);
+  const binaries = await hookBinaryChecks(ctx, found, cmd, fixHooks);
   const broken = found.filter(
     (e) => e.command !== undefined && !isExecutable(e.command) && e.command !== 'oort',
   );
@@ -302,13 +361,39 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
         name: 'claude-code',
         status: 'fail',
         detail: `${broken.map((e) => e.event).join(', ')} run ${broken[0]?.command ?? ''}, which is not an executable file`,
-        fix: HOOK_FIX,
+        ...fixHooks,
       },
       ...binaries,
     ];
   }
   // A version mismatch says more than "another path"; one warning for one cause.
   const versionWarned = binaries.some((c) => c.name === 'claude-code bin' && c.status === 'warn');
+  // Another executable copy of this same version (the managed ~/.oort/cli, say, while this one is
+  // a PATH copy): the hooks are fine as they are (CON-113). Repointing them at this copy could
+  // write a path that breaks later (fnm's per-shell link, a package cache).
+  const sameVersion =
+    stale.length > 0 &&
+    !versionWarned &&
+    binaries.some((c) => c.name === 'claude-code bin' && c.status === 'ok');
+  if (missing.length === 0 && sameVersion) {
+    const hooksBin = hookBinaryOf(`${stale[0]?.command ?? ''} hook ${stale[0]?.event ?? ''}`);
+    const here = ctx.io.entry ?? cmd ?? '';
+    return [
+      {
+        group: 'hooks',
+        name: 'claude-code',
+        status: 'ok',
+        detail: `${found.map((e) => e.event).join(', ')} in ${show}`,
+      },
+      {
+        group: 'hooks',
+        name: 'claude-code copy',
+        status: 'info',
+        detail: `the hooks run ${shown(tilde(hooksBin ?? '', home))}; this is another copy of oort ${VERSION} at ${shown(tilde(here, home))}`,
+      },
+      ...binaries,
+    ];
+  }
   if (missing.length > 0 || (stale.length > 0 && !versionWarned)) {
     return [
       {
@@ -319,7 +404,7 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
           missing.length > 0
             ? `${missing.join(', ')} missing in ${show}`
             : `installed from another path (${stale[0]?.command ?? ''})`,
-        fix: 'oort install claude-code',
+        ...fixHooks,
       },
       ...binaries,
     ];
@@ -336,7 +421,6 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
 }
 
 const HOOK_FIX = 'oort install claude-code';
-const REINSTALL_FIX = `${HOOK_FIX} (run it from the oort you want the hooks to use)`;
 const VERSION_PROBE_MS = 3000;
 
 /** `<bin> --version` through execFile (no shell), with a short timeout; undefined if it fails. */
@@ -368,7 +452,14 @@ async function hookBinaryChecks(
   ctx: Ctx,
   found: readonly { event: string; command?: string }[],
   cmd: string | undefined,
+  fixHooks: { fix: string; fixCommand: string },
 ): Promise<Check[]> {
+  // Another version: `oort update` brings every copy (the hooks' included) to the latest; or
+  // point the hooks at the copy you want.
+  const reinstall =
+    fixHooks.fix === HOOK_FIX
+      ? `oort update, or ${HOOK_FIX} from the oort you want the hooks to use`
+      : `oort update, or ${fixHooks.fix}`;
   const seen = new Set<string>();
   const checks: Check[] = [];
   const home = ctx.io.env['HOME'] ?? '';
@@ -398,8 +489,8 @@ async function hookBinaryChecks(
         name: 'claude-code bin',
         status: 'warn',
         detail: `${show} did not report a version for --version`,
-        fix: REINSTALL_FIX,
-        fixCommand: HOOK_FIX,
+        fix: reinstall,
+        fixCommand: 'oort update',
       });
     } else if (got !== VERSION) {
       checks.push({
@@ -407,8 +498,8 @@ async function hookBinaryChecks(
         name: 'claude-code bin',
         status: 'warn',
         detail: `the hooks run oort ${got} (${show}), but this is oort ${VERSION}`,
-        fix: REINSTALL_FIX,
-        fixCommand: HOOK_FIX,
+        fix: reinstall,
+        fixCommand: 'oort update',
       });
     } else {
       checks.push({
@@ -994,10 +1085,18 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
     if (!(e instanceof Refusal)) throw e;
     cmd = undefined; // not the installed bin: entries are judged on their own paths
   }
+  // The hooks are judged against the copy running, wherever it lives (CON-113): another copy
+  // of the same version is fine, and a temporary one is never suggested as their path.
+  let running: string | undefined;
+  try {
+    running = fs.realpathSync(ctx.binPath ?? binPath());
+  } catch {
+    running = undefined;
+  }
   const keys = await keyChecks(ctx);
   const checks: Check[] = [
     ...keys.checks,
-    ...(await hookChecks(ctx, cmd, home)),
+    ...(await hookChecks(ctx, cmd ?? running, home)),
     ...(await serveChecks(ctx)),
     ...mcpChecks(ctx, cmd),
     ...(await storeChecks(ctx)),
@@ -1022,8 +1121,26 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
       problems === 0 ? ui.success('no problems') : ui.warning(`${problems} to fix`),
     ),
   );
-  for (const group of ['keys', 'hooks', 'serve', 'mcp', 'store', 'relay', 'cloud'] as const) {
-    const rows = checks.filter((c) => c.group === group);
+  // The update notice (CON-114): a line for people, never in --json (`oort update --check
+  // --json` is the data). From the cache only: doctor makes no new network call for it.
+  const update = updateRow(ctx);
+  for (const group of [
+    'keys',
+    'hooks',
+    'serve',
+    'mcp',
+    'store',
+    'relay',
+    'cloud',
+    'updates',
+  ] as const) {
+    const rows =
+      group === 'updates'
+        ? update === undefined
+          ? []
+          : [update]
+        : checks.filter((c) => c.group === group);
+    if (group === 'updates' && rows.length === 0) continue;
     ctx.io.out(`${group === 'keys' ? '' : '\n'}${ui.bold(group)}\n`);
     ctx.io.out(
       ui.kv(
@@ -1043,4 +1160,43 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
     );
   }
   return exit;
+}
+
+/**
+ * Doctor's update line, from the cache: a newer release (with `oort update`), or this one is the
+ * latest. Nothing when the check is off or has not run yet.
+ */
+export function updateRow(ctx: Ctx, now = Date.now()): Check | undefined {
+  const home = resolveHome(ctx.io.env);
+  const off = updateCheckOff(ctx.io.env, home);
+  if (off?.startsWith('home: ') === true) {
+    // An opt-out says nothing; a home the check will not write in says why, once.
+    return {
+      group: 'updates',
+      name: 'version',
+      status: 'info',
+      detail: `update check skipped: ${shown(tilde(home, ctx.io.env['HOME'] ?? ''))} ${off.slice('home: '.length)}`,
+    };
+  }
+  if (off !== undefined) return undefined;
+  const cache = readUpdateCache(home);
+  const latest = availableUpdate(VERSION, cache);
+  if (latest !== undefined) {
+    return {
+      group: 'updates',
+      name: 'version',
+      status: 'info',
+      detail: noticeText(latest, VERSION).replace(/: oort update$/, ''),
+      fix: 'oort update',
+    };
+  }
+  if (cache.latest === undefined || cache.checkedAt === undefined) return undefined;
+  if ((compareVersions(VERSION, cache.latest) ?? -1) < 0) return undefined;
+  const hours = Math.max(0, Math.round((now - cache.checkedAt) / 3_600_000));
+  return {
+    group: 'updates',
+    name: 'version',
+    status: 'ok',
+    detail: `oort ${VERSION} is the latest (checked ${hours < 1 ? 'less than an hour' : `${hours} h`} ago)`,
+  };
 }

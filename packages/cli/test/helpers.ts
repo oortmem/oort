@@ -16,7 +16,6 @@ import {
   type MemoryWriter,
 } from '@oortmem/core';
 import type { Io } from '../src/io.js';
-import type { LoginDeps } from '../src/commands/login.js';
 import { createKeychain, type Keychain } from '../src/keychain.js';
 import { runCli } from '../src/program.js';
 import { resolveAgent, type WireFn, type Wired } from '../src/wire.js';
@@ -35,6 +34,8 @@ export interface FakeIo extends Io {
   /** The cwd of each `spawnDrain`. */
   spawnCwds: string[];
   asked: string[];
+  /** How many background update checks were asked for (`spawnUpdateCheck`); none really start. */
+  updateChecks: number;
 }
 
 export function fakeIo(opts: {
@@ -44,6 +45,10 @@ export function fakeIo(opts: {
   tty?: boolean;
   /** stdout is a terminal (colour on unless NO_COLOR). */
   stdoutTTY?: boolean;
+  /** stderr is a terminal (where the update notice goes). */
+  stderrTTY?: boolean;
+  /** The script the CLI was started as (`process.argv[1]`). */
+  entry?: string;
   answer?: string;
   /** What `askSecret` returns. */
   secret?: string;
@@ -51,9 +56,11 @@ export function fakeIo(opts: {
   const io: FakeIo = {
     cwd: opts.cwd,
     env: opts.env ?? {},
-    entry: undefined,
+    entry: opts.entry,
     stdinIsTTY: opts.tty ?? false,
     stdoutIsTTY: opts.stdoutTTY ?? false,
+    stderrIsTTY: opts.stderrTTY ?? false,
+    updateChecks: 0,
     stdout: '',
     stderr: '',
     hookStdout: undefined,
@@ -82,6 +89,9 @@ export function fakeIo(opts: {
       io.spawned++;
       io.spawnCwds.push(cwd);
     },
+    spawnUpdateCheck() {
+      io.updateChecks++;
+    },
     hookExit(stdout) {
       io.hookExits++;
       io.hookStdout = stdout;
@@ -102,7 +112,7 @@ export interface Harness {
     args: string[],
     io?: Partial<Parameters<typeof fakeIo>[0]>,
     keychain?: Keychain,
-    deps?: { login?: LoginDeps; fetch?: typeof fetch },
+    deps?: Parameters<typeof runCli>[4],
   ): Promise<{ code: number; io: FakeIo }>;
 }
 

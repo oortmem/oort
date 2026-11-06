@@ -1,5 +1,5 @@
-import { Command, CommanderError } from 'commander';
-import { VERSION } from '@oortmem/core';
+import { Command, CommanderError, Option } from 'commander';
+import { VERSION, resolveHome } from '@oortmem/core';
 import { connectCommand } from './commands/connect.js';
 import {
   constellationAdoptCommand,
@@ -23,6 +23,7 @@ import {
 } from './commands/constellation.js';
 import { galaxyCreateCommand, galaxyListCommand, galaxyMembersCommand } from './commands/galaxy.js';
 import { doctorCommand } from './commands/doctor.js';
+import { updateCommand, type UpdateDeps, type UpdateOptions } from './commands/update.js';
 import { consolidateCommand } from './commands/consolidate.js';
 import { explainCommand } from './commands/explain.js';
 import { exportCommand } from './commands/export.js';
@@ -100,6 +101,13 @@ import {
   startOutput,
 } from './output.js';
 import { uiFor } from './ui.js';
+import {
+  availableUpdate,
+  noticeText,
+  readUpdateCache,
+  requestRefresh,
+  updateCheckOff,
+} from './update-check.js';
 import { Refusal, commanderText, echo, safeJson, type Ctx } from './util.js';
 import { wire as defaultWire, type WireFn } from './wire.js';
 
@@ -806,6 +814,27 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--json', 'print JSON')
     .action(run((o: { json?: boolean }) => whoamiCommand(o, ctx)));
 
+  p.command('update')
+    .description(
+      'update every copy of oort here (the hooks, this one, ~/.oort/cli) to the latest release',
+    )
+    .option('--check', 'only report what would change (exits 0 either way)')
+    .option('--yes', 'do not ask before running the installers')
+    .option('--version <version>', 'install this version instead of the latest (0.6.3)')
+    // The program's own `--version` is parsed before any subcommand's, so runCli renames this
+    // command's to `--update-version` before parsing (`updateArgs`).
+    .addOption(new Option('--update-version <version>').hideHelp())
+    .option('--json', 'print oort.v1 JSON')
+    .action(
+      run((o: UpdateOptions & { updateVersion?: string }) => {
+        const { updateVersion, ...rest } = o;
+        return updateCommand(
+          { ...rest, ...(updateVersion !== undefined && { version: updateVersion }) },
+          ctx,
+        );
+      }),
+    );
+
   p.command('doctor')
     .description(
       'check keys, hooks, MCP connectors, the store and the relay, with a fix per problem',
@@ -963,7 +992,12 @@ export async function runCli(
     warn: (m) => io.err(`oort: ${m}\n`),
     promptSecret: (q) => io.askSecret(q),
   }),
-  deps: { login?: LoginDeps; fetch?: typeof fetch } = {},
+  deps: {
+    login?: LoginDeps;
+    fetch?: typeof fetch;
+    binPath?: string;
+    updateDeps?: Partial<UpdateDeps>;
+  } = {},
 ): Promise<number> {
   let code = 0;
   const ctx: Ctx = { io, wire, keychain, ...deps };
@@ -971,8 +1005,10 @@ export async function runCli(
     code = c;
   });
   try {
+    args = updateArgs(p, args);
     // Plain `oort` is the front door: the help on stdout, exit 0.
     await p.parseAsync(args.length === 0 ? ['--help'] : args, { from: 'user' });
+    updateNotice(ctx, io);
     return code;
   } catch (e) {
     if (e instanceof CommanderError && e.exitCode === 0) return 0;
@@ -1005,4 +1041,47 @@ export async function runCli(
     if (json) io.out(`${safeJson(failure(command, info))}\n`);
     return info.exitCode;
   }
+}
+
+/** Commands that never show the update notice: their output is a protocol or has its own line. */
+const NO_NOTICE = new Set(['hook', 'mcp', 'update', 'doctor']);
+
+/**
+ * After an interactive command, one dim line on stderr when a newer oort is out (CON-114): `Oort X
+ * is available (you have Y): oort update`. Only when stdout and stderr are both a terminal, never
+ * in JSON mode (`--json`, `OORT_OUTPUT=json`), never for the hook, MCP, serve, doctor (its own
+ * line) or update. Reads the cache only; a day-old one is refreshed by a detached process.
+ */
+function updateNotice(ctx: Ctx, io: Io): void {
+  try {
+    const out = ctx.output;
+    if (out === undefined || out.json || jsonFromEnv(io.env)) return;
+    if (NO_NOTICE.has(out.command) || out.command.startsWith('serve')) return;
+    if (io.stdoutIsTTY !== true || io.stderrIsTTY !== true) return;
+    const home = resolveHome(io.env);
+    if (updateCheckOff(io.env, home) !== undefined) return;
+    requestRefresh(home, io.env, () => io.spawnUpdateCheck?.());
+    const latest = availableUpdate(VERSION, readUpdateCache(home));
+    if (latest !== undefined) io.err(`${uiFor(io).dim(noticeText(latest, VERSION))}\n`);
+  } catch {
+    // A notice never fails a command.
+  }
+}
+
+/**
+ * `oort update --version <x>`: commander parses the program's `--version` (print the version)
+ * before a subcommand's, so after `update` it becomes `--update-version`, the option update reads.
+ */
+export function updateArgs(root: Command, args: string[]): string[] {
+  if (commandPath(commandFor(root, args)) !== 'update') return args;
+  const at = args.indexOf('update');
+  return args.map((a, i) =>
+    i <= at
+      ? a
+      : a === '--version'
+        ? '--update-version'
+        : a.startsWith('--version=')
+          ? `--update-version=${a.slice('--version='.length)}`
+          : a,
+  );
 }

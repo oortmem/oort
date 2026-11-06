@@ -29,6 +29,151 @@ and neither is `npx -y oortmem`, which is slow to start and needs the network.
 Under `npx oortmem setup`, setup offers to run `npm i -g oortmem` first and
 then writes the global install's path (see the connect step below).
 
+To update later, run `oort update` (see [Updating](#updating-oort-update)).
+
+## Updating: `oort update`
+
+```sh
+oort update                  # every copy here to the latest release, after one question
+oort update --check          # only say what would change; exits 0 either way
+oort update --yes --json     # no question, oort.v1 JSON
+oort update --version 0.6.3  # this release instead of the latest
+```
+
+`oort update` asks npm's registry for the latest `oortmem`, then finds every
+copy of oort that matters on this machine:
+
+- **the hooks' copy**, the binary `~/.claude/settings.json` runs (the path
+  `oort install claude-code` wrote, or the first `oort` on `PATH` for a bare
+  `oort hook …`);
+- **this copy**, the one you ran;
+- **the managed copy** in `~/.oort/cli` (`$OORT_HOME/cli`), when there is one,
+  installed with `npm i -g --prefix ~/.oort/cli oortmem`;
+- **every other `oort` on `PATH`**; the first is what `oort` runs in this
+  shell.
+
+Each copy is recognised by where it really lives (its realpath, or for
+pnpm's shell shims the script the shim's text names: an absolute path, or a
+`$basedir/…` path that stays below the shim's own directory. Whatever it names
+counts only as a pnpm global, which is never run: npm never installs shell
+shims, so a shim never gets an npm prefix, and any other shim is listed as
+unrecognised), and its version is
+read from its files: the nearest `package.json` named `oortmem`, or for a PyPI
+launcher its `oortmem-<version>.dist-info`. Finding copies never runs one, so
+`oort update --check` only reads (and asks npm's registry); a copy whose files
+say nothing is listed as "version unknown".
+
+| Kind | Where it lives | What `oort update` does with it |
+| --- | --- | --- |
+| managed | `~/.oort/cli` | Runs `npm i -g --prefix ~/.oort/cli oortmem@X --prefer-online`. |
+| npm global | `<prefix>/lib/node_modules/oortmem`, also under nvm, fnm, Volta or asdf | Runs `npm i -g --prefix <prefix> oortmem@X --prefer-online`. The prefix is named, so this copy changes whichever `npm` comes first on `PATH`. Under fnm, the `PATH` entry is fnm's link for this shell (`fnm_multishells`); the copy itself is the npm global of that Node version. |
+| pnpm global | pnpm's global directory (`global/5`, or pnpm 11's isolated `global/v11/<hash>`) | Prints `pnpm add -g oortmem@X`; it never runs pnpm. Where pnpm keeps globals moves with its version and settings, so `oort update` cannot be sure `pnpm add -g` would change this copy: run it with the pnpm that installed it. |
+| PyPI launcher | a Python script from `pip install oortmem` or `pipx install oortmem` | Prints `pipx upgrade oortmem` or `<python> -m pip install -U oortmem`. It never runs pip. The launcher runs the npm release it was built for. |
+| checkout | `packages/cli/dist/main.js` in a clone of the repository | Prints `cd <clone> && git pull && pnpm install && pnpm build`. |
+| temporary | the npx cache, pnpm dlx, a temp directory, or fnm's link for a shell that has ended | Nothing. A temporary copy is never updated in place: npx keeps whatever version a later `npx oortmem` asks for, and the others are deleted by their owner. It says why. |
+
+It runs npm for the hooks' copy, this copy, the managed copy and the first
+`oort` on `PATH`, when it is an npm install (managed or npm global) older than
+the release. `npm` is the first one on `PATH`, taken only from absolute `PATH`
+entries and run by its absolute path, from your home directory (so no
+project's `.npmrc` or `package.json` applies); with none, the command is
+printed instead. It lists every
+other older copy on `PATH` with the command that updates it and the one that
+removes it (`npm rm -g --prefix <prefix> oortmem`, `pnpm rm -g oortmem`,
+`pipx uninstall oortmem`). It never deletes anything. Installers run with no
+shell, one at a time; their output goes to stderr, so `--json` keeps stdout
+for the envelope.
+
+- **Checked, not trusted.** An install counts only when the copy then resolves
+  to `<prefix>/lib/node_modules/oortmem/dist/main.js` for the prefix it went
+  into, and that `package.json` says the release. An installer that exits 0
+  but leaves the copy as it was (or pointing somewhere else) is a failure
+  (`✗`, `ok: false`, `unverified: true`, exit 1).
+- **npm's delay after a release.** For a minute or so after a release, npm can
+  answer `ETARGET` (no such version). `oort update` tries again after 5, 10,
+  20 and then every 30 seconds, for up to 2 minutes, with a line on stderr
+  each time. Any other installer failure stops it at once (exit 1).
+- **After installing**, and only with a checked copy: when `oort serve` runs,
+  it is stopped. That copy's
+  `oort doctor --json` then opens the store, which migrates its schema when the
+  release needs that, after copying it, exactly as `oort doctor` does; the
+  copy's path is printed. Then the new copy starts `oort serve --detach`
+  again. All three run from the copy the hooks use. With no checked copy,
+  none of them runs, and it says what to run once one is.
+- **Release notes.** It ends with the link:
+  `https://github.com/oortmem/oort/releases/tag/vX`.
+- **Asking.** One question on stderr: `Update 2 copies of oort to 0.6.3 and
+  restart oort serve? [y/N]`. With `--json`, or when stdin is not a terminal,
+  it refuses (`needs-confirmation`, exit 2) unless `--yes`. Declining exits 0.
+  `--check` never asks and never installs.
+- **Exit codes.** `0`: updated, already up to date, declined, or `--check`
+  (with or without an update: read `data.upToDate`); `1`: an installer failed
+  (the envelope is a success with `exitCode: 1` and says which), or npm's
+  registry could not be reached (`network`); `2`: a `--version` that is not a
+  version (`usage`), or the missing `--yes`.
+
+With `--json` its `data` is `{ "current", "latest", "from": "npm" |
+"--version", "check", "upToDate", "copies": [{ "path", "realpath", "kind",
+"version", "roles", "firstOnPath", "action", "command", "removeCommand",
+"note" }], "installed": [{ "path", "realpath", "command", "ok", "unverified",
+"attempts", "version" }],
+"migration": { "ran", "ok", "store", "migrated", "backup" }, "daemon": {
+"running", "version", "pid", "restarted", "now" }, "releaseNotes" }`, and
+`"declined": true` when you said no. `kind` is
+`managed`, `npm-global`, `pnpm-global`, `pypi`, `source`, `transient` or
+`unknown`; `roles` lists `hooks`, `running`, `managed` and `path`; `action` is
+`update` (run here), `current`, `manual` (a command for you), `listed` (another
+copy on `PATH`), `transient` or `unknown`. `upToDate` and `copies` describe
+the machine before anything ran; `installed` says what changed.
+
+### The update notice
+
+Once a day oort checks whether a newer release is out, and says so:
+
+- **When a Claude Code (or Codex) session starts**, as a message to you
+  (`systemMessage` in the SessionStart hook's output), never as part of the
+  model's context: the memory block it gets is the same as without it. Claude
+  Code shows `systemMessage` to you; Codex accepts it in SessionStart output
+  and surfaces it as a warning in its UI, apart from the context it gives the
+  model. At most once a day for each new version, and never after `/compact`.
+- **After an interactive command**, one dim line on stderr:
+  `Oort 0.6.3 is available (you have 0.6.2): oort update`. Only when stdout
+  and stderr are both a terminal, never with `--json` or `OORT_OUTPUT=json`, and
+  never for `oort hook`, `oort mcp`, `oort serve`, `oort doctor` or
+  `oort update`.
+- **In `oort doctor`** (an `updates` line) and **`oort serve status`** (a
+  line under the status). Neither puts it in `--json`; for scripts,
+  `oort update --check --json` has the data.
+- Never in the MCP server.
+
+**What the check sends.** One `GET https://registry.npmjs.org/oortmem/latest`,
+with the user agent `oort-update-check`, no version, no id and no cookies,
+and a 1.5 second timeout. Nothing about you or your memories. The answer is
+kept in `~/.oort/update-check.json` (mode 600, replaced atomically). A hook only
+reads that file: when it is a day old, the hook starts a detached background
+process that asks npm and rewrites it, so no hook ever waits on the network.
+That process gets only `PATH`, `HOME`, `OORT_HOME`, the opt-outs below, and
+the proxy and certificate variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`
+in either case, `NODE_USE_ENV_PROXY`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
+`SSL_CERT_DIR`): never an API key. It reads at most 1 MB of the answer. When
+`~/.oort` is a symlink, it is followed only to a directory of yours that group
+and others cannot write; otherwise the check is skipped, and `oort doctor`
+says why.
+A failed check is not retried until the next day. `oort doctor` and
+`oort serve status` only read the file.
+
+**Turning it off.** Any one of these turns off both the check and the notice:
+`OORT_NO_UPDATE_CHECK=1`, `NO_UPDATE_NOTIFIER` set to anything, a CI
+environment (`CI` set, and not `false` or `0`), or in `~/.oort/config.json`:
+
+```json
+{ "updates": { "check": false } }
+```
+
+Only the home config is read for `updates`; a repository's `oort.config.json`
+cannot change it (the key is ignored there, with a warning). `oort update`
+itself still asks npm when you run it.
+
 ## Conventions
 
 **Output.** A human-facing command prints one header line, then aligned
@@ -261,6 +406,7 @@ oort constellation members oort-core --json  # { "members": [...] }
 oort constellation remove oort-core mb_… --yes --json   # { "constellation", "member", "removed": true }
 oort serve status --json                     # { "running", "socket", "pid", … } (exit 1 when not running)
 oort doctor --json                           # { "status": "ok"|"warn"|"fail", "problems", "checks": [{ …, "fixCommand"? }] }
+oort update --check --json                   # { "current", "latest", "upToDate", "copies": [{ "path", "kind", "version", "action", "command" }], … }
 ```
 
 
@@ -729,7 +875,9 @@ It is optional: without it, the hooks work exactly as before.
 - **Requests.** Each frame is a 4-byte length and JSON: `{ v, id, method,
   params }`, answered `{ v, id, ok, result }` or `{ v, id, ok: false, error: {
   code, message } }`. The methods are `ping`, `status`, `stop`, `hook` and
-  `recall`. Every request is checked against a schema; an unknown method or an
+  `recall`. A `hook` or `recall` request carries the client's `version`: another
+  version is refused with `version-mismatch`, except that a newer one gets
+  `restarting` on a `hook` (see "After an update" below). Every request is checked against a schema; an unknown method or an
   unexpected field is refused. No parameter names a file: `cwd` only selects
   the project, as the hook input's own `cwd` does.
 
@@ -751,9 +899,19 @@ requests it served. It exits 0 when the daemon answers and 1 when it does not
 (`--json` still prints the state, with `running: false`), so
 `oort serve status || oort serve --detach` works. `oort doctor` shows the same under `serve`.
 
-After upgrading oort, a daemon from the old version keeps running, and the
-hooks ignore it until it exits. Run `oort serve stop` (then `oort serve
---detach` again) to switch at once.
+**After an update.** `oort update` stops the old daemon and starts the new
+one itself. Otherwise the daemon gives way on its own: when a hook from a newer
+oort reaches it, the daemon answers (the error code `restarting`; that hook
+runs in-process, with no circuit breaker) and exits, and the hook starts a
+daemon of its own version in its place, whatever `serve.autostart` says, since
+one was running. A second `restarting` within a minute means something keeps
+starting an older daemon: the hooks then open the circuit breaker for its
+usual minute instead of starting another (`~/.oort/serve.restarting` holds the
+time of the last one). Only a newer hook does this, and only the `hook` method: an
+older or equal version, a version that does not parse, `ping` and `status`
+never stop it, so two copies of different versions cannot take turns. A
+daemon from before 0.6.3 does not do this; the hooks then run in-process until
+it exits, or until `oort serve stop && oort serve --detach`.
 
 ## Memory commands
 
@@ -1569,11 +1727,12 @@ Pro, with no key and a 3 second timeout.
 | Group | Checks | A problem and its fix |
 | --- | --- | --- |
 | `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. A role on a local model instead loads it and runs it once, offline. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort models pull (free local embed and rerank, no keys), oort keys set <provider>, or oort login (Oort Pro)`; for decide and write, which no local model does, the key or Oort Pro. Without a Keychain or `credentials.json`, the variable to set in your agent's environment instead. A model the relay does not serve: use the default model, or set the vendor key. |
-| `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, for this bin. | Missing, from another path, or a command that is not executable: `oort install claude-code`. A hook binary whose `--version` differs from the oort you run is a warning naming both versions and the path (re-run `oort install claude-code` from the oort you want); a path under a Node version manager (`.nvm/`, `fnm_multishells`, `node-versions/`, `.volta/`, `.asdf/`) gets a note that switching Node versions will break the hooks. Unparseable settings: fix the JSON, then `oort install claude-code`. |
+| `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, and the binary they run. Hooks that run another executable copy of this same version (the managed `~/.oort/cli`, while you run a copy from `PATH`) are fine: an info line names both. | Missing, or a command that is not executable: `oort install claude-code`. A hook binary whose `--version` differs from the oort you run is a warning naming both versions and the path: `oort update` (or `oort install claude-code` from the oort you want). When the oort you run lives somewhere temporary or under a Node version manager (the npx or pnpm dlx cache, a temp directory, `fnm_multishells`, `.nvm/`, `node-versions/`, `.volta/`, `.asdf/`), the fix never points the hooks at it: it names the managed copy instead, `~/.oort/cli/bin/oort install claude-code` (with `npm i -g --prefix ~/.oort/cli oortmem &&` first when there is none). A hook path under a version manager gets a note that switching Node versions will break the hooks. Unparseable settings: fix the JSON, then the same fix. |
 | `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. Whether the hooks skip the daemon after a timeout or refusal, and until when. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
 | `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
 | `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
+| `updates` | From the [update check](#the-update-notice)'s file only (doctor makes no request for it): a newer release, or that this one is the latest. Shown to people only, never in `--json`, and not when the check is off. | A newer release (information): `oort update`. |
 
 Each check has a status: `✓` ok, `!` warn, `✗` fail, `•` info and `?`
 unknown. A relay that does not answer `/health` is a warning, not a failure:

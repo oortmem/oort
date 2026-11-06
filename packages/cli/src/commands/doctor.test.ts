@@ -19,7 +19,8 @@ import {
 } from '@oortmem/store-sqlite';
 import { wire as realWire } from '../wire.js';
 import { MIGRATION_PENDING_NOTE } from './hook.js';
-import { consolidationCheck } from './doctor.js';
+import { consolidationCheck, unstableCopy } from './doctor.js';
+import { writeUpdateCache } from '../update-check.js';
 
 interface Check {
   group: string;
@@ -64,11 +65,16 @@ async function doctor(
   env: Record<string, string> = {},
   keychain?: Keychain,
   fetchFn: typeof fetch = fakeRelay().fetchFn,
+  running?: { entry: string; script: string },
 ) {
   const kc = keychain ?? memoryKeychain().kc;
-  const io = { env: { HOME: h.root, OORT_HOME: h.home, ...env } };
-  const human = await h.run(['doctor'], io, kc, { fetch: fetchFn });
-  const json = await h.run(['doctor', '--json'], io, kc, { fetch: fetchFn });
+  const io = {
+    env: { HOME: h.root, OORT_HOME: h.home, ...env },
+    ...(running !== undefined && { entry: running.entry }),
+  };
+  const deps = { fetch: fetchFn, ...(running !== undefined && { binPath: running.script }) };
+  const human = await h.run(['doctor'], io, kc, deps);
+  const json = await h.run(['doctor', '--json'], io, kc, deps);
   const report = data(json.io.stdout, 'doctor') as {
     status: 'ok' | 'warn' | 'fail';
     problems: number;
@@ -252,7 +258,8 @@ describe('oort doctor', () => {
     expect(c?.fix).toContain('oort install claude-code');
     // One warning for one cause: the generic "another path" row is not added on top.
     expect(d.check('hooks', 'claude-code')?.status).not.toBe('warn');
-    expect(d.human.io.stdout).toContain('fix: oort install claude-code');
+    expect(d.human.io.stdout).toContain('fix: oort update, or oort install claude-code');
+    expect(c?.fixCommand).toBe('oort update');
   });
 
   it('doctor.hook-binary-that-is-gone-fails-and-is-never-run', async () => {
@@ -576,5 +583,207 @@ describe('doctor consolidation check (CON-48)', () => {
       fix: 'oort consolidate',
     });
     expect(consolidationCheck(h.home, NOW).detail).toContain('the next drain retries it');
+  });
+});
+
+/**
+ * CON-113: doctor run from a PATH copy of oort (an npm global under fnm, reached through fnm's
+ * per-shell link) while the hooks run the managed copy (~/.oort/cli).
+ */
+describe('doctor: the hooks and another copy of oort (CON-113)', () => {
+  /** An oortmem package whose main.js answers `--version` with `version`; its realpath. */
+  function copy(prefix: string, version: string): string {
+    const pkg = path.join(prefix, 'lib', 'node_modules', 'oortmem');
+    fs.mkdirSync(path.join(pkg, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'oortmem', version }));
+    const main = path.join(pkg, 'dist', 'main.js');
+    fs.writeFileSync(main, `#!/bin/sh\necho "oort ${version}"\n`, { mode: 0o755 });
+    fs.mkdirSync(path.join(prefix, 'bin'), { recursive: true });
+    fs.symlinkSync(main, path.join(prefix, 'bin', 'oort'));
+    return fs.realpathSync(main);
+  }
+
+  /** The managed copy with the hooks on it, and this doctor running from fnm's link. */
+  function machine(
+    hooksVersion: string = VERSION,
+    opts: { managed?: boolean; homeName?: string; shell?: string } = {},
+  ) {
+    const h = harness();
+    // `homeName`: HOME (and ~/.oort in it) in a directory of that name, for awkward paths.
+    const home = opts.homeName === undefined ? h.root : path.join(h.root, opts.homeName);
+    const oortHome = opts.homeName === undefined ? h.home : path.join(home, '.oort');
+    const env: Record<string, string> =
+      opts.homeName === undefined ? {} : { HOME: home, OORT_HOME: oortHome };
+    const managed = path.join(oortHome, 'cli');
+    const hooksBin =
+      opts.managed === false
+        ? copy(path.join(home, 'elsewhere'), hooksVersion)
+        : copy(managed, hooksVersion);
+    installHooks(path.join(home, '.claude', 'settings.json'), hooksBin);
+    const install = path.join(
+      home,
+      '.local',
+      'share',
+      'fnm',
+      'node-versions',
+      'v22.15.0',
+      'installation',
+    );
+    const script = copy(install, VERSION);
+    const shells = path.join(home, '.local', 'state', 'fnm_multishells');
+    fs.mkdirSync(shells, { recursive: true });
+    const shell = opts.shell ?? '51197_1793280789587';
+    fs.symlinkSync(install, path.join(shells, shell));
+    const entry = path.join(shells, shell, 'bin', 'oort');
+    return {
+      h,
+      home,
+      env,
+      hooksBin,
+      running: { entry, script },
+      managedBin: path.join(managed, 'bin', 'oort'),
+      managedPrefix: managed,
+    };
+  }
+
+  /** The settings without the Stop hook: the hooks need reinstalling. */
+  function dropStop(home: string): void {
+    const file = path.join(home, '.claude', 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      hooks: Record<string, unknown>;
+    };
+    delete settings.hooks['Stop'];
+    fs.writeFileSync(file, JSON.stringify(settings));
+  }
+
+  it('doctor.paths-in-the-copy-line-show-control-characters-never-send-them (M1)', async () => {
+    const m = machine(VERSION, { shell: '1_\u001b]0;TITLE\u0007\u001b[31mRED' });
+    const d = await doctor(m.h, m.env, undefined, undefined, m.running);
+    const info = d.check('hooks', 'claude-code copy');
+    expect(info?.detail).toContain('\\u{1b}[31mRED');
+    expect(d.human.io.stdout).not.toMatch(/[\u0007]|\u001b\]0;/);
+    expect(d.json.io.stdout).not.toMatch(/[\u0007\u001b]/);
+  });
+
+  it('doctor.fix-commands-quote-a-home-with-a-space-and-shell-metacharacters (M2)', async () => {
+    const m = machine(VERSION, { managed: false, homeName: "my home $(touch X);'q" });
+    dropStop(m.home);
+    const d = await doctor(m.h, m.env, undefined, undefined, m.running);
+    const row = d.check('hooks', 'claude-code');
+    const q = (p: string): string => `'${p.replaceAll("'", "'\\''")}'`;
+    expect(row?.fixCommand).toBe(
+      `npm i -g --prefix ${q(m.managedPrefix)} oortmem && ${q(m.managedBin)} install claude-code`,
+    );
+  });
+
+  it('doctor.same-version-from-another-path-is-ok-with-an-info-line-naming-both', async () => {
+    const m = machine();
+    const d = await doctor(m.h, {}, undefined, undefined, m.running);
+    expect(d.check('hooks', 'claude-code')).toMatchObject({ status: 'ok' });
+    expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
+    const info = d.check('hooks', 'claude-code copy');
+    expect(info).toMatchObject({ status: 'info' });
+    expect(info?.detail).toContain(m.hooksBin.replace(m.h.root, '~'));
+    expect(info?.detail).toContain(m.running.entry.replace(m.h.root, '~'));
+    expect(info?.detail).toContain(`another copy of oort ${VERSION}`);
+    // Nothing under hooks asks to be fixed, least of all by repointing them at fnm's link.
+    for (const c of d.report.checks.filter((c) => c.group === 'hooks')) {
+      expect(['ok', 'info']).toContain(c.status);
+    }
+    expect(d.human.io.stdout).not.toContain('installed from another path');
+    expect(d.human.io.stdout).not.toContain('fix: oort install claude-code');
+  });
+
+  it('doctor.a-transient-running-copy-is-never-suggested-for-the-hooks', async () => {
+    const m = machine();
+    // One event missing: the hooks need reinstalling, but not from this fnm shell's copy.
+    const file = path.join(m.h.root, '.claude', 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      hooks: Record<string, unknown>;
+    };
+    delete settings.hooks['Stop'];
+    fs.writeFileSync(file, JSON.stringify(settings));
+    const d = await doctor(m.h, {}, undefined, undefined, m.running);
+    const row = d.check('hooks', 'claude-code');
+    expect(row).toMatchObject({ status: 'warn' });
+    expect(row?.fix).toContain(
+      "~/oort-home/cli/bin/oort install claude-code (this oort is in fnm's link for this shell)",
+    );
+    expect(row?.fix).not.toMatch(/^oort install claude-code/);
+    expect(row?.fixCommand).toBe(`${m.managedBin} install claude-code`);
+    expect(row?.fixCommand).not.toContain('fnm_multishells');
+  });
+
+  it('doctor.with-no-managed-copy-the-fix-installs-it-first', async () => {
+    const m = machine(VERSION, { managed: false });
+    const file = path.join(m.h.root, '.claude', 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      hooks: Record<string, unknown>;
+    };
+    delete settings.hooks['Stop'];
+    fs.writeFileSync(file, JSON.stringify(settings));
+    const d = await doctor(m.h, {}, undefined, undefined, m.running);
+    const row = d.check('hooks', 'claude-code');
+    expect(row?.fix).toContain(
+      'npm i -g --prefix ~/oort-home/cli oortmem && ~/oort-home/cli/bin/oort install claude-code',
+    );
+    expect(row?.fixCommand).toBe(
+      `npm i -g --prefix ${path.join(m.h.home, 'cli')} oortmem && ${m.managedBin} install claude-code`,
+    );
+  });
+
+  it('doctor.a-different-version-still-warns', async () => {
+    const m = machine('0.1.0');
+    const d = await doctor(m.h, {}, undefined, undefined, m.running);
+    const bin = d.check('hooks', 'claude-code bin');
+    expect(bin).toMatchObject({ status: 'warn', fixCommand: 'oort update' });
+    expect(bin?.detail).toContain('0.1.0');
+    expect(bin?.detail).toContain(VERSION);
+    expect(bin?.fix).toContain('oort update, or ~/oort-home/cli/bin/oort install claude-code');
+    expect(d.check('hooks', 'claude-code copy')).toBeUndefined();
+  });
+
+  it('doctor.unstable-copies-are-caches-temp-dirs-fnm-links-and-version-managers', () => {
+    const tmp = '/private/var/folders/T';
+    expect(
+      unstableCopy('/usr/local/bin/oort', '/usr/local/lib/node_modules/oortmem/dist/main.js', tmp),
+    ).toBeUndefined();
+    expect(
+      unstableCopy(undefined, '/Users/x/.oort/cli/lib/node_modules/oortmem/dist/main.js', tmp),
+    ).toBeUndefined();
+    expect(
+      unstableCopy(undefined, '/Users/x/.npm/_npx/1/node_modules/oortmem/dist/main.js', tmp),
+    ).toBe('a package cache');
+    expect(
+      unstableCopy(undefined, '/Users/x/Library/Caches/pnpm/dlx/1/oortmem/dist/main.js', tmp),
+    ).toBe('a package cache');
+    expect(unstableCopy(undefined, `${tmp}/x/oortmem/dist/main.js`, tmp)).toBe(
+      'a temporary directory',
+    );
+    expect(unstableCopy('/Users/x/.local/state/fnm_multishells/1_2/bin/oort', undefined, tmp)).toBe(
+      "fnm's link for this shell",
+    );
+    expect(
+      unstableCopy(
+        undefined,
+        '/Users/x/.nvm/versions/node/v22/lib/node_modules/oortmem/dist/main.js',
+        tmp,
+      ),
+    ).toBe('a Node version manager');
+  });
+
+  it('doctor.shows-an-available-update-as-an-info-line-never-in-json', async () => {
+    const h = harness();
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    writeUpdateCache(h.home, { checkedAt: Date.now(), latest: '99.0.0' });
+    const d = await doctor(h);
+    expect(d.human.io.stdout).toContain(`Oort 99.0.0 is available (you have ${VERSION})`);
+    expect(d.human.io.stdout).toContain('try: oort update');
+    expect(d.json.io.stdout).not.toContain('99.0.0');
+    // Off: no line at all.
+    const off = await doctor(h, { OORT_NO_UPDATE_CHECK: '1' });
+    expect(off.human.io.stdout).not.toContain('99.0.0');
+    // Doctor never starts a check itself.
+    expect(d.human.io.updateChecks).toBe(0);
   });
 });

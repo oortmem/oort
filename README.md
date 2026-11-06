@@ -45,6 +45,8 @@ Install the CLI (Node 22.15 or newer), then connect your agent. `oort setup` det
 npm install -g oortmem
 ```
 
+To update later, run `oort update`: it updates every copy here (the one the Claude Code hooks run included), migrates the store and restarts `oort serve`.
+
 ```sh
 oort setup
 oort recall "where does the user live"
@@ -101,7 +103,7 @@ flowchart LR
 
 - **Write path.** Every turn is scrubbed of secrets first. A small writer model distils it into short facts, and a decision model compares each fact with what is already stored: add it, update it, supersede the old one, or skip it.
 - **Read path.** Keyword (SQLite FTS5) and vector (sqlite-vec) search run together. Facts that are no longer valid are filtered out before ranking. Results are fused, reranked when it helps, and freshness only breaks ties, so a newer fact never beats a better match.
-- **Local first.** Everything lives in `~/.oort` on your machine, in one SQLite file plus compressed cold blobs. Nothing is hosted unless you choose Oort Cloud. With no API keys and no Oort Pro login, the local commands make no network call at all (recall falls back to keyword search), and a test runs them with every socket blocked.
+- **Local first.** Everything lives in `~/.oort` on your machine, in one SQLite file plus compressed cold blobs. Nothing is hosted unless you choose Oort Cloud. With no API keys and no Oort Pro login, the local commands make no network call at all (recall falls back to keyword search), and a test runs them with every socket blocked. The one exception is a once-a-day check for a new release, a single request to npm's registry that sends nothing about you; `OORT_NO_UPDATE_CHECK=1` turns it off ([details](docs/cli.md#the-update-notice)).
 
 ## Packages
 

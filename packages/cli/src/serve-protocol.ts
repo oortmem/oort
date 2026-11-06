@@ -31,6 +31,11 @@ export type ErrorCode =
   | 'unknown-method'
   | 'protocol'
   | 'version-mismatch'
+  /**
+   * The hook came from a newer oort than this daemon: it answered, and is exiting so that version
+   * can start its own (only ever sent to a newer client, so no older client sees this code).
+   */
+  | 'restarting'
   | 'migration-required'
   | 'busy'
   | 'shutting-down'
@@ -184,3 +189,38 @@ export function cliVersion(): string {
   }
   return cachedVersion;
 }
+
+const SEMVER =
+  /^(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?:-([0-9A-Za-z.-]{1,64}))?(?:\+[0-9A-Za-z.-]{1,64})?$/;
+
+/**
+ * Semantic-version order of `a` and `b`: negative when `a` is older, positive when newer, 0 when
+ * equal; undefined when either is not a version (`unknown`, garbage), so nothing is decided on
+ * it. A pre-release sorts before its release (`0.7.0-rc.1` < `0.7.0`).
+ */
+export function compareVersions(a: string, b: string): number | undefined {
+  const x = SEMVER.exec(a);
+  const y = SEMVER.exec(b);
+  if (x === null || y === null) return undefined;
+  for (let i = 1; i <= 3; i++) {
+    const d = Number(x[i]) - Number(y[i]);
+    if (d !== 0) return Math.sign(d);
+  }
+  const [pa, pb] = [x[4], y[4]];
+  if (pa === undefined || pb === undefined) return pa === pb ? 0 : pa === undefined ? 1 : -1;
+  const ia = pa.split('.');
+  const ib = pb.split('.');
+  for (let i = 0; i < Math.max(ia.length, ib.length); i++) {
+    const [s, t] = [ia[i], ib[i]];
+    if (s === undefined) return -1;
+    if (t === undefined) return 1;
+    const [ns, nt] = [/^\d+$/.test(s), /^\d+$/.test(t)];
+    if (ns && nt && Number(s) !== Number(t)) return Math.sign(Number(s) - Number(t));
+    if (ns !== nt) return ns ? -1 : 1;
+    if (!ns && s !== t) return s < t ? -1 : 1;
+  }
+  return 0;
+}
+
+/** True only when `a` is a newer version than `b` (both valid versions). */
+export const isNewerVersion = (a: string, b: string): boolean => (compareVersions(a, b) ?? 0) > 0;

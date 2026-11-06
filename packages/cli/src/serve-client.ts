@@ -300,7 +300,50 @@ export function clearSkip(home: string): void {
 
 export type HookAttempt =
   | { served: true; stdout: string; timings?: Record<string, number> }
-  | { served: false; reason: CallFailure; code?: ErrorCode };
+  | {
+      served: false;
+      reason: CallFailure;
+      code?: ErrorCode;
+      /** A second `restarting` within RESTART_WINDOW_MS: the breaker is now open; start nothing. */
+      tripped?: true;
+    };
+
+/**
+ * A daemon answers `restarting` once per update. Twice within this long (an older daemon started
+ * again and again, by hand or by something else), and the hooks open the circuit breaker for the
+ * usual minute instead of starting yet another daemon.
+ */
+export const RESTART_WINDOW_MS = 60_000;
+/** When a hook last heard `restarting` (epoch ms), beside the breaker's marker. */
+export const RESTART_FILE = 'serve.restarting';
+
+function readRestartAt(home: string): number | undefined {
+  try {
+    const n = Number(fs.readFileSync(path.join(home, RESTART_FILE), 'utf8').trim());
+    return Number.isSafeInteger(n) ? n : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Records `at` (0600, never through a symlink). Best effort. */
+function writeRestartAt(home: string, at: number): void {
+  try {
+    const { O_WRONLY, O_CREAT, O_TRUNC } = fs.constants;
+    const fd = fs.openSync(
+      path.join(home, RESTART_FILE),
+      O_WRONLY | O_CREAT | O_TRUNC | NOFOLLOW,
+      0o600,
+    );
+    try {
+      fs.writeSync(fd, `${at}\n`);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // No record: at worst one more restart before the breaker opens.
+  }
+}
 
 /** The daemon's timings for `OORT_HOOK_TIMING=1`: at most 64 finite numbers, else none. */
 export function validTimings(raw: unknown): Record<string, number> | undefined {
@@ -352,6 +395,19 @@ export async function hookViaDaemon(
     // An answer that is not exactly a hook result: as good as another protocol.
     writeSkip(home, now() + SKIP_AFTER_REFUSAL_MS, 'refused');
     return { served: false, reason: 'protocol' };
+  }
+  // `restarting`: the daemon was an older oort and is exiting for this one. No breaker: the hook
+  // starts this version's daemon (main.ts), which the next prompt should use at once. A second one
+  // within a minute means something keeps starting an older daemon: open the breaker instead.
+  if (r.reason === 'error' && r.code === 'restarting') {
+    const at = now();
+    const last = readRestartAt(home);
+    if (last !== undefined && at - last >= 0 && at - last < RESTART_WINDOW_MS) {
+      writeSkip(home, at + SKIP_AFTER_REFUSAL_MS, 'refused');
+      return { served: false, reason: r.reason, code: r.code, tripped: true };
+    }
+    writeRestartAt(home, at);
+    return { served: false, reason: r.reason, code: r.code };
   }
   if (r.reason === 'timeout' || r.reason === 'connect-timeout') {
     writeSkip(home, now() + SKIP_AFTER_TIMEOUT_MS, 'timeout');

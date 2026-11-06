@@ -52,15 +52,36 @@ try {
             const { timingLine } = await import('./timing-line.js');
             io.err(timingLine('daemon', { ...r.timings, socketMs: performance.now() - asked }));
           }
-          io.hookExit(r.stdout);
-        } else if (event === 'SessionStart' && (r.reason === 'absent' || r.reason === 'refused')) {
+          let stdout = r.stdout;
+          if (event === 'SessionStart') {
+            // A new release: one line for the person (`systemMessage`), never the model.
+            const [{ sessionStartNotice }, { homeFrom, cliVersion }, { homedir }] =
+              await Promise.all([
+                import('./update-check.js'),
+                import('./serve-protocol.js'),
+                import('node:os'),
+              ]);
+            stdout = sessionStartNotice(stdout, stdin, {
+              home: homeFrom(io.env, homedir),
+              env: io.env,
+              current: cliVersion(),
+              spawnRefresh: () => io.spawnUpdateCheck?.(),
+            });
+          }
+          io.hookExit(stdout);
+        } else if (
+          (event === 'SessionStart' && (r.reason === 'absent' || r.reason === 'refused')) ||
+          (r.code === 'restarting' && r.tripped !== true)
+        ) {
           // `serve.autostart` (home config, default off): start one for the prompts that follow.
-          // Best effort: a failed start never keeps this hook from running.
+          // `restarting`: the daemon was an older oort and is exiting for this one; start this
+          // version's in its place, whatever autostart says (one was running). Best effort: a
+          // failed start never keeps this hook from running.
           const { homeFrom } = await import('./serve-protocol.js');
           const { homedir } = await import('node:os');
           const home = homeFrom(io.env, homedir);
           try {
-            if (client.autostartEnabled(home)) {
+            if (r.code === 'restarting' || client.autostartEnabled(home)) {
               const { realpathSync } = await import('node:fs');
               client.spawnDaemon(realpathSync(binPath()), home, io.env);
             }
