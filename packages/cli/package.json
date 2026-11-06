@@ -30,7 +30,8 @@
     "node": ">=22.15.0"
   },
   "sideEffects": [
-    "./dist/main.js"
+    "./dist/main.js",
+    "./dist/update-refresh.js"
   ],
   "exports": {
     ".": {

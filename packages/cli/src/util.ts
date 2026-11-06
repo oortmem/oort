@@ -22,6 +22,7 @@ import { PROVIDER_ENV, type Keychain } from './keychain.js';
 import type { CloudClient } from './cloud.js';
 import type { OutputState } from './output.js';
 import type { WireFn, Wired } from './wire.js';
+import type { UpdateDeps } from './commands/update.js';
 
 /**
  * A user argument as echoed in a message: scrubbed, clipped to 24 characters,
@@ -107,6 +108,10 @@ export interface Ctx {
   agent?: string;
   /** The running command's output mode and `oort.v1` envelope state (output.ts); set before it runs. */
   output?: OutputState;
+  /** The bin this CLI runs as (default `binPath()`); tests point it at a stand-in copy. */
+  binPath?: string;
+  /** `oort update`'s installers, registry and daemon; tests fake them (commands/update.ts). */
+  updateDeps?: Partial<UpdateDeps>;
 }
 
 /**

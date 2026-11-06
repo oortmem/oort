@@ -20,6 +20,7 @@ import {
   currentUid,
   encodeFrame,
   inspectDir,
+  isNewerVersion,
   lockPathFor,
   socketPathFor,
   type ErrorCode,
@@ -587,6 +588,18 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       case 'hook': {
         const p = parsed.data as z.infer<(typeof PARAMS)['hook']>;
         if (p.version !== opts.version) {
+          // A hook from a newer oort (after an update): answer, then exit, so the hook can start
+          // a daemon of its own version. Only newer: an older hook (another settings file, a
+          // stale copy) never stops a newer daemon, so two versions cannot take turns. Only the
+          // hook method: the hooks' copy is the one whose daemon this is.
+          if (isNewerVersion(p.version, opts.version)) {
+            opts.log(`a hook from oort ${shown(p.version)} asked; exiting so it can start its own`);
+            setImmediate(() => void stop(`replaced by oort ${shown(p.version)}`));
+            throw new RequestError(
+              'restarting',
+              `this daemon is oort ${opts.version}; it exits for oort ${shown(p.version)}`,
+            );
+          }
           throw new RequestError('version-mismatch', `this daemon is oort ${opts.version}`);
         }
         touch();

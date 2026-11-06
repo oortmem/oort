@@ -103,6 +103,7 @@ const CONTRACT = [
   'cloud export',
   'whoami',
   'doctor',
+  'update',
   'login',
   'logout',
   'keys set',
@@ -533,6 +534,31 @@ describe('oort.v1: memories (local store)', () => {
     expect(cursor, JSON.stringify(f.checks)).toBeDefined();
     expect(cursor?.fixCommand, JSON.stringify(cursor)).toBe('oort connect cursor');
     bad(await run(['doctor', '--bogus', '--json']), 'doctor', 'usage');
+  });
+});
+
+describe('oort.v1: update', () => {
+  it('update: --check reports and exits 0; a bad --version is a usage error', async () => {
+    const { run } = local();
+    // Fakes only: no registry, no installer, no daemon.
+    const updateDeps = {
+      latest: async () => '99.0.0',
+      daemon: async () => ({ running: false }),
+      probe: async () => undefined,
+      tmpdir: () => '/nonexistent-tmp',
+    };
+    const d = ok(
+      await run(['update', '--check', '--json'], {}, undefined, { updateDeps }),
+      'update',
+      0,
+    );
+    expect(d).toMatchObject({ latest: '99.0.0', check: true, from: 'npm', installed: [] });
+    expect(Array.isArray(d.copies)).toBe(true);
+    bad(
+      await run(['update', '--version', 'nope', '--json'], {}, undefined, { updateDeps }),
+      'update',
+      'usage',
+    );
   });
 });
 

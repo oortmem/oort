@@ -92,7 +92,8 @@ describe('packaging (CON-108 §7)', () => {
     expect(PKG.bin).toEqual({ oort: 'dist/main.js', oortmem: 'dist/main.js' });
     expect(PKG.type).toBe('module');
     expect(PKG.engines.node).toBe('>=22.15.0');
-    expect(PKG.sideEffects).toEqual(['./dist/main.js']);
+    // The bin, and the background update check it starts (CON-114): scripts, not modules.
+    expect(PKG.sideEffects).toEqual(['./dist/main.js', './dist/update-refresh.js']);
     expect(PKG.peerDependenciesMeta.ai.optional).toBe(true);
   });
 

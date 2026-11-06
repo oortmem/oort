@@ -53,6 +53,8 @@ function sandbox(): Sandbox {
       HOME: home,
       OORT_HOME: oortHome,
       OORT_NO_KEYCHAIN: '1',
+      // The real bin's SessionStart would start a background update check (a request to npm).
+      OORT_NO_UPDATE_CHECK: '1',
     },
   };
 }
@@ -900,5 +902,113 @@ describe('oort serve security review fixes', () => {
     expect(fs.existsSync(s.socket)).toBe(false);
     expect(fs.existsSync(lockPathFor(s.socket))).toBe(false);
     expect(fs.existsSync(marker(s))).toBe(false);
+  });
+});
+
+/**
+ * CON-114: after an update, the first hook from the newer oort makes the old daemon answer and
+ * exit, and that hook starts a daemon of its own version. Only ever newer: an older or equal
+ * client, or any ping or status, never stops one, so two versions cannot take turns.
+ */
+describe('the daemon gives way to a newer oort', () => {
+  const hookFrom = (s: Sandbox, version: string) =>
+    callDaemon(s.socket, 'hook', {
+      event: 'UserPromptSubmit',
+      stdin: promptInput(s),
+      cwd: s.cwd,
+      version,
+    });
+
+  it('serve.a-hook-from-a-newer-oort-is-answered-then-the-daemon-exits', async () => {
+    const { s } = await seededWithBaseline();
+    const serve = await startServe(s);
+    const r = await hookFrom(s, '999.0.0');
+    expect(r).toMatchObject({ ok: false, reason: 'error', code: 'restarting' });
+    expect(r.ok === false && r.message).toContain(`this daemon is oort ${cliVersion()}`);
+    expect(await serve.exited).toBe(0);
+    expect(serve.output()).toContain('stopped (replaced by oort 999.0.0)');
+    // It cleaned up after itself: the next start is not blocked.
+    expect(fs.existsSync(s.socket)).toBe(false);
+    expect(fs.existsSync(lockPathFor(s.socket))).toBe(false);
+  });
+
+  it('serve.an-older-equal-or-unparsable-client-never-stops-the-daemon', async () => {
+    const { s } = await seededWithBaseline();
+    const serve = await startServe(s);
+    for (const version of ['0.0.1', '0.6.0-rc.1', 'unknown', `${cliVersion()}-rc.1`]) {
+      const r = await hookFrom(s, version);
+      expect(r, version).toMatchObject({ ok: false, reason: 'error', code: 'version-mismatch' });
+    }
+    // Pings and status never carry a version and never stop it either.
+    expect((await callDaemon(s.socket, 'status', {})).ok).toBe(true);
+    // The same version is served, as before this change.
+    const same = await hookFrom(s, cliVersion());
+    expect(same.ok).toBe(true);
+    expect((await callDaemon(s.socket, 'ping', {})).ok).toBe(true);
+    expect(serve.child.exitCode).toBeNull();
+    serve.child.kill('SIGTERM');
+    await serve.exited;
+  });
+
+  it('serve.a-session-start-the-daemon-answers-still-tells-the-person-about-an-update', async () => {
+    const s = sandbox();
+    await seed(s, [memory({ pinned: true, embedding: new Int8Array(512).fill(3) })]);
+    const serve = await startServe(s);
+    // A fresh cache, so the hook starts no background check (no request from a test).
+    fs.writeFileSync(
+      path.join(s.oortHome, 'update-check.json'),
+      JSON.stringify({ checkedAt: Date.now(), latest: '99.0.0' }),
+    );
+    const { OORT_NO_UPDATE_CHECK: _off, ...env } = s.env;
+    const session = JSON.stringify({ session_id: 's-n', cwd: s.cwd, source: 'startup' });
+    const r = await oort(s, ['hook', 'SessionStart'], { input: session, env });
+    const out = JSON.parse(r.stdout) as {
+      systemMessage?: string;
+      hookSpecificOutput?: { additionalContext: string };
+    };
+    expect(out.systemMessage).toBe(
+      `Oort 99.0.0 is available (you have ${cliVersion()}): oort update`,
+    );
+    expect(out.hookSpecificOutput?.additionalContext).toContain('port 5582');
+    expect(out.hookSpecificOutput?.additionalContext).not.toContain('99.0.0');
+    const log = hookLog(s)
+      .filter((l) => l['event'] === 'SessionStart')
+      .at(-1);
+    expect((log?.['counts'] as Record<string, number> | undefined)?.['daemon']).toBe(1);
+    serve.child.kill('SIGTERM');
+    await serve.exited;
+  });
+
+  it('serve.restarting-opens-no-breaker-and-the-hook-starts-its-own-daemon', async () => {
+    const { s, baseline } = await seededWithBaseline();
+    // An older daemon: it answers `restarting` and goes away, as a real one does.
+    let answered = 0;
+    await fakeDaemon(s, (f, conn) => {
+      answered++;
+      conn.end(
+        encodeFrame({
+          v: PROTOCOL_VERSION,
+          id: f.id,
+          ok: false,
+          error: { code: 'restarting', message: 'this daemon is oort 0.0.1; it exits for oort x' },
+        }),
+      );
+      const server = servers.pop();
+      server?.close();
+      fs.rmSync(s.socket, { force: true });
+    });
+    const r = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
+    expect(answered).toBe(1);
+    // This prompt runs in-process, exactly as without a daemon; no breaker opens.
+    expect(r.stdout).toBe(baseline);
+    expect(readSkip(s.oortHome)).toBeUndefined();
+    // The hook started this version's daemon in its place (autostart is off: one was running).
+    await until(async () => (await callDaemon(s.socket, 'ping', {}, { budgetMs: 300 })).ok);
+    const ping = await callDaemon(s.socket, 'ping', {});
+    expect(ping.ok && ping.result['version']).toBe(cliVersion());
+    // And the next prompt is served by it.
+    await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
+    expect(lastPrompt(s).daemon).toBe(true);
+    expect((await oort(s, ['serve', 'stop'])).exitCode).toBe(0);
   });
 });

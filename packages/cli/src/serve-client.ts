@@ -353,6 +353,8 @@ export async function hookViaDaemon(
     writeSkip(home, now() + SKIP_AFTER_REFUSAL_MS, 'refused');
     return { served: false, reason: 'protocol' };
   }
+  // `restarting`: the daemon was an older oort and is exiting for this one. No breaker: the hook
+  // starts this version's daemon (main.ts), which the next prompt should use at once.
   if (r.reason === 'timeout' || r.reason === 'connect-timeout') {
     writeSkip(home, now() + SKIP_AFTER_TIMEOUT_MS, 'timeout');
   } else if (

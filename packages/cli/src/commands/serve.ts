@@ -16,6 +16,7 @@ import {
 import { lockPathFor, socketPathFor } from '../serve-protocol.js';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
+import { availableUpdate, noticeText, readUpdateCache, updateCheckOff } from '../update-check.js';
 import { Refusal, echo, shown, tilde, type Ctx } from '../util.js';
 
 export interface ServeOptions {
@@ -277,6 +278,7 @@ export async function serveCommand(
       io.out(
         `${ui.dim(needsMigration ? 'run oort doctor (it migrates the store), then: oort serve --detach' : 'start it with: oort serve --detach')}\n`,
       );
+      updateLine();
       return 1;
     }
     const v = r.result;
@@ -298,7 +300,15 @@ export async function serveCommand(
         ],
       ]),
     );
+    updateLine();
     return 0;
+  }
+
+  /** A newer oort (from the update check's cache): one line, for people only (never --json). */
+  function updateLine(): void {
+    if (updateCheckOff(io.env, home) !== undefined) return;
+    const latest = availableUpdate(VERSION, readUpdateCache(home));
+    if (latest !== undefined) io.out(`${ui.info(noticeText(latest, VERSION))}\n`);
   }
 
   function lockHolderPid(): number | undefined {

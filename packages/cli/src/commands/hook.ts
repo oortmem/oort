@@ -1,10 +1,11 @@
 import { HOOK_TIMEOUTS, createHookLogger, runHook, type HookEvent } from '@oortmem/claude-code';
-import { resolveHome, type MemoryStore } from '@oortmem/core';
+import { VERSION, resolveHome, type MemoryStore } from '@oortmem/core';
 import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
 import { cloudRemote } from '../cloud-remote.js';
 import { LOCAL_PROVIDER } from '../local-models.js';
 import { HOOK_STDIN_CAP_MS, type Env } from '../io.js';
 import { timingLine } from '../timing-line.js';
+import { sessionStartNotice } from '../update-check.js';
 import { echo, starInCloudMessage, type Ctx } from '../util.js';
 import type { AdapterRole, WireOptions, Wired } from '../wire.js';
 
@@ -253,11 +254,22 @@ export async function hookCommand(
 ): Promise<void> {
   const { io } = ctx;
   let exited = false;
+  let input: string | undefined = opts.stdin;
   const exit = (stdout: string): void => {
     if (exited) return;
     exited = true;
     clearTimeout(deadline);
-    io.hookExit(stdout);
+    // A new release: one line for the person (`systemMessage`), never the model's context.
+    io.hookExit(
+      event === 'SessionStart'
+        ? sessionStartNotice(stdout, input, {
+            home: resolveHome(io.env),
+            env: io.env,
+            current: VERSION,
+            spawnRefresh: () => io.spawnUpdateCheck?.(),
+          })
+        : stdout,
+    );
   };
   const budget = event in HOOK_TIMEOUTS ? HOOK_TIMEOUTS[event as keyof typeof HOOK_TIMEOUTS] : 0;
   // Time already spent (on stdin, or on a daemon that did not answer) comes off the deadline.
@@ -279,6 +291,7 @@ export async function hookCommand(
     } else {
       const stdin =
         event === 'drain' ? '' : (opts.stdin ?? (await io.readStdin(HOOK_STDIN_CAP_MS)));
+      input = stdin;
       const wireStart = performance.now();
       w = await ctx.wire(inputCwd(stdin) ?? io.cwd, hookWireOptions(event, io.env));
       // Config, store open and key lookup (env, then the keychain): the hook log records it (CON-57).

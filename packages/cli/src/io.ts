@@ -1,7 +1,10 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as readline from 'node:readline/promises';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { homeFrom } from './serve-protocol.js';
+import { spawnRefresh } from './update-check.js';
 
 export type Env = Record<string, string | undefined>;
 
@@ -20,6 +23,8 @@ export interface Io {
   stdinIsTTY: boolean;
   /** Whether stdout is a terminal (colour is off when it is not); absent means no. */
   stdoutIsTTY?: boolean;
+  /** Whether stderr is a terminal: the update notice is printed there only then. Absent means no. */
+  stderrIsTTY?: boolean;
   out(text: string): void;
   err(text: string): void;
   /** All of stdin, or what arrived within `capMs`. */
@@ -30,6 +35,11 @@ export interface Io {
   askSecret(question: string): Promise<string>;
   /** Starts a detached `oort hook drain` in `cwd` and does not wait for it. */
   spawnDrain(cwd: string): void;
+  /**
+   * Starts the detached background update check (`update-refresh.js`) and does not wait for it.
+   * Absent: no background check (tests that do not record one).
+   */
+  spawnUpdateCheck?(): void;
   /** Writes the hook's stdout, then exits 0 as soon as the write is flushed. */
   hookExit(stdout: string): void;
 }
@@ -52,6 +62,66 @@ export function runToStderr(
     })
       .once('error', reject)
       .once('close', (code) => resolve(code ?? 1));
+  });
+}
+
+/**
+ * Runs an installer (npm, pnpm) with no shell, its stdout and stderr forwarded to our stderr as
+ * they come (stdout stays for `--json`'s envelope) and the last 64 KB of both kept, so a caller
+ * can tell why it failed (npm's ETARGET right after a release). Resolves the exit code and that
+ * tail; a child that cannot start resolves code 127.
+ */
+export function runForwarding(
+  file: string,
+  args: readonly string[],
+  opts: { env?: NodeJS.ProcessEnv } = {},
+  spawnFn: typeof spawn = spawn,
+): Promise<{ code: number; output: string }> {
+  return new Promise((resolve) => {
+    let tail = '';
+    const keep = (c: Buffer): void => {
+      process.stderr.write(c);
+      tail = (tail + c.toString('utf8')).slice(-65_536);
+    };
+    const child = spawnFn(file, [...args], {
+      stdio: ['inherit', 'pipe', 'pipe'],
+      ...(opts.env !== undefined && { env: opts.env }),
+    });
+    child.stdout?.on('data', keep);
+    child.stderr?.on('data', keep);
+    child.once('error', (e) => resolve({ code: 127, output: `${tail}${e.message}` }));
+    child.once('close', (code) => resolve({ code: code ?? 1, output: tail }));
+  });
+}
+
+/**
+ * Runs `node <script> <args>` (another copy of oort) with no shell and resolves its exit code and
+ * stdout (at most 4 MB); its stderr goes to ours. `timeoutMs` kills it (code 124).
+ */
+export function runNodeScript(
+  script: string,
+  args: readonly string[],
+  opts: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+  spawnFn: typeof spawn = spawn,
+): Promise<{ code: number; stdout: string }> {
+  return new Promise((resolve) => {
+    let stdout = '';
+    const child = spawnFn(process.execPath, [script, ...args], {
+      stdio: ['ignore', 'pipe', 'inherit'],
+      ...(opts.env !== undefined && { env: opts.env }),
+    });
+    const timer = setTimeout(() => child.kill('SIGKILL'), opts.timeoutMs ?? 120_000);
+    child.stdout?.on('data', (c: Buffer) => {
+      if (stdout.length < 4 * 1024 * 1024) stdout += c.toString('utf8');
+    });
+    child.once('error', () => {
+      clearTimeout(timer);
+      resolve({ code: 127, stdout });
+    });
+    child.once('close', (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code: signal === 'SIGKILL' ? 124 : (code ?? 1), stdout });
+    });
   });
 }
 
@@ -87,6 +157,7 @@ export function processIo(
     entry,
     stdinIsTTY: process.stdin.isTTY === true,
     stdoutIsTTY: process.stdout.isTTY === true,
+    stderrIsTTY: process.stderr.isTTY === true,
     out: (text) => void process.stdout.write(text),
     err: (text) => void process.stderr.write(text),
     readStdin(capMs) {
@@ -162,6 +233,9 @@ export function processIo(
       });
       child.on('error', () => {}); // a failed spawn must not crash the hook
       child.unref();
+    },
+    spawnUpdateCheck() {
+      spawnRefresh(homeFrom(process.env, homedir), process.env);
     },
     hookExit(stdout) {
       const timing = opts.timing;

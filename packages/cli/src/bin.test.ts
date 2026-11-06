@@ -8,7 +8,7 @@ import Database from 'better-sqlite3';
 import { execa } from 'execa';
 import { fakeSite } from '../test/fake-site.js';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { OortConfig, projectIdFor, type Memory } from '@oortmem/core';
+import { OortConfig, VERSION, projectIdFor, type Memory } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import { memory, syntheticKey, tmpdir, writeTranscript, data } from '../test/helpers.js';
 import { TG } from '@oortmem/core/store-conformance';
@@ -48,6 +48,8 @@ function sandbox(): Sandbox {
       OORT_HOME: oortHome,
       // The real bin must never reach the real Keychain from a test.
       OORT_NO_KEYCHAIN: '1',
+      // The real bin's SessionStart would start a background update check (a request to npm).
+      OORT_NO_UPDATE_CHECK: '1',
     },
   };
 }
@@ -274,6 +276,50 @@ describe('oort bin', () => {
     expect(fs.readFileSync(path.join(s.oortHome, 'logs', 'hooks.log'), 'utf8')).toContain(
       '"event":"SessionStart"',
     );
+  });
+
+  it('cli.session-start-tells-the-person-about-an-update-in-systemMessage (CON-114)', async () => {
+    const s = sandbox();
+    await seed(s, [
+      memory({
+        pinned: true,
+        text: 'Deploy from main only.',
+        embedding: new Int8Array(512).fill(3),
+      }),
+    ]);
+    // A fresh cache: the hook reads it and starts no background check (no request from a test).
+    const cache = path.join(s.oortHome, 'update-check.json');
+    fs.writeFileSync(cache, JSON.stringify({ checkedAt: Date.now(), latest: '99.0.0' }));
+    const { OORT_NO_UPDATE_CHECK: _off, ...env } = s.env;
+    const input = JSON.stringify({ session_id: 's1', cwd: s.cwd, source: 'startup' });
+    const r = await oort(s, ['hook', 'SessionStart'], { input, env });
+    expect(r.exitCode).toBe(0);
+    const out = JSON.parse(r.stdout) as {
+      systemMessage?: string;
+      hookSpecificOutput?: { hookEventName: string; additionalContext: string };
+    };
+    // For the person: Claude Code shows `systemMessage` to the user. The model's context is the
+    // memory block only, as without a notice.
+    expect(out.systemMessage).toBe(`Oort 99.0.0 is available (you have ${VERSION}): oort update`);
+    expect(out.hookSpecificOutput?.hookEventName).toBe('SessionStart');
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Deploy from main only.');
+    expect(out.hookSpecificOutput?.additionalContext).not.toContain('99.0.0');
+    // Once a day per version: the next session start is the memory block alone.
+    const again = await oort(s, ['hook', 'SessionStart'], { input, env });
+    expect(JSON.parse(again.stdout)).toEqual({ hookSpecificOutput: out.hookSpecificOutput });
+    // The prompt hook never carries it.
+    const prompt = await oort(s, ['hook', 'UserPromptSubmit'], {
+      input: JSON.stringify({ session_id: 's1', cwd: s.cwd, prompt: 'deploy?' }),
+      env,
+    });
+    expect(prompt.stdout).not.toContain('systemMessage');
+    // Opted out: nothing, even for a version not shown yet.
+    fs.writeFileSync(cache, JSON.stringify({ checkedAt: Date.now(), latest: '99.1.0' }));
+    const off = await oort(s, ['hook', 'SessionStart'], { input, env: s.env });
+    expect(off.stdout).not.toContain('systemMessage');
+    // Not a terminal: an ordinary command prints no notice either.
+    const stats = await oort(s, ['stats'], { env });
+    expect(stats.stderr).not.toContain('is available');
   });
 
   it('cli.hook-loads-chrono-only-for-a-date-cue (CON-82)', async () => {
