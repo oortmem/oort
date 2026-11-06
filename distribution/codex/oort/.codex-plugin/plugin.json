@@ -10,6 +10,23 @@
   "homepage": "https://oortcloud.dev/docs/codex",
   "repository": "https://github.com/oortmem/oort",
   "license": "Apache-2.0",
+  "keywords": ["memory", "mcp", "recall", "oort"],
+  "skills": "./skills/",
   "mcpServers": "./.mcp.json",
-  "hooks": "./hooks/hooks.json"
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Oort memory",
+    "shortDescription": "Memory across Codex sessions",
+    "longDescription": "Oort is open-source long-term memory for AI agents. This plugin recalls relevant facts before each prompt and adds the Oort memory tools (recall, remember, forget, pin, explain and more) and the oort-memory skill. Memories stay on your machine unless you choose Oort Cloud. Needs the oort command: npm install -g oortmem, then oort setup.",
+    "developerName": "Oort",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://oortcloud.dev/docs/codex",
+    "defaultPrompt": [
+      "What did we decide about this project last time?",
+      "Remember that we deploy on Fridays."
+    ],
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png"
+  }
 }

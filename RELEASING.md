@@ -40,9 +40,12 @@ runs in the GitHub environment `npm`, which needs Marcus's approval before it ca
 ```sh
 git checkout main && git pull
 # Bump every package to the same version, e.g. 0.1.1, VERSION in packages/core/src/index.ts, and the
-# version in distribution/*/oort plugin.json files, distribution/claude-desktop/manifest.json and
-# .claude-plugin/marketplace.json (release-check fails the run if any differ):
+# version in every plugin.json under distribution/ (oort and oort-dev, Claude Code and Codex),
+# distribution/claude-desktop/manifest.json, .claude-plugin/marketplace.json and
+# metadata.oortmem-version in skills/*/SKILL.md (release-check fails the run if any differ):
 pnpm -r --filter './packages/*' exec npm version 0.1.1 --no-git-tag-version
+# Review skills/ against what changed in the SDK and CLI, then copy it into the plugins:
+pnpm skills:sync
 # commit through a PR, merge it, then tag main:
 git tag v0.1.1 && git push origin v0.1.1
 ```

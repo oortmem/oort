@@ -57,6 +57,30 @@ Every command and flag is in [docs/cli.md](docs/cli.md). To use Oort from your o
 
 Claude Code (hooks, plus the MCP server), Claude Desktop, Codex, Cursor, Gemini CLI, VS Code, and any MCP client over stdio. `oort connect <host>` writes the config, backs up the old file and prints the diff. [Claude Code guide](docs/claude-code.md).
 
+## Build with Oort using your coding agent
+
+The [`oort-sdk`](skills/oort-sdk) skill teaches your coding agent to build Oort into your own apps and agent frameworks: the TypeScript SDK (`createOort` from `oortmem`), multi-user apps, the Vercel AI SDK, LangGraph.js and OpenAI Agents JS, serverless, and Python through the CLI's JSON. Every code block in it is a tested example. It is a separate plugin, `oort-dev`, so "help me build with Oort" installs without "memory for my own sessions" (the `oort` plugin), and the other way round.
+
+Claude Code:
+
+```sh
+claude plugin marketplace add oortmem/oort
+claude plugin install oort-dev@oortmem
+```
+
+(or, in a session, `/plugin marketplace add oortmem/oort` and `/plugin install oort-dev@oortmem`)
+
+Codex:
+
+```sh
+codex plugin marketplace add oortmem/oort
+codex plugin add oort-dev@oortmem
+```
+
+(or `/plugins` in Codex)
+
+Any other agent that reads `SKILL.md` (Cursor, Gemini CLI, GitHub Copilot, OpenCode and more): copy [`skills/oort-sdk`](skills/oort-sdk) into its skills folder, for example `.agents/skills/oort-sdk` in your repository, or run `npx skills add oortmem/oort --skill oort-sdk`. Details for each tool: [skills/README.md](skills/README.md).
+
 ## How it works
 
 ```mermaid

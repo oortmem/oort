@@ -1,4 +1,6 @@
-// Fails unless every publishable package in packages/* and core's VERSION equal the given version.
+// Fails unless every publishable package in packages/*, core's VERSION, every plugin and
+// marketplace manifest, the MCPB manifest, the Python launcher and the skills under skills/ equal
+// the given version.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -13,14 +15,29 @@ for (const dir of readdirSync('packages')) {
   if (pkg.private) continue;
   if (pkg.version !== want) bad.push(`${pkg.name} is ${pkg.version}`);
 }
+// Every plugin either marketplace lists, so a new plugin is checked as soon as it is listed.
+const json = (file) => JSON.parse(readFileSync(file, 'utf8'));
+const plugins = [
+  ...json('.claude-plugin/marketplace.json').plugins.map(
+    (e) => `${e.source.replace(/^\.\//, '')}/.claude-plugin/plugin.json`,
+  ),
+  ...json('.agents/plugins/marketplace.json').plugins.map(
+    (e) => `${e.source.path}/.codex-plugin/plugin.json`,
+  ),
+];
 for (const file of [
-  'distribution/claude-code/oort/.claude-plugin/plugin.json',
-  'distribution/codex/oort/.codex-plugin/plugin.json',
+  ...plugins,
   'distribution/claude-desktop/manifest.json',
   '.claude-plugin/marketplace.json',
 ]) {
-  const v = JSON.parse(readFileSync(file, 'utf8')).version;
+  const v = json(file).version;
   if (v !== want) bad.push(`${file} is ${v}`);
+}
+// A skill for building with Oort names the release it describes (skills/<name>/SKILL.md).
+for (const e of readdirSync('skills', { withFileTypes: true }).filter((d) => d.isDirectory())) {
+  const file = join('skills', e.name, 'SKILL.md');
+  const v = readFileSync(file, 'utf8').match(/^ {2}oortmem-version: ['"]?([^'"\n]+)['"]?$/m);
+  if (v?.[1] !== want) bad.push(`${file} metadata.oortmem-version is ${v?.[1] ?? 'missing'}`);
 }
 // The Python launcher (python/) pins the npm release it runs, so it moves in lockstep.
 const py = readFileSync('python/pyproject.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m);
