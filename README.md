@@ -51,7 +51,7 @@ oort recall "where does the user live"
 oort explain "where does the user live"   # each stage's rank and score
 ```
 
-Every command and flag is in [docs/cli.md](docs/cli.md). To use Oort from your own code (`import { createOort } from 'oortmem'`), see [docs/sdk.md](docs/sdk.md). To build from source instead: `git clone https://github.com/oortmem/oort && cd oort && pnpm install && pnpm build && cd packages/cli && pnpm add -g .` (pnpm 12).
+Every command and flag is in [docs/cli.md](docs/cli.md). To use Oort from your own code (`import { createOort } from 'oortmem'`): SDK: [docs/sdk.md](docs/sdk.md) · reference: [docs/sdk-reference.md](docs/sdk-reference.md) · [examples/](examples). To build from source instead: `git clone https://github.com/oortmem/oort && cd oort && pnpm install && pnpm build && cd packages/cli && pnpm add -g .` (pnpm 12).
 
 ## Works with
 
