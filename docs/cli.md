@@ -74,7 +74,7 @@ current.
     every file, directory and link under `~/.oort/cli` (`bin/`, the package,
     its `dist/`, and every package in `lib/node_modules`, where Node looks for
     what is missing) must be yours with no group or other write, and a link
-    may point only inside `~/.oort/cli`, judged by what the kernel opens (its native realpath, not the link's text) and by its own owner, and may contain `..` only in the shapes npm writes (`node_modules/.bin/<x>` → `../<pkg>/…`, `bin/<x>` → `../lib/node_modules/<pkg>/…`). The walk stops at 20,000 entries,
+    may point only inside `~/.oort/cli`, judged by what the kernel opens (its native realpath) and by its own owner, and its text must point inside too, and may contain `..` only in the shapes npm writes (`node_modules/.bin/<x>` → `../<pkg>/…`, `bin/<x>` → `../lib/node_modules/<pkg>/…`). The walk stops at 20,000 entries,
     reads only file metadata, and runs once per command (setup, install,
     connect, doctor), never in a hook. npm installs the copy with a umask of at
     least `022`, so its files never come out group- or world-writable;
@@ -85,10 +85,17 @@ current.
     become root: `admin` (80) or `wheel` (0) on macOS, as for Homebrew's
     `/opt/homebrew/lib`; `root`, `sudo`, `wheel`, `admin` or your own private
     group on Linux. Never `staff`, every macOS account's group.
-    The whole package it belongs to (the nearest directory whose `package.json`
-    is `oortmem`'s) is walked by the same rules; a link out of it, such as a
-    pnpm checkout's `node_modules`, is judged by the path to what it opens and
-    not walked into, so your own build is checked in milliseconds.
+    Everything Node loads from it is walked by the same rules: the package it
+    belongs to (the nearest directory whose `package.json` is `oortmem`'s), any
+    directory a link in it leads to, and every package it needs at run time
+    (`dependencies`, optional ones and installed peers, found the way Node
+    finds them, recursively; dev dependencies are left out). That is about
+    9,500 entries and 0.3 s from a pnpm checkout of this repository, with a cap
+    of 50,000;
+  - every `node_modules` Node searches above the managed copy, or above a copy
+    of your own and its dependencies (`~/.oort/node_modules`,
+    `~/node_modules`, …), must pass the same path rules: Node loads from them
+    whatever is not found nearer.
 
   A temporary directory never counts: `os.tmpdir()`, `$TMPDIR`, `/tmp`,
   `/private/tmp`, `/var/tmp`, `/private/var/tmp` and `/dev/shm`. A managed

@@ -7,6 +7,8 @@ import { isNewerVersion } from '../serve-protocol.js';
 import {
   inside,
   tempDirs,
+  ancestorModules,
+  trustedClosure,
   trustedPath,
   trustedTree,
   untrustedText,
@@ -157,6 +159,12 @@ export function inspectManaged(env: Record<string, string | undefined>): Managed
   // is used, or installed into (an install leaves what else is there).
   const treeProblem = trustedTree(prefix);
   if (treeProblem !== undefined) return remove(treeProblem);
+  // Node also searches every node_modules above the prefix for what the copy does not ship.
+  const above = ancestorModules(path.dirname(realpathOf(prefix) ?? prefix), {
+    home,
+    strict: true,
+  });
+  if (above !== undefined) return { state: 'untrusted', problem: above };
   const bin = path.join(prefix, 'bin', 'oort');
   const version = packageVersion(realpathOf(bin));
   if (version === undefined) return { state: 'absent' };
@@ -438,7 +446,13 @@ export function copyTree(
   strict: boolean,
 ): Untrusted | undefined {
   const root = oortPackageRoot(real);
-  return root === undefined ? undefined : trustedTree(root, { strict, home: userHome(env) });
+  if (root === undefined) return undefined;
+  // Strict (inside OORT_HOME): the tree and the node_modules Node searches above it. A copy of
+  // your own: everything Node loads from it at run time (`trustedClosure`).
+  return strict
+    ? (trustedTree(root, { strict: true, home: userHome(env) }) ??
+        ancestorModules(path.dirname(root), { home: userHome(env), strict: true }))
+    : trustedClosure(root, { home: userHome(env) });
 }
 
 /** What a copy in `why` risks, for the sentence `This oort is in <why>, <risk>`. */

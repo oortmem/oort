@@ -202,12 +202,18 @@ export const untrustedText = (u: Untrusted): string => `${u.dir} ${u.why} (fix: 
 
 /** The most entries `trustedTree` walks; a tree bigger than this is not vouched for. */
 export const TREE_CAP = 20_000;
+/**
+ * The cap for a copy of your own (lenient): its package and everything its links lead to, which
+ * for a pnpm checkout is the whole dependency closure, dev dependencies included.
+ */
+export const OWN_TREE_CAP = 50_000;
 
 const treeCache = new Map<string, Untrusted | null>();
 
 /** Forgets every `trustedTree` result (tests change trees between checks). */
 export function clearTreeCache(): void {
   treeCache.clear();
+  closureCache.clear();
 }
 
 /**
@@ -250,7 +256,7 @@ export function trustedTree(prefix: string, opts: TreeOptions = {}): Untrusted |
   if (root === undefined) {
     return { dir: prefix, why: 'does not exist', fix: 'oort setup', command: 'oort setup' };
   }
-  const cap = opts.cap ?? TREE_CAP;
+  const cap = opts.cap ?? (opts.strict === false ? OWN_TREE_CAP : TREE_CAP);
   const strict = opts.strict !== false;
   const key = `${root}\0${cap}\0${strict ? 'strict' : `lenient\0${opts.home ?? ''}`}`;
   const seen = opts.groupOk === undefined ? treeCache.get(key) : undefined;
@@ -285,6 +291,7 @@ function walk(
   root: string,
   cap: number,
   opts: TreeOptions & { strict: boolean },
+  state: WalkState = { count: 0, visited: new Set([root]) },
 ): Untrusted | undefined {
   const me = typeof process.getuid === 'function' ? process.getuid() : undefined;
   const home = opts.home === undefined ? undefined : (realpathOf(opts.home) ?? opts.home);
@@ -314,10 +321,12 @@ function walk(
     return undefined;
   };
   const stack = [root];
-  let count = 0;
+  /** Linked directories already walked (lenient), by realpath: no cycle walks twice. */
+  const visited = state.visited;
+  visited.add(root);
   while (stack.length > 0) {
     const p = stack.pop() as string;
-    if (++count > cap) {
+    if (++state.count > cap) {
       return bad(root, `holds more than ${cap} files, more than oort ever installs`);
     }
     let st: fs.Stats;
@@ -340,6 +349,11 @@ function walk(
       }
       if (opts.strict && raw.split(/[\\/]/).includes('..') && !npmLink(p, raw, root)) {
         return bad(p, `is a link with .. in it (${raw}) that is not one of npm's`);
+      }
+      // And its text, read as text, stays inside too (belt and braces with the realpath below).
+      const inRoot = (x: string): boolean => x === root || x.startsWith(root + path.sep);
+      if (opts.strict && !inRoot(path.resolve(path.dirname(p), raw))) {
+        return bad(p, `is a link whose text points out of the managed copy (${raw})`);
       }
       let real: string;
       try {
@@ -368,6 +382,24 @@ function walk(
           ...(opts.groupOk !== undefined && { groupOk: opts.groupOk }),
         });
         if (u !== undefined) return bad(p, `is a link to ${real}, where ${u.dir} ${u.why}`);
+        // A directory it leads to is code Node may load: walk it too, once. A package in a
+        // node_modules (a dependency link: pnpm's store, a workspace package) is walked only when
+        // something needs it at run time (`trustedClosure`), so dev dependencies are left out.
+        let tst: fs.Stats | undefined;
+        try {
+          tst = fs.statSync(real);
+        } catch {
+          tst = undefined;
+        }
+        const parent = path.dirname(p);
+        const depLink =
+          path.basename(parent) === 'node_modules' ||
+          (path.basename(parent).startsWith('@') &&
+            path.basename(path.dirname(parent)) === 'node_modules');
+        if (tst?.isDirectory() === true && !depLink && !visited.has(real) && !inRoot(real)) {
+          visited.add(real);
+          stack.push(real);
+        }
       }
       continue;
     }
@@ -384,4 +416,155 @@ function walk(
     }
   }
   return undefined;
+}
+
+/** What `walk` shares across the packages of one closure: one count, one visited set. */
+interface WalkState {
+  count: number;
+  visited: Set<string>;
+}
+
+/**
+ * Node's lookup directories above `start` (inclusive), up to `/`: each `<d>/node_modules`, or `d`
+ * itself when it is a `node_modules`. Node loads from them whatever is not found nearer.
+ */
+function lookupDirs(start: string): string[] {
+  const out: string[] = [];
+  for (let d = start; ; d = path.dirname(d)) {
+    out.push(path.basename(d) === 'node_modules' ? d : path.join(d, 'node_modules'));
+    if (path.dirname(d) === d) break;
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * Every existing `node_modules` Node would search above `start`, held to `trustedPath`'s rules
+ * (PR #78 review): a planted, writable `~/node_modules` would serve any module oort does not ship.
+ * Only the path to each is walked, not what is in it. `checked` remembers the ones that passed.
+ */
+export function ancestorModules(
+  start: string,
+  opts: { home: string; strict: boolean; groupOk?: (gid: number) => boolean },
+  checked: Set<string> = new Set(),
+): Untrusted | undefined {
+  if (process.platform === 'win32') return undefined;
+  for (const dir of lookupDirs(start)) {
+    if (checked.has(dir)) continue;
+    try {
+      fs.lstatSync(dir);
+    } catch {
+      checked.add(dir);
+      continue;
+    }
+    const u = trustedPath(dir, opts);
+    if (u !== undefined) {
+      return {
+        dir: u.dir,
+        why: `${u.why}, and Node loads modules from ${dir} for anything not found nearer`,
+        fix: `move ${sh(dir)} out of the way (Node searches it), or make it a directory only you can write`,
+      };
+    }
+    checked.add(dir);
+  }
+  return undefined;
+}
+
+/** A package name as package.json may give it: `name` or `@scope/name`, never a path. */
+const PACKAGE_NAME = /^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/i;
+
+/** The packages `pkg` needs at run time: dependencies, optional ones, and peers when installed. */
+function runtimeDeps(pkg: string): string[] {
+  let json: Record<string, unknown>;
+  try {
+    json = JSON.parse(fs.readFileSync(path.join(pkg, 'package.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+  } catch {
+    return [];
+  }
+  const names = new Set<string>();
+  for (const k of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    const v = json[k];
+    if (typeof v === 'object' && v !== null) for (const n of Object.keys(v)) names.add(n);
+  }
+  return [...names].filter((n) => PACKAGE_NAME.test(n));
+}
+
+/** Where Node finds package `name` from a package at `fromReal` (its realpath), or undefined. */
+function resolvePackage(fromReal: string, name: string): string | undefined {
+  for (const dir of lookupDirs(fromReal)) {
+    const candidate = path.join(dir, name);
+    try {
+      if (fs.statSync(candidate).isDirectory()) return candidate;
+    } catch {
+      // Not here.
+    }
+  }
+  return undefined;
+}
+
+const closureCache = new Map<string, Untrusted | null>();
+
+/**
+ * A copy of your own (`--this-copy`, the fallback), walked as far as Node will load from it (PR
+ * #78 review): its package, then every package it needs at run time (`dependencies`, optional
+ * ones, installed peers), found the way Node finds them from each package's realpath, each walked
+ * with the lenient rules, recursively, once each; and every `node_modules` Node would search above
+ * them (`ancestorModules`). Dev dependencies are not walked: a pnpm checkout links them into
+ * `node_modules` beside the runtime ones, and walking everything reachable from a dev checkout is
+ * a whole pnpm store (about 194,000 entries and 5.6 s from this repository's own worktree). One
+ * cap (`OWN_TREE_CAP`) for all of it; cached per process.
+ */
+export function trustedClosure(
+  pkgRoot: string,
+  opts: { home: string; groupOk?: (gid: number) => boolean; cap?: number },
+): Untrusted | undefined {
+  if (process.platform === 'win32') return undefined;
+  const root = realpathOf(pkgRoot);
+  if (root === undefined) {
+    return { dir: pkgRoot, why: 'does not exist', fix: 'rebuild or reinstall it' };
+  }
+  const cap = opts.cap ?? OWN_TREE_CAP;
+  const key = `${root}\0closure\0${cap}\0${opts.home}`;
+  const cached = opts.groupOk === undefined ? closureCache.get(key) : undefined;
+  if (cached !== undefined) return cached ?? undefined;
+  const rules = {
+    home: opts.home,
+    strict: false,
+    ...(opts.groupOk !== undefined && { groupOk: opts.groupOk }),
+  };
+  const state: WalkState = { count: 0, visited: new Set() };
+  const checked = new Set<string>();
+  const queue = [root];
+  const queued = new Set([root]);
+  let found: Untrusted | undefined;
+  while (found === undefined && queue.length > 0) {
+    const pkg = queue.shift() as string;
+    state.visited.add(pkg);
+    found =
+      walk(pkg, cap, { ...rules, strict: false }, state) ??
+      ancestorModules(path.dirname(pkg), rules, checked);
+    if (found !== undefined) break;
+    for (const name of runtimeDeps(pkg)) {
+      const dep = resolvePackage(pkg, name);
+      if (dep === undefined) continue; // not installed (an optional or peer one): nothing to load
+      const u = trustedPath(dep, rules);
+      if (u !== undefined) {
+        found = {
+          dir: u.dir,
+          why: `${u.why} (on the way to ${name}, which ${path.basename(pkg)} loads)`,
+          fix: u.fix,
+        };
+        break;
+      }
+      const real = realpathOf(dep);
+      if (real !== undefined && !queued.has(real)) {
+        queued.add(real);
+        queue.push(real);
+      }
+    }
+  }
+  if (opts.groupOk === undefined) closureCache.set(key, found ?? null);
+  return found;
 }

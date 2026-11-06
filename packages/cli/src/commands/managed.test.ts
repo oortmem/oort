@@ -574,7 +574,10 @@ describe('PR #78 follow-up: the whole managed tree', () => {
     clearTreeCache();
     expect(inspectManaged(envOf(h))).toMatchObject({
       state: 'untrusted',
-      problem: { dir: link, why: `is a link out of the managed copy (to ${outside})` },
+      problem: {
+        dir: link,
+        why: `is a link whose text points out of the managed copy (${outside})`,
+      },
     });
   });
 
@@ -812,7 +815,9 @@ describe('PR #78 review: links in the managed copy', () => {
     clearTreeCache();
     expect(inspectManaged(envOf(h))).toMatchObject({
       state: 'untrusted',
-      problem: { why: expect.stringMatching(/^is a link out of the managed copy/) },
+      problem: {
+        why: expect.stringMatching(/^is a link (whose text points )?out of the managed copy/),
+      },
     });
   });
 
@@ -957,5 +962,134 @@ describe('PR #78 review: kernel paths, the walk after an install, own builds', (
     expect(() => checkAgentPath(main, ctx)).toThrow(
       /is a link to .*commander, where .* can be written by group or others/,
     );
+  });
+});
+
+/** The review of 262ff3c: link text in the managed copy, and code loaded from outside the walk. */
+describe('PR #78 review: link text, closures, ancestor node_modules', () => {
+  const pkgAt = (dir: string, json: Record<string, unknown> = {}): string => {
+    fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: 'oortmem', version: VERSION, ...json }),
+    );
+    const main = path.join(dir, 'dist', 'main.js');
+    fs.writeFileSync(main, '#!/bin/sh\n', { mode: 0o755 });
+    return main;
+  };
+  const dep = (dir: string, file = 'index.js', mode = 0o644): string => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: path.basename(dir) }));
+    const f = path.join(dir, file);
+    fs.writeFileSync(f, '\n', { mode });
+    fs.chmodSync(f, mode);
+    return f;
+  };
+
+  it('text.a-link-whose-text-points-out-but-whose-realpath-is-inside-is-refused', () => {
+    const h = harness({ trusted: true });
+    const prefix = path.join(h.home, 'cli');
+    npmPrefixCopy(prefix, VERSION);
+    // `ext` (outside the copy) leads back into it, so the link's realpath is inside.
+    const ext = path.join(h.root, 'ext');
+    fs.symlinkSync(path.join(prefix, 'lib'), ext);
+    const text = path.join(ext, 'node_modules', 'oortmem', 'package.json');
+    const link = path.join(prefix, 'lib', 'node_modules', 'oortmem', 'dist', 'pkg.json');
+    fs.symlinkSync(text, link);
+    expect(fs.realpathSync.native(link).startsWith(fs.realpathSync(prefix))).toBe(true);
+    clearTreeCache();
+    expect(inspectManaged({ HOME: h.root, OORT_HOME: h.home, PATH: '' })).toMatchObject({
+      state: 'untrusted',
+      problem: { dir: link, why: `is a link whose text points out of the managed copy (${text})` },
+    });
+  });
+
+  it('closure.runtime-dependencies-are-walked-and-dev-dependencies-are-not', () => {
+    const h = harness({ trusted: true });
+    const pkg = path.join(h.root, 'build', 'oortmem');
+    const main = pkgAt(pkg, { dependencies: { left: '1' }, devDependencies: { tooling: '1' } });
+    // pnpm-like: both linked from node_modules into a store outside the package.
+    const store = trustedTmpdir('oort-store-');
+    const leftFile = dep(path.join(store, 'left'));
+    const toolFile = dep(path.join(store, 'tooling'));
+    fs.mkdirSync(path.join(pkg, 'node_modules'));
+    fs.symlinkSync(path.join(store, 'left'), path.join(pkg, 'node_modules', 'left'));
+    fs.symlinkSync(path.join(store, 'tooling'), path.join(pkg, 'node_modules', 'tooling'));
+    const ctx = { io: { env: { HOME: h.root, OORT_HOME: h.home, PATH: '' } } } as never;
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).not.toThrow();
+    // A writable file in a dev dependency: Node never loads it from oort, not walked.
+    fs.chmodSync(toolFile, 0o666);
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).not.toThrow();
+    // In a runtime dependency, found the way Node finds it: refused.
+    fs.chmodSync(leftFile, 0o666);
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).toThrow(`${leftFile} can be written by others`);
+  });
+
+  it('closure.a-dependency-of-a-dependency-is-found-beside-it-as-pnpm-lays-it-out', () => {
+    const h = harness({ trusted: true });
+    const pkg = path.join(h.root, 'build', 'oortmem');
+    const main = pkgAt(pkg, { dependencies: { a: '1' } });
+    // store/a@1/node_modules/{a, b}: a needs b, which Node finds beside it.
+    const nm = path.join(trustedTmpdir('oort-pnpm-'), 'a@1', 'node_modules');
+    dep(path.join(nm, 'a'));
+    fs.writeFileSync(
+      path.join(nm, 'a', 'package.json'),
+      JSON.stringify({ name: 'a', dependencies: { b: '1' } }),
+    );
+    const deep = dep(path.join(nm, 'b'), 'deep.js');
+    fs.mkdirSync(path.join(pkg, 'node_modules'));
+    fs.symlinkSync(path.join(nm, 'a'), path.join(pkg, 'node_modules', 'a'));
+    const ctx = { io: { env: { HOME: h.root, OORT_HOME: h.home, PATH: '' } } } as never;
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).not.toThrow();
+    fs.chmodSync(deep, 0o666);
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).toThrow(`${deep} can be written by others`);
+  });
+
+  it('closure.a-linked-directory-that-is-not-a-dependency-is-walked-too', () => {
+    const h = harness({ trusted: true });
+    const pkg = path.join(h.root, 'build', 'oortmem');
+    const main = pkgAt(pkg);
+    const vendor = path.join(trustedTmpdir('oort-vendor-'), 'vendor');
+    const file = dep(vendor, 'lib.js');
+    fs.symlinkSync(vendor, path.join(pkg, 'dist', 'vendor'));
+    const ctx = { io: { env: { HOME: h.root, OORT_HOME: h.home, PATH: '' } } } as never;
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).not.toThrow();
+    fs.chmodSync(file, 0o666);
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).toThrow(`${file} can be written by others`);
+  });
+
+  it('ancestors.a-planted-writable-node-modules-above-the-copy-is-refused', () => {
+    const h = harness({ trusted: true });
+    const env = { HOME: h.root, OORT_HOME: h.home, PATH: '' };
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    const pkg = path.join(h.root, 'build', 'oortmem');
+    const main = pkgAt(pkg);
+    clearTreeCache();
+    expect(inspectManaged(env).state).toBe('ok');
+    // <HOME>/node_modules, writable by anyone: Node would search it for what oort does not ship.
+    const planted = path.join(h.root, 'node_modules');
+    fs.mkdirSync(planted);
+    fs.chmodSync(planted, 0o777);
+    clearTreeCache();
+    const s = inspectManaged(env);
+    expect(s).toMatchObject({ state: 'untrusted', problem: { dir: planted } });
+    expect(s.state === 'untrusted' && s.problem.why).toContain(
+      `and Node loads modules from ${planted} for anything not found nearer`,
+    );
+    expect(s.state === 'untrusted' && s.problem.fix).not.toMatch(/chmod|chown/);
+    expect(() => checkAgentPath(main, { io: { env } } as never)).toThrow(
+      `and Node loads modules from ${planted}`,
+    );
+    // Yours alone: fine.
+    fs.chmodSync(planted, 0o755);
+    clearTreeCache();
+    expect(inspectManaged(env).state).toBe('ok');
   });
 });
