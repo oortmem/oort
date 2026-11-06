@@ -1,6 +1,3 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/server';
 import {
   MemoryToolError,
@@ -24,6 +21,12 @@ import {
   localGrant,
 } from '@oortmem/core';
 import { supersedeChain } from './engine/chain.js';
+import {
+  AGENT_JUDGMENTS_PER_DAY,
+  AgentJudgmentCapError,
+  refundAgentJudgment,
+  reserveAgentJudgment,
+} from './judge-cap.js';
 import { runRecall, timeMode, viewIgnored, type TemporalView } from './engine/recall.js';
 import { rememberFacts } from './remember.js';
 import { OortCloudError, findCloudMemory, type CloudClient } from './cloud.js';
@@ -387,119 +390,26 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
   };
 }
 
-/** Judgments an agent may record over MCP per day, per Oort home. */
-export const MCP_JUDGMENTS_PER_DAY = 50;
+/** Judgments an agent may record over MCP per day, per Oort home (shared with the SDK). */
+export const MCP_JUDGMENTS_PER_DAY = AGENT_JUDGMENTS_PER_DAY;
 
-const counterFile = (home: string): string => path.join(home, 'judge-mcp-count.json');
-
-const lockFile = (home: string): string => path.join(home, 'judge-mcp-count.lock');
-
-/** A lock file older than this is left over from a crashed process and is taken over. */
-const STALE_LOCK_MS = 30_000;
-const LOCK_WAIT_MS = 5_000;
-
-/** In-process queue per home, so calls in one server never race each other for the lock file. */
-const homeQueues = new Map<string, Promise<unknown>>();
-
-/**
- * Runs `fn` holding this home's counter lock: an in-process queue, then an exclusive lock file
- * (for other processes: another MCP server, another host). Refuses when the lock can't be taken.
- */
-async function withCounterLock<T>(home: string, fn: () => T): Promise<T> {
-  const prev = homeQueues.get(home) ?? Promise.resolve();
-  const run = prev.then(async () => {
-    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-    const file = lockFile(home);
-    const start = Date.now();
-    let fd: number | undefined;
-    while (fd === undefined) {
-      try {
-        fd = fs.openSync(file, 'wx', 0o600);
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw counterRefusal();
-        try {
-          if (Date.now() - fs.statSync(file).mtimeMs > STALE_LOCK_MS)
-            fs.rmSync(file, { force: true });
-        } catch {
-          // Gone in between: try again.
-        }
-        if (Date.now() - start > LOCK_WAIT_MS) throw counterRefusal();
-        await new Promise((r) => setTimeout(r, 10));
-      }
-    }
-    try {
-      return fn();
-    } finally {
-      fs.closeSync(fd);
-      fs.rmSync(file, { force: true });
-    }
-  });
-  // The queue continues whatever this call's outcome.
-  homeQueues.set(
-    home,
-    run.catch(() => {}),
-  );
-  return run;
-}
-
-const counterRefusal = (): MemoryToolError =>
-  new MemoryToolError(
-    "Could not keep this machine's daily count of judgments recorded over MCP, so nothing was saved; try again, or record it with `oort judge record`.",
-  );
-
-/** Today's count, read under the lock. A missing file is 0; an unreadable one is a refusal. */
-function readCounter(home: string, day: string): number {
-  let text: string;
-  try {
-    text = fs.readFileSync(counterFile(home), 'utf8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 0;
-    throw counterRefusal();
-  }
-  try {
-    const raw = JSON.parse(text) as { day?: unknown; count?: unknown };
-    return raw.day === day && typeof raw.count === 'number' && raw.count >= 0 ? raw.count : 0;
-  } catch {
-    throw counterRefusal();
-  }
-}
-
-/** Writes the count atomically (a temporary file, then a rename); a failure is a refusal. */
-function writeCounter(home: string, day: string, count: number): void {
-  const tmp = `${counterFile(home)}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify({ day, count }), { mode: 0o600, flag: 'wx' });
-    fs.renameSync(tmp, counterFile(home));
-  } catch {
-    fs.rmSync(tmp, { force: true });
-    throw counterRefusal();
-  }
-}
-
-/** Takes one of today's slots, or refuses at the cap. */
+/** The MCP tool's own wording for a slot that cannot be taken; the counter lives in judge-cap.ts. */
 async function reserveMcpJudgment(home: string, day: string): Promise<void> {
-  await withCounterLock(home, () => {
-    const used = readCounter(home, day);
-    if (used >= MCP_JUDGMENTS_PER_DAY) {
+  try {
+    await reserveAgentJudgment(home, day);
+  } catch (e) {
+    if (e instanceof AgentJudgmentCapError && e.kind === 'daily-limit') {
       throw new MemoryToolError(
         `This machine already recorded ${MCP_JUDGMENTS_PER_DAY} judgments over MCP today; record more with \`oort judge record\` or \`oort judge import\`.`,
       );
     }
-    writeCounter(home, day, used + 1);
-  });
-}
-
-/** Gives a slot back (the write was unchanged or failed). Best effort. */
-async function refundMcpJudgment(home: string, day: string): Promise<void> {
-  try {
-    await withCounterLock(home, () => {
-      const used = readCounter(home, day);
-      if (used > 0) writeCounter(home, day, used - 1);
-    });
-  } catch {
-    // The slot stays taken: the cap errs on the safe side.
+    throw new MemoryToolError(
+      "Could not keep this machine's daily count of judgments recorded over MCP, so nothing was saved; try again, or record it with `oort judge record`.",
+    );
   }
 }
+
+const refundMcpJudgment = refundAgentJudgment;
 
 /** A judgment input problem as the tool's own refusal; anything else as it is. */
 async function asToolError<T>(fn: () => Promise<T>): Promise<T> {
