@@ -190,6 +190,9 @@ importers:
       '@oortmem/embed-voyage':
         specifier: workspace:*
         version: link:../embed-voyage
+      '@oortmem/local-models':
+        specifier: workspace:*
+        version: link:../local-models
       '@oortmem/rerank-voyage':
         specifier: workspace:*
         version: link:../rerank-voyage

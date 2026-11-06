@@ -1,12 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { findModel, type EmbedModelSpec } from './catalog.js';
+import { findModel, MODELS, type EmbedModelSpec, type RerankModelSpec } from './catalog.js';
 import { localEmbedder } from './embed.js';
 import { clipTokens, normalize, quantize } from './encode.js';
 import { LocalModelError } from './errors.js';
 import { modelDir, pullModel } from './files.js';
-import { localReranker } from './rerank.js';
+import { localReranker, rerankScore } from './rerank.js';
 import { onnxRuntime, type Feed } from './runtime.js';
 import {
   fakeRuntime,
@@ -272,9 +272,10 @@ describe('localReranker', () => {
 
   it('local.rerank-calibrates-sorts-and-cuts-to-topk', async () => {
     const h = home();
-    const spec = tinyRerankSpec({ calibration: { scale: 0.5, shift: 2.4 } });
+    const calibration = (findModel('ms-marco-minilm-l6-v2') as RerankModelSpec).calibration;
+    const spec = tinyRerankSpec({ calibration });
     writeReady(h, spec);
-    const rt = fakeRuntime(logits([-10, 8, -6]));
+    const rt = fakeRuntime(logits([-10, 8, 0.21]));
     const rerank = localReranker({ home: h, model: spec.id, spec, runtime: rt });
     const out = await rerank.rerank(
       'q',
@@ -286,10 +287,27 @@ describe('localReranker', () => {
       2,
     );
     expect(out.map((r) => r.id)).toEqual(['b', 'c']);
-    expect(out[0]!.score).toBeCloseTo(1 / (1 + Math.exp(-(0.5 * 8 + 2.4))), 6);
-    // MiniLM's calibration puts the default 0.35 gate near logit -6.
-    expect(out[1]!.score).toBeCloseTo(0.354, 2);
+    expect(out[0]!.score).toBeCloseTo(rerankScore(8, calibration), 6);
+    // MiniLM's calibration (CON-96) puts the default 0.35 gate at logit 0.21.
+    expect(out[1]!.score).toBeCloseTo(0.35, 2);
     expect(rt.texts).toEqual(['q || x', 'q || y', 'q || z']);
+  });
+
+  it('local.rerank-equal-scores-keep-the-fused-order', async () => {
+    // Recall hands the reranker its candidates in fused order (RRF with the activation boost,
+    // which favours what was used recently). Pairs the model scores alike, such as two copies
+    // of one note, keep that order, as they do with Voyage.
+    const h = home();
+    const spec = tinyRerankSpec({ calibration: { scale: 1.5, shift: -0.93 } });
+    writeReady(h, spec);
+    const rt = fakeRuntime(logits([2, 9, 2, 9]));
+    const rerank = localReranker({ home: h, model: spec.id, spec, runtime: rt });
+    const out = await rerank.rerank(
+      'q',
+      ['newer', 'best-1', 'older', 'best-2'].map((id) => ({ id, text: id })),
+      4,
+    );
+    expect(out.map((r) => r.id)).toEqual(['best-1', 'best-2', 'newer', 'older']);
   });
 
   it('local.rerank-batches-and-skips-loading-for-no-docs', async () => {
@@ -313,5 +331,47 @@ describe('localReranker', () => {
     const e = { ids: [101, 1, 2, 3, 4, 102], token_type_ids: [0, 0, 0, 1, 1, 1] };
     expect(clipTokens(e, 4)).toEqual({ ids: [101, 1, 2, 102], token_type_ids: [0, 0, 0, 1] });
     expect(clipTokens(e, 10)).toBe(e);
+  });
+});
+
+describe('rerankScore', () => {
+  const rerankers = MODELS.filter((m): m is RerankModelSpec => m.role === 'rerank');
+  const grid = Array.from({ length: 801 }, (_, i) => -40 + i * 0.1);
+
+  it('local.rerank-calibration-is-increasing-and-within-0-1', () => {
+    for (const m of rerankers) {
+      expect(m.calibration.scale, m.id).toBeGreaterThan(0);
+      const scores = grid.map((x) => rerankScore(x, m.calibration));
+      for (const s of scores) {
+        expect(s).toBeGreaterThanOrEqual(0);
+        expect(s).toBeLessThanOrEqual(1);
+      }
+      // Strictly increasing wherever float64 can tell the scores apart (it saturates past ~36).
+      for (let i = 1; i < scores.length; i++) {
+        expect(scores[i]!, `${m.id} at ${grid[i]}`).toBeGreaterThanOrEqual(scores[i - 1]!);
+      }
+      const mid = grid.filter((x) => Math.abs(m.calibration.scale * x + m.calibration.shift) < 30);
+      for (let i = 1; i < mid.length; i++) {
+        expect(rerankScore(mid[i]!, m.calibration)).toBeGreaterThan(
+          rerankScore(mid[i - 1]!, m.calibration),
+        );
+      }
+    }
+  });
+
+  it('local.minilm-calibration-lands-on-voyage-margin', () => {
+    // The eval margin it was fitted on (CON-96): MiniLM's lowest answerable logit 1.414 maps to
+    // Voyage's lowest answerable score 0.767, and its highest kept abstention logit 0.062 to
+    // Voyage's highest abstention score 0.303, so recall.minRerankScore (0.35) falls between.
+    const c = (findModel('ms-marco-minilm-l6-v2') as RerankModelSpec).calibration;
+    expect(rerankScore(1.414, c)).toBeCloseTo(0.767, 2);
+    expect(rerankScore(0.062, c)).toBeCloseTo(0.303, 2);
+    expect(rerankScore(0.062, c)).toBeLessThan(0.35);
+    expect(rerankScore(1.414, c)).toBeGreaterThan(0.35);
+    // Unrelated pairs (MS MARCO logits near -10) score about 0, clearly relevant ones (8) about 1,
+    // and nothing MiniLM can emit saturates to exactly 1, so scores stay distinct.
+    expect(rerankScore(-10, c)).toBeLessThan(0.001);
+    expect(rerankScore(8, c)).toBeGreaterThan(0.99);
+    expect(rerankScore(12, c)).toBeLessThan(1);
   });
 });

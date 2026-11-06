@@ -4,6 +4,15 @@ import { clipChars, clipTokens, sigmoid, toBatch } from './encode.js';
 import { readyModel } from './errors.js';
 import { lazyLoad, onnxRuntime, type Runtime } from './runtime.js';
 
+/**
+ * A cross-encoder logit mapped onto the 0 to 1 score `recall.minRerankScore` is set for:
+ * `sigmoid(scale * logit + shift)`. With a positive `scale` it is strictly increasing, so it
+ * never reorders results; it only places them relative to the relevance gate.
+ */
+export function rerankScore(logit: number, calibration: { scale: number; shift: number }): number {
+  return sigmoid(calibration.scale * logit + calibration.shift);
+}
+
 export interface LocalRerankerOptions {
   /** `$OORT_HOME`; models live in `<home>/models/<id>`. */
   home: string;
@@ -34,7 +43,6 @@ export function localReranker(opts: LocalRerankerOptions): LocalReranker {
   const spec = s as RerankModelSpec;
   const load = lazyLoad(opts.runtime ?? onnxRuntime(), dir, opts.threads);
   const batchSize = opts.batchSize ?? 16;
-  const { scale, shift } = spec.calibration;
 
   return {
     model: id,
@@ -59,7 +67,7 @@ export function localReranker(opts: LocalRerankerOptions): LocalReranker {
         }
         const per = out.dims[1] ?? 1;
         for (let j = 0; j < encodings.length; j++) {
-          scores.push(sigmoid(scale * out.data[j * per]! + shift));
+          scores.push(rerankScore(out.data[j * per]!, spec.calibration));
         }
       }
       return docs

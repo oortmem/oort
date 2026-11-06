@@ -384,3 +384,28 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
     fs.rmSync(copy.dir, { recursive: true, force: true });
   }
 }
+
+/** A metric to three decimals, `-` when there is nothing to compute it from. */
+export const cell = (n: number | null | undefined): string =>
+  n === null || n === undefined ? '-' : n.toFixed(3);
+
+export function renderReport(r: EvalReport): string {
+  const head = [
+    'Group',
+    'Rows',
+    ...r.ks.map((k) => `recall@${k}`),
+    'MRR@10',
+    'Stale-leak',
+    'Abstain FP',
+  ];
+  const lines = [`| ${head.join(' | ')} |`, `| ${head.map(() => '---').join(' | ')} |`];
+  for (const [name, g] of Object.entries(r.groups)) {
+    lines.push(
+      `| ${[name, String(g.rows), ...r.ks.map((k) => cell(g.recallAt[k])), cell(g.mrr), cell(g.staleLeak), cell(g.abstainFp)].join(' | ')} |`,
+    );
+  }
+  if (r.skippedEmpty > 0) {
+    lines.push('', `Skipped ${r.skippedEmpty} row(s) with an empty question.`);
+  }
+  return lines.join('\n');
+}
