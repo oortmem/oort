@@ -1141,6 +1141,65 @@ describe('PR #78 review: link text, closures, ancestor node_modules', () => {
     ).toBeUndefined();
   });
 
+  it('globals.a-relative-NODE_PATH-entry-is-refused-whatever-the-copy (review)', () => {
+    const h = harness({ trusted: true });
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    expect(managedWith(h).state).toBe('ok');
+    for (const np of ['vendor', ['/abs', 'rel/libs'].join(path.delimiter), './x']) {
+      const s = managedWith(h, { NODE_PATH: np });
+      expect(s.state).toBe('untrusted');
+      if (s.state !== 'untrusted') continue;
+      expect(s.problem.why).toContain('relative NODE_PATH entry');
+      expect(s.problem.fix).toBe('make it absolute, or remove it from NODE_PATH');
+    }
+    // Empty entries are not relative ones.
+    expect(managedWith(h, { NODE_PATH: path.delimiter }).state).toBe('ok');
+    // A copy of your own: the same.
+    const pkg = path.join(h.root, 'build', 'oortmem');
+    const main = pkgAt(pkg, {});
+    const ctx = {
+      io: { env: { HOME: h.root, OORT_HOME: h.home, PATH: '', NODE_PATH: 'rel' } },
+    } as never;
+    clearTreeCache();
+    expect(() => checkAgentPath(main, ctx)).toThrow('relative NODE_PATH entry');
+  });
+
+  it('ancestors.a-link-to-a-directory-is-walked-under-the-same-rules-and-cap (review)', () => {
+    const h = harness({ trusted: true });
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    const planted = path.join(h.root, 'node_modules');
+    fs.mkdirSync(planted, { recursive: true });
+    const store = path.join(h.root, 'store');
+    const inner = dep(path.join(store, 'pkg', 'lib'), 'x.js');
+    fs.symlinkSync(path.join(store, 'pkg'), path.join(planted, 'linked'));
+    expect(managedWith(h).state).toBe('ok');
+    fs.chmodSync(inner, 0o666);
+    forgetSearched(planted);
+    forgetSearched(path.join(store, 'pkg'));
+    const s = managedWith(h);
+    expect(s).toMatchObject({ state: 'untrusted', problem: { dir: inner } });
+    expect(s.state === 'untrusted' && s.problem.why).toContain(
+      `can be written by others, and Node loads modules from ${planted} for anything not found nearer`,
+    );
+    fs.chmodSync(inner, 0o664);
+    forgetSearched(planted);
+    forgetSearched(path.join(store, 'pkg'));
+    expect(managedWith(h).state).toBe('untrusted');
+    // Past the cap: move the folder aside. A cycle through the link walks once.
+    fs.chmodSync(inner, 0o644);
+    forgetSearched(planted);
+    forgetSearched(path.join(store, 'pkg'));
+    fs.symlinkSync(planted, path.join(store, 'pkg', 'back'));
+    expect(managedWith(h).state).toBe('ok');
+    for (let i = 0; i < 6; i++) dep(path.join(store, 'pkg', `many-${i}`));
+    const rules = { home: h.root, strictFor: () => false };
+    const over = searchedFolders([planted], rules, { count: 0, visited: new Set() }, 5);
+    expect(over?.why).toMatch(/holds more than 5 entries to check/);
+    expect(over?.fix).toBe(
+      `move ${planted} aside (Node searches it), or make everything in it writable only by you`,
+    );
+  });
+
   it("globals.node's-global-folders-are-checked-and-walked-like-an-ancestor-node_modules (review b)", () => {
     const h = harness({ trusted: true });
     npmPrefixCopy(path.join(h.home, 'cli'), VERSION);

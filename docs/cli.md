@@ -98,7 +98,8 @@ current.
   - every `node_modules` Node searches above the managed copy, or above a copy
     of your own and every package of its run-time closure (`~/.oort/node_modules`,
     `~/node_modules`, …), must pass the same path rules, and everything in it
-    is walked: Node loads from them whatever is not found nearer. Inside
+    is walked, and so is every directory a link in them leads to (once, by its
+    real path): Node loads from them whatever is not found nearer. Inside
     `OORT_HOME` the strict rules apply, elsewhere the lenient ones, under one
     cap shared with the rest of the check (100,000 entries for a copy of your
     own). Past the cap the fix is `move <dir> aside`; oort never `chmod`s or
@@ -110,7 +111,9 @@ current.
     `NODE_PATH`; some of its CommonJS dependencies do not, so the folders count.
     The hook command oort writes does not clear `NODE_PATH`, so hooks inherit
     whatever the agent was started with; oort checks the value it sees when it
-    runs;
+    runs. A relative `NODE_PATH` entry is refused (Node resolves it against
+    the hook's working directory, such as a repo an agent is working in): make
+    it absolute or remove it;
   - every directory a link leads to inside a copy of your own is a package of
     that closure: its real path gets the same ancestor `node_modules` check,
     and its `package.json` run-time dependencies are walked as well.

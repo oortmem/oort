@@ -478,7 +478,7 @@ function lookupDirs(start: string): string[] {
 
 /**
  * Node's global folders, searched by CommonJS `require` after every `node_modules`: each absolute
- * `NODE_PATH` entry (from `env`, at check time), `~/.node_modules`, `~/.node_libraries` and
+ * `NODE_PATH` entry (a relative one is refused: `relativeNodePath`) (from `env`, at check time), `~/.node_modules`, `~/.node_libraries` and
  * `<node prefix>/lib/node`. oortmem itself is ESM, which ignores them; its CommonJS dependencies
  * do not.
  */
@@ -498,6 +498,22 @@ export function globalFolders(
       path.join(path.dirname(path.dirname(execPath)), 'lib', 'node'),
     ]),
   ];
+}
+
+/**
+ * A relative `NODE_PATH` entry: Node resolves it against the hook's working directory (a repo the
+ * agent is working in), so it is whatever someone put there, and `globalFolders` leaves it out.
+ * Refused, with the fix of making it absolute or removing it (PR #78 review).
+ */
+export function relativeNodePath(env: Record<string, string | undefined>): Untrusted | undefined {
+  const raw = env['NODE_PATH'] ?? '';
+  const rel = raw.split(path.delimiter).find((p) => p !== '' && !path.isAbsolute(p));
+  if (rel === undefined || process.platform === 'win32') return undefined;
+  return {
+    dir: rel,
+    why: `is a relative NODE_PATH entry, which Node resolves against the working directory of whatever runs oort (such as a repo an agent is working in), so anyone who can write there decides what it loads`,
+    fix: 'make it absolute, or remove it from NODE_PATH',
+  };
 }
 
 /** The rules a searched folder is held to: strict inside `OORT_HOME`, lenient elsewhere. */
@@ -588,6 +604,32 @@ export function searchedFolders(
         if (u !== undefined) {
           return aside({ dir: p, why: `is a link to ${target}, where ${u.dir} ${u.why}` });
         }
+        // A directory it leads to is code Node loads: walked under the same rules and cap, once
+        // (`visited`, by realpath), and remembered by its own mtime and ctime like a folder.
+        let t: fs.Stats;
+        try {
+          t = fs.statSync(target);
+        } catch {
+          continue;
+        }
+        if (!t.isDirectory() || state.visited.has(target)) continue;
+        const tkey = `${target}\0${strict ? 's' : 'l'}\0${related ? rules.home : ''}\0${cap}\0${t.mtimeMs}\0${t.ctimeMs}`;
+        if (rules.groupOk === undefined && searchCache.has(tkey)) continue;
+        const lw = walk(
+          target,
+          cap,
+          {
+            strict,
+            home: rules.home,
+            ...(rules.groupOk !== undefined && { groupOk: rules.groupOk }),
+          },
+          state,
+        );
+        if (lw !== undefined) {
+          const capped = /holds more than/.test(lw.why);
+          return aside(capped ? { dir: real, why: `holds more than ${cap} entries to check` } : lw);
+        }
+        if (rules.groupOk === undefined) searchCache.add(tkey);
         continue;
       }
       // A package, a scope folder or a file: all of it, by the same rules as the closure, under
@@ -723,7 +765,8 @@ export function trustedClosure(
     ...(opts.groupOk !== undefined && { groupOk: opts.groupOk }),
   };
   const globals = globalFolders(opts.env ?? {}, opts.home);
-  let found: Untrusted | undefined = searchedFolders(globals, search, state, cap);
+  let found: Untrusted | undefined =
+    relativeNodePath(opts.env ?? {}) ?? searchedFolders(globals, search, state, cap);
   while (found === undefined && queue.length > 0) {
     const pkg = queue.shift() as string;
     state.visited.add(pkg);

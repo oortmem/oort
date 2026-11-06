@@ -10,6 +10,7 @@ import {
   OWN_TREE_CAP,
   ancestorModules,
   globalFolders,
+  relativeNodePath,
   searchedFolders,
   trustedClosure,
   trustedPath,
@@ -470,6 +471,7 @@ function searched(start: string, env: Record<string, string | undefined>): Untru
   const rules: SearchRules = { home, strictFor: (d) => inside(realpathOf(d) ?? d, [oortHome]) };
   const state = { count: 0, visited: new Set<string>(), passed: new Set<string>() };
   return (
+    relativeNodePath(env) ??
     ancestorModules(start, rules, state, OWN_TREE_CAP) ??
     searchedFolders(globalFolders(env, home), rules, state, OWN_TREE_CAP)
   );
