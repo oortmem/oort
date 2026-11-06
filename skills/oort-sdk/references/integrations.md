@@ -71,7 +71,7 @@ Every command except `oort hook`, `oort mcp` and a foreground `oort serve` takes
 `OORT_OUTPUT=json`) and prints one `oort.v1` envelope on stdout. That is the contract for
 Python today and for any other language. See [cli-and-python.md](cli-and-python.md).
 
-## Not in 0.6.1
+## Not in 0.6.2
 
 - A native Python client (`from oortmem import Oort`) arrives in 0.7. Today the PyPI package
   `oortmem` is a launcher for the `oort` command and still needs Node.js 22.15 or newer.
