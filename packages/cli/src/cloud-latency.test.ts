@@ -238,15 +238,16 @@ describe('the prompt hook in cloud mode (CON-101)', () => {
     const c = await localCloud();
     closers.push(c.close);
     const s = sandbox(c);
+    // The default is `fast` since 0.5.3: embed, no rerank.
     await hook(s, 'which port does the auth service listen on?');
     fs.writeFileSync(path.join(s.oortHome, 'config.json'), '{"recall":{"promptMode":"lexical"}}\n');
     await hook(s, 'which port does the auth service listen on?');
-    fs.writeFileSync(path.join(s.oortHome, 'config.json'), '{"recall":{"promptMode":"fast"}}\n');
+    fs.writeFileSync(path.join(s.oortHome, 'config.json'), '{"recall":{"promptMode":"full"}}\n');
     await hook(s, 'which port does the auth service listen on?');
     expect(c.cloud.recalls.map((b) => [b['rerank'], b['embed']])).toEqual([
-      [undefined, undefined],
-      [false, false],
       [false, undefined],
+      [false, false],
+      [undefined, undefined],
     ]);
   });
 });

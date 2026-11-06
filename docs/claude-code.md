@@ -132,8 +132,8 @@ from before CON-101 ignores the request and recalls in full.
 
 | `promptMode` | What the prompt hook does | Model calls per prompt |
 | --- | --- | --- |
-| `full` (default) | Embeds the prompt and reranks the candidates, as above. | embed, rerank |
-| `fast` | Embeds the prompt; fusion and the relevance gate rank, with no reranker. | embed |
+| `full` | Embeds the prompt and reranks the candidates, as above. | embed, rerank |
+| `fast` (default) | Embeds the prompt; fusion and the relevance gate rank, with no reranker. | embed |
 | `lexical` | Lexical search only: no query embedding and no reranker. | none |
 
 On the bench eval (`pnpm eval --demo`'s 1,500-memory store and 23-row fixture, with the cloud's
@@ -143,7 +143,16 @@ own models: voyage-3.5-lite embeddings and rerank-3-lite, measured 2026-11-05), 
 4 of 4 questions with `full`, 1 of 4 with `fast` and none with `lexical`. The fixture's questions
 share words with their answers, which favours lexical search: a prompt that says the same thing in
 other words finds its memory only through the embedding, so `lexical` misses it. That is why
-`full` stays the default.
+`lexical` is not the default.
+
+`fast` is the default since 0.5.3. Measured live in cloud mode from Europe on 2026-11-05 with
+`oort serve` running and a kept-open connection, a new prompt took about 710 ms with `full`,
+465 ms with `fast` and 220 ms with `lexical`. The reranker alone was about 275 ms and the query
+embedding about 267 ms, and the floor for any cloud request (network, Worker, D1) was about 180 ms.
+`fast` keeps recall by meaning, cuts about a third of the wait, and in the eval above injected
+fewer unrelated memories than `full`. Set `"recall": { "promptMode": "full" }` in
+`~/.oort/config.json` for the reranked order, or `"lexical"` when speed matters most. `oort recall`,
+the MCP `recall` tool and `SessionStart` always recall in full.
 
 ### Cloud mode
 
