@@ -8,7 +8,7 @@ import { TG } from '@oortmem/core/store-conformance';
 import type { Memory } from '@oortmem/core';
 import { downgradeSqliteStore, openSqliteStore, sqliteSchemaVersion } from '@oortmem/store-sqlite';
 import { memory, tmpdir, data } from '../test/helpers.js';
-import { SKIP_FILE, callDaemon, readSkip } from './serve-client.js';
+import { RESTART_FILE, SKIP_FILE, callDaemon, hookViaDaemon, readSkip } from './serve-client.js';
 import { checkSocketPath } from './serve-daemon.js';
 import {
   FrameDecoder,
@@ -977,6 +977,55 @@ describe('the daemon gives way to a newer oort', () => {
     expect((log?.['counts'] as Record<string, number> | undefined)?.['daemon']).toBe(1);
     serve.child.kill('SIGTERM');
     await serve.exited;
+  });
+
+  it('serve.restarting-twice-within-a-minute-trips-the-breaker-and-starts-no-daemon (M9)', async () => {
+    const { s, baseline } = await seededWithBaseline();
+    // Something keeps starting an older daemon: it answers `restarting` every time.
+    let answered = 0;
+    await fakeDaemon(s, (f, conn) => {
+      answered++;
+      conn.end(
+        encodeFrame({
+          v: PROTOCOL_VERSION,
+          id: f.id,
+          ok: false,
+          error: { code: 'restarting', message: 'this daemon is oort 0.0.1; it exits for oort x' },
+        }),
+      );
+    });
+    const record = path.join(s.oortHome, RESTART_FILE);
+    const serveLog = path.join(s.oortHome, 'logs', 'serve.log');
+    // The first answer is recorded (as a hook would), and opens nothing.
+    const first = await hookViaDaemon('UserPromptSubmit', promptInput(s), s.cwd, s.env);
+    expect(first).toEqual({ served: false, reason: 'error', code: 'restarting' });
+    const at = Number(fs.readFileSync(record, 'utf8'));
+    expect(Math.abs(at - Date.now())).toBeLessThan(10_000);
+    expect(fs.statSync(record).mode & 0o777).toBe(0o600);
+    expect(readSkip(s.oortHome)).toBeUndefined();
+    // The second, within the minute, from the real bin: the breaker opens, no daemon starts.
+    const r = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
+    expect(r.stdout).toBe(baseline);
+    expect(answered).toBe(2);
+    expect(readSkip(s.oortHome)?.reason).toBe('refused');
+    await sleep(1000);
+    expect(fs.existsSync(serveLog)).toBe(false);
+    // The next prompt does not even ask.
+    await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
+    expect(answered).toBe(2);
+    // After the window (and the breaker): a single `restarting` restarts once again.
+    fs.writeFileSync(record, `${Date.now() - 2 * 60_000}\n`);
+    fs.rmSync(path.join(s.oortHome, SKIP_FILE));
+    const again = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s) });
+    expect(again.stdout).toBe(baseline);
+    expect(answered).toBe(3);
+    expect(readSkip(s.oortHome)).toBeUndefined();
+    await until(async () => {
+      const p = await callDaemon(s.socket, 'ping', {}, { budgetMs: 300 });
+      return p.ok && p.result['version'] === cliVersion();
+    });
+    expect(fs.existsSync(serveLog)).toBe(true);
+    expect((await oort(s, ['serve', 'stop'])).exitCode).toBe(0);
   });
 
   it('serve.restarting-opens-no-breaker-and-the-hook-starts-its-own-daemon', async () => {

@@ -52,8 +52,12 @@ copy of oort that matters on this machine:
 - **every other `oort` on `PATH`**; the first is what `oort` runs in this
   shell.
 
-Each copy is recognised by where it really lives (its realpath, or for a
-package manager's shell shim the script its text names), and its version is
+Each copy is recognised by where it really lives (its realpath, or for
+pnpm's shell shims the script the shim's text names: an absolute path, or a
+`$basedir/…` path that stays below the shim's own directory. Whatever it names
+counts only as a pnpm global, which is never run: npm never installs shell
+shims, so a shim never gets an npm prefix, and any other shim is listed as
+unrecognised), and its version is
 read from its files: the nearest `package.json` named `oortmem`, or for a PyPI
 launcher its `oortmem-<version>.dist-info`. Finding copies never runs one, so
 `oort update --check` only reads (and asks npm's registry); a copy whose files

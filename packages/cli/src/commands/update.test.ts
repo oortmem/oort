@@ -4,6 +4,7 @@
  * the store migration and daemon restart afterwards. Every copy is a stand-in in a throwaway HOME,
  * every installer, registry and daemon a fake: nothing is installed, nothing reaches the network.
  */
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -515,14 +516,123 @@ describe('oort update: the plan for each machine', () => {
     const shim = data(r.io.stdout, 'update').copies.find(
       (c: { path: string }) => c.path === path.join(bin, 'oort'),
     );
+    // pnpm 11 names `$basedir/../global/…`: out of the shim's own directory, so the text is not
+    // followed. Still a pnpm global (print-only), its version unknown.
     expect(shim).toMatchObject({
       kind: 'pnpm-global',
-      version: '0.6.1',
-      realpath: fs.realpathSync(path.join(pkg, 'dist', 'main.js')),
+      version: null,
+      realpath: fs.realpathSync(path.join(bin, 'oort')),
       action: 'listed',
     });
     expect(fs.existsSync(marker)).toBe(false);
     expect(fs.existsSync(path.join(m.h.root, 'SHIM_RAN'))).toBe(false);
+  });
+
+  it('update.a-pnpm-shim-naming-a-file-below-it-gives-its-version', async () => {
+    const m = machine();
+    withManagedHooks(m);
+    // pnpm 10 and before: the shim sits in PNPM_HOME, its target in PNPM_HOME/global/5.
+    const home = path.join(m.h.root, 'Library', 'pnpm');
+    const pkg = path.join(home, 'global', '5', 'node_modules', 'oortmem');
+    fs.mkdirSync(path.join(pkg, 'dist'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkg, 'package.json'),
+      JSON.stringify({ name: 'oortmem', version: '0.6.1' }),
+    );
+    trap(path.join(pkg, 'dist', 'main.js'), path.join(m.h.root, 'RAN'));
+    fs.writeFileSync(
+      path.join(home, 'oort'),
+      '#!/bin/sh\nexec node "$basedir/global/5/node_modules/oortmem/dist/main.js" "$@"\n',
+      { mode: 0o755 },
+    );
+    m.env.PATH = [path.join(m.h.home, 'cli', 'bin'), home].join(path.delimiter);
+    const r = await update(m, ['--check', '--json'], fakes(), {
+      script: m.managed!.main,
+      entry: m.managed!.bin,
+    });
+    expect(
+      data(r.io.stdout, 'update').copies.find(
+        (c: { path: string }) => c.path === path.join(home, 'oort'),
+      ),
+    ).toMatchObject({ kind: 'pnpm-global', version: '0.6.1', action: 'listed' });
+    expect(fs.existsSync(path.join(m.h.root, 'RAN'))).toBe(false);
+  });
+
+  it('update.shim-text-never-steers-npm (N1): a .. shim and an absolute-path shim plan no npm', async () => {
+    const m = machine();
+    const managed = withManagedHooks(m);
+    // Two npm prefixes someone would like `npm i -g --prefix` pointed at.
+    const victim = npmPrefix(path.join(m.h.root, 'elsewhere', 'victim'), '0.0.1');
+    const victim2 = npmPrefix(path.join(m.h.root, 'elsewhere', 'victim2'), '0.0.1');
+    const shims = path.join(m.h.root, 'shims');
+    fs.mkdirSync(path.join(shims, 'a'), { recursive: true });
+    fs.mkdirSync(path.join(shims, 'b'), { recursive: true });
+    fs.writeFileSync(
+      path.join(shims, 'a', 'oort'),
+      '#!/bin/sh\nexec node "$basedir/../../elsewhere/victim/lib/node_modules/oortmem/dist/main.js" "$@"\n',
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(shims, 'b', 'oort'),
+      `#!/bin/sh\nexec node "${victim2.main}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    for (const first of ['a', 'b']) {
+      m.env.PATH = [path.join(shims, first), path.join(shims, first === 'a' ? 'b' : 'a')].join(
+        path.delimiter,
+      );
+      const f = fakes({ latest: async () => VERSION });
+      const r = await update(m, ['--yes', '--json'], f, {
+        script: managed.main,
+        entry: managed.bin,
+      });
+      expect(r.code, r.io.stderr).toBe(0);
+      // The managed copy is current: nothing at all is installed, least of all into a victim.
+      expect(f.installs).toEqual([]);
+      expect(f.node).toEqual([]);
+      const copies = data(r.io.stdout, 'update').copies as {
+        path: string;
+        kind: string;
+        action: string;
+        command: string | null;
+        version: string | null;
+      }[];
+      for (const c of copies.filter((x) => x.path.startsWith(shims))) {
+        expect(c.kind).toBe('unknown');
+        expect(c.action).toBe('unknown');
+        expect(c.command).toBeNull();
+        expect(c.version).toBeNull();
+      }
+      expect(JSON.stringify(copies)).not.toContain('--prefix');
+    }
+    expect(fs.existsSync(victim.main)).toBe(true);
+    expect(fs.existsSync(path.join(m.h.root, 'NPM_RAN'))).toBe(false);
+  });
+
+  it('update.a-fifo-in-place-of-a-file-never-hangs-discovery (N2)', async () => {
+    const m = machine();
+    const managed = withManagedHooks(m);
+    // An oort on PATH whose package.json is a FIFO, and another oort that is a FIFO's link.
+    const pkg = path.join(m.h.root, 'fifo-prefix', 'lib', 'node_modules', 'oortmem');
+    fs.mkdirSync(path.join(pkg, 'dist'), { recursive: true });
+    execFileSync('mkfifo', [path.join(pkg, 'package.json')]);
+    fs.writeFileSync(path.join(pkg, 'dist', 'main.js'), '', { mode: 0o755 });
+    const bin = path.join(m.h.root, 'fifo-bin');
+    fs.mkdirSync(bin);
+    fs.symlinkSync(path.join(pkg, 'dist', 'main.js'), path.join(bin, 'oort'));
+    m.env.PATH = [path.join(m.h.home, 'cli', 'bin'), bin].join(path.delimiter);
+    const t0 = Date.now();
+    const r = await update(m, ['--check', '--json'], fakes(), {
+      script: managed.main,
+      entry: managed.bin,
+    });
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(
+      data(r.io.stdout, 'update').copies.find(
+        (c: { path: string }) => c.path === path.join(bin, 'oort'),
+      ),
+    ).toMatchObject({ kind: 'npm-global', version: null });
   });
 
   it('update.pypi: the launcher gets its pipx command printed, never run; npx is never touched', async () => {

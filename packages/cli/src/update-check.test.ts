@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VERSION } from '@oortmem/core';
 import { harness, tmpdir } from '../test/helpers.js';
-import { SKIP_FILE, hookViaDaemon, readSkip } from './serve-client.js';
+import { RESTART_FILE, SKIP_FILE, hookViaDaemon, readSkip } from './serve-client.js';
 import { encodeFrame, FrameDecoder, PROTOCOL_VERSION, socketPathFor } from './serve-protocol.js';
 import * as nodeNet from 'node:net';
 import { compareVersions, isNewerVersion } from './serve-protocol.js';
@@ -460,6 +460,7 @@ describe('review fixes', () => {
       const first = await hookViaDaemon('UserPromptSubmit', stdin, '/w', env, { now: () => NOW });
       expect(first).toEqual({ served: false, reason: 'error', code: 'restarting' });
       expect(readSkip(h)).toBeUndefined();
+      expect(fs.readFileSync(path.join(h, RESTART_FILE), 'utf8').trim()).toBe(String(NOW));
       // Again 30 s later: something keeps starting an older daemon. Open the breaker, start nothing.
       const second = await hookViaDaemon('UserPromptSubmit', stdin, '/w', env, {
         now: () => NOW + 30_000,

@@ -325,12 +325,34 @@ const realpathOf = (p: string): string | undefined => {
   }
 };
 
-function readPackage(dir: string): { name?: unknown; version?: unknown } | undefined {
+/**
+ * Up to `max` bytes of `file`, only when it is a regular file: opened non-blocking and checked with
+ * fstat first, so a FIFO (or a device) in its place can never hang the read. Undefined otherwise.
+ */
+function readRegular(file: string, max: number): Buffer | undefined {
+  let fd: number;
   try {
-    return JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as {
-      name?: unknown;
-      version?: unknown;
-    };
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
+  } catch {
+    return undefined;
+  }
+  try {
+    if (!fs.fstatSync(fd).isFile()) return undefined;
+    const buf = Buffer.alloc(max);
+    const n = fs.readSync(fd, buf, 0, max, 0);
+    return buf.subarray(0, n);
+  } catch {
+    return undefined;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readPackage(dir: string): { name?: unknown; version?: unknown } | undefined {
+  const raw = readRegular(path.join(dir, 'package.json'), 1024 * 1024);
+  if (raw === undefined) return undefined;
+  try {
+    return JSON.parse(raw.toString('utf8')) as { name?: unknown; version?: unknown };
   } catch {
     return undefined;
   }
@@ -363,32 +385,28 @@ export function nearestPackageVersion(real: string | undefined): string | undefi
 
 /** The first `bytes` of a file as text, or '' when it cannot be read. Reads, never runs. */
 function fileHead(file: string, bytes = 256): string {
-  try {
-    const fd = fs.openSync(file, 'r');
-    try {
-      const buf = Buffer.alloc(bytes);
-      const n = fs.readSync(fd, buf, 0, bytes, 0);
-      return buf.subarray(0, n).toString('utf8');
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return '';
-  }
+  return readRegular(file, bytes)?.toString('utf8') ?? '';
 }
+
+/** Whether `head` starts a POSIX shell script (`#!/bin/sh`, `#!/usr/bin/env bash`, …). */
+const isShellScript = (head: string): boolean =>
+  head.startsWith('#!') && /\b(?:sh|bash)\b/.test(head.split('\n', 1)[0] ?? '');
 
 /**
  * The script a package manager's shell shim runs (pnpm's global bins, cmd-shim): read from the
- * shim's text (`"$basedir/…/main.js"` or an absolute path to a `.js` file), never by running it.
+ * shim's text (`"$basedir/…/main.js"` below the shim's own directory, or an absolute path to a
+ * `.js` file), never by running it. Text anyone can write: what it names is only ever shown as a
+ * pnpm global (print-only, see `discoverCopies`), never given an npm prefix.
  */
 export function shimTarget(file: string): string | undefined {
   const text = fileHead(file, 4096);
-  if (!text.startsWith('#!') || !/\b(?:sh|bash)\b/.test(text.split('\n', 1)[0] ?? '')) {
-    return undefined;
-  }
+  if (!isShellScript(text)) return undefined;
+  const dir = path.dirname(file);
   const rel = /"\$basedir\/([^"$`]+\.[cm]?js)"/.exec(text)?.[1];
+  // `$basedir/…` must stay under the shim's own directory once normalised (no `..` out of it).
+  const below = rel === undefined ? undefined : path.normalize(path.join(dir, rel));
   const candidates = [
-    ...(rel !== undefined ? [path.join(path.dirname(file), rel)] : []),
+    ...(below !== undefined && below.startsWith(dir + path.sep) ? [below] : []),
     ...[...text.matchAll(/"(\/[^"$`]+\.[cm]?js)"/g)].map((m) => m[1] as string),
   ];
   for (const c of candidates) {
@@ -475,12 +493,22 @@ export function discoverCopies(ctx: Ctx, deps: Pick<UpdateDeps, 'tmpdir'>): Copy
 
   const copies = new Map<string, Copy>();
   for (const f of found) {
-    let real = realpathOf(f.path);
+    const fileReal = realpathOf(f.path);
+    let real = fileReal;
     const isJs = (p: string | undefined): boolean =>
       p !== undefined && /[\\/]dist[\\/]main\.js$/.test(p);
-    // A shell shim (pnpm's global bins): the script it names, read from its text.
-    if (real !== undefined && !isJs(real)) real = shimTarget(real) ?? real;
-    const key = real ?? f.path;
+    // A shell shim (pnpm's global bins): the script it names, read from its text. On Unix npm
+    // never installs shell shims, so a shim's target is never an npm copy and never merges into
+    // one: it is keyed by the shim itself.
+    let viaShim = false;
+    if (real !== undefined && !isJs(real)) {
+      const target = shimTarget(real);
+      if (target !== undefined) {
+        real = target;
+        viaShim = true;
+      }
+    }
+    const key = viaShim ? `shim:${fileReal ?? f.path}` : (real ?? f.path);
     const seen = copies.get(key);
     if (seen !== undefined) {
       if (!seen.roles.includes(f.role)) seen.roles.push(f.role);
@@ -490,13 +518,33 @@ export function discoverCopies(ctx: Ctx, deps: Pick<UpdateDeps, 'tmpdir'>): Copy
       continue;
     }
     const head = real !== undefined && !isJs(real) ? fileHead(real) : undefined;
-    const kind = classifyCopy(f.path, real, {
+    let kind = classifyCopy(f.path, real, {
       managedPrefix: realpathOf(managedPrefix) ?? managedPrefix,
       tmp,
       ...(head !== undefined && { head }),
     });
-    const version =
-      real !== undefined && real === scriptReal
+    let trusted = true;
+    if (viaShim && kind.kind !== 'pnpm-global' && kind.kind !== 'transient') {
+      // Shim text names an npm prefix, a checkout, the managed copy…: never believed.
+      kind = {
+        kind: 'unknown',
+        why: 'a shell script that names something other than a pnpm global; oort update only reads it',
+      };
+      trusted = false;
+      real = fileReal; // shown as what it is: the script, not what its text claims
+    } else if (
+      !viaShim &&
+      head !== undefined &&
+      isShellScript(head) &&
+      /[\\/]pnpm[\\/]/.test(f.path)
+    ) {
+      // A pnpm shim whose target could not be read (or leaves its directory): pnpm, version unknown.
+      kind = { kind: 'pnpm-global' };
+      trusted = false;
+    }
+    const version = !trusted
+      ? undefined
+      : real !== undefined && real === scriptReal
         ? VERSION
         : kind.kind === 'pypi' && real !== undefined
           ? pypiVersion(real, kind.python ?? /^#!\s*(\S+)/.exec(head ?? '')?.[1])
