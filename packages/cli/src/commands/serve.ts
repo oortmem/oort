@@ -56,7 +56,7 @@ function elapsed(ms: number): string {
 }
 
 const NEEDS_DOCTOR =
-  'oort serve did not start: the store needs its schema migration (after an upgrade), and oort serve never migrates it. Run `oort doctor`, then `oort serve --detach`.';
+  'The daemon did not start: the store needs its schema migration (after an upgrade), and `oort serve` never migrates it. Run `oort doctor`, then `oort serve --detach`.';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -89,12 +89,12 @@ export async function serveCommand(
     case 'stop':
       return stop();
     default:
-      throw new Refusal(`unknown action ${echo(action ?? '')}; expected start, status or stop.`);
+      throw new Refusal(`Unknown action ${echo(action ?? '')}; expected start, status or stop.`);
   }
 
   if (process.platform === 'win32') {
     throw new Refusal(
-      'oort serve needs Unix sockets and does not run on Windows yet; the hooks run in-process.',
+      'The daemon needs Unix sockets and does not run on Windows yet; the hooks run in-process.',
     );
   }
   // The home config only: a repository's oort.config.json does not run daemons on this machine.
@@ -147,7 +147,7 @@ export async function serveCommand(
       }
     }
     io.err(
-      `oort: oort serve did not start${pid === undefined ? '' : ` (pid ${pid})`}; see ${show(path.join(home, 'logs', 'serve.log'))}.\n`,
+      `oort: the daemon did not start${pid === undefined ? '' : ` (pid ${pid})`}; see ${show(path.join(home, 'logs', 'serve.log'))}.\n`,
     );
     return 1;
   }
@@ -238,6 +238,8 @@ export async function serveCommand(
           2,
         )}\n`,
       );
+      // Exit 0 only when the daemon answers, so `oort serve status || oort serve --detach` works;
+      // the JSON reports the state either way.
       return r.ok ? 0 : 1;
     }
     io.out(ui.header('serve', 'status'));
@@ -327,7 +329,7 @@ export async function serveCommand(
       }
       await sleep(50);
     }
-    io.err(`oort: oort serve (pid ${pid}) did not stop within ${WAIT_MS / 1000}s.\n`);
+    io.err(`oort: the daemon (pid ${pid}) did not stop within ${WAIT_MS / 1000}s.\n`);
     return 1;
   }
 }

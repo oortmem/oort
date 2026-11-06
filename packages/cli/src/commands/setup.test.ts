@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createKeychain, type Keychain } from '../keychain.js';
 import { fakeSite } from '../../test/fake-site.js';
 import {
+  fakeDecide,
   fakeIo,
   harness,
   memoryKeychain,
@@ -174,7 +175,11 @@ describe('oort setup', () => {
     expect(r.code).toBe(0);
     expect(r.io.stdout).toContain('https://docs.voyageai.com/docs/api-key-and-installation');
     expect(r.io.stdout).toContain('https://platform.claude.com/settings/keys');
-    expect(r.io.stdout).toContain('export TYPESAFE_API_KEY=');
+    // No key store here: name the variable, never `export KEY=...` (shell history).
+    expect(r.io.stdout).toContain(
+      'then set TYPESAFE_API_KEY in the environment your agent starts with',
+    );
+    expect(r.io.stdout).not.toMatch(/export [A-Z_]+_KEY/);
     expect(r.io.stdout).toContain('macOS-only');
     expect(r.io.stdout).toMatch(/recalled/i);
     for (const id of ids) expect(await h.store.get(TG, id)).toBeNull();
@@ -202,6 +207,57 @@ describe('oort setup', () => {
     // Unresolved sessions are skipped unless asked; the estimate always prints first.
     expect(ran.io.stdout).toMatch(/sessions\s+\d/);
     expect(ran.io.stdout).toMatch(/skipped \(unresolved\)/);
+  });
+
+  it('setup.a-declined-import-is-not-reported-as-imported (CON-107)', async () => {
+    const { h, run } = setupHarness();
+    // A git repository, so the transcript's sessions resolve to this project.
+    fs.mkdirSync(path.join(h.cwd, '.git'));
+    writeTranscript(path.join(h.root, '.claude', 'projects'), h.cwd);
+    // Every other step comes from the flags; the one question left is the import's.
+    const p = scripted([false]);
+    const r = await run(
+      { agents: 'none', keys: 'skip', import: '3650d', demo: false },
+      { tty: true, stdoutTTY: true },
+      p,
+    );
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(p.asked).toHaveLength(1);
+    expect(p.said).toContain('Nothing imported. Later: `oort import claude-code --since 3650d`.');
+    expect(p.said + r.io.stdout).not.toContain('imported Claude Code sessions');
+  });
+
+  it('setup.a-partial-import-says-so-and-how-to-retry (CON-107)', async () => {
+    const { h, run } = setupHarness();
+    // A git repository, so the transcript's sessions resolve to this project.
+    fs.mkdirSync(path.join(h.cwd, '.git'));
+    writeTranscript(path.join(h.root, '.claude', 'projects'), h.cwd);
+    const base = h.wire;
+    h.wire = async (dir, o) => ({
+      ...(await base(dir, o)),
+      decide: {
+        ...fakeDecide,
+        async gate() {
+          throw new Error('upstream unavailable');
+        },
+      },
+    });
+    const r = await run({ yes: true, agents: 'none', keys: 'skip', import: '3650d', demo: false });
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toContain('stopped at a failed observation');
+    expect(r.io.stdout).toContain('Run `oort import claude-code --since 3650d` to retry them.');
+    expect(r.io.stdout).toContain('imported part of the Claude Code sessions since 3650d');
+    expect(r.io.stdout).not.toContain('imported Claude Code sessions since');
+  });
+
+  it('setup.a-full-import-is-reported (CON-107)', async () => {
+    const { h, run } = setupHarness();
+    // A git repository, so the transcript's sessions resolve to this project.
+    fs.mkdirSync(path.join(h.cwd, '.git'));
+    writeTranscript(path.join(h.root, '.claude', 'projects'), h.cwd);
+    const r = await run({ yes: true, agents: 'none', keys: 'skip', import: '3650d', demo: false });
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toContain('imported Claude Code sessions since 3650d');
   });
 
   it('setup.interactive-pro-runs-oort-login-for-real', async () => {

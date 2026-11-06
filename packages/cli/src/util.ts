@@ -4,6 +4,7 @@ import {
   CONTRADICTS,
   DISPLAY_UNSAFE_SOURCE,
   Grant,
+  MissingCredentialError,
   grantWrites,
   localGrant,
   scrub,
@@ -15,8 +16,9 @@ import {
   type ScopeFilter,
 } from '@oortmem/core';
 import type { LoginDeps } from './commands/login.js';
+import { ROLE_VENDOR, type AdapterRole } from './credentials.js';
 import type { Io } from './io.js';
-import type { Keychain } from './keychain.js';
+import { PROVIDER_ENV, type Keychain } from './keychain.js';
 import type { CloudClient } from './cloud.js';
 import type { WireFn, Wired } from './wire.js';
 
@@ -140,8 +142,71 @@ export async function withWired<T>(
 }
 
 /**
- * The adapters the write path needs (embed, decide, write). Refuses (exit 2)
- * when any is missing, with each missing adapter's fix (the env var to export).
+ * What to run when a key is missing, in the order to try: free local models (`oort models pull`,
+ * embed and rerank only), your own vendor key, or Oort Pro. Every missing-key message (recall,
+ * reembed, saving, init, doctor) uses this one text, for the `roles` that lack a key (all of
+ * them when absent, with `<provider>`). For decide and write alone it leaves local models out of
+ * the list, since they do neither, and says so. `keyStore: false` (no Keychain or credentials
+ * file here) names the environment variables instead of `oort keys set` and `oort login`, which
+ * would have nowhere to keep the key.
+ */
+export function keyRemedy(
+  opts: { roles?: readonly AdapterRole[]; keyStore?: boolean; code?: boolean } = {},
+): string {
+  const c = (s: string): string => (opts.code === false ? s : `\`${s}\``);
+  const roles = opts.roles;
+  const local = roles === undefined || roles.some((r) => r === 'embed' || r === 'rerank');
+  const vendors = roles === undefined ? undefined : [...new Set(roles.map((r) => ROLE_VENDOR[r]))];
+  const and = (xs: string[]): string =>
+    xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`;
+  const parts = [
+    ...(local ? [`${c('oort models pull')} (free local embed and rerank, no keys)`] : []),
+    opts.keyStore === false
+      ? `set ${vendors === undefined ? 'the key variable (VOYAGE_API_KEY, TYPESAFE_API_KEY or ANTHROPIC_API_KEY)' : and(vendors.map((v) => PROVIDER_ENV[v]))} in the environment your agent starts with`
+      : vendors === undefined
+        ? c('oort keys set <provider>')
+        : and(vendors.map((v) => c(`oort keys set ${v}`))),
+    opts.keyStore === false
+      ? 'set OORT_API_KEY from oortcloud.dev/account (Oort Pro)'
+      : `${c('oort login')} (Oort Pro)`,
+  ];
+  const list = `${parts.slice(0, -1).join(', ')}, or ${parts.at(-1)}`;
+  if (local) return list;
+  const what = and((roles ?? []).filter((r) => r === 'decide' || r === 'write'));
+  return `${list}; no local model does ${what} (${c('oort models pull')} covers embed and rerank only), so saving needs one of these`;
+}
+
+/** The remedy as a sentence: "Run `oort …`, …" or, when it starts with an instruction to set a variable, "Set …". */
+export function remedySentence(
+  opts: { roles?: readonly AdapterRole[]; keyStore?: boolean; code?: boolean } = {},
+): string {
+  const r = keyRemedy(opts);
+  return r.startsWith('set ') ? `S${r.slice(1)}` : `Run ${r}`;
+}
+
+/** Saving (observe, import, MCP remember) needs all three; local models serve only the first. */
+export const SAVING_NEEDS =
+  'Saving new memories needs embed, decide (TypeSafe) and write (Anthropic). Local models (`oort models pull`) cover only embed (and rerank); decide and write need your own TypeSafe and Anthropic keys, or Oort Pro.';
+
+/**
+ * Why an adapter is unavailable, for people: a missing key becomes the shared remedy (never
+ * `export KEY=...`, which leaves the key in shell history); any other reason keeps its message.
+ */
+export function adapterProblem(
+  err: Error | undefined,
+  role: AdapterRole,
+  keyStore = true,
+): string | undefined {
+  if (err === undefined) return undefined;
+  if (err instanceof MissingCredentialError) {
+    return `No ${role} model or key. ${remedySentence({ roles: [role], keyStore })}.`;
+  }
+  return err.message;
+}
+
+/**
+ * The adapters the write path needs (embed, decide, write). Refuses (exit 2) when any is missing,
+ * with each missing adapter's reason and the shared remedy for a missing key.
  */
 export function writePath(
   w: Wired,
@@ -152,8 +217,16 @@ export function writePath(
     return { embed, decide, write };
   }
   const missing = (['embed', 'decide', 'write'] as const).filter((r) => w[r] === undefined);
-  const reasons = [...new Set(missing.map((r) => w.unavailable[r]?.message ?? `No ${r} adapter.`))];
-  throw new Refusal(`${what} needs the ${missing.join(', ')} adapter(s).\n${reasons.join('\n')}`);
+  const reasons = [
+    ...new Set(
+      missing.map(
+        (r) => adapterProblem(w.unavailable[r], r, w.keyStore !== false) ?? `No ${r} adapter.`,
+      ),
+    ),
+  ];
+  throw new Refusal(
+    `Saving needs the ${missing.join(', ')} adapter(s), so ${what} saved nothing.\n${reasons.join('\n')}\n${SAVING_NEEDS}`,
+  );
 }
 
 /**
@@ -171,8 +244,9 @@ export function degradedHint(io: Io, w: Wired, degraded: string[] | undefined): 
   if (refused !== undefined) {
     io.err(`oort: recall degraded. ${refused.message}\n`);
   } else if (w.embed === undefined || w.rerank === undefined) {
-    const why = w.unavailable.embed ?? w.unavailable.rerank;
-    io.err(`oort: lexical-only recall.${why === undefined ? '' : ` ${why.message}`}\n`);
+    const role: AdapterRole = w.unavailable.embed !== undefined ? 'embed' : 'rerank';
+    const why = adapterProblem(w.unavailable[role], role, w.keyStore !== false);
+    io.err(`oort: lexical-only recall.${why === undefined ? '' : ` ${why}`}\n`);
   } else if (reported) {
     io.err(`oort: recall degraded (${degraded.join(', ')}).\n`);
   }
@@ -195,6 +269,22 @@ export function age(iso: string, now: Date): string {
   if (s < 86_400 * 30) return `${Math.floor(s / 86_400)}d`;
   if (s < 86_400 * 365) return `${Math.floor(s / (86_400 * 30))}mo`;
   return `${Math.floor(s / (86_400 * 365))}y`;
+}
+
+/**
+ * A time for human output: the local date and time, and how long ago (`2026-11-06 14:03 (3h
+ * ago)`), or how long until (`in 5d`). `short` gives the local date and time only, for tables.
+ * Anything that is not a time is returned as it is.
+ */
+export function when(iso: string, now: Date, opts: { short?: boolean } = {}): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const d = new Date(t);
+  const p = (n: number): string => String(n).padStart(2, '0');
+  const local = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  if (opts.short === true) return local;
+  const rel = t <= now.getTime() ? `${age(iso, now)} ago` : `in ${age(now.toISOString(), d)}`;
+  return `${local} (${rel})`;
 }
 
 /**
@@ -341,16 +431,29 @@ export async function findMemory(
   throw new Refusal(`No such memory in this project: ${echo(ref)}.`);
 }
 
-/** Asks y/N on a terminal; refuses when stdin is not a terminal and `--yes` was not given. */
+/**
+ * Asks y/N, the question on stderr (never stdout, so a piped stdout such as `| tee log` still gets
+ * only output). Never prompts where no person can answer or where the answer would be data: when
+ * stdin is not a terminal, or with `--json`, it refuses (exit 2) and names `--yes`. A declined
+ * question is not an error: callers exit 0.
+ */
 export async function confirm(
   io: Io,
   question: string,
   yes: boolean,
   flagHint: string,
+  opts: { json?: boolean } = {},
 ): Promise<boolean> {
   if (yes) return true;
-  if (!io.stdinIsTTY)
-    throw new Refusal(`stdin is not a terminal; re-run with --yes to ${flagHint}.`);
+  const why =
+    opts.json === true
+      ? '--json never asks'
+      : !io.stdinIsTTY
+        ? 'stdin is not a terminal'
+        : undefined;
+  if (why !== undefined) {
+    throw new Refusal(`This needs a confirmation, but ${why}; re-run with --yes to ${flagHint}.`);
+  }
   const answer = (await io.ask(`${question} [y/N] `)).trim().toLowerCase();
   return answer === 'y' || answer === 'yes';
 }

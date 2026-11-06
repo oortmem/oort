@@ -83,7 +83,7 @@ async function localExport(
       withEmbedding++;
     if (!fitsVersion1(full)) {
       throw new Refusal(
-        `memory ${full.id} is outside your Planet; Oort Cloud cannot import it yet.`,
+        `Memory ${full.id} is outside your Planet; Oort Cloud cannot import it yet.`,
       );
     }
     scopes.set(scopeKey(full.scope), full.scope);

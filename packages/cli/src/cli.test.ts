@@ -7,6 +7,7 @@ import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
 import { MIGRATION_PENDING_NOTE } from './commands/hook.js';
 import { AWS_KEY, fakeIo, harness, memory, tmpdir, writeTranscript } from '../test/helpers.js';
 import { runCli } from './program.js';
+import { when } from './util.js';
 import { wire as realWire, type WireFn } from './wire.js';
 import { TG } from '@oortmem/core/store-conformance';
 import { localGrant } from '@oortmem/core';
@@ -57,10 +58,29 @@ describe('oort observe', () => {
     const h = harness({ adapters: false });
     const r = await h.run(['observe', '--user', 'which port?', '--assistant', 'port 5582']);
     expect(r.code).toBe(2);
-    for (const v of ['VOYAGE_API_KEY', 'TYPESAFE_API_KEY', 'ANTHROPIC_API_KEY']) {
-      expect(r.io.stderr).toContain(`export ${v}=`);
+    // The shared remedy for each missing key, and saving's need for decide and write keys.
+    for (const p of ['voyage', 'typesafe', 'anthropic']) {
+      expect(r.io.stderr).toContain(`oort keys set ${p}`);
     }
+    expect(r.io.stderr).toContain('oort models pull');
+    expect(r.io.stderr).toContain('no local model does decide');
+    expect(r.io.stderr).not.toMatch(/export [A-Z_]+_API_KEY/);
+    expect(r.io.stderr).not.toContain('oort: oort');
     expect(r.io.stdout).toBe('');
+
+    // No key store (OORT_NO_KEYCHAIN=1): each missing variable is named, and `oort keys set` is
+    // not offered, since it would refuse.
+    const bare = harness({ adapters: false, keyStore: false });
+    const nb = await bare.run(['observe', '--user', 'which port?', '--assistant', 'port 5582']);
+    expect(nb.code).toBe(2);
+    for (const v of ['VOYAGE_API_KEY', 'TYPESAFE_API_KEY', 'ANTHROPIC_API_KEY']) {
+      expect(nb.io.stderr).toMatch(
+        new RegExp(`[Ss]et ${v} in the environment your agent starts with`),
+      );
+    }
+    expect(nb.io.stderr).toContain('oort models pull');
+    expect(nb.io.stderr).not.toContain('oort keys set');
+    expect(nb.io.stderr).not.toMatch(/export [A-Z_]+_API_KEY/);
     expect(
       await h.store.list(
         localGrant({
@@ -146,13 +166,17 @@ describe('oort inspect', () => {
     expect(at(a.id)).toBeGreaterThan(0);
     expect(at(a.id)).toBeLessThan(at(b.id));
     expect(at(b.id)).toBeLessThan(at(c.id));
-    // Each link's validity window.
+    // Each link's validity window, in local time rather than raw ISO.
+    const local = (iso: string): string => when(iso, new Date(), { short: true });
     expect(chain).toMatch(
       new RegExp(
-        `${a.id.slice(0, 8)}\\s+2026-09-01T00:00:00.000Z\\s+2026-09-10T00:00:00.000Z\\s+superseded`,
+        `${a.id.slice(0, 8)}\\s+${local('2026-09-01T00:00:00.000Z')}\\s+${local('2026-09-10T00:00:00.000Z')}\\s+superseded`,
       ),
     );
-    expect(chain).toMatch(new RegExp(`${c.id.slice(0, 8)}\\s+2026-09-20T00:00:00.000Z\\s+open`));
+    expect(chain).toMatch(
+      new RegExp(`${c.id.slice(0, 8)}\\s+${local('2026-09-20T00:00:00.000Z')}\\s+open`),
+    );
+    expect(out).not.toMatch(/\d{4}-\d\d-\d\dT\d\d:/);
 
     const json = await h.run(['inspect', b.id, '--json']);
     const parsed = JSON.parse(json.io.stdout) as {
@@ -590,7 +614,7 @@ describe('oort forget, pin', () => {
     expect(refused.io.stderr).not.toContain(m.text);
     expect(await h.store.get(TG, m.id)).not.toBeNull();
 
-    const declined = await h.run(['forget', m.id], { tty: true, answer: 'n' });
+    const declined = await h.run(['forget', m.id], { tty: true, stdoutTTY: true, answer: 'n' });
     expect(declined.code).toBe(0);
     expect(declined.io.asked).toHaveLength(1);
     expect(await h.store.get(TG, m.id)).not.toBeNull();
@@ -659,7 +683,7 @@ describe('oort forget, pin', () => {
       counts: { expired: 1, evicted: 1 },
     });
     const text = (await h.run(['stats'])).io.stdout;
-    expect(text).toMatch(/consolidated +\d{4}-\d\d-\d\dT/);
+    expect(text).toMatch(/consolidated +\d{4}-\d\d-\d\d \d\d:\d\d \(\d+\w+ ago\)/);
   });
 });
 

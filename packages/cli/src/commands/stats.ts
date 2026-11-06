@@ -8,7 +8,7 @@ import {
 } from '@oortmem/claude-code';
 import { isCurrent, type Tier, localGrant } from '@oortmem/core';
 import { uiFor } from '../ui.js';
-import { cloudOf, scopeLabel, withWired, type Ctx } from '../util.js';
+import { cloudOf, safeJson, scopeLabel, tilde, when, withWired, type Ctx } from '../util.js';
 
 export interface Stats {
   scope: { projectId: string | null };
@@ -89,10 +89,11 @@ export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<
         queue: { pending: jsonlLines(queue), deadLetters: jsonlLines(path.join(queue, 'dead')) },
       };
       if (opts.json === true) {
-        ctx.io.out(`${JSON.stringify(out, null, 2)}\n`);
+        ctx.io.out(`${safeJson(out)}\n`);
         return 0;
       }
       const ui = uiFor(ctx.io);
+      const now = new Date();
       const t = (tier: Tier): string => `${ui.tierName(tier)} ${c.tiers[tier]}`;
       ctx.io.out(ui.header('stats', 'Oort Cloud'));
       ctx.io.out(
@@ -101,7 +102,10 @@ export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<
           ['memories', String(c.memories)],
           ['tiers', `${t('hot')}, ${t('warm')}, ${t('cold')}`],
           ['database', mb(c.databaseBytes)],
-          ['consolidated', c.lastConsolidatedAt ?? 'not yet'],
+          [
+            'consolidated',
+            c.lastConsolidatedAt === null ? 'not yet' : when(c.lastConsolidatedAt, now),
+          ],
           [
             'queue',
             `${out.queue.pending} pending upload, ${out.queue.deadLetters} dead-lettered (this machine)`,
@@ -147,7 +151,7 @@ export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<
       rssBytes: process.memoryUsage().rss,
     };
     if (opts.json === true) {
-      ctx.io.out(`${JSON.stringify(stats, null, 2)}\n`);
+      ctx.io.out(`${safeJson(stats)}\n`);
       return 0;
     }
     const v = stats.validity;
@@ -163,15 +167,22 @@ export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<
           `current ${v.current}, superseded ${v.superseded}, expired ${v.expired}` +
             (v.notYetValid > 0 ? `, not yet valid ${v.notYetValid}` : ''),
         ],
-        ['sqlite', `${mb(stats.sqliteBytes)} ${ui.dim(`(${db}, including -wal)`)}`],
+        [
+          'sqlite',
+          `${mb(stats.sqliteBytes)} ${ui.dim(`(${tilde(db, ctx.io.env['HOME'] ?? '')}, including -wal)`)}`,
+        ],
         ['cold', mb(stats.coldBytes)],
         ['queue', `${stats.queue.pending} pending, ${stats.queue.deadLetters} dead-lettered`],
         [
           'consolidated',
-          (cs.lastCompleteAt ?? 'not yet') +
+          (cs.lastCompleteAt === null ? 'not yet' : when(cs.lastCompleteAt, now)) +
             (cs.lastOutcome === 'partial' ? ' (a later run stopped at its budget)' : '') +
             (cs.lastOutcome === 'error' ? ' (the last run failed)' : '') +
-            ui.dim(due.due ? ' · due on the next drain' : ` · next ${due.nextAt ?? ''}`),
+            ui.dim(
+              due.due
+                ? ' · due on the next drain'
+                : ` · next ${due.nextAt === null ? '' : when(due.nextAt, now)}`,
+            ),
         ],
         ['rss', mb(stats.rssBytes)],
       ]),

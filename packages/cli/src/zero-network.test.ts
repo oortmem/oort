@@ -194,7 +194,14 @@ describe('zero network without keys or Oort Pro', () => {
     const recall = await oort(s, ['recall', 'which port does the auth service listen on']);
     expect(recall.code).toBe(0);
     expect(recall.io.stdout).toContain('port 5582');
+    expect(recall.io.stderr).toContain('`oort models pull` (free local embed and rerank, no keys)');
+    // OORT_NO_KEYCHAIN=1: the variable is named, and `oort keys set` (which would refuse) is not.
     expect(recall.io.stderr).toContain('VOYAGE_API_KEY');
+    expect(recall.io.stderr).toContain(
+      'set VOYAGE_API_KEY in the environment your agent starts with',
+    );
+    expect(recall.io.stderr).not.toContain('oort keys set');
+    expect(recall.io.stderr).not.toContain('export VOYAGE_API_KEY');
 
     const runs: [string[], (io: FakeIo) => void][] = [
       [['recall', 'deploy day', '--json'], (io) => expect(io.stdout).toContain('Tuesday')],
@@ -272,9 +279,13 @@ describe('zero network without keys or Oort Pro', () => {
     await seed(s);
     const r = await oort(s, ['observe', '--user', 'which port?', '--assistant', 'port 5582']);
     expect(r.code).toBe(2);
+    // OORT_NO_KEYCHAIN=1: each variable is named; `oort keys set` would refuse, so it is not offered.
     for (const v of ['VOYAGE_API_KEY', 'TYPESAFE_API_KEY', 'ANTHROPIC_API_KEY']) {
-      expect(r.io.stderr).toContain(`export ${v}=`);
+      expect(r.io.stderr).toContain(v);
     }
+    expect(r.io.stderr).not.toContain('oort keys set');
+    expect(r.io.stderr).toContain('oort models pull');
+    expect(r.io.stderr).not.toMatch(/export [A-Z_]+_API_KEY/);
     expect(r.io.stdout).toBe('');
     expect(guard.attempts).toEqual([]);
   });

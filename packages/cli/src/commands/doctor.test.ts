@@ -214,6 +214,49 @@ describe('oort doctor', () => {
     expect(d.check('hooks', 'claude-code node')).toBeUndefined();
   });
 
+  it('doctor.missing-key-fixes-share-one-remedy-local-models-first-never-export (CON-107)', async () => {
+    const h = harness();
+    // A Keychain (macOS) and a no-key-store system (OORT_NO_KEYCHAIN=1): neither says `export`.
+    for (const kc of [memoryKeychain().kc, createKeychain({ platform: 'none' })]) {
+      const d = await doctor(h, {}, kc);
+      for (const role of ['embed', 'rerank', 'decide', 'write']) {
+        const fix = d.check('keys', role)?.fix ?? '';
+        expect(d.check('keys', role)?.status, role).toBe('warn');
+        expect(fix, role).toContain('oort models pull');
+        expect(fix, role).not.toMatch(/export [A-Z_]+_API_KEY/);
+        expect(fix, role).not.toContain('=...');
+        expect(fix, role).toContain('Oort Pro');
+      }
+      const embed = d.check('keys', 'embed')?.fix ?? '';
+      // Order: free local models, then a key, then Oort Pro.
+      expect(embed.indexOf('oort models pull')).toBeLessThan(embed.search(/voyage/i));
+      expect(embed.search(/voyage/i)).toBeLessThan(embed.indexOf('Oort Pro'));
+      // decide and write have no local model: saving needs a key or Pro even with local models.
+      for (const role of ['decide', 'write']) {
+        expect(d.check('keys', role)?.fix, role).toMatch(/no local model does (decide|write)/);
+      }
+      if (kc.supported) {
+        expect(embed).toBe(
+          'oort models pull (free local embed and rerank, no keys), oort keys set voyage, or oort login (Oort Pro)',
+        );
+        expect(d.check('keys', 'decide')?.fix).toContain('oort keys set typesafe, or oort login');
+        expect(d.check('keys', 'write')?.fix).toContain('oort keys set anthropic, or oort login');
+      } else {
+        expect(embed).toContain('set VOYAGE_API_KEY in the environment your agent starts with');
+      }
+    }
+  });
+
+  it('doctor.uses-the-ui-info-mark (CON-107)', async () => {
+    const h = harness();
+    const d = await doctor(h);
+    // Claude Code is not installed in the harness home: an info row.
+    expect(d.check('hooks', 'claude-code')?.status).toBe('info');
+    expect(d.human.io.stdout).toMatch(/^ {2}• claude-code/m);
+    expect(d.human.io.stdout).not.toContain('·  ');
+    expect(d.human.io.stdout).not.toMatch(/^ {2}· /m);
+  });
+
   it('doctor.every-failure-has-a-one-line-fix-and-exits-1', async () => {
     const h = harness();
     const gone = path.join(h.root, 'gone', 'node_modules', 'oortmem', 'dist', 'main.js');

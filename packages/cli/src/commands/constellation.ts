@@ -96,7 +96,7 @@ function agentArg(agent: string | undefined): string {
   }
   if (!isAgentId(agent) || agent === ANONYMOUS_AGENT) {
     throw new Refusal(
-      `agent ${echo(agent)} is not an agent id: lowercase letters, digits, ".", "_" or "-".`,
+      `Agent ${echo(agent)} is not an agent id: lowercase letters, digits, ".", "_" or "-".`,
     );
   }
   return agent;

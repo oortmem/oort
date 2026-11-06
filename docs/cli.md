@@ -64,22 +64,49 @@ contrast.
 **`--json`.** These commands print data rather than a report: `recall`,
 `explain`, `revalidate`, `inspect`, `stats`, `keys list` and `doctor`. With `--json` they print JSON
 only: no header and no colour. `export` always prints JSON Lines (see
-`docs/export-format.md`). `observe` prints its result as JSON.
+`docs/export-format.md`). `observe` prints its result as JSON, and accepts
+`--json` as a no-op. Memory text and other people's strings in JSON output have
+C1 controls, bidi overrides and invisible characters `\uXXXX`-escaped: the JSON
+parses to the same values, but plants nothing in a terminal.
 
 **Exit codes.**
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success. |
+| `0` | Success, including a declined confirmation. |
 | `1` | Unexpected error. Only the message is printed; add `--debug` for the stack. |
-| `2` | Refusal or usage problem, such as a bad flag, missing keys, a file Oort will not edit, or a non-terminal session that would need a prompt. |
+| `2` | Refusal or usage problem, such as a bad flag, missing keys, a file Oort will not edit, or a confirmation that cannot be asked (see below). |
+| `3` | Partial success: `oort import claude-code` imported what it could, but some sessions stopped at a failed observation. Run it again to retry them. |
 
 `oort doctor` exits 1 when one of its checks fails, and `oort login` exits 1
-when the sign-in expires, was already used or is cancelled.
+when the sign-in expires, was already used or is cancelled. A status query
+exits 1 when what it asks about is not running: `oort serve status` exits 0
+only when the daemon answers, and 1 when it is not running, not answering or
+waiting for a migration (with `--json` too, which still reports `running:
+false`). So `oort serve status || oort serve --detach` starts it only when
+needed.
 
-**Never blocks a script.** A command that would ask a question refuses (exit 2)
-when stdin is not a terminal, and names the flag to pass instead (`--yes` for
-`forget`, `import` and `setup`). `oort hook` always exits 0.
+**Never blocks a script.** A command that asks for a confirmation (`forget`,
+`import`, `reembed`, `share`, `project privacy public`, `cloud import`, the
+`constellation` `remove`, `leave`, `transfer` and `delete` commands, and
+`judge withdraw`, `confirm`, `purge` and `pack import`) writes its question to
+stderr, never stdout, so it still asks with stdout piped (`oort import
+claude-code | tee log`). It refuses (exit 2) instead of asking when stdin is not
+a terminal, or when `--json` is set, and names `--yes`, the flag to pass
+instead. `setup` takes `--yes` too. Declining a question changes nothing and
+exits 0. `oort hook` always exits 0.
+
+**Missing keys.** Every missing-key message gives the same three ways, in this
+order: `oort models pull` (free local embed and rerank models, no keys),
+`oort keys set <provider>` (your own key), or `oort login` (Oort Pro). Local
+models do not decide or write, so saving new memories (`observe`, `import`, the
+MCP `remember` tool) also needs a TypeSafe and an Anthropic key, or Oort Pro,
+even with local models. Recall works without any of them, lexical-only. No
+message suggests `export KEY=...`, which would leave the key in your shell
+history. Without a Keychain or `credentials.json` (`OORT_NO_KEYCHAIN=1`, CI,
+containers), where `oort keys set` and `oort login` cannot keep a key, the
+messages name the variable to set in the environment your agent starts with
+instead.
 
 **Secrets.** No command prints a key, not even a prefix. An argument echoed in
 an error message is scrubbed and clipped to 24 characters.
@@ -580,7 +607,9 @@ so not every session tries again. Only the home config is read for `serve`: a
 `--detach` and autostart write the daemon's output to `~/.oort/logs/serve.log`
 (mode 600). It holds start and stop lines only, never a prompt or a memory.
 `oort serve status` shows the pid, version, socket, uptime and how many
-requests it served. `oort doctor` shows the same under `serve`.
+requests it served. It exits 0 when the daemon answers and 1 when it does not
+(`--json` still prints the state, with `running: false`), so
+`oort serve status || oort serve --detach` works. `oort doctor` shows the same under `serve`.
 
 After upgrading oort, a daemon from the old version keeps running, and the
 hooks ignore it until it exits. Run `oort serve stop` (then `oort serve
@@ -595,12 +624,12 @@ hooks ignore it until it exits. Run `oort serve stop` (then `oort serve
 | `oort revalidate` | Lists volatile facts (a status, a current version, an owner) that nobody confirmed within `recall.staleAfterDays`, oldest first. | `--json` (id, type, text, lastConfirmed) |
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
 | `oort stats` | Counts per tier and validity, store and cold sizes, the hook queue, when the store was last consolidated (and when it is next due), and memory use. | `--json` |
-| `oort observe` | Runs the write path on one turn, from JSON on stdin or from `--user` with `--assistant`. | `--dry-run` (reports scrubbing only) |
+| `oort observe` | Runs the write path on one turn, from JSON on stdin or from `--user` with `--assistant`. It always prints JSON. | `--dry-run` (reports scrubbing only), `--json` (accepted; a no-op) |
 | `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. In Oort Cloud, a copy shared to a Constellation stays (it is the team's memory now) and the command says so. | `--yes`, `--everywhere` (Oort Cloud: also withdraw the shared copies only you contributed to) |
 | `oort pin <id>` / `oort unpin <id>` | A pinned memory is never sent to cold storage. | |
 | `oort consolidate` | Expires, re-tiers and evicts memories, every project and the global ones: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each node, and inside it each project and the global memories, is re-tiered on its own. The hooks also run it about daily (see `docs/claude-code.md`); a manual run counts as that day's. | |
 | `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. Withdrawn judgments are left out. | `--out <file>` (0600), `--force`, `--format 1\|2`, `--include-withdrawn` |
-| `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
+| `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. It exits 3 when some sessions stopped at a failed observation (the rest are imported; run it again to retry them). | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
 
 Ids are full ids or unique prefixes. Every command reads the cwd's project
 plus global memories, as the acting agent (`--agent`, `OORT_AGENT`, else
@@ -989,7 +1018,7 @@ memories stay on your machine, or in Oort Cloud in the EU after
 | Too many sign-in requests from this network (429) | 1 | Wait a minute, then run `oort login` again |
 | Ctrl-C | 1 | Cancelled; nothing was stored |
 | The Keychain or credentials file did not keep the key | 1 | Nothing saved; the unused "CLI on <date>" key can be revoked at oortcloud.dev/account |
-| `OORT_NO_KEYCHAIN=1`, or a system with neither the Keychain nor `credentials.json` | 2 | Refused before anything starts: create a key at oortcloud.dev/account and `export OORT_API_KEY=...` instead |
+| `OORT_NO_KEYCHAIN=1`, or a system with neither the Keychain nor `credentials.json` | 2 | Refused before anything starts: create a key at oortcloud.dev/account and set `OORT_API_KEY` in the environment your agent starts with instead |
 
 Signing in again replaces the stored key; the old key keeps working until
 you revoke it. Neither command sends your email address or any other account
@@ -1238,14 +1267,14 @@ Pro, with no key and a 3 second timeout.
 
 | Group | Checks | A problem and its fix |
 | --- | --- | --- |
-| `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. A role on a local model instead loads it and runs it once, offline. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort keys set <provider>, or oort login (Oort Pro)`. A model the relay does not serve: use the default model, or set the vendor key. |
+| `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. A role on a local model instead loads it and runs it once, offline. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort models pull (free local embed and rerank, no keys), oort keys set <provider>, or oort login (Oort Pro)`; for decide and write, which no local model does, the key or Oort Pro. Without a Keychain or `credentials.json`, the variable to set in your agent's environment instead. A model the relay does not serve: use the default model, or set the vendor key. |
 | `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, for this bin. | Missing, from another path, or a command that is not executable: `oort install claude-code`. A hook binary whose `--version` differs from the oort you run is a warning naming both versions and the path (re-run `oort install claude-code` from the oort you want); a path under a Node version manager (`.nvm/`, `fnm_multishells`, `node-versions/`, `.volta/`, `.asdf/`) gets a note that switching Node versions will break the hooks. Unparseable settings: fix the JSON, then `oort install claude-code`. |
 | `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. Whether the hooks skip the daemon after a timeout or refusal, and until when. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
 | `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
 | `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
 
-Each check has a status: `✓` ok, `!` warn, `✗` fail, `·` info and `?`
+Each check has a status: `✓` ok, `!` warn, `✗` fail, `•` info and `?`
 unknown. A relay that does not answer `/health` is a warning, not a failure:
 Oort still works locally, and recall falls back to lexical-only. A failed check
 makes doctor exit 1; warnings alone exit 0.

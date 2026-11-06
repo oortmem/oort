@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { expect } from 'vitest';
 import { createHookLogger } from '@oortmem/claude-code';
 import {
   MissingCredentialError,
@@ -134,9 +135,10 @@ export const fakeWriter: MemoryWriter = {
 
 /**
  * A temp `OORT_HOME` and an in-memory store behind an injected `wire`. With
- * `adapters: false` the wire reports every adapter missing, as without keys.
+ * `adapters: false` the wire reports every adapter missing, as without keys; `keyStore: false`
+ * wires as on a system where no key can be stored (`OORT_NO_KEYCHAIN=1`).
  */
-export function harness(opts: { adapters?: boolean } = {}): Harness {
+export function harness(opts: { adapters?: boolean; keyStore?: boolean } = {}): Harness {
   const root = tmpdir();
   const home = path.join(root, 'oort-home');
   const cwd = path.join(root, 'project');
@@ -168,6 +170,7 @@ export function harness(opts: { adapters?: boolean } = {}): Harness {
             },
         harnessLog: createHookLogger(home),
         warnings: [],
+        ...(opts.keyStore !== undefined && { keyStore: opts.keyStore }),
         close: async () => {},
         ...(keyed && { embed: fakeEmbedder, decide: fakeDecide, write: fakeWriter }),
       };
@@ -281,3 +284,34 @@ export function memoryKeychain(items: Record<string, string> = {}): {
   });
   return { kc, items, calls };
 }
+
+/**
+ * A command that needs a confirmation and may not ask (stdin not a terminal, or `--json`):
+ * exit 2, `why` and `--yes` named on stderr, no question asked and no prompt on stdout.
+ */
+export function expectRefusedWithoutPrompt(r: { code: number; io: FakeIo }, why: RegExp): void {
+  expect(r.code, r.io.stderr).toBe(2);
+  expect(r.io.asked).toEqual([]);
+  expect(r.io.stderr).toMatch(why);
+  expect(r.io.stderr).toContain('re-run with --yes');
+  expect(r.io.stdout).not.toContain('[y/N]');
+}
+
+/** One question asked (on stderr: never on stdout) and answered; the command exits 0. */
+export function expectAsked(r: { code: number; io: FakeIo }): void {
+  expect(r.code, r.io.stderr).toBe(0);
+  expect(r.io.asked).toHaveLength(1);
+  expect(r.io.asked[0]).toMatch(/\[y\/N\] $/);
+  expect(r.io.stdout).not.toContain('[y/N]');
+  expect(r.io.stdout).not.toContain(r.io.asked[0]!.trim());
+}
+
+/** A question declined on a terminal: one question, never on stdout, and exit 0. */
+export const expectDeclined = expectAsked;
+
+/** stdin is not a terminal: why a command that needs a confirmation refuses. */
+export const NO_TTY_STDIN = /stdin is not a terminal/;
+/** `--json`: why a command that needs a confirmation refuses even on a terminal. */
+export const JSON_NEVER_ASKS = /--json never asks/;
+/** A person at a terminal whose stdout is piped (`| tee log`): asked on stderr, answers yes. */
+export const PIPED_YES = { tty: true, stdoutTTY: false, answer: 'y' } as const;

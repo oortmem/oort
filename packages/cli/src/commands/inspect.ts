@@ -16,9 +16,11 @@ import {
   clip,
   findMemory,
   fixed,
+  safeJson,
   scopeLabel,
   shapeLinks,
   short,
+  when,
   withoutEmbedding,
   withWired,
   type Ctx,
@@ -172,7 +174,7 @@ export async function inspectCommand(
           cloud !== undefined
             ? current
             : await Promise.all(current.map((m) => shapeLinks(w.store, filter, m)));
-        ctx.io.out(`${JSON.stringify(shaped.map(withoutEmbedding), null, 2)}\n`);
+        ctx.io.out(`${safeJson(shaped.map(withoutEmbedding))}\n`);
         return 0;
       }
       const ui = uiFor(ctx.io);
@@ -188,6 +190,12 @@ export async function inspectCommand(
       ctx.io.out(
         ui.header('inspect', `${n} current ${n === 1 ? 'memory' : 'memories'}`, scopeLabel(w)),
       );
+      if (n === 0) {
+        ctx.io.out(
+          `${ui.info('No memories here yet. Your agent saves them as you work; `oort import claude-code` brings in past sessions.')}\n`,
+        );
+        return 0;
+      }
       ctx.io.out(ui.table(['id', 'type', 'tier', 'activation', 'age', 'text'], rows));
       return 0;
     }
@@ -202,7 +210,7 @@ export async function inspectCommand(
         cloud !== undefined ? m : await shapeLinks(w.store, filter, m),
       );
       const out = { memory, chain, hiddenLinks: hidden };
-      ctx.io.out(`${JSON.stringify(out, null, 2)}\n`);
+      ctx.io.out(`${safeJson(out)}\n`);
       return 0;
     }
     const a = activation(m.accessLog, m.salience, now, w.config.activation);
@@ -216,11 +224,17 @@ export async function inspectCommand(
         ['scope', JSON.stringify(m.scope)],
         ['salience', fixed(m.salience)],
         ['activation', `${fixed(a)} (${m.accessLog.count} accesses)`],
-        ['valid', `${m.validFrom} → ${m.validTo ?? 'open'}`],
-        ['expired', `${m.expiredAt ?? 'no'}${m.endReason !== null ? ` (${m.endReason})` : ''}`],
-        ['confirmed', m.lastConfirmedAt ?? 'never'],
-        ['created', m.createdAt],
-        ['updated', m.updatedAt],
+        [
+          'valid',
+          `${when(m.validFrom, now)} → ${m.validTo === null ? 'open' : when(m.validTo, now)}`,
+        ],
+        [
+          'expired',
+          `${m.expiredAt === null ? 'no' : when(m.expiredAt, now)}${m.endReason !== null ? ` (${m.endReason})` : ''}`,
+        ],
+        ['confirmed', m.lastConfirmedAt === null ? 'never' : when(m.lastConfirmedAt, now)],
+        ['created', when(m.createdAt, now)],
+        ['updated', when(m.updatedAt, now)],
         [
           'source',
           `${m.source.harness}${m.source.sessionId !== undefined ? ` session ${m.source.sessionId}` : ''}${m.source.turnRef !== undefined ? ` turn ${m.source.turnRef}` : ''}`,
@@ -246,8 +260,8 @@ export async function inspectCommand(
         chain.map((c) => [
           c.id === m.id ? '*' : '',
           short(c.id),
-          c.validFrom,
-          c.validTo ?? 'open',
+          when(c.validFrom, now, { short: true }),
+          c.validTo === null ? 'open' : when(c.validTo, now, { short: true }),
           c.endReason ?? '-',
           clip(c.text, 60),
         ]),

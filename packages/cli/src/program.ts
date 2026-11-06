@@ -247,8 +247,11 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--user <text>', 'the user turn')
     .option('--assistant <text>', 'the assistant turn')
     .option('--dry-run', 'only report what the scrubber would redact; touches nothing')
+    .option('--json', 'accepted for consistency; observe always prints JSON')
     .action(
-      run((o: { user?: string; assistant?: string; dryRun?: boolean }) => observeCommand(o, ctx)),
+      run((o: { user?: string; assistant?: string; dryRun?: boolean; json?: boolean }) =>
+        observeCommand(o, ctx),
+      ),
     );
 
   p.command('inspect')
@@ -832,7 +835,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
           },
         ) => {
           if (harness !== 'claude-code') {
-            throw new Refusal(`unknown harness ${echo(harness)}; Phase 1 supports claude-code.`);
+            throw new Refusal(`Unknown harness ${echo(harness)}; import supports claude-code.`);
           }
           return importCommand(o, ctx);
         },
@@ -857,8 +860,10 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
 
 /**
  * Runs the CLI on `args` (user arguments, without node and the script) and
- * resolves the exit code: 0 success, 1 unexpected error (message only; the
- * stack with --debug), 2 refusal or usage problem. Never prints a key: error
+ * resolves the exit code (docs/cli.md): 0 success (a declined question and a
+ * status query included), 1 unexpected error (message only; the stack with
+ * --debug), 2 refusal or usage problem, 3 partial success (`import` with
+ * failed sessions). Never prints a key: error
  * messages come from our own refusals or from adapters that never include one.
  */
 export async function runCli(

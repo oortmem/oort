@@ -34,7 +34,7 @@ import { spaceLine } from './whoami.js';
 import { LOCAL_INSTALL_HINT, LOCAL_PROVIDER, importLocalModels } from '../local-models.js';
 import { RELAY_MODELS, relayUrl } from '../relay.js';
 import { uiFor, type Ui } from '../ui.js';
-import { Refusal, echo, shown, tilde, withWired, type Ctx } from '../util.js';
+import { Refusal, echo, keyRemedy, shown, tilde, withWired, type Ctx } from '../util.js';
 import { hostContext } from './connect.js';
 import { VERSION } from '@oortmem/core';
 import { hookBinaryOf, hookCommandPath, settingsFile, versionManagerOf } from './install.js';
@@ -157,9 +157,8 @@ async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean 
         name: role,
         status: 'warn',
         detail: `no ${r.provider} key and no Oort key, so ${ROLE_NEED[role]}`,
-        fix: ctx.keychain.supported
-          ? `oort keys set ${r.provider}, or oort login (Oort Pro)`
-          : `export ${PROVIDER_ENV[r.provider]}=..., or OORT_API_KEY=... from oortcloud.dev/account (Oort Pro)`,
+        // The shared remedy: local models first (embed and rerank), never `export KEY=...`.
+        fix: keyRemedy({ roles: [role], keyStore: ctx.keychain.supported, code: false }),
       });
       continue;
     }
@@ -902,7 +901,7 @@ const GLYPH: Record<CheckStatus, string> = {
   ok: '✓',
   warn: '!',
   fail: '✗',
-  info: '·',
+  info: '•', // the same mark as ui.info
   unknown: '?',
 };
 

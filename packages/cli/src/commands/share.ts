@@ -119,7 +119,9 @@ export async function shareCommand(
       `Share ${short(m.id)} "${shown(clip(p.text, 40))}" with ${echo(p.constellation)} (${shown(p.constellationId.slice(0, 6))})?`,
       opts.yes === true,
       'share it',
+      { json: opts.json === true },
     );
+    // With --json, confirm refuses rather than asks, so a decline is always human output.
     if (!ok) {
       ctx.io.out('Not shared.\n');
       return 0;

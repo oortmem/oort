@@ -2,7 +2,16 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
-import { fakeIo, tmpdir } from '../test/helpers.js';
+import {
+  JSON_NEVER_ASKS,
+  NO_TTY_STDIN,
+  PIPED_YES,
+  expectAsked,
+  expectDeclined,
+  expectRefusedWithoutPrompt,
+  fakeIo,
+  tmpdir,
+} from '../test/helpers.js';
 import { writeCloudSettings } from './cloud.js';
 import { marked } from './commands/share.js';
 import { createKeychain } from './keychain.js';
@@ -23,11 +32,15 @@ function setup(mode: 'local' | 'cloud' = 'cloud') {
   if (mode === 'cloud') writeCloudSettings(home, { store: 'cloud' });
   const wire: WireFn = (dir, o = {}) =>
     realWire(dir, { ...o, keychain: async () => undefined, fetch: cloud.fetch });
-  const run = async (args: string[], opts: { tty?: boolean; answer?: string } = {}) => {
+  // `tty` is a terminal session (stdin and stdout); `stdoutTTY: false` pipes stdout.
+  const run = async (
+    args: string[],
+    opts: { tty?: boolean; stdoutTTY?: boolean; answer?: string } = {},
+  ) => {
     const io = fakeIo({
       cwd,
       env: { HOME: root, OORT_HOME: home, OORT_NO_KEYCHAIN: '1', OORT_API_KEY: key },
-      ...(opts.tty !== undefined && { tty: opts.tty }),
+      ...(opts.tty !== undefined && { tty: opts.tty, stdoutTTY: opts.stdoutTTY ?? opts.tty }),
       ...(opts.answer !== undefined && { answer: opts.answer }),
     });
     const code = await runCli(args, io, wire, createKeychain({ platform: 'none' }), {
@@ -91,6 +104,35 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
     expect(no.code).toBe(0);
     expect(no.io.stdout).toContain('Not shared.');
     expect(e.cloud.hive.shared.size).toBe(0);
+  });
+
+  it('share.confirm-asks-on-stderr-even-piped-refuses-json-and-a-decline-exits-0 (CON-107)', async () => {
+    const e = setup();
+    withTeam(e);
+    const args = ['share', ID, '--to', 'oort-core'];
+    // No terminal on stdin: refuses rather than wait for an answer nobody can give.
+    expectRefusedWithoutPrompt(await e.run(args), NO_TTY_STDIN);
+    // --json on a terminal: refuses too, and stdout stays empty (no preview, no "Not shared.").
+    const json = await e.run([...args, '--json'], { tty: true, answer: 'y' });
+    expectRefusedWithoutPrompt(json, JSON_NEVER_ASKS);
+    expect(json.io.stdout).toBe('');
+    expect(e.cloud.hive.shared.size).toBe(0);
+    // Declined on a terminal: exit 0, the question never on stdout.
+    const no = await e.run(args, { tty: true, answer: 'n' });
+    expectDeclined(no);
+    expect(no.io.asked[0]).toContain('Share 22222222');
+    expect(no.io.stdout).toContain('Not shared.');
+    expect(e.cloud.hive.shared.size).toBe(0);
+    // stdout piped, a person at the terminal: asked on stderr, and yes shares.
+    const piped = await e.run(args, PIPED_YES);
+    expectAsked(piped);
+    expect(piped.io.stdout).toContain('Shared to Constellation');
+    expect(e.cloud.hive.shared.size).toBe(1);
+    // --yes --json: never asks, and stdout is the JSON result alone.
+    const yes = await e.run([...args, '--yes', '--json']);
+    expect(yes.code, yes.io.stderr).toBe(0);
+    expect(yes.io.asked).toEqual([]);
+    expect(JSON.parse(yes.io.stdout)).toMatchObject({ constellationId: 'c_aaaaaaaaaaaaaaaa' });
   });
 
   it('share.sends-an-edited-text-and-a-private-project', async () => {
@@ -388,7 +430,13 @@ describe('project privacy is stated only when the project config sets it, and pr
     expect(asked.io.stderr).toContain('--yes');
     expect([...lastRecall(e).values()]).toEqual([true]);
     const no = await e.run(['project', 'privacy', 'public'], { tty: true, answer: 'n' });
+    expectDeclined(no);
     expect(no.io.stdout).toContain('Unchanged');
+    expect([...lastRecall(e).values()]).toEqual([true]);
+    // stdout piped, a person at the terminal: asked on stderr, and yes marks it public.
+    const piped = await e.run(['project', 'privacy', 'public'], PIPED_YES);
+    expectAsked(piped);
+    expect(piped.io.stdout).toContain('is not private');
     const yes = await e.run(['project', 'privacy', 'public', '--yes']);
     expect(yes.io.stderr).toBe('');
     expect(yes.code).toBe(0);

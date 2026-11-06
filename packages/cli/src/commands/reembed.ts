@@ -2,7 +2,7 @@ import * as path from 'node:path';
 import { reembedSqliteStore } from '@oortmem/store-sqlite';
 import { LOCAL_PROVIDER } from '../local-models.js';
 import { uiFor } from '../ui.js';
-import { Refusal, confirm, withWired, type Ctx } from '../util.js';
+import { Refusal, adapterProblem, confirm, withWired, type Ctx } from '../util.js';
 
 export interface ReembedCommandOptions {
   /** Re-embed even when the store is already bound to the configured embedder. */
@@ -22,14 +22,16 @@ export async function reembedCommand(opts: ReembedCommandOptions, ctx: Ctx): Pro
   return withWired(ctx, async (w) => {
     if (w.mode === 'cloud') {
       throw new Refusal(
-        'this machine uses Oort Cloud, which embeds on the server; nothing to re-embed here.',
+        'This machine uses Oort Cloud, which embeds on the server; nothing to re-embed here.',
       );
     }
     const embedder = w.reembedWith ?? w.embed;
     const binding = w.embedder;
     if (embedder === undefined || binding === undefined) {
-      const why = w.unavailable.embed?.message ?? 'no embedder is configured.';
-      throw new Refusal(`reembed needs the configured embedder. ${why}`);
+      const why =
+        adapterProblem(w.unavailable.embed, 'embed', w.keyStore !== false) ??
+        'No embedder is configured.';
+      throw new Refusal(`Re-embedding needs the configured embedder. ${why}`);
     }
     if (binding.matches && opts.force !== true) {
       ctx.io.out(
@@ -45,7 +47,10 @@ export async function reembedCommand(opts: ReembedCommandOptions, ctx: Ctx): Pro
         opts.yes === true,
         're-embed through the provider',
       );
-      if (!go) return 1;
+      if (!go) {
+        ctx.io.out('Nothing re-embedded.\n');
+        return 0;
+      }
     }
     const t0 = performance.now();
     let shown = -1;

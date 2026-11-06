@@ -2,7 +2,15 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
-import { fakeIo, tmpdir } from '../test/helpers.js';
+import {
+  NO_TTY_STDIN,
+  PIPED_YES,
+  expectAsked,
+  expectDeclined,
+  expectRefusedWithoutPrompt,
+  fakeIo,
+  tmpdir,
+} from '../test/helpers.js';
 import { writeCloudSettings } from './cloud.js';
 import { inviteToken } from './commands/constellation.js';
 import { cloudBackend, cloudSpaces } from './mcp.js';
@@ -33,7 +41,13 @@ function setup(mode: 'local' | 'cloud' = 'cloud') {
   const opened: string[] = [];
   const run = async (
     args: string[],
-    opts: { tty?: boolean; answer?: string; stdin?: string; env?: Record<string, string> } = {},
+    opts: {
+      tty?: boolean;
+      stdoutTTY?: boolean;
+      answer?: string;
+      stdin?: string;
+      env?: Record<string, string>;
+    } = {},
   ) => {
     const io = fakeIo({
       cwd,
@@ -44,7 +58,7 @@ function setup(mode: 'local' | 'cloud' = 'cloud') {
         OORT_API_KEY: key,
         ...opts.env,
       },
-      ...(opts.tty !== undefined && { tty: opts.tty, stdoutTTY: opts.tty }),
+      ...(opts.tty !== undefined && { tty: opts.tty, stdoutTTY: opts.stdoutTTY ?? opts.tty }),
       ...(opts.answer !== undefined && { answer: opts.answer }),
       ...(opts.stdin !== undefined && { stdin: opts.stdin }),
     });
@@ -213,6 +227,28 @@ describe('oort constellation members, roles and leaving (CON-64)', () => {
       `DELETE /v1/constellations/oort-core/members/maya%40example.com`,
     );
     expect(e.cloud.hive.members.get(C)).toHaveLength(1);
+  });
+
+  // CON-107: each Constellation command that asks first refuses without a terminal on stdin
+  // (exit 2, no prompt), exits 0 when declined, and asks on stderr even with stdout piped (the
+  // question never on stdout), acting on yes. --yes is covered by the tests around this one.
+  it.each([
+    { cmd: ['remove', 'oort-core', 'mb_maya00000002'], role: 'maintainer', owner: true },
+    { cmd: ['leave', 'oort-core'], role: 'member', owner: false },
+    { cmd: ['transfer', 'oort-core', 'mb_maya00000002'], role: 'maintainer', owner: true },
+    { cmd: ['delete', 'oort-core'], role: 'maintainer', owner: true },
+  ])('confirm.constellation-$cmd.0-no-tty-declined-piped-yes', async ({ cmd, role, owner }) => {
+    const e = setup();
+    team(e, role, owner);
+    const args = ['constellation', ...cmd];
+    const changes = (): string[] => e.cloud.seen.filter((s) => !s.startsWith('GET '));
+    expectRefusedWithoutPrompt(await e.run(args), NO_TTY_STDIN);
+    const no = await e.run(args, { tty: true, answer: 'n' });
+    expectDeclined(no);
+    expect(changes()).toEqual([]);
+    const piped = await e.run(args, PIPED_YES);
+    expectAsked(piped);
+    expect(changes()).toHaveLength(1);
   });
 
   it('remove.the-owner-is-refused-with-the-apis-message', async () => {

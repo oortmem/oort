@@ -43,7 +43,7 @@ export function hostArgs(args: string[]): Host[] {
   for (const a of args) {
     if (!isHost(a)) {
       throw new Refusal(
-        `unknown host ${echo(a)}; expected one of ${HOSTS.join(', ')}. ChatGPT and claude.ai web need a remote MCP URL, which arrives with Oort Cloud.`,
+        `Unknown host ${echo(a)}; expected one of ${HOSTS.join(', ')}. ChatGPT and claude.ai web need a remote MCP URL, which arrives with Oort Cloud.`,
       );
     }
     if (!hosts.includes(a)) hosts.push(a);

@@ -22,7 +22,10 @@ afterEach(async () => {
 });
 
 /** The server as `oort mcp` serves it (serveStdio picks the era), over an in-memory pipe. */
-async function connect(era: Era, opts: { adapters?: boolean } = {}): Promise<Connected> {
+async function connect(
+  era: Era,
+  opts: { adapters?: boolean; keyStore?: boolean } = {},
+): Promise<Connected> {
   const h = harness(opts);
   const w = await h.wire(h.cwd);
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
@@ -251,6 +254,29 @@ describe('oort mcp tools', () => {
     const found = await client.callTool({ name: 'recall', arguments: { query: 'durable' } });
     expect(found.isError).not.toBe(true);
     expect(json<{ note?: string }>(found).note).toMatch(/lexical-only/);
+  });
+
+  it('mcp.no-key-store-remember-and-recall-note-name-the-variables (CON-107)', async () => {
+    const { client } = await connect('legacy', { adapters: false, keyStore: false });
+    const r = await client.callTool({
+      name: 'remember',
+      arguments: { facts: ['A durable fact.'] },
+    });
+    expect(r.isError).toBe(true);
+    for (const v of ['VOYAGE_API_KEY', 'TYPESAFE_API_KEY', 'ANTHROPIC_API_KEY']) {
+      expect(text(r)).toMatch(new RegExp(`[Ss]et ${v} in the environment your agent starts with`));
+    }
+    expect(text(r)).not.toContain('oort keys set');
+    const found = await client.callTool({ name: 'recall', arguments: { query: 'durable' } });
+    const note = json<{ note?: string }>(found).note ?? '';
+    expect(note).toMatch(/lexical-only/);
+    expect(note).toContain('oort models pull');
+    expect(note).toContain('set VOYAGE_API_KEY in the environment your agent starts with');
+    expect(note).not.toContain('oort keys set');
+    // With a key store, the note offers `oort keys set voyage` instead.
+    const kept = await connect('legacy', { adapters: false });
+    const withStore = await kept.client.callTool({ name: 'recall', arguments: { query: 'x' } });
+    expect(json<{ note?: string }>(withStore).note).toContain('`oort keys set voyage`');
   });
 
   it('mcp.pin-explain-list-recent-whoami', async () => {

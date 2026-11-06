@@ -2,7 +2,17 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DecisionController, Embedder, JudgeRequest } from '@oortmem/core';
-import { fakeDecide, harness, type Harness } from '../test/helpers.js';
+import {
+  JSON_NEVER_ASKS,
+  NO_TTY_STDIN,
+  PIPED_YES,
+  expectAsked,
+  expectDeclined,
+  expectRefusedWithoutPrompt,
+  fakeDecide,
+  harness,
+  type Harness,
+} from '../test/helpers.js';
 import { MCP_JUDGMENTS_PER_DAY, localBackend } from './mcp.js';
 
 /** Items about health claims are near each other; anything else is far. */
@@ -347,7 +357,7 @@ describe('oort judge', () => {
     h.wire = async (dir, o) => ({ ...(await base(dir, o)), mode: 'cloud', cloud: {} as never });
     const r = await record(h);
     expect(r.code).toBe(2);
-    expect(r.io.stderr).toContain('judgment memory is local-only for now');
+    expect(r.io.stderr).toContain('Judgment memory is local-only for now');
   });
 });
 
@@ -678,5 +688,63 @@ describe('oort judge: withdraw, purge and the operator', () => {
     expect(again.io.stdout).toContain(
       '0 added, 0 corrected, 0 already recorded, 1 withdrawn or corrected here before (not brought back)',
     );
+  });
+});
+
+describe('oort judge: confirmations (CON-107)', () => {
+  // Each refuses without a terminal on stdin, exits 0 when declined, and asks on stderr even with
+  // stdout piped, acting on yes. --yes is covered by the tests above.
+  const terminal = { tty: true, stdoutTTY: true, answer: 'n' } as const;
+
+  it.each(['withdraw', 'purge'])('confirm.judge-%s-no-tty-declined-piped-yes', async (action) => {
+    const { h } = judging();
+    const id = json<{ id: string }>((await record(h, { json: '' })).io.stdout).id;
+    if (action === 'purge') await h.run(['judge', 'withdraw', id, '--yes']);
+    expectRefusedWithoutPrompt(await h.run(['judge', action, id]), NO_TTY_STDIN);
+    const no = await h.run(['judge', action, id], terminal);
+    expectDeclined(no);
+    expect(no.io.stdout).toContain('Kept.');
+    const yes = await h.run(['judge', action, id], PIPED_YES);
+    expectAsked(yes);
+    expect(yes.io.stdout).toContain(action === 'purge' ? 'Purged' : 'Withdrew');
+  });
+
+  it('confirm.judge-confirm-no-tty-declined-piped-yes', async () => {
+    const { h } = judging();
+    homeJudge(h, { experts: ['ada'] });
+    await localBackend({ wired: await h.wire(h.cwd) }).recordJudgment!(mcpJudgment());
+    const id = json<{ judgments: { id: string }[] }>(
+      (await h.run(['judge', 'list', '--json'])).io.stdout,
+    ).judgments[0]!.id;
+    expectRefusedWithoutPrompt(await h.run(['judge', 'confirm', id]), NO_TTY_STDIN);
+    const no = await h.run(['judge', 'confirm', id], terminal);
+    expectDeclined(no);
+    expect(no.io.stdout).toContain('Not confirmed.');
+    const yes = await h.run(['judge', 'confirm', id], PIPED_YES);
+    expectAsked(yes);
+    expect(yes.io.stdout).toContain('counts when judging now');
+  });
+
+  it('confirm.judge-pack-import-no-tty-json-declined-piped-yes', async () => {
+    const { h: from } = judging();
+    await record(from);
+    const out = path.join(from.root, 'p.pack.jsonl');
+    expect((await from.run(['judge', 'pack', 'export', '--out', out])).code).toBe(0);
+    const { h } = judging();
+    const args = ['judge', 'pack', 'import', out];
+    expectRefusedWithoutPrompt(await h.run(args), NO_TTY_STDIN);
+    // --json never asks, even on a terminal, and keeps stdout empty.
+    const j = await h.run([...args, '--json'], { ...terminal, answer: 'y' });
+    expectRefusedWithoutPrompt(j, JSON_NEVER_ASKS);
+    expect(j.io.stdout).toBe('');
+    const no = await h.run(args, terminal);
+    expectDeclined(no);
+    expect(no.io.stdout).toContain('Not imported.');
+    const yes = await h.run(args, PIPED_YES);
+    expectAsked(yes);
+    expect(yes.io.stdout).toContain('Imported 1 judgment(s)');
+    const again = await h.run([...args, '--yes', '--json']);
+    expect(again.code, again.io.stderr).toBe(0);
+    expect(json<{ skipped: string[] }>(again.io.stdout).skipped).toHaveLength(1);
   });
 });

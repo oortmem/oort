@@ -7,6 +7,7 @@ import {
   confirm,
   findMemory,
   short,
+  shown,
   withWired,
   refuseStarInCloud,
   writeGrantFor,
@@ -36,7 +37,8 @@ export async function forgetCommand(
     if (cloud === undefined) writeGrantFor(w, m);
     const ok = await confirm(
       ctx.io,
-      `Forget ${short(m.id)} "${clip(m.text, 60)}"?`,
+      // Memory text may carry escape sequences: the prompt shows them, never runs them.
+      `Forget ${short(m.id)} "${shown(clip(m.text, 60))}"?`,
       opts.yes === true,
       'forget it',
     );

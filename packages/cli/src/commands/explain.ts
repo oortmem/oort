@@ -111,6 +111,10 @@ export async function explainCommand(
         ...(result.degraded !== undefined ? [`degraded: ${result.degraded.join(', ')}`] : []),
       ),
     );
+    if (rows.length === 0) {
+      ctx.io.out(`${ui.info('No memories matched this query.')}\n`);
+      return 0;
+    }
     ctx.io.out(
       ui.table(
         [

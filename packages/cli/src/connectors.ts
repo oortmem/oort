@@ -438,7 +438,7 @@ function jsonChange(
   const { [key]: _s1, ...restAfter } = after;
   const { [key]: _s2, ...restBefore } = cfg;
   if (!isDeepStrictEqual(others, othersBefore) || !isDeepStrictEqual(restAfter, restBefore)) {
-    throw new Refusal(`could not edit ${file} safely; add the entry by hand (see docs/cli.md).`);
+    throw new Refusal(`Could not edit ${file} safely; add the entry by hand (see docs/cli.md).`);
   }
   Object.assign(result, opts.dryRun === true ? {} : save(file, text, loaded), {
     changed: true,

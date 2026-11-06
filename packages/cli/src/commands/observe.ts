@@ -1,12 +1,22 @@
 import { privacyStatement } from '../wire.js';
 import { z } from 'zod';
 import { observe, scrubObservation, type Observation } from '@oortmem/core';
-import { Refusal, cloudOf, writePath, withWired, type Ctx, refuseStarInCloud } from '../util.js';
+import {
+  Refusal,
+  cloudOf,
+  safeJson,
+  writePath,
+  withWired,
+  type Ctx,
+  refuseStarInCloud,
+} from '../util.js';
 
 export interface ObserveOptions {
   user?: string;
   assistant?: string;
   dryRun?: boolean;
+  /** Accepted and ignored: observe always prints JSON. */
+  json?: boolean;
 }
 
 const ObservationInput = z.strictObject({
@@ -40,19 +50,19 @@ async function readObservation(opts: ObserveOptions, ctx: Ctx): Promise<Observat
     return turnObservation(opts.user, opts.assistant, at);
   }
   if (ctx.io.stdinIsTTY) {
-    throw new Refusal('pipe an Observation as JSON on stdin, or pass --user and --assistant.');
+    throw new Refusal('Pipe an Observation as JSON on stdin, or pass --user and --assistant.');
   }
   let raw: unknown;
   try {
     raw = JSON.parse(await ctx.io.readStdin());
   } catch {
-    throw new Refusal('stdin is not valid JSON.');
+    throw new Refusal('The input on stdin is not valid JSON.');
   }
   const parsed = ObservationInput.safeParse(raw);
   if (!parsed.success) {
     // Paths and codes only: the issue messages could quote the input.
     const where = parsed.error.issues.map((i) => i.path.join('.') || '(root)').join(', ');
-    throw new Refusal(`stdin is not an Observation (check: ${where}).`);
+    throw new Refusal(`The input on stdin is not an Observation (check: ${where}).`);
   }
   const { at: given, ...rest } = parsed.data;
   const obs: Observation = { ...rest, at: given ?? at };
@@ -69,7 +79,7 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
   if (opts.dryRun === true) {
     const s = scrubObservation(obs);
     const report = { dropped: s.dropped, redactions: s.redactions };
-    ctx.io.out(`${JSON.stringify(report, null, 2)}\n`);
+    ctx.io.out(`${safeJson(report)}\n`);
     return 0;
   }
   return withWired(ctx, async (w) => {
@@ -89,7 +99,7 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
           ...(obs.toolSummaries.length > 0 && { tools: obs.toolSummaries }),
         },
       });
-      ctx.io.out(`${JSON.stringify(result, null, 2)}\n`);
+      ctx.io.out(`${safeJson(result)}\n`);
       return 0;
     }
     const adapters = writePath(w, 'oort observe');
@@ -100,7 +110,7 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
       harness: 'cli',
       home: w.agent.home,
     });
-    ctx.io.out(`${JSON.stringify(result, null, 2)}\n`);
+    ctx.io.out(`${safeJson(result)}\n`);
     return 0;
   });
 }

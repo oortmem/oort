@@ -771,6 +771,7 @@ describe('oort serve security review fixes', () => {
     expect(readSkip(s.oortHome)?.reason).toBe('migration');
     // status says why the last start was refused, then closes the breaker as before.
     const st = await oort(s, ['serve', 'status']);
+    // Not running (a migration pending): exit 1, so `status || serve --detach` works.
     expect(st.exitCode).toBe(1);
     expect(st.stdout).toContain('needs its schema migration');
     expect(st.stdout).toContain('run oort doctor');
