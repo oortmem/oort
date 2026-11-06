@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { AWS_KEY, SESSION, fixtureText } from '../test/helpers.js';
+import { AWS_KEY, SESSION, cpuMs, fixtureText } from '../test/helpers.js';
 import {
   HARNESS_TAGS,
   OORT_MEMORY_TAG,
@@ -170,9 +170,11 @@ describe('parseTranscript', () => {
       size += filler.length + pair.length + 2;
     }
     const jsonl = lines.join('\n');
-    const t0 = performance.now();
-    const ts = parseTranscript(jsonl);
-    const ms = performance.now() - t0;
+    // CPU time, not wall-clock: a busy machine delays the parse but does not make it cost more.
+    let ts: ReturnType<typeof parseTranscript> = [];
+    const ms = cpuMs(() => {
+      ts = parseTranscript(jsonl);
+    });
     expect(ts.length).toBeGreaterThan(1000);
     expect(ms).toBeLessThan(1000);
   });
@@ -528,8 +530,7 @@ describe('tool summaries and stripping cost', () => {
     }
   });
 
-  // Retried: a wall-clock bound cannot hold while sibling test workers saturate every core.
-  it('parser.strip-is-linear', { retry: 2 }, () => {
+  it('parser.strip-is-linear', () => {
     const row = (type: string, uuid: string, text: string) =>
       JSON.stringify({
         type,
@@ -547,13 +548,15 @@ describe('tool summaries and stripping cost', () => {
       '<oort-memory>'.repeat(20_000) + '</oort-memory',
     ]) {
       const jsonl = [row('user', 'u', body), row('assistant', 'a', body)].join('\n');
-      // Fastest of three: contention only adds time; a quadratic strip takes seconds here.
+      // Fastest of three, in CPU time (a busy machine does not inflate it): a quadratic strip
+      // takes seconds here.
       let best = Infinity;
       let ts = parseTranscript(jsonl);
       for (let i = 0; i < 3; i++) {
-        const t0 = performance.now();
-        ts = parseTranscript(jsonl);
-        best = Math.min(best, performance.now() - t0);
+        const ms = cpuMs(() => {
+          ts = parseTranscript(jsonl);
+        });
+        best = Math.min(best, ms);
       }
       expect(best).toBeLessThan(50);
       // Nothing closed, so nothing stripped and nothing reflowed.

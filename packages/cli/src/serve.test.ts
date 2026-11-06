@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import { execa } from 'execa';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { TG } from '@oortmem/core/store-conformance';
 import type { Memory } from '@oortmem/core';
 import { downgradeSqliteStore, openSqliteStore, sqliteSchemaVersion } from '@oortmem/store-sqlite';
@@ -21,6 +21,10 @@ import {
 
 /** The built bin: the daemon and the hooks run as real processes here, so build first. */
 const BIN = path.join(import.meta.dirname, '..', 'dist', 'main.js');
+
+// Each test starts several processes; on a loaded machine (a load average of 100+) one start can
+// take seconds. The timeouts here only catch a hang, so they are generous.
+vi.setConfig({ testTimeout: 120_000 });
 
 interface Sandbox {
   root: string;
@@ -74,7 +78,7 @@ function oort(
     env: opts.env ?? s.env,
     extendEnv: false,
     reject: false,
-    timeout: 20_000,
+    timeout: 60_000,
     ...(opts.input !== undefined ? { input: opts.input } : { stdin: 'ignore' as const }),
   });
 }
@@ -94,7 +98,7 @@ beforeAll(() => {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** Waits until `ok()` holds, polling; fails the test after `ms`. */
-async function until(ok: () => boolean | Promise<boolean>, ms = 8000): Promise<void> {
+async function until(ok: () => boolean | Promise<boolean>, ms = 30_000): Promise<void> {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     if (await ok()) return;
@@ -456,7 +460,7 @@ describe('a hook falls back to in-process whatever the daemon does', () => {
     expect(r.durationMs).toBeGreaterThanOrEqual(2400);
     expect(r.durationMs).toBeLessThan(6000);
     expect(lastPrompt(s)).toEqual({ outcome: 'injected', daemon: false });
-  }, 20_000);
+  });
 
   it('serve.fallback-daemon-returns-an-error', async () => {
     const { s, baseline } = await seededWithBaseline();
@@ -599,7 +603,7 @@ describe('the hooks skip a daemon that hung or refused (circuit breaker)', () =>
     // Checking on the daemon by hand closes the breaker.
     await oort(s, ['serve', 'status']);
     expect(fs.existsSync(marker(s))).toBe(false);
-  }, 20_000);
+  });
 
   it('serve.breaker-a-refusal-skips-for-a-minute', async () => {
     const { s, baseline } = await seededWithBaseline();

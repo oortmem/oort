@@ -26,6 +26,23 @@ const SECRETS = fixture('secrets.b64.txt').map((l) => {
   return { kind, secret, text: rest.join('\t') };
 });
 
+/**
+ * CPU milliseconds this thread spends in `fn`. Wall-clock time also counts the time spent waiting
+ * for a core, which on a loaded machine (a load average of 100+) is most of it; CPU time is what
+ * the code itself costs, so a bound on it holds whatever else the machine runs.
+ */
+function cpuMs(fn: () => void): number {
+  // `threadCpuUsage` (Node 23.9+) leaves out other threads; `cpuUsage` is the whole process.
+  const usage = (prev?: NodeJS.CpuUsage): NodeJS.CpuUsage =>
+    typeof process.threadCpuUsage === 'function'
+      ? process.threadCpuUsage(prev)
+      : process.cpuUsage(prev);
+  const before = usage();
+  fn();
+  const spent = usage(before);
+  return (spent.user + spent.system) / 1000;
+}
+
 /** Some 8-character window of `secret` that survives in `out`, if any. */
 function survivingWindow(secret: string, out: string): string | undefined {
   for (let i = 0; i + 8 <= secret.length; i++) {
@@ -164,19 +181,17 @@ describe('scrub', () => {
 
   it('scrub.env-secret-is-linear', () => {
     const big = 'SECRET'.repeat(Math.ceil(100_000 / 6));
-    const t = performance.now();
-    scrub(big);
-    expect(performance.now() - t).toBeLessThan(100);
+    expect(cpuMs(() => scrub(big))).toBeLessThan(100);
   });
 
   /**
    * Serialised text often has no real newline for a megabyte: deciding whether
    * a token sits inside a JSON string must not rescan the line for each token.
    * A scaling check, not a wall-clock bound (those flake under load): 4x the
-   * input must cost well under 16x, the quadratic ratio.
+   * input must cost well under 16x, the quadratic ratio. Both sides are CPU
+   * time (`cpuMs`), so a busy machine does not skew the ratio.
    */
-  // Retried: a timing ratio cannot hold while sibling test workers saturate every core.
-  it('scrub.linear-on-long-serialised-lines', { timeout: 60_000, retry: 2 }, () => {
+  it('scrub.linear-on-long-serialised-lines', { timeout: 180_000 }, () => {
     const rnd = prng(17);
     const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
     const rand = (n: number, al: string): string => {
@@ -199,26 +214,28 @@ describe('scrub', () => {
         lines(() => `github.com/someorg/somepackage/v2 v2.3.${rnd(9)} h1:${rand(43, b64)}=`),
       ],
     ];
-    // The fastest of five runs: contention only ever adds time, so the minimum is
-    // the estimate least distorted by a busy machine (a median of three was not).
-    const fastest = (text: string): number => {
-      let best = Infinity;
+    // The fastest of five runs each, the two sizes interleaved: contention (a shared cache, a
+    // slower core) only ever adds time, and interleaving exposes both sizes to the same spells.
+    const ratioOf = (small: string, large: string): number => {
+      let bestSmall = Infinity;
+      let bestLarge = Infinity;
       for (let i = 0; i < 5; i++) {
-        const t = performance.now();
-        scrub(text);
-        best = Math.min(best, performance.now() - t);
+        const smallMs = cpuMs(() => scrub(small));
+        const largeMs = cpuMs(() => scrub(large));
+        bestSmall = Math.min(bestSmall, smallMs);
+        bestLarge = Math.min(bestLarge, largeMs);
       }
-      return best;
+      return bestLarge / bestSmall;
     };
     for (const [label, make] of inputs) {
       const small = make(MB / 2);
       const large = make(2 * MB);
       scrub(small); // warm up
-      const ratio = fastest(large) / fastest(small);
-      // 4x the input: linear is ~4, quadratic ~16. 10 leaves room for cache and GC effects
-      // on a loaded machine (6 failed at 6.7-8.1 while two test suites ran) and still
+      const ratio = ratioOf(small, large);
+      // 4x the input: linear is ~4, quadratic ~16. In CPU time it stayed within 3.9-4.3 at a
+      // load average of 400 (wall-clock ratios reached 22 there), so 8 has room and still
       // catches a quadratic scan.
-      expect(ratio, `${label}: t(2 MB) / t(0.5 MB)`).toBeLessThan(10);
+      expect(ratio, `${label}: t(2 MB) / t(0.5 MB)`).toBeLessThan(8);
     }
   });
 
@@ -670,9 +687,8 @@ describe('scrub', () => {
       'kT9+vQ2/Lm8Xp4Rz+Wd6Nc3Bh7Ys1/Fj5Ga0Ue2Io9Pq '.repeat(2_300), // nosemgrep: synthetic test credential, not a real secret
     ];
     for (const s of inputs) {
-      const t = performance.now();
-      scrub(s);
-      expect(performance.now() - t, s.slice(0, 20)).toBeLessThan(250);
+      const ms = cpuMs(() => scrub(s));
+      expect(ms, s.slice(0, 20)).toBeLessThan(250);
     }
   });
 });

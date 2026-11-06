@@ -115,12 +115,16 @@ export function callDaemon(
       conn.destroy();
       resolve(r);
     };
+    // On a loaded machine a timer can come due while this process waits for a core, in the same
+    // turn of the event loop as a connect or an answer that has already arrived; timers run
+    // first. Deciding one `setImmediate` later reads what is already waiting first, so only a
+    // daemon that has really not answered times out.
     const connectTimer = setTimeout(
-      () => finish({ ok: false, reason: 'connect-timeout' }),
+      () => setImmediate(() => conn.connecting && finish({ ok: false, reason: 'connect-timeout' })),
       opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS,
     );
     const budgetTimer = setTimeout(
-      () => finish({ ok: false, reason: 'timeout' }),
+      () => setImmediate(() => finish({ ok: false, reason: 'timeout' })),
       opts.budgetMs ?? 2000,
     );
     const decoder = new FrameDecoder();

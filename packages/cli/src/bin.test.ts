@@ -7,7 +7,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import Database from 'better-sqlite3';
 import { execa } from 'execa';
 import { fakeSite } from '../test/fake-site.js';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { OortConfig, projectIdFor, type Memory } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import { memory, syntheticKey, tmpdir, writeTranscript } from '../test/helpers.js';
@@ -16,6 +16,10 @@ import { localGrant } from '@oortmem/core';
 
 /** The built bin; these tests run it as a real process, so build first. */
 const BIN = path.join(import.meta.dirname, '..', 'dist', 'main.js');
+
+// Most tests start a process or several; on a loaded machine (a load average of 100+) one start
+// can take seconds. The timeouts here only catch a hang, so they are generous.
+vi.setConfig({ testTimeout: 120_000 });
 
 interface Sandbox {
   root: string;
@@ -72,7 +76,7 @@ function oort(s: Sandbox, args: string[], opts: RunOptions = {}) {
     env: opts.env ?? s.env,
     extendEnv: false,
     reject: false,
-    timeout: 20_000,
+    timeout: 60_000,
     ...(opts.input !== undefined ? { input: opts.input } : { stdin: 'ignore' as const }),
   });
 }
@@ -236,7 +240,7 @@ describe('oort bin', () => {
         env: { ...s.env, LOADED: loaded },
         extendEnv: false,
         reject: false,
-        timeout: 20_000,
+        timeout: 60_000,
         input,
       },
     );
@@ -278,7 +282,7 @@ describe('oort bin', () => {
           env: { ...s.env, LOADED: loaded },
           extendEnv: false,
           reject: false,
-          timeout: 20_000,
+          timeout: 60_000,
           input: JSON.stringify({
             session_id: 's1',
             cwd: s.cwd,

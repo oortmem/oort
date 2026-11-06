@@ -51,6 +51,15 @@ async function server(
   };
 }
 
+/** Waits until `ok()` holds, polling; fails the test after `ms`. */
+async function waitFor(ok: () => boolean, ms = 10_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!ok()) {
+    if (Date.now() > end) throw new Error('timed out waiting');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 /** Lets the pool take the connection back after a response (as seconds between prompts do). */
 const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
 
@@ -114,24 +123,41 @@ describe('cloud-http (CON-101)', () => {
     await expect(warmCloud('http://127.0.0.1:9', 500)).resolves.toBeUndefined();
   });
 
-  it('cloud-http.keep-warm-refreshes-an-idle-connection-for-a-while-after-a-prompt', async () => {
-    const s = await server();
-    closers.push(s.close);
-    const w = { mode: 'cloud', cloud: { url: s.url } } as unknown as Wired;
-    const warm = new KeepWarm(Date.now, 40, 300);
-    warm.start(w);
-    await new Promise((r) => setTimeout(r, 200));
-    const during = s.paths.filter((p) => p === '/health').length;
-    // About five at a 40 ms interval; at least two proves it repeats, and survives a busy machine.
-    expect(during).toBeGreaterThanOrEqual(2);
-    // Past `forMs` without a prompt, it stops.
-    await new Promise((r) => setTimeout(r, 400));
-    const after = s.paths.length;
-    await new Promise((r) => setTimeout(r, 200));
-    expect(s.paths.length).toBe(after);
-    expect(s.connections()).toBe(1);
-    warm.stop();
-  });
+  it(
+    'cloud-http.keep-warm-refreshes-an-idle-connection-for-a-while-after-a-prompt',
+    { timeout: 30_000 },
+    async () => {
+      // Each /health waits for the test to answer it, and the clock is the test's: `forMs` passes
+      // between two given refreshes, however slowly a busy machine runs the timers.
+      const held: (() => void)[] = [];
+      const s = await server((req, res) => {
+        if (req.url === '/health') held.push(() => res.end('{"ok":true}'));
+        else res.end('{"ok":true}');
+      });
+      closers.push(s.close);
+      const health = (): number => s.paths.filter((p) => p === '/health').length;
+      const answerNext = async (n: number): Promise<void> => {
+        await waitFor(() => health() >= n);
+        held.shift()?.();
+      };
+      let now = 0;
+      const w = { mode: 'cloud', cloud: { url: s.url } } as unknown as Wired;
+      const warm = new KeepWarm(() => now, 40, 300);
+      warm.start(w);
+      // It repeats: the warm-up, then a refresh after each answer.
+      await answerNext(1);
+      await answerNext(2);
+      await waitFor(() => health() >= 3);
+      // Past `forMs` without a prompt, the refresh in flight is the last one.
+      now = 300;
+      held.shift()?.();
+      await new Promise((r) => setTimeout(r, 400)); // ten intervals: a fourth would be here by now
+      expect(health()).toBe(3);
+      expect(held).toEqual([]);
+      expect(s.connections()).toBe(1);
+      warm.stop();
+    },
+  );
 
   it('cloud-http.keep-warm-ignores-a-local-engine-and-stops-for-good', async () => {
     const s = await server();
