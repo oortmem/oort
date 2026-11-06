@@ -108,6 +108,14 @@ describe('packaging (CON-108 §7)', () => {
     expect(r.dlopen).toEqual([]);
   });
 
+  it('oortmem/ai-sdk loads neither ai nor the CLI', () => {
+    const r = run(
+      `const m = await import(resolveFrom.resolve('oortmem/ai-sdk')); out = Object.keys(m).sort();`,
+    );
+    expect(r.out).toEqual(['oortInstructions', 'oortObserve', 'oortTools']);
+    expect(hits(r.loaded, ['/node_modules/ai/', ...CLI_ONLY, ...NATIVE])).toEqual([]);
+  });
+
   it('cloud mode loads no native module and creates nothing under OORT_HOME', () => {
     const root = tmpdir('oort-sdk-cloud-');
     const home = path.join(root, 'home');
