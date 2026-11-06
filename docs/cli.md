@@ -52,34 +52,50 @@ copy of oort that matters on this machine:
 - **every other `oort` on `PATH`**; the first is what `oort` runs in this
   shell.
 
-Each copy is recognised by where it really lives (its realpath):
+Each copy is recognised by where it really lives (its realpath, or for a
+package manager's shell shim the script its text names), and its version is
+read from its files: the nearest `package.json` named `oortmem`, or for a PyPI
+launcher its `oortmem-<version>.dist-info`. Finding copies never runs one, so
+`oort update --check` only reads (and asks npm's registry); a copy whose files
+say nothing is listed as "version unknown".
 
 | Kind | Where it lives | What `oort update` does with it |
 | --- | --- | --- |
 | managed | `~/.oort/cli` | Runs `npm i -g --prefix ~/.oort/cli oortmem@X --prefer-online`. |
 | npm global | `<prefix>/lib/node_modules/oortmem`, also under nvm, fnm, Volta or asdf | Runs `npm i -g --prefix <prefix> oortmem@X --prefer-online`. The prefix is named, so this copy changes whichever `npm` comes first on `PATH`. Under fnm, the `PATH` entry is fnm's link for this shell (`fnm_multishells`); the copy itself is the npm global of that Node version. |
-| pnpm global | pnpm's global store | Runs `pnpm add -g oortmem@X`. |
+| pnpm global | pnpm's global directory (`global/5`, or pnpm 11's isolated `global/v11/<hash>`) | Prints `pnpm add -g oortmem@X`; it never runs pnpm. Where pnpm keeps globals moves with its version and settings, so `oort update` cannot be sure `pnpm add -g` would change this copy: run it with the pnpm that installed it. |
 | PyPI launcher | a Python script from `pip install oortmem` or `pipx install oortmem` | Prints `pipx upgrade oortmem` or `<python> -m pip install -U oortmem`. It never runs pip. The launcher runs the npm release it was built for. |
 | checkout | `packages/cli/dist/main.js` in a clone of the repository | Prints `cd <clone> && git pull && pnpm install && pnpm build`. |
 | temporary | the npx cache, pnpm dlx, a temp directory, or fnm's link for a shell that has ended | Nothing. A temporary copy is never updated in place: npx keeps whatever version a later `npx oortmem` asks for, and the others are deleted by their owner. It says why. |
 
-It runs the installer for the hooks' copy, this copy, the managed copy and the
-first `oort` on `PATH`, for each one older than the release. It lists every
+It runs npm for the hooks' copy, this copy, the managed copy and the first
+`oort` on `PATH`, when it is an npm install (managed or npm global) older than
+the release. `npm` is the first one on `PATH`, taken only from absolute `PATH`
+entries and run by its absolute path, from your home directory (so no
+project's `.npmrc` or `package.json` applies); with none, the command is
+printed instead. It lists every
 other older copy on `PATH` with the command that updates it and the one that
 removes it (`npm rm -g --prefix <prefix> oortmem`, `pnpm rm -g oortmem`,
 `pipx uninstall oortmem`). It never deletes anything. Installers run with no
 shell, one at a time; their output goes to stderr, so `--json` keeps stdout
 for the envelope.
 
+- **Checked, not trusted.** An install counts only when the copy then resolves
+  to `<prefix>/lib/node_modules/oortmem/dist/main.js` for the prefix it went
+  into, and that `package.json` says the release. An installer that exits 0
+  but leaves the copy as it was (or pointing somewhere else) is a failure
+  (`✗`, `ok: false`, `unverified: true`, exit 1).
 - **npm's delay after a release.** For a minute or so after a release, npm can
   answer `ETARGET` (no such version). `oort update` tries again after 5, 10,
   20 and then every 30 seconds, for up to 2 minutes, with a line on stderr
   each time. Any other installer failure stops it at once (exit 1).
-- **After installing.** When `oort serve` runs, it is stopped. The new copy's
+- **After installing**, and only with a checked copy: when `oort serve` runs,
+  it is stopped. That copy's
   `oort doctor --json` then opens the store, which migrates its schema when the
   release needs that, after copying it, exactly as `oort doctor` does; the
   copy's path is printed. Then the new copy starts `oort serve --detach`
-  again. All three run from the copy the hooks use.
+  again. All three run from the copy the hooks use. With no checked copy,
+  none of them runs, and it says what to run once one is.
 - **Release notes.** It ends with the link:
   `https://github.com/oortmem/oort/releases/tag/vX`.
 - **Asking.** One question on stderr: `Update 2 copies of oort to 0.6.3 and
@@ -95,7 +111,8 @@ for the envelope.
 With `--json` its `data` is `{ "current", "latest", "from": "npm" |
 "--version", "check", "upToDate", "copies": [{ "path", "realpath", "kind",
 "version", "roles", "firstOnPath", "action", "command", "removeCommand",
-"note" }], "installed": [{ "path", "realpath", "command", "ok", "attempts", "version" }],
+"note" }], "installed": [{ "path", "realpath", "command", "ok", "unverified",
+"attempts", "version" }],
 "migration": { "ran", "ok", "store", "migrated", "backup" }, "daemon": {
 "running", "version", "pid", "restarted", "now" }, "releaseNotes" }`, and
 `"declined": true` when you said no. `kind` is
@@ -109,10 +126,12 @@ the machine before anything ran; `installed` says what changed.
 
 Once a day oort checks whether a newer release is out, and says so:
 
-- **When a Claude Code session starts**, as a message to you
-  (`systemMessage` in the SessionStart hook's output), never as part of
-  Claude's context: the memory block Claude gets is the same as without it. At
-  most once a day for each new version, and never after `/compact`.
+- **When a Claude Code (or Codex) session starts**, as a message to you
+  (`systemMessage` in the SessionStart hook's output), never as part of the
+  model's context: the memory block it gets is the same as without it. Claude
+  Code shows `systemMessage` to you; Codex accepts it in SessionStart output
+  and surfaces it as a warning in its UI, apart from the context it gives the
+  model. At most once a day for each new version, and never after `/compact`.
 - **After an interactive command**, one dim line on stderr:
   `Oort 0.6.3 is available (you have 0.6.2): oort update`. Only when stdout
   and stderr are both a terminal, never with `--json` or `OORT_OUTPUT=json`, and
@@ -129,6 +148,13 @@ and a 1.5 second timeout. Nothing about you or your memories. The answer is
 kept in `~/.oort/update-check.json` (mode 600, replaced atomically). A hook only
 reads that file: when it is a day old, the hook starts a detached background
 process that asks npm and rewrites it, so no hook ever waits on the network.
+That process gets only `PATH`, `HOME`, `OORT_HOME`, the opt-outs below, and
+the proxy and certificate variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`
+in either case, `NODE_USE_ENV_PROXY`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
+`SSL_CERT_DIR`): never an API key. It reads at most 1 MB of the answer. When
+`~/.oort` is a symlink, it is followed only to a directory of yours that group
+and others cannot write; otherwise the check is skipped, and `oort doctor`
+says why.
 A failed check is not retried until the next day. `oort doctor` and
 `oort serve status` only read the file.
 
@@ -874,7 +900,10 @@ one itself. Otherwise the daemon gives way on its own: when a hook from a newer
 oort reaches it, the daemon answers (the error code `restarting`; that hook
 runs in-process, with no circuit breaker) and exits, and the hook starts a
 daemon of its own version in its place, whatever `serve.autostart` says, since
-one was running. Only a newer hook does this, and only the `hook` method: an
+one was running. A second `restarting` within a minute means something keeps
+starting an older daemon: the hooks then open the circuit breaker for its
+usual minute instead of starting another (`~/.oort/serve.restarting` holds the
+time of the last one). Only a newer hook does this, and only the `hook` method: an
 older or equal version, a version that does not parse, `ping` and `status`
 never stop it, so two copies of different versions cannot take turns. A
 daemon from before 0.6.3 does not do this; the hooks then run in-process until
