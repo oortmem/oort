@@ -238,8 +238,9 @@ export async function serveCommand(
           2,
         )}\n`,
       );
-      // A status query succeeds whether or not the daemon runs: `running` says which.
-      return 0;
+      // Exit 0 only when the daemon answers, so `oort serve status || oort serve --detach` works;
+      // the JSON reports the state either way.
+      return r.ok ? 0 : 1;
     }
     io.out(ui.header('serve', 'status'));
     if (!r.ok) {
@@ -266,7 +267,7 @@ export async function serveCommand(
       io.out(
         `${ui.dim(needsMigration ? 'run oort doctor (it migrates the store), then: oort serve --detach' : 'start it with: oort serve --detach')}\n`,
       );
-      return 0;
+      return 1;
     }
     const v = r.result;
     const version = shown(v['version']);

@@ -7,7 +7,8 @@ const KEYCHAIN_PROVIDERS: Record<string, string> = {
 
 /**
  * Thrown at construction time when a required credential is absent. The
- * message names only the environment variable: keys are never read from the
+ * message never suggests `export KEY=...`, which would leave the key in shell
+ * history. It names only the environment variable: keys are never read from the
  * plaintext config file. `configKey` names the adapter's config section
  * (e.g. `embed.apiKey`) for callers that group failures; it is not shown.
  */
@@ -19,8 +20,8 @@ export class MissingCredentialError extends Error {
     const provider = KEYCHAIN_PROVIDERS[envVar];
     super(
       provider === undefined
-        ? `Missing ${envVar}. Set it with: export ${envVar}=...`
-        : `Missing ${envVar}. Set it with: oort keys set ${provider} (or export ${envVar}=...)`,
+        ? `Missing ${envVar}. Set it in the environment your agent starts with.`
+        : `Missing ${envVar}. Set it with: oort keys set ${provider} (or set ${envVar} in the environment your agent starts with)`,
     );
     this.name = 'MissingCredentialError';
     this.envVar = envVar;

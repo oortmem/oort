@@ -28,7 +28,9 @@ export async function reembedCommand(opts: ReembedCommandOptions, ctx: Ctx): Pro
     const embedder = w.reembedWith ?? w.embed;
     const binding = w.embedder;
     if (embedder === undefined || binding === undefined) {
-      const why = adapterProblem(w.unavailable.embed, 'embed') ?? 'No embedder is configured.';
+      const why =
+        adapterProblem(w.unavailable.embed, 'embed', w.keyStore !== false) ??
+        'No embedder is configured.';
       throw new Refusal(`Re-embedding needs the configured embedder. ${why}`);
     }
     if (binding.matches && opts.force !== true) {

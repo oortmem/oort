@@ -256,7 +256,10 @@ describe('oort login', () => {
     const off = await login(s, { env: { OORT_NO_KEYCHAIN: '1' } });
     expect(off.code).toBe(2);
     expect(off.io.stderr).toContain('OORT_NO_KEYCHAIN=1');
-    expect(off.io.stderr).toContain('OORT_API_KEY');
+    expect(off.io.stderr).toContain(
+      'set OORT_API_KEY in the environment your agent starts with instead',
+    );
+    expect(off.io.stderr).not.toContain('export OORT_API_KEY');
     const linux = await login(s, { keychain: createKeychain({ platform: 'none' }) });
     expect(linux.code).toBe(2);
     expect(linux.io.stderr).toContain('macOS Keychain');

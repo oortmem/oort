@@ -6,9 +6,9 @@ import { nodesGrant } from '@oortmem/core/store-conformance';
 import { cloudBackend } from './mcp.js';
 import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
 import {
-  PIPED,
+  PIPED_YES,
+  expectAsked,
   expectDeclined,
-  expectRefusedWithoutPrompt,
   fakeIo,
   memory,
   tmpdir,
@@ -422,17 +422,14 @@ describe('oort cloud commands (CON-76)', () => {
     expect(r.code).toBe(2);
     expect(r.io.stderr).toContain('--yes');
     expect(e.cloud.imports).toBe(0);
-    // CON-107: stdout piped refuses without asking; a declined upload exits 0 and asks on stderr.
-    expectRefusedWithoutPrompt(
-      await e.run(['cloud', 'import'], { withKey: true, tty: true, stdoutTTY: false }),
-      PIPED,
-    );
+    // CON-107: a declined upload exits 0, asked on stderr, never stdout.
     const no = await e.run(['cloud', 'import'], { withKey: true, tty: true, answer: 'n' });
     expectDeclined(no);
     expect(no.io.stdout).toContain('Nothing uploaded.');
     expect(e.cloud.imports).toBe(0);
-    const yes = await e.run(['cloud', 'import', '--yes'], { withKey: true });
-    expect(yes.code, yes.io.stderr).toBe(0);
+    // stdout piped, a person at the terminal: asked on stderr, and yes uploads.
+    const piped = await e.run(['cloud', 'import'], { withKey: true, ...PIPED_YES });
+    expectAsked(piped);
     expect(e.cloud.imports).toBeGreaterThan(0);
   });
 

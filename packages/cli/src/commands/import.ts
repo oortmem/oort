@@ -15,7 +15,15 @@ export interface ImportCommandOptions {
    * by default a y/N question on the terminal, or `--yes`.
    */
   confirmWith?: (estimate: { observations: number; estimatedTokens: number }) => Promise<boolean>;
+  /** What happened, for the setup wizard's summary (the exit code alone cannot tell a decline). */
+  onOutcome?: (outcome: ImportOutcome) => void;
 }
+
+/**
+ * `nothing`: no observations to import (or `--estimate-only`); `declined`: the person said no;
+ * `imported`: every session; `partial`: some sessions stopped at a failed observation (exit 3).
+ */
+export type ImportOutcome = 'nothing' | 'declined' | 'imported' | 'partial';
 
 const UNIT_MS = { h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 } as const;
 
@@ -72,7 +80,10 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
           ['skipped (unreadable)', String(est.skippedUnreadable)],
         ]),
       );
-      if (opts.estimateOnly === true || est.observations === 0) return 0;
+      if (opts.estimateOnly === true || est.observations === 0) {
+        opts.onOutcome?.('nothing');
+        return 0;
+      }
       writePath(w, 'oort import claude-code');
       const go =
         opts.confirmWith !== undefined
@@ -85,6 +96,7 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
             );
       if (!go) {
         ctx.io.out('Nothing imported.\n');
+        opts.onOutcome?.('declined');
         return 0;
       }
       const r = await importTranscripts({ ...base, estimateOnly: false }, deps);
@@ -106,8 +118,10 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
         const reasons = new Set(Object.values(r.failedSessions ?? {}).map((f) => f.reason));
         ctx.io.out(`Reason: ${[...reasons].join('; ')}\n`);
         // Partial success: what was imported stays, and a re-run picks up the failed sessions.
+        opts.onOutcome?.('partial');
         return 3;
       }
+      opts.onOutcome?.('imported');
       return 0;
     },
     { agent: 'claude-code' },

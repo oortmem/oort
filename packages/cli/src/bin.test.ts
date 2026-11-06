@@ -140,10 +140,13 @@ describe('oort bin', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain('<oort-memory>');
     expect(r.stdout).toContain('port 5582');
-    // The shared remedy, in order: local models, a key, Oort Pro; never `export KEY=...`.
+    // The shared remedy, in order: local models, a key, Oort Pro; never `export KEY=...`. The
+    // sandbox sets OORT_NO_KEYCHAIN=1, so the key is the variable (`oort keys set` would refuse).
+    expect(r.stderr).toContain('VOYAGE_API_KEY');
     expect(r.stderr).toContain(
-      'Run `oort models pull` (free local embed and rerank, no keys), `oort keys set voyage`, or `oort login` (Oort Pro).',
+      'Run `oort models pull` (free local embed and rerank, no keys), set VOYAGE_API_KEY in the environment your agent starts with, or set OORT_API_KEY from oortcloud.dev/account (Oort Pro).',
     );
+    expect(r.stderr).not.toContain('oort keys set');
     expect(r.stderr).not.toContain('export VOYAGE_API_KEY');
     expect(r.stderr).not.toContain('config.json');
     expect(r.stderr.trim().split('\n')).toHaveLength(1);
@@ -211,7 +214,10 @@ describe('oort bin', () => {
     const keyless = await oort(s, ['import', 'claude-code', '--yes']);
     expect(keyless.exitCode).toBe(2);
     expect(keyless.stdout).toMatch(/observations\s+[1-9]/);
-    expect(keyless.stderr).toContain('oort keys set typesafe');
+    expect(keyless.stderr).toContain(
+      'set TYPESAFE_API_KEY in the environment your agent starts with',
+    );
+    expect(keyless.stderr).not.toContain('oort keys set');
   });
 
   it('cli.hook-exit-zero-on-garbage-stdin', async () => {

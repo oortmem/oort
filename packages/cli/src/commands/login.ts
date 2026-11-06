@@ -118,7 +118,7 @@ const defaultSleep = (ms: number, signal: AbortSignal): Promise<void> =>
 
 /** Why no key store can hold the key here, or undefined when one can. */
 export function keychainBlocker(ctx: Ctx): string | undefined {
-  const fallback = `create a key at ${ACCOUNT_URL} and export OORT_API_KEY=... instead`;
+  const fallback = `create a key at ${ACCOUNT_URL} and set OORT_API_KEY in the environment your agent starts with instead`;
   if (ctx.io.env['OORT_NO_KEYCHAIN'] === '1') {
     return `OORT_NO_KEYCHAIN=1 is set, so oort login has nowhere to keep the key; unset it, or ${fallback}.`;
   }

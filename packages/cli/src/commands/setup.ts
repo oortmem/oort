@@ -27,7 +27,7 @@ import { uiFor, type Ui } from '../ui.js';
 import { Refusal, echo, tilde, withWired, type Ctx } from '../util.js';
 import type { Wired } from '../wire.js';
 import { describeChange, hostArgs, hostContext } from './connect.js';
-import { importCommand, parseSince } from './import.js';
+import { importCommand, parseSince, type ImportOutcome } from './import.js';
 import {
   fromPackageCache,
   hookCommandPath,
@@ -495,7 +495,7 @@ export async function setupCommand(
           p.info(
             ctx.keychain.supported
               ? `  then run: oort keys set ${k}`
-              : `  then export ${PROVIDER_ENV[k]}=... (${ctx.io.env['OORT_NO_KEYCHAIN'] === '1' ? 'OORT_NO_KEYCHAIN=1 is set' : 'no key store here: the Keychain is macOS-only, credentials.json is for Linux and Windows'})`,
+              : `  then set ${PROVIDER_ENV[k]} in the environment your agent starts with (${ctx.io.env['OORT_NO_KEYCHAIN'] === '1' ? 'OORT_NO_KEYCHAIN=1 is set' : 'no key store here: the Keychain is macOS-only, credentials.json is for Linux and Windows'})`,
           );
         }
       }
@@ -665,10 +665,14 @@ export async function setupCommand(
         p.info('Skipped. Later: `oort import claude-code --since 14d`.');
       } else {
         try {
-          await importCommand(
+          let outcome: ImportOutcome | undefined;
+          const code = await importCommand(
             {
               since,
               projectsDir: projects,
+              onOutcome: (o) => {
+                outcome = o;
+              },
               ...(interactive
                 ? {
                     confirmWith: async (est: { observations: number; estimatedTokens: number }) =>
@@ -683,10 +687,25 @@ export async function setupCommand(
             },
             ctx,
           );
-          done.push({
-            what: `imported Claude Code sessions since ${since}`,
-            undo: 'review with `oort inspect`, remove with `oort forget <id>`',
-          });
+          const undo = 'review with `oort inspect`, remove with `oort forget <id>`';
+          const later = `\`oort import claude-code --since ${since}\``;
+          if (code === 3 || outcome === 'partial') {
+            done.push({
+              what: `imported part of the Claude Code sessions since ${since}`,
+              undo,
+            });
+            p.info(
+              ui.warn(
+                `Some sessions stopped at a failed observation; the rest were imported. Run ${later} to retry them.`,
+              ),
+            );
+          } else if (outcome === 'imported') {
+            done.push({ what: `imported Claude Code sessions since ${since}`, undo });
+          } else if (outcome === 'declined') {
+            p.info(`Nothing imported. Later: ${later}.`);
+          } else {
+            p.info(`No Claude Code sessions to import since ${since}.`);
+          }
         } catch (e) {
           if (!(e instanceof Refusal)) throw e;
           p.info(ui.warn(e.message));

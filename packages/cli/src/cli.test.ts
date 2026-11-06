@@ -67,6 +67,18 @@ describe('oort observe', () => {
     expect(r.io.stderr).not.toMatch(/export [A-Z_]+_API_KEY/);
     expect(r.io.stderr).not.toContain('oort: oort');
     expect(r.io.stdout).toBe('');
+
+    // No key store (OORT_NO_KEYCHAIN=1): each missing variable is named, and `oort keys set` is
+    // not offered, since it would refuse.
+    const bare = harness({ adapters: false, keyStore: false });
+    const nb = await bare.run(['observe', '--user', 'which port?', '--assistant', 'port 5582']);
+    expect(nb.code).toBe(2);
+    for (const v of ['VOYAGE_API_KEY', 'TYPESAFE_API_KEY', 'ANTHROPIC_API_KEY']) {
+      expect(nb.io.stderr).toContain(`set ${v} in the environment your agent starts with`);
+    }
+    expect(nb.io.stderr).toContain('oort models pull');
+    expect(nb.io.stderr).not.toContain('oort keys set');
+    expect(nb.io.stderr).not.toMatch(/export [A-Z_]+_API_KEY/);
     expect(
       await h.store.list(
         localGrant({

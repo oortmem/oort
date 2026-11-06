@@ -730,9 +730,9 @@ export async function judgePackImportCommand(
       'import it',
       { json: o.json === true },
     );
+    // With --json, confirm refuses rather than asks, so a decline is always human output.
     if (!ok) {
-      if (o.json === true) ctx.io.err('oort: not imported.\n');
-      else ctx.io.out('Not imported.\n');
+      ctx.io.out('Not imported.\n');
       return 0;
     }
     const r = await refusing(() =>

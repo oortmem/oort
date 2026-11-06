@@ -121,10 +121,9 @@ export async function shareCommand(
       'share it',
       { json: opts.json === true },
     );
+    // With --json, confirm refuses rather than asks, so a decline is always human output.
     if (!ok) {
-      // Never on stdout with --json: stdout carries only the JSON result.
-      if (opts.json === true) ctx.io.err('oort: not shared.\n');
-      else ctx.io.out('Not shared.\n');
+      ctx.io.out('Not shared.\n');
       return 0;
     }
     // Confirm exactly the text that was shown, with the preview's token. Personal data it found

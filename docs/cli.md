@@ -73,20 +73,26 @@ parses to the same values, but plants nothing in a terminal.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success, including a declined confirmation and a status query (`oort serve status` exits 0 when the daemon is not running; its `running` field says so). |
+| `0` | Success, including a declined confirmation. |
 | `1` | Unexpected error. Only the message is printed; add `--debug` for the stack. |
 | `2` | Refusal or usage problem, such as a bad flag, missing keys, a file Oort will not edit, or a confirmation that cannot be asked (see below). |
 | `3` | Partial success: `oort import claude-code` imported what it could, but some sessions stopped at a failed observation. Run it again to retry them. |
 
 `oort doctor` exits 1 when one of its checks fails, and `oort login` exits 1
-when the sign-in expires, was already used or is cancelled.
+when the sign-in expires, was already used or is cancelled. A status query
+exits 1 when what it asks about is not running: `oort serve status` exits 0
+only when the daemon answers, and 1 when it is not running, not answering or
+waiting for a migration (with `--json` too, which still reports `running:
+false`). So `oort serve status || oort serve --detach` starts it only when
+needed.
 
 **Never blocks a script.** A command that asks for a confirmation (`forget`,
 `import`, `reembed`, `share`, `project privacy public`, `cloud import`, the
 `constellation` `remove`, `leave`, `transfer` and `delete` commands, and
 `judge withdraw`, `confirm`, `purge` and `pack import`) writes its question to
-stderr, never stdout. It refuses (exit 2) instead of asking when stdin or stdout
-is not a terminal, or when `--json` is set, and names `--yes`, the flag to pass
+stderr, never stdout, so it still asks with stdout piped (`oort import
+claude-code | tee log`). It refuses (exit 2) instead of asking when stdin is not
+a terminal, or when `--json` is set, and names `--yes`, the flag to pass
 instead. `setup` takes `--yes` too. Declining a question changes nothing and
 exits 0. `oort hook` always exits 0.
 
@@ -97,7 +103,10 @@ models do not decide or write, so saving new memories (`observe`, `import`, the
 MCP `remember` tool) also needs a TypeSafe and an Anthropic key, or Oort Pro,
 even with local models. Recall works without any of them, lexical-only. No
 message suggests `export KEY=...`, which would leave the key in your shell
-history.
+history. Without a Keychain or `credentials.json` (`OORT_NO_KEYCHAIN=1`, CI,
+containers), where `oort keys set` and `oort login` cannot keep a key, the
+messages name the variable to set in the environment your agent starts with
+instead.
 
 **Secrets.** No command prints a key, not even a prefix. An argument echoed in
 an error message is scrubbed and clipped to 24 characters.
@@ -598,8 +607,9 @@ so not every session tries again. Only the home config is read for `serve`: a
 `--detach` and autostart write the daemon's output to `~/.oort/logs/serve.log`
 (mode 600). It holds start and stop lines only, never a prompt or a memory.
 `oort serve status` shows the pid, version, socket, uptime and how many
-requests it served. It exits 0 whether or not the daemon runs (`--json` has
-`running: false` when it does not). `oort doctor` shows the same under `serve`.
+requests it served. It exits 0 when the daemon answers and 1 when it does not
+(`--json` still prints the state, with `running: false`), so
+`oort serve status || oort serve --detach` works. `oort doctor` shows the same under `serve`.
 
 After upgrading oort, a daemon from the old version keeps running, and the
 hooks ignore it until it exits. Run `oort serve stop` (then `oort serve
@@ -1008,7 +1018,7 @@ memories stay on your machine, or in Oort Cloud in the EU after
 | Too many sign-in requests from this network (429) | 1 | Wait a minute, then run `oort login` again |
 | Ctrl-C | 1 | Cancelled; nothing was stored |
 | The Keychain or credentials file did not keep the key | 1 | Nothing saved; the unused "CLI on <date>" key can be revoked at oortcloud.dev/account |
-| `OORT_NO_KEYCHAIN=1`, or a system with neither the Keychain nor `credentials.json` | 2 | Refused before anything starts: create a key at oortcloud.dev/account and `export OORT_API_KEY=...` instead |
+| `OORT_NO_KEYCHAIN=1`, or a system with neither the Keychain nor `credentials.json` | 2 | Refused before anything starts: create a key at oortcloud.dev/account and set `OORT_API_KEY` in the environment your agent starts with instead |
 
 Signing in again replaces the stored key; the old key keeps working until
 you revoke it. Neither command sends your email address or any other account

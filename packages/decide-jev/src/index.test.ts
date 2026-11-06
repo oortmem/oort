@@ -270,7 +270,7 @@ describe('jevDecider', () => {
       expect(() => jevDecider()).toThrow(MissingCredentialError);
       expect(() => jevDecider()).toThrow(/TYPESAFE_API_KEY/);
       expect(() => jevDecider()).toThrow(
-        /^Missing TYPESAFE_API_KEY\. Set it with: oort keys set typesafe \(or export TYPESAFE_API_KEY=\.\.\.\)$/,
+        /^Missing TYPESAFE_API_KEY\. Set it with: oort keys set typesafe \(or set TYPESAFE_API_KEY in the environment your agent starts with\)$/,
       );
     } finally {
       if (prev !== undefined) process.env['TYPESAFE_API_KEY'] = prev;

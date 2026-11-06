@@ -41,7 +41,7 @@ import {
   legacyEmbedderId,
   loadLocal,
 } from './local-models.js';
-import { createKeychain, type KeychainReader } from './keychain.js';
+import { createKeychain, keychainFor, type KeychainReader } from './keychain.js';
 import { RELAY_MODELS, RELAY_PATHS, relayUrl, viaRelay, type OortRelayError } from './relay.js';
 import { Refusal, echo } from './util.js';
 
@@ -84,6 +84,12 @@ export interface Wired {
   reembedWith?: Embedder;
   /** Why each absent adapter is absent (usually a `MissingCredentialError`). */
   unavailable: Partial<Record<AdapterRole, Error>>;
+  /**
+   * Whether `oort keys set` and `oort login` can keep a key here (the Keychain or
+   * credentials.json, and `OORT_NO_KEYCHAIN` unset). False: missing-key messages name the
+   * environment variable instead. Absent (test doubles) counts as true.
+   */
+  keyStore?: boolean;
   /** Which key serves each role (never the key itself). Absent in test doubles. */
   routes?: Record<AdapterRole, RouteSummary>;
   /**
@@ -420,6 +426,7 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     agent,
     store,
     unavailable: {},
+    keyStore: keychainFor(env).supported,
     routes,
     relayErrors,
     harnessLog: createHookLogger(config.home),

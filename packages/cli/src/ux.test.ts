@@ -5,7 +5,10 @@ import { localScope, type DecisionController } from '@oortmem/core';
 import { TG } from '@oortmem/core/store-conformance';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import {
-  PIPED,
+  JSON_NEVER_ASKS,
+  NO_TTY_STDIN,
+  PIPED_YES,
+  expectAsked,
   expectDeclined,
   expectRefusedWithoutPrompt,
   fakeDecide,
@@ -38,7 +41,6 @@ function expectEscaped(stdout: string): void {
 }
 
 const terminal = { tty: true, stdoutTTY: true, answer: 'n' } as const;
-const piped = { tty: true, stdoutTTY: false } as const;
 
 /** A store bound to a local embedder while the config names a paid one: reembed asks first. */
 function needsPaidReembed(h: Harness): void {
@@ -90,8 +92,9 @@ async function emptySqlite(h: Harness): Promise<void> {
 describe('exit codes match docs/cli.md (CON-107)', () => {
   // One row per changed path: what runs, and the code docs/cli.md promises.
   const table: [string, (h: Harness) => Promise<{ code: number }>, number][] = [
-    ['serve status, not running', (h) => h.run(['serve', 'status']), 0],
-    ['serve status --json, not running', (h) => h.run(['serve', 'status', '--json']), 0],
+    // Not running exits 1, so `oort serve status || oort serve --detach` works.
+    ['serve status, not running', (h) => h.run(['serve', 'status']), 1],
+    ['serve status --json, not running', (h) => h.run(['serve', 'status', '--json']), 1],
     [
       'forget, declined',
       async (h) => {
@@ -143,13 +146,46 @@ describe('exit codes match docs/cli.md (CON-107)', () => {
       0,
     ],
     [
-      'a confirmation with stdout piped',
+      'a confirmation without a terminal on stdin',
       async (h) => {
         const m = memory();
         await h.store.upsert(TG, m);
-        return h.run(['forget', m.id], piped);
+        return h.run(['forget', m.id]);
       },
       2,
+    ],
+    [
+      'a confirmation with --json',
+      async (h) => {
+        const pack = path.join(h.root, 'p.pack.jsonl');
+        await h.run([
+          'judge',
+          'record',
+          '--subject',
+          's',
+          '--verdict',
+          'approved',
+          '--reason',
+          'r',
+        ]);
+        await h.run(['judge', 'pack', 'export', '--out', pack]);
+        const r = await h.run(['judge', 'pack', 'import', pack, '--json'], {
+          ...terminal,
+          answer: 'y',
+        });
+        expect(r.io.stderr).toMatch(JSON_NEVER_ASKS);
+        return r;
+      },
+      2,
+    ],
+    [
+      'a confirmation answered yes with stdout piped',
+      async (h) => {
+        const m = memory();
+        await h.store.upsert(TG, m);
+        return h.run(['forget', m.id], PIPED_YES);
+      },
+      0,
     ],
     [
       'observe --json (a no-op flag)',
@@ -165,13 +201,13 @@ describe('exit codes match docs/cli.md (CON-107)', () => {
     expect(r.code, r.io?.stderr).toBe(code);
   });
 
-  it('exit.serve-status-reports-running-false-and-exits-0', async () => {
+  it('exit.serve-status-not-running-exits-1-and-the-json-still-says-so', async () => {
     const h = harness();
     const text = await h.run(['serve', 'status']);
-    expect(text.code).toBe(0);
+    expect(text.code).toBe(1);
     expect(text.io.stdout).toMatch(/state +not running/);
     const json = await h.run(['serve', 'status', '--json']);
-    expect(json.code).toBe(0);
+    expect(json.code).toBe(1);
     expect(JSON.parse(json.io.stdout)).toMatchObject({ running: false });
   });
 
@@ -192,53 +228,61 @@ describe('exit codes match docs/cli.md (CON-107)', () => {
 });
 
 describe('local commands that ask first (CON-107)', () => {
-  it('confirm.forget-piped-declined-yes', async () => {
+  // Each refuses without a terminal on stdin, exits 0 when declined, and asks on stderr even
+  // with stdout piped (`| tee log`), acting on yes. The question is never on stdout.
+  it('confirm.forget-no-tty-declined-piped-yes', async () => {
     const h = harness();
     const m = memory();
     await h.store.upsert(TG, m);
-    expectRefusedWithoutPrompt(await h.run(['forget', m.id], piped), PIPED);
+    expectRefusedWithoutPrompt(await h.run(['forget', m.id]), NO_TTY_STDIN);
     const no = await h.run(['forget', m.id], terminal);
     expectDeclined(no);
     expect(no.io.stdout).toBe('Kept.\n');
     expect(await h.store.get(TG, m.id)).not.toBeNull();
-    const yes = await h.run(['forget', m.id, '--yes']);
-    expect(yes.code).toBe(0);
+    const yes = await h.run(['forget', m.id], PIPED_YES);
+    expectAsked(yes);
+    expect(yes.io.stdout).toBe(`Forgot ${m.id}.\n`);
     expect(await h.store.get(TG, m.id)).toBeNull();
   });
 
-  it('confirm.reembed-piped-declined-exits-0-yes-runs', async () => {
+  it('confirm.reembed-no-tty-declined-exits-0-piped-yes-runs', async () => {
     const h = harness();
     needsPaidReembed(h);
-    expectRefusedWithoutPrompt(await h.run(['reembed'], piped), PIPED);
+    expectRefusedWithoutPrompt(await h.run(['reembed']), NO_TTY_STDIN);
     const no = await h.run(['reembed'], terminal);
     expectDeclined(no);
     expect(no.io.asked[0]).toContain('billed by the provider');
     expect(no.io.stdout).toContain('Nothing re-embedded.');
     await emptySqlite(h);
-    const yes = await h.run(['reembed', '--yes']);
-    expect(yes.code, yes.io.stderr).toBe(0);
-    expect(yes.io.asked).toEqual([]);
+    const yes = await h.run(['reembed'], PIPED_YES);
+    expectAsked(yes);
     expect(yes.io.stdout).toContain('re-embedded 0 memories');
   });
 
-  it('confirm.import-piped-declined-yes', async () => {
+  it('confirm.import-no-tty-declined-piped-yes', async () => {
     const h = harness();
     const projects = transcripts(h);
     const args = ['import', 'claude-code', '--projects-dir', projects, '--include-unresolved'];
-    expectRefusedWithoutPrompt(await h.run(args, piped), PIPED);
+    expectRefusedWithoutPrompt(await h.run(args), NO_TTY_STDIN);
     const no = await h.run(args, terminal);
     expectDeclined(no);
     expect(no.io.stdout).toContain('Nothing imported.');
-    const yes = await h.run([...args, '--yes']);
-    expect(yes.code, yes.io.stderr).toBe(0);
+    const yes = await h.run(args, PIPED_YES);
+    expectAsked(yes);
     expect(yes.io.stdout).toMatch(/added [1-9]/);
   });
 
-  it('confirm.stdin-not-a-terminal-still-refuses', async () => {
+  it('confirm.forget-shows-escape-sequences-in-memory-text-never-runs-them', async () => {
     const h = harness();
-    const m = memory();
+    // ESC [2J clears the screen; C1 CSI does the same in one byte. Built from escapes.
+    const m = memory({ text: 'deploy \u001b[2Jfrom main\u009b31m today' });
     await h.store.upsert(TG, m);
-    expectRefusedWithoutPrompt(await h.run(['forget', m.id]), /stdin is not a terminal/);
+    const r = await h.run(['forget', m.id], terminal);
+    expectDeclined(r);
+    const q = r.io.asked[0]!;
+    expect(q).not.toContain('\u001b');
+    expect(q).not.toContain('\u009b');
+    expect(q).toContain('\\u{1b}[2Jfrom main\\u{9b}31m');
   });
 });
 
@@ -263,6 +307,31 @@ describe('one remedy for a missing key (CON-107)', () => {
     expect(r.io.stderr).toContain(REMEDY);
     expect(r.io.stderr).not.toContain('export VOYAGE_API_KEY');
     expect(r.io.stderr).not.toContain('oort: oort');
+  });
+
+  // No Keychain or credentials.json (OORT_NO_KEYCHAIN=1, CI, containers): `oort keys set` and
+  // `oort login` would refuse, so the remedy names the variables instead.
+  const NO_STORE_REMEDY =
+    '`oort models pull` (free local embed and rerank, no keys), set VOYAGE_API_KEY in the environment your agent starts with, or set OORT_API_KEY from oortcloud.dev/account (Oort Pro)';
+
+  it('remedy.no-key-store-recall-hint-names-the-variable', async () => {
+    const h = harness({ adapters: false, keyStore: false });
+    await h.store.upsert(TG, memory());
+    const r = await h.run(['recall', 'auth service port']);
+    expect(r.code).toBe(0);
+    expect(r.io.stderr).toBe(
+      `oort: lexical-only recall. No embed model or key. Run ${NO_STORE_REMEDY}.\n`,
+    );
+    expect(r.io.stderr).not.toContain('oort keys set');
+    expect(r.io.stderr).not.toContain('oort login');
+  });
+
+  it('remedy.no-key-store-reembed-names-the-variable', async () => {
+    const h = harness({ adapters: false, keyStore: false });
+    const r = await h.run(['reembed']);
+    expect(r.code).toBe(2);
+    expect(r.io.stderr).toContain(NO_STORE_REMEDY);
+    expect(r.io.stderr).not.toContain('oort keys set');
   });
 
   it('remedy.init-with-and-without-a-key-store', async () => {

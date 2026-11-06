@@ -6,7 +6,7 @@ describe('errors', () => {
     const e = new MissingCredentialError('VOYAGE_API_KEY', 'embed.apiKey');
     // Keys stay out of the plaintext config file by design: only the env var is named.
     expect(e.message).toBe(
-      'Missing VOYAGE_API_KEY. Set it with: oort keys set voyage (or export VOYAGE_API_KEY=...)',
+      'Missing VOYAGE_API_KEY. Set it with: oort keys set voyage (or set VOYAGE_API_KEY in the environment your agent starts with)',
     );
     expect(e.configKey).toBe('embed.apiKey');
   });

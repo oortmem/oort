@@ -184,10 +184,14 @@ export const SAVING_NEEDS =
  * Why an adapter is unavailable, for people: a missing key becomes the shared remedy (never
  * `export KEY=...`, which leaves the key in shell history); any other reason keeps its message.
  */
-export function adapterProblem(err: Error | undefined, role: AdapterRole): string | undefined {
+export function adapterProblem(
+  err: Error | undefined,
+  role: AdapterRole,
+  keyStore = true,
+): string | undefined {
   if (err === undefined) return undefined;
   if (err instanceof MissingCredentialError) {
-    return `No ${role} model or key. Run ${keyRemedy({ roles: [role] })}.`;
+    return `No ${role} model or key. Run ${keyRemedy({ roles: [role], keyStore })}.`;
   }
   return err.message;
 }
@@ -206,7 +210,11 @@ export function writePath(
   }
   const missing = (['embed', 'decide', 'write'] as const).filter((r) => w[r] === undefined);
   const reasons = [
-    ...new Set(missing.map((r) => adapterProblem(w.unavailable[r], r) ?? `No ${r} adapter.`)),
+    ...new Set(
+      missing.map(
+        (r) => adapterProblem(w.unavailable[r], r, w.keyStore !== false) ?? `No ${r} adapter.`,
+      ),
+    ),
   ];
   throw new Refusal(
     `Saving needs the ${missing.join(', ')} adapter(s), so ${what} saved nothing.\n${reasons.join('\n')}\n${SAVING_NEEDS}`,
@@ -229,7 +237,7 @@ export function degradedHint(io: Io, w: Wired, degraded: string[] | undefined): 
     io.err(`oort: recall degraded. ${refused.message}\n`);
   } else if (w.embed === undefined || w.rerank === undefined) {
     const role: AdapterRole = w.unavailable.embed !== undefined ? 'embed' : 'rerank';
-    const why = adapterProblem(w.unavailable[role], role);
+    const why = adapterProblem(w.unavailable[role], role, w.keyStore !== false);
     io.err(`oort: lexical-only recall.${why === undefined ? '' : ` ${why}`}\n`);
   } else if (reported) {
     io.err(`oort: recall degraded (${degraded.join(', ')}).\n`);
@@ -416,9 +424,10 @@ export async function findMemory(
 }
 
 /**
- * Asks y/N, the question on stderr. Never prompts where an answer cannot come from a person or
- * where the prompt would land in data: with `--json`, or when stdin or stdout is not a terminal,
- * it refuses (exit 2) and names `--yes`. A declined question is not an error: callers exit 0.
+ * Asks y/N, the question on stderr (never stdout, so a piped stdout such as `| tee log` still gets
+ * only output). Never prompts where no person can answer or where the answer would be data: when
+ * stdin is not a terminal, or with `--json`, it refuses (exit 2) and names `--yes`. A declined
+ * question is not an error: callers exit 0.
  */
 export async function confirm(
   io: Io,
@@ -433,9 +442,7 @@ export async function confirm(
       ? '--json never asks'
       : !io.stdinIsTTY
         ? 'stdin is not a terminal'
-        : io.stdoutIsTTY !== true
-          ? 'stdout is not a terminal'
-          : undefined;
+        : undefined;
   if (why !== undefined) {
     throw new Refusal(`This needs a confirmation, but ${why}; re-run with --yes to ${flagHint}.`);
   }
