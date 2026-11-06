@@ -61,7 +61,13 @@ export interface MemoryBackend {
   recall(input: ToolInput<'recall'>): Promise<RecallOutput>;
   /** `note`: what the person should know, e.g. that a suggested share still needs confirming. */
   remember(input: ToolInput<'remember'>): Promise<{ results: RememberOutcome[]; note?: string }>;
-  forget(input: ToolInput<'forget'>): Promise<{ forgotten: string }>;
+  forget(input: { id: string }): Promise<{ forgotten: string }>;
+  /**
+   * `forget` with `everywhere: true` (CON-67): forgets the memory and withdraws the person's
+   * copies in Constellations, filing a removal request where others contributed. Optional: a
+   * server offers `everywhere` only when the backend has it and `spaces.forgetEverywhere` is set.
+   */
+  forgetEverywhere?(input: { id: string }): Promise<ForgetEverywhereOutcome>;
   pin(input: ToolInput<'pin'>): Promise<{ id: string; pinned: boolean; changed: boolean }>;
   explain(input: ToolInput<'explain'>): Promise<Record<string, unknown>>;
   listRecent(input: ToolInput<'list_recent'>): Promise<{ memories: Record<string, unknown>[] }>;
@@ -79,6 +85,18 @@ export interface MemoryBackend {
    */
   recordJudgment?(input: ToolInput<'record_judgment'>): Promise<Record<string, unknown>>;
   judge?(input: ToolInput<'judge'>): Promise<Record<string, unknown>>;
+}
+
+/** What `forget` with `everywhere` returns: Constellations as people name them. */
+export interface ForgetEverywhereOutcome {
+  forgotten: string;
+  /** Copies only this person contributed to: withdrawn. */
+  withdrawn: string[];
+  /** Others contributed: the maintainers got a removal request, and the copy stays. */
+  requested: string[];
+  /** Not reached: the copy stays. */
+  unreachable: string[];
+  note?: string;
 }
 
 /** What `share` returns. */
@@ -164,7 +182,12 @@ export interface CreateMcpServerOptions {
 export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
   const b = opts.backend;
   const isRefusal = opts.isRefusal ?? (() => false);
-  const spaces = opts.spaces ?? PLANET_ONLY;
+  const given = opts.spaces ?? PLANET_ONLY;
+  // `everywhere` exists only where the backend can withdraw copies and the connection allows it.
+  const spaces: ToolSpaces = {
+    ...given,
+    forgetEverywhere: given.forgetEverywhere === true && b.forgetEverywhere !== undefined,
+  };
   const schemas = inputSchemasFor(spaces);
   const visibility = new Set(['private', ...spaces.visibility]);
   const server = new McpServer(
@@ -188,7 +211,13 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
         facts: [...new Set(i.facts)],
         visibility: visibility.has(i.visibility) ? i.visibility : 'private',
       }),
-    forget: (i) => b.forget(i),
+    forget: (i) => {
+      if (!('everywhere' in i) || i.everywhere !== true) return b.forget({ id: i.id });
+      if (b.forgetEverywhere === undefined || spaces.forgetEverywhere !== true) {
+        throw new MemoryToolError('This connection cannot withdraw shared copies.');
+      }
+      return b.forgetEverywhere({ id: i.id });
+    },
     pin: (i) => b.pin(i),
     explain: (i) => b.explain(i),
     list_recent: (i) => b.listRecent(i),

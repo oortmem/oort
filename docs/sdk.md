@@ -106,7 +106,7 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 | `recall(query, opts?)`                         | `RecallResult`                             | yes   | yes                       |
 | `observe(turn, { signal? })`                   | `ObserveResult`                            | yes   | yes                       |
 | `remember(facts, { type? })`                   | `RememberResult`                           | yes   | yes                       |
-| `forget(id, { everywhere? })`                  | `{ forgotten, withdrawn? }`                | yes   | yes (`everywhere`: cloud only) |
+| `forget(id, { everywhere? })`                  | `{ forgotten, withdrawn?, requested?, unreachable? }` | yes | yes (`everywhere`: cloud only) |
 | `pin(id)` / `unpin(id)`                        | `{ id, pinned, changed }`                  | yes   | yes (`changed: null`)     |
 | `recent({ since?, limit? })`                   | `{ memories, warnings }`                   | yes   | yes                       |
 | `explain(id)`                                  | `Explanation`                              | yes   | yes                       |
@@ -126,6 +126,14 @@ read: `self`, `planet`, `star`, `constellation`, `galaxy`), `budgetChars` (the d
 for `formatForPrompt`), `includeWithdrawn`, `speed` (`full`: embed and rerank; `fast`: no rerank;
 `lexical`: no model call), `inferTime` (default true: "on 2 April" picks as-of, as the CLI does)
 and `signal`.
+
+**`forget` with `everywhere`** (Oort Cloud) does what `oort forget --everywhere` does: it forgets
+the memory, then withdraws your copies in Constellations. The result lists Constellation ids:
+`withdrawn` (you were the only contributor), `requested` (others contributed, so the maintainers
+got a removal request and the copy stays) and `unreachable` (not reached; the copy stays, so call
+it again later with the full id, which still finds the copies of a memory already forgotten).
+Outside the hive beta it is refused (`refused`, reason `hive-not-enabled`) before anything is
+forgotten; in local mode it is `cloud-only`.
 
 The time rules match the MCP server's: `as-of` needs `asOf`, `known-at` needs `knownAt`,
 `current` and `history` take neither, `asOf` together with `knownAt` is a usage error, a single

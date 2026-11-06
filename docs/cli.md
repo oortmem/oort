@@ -177,7 +177,9 @@ envelope instead.
   `partial` (`import`, exit 3), `redacted` and `embed-failed` (judgments),
   `reembed-needed`, `checksum-mismatch` and `optimize-skipped` (models),
   `another-oort-on-path` and `version-manager-path` (`install`),
-  `env-key-set` (`logout`). The stderr line stays.
+  `env-key-set` (`logout`), and for `forget` in Oort Cloud `still-shared`,
+  `removal-requested`, `unreachable` and `shares-unknown`. The stderr line
+  stays.
 - Human lines a command prints along the way go to stderr in JSON mode.
 
 **On failure**, stdout holds one document too, and the one-line message stays
@@ -244,7 +246,7 @@ every error that exits 1.
 ```sh
 oort recall "auth port" --json | jq '.data.memories[0].text'
 oort inspect --json | jq '.data.memories | length'
-oort forget 1b2c3d4e --yes --json            # { "id", "forgotten": true, "withdrawnFrom", "removalRequested", "stillShared" }
+oort forget 1b2c3d4e --yes --json            # { "id", "forgotten": true, "everywhere", "withdrawnFrom", "removalRequested", "unreachable", "stillShared", "constellations" }
 oort consolidate --json                      # { "promoted": [ids], "demoted", "evicted", "expired", "counts": {…}, "complete" }
 oort import claude-code --since 14d --yes --json   # { "outcome", "estimate": {…}, "imported": { "observations", "outcomes", "failedSessions" } }
 oort judge record --subject … --json         # { "outcome", "id", "judgment" }
@@ -575,7 +577,7 @@ Tools:
 | --- | --- | --- | --- |
 | `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10, default 5) | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`), `from` (`from your Planet` or `from this agent's Star`), `overridden_by` (the id of a narrower memory in the result that contradicts it); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
 | `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`) | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
-| `forget` | `id` (required) | destructive, idempotent | `{ forgotten: id }` |
+| `forget` | `id` (required); in Oort Cloud, where the connection reaches a Constellation, also `everywhere?` (boolean, default false: withdraw your shared copies, as `oort forget --everywhere`) | destructive, idempotent | `{ forgotten: id }`; with `everywhere`, also `withdrawn`, `requested` and `unreachable` (Constellation names) and a `note` |
 | `pin` | `id`, `pinned` (boolean) | write, not destructive, idempotent | `{ id, pinned, changed }` |
 | `explain` | `id` | read-only, idempotent | the memory, its stored decisions, and its supersede chain |
 | `list_recent` | `since?` (ISO), `limit?` (1–50, default 20) | read-only, idempotent | memories by `updated_at`, newest first, each with `status` (`current`, `superseded` or `expired`) |
@@ -763,7 +765,7 @@ hooks ignore it until it exits. Run `oort serve stop` (then `oort serve
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
 | `oort stats` | Counts per tier and validity, store and cold sizes, the hook queue, when the store was last consolidated (and when it is next due), and memory use. | `--json` |
 | `oort observe` | Runs the write path on one turn, from JSON on stdin or from `--user` with `--assistant`. It prints its result as JSON; with `--json`, inside the envelope. | `--dry-run` (reports scrubbing only), `--json` |
-| `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. In Oort Cloud, a copy shared to a Constellation stays (it is the team's memory now) and the command says so. | `--yes`, `--everywhere` (Oort Cloud: also withdraw the shared copies only you contributed to) |
+| `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. In Oort Cloud, a copy shared to a Constellation stays (it is the team's memory now): the question says where (`also shared to oort-core; add --everywhere to withdraw your copies`), and so does a `still-shared` warning with `--json`. See [Forgetting a shared memory](#forgetting-a-shared-memory). | `--yes`, `--everywhere` (Oort Cloud: also withdraw your shared copies; a removal request where others contributed) |
 | `oort pin <id>` / `oort unpin <id>` | A pinned memory is never sent to cold storage. | |
 | `oort consolidate` | Expires, re-tiers and evicts memories, every project and the global ones: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each node, and inside it each project and the global memories, is re-tiered on its own. The hooks also run it about daily (see `docs/claude-code.md`); a manual run counts as that day's. | |
 | `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. Withdrawn judgments are left out. | `--out <file>` (0600), `--force`, `--format 1\|2`, `--include-withdrawn` |
@@ -1351,9 +1353,82 @@ save moves there by itself: `oort share` copies one memory, on purpose.
   block, so your own memory comes first. A Constellation that does not answer in time is left out
   of that recall (`degradedNodes` in `--json`), never an error.
 - `oort forget <id>` leaves a shared copy in place and says where it is; `--everywhere` withdraws
-  the copies only you contributed to.
+  the copies only you contributed to (see [Forgetting a shared memory](#forgetting-a-shared-memory)).
 - `oort constellation list` shows the Constellations you belong to, your role, and how many
   members each has. Members never see each other's own memories.
+
+### Forgetting a shared memory
+
+```sh
+oort forget <id> [--yes] [--json]                # your memory; shared copies stay
+oort forget <id> --everywhere [--yes] [--json]   # and your copies in Constellations
+```
+
+A copy you shared is the team's memory: `oort forget` deletes your own memory and leaves the copy.
+It says so first: the question reads `Forget 1b2c3d4e "…" (also shared to oort-core, checkout; add
+--everywhere to withdraw your copies)? [y/N]`, a Constellation you left is marked `(you left)`, and
+afterwards it prints `Still shared to …` with the command that withdraws them. With `--json` the
+same goes in a `still-shared` warning, and `data.stillShared` lists each Constellation.
+
+`--everywhere` also withdraws your copies. In each Constellation that holds one, Oort Cloud does
+one of three things:
+
+- **Withdrawn:** you were its only contributor, so the copy is removed.
+- **Removal requested:** others contributed (they confirmed or co-wrote it), so the copy stays
+  and its maintainers get a request to remove it.
+- **Not reached:** the Constellation did not answer, or you left it and this is a narrowed key
+  (reaching a Constellation you left needs a full key or the dashboard). The copy stays; run the
+  same command again later.
+
+```text
+$ oort forget 1b2c3d4e --everywhere
+Forget 1b2c3d4e "We deploy with wrangler" and withdraw your copies from oort-core, checkout, design (where others contributed, its maintainers get a removal request)? [y/N] y
+Forgot 1b2c3d4e-….
+Withdrawn from oort-core.
+Others contributed in checkout: a removal request went to the maintainers, and the copy stays until they decide.
+Not reached: design. The copy stays; run `oort forget 1b2c3d4e-… --everywhere` again later (a Constellation you left needs a full key, or the dashboard).
+```
+
+```json
+{
+  "schema": "oort.v1",
+  "command": "forget",
+  "ok": true,
+  "data": {
+    "id": "1b2c3d4e-…",
+    "forgotten": true,
+    "everywhere": true,
+    "withdrawnFrom": ["c_aaaa…"],
+    "removalRequested": ["c_cccc…"],
+    "unreachable": ["c_dddd…"],
+    "stillShared": [
+      { "constellation": "c_cccc…", "name": "checkout", "member": true },
+      { "constellation": "c_dddd…", "name": "design", "member": true }
+    ],
+    "constellations": [
+      { "constellation": "c_aaaa…", "name": "oort-core", "member": true },
+      { "constellation": "c_cccc…", "name": "checkout", "member": true },
+      { "constellation": "c_dddd…", "name": "design", "member": true }
+    ]
+  },
+  "warnings": [
+    { "code": "removal-requested", "message": "Others contributed in checkout: …" },
+    { "code": "unreachable", "message": "Not reached: design. …" }
+  ]
+}
+```
+
+`withdrawnFrom`, `removalRequested` and `unreachable` are Constellation ids; `constellations` names
+each one (`member: false` once you left it), and `stillShared` lists the ones that still hold a
+copy. Without `--everywhere` the three lists are empty and `stillShared` lists every copy.
+
+A plain forget keeps the record of where the memory was shared, so `oort forget <full id>
+--everywhere` still withdraws the copies afterwards (the question then reads `Withdraw your copies
+of 1b2c3d4e (already forgotten) from oort-core?`); an id prefix can't find a memory that is gone.
+`--everywhere` asks first like every forget: on a terminal only, and with `--json` or a stdin
+that is not a terminal it refuses (exit 2) unless you pass `--yes`. Outside the hive beta it is
+refused before anything is forgotten, and in local mode it is refused as `cloud-only` (there are
+no Constellations there).
 
 ### Teammates: invites, members and agents
 
@@ -1368,7 +1443,7 @@ oort constellation remove <c> <member> [--yes]    # maintainers
 oort constellation leave <c> [--yes]
 oort constellation transfer <c> <member> [--yes]  # the owner
 oort constellation delete <c> [--yes]             # the owner
-oort constellation policy <c> [--confirm|--open] [--supersede-trust member|maintainer]  # maintainers
+oort constellation policy <c> [--confirm|--open] [--supersede-trust member|maintainer] [--min-support <1-10>]  # maintainers
 oort constellation attach <c> --agent <name> [--share]
 oort constellation detach <c> --agent <name>
 oort project link --constellation <c>             # maintainers; unlink to undo
@@ -1411,6 +1486,12 @@ really confine an agent, give it its own narrowed key: `oort keys create --scope
 Changing membership (invite, revoke, remove, roles, leave, attach, detach, transfer), maintaining
 (policy, project links, resolving contests, delete) and making keys need a full key or the
 signed-in dashboard; a narrowed key is refused.
+
+`policy --min-support <n>` (1 to 10, default 1) is how many members a shared memory needs to
+survive an erasure: when someone deletes their account, a memory they wrote or co-wrote is kept
+only while at least `n` remaining members support it, and is deleted below that. It applies only to
+the erased person's own memories, never to one they only confirmed. `--min-support` can be given
+alone or with the other flags; `--json` returns `minSupport` with the policy.
 
 ### When teammates disagree
 

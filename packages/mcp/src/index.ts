@@ -24,6 +24,7 @@ export {
   MemoryToolError,
   createMcpServer,
   type CreateMcpServerOptions,
+  type ForgetEverywhereOutcome,
   type MemoryBackend,
   type RecallOutput,
   type RecalledFact,

@@ -367,9 +367,10 @@
         "path": "/v1/constellations/:c/policy",
         "request": {
           "policy": "string?",
-          "supersedeTrust": "string?"
+          "supersedeTrust": "string?",
+          "minSupport": "number?"
         },
-        "response": ["policy", "supersedeTrust", "policyVersion"]
+        "response": ["policy", "supersedeTrust", "minSupport?", "policyVersion"]
       },
       {
         "method": "GET",

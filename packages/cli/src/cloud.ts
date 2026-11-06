@@ -383,6 +383,8 @@ export interface CloudPolicy {
   policy: string;
   /** Absent from an older API. */
   supersedeTrust?: string;
+  /** CON-67: the members a memory needs to survive an erasure. Absent from an older API. */
+  minSupport?: number;
   policyVersion: number;
 }
 
@@ -414,9 +416,21 @@ export interface CloudResolved {
 export interface CloudShareEdge {
   constellation: string;
   name: string | null;
+  /** CON-67: false once you left that Constellation. Absent from an older API. */
+  member?: boolean;
   id: string;
   at: string;
   withdrawnAt: string | null;
+}
+
+/** What `DELETE /v1/memories/:id?everywhere=1` answers: Constellation ids (CON-67). */
+export interface CloudForgetEverywhere {
+  /** The copies only you contributed to: withdrawn. */
+  withdrawn: string[];
+  /** Others contributed: a removal request went to the maintainers, and the copy stays. */
+  requested: string[];
+  /** Not reached (try again later; a Constellation you left needs a full key). The copy stays. */
+  unreachable: string[];
 }
 
 export interface CloudClient {
@@ -497,7 +511,11 @@ export interface CloudClient {
   /** Sets the share policy, `supersedeTrust`, or both (maintainers only). */
   setPolicy(
     c: string,
-    set: { policy?: 'confirm' | 'open'; supersedeTrust?: 'member' | 'maintainer' },
+    set: {
+      policy?: 'confirm' | 'open';
+      supersedeTrust?: 'member' | 'maintainer';
+      minSupport?: number;
+    },
   ): Promise<CloudPolicy>;
   /** The open contests in a Constellation (CON-66). */
   contested(c: string): Promise<CloudContest[]>;
@@ -518,10 +536,11 @@ export interface CloudClient {
   setProjectPrivacy(project: string, priv: boolean): Promise<{ project: string; private: boolean }>;
   /** The Constellation copies of one memory. */
   shares(id: string): Promise<CloudShareEdge[]>;
-  /** Forgets a memory and withdraws the copies only this person contributed to. */
-  forgetEverywhere(
-    id: string,
-  ): Promise<{ withdrawn: string[]; requested: string[]; unreachable: string[] }>;
+  /**
+   * Forgets a memory (already forgotten is fine) and withdraws the copies only this person
+   * contributed to; elsewhere it files a removal request with the maintainers.
+   */
+  forgetEverywhere(id: string): Promise<CloudForgetEverywhere>;
   /** `turnRef` makes a retry safe: the API saves each turn once and answers `duplicate`. */
   observe(b: {
     project?: string;
@@ -754,7 +773,19 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       json('PUT', `/v1/projects/${encodeURIComponent(project)}/privacy`, { private: priv }),
     shares: async (id) =>
       (await json<{ shares: CloudShareEdge[] }>('GET', `${idPath(id)}/shares`)).shares,
-    forgetEverywhere: (id) => json('DELETE', `${idPath(id)}?everywhere=1`),
+    forgetEverywhere: async (id) => {
+      const r = await json<Partial<Record<keyof CloudForgetEverywhere, unknown>>>(
+        'DELETE',
+        `${idPath(id)}?everywhere=1`,
+      );
+      const ids = (v: unknown): string[] =>
+        Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+      return {
+        withdrawn: ids(r.withdrawn),
+        requested: ids(r.requested),
+        unreachable: ids(r.unreachable),
+      };
+    },
     observe: (b) => json('POST', '/v1/observe', b),
     list: (q = {}) => {
       const p = new URLSearchParams();
@@ -796,4 +827,111 @@ export async function findCloudMemory(client: CloudClient, ref: string): Promise
     }
     throw e;
   }
+}
+
+/** A full memory id: what the API needs to find the copies of a memory already forgotten. */
+const FULL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A Constellation holding (or that held) a copy of one of your memories (CON-67). */
+export interface SharedCopy {
+  /** The Constellation's id. */
+  constellation: string;
+  /** Its name; `null` when the API no longer knows it. */
+  name: string | null;
+  /** `false` once you left it. */
+  member: boolean;
+}
+
+/** Each Constellation the edges name, once, with its name (withdrawn edges included). */
+export function copiesByConstellation(edges: readonly CloudShareEdge[]): Map<string, SharedCopy> {
+  const out = new Map<string, SharedCopy>();
+  for (const e of edges) {
+    const had = out.get(e.constellation);
+    out.set(e.constellation, {
+      constellation: e.constellation,
+      name: had?.name ?? e.name ?? null,
+      member: had?.member ?? e.member ?? true,
+    });
+  }
+  return out;
+}
+
+/** The Constellations that still hold a copy (an edge not withdrawn), once each. */
+export function liveCopies(edges: readonly CloudShareEdge[]): SharedCopy[] {
+  return [...copiesByConstellation(edges.filter((e) => e.withdrawnAt === null)).values()];
+}
+
+/** The copy's Constellation as people read it: its name, else its id. Never escape sequences. */
+export function copyName(c: SharedCopy): string {
+  return shown(c.name ?? c.constellation);
+}
+
+/** `oort-core, checkout (you left)`. */
+export function copiesLabel(copies: readonly SharedCopy[]): string {
+  return copies.map((c) => copyName(c) + (c.member ? '' : ' (you left)')).join(', ');
+}
+
+/**
+ * Where a memory is shared, for a plain forget: `[]` outside the hive beta (the route answers 403
+ * `hive_not_enabled`) and from an API without the route; `undefined` when the lookup failed
+ * otherwise (then nobody can say).
+ */
+export async function sharesOf(
+  client: CloudClient,
+  id: string,
+): Promise<CloudShareEdge[] | undefined> {
+  try {
+    return await client.shares(id);
+  } catch (e) {
+    if (e instanceof OortCloudError && (e.kind === 'hive-not-enabled' || e.kind === 'not-found')) {
+      return [];
+    }
+    return undefined;
+  }
+}
+
+/** What `forget --everywhere` acts on (CON-67). */
+export interface EverywhereTarget {
+  id: string;
+  /** `null`: already forgotten (a plain forget leaves the shared copies, and their edges). */
+  memory: CloudMemory | null;
+  /** Every share of it, withdrawn ones included. */
+  edges: CloudShareEdge[];
+}
+
+/**
+ * The memory `forget --everywhere` acts on, and its shares. A plain forget leaves the shared
+ * copies: by its full id, a memory already forgotten is still found through their edges, so
+ * `--everywhere` can withdraw them afterwards. Outside the hive beta the shares lookup is
+ * refused (403 `hive_not_enabled`), before anything is forgotten.
+ */
+export async function everywhereTarget(
+  client: CloudClient,
+  ref: string,
+): Promise<EverywhereTarget> {
+  let memory: CloudMemory;
+  try {
+    memory = await findCloudMemory(client, ref);
+  } catch (e) {
+    if (!(e instanceof OortCloudError && e.kind === 'not-found' && FULL_ID.test(ref))) throw e;
+    const edges = await client.shares(ref).catch(() => []);
+    if (liveCopies(edges).length === 0) throw e;
+    return { id: ref, memory: null, edges };
+  }
+  return { id: memory.id, memory, edges: await client.shares(memory.id) };
+}
+
+/** The everywhere answer, each Constellation named from the edges (its id where none). */
+export function namedOutcome(
+  r: CloudForgetEverywhere,
+  edges: readonly CloudShareEdge[],
+): { withdrawn: SharedCopy[]; requested: SharedCopy[]; unreachable: SharedCopy[] } {
+  const by = copiesByConstellation(edges);
+  const named = (ids: readonly string[]) =>
+    [...new Set(ids)].map((id) => by.get(id) ?? { constellation: id, name: null, member: true });
+  return {
+    withdrawn: named(r.withdrawn),
+    requested: named(r.requested),
+    unreachable: named(r.unreachable),
+  };
 }

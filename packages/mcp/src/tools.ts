@@ -79,6 +79,12 @@ export interface ToolSpaces {
   visibility: readonly string[];
   /** Constellation names `share.to` may name. `share` is offered only when this is not empty. */
   share: readonly string[];
+  /**
+   * Whether `forget` takes `everywhere` (CON-67): also withdraw this person's copies of the memory
+   * in Constellations, or file a removal request where others contributed. Default false, and
+   * the argument then does not exist; a server also needs a backend with `forgetEverywhere`.
+   */
+  forgetEverywhere?: boolean;
 }
 
 /** One person's Planet and nothing else: the default for every server. */
@@ -135,7 +141,18 @@ export function inputSchemasFor(spaces: ToolSpaces) {
         .default('private')
         .describe('private (the default), or a Constellation to suggest sharing the fact with'),
     }),
-    forget: z.object({ id: Id }),
+    forget:
+      spaces.forgetEverywhere === true
+        ? z.object({
+            id: Id,
+            everywhere: z
+              .boolean()
+              .default(false)
+              .describe(
+                'Also withdraw the copies shared to Constellations (a removal request where others contributed). Only when the user asks for it',
+              ),
+          })
+        : z.object({ id: Id }),
     pin: z.object({ id: Id, pinned: z.boolean() }),
     explain: z.object({ id: Id }),
     list_recent: z.object({

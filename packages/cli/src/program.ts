@@ -657,7 +657,7 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
   constellation
     .command('policy')
     .description(
-      'how shares are accepted and who may supersede (maintainers): --confirm, --open, --supersede-trust',
+      'how shares are accepted, who may supersede, and erasure support (maintainers): --confirm, --open, --supersede-trust, --min-support',
     )
     .argument('<constellation>', 'name or id')
     .option('--confirm', 'every share is confirmed by a person (the default)')
@@ -666,10 +666,17 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
       '--supersede-trust <trust>',
       "member (the default) or maintainer: who may supersede someone else's memory",
     )
+    .option(
+      '--min-support <n>',
+      'members (1-10, default 1) a memory needs to survive an erasure; needs a full key',
+    )
     .option('--json', 'print oort.v1 JSON')
     .action(
-      run((c: string, o: { open?: boolean; confirm?: boolean; supersedeTrust?: string }) =>
-        constellationPolicyCommand(c, o, ctx),
+      run(
+        (
+          c: string,
+          o: { open?: boolean; confirm?: boolean; supersedeTrust?: string; minSupport?: string },
+        ) => constellationPolicyCommand(c, o, ctx),
       ),
     );
   constellation

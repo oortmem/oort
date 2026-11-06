@@ -29,7 +29,14 @@ import {
 } from './judge-cap.js';
 import { runRecall, timeMode, viewIgnored, type TemporalView } from './engine/recall.js';
 import { rememberFacts } from './remember.js';
-import { OortCloudError, findCloudMemory, type CloudClient } from './cloud.js';
+import {
+  OortCloudError,
+  copyName,
+  everywhereTarget,
+  findCloudMemory,
+  namedOutcome,
+  type CloudClient,
+} from './cloud.js';
 import {
   Refusal,
   findMemory,
@@ -131,6 +138,9 @@ export async function cloudSpaces(w: Wired, client: CloudClient): Promise<ToolSp
       include: hives.length > 0 ? ['planet', 'constellation'] : ['planet'],
       visibility: hives.filter((s) => s.rights.includes('share')).map((s) => s.name),
       share: [],
+      // `forget` may withdraw this person's shared copies where the connection reaches a
+      // Constellation (CON-67); the argument defaults to false.
+      forgetEverywhere: hives.length > 0,
     };
   } catch {
     return { include: ['planet'], visibility: [], share: [] };
@@ -535,6 +545,30 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
       const m = await findCloudMemory(client, id);
       await client.forget(m.id);
       return { forgotten: m.id };
+    },
+
+    async forgetEverywhere({ id }) {
+      refuseStarInCloud(w);
+      const t = await everywhereTarget(client, id);
+      const r = namedOutcome(await client.forgetEverywhere(t.id), t.edges);
+      const names = (copies: typeof r.withdrawn) => copies.map(copyName);
+      const notes = [
+        ...(r.requested.length > 0
+          ? [
+              'Where others contributed, a removal request went to the maintainers; the copy stays until they decide.',
+            ]
+          : []),
+        ...(r.unreachable.length > 0
+          ? ['Some Constellations were not reached; their copies stay. Try again later.']
+          : []),
+      ];
+      return {
+        forgotten: t.id,
+        withdrawn: names(r.withdrawn),
+        requested: names(r.requested),
+        unreachable: names(r.unreachable),
+        ...(notes.length > 0 && { note: notes.join(' ') }),
+      };
     },
 
     async pin({ id, pinned }) {
