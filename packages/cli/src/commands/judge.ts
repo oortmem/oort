@@ -59,7 +59,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 function localOnly(w: Wired): void {
   if (w.mode === 'cloud') {
     throw new Refusal(
-      'judgment memory is local-only for now: Oort Cloud does not hold judgments yet. Run `oort cloud use --local` to use it.',
+      'Judgment memory is local-only for now: Oort Cloud does not hold judgments yet. Run `oort cloud use --local` to use it.',
     );
   }
 }
@@ -99,7 +99,7 @@ function readInput(io: Io, file: string): string {
   try {
     st = fs.statSync(p);
   } catch {
-    throw new Refusal(`cannot read ${echo(file)}.`);
+    throw new Refusal(`Cannot read ${echo(file)}.`);
   }
   if (!st.isFile()) throw new Refusal(`${echo(file)} is not a file.`);
   if (st.size > MAX_FILE_BYTES) throw new Refusal(`${echo(file)} is larger than 20 MB.`);
@@ -630,7 +630,7 @@ export async function judgeEvalCommand(
     localOnly(w);
     if (w.decide?.judge === undefined) {
       throw new Refusal(
-        `judge eval needs predictions, and ${WHY['no-decider'].replace(', so no prediction', '')}.`,
+        `Evaluating needs predictions, and ${WHY['no-decider'].replace(', so no prediction', '')}.`,
       );
     }
     const report = await refusing(() =>
@@ -728,9 +728,11 @@ export async function judgePackImportCommand(
       `Import pack ${shown(clip(m.name, 40))}: ${m.count} judgment(s) naming ${m.experts.map((e) => shown(e)).join(', ')} as expert (${m.domains.map((d) => shown(d)).join(', ')}), exported by ${shown(m.exportedBy)} on ${m.exportedAt.slice(0, 10)}. The pack states who decided; nothing verifies it, so its judgments count only with --include-imported. Import?`,
       o.yes === true,
       'import it',
+      { json: o.json === true },
     );
     if (!ok) {
-      ctx.io.out('Not imported.\n');
+      if (o.json === true) ctx.io.err('oort: not imported.\n');
+      else ctx.io.out('Not imported.\n');
       return 0;
     }
     const r = await refusing(() =>

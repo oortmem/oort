@@ -119,9 +119,12 @@ export async function shareCommand(
       `Share ${short(m.id)} "${shown(clip(p.text, 40))}" with ${echo(p.constellation)} (${shown(p.constellationId.slice(0, 6))})?`,
       opts.yes === true,
       'share it',
+      { json: opts.json === true },
     );
     if (!ok) {
-      ctx.io.out('Not shared.\n');
+      // Never on stdout with --json: stdout carries only the JSON result.
+      if (opts.json === true) ctx.io.err('oort: not shared.\n');
+      else ctx.io.out('Not shared.\n');
       return 0;
     }
     // Confirm exactly the text that was shown, with the preview's token. Personal data it found

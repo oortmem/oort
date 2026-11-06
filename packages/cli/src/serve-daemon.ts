@@ -208,7 +208,7 @@ export class ServeRefusal extends Refusal {
 export class MigrationRequired extends ServeRefusal {
   constructor() {
     super(
-      'the store needs its schema migration first, and oort serve never migrates it: run `oort doctor` (or any oort command), then start it again.',
+      'The store needs its schema migration first, and `oort serve` never migrates it: run `oort doctor` (or any oort command), then start it again.',
     );
   }
 }
@@ -327,10 +327,10 @@ export async function acquireLock(
     const holder = lockHolder(lock);
     if (holder !== undefined) {
       if (await answers()) {
-        throw new ServeRefusal(`oort serve is already running (pid ${holder}).`, false);
+        throw new ServeRefusal(`The daemon is already running (pid ${holder}).`, false);
       }
       if (now() - st.mtimeMs < LOCK_STARTUP_GRACE_MS) {
-        throw new ServeRefusal(`oort serve is starting (pid ${holder}).`, false);
+        throw new ServeRefusal(`The daemon is starting (pid ${holder}).`, false);
       }
     }
     // Stale: the holder is gone (or a reused pid that does not answer). Replace it once, and only
@@ -342,7 +342,7 @@ export async function acquireLock(
       // Removed by another starter; the exclusive create below decides.
     }
   }
-  throw new ServeRefusal('oort serve is starting in another process.', false);
+  throw new ServeRefusal('The daemon is starting in another process.', false);
 }
 
 /** Removes `file` when it still holds what we put there (our pid, or our socket's inode). */

@@ -92,13 +92,19 @@ describe('oort bin', () => {
     const r = await oort(s, ['init']);
     expect(r.exitCode).toBe(0);
     const file = path.join(s.oortHome, 'config.json');
-    expect(r.stdout).toContain(`Created ${file}`);
+    // Paths under HOME are shown with ~.
+    expect(r.stdout).toContain('Created ~/.oort/config.json');
+    expect(r.stdout).not.toContain(s.home);
     expect(fs.statSync(s.oortHome).mode & 0o777).toBe(0o700);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(OortConfig.parse({}));
+    // Each missing key is named, with the shared remedy: local models first, never `export`.
     for (const v of ['VOYAGE_API_KEY', 'TYPESAFE_API_KEY', 'ANTHROPIC_API_KEY']) {
-      expect(r.stdout).toContain(`export ${v}=`);
+      expect(r.stdout).toContain(v);
+      expect(r.stdout).not.toContain(`export ${v}`);
     }
+    expect(r.stdout).toContain('`oort models pull` (free local embed and rerank, no keys)');
+    expect(r.stdout).toContain('decide and write need');
 
     // Never overwritten.
     fs.writeFileSync(file, '{"recall":{"returnK":3}}\n');
@@ -134,8 +140,11 @@ describe('oort bin', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain('<oort-memory>');
     expect(r.stdout).toContain('port 5582');
-    expect(r.stderr).toContain('VOYAGE_API_KEY');
-    expect(r.stderr).toContain('oort keys set voyage');
+    // The shared remedy, in order: local models, a key, Oort Pro; never `export KEY=...`.
+    expect(r.stderr).toContain(
+      'Run `oort models pull` (free local embed and rerank, no keys), `oort keys set voyage`, or `oort login` (Oort Pro).',
+    );
+    expect(r.stderr).not.toContain('export VOYAGE_API_KEY');
     expect(r.stderr).not.toContain('config.json');
     expect(r.stderr.trim().split('\n')).toHaveLength(1);
     expect(r.stderr).not.toContain('5582');
@@ -174,7 +183,10 @@ describe('oort bin', () => {
 
     const est = await oort(s, ['import', 'claude-code', '--estimate-only'], { env });
     expect(est.exitCode).toBe(0);
-    expect(est.stdout).toBe(r.stdout.replace(/ since \S+:/, ':'));
+    expect(est.stdout).toBe(r.stdout.replace(/^since .*\n/m, ''));
+    // ui.kv rows, the transcripts path with ~, and the --since time local rather than ISO.
+    expect(r.stdout).toMatch(/^transcripts +~\/\.claude\/projects$/m);
+    expect(r.stdout).toMatch(/^since +\d{4}-\d\d-\d\d \d\d:\d\d \(\d+y ago\)$/m);
 
     // Nothing was observed.
     const store = await openSqliteStore({
@@ -498,7 +510,8 @@ describe('oort bin', () => {
 
     const r = await oort(s, ['install', 'claude-code']);
     expect(r.exitCode).toBe(0);
-    expect(r.stdout).toContain(settings);
+    expect(r.stdout).toContain('~/.claude/settings.json');
+    expect(r.stdout).not.toContain(s.home);
     const installed = JSON.parse(fs.readFileSync(settings, 'utf8')) as {
       theme: string;
       hooks: Record<string, { hooks: { command: string }[] }[]>;

@@ -130,7 +130,7 @@ export function resolveAgent(home: string, env: Env, flag?: string): WiredAgent 
   const [id, source] = flag !== undefined ? [flag, 'flag' as const] : [fromEnv!, 'env' as const];
   if (!isAgentId(id)) {
     throw new Refusal(
-      `agent ${echo(id)} is not an agent id: lowercase letters, digits, ".", "_" or "-", starting with a letter or digit.`,
+      `Agent ${echo(id)} is not an agent id: lowercase letters, digits, ".", "_" or "-", starting with a letter or digit.`,
     );
   }
   return { id, home: agentHome(home, id), source };
@@ -248,7 +248,7 @@ async function load<T extends object>(
   if (provider !== spec.provider) {
     return {
       error: new Error(
-        `${spec.configKey}.provider "${provider}" is not available; Phase 1 ships "${spec.provider}" (${spec.pkg}).`,
+        `${spec.configKey}.provider "${provider}" is not available; this version supports "${spec.provider}" (${spec.pkg})${spec.role === 'embed' || spec.role === 'rerank' ? ` or "${LOCAL_PROVIDER}" (\`oort models pull\`)` : ''}.`,
       ),
     };
   }

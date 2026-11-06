@@ -12,7 +12,9 @@ import { Refusal, cloudOf, confirm, echo, withWired, type Ctx } from '../util.js
 function rootOrRefuse(ctx: Ctx, action: string): string {
   const root = projectRootFor(ctx.io.cwd);
   if (root === undefined) {
-    throw new Refusal(`project ${action} needs a git repository; none found above the cwd.`);
+    throw new Refusal(
+      `\`oort project ${action}\` needs a git repository; none found above the cwd.`,
+    );
   }
   return root;
 }
@@ -37,7 +39,7 @@ export async function projectLinkCommand(opts: { id?: string }, ctx: Ctx): Promi
     }
   }
   if (id === undefined || id === '') {
-    throw new Refusal('no project.id in oort.config.json; pass --id <id>.');
+    throw new Refusal('No project.id in oort.config.json; pass --id <id>.');
   }
   const home = resolveHome(ctx.io.env);
   if (opts.id === undefined) {
@@ -80,7 +82,7 @@ export async function projectPrivacyCommand(
   ctx: Ctx,
 ): Promise<number> {
   if (state !== 'public' && state !== 'private') {
-    throw new Refusal('project privacy takes public or private.');
+    throw new Refusal('Project privacy takes public or private.');
   }
   return withWired(ctx, async (w) => {
     const cloud = cloudOf(w);
@@ -91,7 +93,7 @@ export async function projectPrivacyCommand(
     }
     const project = w.scope.projectId;
     if (project === undefined) {
-      throw new Refusal('project privacy needs a git repository; none found above the cwd.');
+      throw new Refusal('Project privacy needs a git repository; none found above the cwd.');
     }
     if (state === 'public') {
       const ok = await confirm(

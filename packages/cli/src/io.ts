@@ -24,9 +24,9 @@ export interface Io {
   err(text: string): void;
   /** All of stdin, or what arrived within `capMs`. */
   readStdin(capMs?: number): Promise<string>;
-  /** Prints `question` on stdout and reads one line from stdin. */
+  /** Prints `question` on stderr (never stdout, which may be piped data) and reads one line from stdin. */
   ask(question: string): Promise<string>;
-  /** Like `ask`, with the typed input hidden on a terminal; a pipe supplies one line. Never echoed. */
+  /** Like `ask` (the question on stderr), with the typed input hidden on a terminal; a pipe supplies one line. Never echoed. */
   askSecret(question: string): Promise<string>;
   /** Starts a detached `oort hook drain` in `cwd` and does not wait for it. */
   spawnDrain(cwd: string): void;
@@ -84,7 +84,8 @@ export function processIo(
       });
     },
     async ask(question) {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      // The question goes to stderr: stdout may be piped data (`oort share … --json | jq`).
+      const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
       try {
         return await rl.question(question);
       } finally {
@@ -108,14 +109,14 @@ export function processIo(
           stdin.on('data', onData).on('end', finish).on('error', finish);
         });
       }
-      process.stdout.write(question);
+      process.stderr.write(question);
       return new Promise((resolve) => {
         let buf = '';
         const done = (value: string): void => {
           stdin.off('data', onData);
           stdin.setRawMode(false);
           stdin.pause();
-          process.stdout.write('\n');
+          process.stderr.write('\n');
           resolve(value);
         };
         const onData = (chunk: Buffer): void => {

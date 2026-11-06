@@ -6,14 +6,14 @@ import { clientFor } from './cloud.js';
 function providerArg(arg: string, ctx: Ctx): Provider {
   if (!isProvider(arg)) {
     // The argument is not echoed: someone may have pasted a key here.
-    throw new Refusal(`unknown provider; expected one of ${PROVIDERS.join(', ')}.`);
+    throw new Refusal(`Unknown provider; expected one of ${PROVIDERS.join(', ')}.`);
   }
   if (ctx.io.env['OORT_NO_KEYCHAIN'] === '1') {
     throw new Refusal('OORT_NO_KEYCHAIN=1 is set; unset it to use stored keys.');
   }
   if (!ctx.keychain.supported) {
     throw new Refusal(
-      'this system has no place to keep keys (the Keychain is macOS, credentials.json is Linux and Windows); export the key as an environment variable instead.',
+      'This system has no place to keep keys (the Keychain is macOS, credentials.json is Linux and Windows); set the key in the environment your agent starts with instead.',
     );
   }
   return arg;

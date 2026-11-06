@@ -5,7 +5,15 @@ import { addressed, localGrant, localScope, readAgents, setAgentStar } from '@oo
 import { nodesGrant } from '@oortmem/core/store-conformance';
 import { cloudBackend } from './mcp.js';
 import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
-import { fakeIo, memory, tmpdir, writeTranscript } from '../test/helpers.js';
+import {
+  PIPED,
+  expectDeclined,
+  expectRefusedWithoutPrompt,
+  fakeIo,
+  memory,
+  tmpdir,
+  writeTranscript,
+} from '../test/helpers.js';
 import CONTRACT from '../test/cloud-contract.json' with { type: 'json' };
 import {
   DEFAULT_CLOUD_URL,
@@ -32,7 +40,13 @@ interface Env {
   key: string;
   run(
     args: string[],
-    opts?: { stdin?: string; withKey?: boolean; tty?: boolean; answer?: string },
+    opts?: {
+      stdin?: string;
+      withKey?: boolean;
+      tty?: boolean;
+      stdoutTTY?: boolean;
+      answer?: string;
+    },
   ): Promise<{ code: number; io: ReturnType<typeof fakeIo> }>;
 }
 
@@ -63,7 +77,7 @@ function setup(mode: 'local' | 'cloud'): Env {
           ...(withKey && { OORT_API_KEY: key }),
         },
         ...(opts.stdin !== undefined && { stdin: opts.stdin }),
-        ...(opts.tty !== undefined && { tty: opts.tty }),
+        ...(opts.tty !== undefined && { tty: opts.tty, stdoutTTY: opts.stdoutTTY ?? opts.tty }),
         ...(opts.answer !== undefined && { answer: opts.answer }),
       });
       const code = await runCli(args, io, wire, createKeychain({ platform: 'none' }), {
@@ -408,6 +422,18 @@ describe('oort cloud commands (CON-76)', () => {
     expect(r.code).toBe(2);
     expect(r.io.stderr).toContain('--yes');
     expect(e.cloud.imports).toBe(0);
+    // CON-107: stdout piped refuses without asking; a declined upload exits 0 and asks on stderr.
+    expectRefusedWithoutPrompt(
+      await e.run(['cloud', 'import'], { withKey: true, tty: true, stdoutTTY: false }),
+      PIPED,
+    );
+    const no = await e.run(['cloud', 'import'], { withKey: true, tty: true, answer: 'n' });
+    expectDeclined(no);
+    expect(no.io.stdout).toContain('Nothing uploaded.');
+    expect(e.cloud.imports).toBe(0);
+    const yes = await e.run(['cloud', 'import', '--yes'], { withKey: true });
+    expect(yes.code, yes.io.stderr).toBe(0);
+    expect(e.cloud.imports).toBeGreaterThan(0);
   });
 
   it('cloud.local-only-commands-refuse-in-cloud-mode', async () => {

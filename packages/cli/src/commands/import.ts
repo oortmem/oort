@@ -2,7 +2,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { importTranscripts } from '@oortmem/claude-code';
 import { uiFor } from '../ui.js';
-import { Refusal, confirm, echo, writePath, withWired, type Ctx } from '../util.js';
+import { Refusal, confirm, echo, tilde, when, writePath, withWired, type Ctx } from '../util.js';
 
 export interface ImportCommandOptions {
   since?: string;
@@ -28,7 +28,8 @@ export function parseSince(raw: string, now: Date): Date {
 
 /**
  * `oort import claude-code`: prints the estimate (sessions, observations,
- * writer tokens, skipped sessions) first, then asks before observing anything.
+ * writer tokens, skipped sessions) first, then asks before observing anything. Exits 3 when
+ * some sessions stopped at a failed observation (the rest are imported; a re-run retries them).
  */
 export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promise<number> {
   const since = opts.since === undefined ? undefined : parseSince(opts.since, new Date());
@@ -42,7 +43,7 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
     async (w) => {
       if (w.mode === 'cloud') {
         throw new Refusal(
-          'transcript import writes to the local store: run it with `oort cloud use --local`, then `oort cloud import`.',
+          'Transcript import writes to the local store: run it with `oort cloud use --local`, then `oort cloud import`.',
         );
       }
       const deps = { ...w, log: w.harnessLog, home: w.agent.home };
@@ -52,16 +53,24 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
         includeUnresolved: opts.includeUnresolved === true,
       };
       const est = await importTranscripts({ ...base, estimateOnly: true }, deps);
-      ctx.io.out(uiFor(ctx.io).header('import claude-code', 'estimate first, then asks'));
+      const ui = uiFor(ctx.io);
+      ctx.io.out(ui.header('import claude-code', 'estimate first, then asks'));
+      const unresolvedHint =
+        est.skippedUnresolved > 0 && opts.includeUnresolved !== true
+          ? ' (--include-unresolved imports them as global)'
+          : '';
       ctx.io.out(
-        [
-          `Claude Code transcripts in ${projectsDir}${since !== undefined ? ` since ${since.toISOString()}` : ''}:`,
-          `  sessions              ${est.sessions}`,
-          `  observations          ${est.observations}`,
-          `  estimated tokens      ${est.estimatedTokens} (writer, approximate)`,
-          `  skipped (unresolved)  ${est.skippedUnresolved}${est.skippedUnresolved > 0 && opts.includeUnresolved !== true ? ' (--include-unresolved imports them as global)' : ''}`,
-          `  skipped (unreadable)  ${est.skippedUnreadable}`,
-        ].join('\n') + '\n',
+        ui.kv([
+          ['transcripts', tilde(projectsDir, home)],
+          ...(since !== undefined
+            ? [['since', when(since.toISOString(), new Date())] as [string, string]]
+            : []),
+          ['sessions', String(est.sessions)],
+          ['observations', String(est.observations)],
+          ['estimated tokens', `${est.estimatedTokens} (writer, approximate)`],
+          ['skipped (unresolved)', `${est.skippedUnresolved}${unresolvedHint}`],
+          ['skipped (unreadable)', String(est.skippedUnreadable)],
+        ]),
       );
       if (opts.estimateOnly === true || est.observations === 0) return 0;
       writePath(w, 'oort import claude-code');
@@ -96,6 +105,8 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
         );
         const reasons = new Set(Object.values(r.failedSessions ?? {}).map((f) => f.reason));
         ctx.io.out(`Reason: ${[...reasons].join('; ')}\n`);
+        // Partial success: what was imported stays, and a re-run picks up the failed sessions.
+        return 3;
       }
       return 0;
     },

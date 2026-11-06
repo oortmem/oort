@@ -101,7 +101,7 @@ export async function modelsListCommand(opts: { json?: boolean }, ctx: Ctx): Pro
   const ui = uiFor(ctx.io);
   ctx.io.out(ui.header('models', tilde(lm.modelsRoot(home), ctx.io.env['HOME'] ?? '')));
   ctx.io.out(
-    `${ui.table(
+    ui.table(
       ['model', 'role', 'download', 'licence', 'state'],
       rows.map((r) => [
         r.active ? ui.bold(r.id) : r.id,
@@ -114,7 +114,7 @@ export async function modelsListCommand(opts: { json?: boolean }, ctx: Ctx): Pro
             ? ui.dim('not downloaded')
             : ui.yellow(r.state),
       ]),
-    )}\n`,
+    ),
   );
   if (rows.every((r) => r.state === 'missing')) {
     ctx.io.out(ui.dim('\nRun `oort models pull` to download the defaults and use them.\n'));
@@ -144,7 +144,7 @@ export async function modelsPullCommand(
   const specs = specsFor(lm, wanted);
   for (const role of ['embed', 'rerank'] as const) {
     if (specs.filter((s) => s.role === role).length > 1) {
-      throw new Refusal(`pull one ${role} model at a time.`);
+      throw new Refusal(`Pull one ${role} model at a time.`);
     }
   }
   const baseUrl = ctx.io.env['OORT_MODELS_URL'];

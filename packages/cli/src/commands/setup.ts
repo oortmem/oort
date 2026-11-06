@@ -370,7 +370,7 @@ export async function setupCommand(
                   show(h === 'claude-code' ? settingsFile(false, ctx) : hostConfigPath(h, hc)),
                 ),
               )
-            : ui.dim('· not found'),
+            : ui.info(ui.dim('not found')),
         ]),
       ),
     );

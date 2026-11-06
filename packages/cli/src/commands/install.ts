@@ -7,7 +7,7 @@ import { VERSION } from '@oortmem/core';
 import { HOSTS, isHost } from '../connectors.js';
 import { binPath } from '../io.js';
 import { uiFor } from '../ui.js';
-import { Refusal, echo, type Ctx } from '../util.js';
+import { Refusal, echo, tilde, type Ctx } from '../util.js';
 
 // pnpm 11 removed `pnpm link --global`; `pnpm add -g .` links the package directory instead.
 export const HOW_TO_INSTALL =
@@ -29,20 +29,21 @@ export function ephemeral(p: string): boolean {
  * write a hook that breaks once the process is gone, so it is refused.
  */
 export function hookCommandPath(entry: string | undefined, expected = binPath()): string {
-  if (entry === undefined) throw new Refusal(`oort is not running as its bin. ${HOW_TO_INSTALL}`);
+  if (entry === undefined)
+    throw new Refusal(`The CLI is not running as its bin. ${HOW_TO_INSTALL}`);
   let real: string;
   let bin: string;
   try {
     real = fs.realpathSync(entry);
     bin = fs.realpathSync(expected);
   } catch {
-    throw new Refusal(`oort is not running as its bin. ${HOW_TO_INSTALL}`);
+    throw new Refusal(`The CLI is not running as its bin. ${HOW_TO_INSTALL}`);
   }
   if (real !== bin)
-    throw new Refusal(`oort is not running as its bin (${real}). ${HOW_TO_INSTALL}`);
+    throw new Refusal(`The CLI is not running as its bin (${real}). ${HOW_TO_INSTALL}`);
   if (ephemeral(real)) {
     throw new Refusal(
-      `oort is running from a temporary package cache (${real}). ${HOW_TO_INSTALL}`,
+      `The CLI is running from a temporary package cache (${real}). ${HOW_TO_INSTALL}`,
     );
   }
   try {
@@ -117,7 +118,7 @@ export async function installCommand(
 ): Promise<number> {
   if (harness !== 'claude-code') {
     if (!isHost(harness)) {
-      throw new Refusal(`unknown harness ${echo(harness)}; expected one of ${HOSTS.join(', ')}.`);
+      throw new Refusal(`Unknown harness ${echo(harness)}; expected one of ${HOSTS.join(', ')}.`);
     }
     if (opts.project === true) {
       throw new Refusal(
@@ -130,20 +131,22 @@ export async function installCommand(
   const cmd = hookCommandPath(ctx.io.entry);
   const file = settingsFile(opts.project === true, ctx);
   const events = HOOK_EVENTS.join(', ');
+  const home = ctx.io.env['HOME'] ?? '';
+  const show = (p: string): string => tilde(p, home);
   ctx.io.out(uiFor(ctx.io).header(`${action} claude-code`, 'hooks'));
   if (action === 'install') {
     const { changed } = installHooks(file, cmd);
     ctx.io.out(
       changed
-        ? `Installed Oort hooks (${events}) in ${file}:\n${HOOK_EVENTS.map((e) => `  ${cmd} hook ${e}`).join('\n')}\n`
-        : `Oort hooks are already installed in ${file}; nothing changed.\n`,
+        ? `Installed Oort hooks (${events}) in ${show(file)}:\n${HOOK_EVENTS.map((e) => `  ${show(cmd)} hook ${e}`).join('\n')}\n`
+        : `Oort hooks are already installed in ${show(file)}; nothing changed.\n`,
     );
     const ui = uiFor(ctx.io);
-    ctx.io.out(`${ui.info(`Hook binary: ${cmd} (oort ${VERSION})`)}\n`);
+    ctx.io.out(`${ui.info(`Hook binary: ${show(cmd)} (oort ${VERSION})`)}\n`);
     const onPath = whichOort(ctx.io.env);
     if (onPath !== undefined && onPath !== cmd) {
       ctx.io.out(
-        `${ui.warn(`Another oort comes first on your PATH: ${onPath}. The hooks run ${cmd}, not that one.`)}\n` +
+        `${ui.warn(`Another oort comes first on your PATH: ${show(onPath)}. The hooks run ${show(cmd)}, not that one.`)}\n` +
           `  To use that one instead, run \`oort install claude-code\` from it.\n`,
       );
     }
@@ -157,8 +160,8 @@ export async function installCommand(
     const { changed } = uninstallHooks(file, cmd);
     ctx.io.out(
       changed
-        ? `Removed Oort hooks (${events}) from ${file}.\n`
-        : `No Oort hooks found in ${file}; nothing changed.\n`,
+        ? `Removed Oort hooks (${events}) from ${show(file)}.\n`
+        : `No Oort hooks found in ${show(file)}; nothing changed.\n`,
     );
   }
   return 0;

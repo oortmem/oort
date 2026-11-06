@@ -1,7 +1,7 @@
 import { filterFor } from '@oortmem/claude-code';
 import { isStale, lastConfirmed, localGrant, type Memory } from '@oortmem/core';
 import { uiFor } from '../ui.js';
-import { age, clip, cloudOf, scopeLabel, short, withWired, type Ctx } from '../util.js';
+import { age, clip, cloudOf, safeJson, scopeLabel, short, withWired, type Ctx } from '../util.js';
 
 /** Pages of 100 read from the cloud API; the local store is read whole. */
 const CLOUD_PAGES = 20;
@@ -43,7 +43,7 @@ export async function revalidateCommand(opts: { json?: boolean }, ctx: Ctx): Pro
         text: m.text,
         lastConfirmed: lastConfirmed(m),
       }));
-      ctx.io.out(`${JSON.stringify(rows, null, 2)}\n`);
+      ctx.io.out(`${safeJson(rows)}\n`);
       return 0;
     }
     const ui = uiFor(ctx.io);

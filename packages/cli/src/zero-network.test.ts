@@ -194,7 +194,9 @@ describe('zero network without keys or Oort Pro', () => {
     const recall = await oort(s, ['recall', 'which port does the auth service listen on']);
     expect(recall.code).toBe(0);
     expect(recall.io.stdout).toContain('port 5582');
-    expect(recall.io.stderr).toContain('VOYAGE_API_KEY');
+    expect(recall.io.stderr).toContain('`oort models pull` (free local embed and rerank, no keys)');
+    expect(recall.io.stderr).toContain('`oort keys set voyage`');
+    expect(recall.io.stderr).not.toContain('export VOYAGE_API_KEY');
 
     const runs: [string[], (io: FakeIo) => void][] = [
       [['recall', 'deploy day', '--json'], (io) => expect(io.stdout).toContain('Tuesday')],
@@ -272,9 +274,11 @@ describe('zero network without keys or Oort Pro', () => {
     await seed(s);
     const r = await oort(s, ['observe', '--user', 'which port?', '--assistant', 'port 5582']);
     expect(r.code).toBe(2);
-    for (const v of ['VOYAGE_API_KEY', 'TYPESAFE_API_KEY', 'ANTHROPIC_API_KEY']) {
-      expect(r.io.stderr).toContain(`export ${v}=`);
+    for (const p of ['voyage', 'typesafe', 'anthropic']) {
+      expect(r.io.stderr).toContain(`oort keys set ${p}`);
     }
+    expect(r.io.stderr).toContain('oort models pull');
+    expect(r.io.stderr).not.toMatch(/export [A-Z_]+_API_KEY/);
     expect(r.io.stdout).toBe('');
     expect(guard.attempts).toEqual([]);
   });

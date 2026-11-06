@@ -1,19 +1,37 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { OortConfig, ensurePrivateDir, findGitRoot, resolveHome } from '@oortmem/core';
+import {
+  OortConfig,
+  ensurePrivateDir,
+  findGitRoot,
+  resolveConfig,
+  resolveHome,
+} from '@oortmem/core';
+import { LOCAL_PROVIDER } from '../local-models.js';
 import { uiFor } from '../ui.js';
-import { Refusal, type Ctx } from '../util.js';
+import { Refusal, SAVING_NEEDS, keyRemedy, tilde, type Ctx } from '../util.js';
 
 /** Each key and what needs it. */
 const KEYS = [
   {
     provider: 'voyage',
     envVar: 'VOYAGE_API_KEY',
-    needs: 'embed and rerank (dense recall; observe, import)',
+    needs: 'embed and rerank (dense recall; saving)',
+    roles: ['embed', 'rerank'],
   },
-  { provider: 'typesafe', envVar: 'TYPESAFE_API_KEY', needs: 'decide (observe, import)' },
-  { provider: 'anthropic', envVar: 'ANTHROPIC_API_KEY', needs: 'write (observe, import)' },
+  { provider: 'typesafe', envVar: 'TYPESAFE_API_KEY', needs: 'decide (saving)', roles: ['decide'] },
+  { provider: 'anthropic', envVar: 'ANTHROPIC_API_KEY', needs: 'write (saving)', roles: ['write'] },
 ] as const;
+
+/** True when the config serves embed and rerank with local models, so no Voyage key is needed. */
+function localEmbedAndRerank(cwd: string, env: Record<string, string | undefined>): boolean {
+  try {
+    const config = resolveConfig(cwd, env);
+    return config.embed.provider === LOCAL_PROVIDER && config.rerank.provider === LOCAL_PROVIDER;
+  } catch {
+    return false; // an invalid config: doctor reports it
+  }
+}
 
 /** Creates `file` with `data` and `mode`; returns false, leaving it untouched, when it exists. */
 function createExclusive(file: string, data: string, mode: number): boolean {
@@ -42,9 +60,15 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
   const home = resolveHome(io.env);
   ensurePrivateDir(home);
   const file = path.join(home, 'config.json');
-  io.out(uiFor(io).header('init', home));
+  const ui = uiFor(io);
+  const show = (p: string): string => tilde(p, io.env['HOME'] ?? '');
+  io.out(ui.header('init', show(home)));
   const defaults = `${JSON.stringify(OortConfig.parse({}), null, 2)}\n`;
-  io.out(createExclusive(file, defaults, 0o600) ? `Created ${file}\n` : `Kept existing ${file}\n`);
+  io.out(
+    createExclusive(file, defaults, 0o600)
+      ? `Created ${show(file)}\n`
+      : `Kept existing ${show(file)}\n`,
+  );
 
   if (opts.project === true) {
     const root = findGitRoot(io.cwd);
@@ -55,14 +79,16 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
     io.out(
       // 0644: the project file is meant to be committed and holds no secrets.
       createExclusive(projectFile, body, 0o644)
-        ? `Created ${projectFile}\n`
-        : `Kept existing ${projectFile}\n`,
+        ? `Created ${show(projectFile)}\n`
+        : `Kept existing ${show(projectFile)}\n`,
     );
   }
 
   // Same order as `wire`: the environment, then the Keychain. Presence only; values are dropped.
+  const local = localEmbedAndRerank(io.cwd, io.env);
   const missing: (typeof KEYS)[number][] = [];
   for (const k of KEYS) {
+    if (k.provider === 'voyage' && local) continue;
     if (io.env[k.envVar]) continue;
     if ((await ctx.keychain.read(k.provider)) === undefined) missing.push(k);
   }
@@ -77,15 +103,22 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
     );
   } else {
     io.out('Missing keys (recall works lexical-only without them):\n');
-    for (const k of missing) {
+    io.out(
+      ui.kv(
+        missing.map((k) => [k.envVar, `for ${k.needs}`]),
+        { indent: 2 },
+      ),
+    );
+    const roles = missing.flatMap((k) => k.roles);
+    io.out(`Run ${keyRemedy({ roles, keyStore: ctx.keychain.supported })}.\n`);
+    // With Voyage missing too, the list leads with local models: say what they do not cover.
+    const saving = missing.some((k) => k.provider !== 'voyage');
+    if (saving && missing.some((k) => k.provider === 'voyage')) io.out(`${SAVING_NEEDS}\n`);
+    if (missing.some((k) => k.provider === 'anthropic')) {
       io.out(
-        `  ${k.envVar}, for ${k.needs}. Set it with: oort keys set ${k.provider} (or export ${k.envVar}=...)\n`,
+        'Do not set ANTHROPIC_API_KEY globally if you also use Claude Code on a subscription: it would bill the API instead.\n',
       );
     }
-    io.out(
-      'Do not export ANTHROPIC_API_KEY globally if you also use Claude Code on a subscription: it would bill the API instead.\n',
-    );
-    io.out('Or skip vendor keys with Oort Pro: run `oort login`.\n');
   }
   return 0;
 }

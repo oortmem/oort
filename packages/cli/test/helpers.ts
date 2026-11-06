@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { expect } from 'vitest';
 import { createHookLogger } from '@oortmem/claude-code';
 import {
   MissingCredentialError,
@@ -281,3 +282,29 @@ export function memoryKeychain(items: Record<string, string> = {}): {
   });
   return { kc, items, calls };
 }
+
+/**
+ * A command that needs a confirmation and may not ask (stdout piped, `--json`, no terminal):
+ * exit 2, `why` and `--yes` named on stderr, no question asked and no prompt on stdout.
+ */
+export function expectRefusedWithoutPrompt(r: { code: number; io: FakeIo }, why: RegExp): void {
+  expect(r.code, r.io.stderr).toBe(2);
+  expect(r.io.asked).toEqual([]);
+  expect(r.io.stderr).toMatch(why);
+  expect(r.io.stderr).toContain('re-run with --yes');
+  expect(r.io.stdout).not.toContain('[y/N]');
+}
+
+/** A question declined on a terminal: one question, never on stdout, and exit 0. */
+export function expectDeclined(r: { code: number; io: FakeIo }): void {
+  expect(r.code, r.io.stderr).toBe(0);
+  expect(r.io.asked).toHaveLength(1);
+  expect(r.io.asked[0]).toMatch(/\[y\/N\] $/);
+  expect(r.io.stdout).not.toContain('[y/N]');
+  expect(r.io.stdout).not.toContain(r.io.asked[0]!.trim());
+}
+
+/** stdout is a pipe: why a command that needs a confirmation refuses. */
+export const PIPED = /stdout is not a terminal/;
+/** `--json`: why a command that needs a confirmation refuses even on a terminal. */
+export const JSON_NEVER_ASKS = /--json never asks/;
