@@ -18,6 +18,20 @@ Other commands you will use:
 - `oort login` uses Oort Pro, so you need no vendor keys.
 - `oort keys set <provider>` stores your own Voyage, TypeSafe or Anthropic key.
 
+## From code
+
+The same package is a TypeScript library: the engine in your process, or Oort Cloud over HTTPS.
+
+```ts
+import { createOort, formatForPrompt } from 'oortmem';
+
+const oort = await createOort();
+const memory = formatForPrompt(await oort.recall('how do we deploy?'));
+await oort.observe({ user: 'We deploy on Fridays now.', assistant: 'Noted.' });
+```
+
+Options, judgments, scopes, errors and serverless use: [docs/sdk.md](https://github.com/oortmem/oort/blob/main/docs/sdk.md). The Vercel AI SDK adapter is `oortmem/ai-sdk` (experimental).
+
 Your memories stay on your machine, in `~/.oort`. Needs Node.js 22.15 or later.
 
 Part of [Oort](https://github.com/oortmem/oort), open-source memory for AI agents. See the [main README](https://github.com/oortmem/oort#readme) for how the pieces fit. Apache-2.0.
