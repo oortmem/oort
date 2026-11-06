@@ -108,8 +108,10 @@ containers), where `oort keys set` and `oort login` cannot keep a key, the
 messages name the variable to set in the environment your agent starts with
 instead.
 
-**Secrets.** No command prints a key, not even a prefix. An argument echoed in
-an error message is scrubbed and clipped to 24 characters.
+**Secrets.** No command prints a stored key, not even a prefix. An argument
+echoed in an error message is scrubbed first (every known key format, Oort keys
+included, becomes `[REDACTED:<kind>]`) and then clipped to 24 characters, so a
+value in an unrecognised format shows at most its first 23 characters.
 
 **Environment.**
 

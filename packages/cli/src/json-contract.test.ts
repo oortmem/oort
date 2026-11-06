@@ -1080,7 +1080,14 @@ describe('oort.v1: review fixes', () => {
       .readdirSync(src, { recursive: true, encoding: 'utf8' })
       .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
     for (const f of files) {
-      expect(fs.readFileSync(path.join(src, f), 'utf8'), f).not.toContain("stdio: 'inherit'");
+      const text = fs.readFileSync(path.join(src, f), 'utf8');
+      // Any stdio setting that hands the child our stdout: 'inherit' (bare or in an array, any
+      // quotes), or fd 1 / process.stdout in the second slot.
+      for (const m of text.matchAll(/stdio\s*:\s*(\[[^\]]*\]|['"][a-z]+['"])/g)) {
+        const v = m[1]!;
+        const second = v.startsWith('[') ? v.slice(1, -1).split(',')[1]?.trim() : v;
+        expect(/inherit|^1$|process\.stdout/.test(second ?? ''), `${f}: ${m[0]}`).toBe(false);
+      }
     }
   });
 
