@@ -205,9 +205,10 @@ describe('oort doctor', () => {
     expect(note?.detail).toContain('switching Node versions will break');
     expect(note?.fix).toContain('stable');
     // The version still matches, so the binary row is green and doctor does not fail: the only
-    // warnings are the missing keys, so it exits 4 (warnings only), never 5.
+    // warnings are the missing keys, which exit 0 (data.status is `warn`).
     expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
-    expect(d.human.code).toBe(4);
+    expect(d.human.code).toBe(0);
+    expect(d.report.status).toBe('warn');
   });
 
   it('doctor.hook-binary-of-this-version-is-green', async () => {
@@ -275,9 +276,9 @@ describe('oort doctor', () => {
     fs.mkdirSync(path.join(h.root, '.gemini'));
     fs.writeFileSync(path.join(h.root, '.gemini', 'settings.json'), '{ not json');
     const d = await doctor(h);
-    // A failed check exits 5, in text and JSON (CON-107: 4 is warnings only).
-    expect(d.human.code).toBe(5);
-    expect(d.json.code).toBe(5);
+    // A failed check exits 1, in text and JSON.
+    expect(d.human.code).toBe(1);
+    expect(d.json.code).toBe(1);
     expect(d.report.status).toBe('fail');
     // A fix that is a command is also `fixCommand`, runnable as it is.
     expect(d.check('hooks', 'claude-code')).toMatchObject({
@@ -380,8 +381,9 @@ describe('oort doctor', () => {
       expect(d.check('relay', 'relay')).toMatchObject({ status: 'warn' });
       expect(d.check('relay', 'relay')?.detail).toContain('unreachable');
       expect(d.check('relay', 'relay')?.fix).toBeDefined();
-      // A warning only: exit 4 (CON-107).
-      expect(d.human.code).toBe(4);
+      // A warning only: exit 0, data.status `warn`.
+      expect(d.human.code).toBe(0);
+      expect(d.report.status).toBe('warn');
     }
   });
 
@@ -459,7 +461,7 @@ describe('oort doctor', () => {
       fix: `chmod 600 ${file}`,
       fixCommand: `chmod 600 ${file}`,
     });
-    expect(d.human.code).toBe(5);
+    expect(d.human.code).toBe(1);
     fs.chmodSync(file, 0o600);
     const ok = await doctor(h, {}, kc);
     expect(ok.check('keys', 'credentials')).toBeUndefined();

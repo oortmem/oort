@@ -1,11 +1,11 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { HOOK_EVENTS, installHooks, uninstallHooks } from '@oortmem/claude-code';
 import { VERSION } from '@oortmem/core';
 import { HOSTS, isHost } from '../connectors.js';
-import { binPath } from '../io.js';
+import { binPath, runToStderr } from '../io.js';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import { Refusal, echo, noteWarning, tilde, type Ctx } from '../util.js';
@@ -208,7 +208,10 @@ export interface GlobalInstall {
 }
 
 /** `npm i -g oortmem`, and `<npm prefix -g>/bin/oort` as the stable path (not on Windows yet). */
-export function npmGlobalInstall(env: Record<string, string | undefined>): GlobalInstall {
+export function npmGlobalInstall(
+  env: Record<string, string | undefined>,
+  run: typeof runToStderr = runToStderr,
+): GlobalInstall {
   const childEnv = env as NodeJS.ProcessEnv;
   return {
     bin() {
@@ -229,11 +232,8 @@ export function npmGlobalInstall(env: Record<string, string | undefined>): Globa
       }
     },
     install() {
-      return new Promise((resolve) => {
-        spawn('npm', ['i', '-g', 'oortmem'], { stdio: 'inherit', env: childEnv })
-          .once('error', () => resolve(1))
-          .once('close', (code) => resolve(code ?? 1));
-      });
+      // npm's "added N packages" goes to stderr: stdout is `setup --json`'s envelope.
+      return run('npm', ['i', '-g', 'oortmem'], { env: childEnv }).catch(() => 1);
     },
   };
 }

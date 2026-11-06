@@ -6,10 +6,13 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { Command } from 'commander';
 import { execa } from 'execa';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { DecisionController, Embedder } from '@oortmem/core';
+import { MissingCredentialError, type DecisionController, type Embedder } from '@oortmem/core';
+import { TG } from '@oortmem/core/store-conformance';
+import { openSqliteStore } from '@oortmem/store-sqlite';
 import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
 import { fakeSite, type FakeSite } from '../test/fake-site.js';
 import { fixtureFetch, registerTinyModels } from '../test/local-models.js';
@@ -23,6 +26,7 @@ import {
   writeTranscript,
 } from '../test/helpers.js';
 import { writeCloudSettings } from './cloud.js';
+import { npmGlobalInstall } from './commands/install.js';
 import { createKeychain, type Keychain } from './keychain.js';
 import { commandPath, hasJsonOption } from './output.js';
 import { program, runCli } from './program.js';
@@ -33,14 +37,92 @@ vi.setConfig({ testTimeout: 120_000 });
 /** Commands that never print JSON: the hook protocol, the MCP stdio server. */
 const EXEMPT = new Set(['hook', 'mcp']);
 
+/**
+ * Every command this file has a success and an error case for, by its envelope name (`serve`
+ * reports `serve status` and `serve stop`; `serve start` is exempt in the foreground). A static
+ * list, so the tree walk below does not depend on test order: `ok` and `bad` refuse a command that
+ * is not listed, and the walk refuses a command of the tree that is not listed.
+ */
+const CONTRACT = [
+  'setup',
+  'init',
+  'install',
+  'uninstall',
+  'connect',
+  'disconnect',
+  'serve status',
+  'serve stop',
+  'recall',
+  'explain',
+  'revalidate',
+  'observe',
+  'inspect',
+  'stats',
+  'consolidate',
+  'forget',
+  'judge record',
+  'judge apply',
+  'judge list',
+  'judge withdraw',
+  'judge confirm',
+  'judge purge',
+  'judge import',
+  'judge eval',
+  'judge pack export',
+  'judge pack import',
+  'share',
+  'galaxy list',
+  'galaxy members',
+  'galaxy create',
+  'constellation list',
+  'constellation create',
+  'constellation invite',
+  'constellation join',
+  'constellation invites',
+  'constellation revoke',
+  'constellation members',
+  'constellation remove',
+  'constellation role',
+  'constellation leave',
+  'constellation transfer',
+  'constellation delete',
+  'constellation adopt',
+  'constellation policy',
+  'constellation contested',
+  'constellation resolve',
+  'constellation attach',
+  'constellation detach',
+  'pin',
+  'unpin',
+  'project link',
+  'project unlink',
+  'project privacy',
+  'cloud use',
+  'cloud status',
+  'cloud import',
+  'cloud export',
+  'whoami',
+  'doctor',
+  'login',
+  'logout',
+  'keys set',
+  'keys list',
+  'keys create',
+  'keys rm',
+  'models list',
+  'models pull',
+  'models verify',
+  'models rm',
+  'reembed',
+  'import',
+  'export',
+];
+
 interface Result {
   code: number;
   stdout: string;
   stderr: string;
 }
-
-const okSeen = new Set<string>();
-const errSeen = new Set<string>();
 
 /** A success envelope for `command`, exit `exit`; returns its data. */
 function ok(r: Result, command: string, exit = 0): any {
@@ -62,7 +144,7 @@ function ok(r: Result, command: string, exit = 0): any {
     expect(typeof w.code).toBe('string');
     expect(typeof w.message).toBe('string');
   }
-  okSeen.add(command);
+  expect(CONTRACT, `${command} is not in CONTRACT`).toContain(command);
   return env['data'];
 }
 
@@ -85,7 +167,7 @@ function bad(r: Result, command: string, code: string, exit = 2) {
   expect(error.fix === null || typeof error.fix === 'string').toBe(true);
   // The one-line message stays on stderr for people (commander prints its own `error: …` line).
   expect(r.stderr).toContain(error.message.split('\n')[0]!.slice(0, 50));
-  errSeen.add(command);
+  expect(CONTRACT, `${command} is not in CONTRACT`).toContain(command);
   return error;
 }
 
@@ -184,18 +266,22 @@ function binEnv() {
     OORT_HOME: path.join(home, '.oort'),
     OORT_NO_KEYCHAIN: '1',
   };
-  const run = async (args: string[]): Promise<Result> => {
+  const run = async (
+    args: string[],
+    opts: { input?: string; env?: Record<string, string> } = {},
+  ): Promise<Result> => {
     const r = await execa(BIN, args, {
       cwd,
-      env,
+      env: { ...env, ...opts.env },
       extendEnv: false,
       reject: false,
       timeout: 60_000,
-      stdin: 'ignore',
+      ...(opts.input !== undefined ? { input: opts.input } : { stdin: 'ignore' as const }),
+      stripFinalNewline: false,
     });
     return { code: r.exitCode ?? 1, stdout: String(r.stdout), stderr: String(r.stderr) };
   };
-  return { root, home, cwd, run };
+  return { root, home, cwd, oortHome: env.OORT_HOME, run };
 }
 
 /** Local models from the tiny fixtures, downloaded through an injected fetch. */
@@ -397,19 +483,29 @@ describe('oort.v1: memories (local store)', () => {
     });
   });
 
-  it('serve status and stop; a foreground serve refuses --json', async () => {
+  it('serve status and stop are named so; a foreground serve never prints an envelope', async () => {
     const { run } = local();
-    // Not running exits 1 (`oort serve status || oort serve --detach`); the envelope says so.
-    expect(ok(await run(['serve', 'status', '--json']), 'serve', 1)).toMatchObject({
-      running: false,
-    });
-    expect(ok(await run(['serve', 'stop', '--json']), 'serve')).toMatchObject({ stopped: false });
-    bad(await run(['serve', '--json']), 'serve', 'usage');
+    // Not running exits 1 (`oort serve status || oort serve --detach`); the envelope says so,
+    // with that exit code.
+    const st = await run(['serve', 'status', '--json']);
+    expect(ok(st, 'serve status', 1)).toMatchObject({ running: false });
+    expect(JSON.parse(st.stdout).exitCode).toBe(1);
+    bad(await run(['serve', 'status', '--bogus', '--json']), 'serve status', 'usage');
+    const stop = await run(['serve', 'stop', '--json']);
+    expect(ok(stop, 'serve stop')).toMatchObject({ stopped: false });
+    expect(JSON.parse(stop.stdout)).not.toHaveProperty('exitCode');
+    bad(await run(['serve', 'stop', '--bogus', '--json']), 'serve stop', 'usage');
+    // In the foreground it refuses --json on stderr only: never an envelope.
+    const fg = await run(['serve', '--json']);
+    expect(fg.code).toBe(2);
+    expect(fg.stdout).toBe('');
+    expect(fg.stderr).toContain('--json is for');
   });
 
-  it('doctor: warnings exit 4, a failure exits 5, checks carry fixCommand', async () => {
+  it('doctor: warnings exit 0, a failure exits 1, data.status tells them apart, fixCommand', async () => {
     const { h, run } = local();
-    const d = ok(await run(['doctor', '--json']), 'doctor', 4);
+    // Keyless is a supported state: `oort doctor && …` keeps working.
+    const d = ok(await run(['doctor', '--json']), 'doctor', 0);
     expect(d.status).toBe('warn');
     expect(d.problems).toBeGreaterThan(0);
     fs.mkdirSync(path.join(h.root, '.gemini'));
@@ -427,14 +523,16 @@ describe('oort.v1: memories (local store)', () => {
         },
       }),
     );
-    const f = ok(await run(['doctor', '--json']), 'doctor', 5);
+    const fr = await run(['doctor', '--json']);
+    const f = ok(fr, 'doctor', 1);
     expect(f.status).toBe('fail');
+    expect(JSON.parse(fr.stdout).exitCode).toBe(1);
     const cursor = (f.checks as { name: string; fixCommand?: string }[]).find(
       (c) => c.name === 'cursor',
     );
     expect(cursor, JSON.stringify(f.checks)).toBeDefined();
     expect(cursor?.fixCommand, JSON.stringify(cursor)).toBe('oort connect cursor');
-    errSeen.add('doctor');
+    bad(await run(['doctor', '--bogus', '--json']), 'doctor', 'usage');
   });
 });
 
@@ -929,6 +1027,179 @@ describe('oort.v1: install, connect, setup (the built bin, a throwaway HOME)', (
   });
 });
 
+describe('oort.v1: review fixes', () => {
+  const sk = ['sk', 'ant', 'api03', 'A'.repeat(40)].join('-');
+  const oortSk = ['oort', 'sk', 'B'.repeat(43)].join('_');
+
+  it('a key pasted as an excess argument never comes back: text, --json, OORT_OUTPUT', async () => {
+    const { run } = local();
+    const cases: [string[], string, string][] = [
+      [['keys', 'set', 'anthropic', sk], 'keys set', 'A'.repeat(12)],
+      [['login', oortSk], 'login', 'B'.repeat(12)],
+    ];
+    for (const [args, command, secretPart] of cases) {
+      for (const mode of ['text', 'json', 'env'] as const) {
+        const r = await run(
+          mode === 'json' ? [...args, '--json'] : args,
+          mode === 'env' ? { env: { OORT_OUTPUT: 'json' } } : {},
+        );
+        expect(r.code).toBe(2);
+        expect(r.stdout + r.stderr, `${command} ${mode}`).not.toContain(secretPart);
+        expect(r.stderr).toContain('too many arguments');
+        if (mode === 'text') expect(r.stdout).toBe('');
+        else bad(r, command, 'usage');
+      }
+    }
+  });
+
+  it('a child (npm, security) never writes to stdout: it goes to stderr', async () => {
+    const io = pathToFileURL(path.join(import.meta.dirname, '..', 'dist', 'io.js')).href;
+    const r = await execa(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import { runToStderr } from ${JSON.stringify(io)}; process.exitCode = await runToStderr(process.execPath, ['-e', 'console.log("added 1 package")']);`,
+      ],
+      { reject: false, stdin: 'ignore' },
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toContain('added 1 package');
+    // `setup --install-global` runs npm that way.
+    const calls: [string, string[]][] = [];
+    const code = await npmGlobalInstall({}, async (file, args) => {
+      calls.push([file, args]);
+      return 0;
+    }).install();
+    expect(code).toBe(0);
+    expect(calls).toEqual([['npm', ['i', '-g', 'oortmem']]]);
+    // No spawn in the CLI inherits stdout any more.
+    const src = path.join(import.meta.dirname);
+    const files = fs
+      .readdirSync(src, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
+    for (const f of files) {
+      expect(fs.readFileSync(path.join(src, f), 'utf8'), f).not.toContain("stdio: 'inherit'");
+    }
+  });
+
+  it('a rerun fix never repeats free text: share --text gets the sentence', async () => {
+    const e = cloudEnv();
+    team(e);
+    const r = await e.run([
+      'share',
+      MEM,
+      '--to',
+      'oort-core',
+      '--text',
+      'password is hunter2',
+      '--json',
+    ]);
+    const err = bad(r, 'share', 'needs-confirmation');
+    expect(err.fix).toBe('re-run the same command with --yes');
+    expect(r.stdout).not.toContain('hunter2');
+    // An id-only command still gets the runnable fix.
+    const plain = bad(
+      await e.run(['share', MEM, '--to', 'oort-core', '--json']),
+      'share',
+      'needs-confirmation',
+    );
+    expect(plain.fix).toBe(`oort share ${MEM} --to oort-core --json --yes`);
+  });
+
+  it('an error after the data (the store failing to close) prints only the failure envelope', async () => {
+    const { h, run } = local();
+    const base = h.wire;
+    h.wire = async (dir, o) => ({
+      ...(await base(dir, o)),
+      close: async () => {
+        throw new Error('the store did not close');
+      },
+    });
+    const r = await run(['stats', '--json', '--debug']);
+    const e = bad(r, 'stats', 'internal', 1);
+    expect(e.message).toBe('the store did not close');
+    expect(r.stdout.match(/"schema"/g)).toHaveLength(1);
+    expect(r.stdout).not.toContain('"ok": true');
+    expect(r.stderr).toMatch(/\n\s+at /);
+  });
+
+  it('--debug prints the stack of every exit-1 error, not only internal ones', async () => {
+    const { h, run } = local();
+    h.wire = async () => {
+      throw new MissingCredentialError('TYPESAFE_API_KEY', 'decide.apiKey');
+    };
+    const r = await run(['stats', '--json', '--debug']);
+    const e = bad(r, 'stats', 'needs-key', 1);
+    expect(e.fix).toBe('oort keys set typesafe');
+    expect(r.stderr).toMatch(/\n\s+at /);
+    const quiet = await run(['stats', '--json']);
+    expect(quiet.stderr).not.toMatch(/\n\s+at /);
+  });
+
+  it('hook, mcp and a foreground serve never print an envelope, in any case', async () => {
+    const { run } = local();
+    const env = { env: { OORT_OUTPUT: 'json' } };
+    for (const [args, io] of [
+      [['serve', '--bogus'], env],
+      [['serve', '--json'], {}],
+      [['serve', '--json'], env],
+      [['hook', 'Stop', '--json'], {}],
+      [['hook', 'Stop', '--bogus'], env],
+      [['mcp', '--json'], {}],
+      [['mcp', '--bogus'], env],
+    ] as const) {
+      const r = await run([...args], { ...io, stdin: '{}' });
+      expect(r.stdout, args.join(' ')).not.toContain('oort.v1');
+    }
+  });
+
+  it('OORT_OUTPUT=json leaves the hooks and MCP byte for byte as they are', async () => {
+    const b = binEnv();
+    const store = await openSqliteStore({
+      path: path.join(b.oortHome, 'oort.sqlite'),
+      coldDir: path.join(b.oortHome, 'cold'),
+      dimension: 512,
+      log: () => {},
+    });
+    await store.upsert(TG, memory({ embedding: new Int8Array(512).fill(1) }));
+    await store.close();
+    const prompt = JSON.stringify({
+      session_id: 's1',
+      cwd: b.cwd,
+      hook_event_name: 'UserPromptSubmit',
+      prompt: 'which port does the auth service listen on?',
+    });
+    const json = { OORT_OUTPUT: 'json' };
+    const plain = await b.run(['hook', 'UserPromptSubmit'], { input: prompt });
+    const enveloped = await b.run(['hook', 'UserPromptSubmit'], { input: prompt, env: json });
+    expect(plain.stdout).toContain('5582');
+    expect(enveloped.stdout).toBe(plain.stdout);
+    expect(enveloped.code).toBe(plain.code);
+    const rpc = [
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'contract', version: '1' },
+        },
+      },
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+    ]
+      .map((m) => JSON.stringify(m))
+      .join('\n');
+    const mcp = await b.run(['mcp'], { input: `${rpc}\n` });
+    const mcpJson = await b.run(['mcp'], { input: `${rpc}\n`, env: json });
+    expect(mcp.stdout).toContain('"tools"');
+    expect(mcpJson.stdout).toBe(mcp.stdout);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------
 
 function leaves(cmd: Command): Command[] {
@@ -944,15 +1215,17 @@ describe('every command takes --json and has a contract test', () => {
   const paths = leaves(root)
     .filter((c) => !EXEMPT.has(commandPath(c)))
     .map((c) => ({ path: commandPath(c), json: hasJsonOption(c) }));
+  // `serve` is one commander command with three names; status and stop take --json.
+  const names = paths.flatMap((p) =>
+    p.path === 'serve' ? ['serve status', 'serve stop'] : [p.path],
+  );
 
   it('contract.every-command-but-hook-and-mcp-has---json', () => {
     expect(paths.length).toBeGreaterThan(60);
     expect(paths.filter((p) => !p.json).map((p) => p.path)).toEqual([]);
   });
 
-  it('contract.every-command-has-a-success-and-an-error-test-here', () => {
-    const all = paths.map((p) => p.path).sort();
-    expect(all.filter((p) => !okSeen.has(p))).toEqual([]);
-    expect(all.filter((p) => !errSeen.has(p))).toEqual([]);
+  it('contract.every-command-is-listed-for-a-success-and-an-error-case', () => {
+    expect([...names].sort()).toEqual([...CONTRACT].sort());
   });
 });

@@ -77,10 +77,19 @@ export function commandIn(fix: string | undefined): string | undefined {
   return fix.split(' && ').every((part) => RUNNABLE.test(part)) ? fix : undefined;
 }
 
-/** Doctor's exit code: 0 all well (info included), 4 warnings only, 5 a check failed. */
-export function doctorExit(checks: readonly Check[]): 0 | 4 | 5 {
-  if (checks.some((c) => c.status === 'fail')) return 5;
-  return checks.some((c) => c.status === 'warn') ? 4 : 0;
+/**
+ * Doctor's exit code: 1 when a check failed, else 0. Warnings alone exit 0: a keyless or
+ * local-only install is a supported state, so `oort doctor && …` keeps working; `--json`'s
+ * `data.status` (ok, warn, fail) tells them apart.
+ */
+export function doctorExit(checks: readonly Check[]): 0 | 1 {
+  return checks.some((c) => c.status === 'fail') ? 1 : 0;
+}
+
+/** The overall state `--json` reports: `fail` when a check failed, `warn` for warnings only. */
+export function doctorStatus(checks: readonly Check[]): 'ok' | 'warn' | 'fail' {
+  if (checks.some((c) => c.status === 'fail')) return 'fail';
+  return checks.some((c) => c.status === 'warn') ? 'warn' : 'ok';
 }
 
 const ROLE_NEED: Record<AdapterRole, string> = {
@@ -958,10 +967,7 @@ function paint(ui: Ui, status: CheckStatus, s: string): string {
 const withCommand = (c: string | undefined): { fixCommand?: string } =>
   c === undefined ? {} : { fixCommand: c };
 
-/**
- * `oort doctor [--json]`: every check, with a one-line fix per problem. Exits 5 if one fails, 4
- * if there are warnings only, else 0.
- */
+/** `oort doctor [--json]`: every check, with a one-line fix per problem. Exits 1 if one fails. */
 export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise<number> {
   const home = ctx.io.env['HOME'] ?? '';
   let cmd: string | undefined;
@@ -985,7 +991,7 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
   if (jsonMode(ctx)) {
     const problems = checks.filter((c) => c.status === 'warn' || c.status === 'fail').length;
     emit(ctx, {
-      status: exit === 5 ? 'fail' : exit === 4 ? 'warn' : 'ok',
+      status: doctorStatus(checks),
       problems,
       checks: checks.map((c) => ({ ...c, ...withCommand(c.fixCommand ?? commandIn(c.fix)) })),
     });

@@ -75,10 +75,10 @@ to stdout (see `docs/export-format.md`).
 | `1` | Unexpected error. Only the message is printed; add `--debug` for the stack. |
 | `2` | Refusal or usage problem, such as a bad flag, missing keys, a file Oort will not edit, or a confirmation that cannot be asked (see below). |
 | `3` | Partial success: `oort import claude-code` imported what it could, but some sessions stopped at a failed observation. Run it again to retry them. |
-| `4` | `oort doctor`: warnings only, no check failed. |
-| `5` | `oort doctor`: at least one check failed. |
 
-`oort login` exits 1
+`oort doctor` exits 1 when one of its checks fails; warnings alone exit 0 (a
+keyless or local-only install is a supported state), and `--json` tells them
+apart with `data.status`. `oort login` exits 1
 when the sign-in expires, was already used or is cancelled. A status query
 exits 1 when what it asks about is not running: `oort serve status` exits 0
 only when the daemon answers, and 1 when it is not running, not answering or
@@ -131,7 +131,9 @@ Scripts and agents get one contract from every command: pass `--json`, or set
 `OORT_OUTPUT=json` once in the environment. Every command takes it except
 `oort hook` (the Claude Code hook protocol), `oort mcp` (the MCP protocol on
 stdio) and `oort serve` in the foreground (a long-running log; `serve status`,
-`serve stop` and `serve --detach` do take it). `oort export` and
+`serve stop` and `serve --detach` do take it). Those three never print an
+envelope, whatever is set: `OORT_OUTPUT=json` leaves their output byte for byte
+as it is, and an explicit `--json` on a foreground `serve` is refused on stderr. `oort export` and
 `oort cloud export` (and `oort judge pack export`) write their own format to
 stdout, JSON Lines and a pack; with `--out <file>` and `--json` they print the
 envelope instead.
@@ -156,7 +158,12 @@ envelope instead.
 }
 ```
 
-- `command` is the command path without `oort`: `recall`, `judge pack import`.
+- `command` is the command path without `oort`: `recall`, `judge pack import`;
+  `serve` reports `serve status`, `serve stop` or `serve start` (`--detach`).
+- `exitCode` appears only when the command succeeded but exits non-zero:
+  `serve status` when the daemon is not running (1), `models verify` with a
+  changed file (1), `doctor` with a failed check (1), `import` with failed
+  sessions (3).
 - `data` is always an object; a list is wrapped (`{ "memories": [...] }`).
   Field names are camelCase and stable, ids are full ids (never the 8-character
   prefix tables show), and times are ISO 8601.
@@ -187,8 +194,14 @@ on stderr:
 }
 ```
 
-`fix` is a command you can run as it is, where one fixes it, else `null`.
-`exitCode` is the process's exit code.
+`fix` is a command you can run as it is, where one fixes it, else `null`. The
+"same command with `--yes`" fix repeats your arguments only when every one of
+them is a known flag, a subcommand, an id, a name or an enum; anything else
+(`share --text …`, `--by`, a file path) is never echoed back, and the fix is
+then the sentence `re-run the same command with --yes`. `exitCode` is the
+process's exit code. A usage error from the argument parser has every argument
+it names scrubbed and clipped to 24 characters, in the envelope and on stderr
+alike, so a key pasted as an extra argument never comes back.
 
 | `error.code` | When | Typical `fix` |
 | --- | --- | --- |
@@ -197,7 +210,7 @@ on stderr:
 | `ambiguous-id` | An id prefix that matches more than one memory, judgment or Galaxy. | |
 | `needs-key` | No model or key for a role the command needs. | `oort models pull`, `oort keys set typesafe` |
 | `needs-login` | No Oort key, or Oort Cloud rejected it. | `oort login` |
-| `needs-confirmation` | A command that asks first, run with `--json` or without a terminal on stdin. | the same command with `--yes` |
+| `needs-confirmation` | A command that asks first, run with `--json` or without a terminal on stdin. | the same command with `--yes`, or that sentence |
 | `cloud-only` | A command or flag that needs Oort Cloud, on a machine using the local store. | `oort cloud use` |
 | `network` | Oort Cloud, the relay, the sign-in site or a model download could not be reached, or is down. | |
 | `refused` | A rule said no: a plan or role limit, the hive beta, a Star agent writing the Planet, cloud mode for a local-only command (`consolidate`, `reembed`, `judge`). | |
@@ -208,12 +221,20 @@ Constellation's rule or an inactive plan would read as `usage` and tell an agent
 to change its arguments.
 
 **Exit codes** stay as in [Conventions](#conventions): `0` success (a declined
-question included); `1` an unexpected error, a status query whose subject is
-not running (`serve status`, `models verify` with a changed file: the envelope
-is a success that says so), and an error raised outside the CLI's own checks
-(an adapter's relay or key error, a sign-in that did not complete); `2` every
-refusal and usage error; `3` partial success; `4` and `5` doctor's warnings
-and failures. The envelope's `exitCode` always matches.
+question and doctor's warnings included); `1` an unexpected error, a status
+query whose subject is not running or not well (`serve status`, `models
+verify` with a changed file, `doctor` with a failed check: the envelope is a
+success that says so, with `exitCode: 1`), and an error raised outside the
+CLI's own checks, whatever its code (an adapter's relay or key error, a
+network failure, a sign-in that did not complete); `2` every refusal and usage
+error from the CLI itself; `3` partial success. A failure envelope's
+`exitCode` always matches the process's, and a success envelope carries one
+whenever it is not 0.
+
+The envelope is printed once the command and its cleanup (closing the store)
+have finished: if anything fails after the data was ready, stdout holds the
+failure envelope instead, never both. `--debug` prints the stack on stderr for
+every error that exits 1.
 
 **One example per family.**
 
@@ -1390,9 +1411,10 @@ Pro, with no key and a 3 second timeout.
 
 Each check has a status: `✓` ok, `!` warn, `✗` fail, `•` info and `?`
 unknown. A relay that does not answer `/health` is a warning, not a failure:
-Oort still works locally, and recall falls back to lexical-only. Doctor exits 5
-when a check failed, 4 when there are warnings only, and 0 otherwise (info rows
-do not count). Before 0.6.0 a failure exited 1 and warnings 0.
+Oort still works locally, and recall falls back to lexical-only. A failed check
+makes doctor exit 1; warnings alone exit 0, so `oort doctor && …` works on a
+keyless or local-only install. With `--json`, `data.status` is `ok`, `warn` or
+`fail`.
 
 ```
 oort doctor · 1 to fix

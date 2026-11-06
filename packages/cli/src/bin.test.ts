@@ -416,8 +416,8 @@ describe('oort bin', () => {
   it('cli.doctor-json-reports-every-group-and-creates-nothing', async () => {
     const s = sandbox();
     const r = await oort(s, ['doctor', '--json']);
-    // No keys in the sandbox: warnings only, so exit 4 (CON-107), and nothing failed.
-    expect(r.exitCode).toBe(4);
+    // No keys in the sandbox: warnings only, which exit 0; data.status says `warn`.
+    expect(r.exitCode).toBe(0);
     const report = data(r.stdout, 'doctor') as { status: string; checks: { group: string }[] };
     expect(report.status).toBe('warn');
     expect([...new Set(report.checks.map((c) => c.group))]).toEqual([

@@ -84,7 +84,12 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
   const obs = await readObservation(opts, ctx);
   if (opts.dryRun === true) {
     const s = scrubObservation(obs);
-    print({ dryRun: true, dropped: s.dropped, redactions: s.redactions });
+    // `dryRun: true` in the envelope only: the bare object stays as it always was.
+    print({
+      ...(jsonMode(ctx) && { dryRun: true }),
+      dropped: s.dropped,
+      redactions: s.redactions,
+    });
     return 0;
   }
   return withWired(ctx, async (w) => {

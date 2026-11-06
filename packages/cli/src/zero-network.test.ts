@@ -307,8 +307,8 @@ describe('zero network without keys or Oort Pro', () => {
     expect(r.code).toBe(0);
     expect(r.io.stdout).toContain('port 5582');
     expect(r.io.stderr).toContain('oort models pull');
-    // Models chosen but not pulled is a warning (exit 4), never a download.
-    expect((await oort(s, ['doctor', '--json'])).code).toBe(4);
+    // Models chosen but not pulled is a warning (exit 0), never a download.
+    expect((await oort(s, ['doctor', '--json'])).code).toBe(0);
     expect(fs.existsSync(path.join(s.oortHome, 'models'))).toBe(false);
     expect(guard.attempts).toEqual([]);
   });

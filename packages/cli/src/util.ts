@@ -29,14 +29,39 @@ import type { WireFn, Wired } from './wire.js';
  * (a 20-character AWS key would fit the clip, hence the scrub).
  */
 export function echo(arg: string): string {
-  const clean = scrub(arg).text;
+  const clean = scrubArg(arg);
   // JSON escapes C0 controls; `shown` also catches C1 (\u009b CSI) and bidi overrides.
   return shown(JSON.stringify(clean.length > 24 ? `${clean.slice(0, 23)}…` : clean));
 }
 
+/** An Oort key (`oort_sk_…`), which the shared scrubber does not know (it is Oort's own). */
+const OORT_KEY = /oort_sk_[A-Za-z0-9_-]{8,}/g;
+
+/** `scrub()` for a command-line argument, Oort keys included. */
+export function scrubArg(text: string): string {
+  return scrub(text).text.replace(OORT_KEY, '[REDACTED:oort-key]');
+}
+
+/**
+ * A commander error line as it may be printed (stderr) or put in an `oort.v1` error: every
+ * argument it quotes (`'…'`) or lists unquoted (`got 2: anthropic, sk-ant-…`, excess arguments)
+ * is echoed (scrubbed, clipped to 24 characters), then the whole line is scrubbed again.
+ */
+export function commanderText(line: string): string {
+  const listed = line.replace(
+    /(but got \d+: )(.*)\.(\n?)$/,
+    (_m, head: string, list: string, nl: string) =>
+      `${head}${list.split(', ').map(echo).join(', ')}.${nl}`,
+  );
+  const quoted = listed.replace(/'([^'\n]*)'/g, (_m, a: string) => echo(a));
+  return shown(scrubArg(quoted), { newlines: true });
+}
+
 /**
  * The `oort.v1` error codes (docs/cli.md, "JSON output"): what kind of problem stopped a command,
- * for scripts and agents to branch on. Every code but `internal` exits 2.
+ * for scripts and agents to branch on. A CLI refusal with any code but `internal` exits 2; an error
+ * an adapter or the network raised exits 1 whatever its code (a relay's needs-login, a missing
+ * key's needs-key, `network`), as does `internal`.
  */
 export type ErrorCode =
   | 'usage'

@@ -86,15 +86,21 @@ import {
 } from './commands/cloud.js';
 import {
   commandFor,
+  commandName,
   commandPath,
   describeError,
+  emitted,
+  exempt,
   failure,
+  flush,
   hasJsonOption,
   jsonFromEnv,
+  rerunWith,
+  serveActionIn,
   startOutput,
 } from './output.js';
 import { uiFor } from './ui.js';
-import { Refusal, echo, safeJson, type Ctx } from './util.js';
+import { Refusal, commanderText, echo, safeJson, type Ctx } from './util.js';
 import { wire as defaultWire, type WireFn } from './wire.js';
 
 export function program(ctx: Ctx, setCode: (code: number) => void): Command {
@@ -103,11 +109,13 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     async (...args: A): Promise<void> => {
       const code = await fn(...args);
       if (typeof code === 'number') setCode(code);
-      // The contract: in JSON mode every run that does not throw prints its envelope.
+      // The contract: in JSON mode every run that does not throw prints its envelope, and only
+      // now, after the command and its cleanup (the store closed) have finished.
       const out = ctx.output;
-      if (out?.json === true && !out.emitted) {
+      if (out?.json === true && !emitted(out)) {
         throw new Error(`oort ${out.command} printed no JSON (a bug: please report it).`);
       }
+      flush(ctx, typeof code === 'number' ? code : 0);
     };
   const ui = uiFor(ctx.io);
   // The help's banner: the mark beside the wordmark, on a colour terminal only.
@@ -130,20 +138,20 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
       const agent = (cmd.opts() as { agent?: string }).agent;
       if (agent !== undefined) ctx.agent = agent;
       // `--json`, or OORT_OUTPUT=json on any command that has `--json` (docs/cli.md, "JSON output").
-      // `serve` in the foreground is a long-running process, never JSON: OORT_OUTPUT leaves it be
-      // (and an explicit --json there is refused by the command).
+      // The hook, MCP and a foreground `serve` never print JSON, whatever is set (an explicit
+      // --json on a foreground serve is refused by the command, on stderr).
       const opts = action.opts() as { json?: boolean; detach?: boolean };
       const path = commandPath(action);
-      const serveAction = action.processedArgs[0] as string | undefined;
-      const foreground =
-        path === 'serve' &&
-        serveAction !== 'status' &&
-        serveAction !== 'stop' &&
-        opts.detach !== true;
+      const serveAction =
+        path === 'serve' ? (action.processedArgs[0] as string | undefined) : undefined;
+      const name = commandName(path, serveAction);
       const explicit = opts.json === true;
-      const json = hasJsonOption(action) && (explicit || (!foreground && jsonFromEnv(ctx.io.env)));
+      const json =
+        hasJsonOption(action) &&
+        !exempt(name, opts.detach === true) &&
+        (explicit || jsonFromEnv(ctx.io.env));
       if (json) action.setOptionValue('json', true);
-      startOutput(ctx, path, json, explicit);
+      startOutput(ctx, name, json, explicit);
     })
     .exitOverride()
     .configureOutput({
@@ -151,8 +159,9 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
       writeErr: (s) => ctx.io.err(s),
       getOutHasColors: () => ui.color,
       getErrHasColors: () => ui.color,
-      // Commander quotes the offending argument ('…'): scrub and clip it like our own refusals.
-      outputError: (s, write) => write(s.replace(/'([^'\n]*)'/g, (_m, a: string) => echo(a))),
+      // Commander quotes the offending argument ('…') or lists excess ones bare: scrub and clip
+      // each like our own refusals, and scrub the line.
+      outputError: (s, write) => write(commanderText(s)),
     })
     .configureHelp({
       styleTitle: (s) => ui.bold(s),
@@ -960,24 +969,33 @@ export async function runCli(
     return code;
   } catch (e) {
     if (e instanceof CommanderError && e.exitCode === 0) return 0;
-    const info = describeError(e, args);
+    const target = commandFor(p, args);
+    const info = describeError(e, (flag) => rerunWith(p, target, args, flag));
     // Commander has printed its own line (with the usage hint).
     if (!(e instanceof CommanderError)) io.err(`oort: ${info.message}\n`);
-    if (info.code === 'internal' && args.includes('--debug') && e instanceof Error && e.stack) {
+    // --debug: the stack of every unexpected (exit 1) error.
+    if (info.exitCode === 1 && args.includes('--debug') && e instanceof Error && e.stack) {
       io.err(`${e.stack}\n`);
     }
-    // In JSON mode the failure envelope goes on stdout too (`io` is the real stdout here). Before
-    // any action ran (a usage error) the mode comes from the arguments.
+    // In JSON mode the failure envelope goes on stdout too (`io` is the real stdout here), unless
+    // stdout already has this run's output (a JSON Lines export). Before any action ran (a usage
+    // error) the mode comes from the arguments; the exempt commands never print one.
     const out = ctx.output;
-    const target = out === undefined ? commandFor(p, args) : undefined;
-    const json =
-      out !== undefined
-        ? out.json
-        : args.includes('--json') || (hasJsonOption(target!) && jsonFromEnv(io.env));
-    if (json && out?.emitted !== true) {
-      const command = out?.command ?? commandPath(target!);
-      io.out(`${safeJson(failure(command, info))}\n`);
+    let json: boolean;
+    let command: string;
+    if (out !== undefined) {
+      json = out.json && !out.written;
+      command = out.command;
+    } else {
+      command = commandName(commandPath(target), serveActionIn(args));
+      // An unknown command (`oort recal --json`) still answers a script that asked for JSON.
+      json =
+        !exempt(command, args.includes('--detach')) &&
+        (hasJsonOption(target)
+          ? args.includes('--json') || jsonFromEnv(io.env)
+          : target === p && args.includes('--json'));
     }
+    if (json) io.out(`${safeJson(failure(command, info))}\n`);
     return info.exitCode;
   }
 }
