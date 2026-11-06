@@ -44,24 +44,20 @@ function portable<T>(v: T): T {
 }
 
 /**
- * Lexical hits as a set: `{ id, tier }` sorted by id, without scores. Opening an older store
- * rebuilds its lexical index (schema version 4, CON-110), and the rebuild restarts BM25's row and
- * token totals from the live rows, so scores, and the order of near ties, shift once. Which
- * memories match is unchanged; every other field still compares exactly.
+ * Lexical hits without their scores, in rank order. Opening an older store rebuilds its lexical
+ * index (schema version 4, CON-110), and the rebuild corrects BM25's statistics: an old index also
+ * counted every row ever rewritten. Scores change once, and so can the order, which each fixture
+ * pins where it changed (`at4`). Every other field still compares exactly.
  */
-function unranked<T>(v: T): T {
+function scoreless<T>(v: T): T {
   const isHit = (x: unknown): x is { id: string; tier: string } =>
     x !== null && typeof x === 'object' && Object.keys(x).sort().join() === 'id,score,tier';
   if (Array.isArray(v)) {
-    if (v.length > 0 && v.every(isHit)) {
-      return v
-        .map((h) => ({ id: h.id, tier: h.tier }))
-        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) as T;
-    }
-    return v.map(unranked) as T;
+    if (v.length > 0 && v.every(isHit)) return v.map((h) => ({ id: h.id, tier: h.tier })) as T;
+    return v.map(scoreless) as T;
   }
   if (v !== null && typeof v === 'object') {
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, unranked(x)])) as T;
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scoreless(x)])) as T;
   }
   return v;
 }
@@ -218,7 +214,8 @@ describe('schema migration 1 to 2', () => {
     const s = copyFixture();
     const blobs = hashDir(s.coldDir);
     const got = await readBack(s);
-    expect(portable(unranked(got))).toEqual(portable(unranked(expected)));
+    // The phase1 fixture's lexical order is unchanged by the rebuild; only scores move.
+    expect(portable(scoreless(got))).toEqual(portable(scoreless(expected)));
     expect(hashDir(s.coldDir), 'cold blobs are untouched').toBe(blobs);
     const db = raw(s.dbPath);
     try {
@@ -371,7 +368,7 @@ describe('schema migration 1 to 2', () => {
     downgradeSqliteStore({ path: s.dbPath });
     expect(v1Content(s.dbPath)).toEqual(original);
     downgradeSqliteStore({ path: s.dbPath }); // already version 1: nothing to do
-    expect(portable(unranked(await readBack(s)))).toEqual(portable(unranked(expected)));
+    expect(portable(scoreless(await readBack(s)))).toEqual(portable(scoreless(expected)));
   });
 
   it('migrate.down-refuses-memories-version-1-cannot-hold', async () => {
@@ -481,6 +478,22 @@ describe('schema migration 2 to 3', () => {
   const vec = (k: number) =>
     Int8Array.from({ length: DIM }, (_, j) => ((j * 29 + k * 13) % 200) - 100);
 
+  /**
+   * What the schema version 2 store reads back after the version 4 rebuild. The lexical query
+   * `auth service port staging` ranked the two auth-service memories (`auth`, `service`, `port`)
+   * ahead of the cold staging note (entity `staging`) under the old index's statistics, which
+   * still counted rewritten rows; with the corrected counts the rarer `staging` weighs more, and
+   * the cold note ranks first. A one-time change from correcting the statistics, pinned here.
+   */
+  const at4 = (e: typeof expected2) => ({
+    ...scoreless(e),
+    lexical: [
+      { id: 'v2-e', tier: 'cold' },
+      { id: 'v2-b', tier: 'warm' },
+      { id: 'v2-a', tier: 'warm' },
+    ],
+  });
+
   function copy2(): { dir: string; dbPath: string; coldDir: string } {
     const dir = fs.mkdtempSync(path.join(root, 'store2-'));
     fs.cpSync(FIXTURE2, dir, { recursive: true });
@@ -555,7 +568,7 @@ describe('schema migration 2 to 3', () => {
     expect(sqliteSchemaVersion(s.dbPath)).toBe(2);
     expect(columns(s.dbPath)).not.toContain('judgment');
     const blobs = hashDir(s.coldDir);
-    expect(portable(unranked(await readBack2(s)))).toEqual(portable(unranked(expected2)));
+    expect(portable(scoreless(await readBack2(s)))).toEqual(portable(at4(expected2)));
     expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(columns(s.dbPath)).toContain('judgment');
     expect(hashDir(s.coldDir), 'cold blobs are untouched').toBe(blobs);
@@ -608,7 +621,7 @@ describe('schema migration 2 to 3', () => {
     expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
     downgradeSqliteStore({ path: s.dbPath, to: 2 }); // already version 2: nothing to do
     expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
-    expect(portable(unranked(await readBack2(s)))).toEqual(portable(unranked(expected2)));
+    expect(portable(scoreless(await readBack2(s)))).toEqual(portable(at4(expected2)));
     expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
   });
 });

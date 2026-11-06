@@ -210,7 +210,8 @@ memory from its stub and entities only), in one transaction, after a copy to `<p
 time>`. No vector, cold blob or row changes, and no vendor is called. The new index is optimised
 into one segment. Its BM25 row and token totals count the live rows only, where the old index also
 counted every row ever rewritten (a contentless-delete index never subtracts one), so lexical scores
-shift once, and near ties can swap; which memories match does not change. `meta` records
+shift once, and so can the order of results: a one-time ranking change from correcting the index's
+statistics. Which memories match does not change. `meta` records
 `lexical_version` (2) and the ICU version. A migrating open rebuilds the index again when the
 tokeniser version differs, or when ICU's major version is newer than the one recorded and the store
 holds Thai, Lao, Khmer or Myanmar text (their word breaks come from ICU's dictionaries; nothing else
