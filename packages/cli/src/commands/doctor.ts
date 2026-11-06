@@ -367,6 +367,15 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
       judged !== undefined && 'version' in judged && judged.version !== undefined
         ? `oort ${shown(judged.version)}`
         : 'version unknown';
+    // One line for it (PR #78 review, N5): the bin row says what the hooks run, and that you ran
+    // another copy.
+    const also = `; you ran another copy, oort ${VERSION}, at ${shown(tilde(here, home))}`;
+    let told = false;
+    const rows = binaries.map((c) => {
+      if (told || c.name !== 'claude-code bin') return c;
+      told = true;
+      return { ...c, detail: `${c.detail}${also}` };
+    });
     return [
       {
         group: 'hooks',
@@ -374,13 +383,17 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
         status: 'ok',
         detail: `${found.map((e) => e.event).join(', ')} in ${show}`,
       },
-      {
-        group: 'hooks',
-        name: 'claude-code copy',
-        status: 'info',
-        detail: `the hooks run ${shown(tilde(hooksBin ?? '', home))} (${theirs}); you ran another copy, oort ${VERSION}, at ${shown(tilde(here, home))}`,
-      },
-      ...binaries,
+      ...(told
+        ? []
+        : [
+            {
+              group: 'hooks' as const,
+              name: 'claude-code copy',
+              status: 'info' as const,
+              detail: `the hooks run ${shown(tilde(hooksBin ?? '', home))} (${theirs})${also}`,
+            },
+          ]),
+      ...rows,
     ];
   }
   if (missing.length > 0 || (stale.length > 0 && !versionWarned)) {
@@ -624,9 +637,11 @@ function managedChecks(ctx: Ctx): Check[] {
       status: 'fail',
       detail: `${shown(managedPrefixFor(ctx.io.env))} is not safe for agents to run: ${shown(s.problem.dir)} ${s.problem.why}`,
       fix: shown(s.problem.fix),
-      ...(/^(chmod|sudo chown|rm) /.test(s.problem.fix) && !s.problem.fix.includes(',')
-        ? { fixCommand: s.problem.fix }
-        : {}),
+      ...(s.problem.command !== undefined
+        ? { fixCommand: s.problem.command }
+        : /^(chmod|sudo chown|rm) /.test(s.problem.fix) && !s.problem.fix.includes(',')
+          ? { fixCommand: s.problem.fix }
+          : {}),
     },
   ];
 }
@@ -742,13 +757,12 @@ function mcpChecks(ctx: Ctx, cmd: string | undefined): Check[] {
     const base = { group: 'mcp' as const, name: host };
     switch (s.state) {
       case 'connected':
-        return { ...base, status: 'ok', detail: `${HOST_LABEL[host]} starts oort mcp (${show})` };
       case 'outdated': {
-        // Another copy (PR #78 review, I3): the managed or the running one, or another copy of
-        // yours that stays put, is fine (an info line names it); one someone else could change,
-        // or in a temp directory, is a fail; anything else is outdated.
-        const j = s.otherCopy === undefined ? undefined : judgeCopy(ctx, s.otherCopy);
-        const where = shown(tilde(s.otherCopy ?? '', hc.home));
+        // The binary the entry runs, judged as the hooks' is (PR #78 review, I3 and N3): even an
+        // entry that is exactly what `oort connect` writes is not ok if what it runs is unsafe.
+        const bin = s.state === 'connected' ? s.command : s.otherCopy;
+        const j = bin === undefined ? undefined : judgeCopy(ctx, bin);
+        const where = shown(tilde(bin ?? '', hc.home));
         if (j?.kind === 'unsafe') {
           return {
             ...base,
@@ -761,14 +775,17 @@ function mcpChecks(ctx: Ctx, cmd: string | undefined): Check[] {
           return {
             ...base,
             status: 'ok',
-            detail: `${HOST_LABEL[host]} starts oort mcp from ${j.kind === 'managed' ? 'the managed copy' : 'this copy'}, oort ${j.version} (${where})`,
+            detail:
+              s.state === 'connected' && j.kind === 'running'
+                ? `${HOST_LABEL[host]} starts oort mcp (${show})`
+                : `${HOST_LABEL[host]} starts oort mcp from ${j.kind === 'managed' ? 'the managed copy' : 'this copy'}, oort ${j.version} (${show})`,
           };
         }
-        if (j?.kind === 'other' && !older(j.version, VERSION)) {
+        if ((j?.kind === 'other' || j?.kind === 'drifting') && !older(j.version, VERSION)) {
           return {
             ...base,
             status: 'info',
-            detail: `${HOST_LABEL[host]} starts oort mcp from another copy at ${where} (oort ${shown(j.version)})`,
+            detail: `${HOST_LABEL[host]} starts oort mcp from another copy at ${where} (oort ${shown(j.version)})${j.kind === 'drifting' ? ', under a Node version manager or fnm: switching Node versions breaks it' : ''}`,
             fix: `oort connect ${host} to use the managed copy, or keep it if you built it (--this-copy)`,
           };
         }

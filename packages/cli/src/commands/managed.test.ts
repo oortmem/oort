@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { installHooks } from '@oortmem/claude-code';
 import { VERSION } from '@oortmem/core';
 import {
   data,
@@ -18,7 +19,13 @@ import {
   trustedTmpdir,
   type Harness,
 } from '../../test/helpers.js';
-import { tempDirs } from '../trust.js';
+import {
+  clearTreeCache,
+  groupCanBecomeRoot,
+  tempDirs,
+  trustedPath,
+  trustedTree,
+} from '../trust.js';
 import { Refusal } from '../util.js';
 import { unstableCopy } from './install.js';
 import {
@@ -247,7 +254,8 @@ describe('PR #78 review: trusting where a binary lives', () => {
       problem: {
         dir: h.home,
         why: 'can be written by group or others',
-        fix: `chmod go-w ${h.home}`,
+        // The copy goes first, then the home is tightened: never chmod over a planted copy.
+        fix: `rm -r ${path.join(h.home, 'cli')} && chmod go-w ${h.home} && oort setup`,
       },
     });
     expect(managedCopy(env)).toBeUndefined();
@@ -259,7 +267,7 @@ describe('PR #78 review: trusting where a binary lives', () => {
       const r = await h.run(args, { env }, undefined, { updateDeps: npm.deps });
       expect(r.code, args.join(' ')).toBe(2);
       expect(r.io.stderr).toContain(
-        `The managed copy in ~/oort-home/cli is not safe for agents to run: ${h.home} can be written by group or others (fix: chmod go-w ${h.home})`,
+        `The managed copy in ~/oort-home/cli is not safe for agents to run: ${h.home} can be written by group or others (fix: rm -r ${path.join(h.home, 'cli')} && chmod go-w ${h.home} && oort setup). Oort never repairs a copy like this in place`,
       );
     }
     expect(npm.calls).toEqual([]); // never installed over, either
@@ -321,7 +329,8 @@ describe('PR #78 review: trusting where a binary lives', () => {
       command: null,
       managed: { status: 'untrusted' },
     });
-    expect(r.io.stderr).toContain(`chmod go-w ${path.join(h.home, 'cli')}`);
+    expect(r.io.stderr).toContain(`rm -r ${path.join(h.home, 'cli')} && oort setup`);
+    expect(r.io.stderr).not.toContain('chmod');
   });
 
   it('I1.the-last-check-before-a-write-refuses-an-unsafe-running-copy', () => {
@@ -331,7 +340,7 @@ describe('PR #78 review: trusting where a binary lives', () => {
     const ok = looseCopy(path.join(h.root, 'checkout', 'oortmem'));
     expect(() => checkAgentPath(ok, ctx)).not.toThrow();
     fs.chmodSync(path.join(h.root, 'checkout'), 0o777);
-    expect(() => checkAgentPath(ok, ctx)).toThrow(/can be written by others/);
+    expect(() => checkAgentPath(ok, ctx)).toThrow(/can be written by group or others/);
     const temp = looseCopy(path.join(tmpdir('oort-gate-'), 'oortmem'));
     expect(() => checkAgentPath(temp, ctx)).toThrow(/a temporary directory/);
     expect(() => checkAgentPath(path.join(h.root, 'gone', 'main.js'), ctx)).toThrow(
@@ -381,7 +390,7 @@ describe('PR #78 review: trusting where a binary lives', () => {
         const r = await h.run(args, { env, entry }, undefined, { binPath: entry });
         expect(r.code, `${mode.toString(8)} ${args.join(' ')}`).toBe(2);
         expect(r.io.stderr).toContain(
-          `This oort is in a directory someone else can change (${shared} can be written by others (fix: chmod o-w ${shared})), which agents should not run`,
+          `This oort is in a directory someone else can change (${shared} can be written by group or others (fix: chmod go-w ${shared}, then rebuild or reinstall oort (what is below it may have been changed), or use the managed copy (oort setup))), which agents should not run`,
         );
       }
       expect(fs.existsSync(settings(h))).toBe(false);
@@ -454,5 +463,280 @@ describe('PR #78 review: trusting where a binary lives', () => {
   it('M4.the-real-installer-refuses-to-run-under-the-test-runner', () => {
     const run = defaultUpdateDeps({ io: { env: {} } } as never).run;
     expect(() => run('/usr/bin/true', [], {}, '/')).toThrow(/under the test runner/);
+  });
+});
+
+/**
+ * The managed copy's whole installed tree (PR #78 follow-up review): main.js loads the rest of
+ * dist/ and every dependency, so a writable file anywhere in it is as bad as a writable main.js.
+ */
+describe('PR #78 follow-up: the whole managed tree', () => {
+  /** A managed copy with a nested file in dist/ and a dependency, as npm lays them out. */
+  function fullCopy(h: Harness): { prefix: string; deep: string; dep: string } {
+    const prefix = path.join(h.home, 'cli');
+    npmPrefixCopy(prefix, VERSION);
+    const pkg = path.join(prefix, 'lib', 'node_modules', 'oortmem');
+    const deep = path.join(pkg, 'dist', 'commands', 'deep.js');
+    fs.mkdirSync(path.dirname(deep), { mode: 0o755 });
+    fs.chmodSync(path.dirname(deep), 0o755);
+    fs.writeFileSync(deep, 'export {};\n', { mode: 0o644 });
+    fs.chmodSync(deep, 0o644);
+    const depDir = path.join(pkg, 'node_modules', 'commander');
+    fs.mkdirSync(depDir, { recursive: true, mode: 0o755 });
+    for (const d of [path.join(pkg, 'node_modules'), depDir]) fs.chmodSync(d, 0o755);
+    const dep = path.join(depDir, 'index.js');
+    fs.writeFileSync(dep, 'module.exports = {};\n', { mode: 0o644 });
+    fs.chmodSync(dep, 0o644);
+    clearTreeCache();
+    return { prefix, deep, dep };
+  }
+  const envOf = (h: Harness) => ({ HOME: h.root, OORT_HOME: h.home, PATH: npmTrap(h.root).dir });
+
+  it('tree.a-clean-tree-is-ok-and-the-walk-is-cached', () => {
+    const h = harness({ trusted: true });
+    const { prefix, deep } = fullCopy(h);
+    expect(inspectManaged(envOf(h)).state).toBe('ok');
+    expect(trustedTree(prefix)).toBeUndefined();
+    // Walked once per process: a change after the walk is seen only once the cache is cleared.
+    fs.chmodSync(deep, 0o666);
+    expect(trustedTree(prefix)).toBeUndefined();
+    clearTreeCache();
+    expect(trustedTree(prefix)).toMatchObject({ dir: deep });
+  });
+
+  it('tree.a-group-writable-file-deep-in-dist-or-a-dependency-is-refused-everywhere', async () => {
+    for (const which of ['deep', 'dep'] as const) {
+      const h = harness({ trusted: true });
+      fs.mkdirSync(path.join(h.root, '.cursor'));
+      fs.mkdirSync(path.join(h.root, '.claude'));
+      const copy = fullCopy(h);
+      fs.chmodSync(copy[which], 0o664);
+      clearTreeCache();
+      const env = envOf(h);
+      expect(inspectManaged(env)).toMatchObject({
+        state: 'untrusted',
+        problem: {
+          dir: copy[which],
+          why: 'can be written by group or others',
+          command: `rm -r ${copy.prefix} && oort setup`,
+        },
+      });
+      const npm = fakeNpm();
+      for (const args of [
+        ['install', 'claude-code'],
+        ['connect', 'cursor'],
+      ]) {
+        const r = await h.run(args, { env }, undefined, { updateDeps: npm.deps });
+        expect(r.code, `${which} ${args.join(' ')}`).toBe(2);
+        expect(r.io.stderr).toContain(`${copy[which]} can be written by group or others`);
+        expect(r.io.stderr).toContain(`(fix: rm -r ${copy.prefix} && oort setup)`);
+        expect(r.io.stderr).not.toMatch(/chmod|chown/);
+      }
+      const s = await h.run(
+        ['setup', '--yes', '--agents', 'claude-code', '--keys', 'skip', '--no-demo', '--json'],
+        { env },
+        undefined,
+        { updateDeps: npm.deps },
+      );
+      expect(data(s.io.stdout, 'setup')).toMatchObject({
+        command: null,
+        managed: { status: 'untrusted' },
+      });
+      expect(npm.calls).toEqual([]);
+      expect(fs.existsSync(settings(h))).toBe(false);
+      const d = await h.run(['doctor', '--json'], { env });
+      const row = (
+        data(d.io.stdout, 'doctor') as {
+          checks: { name: string; status: string; fixCommand?: string }[];
+        }
+      ).checks.find((c) => c.name === 'managed copy');
+      expect(row).toMatchObject({
+        status: 'fail',
+        fixCommand: `rm -r ${copy.prefix} && oort setup`,
+      });
+      expect(d.code).toBe(1);
+    }
+  });
+
+  it('tree.a-link-out-of-the-prefix-is-refused-and-links-inside-are-fine', () => {
+    const h = harness({ trusted: true });
+    const { prefix } = fullCopy(h);
+    const bin = path.join(prefix, 'lib', 'node_modules', '.bin');
+    fs.mkdirSync(bin, { mode: 0o755 });
+    fs.chmodSync(bin, 0o755);
+    fs.symlinkSync('../commander/index.js', path.join(bin, 'inside'));
+    clearTreeCache();
+    expect(trustedTree(prefix)).toBeUndefined();
+    const outside = path.join(trustedTmpdir('oort-outside-'), 'evil.js');
+    fs.writeFileSync(outside, 'module.exports = {};\n');
+    const link = path.join(prefix, 'lib', 'node_modules', 'oortmem', 'node_modules', 'evil');
+    fs.symlinkSync(outside, link);
+    clearTreeCache();
+    expect(inspectManaged(envOf(h))).toMatchObject({
+      state: 'untrusted',
+      problem: { dir: link, why: `is a link out of the managed copy (to ${outside})` },
+    });
+  });
+
+  it('tree.past-the-cap-is-not-vouched-for', () => {
+    const h = harness({ trusted: true });
+    const { prefix } = fullCopy(h);
+    clearTreeCache();
+    expect(trustedTree(prefix, { cap: 5 })).toMatchObject({
+      dir: prefix,
+      why: 'holds more than 5 files, more than oort ever installs',
+    });
+    expect(trustedTree(prefix, { cap: 1000 })).toBeUndefined();
+  });
+
+  it('umask.is-tightened-for-the-install-spawn-and-put-back-even-when-it-throws', async () => {
+    const umask = (): number => {
+      const m = process.umask(0o077);
+      process.umask(m);
+      return m;
+    };
+    const before = process.umask(0o002); // a permissive umask, as on some systems
+    try {
+      const h = harness({ trusted: true });
+      const seen: number[] = [];
+      const npm = fakeNpm();
+      const run = npm.deps.run!;
+      const ctx = {
+        io: { env: envOf(h), err() {}, out() {} },
+        updateDeps: {
+          ...npm.deps,
+          run: async (...a: Parameters<typeof run>) => {
+            seen.push(umask());
+            return run(...a);
+          },
+        },
+      } as never;
+      const ok = await installManaged(ctx);
+      expect(ok.ok).toBe(true);
+      expect(seen).toEqual([0o022]);
+      expect(umask()).toBe(0o002);
+      // A 077 stays 077 (only ever tightened).
+      process.umask(0o077);
+      const h2 = harness({ trusted: true });
+      const strict: number[] = [];
+      await installManaged({
+        io: { env: envOf(h2), err() {}, out() {} },
+        updateDeps: {
+          ...npm.deps,
+          run: async (...a: Parameters<typeof run>) => {
+            strict.push(umask());
+            return run(...a);
+          },
+        },
+      } as never);
+      expect(strict).toEqual([0o077]);
+      expect(umask()).toBe(0o077);
+      // The spawn throws: the umask is put back all the same.
+      process.umask(0o002);
+      const h3 = harness({ trusted: true });
+      await expect(
+        installManaged({
+          io: { env: envOf(h3), err() {}, out() {} },
+          updateDeps: {
+            ...npm.deps,
+            run: async () => {
+              throw new Error('spawn failed');
+            },
+          },
+        } as never),
+      ).rejects.toThrow('spawn failed');
+      expect(umask()).toBe(0o002);
+    } finally {
+      process.umask(before);
+    }
+  });
+});
+
+/**
+ * Group write (PR #78 review, N2): every macOS account's own group is `staff`, so group write
+ * counts only from a group that can already become root, and never inside HOME.
+ */
+describe('PR #78 review N2: group write', () => {
+  const linux = (group: string, passwd = '', user = 'ann') =>
+    ({ platform: 'linux', group, passwd, user }) as const;
+
+  it('n2.only-groups-that-can-become-root-count', () => {
+    const mac = { platform: 'darwin', group: '', passwd: '', user: 'ann' } as const;
+    expect(groupCanBecomeRoot(0, mac)).toBe(true); // wheel
+    expect(groupCanBecomeRoot(80, mac)).toBe(true); // admin
+    expect(groupCanBecomeRoot(20, mac)).toBe(false); // staff: every account's group
+    const groups = 'root:x:0:\nsudo:x:27:ann\nusers:x:100:\nann:x:1000:\nbob:x:1001:bob,ann\n';
+    const passwd = 'ann:x:1000:1000::/home/ann:/bin/sh\nbob:x:1001:1001::/home/bob:/bin/sh\n';
+    expect(groupCanBecomeRoot(27, linux(groups, passwd))).toBe(true);
+    expect(groupCanBecomeRoot(100, linux(groups, passwd))).toBe(false);
+    // Ann's private group: named after her, no other members, no one else's primary group.
+    expect(groupCanBecomeRoot(1000, linux(groups, passwd))).toBe(true);
+    expect(groupCanBecomeRoot(1001, linux(groups, passwd))).toBe(false);
+    const shared = `${passwd}carl:x:1002:1000::/home/carl:/bin/sh\n`;
+    expect(groupCanBecomeRoot(1000, linux(groups, shared))).toBe(false);
+    expect(groupCanBecomeRoot(4242, linux(groups, passwd))).toBe(false);
+  });
+
+  it('n2.group-write-outside-home-counts-only-from-a-root-group-and-never-inside-home', () => {
+    const h = harness({ trusted: true });
+    // Outside HOME (h.root is HOME; this root is not under it), as Homebrew's admin-group dirs.
+    const brew = path.join(trustedTmpdir('oort-brew-'), 'lib');
+    fs.mkdirSync(brew);
+    fs.chmodSync(brew, 0o775);
+    const main = path.join(brew, 'node_modules', 'oortmem', 'dist', 'main.js');
+    fs.mkdirSync(path.dirname(main), { recursive: true });
+    fs.writeFileSync(main, '#!/bin/sh\n', { mode: 0o755 });
+    const admin = (gid: number) => gid === fs.statSync(brew).gid;
+    expect(trustedPath(main, { home: h.root, strict: false, groupOk: admin })).toBeUndefined();
+    expect(trustedPath(main, { home: h.root, strict: false, groupOk: () => false })).toMatchObject({
+      dir: brew,
+      why: 'can be written by its group',
+      // Never a bare chmod to run: what is below may have been changed already.
+      fix: expect.stringContaining(`chmod g-w ${brew}, then rebuild or reinstall oort`),
+    });
+    expect(
+      trustedPath(main, { home: h.root, strict: false, groupOk: () => false }),
+    ).not.toHaveProperty('command');
+    // Strict (the managed copy): never.
+    expect(trustedPath(main, { home: h.root, strict: true, groupOk: admin })?.dir).toBe(brew);
+    // Inside HOME: never, whatever the group.
+    const mine = path.join(h.root, 'build');
+    fs.mkdirSync(mine);
+    fs.chmodSync(mine, 0o775);
+    expect(trustedPath(mine, { home: h.root, strict: false, groupOk: () => true })).toMatchObject({
+      dir: mine,
+      why: 'can be written by its group',
+    });
+  });
+
+  it('n2.a-group-writable-build-in-home-is-never-written-and-doctor-fails-it (probe run2/run3 f)', async () => {
+    const h = harness({ trusted: true });
+    const pkg = path.join(h.root, 'build', 'oortmem');
+    fs.mkdirSync(path.join(pkg, 'dist'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkg, 'package.json'),
+      JSON.stringify({ name: 'oortmem', version: VERSION }),
+    );
+    const main = path.join(pkg, 'dist', 'main.js');
+    fs.writeFileSync(main, '#!/bin/sh\n', { mode: 0o755 });
+    fs.chmodSync(path.join(pkg, 'dist'), 0o775); // group staff on a Mac
+    const env = { HOME: h.root, OORT_HOME: h.home, PATH: '' };
+    for (const args of [
+      ['install', 'claude-code', '--this-copy'],
+      ['install', 'claude-code'],
+    ]) {
+      const r = await h.run(args, { env, entry: main }, undefined, { binPath: main });
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(r.io.stderr).toContain(`${path.join(pkg, 'dist')} can be written by its group`);
+    }
+    expect(fs.existsSync(settings(h))).toBe(false);
+    // Hooks someone pointed at it anyway: doctor fails them.
+    installHooks(settings(h), main);
+    const d = await h.run(['doctor', '--json'], { env });
+    const bin = (
+      data(d.io.stdout, 'doctor') as { checks: { name: string; status: string; detail: string }[] }
+    ).checks.find((c) => c.name === 'claude-code bin');
+    expect(bin?.status).toBe('fail');
+    expect(bin?.detail).toContain('can be written by its group');
   });
 });

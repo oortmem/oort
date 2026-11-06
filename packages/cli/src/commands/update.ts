@@ -571,8 +571,10 @@ export function defaultUpdateDeps(ctx: Ctx): UpdateDeps {
     latest: () => fetchLatest(ctx.fetch ?? globalThis.fetch, { timeoutMs: 10_000 }),
     run: (file, args, env, cwd) => {
       // Tests inject their own runner (ctx.updateDeps.run): a real installer never runs under
-      // vitest. Thrown before anything spawns, so no catch can let it through.
-      if (process.env['VITEST'] !== undefined) {
+      // oort's own test suite, which sets OORT_TEST_NPM_GUARD (test/no-real-npm.ts). Keyed on that,
+      // not VITEST, so someone else's vitest suite that shells out to oort is unaffected. Thrown
+      // before anything spawns, so no catch can let it through.
+      if (process.env['OORT_TEST_NPM_GUARD'] !== undefined) {
         throw Object.assign(
           new Error(`refusing to run ${file} under the test runner: inject ctx.updateDeps.run`),
           { code: 'ERR_OORT_REAL_INSTALLER_IN_TEST' },
@@ -714,30 +716,60 @@ export async function runInstaller(
   cwd: string,
 ): Promise<Installed> {
   const [file, args] = c.argv as [string, string[]];
-  const started = deps.now();
-  let delay = 5000;
-  for (let attempts = 1; ; attempts++) {
-    const r = await deps.run(file, args, ctx.io.env as NodeJS.ProcessEnv, cwd);
-    const base = { path: c.path, command: c.command ?? '', attempts };
-    if (r.code === 0) {
-      const v = verifyInstall(c, target);
-      return {
-        ...base,
-        ok: v.ok,
-        ...(!v.ok && { unverified: true as const }),
-        ...(v.version !== undefined && { version: v.version }),
-        ...(v.realpath !== undefined && { realpath: v.realpath }),
-      };
-    }
-    const left = started + NPM_LAG_MS - deps.now();
-    if (!NOT_LISTED_YET.test(r.output) || left <= 0) return { ...base, ok: false };
-    const wait = Math.min(delay, left);
-    ctx.io.err(
-      `oort: npm does not list oortmem ${target} yet (a release takes a minute or so to reach every npm server); trying again in ${seconds(wait)}, ${seconds(left)} left\n`,
-    );
-    await deps.sleep(wait);
-    delay = Math.min(delay * 2, 30_000);
+  // npm's files are never group- or world-writable, whatever the user's umask (PR #78 follow-up):
+  // the child inherits this process's umask when it is spawned. Only ever tightened, and put back
+  // however the install ends.
+  const restore = tightenUmask();
+  try {
+    return await attempt();
+  } finally {
+    restore();
   }
+
+  async function attempt(): Promise<Installed> {
+    const started = deps.now();
+    let delay = 5000;
+    for (let attempts = 1; ; attempts++) {
+      const r = await deps.run(file, args, ctx.io.env as NodeJS.ProcessEnv, cwd);
+      const base = { path: c.path, command: c.command ?? '', attempts };
+      if (r.code === 0) {
+        const v = verifyInstall(c, target);
+        return {
+          ...base,
+          ok: v.ok,
+          ...(!v.ok && { unverified: true as const }),
+          ...(v.version !== undefined && { version: v.version }),
+          ...(v.realpath !== undefined && { realpath: v.realpath }),
+        };
+      }
+      const left = started + NPM_LAG_MS - deps.now();
+      if (!NOT_LISTED_YET.test(r.output) || left <= 0) return { ...base, ok: false };
+      const wait = Math.min(delay, left);
+      ctx.io.err(
+        `oort: npm does not list oortmem ${target} yet (a release takes a minute or so to reach every npm server); trying again in ${seconds(wait)}, ${seconds(left)} left\n`,
+      );
+      await deps.sleep(wait);
+      delay = Math.min(delay * 2, 30_000);
+    }
+  }
+}
+
+/**
+ * Adds 022 to this process's umask (never loosens it: a 077 stays 077) and returns what puts it
+ * back. Read through `umask(0o022)` itself: `process.umask()` with no argument is deprecated. In a
+ * worker thread, where umask cannot be set, nothing changes.
+ */
+export function tightenUmask(): () => void {
+  let old: number;
+  try {
+    old = process.umask(0o022);
+  } catch {
+    return () => {};
+  }
+  process.umask(old | 0o022);
+  return () => {
+    process.umask(old);
+  };
 }
 
 interface Migration {

@@ -43,6 +43,8 @@ export interface Untrusted {
   dir: string;
   why: string;
   fix: string;
+  /** The fix as a command to run as it is, when `fix` says more than that. */
+  command?: string;
 }
 
 const realpathOf = (p: string): string | undefined => {
@@ -53,6 +55,70 @@ const realpathOf = (p: string): string | undefined => {
   }
 };
 
+/** Linux groups whose members can already become root: group write from them adds nothing. */
+const ROOT_GROUPS = new Set(['root', 'sudo', 'wheel', 'admin']);
+
+/** What `groupCanBecomeRoot` reads: the system's group and user databases, and who this is. */
+export interface SystemGroups {
+  platform: NodeJS.Platform;
+  /** `/etc/group`'s text (`name:x:gid:member,member`). */
+  group: string;
+  /** `/etc/passwd`'s text (`name:x:uid:gid:…`). */
+  passwd: string;
+  user: string;
+}
+
+let systemGroups: SystemGroups | undefined;
+
+function readSystemGroups(): SystemGroups {
+  const read = (f: string): string => {
+    try {
+      return fs.readFileSync(f, 'utf8');
+    } catch {
+      return '';
+    }
+  };
+  let user = '';
+  try {
+    user = os.userInfo().username;
+  } catch {
+    // No user name: no user-private group either.
+  }
+  return {
+    platform: process.platform,
+    group: read('/etc/group'),
+    passwd: read('/etc/passwd'),
+    user,
+  };
+}
+
+/**
+ * Whether members of group `gid` can already become root, so letting them write changes nothing
+ * (PR #78 review, N2). macOS: `wheel` (0) and `admin` (80), by number, with no lookup (every
+ * account's own group there is `staff`, 20, which never counts). Elsewhere, from `/etc/group`:
+ * `root`, `sudo`, `wheel` or `admin`, or this user's private group (named after the user, with no
+ * other members and no other user's primary group). Read once per process; never spawns.
+ */
+export function groupCanBecomeRoot(gid: number, sys?: SystemGroups): boolean {
+  const s = sys ?? (systemGroups ??= readSystemGroups());
+  if (s.platform === 'darwin') return gid === 0 || gid === 80;
+  if (gid === 0) return true;
+  const entry = s.group
+    .split('\n')
+    .map((l) => l.split(':'))
+    .find((f) => f.length >= 3 && Number(f[2]) === gid);
+  if (entry === undefined) return false;
+  const name = entry[0] ?? '';
+  if (ROOT_GROUPS.has(name)) return true;
+  const members = (entry[3] ?? '').split(',').filter((m) => m.trim() !== '');
+  if (s.user === '' || name !== s.user || members.some((m) => m.trim() !== s.user)) return false;
+  const others = s.passwd
+    .split('\n')
+    .map((l) => l.split(':'))
+    .filter((f) => f.length >= 4 && Number(f[3]) === gid && f[0] !== s.user);
+  return others.length === 0;
+}
+
 /**
  * Walks `file`'s realpath from `/` down to the file itself; every step must be one nobody else can
  * change:
@@ -61,15 +127,18 @@ const realpathOf = (p: string): string | undefined => {
  *   for a copy outside it (`/usr/local`, `/opt/homebrew`).
  * - **Writable.** `strict` (the managed copy and `OORT_HOME`, which oort creates owner-only): no
  *   group or other write anywhere. Otherwise (a copy the user installed elsewhere): no other
- *   write, sticky or not (`/tmp`); group write is allowed, because Homebrew's `/opt/homebrew/lib`
- *   and `/usr/local/lib/node_modules` are group-writable for the admin group on a normal Mac.
+ *   write, sticky or not (`/tmp`); no group write inside HOME; outside it, group write only from a
+ *   group that can already become root (`groupCanBecomeRoot`: Homebrew's `/opt/homebrew/lib` is
+ *   `admin`, `/usr/local/lib/node_modules` often `wheel`), never `staff` (PR #78 review, N2).
  *
- * Undefined when it passes. A path that does not resolve fails. Windows has no such modes: it
- * passes there.
+ * The fix it names never adopts what is not yours: `chmod` only for a directory of this user's,
+ * never `chown` (that would make someone else's files yours). Undefined when it passes. A path
+ * that does not resolve fails. Windows has no such modes: it passes there. `groupOk` replaces
+ * `groupCanBecomeRoot` (tests).
  */
 export function trustedPath(
   file: string,
-  opts: { home: string; strict: boolean },
+  opts: { home: string; strict: boolean; groupOk?: (gid: number) => boolean },
 ): Untrusted | undefined {
   if (process.platform === 'win32') return undefined;
   const real = realpathOf(file);
@@ -82,6 +151,7 @@ export function trustedPath(
   }
   const me = typeof process.getuid === 'function' ? process.getuid() : undefined;
   const home = realpathOf(opts.home) ?? path.resolve(opts.home);
+  const groupOk = opts.groupOk ?? ((gid: number) => groupCanBecomeRoot(gid));
   const steps: string[] = [];
   for (let p = real; ;) {
     steps.unshift(p);
@@ -89,6 +159,7 @@ export function trustedPath(
     if (up === p) break;
     p = up;
   }
+  const elsewhere = 'use a copy in a directory of your own';
   for (const p of steps) {
     let st: fs.Stats;
     try {
@@ -97,19 +168,28 @@ export function trustedPath(
       return { dir: p, why: 'cannot be read', fix: `ls -ld ${sh(p)}` };
     }
     const mine = p === home || p.startsWith(home + path.sep);
-    if (me !== undefined && st.uid !== me && (mine || st.uid !== 0)) {
-      return {
-        dir: p,
-        why: 'belongs to another user',
-        fix: `sudo chown "$(id -un)" ${sh(p)}`,
-      };
+    const owned = me === undefined || st.uid === me;
+    if (!owned && (mine || st.uid !== 0)) {
+      return { dir: p, why: 'belongs to another user', fix: elsewhere };
     }
-    const mask = opts.strict ? 0o022 : 0o002;
-    if ((st.mode & mask) !== 0) {
+    const others = (st.mode & 0o002) !== 0;
+    const group = (st.mode & 0o020) !== 0 && (opts.strict || mine || !groupOk(st.gid));
+    if (others || group) {
+      const bits = others && group ? 'go-w' : others ? 'o-w' : 'g-w';
       return {
         dir: p,
-        why: opts.strict ? 'can be written by group or others' : 'can be written by others',
-        fix: `chmod ${opts.strict ? 'go-w' : 'o-w'} ${sh(p)}`,
+        why: `can be written by ${others && group ? 'group or others' : others ? 'others' : 'its group'}`,
+        // Strict (OORT_HOME, the user's own): tightening it is the fix (when a managed copy is in
+        // it, inspectManaged removes that first). Anywhere else, what is below may have been
+        // changed already: tightening alone would adopt it, so the hint says to rebuild or
+        // reinstall too, and is never a command to run as it is (PR #78 review, N1).
+        ...(!owned
+          ? { fix: elsewhere }
+          : opts.strict
+            ? { fix: `chmod ${bits} ${sh(p)}`, command: `chmod ${bits} ${sh(p)}` }
+            : {
+                fix: `chmod ${bits} ${sh(p)}, then rebuild or reinstall oort (what is below it may have been changed), or use the managed copy (oort setup)`,
+              }),
       };
     }
   }
@@ -118,3 +198,85 @@ export function trustedPath(
 
 /** One sentence for people: `<dir> <why> (fix: <command>)`. */
 export const untrustedText = (u: Untrusted): string => `${u.dir} ${u.why} (fix: ${u.fix})`;
+
+/** The most entries `trustedTree` walks; a tree bigger than this is not vouched for. */
+export const TREE_CAP = 20_000;
+
+const treeCache = new Map<string, Untrusted | null>();
+
+/** Forgets what `trustedTree` found (tests change trees between checks; a process never does). */
+export function clearTreeCache(): void {
+  treeCache.clear();
+}
+
+/**
+ * Walks everything under `prefix` (the managed copy: `bin/`, and `lib/node_modules` with oortmem,
+ * its `dist/` and every dependency Node could resolve from there), with lstat and no symlink
+ * followed (PR #78 follow-up review). `main.js` loads all of it, so every directory and file must
+ * be this user's with no group or other write; a symlink may point only inside the prefix; any
+ * other kind of entry (a FIFO, a socket, a device) does not belong. Iterative, at most `cap`
+ * entries; past that it is not vouched for. The result is kept for the rest of the process, so
+ * setup's reuse, the check before each write and doctor walk it once.
+ */
+export function trustedTree(prefix: string, opts: { cap?: number } = {}): Untrusted | undefined {
+  if (process.platform === 'win32') return undefined;
+  const root = realpathOf(prefix);
+  if (root === undefined) {
+    return { dir: prefix, why: 'does not exist', fix: 'oort setup', command: 'oort setup' };
+  }
+  const cap = opts.cap ?? TREE_CAP;
+  const key = `${root}\0${cap}`;
+  const seen = treeCache.get(key);
+  if (seen !== undefined) return seen ?? undefined;
+  const found = walk(root, cap);
+  treeCache.set(key, found ?? null);
+  return found;
+}
+
+function walk(root: string, cap: number): Untrusted | undefined {
+  const me = typeof process.getuid === 'function' ? process.getuid() : undefined;
+  // Never chmod or chown a tree like this: its files may not be what npm put there, and either
+  // would make them yours. Remove it and install it again (PR #78 review, N1).
+  const again = `rm -r ${sh(root)} && oort setup`;
+  const bad = (p: string, why: string): Untrusted => ({ dir: p, why, fix: again, command: again });
+  const stack = [root];
+  let count = 0;
+  while (stack.length > 0) {
+    const p = stack.pop() as string;
+    if (++count > cap) {
+      return bad(root, `holds more than ${cap} files, more than oort ever installs`);
+    }
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(p);
+    } catch {
+      return bad(p, 'cannot be read');
+    }
+    if (st.isSymbolicLink()) {
+      let target: string;
+      try {
+        target = path.resolve(path.dirname(p), fs.readlinkSync(p));
+      } catch {
+        return bad(p, 'is a link that cannot be read');
+      }
+      if (target !== root && !target.startsWith(root + path.sep)) {
+        return bad(p, `is a link out of the managed copy (to ${target})`);
+      }
+      continue;
+    }
+    if (me !== undefined && st.uid !== me) return bad(p, 'belongs to another user');
+    if ((st.mode & 0o022) !== 0) return bad(p, 'can be written by group or others');
+    if (st.isDirectory()) {
+      let names: string[];
+      try {
+        names = fs.readdirSync(p);
+      } catch {
+        return bad(p, 'cannot be read');
+      }
+      for (const n of names) stack.push(path.join(p, n));
+    } else if (!st.isFile()) {
+      return bad(p, 'is neither a file, a directory nor a link');
+    }
+  }
+  return undefined;
+}

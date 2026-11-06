@@ -4,7 +4,14 @@ import * as path from 'node:path';
 import { VERSION, ensurePrivateDir, resolveHome } from '@oortmem/core';
 import { binPath } from '../io.js';
 import { isNewerVersion } from '../serve-protocol.js';
-import { inside, tempDirs, trustedPath, untrustedText, type Untrusted } from '../trust.js';
+import {
+  inside,
+  tempDirs,
+  trustedPath,
+  trustedTree,
+  untrustedText,
+  type Untrusted,
+} from '../trust.js';
 import { Refusal, shellWord as sh, shown, tilde, type Ctx } from '../util.js';
 import { hookCommandPath, unstableCopy } from './install.js';
 import {
@@ -113,35 +120,52 @@ export function inspectManaged(env: Record<string, string | undefined>): Managed
   }
   const prefix = managedPrefixFor(env);
   const hasPrefix = exists(prefix);
+  // A copy that is there but not safe is never repaired in place: chmod or chown on it would
+  // adopt whatever someone else put in it. Remove it and install it again (PR #78 review, N1).
+  const again = `rm -r ${sh(prefix)} && oort setup`;
+  const remove = (u: Untrusted): ManagedState => ({
+    state: 'untrusted',
+    problem: { ...u, fix: again, command: again },
+  });
   const homeProblem =
     trustedPath(oortHome, { home, strict: true }) ?? temporary(oortHome, env, 'OORT_HOME');
   if (homeProblem !== undefined) {
-    return hasPrefix
-      ? { state: 'untrusted', problem: homeProblem }
-      : { state: 'absent', unsafeHome: homeProblem };
+    if (!hasPrefix) return { state: 'absent', unsafeHome: homeProblem };
+    // OORT_HOME itself is yours and only too open: tighten it after the copy is gone. Anything
+    // else (someone else's, a temp directory): a home of your own first.
+    const fix = homeProblem.command?.startsWith('chmod ')
+      ? `rm -r ${sh(prefix)} && ${homeProblem.command} && oort setup`
+      : undefined;
+    return {
+      state: 'untrusted',
+      problem:
+        fix === undefined
+          ? {
+              dir: homeProblem.dir,
+              why: homeProblem.why,
+              fix: `${homeProblem.fix}, then oort setup`,
+            }
+          : { dir: homeProblem.dir, why: homeProblem.why, fix, command: fix },
+    };
   }
   if (!hasPrefix) return { state: 'absent' };
   const prefixProblem =
     trustedPath(prefix, { home, strict: true }) ?? temporary(prefix, env, 'the managed copy');
-  if (prefixProblem !== undefined) return { state: 'untrusted', problem: prefixProblem };
+  if (prefixProblem !== undefined) return remove(prefixProblem);
+  // main.js loads the rest of the package and its dependencies, and Node looks in the prefix's
+  // other node_modules for what is missing: all of it is walked, links and all, before the copy
+  // is used, or installed into (an install leaves what else is there).
+  const treeProblem = trustedTree(prefix);
+  if (treeProblem !== undefined) return remove(treeProblem);
   const bin = path.join(prefix, 'bin', 'oort');
   const version = packageVersion(realpathOf(bin));
   if (version === undefined) return { state: 'absent' };
   const v = verifyInstall({ path: bin, prefix }, version);
   if (!v.ok || v.realpath === undefined) return { state: 'absent' };
   const mainProblem = trustedPath(v.realpath, { home, strict: true });
-  if (mainProblem !== undefined) return { state: 'untrusted', problem: mainProblem };
+  if (mainProblem !== undefined) return remove(mainProblem);
   const why = unstableCopy(bin, v.realpath, tempDirs(env));
-  if (why !== undefined) {
-    return {
-      state: 'untrusted',
-      problem: {
-        dir: v.realpath,
-        why: `is in ${why}`,
-        fix: `rm -r ${sh(prefix)}, then oort setup`,
-      },
-    };
-  }
+  if (why !== undefined) return remove({ dir: v.realpath, why: `is in ${why}`, fix: again });
   if (!isExecutable(v.realpath)) return { state: 'absent' };
   return { state: 'ok', managed: { prefix, bin, main: v.realpath, version } };
 }
@@ -175,7 +199,7 @@ export function untrustedManagedMessage(
   problem: Untrusted,
   env: Record<string, string | undefined>,
 ): string {
-  return `The managed copy in ${shownPrefix(env)} is not safe for agents to run: ${shown(untrustedText(problem))}. Fix that, or remove it (rm -r ${shownPrefix(env)}) and run oort setup again.`;
+  return `The managed copy in ${shownPrefix(env)} is not safe for agents to run: ${shown(untrustedText(problem))}. Oort never repairs a copy like this in place, since what is in it may not be what npm installed.`;
 }
 
 /** The refusal for an `OORT_HOME` oort will not install the managed copy into. */

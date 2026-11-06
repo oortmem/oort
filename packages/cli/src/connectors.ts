@@ -716,6 +716,8 @@ export interface HostStatus {
    * this one (another copy of oort, such as one `--this-copy` wrote).
    */
   otherCopy?: string;
+  /** `connected` only: the binary the entry runs (doctor judges it: PR #78 review, N3). */
+  command?: string;
   /** Why the file is `invalid` (holds no config values). */
   message?: string;
 }
@@ -768,7 +770,7 @@ export function inspectHost(host: Host, hc: HostContext, cmd?: string): HostStat
   // Without this bin's path, only an oort-looking path counts as ours (never "\0").
   if (!isOurs(host, entry, cmd ?? '\u0000')) return status('foreign');
   if (!executable(command)) return status('broken');
-  if (same(entry, serverEntry(host, cmd ?? command))) return status('connected');
+  if (same(entry, serverEntry(host, cmd ?? command))) return { ...status('connected'), command };
   // An entry from before agents (no --agent) runs as an anonymous, Planet-only agent.
   const args = isObject(entry) && Array.isArray(entry['args']) ? entry['args'] : [];
   return {

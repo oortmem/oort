@@ -79,6 +79,14 @@ export function npmPrefixCopy(prefix: string, version: string): { bin: string; m
   const bin = path.join(prefix, 'bin', 'oort');
   fs.rmSync(bin, { force: true });
   fs.symlinkSync(path.join('..', 'lib', 'node_modules', 'oortmem', 'dist', 'main.js'), bin);
+  // As npm leaves them with a 022 umask, whatever this test process's umask is: the managed
+  // copy's whole tree is checked (`trustedTree`).
+  for (const d of ['', 'bin', 'lib', 'lib/node_modules', 'lib/node_modules/oortmem']) {
+    fs.chmodSync(path.join(prefix, d), 0o755);
+  }
+  fs.chmodSync(path.join(pkg, 'dist'), 0o755);
+  fs.chmodSync(path.join(pkg, 'package.json'), 0o644);
+  fs.chmodSync(main, 0o755);
   return { bin, main: fs.realpathSync(main) };
 }
 

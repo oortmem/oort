@@ -400,10 +400,12 @@ describe('oort doctor', () => {
     fs.chmodSync(path.dirname(m.main), 0o777);
     installHooks(path.join(h.root, '.claude', 'settings.json'), m.main);
     const d = await doctor(h);
+    // Never chmod a copy like this (that adopts whatever is in it): remove and reinstall.
+    const again = `rm -r ${path.join(h.home, 'cli')} && oort setup`;
     expect(d.check('hooks', 'managed copy')).toMatchObject({
       status: 'fail',
-      fix: `chmod go-w ${path.dirname(m.main)}`,
-      fixCommand: `chmod go-w ${path.dirname(m.main)}`,
+      fix: again,
+      fixCommand: again,
     });
     expect(d.check('hooks', 'managed copy')?.detail).toContain('can be written by group or others');
     // The hooks on it are not vouched for either.
@@ -447,6 +449,17 @@ describe('oort doctor', () => {
     fs.writeFileSync(path.join(evil, 'dist', 'main.js'), '#!/bin/sh\necho evil\n', { mode: 0o755 });
     connectHost('cursor', hc, path.join(evil, 'dist', 'main.js'));
     const running = fakeBin(h);
+    const d = await doctor(h, {}, undefined, undefined, { entry: running, script: running });
+    expect(d.check('mcp', 'cursor')?.status).toBe('fail');
+    expect(d.check('mcp', 'cursor')?.detail).toContain('is in a temporary directory');
+  });
+
+  it('doctor.a-connected-entry-on-an-unsafe-running-copy-is-not-ok (PR #78 review, N3)', async () => {
+    // Exactly the entry `oort connect` writes for this copy, but this copy is in a temp dir.
+    const h = harness();
+    fs.mkdirSync(path.join(h.root, '.cursor'));
+    const running = fakeBin(h);
+    connectHost('cursor', hostContext({ io: { env: { HOME: h.root } } } as never), running);
     const d = await doctor(h, {}, undefined, undefined, { entry: running, script: running });
     expect(d.check('mcp', 'cursor')?.status).toBe('fail');
     expect(d.check('mcp', 'cursor')?.detail).toContain('is in a temporary directory');
@@ -820,7 +833,8 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
   it('doctor.paths-in-the-copy-line-show-control-characters-never-send-them (M1)', async () => {
     const m = machine(VERSION, { shell: '1_\u001b]0;TITLE\u0007\u001b[31mRED' });
     const d = await doctor(m.h, m.env, undefined, undefined, m.running);
-    const info = d.check('hooks', 'claude-code copy');
+    // One line for the hooks' copy and this one (PR #78 review, N5): the bin row.
+    const info = d.check('hooks', 'claude-code bin');
     expect(info?.detail).toContain('\\u{1b}[31mRED');
     expect(d.human.io.stdout).not.toMatch(/[\u0007]|\u001b\]0;/);
     expect(d.json.io.stdout).not.toMatch(/[\u0007\u001b]/);
@@ -841,13 +855,16 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
     const m = machine();
     const d = await doctor(m.h, {}, undefined, undefined, m.running);
     expect(d.check('hooks', 'claude-code')).toMatchObject({ status: 'ok' });
-    expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
-    const info = d.check('hooks', 'claude-code copy');
-    expect(info).toMatchObject({ status: 'info' });
+    // One clear line (PR #78 review, N5): the bin row names the managed copy the hooks run, its
+    // version from its files, and the copy you ran. No separate info row.
+    const info = d.check('hooks', 'claude-code bin');
+    expect(info).toMatchObject({ status: 'ok' });
+    expect(d.check('hooks', 'claude-code copy')).toBeUndefined();
     expect(info?.detail).toContain(m.hooksBin.replace(m.h.root, '~'));
     expect(info?.detail).toContain(m.running.entry.replace(m.h.root, '~'));
-    // The hooks' own version, read from their files, and this copy's: never one for the other.
-    expect(info?.detail).toContain(`(oort ${VERSION}); you ran another copy, oort ${VERSION}, at`);
+    expect(info?.detail).toContain(
+      `oort ${VERSION}, the managed copy (${m.hooksBin.replace(m.h.root, '~')}); you ran another copy, oort ${VERSION}, at`,
+    );
     // Nothing under hooks asks to be fixed, least of all by repointing them at fnm's link.
     for (const c of d.report.checks.filter((c) => c.group === 'hooks')) {
       expect(['ok', 'info']).toContain(c.status);
