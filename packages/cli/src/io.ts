@@ -74,7 +74,7 @@ export function runToStderr(
 export function runForwarding(
   file: string,
   args: readonly string[],
-  opts: { env?: NodeJS.ProcessEnv } = {},
+  opts: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
   spawnFn: typeof spawn = spawn,
 ): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
@@ -86,6 +86,7 @@ export function runForwarding(
     const child = spawnFn(file, [...args], {
       stdio: ['inherit', 'pipe', 'pipe'],
       ...(opts.env !== undefined && { env: opts.env }),
+      ...(opts.cwd !== undefined && { cwd: opts.cwd }),
     });
     child.stdout?.on('data', keep);
     child.stderr?.on('data', keep);

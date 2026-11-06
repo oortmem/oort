@@ -71,7 +71,7 @@ try {
           io.hookExit(stdout);
         } else if (
           (event === 'SessionStart' && (r.reason === 'absent' || r.reason === 'refused')) ||
-          r.code === 'restarting'
+          (r.code === 'restarting' && r.tripped !== true)
         ) {
           // `serve.autostart` (home config, default off): start one for the prompts that follow.
           // `restarting`: the daemon was an older oort and is exiting for this one; start this

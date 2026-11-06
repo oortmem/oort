@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -16,7 +15,7 @@ import {
   releaseNotesUrl,
   writeUpdateCache,
 } from '../update-check.js';
-import { Refusal, confirm, echo, shown, tilde, type Ctx } from '../util.js';
+import { Refusal, confirm, echo, shellWord as sh, shown, tilde, type Ctx } from '../util.js';
 import { hookBinaryOf, settingsFile, versionManagerOf } from './install.js';
 
 /**
@@ -25,20 +24,23 @@ import { hookBinaryOf, settingsFile, versionManagerOf } from './install.js';
  *
  * - **Which copies.** The hooks' copy (the binary `~/.claude/settings.json` runs), the running copy
  *   (this process's script), the managed copy (`~/.oort/cli`, `npm i -g --prefix ~/.oort/cli`), and
- *   every other `oort` on PATH.
+ *   every other `oort` on PATH. Finding them runs nothing: each copy's version is read from files
+ *   (the nearest oortmem package.json, a pnpm shim's target, a PyPI launcher's dist-info).
  * - **What it runs.** For the hooks', the running and the managed copy, and the first `oort` on
- *   PATH (what `oort` runs in this shell), the installer that made
- *   it: `npm i -g --prefix <prefix> oortmem@X --prefer-online` (the managed copy and npm globals,
- *   the prefix named so the right copy changes whichever npm comes first) or `pnpm add -g
- *   oortmem@X`. A PyPI launcher gets its pipx or pip command printed, never run. A copy in a
- *   temporary place (the npx cache, pnpm dlx, a temp dir, fnm's link for a shell that ended) is
- *   never updated in place. Installers run with no shell, through `UpdateDeps.run`.
+ *   PATH (what `oort` runs in this shell), when it is an npm install (the managed copy, an npm
+ *   global): `npm i -g --prefix <prefix> oortmem@X --prefer-online`, the prefix named so the right
+ *   copy changes whichever npm comes first, `npm` found on PATH as an absolute path and run with no
+ *   shell from the home directory. pnpm globals, PyPI launchers and checkouts get their command
+ *   printed, never run. A copy in a temporary place (the npx cache, pnpm dlx, a temp dir, fnm's
+ *   link for a shell that ended) is never updated in place.
+ * - **Verified.** An install counts only when the copy then resolves to `<prefix>/lib/node_modules/
+ *   oortmem/dist/main.js` and that package says the target version.
  * - **npm's lag.** For a minute or so after a release npm answers ETARGET; the install is retried
  *   with backoff for up to 2 minutes, with a progress line.
- * - **After.** `oort serve` is stopped if it runs, the new copy's `oort doctor --json` migrates the
- *   store (after copying it) exactly as doctor does, and the daemon is started again from the new
- *   copy. Older copies left on PATH are listed with the command that updates or removes each;
- *   nothing is ever deleted.
+ * - **After.** With a verified copy only: `oort serve` is stopped if it runs, that copy's `oort
+ *   doctor --json` migrates the store (after copying it) exactly as doctor does, and it starts the
+ *   daemon again. Older copies left on PATH are listed with the command that updates or removes
+ *   each; nothing is ever deleted.
  */
 
 export interface UpdateOptions {
@@ -52,20 +54,22 @@ export interface UpdateOptions {
 export interface UpdateDeps {
   /** npm's latest `oortmem` (default: `fetchLatest` with `ctx.fetch`). */
   latest(): Promise<string>;
-  /** Runs an installer, its output forwarded to stderr; resolves the exit code and output tail. */
+  /**
+   * Runs an installer (an absolute path) in `cwd`, its output forwarded to stderr; resolves the
+   * exit code and output tail.
+   */
   run(
     file: string,
     args: readonly string[],
     env: NodeJS.ProcessEnv,
+    cwd: string,
   ): Promise<{ code: number; output: string }>;
-  /** Runs `node <script> <args>` (a copy of oort); resolves the exit code and stdout. */
+  /** Runs `node <script> <args>` (a verified copy of oort); resolves the exit code and stdout. */
   runNode(
     script: string,
     args: readonly string[],
     env: NodeJS.ProcessEnv,
   ): Promise<{ code: number; stdout: string }>;
-  /** `<bin> <args>` with no shell and a short timeout: a version probe; undefined on failure. */
-  probe(bin: string, args: readonly string[], env: NodeJS.ProcessEnv): Promise<string | undefined>;
   /** Whether `oort serve` answers, and its version and pid. */
   daemon(): Promise<{ running: boolean; version?: string; pid?: number }>;
   sleep(ms: number): Promise<void>;
@@ -77,9 +81,8 @@ export interface UpdateDeps {
 
 /** How long `oort update` waits out npm's lag after a release (ETARGET). */
 export const NPM_LAG_MS = 2 * 60_000;
-/** What npm and pnpm print for a version their registry does not list yet. */
-const NOT_LISTED_YET =
-  /\bETARGET\b|No matching version found|ERR_PNPM_NO_MATCHING_VERSION|notarget/i;
+/** What npm prints for a version its registry does not list yet. */
+const NOT_LISTED_YET = /\bETARGET\b|No matching version found|notarget/i;
 
 export type CopyKind =
   'managed' | 'npm-global' | 'pnpm-global' | 'pypi' | 'source' | 'transient' | 'unknown';
@@ -89,10 +92,10 @@ export type CopyRole = 'hooks' | 'running' | 'managed' | 'path';
 export interface Copy {
   /** The path as found: the hooks' binary, this process's script, a PATH entry. */
   path: string;
-  /** Where it really lives, when the path resolves. */
+  /** Where it really lives, when the path resolves (through a pnpm shim, its target). */
   realpath?: string;
   kind: CopyKind;
-  /** Its version, when it could be read (package.json, or a probe). */
+  /** Its version, read from its files; absent when they say nothing (never by running it). */
   version?: string;
   roles: CopyRole[];
   /** The first `oort` on PATH: what typing `oort` runs in this shell. */
@@ -112,7 +115,7 @@ export type Action = 'update' | 'current' | 'manual' | 'listed' | 'transient' | 
 
 export interface PlannedCopy extends Copy {
   action: Action;
-  /** The installer `oort update` runs (`update`): file and arguments, never a shell line. */
+  /** The installer `oort update` runs (`update`): an absolute file and arguments, never a shell line. */
   argv?: [string, string[]];
   /** The command for people: the same installer, or the one to run yourself. */
   command?: string;
@@ -167,8 +170,8 @@ export function classifyCopy(
   const managed = slash(where.managedPrefix);
   if (r.startsWith(`${managed}/`)) return { kind: 'managed', prefix: where.managedPrefix };
   if (
-    /\/\.pnpm\/oortmem@[^/]+\/node_modules\/oortmem\/dist\/main\.js$/.test(r) ||
-    /\/pnpm\/global\//.test(r)
+    /\/\.pnpm\/oortmem@[^/]+\/node_modules\/oortmem\//.test(r) ||
+    /\/pnpm\/(global|store)\//.test(r)
   ) {
     return { kind: 'pnpm-global' };
   }
@@ -197,11 +200,6 @@ export function classifyCopy(
   };
 }
 
-/** `arg` as a shell word for people to copy (single-quoted when it needs it). */
-function sh(arg: string): string {
-  return /^[A-Za-z0-9_@%+=:,./~-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
-}
-
 const npmArgs = (prefix: string, target: string): string[] => [
   'i',
   '-g',
@@ -212,15 +210,17 @@ const npmArgs = (prefix: string, target: string): string[] => [
 ];
 
 /**
- * What `oort update` does with each copy (pure): runs the installer for the hooks', the running
- * and the managed copy when they are behind, prints the command for a PyPI launcher or a
- * checkout, lists any other older copy on PATH with the command that updates or removes it, and
- * never touches a temporary one. `explicit` (`--version`): any other version is behind.
+ * What `oort update` does with each copy (pure): runs npm for the hooks', the running, the
+ * managed copy and the first on PATH when they are npm installs and behind (only with `npm`, an
+ * absolute path found on PATH; else it prints the command), prints the command for a pnpm global,
+ * a PyPI launcher or a checkout, lists any other older copy on PATH with the command that updates
+ * or removes it, and never touches a temporary one. `explicit` (`--version`): any other version
+ * is behind.
  */
 export function planUpdate(
   copies: readonly Copy[],
   target: string,
-  opts: { explicit?: boolean; platform?: NodeJS.Platform; home?: string } = {},
+  opts: { explicit?: boolean; platform?: NodeJS.Platform; home?: string; npm?: string } = {},
 ): PlannedCopy[] {
   const show = (p: string): string => (opts.home === undefined ? p : tilde(p, opts.home));
   return copies.map((c): PlannedCopy => {
@@ -234,31 +234,31 @@ export function planUpdate(
       case 'managed':
       case 'npm-global': {
         const prefix = c.prefix ?? '';
-        const argv: [string, string[]] = ['npm', npmArgs(prefix, target)];
         const command = ['npm', ...npmArgs(show(prefix), target)].map(sh).join(' ');
         const removeCommand = `npm rm -g --prefix ${sh(show(prefix))} oortmem`;
-        if (primary && opts.platform !== 'win32') {
-          return { ...c, action: 'update', argv, command };
-        }
-        return { ...c, action: primary ? 'manual' : 'listed', command, removeCommand };
-      }
-      case 'pnpm-global': {
-        const command = `pnpm add -g oortmem@${target}`;
-        if (primary && opts.platform !== 'win32') {
-          return {
-            ...c,
-            action: 'update',
-            argv: ['pnpm', ['add', '-g', `oortmem@${target}`]],
-            command,
-          };
+        if (primary && opts.platform !== 'win32' && opts.npm !== undefined) {
+          return { ...c, action: 'update', argv: [opts.npm, npmArgs(prefix, target)], command };
         }
         return {
           ...c,
           action: primary ? 'manual' : 'listed',
           command,
-          removeCommand: 'pnpm rm -g oortmem',
+          removeCommand,
+          ...(primary && opts.npm === undefined && { note: 'no npm on PATH to run it with' }),
         };
       }
+      case 'pnpm-global':
+        // pnpm's global directory moves with its version and settings (`global/5`, the isolated
+        // `global/v11/<hash>` of pnpm 11): `pnpm add -g` cannot be pointed at this copy for sure.
+        return {
+          ...c,
+          action: primary ? 'manual' : 'listed',
+          command: `pnpm add -g oortmem@${target}`,
+          removeCommand: 'pnpm rm -g oortmem',
+          ...(primary && {
+            note: 'run it with the pnpm that installed this copy; oort update never runs pnpm for you',
+          }),
+        };
       case 'pypi': {
         const python = c.python ?? 'python3';
         return {
@@ -290,14 +290,17 @@ export function planUpdate(
   });
 }
 
-/** Every executable `oort` on PATH, in PATH order (a lookup in code, no shell). */
-export function oortsOnPath(env: Record<string, string | undefined>): string[] {
+/**
+ * Every executable `name` on PATH, in PATH order: a lookup in code, no shell, and only absolute
+ * PATH entries (a relative one would make the answer depend on the cwd).
+ */
+export function onPath(name: string, env: Record<string, string | undefined>): string[] {
   const exts = process.platform === 'win32' ? ['.cmd', '.exe', ''] : [''];
   const out: string[] = [];
   for (const dir of (env['PATH'] ?? '').split(path.delimiter)) {
     if (dir === '' || !path.isAbsolute(dir)) continue;
     for (const ext of exts) {
-      const candidate = path.join(dir, `oort${ext}`);
+      const candidate = path.join(dir, `${name}${ext}`);
       try {
         fs.accessSync(candidate, fs.constants.X_OK);
         if (!fs.statSync(candidate).isFile()) continue;
@@ -310,6 +313,10 @@ export function oortsOnPath(env: Record<string, string | undefined>): string[] {
   return out;
 }
 
+/** Every executable `oort` on PATH, in PATH order. */
+export const oortsOnPath = (env: Record<string, string | undefined>): string[] =>
+  onPath('oort', env);
+
 const realpathOf = (p: string): string | undefined => {
   try {
     return fs.realpathSync(p);
@@ -318,27 +325,49 @@ const realpathOf = (p: string): string | undefined => {
   }
 };
 
-/** The version in the package.json beside `<x>/dist/main.js`, when it is oortmem's. */
-export function packageVersion(real: string | undefined): string | undefined {
-  const m = real === undefined ? null : /^(.*)[\\/]dist[\\/]main\.js$/.exec(real);
-  if (m?.[1] === undefined) return undefined;
+function readPackage(dir: string): { name?: unknown; version?: unknown } | undefined {
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(m[1], 'package.json'), 'utf8')) as {
+    return JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as {
       name?: unknown;
       version?: unknown;
     };
-    return pkg.name === 'oortmem' ? asVersion(pkg.version) : undefined;
   } catch {
     return undefined;
   }
 }
 
-function fileHead(file: string): string {
+/** The version in the package.json beside `<x>/dist/main.js`, when it is oortmem's. */
+export function packageVersion(real: string | undefined): string | undefined {
+  const m = real === undefined ? null : /^(.*)[\\/]dist[\\/]main\.js$/.exec(real);
+  if (m?.[1] === undefined) return undefined;
+  const pkg = readPackage(m[1]);
+  return pkg?.name === 'oortmem' ? asVersion(pkg.version) : undefined;
+}
+
+/**
+ * The version of the oortmem package `real` lies in: the nearest package.json above it named
+ * `oortmem` (at most six levels up). A file, never a process.
+ */
+export function nearestPackageVersion(real: string | undefined): string | undefined {
+  if (real === undefined) return undefined;
+  let dir = path.dirname(real);
+  for (let i = 0; i < 6; i++) {
+    const pkg = readPackage(dir);
+    if (pkg !== undefined && pkg.name === 'oortmem') return asVersion(pkg.version);
+    const up = path.dirname(dir);
+    if (up === dir) return undefined;
+    dir = up;
+  }
+  return undefined;
+}
+
+/** The first `bytes` of a file as text, or '' when it cannot be read. Reads, never runs. */
+function fileHead(file: string, bytes = 256): string {
   try {
     const fd = fs.openSync(file, 'r');
     try {
-      const buf = Buffer.alloc(256);
-      const n = fs.readSync(fd, buf, 0, 256, 0);
+      const buf = Buffer.alloc(bytes);
+      const n = fs.readSync(fd, buf, 0, bytes, 0);
       return buf.subarray(0, n).toString('utf8');
     } finally {
       fs.closeSync(fd);
@@ -346,6 +375,56 @@ function fileHead(file: string): string {
   } catch {
     return '';
   }
+}
+
+/**
+ * The script a package manager's shell shim runs (pnpm's global bins, cmd-shim): read from the
+ * shim's text (`"$basedir/…/main.js"` or an absolute path to a `.js` file), never by running it.
+ */
+export function shimTarget(file: string): string | undefined {
+  const text = fileHead(file, 4096);
+  if (!text.startsWith('#!') || !/\b(?:sh|bash)\b/.test(text.split('\n', 1)[0] ?? '')) {
+    return undefined;
+  }
+  const rel = /"\$basedir\/([^"$`]+\.[cm]?js)"/.exec(text)?.[1];
+  const candidates = [
+    ...(rel !== undefined ? [path.join(path.dirname(file), rel)] : []),
+    ...[...text.matchAll(/"(\/[^"$`]+\.[cm]?js)"/g)].map((m) => m[1] as string),
+  ];
+  for (const c of candidates) {
+    const real = realpathOf(c);
+    if (real !== undefined && fs.statSync(real).isFile()) return real;
+  }
+  return undefined;
+}
+
+/**
+ * A PyPI launcher's version from its installed metadata (`oortmem-<v>.dist-info` in the
+ * environment's site-packages), next to the script or its interpreter. A directory read; never
+ * the launcher itself.
+ */
+export function pypiVersion(script: string, python: string | undefined): string | undefined {
+  const bases = [path.dirname(path.dirname(script))];
+  if (python !== undefined) bases.push(path.dirname(path.dirname(python)));
+  for (const base of bases) {
+    let pys: string[];
+    try {
+      pys = fs.readdirSync(path.join(base, 'lib')).filter((d) => /^python\d/.test(d));
+    } catch {
+      continue;
+    }
+    for (const py of pys) {
+      try {
+        for (const e of fs.readdirSync(path.join(base, 'lib', py, 'site-packages'))) {
+          const v = asVersion(/^oortmem-(.+)\.dist-info$/.exec(e)?.[1]);
+          if (v !== undefined) return v;
+        }
+      } catch {
+        // no site-packages here
+      }
+    }
+  }
+  return undefined;
 }
 
 /** The binary the Claude Code hooks run (user settings), or undefined when there are none. */
@@ -372,9 +451,10 @@ export const managedPrefixFor = (env: Record<string, string | undefined>): strin
 
 /**
  * Every copy that matters: the running one, the hooks', the managed one and each `oort` on PATH,
- * merged by where they really live, with their kind and version.
+ * merged by where they really live, with their kind and version. Reads files only: no copy is
+ * ever run to find out what it is.
  */
-export async function discoverCopies(ctx: Ctx, deps: UpdateDeps): Promise<Copy[]> {
+export function discoverCopies(ctx: Ctx, deps: Pick<UpdateDeps, 'tmpdir'>): Copy[] {
   const env = ctx.io.env;
   const script = ctx.binPath ?? binPath();
   const managedPrefix = managedPrefixFor(env);
@@ -395,46 +475,40 @@ export async function discoverCopies(ctx: Ctx, deps: UpdateDeps): Promise<Copy[]
 
   const copies = new Map<string, Copy>();
   for (const f of found) {
-    const real = realpathOf(f.path);
+    let real = realpathOf(f.path);
+    const isJs = (p: string | undefined): boolean =>
+      p !== undefined && /[\\/]dist[\\/]main\.js$/.test(p);
+    // A shell shim (pnpm's global bins): the script it names, read from its text.
+    if (real !== undefined && !isJs(real)) real = shimTarget(real) ?? real;
     const key = real ?? f.path;
     const seen = copies.get(key);
     if (seen !== undefined) {
       if (!seen.roles.includes(f.role)) seen.roles.push(f.role);
       if (f.first === true) seen.firstOnPath = true;
       // Show a bin link (`~/.oort/cli/bin/oort`) rather than the script it points at.
-      if (/[\\/]dist[\\/]main\.js$/.test(seen.path) && !/[\\/]dist[\\/]main\.js$/.test(f.path)) {
-        seen.path = f.path;
-      }
+      if (isJs(seen.path) && !isJs(f.path)) seen.path = f.path;
       continue;
     }
-    const isJs = real !== undefined && /[\\/]dist[\\/]main\.js$/.test(real);
+    const head = real !== undefined && !isJs(real) ? fileHead(real) : undefined;
     const kind = classifyCopy(f.path, real, {
       managedPrefix: realpathOf(managedPrefix) ?? managedPrefix,
       tmp,
-      ...(!isJs && real !== undefined && { head: fileHead(real) }),
+      ...(head !== undefined && { head }),
     });
+    const version =
+      real !== undefined && real === scriptReal
+        ? VERSION
+        : kind.kind === 'pypi' && real !== undefined
+          ? pypiVersion(real, kind.python ?? /^#!\s*(\S+)/.exec(head ?? '')?.[1])
+          : nearestPackageVersion(real);
     copies.set(key, {
       path: f.path,
       ...(real !== undefined && { realpath: real }),
       ...kind,
+      ...(version !== undefined && { version }),
       roles: [f.role],
       ...(f.first === true && { firstOnPath: true }),
     });
-  }
-  const childEnv = env as NodeJS.ProcessEnv;
-  for (const c of copies.values()) {
-    let version =
-      c.realpath !== undefined && c.realpath === scriptReal ? VERSION : packageVersion(c.realpath);
-    if (version === undefined && c.kind === 'pypi') {
-      // The launcher pins the release it runs: `oortmem (Python launcher) X, runs oortmem@X`.
-      const out = await deps.probe(c.path, ['--launcher-version'], childEnv);
-      version = asVersion(/oortmem@(\S+)/.exec(out ?? '')?.[1]);
-    } else if (version === undefined && c.kind === 'unknown' && c.realpath !== undefined) {
-      version = asVersion(
-        /\d+\.\d+\.\d+[^\s]*/.exec((await deps.probe(c.path, ['--version'], childEnv)) ?? '')?.[0],
-      );
-    }
-    if (version !== undefined) c.version = version;
   }
   return [...copies.values()];
 }
@@ -443,26 +517,15 @@ export async function discoverCopies(ctx: Ctx, deps: UpdateDeps): Promise<Copy[]
 export function defaultUpdateDeps(ctx: Ctx): UpdateDeps {
   return {
     latest: () => fetchLatest(ctx.fetch ?? globalThis.fetch, { timeoutMs: 10_000 }),
-    run: (file, args, env) => runForwarding(file, args, { env }),
+    run: (file, args, env, cwd) => runForwarding(file, args, { env, cwd }),
     runNode: (script, args, env) => runNodeScript(script, args, { env }),
-    probe: (bin, args, env) =>
-      new Promise((resolve) => {
-        execFile(
-          bin,
-          [...args],
-          { timeout: 5000, env, encoding: 'utf8', windowsHide: true },
-          (err, stdout) => resolve(err === null ? String(stdout) : undefined),
-        );
-      }),
     daemon: async () => {
       if (process.platform === 'win32') return { running: false };
       const r = await callDaemon(
         socketPathFor(resolveHome(ctx.io.env), ctx.io.env),
         'ping',
         {},
-        {
-          budgetMs: 1000,
-        },
+        { budgetMs: 1000 },
       );
       if (!r.ok) return { running: false };
       const version = asVersion(r.result['version']);
@@ -490,6 +553,7 @@ const KIND_LABEL: Record<CopyKind, string> = {
   unknown: 'unrecognised',
 };
 
+/** One copy's version, kind and roles, for people; every path in it made safe to print. */
 function describeCopy(c: PlannedCopy, home: string): string {
   const where =
     c.kind === 'managed' || (c.kind === 'npm-global' && c.prefix !== undefined)
@@ -503,7 +567,7 @@ function describeCopy(c: PlannedCopy, home: string): string {
     ...(c.firstOnPath === true ? ['first on PATH'] : c.roles.includes('path') ? ['on PATH'] : []),
   ];
   const version = c.version === undefined ? 'version unknown' : `oort ${c.version}`;
-  return `${version}, ${where}${roles.length > 0 ? `; ${roles.join(', ')}` : ''}`;
+  return shown(`${version}, ${where}${roles.length > 0 ? `; ${roles.join(', ')}` : ''}`);
 }
 
 /**
@@ -546,33 +610,57 @@ interface Installed {
   command: string;
   ok: boolean;
   attempts: number;
+  /** The installer exited 0, but the copy does not resolve to the target's package (I1). */
+  unverified?: true;
   version?: string;
   realpath?: string;
 }
 
 const seconds = (ms: number): string => `${Math.ceil(ms / 1000)} s`;
 
-/** Runs one copy's installer, waiting out npm's lag (ETARGET) for up to NPM_LAG_MS. */
+/**
+ * Whether the installer really changed this copy: it resolves to `<prefix>/lib/node_modules/
+ * oortmem/dist/main.js` for the prefix just installed into, and that package is the target. An
+ * exit code alone proves nothing (a stale link, an installer that did nothing).
+ */
+export function verifyInstall(
+  c: Pick<Copy, 'path' | 'prefix'>,
+  target: string,
+): { ok: boolean; realpath?: string; version?: string } {
+  const real = realpathOf(c.path);
+  const version = packageVersion(real);
+  if (real === undefined || c.prefix === undefined) return { ok: false };
+  const prefix = realpathOf(c.prefix) ?? c.prefix;
+  const expected = path.join(prefix, 'lib', 'node_modules', 'oortmem', 'dist', 'main.js');
+  return {
+    ok: real === expected && version === target,
+    realpath: real,
+    ...(version !== undefined && { version }),
+  };
+}
+
+/** Runs one copy's installer, waiting out npm's lag (ETARGET) for up to NPM_LAG_MS, then verifies. */
 async function install(
   ctx: Ctx,
   deps: UpdateDeps,
   c: PlannedCopy,
   target: string,
+  cwd: string,
 ): Promise<Installed> {
   const [file, args] = c.argv as [string, string[]];
   const started = deps.now();
   let delay = 5000;
   for (let attempts = 1; ; attempts++) {
-    const r = await deps.run(file, args, ctx.io.env as NodeJS.ProcessEnv);
+    const r = await deps.run(file, args, ctx.io.env as NodeJS.ProcessEnv, cwd);
     const base = { path: c.path, command: c.command ?? '', attempts };
     if (r.code === 0) {
-      const real = realpathOf(c.path);
-      const version = packageVersion(real);
+      const v = verifyInstall(c, target);
       return {
         ...base,
-        ok: true,
-        ...(version !== undefined && { version }),
-        ...(real !== undefined && { realpath: real }),
+        ok: v.ok,
+        ...(!v.ok && { unverified: true as const }),
+        ...(v.version !== undefined && { version: v.version }),
+        ...(v.realpath !== undefined && { realpath: v.realpath }),
       };
     }
     const left = started + NPM_LAG_MS - deps.now();
@@ -649,8 +737,14 @@ export async function updateCommand(opts: UpdateOptions, ctx: Ctx): Promise<numb
     writeUpdateCache(home, { ...readUpdateCache(home), checkedAt: deps.now(), latest: target });
   }
 
-  const copies = await discoverCopies(ctx, deps);
-  const plan = planUpdate(copies, target, { explicit, platform: deps.platform, home: userHome });
+  const copies = discoverCopies(ctx, deps);
+  const npm = onPath('npm', io.env)[0];
+  const plan = planUpdate(copies, target, {
+    explicit,
+    platform: deps.platform,
+    home: userHome,
+    ...(npm !== undefined && { npm }),
+  });
   const daemon = await deps.daemon();
   const toRun = plan
     .filter((c) => c.action === 'update')
@@ -749,16 +843,22 @@ export async function updateCommand(opts: UpdateOptions, ctx: Ctx): Promise<numb
 
   const installed: Installed[] = [];
   for (const c of toRun) {
-    io.err(`oort: ${c.command ?? ''}\n`);
-    const r = await install(ctx, deps, c, target);
+    io.err(`oort: ${shown(c.command ?? '')}\n`);
+    // From the home directory: never a project's .npmrc or package.json.
+    const r = await install(ctx, deps, c, target, userHome);
     installed.push(r);
+    const where = shown(tilde(c.path, userHome));
     io.out(
       `${
         r.ok
-          ? ui.ok(`${shown(tilde(c.path, userHome))}: oort ${r.version ?? target}`)
-          : ui.fail(
-              `${shown(tilde(c.path, userHome))}: the installer failed${r.attempts > 1 ? ` after ${r.attempts} tries` : ''} (${shown(c.command ?? '')})`,
-            )
+          ? ui.ok(`${where}: oort ${r.version ?? target}`)
+          : r.unverified === true
+            ? ui.fail(
+                `${where}: the installer finished, but this copy is ${r.version === undefined ? 'not' : `oort ${shown(r.version)}, not`} oortmem ${target} in ${shown(tilde(c.prefix ?? '', userHome))} (${shown(c.command ?? '')})`,
+              )
+            : ui.fail(
+                `${where}: the installer failed${r.attempts > 1 ? ` after ${r.attempts} tries` : ''} (${shown(c.command ?? '')})`,
+              )
       }\n`,
     );
     if (!r.ok) break; // the rest would fail the same way; nothing half-done is hidden
@@ -771,7 +871,16 @@ export async function updateCommand(opts: UpdateOptions, ctx: Ctx): Promise<numb
       (r) => r.ok && toRun.find((c) => c.path === r.path)?.roles.includes('managed'),
     ) ??
     installed.find((r) => r.ok);
-  const script = after?.realpath;
+  // Only a verified copy runs anything next: its realpath is the target's package in the prefix
+  // just installed into (`verifyInstall`).
+  const script = after?.ok === true ? after.realpath : undefined;
+  if (script === undefined && (daemon.running || fs.existsSync(path.join(home, 'oort.sqlite')))) {
+    io.out(
+      `${ui.warn(
+        `Skipped the store migration${daemon.running ? ' and the oort serve restart' : ''}: no copy was verified at oortmem ${target}. Once one is, run oort doctor${daemon.running ? ', then oort serve stop && oort serve --detach' : ''}.`,
+      )}\n`,
+    );
+  }
   let migration: Migration = { ran: false };
   let restarted = false;
   let newDaemon: { running: boolean; version?: string; pid?: number } | undefined;

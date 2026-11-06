@@ -11,7 +11,14 @@ import { installHooks } from '@oortmem/claude-code';
 import { VERSION } from '@oortmem/core';
 import { harness, data, type Harness } from '../../test/helpers.js';
 import { readUpdateCache } from '../update-check.js';
-import { NPM_LAG_MS, classifyCopy, planUpdate, type Copy, type UpdateDeps } from './update.js';
+import {
+  NPM_LAG_MS,
+  classifyCopy,
+  planUpdate,
+  verifyInstall,
+  type Copy,
+  type UpdateDeps,
+} from './update.js';
 
 const LATEST = '0.6.3';
 const NO_TMP = '/nonexistent-tmp-for-tests';
@@ -81,6 +88,9 @@ function pipx(root: string): { pathDir: string } {
   const dir = path.join(root, '.local', 'bin');
   fs.mkdirSync(dir, { recursive: true });
   fs.symlinkSync(script, path.join(dir, 'oort'));
+  // What pipx installed, as pip records it: the version is read from here, never by running it.
+  const site = path.join(venvBin, '..', 'lib', 'python3.12', 'site-packages');
+  fs.mkdirSync(path.join(site, `oortmem-${VERSION}.dist-info`), { recursive: true });
   return { pathDir: dir };
 }
 
@@ -96,7 +106,7 @@ function npx(root: string, version = VERSION): string {
 
 interface Fakes {
   deps: Partial<UpdateDeps>;
-  installs: { file: string; args: readonly string[] }[];
+  installs: { file: string; args: readonly string[]; cwd: string }[];
   node: { script: string; args: readonly string[] }[];
   slept: number[];
   daemon: { running: boolean; version?: string; pid?: number };
@@ -124,8 +134,8 @@ function fakes(
   };
   f.deps = {
     latest: opts.latest ?? (async () => LATEST),
-    run: async (file, args) => {
-      f.installs.push({ file, args });
+    run: async (file, args, _env, cwd) => {
+      f.installs.push({ file, args, cwd });
       attempt++;
       const failure = opts.fail?.(attempt);
       if (failure !== undefined) return { code: 1, output: failure };
@@ -177,10 +187,6 @@ function fakes(
         f.daemon = { running: true, version: LATEST, pid: 4242 };
       return { code: 0, stdout: '{}' };
     },
-    probe: async (_bin, args) =>
-      args[0] === '--launcher-version'
-        ? `oortmem (Python launcher) ${VERSION}, runs oortmem@${VERSION}\n`
-        : undefined,
     daemon: async () => f.daemon,
     sleep: async (ms) => {
       f.slept.push(ms);
@@ -197,13 +203,28 @@ interface Machine {
   h: Harness;
   env: Record<string, string>;
   managed?: { bin: string; main: string };
+  /** A stand-in `npm` (never run: the fakes run nothing), appended to PATH unless `noNpm`. */
+  tools: string;
+  noNpm?: boolean;
+}
+
+/** A file that writes `marker` if anything ever runs it. */
+function trap(file: string, marker: string, shebang = '#!/bin/sh'): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${shebang}\necho ran >> '${marker}'\necho 0.0.1\n`, { mode: 0o755 });
 }
 
 /** A throwaway machine: `h.root` is HOME, `h.home` OORT_HOME; PATH holds only `pathDirs`. */
 function machine(pathDirs: string[] = []): Machine {
   const h = harness();
   fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
-  return { h, env: { HOME: h.root, OORT_HOME: h.home, PATH: pathDirs.join(path.delimiter) } };
+  const tools = path.join(h.root, 'tools');
+  trap(path.join(tools, 'npm'), path.join(h.root, 'NPM_RAN'));
+  return {
+    h,
+    tools,
+    env: { HOME: h.root, OORT_HOME: h.home, PATH: pathDirs.join(path.delimiter) },
+  };
 }
 
 /** The managed copy (`~/.oort/cli`), with the Claude Code hooks pointing at it. */
@@ -222,13 +243,22 @@ async function update(
 ) {
   return m.h.run(
     ['update', ...args],
-    { env: { ...m.env, PATH: m.env.PATH ?? '' }, entry: running.entry ?? running.script, ...io },
+    {
+      env: {
+        ...m.env,
+        PATH: [m.env.PATH ?? '', ...(m.noNpm === true ? [] : [m.tools])].join(path.delimiter),
+      },
+      entry: running.entry ?? running.script,
+      ...io,
+    },
     undefined,
     { binPath: running.script, updateDeps: f.deps },
   );
 }
 
-const argv = (f: Fakes): string[] => f.installs.map((i) => [i.file, ...i.args].join(' '));
+/** The installers run, as `npm …` (the file is the absolute npm found on PATH). */
+const argv = (f: Fakes): string[] =>
+  f.installs.map((i) => [path.basename(i.file), ...i.args].join(' '));
 
 let net: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
@@ -356,9 +386,11 @@ describe('oort update: the plan for each machine', () => {
     const f = fakes();
     const r = await update(m, ['--yes', '--json'], f, { script: managed.main, entry: managed.bin });
     expect(r.code, r.io.stderr).toBe(0);
+    // npm found on PATH as an absolute path, run with no shell from the home directory.
     expect(f.installs).toEqual([
       {
-        file: 'npm',
+        file: path.join(m.tools, 'npm'),
+        cwd: m.h.root,
         args: [
           'i',
           '-g',
@@ -414,7 +446,7 @@ describe('oort update: the plan for each machine', () => {
     expect(human.io.stdout).toContain('first on PATH');
   });
 
-  it('update.pnpm: pnpm add -g for the pnpm global, npm for the managed copy', async () => {
+  it('update.pnpm: the pnpm global gets its command printed, never run; npm for the managed copy', async () => {
     const m = machine();
     withManagedHooks(m);
     const p = pnpm(m.h.root);
@@ -425,10 +457,72 @@ describe('oort update: the plan for each machine', () => {
       entry: path.join(p.pathDir, 'oort'),
     });
     expect(r.code, r.io.stderr).toBe(0);
+    // pnpm's global directory moves with its version: oort update never runs pnpm.
     expect(argv(f)).toEqual([
       `npm i -g --prefix ${path.join(m.h.home, 'cli')} oortmem@${LATEST} --prefer-online`,
-      `pnpm add -g oortmem@${LATEST}`,
     ]);
+    const d = data(r.io.stdout, 'update');
+    expect(d.copies.find((c: { kind: string }) => c.kind === 'pnpm-global')).toMatchObject({
+      action: 'manual',
+      command: `pnpm add -g oortmem@${LATEST}`,
+      removeCommand: 'pnpm rm -g oortmem',
+    });
+  });
+
+  it('update.pnpm-shims-are-read-never-run: the target and its version come from the text', async () => {
+    const m = machine();
+    withManagedHooks(m);
+    // A real pnpm global bin: a shell script naming the package's main.js, relative to itself.
+    const pkg = path.join(
+      m.h.root,
+      'Library',
+      'pnpm',
+      'global',
+      'v11',
+      '9f8e',
+      'node_modules',
+      'oortmem',
+    );
+    fs.mkdirSync(path.join(pkg, 'dist'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkg, 'package.json'),
+      JSON.stringify({ name: 'oortmem', version: '0.6.1' }),
+    );
+    const marker = path.join(m.h.root, 'SHIM_TARGET_RAN');
+    trap(path.join(pkg, 'dist', 'main.js'), marker);
+    const bin = path.join(m.h.root, 'Library', 'pnpm', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(
+      path.join(bin, 'oort'),
+      [
+        '#!/bin/sh',
+        'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")',
+        'if [ -x "$basedir/node" ]; then',
+        '  exec "$basedir/node"  "$basedir/../global/v11/9f8e/node_modules/oortmem/dist/main.js" "$@"',
+        'else',
+        '  exec node  "$basedir/../global/v11/9f8e/node_modules/oortmem/dist/main.js" "$@"',
+        'fi',
+        `echo ran >> '${path.join(m.h.root, 'SHIM_RAN')}'`,
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    m.env.PATH = [path.join(m.h.home, 'cli', 'bin'), bin].join(path.delimiter);
+    const r = await update(m, ['--check', '--json'], fakes(), {
+      script: m.managed!.main,
+      entry: m.managed!.bin,
+    });
+    expect(r.code, r.io.stderr).toBe(0);
+    const shim = data(r.io.stdout, 'update').copies.find(
+      (c: { path: string }) => c.path === path.join(bin, 'oort'),
+    );
+    expect(shim).toMatchObject({
+      kind: 'pnpm-global',
+      version: '0.6.1',
+      realpath: fs.realpathSync(path.join(pkg, 'dist', 'main.js')),
+      action: 'listed',
+    });
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.existsSync(path.join(m.h.root, 'SHIM_RAN'))).toBe(false);
   });
 
   it('update.pypi: the launcher gets its pipx command printed, never run; npx is never touched', async () => {
@@ -733,5 +827,189 @@ describe('oort update: after installing', () => {
     expect(r.code).toBe(0);
     expect(f.node).toEqual([]);
     expect(data(r.io.stdout, 'update').migration).toEqual({ ran: false });
+  });
+});
+
+describe('oort update: an install counts only when the copy is the target (I1)', () => {
+  it('update.an-installer-that-exits-0-but-changes-nothing-is-a-failure', async () => {
+    const m = machine();
+    const managed = withManagedHooks(m);
+    fs.writeFileSync(path.join(m.h.home, 'oort.sqlite'), '');
+    const f = fakes();
+    f.daemon = { running: true, version: VERSION, pid: 999 };
+    f.deps.run = async (file, args, _env, cwd) => {
+      f.installs.push({ file, args, cwd });
+      return { code: 0, output: 'up to date in 1s\n' };
+    };
+    const r = await update(m, ['--yes', '--json'], f, { script: managed.main, entry: managed.bin });
+    expect(r.code).toBe(1);
+    const env = JSON.parse(r.io.stdout) as { exitCode: number; data: Record<string, any> };
+    expect(env.exitCode).toBe(1);
+    expect(env.data['installed'][0]).toMatchObject({
+      ok: false,
+      unverified: true,
+      version: VERSION,
+    });
+    // Nothing runs from an unverified copy: no migration, the daemon left as it was.
+    expect(f.node).toEqual([]);
+    expect(env.data['migration']).toEqual({ ran: false });
+    expect(env.data['daemon']).toMatchObject({ running: true, restarted: false });
+    const human = await update(m, ['--yes'], f, { script: managed.main, entry: managed.bin });
+    expect(human.io.stdout).toContain(
+      `✗ ~/oort-home/cli/bin/oort: the installer finished, but this copy is oort ${VERSION}, not oortmem ${LATEST}`,
+    );
+    expect(human.io.stdout).toContain('Skipped the store migration and the oort serve restart');
+    expect(human.io.stdout).toContain('oort serve stop && oort serve --detach');
+  });
+
+  it('update.a-copy-that-still-resolves-to-a-stale-pnpm-path-is-a-failure', async () => {
+    const m = machine();
+    const managed = withManagedHooks(m);
+    // The installer "succeeds", but the copy's link now leads to an old .pnpm/oortmem@… package
+    // that happens to say the target version: not the prefix just installed into.
+    const stale = path.join(
+      m.h.root,
+      'Library',
+      'pnpm',
+      'global',
+      '5',
+      '.pnpm',
+      'oortmem@0.6.1',
+      'node_modules',
+      'oortmem',
+    );
+    fs.mkdirSync(path.join(stale, 'dist'), { recursive: true });
+    fs.writeFileSync(
+      path.join(stale, 'package.json'),
+      JSON.stringify({ name: 'oortmem', version: LATEST }),
+    );
+    fs.writeFileSync(path.join(stale, 'dist', 'main.js'), '');
+    const f = fakes();
+    f.deps.run = async (file, args, _env, cwd) => {
+      f.installs.push({ file, args, cwd });
+      fs.rmSync(managed.bin);
+      fs.symlinkSync(path.join(stale, 'dist', 'main.js'), managed.bin);
+      return { code: 0, output: '' };
+    };
+    // Run as the managed bin, so the copy's path is the link that moved.
+    const r = await update(m, ['--yes', '--json'], f, { script: managed.bin, entry: managed.bin });
+    expect(r.code).toBe(1);
+    expect(JSON.parse(r.io.stdout).data.installed[0]).toMatchObject({
+      ok: false,
+      unverified: true,
+    });
+    expect(f.node).toEqual([]);
+  });
+
+  it('update.verify-install-checks-the-realpath-and-the-version', () => {
+    const root = harness().root;
+    const p = path.join(root, 'prefix');
+    const fresh = npmPrefix(p, LATEST);
+    expect(verifyInstall({ path: fresh.bin, prefix: p }, LATEST)).toMatchObject({
+      ok: true,
+      version: LATEST,
+    });
+    expect(verifyInstall({ path: fresh.bin, prefix: p }, '0.6.4')).toMatchObject({
+      ok: false,
+      version: LATEST,
+    });
+    expect(verifyInstall({ path: fresh.bin, prefix: path.join(root, 'other') }, LATEST).ok).toBe(
+      false,
+    );
+    expect(verifyInstall({ path: path.join(root, 'gone'), prefix: p }, LATEST).ok).toBe(false);
+  });
+});
+
+describe('oort update: discovering copies runs none of them (I2)', () => {
+  it('update.no-copy-on-path-is-ever-run-in-any-mode', async () => {
+    const m = machine();
+    const managed = withManagedHooks(m);
+    const marker = path.join(m.h.root, 'RAN');
+    // An unrecognised oort, a Python-looking one with no metadata, and a shell script whose text
+    // names nothing: none may run, whatever the mode.
+    trap(path.join(m.h.root, 'bin-a', 'oort'), marker);
+    trap(path.join(m.h.root, 'bin-b', 'oort'), marker, '#!/usr/bin/env python3');
+    trap(path.join(m.h.root, 'bin-c', 'oort'), marker, '#!/bin/bash');
+    m.env.PATH = ['bin-a', 'bin-b', 'bin-c']
+      .map((d) => path.join(m.h.root, d))
+      .join(path.delimiter);
+    const running = { script: managed.main, entry: managed.bin };
+    const modes: [string[], Record<string, unknown>][] = [
+      [['--check'], {}],
+      [['--check', '--json'], {}],
+      [['--json'], { tty: true }],
+      [[], {}],
+      [[], { tty: true, answer: 'n' }],
+      [['--yes'], {}],
+      [['--yes', '--json'], {}],
+    ];
+    for (const [args, io] of modes) {
+      const f = fakes();
+      const r = await update(m, args, f, running, io);
+      expect(fs.existsSync(marker), args.join(' ')).toBe(false);
+      expect(fs.existsSync(path.join(m.h.root, 'NPM_RAN'))).toBe(false);
+      if (args.includes('--check')) {
+        expect(f.installs).toEqual([]);
+        expect(f.node).toEqual([]);
+      }
+      if (args.join(' ') === '--check') {
+        expect(r.io.stdout).toContain('version unknown, unrecognised');
+        expect(r.io.stdout).toContain('version unknown, PyPI launcher (pip)');
+      }
+    }
+  });
+
+  it('update.a-pypi-launcher-version-comes-from-its-dist-info', async () => {
+    const m = machine();
+    const managed = withManagedHooks(m);
+    m.env.PATH = pipx(m.h.root).pathDir;
+    const r = await update(m, ['--check', '--json'], fakes(), {
+      script: managed.main,
+      entry: managed.bin,
+    });
+    expect(
+      data(r.io.stdout, 'update').copies.find((c: { kind: string }) => c.kind === 'pypi'),
+    ).toMatchObject({
+      version: VERSION,
+      command: 'pipx upgrade oortmem',
+    });
+  });
+});
+
+describe('oort update: what it prints and what it runs with (M1, M5)', () => {
+  it('update.control-characters-in-a-path-are-shown-never-sent-to-the-terminal', async () => {
+    const m = machine();
+    const managed = withManagedHooks(m);
+    const evil = path.join(m.h.root, 'p \u001b]0;TITLE\u0007\u001b[31mRED\u009b2J');
+    npmPrefix(evil, '0.6.1');
+    m.env.PATH = [path.join(m.h.home, 'cli', 'bin'), path.join(evil, 'bin')].join(path.delimiter);
+    const check = await update(m, ['--check'], fakes(), {
+      script: managed.main,
+      entry: managed.bin,
+    });
+    const yes = await update(m, ['--yes'], fakes(), { script: managed.main, entry: managed.bin });
+    for (const r of [check, yes]) {
+      const all = `${r.io.stdout}${r.io.stderr}`;
+      expect(all).not.toMatch(/[\u001b\u0007\u009b]/);
+      expect(all).toContain('\\u{1b}[31mRED');
+    }
+  });
+
+  it('update.with-no-npm-on-path-it-prints-the-command-and-runs-nothing', async () => {
+    const m = machine();
+    const managed = withManagedHooks(m);
+    m.noNpm = true;
+    // A relative PATH entry with an npm in it is never used either.
+    trap(path.join(m.h.cwd, 'rel', 'npm'), path.join(m.h.root, 'REL_NPM_RAN'));
+    m.env.PATH = 'rel';
+    const f = fakes();
+    const r = await update(m, ['--yes', '--json'], f, { script: managed.main, entry: managed.bin });
+    expect(r.code).toBe(0);
+    expect(f.installs).toEqual([]);
+    expect(data(r.io.stdout, 'update').copies[0]).toMatchObject({
+      action: 'manual',
+      note: 'no npm on PATH to run it with',
+      command: `npm i -g --prefix ~/oort-home/cli oortmem@${LATEST} --prefer-online`,
+    });
   });
 });

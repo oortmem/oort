@@ -7,7 +7,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VERSION } from '@oortmem/core';
-import { tmpdir } from '../test/helpers.js';
+import { harness, tmpdir } from '../test/helpers.js';
+import { SKIP_FILE, hookViaDaemon, readSkip } from './serve-client.js';
+import { encodeFrame, FrameDecoder, PROTOCOL_VERSION, socketPathFor } from './serve-protocol.js';
+import * as nodeNet from 'node:net';
 import { compareVersions, isNewerVersion } from './serve-protocol.js';
 import {
   CACHE_FILE,
@@ -15,7 +18,10 @@ import {
   CHECK_USER_AGENT,
   REGISTRY_LATEST_URL,
   availableUpdate,
+  cacheDir,
   fetchLatest,
+  refresherEnv,
+  spawnRefresh,
   isStale,
   noticeText,
   readUpdateCache,
@@ -250,6 +256,23 @@ describe('the SessionStart notice', () => {
     expect(Object.keys(out).sort()).toEqual(['hookSpecificOutput', 'systemMessage']);
   });
 
+  it('update.session-start-output-fits-codex-schema-which-rejects-unknown-fields (M7)', () => {
+    // Codex runs the same hook; its session-start.command.output schema has
+    // additionalProperties: false at both levels.
+    const TOP = ['continue', 'stopReason', 'suppressOutput', 'systemMessage', 'hookSpecificOutput'];
+    const INNER = ['hookEventName', 'additionalContext'];
+    const h = home();
+    for (const stdout of [MEMORY, '']) {
+      writeUpdateCache(h, { checkedAt: NOW, latest: '0.6.3' });
+      const out = JSON.parse(notice(h, stdout)) as Record<string, unknown>;
+      expect(typeof out['systemMessage']).toBe('string');
+      for (const k of Object.keys(out)) expect(TOP).toContain(k);
+      const inner = (out['hookSpecificOutput'] ?? {}) as Record<string, unknown>;
+      for (const k of Object.keys(inner)) expect(INNER).toContain(k);
+      writeUpdateCache(h, {});
+    }
+  });
+
   it('update.session-start-with-no-memories-prints-only-the-message', () => {
     const h = home();
     writeUpdateCache(h, { checkedAt: NOW, latest: '0.6.3' });
@@ -287,5 +310,176 @@ describe('the SessionStart notice', () => {
     // No cache yet: nothing shown, one background check asked for, no request made here.
     expect(notice(h, MEMORY, 'startup', NOW, () => spawned++)).toBe(MEMORY);
     expect(spawned).toBe(1);
+  });
+});
+
+describe('review fixes', () => {
+  it('update.the-background-check-gets-only-its-allowlisted-environment (M3)', () => {
+    const env = {
+      PATH: '/usr/bin',
+      HOME: '/Users/x',
+      OORT_HOME: '/elsewhere',
+      ANTHROPIC_API_KEY: 'sk-ant-secret',
+      VOYAGE_API_KEY: 'pa-secret',
+      OORT_API_KEY: 'oort_sk_secret',
+      NPM_TOKEN: 'npm_secret',
+      GITHUB_TOKEN: 'ghp_secret',
+      HTTPS_PROXY: 'http://proxy:3128',
+      no_proxy: 'localhost',
+      NODE_EXTRA_CA_CERTS: '/etc/ca.pem',
+      NODE_USE_ENV_PROXY: '1',
+      CI: 'false',
+    };
+    const out = refresherEnv(env, '/Users/x/.oort');
+    expect(out).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/Users/x',
+      OORT_HOME: '/Users/x/.oort',
+      HTTPS_PROXY: 'http://proxy:3128',
+      no_proxy: 'localhost',
+      NODE_EXTRA_CA_CERTS: '/etc/ca.pem',
+      NODE_USE_ENV_PROXY: '1',
+      CI: 'false',
+    });
+    // And that is what the spawned process really gets.
+    let seen: NodeJS.ProcessEnv | undefined;
+    const fakeSpawn = ((_f: string, _a: string[], o: { env: NodeJS.ProcessEnv }) => {
+      seen = o.env;
+      return { on() {}, unref() {} };
+    }) as unknown as Parameters<typeof spawnRefresh>[2];
+    spawnRefresh('/Users/x/.oort', env, fakeSpawn);
+    expect(seen).toEqual(out);
+    expect(JSON.stringify(seen)).not.toContain('secret');
+  });
+
+  it('update.a-declared-oversized-answer-is-refused-before-reading (M4)', async () => {
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulled++;
+        c.enqueue(new Uint8Array(1024));
+      },
+    });
+    const res = new Response(body, { headers: { 'content-length': String(50 * 1024 * 1024) } });
+    await expect(fetchLatest(registry(() => res).fetchFn)).rejects.toThrow('too large');
+    expect(pulled).toBeLessThanOrEqual(1);
+  });
+
+  it('update.an-endless-answer-is-aborted-past-the-cap (M4)', async () => {
+    let bytes = 0;
+    let aborted = false;
+    const fetchFn = (async (_u: unknown, init?: RequestInit) => {
+      init?.signal?.addEventListener('abort', () => (aborted = true));
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(c) {
+            bytes += 64 * 1024;
+            c.enqueue(new Uint8Array(64 * 1024).fill(0x20));
+          },
+        }),
+      );
+    }) as typeof fetch;
+    await expect(fetchLatest(fetchFn, { timeoutMs: 10_000 })).rejects.toThrow('too large');
+    expect(aborted).toBe(true);
+    expect(bytes).toBeLessThan(2 * 1024 * 1024);
+  });
+
+  it('update.a-symlinked-home-is-followed-only-when-it-is-yours-alone (M6)', () => {
+    const root = tmpdir();
+    const real = path.join(root, 'real-oort');
+    fs.mkdirSync(real, { mode: 0o700 });
+    const link = path.join(root, '.oort');
+    fs.symlinkSync(real, link);
+    expect(cacheDir(link)).toEqual({ dir: fs.realpathSync(real) });
+    expect(updateCheckOff({}, link)).toBeUndefined();
+    expect(writeUpdateCache(link, { checkedAt: NOW })).toBe(true);
+    expect(fs.existsSync(path.join(real, CACHE_FILE))).toBe(true);
+    // Writable by others: refused, and said why; nothing is written or started.
+    fs.chmodSync(real, 0o777);
+    expect(updateCheckOff({}, link)).toBe(
+      'home: it is a symlink to a directory that group or others can write',
+    );
+    fs.rmSync(path.join(real, CACHE_FILE));
+    expect(writeUpdateCache(link, { checkedAt: NOW })).toBe(false);
+    let spawned = 0;
+    expect(requestRefresh(link, {}, () => spawned++, NOW)).toBe(false);
+    expect(spawned).toBe(0);
+    fs.chmodSync(real, 0o700);
+    // A symlink that leads nowhere, or to a file.
+    const dangling = path.join(root, 'dangling');
+    fs.symlinkSync(path.join(root, 'nothing'), dangling);
+    expect(cacheDir(dangling)).toEqual({ why: 'it is a symlink that leads nowhere' });
+    fs.writeFileSync(path.join(root, 'file'), '');
+    const toFile = path.join(root, 'to-file');
+    fs.symlinkSync(path.join(root, 'file'), toFile);
+    expect(cacheDir(toFile)).toEqual({
+      why: 'it is a symlink to something that is not a directory',
+    });
+    // No home yet: nothing is wrong, nothing is created.
+    expect(cacheDir(path.join(root, 'none'))).toEqual({ missing: true });
+  });
+
+  it('update.doctor-says-why-a-refused-home-skips-the-check (M6)', async () => {
+    const h = harness();
+    const real = path.join(h.root, 'real-oort');
+    fs.mkdirSync(real, { mode: 0o700 });
+    fs.chmodSync(real, 0o777);
+    fs.symlinkSync(real, h.home);
+    const r = await h.run(['doctor']);
+    expect(r.io.stdout).toContain(
+      'update check skipped: ~/oort-home it is a symlink to a directory that group or others can write',
+    );
+    fs.chmodSync(real, 0o700);
+  });
+
+  it('update.two-restarting-answers-within-a-minute-open-the-breaker (M9)', async () => {
+    const h = home();
+    fs.chmodSync(h, 0o700);
+    const socket = socketPathFor(h);
+    let answered = 0;
+    const server = nodeNet.createServer((conn) => {
+      const decoder = new FrameDecoder();
+      conn.on('data', (c: Buffer) => {
+        for (const f of decoder.push(c) as { id: number }[]) {
+          answered++;
+          conn.end(
+            encodeFrame({
+              v: PROTOCOL_VERSION,
+              id: f.id,
+              ok: false,
+              error: { code: 'restarting', message: 'this daemon is oort 0.0.1' },
+            }),
+          );
+        }
+      });
+    });
+    await new Promise<void>((r) => server.listen(socket, r));
+    try {
+      const env = { HOME: path.dirname(h), OORT_HOME: h };
+      const stdin = JSON.stringify({ session_id: 's', cwd: '/w', prompt: 'x' });
+      const first = await hookViaDaemon('UserPromptSubmit', stdin, '/w', env, { now: () => NOW });
+      expect(first).toEqual({ served: false, reason: 'error', code: 'restarting' });
+      expect(readSkip(h)).toBeUndefined();
+      // Again 30 s later: something keeps starting an older daemon. Open the breaker, start nothing.
+      const second = await hookViaDaemon('UserPromptSubmit', stdin, '/w', env, {
+        now: () => NOW + 30_000,
+      });
+      expect(second).toMatchObject({ code: 'restarting', tripped: true });
+      expect(readSkip(h)).toEqual({ until: NOW + 30_000 + 60_000, reason: 'refused' });
+      // While it is open the daemon is not even asked.
+      const third = await hookViaDaemon('UserPromptSubmit', stdin, '/w', env, {
+        now: () => NOW + 31_000,
+      });
+      expect(third).toEqual({ served: false, reason: 'skipped' });
+      expect(answered).toBe(2);
+      // Once per update, a minute apart or more, never trips it.
+      fs.rmSync(path.join(h, SKIP_FILE));
+      const later = await hookViaDaemon('UserPromptSubmit', stdin, '/w', env, {
+        now: () => NOW + 10 * 60_000,
+      });
+      expect(later).toEqual({ served: false, reason: 'error', code: 'restarting' });
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
   });
 });

@@ -544,7 +544,6 @@ describe('oort.v1: update', () => {
     const updateDeps = {
       latest: async () => '99.0.0',
       daemon: async () => ({ running: false }),
-      probe: async () => undefined,
       tmpdir: () => '/nonexistent-tmp',
     };
     const d = ok(

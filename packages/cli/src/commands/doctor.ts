@@ -46,6 +46,7 @@ import {
   Refusal,
   echo,
   fixForRoles,
+  shellWord as sh,
   keyRemedy,
   shown,
   tilde,
@@ -293,14 +294,15 @@ function hookFix(ctx: Ctx, running: string | undefined): { fix: string; fixComma
   const home = ctx.io.env['HOME'] ?? '';
   const prefix = managedPrefixFor(ctx.io.env);
   const bin = path.join(prefix, 'bin', 'oort');
-  const run = `${bin} install claude-code`;
-  const show = `${tilde(bin, home)} install claude-code`;
+  // fixCommand runs as printed: every path one shell word (a HOME with a space or a `$`).
+  const run = `${sh(bin)} install claude-code`;
+  const show = `${shown(sh(tilde(bin, home)))} install claude-code`;
   if (isExecutable(bin)) {
     return { fix: `${show} (this oort is in ${why})`, fixCommand: run };
   }
   return {
-    fix: `npm i -g --prefix ${tilde(prefix, home)} oortmem && ${show} (this oort is in ${why})`,
-    fixCommand: `npm i -g --prefix ${prefix} oortmem && ${run}`,
+    fix: `npm i -g --prefix ${shown(sh(tilde(prefix, home)))} oortmem && ${show} (this oort is in ${why})`,
+    fixCommand: `npm i -g --prefix ${sh(prefix)} oortmem && ${run}`,
   };
 }
 
@@ -387,7 +389,7 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
         group: 'hooks',
         name: 'claude-code copy',
         status: 'info',
-        detail: `the hooks run ${tilde(hooksBin ?? '', home)}; this is another copy of oort ${VERSION} at ${tilde(here, home)}`,
+        detail: `the hooks run ${shown(tilde(hooksBin ?? '', home))}; this is another copy of oort ${VERSION} at ${shown(tilde(here, home))}`,
       },
       ...binaries,
     ];
@@ -1166,7 +1168,17 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
  */
 export function updateRow(ctx: Ctx, now = Date.now()): Check | undefined {
   const home = resolveHome(ctx.io.env);
-  if (updateCheckOff(ctx.io.env, home) !== undefined) return undefined;
+  const off = updateCheckOff(ctx.io.env, home);
+  if (off?.startsWith('home: ') === true) {
+    // An opt-out says nothing; a home the check will not write in says why, once.
+    return {
+      group: 'updates',
+      name: 'version',
+      status: 'info',
+      detail: `update check skipped: ${shown(tilde(home, ctx.io.env['HOME'] ?? ''))} ${off.slice('home: '.length)}`,
+    };
+  }
+  if (off !== undefined) return undefined;
   const cache = readUpdateCache(home);
   const latest = availableUpdate(VERSION, cache);
   if (latest !== undefined) {

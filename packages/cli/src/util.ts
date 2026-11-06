@@ -432,6 +432,15 @@ export function safeJson(v: unknown): string {
   );
 }
 
+/**
+ * `arg` as one shell word for people (and scripts) to run as printed: as it is when it holds only
+ * safe characters, else single-quoted (a `'` inside becomes `'\''`), so a path with a space, `$`,
+ * `;` or a quote never splits or expands.
+ */
+export function shellWord(arg: string): string {
+  return /^[A-Za-z0-9_@%+=:,./~-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
+}
+
 /** One line, at most `n` characters. */
 export function clip(text: string, n: number): string {
   const one = text.replace(/\s+/g, ' ').trim();

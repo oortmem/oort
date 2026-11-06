@@ -604,16 +604,24 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
   }
 
   /** The managed copy with the hooks on it, and this doctor running from fnm's link. */
-  function machine(hooksVersion: string = VERSION, opts: { managed?: boolean } = {}) {
+  function machine(
+    hooksVersion: string = VERSION,
+    opts: { managed?: boolean; homeName?: string; shell?: string } = {},
+  ) {
     const h = harness();
-    const managed = path.join(h.home, 'cli');
+    // `homeName`: HOME (and ~/.oort in it) in a directory of that name, for awkward paths.
+    const home = opts.homeName === undefined ? h.root : path.join(h.root, opts.homeName);
+    const oortHome = opts.homeName === undefined ? h.home : path.join(home, '.oort');
+    const env: Record<string, string> =
+      opts.homeName === undefined ? {} : { HOME: home, OORT_HOME: oortHome };
+    const managed = path.join(oortHome, 'cli');
     const hooksBin =
       opts.managed === false
-        ? copy(path.join(h.root, 'elsewhere'), hooksVersion)
+        ? copy(path.join(home, 'elsewhere'), hooksVersion)
         : copy(managed, hooksVersion);
-    installHooks(path.join(h.root, '.claude', 'settings.json'), hooksBin);
+    installHooks(path.join(home, '.claude', 'settings.json'), hooksBin);
     const install = path.join(
-      h.root,
+      home,
       '.local',
       'share',
       'fnm',
@@ -622,17 +630,51 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
       'installation',
     );
     const script = copy(install, VERSION);
-    const shells = path.join(h.root, '.local', 'state', 'fnm_multishells');
+    const shells = path.join(home, '.local', 'state', 'fnm_multishells');
     fs.mkdirSync(shells, { recursive: true });
-    fs.symlinkSync(install, path.join(shells, '51197_1793280789587'));
-    const entry = path.join(shells, '51197_1793280789587', 'bin', 'oort');
+    const shell = opts.shell ?? '51197_1793280789587';
+    fs.symlinkSync(install, path.join(shells, shell));
+    const entry = path.join(shells, shell, 'bin', 'oort');
     return {
       h,
+      home,
+      env,
       hooksBin,
       running: { entry, script },
       managedBin: path.join(managed, 'bin', 'oort'),
+      managedPrefix: managed,
     };
   }
+
+  /** The settings without the Stop hook: the hooks need reinstalling. */
+  function dropStop(home: string): void {
+    const file = path.join(home, '.claude', 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      hooks: Record<string, unknown>;
+    };
+    delete settings.hooks['Stop'];
+    fs.writeFileSync(file, JSON.stringify(settings));
+  }
+
+  it('doctor.paths-in-the-copy-line-show-control-characters-never-send-them (M1)', async () => {
+    const m = machine(VERSION, { shell: '1_\u001b]0;TITLE\u0007\u001b[31mRED' });
+    const d = await doctor(m.h, m.env, undefined, undefined, m.running);
+    const info = d.check('hooks', 'claude-code copy');
+    expect(info?.detail).toContain('\\u{1b}[31mRED');
+    expect(d.human.io.stdout).not.toMatch(/[\u0007]|\u001b\]0;/);
+    expect(d.json.io.stdout).not.toMatch(/[\u0007\u001b]/);
+  });
+
+  it('doctor.fix-commands-quote-a-home-with-a-space-and-shell-metacharacters (M2)', async () => {
+    const m = machine(VERSION, { managed: false, homeName: "my home $(touch X);'q" });
+    dropStop(m.home);
+    const d = await doctor(m.h, m.env, undefined, undefined, m.running);
+    const row = d.check('hooks', 'claude-code');
+    const q = (p: string): string => `'${p.replaceAll("'", "'\\''")}'`;
+    expect(row?.fixCommand).toBe(
+      `npm i -g --prefix ${q(m.managedPrefix)} oortmem && ${q(m.managedBin)} install claude-code`,
+    );
+  });
 
   it('doctor.same-version-from-another-path-is-ok-with-an-info-line-naming-both', async () => {
     const m = machine();
