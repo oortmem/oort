@@ -216,8 +216,10 @@ tokeniser version differs, or when ICU's major version is newer than the one rec
 holds Thai, Lao, Khmer or Myanmar text (their word breaks come from ICU's dictionaries; nothing else
 changes with ICU). An index recorded by a newer ICU is left alone, so two Node versions on one
 machine do not rebuild in turn, and an ICU version that is empty or not a number never triggers a
-rebuild (with segmented text in the store, the open logs a warning). Versions 1 and 2 go up to 4 in
-the same single transaction. An open that rebuilds prints one line first, "Rebuilding the search
+rebuild (with segmented text in the store, the open logs a warning). A version 4 index that is not
+right for its memories (under the old name, missing, or empty beside stored memories) is rebuilt
+the same way; an open with `migrate: false` refuses it with `StoreMigrationRequiredError`, changing
+nothing. Versions 1 and 2 go up to 4 in the same single transaction. An open that rebuilds prints one line first, "Rebuilding the search
 index (N memories)…", and waits up to 60 seconds (`MIGRATION_BUSY_TIMEOUT_MS`) for another
 connection's write lock, whatever `busyTimeoutMs` is.
 
