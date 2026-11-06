@@ -339,6 +339,17 @@ export function migrateV3toV4(db: Database): void {
   rebuildFts(db, 2);
 }
 
+/**
+ * A version 4 store whose index is not the version 2 index of its memories: one a pre-release
+ * build left under the old name (`memories_fts`), none at all, or an empty `memories_fts2` beside
+ * stored memories. Rebuilt on the next migrating open; an open that may not migrate refuses.
+ */
+export function indexNeedsRepair(db: Database): boolean {
+  if (exists(db, FTS_TABLE_V1) || !exists(db, FTS_TABLE)) return true;
+  const empty = db.prepare(`SELECT rowid FROM ${FTS_TABLE} LIMIT 1`).get() === undefined;
+  return empty && db.prepare('SELECT 1 FROM memories LIMIT 1').get() !== undefined;
+}
+
 /** An ICU version's major number, or undefined when it is empty or not a version at all. */
 function icuMajor(v: string | undefined): number | undefined {
   const m = /^(\d+)(?:\.\d+)*$/.exec(v ?? '');
@@ -379,8 +390,7 @@ export function lexicalIndexState(
 ): 'rebuild' | 'record-icu' | 'unknown-icu' | 'current' {
   const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
   if (get.get('lexical_version')?.value !== String(LEXICAL_VERSION)) return 'rebuild';
-  // A version 4 index under the old name (a pre-release build): rebuilt under the new one.
-  if (!exists(db, FTS_TABLE)) return 'rebuild';
+  if (indexNeedsRepair(db)) return 'rebuild';
   const recorded = get.get('lexical_icu')?.value;
   const now = icuMajor(icu);
   if (now === undefined) return holdsSegmentedText(db) ? 'unknown-icu' : 'current';
@@ -500,7 +510,9 @@ export class StoreMigrationRequiredError extends Error {
     readonly from: number,
   ) {
     super(
-      `sqlite store: ${path} is at schema version ${from} and must be migrated to ${SCHEMA_VERSION}; open it once without migrate: false (oort doctor does)`,
+      from === SCHEMA_VERSION
+        ? `sqlite store: ${path} needs its search index rebuilt; open it once without migrate: false (oort doctor does)`
+        : `sqlite store: ${path} is at schema version ${from} and must be migrated to ${SCHEMA_VERSION}; open it once without migrate: false (oort doctor does)`,
     );
     this.name = 'StoreMigrationRequiredError';
   }
@@ -585,7 +597,8 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       const n = db.prepare<[], { n: number }>('SELECT count(*) AS n FROM memories').get()?.n ?? 0;
       opts.log?.(`Rebuilding the search index (${n} ${n === 1 ? 'memory' : 'memories'})…`);
     };
-    if (version === undefined && !exists(db, 'memories')) {
+    const fresh = version === undefined && !exists(db, 'memories');
+    if (fresh) {
       db.exec(memoriesV2('memories', true));
       db.exec(INDEXES_V2);
     } else if (version === '1') {
@@ -605,6 +618,11 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       rebuilding();
       migrateV3toV4(db);
     } else if (version === String(SCHEMA_VERSION)) {
+      // An index to repair is a migration: an open that may not migrate (a hook) refuses, changing
+      // nothing, rather than create an empty index that would then look current.
+      if (opts.migrate === false && indexNeedsRepair(db)) {
+        throw new StoreMigrationRequiredError(db.name, SCHEMA_VERSION);
+      }
       // The drift guard needs a write; an open that may not migrate (a hook) leaves it to the next.
       if (opts.migrate !== false) {
         const icu = opts.icu ?? lexicalIcuVersion();
@@ -627,8 +645,9 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     put.run('schema_version', String(SCHEMA_VERSION));
     if (stored === undefined) put.run('dimension', String(dimension));
 
-    // A new store gets the version 2 index here (see `ftsTable`); a migrated one has it already.
-    if (!exists(db, FTS_TABLE)) {
+    // A new store gets the version 2 index here (see `ftsTable`); a migrated one has it already,
+    // and one whose index needs repair was rebuilt above or refused.
+    if (fresh) {
       db.exec(ftsTable(FTS_TOKENIZE, FTS_TABLE));
       recordLexical(db, opts.icu ?? lexicalIcuVersion());
     }

@@ -11,7 +11,12 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { afterAll, describe, expect, it } from 'vitest';
 import { localGrant, tokenizeLexicalV1 } from '@oortmem/core';
-import { openSqliteStore, sqliteSchemaVersion } from './index.js';
+import {
+  FTS_TOKENIZE,
+  openSqliteStore,
+  sqliteSchemaVersion,
+  StoreMigrationRequiredError,
+} from './index.js';
 
 const FIXTURE3 = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -395,4 +400,96 @@ it('fts-rebuild.sweeps-copies-a-killed-backup-left-behind', async () => {
   // any file that is not one of the store's temporary copies.
   expect(fs.existsSync(recent)).toBe(true);
   expect(fs.existsSync(unrelated)).toBe(true);
+});
+
+describe('a hook opens a store whose index needs repair first (CON-110 re-review)', () => {
+  const g = localGrant({
+    orgId: 'local',
+    customerId: 'self',
+    agentId: 'claude-code',
+    projectIds: [null],
+  });
+
+  /** A version 4 store as the pre-rename build left it: the v2 index still named memories_fts. */
+  async function preRename(): Promise<{ dbPath: string; coldDir: string }> {
+    const s = copy3();
+    await (await openSqliteStore(optsFor(s))).close();
+    const db = raw(s.dbPath);
+    try {
+      db.exec('ALTER TABLE memories_fts2 RENAME TO memories_fts');
+    } finally {
+      db.close();
+    }
+    return s;
+  }
+
+  const tables = (dbPath: string): string[] => {
+    const db = raw(dbPath);
+    try {
+      return db
+        .prepare<[], { name: string }>(
+          "SELECT name FROM sqlite_master WHERE name IN ('memories_fts', 'memories_fts2') ORDER BY name",
+        )
+        .all()
+        .map((r) => r.name);
+    } finally {
+      db.close();
+    }
+  };
+
+  it('fts-rebuild.hook-first-then-cli-keeps-search', async () => {
+    const s = await preRename();
+    // The hook (migrate: false) refuses, changing nothing: it must not create an empty index.
+    const err = await openSqliteStore({ ...optsFor(s), migrate: false }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StoreMigrationRequiredError);
+    expect((err as StoreMigrationRequiredError).message).toMatch(/search index/);
+    expect(tables(s.dbPath)).toEqual(['memories_fts']);
+    // The next command rebuilds the index, and search works.
+    const store = await openSqliteStore(optsFor(s));
+    try {
+      expect((await store.lexical(g, '认证 端口', 10)).map((h) => h.id)).toEqual(['zh-1']);
+      expect((await store.lexical(g, 'auth service port staging', 10)).length).toBeGreaterThan(0);
+    } finally {
+      await store.close();
+    }
+    expect(tables(s.dbPath)).toEqual(['memories_fts2']);
+  });
+
+  it('fts-rebuild.an-empty-index-beside-memories-is-rebuilt', async () => {
+    // What the earlier bug left: both tables, the new one empty. A hook refuses; a command repairs.
+    const s = await preRename();
+    const db = raw(s.dbPath);
+    try {
+      db.exec(`CREATE VIRTUAL TABLE memories_fts2 USING fts5(text, stub, entities,
+        content = '', contentless_delete = 1, tokenize = "${FTS_TOKENIZE}")`);
+    } finally {
+      db.close();
+    }
+    await expect(openSqliteStore({ ...optsFor(s), migrate: false })).rejects.toBeInstanceOf(
+      StoreMigrationRequiredError,
+    );
+    const store = await openSqliteStore(optsFor(s));
+    try {
+      expect((await store.lexical(g, '认证 端口', 10)).map((h) => h.id)).toEqual(['zh-1']);
+    } finally {
+      await store.close();
+    }
+    expect(tables(s.dbPath)).toEqual(['memories_fts2']);
+    // And with only the empty new table (old one dropped): still rebuilt.
+    const t = await preRename();
+    const d = raw(t.dbPath);
+    try {
+      d.exec('DROP TABLE memories_fts');
+      d.exec(`CREATE VIRTUAL TABLE memories_fts2 USING fts5(text, stub, entities,
+        content = '', contentless_delete = 1, tokenize = "${FTS_TOKENIZE}")`);
+    } finally {
+      d.close();
+    }
+    const again = await openSqliteStore(optsFor(t));
+    try {
+      expect((await again.lexical(g, '认证 端口', 10)).map((h) => h.id)).toEqual(['zh-1']);
+    } finally {
+      await again.close();
+    }
+  });
 });
