@@ -69,13 +69,17 @@ const RecordJudgmentInput = z.strictObject({
 
 type Infer<T extends z.ZodType> = z.infer<T>;
 
-export interface OortToolSet {
+/**
+ * A type alias, not an interface, so it is assignable to the AI SDK's `ToolSet` (an index
+ * signature): `tools: oortTools(oort)` typechecks without a spread.
+ */
+export type OortToolSet = {
   recall: OortTool<Infer<typeof RecallInput>, { memory: string; abstained: boolean }>;
   remember: OortTool<Infer<typeof RememberInput>, { results: unknown[] }>;
   forget: OortTool<Infer<typeof ForgetInput>, { forgotten: string }>;
   judge?: OortTool<Infer<typeof JudgeInput>, Record<string, unknown>>;
   record_judgment?: OortTool<Infer<typeof RecordJudgmentInput>, Record<string, unknown>>;
-}
+};
 
 /** Errors as data the model can read: the oort.v1 code and message, never a stack. */
 async function asData<T>(
