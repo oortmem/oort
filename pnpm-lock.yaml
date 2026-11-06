@@ -258,6 +258,9 @@ importers:
       '@oortmem/writer':
         specifier: workspace:*
         version: link:../writer
+      ai:
+        specifier: ^7
+        version: 7.0.162(zod@4.6.7)
       commander:
         specifier: 15.0.0
         version: 15.0.0

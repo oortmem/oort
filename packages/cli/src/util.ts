@@ -284,7 +284,7 @@ export function adapterProblem(
  * with each missing adapter's reason and the shared remedy for a missing key.
  */
 export function writePath(
-  w: Wired,
+  w: Pick<Wired, 'embed' | 'decide' | 'write' | 'unavailable' | 'keyStore'>,
   what: string,
 ): { embed: Embedder; decide: DecisionController; write: MemoryWriter } {
   const { embed, decide, write } = w;
