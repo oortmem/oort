@@ -81,3 +81,31 @@ describe('cloud mode and the repository config', () => {
     expect(fs.existsSync(h.home)).toBe(false);
   });
 });
+
+describe('a rate limit is retryable, with Retry-After when the service sends it', () => {
+  it('cloud and relay 429s', async () => {
+    const { OortCloudError } = await import('../cloud.js');
+    const { relayErrorOf, parseRetryAfter } = await import('../relay.js');
+    const { toOortError } = await import('./errors.js');
+    const cloud = toOortError(new OortCloudError('rate-limit', 429, 'cap', 'rate_limit', 30));
+    expect(cloud).toMatchObject({
+      code: 'refused',
+      reason: 'rate-limit',
+      retryable: true,
+      retryAfter: 30,
+    });
+    const relay = toOortError(
+      relayErrorOf({ status: 429, headers: new Headers({ 'retry-after': '12' }) }),
+    );
+    expect(relay).toMatchObject({
+      code: 'refused',
+      reason: 'rate-limit',
+      retryable: true,
+      retryAfter: 12,
+    });
+    expect(toOortError(relayErrorOf({ status: 429 })).retryAfter).toBeUndefined();
+    const now = Date.parse('2026-11-06T12:00:00Z');
+    expect(parseRetryAfter('Fri, 06 Nov 2026 12:01:00 GMT', now)).toBe(60);
+    expect(parseRetryAfter('soon', now)).toBeUndefined();
+  });
+});

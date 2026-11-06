@@ -235,8 +235,9 @@ needs it.
 ## Errors
 
 Every error is an `OortError` subclass with `code` (the `oort.v1` code the CLI's `--json` uses),
-`reason` (finer and stable), `fix` (a runnable `oort …` command, or `null`), `retryable` and, for
-cloud refusals, `status`. Messages name fields, never values, and never carry a key. A vendor's
+`reason` (finer and stable), `fix` (a runnable `oort …` command, or `null`), `retryable`, for
+cloud refusals `status`, and `retryAfter` (seconds) when the service sent `Retry-After`. A rate
+limit (`rate-limit`) is retryable: wait `retryAfter` when it is set. Messages name fields, never values, and never carry a key. A vendor's
 own error is reported by its class name only.
 
 | Class                          | `code`               | Typical `reason`                                                                    |
@@ -249,7 +250,7 @@ own error is reported by its class name only.
 | `OortNeedsConfirmationError`   | `needs-confirmation` | `preview-required`, `findings-unacknowledged` (Oort Cloud 409)                      |
 | `OortCloudOnlyError`           | `cloud-only`         | `hive-level`, or `forget({ everywhere })` locally                                   |
 | `OortNetworkError`             | `network`            | `unreachable`, `timeout`, `busy` (retryable)                                        |
-| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `rate-limit`, `migration-required` (fix `oort doctor`) |
+| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
 | `OortInternalError`            | `internal`           | `store-busy` (retryable), else none                                                 |
 
 ```ts
@@ -257,7 +258,7 @@ import { OortError, OortRefusedError } from 'oortmem';
 try {
   await mem.observe(turn);
 } catch (e) {
-  if (e instanceof OortRefusedError && e.reason === 'rate-limit') backOff();
+  if (e instanceof OortRefusedError && e.reason === 'rate-limit') backOff(e.retryAfter);
   else if (e instanceof OortError && e.retryable) retry();
   else throw e;
 }

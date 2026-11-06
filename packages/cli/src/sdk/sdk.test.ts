@@ -338,7 +338,9 @@ describe('toOortError (§5): every source maps to its code and reason', () => {
     expect(m).toBeInstanceOf(OortError);
     expect(m.code).toBe(code);
     expect(m.reason).toBe(reason);
-    expect(m.retryable).toBe(code === 'network' || reason === 'store-busy');
+    expect(m.retryable).toBe(
+      code === 'network' || reason === 'store-busy' || reason === 'rate-limit',
+    );
   });
 
   it('drops the CLI-only fixes', () => {

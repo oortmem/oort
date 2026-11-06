@@ -12,7 +12,7 @@ import {
   lexicalFirstOf,
 } from './cloud-http.js';
 import type { Env } from './io.js';
-import { ACCOUNT_URL } from './relay.js';
+import { ACCOUNT_URL, parseRetryAfter } from './relay.js';
 import { Refusal, shown, writeOwnerOnly } from './util.js';
 
 /**
@@ -143,14 +143,23 @@ export class OortCloudError extends Refusal {
    * request this client gave up on: finer than `kind`, for the SDK's `reason`. Never shown.
    */
   readonly apiCode: string | undefined;
+  /** Seconds the API asked to wait (its `Retry-After` on a 429 or 503), when it said. */
+  readonly retryAfterSec: number | undefined;
 
-  constructor(kind: CloudErrorKind, status: number, apiMessage?: string, apiCode?: string) {
+  constructor(
+    kind: CloudErrorKind,
+    status: number,
+    apiMessage?: string,
+    apiCode?: string,
+    retryAfterSec?: number,
+  ) {
     super(messageFor(kind, status, apiMessage));
     this.name = 'OortCloudError';
     this.kind = kind;
     this.status = status;
     this.holdQueue = HOLD.has(kind);
     this.apiCode = apiCode;
+    this.retryAfterSec = retryAfterSec;
   }
 }
 
@@ -658,7 +667,13 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       };
       const code = typeof err.error?.code === 'string' ? err.error.code : undefined;
       const message = typeof err.error?.message === 'string' ? err.error.message : undefined;
-      throw new OortCloudError(cloudErrorKind(res.status, code), res.status, message, code);
+      throw new OortCloudError(
+        cloudErrorKind(res.status, code),
+        res.status,
+        message,
+        code,
+        parseRetryAfter(res.headers.get('retry-after')),
+      );
     }
     const t1 = performance.now();
     const conn = connectedSince(t0);

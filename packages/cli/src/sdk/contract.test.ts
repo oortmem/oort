@@ -275,6 +275,7 @@ const errorShape = (e: unknown): Record<string, unknown> => {
     fix: x['fix'],
     status: x['status'],
     retryable: x['retryable'],
+    retryAfter: x['retryAfter'],
     role: x['role'],
     envVar: x['envVar'],
     message: x['message'],

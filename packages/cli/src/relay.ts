@@ -58,9 +58,37 @@ export type RelayErrorKind = 'unauthorized' | 'payment-required' | 'rate-limit' 
  * `MissingCredentialError`: one line that says what happened and the fix.
  * It never carries the key, the request or the relay's own body.
  */
+/**
+ * A `Retry-After` header as whole seconds from now (delta seconds, or an HTTP date); undefined
+ * when absent or unreadable.
+ */
+export function parseRetryAfter(
+  value: string | null | undefined,
+  now = Date.now(),
+): number | undefined {
+  if (value === null || value === undefined || value.trim() === '') return undefined;
+  const v = value.trim();
+  if (/^\d+$/.test(v)) return Number(v);
+  const at = Date.parse(v);
+  return Number.isNaN(at) ? undefined : Math.max(0, Math.ceil((at - now) / 1000));
+}
+
+/** `Retry-After` from an adapter error's response headers (a `Headers` or a plain record). */
+function retryAfterOf(e: unknown): number | undefined {
+  const h = (e as { headers?: unknown } | null)?.headers;
+  if (h === undefined || h === null) return undefined;
+  const raw =
+    typeof (h as Headers).get === 'function'
+      ? (h as Headers).get('retry-after')
+      : (h as Record<string, unknown>)['retry-after'];
+  return parseRetryAfter(typeof raw === 'string' ? raw : undefined);
+}
+
 export class OortRelayError extends Error {
   readonly kind: RelayErrorKind;
   readonly status: number;
+  /** Seconds the relay asked to wait (its `Retry-After`), when it said. */
+  readonly retryAfterSec: number | undefined;
 
   /**
    * `relayMessage` is the relay's own line for a 429 (the monthly cap says which pool and when it
@@ -68,7 +96,7 @@ export class OortRelayError extends Error {
    * message is the generic 429 text. `busy` is the relay's 503: a provider is rate-limited or
    * failing for every Pro user, so it is never this account's cap.
    */
-  constructor(kind: RelayErrorKind, status: number, relayMessage?: string) {
+  constructor(kind: RelayErrorKind, status: number, relayMessage?: string, retryAfterSec?: number) {
     super(
       kind === 'busy'
         ? `Oort Pro is busy, try again shortly (HTTP ${status}).`
@@ -83,6 +111,7 @@ export class OortRelayError extends Error {
     this.name = 'OortRelayError';
     this.kind = kind;
     this.status = status;
+    this.retryAfterSec = retryAfterSec;
   }
 }
 
@@ -93,10 +122,15 @@ export function relayErrorOf(e: unknown): OortRelayError | undefined {
   if (status === 402) return new OortRelayError('payment-required', 402);
   if (status === 429) {
     const msg = (e as { relayMessage?: unknown }).relayMessage;
-    return new OortRelayError('rate-limit', 429, typeof msg === 'string' ? msg : undefined);
+    return new OortRelayError(
+      'rate-limit',
+      429,
+      typeof msg === 'string' ? msg : undefined,
+      retryAfterOf(e),
+    );
   }
   if (status === 401 || status === 403) return new OortRelayError('unauthorized', status);
-  if (status === 503) return new OortRelayError('busy', 503);
+  if (status === 503) return new OortRelayError('busy', 503, undefined, retryAfterOf(e));
   return undefined;
 }
 

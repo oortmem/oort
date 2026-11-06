@@ -137,12 +137,16 @@
     ]
   },
   {
-    "id": "errors.cloud-429-is-refused",
+    "id": "errors.cloud-429-is-refused-and-retryable",
     "transports": ["cloud"],
     "seed": "basic",
     "cloud": {
       "fail": {
-        "POST /v1/recall": 429
+        "POST /v1/recall": {
+          "status": 429,
+          "code": "rate_limit",
+          "retryAfter": "30"
+        }
       }
     },
     "steps": [
@@ -156,7 +160,8 @@
             "code": "refused",
             "reason": "rate-limit",
             "status": 429,
-            "retryable": false
+            "retryable": true,
+            "retryAfter": 30
           }
         }
       }
@@ -434,7 +439,8 @@
         "expect": {
           "error": {
             "code": "refused",
-            "reason": "rate-limit"
+            "reason": "rate-limit",
+            "retryable": true
           }
         }
       }

@@ -28,6 +28,7 @@ export interface OortErrorOptions {
   reason?: string;
   status?: number;
   retryable?: boolean;
+  retryAfter?: number;
 }
 
 export class OortError extends Error {
@@ -39,6 +40,8 @@ export class OortError extends Error {
   /** The HTTP status (cloud). */
   readonly status?: number;
   readonly retryable: boolean;
+  /** Seconds the service asked to wait before a retry (`Retry-After`), when it said. */
+  readonly retryAfter?: number;
 
   constructor(code: OortErrorCode, message: string, opts: OortErrorOptions = {}) {
     super(message);
@@ -48,6 +51,7 @@ export class OortError extends Error {
     if (opts.reason !== undefined) this.reason = opts.reason;
     if (opts.status !== undefined && opts.status > 0) this.status = opts.status;
     this.retryable = opts.retryable ?? false;
+    if (opts.retryAfter !== undefined) this.retryAfter = opts.retryAfter;
   }
 }
 
@@ -160,7 +164,11 @@ const safeName = (e: Error): string => e.name.replace(/[^A-Za-z0-9]/g, '').slice
 /** Oort Cloud's refusal as its SDK class, with the reason its kind and the API's code give. */
 function fromCloud(e: OortCloudError): OortError {
   const info = describeError(e, () => '');
-  const opts = { fix: sdkFix(info.fix), status: e.status };
+  const opts = {
+    fix: sdkFix(info.fix),
+    status: e.status,
+    ...(e.retryAfterSec !== undefined && { retryAfter: e.retryAfterSec }),
+  };
   switch (e.kind) {
     case 'unauthorized':
       return new OortNeedsLoginError(e.message, {
@@ -168,10 +176,12 @@ function fromCloud(e: OortCloudError): OortError {
         fix: 'oort login',
         reason: 'key-rejected',
       });
+    case 'rate-limit':
+      // A limit that passes with time: retry later (after `retryAfter` when the API says).
+      return new OortRefusedError(e.message, { ...opts, reason: e.kind, retryable: true });
     case 'payment-required':
     case 'not-enabled':
     case 'hive-not-enabled':
-    case 'rate-limit':
       return new OortRefusedError(e.message, { ...opts, reason: e.kind });
     case 'refused':
       return new OortRefusedError(e.message, { ...opts, reason: 'forbidden' });
@@ -243,9 +253,21 @@ export function toOortError(e: unknown): OortError {
   if (err instanceof OortRelayError) {
     if (err.kind === 'unauthorized')
       return new OortNeedsLoginError(err.message, { reason: 'key-rejected', status: err.status });
+    const after = err.retryAfterSec === undefined ? {} : { retryAfter: err.retryAfterSec };
     if (err.kind === 'busy')
-      return new OortNetworkError(err.message, { reason: 'busy', status: err.status, fix });
-    return new OortRefusedError(err.message, { reason: err.kind, status: err.status, fix });
+      return new OortNetworkError(err.message, {
+        reason: 'busy',
+        status: err.status,
+        fix,
+        ...after,
+      });
+    return new OortRefusedError(err.message, {
+      reason: err.kind,
+      status: err.status,
+      fix,
+      ...after,
+      ...(err.kind === 'rate-limit' && { retryable: true }),
+    });
   }
   if (own) {
     const reason = err.message.startsWith('scope_denied') ? 'scope-denied' : undefined;

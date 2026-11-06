@@ -65,7 +65,11 @@
           {
             "type": "object",
             "required": ["status", "code"],
-            "properties": { "status": { "type": "integer" }, "code": { "type": "string" } }
+            "properties": {
+              "status": { "type": "integer" },
+              "code": { "type": "string" },
+              "retryAfter": { "type": "string", "description": "A Retry-After header to send." }
+            }
           }
         ]
       }

@@ -32,7 +32,10 @@ export interface FakeCloud {
    * usual code for it; `network` drops the connection; `garbage` answers 200 with a body that is
    * not JSON.
    */
-  fail?: Record<string, number | 'network' | 'garbage' | { status: number; code: string }>;
+  fail?: Record<
+    string,
+    number | 'network' | 'garbage' | { status: number; code: string; retryAfter?: string }
+  >;
   /** Never answers a recall (for hook timeouts). */
   hangRecall?: boolean;
   /** What a recall reports in `degraded` (a server-side stage that was skipped). */
@@ -187,9 +190,13 @@ function forcedFailure(
     if (m !== method || !re.test(pathname)) continue;
     if (what === 'network') throw new TypeError('fetch failed');
     if (what === 'garbage') return new Response('<html>not json</html>', { status: 200 });
-    const { status, code } =
-      typeof what === 'number' ? { status: what, code: STATUS_CODE[what] ?? 'error' } : what;
-    return err(status, code, `forced ${status}`);
+    const { status, code, retryAfter } =
+      typeof what === 'number'
+        ? { status: what, code: STATUS_CODE[what] ?? 'error', retryAfter: undefined }
+        : what;
+    const res = err(status, code, `forced ${status}`);
+    if (retryAfter !== undefined) res.headers.set('retry-after', retryAfter);
+    return res;
   }
   return undefined;
 }
