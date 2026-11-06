@@ -1,5 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import {
+  hasSegmentedScript,
   lexicalIcuVersion,
   LEXICAL_VERSION,
   nodeKey,
@@ -257,7 +258,7 @@ export function migrateV1toV2(db: Database, dimension: number): void {
  * by the history the old index carried. That is accepted: carrying the history over would grow
  * without bound with every past rewrite.
  */
-export function rebuildFts(db: Database, version: 1 | 2): number {
+export function rebuildFts(db: Database, version: 1 | 2, icu = lexicalIcuVersion()): number {
   const tokenize = tokenizerForVersion(version);
   const indexed = (text: string): string => tokenize(text).join(' ');
   db.exec('DROP TABLE IF EXISTS memories_fts');
@@ -289,18 +290,18 @@ export function rebuildFts(db: Database, version: 1 | 2): number {
   }
   // One segment: the rebuild leaves the index as compact as a fresh one, and merges nothing later.
   db.exec("INSERT INTO memories_fts (memories_fts) VALUES ('optimize')");
-  if (version === 2) recordLexical(db);
+  if (version === 2) recordLexical(db, icu);
   else db.exec("DELETE FROM meta WHERE key IN ('lexical_version', 'lexical_icu')");
   return n;
 }
 
-function recordLexical(db: Database): void {
+function recordLexical(db: Database, icu = lexicalIcuVersion()): void {
   const put = db.prepare(
     `INSERT INTO meta (key, value) VALUES (?, ?)
      ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
   );
   put.run('lexical_version', String(LEXICAL_VERSION));
-  put.run('lexical_icu', lexicalIcuVersion());
+  put.run('lexical_icu', icu);
 }
 
 /**
@@ -324,30 +325,55 @@ export function migrateV3toV4(db: Database): void {
   rebuildFts(db, 2);
 }
 
-/** `a` is a later dotted version than `b` (`78.3` after `77.1`); an empty `b` is earlier. */
-function laterVersion(a: string, b: string): boolean {
-  if (a === '') return false;
-  if (b === '') return true;
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] ?? 0;
-    const y = pb[i] ?? 0;
-    if (Number.isNaN(x) || Number.isNaN(y)) return a !== b;
-    if (x !== y) return x > y;
-  }
-  return false;
+/** An ICU version's major number, or undefined when it is empty or not a version at all. */
+function icuMajor(v: string | undefined): number | undefined {
+  const m = /^(\d+)(?:\.\d+)*$/.exec(v ?? '');
+  return m === null ? undefined : Number(m[1]);
+}
+
+/** Whether any memory's indexed text is in a dictionary-segmented script. Read only when needed. */
+function holdsSegmentedText(db: Database): boolean {
+  db.function('oort_segmented', { deterministic: true }, (t: unknown) =>
+    typeof t === 'string' && hasSegmentedScript(t) ? 1 : 0,
+  );
+  return (
+    db
+      .prepare(
+        `SELECT 1 FROM memories
+         WHERE oort_segmented(text) OR oort_segmented(stub) OR oort_segmented(entities) LIMIT 1`,
+      )
+      .get() !== undefined
+  );
 }
 
 /**
- * The drift guard (design §5.2): a version 4 index built by another tokeniser version, or with an
- * older ICU (Thai, Lao, Khmer and Myanmar word breaks come from ICU's dictionaries), is rebuilt.
- * Only a newer ICU triggers it, so processes on two Node versions do not rebuild in turn.
+ * What a version 4 store's lexical index needs on a migrating open (design §5.2):
+ *
+ * - `rebuild`: it was built by another tokeniser version, or by an older ICU major while the
+ *   store holds Thai, Lao, Khmer or Myanmar text (their word breaks come from ICU's
+ *   dictionaries; nothing else changes with ICU). Only a newer major counts, so processes on two
+ *   Node versions do not rebuild in turn.
+ * - `record-icu`: nothing to rebuild, but the recorded ICU version is older (or unknown). An
+ *   index recorded by a newer ICU is left as it is.
+ * - `unknown-icu`: this runtime reports no usable ICU version and the store holds segmented
+ *   text, so drift cannot be checked. Never a rebuild.
+ * - `current`: nothing to do.
  */
-export function lexicalIndexIsStale(db: Database): boolean {
+export function lexicalIndexState(
+  db: Database,
+  icu: string = lexicalIcuVersion(),
+): 'rebuild' | 'record-icu' | 'unknown-icu' | 'current' {
   const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
-  if (get.get('lexical_version')?.value !== String(LEXICAL_VERSION)) return true;
-  return laterVersion(lexicalIcuVersion(), get.get('lexical_icu')?.value ?? '');
+  if (get.get('lexical_version')?.value !== String(LEXICAL_VERSION)) return 'rebuild';
+  const recorded = get.get('lexical_icu')?.value;
+  const now = icuMajor(icu);
+  if (now === undefined) return holdsSegmentedText(db) ? 'unknown-icu' : 'current';
+  if (recorded === icu) return 'current';
+  const was = icuMajor(recorded);
+  // Built by a newer ICU (another Node on this machine): leave it, and its record, alone.
+  if (was !== undefined && now < was) return 'current';
+  if (was !== undefined && now > was && holdsSegmentedText(db)) return 'rebuild';
+  return 'record-icu';
 }
 
 /**
@@ -501,12 +527,16 @@ export interface ApplySchemaOptions {
    * that migrates; `applySchema` never copies anything.
    */
   migrate?: boolean;
+  /** One-line notices (the rebuild, an unknown ICU). Default: none. */
+  log?: (message: string) => void;
+  /** The runtime's ICU version, for the drift guard (default `lexicalIcuVersion()`). */
+  icu?: string;
 }
 
 /**
  * Creates every table and index of a new store at the current version, and
  * migrates a version 1, 2 or 3 store to it (unless `migrate` is false). A version 4 store whose
- * lexical index is stale (`lexicalIndexIsStale`) has it rebuilt, unless `migrate` is false.
+ * lexical index is stale (`lexicalIndexState`) has it rebuilt, unless `migrate` is false.
  * Records `dimension` on first open and refuses a store whose recorded
  * dimension differs, or whose schema version is unknown. Runs in one
  * IMMEDIATE transaction so concurrent first opens (hook processes) serialise:
@@ -551,7 +581,17 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV3toV4(db);
     } else if (version === String(SCHEMA_VERSION)) {
       // The drift guard needs a write; an open that may not migrate (a hook) leaves it to the next.
-      if (opts.migrate !== false && lexicalIndexIsStale(db)) rebuildFts(db, 2);
+      if (opts.migrate !== false) {
+        const icu = opts.icu ?? lexicalIcuVersion();
+        const state = lexicalIndexState(db, icu);
+        if (state === 'rebuild') rebuildFts(db, 2, icu);
+        else if (state === 'record-icu') recordLexical(db, icu);
+        else if (state === 'unknown-icu') {
+          opts.log?.(
+            `sqlite store: this runtime reports no usable ICU version (${JSON.stringify(icu)}); Thai, Lao, Khmer and Myanmar words are matched as the index was built`,
+          );
+        }
+      }
     } else {
       throw new Error(
         `sqlite store: schema version ${version ?? 'unknown'} is not supported (expected ${SCHEMA_VERSION})`,
@@ -563,7 +603,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     // A new store gets the version 2 index here (see `ftsTable`); a migrated one has it already.
     if (!exists(db, 'memories_fts')) {
       db.exec(ftsTable(FTS_TOKENIZE));
-      recordLexical(db);
+      recordLexical(db, opts.icu ?? lexicalIcuVersion());
     }
     if (!exists(db, 'memories_vec')) db.exec(vecV2(dimension));
   }).immediate();

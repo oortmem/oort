@@ -148,3 +148,143 @@ describe('lexical index rebuild (schema version 4)', () => {
     expect(after.bytes).toBe(ftsStats(fresh.dbPath).bytes);
   });
 });
+
+/** A child process that holds the store's write lock for `ms`, then commits and exits. */
+async function holdWriteLock(dbPath: string, ms: number): Promise<{ done: Promise<void> }> {
+  const { spawn } = await import('node:child_process');
+  const child = spawn(
+    process.execPath,
+    [
+      '-e',
+      `const D = require('better-sqlite3'); const db = new D(process.argv[1]);
+       db.exec('BEGIN IMMEDIATE'); process.stdout.write('locked\\n');
+       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.argv[2]));
+       db.exec('COMMIT'); db.close();`,
+      dbPath,
+      String(ms),
+    ],
+    { cwd: path.dirname(fileURLToPath(import.meta.url)), stdio: ['ignore', 'pipe', 'inherit'] },
+  );
+  await new Promise<void>((resolve, reject) => {
+    child.stdout.on('data', (b: Buffer) => b.toString().includes('locked') && resolve());
+    child.on('exit', (code) => reject(new Error(`lock holder exited early (${code})`)));
+  });
+  return { done: new Promise((resolve) => child.on('exit', () => resolve())) };
+}
+
+/** Puts a marker row in the lexical index; a rebuild drops it, anything else keeps it. */
+function mark(dbPath: string): () => boolean {
+  const db = raw(dbPath);
+  try {
+    db.prepare(
+      `INSERT INTO ${ftsName(db)} (rowid, text, stub, entities) VALUES (-99, 'zzmarker', '', '')`,
+    ).run();
+  } finally {
+    db.close();
+  }
+  return () => {
+    const d = raw(dbPath);
+    try {
+      const t = ftsName(d);
+      return d.prepare(`SELECT rowid FROM ${t} WHERE ${t} MATCH 'zzmarker'`).all().length > 0;
+    } finally {
+      d.close();
+    }
+  };
+}
+
+function setMeta(dbPath: string, key: string, value: string): void {
+  const db = raw(dbPath);
+  try {
+    db.prepare('UPDATE meta SET value = ? WHERE key = ?').run(value, key);
+  } finally {
+    db.close();
+  }
+}
+
+const getMeta = (dbPath: string, key: string): string | undefined => {
+  const db = raw(dbPath);
+  try {
+    return db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?').get(key)
+      ?.value;
+  } finally {
+    db.close();
+  }
+};
+
+describe('rebuild cost (CON-110 review)', () => {
+  it('fts-rebuild.says-it-is-rebuilding', async () => {
+    const s = copy3();
+    const lines: string[] = [];
+    await (await openSqliteStore({ ...optsFor(s), log: (m) => lines.push(m) })).close();
+    expect(lines).toContain('Rebuilding the search index (10 memories)…');
+    lines.length = 0;
+    await (await openSqliteStore({ ...optsFor(s), log: (m) => lines.push(m) })).close();
+    expect(lines.filter((l) => l.startsWith('Rebuilding'))).toEqual([]);
+  });
+
+  it('fts-rebuild.a-migrating-open-waits-for-the-write-lock', async () => {
+    const s = copy3();
+    // Another process (a drain, say) holds the lock past the caller's short busy timeout.
+    const lock = await holdWriteLock(s.dbPath, 1500);
+    const store = await openSqliteStore({ ...optsFor(s), busyTimeoutMs: 100 });
+    await store.close();
+    await lock.done;
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+  });
+
+  it('fts-rebuild.icu-rebuild-only-for-a-new-major-with-segmented-text', async () => {
+    const icu = process.versions.icu ?? '';
+    const major = Number(icu.split('.')[0]);
+    // With Thai in the store: an older major rebuilds; the same major does not.
+    const thai = copy3();
+    await (await openSqliteStore(optsFor(thai))).close();
+    setMeta(thai.dbPath, 'lexical_icu', `${major}.0`);
+    const sameMajor = mark(thai.dbPath);
+    await (await openSqliteStore(optsFor(thai))).close();
+    expect(sameMajor(), 'same ICU major: no rebuild').toBe(true);
+    setMeta(thai.dbPath, 'lexical_icu', `${major - 1}.9`);
+    const olderMajor = mark(thai.dbPath);
+    await (await openSqliteStore(optsFor(thai))).close();
+    expect(olderMajor(), 'older ICU major with Thai: rebuilt').toBe(false);
+    expect(getMeta(thai.dbPath, 'lexical_icu')).toBe(icu);
+    // A recorded version that is not a number is unknown: recorded again, never a rebuild.
+    setMeta(thai.dbPath, 'lexical_icu', 'unknown-build');
+    const nonNumeric = mark(thai.dbPath);
+    await (await openSqliteStore(optsFor(thai))).close();
+    expect(nonNumeric(), 'non-numeric ICU: no rebuild').toBe(true);
+    expect(getMeta(thai.dbPath, 'lexical_icu')).toBe(icu);
+
+    // Without any Thai, Lao, Khmer or Myanmar text, a new ICU changes nothing: no rebuild.
+    const dir = fs.mkdtempSync(path.join(root, 'english-'));
+    const en = { dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
+    await (await openSqliteStore(optsFor(en))).close();
+    setMeta(en.dbPath, 'lexical_icu', `${major - 1}.9`);
+    const english = mark(en.dbPath);
+    await (await openSqliteStore(optsFor(en))).close();
+    expect(english(), 'no segmented text: no rebuild').toBe(true);
+    expect(getMeta(en.dbPath, 'lexical_icu')).toBe(icu);
+  });
+});
+
+describe('the ICU guard with an unknown runtime ICU', () => {
+  it('fts-rebuild.unknown-runtime-icu-never-rebuilds-and-warns-for-segmented-text', async () => {
+    const { applySchema } = await import('./schema.js');
+    const s = copy3();
+    await (await openSqliteStore(optsFor(s))).close();
+    setMeta(s.dbPath, 'lexical_icu', '1.0');
+    for (const icu of ['', 'not-a-version']) {
+      const marked = mark(s.dbPath);
+      const db = raw(s.dbPath);
+      const lines: string[] = [];
+      try {
+        applySchema(db, DIM, { icu, log: (m) => lines.push(m) });
+      } finally {
+        db.close();
+      }
+      expect(marked(), `runtime ICU ${JSON.stringify(icu)}: no rebuild`).toBe(true);
+      expect(lines.join('\n')).toMatch(/reports no usable ICU version/);
+      expect(getMeta(s.dbPath, 'lexical_icu')).toBe('1.0');
+    }
+  });
+});

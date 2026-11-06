@@ -131,6 +131,40 @@ describe('oort doctor', () => {
     expect(d.check('store', 'backup')?.detail).toContain('oort.sqlite.pre-v2.');
   });
 
+  it('doctor.says-it-is-rebuilding-the-search-index (CON-110)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      log: () => {},
+    });
+    await s.upsert(TG, memory({ embedding: undefined }));
+    await s.close();
+    downgradeSqliteStore({ path: db, to: 3 });
+    expect(sqliteSchemaVersion(db)).toBe(3);
+    // The store's one-line notices go to stderr, before the migration's transaction.
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let said: string[];
+    try {
+      const d = await doctor(h);
+      expect(d.human.io.stdout).toContain(
+        `migrated the store from schema version 3 to ${SCHEMA_VERSION}`,
+      );
+    } finally {
+      said = err.mock.calls.map((c) => String(c[0]));
+      err.mockRestore();
+    }
+    expect(said).toContain('Rebuilding the search index (1 memory)…\n');
+    expect(said.filter((l) => l.startsWith('Rebuilding'))).toHaveLength(1);
+    expect(sqliteSchemaVersion(db)).toBe(SCHEMA_VERSION);
+    expect(listBackups(db, 'pre-v4')).toHaveLength(1);
+  });
+
   it('doctor.healthy-setup-passes-and-says-which-key-serves-each-role', async () => {
     const h = harness();
     const bin = fakeBin(h);

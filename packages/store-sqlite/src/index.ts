@@ -46,6 +46,7 @@ import {
   applySchema,
   assertMigratable,
   downgradeSchema,
+  lexicalIndexState,
   judgmentCount,
   migrationBlockers,
   schemaVersionOf,
@@ -116,6 +117,12 @@ export interface SqliteStoreOptions {
    */
   log?: (message: string) => void;
 }
+
+/**
+ * How long an open that rebuilds the lexical index (a migration) waits for another connection's
+ * write lock, whatever `busyTimeoutMs` says: it runs once, and failing it would only repeat it.
+ */
+export const MIGRATION_BUSY_TIMEOUT_MS = 60_000;
 
 /** sqlite-vec's upper bound on `k` in a KNN query. */
 const MAX_KNN = 4096;
@@ -454,7 +461,20 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         if (from === 1) assertMigratable(conn);
         backupDatabase(conn, dbPath, from === 1 ? 'pre-v2' : from === 2 ? 'pre-v3' : 'pre-v4');
       }
-      applySchema(conn, dimension, { migrate: opts.migrate !== false });
+      // Every migration from version 3 or older, and a stale version 4 index, rebuilds the lexical
+      // index: say so, and wait as long as another process holds the lock rather than fail.
+      const rebuilds =
+        opts.migrate !== false &&
+        from !== undefined &&
+        (from < SCHEMA_VERSION ||
+          (from === SCHEMA_VERSION && lexicalIndexState(conn) === 'rebuild'));
+      if (rebuilds) {
+        const n = conn.prepare<[], { n: number }>('SELECT count(*) AS n FROM memories').get()?.n;
+        log(`Rebuilding the search index (${n ?? 0} ${n === 1 ? 'memory' : 'memories'})…`);
+        conn.pragma(`busy_timeout = ${Math.max(busyTimeoutMs, MIGRATION_BUSY_TIMEOUT_MS)}`);
+      }
+      applySchema(conn, dimension, { migrate: opts.migrate !== false, log });
+      if (rebuilds) conn.pragma(`busy_timeout = ${busyTimeoutMs}`);
       return conn;
     } catch (e) {
       conn.close();

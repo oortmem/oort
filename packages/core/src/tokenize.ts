@@ -221,6 +221,14 @@ function foldLatin(text: string): string {
     .normalize('NFC');
 }
 
+/**
+ * Whether `text` holds a script whose words come from ICU's dictionaries (Thai, Lao, Khmer,
+ * Myanmar): only those tokens can change when ICU does.
+ */
+export function hasSegmentedScript(text: string): boolean {
+  return SEA.test(text);
+}
+
 /** The ICU version `Intl.Segmenter` uses here, when the runtime reports it ('' otherwise). */
 export function lexicalIcuVersion(): string {
   const p = (globalThis as { process?: { versions?: Record<string, string | undefined> } }).process;

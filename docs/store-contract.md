@@ -208,9 +208,15 @@ entities only), in one transaction, after a copy to `<path>.pre-v4.<UTC time>`. 
 blob or row changes, and no vendor is called. The new index is optimised into one segment. Its
 BM25 row and token totals count the live rows only, where the old index also counted every row
 ever rewritten (a contentless-delete index never subtracts one), so lexical scores shift once, and
-near ties can swap; which memories match does not change. `meta` records `lexical_version` (2) and the ICU version; a migrating open
-rebuilds the index again when the tokeniser version differs or ICU is newer, since Thai word breaks
-come from ICU. Versions 1 and 2 go up to 4 in the same single transaction.
+near ties can swap; which memories match does not change. `meta` records `lexical_version` (2) and the ICU version. A migrating open
+rebuilds the index again when the tokeniser version differs, or when ICU's major version is newer
+than the one recorded and the store holds Thai, Lao, Khmer or Myanmar text (their word breaks come
+from ICU's dictionaries; nothing else changes with ICU). An index recorded by a newer ICU is left
+alone, so two Node versions on one machine do not rebuild in turn, and an ICU version that is empty
+or not a number never triggers a rebuild (with segmented text in the store, the open logs a
+warning). Versions 1 and 2 go up to 4 in the same single transaction. An open that rebuilds prints
+one line first, "Rebuilding the search index (N memories)…", and waits up to 60 seconds
+(`MIGRATION_BUSY_TIMEOUT_MS`) for another connection's write lock, whatever `busyTimeoutMs` is.
 
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the
