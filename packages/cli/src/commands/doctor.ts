@@ -38,7 +38,7 @@ import { Refusal, echo, shown, tilde, withWired, type Ctx } from '../util.js';
 import { hostContext } from './connect.js';
 import { VERSION } from '@oortmem/core';
 import { hookBinaryOf, hookCommandPath, settingsFile, versionManagerOf } from './install.js';
-import { SKIP_FILE, callDaemon, readSkip } from '../serve-client.js';
+import { SKIP_FILE, callDaemon, clearSkip, readSkip } from '../serve-client.js';
 import { socketPathFor } from '../serve-protocol.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info' | 'unknown';
@@ -382,8 +382,10 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
   const show = shown(tilde(socket, ctx.io.env['HOME'] ?? ''));
   const base = { group: 'serve' as const, name: 'daemon' };
   const skip = readSkip(home);
+  // A refusal for a pending migration needs no row: the store check below migrates the store and
+  // reopens the daemon to the hooks.
   const skipping: Check[] =
-    skip !== undefined && skip.until > Date.now()
+    skip !== undefined && skip.until > Date.now() && skip.reason !== 'migration'
       ? [
           {
             group: 'serve',
@@ -574,6 +576,9 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
       status: 'ok',
       detail: `${tilde(db, userHome)} opens; ${count} ${count === 1 ? 'memory' : 'memories'} visible from here`,
     });
+    // The store opened at the current schema (migrated now, or earlier by another command): a
+    // daemon refused for a pending migration may start, and the hooks may try it again.
+    if (readSkip(home)?.reason === 'migration') clearSkip(home);
     if (before !== undefined && before < SCHEMA_VERSION) {
       checks.push({
         group: 'store',

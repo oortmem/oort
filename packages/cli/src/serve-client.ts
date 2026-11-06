@@ -232,13 +232,14 @@ export const SKIP_FILE = 'serve.skip-until';
 export const SKIP_AFTER_TIMEOUT_MS = 5 * 60_000;
 export const SKIP_AFTER_REFUSAL_MS = 60_000;
 
-export type SkipReason = 'timeout' | 'refused';
+/** `migration`: the daemon would not start because the store needs its schema migration (`oort doctor`). */
+export type SkipReason = 'timeout' | 'refused' | 'migration';
 export interface Skip {
   until: number;
   reason?: SkipReason;
 }
 
-const SKIP_LINE = /^(\d{1,16})(?: (timeout|refused))?\s*$/;
+const SKIP_LINE = /^(\d{1,16})(?: (timeout|refused|migration))?\s*$/;
 
 /** The marker's text, undefined when there is none. One read. */
 function readSkipText(home: string): string | undefined {

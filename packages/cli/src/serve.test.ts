@@ -743,13 +743,62 @@ describe('oort serve security review fixes', () => {
     const session = JSON.stringify({ session_id: 's-mig', cwd: s.cwd, source: 'startup' });
     expect((await oort(s, ['hook', 'SessionStart'], { input: session })).exitCode).toBe(0);
     // The spawned daemon refuses (migration pending) and opens the breaker.
-    await until(() => readSkip(s.oortHome)?.reason === 'refused');
+    await until(() => readSkip(s.oortHome)?.reason === 'migration');
     const logBefore = fs.readFileSync(path.join(s.oortHome, 'logs', 'serve.log'), 'utf8');
     expect(logBefore).toContain('never migrates');
     // The next session does not spawn another one.
     expect((await oort(s, ['hook', 'SessionStart'], { input: session })).exitCode).toBe(0);
     await sleep(1500);
     expect(fs.readFileSync(path.join(s.oortHome, 'logs', 'serve.log'), 'utf8')).toBe(logBefore);
+  });
+
+  it('serve.after-an-upgrade-says-run-oort-doctor-and-doctor-reopens-it', async () => {
+    const s = sandbox();
+    await seed(s, [memory({ embedding: new Int8Array(512).fill(3) })]);
+    const db = path.join(s.oortHome, 'oort.sqlite');
+    downgradeSqliteStore({ path: db });
+    // --detach names the cause and the fix, without waiting out its whole start budget.
+    const t0 = Date.now();
+    const detached = await oort(s, ['serve', '--detach']);
+    expect(detached.exitCode).toBe(1);
+    expect(detached.stderr).toContain('needs its schema migration');
+    expect(detached.stderr).toContain('oort doctor');
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(readSkip(s.oortHome)?.reason).toBe('migration');
+    // status says why the last start was refused, then closes the breaker as before.
+    const st = await oort(s, ['serve', 'status']);
+    expect(st.exitCode).toBe(1);
+    expect(st.stdout).toContain('needs its schema migration');
+    expect(st.stdout).toContain('run oort doctor');
+    expect(readSkip(s.oortHome)).toBeUndefined();
+    // doctor migrates and clears a migration refusal, so the hooks try the daemon again at once.
+    fs.writeFileSync(path.join(s.oortHome, SKIP_FILE), `${Date.now() + 60_000} migration\n`);
+    const json = await oort(s, ['serve', 'status', '--json']);
+    expect(JSON.parse(json.stdout)).toMatchObject({ running: false, needsMigration: true });
+    fs.writeFileSync(path.join(s.oortHome, SKIP_FILE), `${Date.now() + 60_000} migration\n`);
+    const doc = await oort(s, ['doctor', '--json']);
+    const checks = (JSON.parse(doc.stdout) as { checks: { group: string; name: string }[] }).checks;
+    expect(checks.some((c) => c.group === 'serve' && c.name === 'hooks')).toBe(false);
+    expect(checks.some((c) => c.name === 'migration')).toBe(true);
+    expect(readSkip(s.oortHome)).toBeUndefined();
+    const again = await oort(s, ['serve', '--detach']);
+    expect(again.exitCode).toBe(0);
+    expect((await oort(s, ['serve', 'stop'])).exitCode).toBe(0);
+  });
+
+  it('serve.a-stale-migration-marker-is-not-reported-and-doctor-clears-it', async () => {
+    const s = sandbox();
+    await seed(s, [memory({ embedding: new Int8Array(512).fill(3) })]);
+    // The store is current (another command migrated it); the marker is left over and expired.
+    fs.writeFileSync(path.join(s.oortHome, SKIP_FILE), `${Date.now() - 1000} migration\n`);
+    const json = await oort(s, ['serve', 'status', '--json']);
+    expect(JSON.parse(json.stdout)).not.toHaveProperty('needsMigration');
+    // A live marker on a current store: doctor clears it even though it migrated nothing.
+    fs.writeFileSync(path.join(s.oortHome, SKIP_FILE), `${Date.now() + 60_000} migration\n`);
+    const doc = await oort(s, ['doctor', '--json']);
+    const checks = (JSON.parse(doc.stdout) as { checks: { name: string }[] }).checks;
+    expect(checks.some((c) => c.name === 'migration')).toBe(false);
+    expect(readSkip(s.oortHome)).toBeUndefined();
   });
 
   it('serve.one-connection-may-queue-at-most-8-requests (L3)', async () => {
