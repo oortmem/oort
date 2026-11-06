@@ -10,6 +10,7 @@ import {
   expectRefusedWithoutPrompt,
   fakeIo,
   tmpdir,
+  data,
 } from '../test/helpers.js';
 import { writeCloudSettings } from './cloud.js';
 import { inviteToken } from './commands/constellation.js';
@@ -118,7 +119,7 @@ describe('oort constellation invite and join (CON-64)', () => {
     expect(r.io.stdout).toMatch(/https:\/\/oortcloud\.dev\/invite#oort_iv_/);
     expect(r.io.stdout).toContain('expires 2026-11-12');
     const json = await e.run(['constellation', 'invite', 'oort-core', 'kim@example.com', '--json']);
-    expect(JSON.parse(json.io.stdout)).toMatchObject({ role: 'member', emailed: false });
+    expect(data(json.io.stdout)).toMatchObject({ role: 'member', emailed: false });
   });
 
   it('invite.prints-the-clouds-note-when-no-email-was-sent-and-still-the-link', async () => {
@@ -411,7 +412,7 @@ describe('oort keys create (CON-64)', () => {
     expect(r.io.stdout).toContain(`planet, ${C}:read`);
     expect(r.io.stdout).toContain('only time the key is shown');
     const full = await e.run(['keys', 'create', '--json']);
-    expect(JSON.parse(full.io.stdout)).toMatchObject({ scope: null });
+    expect(data(full.io.stdout)).toMatchObject({ scope: null });
     expect(e.cloud.keyRequests.at(-1)).toEqual({});
     const bad = await e.run(['keys', 'create', '--scope', 'oort-core']);
     expect(bad.code).toBe(2);
@@ -430,7 +431,7 @@ describe('oort whoami and doctor list spaces (CON-64)', () => {
     expect(e.cloud.whoamiAgents).toEqual([null]);
     const asCursor = await e.run(['--agent', 'cursor', 'whoami', '--json']);
     expect(e.cloud.whoamiAgents.at(-1)).toBe('cursor');
-    expect(JSON.parse(asCursor.io.stdout).spaces).toEqual([{ level: 'planet' }]);
+    expect(data(asCursor.io.stdout).spaces).toEqual([{ level: 'planet' }]);
     e.cloud.narrowed = true;
     expect((await e.run(['whoami'])).io.stdout).toContain('narrowed to the spaces below');
   });
@@ -439,7 +440,7 @@ describe('oort whoami and doctor list spaces (CON-64)', () => {
     const e = setup('local');
     const r = await e.run(['--agent', 'cursor', 'whoami', '--json']);
     expect(r.code, r.io.stderr).toBe(0);
-    expect(JSON.parse(r.io.stdout)).toMatchObject({
+    expect(data(r.io.stdout)).toMatchObject({
       mode: 'local',
       agent: 'cursor',
       spaces: [{ level: 'planet' }, { level: 'star', agent: 'cursor' }],
@@ -451,7 +452,7 @@ describe('oort whoami and doctor list spaces (CON-64)', () => {
     const e = setup();
     team(e);
     const r = await e.run(['doctor', '--json']);
-    const { checks } = JSON.parse(r.io.stdout) as {
+    const { checks } = data(r.io.stdout) as {
       checks: { group: string; name: string; detail: string }[];
     };
     const spaces = checks.find((c) => c.group === 'cloud' && c.name === 'spaces');
@@ -540,7 +541,7 @@ describe('server strings never reach the terminal raw (CON-64 review)', () => {
     // JSON output stays JSON: escaped by JSON, the value intact when parsed.
     const j = await e.run(['constellation', 'members', 'oort-core', '--json']);
     expect(j.io.stdout.includes(ESC)).toBe(false);
-    expect((JSON.parse(j.io.stdout) as { email: string | null }[])[1]!.email).toBe(
+    expect(data<{ members: { email: string | null }[] }>(j.io.stdout).members[1]!.email).toBe(
       `ev${ESC}[2J@example.com`,
     );
   });

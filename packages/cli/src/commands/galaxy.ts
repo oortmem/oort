@@ -1,6 +1,7 @@
 import { OortCloudError, type CloudGalaxy, type CloudGalaxyRole } from '../cloud.js';
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
-import { Refusal, safeJson, shown, type Ctx } from '../util.js';
+import { Refusal, shown, type Ctx } from '../util.js';
 import { clientFor } from './cloud.js';
 import { platformOpener } from './login.js';
 
@@ -36,11 +37,12 @@ export function resolveGalaxy(all: CloudGalaxy[], ref: string): CloudGalaxy {
   if (matches.length > 1) {
     throw new Refusal(
       `Several of your Galaxies match that: ${matches.map((g) => `${galaxyLine(g)} ${shown(g.id)}`).join(', ')}. Use its id.`,
+      { code: 'ambiguous-id' },
     );
   }
   const found = matches[0];
   if (found === undefined) {
-    throw new Refusal('No such Galaxy among yours. See `oort galaxy list`.');
+    throw new Refusal('No such Galaxy among yours. See `oort galaxy list`.', { code: 'not-found' });
   }
   return found;
 }
@@ -49,8 +51,8 @@ export function resolveGalaxy(all: CloudGalaxy[], ref: string): CloudGalaxy {
 export async function galaxyListCommand(opts: { json?: boolean }, ctx: Ctx): Promise<number> {
   const client = await clientFor(ctx);
   const all = await client.galaxies();
-  if (opts.json === true) {
-    ctx.io.out(`${safeJson(all)}\n`);
+  if (jsonMode(ctx)) {
+    emit(ctx, { galaxies: all });
     return 0;
   }
   const ui = uiFor(ctx.io);
@@ -87,12 +89,14 @@ export async function galaxyMembersCommand(
   } catch (e) {
     // The API's 404 for a Galaxy you are not in (or that does not exist).
     if (e instanceof OortCloudError && e.kind === 'not-found') {
-      throw new Refusal('No such Galaxy among yours. See `oort galaxy list`.');
+      throw new Refusal('No such Galaxy among yours. See `oort galaxy list`.', {
+        code: 'not-found',
+      });
     }
     throw e;
   }
-  if (opts.json === true) {
-    ctx.io.out(`${safeJson(r)}\n`);
+  if (jsonMode(ctx)) {
+    emit(ctx, r);
     return 0;
   }
   const ui = uiFor(ctx.io);
@@ -138,5 +142,6 @@ export async function galaxyCreateCommand(
   ctx.io.out(
     'Then `oort galaxy list` shows it, and `oort constellation create <name> --galaxy <slug>` adds a Constellation to it.\n',
   );
+  if (jsonMode(ctx)) emit(ctx, { name: n, url: page, opened });
   return 0;
 }

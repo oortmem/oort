@@ -4,8 +4,9 @@ import { OortConfig, resolveHome, writePrivateFile } from '@oortmem/core';
 import { readEmbedderBinding } from '@oortmem/store-sqlite';
 import type { ModelSpec } from '@oortmem/local-models';
 import { LOCAL_PROVIDER, embedderId, importLocalModels } from '../local-models.js';
+import { emit, isNetworkError, jsonMode } from '../output.js';
 import { uiFor, type Ui } from '../ui.js';
-import { Refusal, echo, tilde, type Ctx } from '../util.js';
+import { Refusal, echo, noteWarning, tilde, type Ctx } from '../util.js';
 
 type LocalModels = Exclude<Awaited<ReturnType<typeof importLocalModels>>, Error>;
 
@@ -73,6 +74,7 @@ function specsFor(lm: LocalModels, ids: readonly string[]): ModelSpec[] {
     if (spec === undefined) {
       throw new Refusal(
         `${echo(id)} is not a local model; choose from ${lm.MODELS.map((m) => m.id).join(', ')}.`,
+        { code: 'not-found', fix: 'oort models list' },
       );
     }
     return spec;
@@ -94,8 +96,8 @@ export async function modelsListCommand(opts: { json?: boolean }, ctx: Ctx): Pro
     state: lm.modelState(home, m),
     active: active[m.role] === m.id,
   }));
-  if (opts.json === true) {
-    ctx.io.out(`${JSON.stringify({ models: rows }, null, 2)}\n`);
+  if (jsonMode(ctx)) {
+    emit(ctx, { root: lm.modelsRoot(home), models: rows });
     return 0;
   }
   const ui = uiFor(ctx.io);
@@ -150,8 +152,11 @@ export async function modelsPullCommand(
   const baseUrl = ctx.io.env['OORT_MODELS_URL'];
   const runtime = lm.onnxRuntime();
   ctx.io.out(ui.header('models pull', tilde(lm.modelsRoot(home), ctx.io.env['HOME'] ?? '')));
+  const pulled: { id: string; role: string; downloaded: boolean; optimized: boolean }[] = [];
   for (const spec of specs) {
     const state = lm.modelState(home, spec);
+    const row = { id: spec.id, role: spec.role, downloaded: state !== 'ready', optimized: true };
+    pulled.push(row);
     if (state === 'ready') {
       ctx.io.out(`${ui.ok(`${spec.id} is already downloaded`)}\n`);
     } else {
@@ -173,7 +178,10 @@ export async function modelsPullCommand(
         });
       } catch (e) {
         if (shown >= 0) ctx.io.err('\n');
-        throw new Refusal(`${(e as Error).message}`);
+        const err = e as Error;
+        throw new Refusal(`${err.message}`, {
+          code: isNetworkError(err) ? 'network' : 'refused',
+        });
       }
       if (shown >= 0) ctx.io.err('\n');
       ctx.io.out(`${ui.ok(`${spec.id}: verified (SHA-256 of every file matches its pin)`)}\n`);
@@ -181,15 +189,17 @@ export async function modelsPullCommand(
     try {
       await runtime.optimize?.(lm.modelDir(home, spec.id));
     } catch (e) {
-      ctx.io.out(
-        `${ui.warn(`${spec.id}: optimised cache skipped (${(e as Error).name}); loads are slower`)}\n`,
-      );
+      row.optimized = false;
+      const msg = `${spec.id}: optimised cache skipped (${(e as Error).name}); loads are slower`;
+      ctx.io.out(`${ui.warn(msg)}\n`);
+      noteWarning(ctx, 'optimize-skipped', msg);
     }
   }
   if (opts.use === false) {
     ctx.io.out(
       ui.dim('\nDownloaded only (--no-use). Use them with `oort models pull` without --no-use.\n'),
     );
+    if (jsonMode(ctx)) emit(ctx, { models: pulled, used: false, config: {} });
     return 0;
   }
   const changed: string[] = [];
@@ -202,6 +212,13 @@ export async function modelsPullCommand(
   const embed = specs.find((s) => s.role === 'embed');
   if (embed !== undefined)
     mismatchNote(ctx, ui, home, embedderId({ provider: LOCAL_PROVIDER, model: embed.id }));
+  if (jsonMode(ctx)) {
+    emit(ctx, {
+      models: pulled,
+      used: true,
+      config: Object.fromEntries(specs.map((s) => [s.role, `${LOCAL_PROVIDER}/${s.id}`])),
+    });
+  }
   return 0;
 }
 
@@ -211,9 +228,9 @@ function mismatchNote(ctx: Ctx, ui: Ui, home: string, active: string): void {
   if (!binding.hasMemories) return;
   const bound = binding.model ?? 'voyage/voyage-3.5-lite';
   if (bound === active) return;
-  ctx.io.out(
-    `${ui.warn(`Your memories are embedded with ${bound}. Run \`oort reembed\` to re-embed them with ${active}; until then dense recall and saving are off.`)}\n`,
-  );
+  const msg = `Your memories are embedded with ${bound}. Run \`oort reembed\` to re-embed them with ${active}; until then dense recall and saving are off.`;
+  ctx.io.out(`${ui.warn(msg)}\n`);
+  noteWarning(ctx, 'reembed-needed', msg);
 }
 
 /** `oort models verify [ids...]`: re-hashes downloaded models against their pins. */
@@ -227,19 +244,24 @@ export async function modelsVerifyCommand(ids: string[], ctx: Ctx): Promise<numb
       : lm.MODELS.filter((m) => lm.modelState(home, m) !== 'missing');
   if (specs.length === 0) {
     ctx.io.out('No local models are downloaded.\n');
+    if (jsonMode(ctx)) emit(ctx, { models: [], ok: true });
     return 0;
   }
   let bad = 0;
+  const results: { id: string; ok: boolean; bad: string[] }[] = [];
   for (const spec of specs) {
     const r = await lm.verifyModel(home, spec);
+    results.push({ id: spec.id, ok: r.ok, bad: r.ok ? [] : r.bad });
     if (r.ok) ctx.io.out(`${ui.ok(`${spec.id}: every file matches its SHA-256`)}\n`);
     else {
       bad++;
-      ctx.io.out(
-        `${ui.fail(`${spec.id}: ${r.bad.join(', ')} changed or missing; run \`oort models pull ${spec.id}\``)}\n`,
-      );
+      const msg = `${spec.id}: ${r.bad.join(', ')} changed or missing; run \`oort models pull ${spec.id}\``;
+      ctx.io.out(`${ui.fail(msg)}\n`);
+      noteWarning(ctx, 'checksum-mismatch', msg);
     }
   }
+  // A mismatch exits 1, like a status query that finds a problem; the envelope lists each model.
+  if (jsonMode(ctx)) emit(ctx, { models: results, ok: bad === 0 });
   return bad === 0 ? 0 : 1;
 }
 
@@ -256,10 +278,16 @@ export async function modelsRmCommand(ids: string[], ctx: Ctx): Promise<number> 
       ? specsFor(lm, ids)
       : lm.MODELS.filter((m) => lm.modelState(home, m) !== 'missing');
   const active = activeLocal(home);
+  const deleted: string[] = [];
+  const reset: string[] = [];
   for (const spec of specs) {
-    if (lm.removeModel(home, spec.id)) ctx.io.out(`${ui.ok(`deleted ${spec.id}`)}\n`);
+    if (lm.removeModel(home, spec.id)) {
+      deleted.push(spec.id);
+      ctx.io.out(`${ui.ok(`deleted ${spec.id}`)}\n`);
+    }
     if (active[spec.role] === spec.id) {
       setHomeModel(home, spec.role, null);
+      reset.push(spec.role);
       ctx.io.out(
         `${ui.ok(`${spec.role} is back to the default provider (Voyage, when a key or Oort Pro is set)`)}\n`,
       );
@@ -270,5 +298,6 @@ export async function modelsRmCommand(ids: string[], ctx: Ctx): Promise<number> 
     }
   }
   if (specs.length === 0) ctx.io.out('No local models are downloaded.\n');
+  if (jsonMode(ctx)) emit(ctx, { deleted, reset });
   return 0;
 }

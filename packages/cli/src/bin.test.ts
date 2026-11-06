@@ -10,7 +10,7 @@ import { fakeSite } from '../test/fake-site.js';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { OortConfig, projectIdFor, type Memory } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
-import { memory, syntheticKey, tmpdir, writeTranscript } from '../test/helpers.js';
+import { memory, syntheticKey, tmpdir, writeTranscript, data } from '../test/helpers.js';
 import { TG } from '@oortmem/core/store-conformance';
 import { localGrant } from '@oortmem/core';
 
@@ -154,7 +154,7 @@ describe('oort bin', () => {
 
     const json = await oort(s, ['recall', 'auth service port', '--json']);
     expect(json.exitCode).toBe(0);
-    const parsed = JSON.parse(json.stdout) as {
+    const parsed = data(json.stdout) as {
       memories: { explanation: unknown }[];
       degraded: string[];
     };
@@ -416,9 +416,10 @@ describe('oort bin', () => {
   it('cli.doctor-json-reports-every-group-and-creates-nothing', async () => {
     const s = sandbox();
     const r = await oort(s, ['doctor', '--json']);
+    // No keys in the sandbox: warnings only, which exit 0; data.status says `warn`.
     expect(r.exitCode).toBe(0);
-    const report = JSON.parse(r.stdout) as { ok: boolean; checks: { group: string }[] };
-    expect(report.ok).toBe(true);
+    const report = data(r.stdout, 'doctor') as { status: string; checks: { group: string }[] };
+    expect(report.status).toBe('warn');
     expect([...new Set(report.checks.map((c) => c.group))]).toEqual([
       'keys',
       'hooks',

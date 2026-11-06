@@ -6,7 +6,7 @@ import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { addressed, localGrant, setAgentStar, type Memory } from '@oortmem/core';
 import { nodesGrant } from '@oortmem/core/store-conformance';
 import { describe, expect, it } from 'vitest';
-import { harness, memory, type Harness } from '../test/helpers.js';
+import { harness, memory, type Harness, data } from '../test/helpers.js';
 import { createOortServer } from './mcp.js';
 import { wire as realWire } from './wire.js';
 
@@ -35,7 +35,7 @@ async function household(h: Harness): Promise<Record<string, Memory>> {
 }
 
 const ids = (stdout: string): string[] =>
-  (JSON.parse(stdout) as { memories: { id: string }[] }).memories.map((m) => m.id);
+  (data(stdout) as { memories: { id: string }[] }).memories.map((m) => m.id);
 
 describe('agents: one Planet, a Star each', () => {
   it('agents.recall-reads-the-planet-and-only-its-own-star', async () => {
@@ -71,7 +71,7 @@ describe('agents: one Planet, a Star each', () => {
     expect(e.io.stdout).toContain("this agent's Star");
     expect(e.io.stdout).toContain('your Planet');
     const j = await h.run(['--agent', 'cursor', 'explain', 'auth service port', '--json']);
-    const out = JSON.parse(j.io.stdout) as {
+    const out = data(j.io.stdout) as {
       agent: { id: string; home: string };
       read: string[];
       memories: { origin: { from: string; author: string } }[];
@@ -181,8 +181,7 @@ describe('agents: one Planet, a Star each', () => {
     ]);
     await w.close();
     const d = await h.run(['--agent', 'cursor', 'doctor', '--json'], { env });
-    const checks = (JSON.parse(d.io.stdout) as { checks: { name: string; detail: string }[] })
-      .checks;
+    const checks = (data(d.io.stdout) as { checks: { name: string; detail: string }[] }).checks;
     const detail = (n: string) => checks.find((c) => c.name === n)?.detail;
     expect(detail('spaces')).toBe('Planet: 1 memory (every project); Star cursor: 1 memory');
     expect(detail('agent')).toContain('acting as cursor (from --agent)');
@@ -192,9 +191,8 @@ describe('agents: one Planet, a Star each', () => {
     expect(cc.io.stdout).toContain('Star claude-code: 0 memories');
     // No agent named: the Planet only, and doctor says so.
     const none = await h.run(['doctor', '--json'], { env });
-    const noneChecks = (
-      JSON.parse(none.io.stdout) as { checks: { name: string; detail: string }[] }
-    ).checks;
+    const noneChecks = (data(none.io.stdout) as { checks: { name: string; detail: string }[] })
+      .checks;
     expect(noneChecks.find((c) => c.name === 'spaces')?.detail).toBe(
       'Planet: 1 memory (every project)',
     );
@@ -253,7 +251,7 @@ describe('agents: review follow-ups', () => {
     const d = await h.run(['doctor', '--json'], {}, undefined, {
       fetch: (async () => Response.json({ ok: true })) as typeof fetch,
     });
-    const check = (JSON.parse(d.io.stdout) as { checks: Record<string, string>[] }).checks.find(
+    const check = (data(d.io.stdout) as { checks: Record<string, string>[] }).checks.find(
       (c) => c['group'] === 'mcp' && c['name'] === 'cursor',
     );
     expect(check).toMatchObject({ status: 'warn', fix: 'oort connect cursor' });

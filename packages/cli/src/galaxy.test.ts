@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeCloud, type FakeCloud } from '../test/fake-cloud.js';
-import { fakeIo, tmpdir } from '../test/helpers.js';
+import { fakeIo, tmpdir, data } from '../test/helpers.js';
 import { writeCloudSettings } from './cloud.js';
 import { GALAXY_PAGE, galaxyLine, resolveGalaxy } from './commands/galaxy.js';
 import { createKeychain } from './keychain.js';
@@ -91,7 +91,7 @@ describe('oort galaxy (CON-97)', () => {
     expect(r.code, r.io.stderr).toBe(0);
     expect(r.io.stdout).toMatch(/Acme {2}admin {2}3 people {2}1 Constellation {2}acme/);
     const j = await e.run(['galaxy', 'list', '--json']);
-    expect(JSON.parse(j.io.stdout)).toEqual([
+    expect(data(j.io.stdout, 'galaxy list').galaxies).toEqual([
       { id: G, name: 'Acme', slug: 'acme', role: 'admin', members: 3, constellations: 1 },
     ]);
     // `oort galaxy` alone lists too.
@@ -120,7 +120,7 @@ describe('oort galaxy (CON-97)', () => {
       expect(r.io.stdout).toContain('gm_000000000002  admin  you');
       expect(r.io.stdout).toContain('gm_000000000003  member  a member');
     }
-    const j = JSON.parse((await e.run(['galaxy', 'members', 'acme', '--json'])).io.stdout) as {
+    const j = data((await e.run(['galaxy', 'members', 'acme', '--json'])).io.stdout) as {
       galaxy: unknown;
       members: unknown[];
     };
@@ -218,10 +218,10 @@ describe('oort galaxy (CON-97)', () => {
     const w = await e.run(['whoami']);
     expect(w.code, w.io.stderr).toBe(0);
     expect(w.io.stdout).toContain('Galaxy Acme (acme, admin)');
-    const wj = JSON.parse((await e.run(['whoami', '--json'])).io.stdout) as { galaxies: unknown };
+    const wj = data((await e.run(['whoami', '--json'])).io.stdout) as { galaxies: unknown };
     expect(wj.galaxies).toEqual([{ id: G, name: 'Acme', slug: 'acme', role: 'admin' }]);
     const d = await e.run(['doctor', '--json']);
-    const { checks } = JSON.parse(d.io.stdout) as {
+    const { checks } = data(d.io.stdout) as {
       checks: { group: string; name: string; detail: string }[];
     };
     expect(checks.find((c) => c.group === 'cloud' && c.name === 'galaxies')?.detail).toBe(
@@ -229,7 +229,7 @@ describe('oort galaxy (CON-97)', () => {
     );
     // No Galaxy: no galaxies check, and whoami lists none.
     e.cloud.hive.galaxies.clear();
-    const d2 = JSON.parse((await e.run(['doctor', '--json'])).io.stdout) as {
+    const d2 = data((await e.run(['doctor', '--json'])).io.stdout) as {
       checks: { name: string }[];
     };
     expect(d2.checks.some((c) => c.name === 'galaxies')).toBe(false);

@@ -33,8 +33,18 @@ import { galaxyLine } from './galaxy.js';
 import { spaceLine } from './whoami.js';
 import { LOCAL_INSTALL_HINT, LOCAL_PROVIDER, importLocalModels } from '../local-models.js';
 import { RELAY_MODELS, relayUrl } from '../relay.js';
+import { emit, jsonMode } from '../output.js';
 import { uiFor, type Ui } from '../ui.js';
-import { Refusal, echo, keyRemedy, shown, tilde, withWired, type Ctx } from '../util.js';
+import {
+  Refusal,
+  echo,
+  fixForRoles,
+  keyRemedy,
+  shown,
+  tilde,
+  withWired,
+  type Ctx,
+} from '../util.js';
 import { hostContext } from './connect.js';
 import { VERSION } from '@oortmem/core';
 import { hookBinaryOf, hookCommandPath, settingsFile, versionManagerOf } from './install.js';
@@ -51,6 +61,35 @@ export interface Check {
   detail: string;
   /** One command or sentence that fixes a `warn` or `fail`. */
   fix?: string;
+  /**
+   * The command in `fix`, runnable as it is, when the fix is one (`--json` only): set where the
+   * sentence wraps it, else `fix` itself when it is a bare command (`commandIn`).
+   */
+  fixCommand?: string;
+}
+
+const RUNNABLE =
+  /^(oort( [a-z0-9][a-z0-9.-]*| --?[a-z][a-z-]*)+|npm i -g [a-z0-9@/.-]+|chmod [0-7]{3} [^\s;&|`$]+)$/;
+
+/** `fix` when it is one runnable command (or `a && b` of them), else undefined. */
+export function commandIn(fix: string | undefined): string | undefined {
+  if (fix === undefined) return undefined;
+  return fix.split(' && ').every((part) => RUNNABLE.test(part)) ? fix : undefined;
+}
+
+/**
+ * Doctor's exit code: 1 when a check failed, else 0. Warnings alone exit 0: a keyless or
+ * local-only install is a supported state, so `oort doctor && …` keeps working; `--json`'s
+ * `data.status` (ok, warn, fail) tells them apart.
+ */
+export function doctorExit(checks: readonly Check[]): 0 | 1 {
+  return checks.some((c) => c.status === 'fail') ? 1 : 0;
+}
+
+/** The overall state `--json` reports: `fail` when a check failed, `warn` for warnings only. */
+export function doctorStatus(checks: readonly Check[]): 'ok' | 'warn' | 'fail' {
+  if (checks.some((c) => c.status === 'fail')) return 'fail';
+  return checks.some((c) => c.status === 'warn') ? 'warn' : 'ok';
 }
 
 const ROLE_NEED: Record<AdapterRole, string> = {
@@ -159,6 +198,7 @@ async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean 
         detail: `no ${r.provider} key and no Oort key, so ${ROLE_NEED[role]}`,
         // The shared remedy: local models first (embed and rerank), never `export KEY=...`.
         fix: keyRemedy({ roles: [role], keyStore: ctx.keychain.supported, code: false }),
+        ...withCommand(fixForRoles([role], ctx.keychain.supported)),
       });
       continue;
     }
@@ -224,6 +264,7 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
         status: 'fail',
         detail: (e as Error).message.split('\n')[0] ?? 'unreadable settings',
         fix: `fix the JSON in ${show}, then oort install claude-code`,
+        fixCommand: HOOK_FIX,
       },
     ];
   }
@@ -349,6 +390,7 @@ async function hookBinaryChecks(
         status: 'warn',
         detail: `${show} did not report a version for --version`,
         fix: REINSTALL_FIX,
+        fixCommand: HOOK_FIX,
       });
     } else if (got !== VERSION) {
       checks.push({
@@ -357,6 +399,7 @@ async function hookBinaryChecks(
         status: 'warn',
         detail: `the hooks run oort ${got} (${show}), but this is oort ${VERSION}`,
         fix: REINSTALL_FIX,
+        fixCommand: HOOK_FIX,
       });
     } else {
       checks.push({
@@ -392,6 +435,7 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
             status: 'warn',
             detail: `skip the daemon until ${new Date(skip.until).toISOString()}, after ${skip.reason === 'refused' ? 'a refusal (another protocol or version, an answer that is not a hook result, or a daemon that would not start)' : 'a hook timed out on it'}; they run in-process (${SKIP_FILE})`,
             fix: 'oort serve status (tries it again), or oort serve stop && oort serve --detach',
+            fixCommand: 'oort serve status',
           },
         ]
       : [];
@@ -702,6 +746,7 @@ export function consolidationCheck(home: string, now = new Date()): Check {
       status: 'info',
       detail: `never ran from the hooks; ${next}`,
       fix: 'oort consolidate runs it now',
+      fixCommand: 'oort consolidate',
     };
   }
   const last =
@@ -797,6 +842,7 @@ async function cloudChecks(ctx: Ctx): Promise<Check[]> {
             status: 'warn',
             detail: `${stars.join(', ')} ${stars.length === 1 ? 'keeps' : 'keep'} a Star, which Oort Cloud does not have yet: their saves are refused (the hooks save nothing) until this changes`,
             fix: `oort connect ${stars[0]} --no-star, or oort cloud use --local`,
+            fixCommand: `oort connect ${stars[0]} --no-star`,
           },
         ]
       : [];
@@ -817,6 +863,7 @@ async function cloudStoreChecks(
         status: 'info',
         detail: 'local store on this machine',
         fix: 'oort cloud use, to keep memories in Oort Cloud (Oort Pro)',
+        fixCommand: 'oort cloud use',
       },
     ];
   }
@@ -840,6 +887,7 @@ async function cloudStoreChecks(
         status: 'fail',
         detail: 'cloud mode is on, but there is no Oort key: hooks inject nothing and saves wait',
         fix: 'oort login (or oort cloud use --local)',
+        fixCommand: 'oort login',
       },
     ];
   }
@@ -892,6 +940,7 @@ async function cloudStoreChecks(
           err.kind === 'network' || err.kind === 'busy'
             ? 'check your network; saves wait in the local queue meanwhile'
             : 'oort login, or oort cloud use --local',
+        ...(err.kind !== 'network' && err.kind !== 'busy' && { fixCommand: 'oort login' }),
       },
     ];
   }
@@ -915,6 +964,9 @@ function paint(ui: Ui, status: CheckStatus, s: string): string {
         : ui.dim(s);
 }
 
+const withCommand = (c: string | undefined): { fixCommand?: string } =>
+  c === undefined ? {} : { fixCommand: c };
+
 /** `oort doctor [--json]`: every check, with a one-line fix per problem. Exits 1 if one fails. */
 export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise<number> {
   const home = ctx.io.env['HOME'] ?? '';
@@ -935,10 +987,15 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
     ...(await relayChecks(ctx, keys.relayed)),
     ...(await cloudChecks(ctx)),
   ];
-  const ok = !checks.some((c) => c.status === 'fail');
-  if (opts.json === true) {
-    ctx.io.out(`${JSON.stringify({ ok, checks }, null, 2)}\n`);
-    return ok ? 0 : 1;
+  const exit = doctorExit(checks);
+  if (jsonMode(ctx)) {
+    const problems = checks.filter((c) => c.status === 'warn' || c.status === 'fail').length;
+    emit(ctx, {
+      status: doctorStatus(checks),
+      problems,
+      checks: checks.map((c) => ({ ...c, ...withCommand(c.fixCommand ?? commandIn(c.fix)) })),
+    });
+    return exit;
   }
   const ui = uiFor(ctx.io);
   const problems = checks.filter((c) => c.status === 'warn' || c.status === 'fail').length;
@@ -968,5 +1025,5 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
       ),
     );
   }
-  return ok ? 0 : 1;
+  return exit;
 }

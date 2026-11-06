@@ -1,8 +1,19 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { importTranscripts } from '@oortmem/claude-code';
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
-import { Refusal, confirm, echo, tilde, when, writePath, withWired, type Ctx } from '../util.js';
+import {
+  Refusal,
+  confirm,
+  echo,
+  tilde,
+  warn,
+  when,
+  writePath,
+  withWired,
+  type Ctx,
+} from '../util.js';
 
 export interface ImportCommandOptions {
   since?: string;
@@ -52,6 +63,7 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
       if (w.mode === 'cloud') {
         throw new Refusal(
           'Transcript import writes to the local store: run it with `oort cloud use --local`, then `oort cloud import`.',
+          { code: 'refused' },
         );
       }
       const deps = { ...w, log: w.harnessLog, home: w.agent.home };
@@ -80,8 +92,19 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
           ['skipped (unreadable)', String(est.skippedUnreadable)],
         ]),
       );
+      const estimate = {
+        projectsDir,
+        since: since?.toISOString() ?? null,
+        sessions: est.sessions,
+        observations: est.observations,
+        estimatedTokens: est.estimatedTokens,
+        skippedUnresolved: est.skippedUnresolved,
+        skippedUnreadable: est.skippedUnreadable,
+      };
+      const json = jsonMode(ctx);
       if (opts.estimateOnly === true || est.observations === 0) {
         opts.onOutcome?.('nothing');
+        if (json) emit(ctx, { outcome: 'nothing', estimate, imported: null });
         return 0;
       }
       writePath(w, 'oort import claude-code');
@@ -93,6 +116,7 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
               'Proceed?',
               opts.yes === true,
               `import ${est.observations} observations`,
+              { json: jsonMode(ctx) },
             );
       if (!go) {
         ctx.io.out('Nothing imported.\n');
@@ -111,17 +135,38 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
         );
       }
       const failed = Object.keys(r.failedSessions ?? {}).length;
+      const imported = {
+        observations: r.observations,
+        outcomes: r.outcomes ?? {},
+        unwritable: r.unwritable ?? {},
+        failedSessions: Object.entries(r.failedSessions ?? {}).map(([session, f]) => ({
+          session,
+          failed: f.failed,
+          notAttempted: f.notAttempted,
+          reason: f.reason,
+        })),
+      };
       if (failed > 0) {
-        ctx.io.out(
-          `${failed} session(s) stopped at a failed observation; re-run the import to retry them.\n`,
-        );
         const reasons = new Set(Object.values(r.failedSessions ?? {}).map((f) => f.reason));
-        ctx.io.out(`Reason: ${[...reasons].join('; ')}\n`);
+        if (json) {
+          warn(
+            ctx,
+            'partial',
+            `${failed} session(s) stopped at a failed observation; re-run the import to retry them. Reason: ${[...reasons].join('; ')}`,
+          );
+        } else {
+          ctx.io.out(
+            `${failed} session(s) stopped at a failed observation; re-run the import to retry them.\n`,
+          );
+          ctx.io.out(`Reason: ${[...reasons].join('; ')}\n`);
+        }
         // Partial success: what was imported stays, and a re-run picks up the failed sessions.
         opts.onOutcome?.('partial');
+        if (json) emit(ctx, { outcome: 'partial', estimate, imported });
         return 3;
       }
       opts.onOutcome?.('imported');
+      if (json) emit(ctx, { outcome: 'imported', estimate, imported });
       return 0;
     },
     { agent: 'claude-code' },

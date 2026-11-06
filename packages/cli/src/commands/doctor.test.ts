@@ -3,7 +3,7 @@ import * as http from 'node:http';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installHooks } from '@oortmem/claude-code';
-import { harness, memory, memoryKeychain, type Harness } from '../../test/helpers.js';
+import { harness, memory, memoryKeychain, type Harness, data } from '../../test/helpers.js';
 import { connectHost } from '../connectors.js';
 import { createKeychain, type Keychain } from '../keychain.js';
 import { hostContext } from './connect.js';
@@ -26,6 +26,7 @@ interface Check {
   status: 'ok' | 'warn' | 'fail' | 'info' | 'unknown';
   detail: string;
   fix?: string;
+  fixCommand?: string;
 }
 
 const oortKey = (): string => ['oort', 'sk', `doctor${Date.now()}AAAAAAAAAAAA`].join('_');
@@ -67,7 +68,11 @@ async function doctor(
   const io = { env: { HOME: h.root, OORT_HOME: h.home, ...env } };
   const human = await h.run(['doctor'], io, kc, { fetch: fetchFn });
   const json = await h.run(['doctor', '--json'], io, kc, { fetch: fetchFn });
-  const report = JSON.parse(json.io.stdout) as { ok: boolean; checks: Check[] };
+  const report = data(json.io.stdout, 'doctor') as {
+    status: 'ok' | 'warn' | 'fail';
+    problems: number;
+    checks: Check[];
+  };
   return {
     human,
     json,
@@ -139,7 +144,7 @@ describe('oort doctor', () => {
     const k = memoryKeychain({ 'oort.voyage': 'test-voyage-key-for-doctor' });
     const d = await doctor(h, { OORT_API_KEY: key }, k.kc);
     expect(d.human.code).toBe(0);
-    expect(d.report.ok).toBe(true);
+    expect(d.report.status).toBe('ok');
     expect(d.check('keys', 'embed')).toMatchObject({ status: 'ok' });
     expect(d.check('keys', 'embed')?.detail).toContain('Keychain oort.voyage');
     expect(d.check('keys', 'write')?.detail).toContain('Oort Pro');
@@ -199,9 +204,11 @@ describe('oort doctor', () => {
     expect(note).toMatchObject({ status: 'info' });
     expect(note?.detail).toContain('switching Node versions will break');
     expect(note?.fix).toContain('stable');
-    // The version still matches, so the binary row is green and doctor does not fail.
+    // The version still matches, so the binary row is green and doctor does not fail: the only
+    // warnings are the missing keys, which exit 0 (data.status is `warn`).
     expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
     expect(d.human.code).toBe(0);
+    expect(d.report.status).toBe('warn');
   });
 
   it('doctor.hook-binary-of-this-version-is-green', async () => {
@@ -269,14 +276,23 @@ describe('oort doctor', () => {
     fs.mkdirSync(path.join(h.root, '.gemini'));
     fs.writeFileSync(path.join(h.root, '.gemini', 'settings.json'), '{ not json');
     const d = await doctor(h);
+    // A failed check exits 1, in text and JSON.
     expect(d.human.code).toBe(1);
     expect(d.json.code).toBe(1);
-    expect(d.report.ok).toBe(false);
+    expect(d.report.status).toBe('fail');
+    // A fix that is a command is also `fixCommand`, runnable as it is.
     expect(d.check('hooks', 'claude-code')).toMatchObject({
       status: 'fail',
       fix: 'oort install claude-code',
+      fixCommand: 'oort install claude-code',
     });
-    expect(d.check('mcp', 'cursor')).toMatchObject({ status: 'fail', fix: 'oort connect cursor' });
+    expect(d.check('mcp', 'cursor')).toMatchObject({
+      status: 'fail',
+      fix: 'oort connect cursor',
+      fixCommand: 'oort connect cursor',
+    });
+    // A sentence that is not a command has no fixCommand.
+    expect(d.check('mcp', 'gemini')?.fixCommand).toBeUndefined();
     expect(d.check('mcp', 'gemini')?.status).toBe('fail');
     expect(d.check('keys', 'embed')).toMatchObject({ status: 'warn' });
     expect(d.check('keys', 'embed')?.fix).toContain('oort keys set voyage');
@@ -365,7 +381,9 @@ describe('oort doctor', () => {
       expect(d.check('relay', 'relay')).toMatchObject({ status: 'warn' });
       expect(d.check('relay', 'relay')?.detail).toContain('unreachable');
       expect(d.check('relay', 'relay')?.fix).toBeDefined();
+      // A warning only: exit 0, data.status `warn`.
       expect(d.human.code).toBe(0);
+      expect(d.report.status).toBe('warn');
     }
   });
 
@@ -391,7 +409,7 @@ describe('oort doctor', () => {
       expect(aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(300);
       expect(aborted).toBe(true);
-      const out = JSON.parse((await pending).io.stdout) as { checks: Check[] };
+      const out = data((await pending).io.stdout) as { checks: Check[] };
       const relay = out.checks.find((c) => c.group === 'relay');
       expect(relay).toMatchObject({ status: 'warn' });
       expect(relay?.detail).toContain('3 s');
@@ -441,6 +459,7 @@ describe('oort doctor', () => {
     expect(d.check('keys', 'credentials')).toMatchObject({
       status: 'fail',
       fix: `chmod 600 ${file}`,
+      fixCommand: `chmod 600 ${file}`,
     });
     expect(d.human.code).toBe(1);
     fs.chmodSync(file, 0o600);

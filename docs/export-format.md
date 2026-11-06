@@ -4,8 +4,9 @@
 [JSON Lines](https://jsonlines.org/) (UTF-8, one JSON value per line, each line
 ending in `\n`). Output goes to stdout, or with `--out <file>` to a new file
 created owner-only (`0600`). An existing file is refused unless `--force` is
-given, and a symlink is never written through. `--json` is accepted and changes
-nothing. This format is the basis for import and migration (CON-36).
+given, and a symlink is never written through. `--json` leaves stdout as JSON
+Lines; with `--out` it prints the `oort.v1` envelope (`{ "file", "memories",
+"format" }`, see `docs/cli.md`). This format is the basis for import and migration (CON-36).
 
 Version 2 adds each memory's address, author and provenance (see Levels in
 `docs/store-contract.md`). `oort export --format 1` writes version 1, for

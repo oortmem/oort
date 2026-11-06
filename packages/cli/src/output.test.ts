@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { harness, memory } from '../test/helpers.js';
+import { harness, memory, data } from '../test/helpers.js';
 import { TG } from '@oortmem/core/store-conformance';
 
 const ESC = '\u001b[';
@@ -38,7 +38,7 @@ describe('consistent output', () => {
     ]) {
       const r = await h.run(args);
       expect(r.code, args.join(' ')).toBe(0);
-      expect(() => JSON.parse(r.io.stdout), args.join(' ')).not.toThrow();
+      expect(() => data(r.io.stdout), args.join(' ')).not.toThrow();
     }
   });
 
@@ -47,7 +47,7 @@ describe('consistent output', () => {
     const m = memory();
     await h.store.upsert(TG, m);
     const r = await h.run(['explain', 'auth service port', '--json']);
-    const out = JSON.parse(r.io.stdout) as {
+    const out = data(r.io.stdout) as {
       memories: { rank: number; id: string; tier: string; explanation: { lexicalRank?: number } }[];
       timings: Record<string, number>;
     };

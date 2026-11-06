@@ -1,5 +1,6 @@
 import { filterFor } from '@oortmem/claude-code';
 import { findCloudMemory } from '../cloud.js';
+import { emit, jsonMode } from '../output.js';
 import {
   Refusal,
   clip,
@@ -27,7 +28,9 @@ export async function forgetCommand(
   return withWired(ctx, async (w) => {
     const cloud = cloudOf(w);
     if (opts.everywhere === true && cloud === undefined) {
-      throw new Refusal('--everywhere is for Oort Cloud, where memories can be shared.');
+      throw new Refusal('--everywhere is for Oort Cloud, where memories can be shared.', {
+        code: 'cloud-only',
+      });
     }
     const m =
       cloud !== undefined
@@ -41,6 +44,7 @@ export async function forgetCommand(
       `Forget ${short(m.id)} "${shown(clip(m.text, 60))}"?`,
       opts.yes === true,
       'forget it',
+      { json: jsonMode(ctx) },
     );
     if (!ok) {
       ctx.io.out('Kept.\n');
@@ -56,6 +60,15 @@ export async function forgetCommand(
           `Others contributed in ${r.requested.length} Constellation(s): their maintainers got a removal request.\n`,
         );
       }
+      if (jsonMode(ctx)) {
+        emit(ctx, {
+          id: m.id,
+          forgotten: true,
+          withdrawnFrom: r.withdrawn,
+          removalRequested: r.requested,
+          stillShared: [],
+        });
+      }
       return 0;
     }
     // Copies in Constellations (none outside the hive beta, where the route answers 403).
@@ -69,6 +82,15 @@ export async function forgetCommand(
       ctx.io.out(
         `Still shared to ${names}: that copy is the team's now. \`oort forget ${short(m.id)} --everywhere\` withdraws it.\n`,
       );
+    }
+    if (jsonMode(ctx)) {
+      emit(ctx, {
+        id: m.id,
+        forgotten: true,
+        withdrawnFrom: [],
+        removalRequested: [],
+        stillShared: live.map((e) => ({ constellation: e.constellation, name: e.name ?? null })),
+      });
     }
     return 0;
   });

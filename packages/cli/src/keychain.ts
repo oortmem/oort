@@ -7,7 +7,7 @@ import {
   readKeys,
   writeKeys,
 } from './credentials-file.js';
-import type { Env } from './io.js';
+import { runToStderr, type Env } from './io.js';
 
 /** The model vendors Oort calls, each with its own key. */
 export const VENDORS = ['voyage', 'typesafe', 'anthropic'] as const;
@@ -121,11 +121,8 @@ const defaultExecFile: NonNullable<KeychainDeps['execFile']> = (file, args) => {
 
 const defaultSpawnInherit: NonNullable<KeychainDeps['spawnInherit']> = (file, args) => {
   refuseUnderTest();
-  return new Promise((resolve, reject) => {
-    spawn(file, args, { stdio: 'inherit' })
-      .once('error', reject)
-      .once('close', (code) => resolve(code ?? 1));
-  });
+  // `security` prompts on the terminal; anything it prints goes to stderr, never our stdout.
+  return runToStderr(file, args);
 };
 
 const defaultSpawnWithInput: NonNullable<KeychainDeps['spawnWithInput']> = (file, args, input) => {

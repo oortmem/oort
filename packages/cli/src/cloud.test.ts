@@ -13,6 +13,7 @@ import {
   memory,
   tmpdir,
   writeTranscript,
+  data,
 } from '../test/helpers.js';
 import CONTRACT from '../test/cloud-contract.json' with { type: 'json' };
 import {
@@ -169,7 +170,7 @@ const TABLE: { name: string; args: string[]; stdout: (out: string) => void }[] =
   {
     name: 'stats',
     args: ['stats', '--json'],
-    stdout: (o) => expect((JSON.parse(o) as { tiers: { warm: number } }).tiers.warm).toBe(1),
+    stdout: (o) => expect((data(o) as { tiers: { warm: number } }).tiers.warm).toBe(1),
   },
   {
     name: 'export',
@@ -345,7 +346,7 @@ describe('oort cloud commands (CON-76)', () => {
     await seed(e, 'cloud');
     const r = await e.run(['cloud', 'status', '--json']);
     expect(r.code).toBe(0);
-    const s = JSON.parse(r.io.stdout) as {
+    const s = data(r.io.stdout) as {
       store: string;
       account: { plan: string };
       cloud: { memories: number };
@@ -447,16 +448,15 @@ describe('oort cloud commands (CON-76)', () => {
     const e = setup('cloud');
     const ok = await e.run(['doctor', '--json']);
     const checks = (
-      JSON.parse(ok.io.stdout) as { checks: { group: string; status: string; detail: string }[] }
+      data(ok.io.stdout) as { checks: { group: string; status: string; detail: string }[] }
     ).checks;
     expect(checks.find((c) => c.group === 'cloud')).toMatchObject({ status: 'ok' });
     const noKey = await e.run(['doctor', '--json'], { withKey: false });
-    const c2 = (JSON.parse(noKey.io.stdout) as { checks: { group: string; status: string }[] })
-      .checks;
+    const c2 = (data(noKey.io.stdout) as { checks: { group: string; status: string }[] }).checks;
     expect(c2.find((c) => c.group === 'cloud')).toMatchObject({ status: 'fail' });
     const local = setup('local');
     const l = await local.run(['doctor', '--json']);
-    const c3 = (JSON.parse(l.io.stdout) as { checks: { group: string; status: string }[] }).checks;
+    const c3 = (data(l.io.stdout) as { checks: { group: string; status: string }[] }).checks;
     expect(c3.find((c) => c.group === 'cloud')).toMatchObject({ status: 'info' });
   });
 });
@@ -727,7 +727,7 @@ describe('Stars and Oort Cloud (CON-62 review)', () => {
     // Doctor warns when the combination exists anyway (set before switching, or by hand).
     setAgentStar(cloudMode.home, 'cursor', true);
     const doc = await cloudMode.run(['doctor', '--json']);
-    const checks = (JSON.parse(doc.io.stdout) as { checks: Record<string, string>[] }).checks;
+    const checks = (data(doc.io.stdout) as { checks: Record<string, string>[] }).checks;
     expect(checks.find((x) => x['group'] === 'cloud' && x['name'] === 'stars')).toMatchObject({
       status: 'warn',
       fix: 'oort connect cursor --no-star, or oort cloud use --local',

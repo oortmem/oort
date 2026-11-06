@@ -1,7 +1,8 @@
 import { filterFor } from '@oortmem/claude-code';
 import { isStale, lastConfirmed, localGrant, type Memory } from '@oortmem/core';
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
-import { age, clip, cloudOf, safeJson, scopeLabel, short, withWired, type Ctx } from '../util.js';
+import { age, clip, cloudOf, scopeLabel, short, withWired, type Ctx } from '../util.js';
 
 /** Pages of 100 read from the cloud API; the local store is read whole. */
 const CLOUD_PAGES = 20;
@@ -36,14 +37,14 @@ export async function revalidateCommand(opts: { json?: boolean }, ctx: Ctx): Pro
     const stale = current
       .filter((m) => Array.isArray(m.source?.decisions) && isStale(m, now, days))
       .sort((a, b) => Date.parse(lastConfirmed(a)) - Date.parse(lastConfirmed(b)));
-    if (opts.json === true) {
-      const rows = stale.map((m) => ({
+    if (jsonMode(ctx)) {
+      const memories = stale.map((m) => ({
         id: m.id,
         type: m.type,
         text: m.text,
         lastConfirmed: lastConfirmed(m),
       }));
-      ctx.io.out(`${safeJson(rows)}\n`);
+      emit(ctx, { staleAfterDays: days, memories });
       return 0;
     }
     const ui = uiFor(ctx.io);

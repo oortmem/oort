@@ -8,6 +8,7 @@ import {
   type RecallMode,
   type RecallResult,
 } from '@oortmem/core';
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import {
   Refusal,
@@ -19,8 +20,8 @@ import {
   withoutEmbedding,
   withWired,
   echo,
+  warn,
   type Ctx,
-  safeJson,
 } from '../util.js';
 import { privacyStatement, type Wired } from '../wire.js';
 
@@ -89,9 +90,15 @@ export function viewIgnored(view: TemporalView, r: RecallResult): boolean {
   return view.mode !== undefined && r.temporal === undefined;
 }
 
-/** The warning for `viewIgnored`, on stderr. */
+/** The warning for `viewIgnored` (stderr, and `time-mode-unreported` in `--json`). */
 export function viewIgnoredWarning(view: TemporalView): string {
-  return `oort: the store did not report the time mode, so "${view.mode}" may not have been applied; these may be current facts.\n`;
+  return `the store did not report the time mode, so "${view.mode}" may not have been applied; these may be current facts.`;
+}
+
+/** Recall's warnings, on stderr and in the envelope: a degraded stage, an ignored time mode. */
+export function recallWarnings(ctx: Ctx, w: Wired, view: TemporalView, result: RecallResult): void {
+  degradedHint(ctx, w, result.degraded);
+  if (viewIgnored(view, result)) warn(ctx, 'time-mode-unreported', viewIgnoredWarning(view));
 }
 
 /**
@@ -147,6 +154,7 @@ export async function runRecall(
     if (e instanceof ScopeDeniedError) {
       throw new Refusal(
         `scope_denied: ${w.agent.id} cannot read ${e.levels.join(', ')} (it reads your Planet and its own Star).`,
+        { code: 'refused' },
       );
     }
     throw e;
@@ -160,17 +168,15 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
   return withWired(ctx, async (w) => {
     const now = new Date();
     const result = await runRecall(w, text, view, now, include, opts.includeWithdrawn === true);
-    degradedHint(ctx.io, w, result.degraded);
-    if (viewIgnored(view, result)) ctx.io.err(viewIgnoredWarning(view));
-    if (opts.json === true) {
+    recallWarnings(ctx, w, view, result);
+    if (jsonMode(ctx)) {
       const filter = filterFor(w.scope);
       // Cloud memories arrive already shaped for this account.
       const shaped =
         w.mode === 'cloud'
           ? result.memories
           : await Promise.all(result.memories.map((m) => shapeLinks(w.store, filter, m)));
-      const plain = { ...result, memories: shaped.map(withoutEmbedding) };
-      ctx.io.out(`${safeJson(plain)}\n`);
+      emit(ctx, { ...result, memories: shaped.map(withoutEmbedding) });
     } else {
       const block = formatForInjection(result, w.config.recall.budgetChars, now);
       const ui = uiFor(ctx.io);

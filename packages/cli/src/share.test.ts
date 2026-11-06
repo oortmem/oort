@@ -11,6 +11,8 @@ import {
   expectRefusedWithoutPrompt,
   fakeIo,
   tmpdir,
+  data,
+  failed,
 } from '../test/helpers.js';
 import { writeCloudSettings } from './cloud.js';
 import { marked } from './commands/share.js';
@@ -112,10 +114,13 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
     const args = ['share', ID, '--to', 'oort-core'];
     // No terminal on stdin: refuses rather than wait for an answer nobody can give.
     expectRefusedWithoutPrompt(await e.run(args), NO_TTY_STDIN);
-    // --json on a terminal: refuses too, and stdout stays empty (no preview, no "Not shared.").
+    // --json on a terminal: refuses too; stdout is only the oort.v1 failure envelope (no preview,
+    // no "Not shared."), whose fix is the same command with --yes.
     const json = await e.run([...args, '--json'], { tty: true, answer: 'y' });
     expectRefusedWithoutPrompt(json, JSON_NEVER_ASKS);
-    expect(json.io.stdout).toBe('');
+    expect(failed(json, 'needs-confirmation', 'share').fix).toBe(
+      `oort share ${ID} --to oort-core --json --yes`,
+    );
     expect(e.cloud.hive.shared.size).toBe(0);
     // Declined on a terminal: exit 0, the question never on stdout.
     const no = await e.run(args, { tty: true, answer: 'n' });
@@ -132,7 +137,7 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
     const yes = await e.run([...args, '--yes', '--json']);
     expect(yes.code, yes.io.stderr).toBe(0);
     expect(yes.io.asked).toEqual([]);
-    expect(JSON.parse(yes.io.stdout)).toMatchObject({ constellationId: 'c_aaaaaaaaaaaaaaaa' });
+    expect(data(yes.io.stdout)).toMatchObject({ constellationId: 'c_aaaaaaaaaaaaaaaa' });
   });
 
   it('share.sends-an-edited-text-and-a-private-project', async () => {
@@ -232,7 +237,7 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
     expect(made.code).toBe(0);
     expect(made.io.stdout).toContain('Created Constellation oort-core');
     const list = await e.run(['constellation', 'list', '--json']);
-    expect(JSON.parse(list.io.stdout)).toEqual([
+    expect(data(list.io.stdout, 'constellation list').constellations).toEqual([
       expect.objectContaining({ name: 'oort-core', role: 'maintainer', owner: true }),
     ]);
     const bad = await e.run(['constellation', 'create', '[your Planet]']);

@@ -11,7 +11,7 @@ import { openSqliteStore, readEmbedderBinding } from '@oortmem/store-sqlite';
 import { TG } from '@oortmem/core/store-conformance';
 import { createKeychain } from './keychain.js';
 import { runCli } from './program.js';
-import { fakeIo, memory, tmpdir, type FakeIo } from '../test/helpers.js';
+import { fakeIo, memory, tmpdir, type FakeIo, data } from '../test/helpers.js';
 import { fixtureFetch, registerTinyModels } from '../test/local-models.js';
 
 let unregister: () => void;
@@ -113,7 +113,7 @@ describe('local models are opt-in', () => {
     });
     const list = await oort(s, ['models', 'list', '--json']);
     const rows = (
-      JSON.parse(list.io.stdout) as { models: { id: string; state: string; active: boolean }[] }
+      data(list.io.stdout) as { models: { id: string; state: string; active: boolean }[] }
     ).models;
     expect(rows.find((m) => m.id === 'tiny-embed')).toMatchObject({ state: 'ready', active: true });
     expect(rows.find((m) => m.id === 'bge-small-en-v1.5')).toMatchObject({
@@ -171,7 +171,7 @@ describe('a store embedded with another model', () => {
     );
     const doctor = await oort(s, ['doctor', '--json']);
     const checks = (
-      JSON.parse(doctor.io.stdout) as {
+      data(doctor.io.stdout) as {
         checks: { name: string; status: string; fix?: string; detail: string }[];
       }
     ).checks;
@@ -198,7 +198,7 @@ describe('a store embedded with another model', () => {
     expect(r.io.stderr).not.toContain('lexical-only');
     expect(r.io.stdout).toContain('35 days');
     const doctor = await oort(s, ['doctor', '--json']);
-    const checks = (JSON.parse(doctor.io.stdout) as { checks: { name: string; status: string }[] })
+    const checks = (data(doctor.io.stdout) as { checks: { name: string; status: string }[] })
       .checks;
     expect(checks.find((c) => c.name === 'embedder')).toMatchObject({ status: 'ok' });
   });

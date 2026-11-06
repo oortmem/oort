@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
-import { fakeIo, tmpdir } from '../test/helpers.js';
+import { fakeIo, tmpdir, data } from '../test/helpers.js';
 import { writeCloudSettings } from './cloud.js';
 import { createKeychain } from './keychain.js';
 import { runCli } from './program.js';
@@ -161,7 +161,9 @@ describe('oort constellation contested and resolve (CON-66)', () => {
       'oort constellation resolve "oort-core" <challenger id> --keep <id>',
     );
     const j = await e.run(['constellation', 'contested', 'oort-core', '--json']);
-    expect(JSON.parse(j.io.stdout)).toMatchObject([{ action: 'SUPERSEDE', current: { id: CUR } }]);
+    expect(data(j.io.stdout, 'constellation contested').contested).toMatchObject([
+      { action: 'SUPERSEDE', current: { id: CUR } },
+    ]);
   });
 
   it('resolve.keeps-one-memory-and-says-what-happened-to-the-other', async () => {
@@ -236,7 +238,7 @@ describe("--json never plants other members' control or bidi characters (CON-66 
     const j = await e.run(['constellation', 'contested', 'oort-core', '--json']);
     expect(j.code, j.io.stderr).toBe(0);
     expect(rawUnsafe(j.io.stdout)).toBe(false);
-    const parsed = JSON.parse(j.io.stdout) as { challenger: { text: string } }[];
+    const parsed = data<{ contested: { challenger: { text: string } }[] }>(j.io.stdout).contested;
     expect(parsed[0]!.challenger.text).toBe(`evil ${hostile}`);
     e.cloud.hive.constellations.get(C)!.name = `oort${CSI}\u202e-core`;
     const list = await e.run(['constellation', 'list', '--json']);

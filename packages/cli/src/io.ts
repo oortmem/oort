@@ -34,6 +34,27 @@ export interface Io {
   hookExit(stdout: string): void;
 }
 
+/**
+ * Runs a child with the terminal attached for input (npm, the macOS `security` prompt), but its
+ * stdout on our stderr: stdout stays for the command's own output (one `oort.v1` envelope with
+ * `--json`), and a child's progress or prompt still reaches the person. Resolves the exit code.
+ */
+export function runToStderr(
+  file: string,
+  args: string[],
+  opts: { env?: NodeJS.ProcessEnv } = {},
+  spawnFn: typeof spawn = spawn,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    spawnFn(file, args, {
+      stdio: ['inherit', 2, 2],
+      ...(opts.env !== undefined && { env: opts.env }),
+    })
+      .once('error', reject)
+      .once('close', (code) => resolve(code ?? 1));
+  });
+}
+
 /** The bin (`dist/main.js`), beside this module in the built package. */
 export function binPath(): string {
   return fileURLToPath(new URL('./main.js', import.meta.url));

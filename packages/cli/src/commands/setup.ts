@@ -23,6 +23,7 @@ import {
 } from '../connectors.js';
 import { PROVIDER_ENV, VENDORS, type Vendor } from '../keychain.js';
 import { rememberFacts } from '../remember.js';
+import { emit, jsonMode, nested } from '../output.js';
 import { uiFor, type Ui } from '../ui.js';
 import { Refusal, echo, tilde, withWired, type Ctx } from '../util.js';
 import type { Wired } from '../wire.js';
@@ -330,7 +331,11 @@ export async function setupCommand(
   const detected = detectHosts(hc);
   const plan = planFrom(opts, detected);
   const terminal = ctx.io.stdinIsTTY && ctx.io.stdoutIsTTY === true;
-  if (opts.yes !== true && !terminal) throw new Refusal(nonInteractiveHelp(detected));
+  if (opts.yes !== true && !terminal) {
+    throw new Refusal(nonInteractiveHelp(detected), {
+      fix: `oort setup --yes --agents ${detected.length > 0 ? detected.join(',') : 'claude-code'} --keys byo --import skip${jsonMode(ctx) ? ' --json' : ''}`,
+    });
+  }
   const ui = uiFor(ctx.io);
   const interactive = opts.yes !== true;
   const p = interactive ? (deps.prompter ?? clackPrompter(ui)) : plainPrompter(ctx, ui);
@@ -508,7 +513,7 @@ export async function setupCommand(
       }
     } else if (keys === 'local') {
       try {
-        await modelsPullCommand([], {}, ctx);
+        await nested(ctx, () => modelsPullCommand([], {}, ctx));
         done.push({
           what: 'downloaded the local models to ~/.oort/models and switched embed and rerank to them',
           undo: 'oort models rm',
@@ -644,6 +649,7 @@ export async function setupCommand(
 
     // 4. Import.
     p.step(4, 'Import Claude Code history');
+    let importOutcome: ImportOutcome | 'skipped' | 'failed' = 'skipped';
     const projects = path.join(hc.home, '.claude', 'projects');
     if (!fs.existsSync(projects)) {
       p.info(`Skipped: no Claude Code transcripts in ${show(projects)}.`);
@@ -666,27 +672,31 @@ export async function setupCommand(
       } else {
         try {
           let outcome: ImportOutcome | undefined;
-          const code = await importCommand(
-            {
-              since,
-              projectsDir: projects,
-              onOutcome: (o) => {
-                outcome = o;
-              },
-              ...(interactive
-                ? {
-                    confirmWith: async (est: { observations: number; estimatedTokens: number }) =>
-                      answered(
-                        await p.confirm(
-                          `Import ${est.observations} observations (about ${est.estimatedTokens} writer tokens)?`,
-                          false,
+          importOutcome = 'failed';
+          const code = await nested(ctx, () =>
+            importCommand(
+              {
+                since,
+                projectsDir: projects,
+                onOutcome: (o) => {
+                  outcome = o;
+                },
+                ...(interactive
+                  ? {
+                      confirmWith: async (est: { observations: number; estimatedTokens: number }) =>
+                        answered(
+                          await p.confirm(
+                            `Import ${est.observations} observations (about ${est.estimatedTokens} writer tokens)?`,
+                            false,
+                          ),
                         ),
-                      ),
-                  }
-                : { yes: true }),
-            },
-            ctx,
+                    }
+                  : { yes: true }),
+              },
+              ctx,
+            ),
           );
+          importOutcome = outcome ?? 'nothing';
           const undo = 'review with `oort inspect`, remove with `oort forget <id>`';
           const later = `\`oort import claude-code --since ${since}\``;
           if (code === 3 || outcome === 'partial') {
@@ -743,6 +753,15 @@ export async function setupCommand(
         ? 'Run `oort setup` again any time.'
         : 'Restart the agents you connected. `oort recall "<question>"` shows what they will see.',
     );
+    if (jsonMode(ctx)) {
+      emit(ctx, {
+        agents,
+        keys,
+        import: importOutcome,
+        demo: runDemo,
+        changed: done,
+      });
+    }
     return 0;
   } catch (e) {
     if (!(e instanceof Cancelled)) throw e;

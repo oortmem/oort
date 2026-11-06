@@ -20,6 +20,7 @@ import {
   type ImportProgress,
 } from '../cloud.js';
 import { keyLookup } from '../credentials.js';
+import { emit, jsonMode, rawOut } from '../output.js';
 import { uiFor } from '../ui.js';
 import { Refusal, confirm, shapeLinks, withWired, writeOwnerOnly, type Ctx } from '../util.js';
 import type { Wired } from '../wire.js';
@@ -35,7 +36,9 @@ export async function clientFor(ctx: Ctx): Promise<CloudClient> {
   if ('error' in url) throw new Refusal(url.error);
   const key = await keyLookup(ctx.io.env, ctx.keychain.read)('oort');
   if (key === undefined) {
-    throw new Refusal('Oort Cloud needs the Oort key: run `oort login` first.');
+    throw new Refusal('Oort Cloud needs the Oort key: run `oort login` first.', {
+      code: 'needs-login',
+    });
   }
   return createCloudClient({
     url: url.url,
@@ -187,6 +190,7 @@ export async function cloudUseCommand(opts: { local?: boolean }, ctx: Ctx): Prom
     ctx.io.out(
       `${ui.ok('This machine now uses the local store.')} Memories already in Oort Cloud stay there; \`oort cloud export\` downloads them.\n`,
     );
+    if (jsonMode(ctx)) emit(ctx, { store: 'local' });
     return 0;
   }
   const stars = Object.entries(readAgents(home))
@@ -196,6 +200,7 @@ export async function cloudUseCommand(opts: { local?: boolean }, ctx: Ctx): Prom
     // Oort Cloud has no Stars yet: these agents' new memories would land on the shared Planet.
     throw new Refusal(
       `${stars.join(', ')} ${stars.length === 1 ? 'keeps its' : 'keep their'} memories in a Star, which Oort Cloud does not have yet. Run \`oort connect ${stars[0]} --no-star\`${stars.length > 1 ? ' for each' : ''} first, or stay local.`,
+      { code: 'refused' },
     );
   }
   const client = await clientFor(ctx);
@@ -222,6 +227,16 @@ export async function cloudUseCommand(opts: { local?: boolean }, ctx: Ctx): Prom
       ui.dim('Switch back any time with `oort cloud use --local`.') +
       '\n',
   );
+  if (jsonMode(ctx)) {
+    emit(ctx, {
+      store: 'cloud',
+      account: me.account,
+      plan: me.plan,
+      url: client.url,
+      localMemories: local,
+      notImported: left,
+    });
+  }
   return 0;
 }
 
@@ -249,8 +264,8 @@ export async function cloudStatusCommand(opts: { json?: boolean }, ctx: Ctx): Pr
       ...(stats !== undefined && { cloud: stats }),
       ...(settings.import !== undefined && { import: settings.import }),
     };
-    if (opts.json === true) {
-      ctx.io.out(`${JSON.stringify(out, null, 2)}\n`);
+    if (jsonMode(ctx)) {
+      emit(ctx, out);
       return 0;
     }
     const ui = uiFor(ctx.io);
@@ -311,8 +326,26 @@ export async function cloudImportCommand(
         ],
       ]),
     );
+    const upload = {
+      total: lines.length,
+      toUpload: lines.length - resume,
+      resumedAfter: resume,
+      bytes,
+      requests: plan.length,
+      embeddingsReused: withEmbedding,
+    };
     if (opts.dryRun === true || lines.length === resume) {
       if (lines.length === resume && lines.length > 0) ctx.io.out('Already uploaded.\n');
+      if (jsonMode(ctx)) {
+        emit(ctx, {
+          dryRun: opts.dryRun === true,
+          ...upload,
+          uploaded: 0,
+          imported: 0,
+          skipped: 0,
+          reembedded: 0,
+        });
+      }
       return 0;
     }
     const go = await confirm(
@@ -320,6 +353,7 @@ export async function cloudImportCommand(
       `Upload ${lines.length - resume} memories to Oort Cloud (EU)?`,
       opts.yes === true,
       'upload them',
+      { json: jsonMode(ctx) },
     );
     if (!go) {
       ctx.io.out('Nothing uploaded.\n');
@@ -352,13 +386,23 @@ export async function cloudImportCommand(
       `${ui.ok('done')}: ${imported} imported, ${skipped} already in the cloud, ${reembedded} re-embedded.\n`,
     );
     if (w.mode !== 'cloud') ctx.io.out('Run `oort cloud use` to start using them.\n');
+    if (jsonMode(ctx)) {
+      emit(ctx, {
+        dryRun: false,
+        ...upload,
+        uploaded: done - resume,
+        imported,
+        skipped,
+        reembedded,
+      });
+    }
     return 0;
   });
 }
 
 /** `oort cloud export [--out <file>] [--force]`: the whole cloud account in the v1 format. */
 export async function cloudExportCommand(
-  opts: { out?: string; force?: boolean },
+  opts: { out?: string; force?: boolean; json?: boolean },
   ctx: Ctx,
 ): Promise<number> {
   const client = await clientFor(ctx);
@@ -367,14 +411,16 @@ export async function cloudExportCommand(
     data = await client.exportText();
   } catch (e) {
     if (e instanceof OortCloudError) throw e;
-    throw new Refusal('Oort Cloud export failed; try again.');
+    throw new Refusal('Oort Cloud export failed; try again.', { code: 'network' });
   }
   const memories = Math.max(0, data.split('\n').filter((l) => l.length > 0).length - 1);
-  if (opts.out === undefined) ctx.io.out(data);
+  // To stdout the export (JSON Lines) is the output, with or without --json.
+  if (opts.out === undefined) rawOut(ctx, data);
   else {
     const file = path.resolve(ctx.io.cwd, opts.out);
     writeOwnerOnly(file, data, opts.force === true);
     ctx.io.out(`Exported ${memories} memories from Oort Cloud to ${file}\n`);
+    if (jsonMode(ctx)) emit(ctx, { file, memories, format: 1 });
   }
   return 0;
 }

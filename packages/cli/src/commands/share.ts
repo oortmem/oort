@@ -1,5 +1,6 @@
 import { privacyStatement } from '../wire.js';
 import { findCloudMemory, type CloudShareResult, type ShareFinding } from '../cloud.js';
+import { emit, jsonMode } from '../output.js';
 import { uiFor, type Ui } from '../ui.js';
 import {
   Refusal,
@@ -11,7 +12,6 @@ import {
   shown,
   withWired,
   type Ctx,
-  safeJson,
 } from '../util.js';
 
 /** What each kind of finding is called in the preview. */
@@ -95,6 +95,7 @@ export async function shareCommand(
     if (cloud === undefined) {
       throw new Refusal(
         'Constellations live in Oort Cloud: share from a machine that uses it (`oort cloud use`).',
+        { code: 'cloud-only' },
       );
     }
     const m = await findCloudMemory(cloud, id);
@@ -113,13 +114,13 @@ export async function shareCommand(
     if (typeof p.constellationId !== 'string' || !CONSTELLATION_ID.test(p.constellationId)) {
       throw new Refusal('Oort Cloud did not say which Constellation this is; nothing was shared.');
     }
-    if (opts.json !== true) ctx.io.out(preview(p, ui));
+    if (!jsonMode(ctx)) ctx.io.out(preview(p, ui));
     const ok = await confirm(
       ctx.io,
       `Share ${short(m.id)} "${shown(clip(p.text, 40))}" with ${echo(p.constellation)} (${shown(p.constellationId.slice(0, 6))})?`,
       opts.yes === true,
       'share it',
-      { json: opts.json === true },
+      { json: jsonMode(ctx) },
     );
     // With --json, confirm refuses rather than asks, so a decline is always human output.
     if (!ok) {
@@ -139,8 +140,8 @@ export async function shareCommand(
       confirm: true,
       ...(pii && { acknowledgedFindings: true }),
     });
-    if (opts.json === true) {
-      ctx.io.out(`${safeJson(done)}\n`);
+    if (jsonMode(ctx)) {
+      emit(ctx, done);
       return 0;
     }
     ctx.io.out(
