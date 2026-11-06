@@ -612,8 +612,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
         if (state === 'rebuild') {
           rebuilding();
           rebuildFts(db, 2, icu);
-        }
-        else if (state === 'record-icu') recordLexical(db, icu);
+        } else if (state === 'record-icu') recordLexical(db, icu);
         else if (state === 'unknown-icu') {
           opts.log?.(
             `sqlite store: this runtime reports no usable ICU version (${JSON.stringify(icu)}); Thai, Lao, Khmer and Myanmar words are matched as the index was built`,
