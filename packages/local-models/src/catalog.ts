@@ -58,9 +58,10 @@ export interface EmbedModelSpec extends BaseSpec {
 export interface RerankModelSpec extends BaseSpec {
   role: 'rerank';
   /**
-   * The score is `sigmoid(scale * logit + shift)`. MS MARCO cross-encoders emit uncalibrated
-   * logits (unrelated pairs sit near -10); this maps them onto the 0 to 1 range that
-   * `recall.minRerankScore` (0.35) was set for. Provisional until calibrated on the eval.
+   * The score is `sigmoid(scale * logit + shift)` (`rerankScore`). MS MARCO cross-encoders emit
+   * uncalibrated logits (unrelated pairs sit near -10); this maps them onto the 0 to 1 range that
+   * `recall.minRerankScore` (0.35) was set for with Voyage's scores. `scale` must be positive, so
+   * the map never reorders results.
    */
   calibration: { scale: number; shift: number };
 }
@@ -135,7 +136,13 @@ export const MODELS: readonly ModelSpec[] = [
       },
     ],
     maxTokens: 512,
-    calibration: { scale: 0.5, shift: 2.4 },
+    // Fitted on the bench eval on 2026-11-06 (CON-96, `pnpm --filter @oortmem/bench run
+    // calibrate:local`; results in docs/cli.md, "Reranker scores"). The logit margin between
+    // answerable and abstention rows (1.414 and 0.062) is mapped onto Voyage rerank-3-lite's
+    // (0.767 and 0.303), so the 0.35 gate sits at logit 0.21, where Voyage's sat in its margin.
+    // The guess this replaces (0.5, 2.4) put the gate at logit -6, so it let almost everything
+    // through: 4 of 4 abstention rows answered, against 1 of 4 now, with recall unchanged.
+    calibration: { scale: 1.5, shift: -0.93 },
   },
   {
     id: 'qwen3-embedding-0.6b',

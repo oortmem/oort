@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { resolveHome } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
-import { loadEvalRows, runEval, type EvalReport } from './eval.js';
+import { cell, loadEvalRows, renderReport, runEval } from './eval.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { FIXTURE_COUNT, FIXTURE_SEED } from './fixture.js';
 import { EMBEDDING_DIMENSION, GENERATOR_NOW, generateMemories } from './generate.js';
@@ -17,30 +17,6 @@ const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>]
        pnpm eval --demo [--json]    synthetic 1500-memory store + the bundled 23-row fixture
 
 Runs recall for each row against a temp copy of the store (the live store is never written).`;
-
-const cell = (n: number | null | undefined): string =>
-  n === null || n === undefined ? '-' : n.toFixed(3);
-
-export function renderReport(r: EvalReport): string {
-  const head = [
-    'Group',
-    'Rows',
-    ...r.ks.map((k) => `recall@${k}`),
-    'MRR@10',
-    'Stale-leak',
-    'Abstain FP',
-  ];
-  const lines = [`| ${head.join(' | ')} |`, `| ${head.map(() => '---').join(' | ')} |`];
-  for (const [name, g] of Object.entries(r.groups)) {
-    lines.push(
-      `| ${[name, String(g.rows), ...r.ks.map((k) => cell(g.recallAt[k])), cell(g.mrr), cell(g.staleLeak), cell(g.abstainFp)].join(' | ')} |`,
-    );
-  }
-  if (r.skippedEmpty > 0) {
-    lines.push('', `Skipped ${r.skippedEmpty} row(s) with an empty question.`);
-  }
-  return lines.join('\n');
-}
 
 /** Relative paths resolve against where `pnpm` was invoked, not the package directory. */
 const fromUser = (p: string): string => path.resolve(process.env['INIT_CWD'] ?? process.cwd(), p);

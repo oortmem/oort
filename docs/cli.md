@@ -1102,10 +1102,60 @@ from the memory's text. `oort doctor` reports the active embedder and any mismat
 through Voyage asks first, since the provider bills it. `oort cloud import` sends text only from
 a store embedded locally, so Oort Cloud embeds it with Voyage.
 
-The reranker's scores are mapped onto the 0 to 1 range that `recall.minRerankScore` assumes
-(MiniLM's raw scores sit near -10 for unrelated pairs); this calibration is provisional until it
-is checked on the eval. On Linux x64, npm runs ONNX Runtime's install script, which downloads
-CUDA libraries Oort does not use; `ONNXRUNTIME_NODE_INSTALL=skip` skips them.
+On Linux x64, npm runs ONNX Runtime's install script, which downloads CUDA libraries Oort does
+not use; `ONNXRUNTIME_NODE_INSTALL=skip` skips them.
+
+**Reranker scores.** MiniLM's raw scores (logits) sit near -10 for unrelated pairs and reach
+about 10 for clear matches. Oort maps them onto the 0 to 1 scale that `recall.minRerankScore`
+(0.35) was set for with Voyage's scores, as `sigmoid(1.5 × logit − 0.93)`. The scaling was fitted
+on the bench eval on 2026-11-06 (CON-96):
+
+- Voyage `rerank-3-lite`, when the gate was calibrated (2026-11-04): every answerable row kept a
+  memory scoring 0.767 or more, and no abstention row scored above 0.303.
+- MiniLM's lowest answerable logit is 1.414. One abstention row scores higher than that: it rates
+  "auth service rollback plan for the billing team" against "Rolled back the auth-service
+  deploy …" at 2.29. Three paraphrased answers score lower, from 1.41 to 1.89 (for example "which
+  package manager does billing-api-15 use" against "billing-api-15 installs dependencies with
+  npm").
+- No increasing map can separate rows that the model does not. The fit gives up that one
+  abstention row, the cheapest choice, and maps 1.414 to 0.767 and the next abstention logit,
+  0.062, to 0.303. The gate then sits at logit 0.21, at the same place in MiniLM's margin as in
+  Voyage's.
+- The map is increasing, so it never changes MiniLM's order. Candidates the model scores alike
+  keep the fused order, as they do with Voyage.
+- The guessed scaling it replaces, `sigmoid(0.5 × logit + 2.4)`, put the gate at logit -6, so
+  almost every candidate passed it.
+
+Recall on the bench eval: `pnpm eval --demo`'s 1,500 synthetic memories and 23-row fixture, with
+the relevance gate on.
+
+| Setup | recall@3 | recall@5 | recall@10 | MRR@10 | Abstention rows answered |
+| --- | --- | --- | --- | --- | --- |
+| Lexical only, no models | 1.000 | 1.000 | 1.000 | 1.000 | 0 of 4 |
+| Local: bge-small, no reranker (what the prompt hook runs) | 0.947 | 1.000 | 1.000 | 0.833 | 4 of 4 |
+| Local: bge-small and MiniLM, guessed scaling | 1.000 | 1.000 | 1.000 | 0.904 | 4 of 4 |
+| **Local: bge-small and MiniLM, fitted scaling** | 1.000 | 1.000 | 1.000 | 0.904 | **1 of 4** |
+| Voyage: voyage-3.5-lite and rerank-3-lite (`full`) | 1.000 | 1.000 | 1.000 | 1.000 | 4 of 4 |
+| Voyage: voyage-3.5-lite, no reranker (`fast`) | 1.000 | 1.000 | 1.000 | 0.947 | 1 of 4 |
+
+- No setup returned a superseded version (stale leak 0).
+- The local rows were measured on 2026-11-06 on an M1 Max, with the rerank budget lifted so that
+  load could not cut a rerank short.
+- The Voyage rows were not re-run, since that needs a paid API. They are the measurement from
+  2026-11-05, taken through Oort Cloud (see `docs/claude-code.md`). The 2026-11-04 calibration
+  run answered none of the abstention rows. The cause of that difference has not been looked into.
+- The fixture's questions share words with their answers, which favours lexical search. That is
+  why lexical-only scores perfectly here. Recall by meaning shows on paraphrased questions
+  instead: the local models found the right memory for 6 of 6, against 1 of 6 for lexical-only
+  (above).
+- MiniLM ranks less well than Voyage (MRR@10 0.904 against 1.000). On the paraphrased "package
+  manager" questions it puts an unrelated memory about the same service first. The scaling
+  changes which memories pass the gate, not their order, so it cannot fix that.
+
+To re-run it with the default local models pulled (it makes no network calls):
+`pnpm --filter @oortmem/bench run calibrate:local -- --home ~/.oort`. With `--record
+packages/bench/eval/minilm-logits.json` it also saves MiniLM's raw logits. A test replays them on
+every `pnpm test` and fails if the eval falls below this run.
 
 ## Oort Pro: `oort login` / `oort logout`
 

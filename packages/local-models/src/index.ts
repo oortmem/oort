@@ -26,7 +26,12 @@ export {
 } from './files.js';
 export { LocalModelError, readyModel, type LocalModelErrorKind } from './errors.js';
 export { localEmbedder, type LocalEmbedder, type LocalEmbedderOptions } from './embed.js';
-export { localReranker, type LocalReranker, type LocalRerankerOptions } from './rerank.js';
+export {
+  localReranker,
+  rerankScore,
+  type LocalReranker,
+  type LocalRerankerOptions,
+} from './rerank.js';
 export {
   defaultThreads,
   onnxRuntime,
