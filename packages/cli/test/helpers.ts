@@ -315,3 +315,46 @@ export const NO_TTY_STDIN = /stdin is not a terminal/;
 export const JSON_NEVER_ASKS = /--json never asks/;
 /** A person at a terminal whose stdout is piped (`| tee log`): asked on stderr, answers yes. */
 export const PIPED_YES = { tty: true, stdoutTTY: false, answer: 'y' } as const;
+
+/**
+ * The `data` of an `oort.v1` success envelope on stdout (docs/cli.md, "JSON output"), after
+ * checking the envelope: schema, ok, an object (never an array) as data, and `command` if given.
+ */
+export function data<T = any>(stdout: string, command?: string): T {
+  const env = JSON.parse(stdout) as {
+    schema: unknown;
+    ok: unknown;
+    command: unknown;
+    data: unknown;
+    warnings: unknown;
+  };
+  expect(env.schema).toBe('oort.v1');
+  expect(env.ok).toBe(true);
+  expect(Array.isArray(env.warnings)).toBe(true);
+  expect(typeof env.data).toBe('object');
+  expect(Array.isArray(env.data)).toBe(false);
+  if (command !== undefined) expect(env.command).toBe(command);
+  return env.data as T;
+}
+
+/** An `oort.v1` failure envelope on stdout: its `error`, checked against `code` and `exitCode`. */
+export function failed(
+  r: { code: number; io: { stdout: string } } | { code: number; stdout: string },
+  code: string,
+  command?: string,
+): { code: string; message: string; fix: string | null; exitCode: number } {
+  const stdout = 'io' in r ? r.io.stdout : r.stdout;
+  const env = JSON.parse(stdout) as {
+    schema: unknown;
+    ok: unknown;
+    command: unknown;
+    error: { code: string; message: string; fix: string | null; exitCode: number };
+  };
+  expect(env.schema).toBe('oort.v1');
+  expect(env.ok).toBe(false);
+  expect(env.error.code).toBe(code);
+  expect(env.error.exitCode).toBe(r.code);
+  expect(typeof env.error.message).toBe('string');
+  if (command !== undefined) expect(env.command).toBe(command);
+  return env.error;
+}

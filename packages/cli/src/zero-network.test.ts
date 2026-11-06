@@ -21,6 +21,7 @@ import {
   tmpdir,
   writeTranscript,
   type FakeIo,
+  data,
 } from '../test/helpers.js';
 import { fixtureFetch, registerTinyModels } from '../test/local-models.js';
 
@@ -243,7 +244,7 @@ describe('zero network without keys or Oort Pro', () => {
 
     // Doctor reports the missing keys and problems; it only probes the relay when a role uses it.
     const doctor = await oort(s, ['doctor', '--json']);
-    const report = JSON.parse(doctor.io.stdout) as { checks: { group: string; status: string }[] };
+    const report = data(doctor.io.stdout) as { checks: { group: string; status: string }[] };
     expect(report.checks.find((c) => c.group === 'relay')?.status).toBe('info');
 
     expect(guard.attempts).toEqual([]);
@@ -306,7 +307,8 @@ describe('zero network without keys or Oort Pro', () => {
     expect(r.code).toBe(0);
     expect(r.io.stdout).toContain('port 5582');
     expect(r.io.stderr).toContain('oort models pull');
-    expect((await oort(s, ['doctor', '--json'])).code).toBe(0);
+    // Models chosen but not pulled is a warning (exit 4), never a download.
+    expect((await oort(s, ['doctor', '--json'])).code).toBe(4);
     expect(fs.existsSync(path.join(s.oortHome, 'models'))).toBe(false);
     expect(guard.attempts).toEqual([]);
   });

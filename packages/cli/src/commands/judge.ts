@@ -26,6 +26,7 @@ import {
   type Memory,
   type RecordJudgmentResult,
 } from '@oortmem/core';
+import { emit, jsonMode, rawOut } from '../output.js';
 import { uiFor } from '../ui.js';
 import {
   Refusal,
@@ -34,9 +35,9 @@ import {
   confirm,
   echo,
   fixed,
-  safeJson,
   short,
   shown,
+  warn,
   withWired,
   writeGrant,
   writeGrantFor,
@@ -60,6 +61,7 @@ function localOnly(w: Wired): void {
   if (w.mode === 'cloud') {
     throw new Refusal(
       'Judgment memory is local-only for now: Oort Cloud does not hold judgments yet. Run `oort cloud use --local` to use it.',
+      { code: 'refused' },
     );
   }
 }
@@ -200,25 +202,36 @@ export async function judgeRecordCommand(o: JudgeRecordOptions, ctx: Ctx): Promi
         ...(corrects !== undefined && { corrects }),
       }),
     );
-    reportRecorded(ctx, w, r, o.json === true);
+    reportRecorded(ctx, w, r, jsonMode(ctx));
     return 0;
   });
 }
 
 function reportRecorded(ctx: Ctx, w: Wired, r: RecordJudgmentResult, json: boolean): void {
   if (r.redacted.length > 0) {
-    ctx.io.err(`oort: redacted a secret (${r.redacted.join(', ')}) before saving.\n`);
+    warn(ctx, 'redacted', `redacted a secret (${r.redacted.join(', ')}) before saving.`);
   }
   if (r.outcome !== 'unchanged' && w.embed === undefined) {
-    ctx.io.err('oort: no embedder, so this judgment is matched by its words only (lexical).\n');
+    warn(
+      ctx,
+      'lexical-only',
+      'no embedder, so this judgment is matched by its words only (lexical).',
+    );
   }
   if (r.embedFailed === true) {
-    ctx.io.err('oort: the embedder failed; the judgment is saved and matched by its words only.\n');
+    warn(
+      ctx,
+      'embed-failed',
+      'the embedder failed; the judgment is saved and matched by its words only.',
+    );
   }
   if (json) {
-    ctx.io.out(
-      `${safeJson({ outcome: r.outcome, id: r.memory.id, ...(r.supersedes !== undefined && { supersedes: r.supersedes }), judgment: r.memory.judgment })}\n`,
-    );
+    emit(ctx, {
+      outcome: r.outcome,
+      id: r.memory.id,
+      ...(r.supersedes !== undefined && { supersedes: r.supersedes }),
+      judgment: r.memory.judgment,
+    });
     return;
   }
   const j = r.memory.judgment!;
@@ -243,9 +256,14 @@ async function findJudgment(w: Wired, ref: string): Promise<Memory & { judgment:
   const matches = all.filter((m) => m.id.startsWith(ref));
   if (matches.length === 1) return matches[0]!;
   if (matches.length > 1) {
-    throw new Refusal(`${echo(ref)} matches ${matches.length} judgments; give more of the id.`);
+    throw new Refusal(`${echo(ref)} matches ${matches.length} judgments; give more of the id.`, {
+      code: 'ambiguous-id',
+    });
   }
-  throw new Refusal(`No such judgment: ${echo(ref)}.`);
+  throw new Refusal(`No such judgment: ${echo(ref)}.`, {
+    code: 'not-found',
+    fix: 'oort judge list --all',
+  });
 }
 
 export interface JudgeApplyOptions {
@@ -318,8 +336,8 @@ export async function judgeApplyCommand(
         opts,
       ),
     );
-    if (o.json === true) {
-      ctx.io.out(`${safeJson(r)}\n`);
+    if (jsonMode(ctx)) {
+      emit(ctx, r);
       return 0;
     }
     printJudgeResult(ctx, w, r);
@@ -413,8 +431,8 @@ export async function judgeListCommand(
             false,
           ),
     );
-    if (o.json === true) {
-      ctx.io.out(`${safeJson({ judgments: items.map(plainJudgment) })}\n`);
+    if (jsonMode(ctx)) {
+      emit(ctx, { judgments: items.map(plainJudgment) });
       return 0;
     }
     const ui = uiFor(ctx.io);
@@ -461,6 +479,7 @@ export async function judgeWithdrawCommand(
     const grant = writeGrantFor(w, m);
     if (m.judgment.withdrawn !== undefined) {
       ctx.io.out(`${short(m.id)} was already withdrawn.\n`);
+      if (jsonMode(ctx)) emit(ctx, { id: m.id, withdrawn: true, changed: false, by: null });
       return 0;
     }
     const ok = await confirm(
@@ -468,6 +487,7 @@ export async function judgeWithdrawCommand(
       `Withdraw ${short(m.id)}: ${judgmentLine(m.judgment)}?`,
       o.yes === true,
       'withdraw it',
+      { json: jsonMode(ctx) },
     );
     if (!ok) {
       ctx.io.out('Kept.\n');
@@ -478,6 +498,7 @@ export async function judgeWithdrawCommand(
     ctx.io.out(
       `Withdrew ${short(m.id)} (recorded as withdrawn by ${shown(by)}). Judging, recall, export and packs leave it out from now on, and no import brings the same decision back. Its record and text stay in this store (\`oort judge list --all\`); \`oort judge purge ${short(m.id)}\` removes the text.\n`,
     );
+    if (jsonMode(ctx)) emit(ctx, { id: m.id, withdrawn: true, changed: true, by });
     return 0;
   });
 }
@@ -498,10 +519,15 @@ export async function judgeConfirmCommand(
           ? `${short(m.id)} is already confirmed.\n`
           : `${short(m.id)} was recorded by a person; there is nothing to confirm.\n`,
       );
+      if (jsonMode(ctx)) {
+        emit(ctx, { id: m.id, confirmed: m.judgment.via === 'mcp', changed: false, by: null });
+      }
       return 0;
     }
     if (m.expiredAt !== null || m.judgment.withdrawn !== undefined) {
-      throw new Refusal(`${short(m.id)} is not a current judgment; it cannot be confirmed.`);
+      throw new Refusal(`${short(m.id)} is not a current judgment; it cannot be confirmed.`, {
+        code: 'refused',
+      });
     }
     const by = operatorOf(w, o.by);
     const ok = await confirm(
@@ -509,6 +535,7 @@ export async function judgeConfirmCommand(
       `Confirm that ${shown(m.judgment.by)} really decided this? ${judgmentLine(m.judgment)}\n  reason: ${shown(clip(m.judgment.reason, 200))}\nIt will count when judging.`,
       o.yes === true,
       'confirm it',
+      { json: jsonMode(ctx) },
     );
     if (!ok) {
       ctx.io.out('Not confirmed.\n');
@@ -516,6 +543,7 @@ export async function judgeConfirmCommand(
     }
     await confirmJudgment(w.store, grant, m, by);
     ctx.io.out(`Confirmed ${short(m.id)} (by ${shown(by)}): it counts when judging now.\n`);
+    if (jsonMode(ctx)) emit(ctx, { id: m.id, confirmed: true, changed: true, by });
     return 0;
   });
 }
@@ -532,6 +560,7 @@ export async function judgePurgeCommand(
     const grant = writeGrantFor(w, m);
     if (m.judgment.purged !== undefined) {
       ctx.io.out(`${short(m.id)} was already purged.\n`);
+      if (jsonMode(ctx)) emit(ctx, { id: m.id, purged: true, changed: false, by: null });
       return 0;
     }
     const by = operatorOf(w, o.by);
@@ -540,6 +569,7 @@ export async function judgePurgeCommand(
       `Purge ${short(m.id)}: ${judgmentLine(m.judgment)}? Its subject, link, reason and embedding are removed for good; an audit stub stays.`,
       o.yes === true,
       'purge it',
+      { json: jsonMode(ctx) },
     );
     if (!ok) {
       ctx.io.out('Kept.\n');
@@ -549,6 +579,7 @@ export async function judgePurgeCommand(
     ctx.io.out(
       `Purged ${short(m.id)}: only the expert, domain, verdict, times and who withdrew and purged it are left. Copies made earlier (exports, packs, backups) are not touched.\n`,
     );
+    if (jsonMode(ctx)) emit(ctx, { id: m.id, purged: true, changed: true, by });
     return 0;
   });
 }
@@ -578,15 +609,17 @@ export async function judgeImportCommand(
         harness: 'import',
       }),
     );
-    if (r.redacted > 0) ctx.io.err(`oort: redacted secrets from ${r.redacted} judgment(s).\n`);
+    if (r.redacted > 0) warn(ctx, 'redacted', `redacted secrets from ${r.redacted} judgment(s).`);
     if (r.embedFailed > 0) {
-      ctx.io.err(
-        `oort: the embedder failed on ${r.embedFailed} judgment(s); they are matched by their words only.\n`,
+      warn(
+        ctx,
+        'embed-failed',
+        `the embedder failed on ${r.embedFailed} judgment(s); they are matched by their words only.`,
       );
     }
     const { redacted: _r, embedFailed: _e, ...counts } = r;
-    if (o.json === true) {
-      ctx.io.out(`${safeJson({ rows: rows.length, ...counts })}\n`);
+    if (jsonMode(ctx)) {
+      emit(ctx, { rows: rows.length, ...counts });
     } else {
       ctx.io.out(
         `Imported ${rows.length} judgment(s): ${r.added} added, ${r.corrected} corrected, ${r.unchanged} already recorded${r.tombstoned > 0 ? `, ${r.tombstoned} withdrawn or corrected here before (not brought back)` : ''}.\n`,
@@ -631,6 +664,7 @@ export async function judgeEvalCommand(
     if (w.decide?.judge === undefined) {
       throw new Refusal(
         `Evaluating needs predictions, and ${WHY['no-decider'].replace(', so no prediction', '')}.`,
+        { code: 'needs-key', fix: 'oort keys set typesafe' },
       );
     }
     const report = await refusing(() =>
@@ -645,8 +679,8 @@ export async function judgeEvalCommand(
         { ...opts, thresholds },
       ),
     );
-    if (o.json === true) {
-      ctx.io.out(`${safeJson(report)}\n`);
+    if (jsonMode(ctx)) {
+      emit(ctx, report);
       return 0;
     }
     const ui = uiFor(ctx.io);
@@ -688,6 +722,7 @@ export async function judgePackExportCommand(
     domain?: string;
     by?: string;
     includeImported?: boolean;
+    json?: boolean;
   },
   ctx: Ctx,
 ): Promise<number> {
@@ -702,12 +737,14 @@ export async function judgePackExportCommand(
       exportedAt: now,
     });
     if (o.out === undefined) {
-      ctx.io.out(data);
+      // The pack is its own versioned format: it is the output, with or without --json.
+      rawOut(ctx, data);
       return 0;
     }
     const file = path.resolve(ctx.io.cwd, o.out);
     writeOwnerOnly(file, data, o.force === true);
     ctx.io.out(`Exported ${items.length} judgment(s) to ${shown(file)}\n`);
+    if (jsonMode(ctx)) emit(ctx, { file, judgments: items.length });
     return 0;
   });
 }
@@ -728,7 +765,7 @@ export async function judgePackImportCommand(
       `Import pack ${shown(clip(m.name, 40))}: ${m.count} judgment(s) naming ${m.experts.map((e) => shown(e)).join(', ')} as expert (${m.domains.map((d) => shown(d)).join(', ')}), exported by ${shown(m.exportedBy)} on ${m.exportedAt.slice(0, 10)}. The pack states who decided; nothing verifies it, so its judgments count only with --include-imported. Import?`,
       o.yes === true,
       'import it',
-      { json: o.json === true },
+      { json: jsonMode(ctx) },
     );
     // With --json, confirm refuses rather than asks, so a decline is always human output.
     if (!ok) {
@@ -744,8 +781,8 @@ export async function judgePackImportCommand(
         harness: 'pack',
       }),
     );
-    if (o.json === true) {
-      ctx.io.out(`${safeJson({ pack: m.digest.slice(0, 16), name: m.name, ...r })}\n`);
+    if (jsonMode(ctx)) {
+      emit(ctx, { pack: m.digest.slice(0, 16), name: m.name, ...r });
     } else {
       ctx.io.out(
         `Imported ${r.added.length} judgment(s) from pack ${shown(clip(m.name, 40))} (${m.digest.slice(0, 16)}); ${r.skipped.length} already here${r.tombstoned.length > 0 ? `, ${r.tombstoned.length} withdrawn or corrected here before (not brought back)` : ''}.\n`,

@@ -18,6 +18,7 @@ import {
   memoryKeychain,
   writeTranscript,
   type Harness,
+  data,
 } from '../test/helpers.js';
 import { createKeychain } from './keychain.js';
 import { adapterProblem, remedySentence } from './util.js';
@@ -209,7 +210,7 @@ describe('exit codes match docs/cli.md (CON-107)', () => {
     expect(text.io.stdout).toMatch(/state +not running/);
     const json = await h.run(['serve', 'status', '--json']);
     expect(json.code).toBe(1);
-    expect(JSON.parse(json.io.stdout)).toMatchObject({ running: false });
+    expect(data(json.io.stdout)).toMatchObject({ running: false });
   });
 
   it('exit.import-with-failed-sessions-exits-3-and-says-to-re-run', async () => {
@@ -452,13 +453,14 @@ describe('safeJson wherever memory text reaches --json (CON-107)', () => {
 });
 
 describe('human output (CON-107)', () => {
-  it('human.observe-accepts-json-as-a-no-op', async () => {
+  it('human.observe-json-wraps-the-same-result-in-the-envelope', async () => {
     const h = harness();
     const args = ['observe', '--user', 'which port?', '--assistant', 'port 5582'];
     const plain = await h.run(args);
     const json = await h.run([...args, '--json']);
     expect(json.code, json.io.stderr).toBe(0);
-    expect(Object.keys(JSON.parse(json.io.stdout))).toEqual(
+    // Without --json observe prints the bare result, as it always has; with it, the envelope.
+    expect(Object.keys(data(json.io.stdout, 'observe'))).toEqual(
       Object.keys(JSON.parse(plain.io.stdout)),
     );
   });

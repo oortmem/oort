@@ -1,6 +1,8 @@
 import * as path from 'node:path';
+import { MissingCredentialError } from '@oortmem/core';
 import { reembedSqliteStore } from '@oortmem/store-sqlite';
 import { LOCAL_PROVIDER } from '../local-models.js';
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import { Refusal, adapterProblem, confirm, withWired, type Ctx } from '../util.js';
 
@@ -23,6 +25,7 @@ export async function reembedCommand(opts: ReembedCommandOptions, ctx: Ctx): Pro
     if (w.mode === 'cloud') {
       throw new Refusal(
         'This machine uses Oort Cloud, which embeds on the server; nothing to re-embed here.',
+        { code: 'refused' },
       );
     }
     const embedder = w.reembedWith ?? w.embed;
@@ -31,12 +34,27 @@ export async function reembedCommand(opts: ReembedCommandOptions, ctx: Ctx): Pro
       const why =
         adapterProblem(w.unavailable.embed, 'embed', w.keyStore !== false) ??
         'No embedder is configured.';
-      throw new Refusal(`Re-embedding needs the configured embedder. ${why}`);
+      throw new Refusal(
+        `Re-embedding needs the configured embedder. ${why}`,
+        w.unavailable.embed instanceof MissingCredentialError
+          ? { code: 'needs-key', fix: 'oort models pull' }
+          : {},
+      );
     }
     if (binding.matches && opts.force !== true) {
       ctx.io.out(
         `${ui.ok(`Memories are already embedded with ${binding.active}; nothing to do (--force re-embeds anyway).`)}\n`,
       );
+      if (jsonMode(ctx)) {
+        emit(ctx, {
+          embedder: binding.active,
+          previous: binding.bound,
+          reembedded: false,
+          live: 0,
+          cold: 0,
+          withoutVector: 0,
+        });
+      }
       return 0;
     }
     ctx.io.out(ui.header('reembed', `${binding.bound} → ${binding.active}`));
@@ -46,6 +64,7 @@ export async function reembedCommand(opts: ReembedCommandOptions, ctx: Ctx): Pro
         `Re-embedding calls ${binding.active} once per memory (billed by the provider). Go on?`,
         opts.yes === true,
         're-embed through the provider',
+        { json: jsonMode(ctx) },
       );
       if (!go) {
         ctx.io.out('Nothing re-embedded.\n');
@@ -78,6 +97,17 @@ export async function reembedCommand(opts: ReembedCommandOptions, ctx: Ctx): Pro
       ctx.io.out(ui.dim(`${r.withoutVector} saved without a vector stay lexical-only.\n`));
     }
     ctx.io.out(ui.dim('Dense recall and saving are on again.\n'));
+    if (jsonMode(ctx)) {
+      emit(ctx, {
+        embedder: binding.active,
+        previous: binding.bound,
+        reembedded: true,
+        live: r.live,
+        cold: r.cold,
+        withoutVector: r.withoutVector,
+        seconds: Number(secs),
+      });
+    }
     return 0;
   });
 }

@@ -5,7 +5,15 @@ import { z } from 'zod';
 import { localScope, parseExport, type Embedder, type Memory } from '@oortmem/core';
 import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
 import { MIGRATION_PENDING_NOTE } from './commands/hook.js';
-import { AWS_KEY, fakeIo, harness, memory, tmpdir, writeTranscript } from '../test/helpers.js';
+import {
+  AWS_KEY,
+  fakeIo,
+  harness,
+  memory,
+  tmpdir,
+  writeTranscript,
+  data,
+} from '../test/helpers.js';
 import { runCli } from './program.js';
 import { when } from './util.js';
 import { wire as realWire, type WireFn } from './wire.js';
@@ -179,7 +187,7 @@ describe('oort inspect', () => {
     expect(out).not.toMatch(/\d{4}-\d\d-\d\dT\d\d:/);
 
     const json = await h.run(['inspect', b.id, '--json']);
-    const parsed = JSON.parse(json.io.stdout) as {
+    const parsed = data(json.io.stdout) as {
       memory: Memory;
       chain: { id: string; validTo: string | null }[];
     };
@@ -229,13 +237,13 @@ describe('scope boundaries', () => {
     expect(text.io.stdout).toContain('1 linked memory in another scope (not shown)');
 
     const json = await h.run(['inspect', g.id, '--json']);
-    const parsed = JSON.parse(json.io.stdout) as { chain: { id: string }[]; hiddenLinks: number };
+    const parsed = data(json.io.stdout) as { chain: { id: string }[]; hiddenLinks: number };
     expect(parsed.chain.map((l) => l.id)).toEqual([g.id]);
     expect(parsed.hiddenLinks).toBe(1);
     expect(json.io.stdout).not.toContain('project-only');
     // Omitted links show no id either: the pointer is nulled and flagged.
     expect(json.io.stdout).not.toContain(p.id);
-    const shown = JSON.parse(json.io.stdout) as { memory: Record<string, unknown> };
+    const shown = data(json.io.stdout) as { memory: Record<string, unknown> };
     expect(shown.memory).toMatchObject({ supersededBy: null, supersededByHidden: true });
     expect(shown.memory['supersedesHidden']).toBeUndefined();
     // The listing and recall --json shape their records the same way.
@@ -299,7 +307,7 @@ describe('oort stats', () => {
 
     const r = await h.run(['stats', '--json']);
     expect(r.code).toBe(0);
-    const s = JSON.parse(r.io.stdout) as Record<string, unknown>;
+    const s = data(r.io.stdout) as Record<string, unknown>;
     expect(s).toMatchObject({
       tiers: { hot: 1, warm: 3, cold: 1 },
       validity: { current: 3, superseded: 1, expired: 1, notYetValid: 0 },
@@ -655,7 +663,7 @@ describe('oort forget, pin', () => {
     await h.store.upsert(TG, other);
     expect((await h.run(['consolidate'])).code).toBe(0);
     expect((await h.store.get(TG, other.id))?.tier).toBe('cold');
-    const s = JSON.parse((await h.run(['stats', '--json'])).io.stdout) as {
+    const s = data((await h.run(['stats', '--json'])).io.stdout) as {
       consolidation: Record<string, unknown>;
     };
     expect(s.consolidation).toMatchObject({ lastOutcome: 'complete', due: false });
@@ -670,7 +678,7 @@ describe('oort forget, pin', () => {
     const h = harness();
     const gone = memory({ validTo: '2026-10-02T00:00:00.000Z' });
     await h.store.upsert(TG, gone);
-    const before = JSON.parse((await h.run(['stats', '--json'])).io.stdout) as {
+    const before = data((await h.run(['stats', '--json'])).io.stdout) as {
       consolidation: Record<string, unknown>;
     };
     expect(before.consolidation).toMatchObject({ lastRunAt: null, due: true });
@@ -1230,7 +1238,7 @@ describe('temporal recall (CON-34)', () => {
     return [v1, v2];
   };
   const ids = (stdout: string) =>
-    (JSON.parse(stdout) as { memories: { id: string }[] }).memories.map((m) => m.id);
+    (data(stdout) as { memories: { id: string }[] }).memories.map((m) => m.id);
 
   it('cli.recall-mode-flags', async () => {
     const h = harness({ adapters: false });
@@ -1238,7 +1246,7 @@ describe('temporal recall (CON-34)', () => {
     const q = 'auth service port';
     const now = await h.run(['recall', q, '--json']);
     expect(ids(now.io.stdout)).toEqual(['v2']);
-    expect(JSON.parse(now.io.stdout).temporal).toEqual({ mode: 'current', inferred: true });
+    expect(data(now.io.stdout).temporal).toEqual({ mode: 'current', inferred: true });
     expect(ids((await h.run(['recall', q, '--json', '--history'])).io.stdout)).toEqual([
       'v1',
       'v2',
@@ -1248,7 +1256,7 @@ describe('temporal recall (CON-34)', () => {
     ]);
     const knownAt = await h.run(['recall', q, '--json', '--known-at', '2026-04-01']);
     expect(ids(knownAt.io.stdout)).toEqual(['v1']);
-    expect(JSON.parse(knownAt.io.stdout).temporal).toMatchObject({ mode: 'known-at' });
+    expect(data(knownAt.io.stdout).temporal).toMatchObject({ mode: 'known-at' });
     // One view at a time; a bad date is refused without echoing it.
     expect((await h.run(['recall', q, '--history', '--as-of', '2026-04-01'])).code).toBe(2);
     const bad = await h.run(['recall', q, '--known-at', 'someday']);
@@ -1264,7 +1272,7 @@ describe('temporal recall (CON-34)', () => {
     const history = await h.run(['explain', 'auth service port', '--history']);
     expect(history.io.stdout).toContain('mode: history');
     const json = await h.run(['explain', 'auth service port', '--json', '--as-of', '2026-04-01']);
-    expect(JSON.parse(json.io.stdout).temporal).toMatchObject({ mode: 'as-of', inferred: false });
+    expect(data(json.io.stdout).temporal).toMatchObject({ mode: 'as-of', inferred: false });
   });
 
   it('cli.revalidate-lists-stale-volatile-facts', async () => {
@@ -1287,7 +1295,10 @@ describe('temporal recall (CON-34)', () => {
     ]);
     const json = await h.run(['revalidate', '--json']);
     expect(json.code).toBe(0);
-    const rows = JSON.parse(json.io.stdout) as { id: string; lastConfirmed: string }[];
+    const rows = data<{ memories: { id: string; lastConfirmed: string }[] }>(
+      json.io.stdout,
+      'revalidate',
+    ).memories;
     expect(rows.map((r) => r.id)).toEqual(['stale']);
     expect(rows[0]?.lastConfirmed).toBe('2026-10-01T00:00:00.000Z');
     const text = await h.run(['revalidate']);

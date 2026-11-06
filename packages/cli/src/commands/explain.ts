@@ -1,23 +1,12 @@
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
-import {
-  age,
-  agentLabel,
-  clip,
-  degradedHint,
-  fixed,
-  scopeLabel,
-  short,
-  withWired,
-  type Ctx,
-  safeJson,
-} from '../util.js';
+import { age, agentLabel, clip, fixed, scopeLabel, short, withWired, type Ctx } from '../util.js';
 import type { RecallResult } from '@oortmem/core';
 import {
   includeLevels,
+  recallWarnings,
   runRecall,
   temporalView,
-  viewIgnored,
-  viewIgnoredWarning,
   type TemporalFlags,
 } from './recall.js';
 
@@ -55,9 +44,8 @@ export async function explainCommand(
   return withWired(ctx, async (w) => {
     const now = new Date();
     const result = await runRecall(w, query, view, now, include, opts.includeWithdrawn === true);
-    degradedHint(ctx.io, w, result.degraded);
-    if (viewIgnored(view, result)) ctx.io.err(viewIgnoredWarning(view));
-    if (opts.json === true) {
+    recallWarnings(ctx, w, view, result);
+    if (jsonMode(ctx)) {
       const memories = result.memories.map((m, i) => ({
         rank: i + 1,
         id: m.id,
@@ -76,7 +64,7 @@ export async function explainCommand(
         timings: result.timings,
         ...(result.degraded !== undefined && { degraded: result.degraded }),
       };
-      ctx.io.out(`${safeJson(out)}\n`);
+      emit(ctx, out);
       return 0;
     }
     const ui = uiFor(ctx.io);

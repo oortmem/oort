@@ -10,6 +10,8 @@ import {
   expectDeclined,
   expectRefusedWithoutPrompt,
   fakeDecide,
+  data,
+  failed,
   harness,
   type Harness,
 } from '../test/helpers.js';
@@ -64,7 +66,7 @@ const record = (h: Harness, over: Record<string, string> = {}) => {
   ]);
 };
 
-const json = <T = Record<string, unknown>>(s: string): T => JSON.parse(s) as T;
+const json = <T = Record<string, unknown>>(s: string): T => data<T>(s);
 
 describe('oort judge', () => {
   it('cli.judge-record-apply-list-withdraw', async () => {
@@ -733,10 +735,10 @@ describe('oort judge: confirmations (CON-107)', () => {
     const { h } = judging();
     const args = ['judge', 'pack', 'import', out];
     expectRefusedWithoutPrompt(await h.run(args), NO_TTY_STDIN);
-    // --json never asks, even on a terminal, and keeps stdout empty.
+    // --json never asks, even on a terminal: stdout is only the oort.v1 failure envelope.
     const j = await h.run([...args, '--json'], { ...terminal, answer: 'y' });
     expectRefusedWithoutPrompt(j, JSON_NEVER_ASKS);
-    expect(j.io.stdout).toBe('');
+    failed(j, 'needs-confirmation', 'judge pack import');
     const no = await h.run(args, terminal);
     expectDeclined(no);
     expect(no.io.stdout).toContain('Not imported.');

@@ -1,6 +1,7 @@
 import { privacyStatement } from '../wire.js';
 import { z } from 'zod';
 import { observe, scrubObservation, type Observation } from '@oortmem/core';
+import { emit, jsonMode } from '../output.js';
 import {
   Refusal,
   cloudOf,
@@ -15,7 +16,7 @@ export interface ObserveOptions {
   user?: string;
   assistant?: string;
   dryRun?: boolean;
-  /** Accepted and ignored: observe always prints JSON. */
+  /** The `oort.v1` envelope; without it observe prints the bare result as JSON. */
   json?: boolean;
 }
 
@@ -75,11 +76,15 @@ async function readObservation(opts: ObserveOptions, ctx: Ctx): Promise<Observat
  * and calls no adapter.
  */
 export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<number> {
+  // The envelope with --json; the bare object otherwise (observe's output since 0.1).
+  const print = (data: object): void => {
+    if (jsonMode(ctx)) emit(ctx, data);
+    else ctx.io.out(`${safeJson(data)}\n`);
+  };
   const obs = await readObservation(opts, ctx);
   if (opts.dryRun === true) {
     const s = scrubObservation(obs);
-    const report = { dropped: s.dropped, redactions: s.redactions };
-    ctx.io.out(`${safeJson(report)}\n`);
+    print({ dryRun: true, dropped: s.dropped, redactions: s.redactions });
     return 0;
   }
   return withWired(ctx, async (w) => {
@@ -99,7 +104,7 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
           ...(obs.toolSummaries.length > 0 && { tools: obs.toolSummaries }),
         },
       });
-      ctx.io.out(`${safeJson(result)}\n`);
+      print(result);
       return 0;
     }
     const adapters = writePath(w, 'oort observe');
@@ -110,7 +115,7 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
       harness: 'cli',
       home: w.agent.home,
     });
-    ctx.io.out(`${safeJson(result)}\n`);
+    print(result);
     return 0;
   });
 }

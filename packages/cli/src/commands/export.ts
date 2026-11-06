@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import { HOSTS } from '../connectors.js';
+import { emit, jsonMode, rawOut } from '../output.js';
 import type { Wired } from '../wire.js';
 import {
   EXPORT_FORMAT_VERSION,
@@ -117,11 +118,12 @@ export async function exportCommand(
       // The whole account, in the same v1 format: `oort cloud export` is how you leave the cloud.
       const data = await cloud.exportText();
       const memories = Math.max(0, data.split('\n').filter((l) => l.length > 0).length - 1);
-      if (opts.out === undefined) ctx.io.out(data);
+      if (opts.out === undefined) rawOut(ctx, data);
       else {
         const file = path.resolve(ctx.io.cwd, opts.out);
         writeOwnerOnly(file, data, opts.force === true);
         ctx.io.out(`Exported ${memories} memories from Oort Cloud to ${file}\n`);
+        if (jsonMode(ctx)) emit(ctx, { file, memories, format: 1 });
       }
       return 0;
     }
@@ -144,12 +146,14 @@ export async function exportCommand(
       );
     }
     const data = formatExport(memories, version);
+    // To stdout the export (JSON Lines) is the output, with or without --json.
     if (opts.out === undefined) {
-      ctx.io.out(data);
+      rawOut(ctx, data);
     } else {
       const file = path.resolve(ctx.io.cwd, opts.out);
       writeOwnerOnly(file, data, opts.force === true);
       ctx.io.out(`Exported ${memories.length} memories to ${file}\n`);
+      if (jsonMode(ctx)) emit(ctx, { file, memories: memories.length, format: version });
     }
     return 0;
   });

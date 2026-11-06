@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fakeSite, type FakeSite } from '../test/fake-site.js';
-import { fakeIo, tmpdir } from '../test/helpers.js';
+import { fakeIo, tmpdir, data } from '../test/helpers.js';
 import { credentialsPath } from './credentials-file.js';
 import { createKeychain, keychainFor } from './keychain.js';
 import { runCli } from './program.js';
@@ -181,7 +181,7 @@ describe('oort keys and oort login on Linux', () => {
     expect(set.io.stdout).toContain(r.file);
     expect(set.io.asked.join()).not.toContain(key);
     const list = await run(['keys', 'list', '--json']);
-    expect(JSON.parse(list.io.stdout)).toContainEqual({
+    expect(data(list.io.stdout).keys).toContainEqual({
       provider: 'voyage',
       envVar: 'VOYAGE_API_KEY',
       source: 'keychain',

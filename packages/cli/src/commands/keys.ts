@@ -1,4 +1,5 @@
 import { PROVIDERS, PROVIDER_ENV, isProvider, type Provider } from '../keychain.js';
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import { Refusal, echo, shown, type Ctx } from '../util.js';
 import { clientFor } from './cloud.js';
@@ -26,22 +27,32 @@ function providerArg(arg: string, ctx: Ctx): Provider {
 export async function keysSetCommand(arg: string, ctx: Ctx): Promise<number> {
   const provider = providerArg(arg, ctx);
   const code = await ctx.keychain.set(provider);
-  if (code === 0) {
-    ctx.io.out(
-      ctx.keychain.kind === 'file'
-        ? `Stored ${provider} in ${ctx.keychain.where(provider)} (mode 600).\n`
-        : `Stored ${provider} in the Keychain (oort.${provider}).\n`,
-    );
+  if (code !== 0) {
+    if (jsonMode(ctx)) throw new Refusal(`${provider} was not stored.`, { code: 'internal' });
+    return 1;
   }
-  return code === 0 ? 0 : 1;
+  const where =
+    ctx.keychain.kind === 'file' ? ctx.keychain.where(provider) : `Keychain oort.${provider}`;
+  ctx.io.out(
+    ctx.keychain.kind === 'file'
+      ? `Stored ${provider} in ${ctx.keychain.where(provider)} (mode 600).\n`
+      : `Stored ${provider} in the Keychain (oort.${provider}).\n`,
+  );
+  if (jsonMode(ctx)) emit(ctx, { provider, stored: true, store: ctx.keychain.kind, where });
+  return 0;
 }
 
 /** `oort keys rm <provider>`. */
 export async function keysRmCommand(arg: string, ctx: Ctx): Promise<number> {
   const provider = providerArg(arg, ctx);
   const code = await ctx.keychain.remove(provider);
-  if (code === 0) ctx.io.out(`Removed ${provider} from ${ctx.keychain.label}.\n`);
-  return code === 0 ? 0 : 1;
+  if (code !== 0) {
+    if (jsonMode(ctx)) throw new Refusal(`${provider} was not removed.`, { code: 'internal' });
+    return 1;
+  }
+  ctx.io.out(`Removed ${provider} from ${ctx.keychain.label}.\n`);
+  if (jsonMode(ctx)) emit(ctx, { provider, removed: true, store: ctx.keychain.kind });
+  return 0;
 }
 
 export type KeySource = 'env' | 'keychain' | 'missing';
@@ -59,8 +70,8 @@ export async function keysListCommand(opts: { json?: boolean }, ctx: Ctx): Promi
   for (const provider of PROVIDERS) {
     rows.push({ provider, envVar: PROVIDER_ENV[provider], source: await keySource(provider, ctx) });
   }
-  if (opts.json === true) {
-    ctx.io.out(`${JSON.stringify(rows, null, 2)}\n`);
+  if (jsonMode(ctx)) {
+    emit(ctx, { keys: rows });
     return 0;
   }
   const ui = uiFor(ctx.io);
@@ -120,8 +131,8 @@ export async function keysCreateCommand(
     ...(name !== undefined && { name }),
     ...(scope !== undefined && { scope }),
   });
-  if (opts.json === true) {
-    ctx.io.out(`${JSON.stringify(k, null, 2)}\n`);
+  if (jsonMode(ctx)) {
+    emit(ctx, k);
     return 0;
   }
   const ui = uiFor(ctx.io);

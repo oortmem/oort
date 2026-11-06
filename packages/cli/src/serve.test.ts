@@ -7,7 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { TG } from '@oortmem/core/store-conformance';
 import type { Memory } from '@oortmem/core';
 import { downgradeSqliteStore, openSqliteStore, sqliteSchemaVersion } from '@oortmem/store-sqlite';
-import { memory, tmpdir } from '../test/helpers.js';
+import { memory, tmpdir, data } from '../test/helpers.js';
 import { SKIP_FILE, callDaemon, readSkip } from './serve-client.js';
 import { checkSocketPath } from './serve-daemon.js';
 import {
@@ -239,12 +239,12 @@ describe('oort serve', () => {
 
     const status = await oort(s, ['serve', 'status', '--json']);
     expect(status.exitCode).toBe(0);
-    const st = JSON.parse(status.stdout) as Record<string, unknown>;
+    const st = data(status.stdout) as Record<string, unknown>;
     expect(st).toMatchObject({ running: true, version: cliVersion(), served: 2 });
 
     const doctor = await oort(s, ['doctor', '--json']);
     const daemon = (
-      JSON.parse(doctor.stdout) as { checks: { group: string; status: string; detail: string }[] }
+      data(doctor.stdout) as { checks: { group: string; status: string; detail: string }[] }
     ).checks.find((c) => c.group === 'serve');
     expect(daemon?.status).toBe('ok');
     expect(daemon?.detail).toContain(`pid ${serve.child.pid}`);
@@ -592,7 +592,7 @@ describe('the hooks skip a daemon that hung or refused (circuit breaker)', () =>
 
     const doctor = await oort(s, ['doctor', '--json']);
     const row = (
-      JSON.parse(doctor.stdout) as {
+      data(doctor.stdout) as {
         checks: { group: string; name: string; status: string; detail: string }[];
       }
     ).checks.find((c) => c.group === 'serve' && c.name === 'hooks');
@@ -779,10 +779,10 @@ describe('oort serve security review fixes', () => {
     // doctor migrates and clears a migration refusal, so the hooks try the daemon again at once.
     fs.writeFileSync(path.join(s.oortHome, SKIP_FILE), `${Date.now() + 60_000} migration\n`);
     const json = await oort(s, ['serve', 'status', '--json']);
-    expect(JSON.parse(json.stdout)).toMatchObject({ running: false, needsMigration: true });
+    expect(data(json.stdout)).toMatchObject({ running: false, needsMigration: true });
     fs.writeFileSync(path.join(s.oortHome, SKIP_FILE), `${Date.now() + 60_000} migration\n`);
     const doc = await oort(s, ['doctor', '--json']);
-    const checks = (JSON.parse(doc.stdout) as { checks: { group: string; name: string }[] }).checks;
+    const checks = (data(doc.stdout) as { checks: { group: string; name: string }[] }).checks;
     expect(checks.some((c) => c.group === 'serve' && c.name === 'hooks')).toBe(false);
     expect(checks.some((c) => c.name === 'migration')).toBe(true);
     expect(readSkip(s.oortHome)).toBeUndefined();
@@ -797,11 +797,11 @@ describe('oort serve security review fixes', () => {
     // The store is current (another command migrated it); the marker is left over and expired.
     fs.writeFileSync(path.join(s.oortHome, SKIP_FILE), `${Date.now() - 1000} migration\n`);
     const json = await oort(s, ['serve', 'status', '--json']);
-    expect(JSON.parse(json.stdout)).not.toHaveProperty('needsMigration');
+    expect(data(json.stdout)).not.toHaveProperty('needsMigration');
     // A live marker on a current store: doctor clears it even though it migrated nothing.
     fs.writeFileSync(path.join(s.oortHome, SKIP_FILE), `${Date.now() + 60_000} migration\n`);
     const doc = await oort(s, ['doctor', '--json']);
-    const checks = (JSON.parse(doc.stdout) as { checks: { name: string }[] }).checks;
+    const checks = (data(doc.stdout) as { checks: { name: string }[] }).checks;
     expect(checks.some((c) => c.name === 'migration')).toBe(false);
     expect(readSkip(s.oortHome)).toBeUndefined();
   });
@@ -865,7 +865,7 @@ describe('oort serve security review fixes', () => {
   it('serve.status-json-and-stop-print-only-what-they-checked (L8)', async () => {
     const s = sandbox();
     const serve = await startServe(s);
-    const status = JSON.parse((await oort(s, ['serve', 'status', '--json'])).stdout) as Record<
+    const status = data((await oort(s, ['serve', 'status', '--json'])).stdout) as Record<
       string,
       unknown
     >;

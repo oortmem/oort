@@ -7,6 +7,7 @@ import {
   type ScopeFilter,
 } from '@oortmem/core';
 import { OortCloudError, findCloudMemory, type CloudClient } from '../cloud.js';
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import {
   Refusal,
@@ -16,7 +17,6 @@ import {
   clip,
   findMemory,
   fixed,
-  safeJson,
   scopeLabel,
   shapeLinks,
   short,
@@ -169,12 +169,12 @@ export async function inspectCommand(
               })
             ).memories as Memory[])
           : (await w.store.list(localGrant(filter))).slice(0, limit);
-      if (opts.json === true) {
+      if (jsonMode(ctx)) {
         const shaped =
           cloud !== undefined
             ? current
             : await Promise.all(current.map((m) => shapeLinks(w.store, filter, m)));
-        ctx.io.out(`${safeJson(shaped.map(withoutEmbedding))}\n`);
+        emit(ctx, { memories: shaped.map(withoutEmbedding) });
         return 0;
       }
       const ui = uiFor(ctx.io);
@@ -205,12 +205,11 @@ export async function inspectCommand(
         : await findMemory(w.store, filter, id);
     const { links: chain, hidden } =
       cloud !== undefined ? await cloudChain(cloud, m) : await supersedeChain(w.store, m, filter);
-    if (opts.json === true) {
+    if (jsonMode(ctx)) {
       const memory = withoutEmbedding(
         cloud !== undefined ? m : await shapeLinks(w.store, filter, m),
       );
-      const out = { memory, chain, hiddenLinks: hidden };
-      ctx.io.out(`${safeJson(out)}\n`);
+      emit(ctx, { memory, chain, hiddenLinks: hidden });
       return 0;
     }
     const a = activation(m.accessLog, m.salience, now, w.config.activation);

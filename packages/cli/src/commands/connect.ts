@@ -11,6 +11,7 @@ import {
   type HostContext,
 } from '../connectors.js';
 import { readCloudSettings } from '../cloud.js';
+import { emit, jsonMode } from '../output.js';
 import { uiFor, type Ui } from '../ui.js';
 import { Refusal, echo, tilde, type Ctx } from '../util.js';
 import { hookCommandPath } from './install.js';
@@ -126,6 +127,7 @@ export async function connectCommand(
     if (readCloudSettings(resolveHome(ctx.io.env)).store === 'cloud') {
       throw new Refusal(
         'This machine uses Oort Cloud, which has no Stars yet: --star would have nowhere private to save. Run `oort cloud use --local` first, or connect without --star.',
+        { code: 'refused' },
       );
     }
   }
@@ -141,12 +143,14 @@ export async function connectCommand(
   const ui = uiFor(ctx.io);
   const dryRun = opts.dryRun === true;
   const oortHome = resolveHome(ctx.io.env);
+  const changes: Record<string, unknown>[] = [];
   for (const host of hosts) {
     const c =
       action === 'connect'
         ? connectHost(host, hc, cmd, { dryRun })
         : disconnectHost(host, hc, cmd, { dryRun });
     ctx.io.out(describeChange(ui, c, cmd, { dryRun, home: hc.home }));
+    changes.push(changeJson(c));
     if (action !== 'connect') continue;
     let star = agentHome(oortHome, host) === 'star';
     if (opts.star !== undefined && opts.star !== star) {
@@ -157,6 +161,23 @@ export async function connectCommand(
       );
     }
     ctx.io.out(ui.kv(memoryRows(host, star), { indent: 2 }));
+    changes[changes.length - 1]!['memory'] = star ? 'star' : 'planet';
   }
+  if (jsonMode(ctx)) emit(ctx, { action, dryRun, command: cmd, changes });
   return 0;
+}
+
+/** A change as `oort.v1` data: the file, whether it changed, the key diff, backups. */
+export function changeJson(c: Change): Record<string, unknown> {
+  return {
+    host: c.host,
+    action: c.action,
+    file: c.file,
+    changed: c.changed,
+    created: c.created,
+    diff: c.diff,
+    backup: c.backup ?? null,
+    previous: c.previous ?? null,
+    via: c.via ?? 'file',
+  };
 }

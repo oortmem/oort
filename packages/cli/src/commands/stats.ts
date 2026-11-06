@@ -8,7 +8,8 @@ import {
 } from '@oortmem/claude-code';
 import { isCurrent, type Tier, localGrant } from '@oortmem/core';
 import { uiFor } from '../ui.js';
-import { cloudOf, safeJson, scopeLabel, tilde, when, withWired, type Ctx } from '../util.js';
+import { emit, jsonMode } from '../output.js';
+import { cloudOf, scopeLabel, tilde, when, withWired, type Ctx } from '../util.js';
 
 export interface Stats {
   scope: { projectId: string | null };
@@ -88,8 +89,8 @@ export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<
         ...c,
         queue: { pending: jsonlLines(queue), deadLetters: jsonlLines(path.join(queue, 'dead')) },
       };
-      if (opts.json === true) {
-        ctx.io.out(`${safeJson(out)}\n`);
+      if (jsonMode(ctx)) {
+        emit(ctx, out);
         return 0;
       }
       const ui = uiFor(ctx.io);
@@ -150,8 +151,8 @@ export async function statsCommand(opts: { json?: boolean }, ctx: Ctx): Promise<
       },
       rssBytes: process.memoryUsage().rss,
     };
-    if (opts.json === true) {
-      ctx.io.out(`${safeJson(stats)}\n`);
+    if (jsonMode(ctx)) {
+      emit(ctx, stats);
       return 0;
     }
     const v = stats.validity;

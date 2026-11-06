@@ -20,6 +20,7 @@ import { ROLE_VENDOR, type AdapterRole } from './credentials.js';
 import type { Io } from './io.js';
 import { PROVIDER_ENV, type Keychain } from './keychain.js';
 import type { CloudClient } from './cloud.js';
+import type { OutputState } from './output.js';
 import type { WireFn, Wired } from './wire.js';
 
 /**
@@ -33,11 +34,39 @@ export function echo(arg: string): string {
   return shown(JSON.stringify(clean.length > 24 ? `${clean.slice(0, 23)}…` : clean));
 }
 
-/** A refusal or usage problem: the message is printed and the CLI exits 2. */
+/**
+ * The `oort.v1` error codes (docs/cli.md, "JSON output"): what kind of problem stopped a command,
+ * for scripts and agents to branch on. Every code but `internal` exits 2.
+ */
+export type ErrorCode =
+  | 'usage'
+  | 'not-found'
+  | 'ambiguous-id'
+  | 'needs-key'
+  | 'needs-login'
+  | 'needs-confirmation'
+  | 'cloud-only'
+  | 'network'
+  | 'refused'
+  | 'internal';
+
+/**
+ * A refusal or usage problem: the message is printed and the CLI exits 2 (1 for `internal`).
+ * `code` is its `oort.v1` error code (default `usage`); `fix` a command that fixes it, when the
+ * message's own first `oort …` command is not the one; `exitCode` keeps a command's documented
+ * exit code where it differs (`oort login` exits 1 when the sign-in does not complete).
+ */
 export class Refusal extends Error {
-  constructor(message: string) {
+  readonly code: ErrorCode;
+  readonly fix: string | undefined;
+  readonly exitCode: number | undefined;
+
+  constructor(message: string, opts: { code?: ErrorCode; fix?: string; exitCode?: number } = {}) {
     super(message);
     this.name = 'Refusal';
+    this.code = opts.code ?? 'usage';
+    this.fix = opts.fix;
+    this.exitCode = opts.exitCode;
   }
 }
 
@@ -51,6 +80,22 @@ export interface Ctx {
   fetch?: typeof fetch;
   /** The agent to act as (`oort --agent <id>`); wiring falls back to `OORT_AGENT`, then `claude-code`. */
   agent?: string;
+  /** The running command's output mode and `oort.v1` envelope state (output.ts); set before it runs. */
+  output?: OutputState;
+}
+
+/**
+ * Prints a warning on stderr (`oort: <message>`) and records it for the `oort.v1` envelope's
+ * `warnings`, so a script sees the same degraded state a person reads.
+ */
+export function warn(ctx: Pick<Ctx, 'io' | 'output'>, code: string, message: string): void {
+  ctx.io.err(`oort: ${message}\n`);
+  noteWarning(ctx, code, message);
+}
+
+/** Records a warning for the envelope only: the command has already told people in its own words. */
+export function noteWarning(ctx: Pick<Ctx, 'output'>, code: string, message: string): void {
+  ctx.output?.warnings.push({ code, message });
 }
 
 /**
@@ -85,7 +130,7 @@ export function starInCloudMessage(agentId: string): string {
  */
 export function refuseStarInCloud(w: Pick<Wired, 'mode' | 'agent'>): void {
   if (w.mode === 'cloud' && w.agent.home === 'star') {
-    throw new Refusal(starInCloudMessage(w.agent.id));
+    throw new Refusal(starInCloudMessage(w.agent.id), { code: 'refused' });
   }
 }
 
@@ -98,6 +143,7 @@ export function writeGrantFor(w: Pick<Wired, 'scope' | 'agent'>, m: Memory): Gra
   if (!grantWrites(g, m)) {
     throw new Refusal(
       `${w.agent.id} keeps its memories in its own Star: it reads your Planet but cannot change it. Run this without --agent (or as an agent that writes your Planet).`,
+      { code: 'refused' },
     );
   }
   return g;
@@ -114,7 +160,9 @@ export function scopeLabel(w: Pick<Wired, 'scope'>): string {
  */
 export function cloudOf(w: Wired): CloudClient | undefined {
   if (w.mode !== 'cloud') return undefined;
-  if (w.cloud === undefined) throw new Refusal(w.cloudProblem ?? 'Oort Cloud is not set up.');
+  if (w.cloud === undefined) {
+    throw new Refusal(w.cloudProblem ?? 'Oort Cloud is not set up.', { code: 'needs-login' });
+  }
   return w.cloud;
 }
 
@@ -133,7 +181,7 @@ export async function withWired<T>(
     ...(agent !== undefined && { agent }),
     ...(opts.cloudKeepAlive === true && { cloudKeepAlive: true }),
   });
-  for (const warning of w.warnings) ctx.io.err(`oort: ${warning.message}\n`);
+  for (const warning of w.warnings) warn(ctx, warning.code, warning.message);
   try {
     return await fn(w);
   } finally {
@@ -224,31 +272,50 @@ export function writePath(
       ),
     ),
   ];
+  const keyed = missing.every((r) => w.unavailable[r] instanceof MissingCredentialError);
   throw new Refusal(
     `Saving needs the ${missing.join(', ')} adapter(s), so ${what} saved nothing.\n${reasons.join('\n')}\n${SAVING_NEEDS}`,
+    keyed ? { code: 'needs-key', fix: fixForRoles(missing, w.keyStore !== false) } : {},
   );
 }
 
 /**
- * One stderr hint when recall runs without its dense or rerank stage. In cloud mode the server
- * embeds and reranks, so no local adapter is expected: only what the server reports counts.
+ * The command that supplies the first missing role's model or key: `oort models pull` for embed
+ * and rerank, else `oort keys set <vendor>`; undefined where no key can be stored (the fix is an
+ * environment variable, not a command).
  */
-export function degradedHint(io: Io, w: Wired, degraded: string[] | undefined): void {
+export function fixForRoles(roles: readonly AdapterRole[], keyStore = true): string | undefined {
+  if (roles.some((r) => r === 'embed' || r === 'rerank')) return 'oort models pull';
+  const first = roles[0];
+  if (first === undefined || !keyStore) return undefined;
+  return `oort keys set ${ROLE_VENDOR[first]}`;
+}
+
+/**
+ * One stderr hint when recall runs without its dense or rerank stage, also recorded as a warning
+ * (`lexical-only`, `recall-degraded`) for `--json`. In cloud mode the server embeds and reranks,
+ * so no local adapter is expected: only what the server reports counts.
+ */
+export function degradedHint(
+  ctx: Pick<Ctx, 'io' | 'output'>,
+  w: Wired,
+  degraded: string[] | undefined,
+): void {
   const reported = degraded !== undefined && degraded.length > 0;
   if (w.mode === 'cloud') {
-    if (reported) io.err(`oort: recall degraded (${degraded.join(', ')}).\n`);
+    if (reported) warn(ctx, 'recall-degraded', `recall degraded (${degraded.join(', ')}).`);
     return;
   }
   // A relay refusal (Oort Pro) is the reason, and it has its own fix.
   const refused = w.relayErrors?.at(-1);
   if (refused !== undefined) {
-    io.err(`oort: recall degraded. ${refused.message}\n`);
+    warn(ctx, 'recall-degraded', `recall degraded. ${refused.message}`);
   } else if (w.embed === undefined || w.rerank === undefined) {
     const role: AdapterRole = w.unavailable.embed !== undefined ? 'embed' : 'rerank';
     const why = adapterProblem(w.unavailable[role], role, w.keyStore !== false);
-    io.err(`oort: lexical-only recall.${why === undefined ? '' : ` ${why}`}\n`);
+    warn(ctx, 'lexical-only', `lexical-only recall.${why === undefined ? '' : ` ${why}`}`);
   } else if (reported) {
-    io.err(`oort: recall degraded (${degraded.join(', ')}).\n`);
+    warn(ctx, 'recall-degraded', `recall degraded (${degraded.join(', ')}).`);
   }
 }
 
@@ -426,9 +493,11 @@ export async function findMemory(
   );
   if (matches.length === 1 && matches[0] !== undefined) return matches[0];
   if (matches.length > 1) {
-    throw new Refusal(`${echo(ref)} matches ${matches.length} memories; give more of the id.`);
+    throw new Refusal(`${echo(ref)} matches ${matches.length} memories; give more of the id.`, {
+      code: 'ambiguous-id',
+    });
   }
-  throw new Refusal(`No such memory in this project: ${echo(ref)}.`);
+  throw new Refusal(`No such memory in this project: ${echo(ref)}.`, { code: 'not-found' });
 }
 
 /**
@@ -452,7 +521,9 @@ export async function confirm(
         ? 'stdin is not a terminal'
         : undefined;
   if (why !== undefined) {
-    throw new Refusal(`This needs a confirmation, but ${why}; re-run with --yes to ${flagHint}.`);
+    throw new Refusal(`This needs a confirmation, but ${why}; re-run with --yes to ${flagHint}.`, {
+      code: 'needs-confirmation',
+    });
   }
   const answer = (await io.ask(`${question} [y/N] `)).trim().toLowerCase();
   return answer === 'y' || answer === 'yes';

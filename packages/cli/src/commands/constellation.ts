@@ -1,7 +1,8 @@
 import { ANONYMOUS_AGENT, isAgentId } from '@oortmem/core';
 import { OortCloudError, type CloudConstellation } from '../cloud.js';
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
-import { Refusal, clip, confirm, echo, safeJson, shown, type Ctx } from '../util.js';
+import { Refusal, clip, confirm, echo, shown, type Ctx } from '../util.js';
 import { clientFor } from './cloud.js';
 import { galaxyLine, resolveGalaxy } from './galaxy.js';
 import { platformOpener } from './login.js';
@@ -15,10 +16,7 @@ export async function constellationListCommand(
 ): Promise<number> {
   const client = await clientFor(ctx);
   const all = await client.constellations();
-  if (opts.json === true) {
-    ctx.io.out(`${safeJson(all)}\n`);
-    return 0;
-  }
+  if (jsonMode(ctx)) return json(ctx, { constellations: all });
   const ui = uiFor(ctx.io);
   ctx.io.out(ui.header('constellations', `${all.length}`));
   if (all.length === 0) {
@@ -64,7 +62,7 @@ export async function constellationCreateCommand(
   // Galaxies, and refuse a reference that matches more than one (CON-97 review).
   const target = galaxy === undefined ? undefined : resolveGalaxy(await client.galaxies(), galaxy);
   const c = await client.createConstellation(n, target?.id);
-  if (opts.json === true) ctx.io.out(`${safeJson(c)}\n`);
+  if (jsonMode(ctx)) emit(ctx, c);
   else
     ctx.io.out(
       `Created Constellation ${shown(c.name)} (${shown(c.id)})${target === undefined ? '' : ` in ${galaxyLine(target)}`}. Share a memory with \`oort share <id> --to ${shown(c.name)}\`.\n`,
@@ -102,10 +100,11 @@ function agentArg(agent: string | undefined): string {
   return agent;
 }
 
-const json = (ctx: Ctx, v: unknown): number => {
-  ctx.io.out(`${safeJson(v)}\n`);
+/** Prints `v` as this run's `oort.v1` data; exit 0. */
+function json(ctx: Ctx, v: object): number {
+  emit(ctx, v);
   return 0;
-};
+}
 
 /** `oort constellation invite <c> <email> [--role …]`: a single-use link, valid for 7 days. */
 export async function constellationInviteCommand(
@@ -119,7 +118,7 @@ export async function constellationInviteCommand(
   const role = roleArg(opts.role, 'member');
   const client = await clientFor(ctx);
   const inv = await client.invite(c, address, role);
-  if (opts.json === true) return json(ctx, inv);
+  if (jsonMode(ctx)) return json(ctx, inv);
   const ui = uiFor(ctx.io);
   ctx.io.out(
     `Invited ${shown(inv.email)} to ${shown(inv.constellation)} as ${shown(inv.role)}. ${
@@ -169,6 +168,7 @@ export async function constellationJoinCommand(
       ? 'Opened the invite in your browser. Accept it there, signed in with the invited email address.\n'
       : `Open this page in a browser and accept it, signed in with the invited email address:\n  ${page}\n`,
   );
+  if (jsonMode(ctx)) emit(ctx, { url: page, opened });
   return 0;
 }
 
@@ -180,7 +180,7 @@ export async function constellationInvitesCommand(
 ): Promise<number> {
   const client = await clientFor(ctx);
   const all = await client.invites(c);
-  if (opts.json === true) return json(ctx, all);
+  if (jsonMode(ctx)) return json(ctx, { invites: all });
   const ui = uiFor(ctx.io);
   ctx.io.out(ui.header('invites', `${all.length}`));
   if (all.length === 0) ctx.io.out('No open invites.\n');
@@ -201,6 +201,7 @@ export async function constellationRevokeCommand(
   const client = await clientFor(ctx);
   const r = await client.revokeInvite(c, invite.trim());
   ctx.io.out(r.revoked ? `Revoked invite ${echo(invite)}.\n` : `No open invite ${echo(invite)}.\n`);
+  if (jsonMode(ctx)) emit(ctx, { constellation: c, invite: invite.trim(), revoked: r.revoked });
   return 0;
 }
 
@@ -212,7 +213,7 @@ export async function constellationMembersCommand(
 ): Promise<number> {
   const client = await clientFor(ctx);
   const all = await client.members(c);
-  if (opts.json === true) return json(ctx, all);
+  if (jsonMode(ctx)) return json(ctx, { members: all });
   const ui = uiFor(ctx.io);
   ctx.io.out(ui.header('members', `${all.length}`));
   for (const m of all) {
@@ -241,6 +242,7 @@ export async function constellationRemoveCommand(
     `Remove ${echo(member)} from ${echo(c)}? Their access ends within a minute; what they shared stays.`,
     opts.yes === true,
     'remove them',
+    { json: jsonMode(ctx) },
   );
   if (!ok) {
     ctx.io.out('Nobody was removed.\n');
@@ -248,6 +250,7 @@ export async function constellationRemoveCommand(
   }
   await client.removeMember(c, member.trim());
   ctx.io.out(`Removed ${echo(member)} from ${echo(c)}. Their access ends within a minute.\n`);
+  if (jsonMode(ctx)) emit(ctx, { constellation: c, member: member.trim(), removed: true });
   return 0;
 }
 
@@ -261,6 +264,7 @@ export async function constellationRoleCommand(
   const client = await clientFor(ctx);
   const r = await client.setRole(c, member.trim(), roleArg(role));
   ctx.io.out(`${shown(r.member)} is now a ${shown(r.role)} of ${echo(c)}.\n`);
+  if (jsonMode(ctx)) emit(ctx, { constellation: c, member: r.member, role: r.role });
   return 0;
 }
 
@@ -276,6 +280,7 @@ export async function constellationLeaveCommand(
     `Leave ${echo(c)}? You and your agents stop reading it; what you shared stays.`,
     opts.yes === true,
     'leave it',
+    { json: jsonMode(ctx) },
   );
   if (!ok) {
     ctx.io.out('Still a member.\n');
@@ -283,6 +288,7 @@ export async function constellationLeaveCommand(
   }
   await client.leave(c);
   ctx.io.out(`Left ${echo(c)}.\n`);
+  if (jsonMode(ctx)) emit(ctx, { constellation: c, left: true });
   return 0;
 }
 
@@ -299,6 +305,7 @@ export async function constellationTransferCommand(
     `Make ${echo(member)} the owner of ${echo(c)}? You stay a maintainer; only they can delete it then.`,
     opts.yes === true,
     'transfer it',
+    { json: jsonMode(ctx) },
   );
   if (!ok) {
     ctx.io.out('Ownership unchanged.\n');
@@ -306,6 +313,7 @@ export async function constellationTransferCommand(
   }
   const r = await client.transfer(c, member.trim());
   ctx.io.out(`${shown(r.member)} now owns ${echo(c)}.\n`);
+  if (jsonMode(ctx)) emit(ctx, { constellation: c, owner: r.member });
   return 0;
 }
 
@@ -321,6 +329,7 @@ export async function constellationDeleteCommand(
     `Delete ${echo(c)} and every memory shared in it, for every member? This cannot be undone.`,
     opts.yes === true,
     'delete it',
+    { json: jsonMode(ctx) },
   );
   if (!ok) {
     ctx.io.out('Nothing was deleted.\n');
@@ -330,6 +339,7 @@ export async function constellationDeleteCommand(
   ctx.io.out(
     `Deleted ${echo(c)} (${shown(r.memories)} ${r.memories === 1 ? 'memory' : 'memories'}). Members' own memories are untouched.\n`,
   );
+  if (jsonMode(ctx)) emit(ctx, { constellation: c, deleted: true, memories: r.memories });
   return 0;
 }
 
@@ -345,7 +355,7 @@ export async function constellationAdoptCommand(
 ): Promise<number> {
   const client = await clientFor(ctx);
   const r = await client.adoptConstellation(c.trim());
-  if (opts.json === true) return json(ctx, r);
+  if (jsonMode(ctx)) return json(ctx, r);
   ctx.io.out(`Adopted ${echo(c)}: it is yours now, outside any team, and no longer archived.\n`);
   return 0;
 }
@@ -382,6 +392,7 @@ export async function constellationPolicyCommand(
         ? '.\n'
         : `; a contradiction of someone else's memory needs ${shown(r.supersedeTrust)} trust to supersede it.\n`),
   );
+  if (jsonMode(ctx)) emit(ctx, { constellation: c, ...r });
   return 0;
 }
 
@@ -398,11 +409,14 @@ export async function constellationContestedCommand(
   const client = await clientFor(ctx);
   const all = await client.contested(c).catch((e: unknown) => {
     if (e instanceof OortCloudError && e.kind === 'not-found') {
-      throw new Refusal(`No Constellation ${echo(c)} among yours.`);
+      throw new Refusal(`No Constellation ${echo(c)} among yours.`, {
+        code: 'not-found',
+        fix: 'oort constellation list',
+      });
     }
     throw e;
   });
-  if (opts.json === true) return json(ctx, all);
+  if (jsonMode(ctx)) return json(ctx, { contested: all });
   const ui = uiFor(ctx.io);
   ctx.io.out(ui.header('contested', `${all.length}`));
   if (all.length === 0) {
@@ -451,11 +465,12 @@ export async function constellationResolveCommand(
     if (e instanceof OortCloudError && e.kind === 'not-found') {
       throw new Refusal(
         `No open contest in ${echo(c)} holds ${echo(id.trim())} and ${echo(keep)}. See \`oort constellation contested ${echo(c)}\`.`,
+        { code: 'not-found' },
       );
     }
     throw e;
   });
-  if (opts.json === true) return json(ctx, r);
+  if (jsonMode(ctx)) return json(ctx, r);
   ctx.io.out(
     `Kept ${shown(r.kept)} in ${echo(c)}; ${shown(r.ended)} is ${
       Object.hasOwn(ENDED, r.action) ? ENDED[r.action] : shown(String(r.action).toLowerCase())
@@ -476,7 +491,7 @@ export async function constellationAttachCommand(
   const agent = agentArg(opts.agent);
   const client = await clientFor(ctx);
   const r = await client.attach(c, agent, opts.share === true);
-  if (opts.json === true) return json(ctx, r);
+  if (jsonMode(ctx)) return json(ctx, r);
   const capped = r.asked.filter((x) => !r.rights.includes(x));
   ctx.io.out(
     `${shown(r.agent)} can now ${r.rights.includes('share') ? 'read and share into' : 'read'} ${echo(c)}.` +
@@ -502,5 +517,6 @@ export async function constellationDetachCommand(
       ? `${agent} no longer reads ${echo(c)}.\n`
       : `${agent} was not attached to ${echo(c)}.\n`,
   );
+  if (jsonMode(ctx)) emit(ctx, { constellation: c, agent, detached: r.detached });
   return 0;
 }

@@ -8,6 +8,7 @@ import {
   resolveHome,
 } from '@oortmem/core';
 import { LOCAL_PROVIDER } from '../local-models.js';
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import { Refusal, SAVING_NEEDS, remedySentence, tilde, type Ctx } from '../util.js';
 
@@ -64,11 +65,9 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
   const show = (p: string): string => tilde(p, io.env['HOME'] ?? '');
   io.out(ui.header('init', show(home)));
   const defaults = `${JSON.stringify(OortConfig.parse({}), null, 2)}\n`;
-  io.out(
-    createExclusive(file, defaults, 0o600)
-      ? `Created ${show(file)}\n`
-      : `Kept existing ${show(file)}\n`,
-  );
+  const created = createExclusive(file, defaults, 0o600);
+  io.out(created ? `Created ${show(file)}\n` : `Kept existing ${show(file)}\n`);
+  let project: { path: string; created: boolean } | null = null;
 
   if (opts.project === true) {
     const root = findGitRoot(io.cwd);
@@ -76,11 +75,10 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
       throw new Refusal('--project needs a git repository; none found above the cwd.');
     const projectFile = path.join(root, 'oort.config.json');
     const body = `${JSON.stringify({ project: { private: false } }, null, 2)}\n`;
+    // 0644: the project file is meant to be committed and holds no secrets.
+    project = { path: projectFile, created: createExclusive(projectFile, body, 0o644) };
     io.out(
-      // 0644: the project file is meant to be committed and holds no secrets.
-      createExclusive(projectFile, body, 0o644)
-        ? `Created ${show(projectFile)}\n`
-        : `Kept existing ${show(projectFile)}\n`,
+      project.created ? `Created ${show(projectFile)}\n` : `Kept existing ${show(projectFile)}\n`,
     );
   }
 
@@ -119,6 +117,15 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
         'Do not set ANTHROPIC_API_KEY globally if you also use Claude Code on a subscription: it would bill the API instead.\n',
       );
     }
+  }
+  if (jsonMode(ctx)) {
+    emit(ctx, {
+      home,
+      config: { path: file, created },
+      project,
+      missingKeys: missing.map((k) => ({ provider: k.provider, envVar: k.envVar, needs: k.needs })),
+      oortKey: oort,
+    });
   }
   return 0;
 }

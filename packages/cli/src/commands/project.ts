@@ -7,6 +7,7 @@ import {
   resolveHome,
   unlinkProject,
 } from '@oortmem/core';
+import { emit, jsonMode } from '../output.js';
 import { Refusal, cloudOf, confirm, echo, withWired, type Ctx } from '../util.js';
 
 function rootOrRefuse(ctx: Ctx, action: string): string {
@@ -59,6 +60,7 @@ export async function projectLinkCommand(opts: { id?: string }, ctx: Ctx): Promi
     throw e;
   }
   ctx.io.out(`Linked ${root} to project ${echo(`${CONFIGURED_ID_PREFIX}${id}`)}\n`);
+  if (jsonMode(ctx)) emit(ctx, { root, project: `${CONFIGURED_ID_PREFIX}${id}`, linked: true });
   return 0;
 }
 
@@ -67,6 +69,7 @@ export async function projectUnlinkCommand(ctx: Ctx): Promise<number> {
   const root = rootOrRefuse(ctx, 'unlink');
   const removed = unlinkProject(resolveHome(ctx.io.env), root);
   ctx.io.out(removed ? `Unlinked ${root}\n` : `No link for ${root}\n`);
+  if (jsonMode(ctx)) emit(ctx, { root, unlinked: removed });
   return 0;
 }
 
@@ -89,6 +92,7 @@ export async function projectPrivacyCommand(
     if (cloud === undefined) {
       throw new Refusal(
         'Project privacy is kept in Oort Cloud: run this on a machine that uses it.',
+        { code: 'cloud-only', fix: 'oort cloud use' },
       );
     }
     const project = w.scope.projectId;
@@ -101,6 +105,7 @@ export async function projectPrivacyCommand(
         `Mark project ${echo(project)} as not private in Oort Cloud? Its memories can then be shared to Constellations.`,
         opts.yes === true,
         'mark it public',
+        { json: jsonMode(ctx) },
       );
       if (!ok) {
         ctx.io.out('Unchanged.\n');
@@ -113,6 +118,7 @@ export async function projectPrivacyCommand(
         ? `Project ${project} is private: its memories never leave it.\n`
         : `Project ${project} is not private: its memories can be shared with \`oort share\`.\n`,
     );
+    if (jsonMode(ctx)) emit(ctx, { project, private: state === 'private' });
     return 0;
   });
 }
@@ -130,7 +136,10 @@ export async function projectConstellationCommand(
   return withWired(ctx, async (w) => {
     const cloud = cloudOf(w);
     if (cloud === undefined) {
-      throw new Refusal('Constellations live in Oort Cloud: run this on a machine that uses it.');
+      throw new Refusal('Constellations live in Oort Cloud: run this on a machine that uses it.', {
+        code: 'cloud-only',
+        fix: 'oort cloud use',
+      });
     }
     const project = w.scope.projectId;
     if (project === undefined) {
@@ -142,6 +151,7 @@ export async function projectConstellationCommand(
         ? `Bound project ${echo(r.project)} to Constellation ${echo(c)}.\n`
         : `Project ${echo(r.project)} is no longer bound to Constellation ${echo(c)}.\n`,
     );
+    if (jsonMode(ctx)) emit(ctx, { project: r.project, constellation: c, bound: r.bound });
     return 0;
   });
 }

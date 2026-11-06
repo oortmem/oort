@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { harness } from '../../test/helpers.js';
+import { harness, data } from '../../test/helpers.js';
 import { createKeychain } from '../keychain.js';
 
 const planted = (): string => ['sk', 'test', String(Date.now())].join('-');
@@ -45,7 +45,7 @@ describe('oort keys', () => {
       { env: { VOYAGE_API_KEY: '', TYPESAFE_API_KEY: key2 } },
       kc,
     );
-    expect(JSON.parse(json.io.stdout)).toEqual([
+    expect(data(json.io.stdout, 'keys list').keys).toEqual([
       { provider: 'voyage', envVar: 'VOYAGE_API_KEY', source: 'keychain' },
       { provider: 'typesafe', envVar: 'TYPESAFE_API_KEY', source: 'env' },
       { provider: 'anthropic', envVar: 'ANTHROPIC_API_KEY', source: 'missing' },
@@ -65,7 +65,7 @@ describe('oort keys', () => {
     expect(r.io.stdout).toContain('oort       keychain  oort.oort');
     expect(r.io.stdout + r.io.stderr).not.toContain(key);
     const env = await h.run(['keys', 'list', '--json'], { env: { OORT_API_KEY: key } }, kc);
-    expect(JSON.parse(env.io.stdout)).toContainEqual({
+    expect(data(env.io.stdout).keys).toContainEqual({
       provider: 'oort',
       envVar: 'OORT_API_KEY',
       source: 'env',

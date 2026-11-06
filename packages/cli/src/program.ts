@@ -84,16 +84,30 @@ import {
   cloudStatusCommand,
   cloudUseCommand,
 } from './commands/cloud.js';
+import {
+  commandFor,
+  commandPath,
+  describeError,
+  failure,
+  hasJsonOption,
+  jsonFromEnv,
+  startOutput,
+} from './output.js';
 import { uiFor } from './ui.js';
-import { Refusal, echo, type Ctx } from './util.js';
+import { Refusal, echo, safeJson, type Ctx } from './util.js';
 import { wire as defaultWire, type WireFn } from './wire.js';
 
-function program(ctx: Ctx, setCode: (code: number) => void): Command {
+export function program(ctx: Ctx, setCode: (code: number) => void): Command {
   const run =
     <A extends unknown[]>(fn: (...args: A) => Promise<number | void>) =>
     async (...args: A): Promise<void> => {
       const code = await fn(...args);
       if (typeof code === 'number') setCode(code);
+      // The contract: in JSON mode every run that does not throw prints its envelope.
+      const out = ctx.output;
+      if (out?.json === true && !out.emitted) {
+        throw new Error(`oort ${out.command} printed no JSON (a bug: please report it).`);
+      }
     };
   const ui = uiFor(ctx.io);
   // The help's banner: the mark beside the wordmark, on a colour terminal only.
@@ -112,9 +126,24 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
       '--agent <id>',
       'act as this agent (claude-code, codex, cursor, …): it shares your Planet and has its own Star',
     )
-    .hook('preAction', (cmd) => {
+    .hook('preAction', (cmd, action) => {
       const agent = (cmd.opts() as { agent?: string }).agent;
       if (agent !== undefined) ctx.agent = agent;
+      // `--json`, or OORT_OUTPUT=json on any command that has `--json` (docs/cli.md, "JSON output").
+      // `serve` in the foreground is a long-running process, never JSON: OORT_OUTPUT leaves it be
+      // (and an explicit --json there is refused by the command).
+      const opts = action.opts() as { json?: boolean; detach?: boolean };
+      const path = commandPath(action);
+      const serveAction = action.processedArgs[0] as string | undefined;
+      const foreground =
+        path === 'serve' &&
+        serveAction !== 'status' &&
+        serveAction !== 'stop' &&
+        opts.detach !== true;
+      const explicit = opts.json === true;
+      const json = hasJsonOption(action) && (explicit || (!foreground && jsonFromEnv(ctx.io.env)));
+      if (json) action.setOptionValue('json', true);
+      startOutput(ctx, path, json, explicit);
     })
     .exitOverride()
     .configureOutput({
@@ -146,12 +175,14 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
       '--install-global',
       'under npx: run `npm i -g oortmem` first (agents need a stable path)',
     )
+    .option('--json', 'print oort.v1 JSON')
     .action(run((o: SetupOptions) => setupCommand(o, ctx)));
 
   p.command('init')
     .description('write ~/.oort/config.json with defaults (never overwrites)')
     .option('--project', 'also write oort.config.json at the git root')
-    .action(run((o: { project?: boolean }) => initCommand(o, ctx)));
+    .option('--json', 'print oort.v1 JSON')
+    .action(run((o: { project?: boolean; json?: boolean }) => initCommand(o, ctx)));
 
   p.command('install')
     .description(
@@ -159,12 +190,14 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     )
     .argument('<harness>', 'claude-code, codex, cursor, claude-desktop, gemini or vscode')
     .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((h: string, o: { project?: boolean }) => installCommand('install', h, o, ctx)));
 
   p.command('uninstall')
     .description('remove the Claude Code hooks, or the MCP server from any other harness')
     .argument('<harness>', 'claude-code, codex, cursor, claude-desktop, gemini or vscode')
     .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((h: string, o: { project?: boolean }) => installCommand('uninstall', h, o, ctx)));
 
   p.command('connect')
@@ -173,6 +206,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--dry-run', 'print the diff without writing')
     .option('--star', "keep this agent's new memories in its own Star (it still reads your Planet)")
     .option('--no-star', "write this agent's new memories to your Planet again (the default)")
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((hosts: string[], o: { dryRun?: boolean; star?: boolean }) =>
         connectCommand('connect', hosts, o, ctx),
@@ -183,6 +217,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description("remove the oort MCP server from an agent host's config")
     .argument('<hosts...>', 'claude-desktop, claude-code, codex, cursor, gemini or vscode')
     .option('--dry-run', 'print the diff without writing')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((hosts: string[], o: { dryRun?: boolean }) =>
         connectCommand('disconnect', hosts, o, ctx),
@@ -205,7 +240,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
       '--idle <duration>',
       'exit after this long without a request (default serve.idleMinutes, 30m)',
     )
-    .option('--json', 'status: print JSON')
+    .option('--json', 'status, stop and --detach: print oort.v1 JSON (not a foreground start)')
     .action(run((action: string | undefined, o: ServeOptions) => serveCommand(action, o, ctx)));
 
   p.command('mcp')
@@ -247,7 +282,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--user <text>', 'the user turn')
     .option('--assistant <text>', 'the assistant turn')
     .option('--dry-run', 'only report what the scrubber would redact; touches nothing')
-    .option('--json', 'accepted for consistency; observe always prints JSON')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((o: { user?: string; assistant?: string; dryRun?: boolean; json?: boolean }) =>
         observeCommand(o, ctx),
@@ -272,6 +307,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
 
   p.command('consolidate')
     .description('expire, re-tier and evict memories')
+    .option('--json', 'print oort.v1 JSON')
     .action(run(() => consolidateCommand(ctx)));
 
   p.command('forget')
@@ -282,6 +318,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
       '--everywhere',
       'Oort Cloud: also withdraw its shared copies where you are the only contributor',
     )
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((id: string, o: { yes?: boolean; everywhere?: boolean }) => forgetCommand(id, o, ctx)),
     );
@@ -346,6 +383,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<id>', 'judgment id or unique prefix')
     .option('--by <operator>', 'who withdraws it (default: judge.operator, else local-user)')
     .option('--yes', 'do not ask')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((id: string, o: { yes?: boolean; by?: string }) => judgeWithdrawCommand(id, o, ctx)),
     );
@@ -355,6 +393,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<id>', 'judgment id or unique prefix')
     .option('--by <operator>', 'who confirms it (default: judge.operator, else local-user)')
     .option('--yes', 'do not ask')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((id: string, o: { yes?: boolean; by?: string }) => judgeConfirmCommand(id, o, ctx)),
     );
@@ -364,6 +403,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<id>', 'judgment id or unique prefix')
     .option('--by <operator>', 'who purges it (default: judge.operator, else local-user)')
     .option('--yes', 'do not ask')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((id: string, o: { yes?: boolean; by?: string }) => judgePurgeCommand(id, o, ctx)));
   judge
     .command('import')
@@ -426,6 +466,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--domain <name>', 'only this domain')
     .option('--by <expert>', 'only this expert')
     .option('--include-imported', 'also export judgments imported from packs')
+    .option('--json', 'with --out, print oort.v1 JSON (to stdout the pack itself is the output)')
     .action(
       run(
         (o: {
@@ -484,6 +525,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('create a Galaxy: opens oortcloud.dev, where you create it signed in')
     .argument('<name>', 'its name')
     .option('--no-browser', 'print the page instead of opening it')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((name: string, o: { browser?: boolean }) => galaxyCreateCommand(name, o, ctx)));
 
   const constellation = p
@@ -522,6 +564,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('open an invite link to accept it, signed in on oortcloud.dev')
     .argument('<link>', 'the invite link (or its token)')
     .option('--no-browser', 'print the page instead of opening the browser')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((link: string, o: { browser?: boolean }) => constellationJoinCommand(link, o, ctx)),
     );
@@ -536,6 +579,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('revoke an open invite (maintainers)')
     .argument('<constellation>', 'name or id')
     .argument('<invite>', 'the invite id from `oort constellation invites`')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((c: string, invite: string) => constellationRevokeCommand(c, invite, ctx)));
   constellation
     .command('members')
@@ -549,6 +593,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<constellation>', 'name or id')
     .argument('<member>', 'the mb_… id from `members`, or their email address')
     .option('--yes', 'do not ask first (needed outside a terminal)')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((c: string, member: string, o: { yes?: boolean }) =>
         constellationRemoveCommand(c, member, o, ctx),
@@ -560,6 +605,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<constellation>', 'name or id')
     .argument('<member>', 'the mb_… id from `members`, or their email address')
     .argument('<role>', 'maintainer, member or reader')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((c: string, member: string, role: string) =>
         constellationRoleCommand(c, member, role, ctx),
@@ -570,6 +616,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('leave a Constellation; what you shared stays')
     .argument('<constellation>', 'name or id')
     .option('--yes', 'do not ask first (needed outside a terminal)')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((c: string, o: { yes?: boolean }) => constellationLeaveCommand(c, o, ctx)));
   constellation
     .command('transfer')
@@ -577,6 +624,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .argument('<constellation>', 'name or id')
     .argument('<member>', 'the mb_… id from `members`, or their email address')
     .option('--yes', 'do not ask first (needed outside a terminal)')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((c: string, member: string, o: { yes?: boolean }) =>
         constellationTransferCommand(c, member, o, ctx),
@@ -587,6 +635,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('delete a Constellation and every memory shared in it (owner only)')
     .argument('<constellation>', 'name or id')
     .option('--yes', 'do not ask first (needed outside a terminal)')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((c: string, o: { yes?: boolean }) => constellationDeleteCommand(c, o, ctx)));
   constellation
     .command('adopt')
@@ -608,6 +657,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
       '--supersede-trust <trust>',
       "member (the default) or maintainer: who may supersede someone else's memory",
     )
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((c: string, o: { open?: boolean; confirm?: boolean; supersedeTrust?: string }) =>
         constellationPolicyCommand(c, o, ctx),
@@ -649,6 +699,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('stop one of your agents reading a Constellation')
     .argument('<constellation>', 'name or id')
     .option('--agent <name>', 'the agent')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((c: string, o: { agent?: string }) =>
         constellationDetachCommand(c, { agent: o.agent ?? ctx.agent }, ctx),
@@ -658,11 +709,13 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
   p.command('pin')
     .description('pin a memory (never sent to cold)')
     .argument('<id>', 'memory id or unique prefix')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((id: string) => pinCommand(id, true, ctx)));
 
   p.command('unpin')
     .description('unpin a memory')
     .argument('<id>', 'memory id or unique prefix')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((id: string) => pinCommand(id, false, ctx)));
 
   const project = p
@@ -673,6 +726,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('bind this repository to its configured project id, or to --id')
     .option('--id <id>', 'the project id to bind (default: project.id in oort.config.json)')
     .option('--constellation <c>', 'Oort Cloud: bind this project to a Constellation (maintainers)')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((o: { id?: string; constellation?: string }) =>
         o.constellation !== undefined
@@ -684,6 +738,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .command('unlink')
     .description("remove this repository's binding (back to the derived id)")
     .option('--constellation <c>', 'Oort Cloud: unbind this project from a Constellation')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run((o: { constellation?: string }) =>
         o.constellation !== undefined
@@ -698,6 +753,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     )
     .argument('<state>', 'public or private')
     .option('--yes', 'do not ask')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((state: string, o: { yes?: boolean }) => projectPrivacyCommand(state, o, ctx)));
 
   const cloud = p
@@ -707,6 +763,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .command('use')
     .description('use Oort Cloud for hooks, MCP and every command (needs oort login and Pro)')
     .option('--local', 'switch back to the local store on this machine')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((o: { local?: boolean }) => cloudUseCommand(o, ctx)));
   cloud
     .command('status')
@@ -718,12 +775,14 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description('upload the local store to Oort Cloud (resumable; safe to run again)')
     .option('--dry-run', 'show what would be uploaded and stop')
     .option('--yes', 'do not ask before uploading')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((o: { dryRun?: boolean; yes?: boolean }) => cloudImportCommand(o, ctx)));
   cloud
     .command('export')
     .description('download every memory in your Oort Cloud account (v1 export format)')
     .option('--out <file>', 'write to a new file (0600) instead of stdout')
     .option('--force', 'with --out, overwrite an existing file (never a symlink)')
+    .option('--json', 'with --out, print oort.v1 JSON (to stdout the export is JSON Lines)')
     .action(run((o: { out?: string; force?: boolean }) => cloudExportCommand(o, ctx)));
 
   p.command('whoami')
@@ -743,10 +802,12 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
       'sign in to Oort Pro in the browser and keep the Oort key in the Keychain (macOS) or credentials.json',
     )
     .option('--no-browser', 'print the sign-in URL instead of opening the browser')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((o: { browser?: boolean }) => loginCommand(o, ctx)));
 
   p.command('logout')
     .description('remove the stored Oort key (it does not revoke the key)')
+    .option('--json', 'print oort.v1 JSON')
     .action(run(() => logoutCommand(ctx)));
 
   const keys = p
@@ -758,6 +819,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .command('set')
     .description('store a key; it is prompted for with the input hidden (never in argv or history)')
     .argument('<provider>', 'voyage, typesafe, anthropic or oort')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((provider: string) => keysSetCommand(provider, ctx)));
   keys
     .command('list')
@@ -779,6 +841,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .command('rm')
     .description('delete a stored key')
     .argument('<provider>', 'voyage, typesafe, anthropic or oort')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((provider: string) => keysRmCommand(provider, ctx)));
 
   const models = p
@@ -796,22 +859,26 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     )
     .argument('[models...]', 'model ids from `oort models list`')
     .option('--no-use', 'download only; leave ~/.oort/config.json as it is')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((ids: string[], o: { use?: boolean }) => modelsPullCommand(ids, o, ctx)));
   models
     .command('verify')
     .description('re-hash downloaded models against their pinned SHA-256')
     .argument('[models...]', 'model ids (default: every downloaded one)')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((ids: string[]) => modelsVerifyCommand(ids, ctx)));
   models
     .command('rm')
     .description('delete downloaded models (default: all) and switch back to the default provider')
     .argument('[models...]', 'model ids (default: every downloaded one)')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((ids: string[]) => modelsRmCommand(ids, ctx)));
 
   p.command('reembed')
     .description('re-embed every memory with the configured embedder (after switching embedders)')
     .option('--force', 're-embed even when the store already uses the configured embedder')
     .option('--yes', 'do not ask before calling a paid embedder')
+    .option('--json', 'print oort.v1 JSON')
     .action(run((o: { force?: boolean; yes?: boolean }) => reembedCommand(o, ctx)));
 
   p.command('import')
@@ -822,6 +889,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--estimate-only', 'print the estimate and stop')
     .option('--include-unresolved', 'import sessions whose project is gone as global memories')
     .option('--projects-dir <dir>', 'Claude Code projects directory (default ~/.claude/projects)')
+    .option('--json', 'print oort.v1 JSON')
     .action(
       run(
         async (
@@ -835,7 +903,9 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
           },
         ) => {
           if (harness !== 'claude-code') {
-            throw new Refusal(`Unknown harness ${echo(harness)}; import supports claude-code.`);
+            throw new Refusal(`Unknown harness ${echo(harness)}; import supports claude-code.`, {
+              fix: 'oort import claude-code',
+            });
           }
           return importCommand(o, ctx);
         },
@@ -847,7 +917,7 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--out <file>', 'write to a new file (0600) instead of stdout')
     .option('--force', 'with --out, overwrite an existing file (never a symlink)')
     .option('--format <version>', 'export format version: 2 (default) or 1 (Planet memories only)')
-    .option('--json', 'accepted for compatibility; the format is always JSON Lines')
+    .option('--json', 'with --out, print oort.v1 JSON (to stdout the export is JSON Lines)')
     .option('--include-withdrawn', 'also export withdrawn judgments')
     .action(
       run((o: { out?: string; force?: boolean; format?: string; includeWithdrawn?: boolean }) =>
@@ -860,11 +930,14 @@ function program(ctx: Ctx, setCode: (code: number) => void): Command {
 
 /**
  * Runs the CLI on `args` (user arguments, without node and the script) and
- * resolves the exit code (docs/cli.md): 0 success (a declined question and a
- * status query included), 1 unexpected error (message only; the stack with
- * --debug), 2 refusal or usage problem, 3 partial success (`import` with
- * failed sessions). Never prints a key: error
- * messages come from our own refusals or from adapters that never include one.
+ * resolves the exit code (docs/cli.md): 0 success (a declined question
+ * included), 1 unexpected error (message only; the stack with --debug) and a
+ * status query whose thing is not running, 2 refusal or usage problem (every
+ * `oort.v1` error code but `internal`), 3 partial success (`import` with
+ * failed sessions), 4 and 5 doctor's warnings and failures. With `--json` a
+ * failure is also an `oort.v1` envelope on stdout (output.ts). Never prints a
+ * key: error messages come from our own refusals or from adapters that never
+ * include one.
  */
 export async function runCli(
   args: string[],
@@ -877,7 +950,8 @@ export async function runCli(
   deps: { login?: LoginDeps; fetch?: typeof fetch } = {},
 ): Promise<number> {
   let code = 0;
-  const p = program({ io, wire, keychain, ...deps }, (c) => {
+  const ctx: Ctx = { io, wire, keychain, ...deps };
+  const p = program(ctx, (c) => {
     code = c;
   });
   try {
@@ -885,14 +959,25 @@ export async function runCli(
     await p.parseAsync(args.length === 0 ? ['--help'] : args, { from: 'user' });
     return code;
   } catch (e) {
-    if (e instanceof CommanderError) return e.exitCode === 0 ? 0 : 2;
-    if (e instanceof Refusal) {
-      io.err(`oort: ${e.message}\n`);
-      return 2;
+    if (e instanceof CommanderError && e.exitCode === 0) return 0;
+    const info = describeError(e, args);
+    // Commander has printed its own line (with the usage hint).
+    if (!(e instanceof CommanderError)) io.err(`oort: ${info.message}\n`);
+    if (info.code === 'internal' && args.includes('--debug') && e instanceof Error && e.stack) {
+      io.err(`${e.stack}\n`);
     }
-    const err = e instanceof Error ? e : new Error(String(e));
-    io.err(`oort: ${err.message}\n`);
-    if (args.includes('--debug') && err.stack !== undefined) io.err(`${err.stack}\n`);
-    return 1;
+    // In JSON mode the failure envelope goes on stdout too (`io` is the real stdout here). Before
+    // any action ran (a usage error) the mode comes from the arguments.
+    const out = ctx.output;
+    const target = out === undefined ? commandFor(p, args) : undefined;
+    const json =
+      out !== undefined
+        ? out.json
+        : args.includes('--json') || (hasJsonOption(target!) && jsonFromEnv(io.env));
+    if (json && out?.emitted !== true) {
+      const command = out?.command ?? commandPath(target!);
+      io.out(`${safeJson(failure(command, info))}\n`);
+    }
+    return info.exitCode;
   }
 }

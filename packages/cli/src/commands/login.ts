@@ -3,9 +3,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import * as os from 'node:os';
 import { keyLookup, routeSummaries } from '../credentials.js';
 import type { Env } from '../io.js';
+import { emit, jsonMode } from '../output.js';
 import { ACCOUNT_URL, REVOKE_HINT } from '../relay.js';
 import { uiFor, type Ui } from '../ui.js';
-import { Refusal, type Ctx } from '../util.js';
+import { Refusal, noteWarning, type Ctx } from '../util.js';
 
 /**
  * `oort login`: the browser sign-in that `apps/site` serves, RFC 8628 style.
@@ -373,9 +374,16 @@ export async function loginCommand(opts: { browser?: boolean }, ctx: Ctx): Promi
   const ui = uiFor(ctx.io);
   ctx.io.out(ui.header('login', 'Oort Pro'));
   const r = await runLogin(ctx, (t) => ctx.io.out(`${t.trimEnd()}\n`), ui, { ...opts, mark: true });
-  if (r.ok) return 0;
-  ctx.io.err(`oort: ${r.message}\n`);
-  return 1;
+  if (r.ok) {
+    if (jsonMode(ctx)) emit(ctx, { signedIn: true, store: ctx.keychain.kind });
+    return 0;
+  }
+  // Expired, used or cancelled: a refusal; the site failing or unreachable: `network`. Exit 1, as
+  // a sign-in that did not complete always has.
+  throw new Refusal(r.message, {
+    code: r.reason === 'failed' ? 'network' : 'refused',
+    exitCode: 1,
+  });
 }
 
 /** `oort logout`: removes the stored Oort key (Keychain item `oort.oort`, or its credentials.json entry). It never revokes the key server-side. */
@@ -392,8 +400,7 @@ export async function logoutCommand(ctx: Ctx): Promise<number> {
   const had = (await ctx.keychain.read('oort')) !== undefined;
   const code = had ? await ctx.keychain.remove('oort') : 0;
   if (code !== 0) {
-    ctx.io.err(`oort: ${ctx.keychain.label} did not remove the Oort key.\n`);
-    return 1;
+    throw new Refusal(`${ctx.keychain.label} did not remove the Oort key.`, { code: 'internal' });
   }
   ctx.io.out(
     had
@@ -402,11 +409,12 @@ export async function logoutCommand(ctx: Ctx): Promise<number> {
         ? `No Oort key in ${ctx.keychain.where('oort')}; nothing changed.\n`
         : 'No Oort key in the Keychain (oort.oort); nothing changed.\n',
   );
-  if (ctx.io.env['OORT_API_KEY']) {
-    ctx.io.out(
-      ui.warn('OORT_API_KEY is still set in this environment; unset it to stop using Oort Pro.') +
-        '\n',
-    );
+  const envKey = Boolean(ctx.io.env['OORT_API_KEY']);
+  if (envKey) {
+    const msg = 'OORT_API_KEY is still set in this environment; unset it to stop using Oort Pro.';
+    ctx.io.out(ui.warn(msg) + '\n');
+    noteWarning(ctx, 'env-key-set', msg);
   }
+  if (jsonMode(ctx)) emit(ctx, { removed: had, store: ctx.keychain.kind });
   return 0;
 }

@@ -61,13 +61,11 @@ ones; otherwise the terminal's own 16 colours. When `COLORFGBG` says the
 background is light (iTerm2, Konsole and rxvt set it), darker shades keep the
 contrast.
 
-**`--json`.** These commands print data rather than a report: `recall`,
-`explain`, `revalidate`, `inspect`, `stats`, `keys list` and `doctor`. With `--json` they print JSON
-only: no header and no colour. `export` always prints JSON Lines (see
-`docs/export-format.md`). `observe` prints its result as JSON, and accepts
-`--json` as a no-op. Memory text and other people's strings in JSON output have
-C1 controls, bidi overrides and invisible characters `\uXXXX`-escaped: the JSON
-parses to the same values, but plants nothing in a terminal.
+**`--json`.** Every command except `hook`, `mcp` and a foreground `serve`
+takes `--json` (or `OORT_OUTPUT=json`) and then prints one `oort.v1` JSON
+envelope on stdout and nothing else there: see [JSON output
+(oort.v1)](#json-output-oortv1). `export` and `cloud export` print JSON Lines
+to stdout (see `docs/export-format.md`).
 
 **Exit codes.**
 
@@ -77,8 +75,10 @@ parses to the same values, but plants nothing in a terminal.
 | `1` | Unexpected error. Only the message is printed; add `--debug` for the stack. |
 | `2` | Refusal or usage problem, such as a bad flag, missing keys, a file Oort will not edit, or a confirmation that cannot be asked (see below). |
 | `3` | Partial success: `oort import claude-code` imported what it could, but some sessions stopped at a failed observation. Run it again to retry them. |
+| `4` | `oort doctor`: warnings only, no check failed. |
+| `5` | `oort doctor`: at least one check failed. |
 
-`oort doctor` exits 1 when one of its checks fails, and `oort login` exits 1
+`oort login` exits 1
 when the sign-in expires, was already used or is cancelled. A status query
 exits 1 when what it asks about is not running: `oort serve status` exits 0
 only when the daemon answers, and 1 when it is not running, not answering or
@@ -121,8 +121,122 @@ an error message is scrubbed and clipped to 24 characters.
 | `OORT_SITE_URL` | The site `oort login` signs in at, for local development (default `https://oortcloud.dev`). The same rule applies. |
 | `OORT_NO_KEYCHAIN=1` | Switches stored keys (Keychain and `credentials.json`) off for every command (see `oort keys`). |
 | `OORT_HOME` | The store directory (default `~/.oort`). |
+| `OORT_OUTPUT=json` | Turns `--json` on for every command that has it, as if each were given `--json` (see [JSON output](#json-output-oortv1)). It never changes `oort hook`, `oort mcp` or a foreground `oort serve`. |
 | `OORT_HOOK_TIMING=1` | Diagnostics. A `UserPromptSubmit` or `SessionStart` hook prints two stderr lines: `oort-hook <event> via=<process\|daemon> <ms>ms`, and `oort-timing {…}` with the hook log's timings for that prompt (numbers only). In cloud mode these include `cloudMs` (the whole request), `cloudHeadersMs`, `cloudBodyMs`, `cloudConnected` (1 when the request opened a connection) with `cloudDnsMs`, `cloudTcpMs` and `cloudTlsMs`, `cloudRecallMs` (the API's recall itself), the API's own stages as `server<Name>Ms`, and `serverLexicalFirstHit` (1 when the API answered from its lexical search without embedding the prompt, 0 when it embedded): the hook asks Oort Cloud for its `Server-Timing` breakdown. A daemon adds `socketMs`, and asks Oort Cloud for Server-Timing only when it was itself started with the variable. |
 | `NO_COLOR`, `FORCE_COLOR`, `COLORTERM`, `COLORFGBG` | See Colour above. |
+
+## JSON output (oort.v1)
+
+Scripts and agents get one contract from every command: pass `--json`, or set
+`OORT_OUTPUT=json` once in the environment. Every command takes it except
+`oort hook` (the Claude Code hook protocol), `oort mcp` (the MCP protocol on
+stdio) and `oort serve` in the foreground (a long-running log; `serve status`,
+`serve stop` and `serve --detach` do take it). `oort export` and
+`oort cloud export` (and `oort judge pack export`) write their own format to
+stdout, JSON Lines and a pack; with `--out <file>` and `--json` they print the
+envelope instead.
+
+> **Breaking change in 0.6.0.** Before 0.6.0, `--json` printed each command's
+> own shape: a bare array for `inspect`, `revalidate`, `keys list`,
+> `galaxy list`, `constellation list`, `invites`, `members` and `contested`,
+> `{ ok, checks }` for `doctor`, a bare object elsewhere, and nothing for an
+> error. From 0.6.0 every one of them prints the envelope below: read `data`
+> (lists are wrapped: `data.memories`, `data.keys`, `data.checks`), and check
+> `ok`. `observe` without `--json` still prints its bare result.
+
+**On success**, stdout holds exactly one document:
+
+```json
+{
+  "schema": "oort.v1",
+  "command": "constellation create",
+  "ok": true,
+  "data": { "id": "c_aaaaaaaaaaaaaaaa", "name": "oort-core" },
+  "warnings": [{ "code": "lexical-only", "message": "lexical-only recall. No embed model or key. …" }]
+}
+```
+
+- `command` is the command path without `oort`: `recall`, `judge pack import`.
+- `data` is always an object; a list is wrapped (`{ "memories": [...] }`).
+  Field names are camelCase and stable, ids are full ids (never the 8-character
+  prefix tables show), and times are ISO 8601.
+- `warnings` lists, with a code, what is also printed on stderr for people:
+  a degraded recall (`lexical-only`, `recall-degraded`), a time mode the store
+  did not report (`time-mode-unreported`), the wiring's own warnings
+  (`project-id-untrusted`, `cloud-unavailable`, `keychain-unreadable`, …),
+  `partial` (`import`, exit 3), `redacted` and `embed-failed` (judgments),
+  `reembed-needed`, `checksum-mismatch` and `optimize-skipped` (models),
+  `another-oort-on-path` and `version-manager-path` (`install`),
+  `env-key-set` (`logout`). The stderr line stays.
+- Human lines a command prints along the way go to stderr in JSON mode.
+
+**On failure**, stdout holds one document too, and the one-line message stays
+on stderr:
+
+```json
+{
+  "schema": "oort.v1",
+  "command": "forget",
+  "ok": false,
+  "error": {
+    "code": "needs-confirmation",
+    "message": "This needs a confirmation, but --json never asks; re-run with --yes to forget it.",
+    "fix": "oort forget 1b2c3d4e-… --json --yes",
+    "exitCode": 2
+  }
+}
+```
+
+`fix` is a command you can run as it is, where one fixes it, else `null`.
+`exitCode` is the process's exit code.
+
+| `error.code` | When | Typical `fix` |
+| --- | --- | --- |
+| `usage` | A bad flag or argument, a missing file, an input Oort refuses to parse; commander's own usage errors too. | `oort --help` |
+| `not-found` | No such memory, judgment, model, Galaxy, Constellation or contest. | `oort constellation list`, `oort models list` |
+| `ambiguous-id` | An id prefix that matches more than one memory, judgment or Galaxy. | |
+| `needs-key` | No model or key for a role the command needs. | `oort models pull`, `oort keys set typesafe` |
+| `needs-login` | No Oort key, or Oort Cloud rejected it. | `oort login` |
+| `needs-confirmation` | A command that asks first, run with `--json` or without a terminal on stdin. | the same command with `--yes` |
+| `cloud-only` | A command or flag that needs Oort Cloud, on a machine using the local store. | `oort cloud use` |
+| `network` | Oort Cloud, the relay, the sign-in site or a model download could not be reached, or is down. | |
+| `refused` | A rule said no: a plan or role limit, the hive beta, a Star agent writing the Planet, cloud mode for a local-only command (`consolidate`, `reembed`, `judge`). | |
+| `internal` | Anything else: a bug or an unexpected failure. | |
+
+`refused` is a code the issue's first draft did not list: without it, a
+Constellation's rule or an inactive plan would read as `usage` and tell an agent
+to change its arguments.
+
+**Exit codes** stay as in [Conventions](#conventions): `0` success (a declined
+question included); `1` an unexpected error, a status query whose subject is
+not running (`serve status`, `models verify` with a changed file: the envelope
+is a success that says so), and an error raised outside the CLI's own checks
+(an adapter's relay or key error, a sign-in that did not complete); `2` every
+refusal and usage error; `3` partial success; `4` and `5` doctor's warnings
+and failures. The envelope's `exitCode` always matches.
+
+**One example per family.**
+
+```sh
+oort recall "auth port" --json | jq '.data.memories[0].text'
+oort inspect --json | jq '.data.memories | length'
+oort forget 1b2c3d4e --yes --json            # { "id", "forgotten": true, "withdrawnFrom", "removalRequested", "stillShared" }
+oort consolidate --json                      # { "promoted": [ids], "demoted", "evicted", "expired", "counts": {…}, "complete" }
+oort import claude-code --since 14d --yes --json   # { "outcome", "estimate": {…}, "imported": { "observations", "outcomes", "failedSessions" } }
+oort judge record --subject … --json         # { "outcome", "id", "judgment" }
+oort judge withdraw 9f8e --yes --json        # { "id", "withdrawn": true, "changed", "by" }
+oort keys list --json                        # { "keys": [{ "provider", "envVar", "source" }] }
+oort models pull --json                      # { "models": [{ "id", "role", "downloaded", "optimized" }], "used", "config" }
+oort connect cursor --json                   # { "action", "dryRun", "command", "changes": [{ "host", "file", "changed", "diff", "backup", "memory" }] }
+oort install claude-code --json              # { "harness", "action", "file", "changed", "command", "events" }
+oort setup --yes --agents none --keys skip --json  # { "agents", "keys", "import", "demo", "changed": [{ "what", "undo" }] }
+oort cloud import --yes --json               # { "total", "toUpload", "uploaded", "imported", "skipped", "reembedded", … }
+oort constellation members oort-core --json  # { "members": [...] }
+oort constellation remove oort-core mb_… --yes --json   # { "constellation", "member", "removed": true }
+oort serve status --json                     # { "running", "socket", "pid", … } (exit 1 when not running)
+oort doctor --json                           # { "status": "ok"|"warn"|"fail", "problems", "checks": [{ …, "fixCommand"? }] }
+```
+
 
 ## `oort setup`
 
@@ -621,10 +735,10 @@ hooks ignore it until it exits. Run `oort serve stop` (then `oort serve
 | --- | --- | --- |
 | `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)) |
 | `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation, hydrated, and where it came from (`your Planet`, `this agent's Star`, with `(overridden)` when a narrower memory contradicts it). The header names the agent, the nodes read (`reads: your Planet, Star cursor`) and the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (agent; read; rank, id, type, tier, validFrom, text, explanation, origin; temporal; timings; degraded), `--include <levels>`, `--as-of`, `--known-at`, `--history` |
-| `oort revalidate` | Lists volatile facts (a status, a current version, an owner) that nobody confirmed within `recall.staleAfterDays`, oldest first. | `--json` (id, type, text, lastConfirmed) |
+| `oort revalidate` | Lists volatile facts (a status, a current version, an owner) that nobody confirmed within `recall.staleAfterDays`, oldest first. | `--json` (`data.memories`: id, type, text, lastConfirmed; `data.staleAfterDays`) |
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
 | `oort stats` | Counts per tier and validity, store and cold sizes, the hook queue, when the store was last consolidated (and when it is next due), and memory use. | `--json` |
-| `oort observe` | Runs the write path on one turn, from JSON on stdin or from `--user` with `--assistant`. It always prints JSON. | `--dry-run` (reports scrubbing only), `--json` (accepted; a no-op) |
+| `oort observe` | Runs the write path on one turn, from JSON on stdin or from `--user` with `--assistant`. It prints its result as JSON; with `--json`, inside the envelope. | `--dry-run` (reports scrubbing only), `--json` |
 | `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. In Oort Cloud, a copy shared to a Constellation stays (it is the team's memory now) and the command says so. | `--yes`, `--everywhere` (Oort Cloud: also withdraw the shared copies only you contributed to) |
 | `oort pin <id>` / `oort unpin <id>` | A pinned memory is never sent to cold storage. | |
 | `oort consolidate` | Expires, re-tiers and evicts memories, every project and the global ones: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each node, and inside it each project and the global memories, is re-tiered on its own. The hooks also run it about daily (see `docs/claude-code.md`); a manual run counts as that day's. | |
@@ -877,8 +991,8 @@ The providers are `voyage` (`VOYAGE_API_KEY`), `typesafe`
 (`TYPESAFE_API_KEY`), `anthropic` (`ANTHROPIC_API_KEY`) and `oort`
 (`OORT_API_KEY`, the Oort Pro key that `oort login` stores). A set, non-empty
 environment variable wins over the stored key. `keys list` prints where each key
-comes from (`keychain` means the stored key, in either place below); with `--json` it prints
-`[{ "provider", "envVar", "source" }]`. It never prints a value. A missing
+comes from (`keychain` means the stored key, in either place below); with `--json` its
+`data` is `{ "keys": [{ "provider", "envVar", "source" }] }`. It never prints a value. A missing
 `oort` row points at `oort login`. `oort keys set oort` also works, for a key
 you created on the account page.
 
@@ -1276,8 +1390,9 @@ Pro, with no key and a 3 second timeout.
 
 Each check has a status: `✓` ok, `!` warn, `✗` fail, `•` info and `?`
 unknown. A relay that does not answer `/health` is a warning, not a failure:
-Oort still works locally, and recall falls back to lexical-only. A failed check
-makes doctor exit 1; warnings alone exit 0.
+Oort still works locally, and recall falls back to lexical-only. Doctor exits 5
+when a check failed, 4 when there are warnings only, and 0 otherwise (info rows
+do not count). Before 0.6.0 a failure exited 1 and warnings 0.
 
 ```
 oort doctor · 1 to fix
@@ -1290,8 +1405,11 @@ mcp
             fix: oort connect cursor
 ```
 
-With `--json` it prints `{ "ok": boolean, "checks": [{ "group", "name",
-"status", "detail", "fix"? }] }` and nothing else.
+With `--json` its `data` is `{ "status": "ok" | "warn" | "fail", "problems":
+number, "checks": [{ "group", "name", "status", "detail", "fix"?,
+"fixCommand"? }] }`. `fixCommand` is set where the fix is a command you can run
+as it is (`oort connect cursor`, `chmod 600 <file>`, `oort models pull`), also
+when `fix` wraps it in a sentence.
 
 ## Projects: `oort project`
 

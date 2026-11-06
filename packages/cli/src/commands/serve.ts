@@ -14,6 +14,7 @@ import {
   writeSkip,
 } from '../serve-client.js';
 import { lockPathFor, socketPathFor } from '../serve-protocol.js';
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import { Refusal, echo, shown, tilde, type Ctx } from '../util.js';
 
@@ -98,8 +99,21 @@ export async function serveCommand(
     );
   }
   // The home config only: a repository's oort.config.json does not run daemons on this machine.
+  if (opts.detach !== true && opts.json === true) {
+    throw new Refusal(
+      '`oort serve` in the foreground runs until stopped and prints a log, not JSON; --json is for `oort serve --detach`, `status` and `stop`.',
+      { fix: 'oort serve --detach --json' },
+    );
+  }
   const config = resolveConfig(io.cwd, io.env, { projectConfig: false });
   const idleMs = opts.idle !== undefined ? parseIdle(opts.idle) : config.serve.idleMinutes * 60_000;
+  const logFile = path.join(home, 'logs', 'serve.log');
+  const detached = (pid: unknown, alreadyRunning: boolean): number => {
+    if (jsonMode(ctx)) {
+      emit(ctx, { running: true, alreadyRunning, pid, socket, idleExitMs: idleMs, log: logFile });
+    }
+    return 0;
+  };
 
   if (opts.detach === true) {
     const running = await callDaemon(socket, 'ping', {}, { budgetMs: 1000 });
@@ -107,7 +121,7 @@ export async function serveCommand(
       io.out(
         `${ui.ok(`oort serve is already running (pid ${shown(running.result['pid'])}, ${show(socket)}).`)}\n`,
       );
-      return 0;
+      return detached(running.result['pid'], true);
     }
     clearSkip(home); // so a refusal written below is this start's, not an older one
     const pid = spawnDaemon(
@@ -120,8 +134,7 @@ export async function serveCommand(
     while (Date.now() < until) {
       await sleep(100);
       if (readSkip(home)?.reason === 'migration') {
-        io.err(`oort: ${NEEDS_DOCTOR}\n`);
-        return 1;
+        throw new Refusal(NEEDS_DOCTOR, { code: 'internal', fix: 'oort doctor' });
       }
       const r = await callDaemon(socket, 'ping', {}, { budgetMs: 500 });
       if (r.ok && r.result['pid'] !== pid) {
@@ -130,7 +143,7 @@ export async function serveCommand(
         io.out(
           `${ui.ok(`oort serve is already running (pid ${shown(r.result['pid'])}, ${show(socket)}).`)}\n`,
         );
-        return 0;
+        return detached(r.result['pid'], true);
       }
       if (r.ok) {
         io.out(ui.header('serve', 'detached'));
@@ -140,16 +153,16 @@ export async function serveCommand(
             ['pid', shown(r.result['pid'])],
             ['socket', show(socket)],
             ['idle exit', minutes(idleMs)],
-            ['log', show(path.join(home, 'logs', 'serve.log'))],
+            ['log', show(logFile)],
           ]),
         );
-        return 0;
+        return detached(r.result['pid'], false);
       }
     }
-    io.err(
-      `oort: the daemon did not start${pid === undefined ? '' : ` (pid ${pid})`}; see ${show(path.join(home, 'logs', 'serve.log'))}.\n`,
+    throw new Refusal(
+      `the daemon did not start${pid === undefined ? '' : ` (pid ${pid})`}; see ${show(logFile)}.`,
+      { code: 'internal' },
     );
-    return 1;
   }
 
   // The daemon module (and through it the engine) loads only for a foreground start.
@@ -204,7 +217,7 @@ export async function serveCommand(
     const holder = lockHolderPid();
     // Only a live marker: any oort command migrates the store, so an expired one may be stale.
     const needsMigration = priorSkip?.reason === 'migration' && priorSkip.until > Date.now();
-    if (opts.json === true) {
+    if (jsonMode(ctx)) {
       // Only known fields, copied by name: nothing the socket sends can add or override one.
       const fields = [
         'version',
@@ -224,19 +237,16 @@ export async function serveCommand(
               .map((f) => [f, r.result[f]]),
           )
         : {};
-      io.out(
-        `${JSON.stringify(
-          r.ok
-            ? { ...known, running: true, socket }
-            : {
-                ...(holder !== undefined && { unresponsivePid: holder }),
-                ...(needsMigration && { needsMigration: true }),
-                running: false,
-                socket,
-              },
-          null,
-          2,
-        )}\n`,
+      emit(
+        ctx,
+        r.ok
+          ? { ...known, running: true, socket }
+          : {
+              ...(holder !== undefined && { unresponsivePid: holder }),
+              ...(needsMigration && { needsMigration: true }),
+              running: false,
+              socket,
+            },
       );
       // Exit 0 only when the daemon answers, so `oort serve status || oort serve --detach` works;
       // the JSON reports the state either way.
@@ -307,16 +317,19 @@ export async function serveCommand(
     if (!before.ok) {
       const holder = lockHolderPid();
       if (holder !== undefined) {
-        io.err(
-          `oort: pid ${holder} holds ${show(lockPathFor(socket))} but does not answer; check what it is with \`ps -p ${holder}\` before stopping it.\n`,
+        throw new Refusal(
+          `pid ${holder} holds ${show(lockPathFor(socket))} but does not answer; check what it is with \`ps -p ${holder}\` before stopping it.`,
+          { code: 'internal' },
         );
-        return 1;
       }
       // Nobody holds the lock: a socket nothing answers on, or a pid file whose process is gone.
       const removed = removeLeftovers(socket, lockPathFor(socket), before.reason === 'refused');
       io.out(
         `${ui.ok(`oort serve is not running${removed ? '; removed what a stopped daemon left behind' : ''}.`)}\n`,
       );
+      if (jsonMode(ctx)) {
+        emit(ctx, { stopped: false, wasRunning: false, pid: null, removedLeftovers: removed });
+      }
       return 0;
     }
     const pid = shown(before.result['pid']);
@@ -325,11 +338,20 @@ export async function serveCommand(
     while (Date.now() < until) {
       if (socketTrust(socket) === 'absent') {
         io.out(`${ui.ok(`Stopped oort serve (pid ${pid}).`)}\n`);
+        if (jsonMode(ctx)) {
+          emit(ctx, {
+            stopped: true,
+            wasRunning: true,
+            pid: before.result['pid'],
+            removedLeftovers: false,
+          });
+        }
         return 0;
       }
       await sleep(50);
     }
-    io.err(`oort: the daemon (pid ${pid}) did not stop within ${WAIT_MS / 1000}s.\n`);
-    return 1;
+    throw new Refusal(`the daemon (pid ${pid}) did not stop within ${WAIT_MS / 1000}s.`, {
+      code: 'internal',
+    });
   }
 }

@@ -5,6 +5,7 @@ import {
   readAgents,
   type ConsolidateResult,
 } from '@oortmem/core';
+import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import { Refusal, scopeLabel, withWired, type Ctx } from '../util.js';
 
@@ -18,7 +19,9 @@ import { Refusal, scopeLabel, withWired, type Ctx } from '../util.js';
 export async function consolidateCommand(ctx: Ctx): Promise<number> {
   return withWired(ctx, async (w) => {
     if (w.mode === 'cloud') {
-      throw new Refusal('In cloud mode Oort Cloud consolidates your memories itself (daily).');
+      throw new Refusal('In cloud mode Oort Cloud consolidates your memories itself (daily).', {
+        code: 'refused',
+      });
     }
     const now = new Date();
     const t0 = performance.now();
@@ -49,6 +52,24 @@ export async function consolidateCommand(ctx: Ctx): Promise<number> {
       total.complete &&= r.complete;
     }
     recordConsolidation(w.config.home, now, savesAtStart, total, performance.now() - t0);
+    if (jsonMode(ctx)) {
+      emit(ctx, {
+        promoted: total.promoted,
+        demoted: total.demoted,
+        evicted: total.evicted,
+        expired: total.expired,
+        counts: {
+          promoted: total.promoted.length,
+          demoted: total.demoted.length,
+          evicted: total.evicted.length,
+          expired: total.expired.length,
+          skipped: total.skipped,
+        },
+        complete: total.complete,
+        agents: [w.agent.id, ...stars],
+      });
+      return 0;
+    }
     const ui = uiFor(ctx.io);
     ctx.io.out(ui.header('consolidate', scopeLabel(w)));
     ctx.io.out(
