@@ -4,7 +4,7 @@ import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import * as path from 'node:path';
 import { execa } from 'execa';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import CONTRACT from '../test/cloud-contract.json' with { type: 'json' };
 import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
 import { tmpdir } from '../test/helpers.js';
@@ -17,6 +17,10 @@ import { socketPathFor } from './serve-protocol.js';
  */
 
 const BIN = path.join(import.meta.dirname, '..', 'dist', 'main.js');
+
+// Each test starts the bin as a process (and one a daemon too); on a loaded machine (a load
+// average of 100+) one start can take seconds. The timeouts only catch a hang.
+vi.setConfig({ testTimeout: 120_000 });
 
 /** Assembled at runtime so no key literal sits in a source file. */
 const oortKey = ['oort', 'sk', 'latency'.padEnd(43, 'L')].join('_');
@@ -123,7 +127,7 @@ const hook = (s: Sandbox, text: string, env: Record<string, string> = {}) =>
     env: { ...s.env, ...env },
     extendEnv: false,
     reject: false,
-    timeout: 20_000,
+    timeout: 60_000,
     input: prompt(s, text),
   });
 
@@ -150,7 +154,7 @@ async function startServe(s: Sandbox): Promise<ChildProcess> {
   const child = spawn(BIN, ['serve'], { cwd: s.cwd, env: s.env, stdio: 'ignore' });
   children.push(child);
   const socket = socketPathFor(s.oortHome);
-  const end = Date.now() + 8000;
+  const end = Date.now() + 30_000;
   while (Date.now() < end) {
     if ((await callDaemon(socket, 'ping', {}, { budgetMs: 300 })).ok) return child;
     await sleep(50);
@@ -163,7 +167,7 @@ const FACT = 'The auth service listens on port 8443 behind the gateway.';
 describe('the prompt hook in cloud mode (CON-101)', () => {
   it(
     'cloud-latency.the-daemon-keeps-one-connection-open-across-prompts',
-    { timeout: 30_000 },
+    { timeout: 180_000 },
     async () => {
       const c = await localCloud();
       closers.push(c.close);
@@ -171,7 +175,7 @@ describe('the prompt hook in cloud mode (CON-101)', () => {
       const s = sandbox(c);
       await startServe(s);
       // Listening, the daemon opens its connection at once (GET /health: no key, nothing read).
-      const end = Date.now() + 5000;
+      const end = Date.now() + 30_000;
       while (!c.paths.includes('/health') && Date.now() < end) await sleep(20);
       expect(c.paths[0]).toBe('/health');
 

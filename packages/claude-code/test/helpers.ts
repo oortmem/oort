@@ -169,3 +169,20 @@ export function queueLines(home: string, session = SESSION): Record<string, unkn
     .filter((l) => l.length > 0)
     .map((l) => JSON.parse(l) as Record<string, unknown>);
 }
+
+/**
+ * CPU milliseconds this thread spends in `fn`. Wall-clock time also counts the time spent waiting
+ * for a core, which on a loaded machine (a load average of 100+) is most of it; CPU time is what
+ * the code itself costs, so a bound on it holds whatever else the machine runs.
+ */
+export function cpuMs(fn: () => void): number {
+  // `threadCpuUsage` (Node 23.9+) leaves out other threads; `cpuUsage` is the whole process.
+  const usage = (prev?: NodeJS.CpuUsage): NodeJS.CpuUsage =>
+    typeof process.threadCpuUsage === 'function'
+      ? process.threadCpuUsage(prev)
+      : process.cpuUsage(prev);
+  const before = usage();
+  fn();
+  const spent = usage(before);
+  return (spent.user + spent.system) / 1000;
+}

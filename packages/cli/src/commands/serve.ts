@@ -113,6 +113,14 @@ export async function serveCommand(
     while (Date.now() < until) {
       await sleep(100);
       const r = await callDaemon(socket, 'ping', {}, { budgetMs: 500 });
+      if (r.ok && r.result['pid'] !== pid) {
+        // Another daemon answers: one that was running all along (too busy to answer the first
+        // ping in time) or that won a race with ours. Ours finds the lock taken and exits.
+        io.out(
+          `${ui.ok(`oort serve is already running (pid ${shown(r.result['pid'])}, ${show(socket)}).`)}\n`,
+        );
+        return 0;
+      }
       if (r.ok) {
         io.out(ui.header('serve', 'detached'));
         io.out(
