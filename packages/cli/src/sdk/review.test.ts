@@ -109,3 +109,65 @@ describe('a rate limit is retryable, with Retry-After when the service sends it'
     expect(parseRetryAfter('soon', now)).toBeUndefined();
   });
 });
+
+describe('error wording', () => {
+  it("a user handle's scope-denied names what it reads, not a Star it does not have", async () => {
+    const h = home();
+    const oort = await createOortWith(
+      { mode: 'local', home: h.home, env: h.env, org: 'acme' },
+      { adapters: fakeAdapters() },
+    );
+    const err = (await oort
+      .scoped({ user: 'u1', agent: 'bot' })
+      .recall('x', { include: ['star'] })
+      .catch((e: unknown) => e)) as Error;
+    expect(err).toMatchObject({ code: 'refused', reason: 'scope-denied' });
+    expect(err.message).not.toMatch(/its own Star/);
+    expect(err.message).toMatch(/reads only its Planet/);
+    await oort.close();
+  });
+});
+
+describe('every text field is scrubbed on read', () => {
+  it("entities and a judgment's verdict, criteria, domain and by", async () => {
+    const { memoryView, judgmentView } = await import('./views.js');
+    const secret = 'AKIA' + 'IOSFODNN7EXAMPLE';
+    const m = {
+      id: 'm1',
+      scope: { orgId: 'local', customerId: 'self', agentId: 'anonymous' },
+      type: 'judgment' as const,
+      text: 'judgment',
+      stub: '',
+      entities: [`key ${secret}`],
+      salience: 0.5,
+      pinned: false,
+      tier: 'warm' as const,
+      accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: null,
+      expiredAt: null,
+      endReason: null,
+      lastConfirmedAt: null,
+      supersedes: null,
+      supersededBy: null,
+      source: { harness: 'cli', decisions: [] },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      judgment: {
+        subject: { summary: 's' },
+        verdict: `v ${secret}`,
+        verdicts: ['approved', `v ${secret}`],
+        reason: 'r',
+        criteria: [`c ${secret}`],
+        domain: `d ${secret}`,
+        by: `b ${secret}`,
+        decidedAt: '2026-01-01T00:00:00.000Z',
+        via: 'cli' as const,
+      },
+    };
+    const now = new Date('2026-11-05T00:00:00Z');
+    const shown = JSON.stringify([memoryView(m, now), judgmentView(m.judgment, m, now)]);
+    expect(shown).not.toContain(secret);
+    expect(shown).toContain('REDACTED');
+  });
+});

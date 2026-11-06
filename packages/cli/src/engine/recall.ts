@@ -2,6 +2,7 @@ import { filterFor } from '@oortmem/claude-code';
 import {
   ScopeDeniedError,
   isIncludeLevel,
+  readableNodes,
   recall,
   type Embedder,
   type Grant,
@@ -174,8 +175,18 @@ export async function runRecall(
     );
   } catch (e) {
     if (e instanceof ScopeDeniedError) {
+      // The CLI's grant is always the Planet and the agent's own Star; a principal's grant (the
+      // SDK's end users) may be narrower, so say what it really reads.
+      const reads =
+        w.grant === undefined
+          ? 'it reads your Planet and its own Star'
+          : `this handle reads only ${readableNodes(w.grant)
+              .map((n) =>
+                n.level === 'user' ? 'its Planet' : n.level === 'agent' ? 'its Star' : n.level,
+              )
+              .join(' and ')}`;
       throw new Refusal(
-        `scope_denied: ${w.agent.id} cannot read ${e.levels.join(', ')} (it reads your Planet and its own Star).`,
+        `scope_denied: ${w.agent.id} cannot read ${e.levels.join(', ')} (${reads}).`,
         { code: 'refused' },
       );
     }
