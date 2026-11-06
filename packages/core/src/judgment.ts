@@ -253,7 +253,8 @@ export function safeExpertId(by: string): string {
 /** The memory text recall shows for a judgment: who decided what, and why, in their words. */
 export function judgmentText(j: Judgment): string {
   const criteria = j.criteria.length === 0 ? '' : ` Criteria: ${j.criteria.join(', ')}.`;
-  const who = j.via === 'mcp' && j.confirmed === undefined ? ' (agent-recorded, unconfirmed)' : '';
+  const who =
+    isAgentVia(j.via) && j.confirmed === undefined ? ' (agent-recorded, unconfirmed)' : '';
   return `Judgment by ${j.by}${who} (${j.domain}): ${j.verdict} "${j.subject.summary}". Reason: ${j.reason}${criteria}`;
 }
 
@@ -264,9 +265,19 @@ export function isActiveJudgment(m: Memory, now: Date): m is Memory & { judgment
   );
 }
 
-/** Recorded by an agent over MCP and not confirmed by a person. */
+/**
+ * True for a `via` that means an agent recorded the judgment (today only `mcp`, which also covers
+ * agent-role SDK records, `source.harness: 'sdk'`). The one definition of agent-recorded: every
+ * rule that keeps an agent from retracting a person's judgment asks it, so a later agent `via`
+ * cannot slip past one site while the others hold.
+ */
+export function isAgentVia(via: JudgmentVia): boolean {
+  return via === 'mcp';
+}
+
+/** Recorded by an agent (over MCP, or an SDK in agent role) and not confirmed by a person. */
 export function isUnconfirmedAgentJudgment(j: Pick<Judgment, 'via' | 'confirmed'>): boolean {
-  return j.via === 'mcp' && j.confirmed === undefined;
+  return isAgentVia(j.via) && j.confirmed === undefined;
 }
 
 /** Case and whitespace folded, for matching a decision whatever its spacing or capitals. */
@@ -450,7 +461,7 @@ function plan(
   // An agent never retracts a person-owned judgment (recorded or confirmed by a person): it is
   // recorded alongside instead. The item key already separates them; this is the second line.
   const prior =
-    ctx.via === 'mcp' && found !== undefined && recordedBy(found.judgment) === 'person'
+    isAgentVia(ctx.via) && found !== undefined && recordedBy(found.judgment) === 'person'
       ? undefined
       : found;
   if (prior !== undefined && ctx.corrects === undefined && sameDecision(prior.judgment, j)) {
@@ -470,7 +481,7 @@ function plan(
     }
   }
   if (key !== undefined && ctx.via !== 'pack') index.items.set(key, memory);
-  if (ctx.via !== 'mcp') index.fingerprints.add(fingerprint(base));
+  if (!isAgentVia(ctx.via)) index.fingerprints.add(fingerprint(base));
   if (ctx.importedKey !== undefined) index.imported.add(ctx.importedKey);
   return { kind: 'write', planned: { memory, ...(prior !== undefined && { prior }), redacted } };
 }
@@ -550,7 +561,11 @@ export async function recordJudgment(
     deps.corrects !== undefined && deps.corrects.judgment !== undefined
       ? (deps.corrects as Memory & { judgment: Judgment })
       : undefined;
-  if (corrects !== undefined && deps.via === 'mcp' && recordedBy(corrects.judgment) === 'person') {
+  if (
+    corrects !== undefined &&
+    isAgentVia(deps.via) &&
+    recordedBy(corrects.judgment) === 'person'
+  ) {
     throw new JudgmentInputError(
       'an agent-recorded judgment cannot correct one a person recorded or confirmed',
     );

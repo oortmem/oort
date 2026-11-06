@@ -13,6 +13,7 @@ import {
   JudgmentInputError,
   VERSION,
   activation,
+  isAgentVia,
   isCurrent,
   judge,
   recordJudgment,
@@ -529,7 +530,7 @@ const JUDGE_NOTES: Record<NonNullable<JudgeResult['why']>, string> = {
  */
 function judgeOutput(r: JudgeResult): Record<string, unknown> {
   const experts = [...new Set(r.precedents.map((p) => safeExpertId(p.by)))].join(', ');
-  const agentRecorded = r.precedents.some((p) => p.via === 'mcp');
+  const agentRecorded = r.precedents.some((p) => isAgentVia(p.via));
   return {
     status: r.status,
     ...(r.why !== undefined && { why: r.why }),
@@ -559,7 +560,7 @@ function judgeOutput(r: JudgeResult): Record<string, unknown> {
       decided_at: p.decidedAt,
       via: p.via,
       confirmed: p.confirmed,
-      ...(p.via === 'mcp' && { agent_recorded: true }),
+      ...(isAgentVia(p.via) && { agent_recorded: true }),
       similarity: p.similarity,
       near: p.near,
       ...(p.agrees !== undefined && { agrees: p.agrees }),
