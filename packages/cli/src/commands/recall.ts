@@ -1,5 +1,5 @@
 import { filterFor } from '@oortmem/claude-code';
-import { formatForInjection, type RecallResult } from '@oortmem/core';
+import { fitForInjection, formatForInjection, type RecallResult } from '@oortmem/core';
 import {
   RECALL_SPEEDS,
   chosenDegradations,
@@ -62,6 +62,12 @@ export interface RecallTuning {
 
 const WHOLE = /^[0-9]+$/;
 
+/**
+ * The `<oort-memory>` block's own tags take this many characters (core's `fitForInjection`), so a
+ * smaller `--budget-chars` could never hold a memory.
+ */
+export const BLOCK_TAG_CHARS = '<oort-memory>\n'.length + '\n</oort-memory>'.length;
+
 /** `--limit`, `--speed` and `--budget-chars`, with the SDK's bounds; a bad value is a usage error. */
 export function recallTuning(
   o: Pick<RecallOptions, 'limit' | 'speed' | 'budgetChars'>,
@@ -83,8 +89,10 @@ export function recallTuning(
   }
   if (o.budgetChars !== undefined) {
     const n = WHOLE.test(o.budgetChars.trim()) ? Number(o.budgetChars.trim()) : NaN;
-    if (!(n >= 1 && Number.isSafeInteger(n))) {
-      throw new Refusal('--budget-chars must be a whole number of characters, 1 or more.');
+    if (!(Number.isSafeInteger(n) && n > BLOCK_TAG_CHARS)) {
+      throw new Refusal(
+        `--budget-chars must be a whole number of characters, at least ${BLOCK_TAG_CHARS + 1} (the block's tags take ${BLOCK_TAG_CHARS}).`,
+      );
     }
     t.budgetChars = n;
   }
@@ -132,22 +140,28 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
           : await Promise.all(result.memories.map((m) => shapeLinks(w.store, filter, m)));
       emit(ctx, { ...result, memories: shaped.map(withoutEmbedding) });
     } else {
-      const block = formatForInjection(
-        result,
-        tuning.budgetChars ?? w.config.recall.budgetChars,
-        now,
-      );
+      const budget = tuning.budgetChars ?? w.config.recall.budgetChars;
+      const block = formatForInjection(result, budget, now);
       const ui = uiFor(ctx.io);
-      const n = result.memories.length;
+      // The count is what the block holds: the memories that fit the budget.
+      const recalled = result.memories.length;
+      const n = fitForInjection(result.memories, budget, now).kept.length;
+      const which = tuning.budgetChars !== undefined ? '--budget-chars' : 'recall.budgetChars';
       ctx.io.out(
         ui.header(
           'recall',
-          `${n} ${n === 1 ? 'memory' : 'memories'}`,
+          recalled > 0 && n === 0
+            ? `none fit ${which}`
+            : `${n} ${n === 1 ? 'memory' : 'memories'}${n < recalled ? ` (of ${recalled}; ${which})` : ''}`,
           scopeLabel(w),
           agentLabel(w),
         ),
       );
       if (block.length > 0) ctx.io.out(`${block}\n`);
+      else if (recalled > 0)
+        ctx.io.err(
+          `oort: none of the ${recalled} recalled memories fit within ${budget} characters (${which}).\n`,
+        );
       else if (result.abstained === true)
         ctx.io.err('oort: no relevant memories (matches were below the relevance threshold).\n');
       else ctx.io.err('oort: no memories matched.\n');

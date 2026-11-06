@@ -1263,6 +1263,16 @@ describe('oort.v1 errors: retryable and retryAfter where they are known', () => 
     expect(down).not.toHaveProperty('retryAfter');
   });
 
+  it('a local store locked by another process is retryable (internal, exit 1)', async () => {
+    const { h, run } = local();
+    h.wire = async () => {
+      throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+    };
+    const busy = bad(await run(['stats', '--json']), 'stats', 'internal', 1);
+    expect(busy.retryable).toBe(true);
+    expect(busy).not.toHaveProperty('retryAfter');
+  });
+
   it('an error that a retry will not fix has neither field (they are optional)', async () => {
     const e = cloudEnv();
     e.cloud.fail = { 'POST /v1/recall': 402 };

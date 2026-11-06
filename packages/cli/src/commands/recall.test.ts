@@ -117,6 +117,58 @@ describe('oort recall: --limit, --speed, --budget-chars', () => {
     }
   });
 
+  it('the header counts the memories that fit --budget-chars; a budget below the tags is refused', async () => {
+    const h = await seeded(6);
+    const all = await h.run(['recall', 'auth service port']);
+    expect(all.io.stdout).toMatch(/^oort recall · 6 memories · /);
+    const some = await h.run(['recall', 'auth service port', '--budget-chars', '200']);
+    const kept = (some.io.stdout.match(/^- \[/gm) ?? []).length;
+    expect(kept).toBeGreaterThan(0);
+    expect(kept).toBeLessThan(6);
+    expect(some.io.stdout).toContain(
+      `· ${kept} ${kept === 1 ? 'memory' : 'memories'} (of 6; --budget-chars) ·`,
+    );
+    const none = await h.run(['recall', 'auth service port', '--budget-chars', '40']);
+    expect(none.code).toBe(0);
+    expect(none.io.stdout).toMatch(/^oort recall · none fit --budget-chars · /);
+    expect(none.io.stderr).toContain('none of the 6 recalled memories fit within 40 characters');
+    const tiny = await h.run(['recall', 'x', '--budget-chars', '29', '--json']);
+    expect(failed(tiny, 'usage', 'recall').message).toContain('at least 30');
+    expect((await h.run(['recall', 'auth service port', '--budget-chars', '30'])).code).toBe(0);
+  });
+
+  it('with the embedder or reranker really missing, --speed decides whether that is a warning', async () => {
+    const noKeys = await seeded(2);
+    const base = noKeys.wire;
+    noKeys.wire = async (dir, o) => {
+      const { embed: _e, rerank: _r, ...w } = await base(dir, o);
+      return w;
+    };
+    const full = await noKeys.run(['recall', 'auth service port', '--json']);
+    expect(data(full.io.stdout, 'recall')).toBeDefined();
+    expect(JSON.parse(full.io.stdout).warnings.map((w: { code: string }) => w.code)).toContain(
+      'lexical-only',
+    );
+    for (const speed of ['fast', 'lexical']) {
+      const r = await noKeys.run(['recall', 'auth service port', '--speed', speed, '--json']);
+      const codes = JSON.parse(r.io.stdout).warnings.map((w: { code: string }) => w.code);
+      // fast still embeds: no embedder is still lexical-only. lexical asked for no model.
+      expect(codes.includes('lexical-only'), speed).toBe(speed === 'fast');
+    }
+    // An embedder without a reranker: fast is what was asked for, full is degraded.
+    const noRerank = await seeded(2);
+    const plain = noRerank.wire;
+    noRerank.wire = async (dir, o) => {
+      const { rerank: _r, ...w } = await plain(dir, o);
+      return w;
+    };
+    const fast = await noRerank.run(['recall', 'auth service port', '--speed', 'fast', '--json']);
+    expect(JSON.parse(fast.io.stdout).warnings).toEqual([]);
+    expect(fast.io.stderr).not.toMatch(/lexical-only|degraded/);
+    const fullNoRerank = await noRerank.run(['recall', 'auth service port', '--json']);
+    expect(JSON.parse(fullNoRerank.io.stdout).warnings.length).toBeGreaterThan(0);
+  });
+
   it("in Oort Cloud, --limit is the request's k and --speed turns off rerank and embed", async () => {
     const root = tmpdir();
     const home = path.join(root, 'oort-home');

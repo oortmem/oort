@@ -141,8 +141,8 @@ function plainPrompter(ctx: Ctx, ui: Ui): Prompter {
 }
 
 /**
- * clack on the terminal. Its questions go to stderr, as every prompt does (CON-107), so stdout
- * never receives one; `streams.input` is for tests.
+ * clack on the terminal. The whole wizard, its questions and its lines, is drawn on stderr, as
+ * every prompt is (CON-107), so stdout never receives any of it; `streams.input` is for tests.
  */
 export function clackPrompter(ui: Ui, streams: { input?: NodeJS.ReadableStream } = {}): Prompter {
   const val = <T>(v: T | symbol): T | null => (clack.isCancel(v) ? null : (v as T));
@@ -152,10 +152,11 @@ export function clackPrompter(ui: Ui, streams: { input?: NodeJS.ReadableStream }
   };
   return {
     interactive: true,
-    intro: (t) => clack.intro(t),
-    step: (n, t) => clack.log.step(`${ui.dim(`${n}/${STEPS}`)} ${ui.bold(t)}`),
-    info: (t) => clack.log.message(t.trimEnd()),
-    outro: (t) => clack.outro(t.trimEnd()),
+    intro: (t) => clack.intro(t, { output: io.output }),
+    step: (n, t) =>
+      clack.log.step(`${ui.dim(`${n}/${STEPS}`)} ${ui.bold(t)}`, { output: io.output }),
+    info: (t) => clack.log.message(t.trimEnd(), { output: io.output }),
+    outro: (t) => clack.outro(t.trimEnd(), { output: io.output }),
     async multiselect<T extends string>(message: string, options: Choice<T>[], initial: T[]) {
       return val<T[]>(
         await clack.multiselect({
@@ -344,6 +345,15 @@ export async function setupCommand(
       fix: `oort setup --yes --agents ${detected.length > 0 ? detected.join(',') : 'claude-code'} --keys byo --import skip${jsonMode(ctx) ? ' --json' : ''}`,
     });
   }
+  // The wizard draws on stderr: with stderr redirected (`2> file`) it would ask where nobody sees.
+  if (opts.yes !== true && deps.prompter === undefined && ctx.io.stderrIsTTY !== true) {
+    throw new Refusal(
+      'setup asks its questions on stderr, and stderr is not a terminal (redirected or piped). Run it without redirecting stderr, or pass --yes and your choices.',
+      {
+        fix: `oort setup --yes --agents ${detected.length > 0 ? detected.join(',') : 'claude-code'} --keys byo --import skip`,
+      },
+    );
+  }
   const ui = uiFor(ctx.io);
   const interactive = opts.yes !== true;
   const p = interactive ? (deps.prompter ?? clackPrompter(ui)) : plainPrompter(ctx, ui);
@@ -362,7 +372,9 @@ export async function setupCommand(
     ui.dim('Six short steps: agents, keys, connect, import, a check.'),
     ui.dim('Every step can be skipped, and the last one shows how to undo.'),
   ]);
-  if (art !== '') ctx.io.out(`${art}\n`);
+  // The mark opens the wizard on stderr with the rest of it; a `--yes` run prints it on stdout.
+  if (art !== '' && interactive && deps.prompter === undefined) ctx.io.err(`${art}\n`);
+  else if (art !== '') ctx.io.out(`${art}\n`);
   p.intro(
     interactive
       ? ui.color
