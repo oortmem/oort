@@ -83,7 +83,7 @@ below updated in the same commit.
 
 ## Baseline, tokeniser v1 (2026-11-06)
 
-Before tokeniser v2: the store at `70e1917`, Node 26.13, ICU 78.3. Local models from a throwaway
+Before tokeniser v2 (commit `cd84e56`): the store at `70e1917`, Node 26.13, ICU 78.3. Local models from a throwaway
 `OORT_HOME`: `bge-small-en-v1.5` (English-only) and `ms-marco-minilm-l6-v2` (English-only).
 
 **mono** (recall@10 / MRR@10 / abstention FP)
@@ -156,6 +156,129 @@ What it shows:
 - **MiniLM.** The English-only reranker cuts cross-lingual recall to 0.03 to 0.47 and drops
   monolingual recall in most languages, while still passing every abstention question in CJK,
   Korean, Hindi, Arabic and Russian. It should not run on non-English text, as the design says.
+
+## After tokeniser v2 (2026-11-06)
+
+The same runs after tokeniser v2 and schema version 4 (see `docs/store-contract.md`), with word
+coverage weighing a CJK run as one word.
+
+**mono** (recall@10 / MRR@10 / abstention FP)
+
+| Language | Lexical            | bge-small          | bge-small + MiniLM |
+| -------- | ------------------ | ------------------ | ------------------ |
+| en       | 0.77 / 0.75 / 0.25 | 0.97 / 0.93 / 0.50 | 0.93 / 0.92 / 0.00 |
+| es       | 0.63 / 0.62 / 0.25 | 0.97 / 0.95 / 1.00 | 0.83 / 0.83 / 0.00 |
+| pt-BR    | 0.67 / 0.65 / 0.00 | 1.00 / 0.95 / 1.00 | 0.77 / 0.75 / 0.00 |
+| de       | 0.57 / 0.57 / 0.00 | 1.00 / 0.97 / 1.00 | 0.77 / 0.77 / 0.00 |
+| fr       | 0.63 / 0.63 / 0.25 | 1.00 / 0.98 / 1.00 | 0.87 / 0.85 / 0.00 |
+| ja       | 0.67 / 0.65 / 0.00 | 1.00 / 0.90 / 1.00 | 0.73 / 0.59 / 1.00 |
+| zh-Hans  | 0.87 / 0.83 / 0.00 | 0.97 / 0.91 / 1.00 | 0.90 / 0.79 / 1.00 |
+| ko       | 0.53 / 0.53 / 0.00 | 1.00 / 0.91 / 1.00 | 0.80 / 0.74 / 1.00 |
+| hi       | 0.50 / 0.50 / 0.00 | 0.97 / 0.92 / 1.00 | 0.97 / 0.93 / 1.00 |
+| ar       | 0.47 / 0.47 / 0.00 | 0.97 / 0.88 / 1.00 | 0.80 / 0.73 / 1.00 |
+| th       | 0.63 / 0.63 / 0.00 | 1.00 / 0.88 / 1.00 | 0.93 / 0.84 / 0.50 |
+| ru       | 0.47 / 0.45 / 0.25 | 1.00 / 0.88 / 1.00 | 0.87 / 0.70 / 1.00 |
+| id       | 0.67 / 0.65 / 0.00 | 0.93 / 0.90 / 1.00 | 0.77 / 0.77 / 0.00 |
+
+**cross** (recall@10 / MRR@10 / abstention FP)
+
+| Language | Lexical            | bge-small          | bge-small + MiniLM |
+| -------- | ------------------ | ------------------ | ------------------ |
+| es       | 0.10 / 0.10 / 0.00 | 0.73 / 0.72 / 0.50 | 0.17 / 0.17 / 0.00 |
+| pt-BR    | 0.07 / 0.07 / 0.00 | 0.67 / 0.63 / 0.50 | 0.07 / 0.07 / 0.00 |
+| de       | 0.07 / 0.07 / 0.00 | 0.70 / 0.67 / 0.25 | 0.13 / 0.13 / 0.00 |
+| fr       | 0.03 / 0.03 / 0.00 | 0.60 / 0.58 / 0.75 | 0.17 / 0.17 / 0.00 |
+| ja       | 0.50 / 0.45 / 0.00 | 0.60 / 0.55 / 1.00 | 0.20 / 0.17 / 0.00 |
+| zh-Hans  | 0.60 / 0.53 / 0.00 | 0.70 / 0.62 / 1.00 | 0.27 / 0.27 / 0.00 |
+| ko       | 0.03 / 0.03 / 0.00 | 0.47 / 0.42 / 0.50 | 0.27 / 0.23 / 0.00 |
+| hi       | 0.03 / 0.03 / 0.00 | 0.47 / 0.45 / 0.25 | 0.47 / 0.47 / 0.00 |
+| ar       | 0.07 / 0.07 / 0.00 | 0.60 / 0.57 / 0.25 | 0.10 / 0.10 / 0.00 |
+| th       | 0.10 / 0.10 / 0.00 | 0.73 / 0.68 / 0.75 | 0.43 / 0.43 / 0.00 |
+| ru       | 0.10 / 0.10 / 0.00 | 0.57 / 0.52 / 0.50 | 0.03 / 0.03 / 0.00 |
+| id       | 0.10 / 0.10 / 0.00 | 0.60 / 0.58 / 0.50 | 0.10 / 0.10 / 0.00 |
+
+**mixed** (recall@10 / MRR@10 / abstention FP)
+
+| Language | Lexical            | bge-small          | bge-small + MiniLM |
+| -------- | ------------------ | ------------------ | ------------------ |
+| en       | 0.80 / 0.80 / 0.25 | 0.93 / 0.93 / 1.00 | 0.93 / 0.92 / 0.25 |
+| es       | 0.67 / 0.67 / 0.25 | 1.00 / 0.97 / 1.00 | 0.83 / 0.83 / 0.00 |
+| pt-BR    | 0.67 / 0.61 / 0.00 | 1.00 / 0.93 / 1.00 | 0.77 / 0.77 / 0.00 |
+| de       | 0.57 / 0.57 / 0.00 | 1.00 / 0.98 / 1.00 | 0.80 / 0.80 / 0.00 |
+| fr       | 0.63 / 0.60 / 0.25 | 1.00 / 0.95 / 1.00 | 0.87 / 0.85 / 0.00 |
+| ja       | 0.70 / 0.68 / 0.00 | 1.00 / 0.92 / 1.00 | 0.77 / 0.65 / 1.00 |
+| zh-Hans  | 0.80 / 0.80 / 0.00 | 0.97 / 0.88 / 1.00 | 0.97 / 0.79 / 1.00 |
+| ko       | 0.53 / 0.53 / 0.00 | 1.00 / 0.94 / 1.00 | 0.83 / 0.76 / 1.00 |
+| hi       | 0.50 / 0.50 / 0.00 | 0.97 / 0.91 / 1.00 | 1.00 / 0.95 / 1.00 |
+| ar       | 0.47 / 0.47 / 0.00 | 0.97 / 0.91 / 1.00 | 0.83 / 0.73 / 1.00 |
+| th       | 0.63 / 0.63 / 0.00 | 0.93 / 0.83 / 1.00 | 0.97 / 0.91 / 0.50 |
+| ru       | 0.47 / 0.45 / 0.25 | 1.00 / 0.89 / 1.00 | 0.90 / 0.71 / 1.00 |
+| id       | 0.67 / 0.67 / 0.00 | 0.97 / 0.92 / 1.00 | 0.77 / 0.77 / 0.00 |
+
+### Before and after, recall@10 (v1 → v2)
+
+| Language | Condition | Lexical     | bge-small   | bge-small + MiniLM |
+| -------- | --------- | ----------- | ----------- | ------------------ |
+| en       | mono      | 0.77 → 0.77 | 0.97 → 0.97 | 0.93 → 0.93        |
+| es       | mono      | 0.63 → 0.63 | 0.97 → 0.97 | 0.83 → 0.83        |
+| pt-BR    | mono      | 0.67 → 0.67 | 1.00 → 1.00 | 0.77 → 0.77        |
+| de       | mono      | 0.57 → 0.57 | 1.00 → 1.00 | 0.77 → 0.77        |
+| fr       | mono      | 0.63 → 0.63 | 1.00 → 1.00 | 0.87 → 0.87        |
+| ja       | mono      | 0.00 → 0.67 | 0.93 → 1.00 | 0.73 → 0.73        |
+| zh-Hans  | mono      | 0.60 → 0.87 | 0.90 → 0.97 | 0.93 → 0.90        |
+| ko       | mono      | 0.20 → 0.53 | 0.97 → 1.00 | 0.80 → 0.80        |
+| hi       | mono      | 0.83 → 0.50 | 0.97 → 0.97 | 0.97 → 0.97        |
+| ar       | mono      | 0.47 → 0.47 | 0.97 → 0.97 | 0.80 → 0.80        |
+| th       | mono      | 0.47 → 0.63 | 0.97 → 1.00 | 0.93 → 0.93        |
+| ru       | mono      | 0.47 → 0.47 | 1.00 → 1.00 | 0.87 → 0.87        |
+| id       | mono      | 0.67 → 0.67 | 0.93 → 0.93 | 0.77 → 0.77        |
+| es       | cross     | 0.10 → 0.10 | 0.73 → 0.73 | 0.17 → 0.17        |
+| pt-BR    | cross     | 0.07 → 0.07 | 0.67 → 0.67 | 0.07 → 0.07        |
+| de       | cross     | 0.07 → 0.07 | 0.70 → 0.70 | 0.13 → 0.13        |
+| fr       | cross     | 0.03 → 0.03 | 0.60 → 0.60 | 0.17 → 0.17        |
+| ja       | cross     | 0.00 → 0.50 | 0.47 → 0.60 | 0.20 → 0.20        |
+| zh-Hans  | cross     | 0.57 → 0.60 | 0.70 → 0.70 | 0.27 → 0.27        |
+| ko       | cross     | 0.00 → 0.03 | 0.47 → 0.47 | 0.27 → 0.27        |
+| hi       | cross     | 0.03 → 0.03 | 0.47 → 0.47 | 0.47 → 0.47        |
+| ar       | cross     | 0.03 → 0.07 | 0.60 → 0.60 | 0.10 → 0.10        |
+| th       | cross     | 0.07 → 0.10 | 0.73 → 0.73 | 0.43 → 0.43        |
+| ru       | cross     | 0.10 → 0.10 | 0.57 → 0.57 | 0.03 → 0.03        |
+| id       | cross     | 0.10 → 0.10 | 0.60 → 0.60 | 0.10 → 0.10        |
+| en       | mixed     | 0.80 → 0.80 | 0.93 → 0.93 | 0.93 → 0.93        |
+| es       | mixed     | 0.67 → 0.67 | 1.00 → 1.00 | 0.83 → 0.83        |
+| pt-BR    | mixed     | 0.67 → 0.67 | 1.00 → 1.00 | 0.77 → 0.77        |
+| de       | mixed     | 0.57 → 0.57 | 1.00 → 1.00 | 0.80 → 0.80        |
+| fr       | mixed     | 0.63 → 0.63 | 1.00 → 1.00 | 0.87 → 0.87        |
+| ja       | mixed     | 0.00 → 0.70 | 0.93 → 1.00 | 0.80 → 0.77        |
+| zh-Hans  | mixed     | 0.60 → 0.80 | 0.87 → 0.97 | 0.93 → 0.97        |
+| ko       | mixed     | 0.23 → 0.53 | 0.97 → 1.00 | 0.83 → 0.83        |
+| hi       | mixed     | 0.83 → 0.50 | 0.97 → 0.97 | 1.00 → 1.00        |
+| ar       | mixed     | 0.47 → 0.47 | 0.97 → 0.97 | 0.83 → 0.83        |
+| th       | mixed     | 0.47 → 0.63 | 0.93 → 0.93 | 0.97 → 0.97        |
+| ru       | mixed     | 0.47 → 0.47 | 1.00 → 1.00 | 0.90 → 0.90        |
+| id       | mixed     | 0.67 → 0.67 | 0.97 → 0.97 | 0.77 → 0.77        |
+
+What changed:
+
+- **English is identical** in every condition and configuration, as the golden tests require.
+  So are Spanish, Portuguese, German, French, Arabic, Russian and Indonesian, whose text v2
+  tokenises as v1 did (the memories and questions use accents consistently, so folding does not
+  show here).
+- **Lexical CJK and Thai recover:** Japanese 0.00 → 0.67, Chinese 0.60 → 0.87, Korean 0.20 →
+  0.53, Thai 0.47 → 0.63. Identifiers written against kana or Hangul are their own tokens now, so
+  Japanese cross-lingual lexical recall goes from 0.00 to 0.50.
+- **Hindi lexical falls, 0.83 → 0.50, and that is the honest number.** v1's score came from
+  shredded fragments that also let half the abstention questions through; v2 keeps words whole
+  and abstention FP drops from 0.50 to 0.00. With the gate off, v2 ranks the right Hindi memory
+  first almost every time (MRR 0.98): what drops it is the coverage gate, because Hindi function
+  words (का, में, है, को) count as informative. The 0.7 stopword work should include Hindi, not
+  only the Latin-script languages.
+- **Coverage over bigrams.** Counting every bigram as a word made a question's own wording outweigh
+  the identifier it names (Chinese lexical fell to 0.27 in a first run). Word coverage now weighs
+  each CJK run as one word, with the share of its bigrams found, which is never less than v1 gave.
+- **bge-small** gains a little in CJK and Thai (lexical candidates are better), but its dense floor
+  still admits every abstention question. **MiniLM** is unchanged: the reranker's gate decides.
+- **Cross-lingual** recall still needs the multilingual embedder and the cross-lingual gate (0.7).
 
 ## Review notes
 
