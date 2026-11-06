@@ -155,6 +155,9 @@ export function recallView(
   return out;
 }
 
+/** The block budget `formatForPrompt` would use for `r` by default, when this SDK made it. */
+export const budgetOf = (r: RecallResult): number | undefined => sources.get(r)?.budgetChars;
+
 /** Default block budget, as the config's `recall.budgetChars`. */
 export const DEFAULT_BUDGET_CHARS = 6000;
 

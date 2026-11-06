@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import type * as http from 'node:http';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -26,6 +27,7 @@ import {
   type ErrorCode,
   type Method,
 } from './serve-protocol.js';
+import { createMemoryApi, type HandleFactory, type ServiceAuth } from './serve-http.js';
 import { Refusal, shown } from './util.js';
 import { statedProjectPrivacy, type WireFn, type Wired } from './wire.js';
 
@@ -33,8 +35,11 @@ import { statedProjectPrivacy, type WireFn, type Wired } from './wire.js';
  * `oort serve` (CON-18): one long-lived process per Oort home, so a hook pays for a socket
  * round trip instead of loading the engine, opening SQLite and reading keys on every prompt.
  *
- * - Listens on a Unix socket only (`socketPathFor`), mode 0600, in a directory owned by this user
- *   and writable by nobody else. No TCP listener, ever.
+ * - Listens on a Unix socket (`socketPathFor`), mode 0600, in a directory owned by this user and
+ *   writable by nobody else. Each connection speaks one protocol, chosen by its first byte: hook
+ *   frames (0x00, a length prefix) or HTTP, the memory protocol (`serve-http.ts`, CON-108 §8.1).
+ * - No TCP listener unless `--listen` asks for one (service mode, §9.4): HTTP only, a bearer
+ *   token on every request, loopback unless a TLS proxy fronts it.
  * - One instance per home, through an exclusive pid file beside the socket.
  * - Keeps wired engines (store, embedder, reranker) warm per project configuration, re-wiring
  *   each in the background once it is a minute old, so edited config and keys are picked up.
@@ -55,7 +60,11 @@ const CONNECTION_IDLE_MS = 10_000;
 const CONNECTION_LIFETIME_MS = 60_000;
 /** Requests one connection may have waiting for an answer. */
 const MAX_QUEUED_FRAMES = 8;
-const MAX_CONNECTIONS = 64;
+/** Hook-frame connections at once; HTTP (the memory protocol) has its own cap. */
+const MAX_FRAME_CONNECTIONS = 64;
+const MAX_HTTP_CONNECTIONS = 32;
+/** TCP connections at once in service mode. */
+const MAX_SERVICE_CONNECTIONS = 256;
 /** How often the daemon checks that its lock and socket are still its own. */
 const SELF_CHECK_MS = 30_000;
 /** A lock younger than this whose holder does not answer yet is a daemon still starting. */
@@ -126,6 +135,13 @@ export interface DaemonOptions {
   now?: () => number;
   /** Tests: how often an idle cloud connection is refreshed, and for how long after a prompt. */
   keepWarm?: { everyMs: number; forMs: number };
+  /**
+   * How the memory protocol makes its SDK handles: `createOort` (the default). Only test fixtures
+   * pass another (fake models); the CLI never does, so no shipped command can swap models.
+   */
+  createHandle?: HandleFactory;
+  /** Service mode (`--listen`): a TCP listener for the memory protocol, with a token. */
+  listen?: { host: string; port: number; auth: ServiceAuth };
 }
 
 /**
@@ -187,6 +203,8 @@ export class KeepWarm {
 export interface Daemon {
   readonly socket: string;
   readonly pid: number;
+  /** Service mode: where the TCP listener listens (the port the OS gave, for port 0). */
+  readonly tcp?: { host: string; port: number };
   /** Resolves with the reason once the daemon has stopped and cleaned up. */
   readonly closed: Promise<string>;
   stop(reason: string): Promise<string>;
@@ -548,11 +566,29 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const touch = (): void => {
     lastActive = now();
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => void stop('idle'), opts.idleMs);
+    // A service (`--listen`) runs until its supervisor stops it: no idle exit.
+    if (opts.listen === undefined) idleTimer = setTimeout(() => void stop('idle'), opts.idleMs);
   };
 
   const server = net.createServer({ allowHalfOpen: false });
-  server.maxConnections = MAX_CONNECTIONS;
+  server.maxConnections = MAX_FRAME_CONNECTIONS + MAX_HTTP_CONNECTIONS;
+  let frameConnections = 0;
+  let httpConnections = 0;
+  const createHandle =
+    opts.createHandle ?? (async (o) => (await import('./sdk/create.js')).createOort(o));
+  const api = createMemoryApi({
+    home: opts.home,
+    env: opts.env,
+    version: opts.version,
+    create: createHandle,
+    warmCwd: opts.warmCwd,
+    touch: () => {
+      touch();
+      served++;
+    },
+    stopping: () => stopping !== undefined,
+    now,
+  });
 
   const handle = async (frame: unknown): Promise<Record<string, unknown>> => {
     const env = Envelope.safeParse(frame);
@@ -663,8 +699,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     }
   };
 
-  server.on('connection', (conn) => {
-    connections.add(conn);
+  /** One connection's hook frames, from its first chunk on (the protocol as it always was). */
+  const serveFrames = (conn: net.Socket, first: Buffer): void => {
     // An absolute lifetime, and an idle limit that only a whole request resets: a client that
     // trickles bytes, or holds the connection open, is dropped all the same.
     const lifetime = setTimeout(() => conn.destroy(), CONNECTION_LIFETIME_MS);
@@ -676,13 +712,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     conn.on('close', () => {
       clearTimeout(lifetime);
       clearTimeout(idle);
-      connections.delete(conn);
     });
-    conn.on('error', () => conn.destroy());
     const decoder = new FrameDecoder();
     let queue = Promise.resolve();
     let queued = 0;
-    conn.on('data', (chunk: Buffer) => {
+    const onData = (chunk: Buffer): void => {
       let frames: unknown[];
       try {
         frames = decoder.push(chunk);
@@ -724,6 +758,57 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
           }
         });
       }
+    };
+    conn.on('data', onData);
+    onData(first);
+  };
+
+  /**
+   * One connection's HTTP requests: handed to the memory API's server with its first chunk put
+   * back, so the HTTP parser reads the request from its first byte.
+   */
+  const serveHttp = (conn: net.Socket, first: Buffer): void => {
+    // Windows has no uid to check the socket against (§13.3): no memory protocol there.
+    if (process.platform === 'win32' || httpConnections >= MAX_HTTP_CONNECTIONS) {
+      conn.end(
+        'HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n',
+      );
+      return;
+    }
+    httpConnections++;
+    conn.on('close', () => httpConnections--);
+    conn.pause();
+    conn.unshift(first);
+    api.server.emit('connection', conn);
+    process.nextTick(() => conn.resume());
+  };
+
+  server.on('connection', (conn) => {
+    connections.add(conn);
+    conn.on('close', () => connections.delete(conn));
+    conn.on('error', () => conn.destroy());
+    // Nothing until the first byte decides the protocol, then that protocol's own limits.
+    const first = setTimeout(() => conn.destroy(), CONNECTION_IDLE_MS);
+    conn.on('close', () => clearTimeout(first));
+    conn.once('data', (chunk: Buffer) => {
+      clearTimeout(first);
+      // A frame's 4-byte big-endian length is at most 4 MiB, so its first byte is always 0x00;
+      // an HTTP request starts with an ASCII method letter.
+      if (chunk[0] === 0x00) {
+        if (frameConnections >= MAX_FRAME_CONNECTIONS) {
+          conn.end(reply(null, { code: 'busy', message: 'too many connections' }));
+          return;
+        }
+        frameConnections++;
+        conn.on('close', () => frameConnections--);
+        serveFrames(conn, chunk);
+        return;
+      }
+      if (chunk[0] !== undefined && chunk[0] >= 0x41 && chunk[0] <= 0x5a) {
+        serveHttp(conn, chunk);
+        return;
+      }
+      conn.end(reply(null, { code: 'bad-frame', message: 'bad frame' }));
     });
   });
 
@@ -761,6 +846,39 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   socketIno = fs.lstatSync(socket).ino;
   const ownsSocket = (st: fs.Stats): boolean => st.isSocket() && st.ino === socketIno;
 
+  // Service mode: the memory protocol on TCP, every request with the token (§9.4).
+  let tcp: http.Server | undefined;
+  let tcpAddress: { host: string; port: number } | undefined;
+  if (opts.listen !== undefined) {
+    const l = opts.listen;
+    tcp = api.serviceServer(l.auth, opts.log);
+    tcp.maxConnections = MAX_SERVICE_CONNECTIONS;
+    tcp.on('connection', (c) => {
+      connections.add(c);
+      c.on('close', () => connections.delete(c));
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        tcp!.once('error', reject);
+        tcp!.listen({ host: l.host, port: l.port, exclusive: true }, () => {
+          tcp!.off('error', reject);
+          resolve();
+        });
+      });
+    } catch (e) {
+      await new Promise<void>((r) => server.close(() => r()));
+      await engines.closeAll();
+      await api.close();
+      unlinkIfOurs(socket, ownsSocket);
+      unlinkIfOurs(lock, ownsLock);
+      throw new ServeRefusal(
+        `cannot listen on ${shown(l.host)}:${l.port} (${(e as NodeJS.ErrnoException).code ?? 'error'}).`,
+      );
+    }
+    const a = tcp.address() as net.AddressInfo;
+    tcpAddress = { host: a.address, port: a.port };
+  }
+
   // Another starter that wrongly judged our lock stale replaced it (or the socket): it wins.
   const selfCheck = setInterval(() => {
     let mine = false;
@@ -779,7 +897,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       clearTimeout(idleTimer);
       clearInterval(selfCheck);
       await new Promise<void>((resolve) => {
-        server.close(() => resolve());
+        let open = tcp === undefined ? 1 : 2;
+        const done = (): void => {
+          if (--open === 0) resolve();
+        };
+        server.close(done);
+        tcp?.close(done);
         // Requests in flight get a moment to answer; then their connections are dropped.
         setTimeout(() => {
           for (const c of connections) c.destroy();
@@ -787,6 +910,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       });
       warm.stop();
       await engines.closeAll();
+      await api.close();
       await closeCloudPool();
       unlinkIfOurs(socket, ownsSocket);
       unlinkIfOurs(lock, ownsLock);
@@ -801,7 +925,16 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Listening: open the Oort Cloud connection now, so the first prompt finds it warm.
   warm.start(firstEngine);
   opts.log(`listening on ${shown(socket)}, pid ${process.pid}, oort ${shown(opts.version)}`);
-  return { socket, pid: process.pid, closed, stop };
+  if (tcpAddress !== undefined) {
+    opts.log(`service mode: memory protocol on ${shown(tcpAddress.host)}:${tcpAddress.port}`);
+  }
+  return {
+    socket,
+    pid: process.pid,
+    ...(tcpAddress !== undefined && { tcp: tcpAddress }),
+    closed,
+    stop,
+  };
 }
 
 function reply(

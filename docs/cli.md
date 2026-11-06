@@ -831,7 +831,8 @@ It is optional: without it, the hooks work exactly as before.
   log lines, with `"daemon": 1` in `counts`. Like the in-process hook, it does
   not use a local reranker for `UserPromptSubmit`.
 - **Socket.** It listens only on a Unix socket, `~/.oort/oort.sock` (or
-  `$OORT_HOME/oort.sock`), with mode 600. There is no TCP listener. When that
+  `$OORT_HOME/oort.sock`), with mode 600. There is no TCP listener unless you
+  ask for service mode (below). When that
   path is too long for a Unix socket, it uses `<hash>.sock` in
   `$XDG_RUNTIME_DIR/oort` when that is set, else in `/tmp/oort-<uid>`. The
   directory must be a real directory (never a symlink, which is not followed)
@@ -912,6 +913,54 @@ older or equal version, a version that does not parse, `ping` and `status`
 never stop it, so two copies of different versions cannot take turns. A
 daemon from before 0.6.3 does not do this; the hooks then run in-process until
 it exits, or until `oort serve stop && oort serve --detach`.
+
+### The memory protocol: HTTP on the socket
+
+The daemon's socket also serves the SDK's operations over HTTP/1.1 with JSON, protocol `v1`
+(the native Python client, [docs/python.md](python.md), speaks it, and any language can). Every
+request runs through an SDK handle, so grants, scope rules, limits and error codes are the SDK's;
+every answer is one `oort.v1` envelope, and a failure carries the `OortError` `code`, `message`,
+`fix`, `retryable` and `retryAfter`.
+
+| Route                                                            | SDK method           |
+| ---------------------------------------------------------------- | -------------------- |
+| `GET /v1/health`                                                 | version, protocol, mode, capabilities |
+| `POST /v1/recall`, `/v1/observe`, `/v1/remember`                 | `recall`, `observe`, `remember` |
+| `GET /v1/memories?since=&limit=`, `GET /v1/memories/:id/explain` | `recent`, `explain`  |
+| `DELETE /v1/memories/:id?everywhere=`                            | `forget`             |
+| `POST /v1/memories/:id/pin`, `/unpin`                            | `pin`, `unpin`       |
+| `POST /v1/judgments`, `/v1/judgments/apply`, `/v1/judgments/:id/confirm` | the judgment methods |
+| `POST /v1/consolidate`                                           | `consolidate`        |
+
+Headers choose the handle: `Oort-Cwd` (a percent-encoded absolute path; it only selects the
+project, as a hook's cwd does), `Oort-Project`, `Oort-Project-Config`, `Oort-Agent`, `Oort-User`,
+`Oort-Org`, `Oort-Judge-Role`, `Oort-Operator`. Bodies are JSON objects of at most 4 MiB, headers
+at most 16 KiB, 30 s per request. There are no CORS headers, and a request with an `Origin`
+header is refused, so a web page cannot reach the socket or a loopback listener. No request names
+a file to read or write.
+
+### Service mode: `oort serve --listen`
+
+```sh
+oort serve token [--rotate] [--json]               # writes ~/.oort/serve.token, mode 600; never prints it
+oort serve --listen 127.0.0.1:7807 --org acme      # foreground, under your supervisor
+```
+
+For a container sidecar, or a backend that is not you. The same protocol on TCP, with these rules:
+
+- **Loopback by default.** A non-loopback `--listen` address is refused unless you add
+  `--behind-tls-proxy`: the daemon speaks plain HTTP, so put TLS in front of it.
+- **A token on every request** except `/healthz` and `/readyz`: `Authorization: Bearer <token>`.
+  The token is 256 bits of base64url (at least 43 characters), from `OORT_SERVE_TOKEN` (up to two,
+  comma separated, for rotation), else the file `OORT_SERVE_TOKEN_FILE` names, else
+  `~/.oort/serve.token` (checked to be mode 600 and yours). It is compared in constant time as
+  a SHA-256 digest, is removed from the environment the daemon's children inherit, and is never
+  logged or printed.
+- **The token decides the org** (`--org` or `OORT_SERVE_ORG`, never `local`): the service acts as
+  that org's agent, not as you. `Oort-Cwd` and `Oort-Org` are refused; name the project with
+  `Oort-Project` (`-` for none).
+- **Foreground only**: no `--detach`, no idle exit. The store must be on a local disk, not a
+  network filesystem.
 
 ## Memory commands
 
