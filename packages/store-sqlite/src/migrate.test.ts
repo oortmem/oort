@@ -533,7 +533,7 @@ describe('schema migration 2 to 3', () => {
     expect(columns(s.dbPath)).not.toContain('judgment');
     const blobs = hashDir(s.coldDir);
     expect(portable(await readBack2(s))).toEqual(portable(expected2));
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(3);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(columns(s.dbPath)).toContain('judgment');
     expect(hashDir(s.coldDir), 'cold blobs are untouched').toBe(blobs);
   });
@@ -572,7 +572,7 @@ describe('schema migration 2 to 3', () => {
     await store.close();
     expect(() => downgradeSqliteStore({ path: s.dbPath, to: 2 })).toThrow(/judgment/);
     expect(() => downgradeSqliteStore({ path: s.dbPath })).toThrow(/not plain Planet memories/);
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(3);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(listBackups(s.dbPath, 'pre-downgrade')).toEqual([]);
   });
 
@@ -586,6 +586,212 @@ describe('schema migration 2 to 3', () => {
     downgradeSqliteStore({ path: s.dbPath, to: 2 }); // already version 2: nothing to do
     expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
     expect(portable(await readBack2(s))).toEqual(portable(expected2));
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
+  });
+});
+
+/**
+ * Schema version 3 to 4 (tokeniser v2, CON-110) on a real version 3 store:
+ * `test/fixtures/schema3` was written by the schema version 3 store (Oort at 70e1917), with
+ * memories in English, Chinese, Japanese, Korean, Thai, Hindi and Spanish, a cold Japanese memory
+ * and a judgment. Its `expected.json` is what that store read back: every record, and the lexical
+ * hits for English and non-English queries under tokeniser v1.
+ */
+describe('schema migration 3 to 4', () => {
+  const FIXTURE3 = path.join(path.dirname(FIXTURE), 'schema3');
+  const expected3 = JSON.parse(fs.readFileSync(path.join(FIXTURE3, 'expected.json'), 'utf8')) as {
+    list: unknown[];
+    lexical: Record<string, { id: string; score: number; tier: string }[]>;
+  };
+  const g3 = nodeGrant({
+    principal: { orgId: 'local', customerId: 'self', agentId: 'claude-code' },
+    read: [{ node: { level: 'user', orgId: 'local', customerId: 'self' }, projectIds: 'all' }],
+  });
+  const ENGLISH = ['auth service port staging', 'billing webhooks retries'];
+
+  function copy3(): { dir: string; dbPath: string; coldDir: string } {
+    const dir = fs.mkdtempSync(path.join(root, 'store3-'));
+    fs.cpSync(FIXTURE3, dir, { recursive: true });
+    fs.rmSync(path.join(dir, 'expected.json'));
+    return { dir, dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
+  }
+
+  /** The FTS declaration, the lexical meta keys and every vector, read without migrating. */
+  function inspect(dbPath: string) {
+    const db = raw(dbPath);
+    try {
+      const sql = (
+        db.prepare("SELECT sql FROM sqlite_master WHERE name = 'memories_fts'").get() as {
+          sql: string;
+        }
+      ).sql;
+      const meta = Object.fromEntries(
+        (
+          db.prepare("SELECT key, value FROM meta WHERE key LIKE 'lexical%'").all() as {
+            key: string;
+            value: string;
+          }[]
+        ).map((r) => [r.key, r.value]),
+      );
+      const vec = db.prepare('SELECT id, hex(embedding) AS e FROM memories_vec ORDER BY id').all();
+      return { sql, meta, vec };
+    } finally {
+      db.close();
+    }
+  }
+
+  async function lexical(s: { dbPath: string; coldDir: string }, queries: string[]) {
+    const store = await openSqliteStore(optsFor(s));
+    try {
+      const out: Record<string, { id: string; score: number; tier: string }[]> = {};
+      for (const q of queries) out[q] = await store.lexical(g3, q, 10);
+      return { out, list: (await store.list(g3, { validOnly: false })).map(render) };
+    } finally {
+      await store.close();
+    }
+  }
+
+  it('migrate.v3-store-reads-back-identically-at-v4', async () => {
+    const s = copy3();
     expect(sqliteSchemaVersion(s.dbPath)).toBe(3);
+    const before = inspect(s.dbPath);
+    expect(before.sql).not.toContain('categories');
+    expect(before.meta).toEqual({});
+    const blobs = hashDir(s.coldDir);
+    const { out, list } = await lexical(s, ENGLISH);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    // Every record, the judgment and the cold memory included, reads back as version 3 wrote it.
+    expect(portable(list)).toEqual(portable(expected3.list));
+    // English queries find the same memories in the same order. Their scores move a little here
+    // because this store's other-language rows now have more tokens (bigrams), which changes
+    // BM25's average lengths; in an English-only store they stay exact (the recall golden).
+    const order = (hits: { id: string; tier: string }[] | undefined) =>
+      hits?.map((h) => [h.id, h.tier]);
+    for (const q of ENGLISH) expect(order(out[q])).toEqual(order(expected3.lexical[q]));
+    const after = inspect(s.dbPath);
+    expect(after.sql).toContain(`categories 'L* N* Co M*'`);
+    expect(after.meta).toEqual({ lexical_version: '2', lexical_icu: process.versions.icu ?? '' });
+    expect(after.vec, 'vectors are untouched').toEqual(before.vec);
+    expect(hashDir(s.coldDir), 'cold blobs are untouched').toBe(blobs);
+  });
+
+  it('migrate.v4-finds-cjk-thai-indic-and-unaccented-words', async () => {
+    const s = copy3();
+    const ids = async (q: string) => (await lexical(s, [q])).out[q]?.map((h) => h.id);
+    // Version 3 found none of these (`expected.json`); version 4 finds each.
+    for (const q of [
+      '认证 端口',
+      '認証サービスのポート',
+      '서비스',
+      'autenticacion',
+      '請求サービス',
+    ]) {
+      expect(expected3.lexical[q], q).toEqual([]);
+    }
+    expect(await ids('认证 端口')).toEqual(['zh-1']);
+    expect((await ids('認証サービスのポート'))?.[0]).toBe('ja-1');
+    expect(await ids('서비스')).toEqual(['ko-1']);
+    expect(await ids('พอร์ต')).toEqual(['th-1']);
+    expect(await ids('सेवा')).toEqual(['hi-1']);
+    expect(await ids('autenticacion')).toEqual(['es-1']);
+    expect(await ids('autenticación')).toEqual(['es-1']);
+    // The cold memory matches through its stub only, as before; ja-1 shares サー ービ ビス.
+    expect(await ids('請求サービス')).toEqual(['ja-cold', 'ja-1']);
+    expect(await ids('毎週')).toEqual([]); // only in the cold text
+    // A port next to CJK text is its own token now.
+    expect(new Set(await ids('8080'))).toEqual(
+      new Set(['en-1', 'zh-1', 'ja-1', 'ko-1', 'th-1', 'hi-1']),
+    );
+  });
+
+  it('migrate.v3-copies-the-store-first-and-migrates-once', async () => {
+    const s = copy3();
+    await (await openSqliteStore(optsFor(s))).close();
+    const backups = listBackups(s.dbPath, 'pre-v4');
+    expect(backups).toHaveLength(1);
+    const backup = backups[0]!;
+    expect(path.basename(backup)).toMatch(/^oort\.sqlite\.pre-v4\.\d{8}T\d{9}Z$/);
+    if (process.platform !== 'win32') expect(fs.statSync(backup).mode & 0o777).toBe(0o600);
+    expect(sqliteSchemaVersion(backup)).toBe(3);
+    expect(listBackups(s.dbPath, 'pre-v3')).toEqual([]);
+    // A later open finds version 4: nothing to migrate, no new copy, the same index.
+    const first = await lexical(s, ENGLISH);
+    await (await openSqliteStore(optsFor(s))).close();
+    expect(listBackups(s.dbPath, 'pre-v4')).toEqual([backup]);
+    expect(portable((await lexical(s, ENGLISH)).out)).toEqual(portable(first.out));
+  });
+
+  it('migrate.v3-open-that-may-not-migrate-changes-nothing', async () => {
+    const s = copy3();
+    const before = fs.readFileSync(s.dbPath);
+    const err = await openSqliteStore({ ...optsFor(s), migrate: false }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StoreMigrationRequiredError);
+    expect((err as StoreMigrationRequiredError).from).toBe(3);
+    expect(fs.readFileSync(s.dbPath).equals(before)).toBe(true);
+    expect(listBackups(s.dbPath, 'pre-v4')).toEqual([]);
+  });
+
+  it('migrate.v4-rebuilds-when-the-index-is-stale', async () => {
+    const s = copy3();
+    const first = await lexical(s, [...ENGLISH, '认证 端口', 'พอร์ต']);
+    const setMeta = (key: string, value: string) => {
+      const db = raw(s.dbPath);
+      try {
+        db.prepare('UPDATE meta SET value = ? WHERE key = ?').run(value, key);
+      } finally {
+        db.close();
+      }
+    };
+    // Built with an older ICU: rebuilt, recording this one, with the same hits and scores.
+    setMeta('lexical_icu', '1.0');
+    const again = await lexical(s, [...ENGLISH, '认证 端口', 'พอร์ต']);
+    expect(portable(again.out)).toEqual(portable(first.out));
+    expect(inspect(s.dbPath).meta['lexical_icu']).toBe(process.versions.icu ?? '');
+    // Built with a newer ICU (another Node on this machine): left alone, no rebuild back and forth.
+    setMeta('lexical_icu', '999.0');
+    await (await openSqliteStore(optsFor(s))).close();
+    expect(inspect(s.dbPath).meta['lexical_icu']).toBe('999.0');
+    // A hook's open (migrate: false) never rebuilds.
+    setMeta('lexical_version', '1');
+    await (await openSqliteStore({ ...optsFor(s), migrate: false })).close();
+    expect(inspect(s.dbPath).meta['lexical_version']).toBe('1');
+    await (await openSqliteStore(optsFor(s))).close();
+    expect(inspect(s.dbPath).meta['lexical_version']).toBe('2');
+  });
+
+  it('migrate.v4-down-to-3-and-up-again', async () => {
+    const s = copy3();
+    const at4 = await lexical(s, [...ENGLISH, '认证 端口']);
+    downgradeSqliteStore({ path: s.dbPath, to: 3 });
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(3);
+    expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
+    const down = inspect(s.dbPath);
+    expect(down.sql).not.toContain('categories');
+    expect(down.meta).toEqual({});
+    downgradeSqliteStore({ path: s.dbPath, to: 3 }); // already version 3: nothing to do
+    expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
+    // Version 3's index is tokeniser v1's again: what Oort before 0.6.x reads. Opening migrates
+    // it straight back up, with the same hits and scores.
+    const db = raw(s.dbPath);
+    try {
+      const hit = db
+        .prepare('SELECT rowid FROM memories_fts WHERE memories_fts MATCH \'"认证"\'')
+        .all();
+      expect(hit).toEqual([]);
+    } finally {
+      db.close();
+    }
+    expect(portable((await lexical(s, [...ENGLISH, '认证 端口'])).out)).toEqual(portable(at4.out));
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+  });
+
+  it('migrate.new-store-starts-at-v4-with-tokeniser-v2', async () => {
+    const dir = fs.mkdtempSync(path.join(root, 'store4-'));
+    const s = { dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
+    await (await openSqliteStore(optsFor(s))).close();
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    const fresh = inspect(s.dbPath);
+    expect(fresh.sql).toContain(`categories 'L* N* Co M*'`);
+    expect(fresh.meta).toEqual({ lexical_version: '2', lexical_icu: process.versions.icu ?? '' });
   });
 });
