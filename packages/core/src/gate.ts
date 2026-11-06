@@ -142,6 +142,7 @@ export const ACKNOWLEDGMENTS: readonly string[] = [
   '네, 알겠습니다',
   '알겠습니다, 감사합니다',
   '고맙습니다',
+  'どうもありがとう',
 ];
 
 /** A reply as compared: NFKC, lowercase, without punctuation, symbols or spaces. */
@@ -152,6 +153,15 @@ const compact = (s: string): string =>
     .replace(/[\p{P}\p{S}\p{Z}\s]+/gu, '');
 
 const ACKS = new Set(ACKNOWLEDGMENTS.map(compact));
+
+/** An acknowledgement, or one said several times over (`嗯嗯嗯…`, `好的好的…`, `ok ok ok`). */
+function isAcknowledgment(c: string): boolean {
+  if (ACKS.has(c)) return true;
+  // Short replies only: the repetition test is quadratic, and a long prompt is never just this.
+  if (c.length > 64) return false;
+  const repeated = /^(.+?)\1+$/u.exec(c);
+  return repeated !== null && ACKS.has(repeated[1] as string);
+}
 
 /** The floor, in width units (`promptWidth`). */
 const MIN_LENGTH = 12;
@@ -186,6 +196,6 @@ export function shouldRecall(prompt: string): { recall: boolean; reason: GateRea
   if (p.startsWith('/')) return { recall: false, reason: 'slash-command' };
   if (promptWidth(p) < MIN_LENGTH) return { recall: false, reason: 'too-short' };
   // Punctuation and spacing anywhere do not matter: `はい、お願いします` and `ok, thank you!`.
-  if (ACKS.has(compact(p))) return { recall: false, reason: 'acknowledgment' };
+  if (isAcknowledgment(compact(p))) return { recall: false, reason: 'acknowledgment' };
   return { recall: true, reason: 'ok' };
 }

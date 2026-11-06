@@ -93,3 +93,19 @@ describe('gate, acknowledgements with punctuation (CON-110 review)', () => {
     });
   });
 });
+
+describe('gate, repeated acknowledgements (CON-110 re-review)', () => {
+  it('gate.repeated-acknowledgments', () => {
+    for (const ack of [
+      '嗯嗯嗯嗯嗯嗯…',
+      '好的好的好的…',
+      'どうもありがとう',
+      'はいはいはいはい',
+      'ok ok ok ok!',
+    ]) {
+      expect(shouldRecall(ack), ack).toEqual({ recall: false, reason: 'acknowledgment' });
+    }
+    // Repeating a question does not make it an acknowledgement.
+    expect(shouldRecall('端口？端口？端口？')).toEqual({ recall: true, reason: 'ok' });
+  });
+});
