@@ -330,6 +330,12 @@ export async function createOortWith(options: OortOptions, internals: Internals)
         reason: 'invalid-argument',
       });
     }
+    if (o.keys !== undefined && o.keySources !== undefined && !o.keySources.includes('explicit')) {
+      throw new OortUsageError(
+        "keys were given, but keySources leaves out 'explicit', so they would be ignored; add 'explicit' to keySources or drop keys.",
+        { reason: 'invalid-argument' },
+      );
+    }
     if (o.mode === 'local' || o.mode === 'cloud') checkMode(o, o.mode);
     checkUser(o.user, o.org);
     const env: Record<string, string | undefined> = { ...(o.env ?? process.env) };

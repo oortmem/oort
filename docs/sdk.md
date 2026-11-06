@@ -75,7 +75,8 @@ throws `OortNeedsKeyError`. A local model (`oort models pull`, or `config: { emb
 'local' } }`) is a config choice, never a fallback. Cloud mode needs only the Oort key; without
 one it throws `OortNeedsLoginError`.
 
-Keys given in code stay in memory. They are kept out of every enumerable field, so
+Passing `keys` with a `keySources` that leaves out `'explicit'` is a usage error, never a silent
+fallback to another source. Keys given in code stay in memory. They are kept out of every enumerable field, so
 `console.log(oort)`, `JSON.stringify(oort)` and `util.inspect(oort)` print only
 `Oort {"mode":…,"scope":…}`, and an error never carries one.
 

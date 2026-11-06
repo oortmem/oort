@@ -39,3 +39,25 @@ describe('a dropped end-user id never falls back to the operator', () => {
     expect(fs.existsSync(h.home)).toBe(false);
   });
 });
+
+describe('explicit keys are never silently ignored', () => {
+  it("keys with keySources leaving out 'explicit' is a usage error", async () => {
+    const h = home();
+    const key = ['oort', 'sk', 'given'.padEnd(43, 'G')].join('_');
+    const env = { ...h.env, OORT_API_KEY: ['oort', 'sk', 'env'.padEnd(43, 'E')].join('_') };
+    await expect(
+      createOort({ mode: 'cloud', env, keys: { oort: key }, keySources: ['env'] }),
+    ).rejects.toMatchObject({
+      code: 'usage',
+      reason: 'invalid-argument',
+      message: expect.stringContaining('keySources'),
+    });
+    const fine = await createOort({
+      mode: 'cloud',
+      env,
+      keys: { oort: key },
+      keySources: ['explicit', 'env'],
+    });
+    await fine.close();
+  });
+});
