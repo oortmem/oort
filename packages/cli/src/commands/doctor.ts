@@ -55,12 +55,14 @@ import {
 } from '../util.js';
 import { hostContext } from './connect.js';
 import { VERSION } from '@oortmem/core';
-import { hookBinaryOf, hookCommandPath, settingsFile, versionManagerOf } from './install.js';
+import { hookBinaryOf, hookCommandPath, settingsFile, unstableCopy } from './install.js';
+
+export { unstableCopy };
 import { binPath } from '../io.js';
 import { compareVersions } from '../serve-protocol.js';
 import { availableUpdate, noticeText, readUpdateCache, updateCheckOff } from '../update-check.js';
 import { managedPrefixFor } from './update.js';
-import * as os from 'node:os';
+import { managedCopy, managedIsCurrent, manualInstall } from './managed.js';
 import { SKIP_FILE, callDaemon, clearSkip, readSkip } from '../serve-client.js';
 import { socketPathFor } from '../serve-protocol.js';
 
@@ -255,35 +257,6 @@ async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean 
 }
 
 /**
- * Why the running copy is no place to point the hooks at, or undefined when it is one: a package
- * runner's cache (npx, pnpm dlx), a temp directory, fnm's per-shell link, or a Node version
- * manager (switching Node versions breaks it). `entry` is the path as typed, `real` its realpath.
- */
-export function unstableCopy(
-  entry: string | undefined,
-  real: string | undefined,
-  tmp: string = realTmp(),
-): string | undefined {
-  const paths = [entry, real].filter((p): p is string => p !== undefined);
-  const segments = (p: string): string[] => p.replaceAll('\\', '/').split('/');
-  if (paths.some((p) => segments(p).includes('_npx') || segments(p).includes('dlx'))) {
-    return 'a package cache';
-  }
-  if (paths.some((p) => p.includes('fnm_multishells'))) return "fnm's link for this shell";
-  if (paths.some((p) => versionManagerOf(p) !== undefined)) return 'a Node version manager';
-  if (paths.some((p) => p === tmp || p.startsWith(tmp + path.sep))) return 'a temporary directory';
-  return undefined;
-}
-
-function realTmp(): string {
-  try {
-    return fs.realpathSync(os.tmpdir());
-  } catch {
-    return os.tmpdir();
-  }
-}
-
-/**
  * The fix that (re)points the hooks: `oort install claude-code` run from this copy, unless this
  * copy is temporary or under a version manager (CON-113), when it would write a path that breaks
  * later; then it names the managed copy (`~/.oort/cli`), installing it first when it is missing.
@@ -471,16 +444,8 @@ async function hookBinaryChecks(
     if (bin === undefined || seen.has(bin)) continue;
     seen.add(bin);
     const show = tilde(bin, home);
-    const manager = versionManagerOf(bin);
-    if (manager !== undefined) {
-      checks.push({
-        group: 'hooks',
-        name: 'claude-code node',
-        status: 'info',
-        detail: `the hooks run ${show}, under a Node version manager: switching Node versions will break them`,
-        fix: 'install oortmem somewhere stable (npm i -g oortmem with a system Node), then oort install claude-code',
-      });
-    }
+    const note = unstableHooksNote(ctx, bin, show);
+    if (note !== undefined) checks.push(note);
     if (!isExecutable(bin)) continue; // never run a path that is not there
     const got = await probeVersion(bin, { ...process.env, ...ctx.io.env }, viaNode);
     if (got === undefined || got === '') {
@@ -511,6 +476,59 @@ async function hookBinaryChecks(
     }
   }
   return checks;
+}
+
+const UNSTABLE_HOOKS: Record<string, string> = {
+  'a Node version manager': 'under a Node version manager: switching Node versions will break them',
+  "fnm's link for this shell": "in fnm's link for one shell: it goes away when that shell ends",
+  'a package cache':
+    'in a package cache, which can be cleared, or hold another version, at any time',
+};
+
+/**
+ * An info row when the hooks run a copy that will not stay put (CON-114): a Node version manager,
+ * fnm's per-shell link or a package cache. The fix is the managed copy (`~/.oort/cli`): pointing
+ * the hooks at it when it is there, else `oort setup` or installing it by hand first. A temp
+ * directory is left out: no `oort install` ever writes one (`hookCommandPath` refuses it).
+ */
+function unstableHooksNote(ctx: Ctx, bin: string, show: string): Check | undefined {
+  let real: string | undefined;
+  try {
+    real = fs.realpathSync(bin);
+  } catch {
+    real = undefined;
+  }
+  const why = unstableCopy(bin, real);
+  const detail = why === undefined ? undefined : UNSTABLE_HOOKS[why];
+  if (detail === undefined) return undefined;
+  const home = ctx.io.env['HOME'] ?? '';
+  const prefix = managedPrefixFor(ctx.io.env);
+  const managedBin = path.join(prefix, 'bin', 'oort');
+  const run = `${sh(managedBin)} install claude-code`;
+  const base = {
+    group: 'hooks' as const,
+    name: 'claude-code node',
+    status: 'info' as const,
+    detail: `the hooks run ${shown(show)}, ${detail}`,
+  };
+  if (managedCopy(ctx.io.env) !== undefined) {
+    return {
+      ...base,
+      fix: `${shown(sh(tilde(managedBin, home)))} install claude-code (the managed copy, which stays put)`,
+      fixCommand: run,
+    };
+  }
+  return {
+    ...base,
+    fix: `oort setup, or ${manualInstall(ctx.io.env)} and then oort install claude-code (a managed copy that stays put)`,
+    fixCommand: `npm i -g --prefix ${sh(prefix)} oortmem && ${run}`,
+  };
+}
+
+/** The managed copy, when it checks out and is this version or newer. */
+function currentManaged(ctx: Ctx): ReturnType<typeof managedCopy> {
+  const m = managedCopy(ctx.io.env);
+  return managedIsCurrent(m) ? m : undefined;
 }
 
 /**
@@ -1098,7 +1116,9 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
     ...keys.checks,
     ...(await hookChecks(ctx, cmd ?? running, home)),
     ...(await serveChecks(ctx)),
-    ...mcpChecks(ctx, cmd),
+    // `oort connect` writes the managed copy when it checks out (CON-114): entries are judged
+    // against that, else against this bin.
+    ...mcpChecks(ctx, currentManaged(ctx)?.main ?? cmd),
     ...(await storeChecks(ctx)),
     ...(await relayChecks(ctx, keys.relayed)),
     ...(await cloudChecks(ctx)),

@@ -200,7 +200,8 @@ export function classifyCopy(
   };
 }
 
-const npmArgs = (prefix: string, target: string): string[] => [
+/** npm's arguments for installing oortmem `target` into `prefix` (the managed copy, an npm global). */
+export const npmArgs = (prefix: string, target: string): string[] => [
   'i',
   '-g',
   '--prefix',
@@ -653,7 +654,7 @@ function planText(ui: Ui, plan: readonly PlannedCopy[], home: string): string {
   return `${lines.join('\n')}\n`;
 }
 
-interface Installed {
+export interface Installed {
   path: string;
   command: string;
   ok: boolean;
@@ -687,11 +688,15 @@ export function verifyInstall(
   };
 }
 
-/** Runs one copy's installer, waiting out npm's lag (ETARGET) for up to NPM_LAG_MS, then verifies. */
-async function install(
+/**
+ * Runs one copy's installer (`c.argv`: an absolute file and its arguments, no shell) in `cwd`,
+ * waiting out npm's lag (ETARGET) for up to NPM_LAG_MS, then verifies the copy (`verifyInstall`).
+ * `oort setup` and `oort install` use it for the managed copy too.
+ */
+export async function runInstaller(
   ctx: Ctx,
-  deps: UpdateDeps,
-  c: PlannedCopy,
+  deps: Pick<UpdateDeps, 'run' | 'now' | 'sleep'>,
+  c: Pick<PlannedCopy, 'path' | 'prefix' | 'argv' | 'command'>,
   target: string,
   cwd: string,
 ): Promise<Installed> {
@@ -893,7 +898,7 @@ export async function updateCommand(opts: UpdateOptions, ctx: Ctx): Promise<numb
   for (const c of toRun) {
     io.err(`oort: ${shown(c.command ?? '')}\n`);
     // From the home directory: never a project's .npmrc or package.json.
-    const r = await install(ctx, deps, c, target, userHome);
+    const r = await runInstaller(ctx, deps, c, target, userHome);
     installed.push(r);
     const where = shown(tilde(c.path, userHome));
     io.out(

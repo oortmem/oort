@@ -19,9 +19,76 @@ import type { Io } from '../src/io.js';
 import { createKeychain, type Keychain } from '../src/keychain.js';
 import { runCli } from '../src/program.js';
 import { resolveAgent, type WireFn, type Wired } from '../src/wire.js';
+import type { UpdateDeps } from '../src/commands/update.js';
 
 export function tmpdir(prefix = 'oort-cli-'): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+}
+
+/**
+ * A directory holding a stand-in `npm` that installs nothing: it records that it ran in
+ * `<root>/NPM_RAN` and exits 1. Put it first on the PATH of any test that runs the real bin, so
+ * `oort setup`, `oort install` and `oort update` can never reach the real npm (or the network).
+ */
+export function npmTrap(root: string): { dir: string; ran: string } {
+  const dir = path.join(root, 'npm-trap');
+  const ran = path.join(root, 'NPM_RAN');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'npm'),
+    `#!/bin/sh\necho "$@" >> '${ran}'\necho 'npm-trap: tests never run the real npm' >&2\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  return { dir, ran };
+}
+
+/**
+ * An npm prefix holding oortmem `version`, as `npm i -g --prefix <prefix> oortmem` leaves it:
+ * `<prefix>/bin/oort` → `<prefix>/lib/node_modules/oortmem/dist/main.js`, whose stand-in answers
+ * `--version`. Replaces what is there. Returns the bin link and the script's realpath.
+ */
+export function npmPrefixCopy(prefix: string, version: string): { bin: string; main: string } {
+  const pkg = path.join(prefix, 'lib', 'node_modules', 'oortmem');
+  fs.mkdirSync(path.join(pkg, 'dist'), { recursive: true });
+  fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'oortmem', version }));
+  const main = path.join(pkg, 'dist', 'main.js');
+  fs.writeFileSync(main, `#!/bin/sh\necho "oort ${version}"\n`, { mode: 0o755 });
+  fs.mkdirSync(path.join(prefix, 'bin'), { recursive: true });
+  const bin = path.join(prefix, 'bin', 'oort');
+  fs.rmSync(bin, { force: true });
+  fs.symlinkSync(path.join('..', 'lib', 'node_modules', 'oortmem', 'dist', 'main.js'), bin);
+  return { bin, main: fs.realpathSync(main) };
+}
+
+/**
+ * A fake npm for `ctx.updateDeps`: every call is recorded, and `npm i -g --prefix <p> oortmem@X`
+ * writes oortmem X into `<p>` (`npmPrefixCopy`), unless `fail` gives the output of a failure.
+ * Nothing is installed and nothing reaches the network.
+ */
+export function fakeNpm(opts: { fail?: string; leaves?: string } = {}): {
+  deps: Partial<UpdateDeps>;
+  calls: { file: string; args: readonly string[]; cwd: string }[];
+} {
+  const calls: { file: string; args: readonly string[]; cwd: string }[] = [];
+  let clock = 0;
+  return {
+    calls,
+    deps: {
+      run: async (file, args, _env, cwd) => {
+        calls.push({ file, args, cwd });
+        if (opts.fail !== undefined) return { code: 1, output: opts.fail };
+        const prefix = args[args.indexOf('--prefix') + 1] ?? '';
+        const version = opts.leaves ?? /oortmem@(\S+)/.exec(args.join(' '))?.[1] ?? '';
+        npmPrefixCopy(prefix, version);
+        return { code: 0, output: 'added 1 package\n' };
+      },
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      now: () => clock,
+      platform: 'darwin',
+    },
+  };
 }
 
 export interface FakeIo extends Io {

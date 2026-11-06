@@ -10,7 +10,15 @@ import { fakeSite } from '../test/fake-site.js';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { OortConfig, VERSION, projectIdFor, type Memory } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
-import { memory, syntheticKey, tmpdir, writeTranscript, data } from '../test/helpers.js';
+import {
+  memory,
+  npmPrefixCopy,
+  npmTrap,
+  syntheticKey,
+  tmpdir,
+  writeTranscript,
+  data,
+} from '../test/helpers.js';
 import { TG } from '@oortmem/core/store-conformance';
 import { localGrant } from '@oortmem/core';
 
@@ -27,6 +35,8 @@ interface Sandbox {
   home: string;
   oortHome: string;
   cwd: string;
+  /** Written if anything ever runs `npm` (the stand-in first on PATH). */
+  npmRan: string;
   env: Record<string, string>;
 }
 
@@ -37,13 +47,16 @@ function sandbox(): Sandbox {
   const cwd = path.join(root, 'work');
   fs.mkdirSync(home);
   fs.mkdirSync(cwd);
+  // The real npm is never run from a test: a stand-in comes first on PATH (CON-114).
+  const trap = npmTrap(root);
   return {
     root,
     home,
     oortHome,
     cwd,
+    npmRan: trap.ran,
     env: {
-      PATH: process.env['PATH'] ?? '',
+      PATH: `${trap.dir}${path.delimiter}${process.env['PATH'] ?? ''}`,
       HOME: home,
       OORT_HOME: oortHome,
       // The real bin must never reach the real Keychain from a test.
@@ -545,8 +558,15 @@ describe('oort bin', () => {
       reject: false,
       stdin: 'ignore',
     });
+    // It is never written (CON-114): the managed copy is installed first, and when that fails
+    // (the stand-in npm on PATH) it refuses with the commands to run.
     expect(cached.exitCode).toBe(2);
-    expect(cached.stderr).toMatch(/temporary package cache/);
+    expect(cached.stderr).toMatch(/This oort is in a package cache/);
+    expect(cached.stderr).toContain('npm i -g --prefix ~/.oort/cli oortmem');
+    expect(cached.stderr).toContain('~/.oort/cli/bin/oort install claude-code');
+    expect(fs.readFileSync(s.npmRan, 'utf8')).toContain(
+      `i -g --prefix ${path.join(s.oortHome, 'cli')} oortmem@`,
+    );
     expect(fs.existsSync(settings)).toBe(false);
   });
 
@@ -618,6 +638,38 @@ describe('oort bin', () => {
     fs.symlinkSync(bin, path.join(other, 'oort'));
     const third = await oort(s, ['install', 'claude-code']);
     expect(third.stdout).not.toContain('first on your PATH');
+  });
+
+  it('cli.install-and-connect-prefer-the-managed-copy-and-doctor-agrees (CON-114)', async () => {
+    const s = sandbox();
+    const bin = fs.realpathSync(BIN);
+    const settings = path.join(s.home, '.claude', 'settings.json');
+    const cursor = path.join(s.home, '.cursor', 'mcp.json');
+    fs.mkdirSync(path.dirname(cursor), { recursive: true });
+    // A managed copy of this version: install and connect write it, not this bin.
+    const managed = npmPrefixCopy(path.join(s.oortHome, 'cli'), VERSION);
+    const r = await oort(s, ['install', 'claude-code']);
+    expect(r.exitCode, r.stderr).toBe(0);
+    expect(fs.readFileSync(settings, 'utf8')).toContain(`${managed.main} hook Stop`);
+    expect(r.stdout).toContain('the managed copy: oort update keeps it current');
+    expect((await oort(s, ['connect', 'cursor'])).exitCode).toBe(0);
+    expect(fs.readFileSync(cursor, 'utf8')).toContain(managed.main);
+    // Doctor, run from this bin, judges the entries against the managed copy: connected.
+    const d = await oort(s, ['doctor', '--json']);
+    const checks = (
+      JSON.parse(d.stdout) as {
+        data: { checks: { group: string; name: string; status: string }[] };
+      }
+    ).data.checks;
+    expect(checks.find((c) => c.group === 'mcp' && c.name === 'cursor')?.status).toBe('ok');
+    expect(checks.find((c) => c.group === 'hooks' && c.name === 'claude-code')?.status).toBe('ok');
+    // An older managed copy is left as it is: the hooks run this bin, with a line saying so.
+    npmPrefixCopy(path.join(s.oortHome, 'cli'), '0.0.1');
+    const older = await oort(s, ['install', 'claude-code']);
+    expect(older.exitCode, older.stderr).toBe(0);
+    expect(fs.readFileSync(settings, 'utf8')).toContain(`${bin} hook Stop`);
+    expect(older.stdout).toContain('is oort 0.0.1, older than this one');
+    expect(fs.existsSync(s.npmRan)).toBe(false);
   });
 
   it('cli.mcp-stdio-serves-tools-scoped-to-the-start-directory', async () => {
@@ -774,6 +826,13 @@ describe('oort bin', () => {
       `${bin} hook Stop`,
     );
     expect(fs.readFileSync(path.join(s.home, '.codex', 'config.toml'), 'utf8')).toContain(bin);
+    // The managed copy could not be installed (the stand-in npm fails), so agents run this
+    // copy, which stays put, and setup says how to get the managed one (CON-114).
+    expect(fs.existsSync(s.npmRan)).toBe(true);
+    expect(r.stdout).toContain('could not be installed (npm failed), so agents run this copy');
+    expect(r.stdout).toContain(
+      'npm i -g --prefix ~/.oort/cli oortmem, then oort install claude-code',
+    );
     // Nothing from the demo is left in the store.
     const db = new Database(path.join(s.oortHome, 'oort.sqlite'), { readonly: true });
     const n = db.prepare('select count(*) as n from memories').get() as { n: number };

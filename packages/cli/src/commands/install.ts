@@ -1,14 +1,13 @@
-import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { HOOK_EVENTS, installHooks, uninstallHooks } from '@oortmem/claude-code';
 import { VERSION } from '@oortmem/core';
 import { HOSTS, isHost } from '../connectors.js';
-import { binPath, runToStderr } from '../io.js';
+import { binPath } from '../io.js';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
-import { Refusal, echo, noteWarning, tilde, type Ctx } from '../util.js';
+import { Refusal, echo, noteWarning, shown, tilde, type Ctx } from '../util.js';
 
 // pnpm 11 removed `pnpm link --global`; `pnpm add -g .` links the package directory instead.
 export const HOW_TO_INSTALL =
@@ -62,6 +61,35 @@ const VERSION_MANAGER = ['.nvm/', 'fnm_multishells', 'node-versions/', '.volta/'
 export function versionManagerOf(file: string): string | undefined {
   const p = file.replaceAll('\\', '/');
   return VERSION_MANAGER.find((m) => p.includes(m));
+}
+
+/**
+ * Why a copy of oort is no place to point agents at, or undefined when it is one: a package
+ * runner's cache (npx, pnpm dlx), a temp directory, fnm's per-shell link, or a Node version
+ * manager (switching Node versions breaks it). `entry` is the path as typed, `real` its realpath.
+ */
+export function unstableCopy(
+  entry: string | undefined,
+  real: string | undefined,
+  tmp: string = realTmp(),
+): string | undefined {
+  const paths = [entry, real].filter((p): p is string => p !== undefined);
+  const segments = (p: string): string[] => p.replaceAll('\\', '/').split('/');
+  if (paths.some((p) => segments(p).includes('_npx') || segments(p).includes('dlx'))) {
+    return 'a package cache';
+  }
+  if (paths.some((p) => p.includes('fnm_multishells'))) return "fnm's link for this shell";
+  if (paths.some((p) => versionManagerOf(p) !== undefined)) return 'a Node version manager';
+  if (paths.some((p) => p === tmp || p.startsWith(tmp + path.sep))) return 'a temporary directory';
+  return undefined;
+}
+
+function realTmp(): string {
+  try {
+    return fs.realpathSync(os.tmpdir());
+  } catch {
+    return os.tmpdir();
+  }
 }
 
 /**
@@ -129,24 +157,45 @@ export async function installCommand(
     const { connectCommand } = await import('./connect.js');
     return connectCommand(action === 'install' ? 'connect' : 'disconnect', [harness], {}, ctx);
   }
-  const cmd = hookCommandPath(ctx.io.entry);
+  const { agentBinary, managedCopy } = await import('./managed.js');
   const file = settingsFile(opts.project === true, ctx);
   const events = HOOK_EVENTS.join(', ');
   const home = ctx.io.env['HOME'] ?? '';
   const show = (p: string): string => tilde(p, home);
-  ctx.io.out(uiFor(ctx.io).header(`${action} claude-code`, 'hooks'));
+  const ui = uiFor(ctx.io);
+  ctx.io.out(ui.header(`${action} claude-code`, 'hooks'));
   let changed: boolean;
+  let cmd: string;
+  let from: 'managed' | 'running' | undefined;
+  let version = VERSION;
+  let installed = false;
   if (action === 'install') {
+    // The managed copy (~/.oort/cli) when it checks out, else this copy when it is stable; from a
+    // temporary copy the managed one is installed first (CON-114).
+    const bin = await agentBinary(ctx, {
+      action: `install claude-code${opts.project === true ? ' --project' : ''}`,
+      say: (line) => ctx.io.out(ui.info(line)),
+    });
+    cmd = bin.path;
+    from = bin.from;
+    version = bin.version;
+    installed = bin.installed === true;
     ({ changed } = installHooks(file, cmd));
     ctx.io.out(
       changed
         ? `Installed Oort hooks (${events}) in ${show(file)}:\n${HOOK_EVENTS.map((e) => `  ${show(cmd)} hook ${e}`).join('\n')}\n`
         : `Oort hooks are already installed in ${show(file)}; nothing changed.\n`,
     );
-    const ui = uiFor(ctx.io);
-    ctx.io.out(`${ui.info(`Hook binary: ${show(cmd)} (oort ${VERSION})`)}\n`);
+    ctx.io.out(
+      `${ui.info(`Hook binary: ${show(cmd)} (oort ${version}${from === 'managed' ? ', the managed copy: oort update keeps it current' : ''})`)}\n`,
+    );
+    if (bin.olderManaged !== undefined) {
+      ctx.io.out(
+        `${ui.info(`The managed copy (${show(bin.olderManaged.prefix)}) is oort ${shown(bin.olderManaged.version)}, older than this one, so the hooks run this copy; \`oort update\` brings both to the latest.`)}\n`,
+      );
+    }
     const onPath = whichOort(ctx.io.env);
-    if (onPath !== undefined && onPath !== cmd) {
+    if (from === 'running' && onPath !== undefined && onPath !== cmd) {
       noteWarning(
         ctx,
         'another-oort-on-path',
@@ -157,18 +206,9 @@ export async function installCommand(
           `  To use that one instead, run \`oort install claude-code\` from it.\n`,
       );
     }
-    if (versionManagerOf(cmd) !== undefined) {
-      noteWarning(
-        ctx,
-        'version-manager-path',
-        'The hook binary is under a Node version manager; switching Node versions will break the hooks.',
-      );
-      ctx.io.out(
-        `${ui.info('This path is under a Node version manager; switching Node versions will break the hooks.')}\n` +
-          '  Install oortmem somewhere stable (`npm i -g oortmem` with a system Node), then re-run this.\n',
-      );
-    }
   } else {
+    // Removing needs no bin: uninstallHooks also takes out entries from older install paths.
+    cmd = managedCopy(ctx.io.env)?.main ?? runningOr('oort', ctx);
     ({ changed } = uninstallHooks(file, cmd));
     ctx.io.out(
       changed
@@ -184,56 +224,19 @@ export async function installCommand(
       changed,
       command: cmd,
       events: [...HOOK_EVENTS],
-      version: VERSION,
+      version,
+      ...(from !== undefined && { binary: from, installedManaged: installed }),
     });
   }
   return 0;
 }
 
-/** This process runs from a package runner's cache (`npx oortmem`, `pnpm dlx`). */
-export function fromPackageCache(): boolean {
+/** This bin's realpath (`hookCommandPath`), or `fallback` when it is not running as its bin. */
+function runningOr(fallback: string, ctx: Ctx): string {
   try {
-    return ephemeral(fs.realpathSync(binPath()));
-  } catch {
-    return false;
+    return hookCommandPath(ctx.io.entry);
+  } catch (e) {
+    if (!(e instanceof Refusal)) throw e;
+    return fallback;
   }
-}
-
-/** The global `oortmem` install `oort setup` offers when it runs under npx. */
-export interface GlobalInstall {
-  /** The realpath of the globally installed bin, when there is a usable one. */
-  bin(): string | undefined;
-  /** Runs `npm i -g oortmem` with the terminal attached; resolves its exit code. */
-  install(): Promise<number>;
-}
-
-/** `npm i -g oortmem`, and `<npm prefix -g>/bin/oort` as the stable path (not on Windows yet). */
-export function npmGlobalInstall(
-  env: Record<string, string | undefined>,
-  run: typeof runToStderr = runToStderr,
-): GlobalInstall {
-  const childEnv = env as NodeJS.ProcessEnv;
-  return {
-    bin() {
-      if (process.platform === 'win32') return undefined;
-      const r = spawnSync('npm', ['prefix', '-g'], {
-        encoding: 'utf8',
-        env: childEnv,
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 30_000,
-      });
-      if (r.status !== 0 || typeof r.stdout !== 'string') return undefined;
-      const link = path.join(r.stdout.trim(), 'bin', 'oort');
-      try {
-        const real = hookCommandPath(link, link);
-        return /[\\/]oortmem[\\/]dist[\\/]main\.js$/.test(real) ? real : undefined;
-      } catch {
-        return undefined;
-      }
-    },
-    install() {
-      // npm's "added N packages" goes to stderr: stdout is `setup --json`'s envelope.
-      return run('npm', ['i', '-g', 'oortmem'], { env: childEnv }).catch(() => 1);
-    },
-  };
 }

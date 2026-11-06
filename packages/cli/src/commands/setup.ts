@@ -25,17 +25,23 @@ import { PROVIDER_ENV, VENDORS, type Vendor } from '../keychain.js';
 import { rememberFacts } from '../remember.js';
 import { emit, jsonMode, nested } from '../output.js';
 import { uiFor, type Ui } from '../ui.js';
-import { Refusal, echo, tilde, withWired, type Ctx } from '../util.js';
+import { Refusal, echo, noteWarning, tilde, withWired, type Ctx } from '../util.js';
 import type { Wired } from '../wire.js';
 import { describeChange, hostArgs, hostContext } from './connect.js';
 import { importCommand, parseSince, type ImportOutcome } from './import.js';
+import { hookCommandPath, settingsFile } from './install.js';
 import {
-  fromPackageCache,
-  hookCommandPath,
-  npmGlobalInstall,
-  settingsFile,
-  type GlobalInstall,
-} from './install.js';
+  canInstallManaged,
+  installCommandFor,
+  installManaged,
+  managedCopy,
+  managedIsCurrent,
+  manualInstall,
+  plannedMain,
+  runningUnstable,
+  shownPrefix,
+} from './managed.js';
+import { managedPrefixFor } from './update.js';
 import { keySource } from './keys.js';
 import { modelsPullCommand } from './models.js';
 import { keychainBlocker, runLogin } from './login.js';
@@ -50,7 +56,7 @@ export interface SetupOptions {
   import?: string;
   /** false with `--no-demo`. */
   demo?: boolean;
-  /** Under npx with `--yes`: run `npm i -g oortmem` first, so agents get a stable path. */
+  /** No longer needed (setup installs the managed copy itself); accepted and ignored. */
   installGlobal?: boolean;
 }
 
@@ -81,12 +87,13 @@ export interface Prompter {
 
 export interface SetupDeps {
   prompter?: Prompter;
-  /** The command written into host configs (default: the realpath of this bin, refused when temporary). */
+  /** This copy as agents would run it (default: the realpath of this bin, refused when it is not the bin). */
   bin?: () => string;
-  /** Whether this run comes from a package runner's cache (npx); default: from the bin's path. */
-  fromPackageCache?: () => boolean;
-  /** The global install offered under npx (default: npm). */
-  globalInstall?: GlobalInstall;
+  /**
+   * Why this copy is no place to point agents at (default: `runningUnstable`: a package cache,
+   * a temp directory, fnm's per-shell link, a Node version manager), or undefined.
+   */
+  unstable?: () => string | undefined;
 }
 
 const STEPS = 6;
@@ -225,7 +232,6 @@ function nonInteractiveHelp(detected: Host[]): string {
     '            local (download local models, 58 MB: embeddings and rerank with no keys), or skip',
     '  --import  skip (the default) or an age such as 14d: imports Claude Code transcripts, using the writer',
     '  --no-demo skip the remember, recall and forget check',
-    '  --install-global  under npx: run `npm i -g oortmem` first, so agents start a stable `oort`',
   ].join('\n');
 }
 
@@ -537,66 +543,99 @@ export async function setupCommand(
 
     // 3. Connect.
     p.step(3, 'Connect');
+    const env = ctx.io.env;
+    const managed: {
+      prefix: string;
+      status: 'skipped' | 'reused' | 'installed' | 'declined' | 'failed' | 'unavailable';
+      version: string | null;
+      command: string | null;
+      reason: string | null;
+    } = {
+      prefix: managedPrefixFor(env),
+      status: 'skipped',
+      version: null,
+      command: null,
+      reason: null,
+    };
+    let written: string | undefined;
     if (agents.length === 0) {
       p.info(
         'Skipped: no agents chosen. Later: `oort install claude-code` or `oort connect <host>`.',
       );
     } else {
-      let cmd: string | undefined;
-      try {
-        cmd = (deps.bin ?? (() => hookCommandPath(ctx.io.entry)))();
-      } catch (e) {
-        if (!(e instanceof Refusal)) throw e;
-        if ((deps.fromPackageCache ?? fromPackageCache)()) {
-          // npx's copy vanishes after the run, so agents must start a global install. Never
-          // the cache path, and never `npx -y oortmem` (slow, and it needs the network).
-          const global = deps.globalInstall ?? npmGlobalInstall(ctx.io.env);
-          cmd = global.bin();
-          if (cmd !== undefined) {
-            p.info(ui.ok(`Using the global oortmem install: ${cmd}`));
-          } else {
-            const why =
-              'You are running oort through npx, whose copy disappears after this run, so agents need `oort` installed globally.';
-            const want = interactive
-              ? answered(await p.confirm(`${why} Install it now with \`npm i -g oortmem\`?`, true))
-              : opts.installGlobal === true;
-            if (!want) {
-              p.info(
-                ui.warn(
-                  `Skipped connecting. ${why} Run \`npm i -g oortmem\`, then \`oort setup\`${interactive ? '' : ' (or pass --install-global)'}.`,
-                ),
-              );
-            } else if ((await global.install()) !== 0 || (cmd = global.bin()) === undefined) {
-              cmd = undefined;
-              p.info(
-                ui.warn(
-                  'Skipped connecting: `npm i -g oortmem` did not leave an `oort` bin; install it yourself, then run `oort setup`.',
-                ),
-              );
-            } else {
-              p.info(ui.ok(`Installed oortmem globally: ${cmd}`));
-              done.push({
-                what: 'installed oortmem globally (npm i -g oortmem)',
-                undo: 'npm rm -g oortmem',
-              });
-            }
-          }
-        } else {
-          p.info(ui.warn(`Skipped: ${e.message}`));
+      // Agents run the managed copy (~/.oort/cli): reused when it is this version or newer, else
+      // installed once the changes are confirmed (CON-114). Without it, this copy, when it is one
+      // that stays put; never npx's cache, a temp directory, fnm's link or a version manager.
+      const prefix = shownPrefix(env);
+      const manual = manualInstall(env);
+      const why = (deps.unstable ?? (() => runningUnstable(ctx)))();
+      let running: string | undefined;
+      let problem =
+        why === undefined ? '' : `This oort is in ${why}, which agents would lose later.`;
+      if (why === undefined) {
+        try {
+          running = (deps.bin ?? (() => hookCommandPath(ctx.io.entry)))();
+        } catch (e) {
+          if (!(e instanceof Refusal)) throw e;
+          problem = e.message;
         }
       }
-      if (cmd !== undefined) {
-        const bin = cmd;
+      const unavailable = (because: string, verb: string): void => {
+        if (running !== undefined) {
+          const line = `The managed copy in ${prefix} ${verb} (${because}), so agents run this copy: ${show(running)}. For one that stays put: ${manual}, then oort install claude-code.`;
+          noteWarning(ctx, 'managed-copy-unavailable', line);
+          p.info(ui.warn(line));
+        } else {
+          p.info(
+            ui.warn(
+              `Skipped connecting: ${problem} The managed copy ${verb} (${because}): run ${manual}, then ${prefix}/bin/oort setup.`,
+            ),
+          );
+        }
+      };
+      const current = managedCopy(env);
+      let plan: { bin: string; install: boolean } | undefined;
+      if (managedIsCurrent(current)) {
+        plan = { bin: current.main, install: false };
+        managed.status = 'reused';
+        managed.version = current.version;
+        p.info(
+          ui.ok(
+            `Agents run the managed copy in ${prefix} (oort ${current.version}); oort update keeps it current.`,
+          ),
+        );
+      } else {
+        const can = canInstallManaged(ctx);
+        if (can === 'yes') {
+          plan = { bin: plannedMain(env), install: true };
+          managed.command = installCommandFor(env);
+        } else {
+          managed.status = 'unavailable';
+          managed.reason = can;
+          unavailable(
+            can === 'no-npm' ? 'npm is not on PATH' : 'it is not set up on Windows yet',
+            'cannot be installed',
+          );
+          if (running !== undefined) plan = { bin: running, install: false };
+        }
+      }
+      if (plan !== undefined) {
+        const planned = plan.bin;
         const preview: string[] = [];
+        if (plan.install) {
+          preview.push(
+            `${ui.bold('oort')}: the managed copy agents run, in ${prefix}\n${ui.green(`+ ${installCommandFor(env)}`)}`,
+          );
+        }
         for (const h of agents) {
           if (h === 'claude-code') {
             preview.push(
-              `${ui.bold('Claude Code')}: hooks in ${show(settingsFile(false, ctx))}\n${HOOK_EVENTS.map((e) => ui.green(`+ hooks.${e}: ${bin} hook ${e}`)).join('\n')}`,
+              `${ui.bold('Claude Code')}: hooks in ${show(settingsFile(false, ctx))}\n${HOOK_EVENTS.map((e) => ui.green(`+ hooks.${e}: ${planned} hook ${e}`)).join('\n')}`,
             );
           } else {
             try {
               preview.push(
-                describeChange(ui, connectHost(h, hc, bin, { dryRun: true }), bin, {
+                describeChange(ui, connectHost(h, hc, planned, { dryRun: true }), planned, {
                   dryRun: true,
                   home: hc.home,
                 }).trimEnd(),
@@ -608,10 +647,52 @@ export async function setupCommand(
           }
         }
         if (interactive) p.info(preview.join('\n\n'));
-        const go = interactive ? answered(await p.confirm('Write these changes?', true)) : true;
+        const go = interactive
+          ? answered(
+              await p.confirm(
+                plan.install
+                  ? `Install oort ${VERSION} in ${prefix} and write these changes?`
+                  : 'Write these changes?',
+                true,
+              ),
+            )
+          : true;
+        let bin: string | undefined = planned;
         if (!go) {
-          p.info('Nothing changed in any agent config.');
-        } else {
+          if (plan.install) managed.status = 'declined';
+          p.info(
+            plan.install
+              ? 'Nothing installed, and nothing changed in any agent config.'
+              : 'Nothing changed in any agent config.',
+          );
+          bin = undefined;
+        } else if (plan.install) {
+          p.info(
+            `Installing oort ${VERSION} in ${prefix}, the copy agents run: ${managed.command}`,
+          );
+          const r = await installManaged(ctx);
+          if (r.ok) {
+            bin = r.managed.main;
+            managed.status = 'installed';
+            managed.version = r.managed.version;
+            p.info(
+              ui.ok(
+                `Installed oort ${r.managed.version} in ${prefix}: agents run it, and oort update keeps it current.`,
+              ),
+            );
+            done.push({
+              what: `installed oort ${r.managed.version} in ${prefix} (the copy agents run)`,
+              undo: `npm rm -g --prefix ${prefix} oortmem`,
+            });
+          } else {
+            managed.status = 'failed';
+            managed.reason = r.reason;
+            bin = running;
+            unavailable(r.detail, 'could not be installed');
+          }
+        }
+        if (bin !== undefined) {
+          written = bin;
           for (const h of agents) {
             try {
               if (h === 'claude-code') {
@@ -759,6 +840,8 @@ export async function setupCommand(
         keys,
         import: importOutcome,
         demo: runDemo,
+        command: written ?? null,
+        managed,
         changed: done,
       });
     }

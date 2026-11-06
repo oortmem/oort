@@ -4,7 +4,14 @@ import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installHooks } from '@oortmem/claude-code';
-import { harness, memory, memoryKeychain, type Harness, data } from '../../test/helpers.js';
+import {
+  harness,
+  memory,
+  memoryKeychain,
+  npmPrefixCopy,
+  type Harness,
+  data,
+} from '../../test/helpers.js';
 import { connectHost } from '../connectors.js';
 import { createKeychain, type Keychain } from '../keychain.js';
 import { hostContext } from './connect.js';
@@ -283,12 +290,47 @@ describe('oort doctor', () => {
     const note = d.check('hooks', 'claude-code node');
     expect(note).toMatchObject({ status: 'info' });
     expect(note?.detail).toContain('switching Node versions will break');
-    expect(note?.fix).toContain('stable');
+    // No managed copy yet (CON-114): setup makes one, or install it by hand and repoint.
+    expect(note?.fix).toBe(
+      'oort setup, or npm i -g --prefix ~/oort-home/cli oortmem and then oort install claude-code (a managed copy that stays put)',
+    );
+    expect(note?.fixCommand).toBe(
+      `npm i -g --prefix ${path.join(h.home, 'cli')} oortmem && ${path.join(h.home, 'cli', 'bin', 'oort')} install claude-code`,
+    );
     // The version still matches, so the binary row is green and doctor does not fail: the only
     // warnings are the missing keys, which exit 0 (data.status is `warn`).
     expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
     expect(d.human.code).toBe(0);
     expect(d.report.status).toBe('warn');
+  });
+
+  it('doctor.hooks-on-an-unstable-copy-with-a-managed-copy-name-it (CON-114)', async () => {
+    const h = harness();
+    const bin = fakeBin(h, VERSION, path.join('.nvm', 'versions', 'node', 'v20.1.0', 'lib'));
+    installHooks(path.join(h.root, '.claude', 'settings.json'), bin);
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    const d = await doctor(h);
+    expect(d.check('hooks', 'claude-code node')).toMatchObject({
+      status: 'info',
+      fix: '~/oort-home/cli/bin/oort install claude-code (the managed copy, which stays put)',
+      fixCommand: `${path.join(h.home, 'cli', 'bin', 'oort')} install claude-code`,
+    });
+  });
+
+  it('doctor.hooks-in-a-package-cache-or-an-fnm-link-get-the-line (CON-114)', async () => {
+    for (const dir of [
+      path.join('.npm', '_npx', '0a1b', 'node_modules'),
+      path.join('.local', 'state', 'fnm_multishells', '1_2', 'lib'),
+    ]) {
+      const h = harness();
+      const bin = fakeBin(h, VERSION, dir);
+      installHooks(path.join(h.root, '.claude', 'settings.json'), bin);
+      const d = await doctor(h);
+      const note = d.check('hooks', 'claude-code node');
+      expect(note?.status, dir).toBe('info');
+      expect(note?.detail).toMatch(/in a package cache|in fnm's link for one shell/);
+      expect(note?.fix).toMatch(/^oort setup, or npm i -g --prefix ~\/oort-home\/cli oortmem/);
+    }
   });
 
   it('doctor.hook-binary-of-this-version-is-green', async () => {

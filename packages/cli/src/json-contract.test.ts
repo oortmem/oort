@@ -22,11 +22,11 @@ import {
   harness,
   memory,
   memoryKeychain,
+  npmTrap,
   tmpdir,
   writeTranscript,
 } from '../test/helpers.js';
 import { writeCloudSettings } from './cloud.js';
-import { npmGlobalInstall } from './commands/install.js';
 import { createKeychain, type Keychain } from './keychain.js';
 import { commandPath, hasJsonOption } from './output.js';
 import { program, runCli } from './program.js';
@@ -261,8 +261,10 @@ function binEnv() {
   const cwd = path.join(root, 'work');
   fs.mkdirSync(home);
   fs.mkdirSync(cwd);
+  // The real npm is never run from a test: a stand-in comes first on PATH (CON-114).
+  const trap = npmTrap(root);
   const env = {
-    PATH: process.env['PATH'] ?? '',
+    PATH: `${trap.dir}${path.delimiter}${process.env['PATH'] ?? ''}`,
     HOME: home,
     OORT_HOME: path.join(home, '.oort'),
     OORT_NO_KEYCHAIN: '1',
@@ -1091,14 +1093,6 @@ describe('oort.v1: review fixes', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toBe('');
     expect(r.stderr).toContain('added 1 package');
-    // `setup --install-global` runs npm that way.
-    const calls: [string, string[]][] = [];
-    const code = await npmGlobalInstall({}, async (file, args) => {
-      calls.push([file, args]);
-      return 0;
-    }).install();
-    expect(code).toBe(0);
-    expect(calls).toEqual([['npm', ['i', '-g', 'oortmem']]]);
     // No spawn in the CLI inherits stdout any more.
     const src = path.join(import.meta.dirname);
     const files = fs

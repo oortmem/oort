@@ -188,10 +188,8 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--keys <mode>', 'byo, pro, local or skip')
     .option('--import <age>', 'skip, or import Claude Code sessions from this age: 14d, 30d')
     .option('--no-demo', 'skip the remember, recall and forget check')
-    .option(
-      '--install-global',
-      'under npx: run `npm i -g oortmem` first (agents need a stable path)',
-    )
+    // Before CON-114: `npm i -g oortmem` under npx. Setup now installs ~/.oort/cli itself.
+    .addOption(new Option('--install-global').hideHelp())
     .option('--json', 'print oort.v1 JSON')
     .action(run((o: SetupOptions) => setupCommand(o, ctx)));
 
