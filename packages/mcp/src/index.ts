@@ -21,6 +21,7 @@ export {
   type ToolSpaces,
 } from './tools.js';
 export {
+  EVERYWHERE_UNAVAILABLE,
   MemoryToolError,
   createMcpServer,
   type CreateMcpServerOptions,

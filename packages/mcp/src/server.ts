@@ -111,6 +111,10 @@ export interface ShareOutcome {
   note?: string;
 }
 
+/** The tool error for `forget` with `everywhere` on a connection that does not offer it. */
+export const EVERYWHERE_UNAVAILABLE =
+  'everywhere is not available on this connection; nothing was forgotten.';
+
 /** A refusal whose message is shown to the user as the tool error. */
 export class MemoryToolError extends Error {
   override readonly name = 'MemoryToolError';
@@ -212,9 +216,12 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
         visibility: visibility.has(i.visibility) ? i.visibility : 'private',
       }),
     forget: (i) => {
-      if (!('everywhere' in i) || i.everywhere !== true) return b.forget({ id: i.id });
-      if (b.forgetEverywhere === undefined || spaces.forgetEverywhere !== true) {
-        throw new MemoryToolError('This connection cannot withdraw shared copies.');
+      // Never forget less than was asked: `everywhere` where it is not offered is refused before
+      // anything is forgotten, so the model can ask again without it (CON-67).
+      const asked = (i as Record<string, unknown>)['everywhere'];
+      if (asked === undefined || asked === false) return b.forget({ id: i.id });
+      if (asked !== true || b.forgetEverywhere === undefined || spaces.forgetEverywhere !== true) {
+        throw new MemoryToolError(EVERYWHERE_UNAVAILABLE);
       }
       return b.forgetEverywhere({ id: i.id });
     },

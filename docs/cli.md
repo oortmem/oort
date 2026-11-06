@@ -75,7 +75,7 @@ to stdout (see `docs/export-format.md`).
 | `0` | Success, including a declined confirmation. |
 | `1` | Unexpected error. Only the message is printed; add `--debug` for the stack. |
 | `2` | Refusal or usage problem, such as a bad flag, missing keys, a file Oort will not edit, or a confirmation that cannot be asked (see below). |
-| `3` | Partial success: `oort import claude-code` imported what it could, but some sessions stopped at a failed observation. Run it again to retry them. |
+| `3` | Partial success: `oort import claude-code` imported what it could, but some sessions stopped at a failed observation, or `oort forget --everywhere` forgot the memory but did not reach every Constellation holding a copy. Run it again to retry them. |
 
 `oort doctor` exits 1 when one of its checks fails; warnings alone exit 0 (a
 keyless or local-only install is a supported state), and `--json` tells them
@@ -166,7 +166,7 @@ envelope instead.
 - `exitCode` appears only when the command succeeded but exits non-zero:
   `serve status` when the daemon is not running (1), `models verify` with a
   changed file (1), `doctor` with a failed check (1), `import` with failed
-  sessions (3).
+  sessions (3), `forget --everywhere` with a Constellation not reached (3).
 - `data` is always an object; a list is wrapped (`{ "memories": [...] }`).
   Field names are camelCase and stable, ids are full ids (never the 8-character
   prefix tables show), and times are ISO 8601.
@@ -577,7 +577,7 @@ Tools:
 | --- | --- | --- | --- |
 | `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10, default 5) | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`), `from` (`from your Planet` or `from this agent's Star`), `overridden_by` (the id of a narrower memory in the result that contradicts it); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
 | `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`) | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
-| `forget` | `id` (required); in Oort Cloud, where the connection reaches a Constellation, also `everywhere?` (boolean, default false: withdraw your shared copies, as `oort forget --everywhere`) | destructive, idempotent | `{ forgotten: id }`; with `everywhere`, also `withdrawn`, `requested` and `unreachable` (Constellation names) and a `note` |
+| `forget` | `id` (required); in Oort Cloud, where the connection reaches a Constellation, also `everywhere?` (boolean, default false: withdraw your shared copies, as `oort forget --everywhere`, only when you ask for that in the conversation). Elsewhere `everywhere` is refused with the tool error `everywhere is not available on this connection; nothing was forgotten.` | destructive, idempotent | `{ forgotten: id }`; with `everywhere`, also `withdrawn`, `requested` and `unreachable` (Constellation names) and a `note` |
 | `pin` | `id`, `pinned` (boolean) | write, not destructive, idempotent | `{ id, pinned, changed }` |
 | `explain` | `id` | read-only, idempotent | the memory, its stored decisions, and its supersede chain |
 | `list_recent` | `since?` (ISO), `limit?` (1–50, default 20) | read-only, idempotent | memories by `updated_at`, newest first, each with `status` (`current`, `superseded` or `expired`) |
@@ -1378,11 +1378,13 @@ one of three things:
   and its maintainers get a request to remove it.
 - **Not reached:** the Constellation did not answer, or you left it and this is a narrowed key
   (reaching a Constellation you left needs a full key or the dashboard). The copy stays; run the
-  same command again later.
+  same command again later. This is a partial success: the command exits 3, and the `--json`
+  envelope carries `"exitCode": 3` (as `import` does). Removal requests alone exit 0: that is the
+  intended outcome where others contributed.
 
 ```text
 $ oort forget 1b2c3d4e --everywhere
-Forget 1b2c3d4e "We deploy with wrangler" and withdraw your copies from oort-core, checkout, design (where others contributed, its maintainers get a removal request)? [y/N] y
+Forget 1b2c3d4e "We deploy with wrangler" and withdraw your copies from oort-core, checkout, design (and any other Constellation you shared it to; where others contributed, its maintainers get a removal request)? [y/N] y
 Forgot 1b2c3d4e-….
 Withdrawn from oort-core.
 Others contributed in checkout: a removal request went to the maintainers, and the copy stays until they decide.
@@ -1414,7 +1416,8 @@ Not reached: design. The copy stays; run `oort forget 1b2c3d4e-… --everywhere`
   "warnings": [
     { "code": "removal-requested", "message": "Others contributed in checkout: …" },
     { "code": "unreachable", "message": "Not reached: design. …" }
-  ]
+  ],
+  "exitCode": 3
 }
 ```
 
@@ -1422,9 +1425,16 @@ Not reached: design. The copy stays; run `oort forget 1b2c3d4e-… --everywhere`
 each one (`member: false` once you left it), and `stillShared` lists the ones that still hold a
 copy. Without `--everywhere` the three lists are empty and `stillShared` lists every copy.
 
+The Constellations the question names are what a lookup found a moment before: Oort Cloud acts
+on every copy it holds when the command runs, so the question says `(and any other Constellation
+you shared it to)`, or `(no shared copies found; any you made will be withdrawn)` when the lookup
+found none, and the lines printed afterwards are Oort Cloud's own answer.
+
 A plain forget keeps the record of where the memory was shared, so `oort forget <full id>
 --everywhere` still withdraws the copies afterwards (the question then reads `Withdraw your copies
-of 1b2c3d4e (already forgotten) from oort-core?`); an id prefix can't find a memory that is gone.
+of 1b2c3d4e (already forgotten) from oort-core (and any other Constellation you shared it to)?`);
+an id prefix can't find a memory that is gone. If that lookup fails (outside the hive beta, or
+Oort Cloud is down), the command says why rather than "not found".
 `--everywhere` asks first like every forget: on a terminal only, and with `--json` or a stdin
 that is not a terminal it refuses (exit 2) unless you pass `--yes`. Outside the hive beta it is
 refused before anything is forgotten, and in local mode it is refused as `cloud-only` (there are

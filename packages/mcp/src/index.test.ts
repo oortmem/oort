@@ -3,6 +3,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  EVERYWHERE_UNAVAILABLE,
   FACT_MAX_CHARS,
   INSTRUCTIONS,
   MemoryToolError,
@@ -312,11 +313,36 @@ describe.each<Era>(['legacy', 'modern'])(
         { method: 'forget', input: { id: 'm1' } },
         { method: 'forgetEverywhere', input: { id: 'm1' } },
       ]);
-      // Where the argument does not exist, a model that sends it gets the plain forget.
+      // Where the argument does not exist, a model that sends it is refused and nothing is
+      // forgotten: never a quiet downgrade to the plain forget.
       calls.length = 0;
-      const planet = await connect(era, fakeBackend({ forgetEverywhere }));
-      await planet.callTool({ name: 'forget', arguments: { id: 'm1', everywhere: true } });
-      expect(calls).toEqual([{ method: 'forget', input: { id: 'm1' } }]);
+      for (const [backend, spaces] of [
+        [fakeBackend({ forgetEverywhere }), undefined],
+        [fakeBackend({ forgetEverywhere }), TEAM],
+        [fakeBackend(), team],
+      ] as const) {
+        const other = await connect(era, backend, undefined, spaces);
+        for (const everywhere of [true, 'yes', 1]) {
+          const refused = await other.callTool({
+            name: 'forget',
+            arguments: { id: 'm1', everywhere },
+          });
+          expect(refused.isError).toBe(true);
+          expect(text(refused)).toBe(EVERYWHERE_UNAVAILABLE);
+        }
+      }
+      expect(EVERYWHERE_UNAVAILABLE).toBe(
+        'everywhere is not available on this connection; nothing was forgotten.',
+      );
+      expect(calls).toEqual([]);
+      // `everywhere: false` is the plain forget, and other invented arguments are still dropped.
+      const planet = await connect(era, fakeBackend());
+      await planet.callTool({ name: 'forget', arguments: { id: 'm1', everywhere: false } });
+      await planet.callTool({ name: 'forget', arguments: { id: 'm1', scope: { orgId: 'x' } } });
+      expect(calls).toEqual([
+        { method: 'forget', input: { id: 'm1' } },
+        { method: 'forget', input: { id: 'm1' } },
+      ]);
     });
   },
 );

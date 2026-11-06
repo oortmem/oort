@@ -592,9 +592,13 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     e.cloud.hive.withdrawOutcome.set(CHECKOUT, 'requested');
     e.cloud.hive.withdrawOutcome.set(DESIGN, 'unreachable');
     const yes = await e.run(['forget', ID, '--everywhere'], PIPED_YES);
-    expectAsked(yes);
+    // A copy not reached is a partial success: exit 3, as `import`.
+    expect(yes.code, yes.io.stderr).toBe(3);
+    expect(yes.io.asked).toHaveLength(1);
+    expect(yes.io.stdout).not.toContain('[y/N]');
+    // The list is what the lookup saw: the question never promises it is exact.
     expect(yes.io.asked[0]).toBe(
-      'Forget 22222222 "We deploy oortcloud with wrangler; ask maya@example.com." and withdraw your copies from oort-core, checkout, design (where others contributed, its maintainers get a removal request)? [y/N] ',
+      'Forget 22222222 "We deploy oortcloud with wrangler; ask maya@example.com." and withdraw your copies from oort-core, checkout, design (and any other Constellation you shared it to; where others contributed, its maintainers get a removal request)? [y/N] ',
     );
     expect(yes.io.stdout).toBe(
       [
@@ -619,7 +623,9 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     e.cloud.hive.withdrawOutcome.set(CHECKOUT, 'requested');
     e.cloud.hive.withdrawOutcome.set(DESIGN, 'unreachable');
     const r = await e.run(['forget', ID, '--everywhere', '--yes', '--json']);
-    expect(r.code, r.io.stderr).toBe(0);
+    // Partial: the envelope says so the way `import`'s does, with exitCode 3.
+    expect(r.code, r.io.stderr).toBe(3);
+    expect(JSON.parse(r.io.stdout)).toMatchObject({ ok: true, exitCode: 3 });
     const core = { constellation: 'c_aaaaaaaaaaaaaaaa', name: 'oort-core', member: true };
     const checkout = { constellation: CHECKOUT, name: 'checkout', member: true };
     const design = { constellation: DESIGN, name: 'design', member: true };
@@ -652,7 +658,7 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     const r = await e.run(['forget', ID, '--everywhere'], PIPED_YES);
     expectAsked(r);
     expect(r.io.asked[0]).toBe(
-      'Withdraw your copies of 22222222 (already forgotten) from oort-core? [y/N] ',
+      'Withdraw your copies of 22222222 (already forgotten) from oort-core (and any other Constellation you shared it to)? [y/N] ',
     );
     expect(r.io.stdout).toBe(`${ID} was already forgotten.\nWithdrawn from oort-core.\n`);
     expect(e.cloud.hive.shared.size).toBe(0);
@@ -669,6 +675,8 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     expect(no.io.asked[0]).toContain('withdraw your copies from checkout (you left)');
     e.cloud.narrowed = true;
     const narrowed = await e.run(['forget', ID, '--everywhere', '--yes', '--json']);
+    expect(narrowed.code, narrowed.io.stderr).toBe(3);
+    expect(JSON.parse(narrowed.io.stdout).exitCode).toBe(3);
     expect(data(narrowed.io.stdout).unreachable).toEqual([CHECKOUT]);
     expect(data(narrowed.io.stdout).stillShared).toEqual([
       { constellation: CHECKOUT, name: 'checkout', member: false },
@@ -676,6 +684,7 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     expect(e.cloud.hive.shared.size).toBe(1);
     e.cloud.narrowed = false;
     const full = await e.run(['forget', ID, '--everywhere', '--yes']);
+    expect(full.code, full.io.stderr).toBe(0);
     expect(full.io.stdout).toContain('Withdrawn from checkout (you left).');
     expect(e.cloud.hive.shared.size).toBe(0);
   });
@@ -694,9 +703,59 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     const e = setup();
     withTeam(e);
     const no = await e.run(['forget', ID, '--everywhere'], { tty: true, answer: 'n' });
-    expect(no.io.asked[0]).toContain('(not shared to any Constellation)? [y/N] ');
+    expect(no.io.asked[0]).toBe(
+      'Forget 22222222 "We deploy oortcloud with wrangler; ask maya@example.com." (no shared copies found; any you made will be withdrawn)? [y/N] ',
+    );
     const r = await e.run(['forget', ID, '--everywhere', '--yes']);
+    expect(r.code, r.io.stderr).toBe(0);
     expect(r.io.stdout).toBe(`Forgot ${ID}.\nIt was not shared to any Constellation.\n`);
+  });
+
+  it('forget.everywhere-with-only-removal-requests-exits-0', async () => {
+    const e = setup();
+    withTeams(e);
+    copyIn(e, CHECKOUT);
+    e.cloud.hive.withdrawOutcome.set(CHECKOUT, 'requested');
+    const r = await e.run(['forget', ID, '--everywhere', '--yes', '--json']);
+    // A removal request is the intended outcome where others contributed: not a partial failure.
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(JSON.parse(r.io.stdout)).not.toHaveProperty('exitCode');
+    expect(data(r.io.stdout).removalRequested).toEqual([CHECKOUT]);
+  });
+
+  it('forget.everywhere-on-a-forgotten-id-shows-the-real-reason-a-lookup-failed', async () => {
+    const e = setup();
+    withTeam(e);
+    copyIn(e, 'c_aaaaaaaaaaaaaaaa');
+    expect((await e.run(['forget', ID, '--yes'])).code).toBe(0);
+    // The memory is gone; a failing shares lookup is reported as itself, never as not-found.
+    e.cloud.fail = { 'GET /v1/memories/:id/shares': 503 };
+    const down = await e.run(['forget', ID, '--everywhere', '--yes', '--json']);
+    expect(down.code).toBe(2);
+    expect(failed(down, 'network', 'forget').message).toContain('HTTP 503');
+    e.cloud.fail = undefined;
+    e.cloud.hive.enabled = false;
+    const beta = await e.run(['forget', ID, '--everywhere', '--yes']);
+    expect(beta.code).toBe(2);
+    expect(beta.io.stderr).toContain('invite-only beta');
+    expect(e.cloud.hive.shared.size).toBe(1);
+  });
+
+  it('forget.an-edge-without-withdrawnAt-counts-as-a-live-copy', async () => {
+    const e = setup();
+    withTeam(e);
+    // An API that leaves `withdrawnAt` out: the copy is live, so the question names it.
+    const base = e.cloud.fetch;
+    e.cloud.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const res = await base(input, init);
+      const url = new URL(new Request(input, init).url);
+      if (!url.pathname.endsWith('/shares') || !res.ok) return res;
+      const body = (await res.json()) as { shares: Record<string, unknown>[] };
+      return Response.json({ shares: body.shares.map(({ withdrawnAt: _w, ...x }) => x) });
+    }) as typeof fetch;
+    copyIn(e, 'c_aaaaaaaaaaaaaaaa');
+    const r = await e.run(['forget', ID], { tty: true, answer: 'n' });
+    expect(r.io.asked[0]).toContain('(also shared to oort-core; add --everywhere');
   });
 
   // CON-107: refuses without a terminal on stdin and with --json (exit 2, no prompt), exits 0

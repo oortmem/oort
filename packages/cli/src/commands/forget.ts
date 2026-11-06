@@ -127,14 +127,17 @@ async function forgetEverywhere(
 ): Promise<number> {
   const t = await everywhereTarget(cloud, ref);
   const live = liveCopies(t.edges);
+  // The list is what the lookup saw a moment ago; the API acts on every copy it holds then, so
+  // the question never promises an exact list, and the result printed is the API's own.
+  const others = 'and any other Constellation you shared it to';
   const where =
     live.length === 0
-      ? ' (not shared to any Constellation)'
-      : ` and withdraw your copies from ${copiesLabel(live)} (where others contributed, its maintainers get a removal request)`;
+      ? ' (no shared copies found; any you made will be withdrawn)'
+      : ` and withdraw your copies from ${copiesLabel(live)} (${others}; where others contributed, its maintainers get a removal request)`;
   const ok = await confirm(
     ctx.io,
     t.memory === null
-      ? `Withdraw your copies of ${short(t.id)} (already forgotten) from ${copiesLabel(live)}?`
+      ? `Withdraw your copies of ${short(t.id)} (already forgotten) from ${copiesLabel(live)} (${others})?`
       : `Forget ${short(t.id)} "${shown(clip(t.memory.text, 60))}"${where}?`,
     opts.yes === true,
     'forget it everywhere',
@@ -179,5 +182,6 @@ async function forgetEverywhere(
       ],
     });
   }
-  return 0;
+  // A copy not reached is a partial success (exit 3, as `import`): run it again later.
+  return r.unreachable.length > 0 ? 3 : 0;
 }

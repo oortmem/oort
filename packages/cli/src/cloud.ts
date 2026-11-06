@@ -420,7 +420,8 @@ export interface CloudShareEdge {
   member?: boolean;
   id: string;
   at: string;
-  withdrawnAt: string | null;
+  /** When it was withdrawn; `null` (or absent, from an older API) while the copy is live. */
+  withdrawnAt?: string | null;
 }
 
 /** What `DELETE /v1/memories/:id?everywhere=1` answers: Constellation ids (CON-67). */
@@ -858,7 +859,12 @@ export function copiesByConstellation(edges: readonly CloudShareEdge[]): Map<str
 
 /** The Constellations that still hold a copy (an edge not withdrawn), once each. */
 export function liveCopies(edges: readonly CloudShareEdge[]): SharedCopy[] {
-  return [...copiesByConstellation(edges.filter((e) => e.withdrawnAt === null)).values()];
+  // Withdrawn only when the API gave a time: a missing `withdrawnAt` counts as live.
+  return [
+    ...copiesByConstellation(
+      edges.filter((e) => e.withdrawnAt === null || e.withdrawnAt === undefined),
+    ).values(),
+  ];
 }
 
 /** The copy's Constellation as people read it: its name, else its id. Never escape sequences. */
@@ -914,7 +920,15 @@ export async function everywhereTarget(
     memory = await findCloudMemory(client, ref);
   } catch (e) {
     if (!(e instanceof OortCloudError && e.kind === 'not-found' && FULL_ID.test(ref))) throw e;
-    const edges = await client.shares(ref).catch(() => []);
+    // Only a missing record means "no copies": a refusal (outside the hive beta), a network
+    // failure or a 5xx is the real reason, and is what the person sees.
+    let edges: CloudShareEdge[];
+    try {
+      edges = await client.shares(ref);
+    } catch (s) {
+      if (s instanceof OortCloudError && s.kind === 'not-found') throw e;
+      throw s;
+    }
     if (liveCopies(edges).length === 0) throw e;
     return { id: ref, memory: null, edges };
   }
