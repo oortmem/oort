@@ -36,6 +36,35 @@ export class AgentJudgmentCapError extends Error {
   }
 }
 
+/**
+ * Removes the lock at `file` only if it is still the one `seen` describes (same device and
+ * inode). It is first renamed to a unique name, which is atomic, and checked there: a lock that
+ * another process created in the meantime is put back instead of deleted. So two waiters that
+ * both found the same stale lock can never delete each other's fresh one. True when removed.
+ */
+export function removeLockIfSame(file: string, seen: { dev: number; ino: number }): boolean {
+  const aside = `${file}.${process.pid}.${randomUUID()}.aside`;
+  try {
+    fs.renameSync(file, aside);
+  } catch {
+    return false; // Already gone.
+  }
+  try {
+    const st = fs.statSync(aside);
+    if (st.dev === seen.dev && st.ino === seen.ino) return true;
+    // Someone else's lock: back where it was. Should yet another lock have appeared in the
+    // microseconds between the rename and this link, the link fails and that newer lock stands.
+    try {
+      fs.linkSync(aside, file);
+    } catch {
+      // See above.
+    }
+    return false;
+  } finally {
+    fs.rmSync(aside, { force: true });
+  }
+}
+
 /** In-process queue per home, so calls in one process never race each other for the lock file. */
 const homeQueues = new Map<string, Promise<unknown>>();
 
@@ -59,8 +88,9 @@ async function withCounterLock<T>(home: string, fn: () => T): Promise<T> {
           throw new AgentJudgmentCapError('unavailable');
         }
         try {
-          if (Date.now() - fs.statSync(file).mtimeMs > STALE_LOCK_MS)
-            fs.rmSync(file, { force: true });
+          const seen = fs.statSync(file);
+          // Only the stale lock we looked at is taken over, never a fresh one that replaced it.
+          if (Date.now() - seen.mtimeMs > STALE_LOCK_MS) removeLockIfSame(file, seen);
         } catch {
           // Gone in between: try again.
         }
@@ -68,11 +98,13 @@ async function withCounterLock<T>(home: string, fn: () => T): Promise<T> {
         await new Promise((r) => setTimeout(r, 10));
       }
     }
+    const mine = fs.fstatSync(fd);
     try {
       return fn();
     } finally {
       fs.closeSync(fd);
-      fs.rmSync(file, { force: true });
+      // Our own lock only: if a waiter took it over as stale, the lock there now is theirs.
+      removeLockIfSame(file, mine);
     }
   });
   // The queue continues whatever this call's outcome.
