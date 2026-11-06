@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -154,6 +155,51 @@ await oort.close();`,
     );
     expect(r.out).toBe('local');
     expect(hits(r.loaded, ['/store-sqlite/']).length).toBeGreaterThan(0);
+  });
+
+  it('a cloud handle never closed does not keep the process alive (the pool is unref()d)', async () => {
+    const server = http.createServer((_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ account: 'a1', plan: 'pro', via: 'key' }));
+    });
+    server.keepAliveTimeout = 120_000;
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    const dir = tmpdir('oort-sdk-pool-');
+    const main = path.join(dir, 'main.mjs');
+    fs.writeFileSync(
+      main,
+      `const { createRequire } = await import('node:module');
+const m = await import(createRequire(${JSON.stringify(path.join(PKG_DIR, 'package.json'))}).resolve('oortmem'));
+const oort = await m.createOort({ mode: 'cloud', keySources: ['env'], url: 'http://127.0.0.1:${port}' });
+console.log((await oort.whoami()).account);`,
+    );
+    const started = Date.now();
+    try {
+      const out = await new Promise<string>((resolve, reject) =>
+        execFile(
+          process.execPath,
+          [main],
+          {
+            cwd: dir,
+            timeout: 30_000,
+            env: {
+              PATH: process.env['PATH'] ?? '',
+              HOME: dir,
+              OORT_NO_KEYCHAIN: '1',
+              OORT_API_KEY: ['oort', 'sk', 'pool'.padEnd(43, 'P')].join('_'),
+            },
+          },
+          (e, stdout) => (e === null ? resolve(stdout) : reject(e)),
+        ),
+      );
+      expect(out.trim()).toBe('a1');
+      // Far below the server's 120 s keep-alive: the open socket did not hold the process.
+      expect(Date.now() - started).toBeLessThan(20_000);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
   });
 
   it("require('oortmem') works through Node's require(esm)", () => {

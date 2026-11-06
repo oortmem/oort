@@ -2,6 +2,7 @@
 
 Reference for every `oort` command. The guides on the site link here for exact
 flags, file paths and output. `oort <command> --help` prints the same flags.
+To use the same memory from your own code, see [the TypeScript SDK](sdk.md).
 
 Memories stay on your machine, in `~/.oort` (or `$OORT_HOME`).
 
@@ -861,7 +862,7 @@ A judgment is a memory of type `judgment`. It holds:
 | `criteria` | Tags the reason relies on (`no-source`, `pii`). |
 | `domain` | `content`, `legal`, `code-review`, …: judging only uses precedents of the item's domain when one is given. |
 | `by` | The expert's id. A prediction always names whose judgments it came from. |
-| `via` | How it was recorded: `cli`, `import`, `pack`, or `mcp` (an agent recorded it). |
+| `via` | How it was recorded: `cli`, `import`, `pack`, `sdk` (by code in the SDK's expert role, which counts as a person's), or `mcp` (an agent recorded it: over MCP, or through the SDK's agent role, with `source.harness: 'sdk'`). |
 | `decidedAt` | When the expert decided (`--decided-at`; default now). |
 
 Judgments are recorded only on purpose: by `oort judge record`, `oort judge import`, a pack, or
