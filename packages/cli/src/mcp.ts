@@ -29,7 +29,14 @@ import {
 } from './judge-cap.js';
 import { runRecall, timeMode, viewIgnored, type TemporalView } from './engine/recall.js';
 import { rememberFacts } from './remember.js';
-import { OortCloudError, findCloudMemory, type CloudClient } from './cloud.js';
+import {
+  OortCloudError,
+  copyName,
+  findCloudMemory,
+  liveCopies,
+  sharesOf,
+  type CloudClient,
+} from './cloud.js';
 import {
   Refusal,
   findMemory,
@@ -533,8 +540,18 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
     async forget({ id }) {
       refuseStarInCloud(w);
       const m = await findCloudMemory(client, id);
+      // A shared copy stays (the team's memory now). Where it is, looked up first and best-effort:
+      // a failed lookup never blocks the forget, it only leaves the note out. Withdrawing the
+      // copies is the person's confirmed step, so the note gives them the command (CON-67).
+      const live = liveCopies((await sharesOf(client, m.id)) ?? []);
       await client.forget(m.id);
-      return { forgotten: m.id };
+      if (live.length === 0) return { forgotten: m.id };
+      const names = live.map(copyName);
+      return {
+        forgotten: m.id,
+        stillShared: names,
+        note: `Still shared to ${names.join(', ')}. To withdraw those copies, the person runs: oort forget ${m.id} --everywhere`,
+      };
     },
 
     async pin({ id, pinned }) {

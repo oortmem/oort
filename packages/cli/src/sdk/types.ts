@@ -181,8 +181,18 @@ export interface RememberResult {
 
 export interface ForgetResult {
   forgotten: string;
-  /** Cloud `everywhere`: the Constellation copies withdrawn. */
+  /** Cloud `everywhere`: the Constellations (ids) whose copy only you contributed to, withdrawn. */
   withdrawn?: string[];
+  /**
+   * Cloud `everywhere`: the Constellations (ids) where others contributed too. Their maintainers
+   * got a removal request, and the copy stays until they decide.
+   */
+  requested?: string[];
+  /**
+   * Cloud `everywhere`: the Constellations (ids) not reached. The copy stays: call it again later
+   * with the full id (a Constellation you left needs a full key).
+   */
+  unreachable?: string[];
 }
 
 export interface PinResult {

@@ -135,7 +135,11 @@ export function inputSchemasFor(spaces: ToolSpaces) {
         .default('private')
         .describe('private (the default), or a Constellation to suggest sharing the fact with'),
     }),
-    forget: z.object({ id: Id }),
+    // Loose (CON-67): the model never withdraws shared copies (a person confirms that in the
+    // terminal), so an `everywhere` it sends must reach the handler and be refused, never be
+    // stripped into a plain forget. Other unknown arguments still never reach a backend: the
+    // handler passes only `id`.
+    forget: z.looseObject({ id: Id }),
     pin: z.object({ id: Id, pinned: z.boolean() }),
     explain: z.object({ id: Id }),
     list_recent: z.object({
@@ -259,7 +263,8 @@ export const TOOLS: readonly ToolDefinition[] = [
   {
     name: 'forget',
     title: 'Forget a memory',
-    description: 'Permanently delete one memory by id, from every storage tier.',
+    description:
+      'Permanently delete one memory by id, from every storage tier. Copies shared to team Constellations stay; the result says how the person can withdraw them.',
     annotations: {
       title: 'Forget a memory',
       readOnlyHint: false,

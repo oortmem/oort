@@ -61,7 +61,14 @@ export interface MemoryBackend {
   recall(input: ToolInput<'recall'>): Promise<RecallOutput>;
   /** `note`: what the person should know, e.g. that a suggested share still needs confirming. */
   remember(input: ToolInput<'remember'>): Promise<{ results: RememberOutcome[]; note?: string }>;
-  forget(input: ToolInput<'forget'>): Promise<{ forgotten: string }>;
+  /**
+   * Forgets one memory. A copy shared to a Constellation stays (it is the team's memory): a
+   * backend that can tell lists those Constellations in `stillShared` and says in `note` how the
+   * person withdraws them. The model never withdraws them itself (CON-67).
+   */
+  forget(input: {
+    id: string;
+  }): Promise<{ forgotten: string; stillShared?: string[]; note?: string }>;
   pin(input: ToolInput<'pin'>): Promise<{ id: string; pinned: boolean; changed: boolean }>;
   explain(input: ToolInput<'explain'>): Promise<Record<string, unknown>>;
   listRecent(input: ToolInput<'list_recent'>): Promise<{ memories: Record<string, unknown>[] }>;
@@ -92,6 +99,19 @@ export interface ShareOutcome {
   text: string;
   note?: string;
 }
+
+/**
+ * The tool error for `forget` with `everywhere` (CON-67): withdrawing shared copies is the
+ * person's confirmed step, like sharing, so the model gets the command to suggest instead.
+ */
+const everywhereNeedsPerson = (id: string): string =>
+  `Withdrawing shared copies needs the person's confirmation. Nothing was forgotten. Ask them to run: oort forget ${commandSafeId(id)} --everywhere`;
+
+/**
+ * The id as it may appear in a command the person copies into a shell: the model chose it, so
+ * anything but a plain id (letters, digits, hyphens) becomes a placeholder instead of shell text.
+ */
+const commandSafeId = (id: string): string => (/^[A-Za-z0-9-]{1,64}$/.test(id) ? id : '<id>');
 
 /** A refusal whose message is shown to the user as the tool error. */
 export class MemoryToolError extends Error {
@@ -188,7 +208,15 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
         facts: [...new Set(i.facts)],
         visibility: visibility.has(i.visibility) ? i.visibility : 'private',
       }),
-    forget: (i) => b.forget(i),
+    forget: (i) => {
+      // Never forget less than was asked: `everywhere` is refused before anything is forgotten,
+      // with the command the person runs to confirm it (CON-67).
+      const asked = (i as Record<string, unknown>)['everywhere'];
+      if (asked !== undefined && asked !== false) {
+        throw new MemoryToolError(everywhereNeedsPerson(i.id));
+      }
+      return b.forget({ id: i.id });
+    },
     pin: (i) => b.pin(i),
     explain: (i) => b.explain(i),
     list_recent: (i) => b.listRecent(i),

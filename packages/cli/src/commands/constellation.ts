@@ -360,31 +360,46 @@ export async function constellationAdoptCommand(
   return 0;
 }
 
+/** The most `--min-support` takes (the API's MIN_SUPPORT_MAX). */
+export const MIN_SUPPORT_MAX = 10;
+
 /**
- * `oort constellation policy <c> [--confirm|--open] [--supersede-trust member|maintainer]`: how
- * shares are accepted, and the least trust a contradiction of someone else's memory needs to
- * supersede it (below it, both are kept as contested until a maintainer decides).
+ * `oort constellation policy <c> [--confirm|--open] [--supersede-trust member|maintainer]
+ * [--min-support <1-10>]`: how shares are accepted, the least trust a contradiction of someone
+ * else's memory needs to supersede it (below it, both are kept as contested until a maintainer
+ * decides), and how many members a memory needs to survive an erasure (CON-67). Maintainers with
+ * a full key only: the API refuses the rest.
  */
 export async function constellationPolicyCommand(
   c: string,
-  opts: { open?: boolean; confirm?: boolean; supersedeTrust?: string },
+  opts: { open?: boolean; confirm?: boolean; supersedeTrust?: string; minSupport?: string },
   ctx: Ctx,
 ): Promise<number> {
   const both = opts.open === true && opts.confirm === true;
   const policy = opts.open === true ? 'open' : opts.confirm === true ? 'confirm' : undefined;
   const trust = opts.supersedeTrust;
-  if (both || (policy === undefined && trust === undefined)) {
+  if (both || (policy === undefined && trust === undefined && opts.minSupport === undefined)) {
     throw new Refusal(
-      'Pick --confirm (every share is confirmed by a person) or --open, and/or --supersede-trust member|maintainer.',
+      'Pick --confirm (every share is confirmed by a person) or --open, and/or --supersede-trust member|maintainer, and/or --min-support <1-10>.',
     );
   }
   if (trust !== undefined && trust !== 'member' && trust !== 'maintainer') {
     throw new Refusal('--supersede-trust must be member or maintainer.');
   }
+  let minSupport: number | undefined;
+  if (opts.minSupport !== undefined) {
+    minSupport = /^\d{1,2}$/.test(opts.minSupport.trim()) ? Number(opts.minSupport) : NaN;
+    if (!(minSupport >= 1 && minSupport <= MIN_SUPPORT_MAX)) {
+      throw new Refusal(
+        `--min-support must be a whole number from 1 to ${MIN_SUPPORT_MAX}: the members a memory needs to survive an erasure.`,
+      );
+    }
+  }
   const client = await clientFor(ctx);
   const r = await client.setPolicy(c, {
     ...(policy !== undefined && { policy }),
     ...(trust !== undefined && { supersedeTrust: trust }),
+    ...(minSupport !== undefined && { minSupport }),
   });
   ctx.io.out(
     `${echo(c)} now uses the ${shown(r.policy)} policy` +
@@ -392,6 +407,12 @@ export async function constellationPolicyCommand(
         ? '.\n'
         : `; a contradiction of someone else's memory needs ${shown(r.supersedeTrust)} trust to supersede it.\n`),
   );
+  if (minSupport !== undefined && typeof r.minSupport === 'number') {
+    const n = r.minSupport;
+    ctx.io.out(
+      `When a member is erased, a shared memory they wrote stays only while at least ${n} remaining member${n === 1 ? '' : 's'} support${n === 1 ? 's' : ''} it.\n`,
+    );
+  }
   if (jsonMode(ctx)) emit(ctx, { constellation: c, ...r });
   return 0;
 }

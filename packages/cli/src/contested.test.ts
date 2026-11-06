@@ -120,6 +120,65 @@ describe('oort constellation policy --supersede-trust (CON-66)', () => {
   });
 });
 
+describe('oort constellation policy --min-support (CON-67)', () => {
+  it('policy.sets-min-support-alone-and-prints-what-it-means', async () => {
+    const e = setup();
+    const r = await e.run(['constellation', 'policy', 'oort-core', '--min-support', '3']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toContain('now uses the confirm policy');
+    expect(r.io.stdout).toContain(
+      'When a member is erased, a shared memory they wrote stays only while at least 3 remaining members support it.',
+    );
+    expect(e.cloud.hive.minSupport.get(C)).toBe(3);
+    const json = await e.run([
+      'constellation',
+      'policy',
+      'oort-core',
+      '--min-support',
+      '1',
+      '--json',
+    ]);
+    expect(data(json.io.stdout, 'constellation policy')).toMatchObject({
+      constellation: 'oort-core',
+      minSupport: 1,
+    });
+  });
+
+  it('policy.refuses-a-min-support-outside-1-to-10-before-asking-the-api', async () => {
+    const e = setup();
+    for (const bad of ['0', '11', 'two', '2.5', '-1', '']) {
+      const r = await e.run(['constellation', 'policy', 'oort-core', '--min-support', bad]);
+      expect(r.code, bad).toBe(2);
+      expect(r.io.stderr, bad).toContain('--min-support must be a whole number from 1 to 10');
+    }
+    expect(e.cloud.seen.filter((s) => s.startsWith('PUT'))).toEqual([]);
+  });
+
+  it('policy.min-support-is-for-maintainers-with-a-full-key', async () => {
+    const member = setup('member');
+    const refused = await member.run([
+      'constellation',
+      'policy',
+      'oort-core',
+      '--min-support',
+      '2',
+    ]);
+    expect(refused.code).toBe(2);
+    expect(refused.io.stderr).toContain('Only a maintainer');
+    const narrowed = setup();
+    narrowed.cloud.narrowed = true;
+    const denied = await narrowed.run([
+      'constellation',
+      'policy',
+      'oort-core',
+      '--min-support',
+      '2',
+    ]);
+    expect(denied.code).toBe(2);
+    expect(narrowed.cloud.hive.minSupport.has(C)).toBe(false);
+  });
+});
+
 describe('oort share says what the Constellation did with it (CON-66)', () => {
   it('share.prints-the-outcome-note-for-a-contested-or-superseding-share', async () => {
     const ID = '33333333-cccc-4ccc-8ccc-333333333333';

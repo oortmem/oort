@@ -1,6 +1,7 @@
 import { VERSION, activation, truncateUtf8, type Memory } from '@oortmem/core';
 import {
   OortCloudError,
+  everywhereTarget,
   findCloudMemory,
   type CloudClient,
   type CloudMemory,
@@ -133,11 +134,20 @@ export async function remember(
 export async function forget(ctx: Ctx, id: string, everywhere: boolean): Promise<ForgetResult> {
   refuseStar(ctx);
   const c = clientOf(ctx);
-  const m = await findCloudMemory(c, id);
   if (everywhere) {
-    const r = await c.forgetEverywhere(m.id);
-    return { forgotten: m.id, withdrawn: [...r.withdrawn] };
+    // As `oort forget --everywhere`: by full id, a memory already forgotten is still found through
+    // the edges its shared copies left, and outside the hive beta this is refused before anything
+    // is forgotten (CON-67).
+    const t = await everywhereTarget(c, id);
+    const r = await c.forgetEverywhere(t.id);
+    return {
+      forgotten: t.id,
+      withdrawn: [...r.withdrawn],
+      requested: [...r.requested],
+      unreachable: [...r.unreachable],
+    };
   }
+  const m = await findCloudMemory(c, id);
   await c.forget(m.id);
   return { forgotten: m.id };
 }

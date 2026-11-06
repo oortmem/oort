@@ -82,6 +82,17 @@ export interface FakeHive {
   constellations: Map<string, { id: string; name: string; role: string; owner: boolean }>;
   /** Shared copies, by id, with the Constellation they are in. */
   shared: Map<string, FakeMemory & { constellation: string; sourceId: string }>;
+  /** CON-67: copies `forget --everywhere` withdrew (the API keeps their edges, withdrawn). */
+  withdrawn: { constellation: string; sourceId: string; id: string; at: string }[];
+  /**
+   * CON-67: what `forget --everywhere` gets from a Constellation (default `withdrawn`):
+   * `requested` (others contributed: a removal request, the copy stays) or `unreachable`.
+   */
+  withdrawOutcome: Map<string, 'withdrawn' | 'requested' | 'unreachable'>;
+  /** CON-67: Constellations you left, by id, with their names (the shares route still names them). */
+  former: Map<string, string>;
+  /** CON-67: each Constellation's minSupport (absent: 1). */
+  minSupport: Map<string, number>;
   /** Every share request body, in order. */
   requests: Record<string, unknown>[];
   /** Each project's privacy as clients stated it (absent: unknown). */
@@ -246,6 +257,10 @@ export function fakeCloud(key: string): FakeCloud {
       archived: new Map(),
       constellations: new Map(),
       shared: new Map(),
+      withdrawn: [],
+      withdrawOutcome: new Map(),
+      former: new Map(),
+      minSupport: new Map(),
       requests: [],
       privacy: new Map(),
       previews: new Map(),
@@ -543,6 +558,7 @@ export function fakeCloud(key: string): FakeCloud {
             );
           }
           c.hive.constellations.delete(x.id);
+          c.hive.former.set(x.id, x.name);
           return Response.json({ left: true });
         }
         if (sub === 'stars' && req.method === 'POST') {
@@ -565,9 +581,21 @@ export function fakeCloud(key: string): FakeCloud {
           if (!maintainer) return needMaintainer();
           if (c.narrowed === true) return err(403, 'scope_denied', 'This key is narrowed.');
           const b = await body();
-          if (b['policy'] === undefined && b['supersedeTrust'] === undefined) {
-            return err(400, 'bad_request', 'Send policy, supersedeTrust, or both.');
+          const min = b['minSupport'];
+          if (b['policy'] === undefined && b['supersedeTrust'] === undefined && min === undefined) {
+            return err(
+              400,
+              'bad_request',
+              'Send policy (confirm or open), supersedeTrust, minSupport, or any of them.',
+            );
           }
+          if (
+            min !== undefined &&
+            !(typeof min === 'number' && Number.isInteger(min) && min >= 1 && min <= 10)
+          ) {
+            return err(400, 'bad_request', 'minSupport must be a whole number from 1 to 10.');
+          }
+          if (typeof min === 'number') c.hive.minSupport.set(x.id, min);
           if (b['policy'] !== undefined) c.hive.policy.set(x.id, String(b['policy']));
           if (b['supersedeTrust'] !== undefined) {
             if (b['supersedeTrust'] !== 'member' && b['supersedeTrust'] !== 'maintainer') {
@@ -578,6 +606,7 @@ export function fakeCloud(key: string): FakeCloud {
           return Response.json({
             policy: c.hive.policy.get(x.id) ?? 'confirm',
             supersedeTrust: c.hive.supersedeTrust.get(x.id) ?? 'member',
+            minSupport: c.hive.minSupport.get(x.id) ?? 1,
             policyVersion: 2,
           });
         }
@@ -826,29 +855,55 @@ export function fakeCloud(key: string): FakeCloud {
       const sharesMatch = /^\/v1\/memories\/([^/]+)\/shares$/.exec(p);
       if (sharesMatch !== null) {
         const id = decodeURIComponent(sharesMatch[1] ?? '');
+        // As the API: every edge, withdrawn ones included, named even where you left (`member`).
+        const edge = (x: { constellation: string; id: string }, withdrawnAt: string | null) => ({
+          constellation: x.constellation,
+          name:
+            c.hive.constellations.get(x.constellation)?.name ??
+            c.hive.former.get(x.constellation) ??
+            null,
+          member: c.hive.constellations.has(x.constellation),
+          id: x.id,
+          at: '2026-11-05T00:00:00.000Z',
+          withdrawnAt,
+        });
         return Response.json({
-          shares: [...c.hive.shared.values()]
-            .filter((x) => x.sourceId === id)
-            .map((x) => ({
-              constellation: x.constellation,
-              name: c.hive.constellations.get(x.constellation)?.name ?? null,
-              id: x.id,
-              at: '2026-11-05T00:00:00.000Z',
-              withdrawnAt: null,
-            })),
+          shares: [
+            ...[...c.hive.shared.values()]
+              .filter((x) => x.sourceId === id)
+              .map((x) => edge(x, null)),
+            ...c.hive.withdrawn.filter((x) => x.sourceId === id).map((x) => edge(x, x.at)),
+          ],
         });
       }
       if (req.method === 'DELETE' && url.searchParams.has('everywhere')) {
+        // As the API: forgets the source (already gone is fine), then asks each Constellation that
+        // holds a copy. A narrowed key reaches only the Constellations you are in.
         const id = decodeURIComponent(p.split('/').pop() ?? '');
-        if (!c.memories.has(id)) return err(404, 'not_found', 'No such memory.');
         c.memories.delete(id);
-        const withdrawn: string[] = [];
-        for (const x of c.hive.shared.values()) {
+        const out = {
+          withdrawn: [] as string[],
+          requested: [] as string[],
+          unreachable: [] as string[],
+        };
+        for (const x of [...c.hive.shared.values()]) {
           if (x.sourceId !== id) continue;
+          const left = !c.hive.constellations.has(x.constellation);
+          const r =
+            left && c.narrowed === true
+              ? 'unreachable'
+              : (c.hive.withdrawOutcome.get(x.constellation) ?? 'withdrawn');
+          if (!out[r].includes(x.constellation)) out[r].push(x.constellation);
+          if (r !== 'withdrawn') continue;
           c.hive.shared.delete(x.id);
-          withdrawn.push(x.constellation);
+          c.hive.withdrawn.push({
+            constellation: x.constellation,
+            sourceId: id,
+            id: x.id,
+            at: '2026-11-06T00:00:00.000Z',
+          });
         }
-        return Response.json({ withdrawn, requested: [], unreachable: [] });
+        return Response.json(out);
       }
       const idMatch = /^\/v1\/memories\/([^/]+)(\/(pin|unpin))?$/.exec(p);
       if (idMatch !== null) {

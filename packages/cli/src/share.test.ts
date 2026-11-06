@@ -271,7 +271,9 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
     await e.run(['share', ID, '--to', 'oort-core', '--yes']);
     const plain = await e.run(['forget', ID, '--yes']);
     expect(plain.code).toBe(0);
-    expect(plain.io.stdout).toContain('Still shared to oort-core');
+    expect(plain.io.stdout).toContain(
+      `Still shared to oort-core: that copy is the team's now. \`oort forget ${ID} --everywhere\` withdraws it.`,
+    );
     expect(e.cloud.hive.shared.size).toBe(1);
 
     const other = '33333333-4444-4555-8666-777777777777';
@@ -279,9 +281,14 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
     await e.run(['share', other, '--to', 'oort-core', '--yes']);
     const all = await e.run(['forget', other, '--yes', '--everywhere']);
     expect(all.code).toBe(0);
-    expect(all.io.stdout).toContain('Withdrawn from 1 Constellation');
+    expect(all.io.stdout).toBe(`Forgot ${other}.\nWithdrawn from oort-core.\n`);
+    expect(e.cloud.seen).toContain(`DELETE /v1/memories/${other}`);
     expect([...e.cloud.hive.shared.values()].map((x) => x.sourceId)).toEqual([ID]);
-    expect((await setup('local').run(['forget', ID, '--yes', '--everywhere'])).code).toBe(2);
+    const local = await setup('local').run(['forget', ID, '--yes', '--everywhere', '--json']);
+    expect(local.code).toBe(2);
+    expect(failed(local, 'cloud-only', 'forget').message).toBe(
+      '--everywhere is for Oort Cloud, where memories can be shared.',
+    );
   });
 
   it('share.marks-findings-without-colour-and-skips-overlaps', () => {
@@ -477,5 +484,301 @@ describe('project privacy is stated only when the project config sets it, and pr
       projectId: 'p1',
     } as never);
     expect(sent[0]).not.toHaveProperty('projectPrivate');
+  });
+});
+
+/** A copy of `source` in Constellation `cid`, as a share leaves it. */
+function copyIn(e: ReturnType<typeof setup>, cid: string, source = ID): void {
+  const id = `copy-${cid}-${source.slice(0, 8)}`;
+  e.cloud.hive.shared.set(id, {
+    ...fakeMemory({ id, text: 'We deploy oortcloud with wrangler.' }),
+    constellation: cid,
+    sourceId: source,
+  });
+}
+
+const CHECKOUT = 'c_cccccccccccccccc';
+const DESIGN = 'c_dddddddddddddddd';
+
+/** oort-core (maintainer), plus checkout and design (member). */
+function withTeams(e: ReturnType<typeof setup>): void {
+  withTeam(e);
+  for (const [id, name] of [
+    [CHECKOUT, 'checkout'],
+    [DESIGN, 'design'],
+  ] as const) {
+    e.cloud.hive.constellations.set(id, { id, name, role: 'member', owner: false });
+  }
+}
+
+describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
+  it('forget.the-question-says-where-it-is-shared-and-how-to-withdraw', async () => {
+    const e = setup();
+    withTeams(e);
+    copyIn(e, 'c_aaaaaaaaaaaaaaaa');
+    copyIn(e, CHECKOUT);
+    const no = await e.run(['forget', ID], { tty: true, answer: 'n' });
+    expectDeclined(no);
+    expect(no.io.asked[0]).toBe(
+      'Forget 22222222 "We deploy oortcloud with wrangler; ask maya@example.com." (also shared to oort-core, checkout; add --everywhere to withdraw your copies)? [y/N] ',
+    );
+    expect(no.io.stdout).toBe('Kept.\n');
+    expect(e.cloud.memories.has(ID)).toBe(true);
+    // Not shared: the question is the plain one.
+    const other = '33333333-4444-4555-8666-777777777777';
+    e.cloud.memories.set(other, fakeMemory({ id: other, text: 'Release notes come first.' }));
+    const plain = await e.run(['forget', other], { tty: true, answer: 'n' });
+    expect(plain.io.asked[0]).toBe('Forget 33333333 "Release notes come first."? [y/N] ');
+  });
+
+  it('forget.json-warns-it-is-still-shared-and-lists-where', async () => {
+    const e = setup();
+    withTeams(e);
+    copyIn(e, CHECKOUT);
+    const r = await e.run(['forget', ID, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(data(r.io.stdout, 'forget')).toEqual({
+      id: ID,
+      forgotten: true,
+      everywhere: false,
+      withdrawnFrom: [],
+      removalRequested: [],
+      unreachable: [],
+      stillShared: [{ constellation: CHECKOUT, name: 'checkout', member: true }],
+      constellations: [{ constellation: CHECKOUT, name: 'checkout', member: true }],
+    });
+    expect(JSON.parse(r.io.stdout).warnings).toEqual([
+      {
+        code: 'still-shared',
+        message: 'Also shared to checkout; add --everywhere to withdraw your copies.',
+      },
+    ]);
+    // The copy stays: it is the team's memory now.
+    expect(e.cloud.hive.shared.size).toBe(1);
+    expect(e.cloud.memories.has(ID)).toBe(false);
+  });
+
+  it('forget.outside-the-hive-beta-forgets-without-a-shares-warning', async () => {
+    const e = setup();
+    e.cloud.memories.set(ID, fakeMemory({ id: ID, text: 'Plain.' }));
+    const r = await e.run(['forget', ID, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(JSON.parse(r.io.stdout).warnings).toEqual([]);
+    expect(data(r.io.stdout).stillShared).toEqual([]);
+  });
+
+  it('forget.a-failed-shares-lookup-is-a-warning-never-a-silent-no-copies', async () => {
+    const e = setup();
+    withTeam(e);
+    e.cloud.fail = { 'GET /v1/memories/:id/shares': 503 };
+    const r = await e.run(['forget', ID, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stderr).toContain(
+      'oort: Could not check whether it was shared to a Constellation.',
+    );
+    expect(JSON.parse(r.io.stdout).warnings).toEqual([
+      {
+        code: 'shares-unknown',
+        message: 'Could not check whether it was shared to a Constellation.',
+      },
+    ]);
+    expect(e.cloud.memories.has(ID)).toBe(false);
+  });
+
+  it('forget.everywhere-says-what-was-withdrawn-requested-and-not-reached', async () => {
+    const e = setup();
+    withTeams(e);
+    for (const cid of ['c_aaaaaaaaaaaaaaaa', CHECKOUT, DESIGN]) copyIn(e, cid);
+    e.cloud.hive.withdrawOutcome.set(CHECKOUT, 'requested');
+    e.cloud.hive.withdrawOutcome.set(DESIGN, 'unreachable');
+    const yes = await e.run(['forget', ID, '--everywhere'], PIPED_YES);
+    // A copy not reached is a partial success: exit 3, as `import`.
+    expect(yes.code, yes.io.stderr).toBe(3);
+    expect(yes.io.asked).toHaveLength(1);
+    expect(yes.io.stdout).not.toContain('[y/N]');
+    // The list is what the lookup saw: the question never promises it is exact.
+    expect(yes.io.asked[0]).toBe(
+      'Forget 22222222 "We deploy oortcloud with wrangler; ask maya@example.com." and withdraw your copies from oort-core, checkout, design (and any other Constellation you shared it to; where others contributed, its maintainers get a removal request)? [y/N] ',
+    );
+    expect(yes.io.stdout).toBe(
+      [
+        `Forgot ${ID}.`,
+        'Withdrawn from oort-core.',
+        'Others contributed in checkout: a removal request went to the maintainers, and the copy stays until they decide.',
+        `Not reached: design. The copy stays; run \`oort forget ${ID} --everywhere\` again later (a Constellation you left needs a full key, or the dashboard).`,
+        '',
+      ].join('\n'),
+    );
+    // Only the withdrawn copy is gone.
+    expect([...e.cloud.hive.shared.values()].map((x) => x.constellation).sort()).toEqual([
+      CHECKOUT,
+      DESIGN,
+    ]);
+  });
+
+  it('forget.everywhere-json-lists-ids-names-and-warnings', async () => {
+    const e = setup();
+    withTeams(e);
+    for (const cid of ['c_aaaaaaaaaaaaaaaa', CHECKOUT, DESIGN]) copyIn(e, cid);
+    e.cloud.hive.withdrawOutcome.set(CHECKOUT, 'requested');
+    e.cloud.hive.withdrawOutcome.set(DESIGN, 'unreachable');
+    const r = await e.run(['forget', ID, '--everywhere', '--yes', '--json']);
+    // Partial: the envelope says so the way `import`'s does, with exitCode 3.
+    expect(r.code, r.io.stderr).toBe(3);
+    expect(JSON.parse(r.io.stdout)).toMatchObject({ ok: true, exitCode: 3 });
+    const core = { constellation: 'c_aaaaaaaaaaaaaaaa', name: 'oort-core', member: true };
+    const checkout = { constellation: CHECKOUT, name: 'checkout', member: true };
+    const design = { constellation: DESIGN, name: 'design', member: true };
+    expect(data(r.io.stdout, 'forget')).toEqual({
+      id: ID,
+      forgotten: true,
+      everywhere: true,
+      withdrawnFrom: ['c_aaaaaaaaaaaaaaaa'],
+      removalRequested: [CHECKOUT],
+      unreachable: [DESIGN],
+      stillShared: [checkout, design],
+      constellations: [core, checkout, design],
+    });
+    expect((JSON.parse(r.io.stdout).warnings as { code: string }[]).map((w) => w.code)).toEqual([
+      'removal-requested',
+      'unreachable',
+    ]);
+    // Human lines go to stderr in JSON mode: stdout is the one envelope.
+    expect(r.io.stderr).toContain('Withdrawn from oort-core.');
+  });
+
+  it('forget.everywhere-after-a-plain-forget-still-withdraws-by-full-id', async () => {
+    const e = setup();
+    withTeam(e);
+    copyIn(e, 'c_aaaaaaaaaaaaaaaa');
+    expect((await e.run(['forget', ID, '--yes'])).code).toBe(0);
+    // A prefix can't find a memory that is gone; the full id finds its copies.
+    const prefix = await e.run(['forget', ID.slice(0, 8), '--everywhere', '--yes']);
+    expect(prefix.code).toBe(2);
+    const r = await e.run(['forget', ID, '--everywhere'], PIPED_YES);
+    expectAsked(r);
+    expect(r.io.asked[0]).toBe(
+      'Withdraw your copies of 22222222 (already forgotten) from oort-core (and any other Constellation you shared it to)? [y/N] ',
+    );
+    expect(r.io.stdout).toBe(`${ID} was already forgotten.\nWithdrawn from oort-core.\n`);
+    expect(e.cloud.hive.shared.size).toBe(0);
+    // Once withdrawn, there is nothing left to find.
+    expect((await e.run(['forget', ID, '--everywhere', '--yes'])).code).toBe(2);
+  });
+
+  it('forget.everywhere-reaches-a-constellation-you-left-but-not-from-a-narrowed-key', async () => {
+    const e = setup();
+    withTeams(e);
+    copyIn(e, CHECKOUT);
+    expect((await e.run(['constellation', 'leave', 'checkout', '--yes'])).code).toBe(0);
+    const no = await e.run(['forget', ID, '--everywhere'], { tty: true, answer: 'n' });
+    expect(no.io.asked[0]).toContain('withdraw your copies from checkout (you left)');
+    e.cloud.narrowed = true;
+    const narrowed = await e.run(['forget', ID, '--everywhere', '--yes', '--json']);
+    expect(narrowed.code, narrowed.io.stderr).toBe(3);
+    expect(JSON.parse(narrowed.io.stdout).exitCode).toBe(3);
+    expect(data(narrowed.io.stdout).unreachable).toEqual([CHECKOUT]);
+    expect(data(narrowed.io.stdout).stillShared).toEqual([
+      { constellation: CHECKOUT, name: 'checkout', member: false },
+    ]);
+    expect(e.cloud.hive.shared.size).toBe(1);
+    e.cloud.narrowed = false;
+    const full = await e.run(['forget', ID, '--everywhere', '--yes']);
+    expect(full.code, full.io.stderr).toBe(0);
+    expect(full.io.stdout).toContain('Withdrawn from checkout (you left).');
+    expect(e.cloud.hive.shared.size).toBe(0);
+  });
+
+  it('forget.everywhere-outside-the-hive-beta-is-refused-before-anything-is-forgotten', async () => {
+    const e = setup();
+    e.cloud.memories.set(ID, fakeMemory({ id: ID, text: 'Plain.' }));
+    const r = await e.run(['forget', ID, '--everywhere', '--yes']);
+    expect(r.code).toBe(2);
+    expect(r.io.stderr).toContain('invite-only beta');
+    expect(e.cloud.memories.has(ID)).toBe(true);
+    expect(e.cloud.seen.filter((s) => s.startsWith('DELETE'))).toEqual([]);
+  });
+
+  it('forget.everywhere-with-no-copies-forgets-and-says-so', async () => {
+    const e = setup();
+    withTeam(e);
+    const no = await e.run(['forget', ID, '--everywhere'], { tty: true, answer: 'n' });
+    expect(no.io.asked[0]).toBe(
+      'Forget 22222222 "We deploy oortcloud with wrangler; ask maya@example.com." (no shared copies found; any you made will be withdrawn)? [y/N] ',
+    );
+    const r = await e.run(['forget', ID, '--everywhere', '--yes']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toBe(`Forgot ${ID}.\nIt was not shared to any Constellation.\n`);
+  });
+
+  it('forget.everywhere-with-only-removal-requests-exits-0', async () => {
+    const e = setup();
+    withTeams(e);
+    copyIn(e, CHECKOUT);
+    e.cloud.hive.withdrawOutcome.set(CHECKOUT, 'requested');
+    const r = await e.run(['forget', ID, '--everywhere', '--yes', '--json']);
+    // A removal request is the intended outcome where others contributed: not a partial failure.
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(JSON.parse(r.io.stdout)).not.toHaveProperty('exitCode');
+    expect(data(r.io.stdout).removalRequested).toEqual([CHECKOUT]);
+  });
+
+  it('forget.everywhere-on-a-forgotten-id-shows-the-real-reason-a-lookup-failed', async () => {
+    const e = setup();
+    withTeam(e);
+    copyIn(e, 'c_aaaaaaaaaaaaaaaa');
+    expect((await e.run(['forget', ID, '--yes'])).code).toBe(0);
+    // The memory is gone; a failing shares lookup is reported as itself, never as not-found.
+    e.cloud.fail = { 'GET /v1/memories/:id/shares': 503 };
+    const down = await e.run(['forget', ID, '--everywhere', '--yes', '--json']);
+    expect(down.code).toBe(2);
+    expect(failed(down, 'network', 'forget').message).toContain('HTTP 503');
+    e.cloud.fail = undefined;
+    e.cloud.hive.enabled = false;
+    const beta = await e.run(['forget', ID, '--everywhere', '--yes']);
+    expect(beta.code).toBe(2);
+    expect(beta.io.stderr).toContain('invite-only beta');
+    expect(e.cloud.hive.shared.size).toBe(1);
+  });
+
+  it('forget.an-edge-without-withdrawnAt-counts-as-a-live-copy', async () => {
+    const e = setup();
+    withTeam(e);
+    // An API that leaves `withdrawnAt` out: the copy is live, so the question names it.
+    const base = e.cloud.fetch;
+    e.cloud.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const res = await base(input, init);
+      const url = new URL(new Request(input, init).url);
+      if (!url.pathname.endsWith('/shares') || !res.ok) return res;
+      const body = (await res.json()) as { shares: Record<string, unknown>[] };
+      return Response.json({ shares: body.shares.map(({ withdrawnAt: _w, ...x }) => x) });
+    }) as typeof fetch;
+    copyIn(e, 'c_aaaaaaaaaaaaaaaa');
+    const r = await e.run(['forget', ID], { tty: true, answer: 'n' });
+    expect(r.io.asked[0]).toContain('(also shared to oort-core; add --everywhere');
+  });
+
+  // CON-107: refuses without a terminal on stdin and with --json (exit 2, no prompt), exits 0
+  // when declined, and asks on stderr even with stdout piped, acting on yes.
+  it('confirm.forget-everywhere-no-tty-json-declined-piped-yes', async () => {
+    const e = setup();
+    withTeam(e);
+    copyIn(e, 'c_aaaaaaaaaaaaaaaa');
+    const changes = (): string[] => e.cloud.seen.filter((s) => !s.startsWith('GET '));
+    expectRefusedWithoutPrompt(await e.run(['forget', ID, '--everywhere']), NO_TTY_STDIN);
+    const json = await e.run(['forget', ID, '--everywhere', '--json'], { tty: true });
+    expectRefusedWithoutPrompt(json, JSON_NEVER_ASKS);
+    const refusal = failed(json, 'needs-confirmation', 'forget');
+    expect(refusal.message).toContain('re-run with --yes to forget it everywhere');
+    expect(refusal.fix).toBe(`oort forget ${ID} --everywhere --json --yes`);
+    const no = await e.run(['forget', ID, '--everywhere'], { tty: true, answer: 'n' });
+    expectDeclined(no);
+    expect(no.io.stdout).toBe('Kept.\n');
+    expect(changes()).toEqual([]);
+    const yes = await e.run(['forget', ID, '--everywhere'], PIPED_YES);
+    expectAsked(yes);
+    expect(yes.io.asked[0]).toContain('withdraw your copies from oort-core');
+    expect(changes()).toEqual([`DELETE /v1/memories/${ID}`]);
+    expect(e.cloud.hive.shared.size).toBe(0);
   });
 });
