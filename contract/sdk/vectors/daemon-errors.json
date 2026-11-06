@@ -1,0 +1,270 @@
+[
+  {
+    "status": 400,
+    "error": {
+      "code": "usage",
+      "message": "options: invalid field limit.",
+      "fix": null,
+      "reason": "invalid-argument",
+      "retryable": false
+    },
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "invalid-argument",
+      "fix": null,
+      "status": null,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "options: invalid field limit."
+    }
+  },
+  {
+    "status": 413,
+    "error": {
+      "code": "usage",
+      "message": "The request body is over 4 MiB.",
+      "fix": null,
+      "reason": "too-large",
+      "retryable": false
+    },
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "too-large",
+      "fix": null,
+      "status": null,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "The request body is over 4 MiB."
+    }
+  },
+  {
+    "status": 404,
+    "error": {
+      "code": "not-found",
+      "message": "No memory with that id in this scope.",
+      "fix": null,
+      "retryable": false
+    },
+    "expect": {
+      "name": "OortNotFoundError",
+      "code": "not-found",
+      "reason": null,
+      "fix": null,
+      "status": null,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "No memory with that id in this scope."
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "code": "ambiguous-id",
+      "message": "That id prefix matches 2 memories; give more of the id.",
+      "fix": null,
+      "retryable": false
+    },
+    "expect": {
+      "name": "OortAmbiguousIdError",
+      "code": "ambiguous-id",
+      "reason": null,
+      "fix": null,
+      "status": null,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "That id prefix matches 2 memories; give more of the id."
+    }
+  },
+  {
+    "status": 403,
+    "error": {
+      "code": "needs-key",
+      "message": "observe needs the write model, and no key or local model serves it.",
+      "fix": "oort keys set anthropic",
+      "reason": "missing-key",
+      "retryable": false,
+      "role": "write",
+      "envVar": "ANTHROPIC_API_KEY"
+    },
+    "expect": {
+      "name": "OortNeedsKeyError",
+      "code": "needs-key",
+      "reason": "missing-key",
+      "fix": "oort keys set anthropic",
+      "status": null,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "observe needs the write model, and no key or local model serves it.",
+      "role": "write",
+      "envVar": "ANTHROPIC_API_KEY"
+    }
+  },
+  {
+    "status": 403,
+    "error": {
+      "code": "needs-key",
+      "message": "remember needs the embed model, and no key or local model serves it.",
+      "fix": "oort models pull",
+      "reason": "missing-key",
+      "retryable": false,
+      "role": "embed",
+      "envVar": "VOYAGE_API_KEY"
+    },
+    "expect": {
+      "name": "OortNeedsKeyError",
+      "code": "needs-key",
+      "reason": "missing-key",
+      "fix": "oort models pull",
+      "status": null,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "remember needs the embed model, and no key or local model serves it.",
+      "role": "embed",
+      "envVar": "VOYAGE_API_KEY"
+    }
+  },
+  {
+    "status": 401,
+    "error": {
+      "code": "needs-login",
+      "message": "A valid service token is required.",
+      "fix": null,
+      "reason": "token-rejected",
+      "retryable": false
+    },
+    "expect": {
+      "name": "OortNeedsLoginError",
+      "code": "needs-login",
+      "reason": "token-rejected",
+      "fix": null,
+      "status": null,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "A valid service token is required."
+    }
+  },
+  {
+    "status": 409,
+    "error": {
+      "code": "needs-confirmation",
+      "message": "preview first",
+      "fix": null,
+      "reason": "preview-required",
+      "retryable": false,
+      "status": 409
+    },
+    "expect": {
+      "name": "OortNeedsConfirmationError",
+      "code": "needs-confirmation",
+      "reason": "preview-required",
+      "fix": null,
+      "status": 409,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "preview first"
+    }
+  },
+  {
+    "status": 403,
+    "error": {
+      "code": "cloud-only",
+      "message": "Constellations live in Oort Cloud.",
+      "fix": "oort cloud use",
+      "reason": "hive-level",
+      "retryable": false
+    },
+    "expect": {
+      "name": "OortCloudOnlyError",
+      "code": "cloud-only",
+      "reason": "hive-level",
+      "fix": "oort cloud use",
+      "status": null,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Constellations live in Oort Cloud."
+    }
+  },
+  {
+    "status": 503,
+    "error": {
+      "code": "network",
+      "message": "The daemon is stopping; try again.",
+      "fix": null,
+      "reason": "shutting-down",
+      "retryable": true
+    },
+    "expect": {
+      "name": "OortNetworkError",
+      "code": "network",
+      "reason": "shutting-down",
+      "fix": null,
+      "status": null,
+      "retryable": true,
+      "retryAfter": null,
+      "message": "The daemon is stopping; try again."
+    }
+  },
+  {
+    "status": 403,
+    "error": {
+      "code": "refused",
+      "message": "rate limited",
+      "fix": null,
+      "reason": "rate-limit",
+      "retryable": true,
+      "retryAfter": 30,
+      "status": 429
+    },
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "rate-limit",
+      "fix": null,
+      "status": 429,
+      "retryable": true,
+      "retryAfter": 30,
+      "message": "rate limited"
+    }
+  },
+  {
+    "status": 403,
+    "error": {
+      "code": "refused",
+      "message": "expert only",
+      "fix": null,
+      "reason": "expert-only",
+      "retryable": false
+    },
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "expert-only",
+      "fix": null,
+      "status": null,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "expert only"
+    }
+  },
+  {
+    "status": 500,
+    "error": {
+      "code": "internal",
+      "message": "An internal error stopped this call (Error).",
+      "fix": null,
+      "retryable": false
+    },
+    "expect": {
+      "name": "OortInternalError",
+      "code": "internal",
+      "reason": null,
+      "fix": null,
+      "status": null,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "An internal error stopped this call (Error)."
+    }
+  }
+]

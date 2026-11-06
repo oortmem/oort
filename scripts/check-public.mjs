@@ -25,8 +25,11 @@ const RULES = [
   ['personal identity number', new RegExp(j('19960505', '6911'))],
   ['Swedish phone number', /\+46[\s-]?\d{2}[\s-]?\d{3}[\s-]?\d{2}/],
   // Trojan Source (CVE-2021-42574): a literal bidi control can make code read differently from
-  // what runs. Write them as \u escapes instead.
+  // what runs, and an invisible character (zero-width space or non-joiner, word joiner, BOM) can
+  // hide in a string or a regex. Write them as \u escapes instead, in every language (python/
+  // included). U+200D is left out: it joins emoji sequences in test text.
   ['literal bidi control character', /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/],
+  ['literal invisible character', /[\u200b\u200c\u2060-\u2064\ufeff]/],
 ];
 
 // Large binaries bloat every clone forever (history keeps them), so any tracked file above this
