@@ -69,3 +69,27 @@ describe('gate, multilingual', () => {
     expect(ACKNOWLEDGMENTS).toEqual(expect.arrayContaining(['好的', '谢谢', '네', '감사합니다']));
   });
 });
+
+describe('gate, acknowledgements with punctuation (CON-110 review)', () => {
+  it('gate.acknowledgments-ignore-punctuation-and-spacing', () => {
+    for (const ack of [
+      'はい、お願いします',
+      'ありがとうございました',
+      'よろしくお願いします',
+      '好的，谢谢你！',
+      '收到，谢谢！',
+      '네, 감사합니다',
+      'ＯＫ　ｔｈａｎｋｓ！',
+      'ok, thank you!',
+      'sounds   good!!',
+    ]) {
+      expect(shouldRecall(ack), ack).toEqual({ recall: false, reason: 'acknowledgment' });
+    }
+    // A question still recalls, whatever it starts with.
+    expect(shouldRecall('好的，认证服务用什么端口？')).toEqual({ recall: true, reason: 'ok' });
+    expect(shouldRecall('ok thanks, which port is auth on?')).toEqual({
+      recall: true,
+      reason: 'ok',
+    });
+  });
+});

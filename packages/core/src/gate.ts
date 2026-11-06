@@ -21,7 +21,7 @@ export const ACKNOWLEDGMENTS: readonly string[] = [
   'n',
   'k',
   // The gating languages (CON-110, design §10), plus Korean: the common replies that only
-  // acknowledge. Compared after NFKC and lowercasing, without trailing punctuation.
+  // acknowledge. Compared after NFKC and lowercasing, without punctuation, symbols or spaces.
   // Spanish
   'gracias',
   'muchas gracias',
@@ -120,9 +120,38 @@ export const ACKNOWLEDGMENTS: readonly string[] = [
   'oki',
   'okk',
   'okie',
+  'ok thanks',
+  'ok thank you',
+  // Multi-word replies in the gating languages (compared without punctuation or spaces)
+  'はい、お願いします',
+  'はい、ありがとうございます',
+  'ありがとうございました',
+  'よろしくお願いします',
+  'わかりました',
+  '大丈夫です',
+  'いいですね',
+  '好的，谢谢',
+  '好的，谢谢你',
+  '好的，继续',
+  '好的，没问题',
+  '收到，谢谢',
+  '明白了',
+  '知道了',
+  '行，继续吧',
+  '네, 감사합니다',
+  '네, 알겠습니다',
+  '알겠습니다, 감사합니다',
+  '고맙습니다',
 ];
 
-const ACKS = new Set(ACKNOWLEDGMENTS);
+/** A reply as compared: NFKC, lowercase, without punctuation, symbols or spaces. */
+const compact = (s: string): string =>
+  s
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}\p{Z}\s]+/gu, '');
+
+const ACKS = new Set(ACKNOWLEDGMENTS.map(compact));
 
 /** The floor, in width units (`promptWidth`). */
 const MIN_LENGTH = 12;
@@ -156,10 +185,7 @@ export function shouldRecall(prompt: string): { recall: boolean; reason: GateRea
   const p = prompt.trim();
   if (p.startsWith('/')) return { recall: false, reason: 'slash-command' };
   if (promptWidth(p) < MIN_LENGTH) return { recall: false, reason: 'too-short' };
-  const norm = p
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[\p{P}\s]+$/u, '');
-  if (ACKS.has(norm)) return { recall: false, reason: 'acknowledgment' };
+  // Punctuation and spacing anywhere do not matter: `はい、お願いします` and `ok, thank you!`.
+  if (ACKS.has(compact(p))) return { recall: false, reason: 'acknowledgment' };
   return { recall: true, reason: 'ok' };
 }
