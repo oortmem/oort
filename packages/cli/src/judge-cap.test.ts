@@ -8,6 +8,7 @@ import {
   AGENT_JUDGMENTS_PER_DAY,
   AgentJudgmentCapError,
   refundAgentJudgment,
+  lockIdOf,
   removeLockIfSame,
   reserveAgentJudgment,
 } from './judge-cap.js';
@@ -59,17 +60,34 @@ describe('the shared agent judgment cap (CON-108 §6.3)', () => {
     fs.writeFileSync(lock, '');
     const old = new Date(Date.now() - 60_000);
     fs.utimesSync(lock, old, old);
-    const seen = fs.statSync(lock);
-    // Another waiter took the stale lock over first and now holds a fresh one.
+    const seen = lockIdOf(lock)!;
+    // Another waiter took the stale lock over first and now holds a fresh one. On Linux the new
+    // file often gets the deleted one's inode, which is why the inode alone is not the identity.
     fs.rmSync(lock);
     fs.writeFileSync(lock, 'fresh');
-    const fresh = fs.statSync(lock);
+    const fresh = lockIdOf(lock)!;
     expect(removeLockIfSame(lock, seen)).toBe(false);
     expect(fs.statSync(lock).ino).toBe(fresh.ino);
     expect(fs.readdirSync(home)).toEqual(['judge-mcp-count.lock']);
     // The lock it really saw goes.
     expect(removeLockIfSame(lock, fresh)).toBe(true);
     expect(fs.readdirSync(home)).toEqual([]);
+  });
+
+  it('a reused inode alone never makes a fresh lock look like the stale one', () => {
+    const home = tmpdir();
+    const lock = path.join(home, 'judge-mcp-count.lock');
+    fs.writeFileSync(lock, '');
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, old, old);
+    const stale = lockIdOf(lock)!;
+    fs.rmSync(lock);
+    fs.writeFileSync(lock, ''); // a fresh, empty (0.5.x-style) lock
+    const fresh = lockIdOf(lock)!;
+    // What Linux often does: the fresh lock reuses the stale one's inode. Simulated here on any
+    // platform by giving the stale identity the fresh inode: the time still tells them apart.
+    expect(removeLockIfSame(lock, { ...stale, ino: fresh.ino })).toBe(false);
+    expect(lockIdOf(lock)).toEqual(fresh);
   });
 
   it('takes over a lock a crashed process left behind', async () => {

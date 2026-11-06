@@ -37,12 +37,36 @@ export class AgentJudgmentCapError extends Error {
 }
 
 /**
- * Removes the lock at `file` only if it is still the one `seen` describes (same device and
- * inode). It is first renamed to a unique name, which is atomic, and checked there: a lock that
- * another process created in the meantime is put back instead of deleted. So two waiters that
- * both found the same stale lock can never delete each other's fresh one. True when removed.
+ * What identifies one lock file: its content (a token unique to the holder; empty for a 0.5.x
+ * lock), modification time and inode. The inode alone is not enough: Linux reuses a deleted
+ * file's inode at once, so a fresh lock can carry the stale one's number.
  */
-export function removeLockIfSame(file: string, seen: { dev: number; ino: number }): boolean {
+export interface LockId {
+  token: string;
+  mtimeMs: number;
+  ino: number;
+}
+
+/** The lock at `file` as `LockId`, or undefined when it is gone or unreadable. */
+export function lockIdOf(file: string): LockId | undefined {
+  try {
+    const st = fs.statSync(file);
+    return { token: fs.readFileSync(file, 'utf8'), mtimeMs: st.mtimeMs, ino: st.ino };
+  } catch {
+    return undefined;
+  }
+}
+
+const sameLock = (a: LockId, b: LockId): boolean =>
+  a.token === b.token && a.mtimeMs === b.mtimeMs && a.ino === b.ino;
+
+/**
+ * Removes the lock at `file` only if it is still the one `seen` describes. It is first renamed
+ * to a unique name, which is atomic, and checked there: a lock another process created in the
+ * meantime is put back instead of deleted. So two waiters that both found the same stale lock
+ * can never delete each other's fresh one. True when removed.
+ */
+export function removeLockIfSame(file: string, seen: LockId): boolean {
   const aside = `${file}.${process.pid}.${randomUUID()}.aside`;
   try {
     fs.renameSync(file, aside);
@@ -50,8 +74,8 @@ export function removeLockIfSame(file: string, seen: { dev: number; ino: number 
     return false; // Already gone.
   }
   try {
-    const st = fs.statSync(aside);
-    if (st.dev === seen.dev && st.ino === seen.ino) return true;
+    const now = lockIdOf(aside);
+    if (now !== undefined && sameLock(now, seen)) return true;
     // Someone else's lock: back where it was. Should yet another lock have appeared in the
     // microseconds between the rename and this link, the link fails and that newer lock stands.
     try {
@@ -87,18 +111,26 @@ async function withCounterLock<T>(home: string, fn: () => T): Promise<T> {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') {
           throw new AgentJudgmentCapError('unavailable');
         }
-        try {
-          const seen = fs.statSync(file);
-          // Only the stale lock we looked at is taken over, never a fresh one that replaced it.
-          if (Date.now() - seen.mtimeMs > STALE_LOCK_MS) removeLockIfSame(file, seen);
-        } catch {
-          // Gone in between: try again.
+        const seen = lockIdOf(file); // undefined: gone in between, so try again.
+        // Only the stale lock we looked at is taken over, never a fresh one that replaced it.
+        if (seen !== undefined && Date.now() - seen.mtimeMs > STALE_LOCK_MS) {
+          removeLockIfSame(file, seen);
         }
         if (Date.now() - start > LOCK_WAIT_MS) throw new AgentJudgmentCapError('unavailable');
         await new Promise((r) => setTimeout(r, 10));
       }
     }
-    const mine = fs.fstatSync(fd);
+    const token = `${process.pid}.${randomUUID()}`;
+    let mine: LockId;
+    try {
+      fs.writeSync(fd, token);
+      const st = fs.fstatSync(fd);
+      mine = { token, mtimeMs: st.mtimeMs, ino: st.ino };
+    } catch {
+      fs.closeSync(fd);
+      fs.rmSync(file, { force: true });
+      throw new AgentJudgmentCapError('unavailable');
+    }
     try {
       return fn();
     } finally {
