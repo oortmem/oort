@@ -51,7 +51,7 @@ export interface OortOptions {
    * omitted to derive it from `cwd` exactly as the CLI does.
    */
   project?: string | null;
-  /** `false` skips the repository's `oort.config.json` (a server whose cwd is a checkout). */
+  /** `false` skips the repository's `oort.config.json` (a server whose cwd is a checkout); local and cloud. */
   projectConfig?: boolean;
   /** The agent to act as; default `OORT_AGENT`, else anonymous (the Planet only). */
   agent?: string;

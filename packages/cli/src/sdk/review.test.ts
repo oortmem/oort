@@ -61,3 +61,23 @@ describe('explicit keys are never silently ignored', () => {
     await fine.close();
   });
 });
+
+describe('cloud mode and the repository config', () => {
+  it('projectConfig: false lets a cloud handle in a checkout skip a broken oort.config.json', async () => {
+    const h = home();
+    const cwd = path.join(h.root, 'checkout');
+    fs.mkdirSync(cwd);
+    fs.writeFileSync(path.join(cwd, 'oort.config.json'), '{ not json');
+    const env = { ...h.env, OORT_API_KEY: ['oort', 'sk', 'cfg'.padEnd(43, 'C')].join('_') };
+    const fetch = (async () =>
+      Response.json({ account: 'a1', plan: 'pro', via: 'key' })) as typeof globalThis.fetch;
+    await expect(createOort({ mode: 'cloud', cwd, env, fetch })).rejects.toMatchObject({
+      code: 'usage',
+      fix: 'oort doctor',
+    });
+    const oort = await createOort({ mode: 'cloud', cwd, env, fetch, projectConfig: false });
+    expect((await oort.whoami()).mode).toBe('cloud');
+    await oort.close();
+    expect(fs.existsSync(h.home)).toBe(false);
+  });
+});

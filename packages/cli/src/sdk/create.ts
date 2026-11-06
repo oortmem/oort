@@ -80,7 +80,7 @@ interface State {
 let poolRefs = 0;
 
 const CLOUD_ONLY = ['url', 'timeoutMs', 'fetch'] as const;
-const LOCAL_ONLY = ['user', 'org', 'config', 'migrate', 'judge', 'projectConfig'] as const;
+const LOCAL_ONLY = ['user', 'org', 'config', 'migrate', 'judge'] as const;
 
 /** Refuses an option the resolved mode does not take: never silently ignored. */
 function checkMode(o: OortOptions, mode: 'local' | 'cloud'): void {

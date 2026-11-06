@@ -53,7 +53,7 @@ ignored.
 | `home`          | `string`                                             | local, auto                 | `OORT_HOME`, else `~/.oort`                                                                          |
 | `cwd`           | `string`                                             | all                         | `process.cwd()`; used only to find the project and its config                                        |
 | `project`       | `string \| null`                                     | all                         | derived from `cwd` as the CLI does. A string becomes `cfg:<id>` (as `oort project link`); `null` means global memories only |
-| `projectConfig` | `boolean`                                            | local                       | `true`. `false` skips the repository's `oort.config.json` (a server whose cwd is a checkout)         |
+| `projectConfig` | `boolean`                                            | local, cloud                | `true`. `false` skips the repository's `oort.config.json` (a server whose cwd is a checkout)         |
 | `agent`         | `string`                                             | all                         | `OORT_AGENT`, else anonymous (the Planet only)                                                       |
 | `user`          | `string`                                             | local                       | unset: the person (`self`). Setting it requires `org`                                                |
 | `org`           | `string`                                             | local                       | `'local'`. Required, and not `'local'`, whenever `user` is set                                       |
@@ -76,7 +76,10 @@ throws `OortNeedsKeyError`. A local model (`oort models pull`, or `config: { emb
 one it throws `OortNeedsLoginError`.
 
 Passing `keys` with a `keySources` that leaves out `'explicit'` is a usage error, never a silent
-fallback to another source. Keys given in code stay in memory. They are kept out of every enumerable field, so
+fallback to another source. The Keychain items (`oort.voyage`, `oort.oort`, …) belong to the macOS user, not to an Oort
+home: `home` changes where memories live, never which Keychain is read. A server, or any process
+that should not use the person's keys, sets `keySources` explicitly (`['env']`, or `['explicit']`).
+Keys given in code stay in memory. They are kept out of every enumerable field, so
 `console.log(oort)`, `JSON.stringify(oort)` and `util.inspect(oort)` print only
 `Oort {"mode":…,"scope":…}`, and an error never carries one.
 
@@ -291,6 +294,8 @@ FUSE).
   match the Lambda architecture.
 - **Keys** from the environment: `keySources: ['explicit', 'env']`, or `OORT_NO_KEYCHAIN=1`.
   There is no Keychain in Lambda.
+- **A checkout as the working directory** (a monorepo deploy): pass `projectConfig: false` so the
+  handle skips the repository's `oort.config.json` (and a broken one cannot stop it starting).
 - **Create the handle at module scope**, so warm invocations reuse its connection. The pool's
   sockets do not keep the process alive, so a function that never calls `close()` still ends.
 - **Await `observe` before returning**: the runtime freezes after the response.
