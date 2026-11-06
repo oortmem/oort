@@ -37,7 +37,8 @@ may share with a Constellation also offers `share`. Use only the tools the serve
 
 - A newer fact supersedes an older one on its own; you do not need to forget the old one first.
 - `forget` deletes permanently. Use it when the user asks, and confirm which memory with
-  `list_recent` or `explain` first.
+  `list_recent` or `explain` first. Copies already shared to a Constellation stay; tell the user
+  what the result says about them.
 - `pin` keeps a memory always available. Use it only when the user asks.
 - `share` copies a memory to a Constellation, where its members can recall it. Only when the user
   asks; secrets are redacted.
