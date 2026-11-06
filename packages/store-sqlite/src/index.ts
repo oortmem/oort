@@ -466,15 +466,14 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         backupDatabase(conn, dbPath, from === 1 ? 'pre-v2' : from === 2 ? 'pre-v3' : 'pre-v4');
       }
       // Every migration from version 3 or older, and a stale version 4 index, rebuilds the lexical
-      // index: say so, and wait as long as another process holds the lock rather than fail.
+      // index (applySchema says so): wait as long as another process holds the lock rather than
+      // fail and repeat the migration later.
       const rebuilds =
         opts.migrate !== false &&
         from !== undefined &&
         (from < SCHEMA_VERSION ||
           (from === SCHEMA_VERSION && lexicalIndexState(conn) === 'rebuild'));
       if (rebuilds) {
-        const n = conn.prepare<[], { n: number }>('SELECT count(*) AS n FROM memories').get()?.n;
-        log(`Rebuilding the search index (${n ?? 0} ${n === 1 ? 'memory' : 'memories'})…`);
         conn.pragma(`busy_timeout = ${Math.max(busyTimeoutMs, MIGRATION_BUSY_TIMEOUT_MS)}`);
       }
       applySchema(conn, dimension, { migrate: opts.migrate !== false, log });

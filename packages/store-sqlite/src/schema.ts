@@ -579,28 +579,40 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     }
 
     const version = get.get('schema_version')?.value;
+    // Said only by the process that rebuilds, inside its transaction: another open that waited
+    // for the lock finds the work done and says nothing.
+    const rebuilding = (): void => {
+      const n = db.prepare<[], { n: number }>('SELECT count(*) AS n FROM memories').get()?.n ?? 0;
+      opts.log?.(`Rebuilding the search index (${n} ${n === 1 ? 'memory' : 'memories'})…`);
+    };
     if (version === undefined && !exists(db, 'memories')) {
       db.exec(memoriesV2('memories', true));
       db.exec(INDEXES_V2);
     } else if (version === '1') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 1);
       assertMigratable(db);
+      rebuilding();
       migrateV1toV2(db, dimension);
       migrateV2toV3(db);
       migrateV3toV4(db);
     } else if (version === '2') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 2);
+      rebuilding();
       migrateV2toV3(db);
       migrateV3toV4(db);
     } else if (version === '3') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 3);
+      rebuilding();
       migrateV3toV4(db);
     } else if (version === String(SCHEMA_VERSION)) {
       // The drift guard needs a write; an open that may not migrate (a hook) leaves it to the next.
       if (opts.migrate !== false) {
         const icu = opts.icu ?? lexicalIcuVersion();
         const state = lexicalIndexState(db, icu);
-        if (state === 'rebuild') rebuildFts(db, 2, icu);
+        if (state === 'rebuild') {
+          rebuilding();
+          rebuildFts(db, 2, icu);
+        }
         else if (state === 'record-icu') recordLexical(db, icu);
         else if (state === 'unknown-icu') {
           opts.log?.(
