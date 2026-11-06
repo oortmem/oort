@@ -41,7 +41,7 @@ import {
   withPrivateUmask,
 } from './blobs.js';
 import { ColdBlobCorruptError, createColdCodec } from './cold.js';
-import { backupDatabase } from './backup.js';
+import { backupDatabase, sweepStaleCopies } from './backup.js';
 import {
   applySchema,
   assertMigratable,
@@ -445,6 +445,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const dbPath = path.resolve(opts.path);
   const coldDir = path.resolve(opts.coldDir);
   prepareDbDir(path.dirname(dbPath), log);
+  const swept = sweepStaleCopies(dbPath);
+  if (swept > 0) log(`oort store: removed ${swept} temporary copy file(s) a stopped backup left`);
   const blobs = openBlobDir(coldDir, log);
   if (!fs.existsSync(dbPath)) fs.closeSync(fs.openSync(dbPath, 'a', 0o600));
 

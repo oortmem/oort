@@ -374,3 +374,25 @@ it('fts-rebuild.a-version-4-index-under-the-old-name-is-rebuilt', async () => {
     d.close();
   }
 });
+
+it('fts-rebuild.sweeps-copies-a-killed-backup-left-behind', async () => {
+  const s = copy3();
+  const dir = path.dirname(s.dbPath);
+  // What a VACUUM INTO killed mid-copy leaves: the temporary copy and its rollback journal.
+  const old = [
+    `.oort.sqlite.pre-v4.0123456789abcdef.tmp`,
+    `.oort.sqlite.pre-v4.0123456789abcdef.tmp-journal`,
+    `.oort.sqlite.pre-downgrade.fedcba9876543210.tmp`,
+  ].map((n) => path.join(dir, n));
+  const recent = path.join(dir, '.oort.sqlite.pre-v4.00112233445566ff.tmp');
+  const unrelated = path.join(dir, '.oort.sqlite.notes.tmp');
+  const hourAgo = (Date.now() - 2 * 3600_000) / 1000;
+  for (const f of [...old, recent, unrelated]) fs.writeFileSync(f, 'partial copy');
+  for (const f of [...old, unrelated]) fs.utimesSync(f, hourAgo, hourAgo);
+  await (await openSqliteStore(optsFor(s))).close();
+  for (const f of old) expect(fs.existsSync(f), path.basename(f)).toBe(false);
+  // A copy still being written by another process (under an hour old) is left alone, and so is
+  // any file that is not one of the store's temporary copies.
+  expect(fs.existsSync(recent)).toBe(true);
+  expect(fs.existsSync(unrelated)).toBe(true);
+});
