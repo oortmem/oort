@@ -208,7 +208,7 @@ export class ServeRefusal extends Refusal {
 export class MigrationRequired extends ServeRefusal {
   constructor() {
     super(
-      'The store needs its schema migration first, and `oort serve` never migrates it: run `oort doctor` (or any oort command), then start it again.',
+      'The store needs its schema migration first, and `oort serve` never migrates it: run `oort doctor` (or any oort command), then start it again, and restart any Oort MCP server started before the upgrade.',
     );
   }
 }

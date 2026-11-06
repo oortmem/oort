@@ -643,10 +643,13 @@ describe('schema migration 3 to 4', () => {
   function inspect(dbPath: string) {
     const db = raw(dbPath);
     try {
+      // Versions 1 to 3 name the index memories_fts; version 4 names it memories_fts2.
       const sql = (
-        db.prepare("SELECT sql FROM sqlite_master WHERE name = 'memories_fts'").get() as {
-          sql: string;
-        }
+        db
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE name IN ('memories_fts', 'memories_fts2') ORDER BY name DESC",
+          )
+          .get() as { sql: string }
       ).sql;
       const meta = Object.fromEntries(
         (

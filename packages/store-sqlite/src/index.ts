@@ -46,6 +46,7 @@ import {
   applySchema,
   assertMigratable,
   downgradeSchema,
+  FTS_TABLE,
   lexicalIndexState,
   judgmentCount,
   migrationBlockers,
@@ -55,6 +56,7 @@ import {
 } from './schema.js';
 
 export {
+  FTS_TABLE,
   FTS_TOKENIZE,
   FTS_TOKENIZE_V1,
   SCHEMA_VERSION,
@@ -533,9 +535,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        RETURNING rid`,
     ),
     setAccess: db.prepare<[string, string]>('UPDATE memories SET access_log = ? WHERE id = ?'),
-    ftsDelete: db.prepare<[number]>('DELETE FROM memories_fts WHERE rowid = ?'),
+    ftsDelete: db.prepare<[number]>(`DELETE FROM ${FTS_TABLE} WHERE rowid = ?`),
     ftsInsert: db.prepare<[number, string, string, string]>(
-      'INSERT INTO memories_fts (rowid, text, stub, entities) VALUES (?, ?, ?, ?)',
+      `INSERT INTO ${FTS_TABLE} (rowid, text, stub, entities) VALUES (?, ?, ?, ?)`,
     ),
     vecGet: db.prepare<[string], { embedding: Buffer }>(
       'SELECT embedding FROM memories_vec WHERE id = ?',
@@ -593,9 +595,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const lexicalScoped = (n: number) =>
     cached<[Params], { id: string; tier: Tier; rank: number }>(
       `lexical:${n}`,
-      () => `SELECT m.id AS id, m.tier AS tier, bm25(memories_fts) AS rank
-       FROM memories_fts CROSS JOIN memories m ON m.rid = memories_fts.rowid
-       WHERE memories_fts MATCH @match AND ${grantSql(n)}
+      () => `SELECT m.id AS id, m.tier AS tier, bm25(${FTS_TABLE}) AS rank
+       FROM ${FTS_TABLE} CROSS JOIN memories m ON m.rid = ${FTS_TABLE}.rowid
+       WHERE ${FTS_TABLE} MATCH @match AND ${grantSql(n)}
        ORDER BY rank, m.updated_at DESC, m.id
        LIMIT @k`,
     );

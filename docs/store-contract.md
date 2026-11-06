@@ -194,29 +194,32 @@ same copy first as the version 1 migration below, to `<path>.pre-v3.<UTC time>`
 (`listBackups(path, 'pre-v3')`), and the hooks leave it to the next `oort` command the same way.
 A version 1 store goes to version 2 and then 3 in one transaction, with one `pre-v2` copy.
 
-Schema version 4 (tokeniser v2, CON-110) rebuilds the lexical index. Core's `tokenizeLexical`
-became script-aware: CJK text is indexed as overlapping character bigrams, Thai, Lao, Khmer and
-Myanmar as words (`Intl.Segmenter`), combining marks stay inside words, and Latin diacritics are
-folded. Its output for plain English is byte-identical to version 1's, emoji included (variation
-selectors, keycaps and ZWJ sequences separate words, as before, and so do `…` and `‥`). NFKC folds
-compatibility forms on purpose: full-width ASCII (`ＡＰＩ` is `api`), fractions (`½` is `1 2`),
-super- and subscripts (`x²` is `x2`), `™` (`tm`) and ligatures (`ﬁ` is `fi`). `memories_fts` is declared
-with `unicode61 remove_diacritics 0 categories 'L* N* Co M*' tokenchars '-_.'` (`FTS_TOKENIZE`), so
-FTS5 keeps the marks too. Opening a version 3 store drops `memories_fts`, creates it with the new
-declaration and indexes every memory again from its stored text (a cold memory from its stub and
-entities only), in one transaction, after a copy to `<path>.pre-v4.<UTC time>`. No vector, cold
-blob or row changes, and no vendor is called. The new index is optimised into one segment. Its
-BM25 row and token totals count the live rows only, where the old index also counted every row
-ever rewritten (a contentless-delete index never subtracts one), so lexical scores shift once, and
-near ties can swap; which memories match does not change. `meta` records `lexical_version` (2) and the ICU version. A migrating open
-rebuilds the index again when the tokeniser version differs, or when ICU's major version is newer
-than the one recorded and the store holds Thai, Lao, Khmer or Myanmar text (their word breaks come
-from ICU's dictionaries; nothing else changes with ICU). An index recorded by a newer ICU is left
-alone, so two Node versions on one machine do not rebuild in turn, and an ICU version that is empty
-or not a number never triggers a rebuild (with segmented text in the store, the open logs a
-warning). Versions 1 and 2 go up to 4 in the same single transaction. An open that rebuilds prints
-one line first, "Rebuilding the search index (N memories)…", and waits up to 60 seconds
-(`MIGRATION_BUSY_TIMEOUT_MS`) for another connection's write lock, whatever `busyTimeoutMs` is.
+Schema version 4 (tokeniser v2, CON-110) rebuilds the lexical index. Core's `tokenizeLexical` became
+script-aware: CJK text is indexed as overlapping character bigrams, Thai, Lao, Khmer and Myanmar as
+words (`Intl.Segmenter`), combining marks stay inside words, and Latin diacritics are folded. Its
+output for plain English is byte-identical to version 1's, emoji included (variation selectors,
+keycaps and ZWJ sequences separate words, as before, and so do `…` and `‥`). NFKC folds
+compatibility forms on purpose: full-width ASCII (`ＡＰＩ` is `api`), fractions (`½` is `1 2`), super-
+and subscripts (`x²` is `x2`), `™` (`tm`) and ligatures (`ﬁ` is `fi`). The index is declared with
+`unicode61 remove_diacritics 0 categories 'L* N* Co M*' tokenchars '-_.'` (`FTS_TOKENIZE`), so FTS5
+keeps the marks too. Opening a version 3 store drops `memories_fts` and creates the index as
+`memories_fts2` with the new declaration (renamed so that an older Oort still running against the
+store, an MCP server or daemon started before the upgrade, fails on its next write instead of
+indexing tokens nothing would find) and indexes every memory again from its stored text (a cold
+memory from its stub and entities only), in one transaction, after a copy to `<path>.pre-v4.<UTC
+time>`. No vector, cold blob or row changes, and no vendor is called. The new index is optimised
+into one segment. Its BM25 row and token totals count the live rows only, where the old index also
+counted every row ever rewritten (a contentless-delete index never subtracts one), so lexical scores
+shift once, and near ties can swap; which memories match does not change. `meta` records
+`lexical_version` (2) and the ICU version. A migrating open rebuilds the index again when the
+tokeniser version differs, or when ICU's major version is newer than the one recorded and the store
+holds Thai, Lao, Khmer or Myanmar text (their word breaks come from ICU's dictionaries; nothing else
+changes with ICU). An index recorded by a newer ICU is left alone, so two Node versions on one
+machine do not rebuild in turn, and an ICU version that is empty or not a number never triggers a
+rebuild (with segmented text in the store, the open logs a warning). Versions 1 and 2 go up to 4 in
+the same single transaction. An open that rebuilds prints one line first, "Rebuilding the search
+index (N memories)…", and waits up to 60 seconds (`MIGRATION_BUSY_TIMEOUT_MS`) for another
+connection's write lock, whatever `busyTimeoutMs` is.
 
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the
@@ -232,8 +235,9 @@ vector table is rebuilt from the stored embeddings.
 - **Not in a hook.** `openSqliteStore({ ..., migrate: false })` never migrates: an older store makes
   it reject with `StoreMigrationRequiredError`, changing nothing. The Claude Code hooks open the
   store this way; finding an older store they skip recall and saving for that turn, exit 0, and
-  print one line: "Oort is upgrading its store; run `oort doctor` once". Every other `oort` command
-  and the MCP server migrate on open; `oort doctor` reports the migration and where the copy is.
+  print one line: "Oort is upgrading its store; run `oort doctor` once, then restart any Oort MCP
+  server started before the upgrade". Every other `oort` command and the MCP server migrate on open;
+  `oort doctor` reports the migration and where the copy is.
 - **Rows the migration cannot place.** A version 1 row with an empty org, customer or agent id
   (grants never allowed one, the 0.1.0 store did not check) has no owner or author to give it, so
   the migration refuses, naming how many such rows there are, and changes nothing. Export or delete
@@ -241,13 +245,14 @@ vector table is rebuilt from the stored embeddings.
 
 `downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x,
 `downgradeSqliteStore({ path, to: 2 })` to version 2 for Oort 0.3 to 0.5, and `{ path, to: 3 }` to
-version 3 for Oort before tokeniser v2 (the lexical index is rebuilt with tokeniser v1). Opening a
-store never goes down: migrations only roll forward. It first copies the
-database to `<path>.pre-downgrade.<UTC time>` (the three newest are kept), and refuses while the
-store holds anything the target version cannot represent (for version 2, any judgment; for version
-1, also any memory outside the Planet, an author with an account, or provenance). **Run it with no other Oort process open**: no
-Claude Code session with Oort hooks, no MCP server, no drain. Any of them would fail on the changed
-schema, and the next `oort` command migrates the store straight back up.
+version 3 for Oort before tokeniser v2 (the lexical index is rebuilt with tokeniser v1, as
+`memories_fts` again). Opening a store never goes down: migrations only roll forward. It first
+copies the database to `<path>.pre-downgrade.<UTC time>` (the three newest are kept), and refuses
+while the store holds anything the target version cannot represent (for version 2, any judgment; for
+version 1, also any memory outside the Planet, an author with an account, or provenance). **Run it
+with no other Oort process open**: no Claude Code session with Oort hooks, no MCP server, no drain.
+Any of them would fail on the changed schema, and the next `oort` command migrates the store
+straight back up.
 
 ## Testing a store
 

@@ -15,7 +15,8 @@ import {
  *    Planet, written by the agent that was their `agent_id`.
  * 3: judgment memory (CON-71). One nullable column, `judgment`, holds a `judgment` memory's
  *    decision as JSON; every other row has NULL. Additive: nothing else changes.
- * 4: tokeniser v2 (CON-110). `memories_fts` is declared with `FTS_TOKENIZE` and holds core's
+ * 4: tokeniser v2 (CON-110). The lexical index is `memories_fts2` (`FTS_TABLE`, renamed from
+ *    `memories_fts`), declared with `FTS_TOKENIZE`, and holds core's
  *    version 2 tokens (CJK bigrams, Thai words, combining marks kept, Latin accents folded).
  *    `meta` records `lexical_version` and the ICU version the index was built with. The
  *    migration rebuilds the index from stored text; nothing else changes.
@@ -32,6 +33,16 @@ export const FTS_TOKENIZE = `unicode61 remove_diacritics 0 categories 'L* N* Co 
 
 /** The declaration of schema versions 1 to 3, for tokeniser v1's index. */
 export const FTS_TOKENIZE_V1 = `unicode61 remove_diacritics 0 tokenchars '-_.'`;
+
+/**
+ * The lexical index's table at schema version 4. It has a new name so that an older Oort still
+ * running against the store (an MCP server or daemon started before the upgrade) fails loudly on
+ * its next write, `no such table: memories_fts`, instead of indexing tokeniser v1's tokens where
+ * no version 2 query would find them.
+ */
+export const FTS_TABLE = 'memories_fts2';
+/** The table of schema versions 1 to 3. */
+export const FTS_TABLE_V1 = 'memories_fts';
 
 /** Which address fields each level has; anything else is NULL. Mirrors core's `Address` union. */
 const LEVEL_CHECK = `CHECK (
@@ -247,7 +258,8 @@ export function migrateV1toV2(db: Database, dimension: number): void {
 }
 
 /**
- * Drops and recreates `memories_fts` for tokeniser `version` (1 or 2) and indexes every memory
+ * Drops the lexical index and creates it again for tokeniser `version`: `memories_fts` with v1's
+ * declaration for 1, `memories_fts2` (`FTS_TABLE`) with `FTS_TOKENIZE` for 2. Indexes every memory
  * again from its stored text, inside the caller's transaction: no vendor call, no vector touched.
  * A row's FTS rowid is its `rid`; a cold row indexes only its stub and entities, as the store
  * writes them. Records the tokeniser and ICU versions in `meta` (version 2), or removes them
@@ -261,10 +273,12 @@ export function migrateV1toV2(db: Database, dimension: number): void {
 export function rebuildFts(db: Database, version: 1 | 2, icu = lexicalIcuVersion()): number {
   const tokenize = tokenizerForVersion(version);
   const indexed = (text: string): string => tokenize(text).join(' ');
-  db.exec('DROP TABLE IF EXISTS memories_fts');
-  db.exec(ftsTable(version === 1 ? FTS_TOKENIZE_V1 : FTS_TOKENIZE));
+  const table = version === 1 ? FTS_TABLE_V1 : FTS_TABLE;
+  db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE_V1}`);
+  db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE}`);
+  db.exec(ftsTable(version === 1 ? FTS_TOKENIZE_V1 : FTS_TOKENIZE, table));
   const insert = db.prepare<[number, string, string, string]>(
-    'INSERT INTO memories_fts (rowid, text, stub, entities) VALUES (?, ?, ?, ?)',
+    `INSERT INTO ${table} (rowid, text, stub, entities) VALUES (?, ?, ?, ?)`,
   );
   // Paged by rid: better-sqlite3 cannot write while a statement is still iterating.
   const page = db.prepare<
@@ -289,7 +303,7 @@ export function rebuildFts(db: Database, version: 1 | 2, icu = lexicalIcuVersion
     }
   }
   // One segment: the rebuild leaves the index as compact as a fresh one, and merges nothing later.
-  db.exec("INSERT INTO memories_fts (memories_fts) VALUES ('optimize')");
+  db.exec(`INSERT INTO ${table} (${table}) VALUES ('optimize')`);
   if (version === 2) recordLexical(db, icu);
   else db.exec("DELETE FROM meta WHERE key IN ('lexical_version', 'lexical_icu')");
   return n;
@@ -312,8 +326,8 @@ function recordLexical(db: Database, icu = lexicalIcuVersion()): void {
  * lexically only through stub and entities. An external content table (content = memories)
  * cannot express either.
  */
-function ftsTable(tokenize: string): string {
-  return `CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+function ftsTable(tokenize: string, table: string): string {
+  return `CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(
         text, stub, entities,
         content = '', contentless_delete = 1,
         tokenize = "${tokenize}"
@@ -365,6 +379,8 @@ export function lexicalIndexState(
 ): 'rebuild' | 'record-icu' | 'unknown-icu' | 'current' {
   const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
   if (get.get('lexical_version')?.value !== String(LEXICAL_VERSION)) return 'rebuild';
+  // A version 4 index under the old name (a pre-release build): rebuilt under the new one.
+  if (!exists(db, FTS_TABLE)) return 'rebuild';
   const recorded = get.get('lexical_icu')?.value;
   const now = icuMajor(icu);
   if (now === undefined) return holdsSegmentedText(db) ? 'unknown-icu' : 'current';
@@ -601,8 +617,8 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     if (stored === undefined) put.run('dimension', String(dimension));
 
     // A new store gets the version 2 index here (see `ftsTable`); a migrated one has it already.
-    if (!exists(db, 'memories_fts')) {
-      db.exec(ftsTable(FTS_TOKENIZE));
+    if (!exists(db, FTS_TABLE)) {
+      db.exec(ftsTable(FTS_TOKENIZE, FTS_TABLE));
       recordLexical(db, opts.icu ?? lexicalIcuVersion());
     }
     if (!exists(db, 'memories_vec')) db.exec(vecV2(dimension));

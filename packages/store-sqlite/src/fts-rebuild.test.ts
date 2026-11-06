@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { afterAll, describe, expect, it } from 'vitest';
-import { tokenizeLexicalV1 } from '@oortmem/core';
+import { localGrant, tokenizeLexicalV1 } from '@oortmem/core';
 import { openSqliteStore, sqliteSchemaVersion } from './index.js';
 
 const FIXTURE3 = path.join(
@@ -287,4 +287,90 @@ describe('the ICU guard with an unknown runtime ICU', () => {
       expect(getMeta(s.dbPath, 'lexical_icu')).toBe('1.0');
     }
   });
+});
+
+describe('older Oort processes and the version 4 index (CON-110 review)', () => {
+  it('fts-rebuild.an-old-process-cannot-write-the-old-index-name', async () => {
+    const s = copy3();
+    // A 0.5.x or 0.6.0 MCP server or daemon, already running against the version 3 store, with
+    // its FTS statement prepared.
+    const old = raw(s.dbPath);
+    const write = old.prepare(
+      'INSERT INTO memories_fts (rowid, text, stub, entities) VALUES (?, ?, ?, ?)',
+    );
+    try {
+      await (await openSqliteStore(optsFor(s))).close();
+      // After the migration its writes fail loudly instead of indexing tokeniser v1's tokens
+      // into the version 2 index, where no query would find them.
+      expect(() => write.run(9999, '认证服务使用端口8080', '', '')).toThrow(
+        /no such table: memories_fts/,
+      );
+    } finally {
+      old.close();
+    }
+    const db = raw(s.dbPath);
+    try {
+      expect(ftsName(db)).toBe('memories_fts2');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('fts-rebuild.down-to-3-renames-the-index-back', async () => {
+    const { downgradeSqliteStore } = await import('./index.js');
+    const s = copy3();
+    await (await openSqliteStore(optsFor(s))).close();
+    downgradeSqliteStore({ path: s.dbPath, to: 3 });
+    const db = raw(s.dbPath);
+    try {
+      expect(ftsName(db)).toBe('memories_fts');
+      const names = db
+        .prepare<[], { name: string }>(
+          "SELECT name FROM sqlite_master WHERE name LIKE 'memories_fts%'",
+        )
+        .all()
+        .map((r) => r.name);
+      expect(names.some((n) => n.startsWith('memories_fts2'))).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+it('fts-rebuild.a-version-4-index-under-the-old-name-is-rebuilt', async () => {
+  const s = copy3();
+  await (await openSqliteStore(optsFor(s))).close();
+  const db = raw(s.dbPath);
+  try {
+    db.exec('ALTER TABLE memories_fts2 RENAME TO memories_fts');
+  } finally {
+    db.close();
+  }
+  const lines: string[] = [];
+  const store = await openSqliteStore({ ...optsFor(s), log: (m) => lines.push(m) });
+  try {
+    expect(lines).toContain('Rebuilding the search index (10 memories)…');
+    expect(
+      (
+        await store.lexical(
+          localGrant({
+            orgId: 'local',
+            customerId: 'self',
+            agentId: 'claude-code',
+            projectIds: [null],
+          }),
+          '认证 端口',
+          10,
+        )
+      ).map((h) => h.id),
+    ).toEqual(['zh-1']);
+  } finally {
+    await store.close();
+  }
+  const d = raw(s.dbPath);
+  try {
+    expect(ftsName(d)).toBe('memories_fts2');
+  } finally {
+    d.close();
+  }
 });

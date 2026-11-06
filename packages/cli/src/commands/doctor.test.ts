@@ -155,6 +155,8 @@ describe('oort doctor', () => {
       expect(d.human.io.stdout).toContain(
         `migrated the store from schema version 3 to ${SCHEMA_VERSION}`,
       );
+      // An Oort started before the upgrade cannot write to the renamed index.
+      expect(d.human.io.stdout).toContain('restart any Oort MCP server started before the upgrade');
     } finally {
       said = err.mock.calls.map((c) => String(c[0]));
       err.mockRestore();

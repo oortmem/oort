@@ -642,6 +642,10 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
             : before === 2
               ? 'it can now hold judgments (oort judge)'
               : 'lexical search now finds Chinese, Japanese, Korean, Thai and Indic words'
+        }${
+          before <= 3
+            ? '. Then restart any Oort MCP server started before the upgrade (quit and reopen Claude Code, Claude Desktop or Cursor): an older Oort cannot write to the new search index'
+            : ''
         }`,
       });
     }
