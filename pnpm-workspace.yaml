@@ -1,5 +1,6 @@
 packages:
   - 'packages/*'
+  - 'examples'
 allowBuilds:
   esbuild: true
   # Its install script only fetches CUDA libraries (Linux x64) from NuGet; Oort runs on the CPU.

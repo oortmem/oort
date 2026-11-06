@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "target": "ESNext",
+    "lib": ["ESNext"],
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "rootDir": ".."
+  },
+  "include": ["src", "test"]
+}
