@@ -1,10 +1,8 @@
 import { observe, type MemoryType, type Scope } from '@oortmem/core';
-import { turnObservation } from './commands/observe.js';
+import { turnObservation } from './engine/observe.js';
 import { writePath } from './util.js';
 import type { Wired } from './wire.js';
 import { grantFor } from '@oortmem/claude-code';
-
-export { FACT_MAX_CHARS, REMEMBER_MAX_FACTS } from '@oortmem/mcp';
 
 export interface RememberResult {
   /** The fact's position in the request, from 0. */

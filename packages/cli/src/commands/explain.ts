@@ -2,6 +2,10 @@ import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import { age, agentLabel, clip, fixed, scopeLabel, short, withWired, type Ctx } from '../util.js';
 import type { RecallResult } from '@oortmem/core';
+import { timeMode } from '../engine/recall.js';
+
+// Moved to the UI-free engine (CON-108).
+export { timeMode } from '../engine/recall.js';
 import {
   includeLevels,
   recallWarnings,
@@ -9,14 +13,6 @@ import {
   temporalView,
   type TemporalFlags,
 } from './recall.js';
-
-/** The temporal view in a few words: `current`, `as-of 2026-04-01`. */
-export function timeMode(t: RecallResult['temporal']): string {
-  // A backend that reports no view (an older cloud API) gets no claim either way.
-  if (t === undefined) return 'not reported';
-  const at = t.asOf ?? t.knownAt;
-  return at === undefined ? t.mode : `${t.mode} ${at.slice(0, 10)}`;
-}
 
 /** The header line: `mode: as-of 2026-04-01 (from the query)`. */
 export function modeLabel(t: RecallResult['temporal']): string {

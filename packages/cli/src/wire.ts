@@ -9,7 +9,10 @@ import {
   agentHome,
   ANONYMOUS_AGENT,
   isAgentId,
+  localGrant,
   localScope,
+  nodeGrant,
+  planetNode,
   resolveProject,
   resolveConfig,
   type DecisionController,
@@ -20,13 +23,15 @@ import {
   type Home,
   type ResolvedConfig,
   type Scope,
+  type Grant,
+  type ProjectResolution,
 } from '@oortmem/core';
 import { createHookLogger, type HookLogger } from '@oortmem/claude-code';
-import { openSqliteStore, readEmbedderBinding, writeEmbedderBinding } from '@oortmem/store-sqlite';
 import type { Env } from './io.js';
 import {
   keyLookup,
   routeFor,
+  type KeyLookup,
   summary,
   ROLES,
   type AdapterRole,
@@ -41,7 +46,13 @@ import {
   legacyEmbedderId,
   loadLocal,
 } from './local-models.js';
-import { createKeychain, keychainFor, type KeychainReader } from './keychain.js';
+import {
+  PROVIDER_ENV,
+  createKeychain,
+  keychainFor,
+  type KeychainReader,
+  type Provider,
+} from './keychain.js';
 import { RELAY_MODELS, RELAY_PATHS, relayUrl, viaRelay, type OortRelayError } from './relay.js';
 import { Refusal, echo } from './util.js';
 
@@ -325,16 +336,20 @@ function homeDimension(home: string): number {
  * vectors are Voyage's. `write` false (the hooks): nothing is recorded, only compared.
  */
 function bindEmbedder(
+  sqlite: Pick<
+    typeof import('@oortmem/store-sqlite'),
+    'readEmbedderBinding' | 'writeEmbedderBinding'
+  >,
   storePath: string,
   config: ResolvedConfig,
   write: boolean,
 ): { active: string; bound: string; matches: boolean } {
   const active = embedderId(config.embed);
-  const recorded = readEmbedderBinding(storePath);
+  const recorded = sqlite.readEmbedderBinding(storePath);
   const bound = !recorded.hasMemories ? active : (recorded.model ?? legacyEmbedderId(config.embed));
   if (write && recorded.model !== bound) {
     try {
-      writeEmbedderBinding(storePath, bound);
+      sqlite.writeEmbedderBinding(storePath, bound);
     } catch {
       // Best effort: the comparison below does not depend on it.
     }
@@ -342,18 +357,115 @@ function bindEmbedder(
   return { active, bound, matches: bound === active };
 }
 
+/** Where a role's key may come from (the SDK's `keySources`); the CLI uses all three. */
+export type KeySource = 'explicit' | 'env' | 'keychain';
+
 /**
- * Builds the engine for `cwd`: resolved config, the cwd's project scope, the
- * SQLite store under `$OORT_HOME`, and each adapter whose key is set. A
- * missing key leaves that adapter undefined (recorded in `unavailable`);
- * commands decide whether that degrades or refuses.
+ * What `wireEngine` takes: everything `wire` does except the agent, plus the SDK's choices. The
+ * engine is principal-free: who reads and writes (org, user, agent, project) is `principalFor`'s.
  */
-export const wire: WireFn = async (cwd, opts = {}) => {
-  const env = opts.env ?? process.env;
+export interface EngineOptions extends Omit<WireOptions, 'agent'> {
+  /** Used only to find the project and its `oort.config.json`. */
+  cwd: string;
+  /** `auto` (default): `$OORT_HOME/cloud.json` decides, as the CLI does. */
+  mode?: 'auto' | 'local' | 'cloud';
+  /**
+   * Open the local store in cloud mode too: the CLI's hooks keep their cursors and queue there.
+   * The SDK leaves it off, so cloud mode opens, creates and writes nothing under `OORT_HOME`.
+   */
+  storeInCloud?: boolean;
+  /** Report `project-id-untrusted` (default true); the SDK turns it off for an explicit project. */
+  projectWarning?: boolean;
+  /** Laid over the resolved config (the SDK's `config`), already validated by the caller. */
+  configOverlay?: Record<string, unknown>;
+  /**
+   * Keys given in code, tried before any other source (SDK `keys`). Only ever passed to the
+   * adapters and the cloud client; never stored on the engine.
+   */
+  explicitKeys?: Partial<Record<Provider, string>>;
+  /** The key sources to read (default: all three). */
+  keySources?: readonly KeySource[];
+  /** Test hook: adapters to use instead of loading the vendor packages (never a public option). */
+  adapters?: Partial<Record<AdapterRole, unknown>>;
+}
+
+/**
+ * The engine without a principal (CON-108): config, mode, store or cloud client, and adapters.
+ * `store` is absent in cloud mode unless `storeInCloud` asked for it.
+ */
+export interface Engine {
+  config: ResolvedConfig;
+  mode: 'local' | 'cloud';
+  store?: MemoryStore;
+  cloud?: CloudClient;
+  cloudProblem?: string;
+  embed?: Embedder;
+  rerank?: Reranker;
+  decide?: DecisionController;
+  write?: MemoryWriter;
+  embedder?: { active: string; bound: string; matches: boolean };
+  reembedWith?: Embedder;
+  unavailable: Partial<Record<AdapterRole, Error>>;
+  keyStore: boolean;
+  routes: Record<AdapterRole, RouteSummary>;
+  relayErrors: OortRelayError[];
+  warnings: WireWarning[];
+  /** The cwd's project, resolved once (`resolveProject`). */
+  project: ProjectResolution;
+  /** `project.private` as the cwd's own `oort.config.json` states it (see `Wired.statedPrivacy`). */
+  statedPrivacy?: boolean;
+  close(): Promise<void>;
+}
+
+/** Config and project for a cwd: the synchronous first half of wiring (no store, no keys). */
+interface Prepared {
+  config: ResolvedConfig;
+  warnings: WireWarning[];
+  project: ProjectResolution;
+}
+
+/** Deep merge of plain objects: `over` wins; arrays and scalars replace. */
+function overlay(
+  base: Record<string, unknown>,
+  over: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(over)) {
+    const b = out[k];
+    out[k] =
+      v !== null &&
+      typeof v === 'object' &&
+      !Array.isArray(v) &&
+      b !== null &&
+      typeof b === 'object' &&
+      !Array.isArray(b)
+        ? overlay(b as Record<string, unknown>, v as Record<string, unknown>)
+        : v;
+  }
+  return out;
+}
+
+function prepare(opts: EngineOptions, env: Env): Prepared {
+  const cwd = opts.cwd;
   let config = resolveConfig(cwd, env, {
     ...(opts.projectConfig !== undefined && { projectConfig: opts.projectConfig }),
   });
   const warnings: WireWarning[] = [];
+  if (opts.configOverlay !== undefined && Object.keys(opts.configOverlay).length > 0) {
+    // The host's code is the operator: its overlay outranks both files (but never sets `serve`;
+    // the caller has refused that already). Re-validated as a whole by the strict schema.
+    const { home, sources, ignoredProjectKeys, ...plain } = config;
+    const merged = OortConfig.parse(overlay(plain, opts.configOverlay));
+    const over = Object.fromEntries(
+      Object.keys(opts.configOverlay).map((k) => [k, 'home' as const]),
+    );
+    config = {
+      ...merged,
+      home,
+      sources: { ...sources, ...over },
+      ...(ignoredProjectKeys !== undefined && { ignoredProjectKeys }),
+    };
+  }
   // One store serves every project, so its dimension is the home config's: a
   // project config cannot change it (the store would refuse to open, or embed
   // vectors it cannot hold).
@@ -383,16 +495,39 @@ export const wire: WireFn = async (cwd, opts = {}) => {
   }
   const project = resolveProject(cwd, config.home);
   // A repository file cannot choose a scope without the user's trust binding.
-  if (project.untrustedId !== undefined && opts.projectConfig !== false) {
+  if (
+    project.untrustedId !== undefined &&
+    opts.projectConfig !== false &&
+    opts.projectWarning !== false
+  ) {
     warnings.push({
       code: 'project-id-untrusted',
       message: `oort.config.json sets project.id ${echo(project.untrustedId)}, ignored until you trust it: run \`oort project link\` in this repository.`,
     });
   }
-  const agent = resolveAgent(config.home, env, opts.agent);
-  const scope: Scope = { ...localScope(project.projectId), agentId: agent.id };
+  return { config, warnings, project };
+}
+
+/** The env vars that carry keys, left out of the key lookup when `keySources` drops `env`. */
+const KEY_ENV = new Set(Object.values(PROVIDER_ENV));
+
+/**
+ * The second half of wiring: the mode, then (local, or `storeInCloud`) the store, then the keys
+ * and either the cloud client or the adapters. The mode is decided before any store is opened,
+ * and `@oortmem/store-sqlite` is imported only when one is: cloud mode loads no native module.
+ */
+async function open(p: Prepared, opts: EngineOptions, env: Env): Promise<Engine> {
+  const { config, warnings, project } = p;
+  const mode: 'local' | 'cloud' =
+    opts.mode === 'local' || opts.mode === 'cloud'
+      ? opts.mode
+      : readCloudSettings(config.home).store;
   const storePath = path.join(config.home, 'oort.sqlite');
-  const store = await openSqliteStore({
+  const sqlite =
+    mode === 'local' || opts.storeInCloud === true
+      ? await import('@oortmem/store-sqlite')
+      : undefined;
+  const store = await sqlite?.openSqliteStore({
     path: storePath,
     coldDir: path.join(config.home, 'cold'),
     dimension: config.embed.dimension,
@@ -400,16 +535,28 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     ...(opts.busyTimeoutMs !== undefined && { busyTimeoutMs: opts.busyTimeoutMs }),
     ...(opts.migrate === false && { migrate: false }),
   });
+  const sources = new Set<KeySource>(opts.keySources ?? ['explicit', 'env', 'keychain']);
   // Env first (set and non-empty), then the keychain, each item read at most once.
-  const reader: KeychainReader =
-    opts.keychain ??
-    (env['OORT_NO_KEYCHAIN'] === '1'
-      ? async () => undefined
-      : createKeychain({
-          env,
-          warn: (message) => warnings.push({ code: 'keychain-unreadable', message }),
-        }).read);
-  const lookup = keyLookup(env, reader);
+  const none: KeychainReader = async () => undefined;
+  const reader: KeychainReader = !sources.has('keychain')
+    ? none
+    : (opts.keychain ??
+      (env['OORT_NO_KEYCHAIN'] === '1'
+        ? none
+        : createKeychain({
+            env,
+            warn: (message) => warnings.push({ code: 'keychain-unreadable', message }),
+          }).read));
+  const keyEnv = sources.has('env')
+    ? env
+    : Object.fromEntries(Object.entries(env).filter(([k]) => !KEY_ENV.has(k)));
+  const fromSources = keyLookup(keyEnv, reader);
+  const explicit = sources.has('explicit') ? opts.explicitKeys : undefined;
+  const lookup: KeyLookup = async (provider) => {
+    const given = explicit?.[provider];
+    if (given !== undefined && given !== '') return { source: 'explicit', key: given };
+    return fromSources(provider);
+  };
   const relay = relayUrl(env);
   const relayErrors: OortRelayError[] = [];
   const onRelayError = (e: OortRelayError): void => void relayErrors.push(e);
@@ -420,27 +567,26 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     return r;
   };
   const fetchOpt = opts.fetch === undefined ? {} : { fetch: opts.fetch };
-  const out: Wired = {
+  const out: Engine = {
     config,
-    scope,
-    agent,
-    store,
+    mode,
+    ...(store !== undefined && { store }),
     unavailable: {},
     keyStore: keychainFor(env).supported,
     routes,
     relayErrors,
-    harnessLog: createHookLogger(config.home),
     warnings,
-    close: () => store.close(),
+    project,
+    close: async () => {
+      await store?.close();
+    },
   };
   const stated =
-    opts.projectConfig === false || scope.projectId === undefined
+    opts.projectConfig === false || project.projectId === undefined
       ? undefined
-      : statedProjectPrivacy(cwd, config);
+      : statedProjectPrivacy(opts.cwd, config);
   if (stated !== undefined) out.statedPrivacy = stated;
-  const settings = readCloudSettings(config.home);
-  if (settings.store === 'cloud') {
-    out.mode = 'cloud';
+  if (mode === 'cloud') {
     const url = cloudUrl(env);
     const key = await lookup('oort');
     if ('error' in url) out.cloudProblem = url.error;
@@ -462,7 +608,8 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     // The cloud runs the models with Oort's keys: no vendor adapter, no vendor key read.
     return out;
   }
-  out.mode = 'local';
+  if (sqlite === undefined) throw new Error('unreachable: local mode without a store');
+  const given = opts.adapters;
   const want = new Set<AdapterRole>(opts.roles ?? ROLES);
   // The selected adapters load in parallel; key reads are cached per provider, so a shared key
   // (Voyage for embed and rerank) is still read once.
@@ -470,25 +617,27 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     want.has('embed') &&
       (async () => {
         const embed =
-          config.embed.provider === LOCAL_PROVIDER
-            ? await loadLocal('embed', config)
-            : await load(EMBED, config, await routeOf(EMBED), relay, onRelayError, async (r) =>
-                (await import('@oortmem/embed-voyage')).voyageEmbedder({
-                  apiKey: r.key,
-                  model: config.embed.model,
-                  dimension: config.embed.dimension,
-                  ...(r.relay !== undefined && {
-                    baseUrl: `${r.relay}${RELAY_PATHS.voyage}`,
-                    relay: true,
+          given?.embed !== undefined
+            ? { ok: given.embed as Embedder }
+            : config.embed.provider === LOCAL_PROVIDER
+              ? await loadLocal('embed', config)
+              : await load(EMBED, config, await routeOf(EMBED), relay, onRelayError, async (r) =>
+                  (await import('@oortmem/embed-voyage')).voyageEmbedder({
+                    apiKey: r.key,
+                    model: config.embed.model,
+                    dimension: config.embed.dimension,
+                    ...(r.relay !== undefined && {
+                      baseUrl: `${r.relay}${RELAY_PATHS.voyage}`,
+                      relay: true,
+                    }),
+                    ...fetchOpt,
                   }),
-                  ...fetchOpt,
-                }),
-              );
+                );
         if ('error' in embed) {
           out.unavailable.embed = embed.error;
           return;
         }
-        const bound = bindEmbedder(storePath, config, opts.migrate !== false);
+        const bound = bindEmbedder(sqlite, storePath, config, opts.migrate !== false);
         out.embedder = bound;
         if (bound.matches) out.embed = withQueryCache(embed.ok, config);
         else {
@@ -499,60 +648,60 @@ export const wire: WireFn = async (cwd, opts = {}) => {
     want.has('rerank') &&
       (async () => {
         const rerank =
-          config.rerank.provider === LOCAL_PROVIDER
-            ? await loadLocal('rerank', config)
-            : await load(RERANK, config, await routeOf(RERANK), relay, onRelayError, async (r) =>
-                (await import('@oortmem/rerank-voyage')).voyageReranker({
-                  apiKey: r.key,
-                  model: config.rerank.model,
-                  ...(r.relay !== undefined && {
-                    baseUrl: `${r.relay}${RELAY_PATHS.voyage}`,
-                    relay: true,
+          given?.rerank !== undefined
+            ? { ok: given.rerank as Reranker }
+            : config.rerank.provider === LOCAL_PROVIDER
+              ? await loadLocal('rerank', config)
+              : await load(RERANK, config, await routeOf(RERANK), relay, onRelayError, async (r) =>
+                  (await import('@oortmem/rerank-voyage')).voyageReranker({
+                    apiKey: r.key,
+                    model: config.rerank.model,
+                    ...(r.relay !== undefined && {
+                      baseUrl: `${r.relay}${RELAY_PATHS.voyage}`,
+                      relay: true,
+                    }),
+                    ...fetchOpt,
                   }),
-                  ...fetchOpt,
-                }),
-              );
+                );
         if ('ok' in rerank) out.rerank = rerank.ok;
         else out.unavailable.rerank = rerank.error;
       })(),
     want.has('decide') &&
       (async () => {
-        const decide = await load(
-          DECIDE,
-          config,
-          await routeOf(DECIDE),
-          relay,
-          onRelayError,
-          async (r) =>
-            (await import('@oortmem/decide-jev')).jevDecider({
-              apiKey: r.key,
-              ...(r.relay !== undefined && {
-                baseURL: `${r.relay}${RELAY_PATHS.typesafe}`,
-                relay: true,
-              }),
-              ...fetchOpt,
-            }),
-        );
+        const decide =
+          given?.decide !== undefined
+            ? { ok: given.decide as DecisionController }
+            : await load(DECIDE, config, await routeOf(DECIDE), relay, onRelayError, async (r) =>
+                (await import('@oortmem/decide-jev')).jevDecider({
+                  apiKey: r.key,
+                  ...(r.relay !== undefined && {
+                    baseURL: `${r.relay}${RELAY_PATHS.typesafe}`,
+                    relay: true,
+                  }),
+                  ...fetchOpt,
+                }),
+              );
         if ('ok' in decide) out.decide = decide.ok;
         else out.unavailable.decide = decide.error;
       })(),
     want.has('write') &&
       (async () => {
-        const write = await load(
-          WRITE,
-          config,
-          await routeOf(WRITE),
-          relay,
-          onRelayError,
-          async (r) =>
-            (await import('@oortmem/writer')).anthropicWriter({
-              ...(r.relay === undefined
-                ? { apiKey: r.key }
-                : { authToken: r.key, baseURL: `${r.relay}${RELAY_PATHS.anthropic}`, relay: true }),
-              model: config.writer.model,
-              ...fetchOpt,
-            }),
-        );
+        const write =
+          given?.write !== undefined
+            ? { ok: given.write as MemoryWriter }
+            : await load(WRITE, config, await routeOf(WRITE), relay, onRelayError, async (r) =>
+                (await import('@oortmem/writer')).anthropicWriter({
+                  ...(r.relay === undefined
+                    ? { apiKey: r.key }
+                    : {
+                        authToken: r.key,
+                        baseURL: `${r.relay}${RELAY_PATHS.anthropic}`,
+                        relay: true,
+                      }),
+                  model: config.writer.model,
+                  ...fetchOpt,
+                }),
+              );
         if ('ok' in write) out.write = write.ok;
         else out.unavailable.write = write.error;
       })(),
@@ -561,6 +710,93 @@ export const wire: WireFn = async (cwd, opts = {}) => {
   const ordered = {} as Record<AdapterRole, RouteSummary>;
   for (const role of ROLES) if (routes[role] !== undefined) ordered[role] = routes[role];
   out.routes = ordered;
+  return out;
+}
+
+/**
+ * The principal-free engine for `opts.cwd` (CON-108): resolved config, the cwd's project, the
+ * mode, the store (local mode) or the Oort Cloud client, and each adapter whose key is found. In
+ * cloud mode nothing under `OORT_HOME` is opened or created (unless `storeInCloud`), and no native
+ * module is loaded. A missing key leaves that adapter undefined (recorded in `unavailable`).
+ */
+export async function wireEngine(opts: EngineOptions): Promise<Engine> {
+  const env = opts.env ?? process.env;
+  return open(prepare(opts, env), opts, env);
+}
+
+/**
+ * Who reads and writes: the scope (org, customer, agent, project), where the agent's new
+ * memories land, and the one grant every read and write of this principal uses. `grant` is the
+ * acting agent's local grant (the person's Planet and the agent's own Star), or, for an end user
+ * (`customerId` other than `self`), the user's Planet alone: today's Star is keyed by org and
+ * agent, not by user, so it would leak between users (CON-108 §6.4).
+ */
+export interface Principal {
+  scope: Scope;
+  agent: WiredAgent;
+  grant: Grant;
+}
+
+/**
+ * The principal for a scope and agent. `planetOnly` (end users) reads and writes the user's
+ * Planet only, with the agent still recorded as the author; an agent whose home is its Star is
+ * the caller's to refuse before this.
+ */
+export function principalFor(
+  engine: Pick<Engine, 'config'>,
+  p: {
+    orgId?: string;
+    customerId?: string;
+    agent: WiredAgent;
+    projectId?: string;
+    planetOnly?: boolean;
+  },
+): Principal {
+  const base = localScope(p.projectId);
+  const scope: Scope = {
+    ...base,
+    ...(p.orgId !== undefined && { orgId: p.orgId }),
+    ...(p.customerId !== undefined && { customerId: p.customerId }),
+    agentId: p.agent.id,
+  };
+  const projectIds = [...new Set<string | null>([scope.projectId ?? null, null])];
+  const principal = { orgId: scope.orgId, customerId: scope.customerId, agentId: scope.agentId };
+  const grant =
+    p.planetOnly === true
+      ? nodeGrant({ principal, read: [{ node: planetNode(principal), projectIds }] })
+      : localGrant({ ...principal, projectIds }, { home: p.agent.home });
+  void engine;
+  return { scope, agent: p.agent, grant };
+}
+
+/**
+ * Builds the engine for `cwd`: resolved config, the cwd's project scope, the
+ * SQLite store under `$OORT_HOME`, and each adapter whose key is set. A
+ * missing key leaves that adapter undefined (recorded in `unavailable`);
+ * commands decide whether that degrades or refuses. A thin wrapper over
+ * `wireEngine` and `principalFor`; the store opens in cloud mode too (the hooks' cursors and
+ * queue live there).
+ */
+export const wire: WireFn = async (cwd, opts = {}) => {
+  const env = opts.env ?? process.env;
+  const { agent: flag, ...rest } = opts;
+  const eopts: EngineOptions = { ...rest, cwd, storeInCloud: true };
+  const prepared = prepare(eopts, env);
+  const agent = resolveAgent(prepared.config.home, env, flag);
+  const engine = await open(prepared, eopts, env);
+  const { scope } = principalFor(engine, {
+    agent,
+    ...(engine.project.projectId !== undefined && { projectId: engine.project.projectId }),
+  });
+  const { store, project: _p, ...fields } = engine;
+  if (store === undefined) throw new Error('unreachable: wire() always opens the store');
+  const out: Wired = {
+    ...fields,
+    scope,
+    agent,
+    store,
+    harnessLog: createHookLogger(engine.config.home),
+  };
   return out;
 };
 

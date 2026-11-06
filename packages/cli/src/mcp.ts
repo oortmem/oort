@@ -23,9 +23,8 @@ import {
   type Memory,
   localGrant,
 } from '@oortmem/core';
-import { supersedeChain } from './commands/inspect.js';
-import { timeMode } from './commands/explain.js';
-import { runRecall, viewIgnored, type TemporalView } from './commands/recall.js';
+import { supersedeChain } from './engine/chain.js';
+import { runRecall, timeMode, viewIgnored, type TemporalView } from './engine/recall.js';
 import { rememberFacts } from './remember.js';
 import { OortCloudError, findCloudMemory, type CloudClient } from './cloud.js';
 import {

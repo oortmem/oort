@@ -13,7 +13,14 @@ import type {
 } from './adapters.js';
 import type { ResolvedConfig } from './config.js';
 import { addressed, addressOf, nodeKey, nodeOf } from './address.js';
-import { grantWrites, homeAddress, localGrant, type Grant, type Home } from './grant.js';
+import {
+  assertGrant,
+  grantWrites,
+  homeAddress,
+  localGrant,
+  type Grant,
+  type Home,
+} from './grant.js';
 import { CONTRADICTS } from './levels.js';
 import { capObservation } from './cap.js';
 import type { Decision, Memory, Scope } from './model.js';
@@ -95,6 +102,12 @@ export interface ObserveDeps {
    * never a confirmation or an edit.
    */
   home?: Home;
+  /**
+   * The grant to read and write with, instead of `localGrant(scope, { home })` (CON-108: an end
+   * user's Planet-only grant, which has no Star). It must name `scope`'s principal; new memories
+   * land in its home node.
+   */
+  grant?: Grant;
 }
 
 /**
@@ -560,7 +573,13 @@ export async function observe(
   const obs = capObservation(scrubbed.obs);
   const { store, embed, decide, write } = deps;
   const now = deps.now ?? new Date();
-  const grant = localGrant(filterFor(scope), deps.home === undefined ? {} : { home: deps.home });
+  const grant =
+    deps.grant ?? localGrant(filterFor(scope), deps.home === undefined ? {} : { home: deps.home });
+  assertGrant(grant);
+  const p = grant.principal;
+  if (p.orgId !== scope.orgId || p.customerId !== scope.customerId || p.agentId !== scope.agentId) {
+    throw new RangeError("observe: the grant must name the scope's principal");
+  }
   const g = await decide.gate(obs);
   const text = `${obs.userText}\n${obs.assistantText}`;
 

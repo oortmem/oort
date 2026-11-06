@@ -12,7 +12,8 @@ export const ROLE_VENDOR: Record<AdapterRole, Vendor> = {
   write: 'anthropic',
 };
 
-export type KeyOrigin = 'env' | 'keychain';
+/** `explicit`: given in code (the SDK's `keys`), never read from anywhere. */
+export type KeyOrigin = 'explicit' | 'env' | 'keychain';
 
 /**
  * Where one role's key comes from. A vendor key always wins; the Oort key

@@ -138,13 +138,19 @@ export class OortCloudError extends Refusal {
   readonly status: number;
   /** The drain keeps the line queued instead of counting an attempt. */
   readonly holdQueue: boolean;
+  /**
+   * The API's own `error.code` (`preview_required`, `cloud_not_enabled`), or `timeout` for a
+   * request this client gave up on: finer than `kind`, for the SDK's `reason`. Never shown.
+   */
+  readonly apiCode: string | undefined;
 
-  constructor(kind: CloudErrorKind, status: number, apiMessage?: string) {
+  constructor(kind: CloudErrorKind, status: number, apiMessage?: string, apiCode?: string) {
     super(messageFor(kind, status, apiMessage));
     this.name = 'OortCloudError';
     this.kind = kind;
     this.status = status;
     this.holdQueue = HOLD.has(kind);
+    this.apiCode = apiCode;
   }
 }
 
@@ -637,7 +643,12 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
         redirect: 'error',
       });
     } catch {
-      throw new OortCloudError('network', 0);
+      throw new OortCloudError(
+        'network',
+        0,
+        undefined,
+        abort.signal.aborted ? 'timeout' : undefined,
+      );
     } finally {
       clearTimeout(timer);
     }
@@ -647,7 +658,7 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       };
       const code = typeof err.error?.code === 'string' ? err.error.code : undefined;
       const message = typeof err.error?.message === 'string' ? err.error.message : undefined;
-      throw new OortCloudError(cloudErrorKind(res.status, code), res.status, message);
+      throw new OortCloudError(cloudErrorKind(res.status, code), res.status, message, code);
     }
     const t1 = performance.now();
     const conn = connectedSince(t0);

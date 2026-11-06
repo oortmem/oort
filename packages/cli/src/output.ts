@@ -1,18 +1,9 @@
 import { CommanderError, type Command } from 'commander';
-import { MissingCredentialError } from '@oortmem/core';
-import { OortCloudError, type CloudErrorKind } from './cloud.js';
+import { describeError as describeOther, type ErrorInfo } from './describe-error.js';
 import type { Env, Io } from './io.js';
-import { OortRelayError } from './relay.js';
-import { PROVIDER_ENV, type Provider } from './keychain.js';
-import {
-  Refusal,
-  commanderText,
-  safeJson,
-  scrubArg,
-  shown,
-  type Ctx,
-  type ErrorCode,
-} from './util.js';
+import { commanderText, safeJson, scrubArg, shown, type Ctx } from './util.js';
+
+export { fixInMessage, isNetworkError, type ErrorInfo } from './describe-error.js';
 
 /**
  * The `oort.v1` JSON contract (docs/cli.md, "JSON output"). With `--json` (or `OORT_OUTPUT=json`)
@@ -31,14 +22,6 @@ export const SCHEMA = 'oort.v1';
 export interface Warning {
   code: string;
   message: string;
-}
-
-export interface ErrorInfo {
-  code: ErrorCode;
-  message: string;
-  /** A command that fixes it, or null where none does. */
-  fix: string | null;
-  exitCode: number;
 }
 
 export interface Success<T extends object = Record<string, unknown>> {
@@ -291,115 +274,17 @@ export function rerunWith(
   return shown(['oort', ...kept, flag].join(' '));
 }
 
-const shownOrNull = (fix: string | undefined): string | null =>
-  fix === undefined ? null : shown(fix);
-
 /**
- * The first runnable `oort …` command quoted in a message (`` `oort login` ``), skipping ones with
- * placeholders (`<id>`, `…`): the fix most refusals already name.
- */
-export function fixInMessage(message: string): string | undefined {
-  for (const m of message.matchAll(/`(oort [^`]+)`/g)) {
-    const c = m[1]!;
-    if (!/[<>…]|\.\.\./.test(c)) return c;
-  }
-  return undefined;
-}
-
-const CLOUD_CODE: Record<CloudErrorKind, ErrorCode> = {
-  unauthorized: 'needs-login',
-  'payment-required': 'refused',
-  'not-enabled': 'refused',
-  'hive-not-enabled': 'refused',
-  'rate-limit': 'refused',
-  'too-large': 'usage',
-  'not-found': 'not-found',
-  'ambiguous-prefix': 'ambiguous-id',
-  'bad-request': 'usage',
-  busy: 'network',
-  refused: 'refused',
-  network: 'network',
-};
-
-const NETWORK_CODES = new Set([
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'ENOTFOUND',
-  'ETIMEDOUT',
-  'EAI_AGAIN',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'UND_ERR_CONNECT_TIMEOUT',
-  'UND_ERR_SOCKET',
-]);
-
-/** A connection that failed (refused, reset, DNS, timeout), from fetch or a socket. */
-export function isNetworkError(e: Error): boolean {
-  const cause = (e as { cause?: { code?: unknown } }).cause;
-  const code = (e as { code?: unknown }).code ?? cause?.code;
-  if (typeof code === 'string' && NETWORK_CODES.has(code)) return true;
-  return e.name === 'TypeError' && e.message === 'fetch failed';
-}
-
-const ENV_PROVIDER = Object.fromEntries(
-  Object.entries(PROVIDER_ENV).map(([p, v]) => [v, p as Provider]),
-) as Record<string, Provider | undefined>;
-
-/** Error names (other packages' classes) that are a problem with the input, not a bug. */
-const USAGE_ERRORS = new Set([
-  'JudgmentInputError',
-  'JudgmentPackError',
-  'ExportFormatError',
-  'EmbedderMismatchError',
-]);
-const REFUSED_ERRORS = new Set(['GrantError', 'ScopeDeniedError']);
-
-/**
- * The one place an error becomes its `oort.v1` code, fix and exit code: every command's refusals
- * (`Refusal` and its `code`), Oort Cloud and relay refusals by kind, a missing key, commander's
- * usage errors, network failures, and anything else as `internal`. `rerun` gives the "again with
- * --yes" fix for the command that ran.
+ * The one place an error becomes its `oort.v1` code, fix and exit code: commander's usage errors
+ * here, and everything else (every command's refusals, Oort Cloud and relay refusals by kind, a
+ * missing key, network failures, anything else as `internal`) in `describe-error.ts`, which the
+ * SDK shares. `rerun` gives the "again with --yes" fix for the command that ran.
  */
 export function describeError(e: unknown, rerun: (flag: string) => string): ErrorInfo {
-  const err = e instanceof Error ? e : new Error(String(e));
-  // Exit codes stay as docs/cli.md has them: 2 for the CLI's own refusals and usage errors (1
-  // for one coded `internal`), 1 for anything raised outside them (an adapter's relay or key
-  // error, a network failure), whatever its code.
-  const own = err instanceof Refusal || err instanceof CommanderError;
-  const make = (code: ErrorCode, message: string, fix?: string, exitCode?: number): ErrorInfo => ({
-    code,
-    message,
-    fix: shownOrNull(fix ?? fixInMessage(message)),
-    exitCode: exitCode ?? (own && code !== 'internal' ? 2 : 1),
-  });
-  if (err instanceof CommanderError) {
+  if (e instanceof CommanderError) {
     // Commander's own wording, every argument scrubbed and clipped as on its stderr line.
-    return make('usage', commanderText(err.message.replace(/^error: /, '')), 'oort --help');
+    const message = commanderText(e.message.replace(/^error: /, ''));
+    return { code: 'usage', message, fix: shown('oort --help'), exitCode: 2 };
   }
-  if (err instanceof OortCloudError) return make(CLOUD_CODE[err.kind], err.message);
-  if (err instanceof Refusal) {
-    const fix = err.fix ?? (err.code === 'needs-confirmation' ? rerun('--yes') : undefined);
-    return make(err.code, err.message, fix, err.exitCode);
-  }
-  if (err instanceof OortRelayError) {
-    const code: ErrorCode =
-      err.kind === 'unauthorized' ? 'needs-login' : err.kind === 'busy' ? 'network' : 'refused';
-    return make(code, err.message, code === 'needs-login' ? 'oort login' : undefined);
-  }
-  if (err instanceof MissingCredentialError) {
-    const provider = ENV_PROVIDER[err.envVar];
-    return make(
-      'needs-key',
-      err.message,
-      provider === 'voyage'
-        ? 'oort models pull'
-        : provider !== undefined
-          ? `oort keys set ${provider}`
-          : undefined,
-    );
-  }
-  if (USAGE_ERRORS.has(err.name)) return make('usage', err.message);
-  if (REFUSED_ERRORS.has(err.name)) return make('refused', err.message);
-  if (isNetworkError(err)) return make('network', err.message);
-  return make('internal', err.message);
+  return describeOther(e, rerun);
 }
