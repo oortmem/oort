@@ -45,14 +45,17 @@ export function writeTokenFile(home: string, rotate: boolean): { file: string; c
 const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 
 /**
- * A token file's contents, refused unless it is a regular file of this user's that `others` may
- * neither read nor write (`mask`: 0o077 for the home's own file, 0o007 for a mounted secret,
- * which a group may share). The home's file is never followed through a symlink.
+ * A token file's contents, refused unless it is a regular file of this user's (or root's, for a
+ * mounted secret) that neither group nor others may write and others may not read (`mask`: 0o077
+ * for the home's own file; 0o027 for a mounted secret, which a group may share), in a directory
+ * others cannot write. The file is opened with O_NOFOLLOW, so a swap of the last component for a
+ * link is refused; `file` itself must already be the real path for a mounted secret (the caller
+ * resolves the links an orchestrator puts in the path, once, before this).
  */
-function readTokenFile(file: string, mask: number, follow: boolean): string {
+function readTokenFile(file: string, mask: number, root: boolean): string {
   let fd: number;
   try {
-    fd = fs.openSync(file, fs.constants.O_RDONLY | (follow ? 0 : NOFOLLOW));
+    fd = fs.openSync(file, fs.constants.O_RDONLY | NOFOLLOW);
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
     throw new Refusal(
@@ -66,13 +69,21 @@ function readTokenFile(file: string, mask: number, follow: boolean): string {
     const st = fs.fstatSync(fd);
     const me = currentUid();
     if (!st.isFile()) throw new Refusal(`${shown(file)} is not a regular file.`);
-    if (me !== undefined && st.uid !== me) {
+    if (me !== undefined && st.uid !== me && !(root && st.uid === 0)) {
       throw new Refusal(`${shown(file)} belongs to another user; refusing to use it.`);
     }
     if (process.platform !== 'win32' && (st.mode & mask) !== 0) {
       throw new Refusal(
-        `${shown(file)} is mode ${(st.mode & 0o777).toString(8)}, so others could read the service token. Fix: chmod 600 ${shown(file)}`,
+        `${shown(file)} is mode ${(st.mode & 0o777).toString(8)}, so others could read or change the service token. Fix: chmod ${mask === 0o077 ? '600' : '640'} ${shown(file)}`,
       );
+    }
+    if (root && process.platform !== 'win32') {
+      const dir = fs.statSync(path.dirname(file));
+      if ((dir.mode & 0o002) !== 0 || (me !== undefined && dir.uid !== me && dir.uid !== 0)) {
+        throw new Refusal(
+          `${shown(path.dirname(file))} (the token file's directory) can be changed by others; refusing to use ${shown(file)}.`,
+        );
+      }
     }
     return fs.readFileSync(fd, 'utf8');
   } finally {
@@ -80,28 +91,52 @@ function readTokenFile(file: string, mask: number, follow: boolean): string {
   }
 }
 
-/**
- * The tokens service mode accepts, as SHA-256 digests: `OORT_SERVE_TOKEN` (up to two, comma
- * separated, for rotation), else the file `OORT_SERVE_TOKEN_FILE` names (a mounted secret), else
- * `<home>/serve.token`. Each must be at least 43 base64url characters (256 bits).
- */
-export function serviceDigests(env: Env, home: string): Buffer[] {
+/** Where the token comes from, and how a file is judged. */
+interface TokenSource {
+  where: string;
+  /** Undefined for `OORT_SERVE_TOKEN`: fixed for the life of the process. */
+  file?: string;
+  mask: number;
+  mounted: boolean;
+  read: () => string;
+}
+
+function sourceOf(env: Env, home: string): TokenSource {
   const fromEnv = env['OORT_SERVE_TOKEN'];
   const fileEnv = env['OORT_SERVE_TOKEN_FILE'];
-  let raw: string;
-  let where: string;
   if (fromEnv !== undefined && fromEnv !== '') {
-    raw = fromEnv;
-    where = 'OORT_SERVE_TOKEN';
-  } else if (fileEnv !== undefined && fileEnv !== '') {
+    return { where: 'OORT_SERVE_TOKEN', mask: 0, mounted: false, read: () => fromEnv };
+  }
+  if (fileEnv !== undefined && fileEnv !== '') {
     if (!path.isAbsolute(fileEnv))
       throw new Refusal('OORT_SERVE_TOKEN_FILE must be an absolute path.');
-    raw = readTokenFile(fileEnv, 0o007, true);
-    where = 'OORT_SERVE_TOKEN_FILE';
-  } else {
-    raw = readTokenFile(tokenPathFor(home), 0o077, false);
-    where = shown(tokenPathFor(home));
+    // A mounted secret is reached through links (`token -> ..data/token`): resolved once here.
+    let real = fileEnv;
+    try {
+      real = fs.realpathSync(fileEnv);
+    } catch {
+      // readTokenFile reports it.
+    }
+    return {
+      where: 'OORT_SERVE_TOKEN_FILE',
+      file: real,
+      mask: 0o027,
+      mounted: true,
+      read: () => readTokenFile(real, 0o027, true),
+    };
   }
+  const file = tokenPathFor(home);
+  return {
+    where: shown(file),
+    file,
+    mask: 0o077,
+    mounted: false,
+    read: () => readTokenFile(file, 0o077, false),
+  };
+}
+
+/** One to two tokens from the text, each at least 43 base64url characters; as SHA-256 digests. */
+function digestsOf(raw: string, where: string): Buffer[] {
   const tokens = raw
     .split(',')
     .map((t) => t.trim())
@@ -118,6 +153,76 @@ export function serviceDigests(env: Env, home: string): Buffer[] {
     }
   }
   return tokens.map(digestOf);
+}
+
+/**
+ * The tokens service mode accepts, as SHA-256 digests: `OORT_SERVE_TOKEN` (up to two, comma
+ * separated, for rotation), else the file `OORT_SERVE_TOKEN_FILE` names (a mounted secret; prefer
+ * it: an environment variable is readable in `/proc/<pid>/environ`), else `<home>/serve.token`.
+ * Each must be at least 43 base64url characters (256 bits).
+ */
+export function serviceDigests(env: Env, home: string): Buffer[] {
+  const src = sourceOf(env, home);
+  return digestsOf(src.read(), src.where);
+}
+
+/**
+ * The digests, and (for a token file) a `reload` that follows the file: on each request the
+ * file's identity and times are checked (one `stat`), and a changed file is read again, so
+ * `oort serve token --rotate` takes effect on the next request with no restart. A file that has
+ * become unreadable or invalid accepts no token at all (fails closed) until it is fixed.
+ * `forceReload` (SIGHUP) reads it again whatever `stat` says.
+ */
+export function serviceTokens(
+  env: Env,
+  home: string,
+): {
+  digests: Buffer[];
+  reload?: (log?: (line: string) => void) => readonly Buffer[];
+  forceReload?: () => void;
+} {
+  const src = sourceOf(env, home);
+  let current = digestsOf(src.read(), src.where);
+  const file = src.file;
+  if (file === undefined) return { digests: current };
+  const stamp = (): string | undefined => {
+    try {
+      const st = fs.statSync(file, { bigint: true });
+      return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
+    } catch {
+      return undefined;
+    }
+  };
+  let seen = stamp();
+  let force = false;
+  return {
+    digests: current,
+    forceReload: () => {
+      force = true;
+    },
+    reload: (log) => {
+      const now = stamp();
+      if (!force && now === seen) return current;
+      force = false;
+      seen = now;
+      try {
+        current = digestsOf(src.read(), src.where);
+        log?.(
+          JSON.stringify({ level: 'info', msg: 'service token reloaded', tokens: current.length }),
+        );
+      } catch (e) {
+        current = [];
+        log?.(
+          JSON.stringify({
+            level: 'error',
+            msg: 'service token unreadable: refusing every request until it is fixed',
+            reason: e instanceof Refusal ? e.message.slice(0, 200) : 'error',
+          }),
+        );
+      }
+      return current;
+    },
+  };
 }
 
 /** Loopback addresses: a listener there is reachable from this host (or this pod) only. */
@@ -157,9 +262,16 @@ const NETWORK_FS = new Map<number, string>([
   [0x6b414653, 'AFS'],
   [0x47504653, 'GPFS'],
   [0x0bd00bd0, 'Lustre'],
+  [0x01021997, '9p'],
+  [0x00c36400, 'Ceph'],
 ]);
 
-/** The network filesystem `dir` is on (Linux), else undefined (local, or unknown elsewhere). */
+/**
+ * The network filesystem `dir` is on, else undefined. Linux only: macOS and Windows are not
+ * checked (undefined), and a network volume that a container runtime mounts through a local
+ * driver (an overlay, a bind of a host path) reports the type the kernel shows, which may be the
+ * local one. A best-effort refusal, not a guarantee: keep OORT_HOME on a local block volume.
+ */
 export function networkFilesystem(dir: string): string | undefined {
   if (process.platform !== 'linux') return undefined;
   try {
@@ -206,5 +318,5 @@ export function serviceSettings(
       `${shown(home)} is on a network filesystem (${fsName}); SQLite needs a local disk for one store. Put OORT_HOME on a block volume.`,
     );
   }
-  return { host, port, auth: { digests: serviceDigests(env, home), org } };
+  return { host, port, auth: { ...serviceTokens(env, home), org } };
 }

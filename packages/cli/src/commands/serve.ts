@@ -248,12 +248,16 @@ export async function serveCommand(
   process.on('SIGTERM', onSignal);
   process.on('SIGINT', onSignal);
   process.on('uncaughtException', onCrash);
+  // SIGHUP reads the service token file again (a rotation is also seen on the next request).
+  const onHup = (): void => listen?.auth.forceReload?.();
+  if (listen !== undefined) process.on('SIGHUP', onHup);
   try {
     await daemon.closed;
   } finally {
     process.off('SIGTERM', onSignal);
     process.off('SIGINT', onSignal);
     process.off('uncaughtException', onCrash);
+    process.off('SIGHUP', onHup);
   }
   return process.exitCode === 1 ? 1 : 0;
 
@@ -268,8 +272,13 @@ export async function serveCommand(
           : `${show(r.file)} already holds a token; \`oort serve token --rotate\` replaces it.`,
       )}\n`,
     );
+    if (r.created && opts.rotate === true) {
+      io.out(
+        `${ui.dim('Rotated: the running service picks it up on the next request, and the old token stops working then (no restart needed).')}\n`,
+      );
+    }
     io.out(
-      `${ui.dim('Give it to clients as OORT_SERVE_TOKEN (read the file; it is never printed), then: oort serve --listen 127.0.0.1:7807 --org <tenant>')}\n`,
+      `${ui.dim('Give it to clients (read the file; it is never printed), then: oort serve --listen 127.0.0.1:7807 --org <tenant>. Mount the file with OORT_SERVE_TOKEN_FILE rather than putting the token in OORT_SERVE_TOKEN: an environment variable can be read from /proc/<pid>/environ.')}\n`,
     );
     return 0;
   }

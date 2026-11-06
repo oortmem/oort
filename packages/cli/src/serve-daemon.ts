@@ -851,7 +851,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   let tcpAddress: { host: string; port: number } | undefined;
   if (opts.listen !== undefined) {
     const l = opts.listen;
-    tcp = api.serviceServer(l.auth, opts.log);
+    tcp = api.serviceServer(l.auth, opts.log, { host: l.host });
     tcp.maxConnections = MAX_SERVICE_CONNECTIONS;
     tcp.on('connection', (c) => {
       connections.add(c);

@@ -10,12 +10,13 @@ import { createOortWith } from './sdk/create.js';
 import type { OortOptions } from './sdk/types.js';
 import { callDaemon } from './serve-client.js';
 import { startDaemon, type Daemon } from './serve-daemon.js';
-import { MAX_BODY_BYTES, digestOf, tokenMatches } from './serve-http.js';
+import { MAX_BODY_BYTES, allowedHost, digestOf, tokenMatches } from './serve-http.js';
 import {
   isLoopback,
   parseListen,
   serviceDigests,
   serviceSettings,
+  serviceTokens,
   tokenPathFor,
   writeTokenFile,
 } from './serve-token.js';
@@ -209,13 +210,60 @@ describe('service mode on TCP', () => {
     expect((await request('GET', '/healthz', {}, undefined, true)).status).toBe(200);
   });
 
+  it('needs Oort-User on every memory route: a missing one never acts as the org', async () => {
+    const tcp = (h: Record<string, string>, route = '/v1/whoami') =>
+      request('GET', route, h, undefined, true);
+    for (const route of ['/v1/whoami', '/v1/memories']) {
+      const none = await tcp(auth, route);
+      expect([none.status, none.body.error?.['code'], none.body.error?.['reason']]).toEqual([
+        400,
+        'usage',
+        'user-missing',
+      ]);
+    }
+    const post = await request('POST', '/v1/recall', auth, JSON.stringify({ query: 'q' }), true);
+    expect(post.body.error?.['reason']).toBe('user-missing');
+    // Deliberate org-level memory says so; the agent may be named with it.
+    const org = await tcp({ ...auth, 'oort-user': '-' });
+    expect(org.status).toBe(200);
+    expect(org.body.data?.['user']).toBeNull();
+    const agent = await tcp({ ...auth, 'oort-user': '-', 'oort-agent': 'bot' });
+    expect(agent.body.data).toMatchObject({ agent: 'bot', user: null });
+    // The health handshake needs no user; an empty one is still the SDK's user-missing.
+    expect((await tcp(auth, '/v1/health')).status).toBe(200);
+    expect((await tcp({ ...auth, 'oort-user': '' })).body.error?.['reason']).toBe('user-missing');
+  });
+
+  it('answers a loopback listener only under its own Host', async () => {
+    const tcp = (host: string) =>
+      request('GET', '/v1/whoami', { ...auth, 'oort-user': 'u1', host }, undefined, true);
+    const port = daemon.tcp!.port;
+    for (const bad of [
+      'evil.example',
+      `evil.example:${port}`,
+      '127.0.0.1',
+      `localhost:${port + 1}`,
+    ]) {
+      const r = await tcp(bad);
+      expect([r.status, r.body.error?.['reason']], bad).toEqual([403, 'host-refused']);
+    }
+    for (const good of [`127.0.0.1:${port}`, `localhost:${port}`, `LOCALHOST:${port}`]) {
+      expect((await tcp(good)).status, good).toBe(200);
+    }
+    expect(allowedHost('[::1]:7807', '::1', 7807)).toBe(true);
+    expect(allowedHost('[::1]:7808', '::1', 7807)).toBe(false);
+    expect(allowedHost(undefined, '127.0.0.1', 7807)).toBe(false);
+  });
+
   it('refuses a cwd, an org, an expert role and a missing project', async () => {
     const tcp = (h: Record<string, string>) => request('GET', '/v1/whoami', h, undefined, true);
     expect((await tcp({ ...auth, 'oort-cwd': '/etc' })).status).toBe(400);
     expect((await tcp({ ...auth, 'oort-org': 'other' })).status).toBe(400);
-    expect((await tcp({ ...auth, 'oort-judge-role': 'expert' })).body.error?.['reason']).toBe(
-      'expert-only',
-    );
+    expect(
+      (await tcp({ ...auth, 'oort-user': 'u1', 'oort-judge-role': 'expert' })).body.error?.[
+        'reason'
+      ],
+    ).toBe('expert-only');
     expect((await tcp({ authorization: auth.authorization })).status).toBe(400);
   });
 
@@ -224,9 +272,120 @@ describe('service mode on TCP', () => {
     expect(tokenMatches(`Bearer ${TOKEN}`, d)).toBe(true);
     expect(tokenMatches(`Bearer ${'B'.repeat(43)}`, d)).toBe(true);
     expect(tokenMatches(`Bearer ${TOKEN}x`, d)).toBe(false);
-    expect(tokenMatches(`bearer ${TOKEN}`, d)).toBe(false);
+    expect(tokenMatches(`bearer ${TOKEN}`, d)).toBe(true);
+    expect(tokenMatches(`BEARER ${TOKEN}`, d)).toBe(true);
+    expect(tokenMatches(`Basic ${TOKEN}`, d)).toBe(false);
     expect(tokenMatches(undefined, d)).toBe(false);
     expect(tokenMatches('Bearer ', d)).toBe(false);
+  });
+});
+
+describe('rotating the service token under a running service', () => {
+  it('stops the old token on the next request and starts the new one, with no restart', async () => {
+    const base = tmpdir('oort-rot-');
+    const h = path.join(base, 'home');
+    fs.mkdirSync(h, { recursive: true, mode: 0o700 });
+    writeTokenFile(h, false);
+    const first = fs.readFileSync(tokenPathFor(h), 'utf8').trim();
+    const settings = serviceSettings({ listen: '127.0.0.1:0', org: 'acme' }, {}, h);
+    const d = await startDaemon({
+      home: h,
+      env: { HOME: base, OORT_HOME: h, OORT_NO_KEYCHAIN: '1' },
+      wire,
+      version: VERSION,
+      idleMs: 600_000,
+      spawnDrain: () => {},
+      log: () => {},
+      warmCwd: base,
+      createHandle: (o) => createOortWith(o, { adapters: fakeAdapters() }),
+      listen: { host: settings.host, port: settings.port, auth: settings.auth },
+    });
+    try {
+      const get = (token: string): Promise<number> =>
+        new Promise((resolve, reject) => {
+          const port = d.tcp!.port;
+          http
+            .get(
+              {
+                host: '127.0.0.1',
+                port,
+                path: '/v1/whoami',
+                headers: {
+                  authorization: `Bearer ${token}`,
+                  'oort-project': '-',
+                  'oort-user': 'u1',
+                },
+              },
+              (res) => {
+                res.resume();
+                res.on('end', () => resolve(res.statusCode ?? 0));
+              },
+            )
+            .on('error', reject);
+        });
+      expect(await get(first)).toBe(200);
+      writeTokenFile(h, true);
+      const second = fs.readFileSync(tokenPathFor(h), 'utf8').trim();
+      expect(second).not.toBe(first);
+      expect(await get(first)).toBe(401);
+      expect(await get(second)).toBe(200);
+      // A token file that is gone accepts nothing (fails closed), and works again once it is back.
+      fs.rmSync(tokenPathFor(h));
+      expect(await get(second)).toBe(401);
+      writeTokenFile(h, false);
+      expect(await get(second)).toBe(401);
+      expect(await get(fs.readFileSync(tokenPathFor(h), 'utf8').trim())).toBe(200);
+    } finally {
+      await d.stop('test');
+    }
+  });
+
+  it('forceReload (SIGHUP) reads the file again even when its stat did not change', () => {
+    const h = path.join(tmpdir('oort-hup-'), 'home');
+    fs.mkdirSync(h, { recursive: true, mode: 0o700 });
+    writeTokenFile(h, false);
+    const t = serviceTokens({}, h);
+    const before = t.reload!();
+    expect(before).toHaveLength(1);
+    t.forceReload!();
+    expect(t.reload!()).toHaveLength(1);
+    expect(serviceTokens({ OORT_SERVE_TOKEN: TOKEN }, h).reload).toBeUndefined();
+  });
+});
+
+describe('OORT_SERVE_TOKEN_FILE', () => {
+  const make = (mode: number, dirMode = 0o755) => {
+    const dir = path.join(tmpdir('oort-tf-'), 'secret');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.chmodSync(dir, dirMode);
+    const file = path.join(dir, 'token');
+    fs.writeFileSync(file, `${TOKEN}\n`, { mode });
+    fs.chmodSync(file, mode);
+    return { dir, file };
+  };
+  const h = path.join(tmpdir('oort-tfh-'), 'home');
+
+  it('takes a private or group-readable file, and a link to it (an orchestrator mount)', () => {
+    for (const mode of [0o600, 0o640, 0o440]) {
+      const { file } = make(mode);
+      expect(serviceDigests({ OORT_SERVE_TOKEN_FILE: file }, h)).toHaveLength(1);
+    }
+    const { dir, file } = make(0o600);
+    const link = path.join(dir, 'mounted');
+    fs.symlinkSync(file, link);
+    expect(serviceDigests({ OORT_SERVE_TOKEN_FILE: link }, h)).toHaveLength(1);
+  });
+
+  it('refuses a file others or the group can write, others can read, or in a directory others can write', () => {
+    for (const mode of [0o620, 0o660, 0o602, 0o644, 0o604]) {
+      const { file } = make(mode);
+      expect(() => serviceDigests({ OORT_SERVE_TOKEN_FILE: file }, h), mode.toString(8)).toThrow(
+        /others could read or change/,
+      );
+    }
+    const open = make(0o600, 0o777);
+    expect(() => serviceDigests({ OORT_SERVE_TOKEN_FILE: open.file }, h)).toThrow(/directory/);
+    expect(() => serviceDigests({ OORT_SERVE_TOKEN_FILE: 'relative' }, h)).toThrow(/absolute/);
   });
 });
 

@@ -37,6 +37,10 @@ export const MAX_BODY_BYTES = 4 * 1024 * 1024;
 export const MAX_HEADER_BYTES = 16 * 1024;
 export const REQUEST_TIMEOUT_MS = 30_000;
 const HEADERS_TIMEOUT_MS = 10_000;
+/** The TCP listener waits less for a request's headers: an idle connection holds a slot. */
+const SERVICE_HEADERS_TIMEOUT_MS = 5_000;
+/** How often Node closes connections past their timeouts (default 30 s; slots free sooner). */
+const CONNECTIONS_CHECK_MS = 1_000;
 const KEEP_ALIVE_MS = 5_000;
 /** What this daemon serves beyond the core routes (`GET /v1/health`). */
 export const CAPABILITIES = ['judgments', 'consolidate'] as const;
@@ -55,7 +59,23 @@ export type HandleFactory = (options: OortOptions) => Promise<Oort>;
 export interface ServiceAuth {
   digests: Buffer[];
   org: string;
+  /**
+   * The digests now, asked on every request: a token file that was rotated or removed changes
+   * the answer with no restart. Absent: `digests` is fixed (`OORT_SERVE_TOKEN`).
+   */
+  reload?: (log?: (line: string) => void) => readonly Buffer[];
+  /** Read the token file again on the next request (SIGHUP). */
+  forceReload?: () => void;
 }
+
+/** Where the TCP listener is bound: loopback binds check the Host header (DNS rebinding). */
+export interface ServiceBind {
+  host: string;
+  port?: number;
+}
+
+/** `Oort-User: -` on the TCP listener: deliberate org-level (or agent-level) memory. */
+export const NO_USER = '-';
 
 export interface MemoryApiOptions {
   home: string;
@@ -153,7 +173,7 @@ function scopeOf(req: http.IncomingMessage, service: ServiceAuth | undefined): R
   const rawProject = header(req, 'oort-project');
   const rawConfig = header(req, 'oort-project-config');
   const agent = header(req, 'oort-agent');
-  const user = header(req, 'oort-user');
+  const rawUser = header(req, 'oort-user');
   const rawOrg = header(req, 'oort-org');
   const rawRole = header(req, 'oort-judge-role');
   const operator = header(req, 'oort-operator');
@@ -167,6 +187,14 @@ function scopeOf(req: http.IncomingMessage, service: ServiceAuth | undefined): R
     if (rawProject === undefined) {
       throw usage('Oort-Project is required on the TCP listener (`-` for no project).');
     }
+    // Fail closed: a request that forgot its end user must not act as the org's one shared
+    // Planet. Deliberate org-level (or agent-level) memory says so with `Oort-User: -`.
+    if (rawUser === undefined) {
+      throw usage(
+        'Oort-User is required on the TCP listener: name the end user, or send `Oort-User: -` for org-level (or agent-level, with Oort-Agent) memory.',
+        'user-missing',
+      );
+    }
     if (rawRole !== undefined && rawRole !== 'agent') {
       throw new Reject(
         new OortRefusedError(
@@ -176,6 +204,7 @@ function scopeOf(req: http.IncomingMessage, service: ServiceAuth | undefined): R
       );
     }
   }
+  const user = service !== undefined && rawUser === NO_USER ? undefined : rawUser;
   let cwd: string | undefined;
   if (rawCwd !== undefined) {
     try {
@@ -529,7 +558,8 @@ export function tokenMatches(
   authorization: string | undefined,
   digests: readonly Buffer[],
 ): boolean {
-  const m = /^Bearer ([^\s]+)$/.exec(authorization ?? '');
+  // The scheme is case-insensitive (RFC 7235 section 2.1).
+  const m = /^bearer ([^\s]+)$/i.exec(authorization ?? '');
   const given = createHash('sha256')
     .update(m?.[1] ?? '')
     .digest();
@@ -539,13 +569,24 @@ export function tokenMatches(
   return ok;
 }
 
+const isLoopbackHost = (host: string): boolean =>
+  host === 'localhost' || host === '::1' || host.startsWith('127.');
+
+/** The Host values a loopback listener answers to: its own names and the port it listens on. */
+export function allowedHost(host: string | undefined, bound: string, port: number): boolean {
+  if (host === undefined) return false;
+  const names = ['localhost', '127.0.0.1', '[::1]', bound.includes(':') ? `[${bound}]` : bound];
+  const h = host.toLowerCase();
+  return names.some((n) => h === `${n.toLowerCase()}:${port}` || (port === 80 && h === n));
+}
+
 export const digestOf = (token: string): Buffer => createHash('sha256').update(token).digest();
 
 export interface MemoryApi {
   /** A server that is never listened on: the daemon hands it the socket's HTTP connections. */
   readonly server: http.Server;
   /** Service mode's own server (`--listen`), when made. */
-  serviceServer(auth: ServiceAuth, log: (line: string) => void): http.Server;
+  serviceServer(auth: ServiceAuth, log: (line: string) => void, bind?: ServiceBind): http.Server;
   readonly handles: number;
   close(): Promise<void>;
 }
@@ -582,6 +623,8 @@ export function createMemoryApi(o: MemoryApiOptions): MemoryApi {
     req: http.IncomingMessage,
     res: http.ServerResponse,
     service: ServiceAuth | undefined,
+    hostOk?: (host: string | undefined) => boolean,
+    log?: (line: string) => void,
   ): Promise<{ status: number; route: string }> => {
     let route = 'unknown';
     try {
@@ -593,6 +636,14 @@ export function createMemoryApi(o: MemoryApiOptions): MemoryApi {
           }),
         );
       }
+      // A loopback listener answers only to its own names: a rebound DNS name is refused.
+      if (hostOk !== undefined && !hostOk(req.headers.host)) {
+        throw new Reject(
+          new OortRefusedError('This Host is not allowed on a loopback listener.', {
+            reason: 'host-refused',
+          }),
+        );
+      }
       const url = new URL(req.url ?? '/', 'http://oort.invalid');
       const method = req.method ?? 'GET';
       if (method === 'GET' && (url.pathname === '/healthz' || url.pathname === '/readyz')) {
@@ -601,7 +652,10 @@ export function createMemoryApi(o: MemoryApiOptions): MemoryApi {
         const status = url.pathname === '/healthz' || ready ? 200 : 503;
         return { status: send(res, status, { ok: ready, data: { ready } }), route };
       }
-      if (service !== undefined && !tokenMatches(req.headers.authorization, service.digests)) {
+      if (
+        service !== undefined &&
+        !tokenMatches(req.headers.authorization, service.reload?.(log) ?? service.digests)
+      ) {
         throw new Reject(
           new OortNeedsLoginError('A valid service token is required (Authorization: Bearer).', {
             fix: null,
@@ -657,17 +711,30 @@ export function createMemoryApi(o: MemoryApiOptions): MemoryApi {
     }
   };
 
-  const make = (service?: ServiceAuth, log?: (line: string) => void): http.Server => {
+  const make = (
+    service?: ServiceAuth,
+    log?: (line: string) => void,
+    bind?: ServiceBind,
+  ): http.Server => {
+    const loopbackBind = service !== undefined && bind !== undefined && isLoopbackHost(bind.host);
+    const hostOk = loopbackBind
+      ? (host: string | undefined): boolean => {
+          const addr = server.address();
+          const port = bind.port ?? (addr !== null && typeof addr === 'object' ? addr.port : 0);
+          return allowedHost(host, bind.host, port);
+        }
+      : undefined;
     const server = http.createServer(
       {
         maxHeaderSize: MAX_HEADER_BYTES,
         requestTimeout: REQUEST_TIMEOUT_MS,
-        headersTimeout: HEADERS_TIMEOUT_MS,
+        headersTimeout: service === undefined ? HEADERS_TIMEOUT_MS : SERVICE_HEADERS_TIMEOUT_MS,
         keepAliveTimeout: KEEP_ALIVE_MS,
+        connectionsCheckingInterval: CONNECTIONS_CHECK_MS,
       },
       (req, res) => {
         const t0 = performance.now();
-        void handle(req, res, service).then(({ status, route }) => {
+        void handle(req, res, service, hostOk, log).then(({ status, route }) => {
           // Service logs (§9.7): the route pattern, status and time; never text, ids or scope.
           log?.(
             JSON.stringify({
@@ -692,7 +759,7 @@ export function createMemoryApi(o: MemoryApiOptions): MemoryApi {
   const server = make();
   return {
     server,
-    serviceServer: (auth, log) => make(auth, log),
+    serviceServer: (auth, log, bind) => make(auth, log, bind),
     get handles() {
       return handles.size;
     },

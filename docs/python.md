@@ -266,10 +266,23 @@ with Oort(mode="local", judge_role="expert", operator="ada") as oort:
   protocol" in [docs/cli.md](cli.md#the-local-daemon-oort-serve).
 - **Autostart.** When nothing answers, the client runs `oort serve --detach` once: the managed
   copy (`~/.oort/cli/bin/oort`), else the first `oort` on `PATH` that is not this package's
-  launcher and is this minor or newer, else `npx --yes oortmem@<this version>`. The daemon gets
+  launcher and is this minor or newer, else `npx --yes oortmem@<this version>`. The npx fallback
+  downloads `oortmem` from the npm registry the first time it runs (it is cached after that), so
+  a machine with no CLI needs the network for its first autostart.
+  Nothing is run before it is trusted (the rules of `oort install`'s binary check): only
+  absolute `PATH` entries are searched (a relative or empty entry is skipped, never resolved
+  against the working directory); the realpath of `oort`, `node` and `npx` must belong to you or
+  root, with no write for others (and none for the group, except a group that can already
+  become root, for a `PATH` copy) on it or any directory above it, and not be in a temp directory.
+  The managed copy is stricter: no group write at all. A JavaScript `oort` is run as
+  `node <file>`, and npx as `node <npx>`, never through a `#!/usr/bin/env node` line. The
+  `--version` probe and the daemon see a `PATH` of trusted directories only. The probe's environment is
+  `PATH`, `HOME`, `OORT_HOME`, `LANG` and the proxy variables: no key or token. The daemon gets
   an allowlisted environment only (`PATH`, `HOME`, `LANG`, `TMPDIR`, `XDG_RUNTIME_DIR`, the
   `OORT_*` variables except the service token and `OORT_AGENT`, the three vendor keys,
   `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY`, `NO_PROXY`), so your app's other secrets never reach it.
+  A command that cannot be run is an `OortUsageError` (`autostart-failed`, fix
+  `oort serve --detach`).
   It exits after `serve.idleMinutes` without a request; a long-lived service runs `oort serve`
   under its own supervisor and passes `autostart=False`.
 - **Trust.** Before connecting, the client checks the socket as the hooks do: a real directory
@@ -291,12 +304,17 @@ oort serve --listen 127.0.0.1:7807 --org acme         # every token request acts
 
 ```text
 from oortmem import Oort
-svc = Oort(mode="remote", url="http://127.0.0.1:7807", token=open(token_file).read().strip())
+svc = Oort(mode="remote", url="http://127.0.0.1:7807", token=open(token_file).read().strip(),
+           agent_level=True)
 mem = svc.scoped(user="u-123", agent="support-bot")
 ```
 
 The token decides the org, so a remote handle names no `org`; it sends no cwd (the service has
-none) and records judgments in agent role only. The token never travels over plain `http://` to
+none) and records judgments in agent role only. A service never acts for "no one" by accident:
+every request carries `Oort-User`, so a remote handle needs `user=` or an explicit
+`agent_level=True` (sent as `Oort-User: -`, deliberate org-level or agent-level memory); neither
+is `OortUsageError` (`user-missing`). A request that reaches the service without the header
+gets `400 user-missing`. The token never travels over plain `http://` to
 a host other than loopback: put a TLS proxy in front, and use `https://`.
 
 ## Cloud mode
@@ -306,7 +324,9 @@ Python calls Oort Cloud's `/v1` API exactly as the TypeScript SDK does, with the
 mapping (shared test vectors pin it). Redirects are never followed, so the key never reaches
 another origin. `HTTPS_PROXY` and `NO_PROXY` are honoured.
 
-One difference, until a shared rule table exists: Python sends turns and queries as given and
-does not scrub memory text again on read. Oort Cloud scrubs secrets before anything is stored or
-reaches a model; the TypeScript SDK additionally re-scrubs on read, which catches a memory stored
-before a rule existed.
+Oort Cloud scrubs secrets before anything is stored or reaches a model, and Python scrubs again on
+read, as the TypeScript SDK does, with a port of the same scrubber (`oortmem._scrub`: the same
+rules, `[REDACTED:<kind>]` markers and secret ratio, pinned to core by a shared secret corpus and
+golden vectors). It catches a memory stored before a rule existed, or while the cloud lags one:
+every text field of a cloud read (text, entities, the explain chain, decisions' question and
+answer) is scrubbed, and `format_for_prompt` scrubs before it escapes.

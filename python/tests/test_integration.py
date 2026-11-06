@@ -84,7 +84,8 @@ class AgainstTheBuiltDaemon(unittest.TestCase):
     def oort(self, **kw):
         from oortmem import Oort
 
-        return Oort(mode="local", env=self.h.env, cwd=self.h.root, **kw)
+        # The shim sits in a temp dir, which autostart (rightly) never runs: name the built CLI.
+        return Oort(mode="local", env=self.h.env, cwd=self.h.root, _internals={"find": lambda home, env: [NODE, BIN]}, **kw)
 
     def test_1_autostart_then_keyword_recall_and_the_prompt_block(self) -> None:
         from oortmem import format_for_prompt
@@ -244,17 +245,17 @@ class ServiceMode(unittest.TestCase):
         self.assertIsNotNone(port)
         url = f"http://127.0.0.1:{port}"
 
-        svc = Oort(mode="remote", url=url, token=token)
+        svc = Oort(mode="remote", url=url, token=token, agent_level=True)
         u1 = svc.scoped(user="u1", agent="support")
         self.assertEqual([m.id for m in u1.recall("billing service deploys").memories], [OTHER])
         self.assertEqual(svc.whoami().mode, "remote")
         with self.assertRaises(OortNeedsLoginError) as e:
-            Oort(mode="remote", url=url, token="x" * 43).whoami()
+            Oort(mode="remote", url=url, token="x" * 43, agent_level=True).whoami()
         self.assertEqual(e.exception.reason, "token-rejected")
 
-        def raw(headers: str) -> bytes:
+        def raw(headers: str, host: str = f"127.0.0.1:{port}") -> bytes:
             s = socket.create_connection(("127.0.0.1", port))
-            s.sendall(f"GET /v1/whoami HTTP/1.1\r\nHost: x\r\n{headers}Connection: close\r\n\r\n".encode())
+            s.sendall(f"GET /v1/whoami HTTP/1.1\r\nHost: {host}\r\n{headers}Connection: close\r\n\r\n".encode())
             out = b""
             while True:
                 c = s.recv(65536)
@@ -269,11 +270,14 @@ class ServiceMode(unittest.TestCase):
         self.assertIn(b"Oort-Cwd is refused", raw(auth + "Oort-Project: -\r\nOort-Cwd: /etc\r\n"))
         self.assertIn(b"Oort-Org is refused", raw(auth + "Oort-Project: -\r\nOort-Org: other\r\n"))
         self.assertIn(b"Oort-Project is required", raw(auth))
-        self.assertIn(b"expert-only", raw(auth + "Oort-Project: -\r\nOort-Judge-Role: expert\r\n"))
+        self.assertIn(b"user-missing", raw(auth + "Oort-Project: -\r\n"))  # never the org's shared Planet
+        self.assertNotIn(b"user-missing", raw(auth + "Oort-Project: -\r\nOort-User: -\r\n"))
+        self.assertIn(b"host-refused", raw(auth + "Oort-Project: -\r\nOort-User: -\r\n", host="evil.example"))
+        self.assertIn(b"expert-only", raw(auth + "Oort-Project: -\r\nOort-User: -\r\nOort-Judge-Role: expert\r\n"))
         self.assertIn(b"origin-refused", raw(auth + "Oort-Project: -\r\nOrigin: http://127.0.0.1\r\n"))
         self.assertTrue(raw("").startswith(b"HTTP/1.1 401"))
         with self.assertRaises(OortUsageError):
-            Oort(mode="remote", url=f"http://10.1.2.3:{port}", token=token)
+            Oort(mode="remote", url=f"http://10.1.2.3:{port}", token=token, agent_level=True)
 
 
 if __name__ == "__main__":
