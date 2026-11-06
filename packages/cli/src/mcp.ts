@@ -31,7 +31,7 @@ import {
   Refusal,
   findMemory,
   fixed,
-  keyRemedy,
+  remedySentence,
   refuseStarInCloud,
   shapeLinks,
   writeGrant,
@@ -183,7 +183,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
         ...(refused !== undefined
           ? { note: `recall degraded: ${refused.message}` }
           : lexicalOnly && {
-              note: `lexical-only recall: no embed or rerank model or key. Run ${keyRemedy({ roles: ['embed', 'rerank'], keyStore: w.keyStore !== false })}.`,
+              note: `lexical-only recall: no embed or rerank model or key. ${remedySentence({ roles: ['embed', 'rerank'], keyStore: w.keyStore !== false })}.`,
             }),
         // Last, so a store that ignored the requested time mode is the note the agent reads.
         ...(ignored && {

@@ -176,6 +176,14 @@ export function keyRemedy(
   return `${list}; no local model does ${what} (${c('oort models pull')} covers embed and rerank only), so saving needs one of these`;
 }
 
+/** The remedy as a sentence: "Run `oort …`, …" or, when it starts with an instruction to set a variable, "Set …". */
+export function remedySentence(
+  opts: { roles?: readonly AdapterRole[]; keyStore?: boolean; code?: boolean } = {},
+): string {
+  const r = keyRemedy(opts);
+  return r.startsWith('set ') ? `S${r.slice(1)}` : `Run ${r}`;
+}
+
 /** Saving (observe, import, MCP remember) needs all three; local models serve only the first. */
 export const SAVING_NEEDS =
   'Saving new memories needs embed, decide (TypeSafe) and write (Anthropic). Local models (`oort models pull`) cover only embed (and rerank); decide and write need your own TypeSafe and Anthropic keys, or Oort Pro.';
@@ -191,7 +199,7 @@ export function adapterProblem(
 ): string | undefined {
   if (err === undefined) return undefined;
   if (err instanceof MissingCredentialError) {
-    return `No ${role} model or key. Run ${keyRemedy({ roles: [role], keyStore })}.`;
+    return `No ${role} model or key. ${remedySentence({ roles: [role], keyStore })}.`;
   }
   return err.message;
 }

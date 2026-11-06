@@ -9,7 +9,7 @@ import {
 } from '@oortmem/core';
 import { LOCAL_PROVIDER } from '../local-models.js';
 import { uiFor } from '../ui.js';
-import { Refusal, SAVING_NEEDS, keyRemedy, tilde, type Ctx } from '../util.js';
+import { Refusal, SAVING_NEEDS, remedySentence, tilde, type Ctx } from '../util.js';
 
 /** Each key and what needs it. */
 const KEYS = [
@@ -110,7 +110,7 @@ export async function initCommand(opts: { project?: boolean }, ctx: Ctx): Promis
       ),
     );
     const roles = missing.flatMap((k) => k.roles);
-    io.out(`Run ${keyRemedy({ roles, keyStore: ctx.keychain.supported })}.\n`);
+    io.out(`${remedySentence({ roles, keyStore: ctx.keychain.supported })}.\n`);
     // With Voyage missing too, the list leads with local models: say what they do not cover.
     const saving = missing.some((k) => k.provider !== 'voyage');
     if (saving && missing.some((k) => k.provider === 'voyage')) io.out(`${SAVING_NEEDS}\n`);

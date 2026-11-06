@@ -215,7 +215,7 @@ describe('oort bin', () => {
     expect(keyless.exitCode).toBe(2);
     expect(keyless.stdout).toMatch(/observations\s+[1-9]/);
     expect(keyless.stderr).toContain(
-      'set TYPESAFE_API_KEY in the environment your agent starts with',
+      'Set TYPESAFE_API_KEY in the environment your agent starts with',
     );
     expect(keyless.stderr).not.toContain('oort keys set');
   });

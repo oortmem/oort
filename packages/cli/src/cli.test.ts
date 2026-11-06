@@ -74,7 +74,9 @@ describe('oort observe', () => {
     const nb = await bare.run(['observe', '--user', 'which port?', '--assistant', 'port 5582']);
     expect(nb.code).toBe(2);
     for (const v of ['VOYAGE_API_KEY', 'TYPESAFE_API_KEY', 'ANTHROPIC_API_KEY']) {
-      expect(nb.io.stderr).toContain(`set ${v} in the environment your agent starts with`);
+      expect(nb.io.stderr).toMatch(
+        new RegExp(`[Ss]et ${v} in the environment your agent starts with`),
+      );
     }
     expect(nb.io.stderr).toContain('oort models pull');
     expect(nb.io.stderr).not.toContain('oort keys set');

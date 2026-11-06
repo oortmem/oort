@@ -264,7 +264,7 @@ describe('oort mcp tools', () => {
     });
     expect(r.isError).toBe(true);
     for (const v of ['VOYAGE_API_KEY', 'TYPESAFE_API_KEY', 'ANTHROPIC_API_KEY']) {
-      expect(text(r)).toContain(`set ${v} in the environment your agent starts with`);
+      expect(text(r)).toMatch(new RegExp(`[Ss]et ${v} in the environment your agent starts with`));
     }
     expect(text(r)).not.toContain('oort keys set');
     const found = await client.callTool({ name: 'recall', arguments: { query: 'durable' } });

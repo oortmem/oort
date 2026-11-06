@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { localScope, type DecisionController } from '@oortmem/core';
+import { MissingCredentialError, localScope, type DecisionController } from '@oortmem/core';
 import { TG } from '@oortmem/core/store-conformance';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import {
@@ -20,6 +20,7 @@ import {
   type Harness,
 } from '../test/helpers.js';
 import { createKeychain } from './keychain.js';
+import { adapterProblem, remedySentence } from './util.js';
 
 /**
  * CON-107 step 1: prompts never on stdout, one missing-key remedy, exit codes as docs/cli.md
@@ -289,6 +290,22 @@ describe('local commands that ask first (CON-107)', () => {
 describe('one remedy for a missing key (CON-107)', () => {
   const REMEDY =
     '`oort models pull` (free local embed and rerank, no keys), `oort keys set voyage`, or `oort login` (Oort Pro)';
+
+  it('remedy.reads-as-a-sentence-with-and-without-a-key-store', () => {
+    // Without a key store and no local model for the role, the remedy is an instruction to set
+    // variables, so it must not read "Run set …".
+    for (const role of ['decide', 'write'] as const) {
+      const s = remedySentence({ roles: [role], keyStore: false });
+      expect(s).toMatch(/^Set [A-Z_]+_API_KEY in the environment your agent starts with/);
+      expect(s).not.toMatch(/Run set/);
+    }
+    expect(remedySentence({ roles: ['embed'], keyStore: false })).toMatch(
+      /^Run `oort models pull`/,
+    );
+    expect(remedySentence({ roles: ['decide'] })).toMatch(/^Run `oort keys set typesafe`/);
+    const err = new MissingCredentialError('TYPESAFE_API_KEY', 'typesafe');
+    expect(adapterProblem(err, 'decide', false)).not.toMatch(/Run set/);
+  });
 
   it('remedy.recall-lexical-only-hint', async () => {
     const h = harness({ adapters: false });
