@@ -1,0 +1,60 @@
+{"fact":"f01","text":"本地开发时 checkout-web 跑在 4173 端口，API 请求会代理到 8081 端口的后端。"}
+{"fact":"f02","text":"ledger-sync 这个 worker 消费 Kafka 的 ledger.events.v2 topic，只有数据库事务成功之后才提交 offset。"}
+{"fact":"f03","text":"invoice-renderer用Playwright生成发票PDF，所以Docker镜像里必须带上headless Chromium。"}
+{"fact":"f04","text":"staging 环境的 Postgres 凭据放在 Vault 的 secret/staging/postgres 下面，绝对不要复制到 .env 文件里。"}
+{"fact":"f05","text":"支付的 on-call 排班由 Marta Oliveira 负责；动退款任务之前一定要先呼她。"}
+{"fact":"f06","text":"用户希望 commit message 用祈使句，末尾带上 Linear 的 issue key，比如“Fix retry backoff (PAY-212)”。"}
+{"fact":"f07","text":"重新生成GraphQL类型：在仓库根目录执行pnpm codegen，然后重启dev server。"}
+{"fact":"f08","text":"2026-10-14 MaxMind 数据库更新后，geo-lookup 内存溢出（OOM）挂掉了；已经把容器内存上限调到 1 GiB。"}
+{"fact":"f09","text":"移动端App支持iOS 16及以上；不再支持iOS 15这件事已经和产品团队达成一致。"}
+{"fact":"f10","text":"reporting-api 用 PostgreSQL 的行级安全（RLS）做租户隔离，而不是在应用代码里过滤，因为以前有一次漏了 WHERE 条件，把别的客户的数据泄露了出去。"}
+{"fact":"f11","text":"用户希望 PR 的改动控制在 400 行以内；超过的话在评审前先拆开。"}
+{"fact":"f12","text":"发版前用 pnpm changeset version 升版本号，并检查 CHANGELOG.md 里有没有写全所有面向用户的改动。"}
+{"fact":"f13","text":"session-broker把会话存在Redis里，空闲超时30分钟，绝对上限12小时。"}
+{"fact":"f14","text":"夜间备份连续三个晚上失败，原因是 S3 的生命周期规则一直在删 staging 前缀下的东西。"}
+{"fact":"f15","text":"功能开关统一在 Unleash 里管理；new-checkout-flow 目前对巴西 10% 的用户开启。"}
+{"fact":"f16","text":"用户不喜欢 default export，要求所有 TypeScript 模块都用具名导出（named export）。"}
+{"fact":"f17","text":"那个不稳定的登录测试（flaky）可以在本地复现：带上 SLOW_NETWORK=1，再用一个全新的浏览器配置文件来跑。"}
+{"fact":"f18","text":"support-etl任务每15分钟把Zendesk里的工单拷贝到数据仓库。"}
+{"fact":"f19","text":"设计系统在 packages/ui 里，基于 Tailwind token 构建；颜色必须从 token 文件里取，禁止硬编码十六进制色值。"}
+{"fact":"f20","text":"2026-09-03 改了 analyzer 之后，catalog-indexer 从头重建了 Elasticsearch 索引，大概花了六个小时。"}
+{"fact":"f21","text":"图片上传上限是 10 MB，媒体处理流水线会把图片缩放到宽度不超过 2048 像素。"}
+{"fact":"f22","text":"所有时间戳一律按UTC存储，只在浏览器端转换成用户所在的时区。"}
+{"fact":"f23","text":"公开 API 通过 URL 路径做版本管理（/v1、/v2），/v1 将在 2027-03-31 下线。"}
+{"fact":"f24","text":"生产环境的迁移失败了也千万别去改那个迁移：新写一个向前的迁移，再用 pnpm db:migrate 执行。"}
+{"fact":"f25","text":"用户希望错误提示是写给最终用户看的，不要带堆栈信息，也不要暴露内部错误码。"}
+{"fact":"f26","text":"push-gateway 在 Android 上通过 Firebase Cloud Messaging（FCM）推送通知，iOS 上走 APNs。"}
+{"fact":"f27","text":"2026-08-21的压测显示，每秒2,000个请求时checkout延迟超过800 ms，瓶颈在算税的那个调用上。"}
+{"fact":"f28","text":"翻译在 Crowdin 上管理；源文案在 locales/en.json，其他语言由 CI 拉取。"}
+{"fact":"f29","text":"团队决定 monorepo 继续用 pnpm workspaces，不引入 Nx，免得再多一层构建。"}
+{"fact":"f30","text":"公开API每个API key每分钟限100次请求，限流在网关层做。"}
+{"fact":"f31","text":"想在本地用接近生产的数据，就跑 scripts/seed-anonymised.sh；它绝不会拷贝真实的邮箱地址。"}
+{"fact":"f32","text":"数据仓库是 europe-west1 区域的 BigQuery，分析师通过 Metabase 来查。"}
+{"fact":"f33","text":"用户希望 code review 的评论能给出具体的修复方案，而不只是指出问题。"}
+{"fact":"f34","text":"2026-07-02 证书过期导致合作方 webhook 接口挂了；现在证书由 cert-manager 自动续期。"}
+{"fact":"f35","text":"Android端用Kotlin和Jetpack Compose写，iOS端用SwiftUI。"}
+{"fact":"f36","text":"每个候选发布版本都要用 axe 做一遍无障碍审查，对比度不达标会直接卡住发布。"}
+{"fact":"f37","text":"密码用 Argon2id 做哈希；老系统留下的 bcrypt 哈希会在用户下次登录时重新哈希。"}
+{"fact":"f38","text":"轮换 Stripe webhook 密钥：先在 Vault 里更新，再重新部署 billing-worker。"}
+{"fact":"f39","text":"应用日志发到Grafana Loki，保留30天；错误同时上报到Sentry。"}
+{"fact":"f40","text":"用户更喜欢带简短代码示例的讲解，不喜欢长篇大论的理论回答。"}
+{"fact":"u01a","text":"checkout-web 部署在 Vercel 上。"}
+{"fact":"u01b","text":"checkout-web 现在不用 Vercel 了，改成部署到 Cloudflare Pages。"}
+{"fact":"u02a","text":"每次发版前的代码冻结期是两天。"}
+{"fact":"u02b","text":"每次发版前的代码冻结期已经缩短到一天。"}
+{"fact":"u03a","text":"ledger-sync跑在Node.js 20上。"}
+{"fact":"u03b","text":"ledger-sync 已经升级到 Node.js 24。"}
+{"fact":"u04a","text":"每周的设计评审在周二 10:00。"}
+{"fact":"u04b","text":"每周设计评审改到了周四 14:00。"}
+{"fact":"u05a","text":"移动端团队用 Bitrise 做 App 的 CI 构建。"}
+{"fact":"u05b","text":"移动端团队已经把CI构建从Bitrise迁到了GitHub Actions。"}
+{"fact":"u06a","text":"orders-api 默认每页返回 50 条。"}
+{"fact":"u06b","text":"orders-api 的默认分页大小已经调低到 25 条。"}
+{"fact":"u07a","text":"搜索团队的技术负责人是 Jonas Weber。"}
+{"fact":"u07b","text":"Priya Raman 已经接任搜索团队的技术负责人。"}
+{"fact":"u08a","text":"geo-lookup会把查询结果缓存24小时。"}
+{"fact":"u08b","text":"geo-lookup 现在只把查询结果缓存 6 小时。"}
+{"fact":"u09a","text":"staging 环境每周日晚上重置一次。"}
+{"fact":"u09b","text":"staging 环境现在改成每晚 02:00 UTC 重置。"}
+{"fact":"u10a","text":"invoice-renderer 在发票上用的是 Inter 字体。"}
+{"fact":"u10b","text":"invoice-renderer的发票字体换成了Noto Sans，这样非拉丁文字的客户名也能正常显示。"}

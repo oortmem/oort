@@ -1,0 +1,60 @@
+{"fact":"f01","text":"يعمل checkout-web على المنفذ 4173 في بيئة التطوير المحلية، ويمرّر طلبات الـ API عبر proxy إلى الـ backend على المنفذ 8081."}
+{"fact":"f02","text":"يقرأ الـ worker المسمّى ledger-sync من Kafka topic باسم ledger.events.v2، ولا ينفّذ commit للـ offsets إلا بعد نجاح الـ transaction في قاعدة البيانات."}
+{"fact":"f03","text":"يولّد invoice-renderer ملفات PDF للفواتير باستخدام Playwright، لذلك يجب أن تتضمن صورة Docker متصفح Chromium بوضع headless."}
+{"fact":"f04","text":"بيانات اعتماد Postgres الخاصة ببيئة staging محفوظة في Vault تحت المسار secret/staging/postgres، ولا يجوز نسخها إلى ملفات .env إطلاقًا."}
+{"fact":"f05","text":"Marta Oliveira مسؤولة عن جدول المناوبة (on-call) لفريق المدفوعات؛ أرسل لها page قبل أن يلمس أي شخص مهام الاسترداد (refund jobs)."}
+{"fact":"f06","text":"يريد المستخدم أن تُكتب رسائل الـ commit بصيغة الأمر (imperative) مع مفتاح تذكرة Linear في آخرها، مثل \"Fix retry backoff (PAY-212)\"."}
+{"fact":"f07","text":"لإعادة توليد أنواع GraphQL، شغّل pnpm codegen من جذر المستودع ثم أعد تشغيل الـ dev server."}
+{"fact":"f08","text":"في 2026-10-14 نفدت ذاكرة geo-lookup (out of memory) بعد تحديث قاعدة بيانات MaxMind، فرُفع حد ذاكرة الحاوية إلى 1 GiB."}
+{"fact":"f09","text":"يدعم تطبيق الجوال iOS 16 وما بعده؛ وقد تم الاتفاق مع فريق المنتج على إيقاف دعم iOS 15."}
+{"fact":"f10","text":"يعزل reporting-api بيانات الـ tenants باستخدام row-level security في PostgreSQL بدلًا من الفلترة في كود التطبيق، لأن نسيان شرط WHERE تسبّب ذات مرة في تسريب بيانات عميل آخر."}
+{"fact":"f11","text":"يفضّل المستخدم أن تكون الـ pull requests أقل من 400 سطر معدّل؛ وأي PR أكبر من ذلك يُقسَّم قبل المراجعة."}
+{"fact":"f12","text":"قبل أي إصدار، ارفع أرقام الإصدارات عبر pnpm changeset version وتأكد أن CHANGELOG.md يذكر كل تغيير يظهر للمستخدم."}
+{"fact":"f13","text":"يحفظ session-broker الجلسات في Redis بمهلة خمول (idle timeout) مدتها 30 دقيقة وحد أقصى مطلق قدره 12 ساعة."}
+{"fact":"f14","text":"فشل النسخ الاحتياطي الليلي ثلاث ليالٍ متتالية لأن قاعدة lifecycle في S3 كانت تحذف الـ prefix الخاص بـ staging."}
+{"fact":"f15","text":"تُدار الـ feature flags في Unleash؛ والـ flag المسمّى new-checkout-flow مفعّل لـ 10% من المستخدمين في البرازيل."}
+{"fact":"f16","text":"لا يحب المستخدم الـ default exports، ويريد named exports في كل module مكتوب بـ TypeScript."}
+{"fact":"f17","text":"يمكن إعادة إنتاج اختبار تسجيل الدخول المتقلّب (flaky) محليًا بتشغيله مع SLOW_NETWORK=1 وبملف تعريف متصفح جديد (fresh profile)."}
+{"fact":"f18","text":"تنسخ مهمة support-etl تذاكر الدعم من Zendesk إلى مستودع البيانات (data warehouse) كل 15 دقيقة."}
+{"fact":"f19","text":"نظام التصميم موجود في packages/ui ومبني على Tailwind tokens؛ ويجب أن تأتي الألوان من ملف الـ tokens، وليس أبدًا من قيم hex مكتوبة يدويًا في الكود."}
+{"fact":"f20","text":"في 2026-09-03 أعاد catalog-indexer بناء فهرس Elasticsearch من الصفر بعد تغيير الـ analyzer، واستغرقت إعادة البناء نحو ست ساعات."}
+{"fact":"f21","text":"الحد الأقصى لحجم الصور المرفوعة 10 MB، ويعيد الـ media pipeline تحجيمها بحيث لا يتجاوز عرضها 2048 بكسل."}
+{"fact":"f22","text":"تُخزَّن كل الـ timestamps بتوقيت UTC، ولا تُحوَّل إلى المنطقة الزمنية للمستخدم إلا في المتصفح."}
+{"fact":"f23","text":"يُحدَّد إصدار الـ API العام في مسار الـ URL (/v1, /v2)، وسيُوقَف /v1 في 2027-03-31."}
+{"fact":"f24","text":"إذا فشل migration في بيئة الإنتاج فلا تعدّله أبدًا: اكتب forward migration جديدًا وطبّقه باستخدام pnpm db:migrate."}
+{"fact":"f25","text":"يريد المستخدم أن تُكتب رسائل الخطأ بلغة يفهمها المستخدم النهائي، دون أي stack traces أو رموز أخطاء داخلية."}
+{"fact":"f26","text":"يرسل push-gateway الإشعارات عبر Firebase Cloud Messaging (FCM) على Android وعبر APNs على iOS."}
+{"fact":"f27","text":"أظهر اختبار الحِمل (load test) في 2026-08-21 أن زمن استجابة الـ checkout تجاوز 800 ms عند 2,000 طلب في الثانية، وكان عنق الزجاجة هو استدعاء حساب الضريبة."}
+{"fact":"f28","text":"تُدار الترجمات في Crowdin؛ النصوص المصدرية موجودة في locales/en.json، والـ CI يسحب بقية الـ locales."}
+{"fact":"f29","text":"قرّر الفريق البقاء على pnpm workspaces في الـ monorepo وعدم اعتماد Nx، تجنّبًا لإضافة طبقة build أخرى."}
+{"fact":"f30","text":"يسمح الـ API العام بـ 100 طلب في الدقيقة لكل API key، ويُطبَّق هذا الحد على مستوى الـ gateway."}
+{"fact":"f31","text":"للحصول محليًا على بيانات شبيهة ببيانات الإنتاج، شغّل scripts/seed-anonymised.sh؛ فهو لا ينسخ عناوين البريد الإلكتروني الحقيقية أبدًا."}
+{"fact":"f32","text":"مستودع البيانات هو BigQuery في منطقة europe-west1، ويستعلم عنه المحللون من خلال Metabase."}
+{"fact":"f33","text":"يريد المستخدم أن تقترح تعليقات الـ review حلًّا ملموسًا بدلًا من الاكتفاء بالإشارة إلى المشكلة."}
+{"fact":"f34","text":"في 2026-07-02 تسبّبت شهادة منتهية الصلاحية في توقف الـ webhook endpoint الخاص بالشركاء؛ والآن يجدّد cert-manager الشهادات تلقائيًا."}
+{"fact":"f35","text":"تطبيق Android مكتوب بـ Kotlin مع Jetpack Compose، أما تطبيق iOS فيستخدم SwiftUI."}
+{"fact":"f36","text":"يخضع كل release candidate لتدقيق accessibility باستخدام axe، وأي إخفاق في التباين (contrast) يوقف الإصدار."}
+{"fact":"f37","text":"تُعمل hash لكلمات المرور باستخدام Argon2id؛ أما hashes الـ bcrypt القادمة من النظام القديم فيُعاد عمل hash لها عند تسجيل دخول المستخدم في المرة التالية."}
+{"fact":"f38","text":"لتدوير (rotate) الـ webhook secret الخاص بـ Stripe، حدّثه في Vault أولًا ثم أعد نشر billing-worker."}
+{"fact":"f39","text":"تذهب logs التطبيق إلى Grafana Loki وتُحفظ لمدة 30 يومًا، كما تُرسَل الأخطاء إلى Sentry أيضًا."}
+{"fact":"f40","text":"يفضّل المستخدم الشروحات المصحوبة بمثال كود قصير على الإجابات النظرية الطويلة."}
+{"fact":"u01a","text":"يُنشر checkout-web على Vercel."}
+{"fact":"u01b","text":"أصبح checkout-web يُنشر الآن على Cloudflare Pages بدلًا من Vercel."}
+{"fact":"u02a","text":"تستمر فترة الـ code freeze قبل كل إصدار يومين."}
+{"fact":"u02b","text":"تم تقليص فترة الـ code freeze قبل كل إصدار إلى يوم واحد."}
+{"fact":"u03a","text":"يعمل ledger-sync على Node.js 20."}
+{"fact":"u03b","text":"تمت ترقية ledger-sync إلى Node.js 24."}
+{"fact":"u04a","text":"تُعقد مراجعة التصميم الأسبوعية (design review) يوم الثلاثاء الساعة 10:00."}
+{"fact":"u04b","text":"انتقلت مراجعة التصميم الأسبوعية (design review) إلى يوم الخميس الساعة 14:00."}
+{"fact":"u05a","text":"يبني فريق الجوال تطبيقاته على Bitrise كمنصة CI."}
+{"fact":"u05b","text":"نقل فريق الجوال عمليات الـ CI build من Bitrise إلى GitHub Actions."}
+{"fact":"u06a","text":"يُرجع orders-api افتراضيًا 50 عنصرًا في كل صفحة."}
+{"fact":"u06b","text":"تم تخفيض حجم الصفحة الافتراضي في orders-api إلى 25 عنصرًا."}
+{"fact":"u07a","text":"Jonas Weber هو الـ tech lead لفريق البحث (search team)."}
+{"fact":"u07b","text":"تولّت Priya Raman دور الـ tech lead لفريق البحث (search team)."}
+{"fact":"u08a","text":"يخزّن geo-lookup نتائج الـ lookup مؤقتًا (cache) لمدة 24 ساعة."}
+{"fact":"u08b","text":"أصبح geo-lookup يخزّن نتائج الـ lookup مؤقتًا (cache) لمدة 6 ساعات فقط."}
+{"fact":"u09a","text":"يُعاد ضبط بيئة staging كل ليلة أحد."}
+{"fact":"u09b","text":"أصبحت بيئة staging يُعاد ضبطها الآن كل ليلة الساعة 02:00 UTC."}
+{"fact":"u10a","text":"يستخدم invoice-renderer خط Inter في الفواتير."}
+{"fact":"u10b","text":"انتقل invoice-renderer إلى خط Noto Sans في الفواتير حتى تظهر أسماء العملاء المكتوبة بخطوط غير لاتينية بشكل صحيح."}

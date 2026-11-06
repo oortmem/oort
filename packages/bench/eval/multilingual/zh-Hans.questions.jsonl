@@ -1,0 +1,34 @@
+{"question":"本地要看 checkout-web 得打开哪个端口？","expectedMemoryIds":["zh-Hans-f01"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"ledger-sync 是从哪个 Kafka topic 读数据的？","expectedMemoryIds":["zh-Hans-f02"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"invoice-renderer 是用什么生成 PDF 的？","expectedMemoryIds":["zh-Hans-f03"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"staging 数据库的密码存在哪儿？","expectedMemoryIds":["zh-Hans-f04"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"动退款任务之前应该先找谁？","expectedMemoryIds":["zh-Hans-f05"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"GraphQL 类型怎么重新生成？","expectedMemoryIds":["zh-Hans-f07"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"geo-lookup 十月份为什么崩了？","expectedMemoryIds":["zh-Hans-f08"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"reporting API 是怎么把不同租户的数据隔离开的？","expectedMemoryIds":["zh-Hans-f10"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"PR 改到多大就该拆了？","expectedMemoryIds":["zh-Hans-f11"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"session-broker 里的会话闲置多久会过期？","expectedMemoryIds":["zh-Hans-f13"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"new-checkout-flow 这个开关给巴西多大比例的用户开了？","expectedMemoryIds":["zh-Hans-f15"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"TypeScript 文件里能用 default export 吗？","expectedMemoryIds":["zh-Hans-f16"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"那个 flaky 的登录测试，怎么在我本地让它复现失败？","expectedMemoryIds":["zh-Hans-f17"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"Elasticsearch重建索引花了多长时间？","expectedMemoryIds":["zh-Hans-f20"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"v1 的 API 什么时候下线？","expectedMemoryIds":["zh-Hans-f23"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"生产上有个迁移挂了，我能直接改那个迁移文件吗？","expectedMemoryIds":["zh-Hans-f24"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"push-gateway 是怎么给 iPhone 推送通知的？","expectedMemoryIds":["zh-Hans-f26"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"公开 API 一个 API key 每分钟能请求多少次？","expectedMemoryIds":["zh-Hans-f30"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"BigQuery 数仓在哪个区域？","expectedMemoryIds":["zh-Hans-f32"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"我们的密码是用什么算法做哈希的？","expectedMemoryIds":["zh-Hans-f37"],"category":"single-fact","lang":"zh-Hans"}
+{"question":"checkout-web 现在托管在哪儿？","expectedMemoryIds":["zh-Hans-u01b"],"notExpectedMemoryIds":["zh-Hans-u01a"],"category":"knowledge-update","lang":"zh-Hans"}
+{"question":"发版前代码冻结多久？","expectedMemoryIds":["zh-Hans-u02b"],"notExpectedMemoryIds":["zh-Hans-u02a"],"category":"knowledge-update","lang":"zh-Hans"}
+{"question":"设计评审是什么时候开？","expectedMemoryIds":["zh-Hans-u04b"],"notExpectedMemoryIds":["zh-Hans-u04a"],"category":"knowledge-update","lang":"zh-Hans"}
+{"question":"移动端团队现在用哪个 CI 构建？","expectedMemoryIds":["zh-Hans-u05b"],"notExpectedMemoryIds":["zh-Hans-u05a"],"category":"knowledge-update","lang":"zh-Hans"}
+{"question":"不传参数的话 orders-api 每页返回多少条？","expectedMemoryIds":["zh-Hans-u06b"],"notExpectedMemoryIds":["zh-Hans-u06a"],"category":"knowledge-update","lang":"zh-Hans"}
+{"question":"staging 什么时候会被清空？","expectedMemoryIds":["zh-Hans-u09b"],"notExpectedMemoryIds":["zh-Hans-u09a"],"category":"knowledge-update","lang":"zh-Hans"}
+{"question":"invoice-renderer 在发票上用的是什么字体？","expectedMemoryIds":["zh-Hans-u10b"],"notExpectedMemoryIds":["zh-Hans-u10a"],"category":"knowledge-update","lang":"zh-Hans"}
+{"question":"5月的时候 ledger-sync 用的是哪个 Node.js 版本？","expectedMemoryIds":["zh-Hans-u03a"],"notExpectedMemoryIds":["zh-Hans-u03b"],"asOf":"2026-05-20T12:00:00Z","category":"temporal","lang":"zh-Hans"}
+{"question":"四月份搜索团队是谁带的？","expectedMemoryIds":["zh-Hans-u07a"],"notExpectedMemoryIds":["zh-Hans-u07b"],"asOf":"2026-04-15T12:00:00Z","category":"temporal","lang":"zh-Hans"}
+{"question":"夏天刚开始时，geo-lookup 的缓存结果保留多久？","expectedMemoryIds":["zh-Hans-u08a"],"notExpectedMemoryIds":["zh-Hans-u08b"],"asOf":"2026-06-05T12:00:00Z","category":"temporal","lang":"zh-Hans"}
+{"question":"notification-scheduler 监听哪个端口？","expectedMemoryIds":[],"category":"abstention","lang":"zh-Hans"}
+{"question":"欧盟客户的数据保留策略归谁负责？","expectedMemoryIds":[],"category":"abstention","lang":"zh-Hans"}
+{"question":"机器学习训练流水线用的是哪个 Python 版本？","expectedMemoryIds":[],"category":"abstention","lang":"zh-Hans"}
+{"question":"SendGrid 的 API key 怎么轮换？","expectedMemoryIds":[],"category":"abstention","lang":"zh-Hans"}

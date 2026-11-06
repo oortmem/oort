@@ -1,0 +1,34 @@
+{"question":"ローカルでcheckout-webを見るには何番ポートを開けばいい？","expectedMemoryIds":["ja-f01"],"category":"single-fact","lang":"ja"}
+{"question":"ledger-syncってどのKafkaトピックを読んでるんだっけ？","expectedMemoryIds":["ja-f02"],"category":"single-fact","lang":"ja"}
+{"question":"invoice-rendererはPDFを何で作ってるの？","expectedMemoryIds":["ja-f03"],"category":"single-fact","lang":"ja"}
+{"question":"ステージングのDBのパスワードってどこに保存されてる？","expectedMemoryIds":["ja-f04"],"category":"single-fact","lang":"ja"}
+{"question":"返金ジョブを触る前に誰に連絡すればいいですか？","expectedMemoryIds":["ja-f05"],"category":"single-fact","lang":"ja"}
+{"question":"GraphQLの型ってどうやって再生成するんでしたっけ？","expectedMemoryIds":["ja-f07"],"category":"single-fact","lang":"ja"}
+{"question":"10月にgeo-lookupが落ちたのはなんで？","expectedMemoryIds":["ja-f08"],"category":"single-fact","lang":"ja"}
+{"question":"reporting APIって、テナント同士のデータをどうやって分けてるの？","expectedMemoryIds":["ja-f10"],"category":"single-fact","lang":"ja"}
+{"question":"プルリクってどれくらいの大きさになったら分割したほうがいい？","expectedMemoryIds":["ja-f11"],"category":"single-fact","lang":"ja"}
+{"question":"session-brokerのセッションって、放置したらどれくらいで切れる？","expectedMemoryIds":["ja-f13"],"category":"single-fact","lang":"ja"}
+{"question":"new-checkout-flowのフラグって、ブラジルのユーザーの何%に出てる？","expectedMemoryIds":["ja-f15"],"category":"single-fact","lang":"ja"}
+{"question":"TypeScriptのファイルでexport defaultを使っても大丈夫？","expectedMemoryIds":["ja-f16"],"category":"single-fact","lang":"ja"}
+{"question":"あの不安定なログインテスト、手元で落ちるのを再現するにはどうすればいい？","expectedMemoryIds":["ja-f17"],"category":"single-fact","lang":"ja"}
+{"question":"Elasticsearchのインデックス作り直し、どれくらい時間かかった？","expectedMemoryIds":["ja-f20"],"category":"single-fact","lang":"ja"}
+{"question":"v1のAPIっていつ廃止されるんですか？","expectedMemoryIds":["ja-f23"],"category":"single-fact","lang":"ja"}
+{"question":"本番でマイグレーションがコケたんだけど、マイグレーションファイルを直接直しちゃっていい？","expectedMemoryIds":["ja-f24"],"category":"single-fact","lang":"ja"}
+{"question":"push-gatewayってiPhoneにはどうやって通知を届けてるの？","expectedMemoryIds":["ja-f26"],"category":"single-fact","lang":"ja"}
+{"question":"公開APIって、APIキー1つで1分間に何リクエストまで投げられる？","expectedMemoryIds":["ja-f30"],"category":"single-fact","lang":"ja"}
+{"question":"BigQueryのウェアハウスってどのリージョンにある？","expectedMemoryIds":["ja-f32"],"category":"single-fact","lang":"ja"}
+{"question":"パスワードのハッシュ化には何のアルゴリズムを使ってますか？","expectedMemoryIds":["ja-f37"],"category":"single-fact","lang":"ja"}
+{"question":"checkout-webって今どこでホスティングしてる？","expectedMemoryIds":["ja-u01b"],"notExpectedMemoryIds":["ja-u01a"],"category":"knowledge-update","lang":"ja"}
+{"question":"リリース前のコードフリーズってどれくらいの期間？","expectedMemoryIds":["ja-u02b"],"notExpectedMemoryIds":["ja-u02a"],"category":"knowledge-update","lang":"ja"}
+{"question":"デザインレビューっていつやってるんだっけ？","expectedMemoryIds":["ja-u04b"],"notExpectedMemoryIds":["ja-u04a"],"category":"knowledge-update","lang":"ja"}
+{"question":"モバイルチームのビルドってどのCIを使ってる？","expectedMemoryIds":["ja-u05b"],"notExpectedMemoryIds":["ja-u05a"],"category":"knowledge-update","lang":"ja"}
+{"question":"orders-apiって何も指定しないと1ページ何件返ってくる？","expectedMemoryIds":["ja-u06b"],"notExpectedMemoryIds":["ja-u06a"],"category":"knowledge-update","lang":"ja"}
+{"question":"ステージングっていつリセットされるの？","expectedMemoryIds":["ja-u09b"],"notExpectedMemoryIds":["ja-u09a"],"category":"knowledge-update","lang":"ja"}
+{"question":"invoice-rendererが請求書に使ってるフォントは何？","expectedMemoryIds":["ja-u10b"],"notExpectedMemoryIds":["ja-u10a"],"category":"knowledge-update","lang":"ja"}
+{"question":"5月の時点でledger-syncのNode.jsのバージョンはいくつだった？","expectedMemoryIds":["ja-u03a"],"notExpectedMemoryIds":["ja-u03b"],"asOf":"2026-05-20T12:00:00Z","category":"temporal","lang":"ja"}
+{"question":"4月に検索チームのリードをやってたのは誰？","expectedMemoryIds":["ja-u07a"],"notExpectedMemoryIds":["ja-u07b"],"asOf":"2026-04-15T12:00:00Z","category":"temporal","lang":"ja"}
+{"question":"夏の初め頃、geo-lookupはキャッシュした結果をどれくらい保持してた？","expectedMemoryIds":["ja-u08a"],"notExpectedMemoryIds":["ja-u08b"],"asOf":"2026-06-05T12:00:00Z","category":"temporal","lang":"ja"}
+{"question":"notification-schedulerって何番ポートでリッスンしてる？","expectedMemoryIds":[],"category":"abstention","lang":"ja"}
+{"question":"EUの顧客向けのデータ保持ポリシーって誰の担当？","expectedMemoryIds":[],"category":"abstention","lang":"ja"}
+{"question":"MLの学習パイプラインってPythonのどのバージョンを使ってますか？","expectedMemoryIds":[],"category":"abstention","lang":"ja"}
+{"question":"SendGridのAPIキーってどうやってローテーションするの？","expectedMemoryIds":[],"category":"abstention","lang":"ja"}

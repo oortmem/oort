@@ -1,0 +1,60 @@
+{"fact":"f01","type":"semantic","entities":["checkout-web"],"validFrom":"2026-01-12T09:30:00Z"}
+{"fact":"f02","type":"semantic","entities":["ledger-sync","ledger.events.v2"],"validFrom":"2026-01-20T14:05:00Z"}
+{"fact":"f03","type":"semantic","entities":["invoice-renderer","Playwright"],"validFrom":"2026-02-03T10:15:00Z"}
+{"fact":"f04","type":"semantic","entities":["Vault","secret/staging/postgres"],"validFrom":"2026-02-11T16:40:00Z"}
+{"fact":"f05","type":"semantic","entities":["Marta Oliveira"],"validFrom":"2026-02-24T08:50:00Z"}
+{"fact":"f06","type":"preference","entities":["PAY-212"],"validFrom":"2026-03-02T11:20:00Z"}
+{"fact":"f07","type":"procedural","entities":["pnpm codegen"],"validFrom":"2026-03-09T13:00:00Z"}
+{"fact":"f08","type":"episodic","entities":["geo-lookup","MaxMind"],"validFrom":"2026-10-14T19:10:00Z"}
+{"fact":"f09","type":"semantic","entities":["iOS 16"],"validFrom":"2026-03-18T09:45:00Z"}
+{"fact":"f10","type":"semantic","entities":["reporting-api","PostgreSQL"],"validFrom":"2026-03-26T15:30:00Z"}
+{"fact":"f11","type":"preference","entities":[],"validFrom":"2026-04-01T10:00:00Z"}
+{"fact":"f12","type":"procedural","entities":["pnpm changeset version","CHANGELOG.md"],"validFrom":"2026-04-08T17:25:00Z"}
+{"fact":"f13","type":"semantic","entities":["session-broker","Redis"],"validFrom":"2026-04-15T12:10:00Z"}
+{"fact":"f14","type":"episodic","entities":["S3"],"validFrom":"2026-04-23T07:55:00Z"}
+{"fact":"f15","type":"semantic","entities":["Unleash","new-checkout-flow"],"validFrom":"2026-05-04T14:35:00Z"}
+{"fact":"f16","type":"preference","entities":["TypeScript"],"validFrom":"2026-05-11T09:05:00Z"}
+{"fact":"f17","type":"procedural","entities":["SLOW_NETWORK"],"validFrom":"2026-05-19T16:20:00Z"}
+{"fact":"f18","type":"semantic","entities":["Zendesk","support-etl"],"validFrom":"2026-05-27T11:45:00Z"}
+{"fact":"f19","type":"semantic","entities":["packages/ui","Tailwind"],"validFrom":"2026-06-03T10:30:00Z"}
+{"fact":"f20","type":"episodic","entities":["catalog-indexer","Elasticsearch"],"validFrom":"2026-09-03T21:00:00Z"}
+{"fact":"f21","type":"semantic","entities":[],"validFrom":"2026-06-10T13:15:00Z"}
+{"fact":"f22","type":"semantic","entities":["UTC"],"validFrom":"2026-06-17T08:40:00Z"}
+{"fact":"f23","type":"semantic","entities":["/v1","/v2"],"validFrom":"2026-06-24T15:50:00Z"}
+{"fact":"f24","type":"procedural","entities":["pnpm db:migrate"],"validFrom":"2026-07-01T09:25:00Z"}
+{"fact":"f25","type":"preference","entities":[],"validFrom":"2026-07-08T14:00:00Z"}
+{"fact":"f26","type":"semantic","entities":["push-gateway","FCM","APNs"],"validFrom":"2026-07-15T10:50:00Z"}
+{"fact":"f27","type":"episodic","entities":["checkout"],"validFrom":"2026-08-21T18:30:00Z"}
+{"fact":"f28","type":"semantic","entities":["Crowdin","locales/en.json"],"validFrom":"2026-07-22T12:35:00Z"}
+{"fact":"f29","type":"semantic","entities":["pnpm","Nx"],"validFrom":"2026-07-29T16:05:00Z"}
+{"fact":"f30","type":"semantic","entities":[],"validFrom":"2026-08-05T09:15:00Z"}
+{"fact":"f31","type":"procedural","entities":["scripts/seed-anonymised.sh"],"validFrom":"2026-08-12T11:00:00Z"}
+{"fact":"f32","type":"semantic","entities":["BigQuery","europe-west1","Metabase"],"validFrom":"2026-08-19T14:45:00Z"}
+{"fact":"f33","type":"preference","entities":[],"validFrom":"2026-08-26T10:20:00Z"}
+{"fact":"f34","type":"episodic","entities":["cert-manager"],"validFrom":"2026-07-02T06:30:00Z"}
+{"fact":"f35","type":"semantic","entities":["Kotlin","Jetpack Compose","SwiftUI"],"validFrom":"2026-09-09T13:40:00Z"}
+{"fact":"f36","type":"semantic","entities":["axe"],"validFrom":"2026-09-16T15:10:00Z"}
+{"fact":"f37","type":"semantic","entities":["Argon2id","bcrypt"],"validFrom":"2026-09-23T09:55:00Z"}
+{"fact":"f38","type":"procedural","entities":["Stripe","Vault","billing-worker"],"validFrom":"2026-09-30T17:15:00Z"}
+{"fact":"f39","type":"semantic","entities":["Grafana Loki","Sentry"],"validFrom":"2026-10-07T12:25:00Z"}
+{"fact":"f40","type":"preference","entities":[],"validFrom":"2026-10-21T10:40:00Z"}
+{"fact":"u01a","type":"semantic","entities":["checkout-web","Vercel"],"validFrom":"2026-02-05T10:00:00Z"}
+{"fact":"u01b","type":"semantic","entities":["checkout-web","Cloudflare Pages"],"validFrom":"2026-09-14T10:00:00Z","supersedes":"u01a"}
+{"fact":"u02a","type":"semantic","entities":[],"validFrom":"2026-02-09T09:00:00Z"}
+{"fact":"u02b","type":"semantic","entities":[],"validFrom":"2026-08-24T09:00:00Z","supersedes":"u02a"}
+{"fact":"u03a","type":"semantic","entities":["ledger-sync","Node.js 20"],"validFrom":"2026-02-13T15:00:00Z"}
+{"fact":"u03b","type":"semantic","entities":["ledger-sync","Node.js 24"],"validFrom":"2026-08-31T15:00:00Z","supersedes":"u03a"}
+{"fact":"u04a","type":"semantic","entities":[],"validFrom":"2026-02-17T11:00:00Z"}
+{"fact":"u04b","type":"semantic","entities":[],"validFrom":"2026-09-07T11:00:00Z","supersedes":"u04a"}
+{"fact":"u05a","type":"semantic","entities":["Bitrise"],"validFrom":"2026-02-20T12:00:00Z"}
+{"fact":"u05b","type":"semantic","entities":["GitHub Actions"],"validFrom":"2026-08-27T12:00:00Z","supersedes":"u05a"}
+{"fact":"u06a","type":"semantic","entities":["orders-api"],"validFrom":"2026-02-26T14:00:00Z"}
+{"fact":"u06b","type":"semantic","entities":["orders-api"],"validFrom":"2026-09-21T14:00:00Z","supersedes":"u06a"}
+{"fact":"u07a","type":"semantic","entities":["Jonas Weber"],"validFrom":"2026-03-03T09:30:00Z"}
+{"fact":"u07b","type":"semantic","entities":["Priya Raman"],"validFrom":"2026-09-02T09:30:00Z","supersedes":"u07a"}
+{"fact":"u08a","type":"semantic","entities":["geo-lookup"],"validFrom":"2026-03-10T16:00:00Z"}
+{"fact":"u08b","type":"semantic","entities":["geo-lookup"],"validFrom":"2026-09-10T16:00:00Z","supersedes":"u08a"}
+{"fact":"u09a","type":"semantic","entities":[],"validFrom":"2026-03-16T08:00:00Z"}
+{"fact":"u09b","type":"semantic","entities":[],"validFrom":"2026-10-05T08:00:00Z","supersedes":"u09a"}
+{"fact":"u10a","type":"semantic","entities":["invoice-renderer","Inter"],"validFrom":"2026-03-23T13:00:00Z"}
+{"fact":"u10b","type":"semantic","entities":["invoice-renderer","Noto Sans"],"validFrom":"2026-10-12T13:00:00Z","supersedes":"u10a"}

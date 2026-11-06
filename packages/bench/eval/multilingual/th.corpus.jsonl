@@ -1,0 +1,60 @@
+{"fact":"f01","text":"ตอน dev บนเครื่อง local checkout-web รันที่พอร์ต 4173 และพร็อกซีการเรียก API ไปที่ backend พอร์ต 8081"}
+{"fact":"f02","text":"worker ledger-sync คอนซูม Kafka topic ledger.events.v2 และจะคอมมิต offset ก็ต่อเมื่อทรานแซกชันในฐานข้อมูลสำเร็จแล้วเท่านั้น"}
+{"fact":"f03","text":"invoice-renderer ใช้ Playwright สร้าง PDF ใบแจ้งหนี้ ดังนั้น Docker image ต้องมี Chromium แบบ headless ติดมาด้วย"}
+{"fact":"f04","text":"credential ของ Postgres บน staging เก็บไว้ใน Vault ที่ secret/staging/postgres ห้ามก๊อปไปใส่ไฟล์ .env เด็ดขาด"}
+{"fact":"f05","text":"Marta Oliveira ดูแลตารางเวร on-call ของฝั่ง payments ก่อนใครจะไปแตะ job คืนเงิน ต้องเพจหาเธอก่อนทุกครั้ง"}
+{"fact":"f06","text":"ผู้ใช้อยากให้เขียน commit message เป็นประโยคคำสั่ง (imperative) และใส่ issue key ของ Linear ไว้ท้ายข้อความ เช่น \"Fix retry backoff (PAY-212)\""}
+{"fact":"f07","text":"ถ้าจะ generate GraphQL types ใหม่ ให้รัน pnpm codegen ที่ root ของ repo แล้วรีสตาร์ท dev server"}
+{"fact":"f08","text":"เมื่อ 2026-10-14 geo-lookup เมมโมรีไม่พอ (OOM) หลังอัปเดตฐานข้อมูล MaxMind เลยเพิ่ม memory limit ของคอนเทนเนอร์เป็น 1 GiB"}
+{"fact":"f09","text":"แอปมือถือรองรับ iOS 16 ขึ้นไป ส่วนการเลิกรองรับ iOS 15 ตกลงกับทีม product เรียบร้อยแล้ว"}
+{"fact":"f10","text":"reporting-api แยกข้อมูลแต่ละ tenant ด้วย row-level security ของ PostgreSQL แทนการกรองในโค้ดแอป เพราะเคยลืมใส่ WHERE ครั้งหนึ่งแล้วข้อมูลของลูกค้าอีกรายหลุดออกไป"}
+{"fact":"f11","text":"ผู้ใช้ชอบให้ pull request มีบรรทัดที่เปลี่ยนไม่ถึง 400 บรรทัด ถ้าใหญ่กว่านั้นจะแตกออกก่อนส่งรีวิว"}
+{"fact":"f12","text":"ก่อนรีลีส ให้ bump เวอร์ชันด้วย pnpm changeset version แล้วเช็กว่าใน CHANGELOG.md มีทุกการเปลี่ยนแปลงที่ผู้ใช้เห็นครบ"}
+{"fact":"f13","text":"session-broker เก็บ session ไว้ใน Redis มี idle timeout 30 นาที และอายุสูงสุดแบบตายตัว 12 ชั่วโมง"}
+{"fact":"f14","text":"แบ็กอัปรายคืนล้มเหลวสามคืนติดกัน เพราะ lifecycle rule ของ S3 ไปลบ prefix ของ staging ทิ้ง"}
+{"fact":"f15","text":"feature flag จัดการใน Unleash ตอนนี้ new-checkout-flow เปิดให้ผู้ใช้ในบราซิล 10%"}
+{"fact":"f16","text":"ผู้ใช้ไม่ชอบ default export และอยากให้ใช้ named export ในทุกโมดูล TypeScript"}
+{"fact":"f17","text":"เทสต์ login ที่ flaky รีโปรบนเครื่องได้ โดยรันพร้อม SLOW_NETWORK=1 และใช้ browser profile ใหม่"}
+{"fact":"f18","text":"job support-etl ก๊อปทิกเก็ตซัพพอร์ตจาก Zendesk เข้า data warehouse ทุก 15 นาที"}
+{"fact":"f19","text":"design system อยู่ที่ packages/ui และสร้างบน Tailwind tokens สีต้องดึงจากไฟล์ tokens เท่านั้น ห้าม hard-code ค่า hex"}
+{"fact":"f20","text":"เมื่อ 2026-09-03 catalog-indexer rebuild index ของ Elasticsearch ใหม่ทั้งหมดหลังเปลี่ยน analyzer ใช้เวลาไปประมาณ 6 ชั่วโมง"}
+{"fact":"f21","text":"อัปโหลดรูปได้ไม่เกิน 10 MB และ media pipeline จะย่อรูปให้กว้างไม่เกิน 2048 พิกเซล"}
+{"fact":"f22","text":"timestamp ทั้งหมดเก็บเป็น UTC และจะแปลงเป็นเขตเวลาของผู้ใช้เฉพาะบนเบราว์เซอร์เท่านั้น"}
+{"fact":"f23","text":"public API แยกเวอร์ชันไว้ใน URL path (/v1, /v2) และ /v1 จะปิดในวันที่ 2027-03-31"}
+{"fact":"f24","text":"ถ้า migration พังบนโปรดักชัน ห้ามไปแก้ไฟล์ migration นั้นเด็ดขาด ให้เขียน forward migration ตัวใหม่แล้วรันด้วย pnpm db:migrate"}
+{"fact":"f25","text":"ผู้ใช้อยากให้ error message เขียนให้ผู้ใช้ปลายทางอ่านเข้าใจ ไม่มี stack trace หรือรหัส error ภายใน"}
+{"fact":"f26","text":"push-gateway ส่งการแจ้งเตือนผ่าน Firebase Cloud Messaging (FCM) บน Android และผ่าน APNs บน iOS"}
+{"fact":"f27","text":"load test เมื่อ 2026-08-21 พบว่า latency ของ checkout เกิน 800 ms ที่ 2,000 requests ต่อวินาที คอขวดอยู่ที่การเรียกคำนวณภาษี"}
+{"fact":"f28","text":"งานแปลจัดการใน Crowdin ข้อความต้นฉบับอยู่ใน locales/en.json ส่วน locale อื่นๆ CI จะดึงมาเอง"}
+{"fact":"f29","text":"ทีมตัดสินใจใช้ pnpm workspaces กับ monorepo ต่อไป ไม่เอา Nx มาใช้ เพื่อไม่ให้มี build layer เพิ่มอีกชั้น"}
+{"fact":"f30","text":"public API ให้ยิงได้ 100 requests ต่อนาทีต่อ API key และ limit นี้บังคับที่ gateway"}
+{"fact":"f31","text":"ถ้าอยากได้ข้อมูลแบบโปรดักชันมาใช้บนเครื่อง local ให้รัน scripts/seed-anonymised.sh สคริปต์นี้ไม่ก๊อปอีเมลจริงมาเด็ดขาด"}
+{"fact":"f32","text":"data warehouse เป็น BigQuery อยู่ region europe-west1 และนักวิเคราะห์ query ผ่าน Metabase"}
+{"fact":"f33","text":"ผู้ใช้อยากให้คอมเมนต์ตอนรีวิวเสนอวิธีแก้ที่ชัดเจนไปด้วย ไม่ใช่แค่ชี้ว่ามีปัญหา"}
+{"fact":"f34","text":"เมื่อ 2026-07-02 certificate หมดอายุทำให้ webhook endpoint ของพาร์ตเนอร์ล่ม ตอนนี้ cert-manager ต่ออายุ certificate ให้อัตโนมัติแล้ว"}
+{"fact":"f35","text":"แอป Android เขียนด้วย Kotlin กับ Jetpack Compose ส่วนแอป iOS ใช้ SwiftUI"}
+{"fact":"f36","text":"release candidate ทุกตัวต้องผ่าน accessibility audit ด้วย axe ถ้า contrast ไม่ผ่านจะบล็อกการรีลีส"}
+{"fact":"f37","text":"รหัสผ่านแฮชด้วย Argon2id ส่วนแฮช bcrypt จากระบบเก่าจะถูกแฮชใหม่ตอนที่ผู้ใช้ล็อกอินครั้งถัดไป"}
+{"fact":"f38","text":"ถ้าจะ rotate Stripe webhook secret ให้อัปเดตใน Vault ก่อน แล้วค่อยดีพลอย billing-worker ใหม่"}
+{"fact":"f39","text":"log ของแอปส่งไปที่ Grafana Loki และเก็บไว้ 30 วัน ส่วน error จะส่งเข้า Sentry ด้วย"}
+{"fact":"f40","text":"ผู้ใช้ชอบคำอธิบายที่มีตัวอย่างโค้ดสั้นๆ มากกว่าคำตอบเชิงทฤษฎียาวๆ"}
+{"fact":"u01a","text":"checkout-web ดีพลอยอยู่บน Vercel"}
+{"fact":"u01b","text":"ตอนนี้ checkout-web ย้ายไปดีพลอยบน Cloudflare Pages แทน Vercel แล้ว"}
+{"fact":"u02a","text":"code freeze ก่อนรีลีสแต่ละรอบใช้เวลาสองวัน"}
+{"fact":"u02b","text":"code freeze ก่อนรีลีสแต่ละรอบลดเหลือหนึ่งวันแล้ว"}
+{"fact":"u03a","text":"ledger-sync รันบน Node.js 20"}
+{"fact":"u03b","text":"ledger-sync อัปเกรดเป็น Node.js 24 แล้ว"}
+{"fact":"u04a","text":"design review ประจำสัปดาห์จัดทุกวันอังคาร 10:00"}
+{"fact":"u04b","text":"design review ประจำสัปดาห์ย้ายไปเป็นวันพฤหัสบดี 14:00 แล้ว"}
+{"fact":"u05a","text":"ทีม mobile ใช้ Bitrise เป็น CI สำหรับบิลด์แอป"}
+{"fact":"u05b","text":"ทีม mobile ย้าย CI build จาก Bitrise ไปใช้ GitHub Actions แล้ว"}
+{"fact":"u06a","text":"orders-api คืนค่า 50 รายการต่อหน้าเป็นค่าเริ่มต้น"}
+{"fact":"u06b","text":"page size เริ่มต้นของ orders-api ลดเหลือ 25 รายการ"}
+{"fact":"u07a","text":"Jonas Weber เป็น tech lead ของทีม search"}
+{"fact":"u07b","text":"Priya Raman ขึ้นมาเป็น tech lead ของทีม search แทนแล้ว"}
+{"fact":"u08a","text":"geo-lookup แคชผล lookup ไว้ 24 ชั่วโมง"}
+{"fact":"u08b","text":"ตอนนี้ geo-lookup แคชผล lookup ไว้แค่ 6 ชั่วโมง"}
+{"fact":"u09a","text":"environment staging ถูกรีเซ็ตทุกคืนวันอาทิตย์"}
+{"fact":"u09b","text":"ตอนนี้ environment staging ถูกรีเซ็ตทุกคืนตอน 02:00 UTC"}
+{"fact":"u10a","text":"invoice-renderer ใช้ฟอนต์ Inter ในใบแจ้งหนี้"}
+{"fact":"u10b","text":"invoice-renderer เปลี่ยนฟอนต์ในใบแจ้งหนี้เป็น Noto Sans เพื่อให้ชื่อลูกค้าที่ไม่ได้เขียนด้วยอักษรละตินแสดงผลได้ถูกต้อง"}

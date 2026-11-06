@@ -1,0 +1,34 @@
+{"question":"qual porta eu abro pra ver o checkout-web localmente?","expectedMemoryIds":["pt-BR-f01"],"category":"single-fact","lang":"pt-BR"}
+{"question":"de qual tópico do Kafka o ledger-sync lê?","expectedMemoryIds":["pt-BR-f02"],"category":"single-fact","lang":"pt-BR"}
+{"question":"o que o invoice-renderer usa pra gerar os PDFs?","expectedMemoryIds":["pt-BR-f03"],"category":"single-fact","lang":"pt-BR"}
+{"question":"onde ficam as senhas do banco de staging?","expectedMemoryIds":["pt-BR-f04"],"category":"single-fact","lang":"pt-BR"}
+{"question":"quem eu tenho que acionar antes de mexer nos jobs de reembolso?","expectedMemoryIds":["pt-BR-f05"],"category":"single-fact","lang":"pt-BR"}
+{"question":"como eu regero os tipos do GraphQL?","expectedMemoryIds":["pt-BR-f07"],"category":"single-fact","lang":"pt-BR"}
+{"question":"por que o geo-lookup caiu em outubro?","expectedMemoryIds":["pt-BR-f08"],"category":"single-fact","lang":"pt-BR"}
+{"question":"como a API de reporting impede que um tenant veja os dados de outro?","expectedMemoryIds":["pt-BR-f10"],"category":"single-fact","lang":"pt-BR"}
+{"question":"qual o tamanho máximo de um pull request antes de eu ter que quebrar ele?","expectedMemoryIds":["pt-BR-f11"],"category":"single-fact","lang":"pt-BR"}
+{"question":"quanto tempo uma sessão pode ficar parada no session-broker antes de expirar?","expectedMemoryIds":["pt-BR-f13"],"category":"single-fact","lang":"pt-BR"}
+{"question":"qual porcentagem dos usuários brasileiros recebe a flag new-checkout-flow?","expectedMemoryIds":["pt-BR-f15"],"category":"single-fact","lang":"pt-BR"}
+{"question":"tudo bem usar default export num arquivo TypeScript?","expectedMemoryIds":["pt-BR-f16"],"category":"single-fact","lang":"pt-BR"}
+{"question":"como eu faço o teste flaky de login falhar na minha máquina?","expectedMemoryIds":["pt-BR-f17"],"category":"single-fact","lang":"pt-BR"}
+{"question":"quanto tempo levou o reindex do Elasticsearch?","expectedMemoryIds":["pt-BR-f20"],"category":"single-fact","lang":"pt-BR"}
+{"question":"quando a API v1 vai ser desligada?","expectedMemoryIds":["pt-BR-f23"],"category":"single-fact","lang":"pt-BR"}
+{"question":"quebrou uma migration em produção, posso só corrigir o arquivo dela?","expectedMemoryIds":["pt-BR-f24"],"category":"single-fact","lang":"pt-BR"}
+{"question":"como o push-gateway chega nos iPhones?","expectedMemoryIds":["pt-BR-f26"],"category":"single-fact","lang":"pt-BR"}
+{"question":"quantas requisições por minuto uma API key tem na API pública?","expectedMemoryIds":["pt-BR-f30"],"category":"single-fact","lang":"pt-BR"}
+{"question":"em qual região fica o warehouse do BigQuery?","expectedMemoryIds":["pt-BR-f32"],"category":"single-fact","lang":"pt-BR"}
+{"question":"com qual algoritmo a gente faz hash das senhas?","expectedMemoryIds":["pt-BR-f37"],"category":"single-fact","lang":"pt-BR"}
+{"question":"onde o checkout-web está hospedado hoje em dia?","expectedMemoryIds":["pt-BR-u01b"],"notExpectedMemoryIds":["pt-BR-u01a"],"category":"knowledge-update","lang":"pt-BR"}
+{"question":"quanto tempo dura o code freeze antes de um release?","expectedMemoryIds":["pt-BR-u02b"],"notExpectedMemoryIds":["pt-BR-u02a"],"category":"knowledge-update","lang":"pt-BR"}
+{"question":"quando é a design review?","expectedMemoryIds":["pt-BR-u04b"],"notExpectedMemoryIds":["pt-BR-u04a"],"category":"knowledge-update","lang":"pt-BR"}
+{"question":"em qual CI o time de mobile faz os builds?","expectedMemoryIds":["pt-BR-u05b"],"notExpectedMemoryIds":["pt-BR-u05a"],"category":"knowledge-update","lang":"pt-BR"}
+{"question":"quantos itens por página a orders-api retorna se eu não passar nada?","expectedMemoryIds":["pt-BR-u06b"],"notExpectedMemoryIds":["pt-BR-u06a"],"category":"knowledge-update","lang":"pt-BR"}
+{"question":"quando o staging é zerado?","expectedMemoryIds":["pt-BR-u09b"],"notExpectedMemoryIds":["pt-BR-u09a"],"category":"knowledge-update","lang":"pt-BR"}
+{"question":"qual fonte o invoice-renderer coloca nas faturas?","expectedMemoryIds":["pt-BR-u10b"],"notExpectedMemoryIds":["pt-BR-u10a"],"category":"knowledge-update","lang":"pt-BR"}
+{"question":"qual versão do Node.js o ledger-sync usava em maio?","expectedMemoryIds":["pt-BR-u03a"],"notExpectedMemoryIds":["pt-BR-u03b"],"asOf":"2026-05-20T12:00:00Z","category":"temporal","lang":"pt-BR"}
+{"question":"quem liderava o time de busca lá em abril?","expectedMemoryIds":["pt-BR-u07a"],"notExpectedMemoryIds":["pt-BR-u07b"],"asOf":"2026-04-15T12:00:00Z","category":"temporal","lang":"pt-BR"}
+{"question":"por quanto tempo o geo-lookup mantinha os resultados em cache no começo de junho?","expectedMemoryIds":["pt-BR-u08a"],"notExpectedMemoryIds":["pt-BR-u08b"],"asOf":"2026-06-05T12:00:00Z","category":"temporal","lang":"pt-BR"}
+{"question":"em qual porta o notification-scheduler escuta?","expectedMemoryIds":[],"category":"abstention","lang":"pt-BR"}
+{"question":"quem é o responsável pela política de retenção de dados dos clientes da UE?","expectedMemoryIds":[],"category":"abstention","lang":"pt-BR"}
+{"question":"qual versão do Python o pipeline de treinamento de ML usa?","expectedMemoryIds":[],"category":"abstention","lang":"pt-BR"}
+{"question":"como eu rotaciono a API key do SendGrid?","expectedMemoryIds":[],"category":"abstention","lang":"pt-BR"}

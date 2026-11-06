@@ -29,7 +29,14 @@ export interface EvalRow {
   asOf?: string;
   category?: EvalCategory;
   notExpectedMemoryIds?: string[];
+  /** BCP 47 code of the question's language (the multilingual set, `eval/multilingual/`). */
+  lang?: string;
+  /** Pins a row to one multilingual condition; rows without one run in every condition. */
+  condition?: EvalCondition;
 }
+
+export const EVAL_CONDITIONS = ['mono', 'cross', 'mixed'] as const;
+export type EvalCondition = (typeof EVAL_CONDITIONS)[number];
 
 export interface LoadedRows {
   rows: EvalRow[];
@@ -79,6 +86,15 @@ export function loadEvalRows(text: string): LoadedRows {
     if (o['category'] !== undefined && !CATEGORIES.includes(o['category'] as EvalCategory)) {
       throw new Error(`${where}: category must be one of ${CATEGORIES.join(', ')}`);
     }
+    if (o['lang'] !== undefined && (typeof o['lang'] !== 'string' || o['lang'] === '')) {
+      throw new Error(`${where}: lang must be a language code`);
+    }
+    if (
+      o['condition'] !== undefined &&
+      !EVAL_CONDITIONS.includes(o['condition'] as EvalCondition)
+    ) {
+      throw new Error(`${where}: condition must be one of ${EVAL_CONDITIONS.join(', ')}`);
+    }
     if (o['question'].trim() === '') {
       skippedEmpty++;
       continue;
@@ -91,6 +107,8 @@ export function loadEvalRows(text: string): LoadedRows {
       ...(o['notExpectedMemoryIds'] !== undefined
         ? { notExpectedMemoryIds: o['notExpectedMemoryIds'] as string[] }
         : {}),
+      ...(o['lang'] !== undefined ? { lang: o['lang'] as string } : {}),
+      ...(o['condition'] !== undefined ? { condition: o['condition'] as EvalCondition } : {}),
     });
   }
   return { rows, skippedEmpty };

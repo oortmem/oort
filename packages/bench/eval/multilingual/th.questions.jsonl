@@ -1,0 +1,34 @@
+{"question":"จะเปิดดู checkout-web บนเครื่องตัวเอง ต้องเข้าพอร์ตอะไร","expectedMemoryIds":["th-f01"],"category":"single-fact","lang":"th"}
+{"question":"ledger-sync อ่านข้อมูลจาก Kafka topic ไหน","expectedMemoryIds":["th-f02"],"category":"single-fact","lang":"th"}
+{"question":"invoice-renderer ใช้อะไรสร้าง PDF ครับ","expectedMemoryIds":["th-f03"],"category":"single-fact","lang":"th"}
+{"question":"รหัสผ่านฐานข้อมูลของ staging เก็บไว้ที่ไหน","expectedMemoryIds":["th-f04"],"category":"single-fact","lang":"th"}
+{"question":"ก่อนจะไปแตะ job คืนเงิน ต้องโทรหาใครก่อน","expectedMemoryIds":["th-f05"],"category":"single-fact","lang":"th"}
+{"question":"จะ generate GraphQL types ใหม่ต้องทำยังไง","expectedMemoryIds":["th-f07"],"category":"single-fact","lang":"th"}
+{"question":"เดือนตุลาคม geo-lookup ล่มเพราะอะไร","expectedMemoryIds":["th-f08"],"category":"single-fact","lang":"th"}
+{"question":"reporting API กันไม่ให้ข้อมูลของ tenant หนึ่งไปปนกับอีก tenant ยังไง","expectedMemoryIds":["th-f10"],"category":"single-fact","lang":"th"}
+{"question":"PR ใหญ่ได้แค่ไหนถึงควรแตกออก","expectedMemoryIds":["th-f11"],"category":"single-fact","lang":"th"}
+{"question":"ใน session-broker ถ้าปล่อย session ไว้เฉยๆ จะหมดอายุภายในกี่นาที","expectedMemoryIds":["th-f13"],"category":"single-fact","lang":"th"}
+{"question":"ผู้ใช้ในบราซิลกี่เปอร์เซ็นต์ที่ได้ flag new-checkout-flow","expectedMemoryIds":["th-f15"],"category":"single-fact","lang":"th"}
+{"question":"ใช้ default export ในไฟล์ TypeScript ได้ไหม","expectedMemoryIds":["th-f16"],"category":"single-fact","lang":"th"}
+{"question":"จะทำให้เทสต์ login ที่ flaky พังบนเครื่องตัวเองได้ยังไง","expectedMemoryIds":["th-f17"],"category":"single-fact","lang":"th"}
+{"question":"reindex Elasticsearch ใช้เวลานานแค่ไหน","expectedMemoryIds":["th-f20"],"category":"single-fact","lang":"th"}
+{"question":"API v1 จะปิดเมื่อไหร่","expectedMemoryIds":["th-f23"],"category":"single-fact","lang":"th"}
+{"question":"migration พังบนโปรดักชัน แก้ไฟล์ migration ตรงๆ เลยได้ไหม","expectedMemoryIds":["th-f24"],"category":"single-fact","lang":"th"}
+{"question":"push-gateway ส่งแจ้งเตือนไปถึง iPhone ยังไง","expectedMemoryIds":["th-f26"],"category":"single-fact","lang":"th"}
+{"question":"public API ให้ API key หนึ่งตัวยิงได้กี่ request ต่อนาที","expectedMemoryIds":["th-f30"],"category":"single-fact","lang":"th"}
+{"question":"BigQuery warehouse อยู่ region ไหน","expectedMemoryIds":["th-f32"],"category":"single-fact","lang":"th"}
+{"question":"เราแฮชรหัสผ่านด้วยอัลกอริทึมอะไร","expectedMemoryIds":["th-f37"],"category":"single-fact","lang":"th"}
+{"question":"ช่วงนี้ checkout-web โฮสต์อยู่ที่ไหน","expectedMemoryIds":["th-u01b"],"notExpectedMemoryIds":["th-u01a"],"category":"knowledge-update","lang":"th"}
+{"question":"code freeze ก่อนรีลีสนานกี่วัน","expectedMemoryIds":["th-u02b"],"notExpectedMemoryIds":["th-u02a"],"category":"knowledge-update","lang":"th"}
+{"question":"design review จัดวันไหน","expectedMemoryIds":["th-u04b"],"notExpectedMemoryIds":["th-u04a"],"category":"knowledge-update","lang":"th"}
+{"question":"ทีม mobile บิลด์บน CI ตัวไหน","expectedMemoryIds":["th-u05b"],"notExpectedMemoryIds":["th-u05a"],"category":"knowledge-update","lang":"th"}
+{"question":"ถ้าไม่ได้ระบุ orders-api จะคืนมากี่รายการต่อหน้า","expectedMemoryIds":["th-u06b"],"notExpectedMemoryIds":["th-u06a"],"category":"knowledge-update","lang":"th"}
+{"question":"staging โดนล้างเมื่อไหร่","expectedMemoryIds":["th-u09b"],"notExpectedMemoryIds":["th-u09a"],"category":"knowledge-update","lang":"th"}
+{"question":"invoice-renderer ใช้ฟอนต์อะไรในใบแจ้งหนี้","expectedMemoryIds":["th-u10b"],"notExpectedMemoryIds":["th-u10a"],"category":"knowledge-update","lang":"th"}
+{"question":"เมื่อเดือนพฤษภาคม ledger-sync ใช้ Node.js เวอร์ชันไหน","expectedMemoryIds":["th-u03a"],"notExpectedMemoryIds":["th-u03b"],"asOf":"2026-05-20T12:00:00Z","category":"temporal","lang":"th"}
+{"question":"ช่วงเดือนเมษายน ใครเป็นหัวหน้าทีม search","expectedMemoryIds":["th-u07a"],"notExpectedMemoryIds":["th-u07b"],"asOf":"2026-04-15T12:00:00Z","category":"temporal","lang":"th"}
+{"question":"ช่วงต้นเดือนมิถุนายน geo-lookup เก็บแคชผลลัพธ์ไว้นานแค่ไหน","expectedMemoryIds":["th-u08a"],"notExpectedMemoryIds":["th-u08b"],"asOf":"2026-06-05T12:00:00Z","category":"temporal","lang":"th"}
+{"question":"notification-scheduler listen อยู่ที่พอร์ตอะไร","expectedMemoryIds":[],"category":"abstention","lang":"th"}
+{"question":"ใครเป็นเจ้าของนโยบายการเก็บรักษาข้อมูลของลูกค้า EU","expectedMemoryIds":[],"category":"abstention","lang":"th"}
+{"question":"ML training pipeline ใช้ Python เวอร์ชันไหน","expectedMemoryIds":[],"category":"abstention","lang":"th"}
+{"question":"จะ rotate API key ของ SendGrid ยังไง","expectedMemoryIds":[],"category":"abstention","lang":"th"}
