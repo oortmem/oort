@@ -48,8 +48,26 @@ function corpus(): string[] {
   return texts;
 }
 
+/**
+ * English as people write it in chat, beyond the ASCII fixtures: emoji with variation selectors
+ * and keycaps, ZWJ sequences, skin tones, ellipses and curly quotes (CON-110 review).
+ */
+const CHAT_ENGLISH = [
+  '⚠️ the deploy script deletes the staging prefix, check it first',
+  'LGTM ✔️ ship it',
+  'I ❤️ the new retry backoff',
+  '⚙️ config lives in packages/core/config.ts',
+  'Steps: 1️⃣ build, 2️⃣ test, 3️⃣ deploy #️⃣ done',
+  'pairing 👩‍💻 with Marta on the refund jobs 👍🏽',
+  'the whole team 👨‍👩‍👧 agreed 🏳️‍🌈',
+  'wait…then retry the migration',
+  'hmm… not sure, maybe v1‥v2 of the API',
+  '“auth-service” doesn’t listen on 8080 anymore',
+  'it’s fine 😀😀😀',
+];
+
 it('tokenize-golden.v2-is-byte-identical-to-v1-for-plain-english', () => {
-  const texts = corpus();
+  const texts = [...corpus(), ...CHAT_ENGLISH];
   expect(texts.length).toBeGreaterThan(30_000);
   let differ = 0;
   const examples: string[] = [];
@@ -61,4 +79,21 @@ it('tokenize-golden.v2-is-byte-identical-to-v1-for-plain-english', () => {
   }
   expect(examples).toEqual([]);
   expect(differ).toBe(0);
+});
+
+it('tokenize-golden.documented-folds-are-the-only-differences', () => {
+  // NFKC's deliberate folds (core/src/tokenize.ts): full-width ASCII, fractions, super- and
+  // subscripts, the trade mark sign and ligatures. Each is pinned, with v1's tokens beside it.
+  const folds: [string, string[], string[]][] = [
+    ['ＯＫ　ｔｈａｎｋｓ', ['ok', 'thanks'], ['ｏｋ', 'ｔｈａｎｋｓ']],
+    ['add ½ cup', ['add', '1', '2', 'cup'], ['add', '½', 'cup']],
+    ['O(n²) time', ['o', 'n2', 'time'], ['o', 'n²', 'time']],
+    ['H₂O', ['h2o'], ['h₂o']],
+    ['Oort™ API', ['oorttm', 'api'], ['oort', 'api']],
+    ['the ﬁle', ['the', 'file'], ['the', 'ﬁle']],
+  ];
+  for (const [text, v2, v1] of folds) {
+    expect(tokenizeLexical(text), text).toEqual(v2);
+    expect(tokenizeLexicalV1(text), text).toEqual(v1);
+  }
 });

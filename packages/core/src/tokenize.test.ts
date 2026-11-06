@@ -95,6 +95,19 @@ describe('tokenizeLexical v2 (CON-110)', () => {
       '’',
       '“',
       '😀',
+      // Emoji with variation selectors, keycaps and ZWJ sequences, and leaders (CON-110 review).
+      '⚠️',
+      '❤️',
+      '✔️',
+      '⚙️',
+      '1️⃣',
+      '#️⃣',
+      '👍🏽',
+      '👩‍💻',
+      '👨‍👩‍👧',
+      '🏳️‍🌈',
+      '…',
+      '‥',
     ];
     let seed = 0x2545f491;
     const next = () => {
@@ -109,6 +122,41 @@ describe('tokenizeLexical v2 (CON-110)', () => {
       for (let j = 0; j < len; j++) s += alphabet[Math.floor(next() * alphabet.length)];
       expect(tokenizeLexical(s), JSON.stringify(s)).toEqual(tokenizeLexicalV1(s));
     }
+  });
+
+  it('tokenize.v2-emoji-and-leaders-tokenise-as-v1', () => {
+    for (const s of [
+      '⚠️ fix the deploy',
+      'done ✔️',
+      '❤️ it',
+      '⚙️config',
+      'step 1️⃣ then 2️⃣',
+      'a1️⃣b',
+      'pair 👩‍💻 on it',
+      'family 👨‍👩‍👧 photo',
+      'wait…then retry',
+      'wait…',
+      'v1‥v2',
+      '\u0301orphan mark',
+      'x \u20e3 y',
+    ]) {
+      expect(tokenizeLexical(s), JSON.stringify(s)).toEqual(tokenizeLexicalV1(s));
+    }
+    expect(tokenizeLexical('wait…then')).toEqual(['wait', 'then']);
+    expect(tokenizeLexical('⚠️')).toEqual([]);
+  });
+
+  it('tokenize.v2-documented-nfkc-folds', () => {
+    // Deliberate: NFKC folds compatibility forms to what they stand for.
+    expect(tokenizeLexical('ＡＰＩ ｖ２')).toEqual(['api', 'v2']); // full-width ASCII
+    expect(tokenizeLexical('½ cup')).toEqual(['1', '2', 'cup']); // v1: ['½', 'cup']
+    expect(tokenizeLexical('x² m³')).toEqual(['x2', 'm3']); // v1: ['x²', 'm³']
+    expect(tokenizeLexical('Oort™ API')).toEqual(['oorttm', 'api']); // v1: ['oort', 'api']
+    expect(tokenizeLexical('ﬁle')).toEqual(['file']); // ligature; v1: ['ﬁle']
+    // A variation selector on a letter is dropped, not a split (ideographic variants).
+    expect(tokenizeLexical('葛\ufe00城')).toEqual(tokenizeLexical('葛城'));
+    // A zero-width joiner inside a word joins it (Indic conjuncts); elsewhere it separates.
+    expect(tokenizeLexical('क्\u200dष')).toEqual(tokenizeLexical('क्ष'));
   });
 
   it('tokenize.v2-falls-back-to-bigrams-without-segmenter', async () => {

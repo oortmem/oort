@@ -197,7 +197,10 @@ A version 1 store goes to version 2 and then 3 in one transaction, with one `pre
 Schema version 4 (tokeniser v2, CON-110) rebuilds the lexical index. Core's `tokenizeLexical`
 became script-aware: CJK text is indexed as overlapping character bigrams, Thai, Lao, Khmer and
 Myanmar as words (`Intl.Segmenter`), combining marks stay inside words, and Latin diacritics are
-folded. Its output for plain English is byte-identical to version 1's. `memories_fts` is declared
+folded. Its output for plain English is byte-identical to version 1's, emoji included (variation
+selectors, keycaps and ZWJ sequences separate words, as before, and so do `…` and `‥`). NFKC folds
+compatibility forms on purpose: full-width ASCII (`ＡＰＩ` is `api`), fractions (`½` is `1 2`),
+super- and subscripts (`x²` is `x2`), `™` (`tm`) and ligatures (`ﬁ` is `fi`). `memories_fts` is declared
 with `unicode61 remove_diacritics 0 categories 'L* N* Co M*' tokenchars '-_.'` (`FTS_TOKENIZE`), so
 FTS5 keeps the marks too. Opening a version 3 store drops `memories_fts`, creates it with the new
 declaration and indexes every memory again from its stored text (a cold memory from its stub and

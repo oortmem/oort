@@ -60,9 +60,7 @@ export function tokenizeLexicalUnits(text: string): LexicalUnit[] {
 /** Steps 1 and 2: the normalised text split into words, joiners trimmed, empties dropped. */
 function words(text: string): string[] {
   // ASCII is already NFKC: skip the normalisation passes.
-  const norm = ASCII.test(text)
-    ? text.toLowerCase()
-    : text.normalize('NFKC').toLowerCase().normalize('NFC');
+  const norm = ASCII.test(text) ? text.toLowerCase() : normalise(text);
   const out: string[] = [];
   for (const word of norm.split(WORD_SEPARATOR)) {
     const w = trimJoiners(word);
@@ -97,6 +95,34 @@ export function tokenizerForVersion(version: number): (text: string) => string[]
 }
 
 const ASCII = /^\p{ASCII}*$/u;
+
+/** Leaders NFKC would turn into dots (`…` to `...`), which would then join the words around them. */
+const LEADERS = /[\u2024-\u2026]/gu;
+/** A zero-width joiner inside a word (an Indic conjunct); elsewhere it already separates. */
+const ZWJ_IN_WORD = /(?<=[\p{L}\p{M}])\u200d(?=\p{L})/gu;
+/** Combining marks with no letter before them: a variation selector or keycap after an emoji. */
+const ORPHAN_MARKS = /(^|[^\p{L}\p{M}])\p{M}+/gu;
+/** Variation selectors left on letters (ideographic variants): they select a glyph, not a word. */
+const SELECTORS = /[\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/gu;
+
+/**
+ * Step 1 for non-ASCII text. NFKC, lowercase and NFC, with four exceptions that keep v1's word
+ * boundaries: leaders become spaces, a ZWJ inside a word is dropped, a combining mark with no
+ * letter before it (the `U+FE0F` and `U+20E3` of `⚠️` and `1️⃣`) separates as v1 had it, and a
+ * variation selector on a letter is dropped. NFKC's other folds are deliberate: full-width ASCII
+ * (`ＡＰＩ` is `api`), fractions (`½` is `1 2`), super- and subscripts (`x²` is `x2`), `™` (`tm`)
+ * and ligatures (`ﬁ` is `fi`).
+ */
+function normalise(text: string): string {
+  return text
+    .replace(LEADERS, ' ')
+    .replace(ZWJ_IN_WORD, '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .normalize('NFC')
+    .replace(ORPHAN_MARKS, '$1 ')
+    .replace(SELECTORS, '');
+}
 
 const WORD_SEPARATOR = /[^\p{L}\p{M}\p{N}\-_.]+/u;
 
