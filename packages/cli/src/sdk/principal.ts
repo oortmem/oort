@@ -61,6 +61,18 @@ export function checkUser(user: string | undefined, org: string | undefined): vo
  * dropped id (`req.user?.id` with no user), never a fallback to the operator's own principal.
  * Only an options object without the key at all acts as the person.
  */
+/**
+ * The options as one snapshot: every property read once, so a getter or proxy cannot pass the
+ * user check and then hand the parser something else. A `user` that is named but not an own
+ * property (inherited, hidden) counts as given and empty, so it fails closed.
+ */
+export function readOnce<T>(input: T): T {
+  if (input === null || typeof input !== 'object') return input;
+  const raw: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+  if ('user' in (input as object) && !Object.hasOwn(raw, 'user')) raw['user'] = undefined;
+  return raw as T;
+}
+
 export function requireUserIfNamed(input: unknown): void {
   if (input === null || typeof input !== 'object' || !('user' in input)) return;
   const u = (input as { user?: unknown }).user;

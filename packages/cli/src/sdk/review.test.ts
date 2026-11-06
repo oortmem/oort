@@ -29,6 +29,31 @@ describe('a dropped end-user id never falls back to the operator', () => {
     await oort.close();
   });
 
+  it('a getter or proxy cannot pass the user check and then hand the parser undefined', async () => {
+    const h = home();
+    const oort = await createOortWith(
+      { mode: 'local', home: h.home, env: h.env, org: 'acme' },
+      { adapters: fakeAdapters() },
+    );
+    // Reads 'alice' once, undefined afterwards: the options are read once, so it stays alice.
+    let reads = 0;
+    const flaky = {
+      agent: 'support-bot',
+      get user() {
+        return reads++ === 0 ? 'alice' : undefined;
+      },
+    };
+    expect((await oort.scoped(flaky as never).whoami()).user).toBe('alice');
+    // A proxy that says it has `user` but hands back undefined is user-missing, not the operator.
+    const sneaky = new Proxy({ agent: 'support-bot' } as Record<string, unknown>, {
+      has: (t, k) => k === 'user' || k in t,
+    });
+    expect(() => oort.scoped(sneaky as never)).toThrow(
+      expect.objectContaining({ code: 'usage', reason: 'user-missing' }),
+    );
+    await oort.close();
+  });
+
   it('createOort({ org, user: undefined }) is user-missing too', async () => {
     const h = home();
     for (const user of [undefined, null, '']) {
@@ -107,6 +132,17 @@ describe('a rate limit is retryable, with Retry-After when the service sends it'
     const now = Date.parse('2026-11-06T12:00:00Z');
     expect(parseRetryAfter('Fri, 06 Nov 2026 12:01:00 GMT', now)).toBe(60);
     expect(parseRetryAfter('soon', now)).toBeUndefined();
+    // Hostile or broken headers: never "retry now", never past an hour, never a loose date.
+    expect(parseRetryAfter('9'.repeat(400), now)).toBeUndefined();
+    expect(parseRetryAfter('99999999999', now)).toBeUndefined();
+    expect(parseRetryAfter('86400', now)).toBe(3600);
+    expect(parseRetryAfter('Fri, 31 Dec 9999 23:59:59 GMT', now)).toBe(3600);
+    expect(parseRetryAfter('+275760-09-13T00:00:00Z', now)).toBeUndefined();
+    expect(parseRetryAfter('-5', now)).toBeUndefined();
+    expect(parseRetryAfter('foo 2', now)).toBeUndefined();
+    expect(parseRetryAfter('1.5', now)).toBeUndefined();
+    expect(parseRetryAfter('0', now)).toBe(1);
+    expect(parseRetryAfter('Thu, 05 Nov 2026 12:00:00 GMT', now)).toBe(1);
   });
 });
 

@@ -10,6 +10,7 @@ import {
   agentFor,
   agentName,
   checkUser,
+  readOnce,
   requireUserIfNamed,
   principalOf,
   projectIdFor,
@@ -232,8 +233,9 @@ class OortHandle implements Oort {
       throw new OortUsageError('This Oort handle is closed.', { reason: 'closed' });
     }
     try {
-      requireUserIfNamed(s);
-      const o = check(ScopedSchema, s, 'scoped options');
+      const raw = readOnce(s);
+      requireUserIfNamed(raw);
+      const o = check(ScopedSchema, raw, 'scoped options');
       const { ctx, org } = this.#s;
       const engine = this.#root.engine;
       if (o.user !== undefined && engine.mode === 'cloud') {
@@ -323,8 +325,9 @@ export async function createOort(options: OortOptions = {}): Promise<Oort> {
 export async function createOortWith(options: OortOptions, internals: Internals): Promise<Oort> {
   let engine: Engine | undefined;
   try {
-    requireUserIfNamed(options);
-    const o = check(OptionsSchema, options, 'options') as OortOptions;
+    const raw = readOnce(options);
+    requireUserIfNamed(raw);
+    const o = check(OptionsSchema, raw, 'options') as OortOptions;
     if (o.config !== undefined && 'serve' in o.config) {
       throw new OortUsageError('config.serve cannot be set from code (the home config only).', {
         reason: 'invalid-argument',
