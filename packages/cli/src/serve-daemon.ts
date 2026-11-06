@@ -204,6 +204,15 @@ export class ServeRefusal extends Refusal {
   }
 }
 
+/** The store needs its schema migration, which only `oort doctor` (or any oort command) runs. */
+export class MigrationRequired extends ServeRefusal {
+  constructor() {
+    super(
+      'the store needs its schema migration first, and oort serve never migrates it: run `oort doctor` (or any oort command), then start it again.',
+    );
+  }
+}
+
 const uid = currentUid;
 
 /**
@@ -518,11 +527,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   } catch (e) {
     await engines.closeAll();
     unlinkIfOurs(lock, ownsLock);
-    if (e instanceof StoreMigrationRequiredError) {
-      throw new ServeRefusal(
-        'the store needs its schema migration first, and oort serve never migrates it: run `oort doctor` (or any oort command), then start it again.',
-      );
-    }
+    if (e instanceof StoreMigrationRequiredError) throw new MigrationRequired();
     if (isBusy(e)) throw new ServeRefusal('the store is locked by another process; try again.');
     throw new ServeRefusal(
       `cannot open the store: ${shown(e instanceof Error ? e.message : String(e))}`,

@@ -509,6 +509,10 @@ It is optional: without it, the hooks work exactly as before.
   unreadable marker means the daemon is tried. A successful answer removes
   it, and so do `oort serve`, `oort serve status` and `oort serve stop`.
   `oort doctor` shows when the hooks skip the daemon, and until when.
+- **After an upgrade.** The daemon never migrates the store. When a new
+  version needs a schema migration, `oort serve --detach` and
+  `oort serve status` say so and point to `oort doctor`, which migrates the
+  store and lets the hooks try the daemon again straight away.
 - **Same answer.** The daemon runs the same handlers, so it injects the same
   `<oort-memory>` block with the same scrubbing, and it writes the same hook
   log lines, with `"daemon": 1` in `counts`. Like the in-process hook, it does

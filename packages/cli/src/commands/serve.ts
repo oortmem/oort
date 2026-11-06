@@ -7,6 +7,7 @@ import {
   SKIP_AFTER_REFUSAL_MS,
   callDaemon,
   clearSkip,
+  readSkip,
   removeLeftovers,
   socketTrust,
   spawnDaemon,
@@ -54,6 +55,9 @@ function elapsed(ms: number): string {
   return `${Math.floor(s / 3600)}h${m > 0 ? ` ${m}m` : ''}`;
 }
 
+const NEEDS_DOCTOR =
+  'oort serve did not start: the store needs its schema migration (after an upgrade), and oort serve never migrates it. Run `oort doctor`, then `oort serve --detach`.';
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -74,6 +78,8 @@ export async function serveCommand(
   const ui = uiFor(io);
   // Checking on or stopping the daemon by hand closes the hooks' circuit breaker: the next prompt
   // tries the daemon again. A start closes it once the daemon listens.
+  // Read first: status explains a start that was refused for a pending migration.
+  const priorSkip = readSkip(home);
   if (action === 'status' || action === 'stop') clearSkip(home);
   switch (action ?? 'start') {
     case 'start':
@@ -103,6 +109,7 @@ export async function serveCommand(
       );
       return 0;
     }
+    clearSkip(home); // so a refusal written below is this start's, not an older one
     const pid = spawnDaemon(
       fs.realpathSync(binPath()),
       home,
@@ -112,6 +119,10 @@ export async function serveCommand(
     const until = Date.now() + WAIT_MS;
     while (Date.now() < until) {
       await sleep(100);
+      if (readSkip(home)?.reason === 'migration') {
+        io.err(`oort: ${NEEDS_DOCTOR}\n`);
+        return 1;
+      }
       const r = await callDaemon(socket, 'ping', {}, { budgetMs: 500 });
       if (r.ok) {
         io.out(ui.header('serve', 'detached'));
@@ -134,7 +145,7 @@ export async function serveCommand(
   }
 
   // The daemon module (and through it the engine) loads only for a foreground start.
-  const { startDaemon, ServeRefusal } = await import('../serve-daemon.js');
+  const { startDaemon, ServeRefusal, MigrationRequired } = await import('../serve-daemon.js');
   const stamp = (): string => new Date().toISOString();
   io.out(ui.header('serve', show(socket), `pid ${process.pid}`, `idle exit ${minutes(idleMs)}`));
   let daemon: Awaited<ReturnType<typeof startDaemon>>;
@@ -153,7 +164,11 @@ export async function serveCommand(
     // A daemon that will not start (a pending migration, a bad directory) opens the breaker, so
     // autostart does not try again on every session; "another one runs" does not.
     if (!(e instanceof ServeRefusal) || e.tripsBreaker) {
-      writeSkip(home, Date.now() + SKIP_AFTER_REFUSAL_MS, 'refused');
+      writeSkip(
+        home,
+        Date.now() + SKIP_AFTER_REFUSAL_MS,
+        e instanceof MigrationRequired ? 'migration' : 'refused',
+      );
     }
     throw e;
   }
@@ -179,6 +194,7 @@ export async function serveCommand(
   async function status(): Promise<number> {
     const r = await callDaemon(socket, 'status', {}, { budgetMs: 1000 });
     const holder = lockHolderPid();
+    const needsMigration = priorSkip?.reason === 'migration';
     if (opts.json === true) {
       // Only known fields, copied by name: nothing the socket sends can add or override one.
       const fields = [
@@ -203,7 +219,12 @@ export async function serveCommand(
         `${JSON.stringify(
           r.ok
             ? { ...known, running: true, socket }
-            : { ...(holder !== undefined && { unresponsivePid: holder }), running: false, socket },
+            : {
+                ...(holder !== undefined && { unresponsivePid: holder }),
+                ...(needsMigration && { needsMigration: true }),
+                running: false,
+                socket,
+              },
           null,
           2,
         )}\n`,
@@ -220,11 +241,21 @@ export async function serveCommand(
               ? ui.warning(`not answering (pid ${holder} holds the lock)`)
               : ui.dim('not running'),
           ],
+          ...(needsMigration
+            ? [
+                ['last start', ui.warning('refused: the store needs its schema migration')] as [
+                  string,
+                  string,
+                ],
+              ]
+            : []),
           ['socket', show(socket)],
           ['hooks', 'run in-process'],
         ]),
       );
-      io.out(`${ui.dim('start it with: oort serve --detach')}\n`);
+      io.out(
+        `${ui.dim(needsMigration ? 'run oort doctor (it migrates the store), then: oort serve --detach' : 'start it with: oort serve --detach')}\n`,
+      );
       return 1;
     }
     const v = r.result;
