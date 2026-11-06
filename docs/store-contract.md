@@ -202,9 +202,10 @@ with `unicode61 remove_diacritics 0 categories 'L* N* Co M*' tokenchars '-_.'` (
 FTS5 keeps the marks too. Opening a version 3 store drops `memories_fts`, creates it with the new
 declaration and indexes every memory again from its stored text (a cold memory from its stub and
 entities only), in one transaction, after a copy to `<path>.pre-v4.<UTC time>`. No vector, cold
-blob or row changes, and no vendor is called. The rebuild keeps FTS5's row and token totals as they
-were (a contentless-delete index never subtracts a rewritten row from them), so BM25 scores of
-unchanged text stay exact. `meta` records `lexical_version` (2) and the ICU version; a migrating open
+blob or row changes, and no vendor is called. The new index is optimised into one segment. Its
+BM25 row and token totals count the live rows only, where the old index also counted every row
+ever rewritten (a contentless-delete index never subtracts one), so lexical scores shift once, and
+near ties can swap; which memories match does not change. `meta` records `lexical_version` (2) and the ICU version; a migrating open
 rebuilds the index again when the tokeniser version differs or ICU is newer, since Thai word breaks
 come from ICU. Versions 1 and 2 go up to 4 in the same single transaction.
 

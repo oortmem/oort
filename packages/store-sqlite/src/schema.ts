@@ -251,11 +251,15 @@ export function migrateV1toV2(db: Database, dimension: number): void {
  * A row's FTS rowid is its `rid`; a cold row indexes only its stub and entities, as the store
  * writes them. Records the tokeniser and ICU versions in `meta` (version 2), or removes them
  * (version 1, which older Oort versions do not know).
+ *
+ * BM25's row and token totals start again from the live rows. A long-lived contentless-delete
+ * index never subtracts a rewritten row from them, so lexical scores shift once at the rebuild,
+ * by the history the old index carried. That is accepted: carrying the history over would grow
+ * without bound with every past rewrite.
  */
 export function rebuildFts(db: Database, version: 1 | 2): number {
   const tokenize = tokenizerForVersion(version);
   const indexed = (text: string): string => tokenize(text).join(' ');
-  const drift = exists(db, 'memories_fts') ? statisticsDrift(db) : undefined;
   db.exec('DROP TABLE IF EXISTS memories_fts');
   db.exec(ftsTable(version === 1 ? FTS_TOKENIZE_V1 : FTS_TOKENIZE));
   const insert = db.prepare<[number, string, string, string]>(
@@ -283,74 +287,11 @@ export function rebuildFts(db: Database, version: 1 | 2): number {
       after = r.rid;
     }
   }
-  if (drift !== undefined) carryDrift(db, drift);
+  // One segment: the rebuild leaves the index as compact as a fresh one, and merges nothing later.
+  db.exec("INSERT INTO memories_fts (memories_fts) VALUES ('optimize')");
   if (version === 2) recordLexical(db);
   else db.exec("DELETE FROM meta WHERE key IN ('lexical_version', 'lexical_icu')");
   return n;
-}
-
-/** SQLite varints, as FTS5 writes them in its averages record and `docsize` rows. */
-function varints(buf: Buffer | undefined): number[] {
-  const out: number[] = [];
-  if (buf === undefined) return out;
-  let i = 0;
-  while (i < buf.length) {
-    let v = 0;
-    for (let k = 0; k < 9 && i < buf.length; k++) {
-      const c = buf[i++] as number;
-      if (k === 8) {
-        v = v * 256 + c;
-        break;
-      }
-      v = v * 128 + (c & 0x7f);
-      if ((c & 0x80) === 0) break;
-    }
-    out.push(v);
-  }
-  return out;
-}
-
-/**
- * BM25 reads the row count and each column's token total from FTS5's averages record. In a
- * contentless-delete table a deleted row is never subtracted from them, so every rewrite of a
- * memory (a tier change, an update) leaves them a little higher than the live rows add up to,
- * and today's rankings are scored with those totals. A rebuild would start from the live rows
- * and shift every score, English included. This is that difference: the averages record minus
- * the live rows' sizes (`memories_fts_docsize`), as [rows, text, stub, entities].
- */
-function statisticsDrift(db: Database): number[] {
-  const avg = varints(
-    db.prepare<[], { block: Buffer }>('SELECT block FROM memories_fts_data WHERE id = 1').get()
-      ?.block,
-  );
-  const live = [0, 0, 0, 0];
-  for (const r of db.prepare<[], { sz: Buffer }>('SELECT sz FROM memories_fts_docsize').all()) {
-    live[0]!++;
-    varints(r.sz).forEach((x, c) => (live[c + 1]! += x));
-  }
-  return live.map((x, i) => Math.max(0, (avg[i] ?? 0) - x));
-}
-
-/**
- * Restores the drift on a freshly built index, so the rebuild changes no score for text whose
- * tokens did not change. FTS5's shadow tables cannot be written directly, so it inserts that many
- * placeholder rows, carrying the missing token counts, at negative rowids (no memory has one) and
- * deletes them again: their deletion is not subtracted either. A placeholder token can never
- * match, because deleted rows are never returned.
- */
-function carryDrift(db: Database, drift: number[]): void {
-  const [rows = 0, ...tokens] = drift;
-  if (rows === 0) return;
-  const filler = (n: number): string => Array<string>(n).fill('oort-stat').join(' ');
-  const insert = db.prepare<[number, string, string, string]>(
-    'INSERT INTO memories_fts (rowid, text, stub, entities) VALUES (?, ?, ?, ?)',
-  );
-  const remove = db.prepare<[number]>('DELETE FROM memories_fts WHERE rowid = ?');
-  for (let i = 1; i <= rows; i++) {
-    const [text, stub, entities] = tokens.map((n) => (i === 1 ? filler(n) : ''));
-    insert.run(-i, text ?? '', stub ?? '', entities ?? '');
-  }
-  for (let i = 1; i <= rows; i++) remove.run(-i);
 }
 
 function recordLexical(db: Database): void {
