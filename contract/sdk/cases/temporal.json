@@ -1,0 +1,124 @@
+[
+  {
+    "id": "temporal.as-of-needs-as-of",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "port", "mode": "as-of" },
+        "expect": { "error": { "code": "usage", "reason": "invalid-argument" } }
+      }
+    ]
+  },
+  {
+    "id": "temporal.known-at-needs-known-at",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "port", "mode": "known-at" },
+        "expect": { "error": { "code": "usage", "reason": "invalid-argument" } }
+      }
+    ]
+  },
+  {
+    "id": "temporal.current-and-history-take-no-date",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "port", "mode": "current", "asOf": "2026-04-01" },
+        "expect": { "error": { "code": "usage" } }
+      },
+      {
+        "call": "recall",
+        "args": { "query": "port", "mode": "history", "knownAt": "2026-04-01" },
+        "expect": { "error": { "code": "usage" } }
+      }
+    ]
+  },
+  {
+    "id": "temporal.as-of-and-known-at-together-are-refused",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "port", "asOf": "2026-04-01", "knownAt": "2026-04-01" },
+        "expect": { "error": { "code": "usage", "reason": "invalid-argument" } }
+      }
+    ]
+  },
+  {
+    "id": "temporal.one-date-picks-the-view",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "auth service port", "asOf": "2026-04-01T00:00:00.000Z" },
+        "expect": {
+          "result": {
+            "temporal": { "mode": "as-of", "asOf": "2026-04-01T00:00:00.000Z" },
+            "memories": {
+              "$some": { "id": "22222222-0000-4000-8000-000000000001", "status": "superseded" }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "args": { "query": "auth service port", "knownAt": "2026-07-01T00:00:00.000Z" },
+        "expect": { "result": { "temporal": { "mode": "known-at" } } }
+      }
+    ]
+  },
+  {
+    "id": "temporal.current-reads-what-holds-now",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "auth service port" },
+        "expect": {
+          "result": {
+            "temporal": { "mode": "current" },
+            "memories": {
+              "$some": { "id": "22222222-0000-4000-8000-000000000002", "status": "current" }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "args": { "query": "auth service port", "mode": "history" },
+        "expect": {
+          "result": {
+            "temporal": { "mode": "history" },
+            "memories": { "$some": { "id": "22222222-0000-4000-8000-000000000001" } }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "temporal.a-date-in-the-query-picks-as-of-unless-infer-time-is-off",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "which port did the auth service use on 2 April 2026" },
+        "expect": { "result": { "temporal": { "mode": "as-of", "inferred": true } } }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "which port did the auth service use on 2 April 2026",
+          "inferTime": false
+        },
+        "expect": { "result": { "temporal": { "mode": "current", "inferred": false } } }
+      }
+    ]
+  }
+]

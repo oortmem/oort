@@ -1,0 +1,97 @@
+[
+  {
+    "id": "remember.one-fact",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "remember",
+        "args": { "facts": "The release train leaves every second Tuesday." },
+        "expect": {
+          "result": {
+            "results": [{ "fact": 0, "outcome": "added", "id": { "$type": "string" } }],
+            "warnings": []
+          }
+        },
+        "save": { "id": "$.results[0].id" }
+      },
+      {
+        "call": "recent",
+        "expect": { "result": { "memories": { "$some": { "id": "${id}" } } } }
+      }
+    ]
+  },
+  {
+    "id": "remember.up-to-five-facts-with-a-type",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "remember",
+        "args": {
+          "facts": [
+            "Fact one about tabs.",
+            "Fact two about spaces.",
+            "Fact three.",
+            "Fact four.",
+            "Fact five."
+          ],
+          "type": "preference"
+        },
+        "expect": { "result": { "results": { "$len": 5 } } }
+      }
+    ]
+  },
+  {
+    "id": "remember.the-type-reaches-the-memory",
+    "transports": ["local"],
+    "steps": [
+      {
+        "call": "remember",
+        "args": { "facts": ["Marcus prefers tabs over spaces."], "type": "preference" },
+        "save": { "id": "$.results[0].id" }
+      },
+      {
+        "call": "explain",
+        "args": { "id": "${id}" },
+        "expect": { "result": { "memory": { "type": "preference", "source": "sdk" } } }
+      }
+    ]
+  },
+  {
+    "id": "remember.six-facts-are-refused",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "remember",
+        "args": { "facts": ["a1", "a2", "a3", "a4", "a5", "a6"] },
+        "expect": { "error": { "code": "usage", "reason": "invalid-argument" } }
+      }
+    ]
+  },
+  {
+    "id": "remember.a-fact-is-at-most-500-characters",
+    "transports": ["local", "cloud"],
+    "steps": [
+      {
+        "call": "remember",
+        "args": { "facts": ["${repeat:501:f}"] },
+        "expect": { "error": { "code": "usage", "reason": "invalid-argument" } }
+      },
+      {
+        "call": "remember",
+        "args": { "facts": [] },
+        "expect": { "error": { "code": "usage" } }
+      }
+    ]
+  },
+  {
+    "id": "remember.a-judgment-type-is-refused",
+    "transports": ["local"],
+    "steps": [
+      {
+        "call": "remember",
+        "args": { "facts": ["x is fine"], "type": "judgment" },
+        "expect": { "error": { "code": "usage" } }
+      }
+    ]
+  }
+]

@@ -1,12 +1,7 @@
 import { filterFor } from '@oortmem/claude-code';
-import {
-  activation,
-  localGrant,
-  type Memory,
-  type MemoryStore,
-  type ScopeFilter,
-} from '@oortmem/core';
+import { activation, localGrant, type Memory } from '@oortmem/core';
 import { OortCloudError, findCloudMemory, type CloudClient } from '../cloud.js';
+import { chainLink, supersedeChain, type ChainLink } from '../engine/chain.js';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import {
@@ -31,70 +26,8 @@ export interface InspectOptions {
   limit?: string;
 }
 
-export interface ChainLink {
-  id: string;
-  validFrom: string;
-  validTo: string | null;
-  expiredAt: string | null;
-  endReason: Memory['endReason'];
-  text: string;
-}
-
-const link = (m: Memory): ChainLink => ({
-  id: m.id,
-  validFrom: m.validFrom,
-  validTo: m.validTo,
-  expiredAt: m.expiredAt,
-  endReason: m.endReason,
-  text: m.text,
-});
-
-/**
- * The supersede chain through `m`, oldest first: `supersedes` back,
- * `supersededBy` forward. Links outside `filter` (another project's memory,
- * from before observe kept chains in one scope) are walked through but not
- * returned; `hidden` counts them.
- */
-export async function supersedeChain(
-  store: MemoryStore,
-  m: Memory,
-  filter: ScopeFilter,
-): Promise<{ links: ChainLink[]; hidden: number }> {
-  const grant = localGrant(filter);
-  const seen = new Set([m.id]);
-  let hidden = 0;
-  const walk = async (
-    start: string | null,
-    next: (x: Memory) => string | null,
-    add: (l: ChainLink) => void,
-  ): Promise<void> => {
-    for (let id = start; id !== null && !seen.has(id);) {
-      seen.add(id);
-      // The store answers an unknown and an out-of-scope id alike: the chain
-      // continues where this view cannot follow, so the walk stops there.
-      const x = await store.get(grant, id);
-      if (x === null) {
-        hidden++;
-        break;
-      }
-      add(link(x));
-      id = next(x);
-    }
-  };
-  const back: ChainLink[] = [];
-  const forward: ChainLink[] = [];
-  await walk(
-    m.supersedes,
-    (x) => x.supersedes,
-    (l) => back.unshift(l),
-  );
-  await walk(
-    m.supersededBy,
-    (x) => x.supersededBy,
-    (l) => forward.push(l),
-  );
-  return { links: [...back, link(m), ...forward], hidden };
-}
+// Moved to the UI-free engine (CON-108).
+export { supersedeChain, type ChainLink } from '../engine/chain.js';
 
 /** The supersede chain through `m` in Oort Cloud: links the account cannot read count as hidden. */
 async function cloudChain(
@@ -120,7 +53,7 @@ async function cloudChain(
         }
         throw e;
       }
-      add(link(x));
+      add(chainLink(x));
       id = next(x);
     }
   };
@@ -136,7 +69,7 @@ async function cloudChain(
     (x) => x.supersededBy,
     (l) => forward.push(l),
   );
-  return { links: [...back, link(m), ...forward], hidden };
+  return { links: [...back, chainLink(m), ...forward], hidden };
 }
 
 function limitOf(raw: string | undefined): number {

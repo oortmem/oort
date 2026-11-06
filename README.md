@@ -51,7 +51,7 @@ oort recall "where does the user live"
 oort explain "where does the user live"   # each stage's rank and score
 ```
 
-Every command and flag is in [docs/cli.md](docs/cli.md). To build from source instead: `git clone https://github.com/oortmem/oort && cd oort && pnpm install && pnpm build && cd packages/cli && pnpm add -g .` (pnpm 12).
+Every command and flag is in [docs/cli.md](docs/cli.md). To use Oort from your own code (`import { createOort } from 'oortmem'`), see [docs/sdk.md](docs/sdk.md). To build from source instead: `git clone https://github.com/oortmem/oort && cd oort && pnpm install && pnpm build && cd packages/cli && pnpm add -g .` (pnpm 12).
 
 ## Works with
 
@@ -81,19 +81,19 @@ flowchart LR
 
 ## Packages
 
-| Package                                            | What it does                                                                                   |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| [`oortmem`](packages/cli)                          | The `oort` command line: setup, connectors, the local MCP server, recall, import and export    |
-| [`@oortmem/core`](packages/core)                   | The engine: secret scrubbing, the write gate, hybrid recall, fusion, tiering and project scope |
-| [`@oortmem/store-sqlite`](packages/store-sqlite)   | Storage on SQLite with FTS5 and sqlite-vec, and zstd cold blobs                                |
-| [`@oortmem/writer`](packages/writer)               | Turns conversation turns into short, self-contained facts                                      |
-| [`@oortmem/decide-jev`](packages/decide-jev)       | Add, update, supersede or skip decisions, using TypeSafe Jev                                   |
-| [`@oortmem/embed-voyage`](packages/embed-voyage)   | Embeddings through Voyage AI                                                                   |
-| [`@oortmem/rerank-voyage`](packages/rerank-voyage) | Reranking through Voyage AI                                                                    |
-| [`@oortmem/local-models`](packages/local-models)   | Embeddings and reranking on your CPU (ONNX Runtime): no keys, no account                       |
-| [`@oortmem/claude-code`](packages/claude-code)     | Claude Code hooks and transcript import                                                        |
-| [`@oortmem/mcp`](packages/mcp)                     | The MCP tools, schemas, instructions and skill, served over any memory backend                 |
-| [`oortmem` on PyPI](python)                        | A Python launcher for the same `oort` command (still needs Node 22.15 or newer)                |
+| Package                                            | What it does                                                                                                                                      |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`oortmem`](packages/cli)                          | The `oort` command line (setup, connectors, the local MCP server, recall, import and export), and the TypeScript SDK ([docs/sdk.md](docs/sdk.md)) |
+| [`@oortmem/core`](packages/core)                   | The engine: secret scrubbing, the write gate, hybrid recall, fusion, tiering and project scope                                                    |
+| [`@oortmem/store-sqlite`](packages/store-sqlite)   | Storage on SQLite with FTS5 and sqlite-vec, and zstd cold blobs                                                                                   |
+| [`@oortmem/writer`](packages/writer)               | Turns conversation turns into short, self-contained facts                                                                                         |
+| [`@oortmem/decide-jev`](packages/decide-jev)       | Add, update, supersede or skip decisions, using TypeSafe Jev                                                                                      |
+| [`@oortmem/embed-voyage`](packages/embed-voyage)   | Embeddings through Voyage AI                                                                                                                      |
+| [`@oortmem/rerank-voyage`](packages/rerank-voyage) | Reranking through Voyage AI                                                                                                                       |
+| [`@oortmem/local-models`](packages/local-models)   | Embeddings and reranking on your CPU (ONNX Runtime): no keys, no account                                                                          |
+| [`@oortmem/claude-code`](packages/claude-code)     | Claude Code hooks and transcript import                                                                                                           |
+| [`@oortmem/mcp`](packages/mcp)                     | The MCP tools, schemas, instructions and skill, served over any memory backend                                                                    |
+| [`oortmem` on PyPI](python)                        | A Python launcher for the same `oort` command (still needs Node 22.15 or newer)                                                                   |
 
 Install bundles for Claude Desktop, Claude Code, Codex, Cursor and Gemini CLI are in
 [`distribution/`](distribution).

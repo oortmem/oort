@@ -2,6 +2,10 @@ import { privacyStatement } from '../wire.js';
 import { z } from 'zod';
 import { observe, scrubObservation, type Observation } from '@oortmem/core';
 import { emit, jsonMode } from '../output.js';
+import { turnObservation } from '../engine/observe.js';
+
+// Moved to the UI-free engine (CON-108).
+export { turnObservation } from '../engine/observe.js';
 import {
   Refusal,
   cloudOf,
@@ -32,15 +36,6 @@ const ObservationInput = z.strictObject({
     .refine((s) => !Number.isNaN(Date.parse(s)), 'not an ISO timestamp')
     .optional(),
 });
-
-/** One turn as an Observation, the way `oort observe --user --assistant` builds it. */
-export function turnObservation(
-  userText: string,
-  assistantText: string,
-  at = new Date().toISOString(),
-): Observation {
-  return { userText, assistantText, toolSummaries: [], at };
-}
 
 async function readObservation(opts: ObserveOptions, ctx: Ctx): Promise<Observation> {
   const at = new Date().toISOString();

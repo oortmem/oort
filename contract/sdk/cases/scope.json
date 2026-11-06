@@ -1,0 +1,831 @@
+[
+  {
+    "id": "scope.two-users-of-one-agent-never-see-each-other",
+    "transports": ["local"],
+    "seed": "basic",
+    "options": {
+      "org": "acme"
+    },
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u1",
+          "agent": "bot"
+        },
+        "as": "u1"
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u2",
+          "agent": "bot"
+        },
+        "as": "u2"
+      },
+      {
+        "call": "remember",
+        "on": "u1",
+        "args": {
+          "facts": ["The garden of u1 is in Kyoto."]
+        },
+        "save": {
+          "kyoto": "$.results[0].id"
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u2",
+        "args": {
+          "query": "garden Kyoto"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$none": {
+                "text": {
+                  "$regex": "Kyoto"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u1",
+        "args": {
+          "query": "garden Kyoto"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$some": {
+                "id": "${kyoto}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u2",
+        "args": {
+          "query": "dark mode editor"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$none": {
+                "id": "ffffffff-0000-4000-8000-000000000001"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u1",
+        "args": {
+          "query": "dark mode editor"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$some": {
+                "id": "ffffffff-0000-4000-8000-000000000001"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u1",
+        "args": {
+          "query": "internal escalation extension"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$none": {
+                "id": "dddddddd-0000-4000-8000-000000000003"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u1",
+        "args": {
+          "query": "anything",
+          "include": ["star"]
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "scope-denied"
+          }
+        }
+      },
+      {
+        "call": "explain",
+        "on": "u2",
+        "args": {
+          "id": "${kyoto}"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "explain",
+        "on": "u1",
+        "args": {
+          "id": "dddddddd-0000-4000-8000-000000000003"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "recent",
+        "on": "u2",
+        "expect": {
+          "result": {
+            "memories": [
+              {
+                "id": "ffffffff-0000-4000-8000-000000000002"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "call": "whoami",
+        "on": "u1",
+        "expect": {
+          "result": {
+            "user": "u1",
+            "agent": "bot",
+            "reads": ["Planet u1"],
+            "writesTo": "Planet u1"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "scope.another-users-memories-cannot-be-changed-or-maintained",
+    "description": "forget, pin, unpin, explain, consolidate and judgments across two users of one agent: the other user's records are not-found, and consolidation never touches them.",
+    "transports": ["local"],
+    "seed": "basic",
+    "options": {
+      "org": "acme",
+      "judge": {
+        "role": "expert"
+      },
+      "config": {
+        "judge": {
+          "experts": ["ada"]
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u1",
+          "agent": "bot"
+        },
+        "as": "u1"
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u2",
+          "agent": "bot"
+        },
+        "as": "u2"
+      },
+      {
+        "call": "forget",
+        "on": "u2",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "pin",
+        "on": "u2",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "unpin",
+        "on": "u2",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "unpin",
+        "on": "u2",
+        "args": {
+          "id": "ffffffff"
+        },
+        "expect": {
+          "result": {
+            "id": "ffffffff-0000-4000-8000-000000000002"
+          }
+        }
+      },
+      {
+        "call": "explain",
+        "on": "u2",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000003"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "pin",
+        "on": "u1",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "result": {
+            "pinned": true,
+            "changed": true
+          }
+        }
+      },
+      {
+        "call": "consolidate",
+        "on": "u2",
+        "expect": {
+          "result": {
+            "complete": true,
+            "expired": {
+              "$none": {
+                "$regex": "^ffffffff-0000-4000-8000-00000000000[13]$"
+              }
+            },
+            "promoted": {
+              "$none": {
+                "$regex": "^ffffffff-0000-4000-8000-00000000000[13]$"
+              }
+            },
+            "demoted": {
+              "$none": {
+                "$regex": "^ffffffff-0000-4000-8000-00000000000[13]$"
+              }
+            },
+            "evicted": {
+              "$none": {
+                "$regex": "^ffffffff-0000-4000-8000-00000000000[13]$"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "consolidate",
+        "on": "u1",
+        "expect": {
+          "result": {
+            "expired": {
+              "$some": "ffffffff-0000-4000-8000-000000000003"
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.record",
+        "on": "u1",
+        "args": {
+          "subject": "u1 ticket 9 asks for a refund",
+          "verdict": "approved",
+          "reason": "Within 30 days.",
+          "domain": "support",
+          "by": "ada"
+        },
+        "expect": {
+          "result": {
+            "status": "recorded"
+          }
+        },
+        "save": {
+          "j": "$.id"
+        }
+      },
+      {
+        "call": "judge.list",
+        "on": "u2",
+        "expect": {
+          "result": {
+            "judgments": {
+              "$none": {
+                "id": "${j}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.confirm",
+        "on": "u2",
+        "args": {
+          "id": "${j}"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "judge.apply",
+        "on": "u2",
+        "args": {
+          "item": {
+            "summary": "u1 ticket 9 asks for a refund",
+            "domain": "support"
+          }
+        },
+        "expect": {
+          "result": {
+            "precedents": {
+              "$none": {
+                "id": "${j}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.list",
+        "on": "u1",
+        "expect": {
+          "result": {
+            "judgments": {
+              "$some": {
+                "id": "${j}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "forget",
+        "on": "u1",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "result": {
+            "forgotten": "ffffffff-0000-4000-8000-000000000001"
+          }
+        }
+      },
+      {
+        "call": "recent",
+        "on": "u2",
+        "expect": {
+          "result": {
+            "memories": [
+              {
+                "id": "ffffffff-0000-4000-8000-000000000002"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "scope.two-agents-keep-their-own-stars",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "agent": "bot"
+        },
+        "as": "bot"
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "agent": "cursor"
+        },
+        "as": "cursor"
+      },
+      {
+        "call": "recall",
+        "on": "bot",
+        "args": {
+          "query": "blue deploy lane"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$some": {
+                "id": "dddddddd-0000-4000-8000-000000000001"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "cursor",
+        "args": {
+          "query": "blue deploy lane"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$none": {
+                "id": "dddddddd-0000-4000-8000-000000000001"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "blue deploy lane"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$none": {
+                "id": "dddddddd-0000-4000-8000-000000000001"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "whoami",
+        "on": "bot",
+        "expect": {
+          "result": {
+            "agent": "bot",
+            "reads": ["your Planet", "Star bot"]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "scope.include-only-narrows",
+    "transports": ["local"],
+    "seed": "basic",
+    "options": {
+      "agent": "bot"
+    },
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "blue deploy lane billing",
+          "include": ["planet"]
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$none": {
+                "id": "dddddddd-0000-4000-8000-000000000001"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "blue deploy lane billing",
+          "include": ["star"]
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$some": {
+                "id": "dddddddd-0000-4000-8000-000000000001"
+              },
+              "$none": {
+                "id": "11111111-0000-4000-8000-000000000001"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "scope.user-needs-an-org",
+    "transports": ["local"],
+    "options": {
+      "user": "u1"
+    },
+    "expectCreate": {
+      "error": {
+        "code": "usage",
+        "reason": "principal-required"
+      }
+    },
+    "steps": []
+  },
+  {
+    "id": "scope.user-needs-an-org-other-than-local",
+    "transports": ["local"],
+    "options": {
+      "user": "u1",
+      "org": "local"
+    },
+    "expectCreate": {
+      "error": {
+        "code": "usage",
+        "reason": "principal-required"
+      }
+    },
+    "steps": []
+  },
+  {
+    "id": "scope.a-dropped-user-id-never-falls-back",
+    "description": "A user key that is present must hold an id; only a missing key acts as the person.",
+    "transports": ["local"],
+    "options": {
+      "org": "acme"
+    },
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "user": null,
+          "agent": "bot"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "user-missing"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "",
+          "agent": "bot"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "user-missing"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "agent": "bot"
+        },
+        "as": "bot"
+      },
+      {
+        "call": "whoami",
+        "on": "bot",
+        "expect": {
+          "result": {
+            "user": null,
+            "agent": "bot"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "scope.create-with-an-empty-user-is-user-missing",
+    "transports": ["local"],
+    "options": {
+      "org": "acme",
+      "user": null
+    },
+    "expectCreate": {
+      "error": {
+        "code": "usage",
+        "reason": "user-missing"
+      }
+    },
+    "steps": []
+  },
+  {
+    "id": "scope.self-is-never-derivable",
+    "transports": ["local"],
+    "options": {
+      "org": "acme"
+    },
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "user": "self"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "self-not-derivable"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "judgeRole": "expert"
+        },
+        "expect": {
+          "error": {
+            "code": "usage"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "scope.a-star-agent-with-a-user-is-refused",
+    "transports": ["local"],
+    "agents": {
+      "cursor": {
+        "star": true
+      }
+    },
+    "options": {
+      "org": "acme",
+      "agent": "cursor",
+      "user": "u1"
+    },
+    "expectCreate": {
+      "error": {
+        "code": "refused",
+        "reason": "star-with-user"
+      }
+    },
+    "steps": []
+  },
+  {
+    "id": "scope.user-is-local-only",
+    "transports": ["cloud"],
+    "options": {
+      "user": "u1",
+      "org": "acme"
+    },
+    "expectCreate": {
+      "error": {
+        "code": "usage"
+      }
+    },
+    "steps": []
+  },
+  {
+    "id": "scope.a-star-agent-cannot-write-in-the-cloud",
+    "transports": ["cloud"],
+    "agents": {
+      "cursor": {
+        "star": true
+      }
+    },
+    "seed": "basic",
+    "options": {
+      "agent": "cursor"
+    },
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "billing deploy"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$type": "array"
+            }
+          }
+        }
+      },
+      {
+        "call": "observe",
+        "args": {
+          "user": "a",
+          "assistant": "b"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "star-in-cloud"
+          }
+        }
+      },
+      {
+        "call": "remember",
+        "args": {
+          "facts": ["x"]
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "star-in-cloud"
+          }
+        }
+      },
+      {
+        "call": "forget",
+        "args": {
+          "id": "11111111-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "star-in-cloud"
+          }
+        }
+      },
+      {
+        "call": "pin",
+        "args": {
+          "id": "11111111-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "star-in-cloud"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "scope.whoami",
+    "transports": ["local", "cloud"],
+    "options": {
+      "agent": "bot",
+      "project": "acme-web"
+    },
+    "steps": [
+      {
+        "call": "whoami",
+        "expect": {
+          "result": {
+            "mode": {
+              "$regex": "^(local|cloud)$"
+            },
+            "agent": "bot",
+            "project": "cfg:acme-web",
+            "user": null,
+            "reads": {
+              "$type": "array"
+            },
+            "writesTo": "your Planet",
+            "version": {
+              "$type": "string"
+            },
+            "routes": {
+              "embed": {
+                "$type": "string"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+]

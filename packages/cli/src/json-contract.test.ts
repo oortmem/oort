@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MissingCredentialError, type DecisionController, type Embedder } from '@oortmem/core';
 import { TG } from '@oortmem/core/store-conformance';
 import { openSqliteStore } from '@oortmem/store-sqlite';
-import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
+import { fakeCloud, fakeMemory, type FakeCloud } from '../test/helpers/fake-cloud.js';
 import { fakeSite, type FakeSite } from '../test/fake-site.js';
 import { fixtureFetch, registerTinyModels } from '../test/local-models.js';
 import {

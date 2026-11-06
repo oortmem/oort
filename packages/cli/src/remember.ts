@@ -1,10 +1,8 @@
-import { observe, type MemoryType, type Scope } from '@oortmem/core';
-import { turnObservation } from './commands/observe.js';
+import { observe, type Grant, type MemoryType, type Scope } from '@oortmem/core';
+import { turnObservation } from './engine/observe.js';
 import { writePath } from './util.js';
 import type { Wired } from './wire.js';
 import { grantFor } from '@oortmem/claude-code';
-
-export { FACT_MAX_CHARS, REMEMBER_MAX_FACTS } from '@oortmem/mcp';
 
 export interface RememberResult {
   /** The fact's position in the request, from 0. */
@@ -29,9 +27,27 @@ export interface RememberResult {
  * `Refusal`) when the embed, decide or write adapter is missing.
  */
 export async function rememberFacts(
-  w: Wired,
+  w: Pick<
+    Wired,
+    | 'store'
+    | 'config'
+    | 'scope'
+    | 'agent'
+    | 'embed'
+    | 'decide'
+    | 'write'
+    | 'unavailable'
+    | 'keyStore'
+  >,
   facts: readonly string[],
-  opts: { harness: string; scope?: Scope; type?: MemoryType; now?: Date },
+  opts: {
+    harness: string;
+    scope?: Scope;
+    type?: MemoryType;
+    now?: Date;
+    /** The grant to read and write with (the SDK's principal); default the scope's local grant. */
+    grant?: Grant;
+  },
 ): Promise<RememberResult[]> {
   const adapters = writePath(w, 'remember');
   const scope = opts.scope ?? w.scope;
@@ -47,11 +63,12 @@ export async function rememberFacts(
       harness: opts.harness,
       home: w.agent.home,
       ...(opts.now !== undefined && { now: opts.now }),
+      ...(opts.grant !== undefined && { grant: opts.grant }),
     });
     const out: RememberResult = { fact: i, outcome: r.outcome };
     if (r.memoryId !== undefined) out.id = r.memoryId;
     if ((r.outcome === 'superseded' || r.outcome === 'corrected') && r.memoryId !== undefined) {
-      const prior = (await w.store.get(grantFor(w.scope), r.memoryId))?.supersedes;
+      const prior = (await w.store.get(opts.grant ?? grantFor(w.scope), r.memoryId))?.supersedes;
       if (prior !== null && prior !== undefined) out.supersedes = prior;
     }
     if (r.outcome === 'skipped') out.reason = r.reason ?? 'not durable';

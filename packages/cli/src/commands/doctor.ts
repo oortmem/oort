@@ -25,7 +25,14 @@ import {
   sqliteSchemaVersion,
 } from '@oortmem/store-sqlite';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
-import { ROLES, ROLE_VENDOR, keyLookup, routeFor, type AdapterRole } from '../credentials.js';
+import {
+  ROLES,
+  ROLE_VENDOR,
+  keyLookup,
+  routeFor,
+  type AdapterRole,
+  type KeyOrigin,
+} from '../credentials.js';
 import { describeProblem, inspectCredentialsFile } from '../credentials-file.js';
 import { PROVIDER_ENV } from '../keychain.js';
 import { OortCloudError, cloudUrl, createCloudClient, readCloudSettings } from '../cloud.js';
@@ -177,10 +184,12 @@ async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean 
       continue;
     }
     const r = await routeFor(role, lookup);
-    const where = (source: 'env' | 'keychain', provider: string): string =>
-      source === 'env'
-        ? PROVIDER_ENV[provider as keyof typeof PROVIDER_ENV]
-        : ctx.keychain.where(provider as keyof typeof PROVIDER_ENV);
+    const where = (source: KeyOrigin, provider: string): string =>
+      source === 'explicit'
+        ? 'given in code'
+        : source === 'env'
+          ? PROVIDER_ENV[provider as keyof typeof PROVIDER_ENV]
+          : ctx.keychain.where(provider as keyof typeof PROVIDER_ENV);
     if (r.via === 'vendor') {
       checks.push({
         group: 'keys',

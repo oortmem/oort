@@ -29,6 +29,20 @@
   "engines": {
     "node": ">=22.15.0"
   },
+  "sideEffects": [
+    "./dist/main.js"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/sdk/index.d.ts",
+      "default": "./dist/sdk/index.js"
+    },
+    "./ai-sdk": {
+      "types": "./dist/sdk/adapters/ai-sdk.d.ts",
+      "default": "./dist/sdk/adapters/ai-sdk.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "oort": "dist/main.js",
     "oortmem": "dist/main.js"
@@ -62,10 +76,14 @@
     "zod": "4.6.7"
   },
   "peerDependencies": {
-    "@oortmem/local-models": "workspace:^"
+    "@oortmem/local-models": "workspace:^",
+    "ai": "^7"
   },
   "peerDependenciesMeta": {
     "@oortmem/local-models": {
+      "optional": true
+    },
+    "ai": {
       "optional": true
     }
   },

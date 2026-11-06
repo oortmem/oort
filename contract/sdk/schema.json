@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oortcloud.dev/contract/sdk/case.json",
+  "title": "Oort SDK contract case file",
+  "description": "A file of cases. Each case runs on every transport it names, against a fresh store seeded from seeds/<seed>.json. Names are camelCase wire names; the Python runner converts them mechanically. In strings, ${name} is a value a step saved (a whole-string reference keeps the value itself), ${secret:<kind>} the text of a fixture secret of that kind (packages/core/test/fixtures/secrets.b64.txt), and ${repeat:<n>:<c>} the character c repeated n times. Matchers: $type, $len, $some, $every, $none, $absent, $regex, $approx (with $tol). Unknown result fields are ignored. After every step, no fixture secret may appear in the result or error.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["id", "transports", "steps"],
+    "properties": {
+      "id": { "type": "string", "pattern": "^[a-z0-9]+\\.[a-z0-9-]+$" },
+      "description": { "type": "string" },
+      "transports": {
+        "type": "array",
+        "minItems": 1,
+        "items": { "enum": ["local", "cloud", "remote"] }
+      },
+      "seed": { "type": "string" },
+      "options": {
+        "type": "object",
+        "description": "createOort options; the runner adds mode, home, cwd, env, fetch and keySources."
+      },
+      "now": { "type": "string", "format": "date-time" },
+      "adapters": {
+        "enum": ["fake", "none"],
+        "description": "none: no model adapters and no keys (local)."
+      },
+      "counter": {
+        "type": "integer",
+        "description": "Today's count in the shared agent judgment counter (judge-mcp-count.json)."
+      },
+      "agents": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": { "star": { "type": "boolean" } }
+        }
+      },
+      "cloud": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "fail": { "$ref": "#/$defs/fail" },
+          "noKey": { "type": "boolean" },
+          "memories": { "type": "integer", "description": "Extra bulk memories in the fake cloud." }
+        }
+      },
+      "expectCreate": {
+        "type": "object",
+        "properties": { "error": { "type": "object" } },
+        "required": ["error"]
+      },
+      "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } }
+    }
+  },
+  "$defs": {
+    "fail": {
+      "type": "object",
+      "description": "Forced fake-cloud failures by route ('METHOD /path', :id matches one segment): a status, {status, code}, 'network' or 'garbage'.",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "integer" },
+          { "enum": ["network", "garbage"] },
+          {
+            "type": "object",
+            "required": ["status", "code"],
+            "properties": {
+              "status": { "type": "integer" },
+              "code": { "type": "string" },
+              "retryAfter": { "type": "string", "description": "A Retry-After header to send." }
+            }
+          }
+        ]
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["call"],
+      "properties": {
+        "call": {
+          "enum": [
+            "recall",
+            "observe",
+            "remember",
+            "forget",
+            "pin",
+            "unpin",
+            "recent",
+            "explain",
+            "whoami",
+            "consolidate",
+            "scoped",
+            "judge.record",
+            "judge.apply",
+            "judge.list",
+            "judge.confirm",
+            "formatForPrompt",
+            "reader.judgment"
+          ]
+        },
+        "on": {
+          "type": "string",
+          "description": "A handle a scoped step saved with 'as'; default the root."
+        },
+        "as": { "type": "string" },
+        "args": {},
+        "expect": {
+          "type": "object",
+          "properties": { "result": {}, "error": { "type": "object" } }
+        },
+        "save": { "type": "object", "additionalProperties": { "type": "string" } },
+        "cloud": {
+          "type": "object",
+          "properties": { "fail": { "$ref": "#/$defs/fail" } }
+        }
+      }
+    }
+  }
+}

@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { execa } from 'execa';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import CONTRACT from '../test/cloud-contract.json' with { type: 'json' };
-import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
+import { fakeCloud, fakeMemory, type FakeCloud } from '../test/helpers/fake-cloud.js';
 import { tmpdir } from '../test/helpers.js';
 import { callDaemon } from './serve-client.js';
 import { socketPathFor } from './serve-protocol.js';

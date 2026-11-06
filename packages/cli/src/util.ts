@@ -183,7 +183,9 @@ export function scopeLabel(w: Pick<Wired, 'scope'>): string {
  * The Oort Cloud client when this machine uses the cloud store, undefined in local mode. In cloud
  * mode without a client (no Oort key, a bad URL) it refuses with the reason.
  */
-export function cloudOf(w: Wired): CloudClient | undefined {
+export function cloudOf(
+  w: Pick<Wired, 'mode' | 'cloud' | 'cloudProblem'>,
+): CloudClient | undefined {
   if (w.mode !== 'cloud') return undefined;
   if (w.cloud === undefined) {
     throw new Refusal(w.cloudProblem ?? 'Oort Cloud is not set up.', { code: 'needs-login' });
@@ -282,7 +284,7 @@ export function adapterProblem(
  * with each missing adapter's reason and the shared remedy for a missing key.
  */
 export function writePath(
-  w: Wired,
+  w: Pick<Wired, 'embed' | 'decide' | 'write' | 'unavailable' | 'keyStore'>,
   what: string,
 ): { embed: Embedder; decide: DecisionController; write: MemoryWriter } {
   const { embed, decide, write } = w;

@@ -1,0 +1,108 @@
+[
+  {
+    "id": "scrub.a-secret-stored-before-a-rule-is-scrubbed-on-read",
+    "transports": ["local", "cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "explain",
+        "args": {
+          "id": "cccccccc-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "result": {
+            "memory": {
+              "text": {
+                "$regex": "REDACTED"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "stored before a scrub rule existed"
+        }
+      },
+      {
+        "call": "recent",
+        "args": {
+          "limit": 100
+        }
+      }
+    ]
+  },
+  {
+    "id": "scrub.a-secret-in-a-turn-is-redacted-before-anything-sees-it",
+    "transports": ["local"],
+    "steps": [
+      {
+        "call": "observe",
+        "args": {
+          "user": "${secret:aws-access-key}",
+          "assistant": "Noted."
+        },
+        "expect": {
+          "result": {
+            "outcome": "added"
+          }
+        },
+        "save": {
+          "o": "$.memories[0].id"
+        }
+      },
+      {
+        "call": "explain",
+        "args": {
+          "id": "${o}"
+        },
+        "expect": {
+          "result": {
+            "memory": {
+              "text": {
+                "$regex": "REDACTED"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "remember",
+        "args": {
+          "facts": ["${secret:github-token}"]
+        }
+      },
+      {
+        "call": "observe",
+        "args": {
+          "user": "${secret:pem-private-key}",
+          "assistant": "${secret:pem-private-key}"
+        },
+        "expect": {
+          "result": {
+            "outcome": "skipped",
+            "memories": [
+              {
+                "reason": "secret"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "scrub.a-secret-in-a-query-never-comes-back",
+    "transports": ["local", "cloud"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "${secret:aws-access-key}"
+        }
+      }
+    ]
+  }
+]

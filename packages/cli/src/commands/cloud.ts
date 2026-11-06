@@ -54,7 +54,7 @@ export async function clientFor(ctx: Ctx): Promise<CloudClient> {
  * holds exactly. Stars stay on this machine (each is private to its agent),
  * and a contradiction naming one is left out. Each line keeps its author in
  * `scope.agentId`; Oort Cloud's import re-scopes every line to the account's
- * own Planet, keeping its project (see `test/fake-cloud.ts`).
+ * own Planet, keeping its project (see `test/helpers/fake-cloud.ts`).
  */
 async function localExport(
   w: Wired,

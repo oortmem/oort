@@ -1,0 +1,615 @@
+[
+  {
+    "id": "judge.agent-record-is-unconfirmed",
+    "transports": ["local"],
+    "seed": "empty",
+    "options": {
+      "agent": "bot",
+      "config": {
+        "judge": {
+          "experts": ["ada"]
+        }
+      }
+    },
+    "now": "2026-11-05T12:00:00Z",
+    "steps": [
+      {
+        "call": "judge.record",
+        "args": {
+          "subject": "Post claims a cure",
+          "verdict": "rejected",
+          "reason": "No source.",
+          "domain": "content",
+          "by": "ada"
+        },
+        "expect": {
+          "result": {
+            "outcome": "added",
+            "id": {
+              "$type": "string"
+            },
+            "status": "agent-recorded",
+            "redacted": []
+          }
+        },
+        "save": {
+          "judgment": "$.id"
+        }
+      },
+      {
+        "call": "judge.list",
+        "args": {},
+        "expect": {
+          "result": {
+            "judgments": {
+              "$some": {
+                "id": "${judgment}",
+                "via": "mcp",
+                "agentRecorded": true,
+                "confirmed": false
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "reader.judgment",
+        "args": {
+          "id": "${judgment}"
+        },
+        "expect": {
+          "result": {
+            "found": true,
+            "via": "mcp",
+            "harness": "sdk",
+            "unconfirmedAgent": true
+          }
+        }
+      },
+      {
+        "call": "judge.confirm",
+        "args": {
+          "id": "${judgment}"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "expert-only"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.agent-role-needs-listed-experts",
+    "transports": ["local"],
+    "steps": [
+      {
+        "call": "judge.record",
+        "args": {
+          "subject": "s",
+          "verdict": "rejected",
+          "reason": "r",
+          "domain": "content",
+          "by": "ada"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "experts-not-listed"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.agent-role-records-only-for-a-listed-expert",
+    "transports": ["local"],
+    "options": {
+      "config": {
+        "judge": {
+          "experts": ["ada"]
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "judge.record",
+        "args": {
+          "subject": "s",
+          "verdict": "rejected",
+          "reason": "r",
+          "domain": "content",
+          "by": "bob"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "not-an-expert"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.the-daily-cap-is-shared-with-mcp",
+    "transports": ["local"],
+    "options": {
+      "config": {
+        "judge": {
+          "experts": ["ada"]
+        }
+      }
+    },
+    "counter": 49,
+    "steps": [
+      {
+        "call": "judge.record",
+        "args": {
+          "subject": "first",
+          "verdict": "rejected",
+          "reason": "r",
+          "domain": "content",
+          "by": "ada"
+        },
+        "expect": {
+          "result": {
+            "outcome": "added"
+          }
+        }
+      },
+      {
+        "call": "judge.record",
+        "args": {
+          "subject": "second",
+          "verdict": "rejected",
+          "reason": "r",
+          "domain": "content",
+          "by": "ada"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "daily-limit"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.expert-role-records-as-a-person",
+    "transports": ["local"],
+    "options": {
+      "judge": {
+        "role": "expert",
+        "operator": "marcus"
+      }
+    },
+    "steps": [
+      {
+        "call": "judge.record",
+        "args": {
+          "subject": "Post claims a cure",
+          "verdict": "rejected",
+          "reason": "No source.",
+          "domain": "content",
+          "by": "anyone",
+          "decidedAt": "2026-11-01T00:00:00.000Z"
+        },
+        "expect": {
+          "result": {
+            "outcome": "added",
+            "status": "recorded"
+          }
+        },
+        "save": {
+          "j": "$.id"
+        }
+      },
+      {
+        "call": "reader.judgment",
+        "args": {
+          "id": "${j}"
+        },
+        "expect": {
+          "result": {
+            "via": "sdk",
+            "harness": "sdk",
+            "unconfirmedAgent": false
+          }
+        }
+      },
+      {
+        "call": "judge.list",
+        "args": {
+          "domain": "content"
+        },
+        "expect": {
+          "result": {
+            "judgments": [
+              {
+                "id": "${j}",
+                "via": "sdk",
+                "confirmed": true,
+                "agentRecorded": false,
+                "status": "current",
+                "decidedAt": "2026-11-01T00:00:00.000Z"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "call": "judge.confirm",
+        "args": {
+          "id": "${j}"
+        },
+        "expect": {
+          "result": {
+            "id": "${j}",
+            "changed": false
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.an-expert-confirms-an-agent-record",
+    "transports": ["local"],
+    "options": {
+      "judge": {
+        "role": "expert",
+        "operator": "marcus"
+      },
+      "config": {
+        "judge": {
+          "experts": ["ada"]
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "judgeRole": "agent"
+        },
+        "as": "agent"
+      },
+      {
+        "call": "judge.record",
+        "on": "agent",
+        "args": {
+          "subject": "Post claims a cure",
+          "verdict": "rejected",
+          "reason": "No source.",
+          "domain": "content",
+          "by": "ada"
+        },
+        "expect": {
+          "result": {
+            "status": "agent-recorded"
+          }
+        },
+        "save": {
+          "j": "$.id"
+        }
+      },
+      {
+        "call": "judge.confirm",
+        "on": "agent",
+        "args": {
+          "id": "${j}"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "expert-only"
+          }
+        }
+      },
+      {
+        "call": "judge.confirm",
+        "args": {
+          "id": "${j}"
+        },
+        "expect": {
+          "result": {
+            "id": "${j}",
+            "changed": true
+          }
+        }
+      },
+      {
+        "call": "reader.judgment",
+        "args": {
+          "id": "${j}"
+        },
+        "expect": {
+          "result": {
+            "via": "mcp",
+            "unconfirmedAgent": false
+          }
+        }
+      },
+      {
+        "call": "judge.list",
+        "expect": {
+          "result": {
+            "judgments": [
+              {
+                "id": "${j}",
+                "confirmed": true,
+                "agentRecorded": false
+              }
+            ]
+          }
+        }
+      },
+      {
+        "call": "judge.confirm",
+        "args": {
+          "id": "${j}"
+        },
+        "expect": {
+          "result": {
+            "changed": false
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.an-agent-never-corrects-a-person",
+    "transports": ["local"],
+    "options": {
+      "judge": {
+        "role": "expert"
+      },
+      "config": {
+        "judge": {
+          "experts": ["ada"]
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "judge.record",
+        "args": {
+          "subject": "Post 1",
+          "ref": "post-1",
+          "verdict": "rejected",
+          "reason": "No source.",
+          "domain": "content",
+          "by": "ada"
+        },
+        "expect": {
+          "result": {
+            "outcome": "added"
+          }
+        },
+        "save": {
+          "person": "$.id"
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "judgeRole": "agent"
+        },
+        "as": "agent"
+      },
+      {
+        "call": "judge.record",
+        "on": "agent",
+        "args": {
+          "subject": "Post 1",
+          "ref": "post-1",
+          "verdict": "approved",
+          "reason": "Looks fine.",
+          "domain": "content",
+          "by": "ada"
+        },
+        "expect": {
+          "result": {
+            "outcome": "added",
+            "corrects": {
+              "$absent": true
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.list",
+        "expect": {
+          "result": {
+            "judgments": {
+              "$len": 2,
+              "$some": {
+                "id": "${person}",
+                "status": "current",
+                "verdict": "rejected"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.apply-leaves-out-unconfirmed-agent-records",
+    "transports": ["local"],
+    "seed": "judgments",
+    "steps": [
+      {
+        "call": "judge.apply",
+        "args": {
+          "item": {
+            "summary": "Post claims a miracle cure for cancer",
+            "domain": "content"
+          }
+        },
+        "expect": {
+          "result": {
+            "status": {
+              "$regex": "^(suggested|needs-expert|precedents-only)$"
+            },
+            "precedents": {
+              "$every": {
+                "agentRecorded": false,
+                "by": "ada"
+              }
+            },
+            "agentRecordedExcluded": 1,
+            "decisions": {
+              "$type": "array"
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.apply",
+        "args": {
+          "item": {
+            "summary": "Post claims a miracle cure for cancer",
+            "domain": "content"
+          },
+          "includeAgentRecorded": true,
+          "limit": 10
+        },
+        "expect": {
+          "result": {
+            "agentRecordedExcluded": {
+              "$absent": true
+            },
+            "precedents": {
+              "$some": {
+                "agentRecorded": true
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.list",
+        "args": {
+          "all": true,
+          "limit": 2
+        },
+        "expect": {
+          "result": {
+            "judgments": {
+              "$len": 2
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.input-limits",
+    "transports": ["local"],
+    "options": {
+      "judge": {
+        "role": "expert"
+      }
+    },
+    "steps": [
+      {
+        "call": "judge.record",
+        "args": {
+          "subject": "${repeat:501:s}",
+          "verdict": "rejected",
+          "reason": "r",
+          "domain": "content",
+          "by": "ada"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "invalid-argument"
+          }
+        }
+      },
+      {
+        "call": "judge.record",
+        "args": {
+          "subject": "s",
+          "verdict": "rejected",
+          "reason": "r",
+          "domain": "content",
+          "by": "ada",
+          "place": {}
+        },
+        "expect": {
+          "error": {
+            "code": "usage"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.is-local-only",
+    "transports": ["cloud"],
+    "steps": [
+      {
+        "call": "judge.record",
+        "args": {
+          "subject": "s",
+          "verdict": "rejected",
+          "reason": "r",
+          "domain": "content",
+          "by": "ada"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "local-only"
+          }
+        }
+      },
+      {
+        "call": "judge.apply",
+        "args": {
+          "item": "s"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "local-only"
+          }
+        }
+      },
+      {
+        "call": "judge.list",
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "local-only"
+          }
+        }
+      },
+      {
+        "call": "judge.confirm",
+        "args": {
+          "id": "11111111-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "local-only"
+          }
+        }
+      },
+      {
+        "call": "consolidate",
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "local-only"
+          }
+        }
+      }
+    ]
+  }
+]

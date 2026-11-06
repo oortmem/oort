@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
+import { fakeCloud, fakeMemory, type FakeCloud } from '../test/helpers/fake-cloud.js';
 import {
   JSON_NEVER_ASKS,
   NO_TTY_STDIN,

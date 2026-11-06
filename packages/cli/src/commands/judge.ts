@@ -12,6 +12,7 @@ import {
   importJudgmentPack,
   importJudgments,
   isActiveJudgment,
+  isAgentVia,
   isUnconfirmedAgentJudgment,
   judge,
   parseJudgmentPack,
@@ -136,7 +137,7 @@ function operatorOf(w: Wired, flag: string | undefined): string {
 
 /** How a precedent or judgment was recorded, for labels. */
 function recordedLabel(j: Pick<Judgment, 'via' | 'confirmed'>): string {
-  if (j.via !== 'mcp') return '';
+  if (!isAgentVia(j.via)) return '';
   return j.confirmed === undefined
     ? ' [agent-recorded, unconfirmed]'
     : ` [agent-recorded, confirmed by ${shown(j.confirmed.by)}]`;
@@ -393,12 +394,11 @@ function printJudgeResult(ctx: Ctx, w: Wired, r: JudgeResult): void {
   for (const [i, p] of r.precedents.entries()) {
     const mark = p.agrees === undefined ? '' : p.agrees ? ' agrees' : ' differs';
     const from = p.pack === undefined ? '' : `, imported from pack ${shown(p.pack.name)}`;
-    const agent =
-      p.via !== 'mcp'
-        ? ''
-        : p.confirmed
-          ? ', agent-recorded (confirmed)'
-          : ', agent-recorded (unconfirmed)';
+    const agent = !isAgentVia(p.via)
+      ? ''
+      : p.confirmed
+        ? ', agent-recorded (confirmed)'
+        : ', agent-recorded (unconfirmed)';
     ctx.io.out(
       `${i + 1}. ${shown(p.verdict)}  ${fixed(p.similarity)}${mark}  "${shown(clip(p.subject.summary, 70))}"  by ${shown(p.by)}, ${p.decidedAt.slice(0, 10)}${from}${agent}  ${short(p.id)}\n`,
     );
@@ -515,12 +515,12 @@ export async function judgeConfirmCommand(
     const grant = writeGrantFor(w, m);
     if (!isUnconfirmedAgentJudgment(m.judgment)) {
       ctx.io.out(
-        m.judgment.via === 'mcp'
+        isAgentVia(m.judgment.via)
           ? `${short(m.id)} is already confirmed.\n`
           : `${short(m.id)} was recorded by a person; there is nothing to confirm.\n`,
       );
       if (jsonMode(ctx)) {
-        emit(ctx, { id: m.id, confirmed: m.judgment.via === 'mcp', changed: false, by: null });
+        emit(ctx, { id: m.id, confirmed: isAgentVia(m.judgment.via), changed: false, by: null });
       }
       return 0;
     }
