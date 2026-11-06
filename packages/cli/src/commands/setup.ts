@@ -140,9 +140,16 @@ function plainPrompter(ctx: Ctx, ui: Ui): Prompter {
   };
 }
 
-/** clack on the terminal. */
-function clackPrompter(ui: Ui): Prompter {
+/**
+ * clack on the terminal. Its questions go to stderr, as every prompt does (CON-107), so stdout
+ * never receives one; `streams.input` is for tests.
+ */
+export function clackPrompter(ui: Ui, streams: { input?: NodeJS.ReadableStream } = {}): Prompter {
   const val = <T>(v: T | symbol): T | null => (clack.isCancel(v) ? null : (v as T));
+  const io = {
+    output: process.stderr,
+    ...(streams.input !== undefined && { input: streams.input as NodeJS.ReadStream }),
+  };
   return {
     interactive: true,
     intro: (t) => clack.intro(t),
@@ -156,16 +163,17 @@ function clackPrompter(ui: Ui): Prompter {
           options: options as never,
           initialValues: initial,
           required: false,
+          ...io,
         }),
       );
     },
     async select<T extends string>(message: string, options: Choice<T>[], initial: T) {
       return val<T>(
-        await clack.select({ message, options: options as never, initialValue: initial }),
+        await clack.select({ message, options: options as never, initialValue: initial, ...io }),
       );
     },
     async confirm(message, initial) {
-      return val<boolean>(await clack.confirm({ message, initialValue: initial }));
+      return val<boolean>(await clack.confirm({ message, initialValue: initial, ...io }));
     },
   };
 }
