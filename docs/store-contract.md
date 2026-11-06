@@ -200,7 +200,7 @@ words (`Intl.Segmenter`), combining marks stay inside words, and Latin diacritic
 output for plain English is byte-identical to version 1's, emoji included (variation selectors,
 keycaps and ZWJ sequences separate words, as before, and so do `…` and `‥`). NFKC folds
 compatibility forms on purpose: full-width ASCII (`ＡＰＩ` is `api`), fractions (`½` is `1 2`), super-
-and subscripts (`x²` is `x2`), `™` (`tm`) and ligatures (`ﬁ` is `fi`). The index is declared with
+and subscripts (`x²` is `x2`) and ligatures (`ﬁ` is `fi`); `™` and `℠` separate words, as before. The index is declared with
 `unicode61 remove_diacritics 0 categories 'L* N* Co M*' tokenchars '-_.'` (`FTS_TOKENIZE`), so FTS5
 keeps the marks too. Opening a version 3 store drops `memories_fts` and creates the index as
 `memories_fts2` with the new declaration (renamed so that an older Oort still running against the

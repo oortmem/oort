@@ -64,6 +64,7 @@ const CHAT_ENGLISH = [
   'hmm… not sure, maybe v1‥v2 of the API',
   '“auth-service” doesn’t listen on 8080 anymore',
   'it’s fine 😀😀😀',
+  'Oort™ and Acme℠ both ship an API',
 ];
 
 it('tokenize-golden.v2-is-byte-identical-to-v1-for-plain-english', () => {
@@ -83,13 +84,12 @@ it('tokenize-golden.v2-is-byte-identical-to-v1-for-plain-english', () => {
 
 it('tokenize-golden.documented-folds-are-the-only-differences', () => {
   // NFKC's deliberate folds (core/src/tokenize.ts): full-width ASCII, fractions, super- and
-  // subscripts, the trade mark sign and ligatures. Each is pinned, with v1's tokens beside it.
+  // subscripts and ligatures. Each is pinned, with v1's tokens beside it.
   const folds: [string, string[], string[]][] = [
     ['ＯＫ　ｔｈａｎｋｓ', ['ok', 'thanks'], ['ｏｋ', 'ｔｈａｎｋｓ']],
     ['add ½ cup', ['add', '1', '2', 'cup'], ['add', '½', 'cup']],
     ['O(n²) time', ['o', 'n2', 'time'], ['o', 'n²', 'time']],
     ['H₂O', ['h2o'], ['h₂o']],
-    ['Oort™ API', ['oorttm', 'api'], ['oort', 'api']],
     ['the ﬁle', ['the', 'file'], ['the', 'ﬁle']],
   ];
   for (const [text, v2, v1] of folds) {
