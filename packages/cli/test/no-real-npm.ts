@@ -22,6 +22,11 @@ process.env['PATH'] = `${dir}${path.delimiter}${process.env['PATH'] ?? ''}`;
 process.env['OORT_TEST_NPM_GUARD'] = dir;
 
 afterAll(() => {
+  // The roots `trustedTmpdir` made for this file (test/helpers.ts).
+  const roots = (globalThis as Record<symbol, string[] | undefined>)[
+    Symbol.for('oort.test.trustedRoots')
+  ];
+  for (const r of roots?.splice(0) ?? []) fs.rmSync(r, { recursive: true, force: true });
   const asked = fs.existsSync(ran) ? fs.readFileSync(ran, 'utf8').trim() : undefined;
   fs.rmSync(dir, { recursive: true, force: true });
   if (asked !== undefined) {

@@ -16,6 +16,7 @@ import {
   npmTrap,
   syntheticKey,
   tmpdir,
+  trustedTmpdir,
   writeTranscript,
   data,
 } from '../test/helpers.js';
@@ -40,8 +41,12 @@ interface Sandbox {
   env: Record<string, string>;
 }
 
-function sandbox(): Sandbox {
-  const root = tmpdir('oort-bin-');
+/**
+ * A throwaway HOME for the real bin. `trusted`: outside every temporary directory
+ * (`trustedTmpdir`), for tests that need oort to trust it with the managed copy.
+ */
+function sandbox(opts: { trusted?: boolean } = {}): Sandbox {
+  const root = opts.trusted === true ? trustedTmpdir('oort-bin-') : tmpdir('oort-bin-');
   const home = path.join(root, 'home');
   const oortHome = path.join(home, '.oort');
   const cwd = path.join(root, 'work');
@@ -570,6 +575,47 @@ describe('oort bin', () => {
     expect(fs.existsSync(settings)).toBe(false);
   });
 
+  it('cli.a-copy-under-tmp-is-never-written-plain-or-this-copy (PR #78 I2)', async () => {
+    const s = sandbox({ trusted: true });
+    const settings = path.join(s.home, '.claude', 'settings.json');
+    // The real bin, copied under /tmp (on macOS, /private/tmp: not os.tmpdir()).
+    const root = fs.realpathSync(fs.mkdtempSync('/tmp/oort-i2-'));
+    const pkg = path.join(root, 'oortmem');
+    fs.mkdirSync(pkg);
+    fs.cpSync(path.dirname(BIN), path.join(pkg, 'dist'), { recursive: true });
+    fs.copyFileSync(
+      path.join(path.dirname(BIN), '..', 'package.json'),
+      path.join(pkg, 'package.json'),
+    );
+    fs.symlinkSync(
+      path.join(path.dirname(BIN), '..', 'node_modules'),
+      path.join(pkg, 'node_modules'),
+    );
+    const run = (args: string[]) =>
+      execa(path.join(pkg, 'dist', 'main.js'), args, {
+        cwd: s.cwd,
+        env: s.env,
+        extendEnv: false,
+        reject: false,
+        stdin: 'ignore',
+      });
+    try {
+      const plain = await run(['install', 'claude-code']);
+      expect(plain.exitCode).toBe(2);
+      expect(plain.stderr).toContain('This oort is in a temporary directory');
+      // It tried the managed copy first (the stand-in npm fails), and then refused.
+      expect(fs.existsSync(s.npmRan)).toBe(true);
+      fs.rmSync(s.npmRan);
+      const mine = await run(['install', 'claude-code', '--this-copy']);
+      expect(mine.exitCode).toBe(2);
+      expect(mine.stderr).toContain('so --this-copy will not write it');
+      expect(fs.existsSync(s.npmRan)).toBe(false);
+      expect(fs.existsSync(settings)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('cli.install-uninstall-roundtrip', async () => {
     const s = sandbox();
     const settings = path.join(s.home, '.claude', 'settings.json');
@@ -641,7 +687,7 @@ describe('oort bin', () => {
   });
 
   it('cli.install-and-connect-prefer-the-managed-copy-and-doctor-agrees (CON-114)', async () => {
-    const s = sandbox();
+    const s = sandbox({ trusted: true });
     const bin = fs.realpathSync(BIN);
     const settings = path.join(s.home, '.claude', 'settings.json');
     const cursor = path.join(s.home, '.cursor', 'mcp.json');
@@ -674,7 +720,7 @@ describe('oort bin', () => {
 
   it('cli.this-copy-writes-this-build-even-with-a-managed-copy', async () => {
     // This bin is a source checkout (packages/cli/dist/main.js): a developer's own build.
-    const s = sandbox();
+    const s = sandbox({ trusted: true });
     const bin = fs.realpathSync(BIN);
     const settings = path.join(s.home, '.claude', 'settings.json');
     const cursor = path.join(s.home, '.cursor', 'mcp.json');
@@ -859,7 +905,7 @@ describe('oort bin', () => {
   });
 
   it('cli.setup-yes-connects-and-runs-the-demo', async () => {
-    const s = sandbox();
+    const s = sandbox({ trusted: true });
     fs.mkdirSync(path.join(s.home, '.claude'));
     fs.mkdirSync(path.join(s.home, '.codex'));
     const r = await oort(s, [

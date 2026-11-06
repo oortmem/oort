@@ -13,6 +13,7 @@ import {
   memoryKeychain,
   npmPrefixCopy,
   npmTrap,
+  trustedTmpdir,
   writeTranscript,
   type Harness,
 } from '../../test/helpers.js';
@@ -22,7 +23,21 @@ import type { WireFn } from '../wire.js';
 import { setupCommand, type Choice, type Prompter, type SetupDeps } from './setup.js';
 import { TG } from '@oortmem/core/store-conformance';
 
-const CMD = '/opt/oort/node_modules/oort/dist/main.js';
+/** This copy as setup sees it: a real file in a root oort trusts (`trustedTmpdir`). */
+const CMD = (() => {
+  const main = path.join(
+    trustedTmpdir('oort-cmd-'),
+    'opt',
+    'oort',
+    'node_modules',
+    'oort',
+    'dist',
+    'main.js',
+  );
+  fs.mkdirSync(path.dirname(main), { recursive: true });
+  fs.writeFileSync(main, '#!/bin/sh\n', { mode: 0o755 });
+  return main;
+})();
 
 /** The harness, with every id the store ever received recorded (to prove the demo cleans up). */
 function recording(h: Harness): { wire: WireFn; ids: Set<string> } {
@@ -81,7 +96,7 @@ function scripted(answers: unknown[]): Prompter & { asked: string[]; said: strin
 }
 
 function setupHarness(opts: { adapters?: boolean } = {}) {
-  const h = harness(opts);
+  const h = harness({ ...opts, trusted: true });
   const rec = recording(h);
   const run = async (
     flags: Parameters<typeof setupCommand>[0],
@@ -626,7 +641,7 @@ describe('oort setup', () => {
 
     it('setup.json-from-npx-installs-the-managed-copy-and-reports-it', async () => {
       // Through the CLI, as `npx oortmem setup --yes … --json` runs: the entry is in npx's cache.
-      const h = harness();
+      const h = harness({ trusted: true });
       fs.mkdirSync(path.join(h.root, '.claude'));
       const npx = path.join(h.root, '.npm', '_npx', '6a1f2b', 'node_modules', 'oortmem', 'dist');
       fs.mkdirSync(npx, { recursive: true });
@@ -668,7 +683,7 @@ describe('oort setup', () => {
         '_npx',
       );
       // No npm: the envelope says so, and nothing points at npx's copy.
-      const h2 = harness();
+      const h2 = harness({ trusted: true });
       fs.mkdirSync(path.join(h2.root, '.claude'));
       const r2 = await h2.run(
         ['setup', '--yes', '--agents', 'claude-code', '--keys', 'skip', '--no-demo', '--json'],
@@ -681,7 +696,7 @@ describe('oort setup', () => {
     });
 
     it('setup.json-reports-the-fallback-as-a-warning', async () => {
-      const h = harness();
+      const h = harness({ trusted: true });
       fs.mkdirSync(path.join(h.root, '.claude'));
       const r = await h.run(
         ['setup', '--yes', '--agents', 'claude-code', '--keys', 'skip', '--no-demo', '--json'],
@@ -819,7 +834,7 @@ describe('oort setup', () => {
     });
 
     it('setup.install-global-is-accepted-and-changes-nothing', async () => {
-      const h = harness();
+      const h = harness({ trusted: true });
       const r = await h.run([
         'setup',
         '--yes',

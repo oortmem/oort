@@ -32,10 +32,13 @@ import { importCommand, parseSince, type ImportOutcome } from './import.js';
 import { hookCommandPath, settingsFile } from './install.js';
 import {
   canInstallManaged,
+  checkAgentPath,
+  inspectManaged,
   installCommandFor,
   installManaged,
-  managedCopy,
   managedIsCurrent,
+  riskOf,
+  untrustedManagedMessage,
   manualInstall,
   plannedMain,
   runningUnstable,
@@ -552,7 +555,8 @@ export async function setupCommand(
     const env = ctx.io.env;
     const managed: {
       prefix: string;
-      status: 'skipped' | 'reused' | 'installed' | 'declined' | 'failed' | 'unavailable';
+      status:
+        'skipped' | 'reused' | 'installed' | 'declined' | 'failed' | 'unavailable' | 'untrusted';
       version: string | null;
       command: string | null;
       reason: string | null;
@@ -576,8 +580,7 @@ export async function setupCommand(
       const manual = manualInstall(env);
       const why = (deps.unstable ?? (() => runningUnstable(ctx)))();
       let running: string | undefined;
-      let problem =
-        why === undefined ? '' : `This oort is in ${why}, which agents would lose later.`;
+      let problem = why === undefined ? '' : `This oort is in ${why}, ${riskOf(why)}.`;
       if (why === undefined) {
         try {
           running = (deps.bin ?? (() => hookCommandPath(ctx.io.entry)))();
@@ -599,9 +602,15 @@ export async function setupCommand(
           );
         }
       };
-      const current = managedCopy(env);
+      const state = inspectManaged(env);
+      const current = state.state === 'ok' ? state.managed : undefined;
       let plan: { bin: string; install: boolean } | undefined;
-      if (opts.thisCopy === true) {
+      if (opts.thisCopy !== true && state.state === 'untrusted') {
+        // Never reused, never installed over, never worked around (PR #78 review, I1).
+        managed.status = 'untrusted';
+        managed.reason = 'untrusted';
+        p.info(ui.warn(`Skipped connecting: ${untrustedManagedMessage(state.problem, env)}`));
+      } else if (opts.thisCopy === true) {
         managed.reason = 'this-copy';
         if (current !== undefined) managed.version = current.version;
         if (running !== undefined) {
@@ -629,16 +638,13 @@ export async function setupCommand(
         );
       } else {
         const can = canInstallManaged(ctx);
-        if (can === 'yes') {
+        if (can.ok) {
           plan = { bin: plannedMain(env), install: true };
           managed.command = installCommandFor(env);
         } else {
           managed.status = 'unavailable';
-          managed.reason = can;
-          unavailable(
-            can === 'no-npm' ? 'npm is not on PATH' : 'it is not set up on Windows yet',
-            'cannot be installed',
-          );
+          managed.reason = can.reason;
+          unavailable(can.because, 'cannot be installed');
           if (running !== undefined) plan = { bin: running, install: false };
         }
       }
@@ -693,7 +699,13 @@ export async function setupCommand(
           p.info(
             `Installing oort ${VERSION} in ${prefix}, the copy agents run: ${managed.command}`,
           );
-          const r = await installManaged(ctx);
+          let r: Awaited<ReturnType<typeof installManaged>>;
+          try {
+            r = await installManaged(ctx);
+          } catch (e) {
+            if (!(e instanceof Refusal)) throw e;
+            r = { ok: false, reason: 'failed', command: managed.command ?? '', detail: e.message };
+          }
           if (r.ok) {
             bin = r.managed.main;
             managed.status = 'installed';
@@ -712,6 +724,16 @@ export async function setupCommand(
             managed.reason = r.reason;
             bin = running;
             unavailable(r.detail, 'could not be installed');
+          }
+        }
+        if (bin !== undefined) {
+          // The last check before any config is written: the path is still safe (PR #78, I1).
+          try {
+            checkAgentPath(bin, ctx);
+          } catch (e) {
+            if (!(e instanceof Refusal)) throw e;
+            p.info(ui.warn(`Skipped connecting: ${e.message}`));
+            bin = undefined;
           }
         }
         if (bin !== undefined) {

@@ -39,7 +39,8 @@ npm i -g --prefix ~/.oort/cli oortmem
 
 Agents run its `~/.oort/cli/lib/node_modules/oortmem/dist/main.js` by that
 path (`$OORT_HOME/cli` when `OORT_HOME` is set). A global install under a Node
-version manager (nvm, fnm, Volta, asdf) moves when you change Node, fnm's
+version manager (nvm, fnm, Volta, asdf, mise, nodenv, nvs) moves when you
+change Node, fnm's
 `fnm_multishells` links last one shell, and npx keeps its copy in a cache. The
 managed copy belongs to Oort and stays where it is. `oort update` keeps it
 current.
@@ -56,10 +57,38 @@ current.
   checks out and is this version or newer. Otherwise they write the copy you
   ran, when it stays put. They never write a copy in the npx or pnpm dlx
   cache, a temp directory, `fnm_multishells` or a version manager's
-  directory. From such a copy they install the managed copy first, or, when
-  they cannot (no `npm` on `PATH`, npm fails, Windows), they refuse (exit 2)
-  and name the commands: `npm i -g --prefix ~/.oort/cli oortmem`, then
-  `~/.oort/cli/bin/oort install claude-code`.
+  directory. From such a copy, `npx oortmem install claude-code` say, they
+  install the managed copy first: the same `oortmem` package from npm's
+  registry, at the version you ran, without a separate question (one line says
+  so; `oort connect --dry-run` installs nothing and shows where the managed copy
+  would be). When they cannot (no `npm` on `PATH`, npm fails, Windows), they
+  refuse (exit 2) and name the commands: `npm i -g --prefix ~/.oort/cli
+  oortmem`, then `~/.oort/cli/bin/oort install claude-code`.
+- **Only a copy nobody else can change.** Agents run the path oort writes on
+  every prompt, so before it reuses the managed copy, and again right before
+  any config is written, oort walks the path from `/` down to `main.js`:
+  - inside `OORT_HOME` (the managed copy), every directory and the file must
+    be yours (or root's, above your home directory) and not writable by group
+    or others;
+  - for the copy you ran, when it is written instead (the fallback and
+    `--this-copy`), every step must be yours or root's and not writable by
+    others, sticky or not. Group write is allowed there, because Homebrew's
+    `/opt/homebrew/lib` and `/usr/local/lib/node_modules` are group-writable on
+    a normal Mac.
+
+  A temporary directory never counts: `os.tmpdir()`, `$TMPDIR`, `/tmp`,
+  `/private/tmp`, `/var/tmp`, `/private/var/tmp` and `/dev/shm`. A managed
+  copy that fails is never reused, installed over or worked around: setup
+  skips connecting, `oort install` and `oort connect` refuse (exit 2), and
+  `oort doctor` fails, each naming the directory and the fix:
+
+  ```
+  The managed copy in ~/.oort/cli is not safe for agents to run: /Users/you/.oort can be written by group or others (fix: chmod go-w /Users/you/.oort). Fix that, or remove it (rm -r ~/.oort/cli) and run oort setup again.
+  ```
+
+  An `OORT_HOME` that is a symlink to nothing, someone else's, or in a
+  temporary directory gets no managed copy: setup falls back as below, and
+  `oort install` from npx refuses with the same sentence.
 - **Without it**, when npm is not on `PATH` or the install fails, setup falls
   back to the copy you ran if it stays put, with a one-line warning and the
   manual command. If the copy you ran does not stay put, setup skips
@@ -73,8 +102,9 @@ current.
   `fnm_multishells`, a version manager) is still refused, because its path
   breaks later whatever you intend: `This oort is in a package cache, which
   agents would lose later, so --this-copy will not write it.` Run the command
-  again without the flag to go back to the managed copy. `oort doctor` does not
-  flag a copy written this way when it stays put and is this version or newer.
+  again without the flag to go back to the managed copy. `oort doctor` names a
+  copy written this way in an info line, and does not fail or warn, when it
+  stays put, is yours, and is this version or newer.
 
 ## Updating: `oort update`
 
@@ -860,7 +890,7 @@ temp directory, `fnm_multishells` or a version manager, `oort install
 claude-code` installs the managed copy first:
 
 ```
-• This oort is in a package cache, so agents would lose it later: installing oort 0.6.3 in ~/.oort/cli first (npm i -g --prefix ~/.oort/cli oortmem@0.6.3 --prefer-online).
+• This oort is in a package cache, which agents would lose later: installing oort 0.6.3 in ~/.oort/cli first (npm i -g --prefix ~/.oort/cli oortmem@0.6.3 --prefer-online).
 ```
 
 When it cannot, it refuses (exit 2) and names `npm i -g --prefix ~/.oort/cli
@@ -1815,9 +1845,9 @@ Pro, with no key and a 3 second timeout.
 | Group | Checks | A problem and its fix |
 | --- | --- | --- |
 | `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. A role on a local model instead loads it and runs it once, offline. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort models pull (free local embed and rerank, no keys), oort keys set <provider>, or oort login (Oort Pro)`; for decide and write, which no local model does, the key or Oort Pro. Without a Keychain or `credentials.json`, the variable to set in your agent's environment instead. A model the relay does not serve: use the default model, or set the vendor key. |
-| `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, and the binary they run. Hooks that run another executable copy of this same version (the managed `~/.oort/cli`, while you run a copy from `PATH`) are fine: an info line names both. | Missing, or a command that is not executable: `oort install claude-code`. A hook binary whose `--version` is older than the oort you run, or newer but somewhere that does not stay put, is a warning naming both versions and the path (a newer copy that stays put, such as your own build written with `--this-copy`, is fine): `oort update` (or `oort install claude-code` from the oort you want). When the oort you run lives somewhere temporary or under a Node version manager (the npx or pnpm dlx cache, a temp directory, `fnm_multishells`, `.nvm/`, `node-versions/`, `.volta/`, `.asdf/`), the fix never points the hooks at it: it names the managed copy instead, `~/.oort/cli/bin/oort install claude-code` (with `npm i -g --prefix ~/.oort/cli oortmem &&` first when there is none). Hooks that run a copy that does not stay put (under a version manager, in `fnm_multishells`, or in the npx or pnpm dlx cache) get an info line (`claude-code node`) naming the fix: with no managed copy, `oort setup, or npm i -g --prefix ~/.oort/cli oortmem and then oort install claude-code`; with one, `~/.oort/cli/bin/oort install claude-code`. Unparseable settings: fix the JSON, then the same fix. |
+| `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, and the binary they run. Hooks that run the managed `~/.oort/cli` while you run a copy from `PATH` are fine: an info line names both, each with its own version. A managed copy that is there but not safe to run (`managed copy`) is a fail, with the `chmod` or `chown` that fixes it. | Missing, or a command that is not executable: `oort install claude-code`. Doctor never runs a hook's binary: versions come from the package's files. The managed copy (when it checks out and is safe) and the copy you ran are ok at this version or newer. Any other copy that stays put and is yours, such as your own build written with `--this-copy`, is an info line naming it ("the hooks run another copy at X (oort V)", try: `oort install claude-code` to use the managed copy, or keep it if you built it). A copy in a temp directory or package cache, or one someone else could change, is a fail. A hook binary that is older than the oort you run, or whose files do not say a version, is a warning naming both versions and the path: `oort update` (or `oort install claude-code` from the oort you want). When the oort you run lives somewhere temporary or under a Node version manager (the npx or pnpm dlx cache, a temp directory, `fnm_multishells`, `.nvm/`, `node-versions/`, `.volta/`, `.asdf/`), the fix never points the hooks at it: it names the managed copy instead, `~/.oort/cli/bin/oort install claude-code` (with `npm i -g --prefix ~/.oort/cli oortmem &&` first when there is none). Hooks that run a copy that does not stay put (under a version manager, in `fnm_multishells`, or in the npx or pnpm dlx cache) get an info line (`claude-code node`) naming the fix: with no managed copy, `oort setup, or npm i -g --prefix ~/.oort/cli oortmem and then oort install claude-code`; with one, `~/.oort/cli/bin/oort install claude-code`. Unparseable settings: fix the JSON, then the same fix. |
 | `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. Whether the hooks skip the daemon after a timeout or refusal, and until when. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
-| `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. Entries are judged against the binary `oort connect` would write now: the managed copy when it checks out, else the copy you ran. An entry `oort connect` wrote for another copy that stays put and is this version or newer (one written with `--this-copy`) is fine. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
+| `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. Entries are judged against the binary `oort connect` would write now: the managed copy when it checks out, else the copy you ran. An entry `oort connect` wrote for another copy follows the hooks' rules: the managed or the running copy is ok, another copy of yours that stays put and is this version or newer (one written with `--this-copy`) is an info line naming it, and one in a temp directory or someone else's is a fail. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
 | `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
 | `updates` | From the [update check](#the-update-notice)'s file only (doctor makes no request for it): a newer release, or that this one is the latest. Shown to people only, never in `--json`, and not when the check is off. | A newer release (information): `oort update`. |

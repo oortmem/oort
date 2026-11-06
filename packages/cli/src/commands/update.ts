@@ -130,6 +130,9 @@ const MANAGER_NAME: Record<string, string> = {
   'node-versions/': 'fnm',
   '.volta/': 'Volta',
   '.asdf/': 'asdf',
+  '.local/share/mise/installs/': 'mise',
+  '.nodenv/versions/': 'nodenv',
+  '.nvs/': 'nvs',
 };
 
 const slash = (p: string): string => p.replaceAll('\\', '/');
@@ -566,7 +569,17 @@ export function discoverCopies(ctx: Ctx, deps: Pick<UpdateDeps, 'tmpdir'>): Copy
 export function defaultUpdateDeps(ctx: Ctx): UpdateDeps {
   return {
     latest: () => fetchLatest(ctx.fetch ?? globalThis.fetch, { timeoutMs: 10_000 }),
-    run: (file, args, env, cwd) => runForwarding(file, args, { env, cwd }),
+    run: (file, args, env, cwd) => {
+      // Tests inject their own runner (ctx.updateDeps.run): a real installer never runs under
+      // vitest. Thrown before anything spawns, so no catch can let it through.
+      if (process.env['VITEST'] !== undefined) {
+        throw Object.assign(
+          new Error(`refusing to run ${file} under the test runner: inject ctx.updateDeps.run`),
+          { code: 'ERR_OORT_REAL_INSTALLER_IN_TEST' },
+        );
+      }
+      return runForwarding(file, args, { env, cwd });
+    },
     runNode: (script, args, env) => runNodeScript(script, args, { env }),
     daemon: async () => {
       if (process.platform === 'win32') return { running: false };

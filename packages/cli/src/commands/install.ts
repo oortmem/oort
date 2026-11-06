@@ -6,6 +6,7 @@ import { VERSION } from '@oortmem/core';
 import { HOSTS, isHost } from '../connectors.js';
 import { binPath } from '../io.js';
 import { emit, jsonMode } from '../output.js';
+import { inside, tempDirs } from '../trust.js';
 import { uiFor } from '../ui.js';
 import { Refusal, echo, noteWarning, shown, tilde, type Ctx } from '../util.js';
 
@@ -18,8 +19,7 @@ export const HOW_TO_INSTALL =
 export function ephemeral(p: string): boolean {
   const segments = p.split(path.sep);
   if (segments.includes('_npx') || segments.includes('dlx')) return true;
-  const tmp = fs.realpathSync(os.tmpdir());
-  return p === tmp || p.startsWith(tmp + path.sep);
+  return inside(p, tempDirs());
 }
 
 /**
@@ -55,7 +55,16 @@ export function hookCommandPath(entry: string | undefined, expected = binPath())
 }
 
 /** Path pieces of Node version managers: a hook that points into one breaks on a version switch. */
-const VERSION_MANAGER = ['.nvm/', 'fnm_multishells', 'node-versions/', '.volta/', '.asdf/'];
+const VERSION_MANAGER = [
+  '.nvm/',
+  'fnm_multishells',
+  'node-versions/',
+  '.volta/',
+  '.asdf/',
+  '.local/share/mise/installs/',
+  '.nodenv/versions/',
+  '.nvs/',
+];
 
 /** The version manager `file` lives under (as its marker), if any. */
 export function versionManagerOf(file: string): string | undefined {
@@ -71,8 +80,9 @@ export function versionManagerOf(file: string): string | undefined {
 export function unstableCopy(
   entry: string | undefined,
   real: string | undefined,
-  tmp: string = realTmp(),
+  tmp: string | readonly string[] = tempDirs(),
 ): string | undefined {
+  const temps = typeof tmp === 'string' ? [tmp] : tmp;
   const paths = [entry, real].filter((p): p is string => p !== undefined);
   const segments = (p: string): string[] => p.replaceAll('\\', '/').split('/');
   if (paths.some((p) => segments(p).includes('_npx') || segments(p).includes('dlx'))) {
@@ -80,16 +90,8 @@ export function unstableCopy(
   }
   if (paths.some((p) => p.includes('fnm_multishells'))) return "fnm's link for this shell";
   if (paths.some((p) => versionManagerOf(p) !== undefined)) return 'a Node version manager';
-  if (paths.some((p) => p === tmp || p.startsWith(tmp + path.sep))) return 'a temporary directory';
+  if (paths.some((p) => inside(p, temps))) return 'a temporary directory';
   return undefined;
-}
-
-function realTmp(): string {
-  try {
-    return fs.realpathSync(os.tmpdir());
-  } catch {
-    return os.tmpdir();
-  }
 }
 
 /**
@@ -162,7 +164,7 @@ export async function installCommand(
       ctx,
     );
   }
-  const { agentBinary, managedCopy } = await import('./managed.js');
+  const { agentBinary, checkAgentPath, managedCopy } = await import('./managed.js');
   const file = settingsFile(opts.project === true, ctx);
   const events = HOOK_EVENTS.join(', ');
   const home = ctx.io.env['HOME'] ?? '';
@@ -186,6 +188,7 @@ export async function installCommand(
     from = bin.from;
     version = bin.version;
     installed = bin.installed === true;
+    checkAgentPath(cmd, ctx); // the last check before the write (PR #78 review, I1)
     ({ changed } = installHooks(file, cmd));
     ctx.io.out(
       changed

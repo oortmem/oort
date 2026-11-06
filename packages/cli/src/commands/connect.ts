@@ -15,7 +15,7 @@ import { emit, jsonMode } from '../output.js';
 import { uiFor, type Ui } from '../ui.js';
 import { Refusal, echo, tilde, type Ctx } from '../util.js';
 import { hookCommandPath } from './install.js';
-import { agentBinary, managedCopy } from './managed.js';
+import { agentBinary, checkAgentPath, managedCopy } from './managed.js';
 
 /** Where the host starts stdio servers, which decides the memory scope. */
 function scopeNote(host: Host): string {
@@ -149,6 +149,7 @@ export async function connectCommand(
     });
     cmd = bin.path;
     from = bin.from;
+    if (!dryRun) checkAgentPath(cmd, ctx); // the last check before any write (PR #78, I1)
   } else {
     try {
       cmd = managedCopy(ctx.io.env)?.main ?? hookCommandPath(ctx.io.entry);

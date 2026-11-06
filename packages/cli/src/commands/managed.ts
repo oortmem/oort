@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { VERSION, ensurePrivateDir, resolveHome } from '@oortmem/core';
 import { binPath } from '../io.js';
 import { isNewerVersion } from '../serve-protocol.js';
+import { inside, tempDirs, trustedPath, untrustedText, type Untrusted } from '../trust.js';
 import { Refusal, shellWord as sh, shown, tilde, type Ctx } from '../util.js';
 import { hookCommandPath, unstableCopy } from './install.js';
 import {
@@ -20,9 +21,11 @@ import {
  * The managed copy of oort: `<OORT_HOME>/cli` (`~/.oort/cli`), installed with
  * `npm i -g --prefix ~/.oort/cli oortmem`. It is the copy the Claude Code hooks and the MCP
  * entries run, because it stays put: an npm global under a Node version manager (nvm, fnm, Volta,
- * asdf) moves when Node changes, fnm's `fnm_multishells` links last one shell, and npx's copy is a
- * cache. `oort setup` installs it, `oort install` and `oort connect` point agents at it (and
- * install it first when the running copy is one of those), and `oort update` keeps it current.
+ * asdf, mise, nodenv, nvs) moves when Node changes, fnm's `fnm_multishells` links last one shell,
+ * and npx's copy is a cache. `oort setup` installs it, `oort install` and `oort connect` point
+ * agents at it (and install it first when the running copy is one of those), and `oort update`
+ * keeps it current. Agents run it every prompt, so it is used only when nobody else can change it
+ * (`trustedPath`, strict: owner-only all the way down from `OORT_HOME`).
  */
 
 export interface Managed {
@@ -53,29 +56,149 @@ const realpathOf = (p: string | undefined): string | undefined => {
   }
 };
 
+const userHome = (env: Record<string, string | undefined>): string => env['HOME'] || os.homedir();
+
+/** What there is at `<OORT_HOME>/cli`. */
+export type ManagedState =
+  | { state: 'ok'; managed: Managed }
+  /**
+   * No copy that checks out (none, or a broken one an install repairs). `unsafeHome`: oort will
+   * not install one here, because `OORT_HOME` is not safe to hold it.
+   */
+  | { state: 'absent'; unsafeHome?: Untrusted }
+  /** A copy is there, but someone else could change it, or it is somewhere the system clears. */
+  | { state: 'untrusted'; problem: Untrusted };
+
+const exists = (p: string): boolean => {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /**
- * The managed copy, only when it checks out: `<prefix>/bin/oort` resolves to the oortmem package
- * in that prefix (`verifyInstall`), whose `package.json` names a version, and the script is
- * executable. Reads files; never runs it.
+ * The managed copy, and whether it is safe to run (PR #78 review, I1). `OORT_HOME` must be a
+ * directory (not a link to nothing), and it, the prefix and every step down to `main.js` must be
+ * this user's with no group or other write (`trustedPath`, strict). A copy in a temporary
+ * directory, or one `unstableCopy` rejects, does not count. The layout must check out:
+ * `<prefix>/bin/oort` resolves to the oortmem package in that prefix (`verifyInstall`), whose
+ * `package.json` names a version, and the script is executable. Reads files; never runs it.
  */
-export function managedCopy(env: Record<string, string | undefined>): Managed | undefined {
+export function inspectManaged(env: Record<string, string | undefined>): ManagedState {
+  const home = userHome(env);
+  const oortHome = resolveHome(env);
+  let lst: fs.Stats;
+  try {
+    lst = fs.lstatSync(oortHome);
+  } catch {
+    // No OORT_HOME yet: an install would create it inside the nearest directory that exists, so
+    // that one is held to the same rules.
+    let anchor = path.dirname(oortHome);
+    while (!exists(anchor) && path.dirname(anchor) !== anchor) anchor = path.dirname(anchor);
+    const unsafe =
+      trustedPath(anchor, { home, strict: true }) ?? temporary(anchor, env, 'OORT_HOME');
+    return unsafe === undefined ? { state: 'absent' } : { state: 'absent', unsafeHome: unsafe };
+  }
+  if (lst.isSymbolicLink() && realpathOf(oortHome) === undefined) {
+    return {
+      state: 'absent',
+      unsafeHome: {
+        dir: oortHome,
+        why: 'is a symlink that leads nowhere',
+        fix: `rm ${sh(oortHome)}, or create the directory it points to`,
+      },
+    };
+  }
   const prefix = managedPrefixFor(env);
+  const hasPrefix = exists(prefix);
+  const homeProblem =
+    trustedPath(oortHome, { home, strict: true }) ?? temporary(oortHome, env, 'OORT_HOME');
+  if (homeProblem !== undefined) {
+    return hasPrefix
+      ? { state: 'untrusted', problem: homeProblem }
+      : { state: 'absent', unsafeHome: homeProblem };
+  }
+  if (!hasPrefix) return { state: 'absent' };
+  const prefixProblem =
+    trustedPath(prefix, { home, strict: true }) ?? temporary(prefix, env, 'the managed copy');
+  if (prefixProblem !== undefined) return { state: 'untrusted', problem: prefixProblem };
   const bin = path.join(prefix, 'bin', 'oort');
   const version = packageVersion(realpathOf(bin));
-  if (version === undefined) return undefined;
+  if (version === undefined) return { state: 'absent' };
   const v = verifyInstall({ path: bin, prefix }, version);
-  if (!v.ok || v.realpath === undefined || !isExecutable(v.realpath)) return undefined;
-  return { prefix, bin, main: v.realpath, version };
+  if (!v.ok || v.realpath === undefined) return { state: 'absent' };
+  const mainProblem = trustedPath(v.realpath, { home, strict: true });
+  if (mainProblem !== undefined) return { state: 'untrusted', problem: mainProblem };
+  const why = unstableCopy(bin, v.realpath, tempDirs(env));
+  if (why !== undefined) {
+    return {
+      state: 'untrusted',
+      problem: {
+        dir: v.realpath,
+        why: `is in ${why}`,
+        fix: `rm -r ${sh(prefix)}, then oort setup`,
+      },
+    };
+  }
+  if (!isExecutable(v.realpath)) return { state: 'absent' };
+  return { state: 'ok', managed: { prefix, bin, main: v.realpath, version } };
+}
+
+/** `dir`'s realpath is in a temporary directory: not a place for the managed copy. */
+function temporary(
+  dir: string,
+  env: Record<string, string | undefined>,
+  what: string,
+): Untrusted | undefined {
+  const real = realpathOf(dir) ?? dir;
+  if (!inside(real, tempDirs(env))) return undefined;
+  return {
+    dir: real,
+    why: 'is in a temporary directory, which the system clears',
+    fix:
+      what === 'OORT_HOME'
+        ? 'set OORT_HOME to a directory of your own (the default is ~/.oort)'
+        : `rm -r ${sh(dir)}, then oort setup`,
+  };
+}
+
+/** The managed copy, when it checks out and is safe to run (`inspectManaged`). */
+export function managedCopy(env: Record<string, string | undefined>): Managed | undefined {
+  const s = inspectManaged(env);
+  return s.state === 'ok' ? s.managed : undefined;
+}
+
+/** The refusal for a managed copy that is not safe to run: the directory, why, and the fix. */
+export function untrustedManagedMessage(
+  problem: Untrusted,
+  env: Record<string, string | undefined>,
+): string {
+  return `The managed copy in ${shownPrefix(env)} is not safe for agents to run: ${shown(untrustedText(problem))}. Fix that, or remove it (rm -r ${shownPrefix(env)}) and run oort setup again.`;
+}
+
+/** The refusal for an `OORT_HOME` oort will not install the managed copy into. */
+export function unsafeHomeMessage(problem: Untrusted): string {
+  return `Oort will not install its managed copy there: ${shown(untrustedText(problem))}.`;
 }
 
 /** The managed copy is this version or newer: setup and install use it as it is. */
 export const managedIsCurrent = (m: Managed | undefined): m is Managed =>
   m !== undefined && !isNewerVersion(VERSION, m.version);
 
+/**
+ * A path for a printed command: `~/…` when that needs no quotes (the shell expands it), else the
+ * absolute path, quoted (`~` inside quotes is not expanded; PR #78 review, M1).
+ */
+export function shellPath(p: string, home: string): string {
+  const t = tilde(p, home);
+  return t.startsWith('~') && sh(t) === t ? t : sh(p);
+}
+
 /** The prefix as people see it: `~/.oort/cli`, one shell word. */
 export function shownPrefix(env: Record<string, string | undefined>): string {
-  const home = env['HOME'] || os.homedir();
-  return shown(sh(tilde(managedPrefixFor(env), home)));
+  return shown(shellPath(managedPrefixFor(env), userHome(env)));
 }
 
 /** The command that installs the managed copy by hand: `npm i -g --prefix ~/.oort/cli oortmem`. */
@@ -87,9 +210,9 @@ export function installCommandFor(
   env: Record<string, string | undefined>,
   target = VERSION,
 ): string {
-  const home = env['HOME'] || os.homedir();
-  return ['npm', ...npmArgs(tilde(managedPrefixFor(env), home), target)]
-    .map((a) => shown(sh(a)))
+  const [i, g, flag, , pkg, online] = npmArgs('', target);
+  return ['npm', i, g, flag, shownPrefix(env), pkg, online]
+    .map((a, n) => (n === 4 ? a : shown(sh(a ?? ''))))
     .join(' ');
 }
 
@@ -122,11 +245,31 @@ export type ManagedInstall =
       attempts?: number;
     };
 
-/** Whether `installManaged` can run here: npm on PATH (absolute entries only), not Windows. */
-export function canInstallManaged(ctx: Ctx): 'yes' | 'no-npm' | 'unsupported' {
+/**
+ * Whether `installManaged` can run here: not Windows, an `OORT_HOME` that is safe to hold the
+ * managed copy, and npm on PATH (absolute entries only). `because` says why not, for people.
+ */
+export function canInstallManaged(ctx: Ctx):
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'no-npm' | 'unsupported' | 'unsafe-home' | 'untrusted';
+      because: string;
+    } {
   const deps = { ...defaultUpdateDeps(ctx), ...ctx.updateDeps };
-  if (deps.platform === 'win32') return 'unsupported';
-  return onPath('npm', ctx.io.env)[0] === undefined ? 'no-npm' : 'yes';
+  if (deps.platform === 'win32') {
+    return { ok: false, reason: 'unsupported', because: 'it is not set up on Windows yet' };
+  }
+  const s = inspectManaged(ctx.io.env);
+  if (s.state === 'untrusted') {
+    return { ok: false, reason: 'untrusted', because: shown(untrustedText(s.problem)) };
+  }
+  if (s.state === 'absent' && s.unsafeHome !== undefined) {
+    return { ok: false, reason: 'unsafe-home', because: shown(untrustedText(s.unsafeHome)) };
+  }
+  return onPath('npm', ctx.io.env)[0] === undefined
+    ? { ok: false, reason: 'no-npm', because: 'npm is not on PATH' }
+    : { ok: true };
 }
 
 /**
@@ -152,7 +295,27 @@ export async function installManaged(ctx: Ctx, target = VERSION): Promise<Manage
     return { ok: false, reason: 'no-npm', command, detail: 'npm is not on PATH' };
   }
   const prefix = managedPrefixFor(env);
-  ensurePrivateDir(resolveHome(env));
+  // Never into a managed copy, or an OORT_HOME, that someone else could change (PR #78, I1, M2).
+  const state = inspectManaged(env);
+  if (state.state === 'untrusted') {
+    throw new Refusal(untrustedManagedMessage(state.problem, env), { code: 'refused' });
+  }
+  if (state.state === 'absent' && state.unsafeHome !== undefined) {
+    throw new Refusal(unsafeHomeMessage(state.unsafeHome), { code: 'refused' });
+  }
+  try {
+    ensurePrivateDir(resolveHome(env));
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code ?? 'error';
+    throw new Refusal(
+      `Could not create ${shown(resolveHome(env))} for the managed copy (${code}): ${
+        code === 'EACCES' || code === 'EPERM'
+          ? 'it, or the directory above it, belongs to another user or is read-only'
+          : 'check that the path, and any link in it, leads to a directory of yours'
+      }. Set OORT_HOME to a directory of your own, or fix its permissions, then run this again.`,
+      { code: 'refused' },
+    );
+  }
   ctx.io.err(`oort: ${command}\n`);
   const r = await runInstaller(
     ctx,
@@ -185,14 +348,50 @@ export async function installManaged(ctx: Ctx, target = VERSION): Promise<Manage
       };
 }
 
+/** How a running copy that others can write is described (`runningUnstable`). */
+const WRITABLE = 'a directory someone else can change';
+
 /**
- * Why the running copy is no place to point agents at (`unstableCopy`: a package cache, a temp
- * directory, fnm's per-shell link, a Node version manager), or undefined when it is one.
+ * Why the running copy is no place to point agents at, or undefined when it is one: what
+ * `unstableCopy` rejects (a package cache, a temp directory, fnm's per-shell link, a Node version
+ * manager), or a path whose walk from `/` fails `trustedPath` (a directory writable by others,
+ * sticky or not, or owned by another user; PR #78 review, I2).
  */
 export function runningUnstable(ctx: Ctx): string | undefined {
   const entry = ctx.io.entry;
   const real = realpathOf(entry) ?? realpathOf(ctx.binPath ?? binPath());
-  return unstableCopy(entry, real);
+  const why = unstableCopy(entry, real, tempDirs(ctx.io.env));
+  if (why !== undefined || real === undefined) return why;
+  const u = trustedPath(real, { home: userHome(ctx.io.env), strict: false });
+  return u === undefined ? undefined : `${WRITABLE} (${shown(untrustedText(u))})`;
+}
+
+/** What a copy in `why` risks, for the sentence `This oort is in <why>, <risk>`. */
+export const riskOf = (why: string): string =>
+  why.startsWith(WRITABLE) ? 'which agents should not run' : 'which agents would lose later';
+
+/**
+ * Agents are about to be pointed at `p` (any config write: hooks, MCP entries): refuses unless it
+ * is the managed copy that checks out and is safe (`inspectManaged`), or a copy outside it that
+ * stays put and that nobody else can change (`unstableCopy` with every temp directory, and
+ * `trustedPath`, strict inside `OORT_HOME`). Run right before every write (PR #78 review, I1).
+ */
+export function checkAgentPath(p: string, ctx: Ctx): void {
+  const env = ctx.io.env;
+  const s = inspectManaged(env);
+  if (s.state === 'ok' && s.managed.main === p) return;
+  const real = realpathOf(p);
+  const refuse = (why: string): never => {
+    throw new Refusal(`Oort will not point agents at ${shown(p)}: ${why}.`, { code: 'refused' });
+  };
+  if (real === undefined) refuse('it does not exist');
+  const why = unstableCopy(p, real, tempDirs(env));
+  if (why !== undefined) refuse(`it is in ${why}`);
+  const oortHome = realpathOf(resolveHome(env)) ?? resolveHome(env);
+  const strict = inside(real as string, [oortHome]);
+  if (strict && s.state === 'untrusted') refuse(shown(untrustedText(s.problem)));
+  const u = trustedPath(real as string, { home: userHome(env), strict });
+  if (u !== undefined) refuse(shown(untrustedText(u)));
 }
 
 /** The binary agents are pointed at, and where it came from. */
@@ -210,13 +409,13 @@ export interface AgentBinary {
 
 /**
  * The binary `oort install` and `oort connect` write (CON-114): the managed copy when it checks
- * out and is this version or newer; else this copy, when it is stable (`hookCommandPath`'s rules,
- * and never a package cache, temp directory, fnm link or version manager). When this copy is not
- * stable, the managed copy is installed first (`say` prints the line); if it cannot be, a refusal
- * names the commands to run. `dryRun` installs nothing: it returns where the managed copy would be.
- * `thisCopy` (`--this-copy`, for developers testing their own build) writes this copy even when a
- * managed copy is there, and installs nothing; an unstable copy is still refused, since it breaks
- * later whatever is intended.
+ * out, is safe to run and is this version or newer; else this copy, when it stays put and nobody
+ * else can change it (`runningUnstable`). When this copy is not one of those, the managed copy is
+ * installed first (`say` prints the line); if it cannot be, a refusal names the commands to run.
+ * A managed copy that is there but not safe to run is refused outright, with its fix (PR #78, I1).
+ * `dryRun` installs nothing: it returns where the managed copy would be. `thisCopy`
+ * (`--this-copy`, for developers testing their own build) writes this copy even when a managed
+ * copy is there, and installs nothing; an unstable or untrusted copy is still refused.
  */
 export async function agentBinary(
   ctx: Ctx,
@@ -224,7 +423,11 @@ export async function agentBinary(
 ): Promise<AgentBinary> {
   const env = ctx.io.env;
   const thisCopy = opts.thisCopy === true;
-  const managed = managedCopy(env);
+  const state = inspectManaged(env);
+  if (!thisCopy && state.state === 'untrusted') {
+    throw new Refusal(untrustedManagedMessage(state.problem, env), { code: 'refused' });
+  }
+  const managed = state.state === 'ok' ? state.managed : undefined;
   if (!thisCopy && managedIsCurrent(managed)) {
     return { path: managed.main, from: 'managed', version: managed.version };
   }
@@ -242,19 +445,18 @@ export async function agentBinary(
   const prefix = shownPrefix(env);
   const manual = `\`${manualInstall(env)}\`, then \`${prefix}/bin/oort ${opts.action}\``;
   if (thisCopy) throw new Refusal(thisCopyRefusal(why, env, opts.action), { code: 'refused' });
+  const lead = `This oort is in ${why}, ${riskOf(why)}`;
   if (opts.dryRun === true) {
     opts.say(
-      `This oort is in ${why}, so agents would lose it later: \`oort ${opts.action}\` installs oort ${VERSION} in ${prefix} first (${installCommandFor(env)}).\n`,
+      `${lead}: \`oort ${opts.action}\` installs oort ${VERSION} in ${prefix} first (${installCommandFor(env)}).\n`,
     );
     return { path: plannedMain(env), from: 'managed', version: VERSION };
   }
-  opts.say(
-    `This oort is in ${why}, so agents would lose it later: installing oort ${VERSION} in ${prefix} first (${installCommandFor(env)}).\n`,
-  );
+  opts.say(`${lead}: installing oort ${VERSION} in ${prefix} first (${installCommandFor(env)}).\n`);
   const r = await installManaged(ctx);
   if (!r.ok) {
     throw new Refusal(
-      `This oort is in ${why}, which agents would lose later, and the managed copy could not be installed (${r.detail}). Run ${manual}.`,
+      `${lead}, and the managed copy could not be installed (${r.detail}). Run ${manual}.`,
       { code: 'refused' },
     );
   }
@@ -262,8 +464,9 @@ export async function agentBinary(
 }
 
 /**
- * `--this-copy` from a copy that does not stay put: refused, because the path breaks later
- * whatever is intended. The same sentence for install, connect and setup.
+ * `--this-copy` from a copy that does not stay put, or that someone else could change: refused,
+ * because that path breaks later (or is not safe) whatever is intended. The same sentence for
+ * install, connect and setup.
  */
 export function thisCopyRefusal(
   why: string,
@@ -271,5 +474,5 @@ export function thisCopyRefusal(
   action: string,
 ): string {
   const prefix = shownPrefix(env);
-  return `This oort is in ${why}, which agents would lose later, so --this-copy will not write it. Run \`${manualInstall(env)}\`, then \`${prefix}/bin/oort ${action}\`, or run --this-copy from a copy that stays put (a build of your own, an npm global outside a Node version manager).`;
+  return `This oort is in ${why}, ${riskOf(why)}, so --this-copy will not write it. Run \`${manualInstall(env)}\`, then \`${prefix}/bin/oort ${action}\`, or run --this-copy from a copy that stays put (a build of your own, an npm global outside a Node version manager).`;
 }

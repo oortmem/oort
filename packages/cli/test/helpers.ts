@@ -25,6 +25,28 @@ export function tmpdir(prefix = 'oort-cli-'): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
+/** Where `trustedTmpdir` makes its roots: in this package, ignored by git, removed on exit. */
+const TRUSTED_ROOT = path.join(import.meta.dirname, '..', '.test-homes');
+/** Shared with test/no-real-npm.ts, which removes them after each test file. */
+const ROOTS = Symbol.for('oort.test.trustedRoots');
+const trustedRoots: string[] = ((globalThis as Record<symbol, string[]>)[ROOTS] ??= []);
+process.once('exit', () => {
+  for (const r of trustedRoots) fs.rmSync(r, { recursive: true, force: true });
+});
+
+/**
+ * A throwaway root outside every temporary directory, owner-only: for tests whose HOME must be
+ * one oort trusts with the managed copy (`trustedPath`, `tempDirs`: a HOME under `/tmp` or
+ * macOS's `/var/folders` never is). Removed when the test process exits.
+ */
+export function trustedTmpdir(prefix = 'oort-trusted-'): string {
+  fs.mkdirSync(TRUSTED_ROOT, { recursive: true, mode: 0o700 });
+  fs.chmodSync(TRUSTED_ROOT, 0o700);
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(TRUSTED_ROOT, prefix)));
+  trustedRoots.push(root);
+  return root;
+}
+
 /**
  * A directory holding a stand-in `npm` that installs nothing: it records that it ran in
  * `<root>/NPM_RAN` and exits 1. Put it first on the PATH of any test that runs the real bin, so
@@ -215,8 +237,11 @@ export const fakeWriter: MemoryWriter = {
  * `adapters: false` the wire reports every adapter missing, as without keys; `keyStore: false`
  * wires as on a system where no key can be stored (`OORT_NO_KEYCHAIN=1`).
  */
-export function harness(opts: { adapters?: boolean; keyStore?: boolean } = {}): Harness {
-  const root = tmpdir();
+export function harness(
+  opts: { adapters?: boolean; keyStore?: boolean; trusted?: boolean } = {},
+): Harness {
+  // `trusted`: a root oort trusts with the managed copy (`trustedTmpdir`), not a temp directory.
+  const root = opts.trusted === true ? trustedTmpdir() : tmpdir();
   const home = path.join(root, 'oort-home');
   const cwd = path.join(root, 'project');
   fs.mkdirSync(cwd);
