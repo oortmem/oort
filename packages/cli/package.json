@@ -1,6 +1,6 @@
 {
   "name": "oortmem",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Oort: memory for AI coding agents. The oort command line, MCP server and agent connectors.",
   "keywords": [
     "oort",
