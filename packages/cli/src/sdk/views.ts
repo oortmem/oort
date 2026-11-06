@@ -279,8 +279,8 @@ export function judgeView(r: CoreJudgeResult): JudgeResult {
     ...(r.degraded !== undefined && { degraded: [...r.degraded] }),
     decisions: r.decisions.map((d) => ({
       stage: d.stage,
-      question: d.question,
-      answer: d.answer,
+      question: clean(d.question),
+      answer: clean(d.answer),
       probability: d.probability,
     })),
     ...(r.importedExcluded !== undefined && { importedExcluded: r.importedExcluded }),

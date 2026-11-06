@@ -302,8 +302,8 @@ export async function explain(ctx: Ctx, id: string): Promise<Explanation> {
     },
     decisions: m.source.decisions.map((d) => ({
       stage: d.stage,
-      question: d.question,
-      answer: d.answer,
+      question: clean(d.question),
+      answer: clean(d.answer),
       probability: d.probability,
     })),
     chain: links.map((l) => ({
