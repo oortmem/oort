@@ -2,13 +2,7 @@
   "memory": [
     {
       "question": "2869 search-gateway development listens",
-      "ids": [
-        "m7-245",
-        "m7-559",
-        "m7-256",
-        "m7-1008",
-        "m7-307"
-      ],
+      "ids": ["m7-245", "m7-559", "m7-256", "m7-1008", "m7-307"],
       "explanations": [
         {
           "lexicalRank": 9,
@@ -68,9 +62,7 @@
         "dropped": 5
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -79,11 +71,7 @@
     },
     {
       "question": "2026-05-16 connection pooling tsup",
-      "ids": [
-        "m7-187",
-        "m7-331",
-        "m7-888"
-      ],
+      "ids": ["m7-187", "m7-331", "m7-888"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -117,9 +105,7 @@
         "dropped": 7
       },
       "embedSkipped": "lexical-confident",
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -128,14 +114,7 @@
     },
     {
       "question": "2026-09-04 token footprint",
-      "ids": [
-        "m7-1481",
-        "m7-1003",
-        "m7-1118",
-        "m7-1063",
-        "m7-695",
-        "m7-1228"
-      ],
+      "ids": ["m7-1481", "m7-1003", "m7-1118", "m7-1063", "m7-695", "m7-1228"],
       "explanations": [
         {
           "lexicalRank": 2,
@@ -193,9 +172,7 @@
         "dropped": 4
       },
       "embedSkipped": "lexical-confident",
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -204,14 +181,7 @@
     },
     {
       "question": "2026-03-28 rate class",
-      "ids": [
-        "m7-853",
-        "m7-1237",
-        "m7-1336",
-        "m7-1205",
-        "m7-484",
-        "m7-1161"
-      ],
+      "ids": ["m7-853", "m7-1237", "m7-1336", "m7-1205", "m7-484", "m7-1161"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -269,9 +239,7 @@
         "dropped": 4
       },
       "embedSkipped": "lexical-confident",
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -390,9 +358,7 @@
         "dropped": 1
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -518,9 +484,7 @@
       "abstained": false,
       "gate": null,
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -529,9 +493,7 @@
     },
     {
       "question": "which package manager does edge-router-10 use now",
-      "ids": [
-        "m7-827"
-      ],
+      "ids": ["m7-827"],
       "explanations": [
         {
           "lexicalRank": 6,
@@ -551,9 +513,7 @@
         "dropped": 9
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -562,9 +522,7 @@
     },
     {
       "question": "which library does sync-daemon-4 use to validate requests now",
-      "ids": [
-        "m7-14"
-      ],
+      "ids": ["m7-14"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -584,9 +542,7 @@
         "dropped": 9
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -595,12 +551,7 @@
     },
     {
       "question": "which port does auth-service-22 listen on now",
-      "ids": [
-        "m7-68",
-        "m7-98",
-        "m7-153",
-        "m7-565"
-      ],
+      "ids": ["m7-68", "m7-98", "m7-153", "m7-565"],
       "explanations": [
         {
           "lexicalRank": 2,
@@ -650,9 +601,7 @@
         "dropped": 6
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -670,9 +619,7 @@
         "dropped": 10
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -681,9 +628,7 @@
     },
     {
       "question": "which package manager does billing-api-15 use back then",
-      "ids": [
-        "m7-46"
-      ],
+      "ids": ["m7-46"],
       "explanations": [
         {
           "denseRank": 1,
@@ -702,9 +647,7 @@
         "dropped": 9
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-04-23T17:29:09.314Z",
@@ -714,12 +657,7 @@
     },
     {
       "question": "which port does report-builder-17 listen on back then",
-      "ids": [
-        "m7-52",
-        "m7-685",
-        "m7-60",
-        "m7-170"
-      ],
+      "ids": ["m7-52", "m7-685", "m7-60", "m7-170"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -764,9 +702,7 @@
         "dropped": 6
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-02-28T17:15:32.520Z",
@@ -776,9 +712,7 @@
     },
     {
       "question": "which port does auth-service-0 listen on back then",
-      "ids": [
-        "m7-1"
-      ],
+      "ids": ["m7-1"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -798,9 +732,7 @@
         "dropped": 9
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-04-02T16:02:44.017Z",
@@ -810,10 +742,7 @@
     },
     {
       "question": "on 8 February 2026, which port did media-proxy-2 listen on",
-      "ids": [
-        "m7-7",
-        "m7-1089"
-      ],
+      "ids": ["m7-7", "m7-1089"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -842,9 +771,7 @@
         "dropped": 8
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-02-08T23:59:59.999Z",
@@ -854,12 +781,7 @@
     },
     {
       "question": "on 16 March 2026, which port did media-proxy-23 listen on",
-      "ids": [
-        "m7-70",
-        "m7-1089",
-        "m7-7",
-        "m7-1131"
-      ],
+      "ids": ["m7-70", "m7-1089", "m7-7", "m7-1131"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -906,9 +828,7 @@
         "dropped": 6
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-03-16T23:59:59.999Z",
@@ -918,11 +838,7 @@
     },
     {
       "question": "how has the port of sync-daemon-18 changed over time",
-      "ids": [
-        "m7-54",
-        "m7-55",
-        "m7-56"
-      ],
+      "ids": ["m7-54", "m7-55", "m7-56"],
       "explanations": [
         {
           "lexicalRank": 2,
@@ -960,9 +876,7 @@
         "dropped": 8
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "history",
         "inferred": true
@@ -1078,9 +992,7 @@
       "abstained": false,
       "gate": null,
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1196,9 +1108,7 @@
       "abstained": false,
       "gate": null,
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1316,9 +1226,7 @@
       "abstained": false,
       "gate": null,
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1336,9 +1244,7 @@
         "dropped": 10
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1347,10 +1253,7 @@
     },
     {
       "question": "who approved the quarterly budget for the search gateway",
-      "ids": [
-        "m7-1383",
-        "m7-1309"
-      ],
+      "ids": ["m7-1383", "m7-1309"],
       "explanations": [
         {
           "lexicalRank": 14,
@@ -1380,9 +1283,7 @@
         "dropped": 8
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1400,9 +1301,7 @@
         "dropped": 10
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1420,9 +1319,7 @@
         "dropped": 10
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1433,13 +1330,7 @@
   "sqlite": [
     {
       "question": "2869 search-gateway development listens",
-      "ids": [
-        "m7-245",
-        "m7-559",
-        "m7-256",
-        "m7-1008",
-        "m7-307"
-      ],
+      "ids": ["m7-245", "m7-559", "m7-256", "m7-1008", "m7-307"],
       "explanations": [
         {
           "lexicalRank": 5,
@@ -1499,9 +1390,7 @@
         "dropped": 5
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1510,11 +1399,7 @@
     },
     {
       "question": "2026-05-16 connection pooling tsup",
-      "ids": [
-        "m7-187",
-        "m7-331",
-        "m7-888"
-      ],
+      "ids": ["m7-187", "m7-331", "m7-888"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -1548,9 +1433,7 @@
         "dropped": 7
       },
       "embedSkipped": "lexical-confident",
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1559,13 +1442,7 @@
     },
     {
       "question": "2026-09-04 token footprint",
-      "ids": [
-        "m7-1003",
-        "m7-1063",
-        "m7-1481",
-        "m7-1327",
-        "m7-1118"
-      ],
+      "ids": ["m7-1003", "m7-1063", "m7-1481", "m7-1327", "m7-1118"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -1615,9 +1492,7 @@
         "dropped": 5
       },
       "embedSkipped": "lexical-confident",
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1626,14 +1501,7 @@
     },
     {
       "question": "2026-03-28 rate class",
-      "ids": [
-        "m7-853",
-        "m7-1336",
-        "m7-1205",
-        "m7-1237",
-        "m7-484",
-        "m7-1161"
-      ],
+      "ids": ["m7-853", "m7-1336", "m7-1205", "m7-1237", "m7-484", "m7-1161"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -1691,9 +1559,7 @@
         "dropped": 4
       },
       "embedSkipped": "lexical-confident",
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1812,9 +1678,7 @@
         "dropped": 1
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1940,9 +1804,7 @@
       "abstained": false,
       "gate": null,
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1960,9 +1822,7 @@
         "dropped": 10
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -1971,9 +1831,7 @@
     },
     {
       "question": "which library does sync-daemon-4 use to validate requests now",
-      "ids": [
-        "m7-14"
-      ],
+      "ids": ["m7-14"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -1993,9 +1851,7 @@
         "dropped": 9
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -2004,12 +1860,7 @@
     },
     {
       "question": "which port does auth-service-22 listen on now",
-      "ids": [
-        "m7-68",
-        "m7-1240",
-        "m7-565",
-        "m7-98"
-      ],
+      "ids": ["m7-68", "m7-1240", "m7-565", "m7-98"],
       "explanations": [
         {
           "lexicalRank": 2,
@@ -2059,9 +1910,7 @@
         "dropped": 6
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -2079,9 +1928,7 @@
         "dropped": 10
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -2090,9 +1937,7 @@
     },
     {
       "question": "which package manager does billing-api-15 use back then",
-      "ids": [
-        "m7-46"
-      ],
+      "ids": ["m7-46"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -2112,9 +1957,7 @@
         "dropped": 9
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-04-23T17:29:09.314Z",
@@ -2124,12 +1967,7 @@
     },
     {
       "question": "which port does report-builder-17 listen on back then",
-      "ids": [
-        "m7-685",
-        "m7-52",
-        "m7-60",
-        "m7-170"
-      ],
+      "ids": ["m7-685", "m7-52", "m7-60", "m7-170"],
       "explanations": [
         {
           "denseRank": 2,
@@ -2174,9 +2012,7 @@
         "dropped": 6
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-02-28T17:15:32.520Z",
@@ -2186,9 +2022,7 @@
     },
     {
       "question": "which port does auth-service-0 listen on back then",
-      "ids": [
-        "m7-1"
-      ],
+      "ids": ["m7-1"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -2208,9 +2042,7 @@
         "dropped": 9
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-04-02T16:02:44.017Z",
@@ -2220,10 +2052,7 @@
     },
     {
       "question": "on 8 February 2026, which port did media-proxy-2 listen on",
-      "ids": [
-        "m7-7",
-        "m7-1089"
-      ],
+      "ids": ["m7-7", "m7-1089"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -2253,9 +2082,7 @@
         "dropped": 8
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-02-08T23:59:59.999Z",
@@ -2265,12 +2092,7 @@
     },
     {
       "question": "on 16 March 2026, which port did media-proxy-23 listen on",
-      "ids": [
-        "m7-70",
-        "m7-1089",
-        "m7-7",
-        "m7-1131"
-      ],
+      "ids": ["m7-70", "m7-1089", "m7-7", "m7-1131"],
       "explanations": [
         {
           "lexicalRank": 2,
@@ -2320,9 +2142,7 @@
         "dropped": 6
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-03-16T23:59:59.999Z",
@@ -2332,11 +2152,7 @@
     },
     {
       "question": "how has the port of sync-daemon-18 changed over time",
-      "ids": [
-        "m7-54",
-        "m7-55",
-        "m7-56"
-      ],
+      "ids": ["m7-54", "m7-55", "m7-56"],
       "explanations": [
         {
           "lexicalRank": 1,
@@ -2374,9 +2190,7 @@
         "dropped": 7
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "history",
         "inferred": true
@@ -2492,9 +2306,7 @@
       "abstained": false,
       "gate": null,
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -2610,9 +2422,7 @@
       "abstained": false,
       "gate": null,
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -2730,9 +2540,7 @@
       "abstained": false,
       "gate": null,
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -2750,9 +2558,7 @@
         "dropped": 10
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -2761,9 +2567,7 @@
     },
     {
       "question": "who approved the quarterly budget for the search gateway",
-      "ids": [
-        "m7-1309"
-      ],
+      "ids": ["m7-1309"],
       "explanations": [
         {
           "lexicalRank": 47,
@@ -2783,9 +2587,7 @@
         "dropped": 9
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -2803,9 +2605,7 @@
         "dropped": 10
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
@@ -2823,9 +2623,7 @@
         "dropped": 10
       },
       "embedSkipped": null,
-      "degraded": [
-        "no-reranker"
-      ],
+      "degraded": ["no-reranker"],
       "temporal": {
         "mode": "current",
         "inferred": true
