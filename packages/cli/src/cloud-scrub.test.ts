@@ -243,3 +243,27 @@ describe('cloud remember: Star refusal, project payload, idempotent retries', ()
     expect(data(j.io.stdout, 'remember').results).toEqual([{ fact: 0, outcome: 'unknown' }]);
   });
 });
+
+describe('oort cloud import lines', () => {
+  it('cloud-scrub.export-line-scrubs-text-stub-and-entities-and-keeps-the-rest', async () => {
+    const { scrubExportLine } = await import('./cloud-scrub.js');
+    const line = JSON.stringify({
+      id: 'm1',
+      text: `deploy key ${AWS_KEY}`,
+      stub: `key ${AWS_KEY}`,
+      entities: ['billing-service', AWS_KEY],
+      tier: 'warm',
+    });
+    const out = JSON.parse(scrubExportLine(line)) as Record<string, unknown>;
+    expect(JSON.stringify(out)).not.toContain(AWS_KEY);
+    expect(out['text']).toMatch(/\[REDACTED:/);
+    expect(out['stub']).toMatch(/\[REDACTED:/);
+    expect((out['entities'] as string[])[0]).toBe('billing-service');
+    expect((out['entities'] as string[])[1]).toMatch(/\[REDACTED:/);
+    expect(out['id']).toBe('m1');
+    expect(out['tier']).toBe('warm');
+    const clean = JSON.stringify({ id: 'm2', text: 'no secrets here', entities: ['a'] });
+    expect(scrubExportLine(clean)).toBe(clean);
+    expect(scrubExportLine('not json')).toBe('not json');
+  });
+});

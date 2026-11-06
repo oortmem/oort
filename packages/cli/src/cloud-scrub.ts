@@ -41,7 +41,7 @@ export function scrubTextForCloud(text: string): { text: string; dropped: boolea
 }
 
 /**
- * One line of a v1 export bound for `oort cloud import`: its `text` and `stub` scrubbed again
+ * One line of a v1 export bound for `oort cloud import`: its `text`, `stub` and `entities` scrubbed again
  * (they were scrubbed when saved locally; this is cheap insurance). Every other field, and the
  * line count the resume logic relies on, stays as it is. A line that is not a JSON object passes
  * through: the API refuses it.
@@ -62,6 +62,15 @@ export function scrubExportLine(line: string): string {
     const clean = scrub(v).text;
     if (clean !== v) {
       rec[k] = clean;
+      changed = true;
+    }
+  }
+  // Entities are text too (names, paths, identifiers): the same insurance.
+  if (Array.isArray(rec['entities'])) {
+    const before = rec['entities'] as unknown[];
+    const after = before.map((e) => (typeof e === 'string' ? scrub(e).text : e));
+    if (after.some((e, i) => e !== before[i])) {
+      rec['entities'] = after;
       changed = true;
     }
   }
