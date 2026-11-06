@@ -731,7 +731,7 @@ export function fitForInjection<M extends RecalledMemory>(
       m.explanation.stale === true
         ? ` (may be outdated; last confirmed ${age(lastConfirmed(m), now)})`
         : '';
-    const text = scrub(escapeBlockTags(escapeLabelText(m.text))).text;
+    const text = injectableText(m.text);
     const line = `- [${labelFor(m, labelled, now)}] ${text}${note}`;
     const cost = line.length + (lines.length > 0 ? 1 : 0);
     // Hive memories (Constellation, Galaxy) take at most HIVE_QUOTA of the budget, so a large team
@@ -751,6 +751,18 @@ export function fitForInjection<M extends RecalledMemory>(
  * Memory text with any `<oort-…` or `</oort-…` tag opening written as `&lt;`, so a memory cannot
  * close the `<oort-memory>` block (or open another) and have what follows read as the prompt.
  */
+/**
+ * Memory text as it goes into the block: scrubbed first, then escaped. Scrubbing after escaping let
+ * secrets through (escaping `[` hid an array value from the env-secret rule), so the order matters.
+ * The redaction markers scrubbing adds stay readable; every other bracket is escaped.
+ */
+export function injectableText(text: string): string {
+  return scrub(text)
+    .text.split(/(\[REDACTED:[a-z0-9-]+\])/)
+    .map((part, i) => (i % 2 === 1 ? part : escapeBlockTags(escapeLabelText(part))))
+    .join('');
+}
+
 export function escapeBlockTags(text: string): string {
   return text.replace(/<(?=\s*\/?\s*oort-)/gi, '&lt;');
 }
