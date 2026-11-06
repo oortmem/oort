@@ -1,4 +1,5 @@
 import type { RemoteMemory } from '@oortmem/claude-code';
+import { scrubForCloud } from './cloud-scrub.js';
 import type { Memory } from '@oortmem/core';
 import { createHash } from 'node:crypto';
 import { OortCloudError, type CloudClient } from './cloud.js';
@@ -125,19 +126,22 @@ export function cloudRemote(
       return out;
     },
     observe: async (obs, projectId, turnRef) => {
+      // Scrubbed here, before it leaves the machine; a mostly-secret turn is done, never sent.
+      const s = scrubForCloud({
+        user: obs.userText,
+        assistant: obs.assistantText,
+        at: obs.at,
+        ...(obs.sessionId !== undefined && { session: obs.sessionId }),
+        ...(obs.toolSummaries.length > 0 && { tools: obs.toolSummaries }),
+      });
+      if (s.dropped) return;
       try {
         // A repeat of the same turnRef answers `duplicate: true`: already saved, so success.
         await client.observe({
           ...(projectId !== undefined && { project: projectId }),
           ...privacy(projectId),
           ...(turnRef !== undefined && { turnRef: cloudTurnRef(turnRef) }),
-          observation: {
-            user: obs.userText,
-            assistant: obs.assistantText,
-            at: obs.at,
-            ...(obs.sessionId !== undefined && { session: obs.sessionId }),
-            ...(obs.toolSummaries.length > 0 && { tools: obs.toolSummaries }),
-          },
+          observation: s.turn,
         });
       } catch (e) {
         if (e instanceof OortCloudError) throw e; // carries holdQueue

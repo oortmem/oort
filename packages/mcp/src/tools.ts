@@ -45,7 +45,7 @@ const Fact = z
   .trim()
   .min(1)
   .max(FACT_MAX_CHARS)
-  .regex(/^[^\r\n]*$/, 'one line per fact')
+  .regex(/^[^\r\n\u0085\u2028\u2029]*$/, 'one line per fact')
   .describe('One standalone claim, true without the conversation around it');
 
 export const MEMORY_TYPES = ['semantic', 'episodic', 'procedural', 'preference'] as const;

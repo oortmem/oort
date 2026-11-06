@@ -1,8 +1,9 @@
-import { privacyStatement } from '../wire.js';
+import { privacyStatement, resolveAgent } from '../wire.js';
 import { z } from 'zod';
-import { observe, scrubObservation, type Observation } from '@oortmem/core';
+import { observe, resolveHome, scrubObservation, type Observation } from '@oortmem/core';
 import { emit, jsonMode } from '../output.js';
 import { turnObservation } from '../engine/observe.js';
+import { scrubForCloud } from '../cloud-scrub.js';
 
 // Moved to the UI-free engine (CON-108).
 export { turnObservation } from '../engine/observe.js';
@@ -78,6 +79,8 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
   };
   const obs = await readObservation(opts, ctx);
   if (opts.dryRun === true) {
+    // The agent id is checked as a real run checks it, without wiring anything.
+    resolveAgent(resolveHome(ctx.io.env), ctx.io.env, ctx.agent);
     const s = scrubObservation(obs);
     // `dryRun: true` in the envelope only: the bare object stays as it always was.
     print({
@@ -91,18 +94,25 @@ export async function observeCommand(opts: ObserveOptions, ctx: Ctx): Promise<nu
     const cloud = cloudOf(w);
     if (cloud !== undefined) {
       refuseStarInCloud(w);
+      // Scrubbed here, before it leaves the machine; a mostly-secret turn is never sent.
+      const s = scrubForCloud({
+        user: obs.userText,
+        assistant: obs.assistantText,
+        at: obs.at,
+        ...(obs.sessionId !== undefined && { session: obs.sessionId }),
+        ...(obs.toolSummaries.length > 0 && { tools: obs.toolSummaries }),
+      });
+      if (s.dropped) {
+        print({ outcome: 'skipped', reason: 'secret', memories: [], counts: { skipped: 1 } });
+        return 0;
+      }
       const result = await cloud.observe({
         ...(w.scope.projectId !== undefined && {
           project: w.scope.projectId,
           ...privacyStatement(w),
         }),
-        observation: {
-          user: obs.userText,
-          assistant: obs.assistantText,
-          at: obs.at,
-          ...(obs.sessionId !== undefined && { session: obs.sessionId }),
-          ...(obs.toolSummaries.length > 0 && { tools: obs.toolSummaries }),
-        },
+        ...(obs.turnRef !== undefined && { turnRef: obs.turnRef }),
+        observation: s.turn,
       });
       print(result);
       return 0;

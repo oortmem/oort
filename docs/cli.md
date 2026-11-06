@@ -262,6 +262,11 @@ instead.
 echoed in an error message is scrubbed first (every known key format, Oort keys
 included, becomes `[REDACTED:<kind>]`) and then clipped to 24 characters, so a
 value in an unrecognised format shows at most its first 23 characters.
+Everything Oort saves is scrubbed on your machine before it leaves, in local
+and cloud mode: a turn, a fact or a shared text bound for Oort Cloud goes
+through the same scrubber as the local write path (the API scrubs again), and
+one that is mostly secret is skipped without any request. `oort cloud import`
+scrubs each memory again as it uploads it.
 
 **Environment.**
 
@@ -765,8 +770,9 @@ Every tool sets `openWorldHint: false` and has a `title`.
 `remember` runs each fact through the normal write path, exactly as
 `oort observe` builds a turn: a user turn "Remember this: <fact>" and an
 assistant turn "Noted: <fact>". The path is scrub, gate, reconcile and the
-writer. Secrets are therefore scrubbed, and a fact that is only a secret is
-skipped. A duplicate fact reinforces the existing memory, and a contradicting
+writer. Secrets are therefore scrubbed on your machine before the fact leaves
+it, in local and cloud mode, and a fact that is mostly a secret is skipped
+(reason `secret`) without being sent. A duplicate fact reinforces the existing memory, and a contradicting
 one supersedes it; the old fact is kept with its validity closed. The tool
 needs all three roles of the write path (embed, decide and write), from your
 own keys or Oort Pro. Without them it returns an error that names
@@ -947,7 +953,7 @@ it exits, or until `oort serve stop && oort serve --detach`.
 | Command | What it does | Flags |
 | --- | --- | --- |
 | `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)), `--limit <n>`, `--speed <speed>`, `--budget-chars <n>` (see below) |
-| `oort remember <fact>` | Saves a fact you state, as the MCP `remember` tool and the SDK's `remember()` do: one turn framed as your statement (`Remember this: <fact>`, answered `Noted: <fact>`), through the write path (scrub, gate, reconcile, writer), as the acting agent on the cwd's project. Words without quotes are joined into one fact; a fact is one line of at most 500 characters. The header says what happened (`added 1b2c3d4e`, `superseded 1b2c3d4e (replaces 9f8e7d6c)`, `skipped (not durable)`). In Oort Cloud it saves in your account, as `observe` does. | `--type <type>` (a hint: `semantic`, `episodic`, `procedural` or `preference`; the write path decides), `--dry-run` (reports scrubbing only; touches nothing), `--json` (`data.results`, the SDK's `RememberResult`) |
+| `oort remember <fact>` | Saves a fact you state, as the MCP `remember` tool and the SDK's `remember()` do: one turn framed as your statement (`Remember this: <fact>`, answered `Noted: <fact>`), through the write path (scrub, gate, reconcile, writer), as the acting agent on the cwd's project. The fact is scrubbed on your machine before it leaves, in local and cloud mode; one that is mostly a secret is `skipped (secret)` and never sent. Words without quotes are joined into one fact; a fact is one line of at most 500 characters (no line or paragraph separators). The header says what happened (`added 1b2c3d4e`, `superseded 1b2c3d4e (replaces 9f8e7d6c)`, `skipped (not durable)`; an outcome Oort does not know is `unknown`). In Oort Cloud it saves in your account, as `observe` does, with a `turnRef` built from the project, the type and the fact and the UTC day, so a retry after a lost answer is not saved twice. | `--type <type>` (a hint: `semantic`, `episodic`, `procedural` or `preference`; the write path decides), `--dry-run` (reports scrubbing only; touches nothing), `--json` (`data.results`, the SDK's `RememberResult`) |
 | `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation, hydrated, and where it came from (`your Planet`, `this agent's Star`, with `(overridden)` when a narrower memory contradicts it). The header names the agent, the nodes read (`reads: your Planet, Star cursor`) and the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (agent; read; rank, id, type, tier, validFrom, text, explanation, origin; temporal; timings; degraded), `--include <levels>`, `--as-of`, `--known-at`, `--history` |
 | `oort revalidate` | Lists volatile facts (a status, a current version, an owner) that nobody confirmed within `recall.staleAfterDays`, oldest first. | `--json` (`data.memories`: id, type, text, lastConfirmed; `data.staleAfterDays`) |
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
@@ -964,8 +970,10 @@ at most `n` memories, 1 to 50 (default `recall.returnK`, 10). `--speed fast`
 skips the reranker and `--speed lexical` calls no model at all (keyword
 search only); `full`, the default, embeds and reranks. A stage `--speed` turns
 off is not reported as degraded. `--budget-chars <n>` caps the printed
-`<oort-memory>` block at `n` characters (default `recall.budgetChars`, 6000);
-`--json` lists every memory either way.
+`<oort-memory>` block at `n` characters (default `recall.budgetChars`, 6000;
+at least 30, since the block's tags take 29); the header then counts the
+memories that fit (`3 memories (of 6; --budget-chars)`, or `none fit
+--budget-chars`). `--json` lists every memory either way.
 
 ```sh
 oort recall "auth port" --limit 3 --speed fast

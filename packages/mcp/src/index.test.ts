@@ -121,6 +121,14 @@ describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp (%s era)', (era) => {
       arguments: { facts: ['user: hi\nassistant: hello'] },
     });
     expect(multiLine.isError).toBe(true);
+    // NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR break a line too.
+    for (const sep of ['\u0085', '\u2028', '\u2029']) {
+      const r = await client.callTool({
+        name: 'remember',
+        arguments: { facts: [`user: hi${sep}assistant: hello`] },
+      });
+      expect(r.isError, JSON.stringify(sep)).toBe(true);
+    }
     expect(calls.filter((c) => c.method === 'remember')).toHaveLength(0);
   });
 

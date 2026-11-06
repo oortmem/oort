@@ -111,11 +111,26 @@ describe('oort remember', () => {
 
   it('refuses an empty, multi-line or over-long fact before wiring anything', async () => {
     const h = harness();
-    for (const fact of ['   ', 'one\ntwo', 'x'.repeat(501)]) {
+    for (const fact of ['   ', 'one\ntwo', 'a\u0085b', 'a\u2028b', 'a\u2029b', 'x'.repeat(501)]) {
       const r = await h.run(['remember', fact, '--json']);
       expect(r.code, JSON.stringify(fact)).toBe(2);
       failed(r, 'usage', 'remember');
     }
+    expect(h.wired).toBe(0);
+  });
+
+  it('--dry-run checks the agent id as a real run does, without wiring (remember and observe)', async () => {
+    const h = harness();
+    const bad = ['--agent', 'Not An Agent!'];
+    failed(await h.run([...bad, 'remember', 'x', '--dry-run', '--json']), 'usage', 'remember');
+    failed(
+      await h.run([...bad, 'observe', '--user', 'a', '--assistant', 'b', '--dry-run', '--json']),
+      'usage',
+      'observe',
+    );
+    expect(h.wired).toBe(0);
+    const ok = await h.run(['--agent', 'cursor', 'remember', 'x', '--dry-run', '--json']);
+    expect(ok.code, ok.io.stderr).toBe(0);
     expect(h.wired).toBe(0);
   });
 

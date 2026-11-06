@@ -1,12 +1,12 @@
 import { FACT_MAX_CHARS, MEMORY_TYPES } from '@oortmem/mcp';
-import { scrubObservation, type MemoryType } from '@oortmem/core';
+import { resolveHome, scrubObservation, type MemoryType } from '@oortmem/core';
 import { turnObservation } from '../engine/observe.js';
 import { emit, jsonMode } from '../output.js';
 import {
   rememberFacts,
   rememberFactsInCloud,
   rememberTurn,
-  type RememberResult,
+  type CloudRememberResult,
 } from '../remember.js';
 import { uiFor } from '../ui.js';
 import {
@@ -16,10 +16,11 @@ import {
   refuseStarInCloud,
   scopeLabel,
   short,
+  shown,
   withWired,
   type Ctx,
 } from '../util.js';
-import { privacyStatement } from '../wire.js';
+import { privacyStatement, resolveAgent } from '../wire.js';
 
 export interface RememberOptions {
   /** `--type`: a hint for the kind of fact; the write path decides the final type. */
@@ -29,6 +30,9 @@ export interface RememberOptions {
   json?: boolean;
 }
 
+/** Line breaks a terminal or a JSON reader may honour: CR, LF, NEL, LS and PS. */
+const LINE_BREAK = /[\r\n\u0085\u2028\u2029]/;
+
 /** The fact as the MCP tool takes one: trimmed, one line, 1 to 500 characters. */
 function checkedFact(words: readonly string[]): string {
   const fact = words.join(' ').trim();
@@ -37,7 +41,7 @@ function checkedFact(words: readonly string[]): string {
       'Give the fact to remember, in quotes: oort remember "We deploy on Fridays."',
     );
   }
-  if (/[\r\n]/.test(fact)) {
+  if (LINE_BREAK.test(fact)) {
     throw new Refusal('A fact is one line: remember each line on its own.');
   }
   if (fact.length > FACT_MAX_CHARS) {
@@ -60,11 +64,12 @@ function checkedType(raw: string | undefined): MemoryType | undefined {
 }
 
 /** One result as a header detail: `added 1b2c3d4e`, `superseded 1b2c3d4e (replaces 9f8e7d6c)`. */
-function said(r: RememberResult): string {
-  if (r.outcome === 'skipped') return `skipped (${r.reason ?? 'not durable'})`;
-  const id = r.id === undefined ? '' : ` ${short(r.id)}`;
-  const replaces = r.supersedes === undefined ? '' : ` (replaces ${short(r.supersedes)})`;
-  return `${r.outcome}${id}${replaces}`;
+function said(r: CloudRememberResult): string {
+  // Oort Cloud's answer is checked (remember.ts) and still printed through `shown`.
+  if (r.outcome === 'skipped') return `skipped (${shown(r.reason ?? 'not durable')})`;
+  const id = r.id === undefined ? '' : ` ${shown(short(r.id))}`;
+  const replaces = r.supersedes === undefined ? '' : ` (replaces ${shown(short(r.supersedes))})`;
+  return `${shown(r.outcome)}${id}${replaces}`;
 }
 
 /**
@@ -83,6 +88,8 @@ export async function rememberCommand(
   const type = checkedType(opts.type);
   const ui = uiFor(ctx.io);
   if (opts.dryRun === true) {
+    // The agent id is checked as a real run checks it, without wiring anything.
+    resolveAgent(resolveHome(ctx.io.env), ctx.io.env, ctx.agent);
     const turn = rememberTurn(fact, type);
     const s = scrubObservation(turnObservation(turn.user, turn.assistant));
     const detail = s.dropped
@@ -96,7 +103,7 @@ export async function rememberCommand(
   }
   return withWired(ctx, async (w) => {
     const cloud = cloudOf(w);
-    let results: RememberResult[];
+    let results: CloudRememberResult[];
     if (cloud !== undefined) {
       refuseStarInCloud(w);
       const project = w.scope.projectId;

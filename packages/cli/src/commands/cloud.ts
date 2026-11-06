@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { scrubExportLine } from '../cloud-scrub.js';
 import { readEmbedderBinding } from '@oortmem/store-sqlite';
 import {
   ANONYMOUS_AGENT,
@@ -135,7 +136,8 @@ export async function uploadChunk(
   lines: string[],
   progress: (inChunk: number) => void,
 ): Promise<{ imported: number; skipped: number; reembedded: number; calls: number }> {
-  const body = [header, ...lines];
+  // Scrubbed when they were saved; scrubbed again here, before they leave the machine.
+  const body = [header, ...lines.map(scrubExportLine)];
   const total = { imported: 0, skipped: 0, reembedded: 0, calls: 0 };
   let from = 0;
   for (;;) {
