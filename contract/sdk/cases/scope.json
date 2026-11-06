@@ -181,6 +181,255 @@
     ]
   },
   {
+    "id": "scope.another-users-memories-cannot-be-changed-or-maintained",
+    "description": "forget, pin, unpin, explain, consolidate and judgments across two users of one agent: the other user's records are not-found, and consolidation never touches them.",
+    "transports": ["local"],
+    "seed": "basic",
+    "options": {
+      "org": "acme",
+      "judge": {
+        "role": "expert"
+      },
+      "config": {
+        "judge": {
+          "experts": ["ada"]
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u1",
+          "agent": "bot"
+        },
+        "as": "u1"
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u2",
+          "agent": "bot"
+        },
+        "as": "u2"
+      },
+      {
+        "call": "forget",
+        "on": "u2",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "pin",
+        "on": "u2",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "unpin",
+        "on": "u2",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "unpin",
+        "on": "u2",
+        "args": {
+          "id": "ffffffff"
+        },
+        "expect": {
+          "result": {
+            "id": "ffffffff-0000-4000-8000-000000000002"
+          }
+        }
+      },
+      {
+        "call": "explain",
+        "on": "u2",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000003"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "pin",
+        "on": "u1",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "result": {
+            "pinned": true,
+            "changed": true
+          }
+        }
+      },
+      {
+        "call": "consolidate",
+        "on": "u2",
+        "expect": {
+          "result": {
+            "complete": true,
+            "expired": {
+              "$none": {
+                "$regex": "^ffffffff-0000-4000-8000-00000000000[13]$"
+              }
+            },
+            "promoted": {
+              "$none": {
+                "$regex": "^ffffffff-0000-4000-8000-00000000000[13]$"
+              }
+            },
+            "demoted": {
+              "$none": {
+                "$regex": "^ffffffff-0000-4000-8000-00000000000[13]$"
+              }
+            },
+            "evicted": {
+              "$none": {
+                "$regex": "^ffffffff-0000-4000-8000-00000000000[13]$"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "consolidate",
+        "on": "u1",
+        "expect": {
+          "result": {
+            "expired": {
+              "$some": "ffffffff-0000-4000-8000-000000000003"
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.record",
+        "on": "u1",
+        "args": {
+          "subject": "u1 ticket 9 asks for a refund",
+          "verdict": "approved",
+          "reason": "Within 30 days.",
+          "domain": "support",
+          "by": "ada"
+        },
+        "expect": {
+          "result": {
+            "status": "recorded"
+          }
+        },
+        "save": {
+          "j": "$.id"
+        }
+      },
+      {
+        "call": "judge.list",
+        "on": "u2",
+        "expect": {
+          "result": {
+            "judgments": {
+              "$none": {
+                "id": "${j}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.confirm",
+        "on": "u2",
+        "args": {
+          "id": "${j}"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "judge.apply",
+        "on": "u2",
+        "args": {
+          "item": {
+            "summary": "u1 ticket 9 asks for a refund",
+            "domain": "support"
+          }
+        },
+        "expect": {
+          "result": {
+            "precedents": {
+              "$none": {
+                "id": "${j}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.list",
+        "on": "u1",
+        "expect": {
+          "result": {
+            "judgments": {
+              "$some": {
+                "id": "${j}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "forget",
+        "on": "u1",
+        "args": {
+          "id": "ffffffff-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "result": {
+            "forgotten": "ffffffff-0000-4000-8000-000000000001"
+          }
+        }
+      },
+      {
+        "call": "recent",
+        "on": "u2",
+        "expect": {
+          "result": {
+            "memories": [
+              {
+                "id": "ffffffff-0000-4000-8000-000000000002"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
     "id": "scope.two-agents-keep-their-own-stars",
     "transports": ["local"],
     "seed": "basic",
