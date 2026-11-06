@@ -23,7 +23,8 @@
         "include": "string[]?",
         "agent": "string?",
         "rerank": "boolean?",
-        "embed": "boolean?"
+        "embed": "boolean?",
+        "lexicalFirst": "boolean?"
       },
       "response": ["memories", "timings", "temporal", "read?", "degraded?", "degradedNodes?"]
     },

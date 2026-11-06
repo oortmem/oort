@@ -117,9 +117,16 @@ Three settings under `recall` cut them:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `lexicalFirst` | true | Run the lexical search first. When its top result holds every informative word of the prompt (at least two of them), is current, and the runner-up holds clearly fewer, the prompt is not embedded at all. |
+| `lexicalFirst` | true | Run the lexical search first. When its top result holds every informative word of the prompt (at least two of them), is current, and the runner-up holds clearly fewer, the prompt is not embedded at all. In cloud mode the prompt hook sends this setting to Oort Cloud, which does the same. |
 | `rerankBudgetMs` | 400 | The longest wait for the reranker. Past it, recall uses the fused order, logs `rerank-timeout`, and the relevance gate falls back to word coverage and dense similarity. 0 waits as long as the reranker takes. |
 | `queryCacheTtlSec` | 600 | How long a prompt's embedding is reused. The cache is in memory and on disk under `~/.oort/cache/query-embed` (files are named by a SHA-256 hash; no prompt text is stored). 0 turns it off. |
+
+Lexical first is conservative: it skips the embedding only when one memory clearly holds the
+whole prompt. On the bench eval below (with the cloud's models, measured 2026-11-05) it answered 3
+of the fixture's 23 questions without an embedding, and none of them once each question was framed
+the way people type prompts ("can you check … before I deploy"). Where it answered, it ranked at
+least as well as the embedding did: with `fast`, MRR@10 was 0.947 with it and 0.921 without it, and
+recall@3 to @10 and abstention did not change.
 
 From Europe a warm Voyage rerank took 200 to 300 ms when measured on 2026-11-04, so the 400 ms
 default lets normal reranks finish and only cuts off slow outliers. Lower it (150 ms is the spec's

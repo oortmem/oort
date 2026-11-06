@@ -31,6 +31,8 @@ export interface CloudTiming {
   totalMs: number;
   /** The API's Server-Timing metrics (`name;dur=12.3`), when it sent them. */
   server?: Record<string, number>;
+  /** What the API's lexical first decided (`lexfirst;desc=hit|miss`), when it said. */
+  lexicalFirst?: 'hit' | 'miss';
 }
 
 /**
@@ -44,6 +46,12 @@ export const KEEP_ALIVE_MS = 120_000;
 export const TIMING_HEADER = 'x-oort-timing';
 
 const METRIC = /^[A-Za-z0-9_.-]{1,40}$/;
+
+/** The API's `lexfirst;desc=hit|miss` Server-Timing entry (CON-101), when it sent one. */
+export function lexicalFirstOf(header: string | null | undefined): 'hit' | 'miss' | undefined {
+  const m = /(?:^|,)\s*lexfirst\s*;\s*desc=(hit|miss)\s*(?:,|$)/.exec(header ?? '');
+  return m === null ? undefined : (m[1] as 'hit' | 'miss');
+}
 
 /**
  * Server-Timing metrics with a duration, as `{ name: ms }`. Anything else in the header

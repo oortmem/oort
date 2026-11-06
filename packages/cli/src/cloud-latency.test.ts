@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import * as path from 'node:path';
 import { execa } from 'execa';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import CONTRACT from '../test/cloud-contract.json' with { type: 'json' };
 import { fakeCloud, fakeMemory, type FakeCloud } from '../test/fake-cloud.js';
 import { tmpdir } from '../test/helpers.js';
 import { callDaemon } from './serve-client.js';
@@ -55,7 +56,9 @@ async function localCloud(): Promise<LocalCloud> {
     });
     res.statusCode = r.status;
     r.headers.forEach((v, k) => res.setHeader(k, v));
-    if (timing === '1') res.setHeader('server-timing', 'auth;dur=41, do;dur=700, total;dur=760');
+    if (timing === '1') {
+      res.setHeader('server-timing', 'auth;dur=41, do;dur=700, total;dur=760, lexfirst;desc=hit');
+    }
     res.end(Buffer.from(await r.arrayBuffer()));
   });
   srv.keepAliveTimeout = 120_000;
@@ -219,6 +222,8 @@ describe('the prompt hook in cloud mode (CON-101)', () => {
     expect(t?.['cloudTcpMs']).toBeTypeOf('number');
     expect(t?.['serverAuthMs']).toBe(41);
     expect(t?.['serverDoMs']).toBe(700);
+    // What the API's lexical first decided: 1, it answered without embedding the prompt.
+    expect(t?.['serverLexicalFirstHit']).toBe(1);
   });
 
   it('cloud-latency.a-long-prompt-still-recalls', async () => {
@@ -249,5 +254,37 @@ describe('the prompt hook in cloud mode (CON-101)', () => {
       [false, false],
       [undefined, undefined],
     ]);
+  });
+
+  it('cloud-latency.the-prompt-hook-sends-recall-lexical-first-in-cloud-mode', async () => {
+    const c = await localCloud();
+    closers.push(c.close);
+    const s = sandbox(c);
+    const ask = 'which port does the auth service listen on?';
+    // On by default, as locally: the API may skip the embedding when the lexical answer is clear.
+    await hook(s, ask);
+    fs.writeFileSync(path.join(s.oortHome, 'config.json'), '{"recall":{"lexicalFirst":false}}\n');
+    await hook(s, ask);
+    // `lexical` mode never embeds: nothing to skip, nothing sent.
+    fs.writeFileSync(path.join(s.oortHome, 'config.json'), '{"recall":{"promptMode":"lexical"}}\n');
+    await hook(s, ask);
+    expect(
+      c.cloud.recalls.map((b) => ('lexicalFirst' in b ? b['lexicalFirst'] : 'absent')),
+    ).toEqual([true, false, 'absent']);
+    // Every field the hook sends is one the contract lists, so an older API can ignore it.
+    const spec = CONTRACT.routes.find((r) => r.path === '/v1/recall')?.request ?? {};
+    for (const b of c.cloud.recalls) {
+      for (const k of Object.keys(b)) expect(Object.keys(spec), k).toContain(k);
+    }
+  });
+
+  it('cloud-latency.local-mode-never-asks-oort-cloud', async () => {
+    const c = await localCloud();
+    closers.push(c.close);
+    const s = sandbox(c);
+    fs.rmSync(path.join(s.oortHome, 'cloud.json'));
+    const r = await hook(s, 'which port does the auth service listen on?');
+    expect(r.exitCode).toBe(0);
+    expect(c.paths).toEqual([]);
   });
 });

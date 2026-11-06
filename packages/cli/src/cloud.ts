@@ -9,6 +9,7 @@ import {
   timedFetch,
   parseServerTiming,
   type CloudTiming,
+  lexicalFirstOf,
 } from './cloud-http.js';
 import type { Env } from './io.js';
 import { ACCOUNT_URL } from './relay.js';
@@ -424,6 +425,11 @@ export interface CloudClient {
     rerank?: boolean;
     /** false: no query embedding, lexical recall only (CON-101). An older API ignores it. */
     embed?: boolean;
+    /**
+     * Lexical first (core's `recall.lexicalFirst`): true lets a clear lexical answer skip the
+     * query embedding, false always embeds. An older API ignores it (and runs lexical first).
+     */
+    lexicalFirst?: boolean;
   }): Promise<RecallResult>;
   /** The account's Constellations (hive beta; 403 `hive_not_enabled` outside it). */
   constellations(): Promise<CloudConstellation[]>;
@@ -555,8 +561,9 @@ export interface CloudClientOptions {
  * shows it beside the API's own stages: `cloudMs` (the whole request), `cloudHeadersMs` and
  * `cloudBodyMs`, `cloudConnected` (1 when it opened a connection, 0 when it reused one; only
  * known for the keep-alive pool), `cloudDnsMs`, `cloudTcpMs` and
- * `cloudTlsMs` when known, `cloudRecallMs` (the API's recall itself), and each Server-Timing
- * metric as `server<Name>Ms`.
+ * `cloudTlsMs` when known, `cloudRecallMs` (the API's recall itself), each Server-Timing
+ * metric as `server<Name>Ms`, and `serverLexicalFirstHit` (1: the API answered from its lexical
+ * search without embedding the prompt, 0: it embedded) when the API said.
  */
 export function withCloudTimings(r: RecallResult, t: CloudTiming): RecallResult {
   const timings: Record<string, number> = { ...r.timings };
@@ -569,6 +576,8 @@ export function withCloudTimings(r: RecallResult, t: CloudTiming): RecallResult 
   if (t.dnsMs !== undefined) timings['cloudDnsMs'] = t.dnsMs;
   if (t.tcpMs !== undefined) timings['cloudTcpMs'] = t.tcpMs;
   if (t.tlsMs !== undefined) timings['cloudTlsMs'] = t.tlsMs;
+  if (t.lexicalFirst !== undefined)
+    timings['serverLexicalFirstHit'] = t.lexicalFirst === 'hit' ? 1 : 0;
   for (const [name, ms] of Object.entries(t.server ?? {})) {
     timings[
       `server${name.charAt(0).toUpperCase()}${name.slice(1).replace(/[^A-Za-z0-9]/g, '')}Ms`
@@ -643,6 +652,7 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
     const t1 = performance.now();
     const conn = connectedSince(t0);
     const server = parseServerTiming(res.headers.get('server-timing'));
+    const lexicalFirst = lexicalFirstOf(res.headers.get('server-timing'));
     return {
       res,
       done: () => {
@@ -658,6 +668,7 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
           bodyMs: t2 - t1,
           totalMs: t2 - t0,
           ...(Object.keys(server).length > 0 && { server }),
+          ...(lexicalFirst !== undefined && { lexicalFirst }),
         };
       },
     };
