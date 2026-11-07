@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { openSqliteStore } from '../dist/index.js';
 
 const { path, coldDir, dimension, busyTimeoutMs } = workerData;
+parentPort.postMessage('opening'); // the test holds its lock from here
 try {
   const store = await openSqliteStore({ path, coldDir, dimension, busyTimeoutMs, log: () => {} });
   await store.close();

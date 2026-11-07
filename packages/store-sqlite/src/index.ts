@@ -146,7 +146,12 @@ function enableWal(conn: Database.Database, timeoutMs: number): void {
     try {
       mode = conn.pragma('journal_mode = WAL', { simple: true });
     } catch (e) {
-      if ((e as { code?: unknown }).code !== 'SQLITE_BUSY' || Date.now() >= deadline) throw e;
+      if (
+        !String((e as { code?: unknown }).code).startsWith('SQLITE_BUSY') ||
+        Date.now() >= deadline
+      ) {
+        throw e;
+      }
     }
     if (mode === 'wal') return;
     if (mode !== undefined && Date.now() >= deadline) {

@@ -470,8 +470,9 @@ describe('sqlite store', () => {
   });
 
   /** Opens the store in a worker while another connection holds a fresh database's write
-   * reservation for `holdMs`, as a second first-run opener does mid-switch. */
-  async function openWhileReserved(holdMs: number, busyTimeoutMs?: number) {
+   * reservation, as a second first-run opener does mid-switch. The lock is held from the moment
+   * the worker starts its open: for `holdMs`, or (no `holdMs`) until the open has answered. */
+  async function openWhileReserved(holdMs?: number, busyTimeoutMs?: number) {
     const opts = optsIn(freshDir());
     fs.mkdirSync(path.dirname(opts.path), { recursive: true });
     const other = new Database(opts.path); // a fresh file: rollback journal, not yet WAL
@@ -481,27 +482,40 @@ describe('sqlite store', () => {
     const worker = new Worker(new URL('../test/open-store.mjs', import.meta.url), {
       workerData: { ...opts, busyTimeoutMs },
     });
+    let opening!: () => void;
+    const started = new Promise<void>((r) => (opening = r));
     const result = new Promise<{ ok: boolean; mode?: string; error?: string }>(
       (resolve, reject) => {
-        worker.once('message', resolve);
+        worker.on('message', (m) => (m === 'opening' ? opening() : resolve(m)));
         worker.once('error', reject);
       },
     );
-    await new Promise((r) => setTimeout(r, holdMs));
-    other.exec('COMMIT');
-    other.close();
-    return result;
+    try {
+      await started;
+      const at = Date.now();
+      if (holdMs !== undefined) await new Promise((r) => setTimeout(r, holdMs));
+      else await Promise.race([result, new Promise((r) => setTimeout(r, 10_000))]);
+      other.exec('COMMIT');
+      const answer = await result;
+      return { answer, waitedMs: Date.now() - at };
+    } finally {
+      if (other.open) other.close();
+    }
   }
 
   it('store.open-waits-for-the-wal-switch', async () => {
     // Two processes opening a brand-new database at once (a hook and the daemon on first run):
     // switching it to WAL needs every other connection out, and SQLite reports SQLITE_BUSY for
     // that switch at once, without the busy timeout. The open must wait, not fail.
-    expect(await openWhileReserved(300)).toEqual({ ok: true, mode: 'wal' });
+    const { answer, waitedMs } = await openWhileReserved(300);
+    expect(answer).toEqual({ ok: true, mode: 'wal' });
+    expect(waitedMs).toBeGreaterThanOrEqual(300); // it answered only after the lock was released
   });
 
   it('store.open-gives-up-on-the-wal-switch-after-the-busy-timeout', async () => {
-    expect(await openWhileReserved(600, 100)).toEqual({ ok: false, error: 'SQLITE_BUSY' });
+    // The lock is held until the open answers, so it can only answer by giving up.
+    const { answer } = await openWhileReserved(undefined, 100);
+    expect(answer).toEqual({ ok: false, error: 'SQLITE_BUSY' });
   });
 
   it('store.open-sweeps-orphan-blobs', async () => {
