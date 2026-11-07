@@ -1,6 +1,6 @@
 {
   "name": "oort",
-  "version": "0.6.4",
+  "version": "0.7.0",
   "description": "Oort memory for Codex: recalls relevant facts before each prompt and adds the Oort memory tools and skill.",
   "author": {
     "name": "Oort",

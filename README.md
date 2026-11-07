@@ -63,7 +63,7 @@ Claude Code (hooks, plus the MCP server), Claude Desktop, Codex, Cursor, Gemini 
 
 ## Build with Oort using your coding agent
 
-The [`oort-sdk`](skills/oort-sdk) skill teaches your coding agent to build Oort into your own apps and agent frameworks: the TypeScript SDK (`createOort` from `oortmem`), multi-user apps, the Vercel AI SDK, LangGraph.js and OpenAI Agents JS, serverless, and Python through the CLI's JSON. Every code block in it is a tested example. It is a separate plugin, `oort-dev`, so "help me build with Oort" installs without "memory for my own sessions" (the `oort` plugin), and the other way round.
+The [`oort-sdk`](skills/oort-sdk) skill teaches your coding agent to build Oort into your own apps and agent frameworks: the TypeScript SDK (`createOort` from `oortmem`), multi-user apps, the Vercel AI SDK, LangGraph.js and OpenAI Agents JS, serverless, the native Python client (`from oortmem import Oort`), and the CLI's JSON for other languages. Every code block in it is a tested example. It is a separate plugin, `oort-dev`, so "help me build with Oort" installs without "memory for my own sessions" (the `oort` plugin), and the other way round.
 
 Claude Code:
 

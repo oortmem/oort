@@ -302,10 +302,11 @@ oort serve token                                      # writes ~/.oort/serve.tok
 oort serve --listen 127.0.0.1:7807 --org acme         # every token request acts in org acme
 ```
 
-```text
+```python
 from oortmem import Oort
-svc = Oort(mode="remote", url="http://127.0.0.1:7807", token=open(token_file).read().strip(),
-           agent_level=True)
+
+# The token comes from OORT_SERVE_TOKEN (your secret manager), or pass token=.
+svc = Oort(mode="remote", url="http://127.0.0.1:7807", agent_level=True)
 mem = svc.scoped(user="u-123", agent="support-bot")
 ```
 
