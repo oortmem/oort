@@ -205,7 +205,9 @@ function envSecret(head: string, offset: number, text: string): Replacement | nu
   const raw = ENV_VALUE.exec(text)?.[0];
   if (raw === undefined || raw.includes(MARK)) return null;
   const length = head.length + raw.length;
-  if (raw.startsWith('[')) {
+  // An array is `[` then a quote (ENV_VALUE's bare alternative never starts `[ ` or `['`); a bare
+  // value that merely starts with a bracket (`token=[abc]`) is redacted whole, below.
+  if (/^\[[ \t]*["']/.test(raw)) {
     // An array of strings: redact each element, keep the array.
     if (level === 'unless-count') return null;
     let removed = 0;
