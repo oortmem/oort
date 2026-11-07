@@ -44,7 +44,8 @@ export interface RecallOutput {
 
 export interface RememberOutcome {
   fact: number;
-  outcome: 'added' | 'reinforced' | 'updated' | 'superseded' | 'corrected' | 'skipped';
+  /** `unknown`: Oort Cloud answered an outcome this version does not know. */
+  outcome: 'added' | 'reinforced' | 'updated' | 'superseded' | 'corrected' | 'skipped' | 'unknown';
   id?: string;
   supersedes?: string;
   reason?: string;

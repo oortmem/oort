@@ -140,6 +140,32 @@ describe('oort share and oort constellation (Oort Cloud, hive beta)', () => {
     expect(data(yes.io.stdout)).toMatchObject({ constellationId: 'c_aaaaaaaaaaaaaaaa' });
   });
 
+  it('share.edited-text-is-scrubbed-before-it-leaves-the-machine', async () => {
+    const e = setup();
+    withTeam(e);
+    const key = ['AKIA', 'IOSFODNN7', 'EXAMPLE'].join('');
+    const r = await e.run([
+      'share',
+      ID,
+      '--to',
+      'oort-core',
+      '--text',
+      `The deploy bot signs in with ${key} on staging.`,
+      '--yes',
+    ]);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(JSON.stringify(e.cloud.hive.requests)).not.toContain(key);
+    expect((e.cloud.hive.requests[0] as { text: string }).text).toMatch(
+      /\[REDACTED:aws-access-key\]/,
+    );
+    // Mostly secret: refused here, nothing sent.
+    const before = e.cloud.hive.requests.length;
+    const secret = await e.run(['share', ID, '--to', 'oort-core', '--text', key, '--yes']);
+    expect(secret.code).toBe(2);
+    expect(secret.io.stderr).toContain('mostly secret');
+    expect(e.cloud.hive.requests).toHaveLength(before);
+  });
+
   it('share.sends-an-edited-text-and-a-private-project', async () => {
     const e = setup();
     withTeam(e);

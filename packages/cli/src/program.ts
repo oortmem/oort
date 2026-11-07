@@ -71,6 +71,7 @@ import {
   projectUnlinkCommand,
 } from './commands/project.js';
 import { recallCommand, type RecallOptions } from './commands/recall.js';
+import { rememberCommand, type RememberOptions } from './commands/remember.js';
 import { reembedCommand } from './commands/reembed.js';
 import { revalidateCommand } from './commands/revalidate.js';
 import { serveCommand, type ServeOptions } from './commands/serve.js';
@@ -188,9 +189,11 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--keys <mode>', 'byo, pro, local or skip')
     .option('--import <age>', 'skip, or import Claude Code sessions from this age: 14d, 30d')
     .option('--no-demo', 'skip the remember, recall and forget check')
+    // Before CON-114: `npm i -g oortmem` under npx. Setup now installs ~/.oort/cli itself.
+    .addOption(new Option('--install-global').hideHelp())
     .option(
-      '--install-global',
-      'under npx: run `npm i -g oortmem` first (agents need a stable path)',
+      '--this-copy',
+      'for developers testing their own build: write this copy, even when ~/.oort/cli is there',
     )
     .option('--json', 'print oort.v1 JSON')
     .action(run((o: SetupOptions) => setupCommand(o, ctx)));
@@ -207,8 +210,16 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     )
     .argument('<harness>', 'claude-code, codex, cursor, claude-desktop, gemini or vscode')
     .option('--project', 'use <cwd>/.claude/settings.json instead of ~/.claude/settings.json')
+    .option(
+      '--this-copy',
+      'for developers testing their own build: write this copy, even when ~/.oort/cli is there',
+    )
     .option('--json', 'print oort.v1 JSON')
-    .action(run((h: string, o: { project?: boolean }) => installCommand('install', h, o, ctx)));
+    .action(
+      run((h: string, o: { project?: boolean; thisCopy?: boolean }) =>
+        installCommand('install', h, o, ctx),
+      ),
+    );
 
   p.command('uninstall')
     .description('remove the Claude Code hooks, or the MCP server from any other harness')
@@ -223,9 +234,13 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--dry-run', 'print the diff without writing')
     .option('--star', "keep this agent's new memories in its own Star (it still reads your Planet)")
     .option('--no-star', "write this agent's new memories to your Planet again (the default)")
+    .option(
+      '--this-copy',
+      'for developers testing their own build: write this copy, even when ~/.oort/cli is there',
+    )
     .option('--json', 'print oort.v1 JSON')
     .action(
-      run((hosts: string[], o: { dryRun?: boolean; star?: boolean }) =>
+      run((hosts: string[], o: { dryRun?: boolean; star?: boolean; thisCopy?: boolean }) =>
         connectCommand('connect', hosts, o, ctx),
       ),
     );
@@ -286,7 +301,23 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--history', 'recall every version of the matching facts, oldest first')
     .option('--include <levels>', 'read only these levels: self, planet, star (comma list)')
     .option('--include-withdrawn', 'also show withdrawn judgments')
+    .option('--limit <n>', 'at most this many memories, 1 to 50 (default 10)')
+    .option('--speed <speed>', 'full (the default), fast (no rerank) or lexical (no model call)')
+    .option('--budget-chars <n>', 'the printed block, at most this many characters')
     .action(run((t: string, o: RecallOptions) => recallCommand(t, o, ctx)));
+
+  p.command('remember')
+    .description(
+      'save a fact you state, as the MCP remember tool does (scrubbed, through the write path)',
+    )
+    .argument('<fact...>', 'the fact, in quotes (words without quotes are joined into one fact)')
+    .option(
+      '--type <type>',
+      'a hint for the kind of fact: semantic, episodic, procedural, preference',
+    )
+    .option('--dry-run', 'only report what the scrubber would redact; touches nothing')
+    .option('--json', 'print oort.v1 JSON')
+    .action(run((words: string[], o: RememberOptions) => rememberCommand(words, o, ctx)));
 
   p.command('explain')
     .description("recall with each stage's ranks and scores")
@@ -806,6 +837,7 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .action(run((o: { json?: boolean }) => cloudStatusCommand(o, ctx)));
   cloud
     .command('import')
+    .alias('upload')
     .description('upload the local store to Oort Cloud (resumable; safe to run again)')
     .option('--dry-run', 'show what would be uploaded and stop')
     .option('--yes', 'do not ask before uploading')
@@ -813,6 +845,7 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .action(run((o: { dryRun?: boolean; yes?: boolean }) => cloudImportCommand(o, ctx)));
   cloud
     .command('export')
+    .alias('download')
     .description('download every memory in your Oort Cloud account (v1 export format)')
     .option('--out <file>', 'write to a new file (0600) instead of stdout')
     .option('--force', 'with --out, overwrite an existing file (never a symlink)')
@@ -894,6 +927,7 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     );
   keys
     .command('rm')
+    .alias('remove')
     .description('delete a stored key')
     .argument('<provider>', 'voyage, typesafe, anthropic or oort')
     .option('--json', 'print oort.v1 JSON')
@@ -924,6 +958,7 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .action(run((ids: string[]) => modelsVerifyCommand(ids, ctx)));
   models
     .command('rm')
+    .alias('remove')
     .description('delete downloaded models (default: all) and switch back to the default provider')
     .argument('[models...]', 'model ids (default: every downloaded one)')
     .option('--json', 'print oort.v1 JSON')
@@ -980,7 +1015,83 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
       ),
     );
 
+  groupHelp(p, ui);
   return p;
+}
+
+/**
+ * `oort --help`'s groups (CON-107 step 3), in this order, each listing its commands in this
+ * order. A command left out here fails help.test.ts.
+ */
+export const HELP_GROUPS: readonly (readonly [string, readonly string[]])[] = [
+  ['Start:', ['setup', 'init', 'whoami']],
+  [
+    'Memory:',
+    [
+      'recall',
+      'remember',
+      'observe',
+      'inspect',
+      'explain',
+      'forget',
+      'pin',
+      'unpin',
+      'revalidate',
+      'import',
+      'export',
+      'judge',
+    ],
+  ],
+  ['Agents:', ['connect', 'disconnect', 'install', 'uninstall', 'mcp', 'hook', 'serve']],
+  [
+    'Cloud and sharing:',
+    ['login', 'logout', 'cloud', 'share', 'constellation', 'galaxy', 'project'],
+  ],
+  ['Maintenance:', ['doctor', 'update', 'stats', 'consolidate', 'reembed', 'models', 'keys']],
+];
+
+/** The examples under `oort --help`: the common commands, one line each. */
+const HELP_EXAMPLES: readonly (readonly [string, string])[] = [
+  ['oort setup', 'connect your agents and choose keys'],
+  ['oort remember "We deploy on Fridays."', 'save a fact you state'],
+  ['oort recall "how do we deploy?"', 'what your agents are shown'],
+  ['oort inspect', 'list current memories'],
+  ['oort forget 1b2c3d4e', 'delete one, by id or prefix'],
+  ['oort doctor', 'check keys, hooks and the store'],
+  ['oort recall "auth port" --json', 'any command as oort.v1 JSON'],
+];
+
+/**
+ * Groups the top-level commands by purpose, `help` under Maintenance, and ends the top-level help
+ * with the examples and where the docs are. A command's own help (`oort recall --help`) is as
+ * commander prints it.
+ */
+function groupHelp(p: Command, ui: ReturnType<typeof uiFor>): void {
+  const order = HELP_GROUPS.flatMap(([, names]) => names);
+  for (const [group, names] of HELP_GROUPS) {
+    for (const name of names) {
+      const cmd = p.commands.find((c) => c.name() === name);
+      if (cmd === undefined) throw new Error(`help group ${group} names no command ${name}`);
+      cmd.helpGroup(group);
+    }
+  }
+  // Commander lists a group's commands in the order they were added.
+  (p.commands as Command[]).sort((a, b) => order.indexOf(a.name()) - order.indexOf(b.name()));
+  p.commandsGroup('Maintenance:').helpCommand('help [command]', 'display help for command');
+  const width = Math.max(...HELP_EXAMPLES.map(([c]) => c.length));
+  p.addHelpText('after', ({ error }) =>
+    error
+      ? ''
+      : [
+          '',
+          ui.bold('Examples:'),
+          ...HELP_EXAMPLES.map(([c, what]) => `  ${c.padEnd(width)}  ${ui.dim(what)}`),
+          '',
+          'Run `oort <command> --help` for its flags.',
+          `Docs: ${ui.glow('https://oortcloud.dev/docs')}`,
+          `Every command and flag: ${ui.glow('https://github.com/oortmem/oort/blob/main/docs/cli.md')}`,
+        ].join('\n'),
+  );
 }
 
 /**

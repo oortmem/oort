@@ -39,7 +39,9 @@ and warnings go to stderr.
 - On failure: `"ok": false` and `error` with `code` (the same codes as `OortError.code`:
   `usage`, `not-found`, `ambiguous-id`, `needs-key`, `needs-login`, `needs-confirmation`,
   `cloud-only`, `network`, `refused`, `internal`), `message`, `fix` (a runnable command, or
-  `null`) and `exitCode`.
+  `null`) and `exitCode`, plus `retryable: true` when trying again can succeed (a network
+  failure, a rate limit) and `retryAfter` (seconds) when the service sent `Retry-After`; both
+  are absent otherwise.
 - Exit codes: `0` success, `1` an unexpected error, `2` a refusal or usage problem, `3` partial
   success (`oort import claude-code`).
 - A command that asks first (`forget`, `import`, …) never asks under `--json`: it fails with
@@ -118,7 +120,8 @@ inject; that human output is not a stable contract, so prefer `--json`.
 
 | Command                                 | What it does                                                                                                   |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `oort recall "<text>" --json`           | Recall as the acting agent; `--as-of`, `--known-at`, `--history`                                               |
+| `oort recall "<text>" --json`           | Recall as the acting agent; `--as-of`, `--known-at`, `--history`, `--limit`, `--speed`, `--budget-chars`       |
+| `oort remember "<fact>" --json`         | Save a fact the user stated, framed as the MCP `remember` tool frames it; `--dry-run`                          |
 | `oort observe --json`                   | Run the write path on one turn (stdin JSON, or `--user` and `--assistant`); `--dry-run` reports scrubbing only |
 | `oort forget <id> --yes --json`         | Delete a memory everywhere                                                                                     |
 | `oort pin <id>` / `oort unpin <id>`     | Keep a memory out of cold storage, or release it                                                               |

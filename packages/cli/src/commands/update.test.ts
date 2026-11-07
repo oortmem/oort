@@ -1105,7 +1105,8 @@ describe('oort update: what it prints and what it runs with (M1, M5)', () => {
     const yes = await update(m, ['--yes'], fakes(), { script: managed.main, entry: managed.bin });
     for (const r of [check, yes]) {
       const all = `${r.io.stdout}${r.io.stderr}`;
-      expect(all).not.toMatch(/[\u001b\u0007\u009b]/);
+      // String checks, not a regex: oxlint flags control characters in patterns, escaped or not.
+      expect(['\u001b', '\u0007', '\u009b'].some((c) => all.includes(c))).toBe(false);
       expect(all).toContain('\\u{1b}[31mRED');
     }
   });

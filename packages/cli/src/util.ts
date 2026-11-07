@@ -332,6 +332,8 @@ export function degradedHint(
   ctx: Pick<Ctx, 'io' | 'output'>,
   w: Wired,
   degraded: string[] | undefined,
+  /** `--speed`: a stage the caller turned off is no degradation. */
+  speed: 'full' | 'fast' | 'lexical' = 'full',
 ): void {
   const reported = degraded !== undefined && degraded.length > 0;
   if (w.mode === 'cloud') {
@@ -342,7 +344,10 @@ export function degradedHint(
   const refused = w.relayErrors?.at(-1);
   if (refused !== undefined) {
     warn(ctx, 'recall-degraded', `recall degraded. ${refused.message}`);
-  } else if (w.embed === undefined || w.rerank === undefined) {
+  } else if (
+    speed !== 'lexical' &&
+    (w.embed === undefined || (speed === 'full' && w.rerank === undefined))
+  ) {
     const role: AdapterRole = w.unavailable.embed !== undefined ? 'embed' : 'rerank';
     const why = adapterProblem(w.unavailable[role], role, w.keyStore !== false);
     warn(ctx, 'lexical-only', `lexical-only recall.${why === undefined ? '' : ` ${why}`}`);

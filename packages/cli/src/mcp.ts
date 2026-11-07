@@ -28,7 +28,7 @@ import {
   reserveAgentJudgment,
 } from './judge-cap.js';
 import { runRecall, timeMode, viewIgnored, type TemporalView } from './engine/recall.js';
-import { rememberFacts } from './remember.js';
+import { rememberFacts, rememberFactsInCloud } from './remember.js';
 import {
   OortCloudError,
   copyName,
@@ -506,25 +506,11 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
     async remember({ facts, type, visibility }) {
       refuseStarInCloud(w);
       // The same turn the local engine observes for a fact, sent to the cloud's write path.
-      const hint = type === undefined ? '' : ` (a ${type} fact)`;
-      const results = [];
-      for (const [i, fact] of facts.entries()) {
-        const r = await client.observe({
-          ...(project !== undefined && { project, ...privacyStatement(w) }),
-          observation: {
-            user: `Remember this${hint}: ${fact}`,
-            assistant: `Noted: ${fact}`,
-            at: now().toISOString(),
-          },
-        });
-        const first = r.memories[0];
-        results.push({
-          fact: i,
-          outcome: r.outcome as 'added',
-          ...(first?.id !== undefined && { id: first.id }),
-          ...(r.outcome === 'skipped' && { reason: 'not durable' }),
-        });
-      }
+      const results = await rememberFactsInCloud(client, facts, {
+        now,
+        ...(type !== undefined && { type }),
+        ...(project !== undefined && { project: { project, ...privacyStatement(w) } }),
+      });
       // No proposals yet (hive slice 9): a fact meant for a Constellation is saved privately, and
       // sharing it stays the person's confirmed step.
       if (visibility !== 'private') {

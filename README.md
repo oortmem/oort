@@ -45,7 +45,9 @@ Install the CLI (Node 22.15 or newer), then connect your agent. `oort setup` det
 npm install -g oortmem
 ```
 
-To update later, run `oort update`: it updates every copy here (the one the Claude Code hooks run included), migrates the store and restarts `oort serve`.
+`oort setup` also installs the managed copy in `~/.oort/cli` (`npm i -g --prefix ~/.oort/cli oortmem`), the one your agents run, so their hooks and MCP entries keep working when you switch Node versions with nvm, fnm, Volta or asdf. [More](docs/cli.md#the-managed-copy-oortcli).
+
+To update later, run `oort update`: it updates every copy here (the managed copy the Claude Code hooks run included), migrates the store and restarts `oort serve`.
 
 ```sh
 oort setup

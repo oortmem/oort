@@ -4,7 +4,14 @@ import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installHooks } from '@oortmem/claude-code';
-import { harness, memory, memoryKeychain, type Harness, data } from '../../test/helpers.js';
+import {
+  harness,
+  memory,
+  memoryKeychain,
+  npmPrefixCopy,
+  type Harness,
+  data,
+} from '../../test/helpers.js';
 import { connectHost } from '../connectors.js';
 import { createKeychain, type Keychain } from '../keychain.js';
 import { hostContext } from './connect.js';
@@ -35,8 +42,11 @@ const oortKey = (): string => ['oort', 'sk', `doctor${Date.now()}AAAAAAAAAAAA`].
 
 /** An executable stand-in for the installed bin, so hook and MCP commands resolve. */
 function fakeBin(h: Harness, version: string = VERSION, dir = 'lib'): string {
-  const bin = path.join(h.root, dir, 'node_modules', 'oortmem', 'dist', 'main.js');
+  const pkg = path.join(h.root, dir, 'node_modules', 'oortmem');
+  const bin = path.join(pkg, 'dist', 'main.js');
   fs.mkdirSync(path.dirname(bin), { recursive: true });
+  // Doctor reads the version from the package's files, never from running it (PR #78, I3).
+  fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'oortmem', version }));
   fs.writeFileSync(bin, `#!/bin/sh\necho "oort ${version}"\n`, { mode: 0o755 });
   return bin;
 }
@@ -211,7 +221,7 @@ describe('oort doctor', () => {
   });
 
   it('doctor.healthy-setup-passes-and-says-which-key-serves-each-role', async () => {
-    const h = harness();
+    const h = harness({ trusted: true });
     const bin = fakeBin(h);
     installHooks(path.join(h.root, '.claude', 'settings.json'), bin);
     fs.mkdirSync(path.join(h.root, '.cursor'));
@@ -221,7 +231,8 @@ describe('oort doctor', () => {
     await h.store.upsert(TG, memory());
     const key = oortKey();
     const k = memoryKeychain({ 'oort.voyage': 'test-voyage-key-for-doctor' });
-    const d = await doctor(h, { OORT_API_KEY: key }, k.kc);
+    // Doctor runs as the bin the hooks and Cursor run: this copy, vouched for.
+    const d = await doctor(h, { OORT_API_KEY: key }, k.kc, undefined, { entry: bin, script: bin });
     expect(d.human.code).toBe(0);
     expect(d.report.status).toBe('ok');
     expect(d.check('keys', 'embed')).toMatchObject({ status: 'ok' });
@@ -246,7 +257,7 @@ describe('oort doctor', () => {
   });
 
   it('doctor.hook-binary-of-another-version-warns-with-both-versions-and-the-path', async () => {
-    const h = harness();
+    const h = harness({ trusted: true });
     const old = fakeBin(h, '0.1.0', 'old');
     installHooks(path.join(h.root, '.claude', 'settings.json'), old);
     const d = await doctor(h);
@@ -276,26 +287,189 @@ describe('oort doctor', () => {
   });
 
   it('doctor.hook-binary-under-a-node-version-manager-gets-a-note', async () => {
-    const h = harness();
+    const h = harness({ trusted: true });
     const bin = fakeBin(h, VERSION, path.join('.nvm', 'versions', 'node', 'v20.1.0', 'lib'));
     installHooks(path.join(h.root, '.claude', 'settings.json'), bin);
     const d = await doctor(h);
     const note = d.check('hooks', 'claude-code node');
     expect(note).toMatchObject({ status: 'info' });
     expect(note?.detail).toContain('switching Node versions will break');
-    expect(note?.fix).toContain('stable');
-    // The version still matches, so the binary row is green and doctor does not fail: the only
-    // warnings are the missing keys, which exit 0 (data.status is `warn`).
-    expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
+    // No managed copy yet (CON-114): setup makes one, or install it by hand and repoint.
+    expect(note?.fix).toBe(
+      'oort setup, or npm i -g --prefix ~/oort-home/cli oortmem and then oort install claude-code (a managed copy that stays put)',
+    );
+    expect(note?.fixCommand).toBe(
+      `npm i -g --prefix ${path.join(h.home, 'cli')} oortmem && ${path.join(h.home, 'cli', 'bin', 'oort')} install claude-code`,
+    );
+    // Yours and this version, but not the managed or the running copy: an info line, and doctor
+    // does not fail: the only warnings are the missing keys, which exit 0 (data.status `warn`).
+    expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'info' });
     expect(d.human.code).toBe(0);
     expect(d.report.status).toBe('warn');
   });
 
-  it('doctor.hook-binary-of-this-version-is-green', async () => {
+  it('doctor.hooks-on-an-unstable-copy-with-a-managed-copy-name-it (CON-114)', async () => {
+    const h = harness({ trusted: true });
+    const bin = fakeBin(h, VERSION, path.join('.nvm', 'versions', 'node', 'v20.1.0', 'lib'));
+    installHooks(path.join(h.root, '.claude', 'settings.json'), bin);
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    const d = await doctor(h);
+    expect(d.check('hooks', 'claude-code node')).toMatchObject({
+      status: 'info',
+      fix: '~/oort-home/cli/bin/oort install claude-code (the managed copy, which stays put)',
+      fixCommand: `${path.join(h.home, 'cli', 'bin', 'oort')} install claude-code`,
+    });
+  });
+
+  it('doctor.hooks-in-an-fnm-link-get-the-line-and-in-a-package-cache-fail (CON-114, PR #78 I3)', async () => {
+    const fnm = harness({ trusted: true });
+    const link = fakeBin(
+      fnm,
+      VERSION,
+      path.join('.local', 'state', 'fnm_multishells', '1_2', 'lib'),
+    );
+    installHooks(path.join(fnm.root, '.claude', 'settings.json'), link);
+    const a = await doctor(fnm);
+    expect(a.check('hooks', 'claude-code node')?.detail).toContain("in fnm's link for one shell");
+    expect(a.check('hooks', 'claude-code node')?.fix).toMatch(
+      /^oort setup, or npm i -g --prefix ~\/oort-home\/cli oortmem/,
+    );
+    // npx's cache: anyone's later `npx oortmem` decides what runs there. A fail.
+    const npx = harness({ trusted: true });
+    const cached = fakeBin(npx, VERSION, path.join('.npm', '_npx', '0a1b', 'node_modules'));
+    installHooks(path.join(npx.root, '.claude', 'settings.json'), cached);
+    const b = await doctor(npx);
+    expect(b.check('hooks', 'claude-code bin')).toMatchObject({ status: 'fail' });
+    expect(b.check('hooks', 'claude-code bin')?.detail).toContain('is in a package cache');
+    expect(b.human.code).toBe(1);
+  });
+
+  it('doctor.hooks-on-another-copy-of-yours-are-an-info-line-never-ok (--this-copy, PR #78 I3)', async () => {
+    const h = harness({ trusted: true });
+    const bin = fakeBin(h, '99.0.0', 'checkout');
+    installHooks(path.join(h.root, '.claude', 'settings.json'), bin);
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    const d = await doctor(h);
+    // Newer, yours, and stays put: named, never vouched for (a swap would look the same).
+    expect(d.check('hooks', 'claude-code bin')).toMatchObject({
+      status: 'info',
+      detail: `the hooks run another copy at ${bin.replace(h.root, '~')} (oort 99.0.0)`,
+      fix: 'oort install claude-code to use the managed copy, or keep it if you built it (--this-copy)',
+    });
+    expect(d.check('hooks', 'claude-code node')).toBeUndefined();
+    for (const c of d.report.checks.filter((c) => c.group === 'hooks')) {
+      expect(['ok', 'info'], c.name).toContain(c.status);
+    }
+    // An older one warns.
+    const h2 = harness({ trusted: true });
+    installHooks(path.join(h2.root, '.claude', 'settings.json'), fakeBin(h2, '0.1.0', 'checkout'));
+    expect((await doctor(h2)).check('hooks', 'claude-code bin')?.status).toBe('warn');
+  });
+
+  it('doctor.a-newer-managed-copy-is-ok-and-its-version-comes-from-its-files (PR #78 I3)', async () => {
+    const h = harness({ trusted: true });
+    const m = npmPrefixCopy(path.join(h.home, 'cli'), '99.0.0');
+    // What the script prints is never asked: it claims another version.
+    fs.writeFileSync(m.main, '#!/bin/sh\necho "oort 1.2.3"\n', { mode: 0o755 });
+    installHooks(path.join(h.root, '.claude', 'settings.json'), m.main);
+    const d = await doctor(h);
+    expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
+    expect(d.check('hooks', 'claude-code bin')?.detail).toContain(
+      `oort 99.0.0, the managed copy, newer than this oort ${VERSION}`,
+    );
+  });
+
+  it('doctor.a-swapped-hook-script-in-a-temp-dir-fails (PR #78 I3, probe h6)', async () => {
+    // The reviewer's probe: a two-line script that prints a newer version, in a temp directory.
     const h = harness();
+    // At an oort-shaped path, so the hooks are recognised as Oort's.
+    const evil = path.join(h.root, 'x', 'oortmem', 'dist', 'main.js');
+    fs.mkdirSync(path.dirname(evil), { recursive: true });
+    fs.writeFileSync(evil, '#!/bin/sh\necho "oort 99.0.0"\n', { mode: 0o755 });
+    installHooks(path.join(h.root, '.claude', 'settings.json'), evil);
+    const d = await doctor(h);
+    const bin = d.check('hooks', 'claude-code bin');
+    expect(bin?.status).toBe('fail');
+    expect(bin?.detail).toContain('is in a temporary directory');
+    expect(d.human.code).toBe(1);
+  });
+
+  it('doctor.a-managed-copy-others-can-write-fails-with-the-fix (PR #78 I1, probe h5)', async () => {
+    const h = harness({ trusted: true });
+    const m = npmPrefixCopy(path.join(h.home, 'cli'), '99.0.0');
+    fs.chmodSync(path.dirname(m.main), 0o777);
+    installHooks(path.join(h.root, '.claude', 'settings.json'), m.main);
+    const d = await doctor(h);
+    // Never chmod a copy like this (that adopts whatever is in it): remove and reinstall.
+    const again = `rm -r ${path.join(h.home, 'cli')} && oort setup`;
+    expect(d.check('hooks', 'managed copy')).toMatchObject({
+      status: 'fail',
+      fix: again,
+      fixCommand: again,
+    });
+    expect(d.check('hooks', 'managed copy')?.detail).toContain('can be written by group or others');
+    // The hooks on it are not vouched for either.
+    expect(d.check('hooks', 'claude-code bin')?.status).toBe('fail');
+    expect(d.human.code).toBe(1);
+  });
+
+  it('doctor.an-mcp-entry-on-another-copy-of-yours-is-an-info-line (--this-copy, PR #78 I3)', async () => {
+    const h = harness({ trusted: true });
+    fs.mkdirSync(path.join(h.root, '.cursor'));
+    // A managed copy is there, but cursor runs another copy (`oort connect cursor --this-copy`).
+    npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+    const hc = hostContext({ io: { env: { HOME: h.root } } } as never);
+    const other = npmPrefixCopy(path.join(h.root, 'checkout'), VERSION);
+    connectHost('cursor', hc, other.main);
+    const d = await doctor(h);
+    expect(d.check('mcp', 'cursor')).toMatchObject({ status: 'info' });
+    expect(d.check('mcp', 'cursor')?.detail).toContain(
+      `from another copy at ${other.main.replace(h.root, '~')} (oort ${VERSION})`,
+    );
+    // An older copy is outdated.
+    npmPrefixCopy(path.join(h.root, 'checkout'), '0.1.0');
+    expect((await doctor(h)).check('mcp', 'cursor')).toMatchObject({
+      status: 'warn',
+      fix: 'oort connect cursor',
+    });
+  });
+
+  it('doctor.a-swapped-cursor-entry-with-a-fake-package-json-fails (PR #78 I3, probe h10)', async () => {
+    // The reviewer's probe: the entry's command swapped for a script beside a package.json that
+    // says oortmem 50.0.0, in a temp directory.
+    const h = harness();
+    fs.mkdirSync(path.join(h.root, '.cursor'));
+    const hc = hostContext({ io: { env: { HOME: h.root } } } as never);
+    const evil = path.join(h.root, 'x', 'oortmem');
+    fs.mkdirSync(path.join(evil, 'dist'), { recursive: true });
+    fs.writeFileSync(
+      path.join(evil, 'package.json'),
+      JSON.stringify({ name: 'oortmem', version: '50.0.0' }),
+    );
+    fs.writeFileSync(path.join(evil, 'dist', 'main.js'), '#!/bin/sh\necho evil\n', { mode: 0o755 });
+    connectHost('cursor', hc, path.join(evil, 'dist', 'main.js'));
+    const running = fakeBin(h);
+    const d = await doctor(h, {}, undefined, undefined, { entry: running, script: running });
+    expect(d.check('mcp', 'cursor')?.status).toBe('fail');
+    expect(d.check('mcp', 'cursor')?.detail).toContain('is in a temporary directory');
+  });
+
+  it('doctor.a-connected-entry-on-an-unsafe-running-copy-is-not-ok (PR #78 review, N3)', async () => {
+    // Exactly the entry `oort connect` writes for this copy, but this copy is in a temp dir.
+    const h = harness();
+    fs.mkdirSync(path.join(h.root, '.cursor'));
+    const running = fakeBin(h);
+    connectHost('cursor', hostContext({ io: { env: { HOME: h.root } } } as never), running);
+    const d = await doctor(h, {}, undefined, undefined, { entry: running, script: running });
+    expect(d.check('mcp', 'cursor')?.status).toBe('fail');
+    expect(d.check('mcp', 'cursor')?.detail).toContain('is in a temporary directory');
+  });
+
+  it('doctor.hook-binary-of-this-version-is-green', async () => {
+    const h = harness({ trusted: true });
     const bin = fakeBin(h);
     installHooks(path.join(h.root, '.claude', 'settings.json'), bin);
-    const d = await doctor(h);
+    const d = await doctor(h, {}, undefined, undefined, { entry: bin, script: bin });
     expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
     expect(d.check('hooks', 'claude-code bin')?.detail).toContain(VERSION);
     expect(d.check('hooks', 'claude-code node')).toBeUndefined();
@@ -608,7 +782,7 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
     hooksVersion: string = VERSION,
     opts: { managed?: boolean; homeName?: string; shell?: string } = {},
   ) {
-    const h = harness();
+    const h = harness({ trusted: true });
     // `homeName`: HOME (and ~/.oort in it) in a directory of that name, for awkward paths.
     const home = opts.homeName === undefined ? h.root : path.join(h.root, opts.homeName);
     const oortHome = opts.homeName === undefined ? h.home : path.join(home, '.oort');
@@ -659,10 +833,14 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
   it('doctor.paths-in-the-copy-line-show-control-characters-never-send-them (M1)', async () => {
     const m = machine(VERSION, { shell: '1_\u001b]0;TITLE\u0007\u001b[31mRED' });
     const d = await doctor(m.h, m.env, undefined, undefined, m.running);
-    const info = d.check('hooks', 'claude-code copy');
+    // One line for the hooks' copy and this one (PR #78 review, N5): the bin row.
+    const info = d.check('hooks', 'claude-code bin');
     expect(info?.detail).toContain('\\u{1b}[31mRED');
-    expect(d.human.io.stdout).not.toMatch(/[\u0007]|\u001b\]0;/);
-    expect(d.json.io.stdout).not.toMatch(/[\u0007\u001b]/);
+    // String checks, not a regex: oxlint flags control characters in patterns, escaped or not.
+    expect(d.human.io.stdout.includes('\u0007') || d.human.io.stdout.includes('\u001b]0;')).toBe(
+      false,
+    );
+    expect(['\u0007', '\u001b'].some((c) => d.json.io.stdout.includes(c))).toBe(false);
   });
 
   it('doctor.fix-commands-quote-a-home-with-a-space-and-shell-metacharacters (M2)', async () => {
@@ -680,12 +858,16 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
     const m = machine();
     const d = await doctor(m.h, {}, undefined, undefined, m.running);
     expect(d.check('hooks', 'claude-code')).toMatchObject({ status: 'ok' });
-    expect(d.check('hooks', 'claude-code bin')).toMatchObject({ status: 'ok' });
-    const info = d.check('hooks', 'claude-code copy');
-    expect(info).toMatchObject({ status: 'info' });
+    // One clear line (PR #78 review, N5): the bin row names the managed copy the hooks run, its
+    // version from its files, and the copy you ran. No separate info row.
+    const info = d.check('hooks', 'claude-code bin');
+    expect(info).toMatchObject({ status: 'ok' });
+    expect(d.check('hooks', 'claude-code copy')).toBeUndefined();
     expect(info?.detail).toContain(m.hooksBin.replace(m.h.root, '~'));
     expect(info?.detail).toContain(m.running.entry.replace(m.h.root, '~'));
-    expect(info?.detail).toContain(`another copy of oort ${VERSION}`);
+    expect(info?.detail).toContain(
+      `oort ${VERSION}, the managed copy (${m.hooksBin.replace(m.h.root, '~')}); you ran another copy, oort ${VERSION}, at`,
+    );
     // Nothing under hooks asks to be fixed, least of all by repointing them at fnm's link.
     for (const c of d.report.checks.filter((c) => c.group === 'hooks')) {
       expect(['ok', 'info']).toContain(c.status);

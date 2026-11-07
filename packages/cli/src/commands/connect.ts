@@ -15,6 +15,7 @@ import { emit, jsonMode } from '../output.js';
 import { uiFor, type Ui } from '../ui.js';
 import { Refusal, echo, tilde, type Ctx } from '../util.js';
 import { hookCommandPath } from './install.js';
+import { agentBinary, checkAgentPath, managedCopy } from './managed.js';
 
 /** Where the host starts stdio servers, which decides the memory scope. */
 function scopeNote(host: Host): string {
@@ -118,7 +119,7 @@ function memoryRows(host: Host, star: boolean): [string, string][] {
 export async function connectCommand(
   action: 'connect' | 'disconnect',
   args: string[],
-  opts: { dryRun?: boolean; star?: boolean },
+  opts: { dryRun?: boolean; star?: boolean; thisCopy?: boolean },
   ctx: Ctx,
 ): Promise<number> {
   const hosts = hostArgs(args);
@@ -131,17 +132,31 @@ export async function connectCommand(
       );
     }
   }
-  // Disconnect also removes an entry from an older install path, so it never needs the bin.
-  let cmd: string;
-  try {
-    cmd = hookCommandPath(ctx.io.entry);
-  } catch (e) {
-    if (action === 'connect') throw e;
-    cmd = 'oort';
-  }
   const hc = hostContext(ctx);
   const ui = uiFor(ctx.io);
   const dryRun = opts.dryRun === true;
+  // Connect writes the managed copy (~/.oort/cli) when it checks out, else this copy when it is
+  // stable; from a temporary copy the managed one is installed first (CON-114). Disconnect also
+  // removes an entry from an older install path, so it never needs the bin.
+  let cmd: string;
+  let from: 'managed' | 'running' | undefined;
+  if (action === 'connect') {
+    const bin = await agentBinary(ctx, {
+      action: `connect ${hosts.join(' ')}`,
+      dryRun,
+      say: (line) => ctx.io.out(ui.info(line)),
+      thisCopy: opts.thisCopy === true,
+    });
+    cmd = bin.path;
+    from = bin.from;
+    if (!dryRun) checkAgentPath(cmd, ctx); // the last check before any write (PR #78, I1)
+  } else {
+    try {
+      cmd = managedCopy(ctx.io.env)?.main ?? hookCommandPath(ctx.io.entry);
+    } catch {
+      cmd = 'oort';
+    }
+  }
   const oortHome = resolveHome(ctx.io.env);
   const changes: Record<string, unknown>[] = [];
   for (const host of hosts) {
@@ -163,7 +178,15 @@ export async function connectCommand(
     ctx.io.out(ui.kv(memoryRows(host, star), { indent: 2 }));
     changes[changes.length - 1]!['memory'] = star ? 'star' : 'planet';
   }
-  if (jsonMode(ctx)) emit(ctx, { action, dryRun, command: cmd, changes });
+  if (jsonMode(ctx)) {
+    emit(ctx, {
+      action,
+      dryRun,
+      command: cmd,
+      ...(from !== undefined && { binary: from }),
+      changes,
+    });
+  }
   return 0;
 }
 

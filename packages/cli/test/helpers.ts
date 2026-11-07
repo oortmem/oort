@@ -19,9 +19,109 @@ import type { Io } from '../src/io.js';
 import { createKeychain, type Keychain } from '../src/keychain.js';
 import { runCli } from '../src/program.js';
 import { resolveAgent, type WireFn, type Wired } from '../src/wire.js';
+import type { UpdateDeps } from '../src/commands/update.js';
 
 export function tmpdir(prefix = 'oort-cli-'): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+}
+
+/**
+ * Where `trustedTmpdir` makes its roots: at the top of the checkout (not inside this package, whose
+ * whole tree is walked when it runs as `--this-copy`), ignored by git, removed after each file.
+ */
+const TRUSTED_ROOT = path.join(import.meta.dirname, '..', '..', '..', '.test-homes');
+/** Shared with test/no-real-npm.ts, which removes them after each test file. */
+const ROOTS = Symbol.for('oort.test.trustedRoots');
+const trustedRoots: string[] = ((globalThis as Record<symbol, string[]>)[ROOTS] ??= []);
+process.once('exit', () => {
+  for (const r of trustedRoots) fs.rmSync(r, { recursive: true, force: true });
+});
+
+/**
+ * A throwaway root outside every temporary directory, owner-only: for tests whose HOME must be
+ * one oort trusts with the managed copy (`trustedPath`, `tempDirs`: a HOME under `/tmp` or
+ * macOS's `/var/folders` never is). Removed when the test process exits.
+ */
+export function trustedTmpdir(prefix = 'oort-trusted-'): string {
+  fs.mkdirSync(TRUSTED_ROOT, { recursive: true, mode: 0o700 });
+  fs.chmodSync(TRUSTED_ROOT, 0o700);
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(TRUSTED_ROOT, prefix)));
+  trustedRoots.push(root);
+  return root;
+}
+
+/**
+ * A directory holding a stand-in `npm` that installs nothing: it records that it ran in
+ * `<root>/NPM_RAN` and exits 1. Put it first on the PATH of any test that runs the real bin, so
+ * `oort setup`, `oort install` and `oort update` can never reach the real npm (or the network).
+ */
+export function npmTrap(root: string): { dir: string; ran: string } {
+  const dir = path.join(root, 'npm-trap');
+  const ran = path.join(root, 'NPM_RAN');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'npm'),
+    `#!/bin/sh\necho "$@" >> '${ran}'\necho 'npm-trap: tests never run the real npm' >&2\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  return { dir, ran };
+}
+
+/**
+ * An npm prefix holding oortmem `version`, as `npm i -g --prefix <prefix> oortmem` leaves it:
+ * `<prefix>/bin/oort` → `<prefix>/lib/node_modules/oortmem/dist/main.js`, whose stand-in answers
+ * `--version`. Replaces what is there. Returns the bin link and the script's realpath.
+ */
+export function npmPrefixCopy(prefix: string, version: string): { bin: string; main: string } {
+  const pkg = path.join(prefix, 'lib', 'node_modules', 'oortmem');
+  fs.mkdirSync(path.join(pkg, 'dist'), { recursive: true });
+  fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'oortmem', version }));
+  const main = path.join(pkg, 'dist', 'main.js');
+  fs.writeFileSync(main, `#!/bin/sh\necho "oort ${version}"\n`, { mode: 0o755 });
+  fs.mkdirSync(path.join(prefix, 'bin'), { recursive: true });
+  const bin = path.join(prefix, 'bin', 'oort');
+  fs.rmSync(bin, { force: true });
+  fs.symlinkSync(path.join('..', 'lib', 'node_modules', 'oortmem', 'dist', 'main.js'), bin);
+  // As npm leaves them with a 022 umask, whatever this test process's umask is: the managed
+  // copy's whole tree is checked (`trustedTree`).
+  for (const d of ['', 'bin', 'lib', 'lib/node_modules', 'lib/node_modules/oortmem']) {
+    fs.chmodSync(path.join(prefix, d), 0o755);
+  }
+  fs.chmodSync(path.join(pkg, 'dist'), 0o755);
+  fs.chmodSync(path.join(pkg, 'package.json'), 0o644);
+  fs.chmodSync(main, 0o755);
+  return { bin, main: fs.realpathSync(main) };
+}
+
+/**
+ * A fake npm for `ctx.updateDeps`: every call is recorded, and `npm i -g --prefix <p> oortmem@X`
+ * writes oortmem X into `<p>` (`npmPrefixCopy`), unless `fail` gives the output of a failure.
+ * Nothing is installed and nothing reaches the network.
+ */
+export function fakeNpm(opts: { fail?: string; leaves?: string } = {}): {
+  deps: Partial<UpdateDeps>;
+  calls: { file: string; args: readonly string[]; cwd: string }[];
+} {
+  const calls: { file: string; args: readonly string[]; cwd: string }[] = [];
+  let clock = 0;
+  return {
+    calls,
+    deps: {
+      run: async (file, args, _env, cwd) => {
+        calls.push({ file, args, cwd });
+        if (opts.fail !== undefined) return { code: 1, output: opts.fail };
+        const prefix = args[args.indexOf('--prefix') + 1] ?? '';
+        const version = opts.leaves ?? /oortmem@(\S+)/.exec(args.join(' '))?.[1] ?? '';
+        npmPrefixCopy(prefix, version);
+        return { code: 0, output: 'added 1 package\n' };
+      },
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      now: () => clock,
+      platform: 'darwin',
+    },
+  };
 }
 
 export interface FakeIo extends Io {
@@ -148,8 +248,11 @@ export const fakeWriter: MemoryWriter = {
  * `adapters: false` the wire reports every adapter missing, as without keys; `keyStore: false`
  * wires as on a system where no key can be stored (`OORT_NO_KEYCHAIN=1`).
  */
-export function harness(opts: { adapters?: boolean; keyStore?: boolean } = {}): Harness {
-  const root = tmpdir();
+export function harness(
+  opts: { adapters?: boolean; keyStore?: boolean; trusted?: boolean } = {},
+): Harness {
+  // `trusted`: a root oort trusts with the managed copy (`trustedTmpdir`), not a temp directory.
+  const root = opts.trusted === true ? trustedTmpdir() : tmpdir();
   const home = path.join(root, 'oort-home');
   const cwd = path.join(root, 'project');
   fs.mkdirSync(cwd);

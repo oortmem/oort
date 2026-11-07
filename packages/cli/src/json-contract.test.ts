@@ -22,11 +22,11 @@ import {
   harness,
   memory,
   memoryKeychain,
+  npmTrap,
   tmpdir,
   writeTranscript,
 } from '../test/helpers.js';
 import { writeCloudSettings } from './cloud.js';
-import { npmGlobalInstall } from './commands/install.js';
 import { createKeychain, type Keychain } from './keychain.js';
 import { commandPath, hasJsonOption } from './output.js';
 import { program, runCli } from './program.js';
@@ -56,6 +56,7 @@ const CONTRACT = [
   'explain',
   'revalidate',
   'observe',
+  'remember',
   'inspect',
   'stats',
   'consolidate',
@@ -161,7 +162,14 @@ function bad(r: Result, command: string, code: string, exit = 2) {
   expect(env['schema']).toBe('oort.v1');
   expect(env['ok']).toBe(false);
   expect(env['command']).toBe(command);
-  const error = env['error'] as { code: string; message: string; fix: unknown; exitCode: number };
+  const error = env['error'] as {
+    code: string;
+    message: string;
+    fix: unknown;
+    exitCode: number;
+    retryable?: boolean;
+    retryAfter?: number;
+  };
   expect(error.code).toBe(code);
   expect(error.exitCode).toBe(r.code);
   expect(error.message.length).toBeGreaterThan(0);
@@ -261,8 +269,10 @@ function binEnv() {
   const cwd = path.join(root, 'work');
   fs.mkdirSync(home);
   fs.mkdirSync(cwd);
+  // The real npm is never run from a test: a stand-in comes first on PATH (CON-114).
+  const trap = npmTrap(root);
   const env = {
-    PATH: process.env['PATH'] ?? '',
+    PATH: `${trap.dir}${path.delimiter}${process.env['PATH'] ?? ''}`,
     HOME: home,
     OORT_HOME: path.join(home, '.oort'),
     OORT_NO_KEYCHAIN: '1',
@@ -374,6 +384,10 @@ describe('oort.v1: memories (local store)', () => {
     expect(o.outcome).toBe('added');
     expect(typeof o.memoryId).toBe('string');
     bad(await run(['observe', '--user', 'x', '--json']), 'observe', 'usage');
+    const m = ok(await run(['remember', 'The staging port is 5582.', '--json']), 'remember');
+    expect(m.results).toEqual([{ fact: 0, outcome: 'added', id: expect.any(String) }]);
+    expect(ok(await run(['remember', 'x', '--dry-run', '--json']), 'remember').dryRun).toBe(true);
+    bad(await run(['remember', '', '--json']), 'remember', 'usage');
   });
 
   it('observe without keys: needs-key, with the free local fix', async () => {
@@ -1091,14 +1105,6 @@ describe('oort.v1: review fixes', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toBe('');
     expect(r.stderr).toContain('added 1 package');
-    // `setup --install-global` runs npm that way.
-    const calls: [string, string[]][] = [];
-    const code = await npmGlobalInstall({}, async (file, args) => {
-      calls.push([file, args]);
-      return 0;
-    }).install();
-    expect(code).toBe(0);
-    expect(calls).toEqual([['npm', ['i', '-g', 'oortmem']]]);
     // No spawn in the CLI inherits stdout any more.
     const src = path.join(import.meta.dirname);
     const files = fs
@@ -1229,6 +1235,47 @@ describe('oort.v1: review fixes', () => {
     const mcpJson = await b.run(['mcp'], { input: `${rpc}\n`, env: json });
     expect(mcp.stdout).toContain('"tools"');
     expect(mcpJson.stdout).toBe(mcp.stdout);
+  });
+});
+
+describe('oort.v1 errors: retryable and retryAfter where they are known', () => {
+  it('a rate limit is retryable, with the Retry-After seconds the service sent', async () => {
+    const e = cloudEnv();
+    e.cloud.fail = { 'POST /v1/recall': { status: 429, code: 'rate_limit', retryAfter: '7' } };
+    const err = bad(await e.run(['recall', 'deploy', '--json']), 'recall', 'refused');
+    expect(err).toMatchObject({ retryable: true, retryAfter: 7 });
+  });
+
+  it('a service that is down or unreachable is retryable; retryAfter only when it was sent', async () => {
+    const e = cloudEnv();
+    e.cloud.fail = { 'POST /v1/recall': { status: 503, code: 'unavailable', retryAfter: '3' } };
+    const busy = bad(await e.run(['recall', 'deploy', '--json']), 'recall', 'network');
+    expect(busy).toMatchObject({ retryable: true, retryAfter: 3 });
+    e.cloud.fail = { 'POST /v1/recall': 'network' };
+    const down = bad(await e.run(['recall', 'deploy', '--json']), 'recall', 'network');
+    expect(down.retryable).toBe(true);
+    expect(down).not.toHaveProperty('retryAfter');
+  });
+
+  it('a local store locked by another process is retryable (internal, exit 1)', async () => {
+    const { h, run } = local();
+    h.wire = async () => {
+      throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+    };
+    const busy = bad(await run(['stats', '--json']), 'stats', 'internal', 1);
+    expect(busy.retryable).toBe(true);
+    expect(busy).not.toHaveProperty('retryAfter');
+  });
+
+  it('an error that a retry will not fix has neither field (they are optional)', async () => {
+    const e = cloudEnv();
+    e.cloud.fail = { 'POST /v1/recall': 402 };
+    const lapsed = bad(await e.run(['recall', 'deploy', '--json']), 'recall', 'refused');
+    expect(lapsed).not.toHaveProperty('retryable');
+    expect(lapsed).not.toHaveProperty('retryAfter');
+    const { run } = local();
+    const usage = bad(await run(['recall', 'x', '--as-of', 'nope', '--json']), 'recall', 'usage');
+    expect(Object.keys(usage).sort()).toEqual(['code', 'exitCode', 'fix', 'message']);
   });
 });
 

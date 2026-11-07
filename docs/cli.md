@@ -22,14 +22,136 @@ the docs use `oort`. From a clone of the repo, use
 connects the agents, offers an import, runs a quick check, and lists what
 changed and how to undo it. Every step can be skipped.
 
-The connect step writes the realpath of the installed `oort` bin into agent
-config files. A copy in a temporary package cache (`npx`, `pnpm dlx`) or a temp
-directory is never written, because that path disappears once the run ends,
-and neither is `npx -y oortmem`, which is slow to start and needs the network.
-Under `npx oortmem setup`, setup offers to run `npm i -g oortmem` first and
-then writes the global install's path (see the connect step below).
+The connect step installs the [managed copy](#the-managed-copy-oortcli) in
+`~/.oort/cli` and writes its path into agent config files, so the hooks and
+MCP entries run a copy that stays put. `npx oortmem setup` works the same way.
 
 To update later, run `oort update` (see [Updating](#updating-oort-update)).
+
+### The managed copy: `~/.oort/cli`
+
+The Claude Code hooks and the MCP entries run one copy of oort, the managed
+copy, installed with:
+
+```sh
+npm i -g --prefix ~/.oort/cli oortmem
+```
+
+Agents run its `~/.oort/cli/lib/node_modules/oortmem/dist/main.js` by that
+path (`$OORT_HOME/cli` when `OORT_HOME` is set). A global install under a Node
+version manager (nvm, fnm, Volta, asdf, mise, nodenv, nvs) moves when you
+change Node, fnm's
+`fnm_multishells` links last one shell, and npx keeps its copy in a cache. The
+managed copy belongs to Oort and stays where it is. `oort update` keeps it
+current.
+
+- **`oort setup`** installs it when you connect an agent, unless there is
+  already one of this version or newer. It runs `npm i -g --prefix
+  ~/.oort/cli oortmem@<this version> --prefer-online` the way `oort update`
+  does: the first `npm` on `PATH` by its absolute path, no shell, from your
+  home directory, with npm's delay after a release waited out. It counts the
+  install only after checking that `~/.oort/cli/bin/oort` resolves to that
+  release. An older managed copy is brought up to this version.
+- **`oort install claude-code`**, **`oort connect <host>`** and
+  **`oort install <host>`** write the managed copy's path when it is there,
+  checks out and is this version or newer. Otherwise they write the copy you
+  ran, when it stays put. They never write a copy in the npx or pnpm dlx
+  cache, a temp directory, `fnm_multishells` or a version manager's
+  directory. From such a copy, `npx oortmem install claude-code` say, they
+  install the managed copy first: the same `oortmem` package from npm's
+  registry, at the version you ran, without a separate question (one line says
+  so; `oort connect --dry-run` installs nothing and shows where the managed copy
+  would be). When they cannot (no `npm` on `PATH`, npm fails, Windows), they
+  refuse (exit 2) and name the commands: `npm i -g --prefix ~/.oort/cli
+  oortmem`, then `~/.oort/cli/bin/oort install claude-code`.
+- **Only a copy nobody else can change.** Agents run the path oort writes on
+  every prompt, so before it reuses the managed copy, and again right before
+  any config is written, oort walks the path from `/` down to `main.js`. The
+  trust boundary is: nothing that anyone other than you (or root) can write.
+  Paths that are yours and writable only by you are trusted; write access to
+  your own files is already full compromise of your account.
+  - inside `OORT_HOME` (the managed copy), every directory and the file must
+    be yours (or root's, above your home directory) and not writable by group
+    or others;
+  - the whole installed copy is checked too, not only the path to `main.js`:
+    every file, directory and link under `~/.oort/cli` (`bin/`, the package,
+    its `dist/`, and every package in `lib/node_modules`, where Node looks for
+    what is missing) must be yours with no group or other write, and a link
+    may point only inside `~/.oort/cli`, judged by what the kernel opens (its native realpath) and by its own owner, and its text must point inside too, and may contain `..` only in the shapes npm writes (`node_modules/.bin/<x>` → `../<pkg>/…`, `bin/<x>` → `../lib/node_modules/<pkg>/…`). The walk stops at 20,000 entries,
+    reads only file metadata, and runs once per command (setup, install,
+    connect, doctor), never in a hook. npm installs the copy with a umask of at
+    least `022`, so its files never come out group- or world-writable;
+  - for the copy you ran, when it is written instead (the fallback and
+    `--this-copy`), every step must be yours or root's and not writable by
+    others, sticky or not. Group write is refused inside your home directory.
+    Outside it, it is allowed only from a group whose members can already
+    become root: `admin` (80) or `wheel` (0) on macOS, as for Homebrew's
+    `/opt/homebrew/lib`; `root`, `sudo`, `wheel`, `admin` or your own private
+    group on Linux. Never `staff`, every macOS account's group.
+    Everything Node loads from it is walked by the same rules: the package it
+    belongs to (the nearest directory whose `package.json` is `oortmem`'s), any
+    directory a link in it leads to, and every package it needs at run time
+    (`dependencies`, optional ones and installed peers, found the way Node
+    finds them, recursively; dev dependencies are left out). That is about
+    9,500 entries and 0.3 s from a pnpm checkout of this repository, with a cap
+    of 50,000;
+  - every `node_modules` Node searches above the managed copy, or above a copy
+    of your own and every package of its run-time closure (`~/.oort/node_modules`,
+    `~/node_modules`, …), must pass the same path rules, and everything in it
+    is walked, and so is every directory a link in them leads to (once, by its
+    real path): Node loads from them whatever is not found nearer. Inside
+    `OORT_HOME` the strict rules apply, elsewhere the lenient ones, under one
+    cap shared with the rest of the check (100,000 entries for a copy of your
+    own). Past the cap the fix is `move <dir> aside`; oort never `chmod`s or
+    `chown`s what is in such a folder. A passing folder is remembered for the
+    process;
+  - Node's global folders are treated the same way, checked and walked:
+    each absolute `NODE_PATH` entry, `~/.node_modules`, `~/.node_libraries` and
+    `<node prefix>/lib/node`. oortmem is an ES module, and ES modules ignore
+    `NODE_PATH`; some of its CommonJS dependencies do not, so the folders count.
+    The hook command oort writes does not clear `NODE_PATH`, so hooks inherit
+    whatever the agent was started with; oort checks the value it sees when it
+    runs. A relative `NODE_PATH` entry is refused (Node resolves it against
+    the hook's working directory, such as a repo an agent is working in): make
+    it absolute or remove it;
+  - every directory a link leads to inside a copy of your own is a package of
+    that closure: its real path gets the same ancestor `node_modules` check,
+    and its `package.json` run-time dependencies are walked as well.
+
+  A temporary directory never counts: `os.tmpdir()`, `$TMPDIR`, `/tmp`,
+  `/private/tmp`, `/var/tmp`, `/private/var/tmp` and `/dev/shm`. A managed
+  copy that fails is never reused, installed over, repaired in place or
+  worked around: setup skips connecting, `oort install` and `oort connect`
+  refuse (exit 2), and `oort doctor` fails, each naming the first path that
+  fails. The fix always removes the copy and installs it again, never `chmod`
+  or `chown` on it, which would adopt whatever someone else put there:
+
+  ```
+  The managed copy in ~/.oort/cli is not safe for agents to run: /Users/you/.oort/cli/lib/node_modules/commander/index.js can be written by group or others (fix: rm -r ~/.oort/cli && oort setup). Oort never repairs a copy like this in place, since what is in it may not be what npm installed.
+  ```
+
+  When `OORT_HOME` itself is yours but too open, the fix removes the copy
+  first, then tightens it: `rm -r ~/.oort/cli && chmod go-w ~/.oort && oort
+  setup`. An `OORT_HOME` that is a symlink to nothing, someone else's, or in a
+  temporary directory gets no managed copy: setup falls back as below, and
+  `oort install` from npx refuses with the same sentence. A directory of
+  someone else's is never offered a `chown`: use one of your own.
+- **Without it**, when npm is not on `PATH` or the install fails, setup falls
+  back to the copy you ran if it stays put, with a one-line warning and the
+  manual command. If the copy you ran does not stay put, setup skips
+  connecting and says what to run.
+- **Windows:** the managed copy is not set up there yet. `oort setup`,
+  `oort install` and `oort connect` skip it and write the copy you ran.
+- **`--this-copy`**, for developers testing their own build: `oort setup`,
+  `oort install <host>` and `oort connect <host>` write the copy you ran (a
+  build from a checkout, say) even when a managed copy is there, and install
+  nothing. A copy that does not stay put (a package cache, a temp directory,
+  `fnm_multishells`, a version manager) is still refused, because its path
+  breaks later whatever you intend: `This oort is in a package cache, which
+  agents would lose later, so --this-copy will not write it.` Run the command
+  again without the flag to go back to the managed copy. `oort doctor` names a
+  copy written this way in an info line, and does not fail or warn, when it
+  stays put, is yours, and is this version or newer.
 
 ## Updating: `oort update`
 
@@ -47,8 +169,8 @@ copy of oort that matters on this machine:
   `oort install claude-code` wrote, or the first `oort` on `PATH` for a bare
   `oort hook …`);
 - **this copy**, the one you ran;
-- **the managed copy** in `~/.oort/cli` (`$OORT_HOME/cli`), when there is one,
-  installed with `npm i -g --prefix ~/.oort/cli oortmem`;
+- **the managed copy** in `~/.oort/cli` (`$OORT_HOME/cli`), when there is one:
+  `oort setup` installs it (see [The managed copy](#the-managed-copy-oortcli));
 - **every other `oort` on `PATH`**; the first is what `oort` runs in this
   shell.
 
@@ -194,7 +316,10 @@ is slate blue. Where a row shows a tier with its glyph, the glyphs are `●` hot
 `◐` warm and `○` cold. A one-line confirmation (`pin`, `forget`, `project link`,
 `keys set`) is its own header.
 
-`oort` with no arguments prints the help, like `oort --help`. On a colour
+`oort` with no arguments prints the help, like `oort --help`. It groups the
+commands by purpose (Start, Memory, Agents, Cloud and sharing, Maintenance) and
+ends with an example of each common command and where these docs are. `oort
+<command> --help` prints that command's own usage and flags. On a colour
 terminal the help, the start of `oort setup` and a finished `oort login` show
 the Oort mark (a dotted spiral with a comet); nowhere else, and never in a pipe.
 
@@ -239,14 +364,15 @@ needed.
 stderr, never stdout, so it still asks with stdout piped (`oort import
 claude-code | tee log`). It refuses (exit 2) instead of asking when stdin is not
 a terminal, or when `--json` is set, and names `--yes`, the flag to pass
-instead. `setup` takes `--yes` too. Declining a question changes nothing and
+instead. `setup` takes `--yes` too, and its interactive wizard asks its
+questions on stderr as well. Declining a question changes nothing and
 exits 0. `oort hook` always exits 0.
 
 **Missing keys.** Every missing-key message gives the same three ways, in this
 order: `oort models pull` (free local embed and rerank models, no keys),
 `oort keys set <provider>` (your own key), or `oort login` (Oort Pro). Local
-models do not decide or write, so saving new memories (`observe`, `import`, the
-MCP `remember` tool) also needs a TypeSafe and an Anthropic key, or Oort Pro,
+models do not decide or write, so saving new memories (`observe`, `remember`,
+`import`, the MCP `remember` tool) also needs a TypeSafe and an Anthropic key, or Oort Pro,
 even with local models. Recall works without any of them, lexical-only. No
 message suggests `export KEY=...`, which would leave the key in your shell
 history. Without a Keychain or `credentials.json` (`OORT_NO_KEYCHAIN=1`, CI,
@@ -258,6 +384,11 @@ instead.
 echoed in an error message is scrubbed first (every known key format, Oort keys
 included, becomes `[REDACTED:<kind>]`) and then clipped to 24 characters, so a
 value in an unrecognised format shows at most its first 23 characters.
+Everything Oort saves is scrubbed on your machine before it leaves, in local
+and cloud mode: a turn, a fact or a shared text bound for Oort Cloud goes
+through the same scrubber as the local write path (the API scrubs again), and
+one that is mostly secret is skipped without any request. `oort cloud import`
+scrubs each memory again as it uploads it.
 
 **Environment.**
 
@@ -321,7 +452,8 @@ envelope instead.
   (`project-id-untrusted`, `cloud-unavailable`, `keychain-unreadable`, …),
   `partial` (`import`, exit 3), `redacted` and `embed-failed` (judgments),
   `reembed-needed`, `checksum-mismatch` and `optimize-skipped` (models),
-  `another-oort-on-path` and `version-manager-path` (`install`),
+  `another-oort-on-path` (`install`), `managed-copy-unavailable` (`setup`:
+  agents run the copy you ran instead of `~/.oort/cli`),
   `env-key-set` (`logout`), and for `forget` in Oort Cloud `still-shared`,
   `removal-requested`, `unreachable` and `shares-unknown`. The stderr line
   stays.
@@ -340,6 +472,30 @@ on stderr:
     "message": "This needs a confirmation, but --json never asks; re-run with --yes to forget it.",
     "fix": "oort forget 1b2c3d4e-… --json --yes",
     "exitCode": 2
+  }
+}
+```
+
+Two optional fields say whether trying again can help, as the SDK's
+`OortError` does: `retryable` is `true` for a network failure or a service
+that is busy or down (`network`), a rate limit (`refused`, HTTP 429) and a
+local store locked by another process (`internal`); `retryAfter` is the number
+of seconds the service asked to wait (its `Retry-After` header), when it sent
+one. Both are absent otherwise, so read a missing `retryable` as "a retry
+alone will not fix this":
+
+```json
+{
+  "schema": "oort.v1",
+  "command": "recall",
+  "ok": false,
+  "error": {
+    "code": "refused",
+    "message": "Oort Cloud limit reached (HTTP 429): … Usage is at https://oortcloud.dev/account.",
+    "fix": null,
+    "exitCode": 2,
+    "retryable": true,
+    "retryAfter": 30
   }
 }
 ```
@@ -391,6 +547,7 @@ every error that exits 1.
 ```sh
 oort recall "auth port" --json | jq '.data.memories[0].text'
 oort inspect --json | jq '.data.memories | length'
+oort remember "We deploy on Fridays." --json # { "results": [{ "fact": 0, "outcome", "id", "supersedes"?, "reason"? }] }
 oort forget 1b2c3d4e --yes --json            # { "id", "forgotten": true, "everywhere", "withdrawnFrom", "removalRequested", "unreachable", "stillShared", "constellations" }
 oort consolidate --json                      # { "promoted": [ids], "demoted", "evicted", "expired", "counts": {…}, "complete" }
 oort import claude-code --since 14d --yes --json   # { "outcome", "estimate": {…}, "imported": { "observations", "outcomes", "failedSessions" } }
@@ -398,9 +555,9 @@ oort judge record --subject … --json         # { "outcome", "id", "judgment" }
 oort judge withdraw 9f8e --yes --json        # { "id", "withdrawn": true, "changed", "by" }
 oort keys list --json                        # { "keys": [{ "provider", "envVar", "source" }] }
 oort models pull --json                      # { "models": [{ "id", "role", "downloaded", "optimized" }], "used", "config" }
-oort connect cursor --json                   # { "action", "dryRun", "command", "changes": [{ "host", "file", "changed", "diff", "backup", "memory" }] }
-oort install claude-code --json              # { "harness", "action", "file", "changed", "command", "events" }
-oort setup --yes --agents none --keys skip --json  # { "agents", "keys", "import", "demo", "changed": [{ "what", "undo" }] }
+oort connect cursor --json                   # { "action", "dryRun", "command", "binary", "changes": [{ "host", "file", "changed", "diff", "backup", "memory" }] }
+oort install claude-code --json              # { "harness", "action", "file", "changed", "command", "events", "version", "binary", "installedManaged" }
+oort setup --yes --agents none --keys skip --json  # { "agents", "keys", "import", "demo", "command", "managed", "changed": [{ "what", "undo" }] }
 oort cloud import --yes --json               # { "total", "toUpload", "uploaded", "imported", "skipped", "reembedded", … }
 oort constellation members oort-core --json  # { "members": [...] }
 oort constellation remove oort-core mb_… --yes --json   # { "constellation", "member", "removed": true }
@@ -424,7 +581,7 @@ oort setup --yes --agents claude-code,codex --keys byo --import skip
 | `--keys <mode>` | `byo`, `pro`, `local` or `skip`. | `byo` |
 | `--import <age>` | `skip`, or an age such as `14d`, `30d`, `12h` or `2w`. | `skip` |
 | `--no-demo` | Skip the remember, recall and forget check. | the check runs |
-| `--install-global` | Under `npx`: run `npm i -g oortmem` before connecting. | no install |
+| `--this-copy` | For developers testing their own build: agents run the copy you ran, not the [managed copy](#the-managed-copy-oortcli); nothing is installed. | the managed copy |
 
 On a terminal, a flag answers its question and the other steps still ask. When
 stdin or stdout is not a terminal and `--yes` is missing, setup prompts for
@@ -466,14 +623,37 @@ The steps:
    first shows the dry-run diff for every agent and asks once before writing
    any of them.
 
-   Under `npx oortmem setup` the running copy is temporary, so setup first
-   looks for a global install (`<npm prefix -g>/bin/oort`) and uses its path
-   if there is one. Otherwise it asks whether to run `npm i -g oortmem`, or,
-   with `--yes`, runs it only with `--install-global`. Without the install it
-   skips connecting and says which command to run. The npx path itself is
-   never written, and neither is `npx -y oortmem`. An agent whose file Oort will not edit (invalid JSON, or an
-   `oort` entry you wrote yourself) is reported and skipped, and the others
-   still connect.
+   The path written is the [managed copy](#the-managed-copy-oortcli) in
+   `~/.oort/cli`. When there is none of this version or newer, setup installs
+   it first, as part of the same step. On a terminal the preview lists the
+   install, `+ npm i -g --prefix ~/.oort/cli oortmem@<version>
+   --prefer-online`, and the question becomes `Install oort <version> in
+   ~/.oort/cli and write these changes?`. Declining installs nothing and
+   writes nothing. With `--yes` it installs without asking, because running
+   setup is the request to install. It prints one line before npm runs and
+   one after; npm's own output goes to stderr. If npm is missing or fails,
+   agents get the copy you ran, when it stays put, with a warning:
+
+   ```
+   ! The managed copy in ~/.oort/cli could not be installed (npm failed), so agents run this copy: /usr/local/lib/node_modules/oortmem/dist/main.js. For one that stays put: npm i -g --prefix ~/.oort/cli oortmem, then oort install claude-code.
+   ```
+
+   Under `npx oortmem setup` the copy you ran is in npx's cache, so without
+   the managed copy setup skips connecting and says what to run. The npx path
+   is never written, and neither is `npx -y oortmem`. With no agents chosen,
+   nothing is installed. On Windows the managed copy is skipped and agents run
+   the copy you ran. `--this-copy` skips it too (see the flags above).
+   `--install-global`, from before the managed copy, is
+   still accepted and does nothing. An agent whose file Oort will not edit
+   (invalid JSON, or an `oort` entry you wrote yourself) is reported and
+   skipped, and the others still connect.
+
+   With `--json`, `data.command` is the path written (or `null`),
+   `data.binary` is `managed`, `running` or `null`, and `data.managed` is `{ "prefix", "status", "version", "command", "reason" }`.
+   `status` is `installed`, `reused`, `declined`, `failed`, `unavailable`
+   (`reason`: `no-npm` or `unsupported`) or `skipped` (no agents, or
+   `reason` `this-copy`).
+   `failed` gives `reason` `failed` or `unverified`.
 4. **Import.** This step appears only when `~/.claude/projects` exists. It
    runs `oort import claude-code --since <age>`: it prints the estimate (the
    sessions, the observations and the approximate writer tokens), then asks
@@ -492,7 +672,7 @@ The steps:
 | An MCP entry in a host's config | `oort disconnect <host>` |
 | A key in the Keychain or `credentials.json` | `oort keys rm <provider>` |
 | The Oort Pro key (`oort.oort`, or its `credentials.json` entry) | `oort logout`, then revoke the key at oortcloud.dev/account |
-| A global install (`npm i -g oortmem`) | `npm rm -g oortmem` |
+| The managed copy in `~/.oort/cli` | `npm rm -g --prefix ~/.oort/cli oortmem` (after `oort uninstall claude-code` and `oort disconnect <host>`) |
 | Imported sessions | review with `oort inspect`, remove with `oort forget <id>` |
 | A new store in `~/.oort` | `rm -r ~/.oort` (deletes every memory) |
 
@@ -505,11 +685,13 @@ changed, with each undo command, and exits 1.
 oort connect cursor codex
 oort connect cursor --star         # Cursor keeps its new memories in its own Star
 oort connect vscode --dry-run      # print the diff, write nothing
+oort connect cursor --this-copy    # for developers testing their own build: this copy, not ~/.oort/cli
 oort disconnect cursor
 ```
 
 These commands add or remove one MCP server entry named `oort` in each host's
-user-level config. The entry runs the installed bin as `oort mcp --agent
+user-level config. The entry runs the [managed copy](#the-managed-copy-oortcli)
+(`~/.oort/cli`) when it checks out, else the copy you ran, as `oort mcp --agent
 <host>`, so each host acts as its own agent (see [Agents](#agents-one-planet-a-star-each)).
 Cursor and VS Code also get `--project ${workspaceFolder}`, which they replace
 with the open workspace's folder.
@@ -736,8 +918,9 @@ Every tool sets `openWorldHint: false` and has a `title`.
 `remember` runs each fact through the normal write path, exactly as
 `oort observe` builds a turn: a user turn "Remember this: <fact>" and an
 assistant turn "Noted: <fact>". The path is scrub, gate, reconcile and the
-writer. Secrets are therefore scrubbed, and a fact that is only a secret is
-skipped. A duplicate fact reinforces the existing memory, and a contradicting
+writer. Secrets are therefore scrubbed on your machine before the fact leaves
+it, in local and cloud mode, and a fact that is mostly a secret is skipped
+(reason `secret`) without being sent. A duplicate fact reinforces the existing memory, and a contradicting
 one supersedes it; the old fact is kept with its validity closed. The tool
 needs all three roles of the write path (embed, decide and write), from your
 own keys or Oort Pro. Without them it returns an error that names
@@ -767,9 +950,9 @@ up the next time the host restarts it.
 ## Claude Code hooks: `oort install` / `oort uninstall`
 
 ```sh
-oort install claude-code [--project]
+oort install claude-code [--project] [--this-copy]
 oort uninstall claude-code [--project]
-oort install <harness>      # codex, cursor, claude-desktop, gemini or vscode
+oort install <harness> [--this-copy]   # codex, cursor, claude-desktop, gemini or vscode
 oort uninstall <harness>
 ```
 
@@ -781,7 +964,24 @@ Claude Code.
 These commands add or remove the `UserPromptSubmit`, `Stop` and
 `SessionStart` hooks in `~/.claude/settings.json`, or in
 `<cwd>/.claude/settings.json` with `--project`. The hooks run
-`<bin> hook <event>`. The first change keeps a one-time backup at
+`<bin> hook <event>`. `<bin>` is the [managed copy](#the-managed-copy-oortcli)'s
+`main.js` when it checks out and is this version or newer (`Hook binary: …
+(oort 0.6.3, the managed copy: oort update keeps it current)`). Otherwise it is
+the copy you ran, when that copy stays put. From a copy in a package cache, a
+temp directory, `fnm_multishells` or a version manager, `oort install
+claude-code` installs the managed copy first:
+
+```
+• This oort is in a package cache, which agents would lose later: installing oort 0.6.3 in ~/.oort/cli first (npm i -g --prefix ~/.oort/cli oortmem@0.6.3 --prefer-online).
+```
+
+When it cannot, it refuses (exit 2) and names `npm i -g --prefix ~/.oort/cli
+oortmem`, then `~/.oort/cli/bin/oort install claude-code`. A managed copy
+older than the copy you ran is left alone: the hooks run the copy you ran, and
+a line names `oort update`. `oort uninstall` needs no bin and never installs
+anything. `--this-copy`, for developers testing their own build, writes the
+copy you ran even when a managed copy is there (see [The managed
+copy](#the-managed-copy-oortcli)); `data.binary` is then `running`. The first change keeps a one-time backup at
 `settings.json.oort-backup`. Only exact Oort entries are touched: `<bin> hook
 <event>` for this bin, or an older one (a bare `oort` bin, or a package's
 `oort/dist/main.js` or `oortmem/dist/main.js`), which is replaced in place. A
@@ -989,7 +1189,8 @@ For a container sidecar, or a backend that is not you. The same protocol on TCP,
 
 | Command | What it does | Flags |
 | --- | --- | --- |
-| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)) |
+| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)), `--limit <n>`, `--speed <speed>`, `--budget-chars <n>` (see below) |
+| `oort remember <fact>` | Saves a fact you state, as the MCP `remember` tool and the SDK's `remember()` do: one turn framed as your statement (`Remember this: <fact>`, answered `Noted: <fact>`), through the write path (scrub, gate, reconcile, writer), as the acting agent on the cwd's project. The fact is scrubbed on your machine before it leaves, in local and cloud mode; one that is mostly a secret is `skipped (secret)` and never sent. Words without quotes are joined into one fact; a fact is one line of at most 500 characters (no line or paragraph separators). The header says what happened (`added 1b2c3d4e`, `superseded 1b2c3d4e (replaces 9f8e7d6c)`, `skipped (not durable)`; an outcome Oort does not know is `unknown`). In Oort Cloud it saves in your account, as `observe` does, with a `turnRef` built from the project, the type and the fact and the UTC day, so a retry after a lost answer is not saved twice. | `--type <type>` (a hint: `semantic`, `episodic`, `procedural` or `preference`; the write path decides), `--dry-run` (reports scrubbing only; touches nothing), `--json` (`data.results`, the SDK's `RememberResult`) |
 | `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation, hydrated, and where it came from (`your Planet`, `this agent's Star`, with `(overridden)` when a narrower memory contradicts it). The header names the agent, the nodes read (`reads: your Planet, Star cursor`) and the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (agent; read; rank, id, type, tier, validFrom, text, explanation, origin; temporal; timings; degraded), `--include <levels>`, `--as-of`, `--known-at`, `--history` |
 | `oort revalidate` | Lists volatile facts (a status, a current version, an owner) that nobody confirmed within `recall.staleAfterDays`, oldest first. | `--json` (`data.memories`: id, type, text, lastConfirmed; `data.staleAfterDays`) |
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
@@ -1000,6 +1201,27 @@ For a container sidecar, or a backend that is not you. The same protocol on TCP,
 | `oort consolidate` | Expires, re-tiers and evicts memories, every project and the global ones: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each node, and inside it each project and the global memories, is re-tiered on its own. The hooks also run it about daily (see `docs/claude-code.md`); a manual run counts as that day's. | |
 | `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. Withdrawn judgments are left out. | `--out <file>` (0600), `--force`, `--format 1\|2`, `--include-withdrawn` |
 | `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. It exits 3 when some sessions stopped at a failed observation (the rest are imported; run it again to retry them). | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
+
+`oort recall` takes the SDK's recall options as flags. `--limit <n>` returns
+at most `n` memories, 1 to 50 (default `recall.returnK`, 10). `--speed fast`
+skips the reranker and `--speed lexical` calls no model at all (keyword
+search only); `full`, the default, embeds and reranks. A stage `--speed` turns
+off is not reported as degraded. `--budget-chars <n>` caps the printed
+`<oort-memory>` block at `n` characters (default `recall.budgetChars`, 6000;
+at least 30, since the block's tags take 29); the header then counts the
+memories that fit (`3 memories (of 6; --budget-chars)`, or `none fit
+--budget-chars`). `--json` lists every memory either way.
+
+```sh
+oort recall "auth port" --limit 3 --speed fast
+oort recall "auth port" --budget-chars 1500
+```
+
+```sh
+oort remember "We deploy on Fridays."
+oort remember --type preference "I prefer pnpm over npm."
+oort remember "The CI key is in 1Password." --dry-run   # what the scrubber would redact
+```
 
 Ids are full ids or unique prefixes. Every command reads the cwd's project
 plus global memories, as the acting agent (`--agent`, `OORT_AGENT`, else
@@ -1242,7 +1464,7 @@ Judgment memory is local for now: in cloud mode the `oort judge` commands refuse
 ```sh
 oort keys set voyage      # prompts for the value, hidden (Keychain on macOS, credentials.json elsewhere)
 oort keys list [--json]   # where each key comes from: env, keychain or missing
-oort keys rm voyage
+oort keys rm voyage       # also: oort keys remove voyage
 ```
 
 `oort keys create [--name <n>] [--scope <list>] [--json]` makes a new Oort Cloud key for your
@@ -1290,7 +1512,7 @@ npm i -g @oortmem/local-models   # the runtime: ONNX Runtime, about 115 MB
 oort models pull                 # download the default models (58 MB), verify, and use them
 oort models [list] [--json]      # the catalog: downloaded, in use
 oort models verify [models...]   # re-hash downloaded files against their pins
-oort models rm [models...]       # delete them and switch back to the default provider
+oort models rm [models...]       # delete them and switch back to the default provider (also: models remove)
 oort reembed [--force] [--yes]   # re-embed every memory with the configured embedder
 ```
 
@@ -1517,9 +1739,14 @@ Every adapter role picks its key on its own:
 ```sh
 oort cloud use [--local]
 oort cloud status [--json]
-oort cloud import [--dry-run] [--yes]
-oort cloud export [--out <file>] [--force]
+oort cloud import [--dry-run] [--yes]    # also: oort cloud upload
+oort cloud export [--out <file>] [--force]   # also: oort cloud download
 ```
+
+`oort cloud upload` and `oort cloud download` are the same commands as
+`oort cloud import` and `oort cloud export` (which upload this machine's store
+and download your account's, unlike `oort import claude-code`, which reads
+transcripts). Both names work; `--json` reports the first.
 
 With Oort Pro your memories can live in Oort Cloud (stored in the EU) instead of on this machine.
 Then the Claude Code hooks, `oort mcp` and the memory commands read and save in your account, and
@@ -1799,9 +2026,9 @@ Pro, with no key and a 3 second timeout.
 | Group | Checks | A problem and its fix |
 | --- | --- | --- |
 | `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. A role on a local model instead loads it and runs it once, offline. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort models pull (free local embed and rerank, no keys), oort keys set <provider>, or oort login (Oort Pro)`; for decide and write, which no local model does, the key or Oort Pro. Without a Keychain or `credentials.json`, the variable to set in your agent's environment instead. A model the relay does not serve: use the default model, or set the vendor key. |
-| `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, and the binary they run. Hooks that run another executable copy of this same version (the managed `~/.oort/cli`, while you run a copy from `PATH`) are fine: an info line names both. | Missing, or a command that is not executable: `oort install claude-code`. A hook binary whose `--version` differs from the oort you run is a warning naming both versions and the path: `oort update` (or `oort install claude-code` from the oort you want). When the oort you run lives somewhere temporary or under a Node version manager (the npx or pnpm dlx cache, a temp directory, `fnm_multishells`, `.nvm/`, `node-versions/`, `.volta/`, `.asdf/`), the fix never points the hooks at it: it names the managed copy instead, `~/.oort/cli/bin/oort install claude-code` (with `npm i -g --prefix ~/.oort/cli oortmem &&` first when there is none). A hook path under a version manager gets a note that switching Node versions will break the hooks. Unparseable settings: fix the JSON, then the same fix. |
+| `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, and the binary they run. Hooks that run the managed `~/.oort/cli` while you run a copy from `PATH` are fine: the `claude-code bin` row names both, each with its own version. A managed copy that is there but not safe to run (`managed copy`) is a fail, and its fix always removes and reinstalls it (`rm -r <prefix> && oort setup`, with `chmod go-w` on `OORT_HOME` after the `rm` when only `OORT_HOME` itself is too open): Oort never repairs a copy like this in place. | Missing, or a command that is not executable: `oort install claude-code`. Doctor never runs a hook's binary: versions come from the package's files. The managed copy (when it checks out and is safe) and the copy you ran are ok at this version or newer. Any other copy that stays put and is yours, such as your own build written with `--this-copy`, is an info line naming it ("the hooks run another copy at X (oort V)", try: `oort install claude-code` to use the managed copy, or keep it if you built it). A copy in a temp directory or package cache, or one someone else could change, is a fail. A hook binary that is older than the oort you run, or whose files do not say a version, is a warning naming both versions and the path: `oort update` (or `oort install claude-code` from the oort you want). When the oort you run lives somewhere temporary or under a Node version manager (the npx or pnpm dlx cache, a temp directory, `fnm_multishells`, `.nvm/`, `node-versions/`, `.volta/`, `.asdf/`), the fix never points the hooks at it: it names the managed copy instead, `~/.oort/cli/bin/oort install claude-code` (with `npm i -g --prefix ~/.oort/cli oortmem &&` first when there is none). Hooks that run a copy that does not stay put (under a version manager, in `fnm_multishells`, or in the npx or pnpm dlx cache) get an info line (`claude-code node`) naming the fix: with no managed copy, `oort setup, or npm i -g --prefix ~/.oort/cli oortmem and then oort install claude-code`; with one, `~/.oort/cli/bin/oort install claude-code`. Unparseable settings: fix the JSON, then the same fix. |
 | `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. Whether the hooks skip the daemon after a timeout or refusal, and until when. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
-| `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
+| `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. Entries are judged against the binary `oort connect` would write now: the managed copy when it checks out, else the copy you ran. The binary an entry runs follows the hooks' rules, also for an entry that is exactly what `oort connect` writes: the managed or the running copy is ok, another copy of yours that stays put and is this version or newer (one written with `--this-copy`) is an info line naming it, and one in a temp directory or someone else's is a fail. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
 | `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
 | `updates` | From the [update check](#the-update-notice)'s file only (doctor makes no request for it): a newer release, or that this one is the latest. Shown to people only, never in `--json`, and not when the check is off. | A newer release (information): `oort update`. |

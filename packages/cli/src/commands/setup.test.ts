@@ -3,21 +3,41 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createKeychain, type Keychain } from '../keychain.js';
 import { fakeSite } from '../../test/fake-site.js';
+import { VERSION } from '@oortmem/core';
 import {
+  data,
   fakeDecide,
   fakeIo,
+  fakeNpm,
   harness,
   memoryKeychain,
+  npmPrefixCopy,
+  npmTrap,
+  trustedTmpdir,
   writeTranscript,
   type Harness,
 } from '../../test/helpers.js';
-import { Refusal } from '../util.js';
+import type { UpdateDeps } from './update.js';
 import type { LoginDeps } from './login.js';
 import type { WireFn } from '../wire.js';
 import { setupCommand, type Choice, type Prompter, type SetupDeps } from './setup.js';
 import { TG } from '@oortmem/core/store-conformance';
 
-const CMD = '/opt/oort/node_modules/oort/dist/main.js';
+/** This copy as setup sees it: a real file in a root oort trusts (`trustedTmpdir`). */
+const CMD = (() => {
+  const main = path.join(
+    trustedTmpdir('oort-cmd-'),
+    'opt',
+    'oort',
+    'node_modules',
+    'oort',
+    'dist',
+    'main.js',
+  );
+  fs.mkdirSync(path.dirname(main), { recursive: true });
+  fs.writeFileSync(main, '#!/bin/sh\n', { mode: 0o755 });
+  return main;
+})();
 
 /** The harness, with every id the store ever received recorded (to prove the demo cleans up). */
 function recording(h: Harness): { wire: WireFn; ids: Set<string> } {
@@ -76,7 +96,7 @@ function scripted(answers: unknown[]): Prompter & { asked: string[]; said: strin
 }
 
 function setupHarness(opts: { adapters?: boolean } = {}) {
-  const h = harness(opts);
+  const h = harness({ ...opts, trusted: true });
   const rec = recording(h);
   const run = async (
     flags: Parameters<typeof setupCommand>[0],
@@ -85,6 +105,7 @@ function setupHarness(opts: { adapters?: boolean } = {}) {
     keychain: Keychain = createKeychain({ platform: 'none' }),
     login?: { siteUrl: string; deps?: LoginDeps },
     more: Partial<SetupDeps> = {},
+    machine: { env?: Record<string, string>; updateDeps?: Partial<UpdateDeps> } = {},
   ) => {
     const fio = fakeIo({
       cwd: h.cwd,
@@ -92,6 +113,7 @@ function setupHarness(opts: { adapters?: boolean } = {}) {
         HOME: h.root,
         OORT_HOME: h.home,
         ...(login !== undefined && { OORT_SITE_URL: login.siteUrl }),
+        ...machine.env,
       },
       ...io,
     });
@@ -102,6 +124,7 @@ function setupHarness(opts: { adapters?: boolean } = {}) {
         wire: rec.wire,
         keychain,
         login: { sleep: async () => {}, openBrowser: async () => false, ...login?.deps },
+        ...(machine.updateDeps !== undefined && { updateDeps: machine.updateDeps }),
       },
       { bin: () => CMD, ...(prompter !== undefined && { prompter }), ...more },
     );
@@ -400,95 +423,429 @@ describe('oort setup', () => {
     expect(p.said).toContain('oort keys rm voyage');
   });
 
-  describe('under npx', () => {
+  /**
+   * The managed copy (CON-114): `~/.oort/cli` (here `$OORT_HOME/cli`) is what agents run. Every npm
+   * is a fake (`fakeNpm`) behind a stand-in on PATH (`npmTrap`): nothing is installed, nothing
+   * reaches the network.
+   */
+  describe('the managed copy', () => {
     const NPX = '/Users/x/.npm/_npx/0a1b2c/node_modules/oortmem/dist/main.js';
-    const GLOBAL = '/opt/homebrew/lib/node_modules/oortmem/dist/main.js';
-    /** The bin as npx runs it (refused as temporary), and an npm that installs on request. */
-    function npx(installed = false) {
-      const calls: string[] = [];
-      let have = installed;
-      const deps: Partial<SetupDeps> = {
-        bin: () => {
-          throw new Refusal(`oort is running from a temporary package cache (${NPX}).`);
-        },
-        fromPackageCache: () => true,
-        globalInstall: {
-          bin: () => (have ? GLOBAL : undefined),
-          install: async () => {
-            calls.push('npm i -g oortmem');
-            have = true;
-            return 0;
-          },
-        },
-      };
-      return { deps, calls };
+    const flags = {
+      yes: true,
+      agents: 'claude-code,codex',
+      keys: 'skip',
+      import: 'skip',
+      demo: false,
+    };
+    const managedMain = (h: Harness): string =>
+      path.join(h.home, 'cli', 'lib', 'node_modules', 'oortmem', 'dist', 'main.js');
+    const hooksText = (h: Harness): string =>
+      fs.readFileSync(path.join(h.root, '.claude', 'settings.json'), 'utf8');
+    const codexText = (h: Harness): string =>
+      fs.readFileSync(path.join(h.root, '.codex', 'config.toml'), 'utf8');
+    /** `.claude` and `.codex` in HOME, and PATH holding only the stand-in npm. */
+    function agentsAndNpm(h: Harness, withNpm = true): { env: Record<string, string> } {
+      fs.mkdirSync(path.join(h.root, '.claude'), { recursive: true });
+      fs.mkdirSync(path.join(h.root, '.codex'), { recursive: true });
+      return { env: { PATH: withNpm ? npmTrap(h.root).dir : '' } };
     }
-    const cursorFile = (h: Harness): string => path.join(h.root, '.cursor', 'mcp.json');
 
-    it('setup.npx-offers-the-global-install-then-writes-its-stable-path', async () => {
+    it('setup.fresh-home-installs-the-managed-copy-and-points-agents-at-it', async () => {
+      const { h, run } = setupHarness();
+      const npm = fakeNpm();
+      const m = agentsAndNpm(h);
+      const r = await run(
+        flags,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        {},
+        {
+          ...m,
+          updateDeps: npm.deps,
+        },
+      );
+      expect(r.code, r.io.stderr).toBe(0);
+      expect(r.io.asked).toEqual([]);
+      // npm by its absolute path on PATH, the prefix named, this version, from HOME.
+      expect(npm.calls).toEqual([
+        {
+          file: path.join(h.root, 'npm-trap', 'npm'),
+          args: [
+            'i',
+            '-g',
+            '--prefix',
+            path.join(h.home, 'cli'),
+            `oortmem@${VERSION}`,
+            '--prefer-online',
+          ],
+          cwd: h.root,
+        },
+      ]);
+      expect(hooksText(h)).toContain(`${managedMain(h)} hook Stop`);
+      expect(hooksText(h)).not.toContain(CMD);
+      expect(codexText(h)).toContain(managedMain(h));
+      const out = r.io.stdout;
+      expect(out).toContain(
+        `Installing oort ${VERSION} in ~/oort-home/cli, the copy agents run: npm i -g --prefix ~/oort-home/cli oortmem@${VERSION} --prefer-online`,
+      );
+      expect(out).toContain(`Installed oort ${VERSION} in ~/oort-home/cli: agents run it`);
+      expect(out).toContain('npm rm -g --prefix ~/oort-home/cli oortmem');
+      // OORT_HOME is created owner-only before npm writes into it.
+      expect(fs.statSync(h.home).mode & 0o077).toBe(0);
+    });
+
+    it('setup.reuses-a-managed-copy-at-this-version-with-no-npm-call', async () => {
+      const { h, run } = setupHarness();
+      const npm = fakeNpm();
+      const m = agentsAndNpm(h);
+      const managed = npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+      const r = await run(
+        flags,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        {},
+        {
+          ...m,
+          updateDeps: npm.deps,
+        },
+      );
+      expect(r.code, r.io.stderr).toBe(0);
+      expect(npm.calls).toEqual([]);
+      expect(hooksText(h)).toContain(`${managed.main} hook Stop`);
+      expect(r.io.stdout).toContain(
+        `Agents run the managed copy in ~/oort-home/cli (oort ${VERSION})`,
+      );
+      expect(r.io.stdout).not.toContain('npm rm -g');
+    });
+
+    it('setup.an-older-managed-copy-is-brought-to-this-version', async () => {
+      const { h, run } = setupHarness();
+      const npm = fakeNpm();
+      const m = agentsAndNpm(h);
+      npmPrefixCopy(path.join(h.home, 'cli'), '0.0.1');
+      const r = await run(
+        flags,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        {},
+        {
+          ...m,
+          updateDeps: npm.deps,
+        },
+      );
+      expect(r.code, r.io.stderr).toBe(0);
+      expect(npm.calls.map((c) => c.args[4])).toEqual([`oortmem@${VERSION}`]);
+      expect(hooksText(h)).toContain(managedMain(h));
+    });
+
+    it('setup.without-npm-falls-back-to-this-copy-with-a-warning', async () => {
+      const { h, run } = setupHarness();
+      const m = agentsAndNpm(h, false);
+      const r = await run(flags, {}, undefined, undefined, undefined, {}, m);
+      expect(r.code, r.io.stderr).toBe(0);
+      expect(hooksText(h)).toContain(`${CMD} hook Stop`);
+      expect(codexText(h)).toContain(CMD);
+      expect(r.io.stdout).toContain(
+        `The managed copy in ~/oort-home/cli cannot be installed (npm is not on PATH), so agents run this copy: ${CMD}. For one that stays put: npm i -g --prefix ~/oort-home/cli oortmem, then oort install claude-code.`,
+      );
+      expect(fs.existsSync(path.join(h.home, 'cli'))).toBe(false);
+    });
+
+    it('setup.a-failing-npm-falls-back-to-this-copy-with-a-warning', async () => {
+      const { h, run } = setupHarness();
+      const npm = fakeNpm({ fail: 'npm ERR! code E404\n' });
+      const m = agentsAndNpm(h);
+      const r = await run(
+        flags,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        {},
+        {
+          ...m,
+          updateDeps: npm.deps,
+        },
+      );
+      expect(r.code, r.io.stderr).toBe(0);
+      expect(npm.calls).toHaveLength(1); // not ETARGET: no retry
+      expect(hooksText(h)).toContain(`${CMD} hook Stop`);
+      expect(r.io.stdout).toContain(
+        'The managed copy in ~/oort-home/cli could not be installed (npm failed), so agents run this copy',
+      );
+      expect(r.io.stdout).not.toContain('npm rm -g');
+    });
+
+    it('setup.npm-that-leaves-another-version-is-not-trusted', async () => {
+      const { h, run } = setupHarness();
+      const npm = fakeNpm({ leaves: '0.0.1' });
+      const m = agentsAndNpm(h);
+      const r = await run(
+        flags,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        {},
+        {
+          ...m,
+          updateDeps: npm.deps,
+        },
+      );
+      expect(r.code, r.io.stderr).toBe(0);
+      expect(hooksText(h)).toContain(`${CMD} hook Stop`);
+      expect(r.io.stdout).toContain(`does not hold oortmem ${VERSION}`);
+    });
+
+    it('setup.a-transient-running-copy-is-never-written', async () => {
+      const unstable = { unstable: () => 'a package cache', bin: () => NPX };
+      // With npm: the managed copy is installed, and agents run it.
+      const a = setupHarness();
+      const npm = fakeNpm();
+      const ma = agentsAndNpm(a.h);
+      const ok = await a.run(flags, {}, undefined, undefined, undefined, unstable, {
+        ...ma,
+        updateDeps: npm.deps,
+      });
+      expect(ok.code, ok.io.stderr).toBe(0);
+      expect(hooksText(a.h)).toContain(managedMain(a.h));
+      expect(hooksText(a.h)).not.toContain('_npx');
+      expect(codexText(a.h)).not.toContain('_npx');
+      // Without npm: nothing is connected, and setup says what to run.
+      const b = setupHarness();
+      const mb = agentsAndNpm(b.h, false);
+      const skipped = await b.run(flags, {}, undefined, undefined, undefined, unstable, mb);
+      expect(skipped.code).toBe(0);
+      expect(fs.existsSync(path.join(b.h.root, '.claude', 'settings.json'))).toBe(false);
+      expect(fs.existsSync(path.join(b.h.root, '.codex', 'config.toml'))).toBe(false);
+      expect(skipped.io.stdout).toContain(
+        'Skipped connecting: This oort is in a package cache, which agents would lose later. The managed copy cannot be installed (npm is not on PATH): run npm i -g --prefix ~/oort-home/cli oortmem, then ~/oort-home/cli/bin/oort setup.',
+      );
+      // npm failing: the same, never the npx path.
+      const c = setupHarness();
+      const mc = agentsAndNpm(c.h);
+      const failed = await c.run(flags, {}, undefined, undefined, undefined, unstable, {
+        ...mc,
+        updateDeps: fakeNpm({ fail: 'npm ERR! network\n' }).deps,
+      });
+      expect(failed.code).toBe(0);
+      expect(fs.existsSync(path.join(c.h.root, '.claude', 'settings.json'))).toBe(false);
+      expect(failed.io.stdout).toContain('could not be installed (npm failed)');
+    });
+
+    it('setup.json-from-npx-installs-the-managed-copy-and-reports-it', async () => {
+      // Through the CLI, as `npx oortmem setup --yes … --json` runs: the entry is in npx's cache.
+      const h = harness({ trusted: true });
+      fs.mkdirSync(path.join(h.root, '.claude'));
+      const npx = path.join(h.root, '.npm', '_npx', '6a1f2b', 'node_modules', 'oortmem', 'dist');
+      fs.mkdirSync(npx, { recursive: true });
+      fs.writeFileSync(path.join(npx, 'main.js'), '#!/bin/sh\n', { mode: 0o755 });
+      const npm = fakeNpm();
+      const r = await h.run(
+        ['setup', '--yes', '--agents', 'claude-code', '--keys', 'skip', '--no-demo', '--json'],
+        {
+          env: { HOME: h.root, OORT_HOME: h.home, PATH: npmTrap(h.root).dir },
+          entry: path.join(npx, 'main.js'),
+        },
+        undefined,
+        { updateDeps: npm.deps },
+      );
+      expect(r.code, r.io.stderr).toBe(0);
+      expect(r.io.asked).toEqual([]);
+      const d = data(r.io.stdout, 'setup') as {
+        command: string;
+        managed: Record<string, unknown>;
+        changed: { what: string }[];
+      };
+      expect(d.command).toBe(
+        path.join(h.home, 'cli', 'lib', 'node_modules', 'oortmem', 'dist', 'main.js'),
+      );
+      expect(d.managed).toEqual({
+        prefix: path.join(h.home, 'cli'),
+        status: 'installed',
+        version: VERSION,
+        command: `npm i -g --prefix ~/oort-home/cli oortmem@${VERSION} --prefer-online`,
+        reason: null,
+      });
+      expect(d.changed.map((c) => c.what)).toContain(
+        `installed oort ${VERSION} in ~/oort-home/cli (the copy agents run)`,
+      );
+      // stdout is the envelope alone; the human lines (and npm's) went to stderr.
+      expect(r.io.stdout).not.toContain('Installed oort');
+      expect(r.io.stderr).toContain('Installed oort');
+      expect(fs.readFileSync(path.join(h.root, '.claude', 'settings.json'), 'utf8')).not.toContain(
+        '_npx',
+      );
+      // No npm: the envelope says so, and nothing points at npx's copy.
+      const h2 = harness({ trusted: true });
+      fs.mkdirSync(path.join(h2.root, '.claude'));
+      const r2 = await h2.run(
+        ['setup', '--yes', '--agents', 'claude-code', '--keys', 'skip', '--no-demo', '--json'],
+        { env: { HOME: h2.root, OORT_HOME: h2.home, PATH: '' }, entry: path.join(npx, 'main.js') },
+      );
+      expect(r2.code, r2.io.stderr).toBe(0);
+      const d2 = data(r2.io.stdout, 'setup') as { command: null; managed: Record<string, unknown> };
+      expect(d2.command).toBeNull();
+      expect(d2.managed).toMatchObject({ status: 'unavailable', reason: 'no-npm' });
+    });
+
+    it('setup.json-reports-the-fallback-as-a-warning', async () => {
+      const h = harness({ trusted: true });
+      fs.mkdirSync(path.join(h.root, '.claude'));
+      const r = await h.run(
+        ['setup', '--yes', '--agents', 'claude-code', '--keys', 'skip', '--no-demo', '--json'],
+        { env: { HOME: h.root, OORT_HOME: h.home, PATH: '' } },
+      );
+      // Not running as the bin and no npm: nothing to connect with, and no warning to give.
+      expect(r.code, r.io.stderr).toBe(0);
+      const env = JSON.parse(r.io.stdout) as { warnings: { code: string }[] };
+      expect(env.warnings.map((w) => w.code)).not.toContain('managed-copy-unavailable');
+    });
+
+    it('setup.interactive-asks-once-for-the-install-and-the-writes', async () => {
       const { h, run } = setupHarness();
       fs.mkdirSync(path.join(h.root, '.cursor'));
-      const n = npx();
-      // agents; keys: skip; install globally: yes; write: yes; demo: no.
-      const p = scripted([['cursor'], 'skip', true, true, false]);
+      const env = { PATH: npmTrap(h.root).dir };
+      // agents; keys: skip; install and write: yes; demo: no.
+      const npm = fakeNpm();
+      const p = scripted([['cursor'], 'skip', true, false]);
+      const yes = await run(
+        { import: 'skip' },
+        { tty: true, stdoutTTY: true },
+        p,
+        undefined,
+        undefined,
+        {},
+        {
+          env,
+          updateDeps: npm.deps,
+        },
+      );
+      expect(yes.code, yes.io.stderr).toBe(0);
+      expect(p.asked).toContain(
+        `Install oort ${VERSION} in ~/oort-home/cli and write these changes?`,
+      );
+      expect(p.asked.filter((q) => q.includes('npm'))).toEqual([]);
+      // The preview named the install and the managed path before the question.
+      expect(p.said).toContain(
+        `+ npm i -g --prefix ~/oort-home/cli oortmem@${VERSION} --prefer-online`,
+      );
+      expect(p.said).toContain(
+        path.join(h.home, 'cli', 'lib', 'node_modules', 'oortmem', 'dist', 'main.js'),
+      );
+      expect(npm.calls).toHaveLength(1);
+      expect(fs.readFileSync(path.join(h.root, '.cursor', 'mcp.json'), 'utf8')).toContain(
+        path.join(h.home, 'cli'),
+      );
+    });
+
+    it('setup.interactive-declining-installs-nothing-and-writes-nothing', async () => {
+      const { h, run } = setupHarness();
+      fs.mkdirSync(path.join(h.root, '.cursor'));
+      const npm = fakeNpm();
+      const p = scripted([['cursor'], 'skip', false, false]);
       const r = await run(
         { import: 'skip' },
         { tty: true, stdoutTTY: true },
         p,
         undefined,
         undefined,
-        n.deps,
+        {},
+        {
+          env: { PATH: npmTrap(h.root).dir },
+          updateDeps: npm.deps,
+        },
       );
       expect(r.code).toBe(0);
-      expect(p.asked.some((q) => q.includes('npm i -g oortmem'))).toBe(true);
-      expect(n.calls).toEqual(['npm i -g oortmem']);
-      const text = fs.readFileSync(cursorFile(h), 'utf8');
-      expect(text).toContain(GLOBAL);
-      expect(text).not.toContain('_npx');
-      expect(text).not.toContain('npx');
-      expect(p.said).toContain('npm rm -g oortmem');
+      expect(npm.calls).toEqual([]);
+      expect(fs.existsSync(path.join(h.home, 'cli'))).toBe(false);
+      expect(fs.existsSync(path.join(h.root, '.cursor', 'mcp.json'))).toBe(false);
+      expect(p.said).toContain('Nothing installed, and nothing changed in any agent config.');
     });
 
-    it('setup.npx-with-yes-installs-only-with-the-flag', async () => {
+    it('setup.with-no-agents-installs-nothing', async () => {
       const { h, run } = setupHarness();
-      fs.mkdirSync(path.join(h.root, '.cursor'));
-      const n = npx();
-      const flags = { yes: true, agents: 'cursor', keys: 'skip', import: 'skip', demo: false };
-      const skipped = await run(flags, {}, undefined, undefined, undefined, n.deps);
-      expect(skipped.code).toBe(0);
-      expect(n.calls).toEqual([]);
-      expect(skipped.io.stdout).toContain('npm i -g oortmem');
-      expect(skipped.io.stdout).toContain('--install-global');
-      expect(fs.existsSync(cursorFile(h))).toBe(false);
-
-      const ran = await run(
-        { ...flags, installGlobal: true },
-        {},
-        undefined,
-        undefined,
-        undefined,
-        n.deps,
-      );
-      expect(ran.code).toBe(0);
-      expect(n.calls).toEqual(['npm i -g oortmem']);
-      expect(fs.readFileSync(cursorFile(h), 'utf8')).toContain(GLOBAL);
-    });
-
-    it('setup.npx-reuses-an-existing-global-install', async () => {
-      const { h, run } = setupHarness();
-      fs.mkdirSync(path.join(h.root, '.cursor'));
-      const n = npx(true);
+      const npm = fakeNpm();
       const r = await run(
-        { yes: true, agents: 'cursor', keys: 'skip', import: 'skip', demo: false },
+        { ...flags, agents: 'none' },
         {},
         undefined,
         undefined,
         undefined,
-        n.deps,
+        {},
+        {
+          env: { PATH: npmTrap(h.root).dir },
+          updateDeps: npm.deps,
+        },
       );
       expect(r.code).toBe(0);
-      expect(n.calls).toEqual([]);
-      expect(fs.readFileSync(cursorFile(h), 'utf8')).toContain(GLOBAL);
+      expect(npm.calls).toEqual([]);
+    });
+
+    it('setup.this-copy-writes-this-copy-and-installs-nothing', async () => {
+      const { h, run } = setupHarness();
+      const npm = fakeNpm();
+      const m = agentsAndNpm(h);
+      npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
+      const r = await run(
+        { ...flags, thisCopy: true },
+        {},
+        undefined,
+        undefined,
+        undefined,
+        {},
+        {
+          ...m,
+          updateDeps: npm.deps,
+        },
+      );
+      expect(r.code, r.io.stderr).toBe(0);
+      expect(npm.calls).toEqual([]);
+      expect(hooksText(h)).toContain(`${CMD} hook Stop`);
+      expect(codexText(h)).toContain(CMD);
+      expect(r.io.stdout).toContain(
+        `--this-copy: agents run this copy, ${CMD}, not the managed copy in ~/oort-home/cli.`,
+      );
+      // From a transient copy it is refused all the same: nothing connected, nothing installed.
+      const b = setupHarness();
+      const mb = agentsAndNpm(b.h);
+      const npmB = fakeNpm();
+      const t = await b.run(
+        { ...flags, thisCopy: true },
+        {},
+        undefined,
+        undefined,
+        undefined,
+        { unstable: () => 'a package cache', bin: () => '/x/_npx/1/oortmem/dist/main.js' },
+        { ...mb, updateDeps: npmB.deps },
+      );
+      expect(t.code).toBe(0);
+      expect(npmB.calls).toEqual([]);
+      expect(fs.existsSync(path.join(b.h.root, '.claude', 'settings.json'))).toBe(false);
+      expect(t.io.stdout).toContain(
+        'Skipped connecting: This oort is in a package cache, which agents would lose later, so --this-copy will not write it.',
+      );
+    });
+
+    it('setup.install-global-is-accepted-and-changes-nothing', async () => {
+      const h = harness({ trusted: true });
+      const r = await h.run([
+        'setup',
+        '--yes',
+        '--agents',
+        'none',
+        '--keys',
+        'skip',
+        '--no-demo',
+        '--install-global',
+      ]);
+      expect(r.code, r.io.stderr).toBe(0);
     });
   });
 });

@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -55,12 +54,23 @@ import {
 } from '../util.js';
 import { hostContext } from './connect.js';
 import { VERSION } from '@oortmem/core';
-import { hookBinaryOf, hookCommandPath, settingsFile, versionManagerOf } from './install.js';
+import { hookBinaryOf, hookCommandPath, settingsFile, unstableCopy } from './install.js';
+
+export { unstableCopy };
 import { binPath } from '../io.js';
 import { compareVersions } from '../serve-protocol.js';
 import { availableUpdate, noticeText, readUpdateCache, updateCheckOff } from '../update-check.js';
-import { managedPrefixFor } from './update.js';
-import * as os from 'node:os';
+import { managedPrefixFor, nearestPackageVersion } from './update.js';
+import {
+  inspectManaged,
+  managedCopy,
+  managedIsCurrent,
+  manualInstall,
+  copyTree,
+  runningUnstable,
+  shellPath,
+} from './managed.js';
+import { tempDirs, trustedPath, untrustedText } from '../trust.js';
 import { SKIP_FILE, callDaemon, clearSkip, readSkip } from '../serve-client.js';
 import { socketPathFor } from '../serve-protocol.js';
 
@@ -255,35 +265,6 @@ async function keyChecks(ctx: Ctx): Promise<{ checks: Check[]; relayed: boolean 
 }
 
 /**
- * Why the running copy is no place to point the hooks at, or undefined when it is one: a package
- * runner's cache (npx, pnpm dlx), a temp directory, fnm's per-shell link, or a Node version
- * manager (switching Node versions breaks it). `entry` is the path as typed, `real` its realpath.
- */
-export function unstableCopy(
-  entry: string | undefined,
-  real: string | undefined,
-  tmp: string = realTmp(),
-): string | undefined {
-  const paths = [entry, real].filter((p): p is string => p !== undefined);
-  const segments = (p: string): string[] => p.replaceAll('\\', '/').split('/');
-  if (paths.some((p) => segments(p).includes('_npx') || segments(p).includes('dlx'))) {
-    return 'a package cache';
-  }
-  if (paths.some((p) => p.includes('fnm_multishells'))) return "fnm's link for this shell";
-  if (paths.some((p) => versionManagerOf(p) !== undefined)) return 'a Node version manager';
-  if (paths.some((p) => p === tmp || p.startsWith(tmp + path.sep))) return 'a temporary directory';
-  return undefined;
-}
-
-function realTmp(): string {
-  try {
-    return fs.realpathSync(os.tmpdir());
-  } catch {
-    return os.tmpdir();
-  }
-}
-
-/**
  * The fix that (re)points the hooks: `oort install claude-code` run from this copy, unless this
  * copy is temporary or under a version manager (CON-113), when it would write a path that breaks
  * later; then it names the managed copy (`~/.oort/cli`), installing it first when it is missing.
@@ -296,12 +277,12 @@ function hookFix(ctx: Ctx, running: string | undefined): { fix: string; fixComma
   const bin = path.join(prefix, 'bin', 'oort');
   // fixCommand runs as printed: every path one shell word (a HOME with a space or a `$`).
   const run = `${sh(bin)} install claude-code`;
-  const show = `${shown(sh(tilde(bin, home)))} install claude-code`;
+  const show = `${shown(shellPath(bin, home))} install claude-code`;
   if (isExecutable(bin)) {
     return { fix: `${show} (this oort is in ${why})`, fixCommand: run };
   }
   return {
-    fix: `npm i -g --prefix ${shown(sh(tilde(prefix, home)))} oortmem && ${show} (this oort is in ${why})`,
+    fix: `npm i -g --prefix ${shown(shellPath(prefix, home))} oortmem && ${show} (this oort is in ${why})`,
     fixCommand: `npm i -g --prefix ${sh(prefix)} oortmem && ${run}`,
   };
 }
@@ -367,17 +348,35 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
     ];
   }
   // A version mismatch says more than "another path"; one warning for one cause.
-  const versionWarned = binaries.some((c) => c.name === 'claude-code bin' && c.status === 'warn');
+  const versionWarned = binaries.some(
+    (c) => c.name === 'claude-code bin' && (c.status === 'warn' || c.status === 'fail'),
+  );
   // Another executable copy of this same version (the managed ~/.oort/cli, say, while this one is
   // a PATH copy): the hooks are fine as they are (CON-113). Repointing them at this copy could
   // write a path that breaks later (fnm's per-shell link, a package cache).
   const sameVersion =
     stale.length > 0 &&
     !versionWarned &&
-    binaries.some((c) => c.name === 'claude-code bin' && c.status === 'ok');
+    binaries.some(
+      (c) => c.name === 'claude-code bin' && (c.status === 'ok' || c.status === 'info'),
+    );
   if (missing.length === 0 && sameVersion) {
     const hooksBin = hookBinaryOf(`${stale[0]?.command ?? ''} hook ${stale[0]?.event ?? ''}`);
     const here = ctx.io.entry ?? cmd ?? '';
+    const judged = hooksBin === undefined ? undefined : judgeCopy(ctx, hooksBin);
+    const theirs =
+      judged !== undefined && 'version' in judged && judged.version !== undefined
+        ? `oort ${shown(judged.version)}`
+        : 'version unknown';
+    // One line for it (PR #78 review, N5): the bin row says what the hooks run, and that you ran
+    // another copy.
+    const also = `; you ran another copy, oort ${VERSION}, at ${shown(tilde(here, home))}`;
+    let told = false;
+    const rows = binaries.map((c) => {
+      if (told || c.name !== 'claude-code bin') return c;
+      told = true;
+      return { ...c, detail: `${c.detail}${also}` };
+    });
     return [
       {
         group: 'hooks',
@@ -385,13 +384,17 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
         status: 'ok',
         detail: `${found.map((e) => e.event).join(', ')} in ${show}`,
       },
-      {
-        group: 'hooks',
-        name: 'claude-code copy',
-        status: 'info',
-        detail: `the hooks run ${shown(tilde(hooksBin ?? '', home))}; this is another copy of oort ${VERSION} at ${shown(tilde(here, home))}`,
-      },
-      ...binaries,
+      ...(told
+        ? []
+        : [
+            {
+              group: 'hooks' as const,
+              name: 'claude-code copy',
+              status: 'info' as const,
+              detail: `the hooks run ${shown(tilde(hooksBin ?? '', home))} (${theirs})${also}`,
+            },
+          ]),
+      ...rows,
     ];
   }
   if (missing.length > 0 || (stale.length > 0 && !versionWarned)) {
@@ -421,32 +424,82 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
 }
 
 const HOOK_FIX = 'oort install claude-code';
-const VERSION_PROBE_MS = 3000;
-
-/** `<bin> --version` through execFile (no shell), with a short timeout; undefined if it fails. */
-function probeVersion(
-  bin: string,
-  env: NodeJS.ProcessEnv,
-  viaNode: boolean,
-): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    const [file, args] = viaNode ? ['node', [bin, '--version']] : [bin, ['--version']];
-    execFile(
-      file as string,
-      args as string[],
-      { timeout: VERSION_PROBE_MS, env, encoding: 'utf8', windowsHide: true },
-      (err, stdout) => {
-        const v = /\d+\.\d+\.\d+[^\s]*/.exec(String(stdout))?.[0];
-        resolve(err === null ? (v ?? '') : undefined);
-      },
-    );
-  });
-}
 
 /**
- * Does each hook's binary exist, and is it the oort that is running? A binary that is missing
- * is already a failure on the `claude-code` row, so only the version-manager note is added
- * for it; the file is never run unless it exists.
+ * What a binary agents run is, for doctor (PR #78 review, I3). Only two copies are vouched for:
+ * the managed copy that checks out and is safe (`managedCopy`) and the running copy when it stays
+ * put and nobody else can change it (`runningUnstable`); their versions come from their files.
+ * Anything else is judged by where it lives and never by what it prints: doctor reads files only
+ * and never runs a hook's binary.
+ *
+ * - `unsafe`: in a temporary directory or a package cache, or someone else could change it
+ *   (`trustedPath`): a fail, since what runs there next may not be oort.
+ * - `drifting`: under a Node version manager or fnm's per-shell link: yours, but it moves.
+ * - `other`: another copy that stays put and is yours (a build of your own, `--this-copy`).
+ */
+type Judged =
+  | { kind: 'managed'; version: string }
+  | { kind: 'running'; version: string }
+  | { kind: 'unsafe'; why: string }
+  | { kind: 'drifting' | 'other'; version?: string };
+
+function judgeCopy(ctx: Ctx, bin: string): Judged {
+  const env = ctx.io.env;
+  let real: string | undefined;
+  try {
+    real = fs.realpathSync(bin);
+  } catch {
+    return { kind: 'unsafe', why: 'leads nowhere' };
+  }
+  const managed = managedCopy(env);
+  if (managed !== undefined && real === managed.main) {
+    return { kind: 'managed', version: managed.version };
+  }
+  let running: string | undefined;
+  try {
+    running = fs.realpathSync(ctx.binPath ?? binPath());
+  } catch {
+    running = undefined;
+  }
+  if (running !== undefined && real === running && runningUnstable(ctx) === undefined) {
+    return { kind: 'running', version: VERSION };
+  }
+  const where = unstableCopy(bin, real, tempDirs(env));
+  if (where === 'a temporary directory' || where === 'a package cache') {
+    return { kind: 'unsafe', why: `is in ${where} (others can fill or clear it)` };
+  }
+  const oortHome = resolveHome(env);
+  let oortReal = oortHome;
+  try {
+    oortReal = fs.realpathSync(oortHome);
+  } catch {
+    // No OORT_HOME yet.
+  }
+  const u = trustedPath(real, {
+    home: env['HOME'] ?? '',
+    strict: real === oortReal || real.startsWith(oortReal + path.sep),
+  });
+  // The whole package it belongs to, as for the running copy (PR #78 review).
+  const t = u ?? copyTree(real, env, real === oortReal || real.startsWith(oortReal + path.sep));
+  if (t !== undefined) return { kind: 'unsafe', why: shown(untrustedText(t)) };
+  const version = nearestPackageVersion(real);
+  return {
+    kind: where === undefined ? 'other' : 'drifting',
+    ...(version !== undefined && { version }),
+  };
+}
+
+/** `a` is older than `b`, or unknown. */
+const older = (a: string | undefined, b: string): boolean =>
+  a === undefined || (compareVersions(a, b) ?? -1) < 0;
+
+/**
+ * Each hook binary: what it is (`judgeCopy`) and whether that is fine. A binary that is missing
+ * is already a failure on the `claude-code` row, so only the version-manager note is added for
+ * it. Levels: the managed or the running copy of this version or newer is ok; another copy you
+ * own that stays put, of this version or newer, is an info line naming it (developers'
+ * `--this-copy` builds are not nagged); an older or unknown version is a warning; a copy someone
+ * else could change, or one in a temp directory or package cache, is a fail.
  */
 async function hookBinaryChecks(
   ctx: Ctx,
@@ -463,54 +516,143 @@ async function hookBinaryChecks(
   const seen = new Set<string>();
   const checks: Check[] = [];
   const home = ctx.io.env['HOME'] ?? '';
+  const row = { group: 'hooks' as const, name: 'claude-code bin' };
   for (const e of found) {
     const raw = e.command ?? cmd;
     if (raw === undefined || raw === 'oort') continue;
-    const viaNode = raw.startsWith('node ');
     const bin = hookBinaryOf(`${raw} hook ${e.event}`);
     if (bin === undefined || seen.has(bin)) continue;
     seen.add(bin);
-    const show = tilde(bin, home);
-    const manager = versionManagerOf(bin);
-    if (manager !== undefined) {
+    const show = shown(tilde(bin, home));
+    const note = unstableHooksNote(ctx, bin, show);
+    if (note !== undefined) checks.push(note);
+    if (!isExecutable(bin)) continue;
+    const j = judgeCopy(ctx, bin);
+    if (j.kind === 'unsafe') {
       checks.push({
-        group: 'hooks',
-        name: 'claude-code node',
-        status: 'info',
-        detail: `the hooks run ${show}, under a Node version manager: switching Node versions will break them`,
-        fix: 'install oortmem somewhere stable (npm i -g oortmem with a system Node), then oort install claude-code',
+        ...row,
+        status: 'fail',
+        detail: `the hooks run ${show}, which ${j.why}: what runs there next may not be oort`,
+        ...fixHooks,
       });
-    }
-    if (!isExecutable(bin)) continue; // never run a path that is not there
-    const got = await probeVersion(bin, { ...process.env, ...ctx.io.env }, viaNode);
-    if (got === undefined || got === '') {
+    } else if (j.kind === 'managed' || j.kind === 'running') {
+      if (older(j.version, VERSION)) {
+        checks.push({
+          ...row,
+          status: 'warn',
+          detail: `the hooks run oort ${j.version} (${show}), but this is oort ${VERSION}`,
+          fix: reinstall,
+          fixCommand: 'oort update',
+        });
+      } else {
+        checks.push({
+          ...row,
+          status: 'ok',
+          detail:
+            j.kind === 'running'
+              ? `oort ${j.version}, the version you are running (${show})`
+              : `oort ${j.version}, the managed copy${j.version === VERSION ? '' : `, newer than this oort ${VERSION}`} (${show})`,
+        });
+      }
+    } else if (j.version === undefined) {
       checks.push({
-        group: 'hooks',
-        name: 'claude-code bin',
+        ...row,
         status: 'warn',
-        detail: `${show} did not report a version for --version`,
-        fix: reinstall,
-        fixCommand: 'oort update',
+        detail: `the hooks run ${show}, whose files do not say which oort it is`,
+        ...fixHooks,
       });
-    } else if (got !== VERSION) {
+    } else if (older(j.version, VERSION)) {
       checks.push({
-        group: 'hooks',
-        name: 'claude-code bin',
+        ...row,
         status: 'warn',
-        detail: `the hooks run oort ${got} (${show}), but this is oort ${VERSION}`,
+        detail: `the hooks run oort ${shown(j.version)} (${show}), but this is oort ${VERSION}`,
         fix: reinstall,
         fixCommand: 'oort update',
       });
     } else {
       checks.push({
-        group: 'hooks',
-        name: 'claude-code bin',
-        status: 'ok',
-        detail: `oort ${got}, the version you are running (${show})`,
+        ...row,
+        status: 'info',
+        detail: `the hooks run another copy at ${show} (oort ${shown(j.version)})`,
+        fix: `${HOOK_FIX} to use the managed copy, or keep it if you built it (--this-copy)`,
       });
     }
   }
   return checks;
+}
+
+const UNSTABLE_HOOKS: Record<string, string> = {
+  'a Node version manager': 'under a Node version manager: switching Node versions will break them',
+  "fnm's link for this shell": "in fnm's link for one shell: it goes away when that shell ends",
+};
+
+/**
+ * An info row when the hooks run a copy of yours that moves (CON-114): a Node version manager or
+ * fnm's per-shell link. (A temp directory or package cache is a fail on the bin row.) The fix is
+ * the managed copy (`~/.oort/cli`): pointing the hooks at it when it is there, else `oort setup`
+ * or installing it by hand first.
+ */
+function unstableHooksNote(ctx: Ctx, bin: string, show: string): Check | undefined {
+  let real: string | undefined;
+  try {
+    real = fs.realpathSync(bin);
+  } catch {
+    real = undefined;
+  }
+  const why = unstableCopy(bin, real, []);
+  const detail = why === undefined ? undefined : UNSTABLE_HOOKS[why];
+  if (detail === undefined) return undefined;
+  const home = ctx.io.env['HOME'] ?? '';
+  const prefix = managedPrefixFor(ctx.io.env);
+  const managedBin = path.join(prefix, 'bin', 'oort');
+  const run = `${sh(managedBin)} install claude-code`;
+  const base = {
+    group: 'hooks' as const,
+    name: 'claude-code node',
+    status: 'info' as const,
+    detail: `the hooks run ${show}, ${detail}`,
+  };
+  if (managedCopy(ctx.io.env) !== undefined) {
+    return {
+      ...base,
+      fix: `${shown(shellPath(managedBin, home))} install claude-code (the managed copy, which stays put)`,
+      fixCommand: run,
+    };
+  }
+  return {
+    ...base,
+    fix: `oort setup, or ${manualInstall(ctx.io.env)} and then oort install claude-code (a managed copy that stays put)`,
+    fixCommand: `npm i -g --prefix ${sh(prefix)} oortmem && ${run}`,
+  };
+}
+
+/**
+ * The managed copy is there but not safe to run (PR #78 review, I1): a fail naming the directory
+ * and the command that fixes it. Setup, install and connect refuse it the same way.
+ */
+function managedChecks(ctx: Ctx): Check[] {
+  const s = inspectManaged(ctx.io.env);
+  if (s.state !== 'untrusted') return [];
+  return [
+    {
+      group: 'hooks',
+      name: 'managed copy',
+      status: 'fail',
+      detail: `${shown(managedPrefixFor(ctx.io.env))} is not safe for agents to run: ${shown(s.problem.dir)} ${s.problem.why}`,
+      fix: shown(s.problem.fix),
+      ...(s.problem.command !== undefined
+        ? { fixCommand: s.problem.command }
+        : /^(chmod|sudo chown|rm) /.test(s.problem.fix) && !s.problem.fix.includes(',')
+          ? { fixCommand: s.problem.fix }
+          : {}),
+    },
+  ];
+}
+
+/** The managed copy, when it checks out and is this version or newer. */
+function currentManaged(ctx: Ctx): ReturnType<typeof managedCopy> {
+  const m = managedCopy(ctx.io.env);
+  return managedIsCurrent(m) ? m : undefined;
 }
 
 /**
@@ -618,8 +760,38 @@ function mcpChecks(ctx: Ctx, cmd: string | undefined): Check[] {
     const base = { group: 'mcp' as const, name: host };
     switch (s.state) {
       case 'connected':
-        return { ...base, status: 'ok', detail: `${HOST_LABEL[host]} starts oort mcp (${show})` };
-      case 'outdated':
+      case 'outdated': {
+        // The binary the entry runs, judged as the hooks' is (PR #78 review, I3 and N3): even an
+        // entry that is exactly what `oort connect` writes is not ok if what it runs is unsafe.
+        const bin = s.state === 'connected' ? s.command : s.otherCopy;
+        const j = bin === undefined ? undefined : judgeCopy(ctx, bin);
+        const where = shown(tilde(bin ?? '', hc.home));
+        if (j?.kind === 'unsafe') {
+          return {
+            ...base,
+            status: 'fail',
+            detail: `Oort's entry in ${show} runs ${where}, which ${j.why}: what runs there next may not be oort`,
+            fix: `oort connect ${host}`,
+          };
+        }
+        if ((j?.kind === 'managed' || j?.kind === 'running') && !older(j.version, VERSION)) {
+          return {
+            ...base,
+            status: 'ok',
+            detail:
+              s.state === 'connected' && j.kind === 'running'
+                ? `${HOST_LABEL[host]} starts oort mcp (${show})`
+                : `${HOST_LABEL[host]} starts oort mcp from ${j.kind === 'managed' ? 'the managed copy' : 'this copy'}, oort ${j.version} (${show})`,
+          };
+        }
+        if ((j?.kind === 'other' || j?.kind === 'drifting') && !older(j.version, VERSION)) {
+          return {
+            ...base,
+            status: 'info',
+            detail: `${HOST_LABEL[host]} starts oort mcp from another copy at ${where} (oort ${shown(j.version)})${j.kind === 'drifting' ? ', under a Node version manager or fnm: switching Node versions breaks it' : ''}`,
+            fix: `oort connect ${host} to use the managed copy, or keep it if you built it (--this-copy)`,
+          };
+        }
         return {
           ...base,
           status: 'warn',
@@ -629,6 +801,7 @@ function mcpChecks(ctx: Ctx, cmd: string | undefined): Check[] {
               : `Oort's entry in ${show} is from another install path or an older version`,
           fix: `oort connect ${host}`,
         };
+      }
       case 'broken':
         return {
           ...base,
@@ -1097,8 +1270,11 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
   const checks: Check[] = [
     ...keys.checks,
     ...(await hookChecks(ctx, cmd ?? running, home)),
+    ...managedChecks(ctx),
     ...(await serveChecks(ctx)),
-    ...mcpChecks(ctx, cmd),
+    // `oort connect` writes the managed copy when it checks out (CON-114): entries are judged
+    // against that, else against this bin.
+    ...mcpChecks(ctx, currentManaged(ctx)?.main ?? cmd ?? running),
     ...(await storeChecks(ctx)),
     ...(await relayChecks(ctx, keys.relayed)),
     ...(await cloudChecks(ctx)),

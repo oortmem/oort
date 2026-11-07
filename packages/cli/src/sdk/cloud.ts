@@ -7,6 +7,8 @@ import {
   type CloudMemory,
   type CloudObserveResult,
 } from '../cloud.js';
+import { scrubForCloud } from '../cloud-scrub.js';
+import { cloudRememberRequest } from '../remember.js';
 import { starInCloudMessage } from '../util.js';
 import { privacyStatement } from '../wire.js';
 import type { Ctx } from './context.js';
@@ -88,38 +90,52 @@ function observeView(r: CloudObserveResult, warnings: Warning[]): ObserveResult 
 
 export async function observe(ctx: Ctx, turn: Turn): Promise<ObserveResult> {
   refuseStar(ctx);
+  // Scrubbed here, before it leaves the machine; a mostly-secret turn is never sent.
+  const s = scrubForCloud({
+    user: turn.user,
+    assistant: turn.assistant,
+    at: turn.at === undefined ? ctx.now().toISOString() : iso(turn.at),
+    ...(turn.sessionId !== undefined && { session: turn.sessionId }),
+    ...(turn.tools !== undefined && turn.tools.length > 0 && { tools: capTools(turn.tools) }),
+  });
+  if (s.dropped) {
+    return {
+      outcome: 'skipped',
+      memories: [{ outcome: 'skipped', reason: 'secret' }],
+      counts: { skipped: 1 },
+      warnings: [...ctx.warnings],
+    };
+  }
   const r = await clientOf(ctx).observe({
     ...project(ctx),
     ...(turn.turnRef !== undefined && { turnRef: turn.turnRef }),
-    observation: {
-      user: turn.user,
-      assistant: turn.assistant,
-      at: turn.at === undefined ? ctx.now().toISOString() : iso(turn.at),
-      ...(turn.sessionId !== undefined && { session: turn.sessionId }),
-      ...(turn.tools !== undefined && turn.tools.length > 0 && { tools: capTools(turn.tools) }),
-    },
+    observation: s.turn,
   });
   return observeView(r, [...ctx.warnings]);
 }
 
-/** One observe per fact, framed exactly as the MCP server's cloud `remember` frames it. */
+/**
+ * One observe per fact, as the MCP server's cloud `remember` sends it (`cloudRememberRequest`:
+ * framed, scrubbed here, with a stable `turnRef`); a mostly-secret fact is skipped, never sent.
+ */
 export async function remember(
   ctx: Ctx,
   facts: readonly string[],
   type: MemoryType | undefined,
 ): Promise<RememberResult> {
   refuseStar(ctx);
-  const hint = type === undefined ? '' : ` (a ${type} fact)`;
   const results: RememberResult['results'] = [];
   for (const [i, fact] of facts.entries()) {
-    const r = await clientOf(ctx).observe({
-      ...project(ctx),
-      observation: {
-        user: `Remember this${hint}: ${fact}`,
-        assistant: `Noted: ${fact}`,
-        at: ctx.now().toISOString(),
-      },
+    const req = cloudRememberRequest(fact, {
+      type,
+      at: ctx.now().toISOString(),
+      project: project(ctx),
     });
+    if (req.dropped) {
+      results.push({ fact: i, outcome: 'skipped', reason: 'secret' });
+      continue;
+    }
+    const r = await clientOf(ctx).observe(req.body);
     const first = r.memories[0];
     results.push({
       fact: i,
