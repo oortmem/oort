@@ -155,6 +155,9 @@ export function recallView(
   return out;
 }
 
+/** The block budget `formatForPrompt` would use for `r` by default, when this SDK made it. */
+export const budgetOf = (r: RecallResult): number | undefined => sources.get(r)?.budgetChars;
+
 /** Default block budget, as the config's `recall.budgetChars`. */
 export const DEFAULT_BUDGET_CHARS = 6000;
 
@@ -276,8 +279,8 @@ export function judgeView(r: CoreJudgeResult): JudgeResult {
     ...(r.degraded !== undefined && { degraded: [...r.degraded] }),
     decisions: r.decisions.map((d) => ({
       stage: d.stage,
-      question: d.question,
-      answer: d.answer,
+      question: clean(d.question),
+      answer: clean(d.answer),
       probability: d.probability,
     })),
     ...(r.importedExcluded !== undefined && { importedExcluded: r.importedExcluded }),

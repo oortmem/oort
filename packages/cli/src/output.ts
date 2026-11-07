@@ -217,7 +217,9 @@ export function exempt(name: string, detach: boolean): boolean {
 /** `serve`'s action in raw arguments (for a usage error before any action ran). */
 export function serveActionIn(args: readonly string[]): string | undefined {
   const i = args.indexOf('serve');
-  return args.slice(i + 1).find((a) => a === 'status' || a === 'stop' || a === 'start');
+  return args
+    .slice(i + 1)
+    .find((a) => a === 'status' || a === 'stop' || a === 'start' || a === 'token');
 }
 
 /** Options whose value is an id, a name or an enum: the only values a rerun fix repeats. */

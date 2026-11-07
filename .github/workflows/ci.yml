@@ -25,9 +25,29 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      # Python: 3.10 is the client's floor (pnpm verify runs the client, the shared contract suite
+      # and the integration test on it), 3.13 the newest checked, 3.9 the launcher's floor.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: |
+            3.9
+            3.13
+            3.10
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
-      - name: Python launcher tests
-        run: python3 -m unittest discover -s python/tests -v
+        env:
+          OORT_PYTHON: python3.10
+      - name: Python tests on 3.13 (client) and 3.9 (launcher only)
+        run: |
+          python3.13 -m unittest discover -s python/tests -v
+          python3.9 -m unittest discover -s python/tests -v
+      - name: The Python package builds a wheel that imports
+        run: |
+          python3.10 -m pip install build==1.6.1
+          python3.10 -m build python --outdir /tmp/oortmem-dist
+          python3.10 -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/pip install /tmp/oortmem-dist/*.whl
+          /tmp/wheel-venv/bin/python -c 'from oortmem import Oort, AsyncOort, format_for_prompt; import oortmem.types'
+          /tmp/wheel-venv/bin/oort --launcher-version
       - name: Build the Claude Desktop bundle (not published)
         run: pnpm bundle:mcpb

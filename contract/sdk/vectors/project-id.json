@@ -1,0 +1,64 @@
+[
+  {
+    "name": "a repository, from a subdirectory",
+    "dirs": ["repo/.git", "repo/src/deep"],
+    "cwd": "repo/src/deep"
+  },
+  { "name": "outside any repository", "dirs": ["plain/dir"], "cwd": "plain/dir" },
+  { "name": "a colon in the root's name", "dirs": ["we:ird/.git"], "cwd": "we:ird" },
+  { "name": "a non-ASCII root name", "dirs": ["répo-日本/.git"], "cwd": "répo-日本" },
+  {
+    "name": "a linked worktree resolves to its main checkout",
+    "dirs": ["main/.git/worktrees/wt", "wt"],
+    "files": {
+      "main/.git/worktrees/wt/commondir": "../..\n",
+      "main/.git/worktrees/wt/gitdir": "$BASE/wt/.git\n",
+      "wt/.git": "gitdir: $BASE/main/.git/worktrees/wt\n"
+    },
+    "cwd": "wt"
+  },
+  {
+    "name": "a relative gitdir in the worktree's .git",
+    "dirs": ["main/.git/worktrees/rel", "rel"],
+    "files": {
+      "main/.git/worktrees/rel/commondir": "../..\n",
+      "main/.git/worktrees/rel/gitdir": "../../../../rel/.git\n",
+      "rel/.git": "gitdir: ../main/.git/worktrees/rel\n"
+    },
+    "cwd": "rel"
+  },
+  {
+    "name": "a forged .git file the main repository does not vouch for",
+    "dirs": ["main/.git/worktrees/other", "forged"],
+    "files": {
+      "main/.git/worktrees/other/commondir": "../..\n",
+      "main/.git/worktrees/other/gitdir": "$BASE/elsewhere/.git\n",
+      "forged/.git": "gitdir: $BASE/main/.git/worktrees/other\n"
+    },
+    "cwd": "forged"
+  },
+  {
+    "name": "a .git file without commondir (a submodule)",
+    "dirs": ["super/.git/modules/sub", "super/sub"],
+    "files": { "super/sub/.git": "gitdir: ../.git/modules/sub\n" },
+    "cwd": "super/sub"
+  },
+  {
+    "name": "a symlinked .git is never followed",
+    "dirs": ["target/.git", "linkgit"],
+    "symlinks": { "linkgit/.git": "$BASE/target/.git" },
+    "cwd": "linkgit"
+  },
+  {
+    "name": "a cwd reached through a symlink",
+    "dirs": ["real/.git", "real/inside"],
+    "symlinks": { "alias": "$BASE/real/inside" },
+    "cwd": "alias"
+  },
+  {
+    "name": "a trust link names the project",
+    "dirs": ["linked/.git", "linked/app"],
+    "links": { "linked": "acme-web" },
+    "cwd": "linked/app"
+  }
+]

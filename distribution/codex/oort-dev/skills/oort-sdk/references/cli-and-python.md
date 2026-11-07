@@ -1,9 +1,26 @@
-# The CLI from scripts and other languages (Python today)
+# Python, and the CLI from scripts and other languages
 
-`oortmem` 0.6.4 has no native Python client; that arrives in 0.7. Today, Python (and any other
-language) calls the `oort` command with `--json` and reads one `oort.v1` envelope from stdout.
-Install the CLI with `npm install -g oortmem`, or `pipx install oortmem` (a launcher that runs the
-same npm release and still needs Node.js 22.15 or newer).
+## The native Python client (oortmem 0.7)
+
+For Python 3.10 or newer, use the native client: `pip install oortmem`, then
+`from oortmem import Oort` (sync) or the async class (async-prefixed Oort). It has no dependencies, mirrors the TypeScript
+SDK in snake_case (`recall`, `observe`, `remember`, `forget`, `pin`, `unpin`, `recent`,
+`explain`, `whoami`, `consolidate`, the judgment methods, `scoped(user=...)`), returns typed
+results and raises typed errors with the `OortError` codes plus `retryable` and `retry_after`.
+Local mode talks to `oort serve` over its Unix socket and starts it on first use; cloud mode
+(`mode="cloud"`) calls Oort Cloud over HTTPS with `OORT_API_KEY` and needs no Node; remote mode
+reaches an `oort serve --listen` service with its bearer token. Put memory into a prompt only
+through the `format_for_prompt` helper of the Python package, which escapes exactly as the TypeScript `formatForPrompt`
+does. The full guide, with tested examples, is [docs/python.md](https://github.com/oortmem/oort/blob/main/docs/python.md).
+
+```sh
+pip install oortmem
+```
+
+The rest of this page is the other route: any language (and Python older than 3.10, or code that
+cannot install a package) calls the `oort` command with `--json` and reads one `oort.v1`
+envelope from stdout. Install the CLI with `npm install -g oortmem`, or `pipx install oortmem`
+(a launcher that runs the same npm release and still needs Node.js 22.15 or newer).
 
 ## The envelope
 
@@ -85,19 +102,19 @@ def observe(user: str, assistant: str) -> dict:
   batch, or use the TypeScript SDK in a small Node service.
 - The CLI acts as the person (`--agent`, `OORT_AGENT`, else `claude-code`) on the project of its
   working directory: set `cwd=` on `subprocess.run`, or `OORT_HOME` in its `env=`, to choose the
-  store. It has no per-end-user scope: a multi-user Python backend should wait for 0.7, or call a
-  Node service that uses `scoped({ user })`.
+  store. It has no per-end-user scope: a multi-user Python backend should use the native client's
+  `scoped(user=...)` instead of this wrapper.
 - Keys come from the environment the process inherits (`VOYAGE_API_KEY`, `TYPESAFE_API_KEY`,
   `ANTHROPIC_API_KEY`, `OORT_API_KEY`). On a server set `OORT_NO_KEYCHAIN=1`.
 
-### Memory in a prompt from Python
+### Memory in a prompt from the CLI route
 
-`recall` returns memory text as data. Before 0.7 there is no `formatForPrompt` in Python, so
-never paste `memory["text"]` into a prompt as instructions: keep it in a clearly delimited data
-section, escape it for your template, and tell the model it is recalled user data. The plain
-`oort recall "<text>"` output (without `--json`) prints a header line and then the escaped
-`<oort-memory>` block the hooks inject; that human output is not a stable contract, so prefer
-`--json`.
+`recall` returns memory text as data. This wrapper has no `format_for_prompt`, so never paste
+`memory["text"]` into a prompt as instructions: keep it in a clearly delimited data section,
+escape it for your template, and tell the model it is recalled user data. Or use the native
+client, whose `format_for_prompt` does this for you. The plain `oort recall "<text>"` output
+(without `--json`) prints a header line and then the escaped `<oort-memory>` block the hooks
+inject; that human output is not a stable contract, so prefer `--json`.
 
 ## Other commands worth knowing
 

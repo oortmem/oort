@@ -266,13 +266,23 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .description(
       'run the local daemon the hooks prefer (a Unix socket; they fall back to in-process without it)',
     )
-    .argument('[action]', 'start (the default), status or stop')
+    .argument('[action]', 'start (the default), status, stop or token')
     .option('--detach', 'start in the background and return')
     .option(
       '--idle <duration>',
       'exit after this long without a request (default serve.idleMinutes, 30m)',
     )
-    .option('--json', 'status, stop and --detach: print oort.v1 JSON (not a foreground start)')
+    .option(
+      '--listen <address>',
+      'service mode: also serve the memory protocol on TCP (127.0.0.1:7807), with a token',
+    )
+    .option('--behind-tls-proxy', 'service mode: allow a non-loopback address behind a TLS proxy')
+    .option('--org <id>', 'service mode: the org every token request acts in (or OORT_SERVE_ORG)')
+    .option('--rotate', 'token: replace the existing token file')
+    .option(
+      '--json',
+      'status, stop, token and --detach: print oort.v1 JSON (not a foreground start)',
+    )
     .action(run((action: string | undefined, o: ServeOptions) => serveCommand(action, o, ctx)));
 
   p.command('mcp')

@@ -121,7 +121,7 @@ flowchart LR
 | [`@oortmem/local-models`](packages/local-models)   | Embeddings and reranking on your CPU (ONNX Runtime): no keys, no account                                                                          |
 | [`@oortmem/claude-code`](packages/claude-code)     | Claude Code hooks and transcript import                                                                                                           |
 | [`@oortmem/mcp`](packages/mcp)                     | The MCP tools, schemas, instructions and skill, served over any memory backend                                                                    |
-| [`oortmem` on PyPI](python)                        | A Python launcher for the same `oort` command (still needs Node 22.15 or newer)                                                                   |
+| [`oortmem` on PyPI](python)                        | The native Python client (`Oort`, `AsyncOort`; [docs/python.md](docs/python.md)) and a launcher for the `oort` command                            |
 
 Install bundles for Claude Desktop, Claude Code, Codex, Cursor and Gemini CLI are in
 [`distribution/`](distribution).

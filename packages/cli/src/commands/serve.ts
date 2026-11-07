@@ -14,6 +14,7 @@ import {
   writeSkip,
 } from '../serve-client.js';
 import { lockPathFor, socketPathFor } from '../serve-protocol.js';
+import { TOKEN_ENV, serviceSettings, writeTokenFile } from '../serve-token.js';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import { availableUpdate, noticeText, readUpdateCache, updateCheckOff } from '../update-check.js';
@@ -23,6 +24,12 @@ export interface ServeOptions {
   detach?: boolean;
   idle?: string;
   json?: boolean;
+  /** Service mode: the memory protocol on TCP, with a token (CON-108 §9.4). */
+  listen?: string;
+  behindTlsProxy?: boolean;
+  org?: string;
+  /** `oort serve token --rotate`: replace the token file. */
+  rotate?: boolean;
 }
 
 const MAX_IDLE_MS = 24 * 60 * 60 * 1000;
@@ -63,9 +70,11 @@ const NEEDS_DOCTOR =
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
- * `oort serve [start|status|stop] [--detach] [--idle <duration>] [--json]` (CON-18): the local
- * daemon the hooks prefer. `start` (the default) runs it in the foreground until SIGTERM, SIGINT,
- * `oort serve stop` or the idle timeout; `--detach` starts it in the background and returns.
+ * `oort serve [start|status|stop|token] [--detach] [--idle <duration>] [--json]` (CON-18): the
+ * local daemon the hooks prefer, and the memory protocol for other languages (CON-108). `start`
+ * (the default) runs it in the foreground until SIGTERM, SIGINT, `oort serve stop` or the idle
+ * timeout; `--detach` starts it in the background and returns. `--listen` adds service mode's
+ * TCP listener; `token` makes its token file.
  */
 export async function serveCommand(
   action: string | undefined,
@@ -90,9 +99,14 @@ export async function serveCommand(
       return status();
     case 'stop':
       return stop();
+    case 'token':
+      return token();
     default:
-      throw new Refusal(`Unknown action ${echo(action ?? '')}; expected start, status or stop.`);
+      throw new Refusal(
+        `Unknown action ${echo(action ?? '')}; expected start, status, stop or token.`,
+      );
   }
+  if (opts.rotate === true) throw new Refusal('--rotate is for `oort serve token`.');
 
   if (process.platform === 'win32') {
     throw new Refusal(
@@ -106,8 +120,37 @@ export async function serveCommand(
       { fix: 'oort serve --detach --json' },
     );
   }
+  if (opts.listen === undefined && (opts.behindTlsProxy === true || opts.org !== undefined)) {
+    throw new Refusal('--behind-tls-proxy and --org are for service mode (--listen).');
+  }
+  if (opts.listen !== undefined && opts.detach === true) {
+    throw new Refusal(
+      'Service mode runs in the foreground, under your supervisor (systemd, a container): drop --detach.',
+    );
+  }
+  if (opts.listen !== undefined && opts.idle !== undefined) {
+    throw new Refusal('Service mode has no idle exit: drop --idle.');
+  }
   const config = resolveConfig(io.cwd, io.env, { projectConfig: false });
   const idleMs = opts.idle !== undefined ? parseIdle(opts.idle) : config.serve.idleMinutes * 60_000;
+  // Read once, before anything starts, then out of every environment a child could inherit.
+  const listen =
+    opts.listen === undefined
+      ? undefined
+      : serviceSettings(
+          {
+            listen: opts.listen,
+            ...(opts.behindTlsProxy === true && { behindTlsProxy: true }),
+            ...(opts.org !== undefined && { org: opts.org }),
+          },
+          io.env,
+          home,
+        );
+  const daemonEnv = { ...io.env };
+  for (const k of TOKEN_ENV) {
+    delete daemonEnv[k];
+    delete process.env[k];
+  }
   const logFile = path.join(home, 'logs', 'serve.log');
   const detached = (pid: unknown, alreadyRunning: boolean): number => {
     if (jsonMode(ctx)) {
@@ -174,7 +217,8 @@ export async function serveCommand(
   try {
     daemon = await startDaemon({
       home,
-      env: io.env,
+      env: daemonEnv,
+      ...(listen !== undefined && { listen }),
       wire: ctx.wire,
       version: VERSION,
       idleMs,
@@ -204,14 +248,40 @@ export async function serveCommand(
   process.on('SIGTERM', onSignal);
   process.on('SIGINT', onSignal);
   process.on('uncaughtException', onCrash);
+  // SIGHUP reads the service token file again (a rotation is also seen on the next request).
+  const onHup = (): void => listen?.auth.forceReload?.();
+  if (listen !== undefined) process.on('SIGHUP', onHup);
   try {
     await daemon.closed;
   } finally {
     process.off('SIGTERM', onSignal);
     process.off('SIGINT', onSignal);
     process.off('uncaughtException', onCrash);
+    process.off('SIGHUP', onHup);
   }
   return process.exitCode === 1 ? 1 : 0;
+
+  /** `oort serve token`: the service token file (0600), kept unless `--rotate`. Never printed. */
+  function token(): number {
+    const r = writeTokenFile(home, opts.rotate === true);
+    if (jsonMode(ctx)) emit(ctx, { file: r.file, created: r.created });
+    io.out(
+      `${ui.ok(
+        r.created
+          ? `Wrote a new service token to ${show(r.file)} (mode 600).`
+          : `${show(r.file)} already holds a token; \`oort serve token --rotate\` replaces it.`,
+      )}\n`,
+    );
+    if (r.created && opts.rotate === true) {
+      io.out(
+        `${ui.dim('Rotated: the running service picks it up on the next request, and the old token stops working then (no restart needed).')}\n`,
+      );
+    }
+    io.out(
+      `${ui.dim('Give it to clients (read the file; it is never printed), then: oort serve --listen 127.0.0.1:7807 --org <tenant>. Mount the file with OORT_SERVE_TOKEN_FILE rather than putting the token in OORT_SERVE_TOKEN: an environment variable can be read from /proc/<pid>/environ.')}\n`,
+    );
+    return 0;
+  }
 
   async function status(): Promise<number> {
     const r = await callDaemon(socket, 'status', {}, { budgetMs: 1000 });

@@ -6,7 +6,8 @@ runs the engine in your process (`local`) or calls Oort Cloud over HTTPS (`cloud
 methods, results and errors either way.
 
 ESM only, Node 22.15 or newer. `require('oortmem')` works too, through Node's `require(esm)`.
-Python (0.7) and a `remote` mode against `oort serve` (0.7) come later; the design is in
+Python has its own native client since 0.7 ([docs/python.md](python.md)), which also reaches an
+`oort serve --listen` service; a TypeScript `remote` mode is not shipped yet. The design is in
 [docs/design/2026-11-06-sdk-design.md](design/2026-11-06-sdk-design.md).
 
 ```sh

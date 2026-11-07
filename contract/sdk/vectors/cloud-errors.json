@@ -1,0 +1,303 @@
+[
+  {
+    "status": 0,
+    "expect": {
+      "name": "OortNetworkError",
+      "code": "network",
+      "reason": "unreachable",
+      "fix": null,
+      "status": null,
+      "retryable": true,
+      "retryAfter": null,
+      "message": "Oort Cloud is unreachable: check your network, then try again."
+    }
+  },
+  {
+    "status": 0,
+    "code": "timeout",
+    "expect": {
+      "name": "OortNetworkError",
+      "code": "network",
+      "reason": "timeout",
+      "fix": null,
+      "status": null,
+      "retryable": true,
+      "retryAfter": null,
+      "message": "Oort Cloud is unreachable: check your network, then try again."
+    }
+  },
+  {
+    "status": 400,
+    "code": "bad_request",
+    "message": "text is required",
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "bad-request",
+      "fix": null,
+      "status": 400,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 400): text is required"
+    }
+  },
+  {
+    "status": 400,
+    "code": "scope_denied",
+    "message": "no such level",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "scope-denied",
+      "fix": null,
+      "status": 400,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 400): no such level"
+    }
+  },
+  {
+    "status": 401,
+    "code": "unauthorized",
+    "expect": {
+      "name": "OortNeedsLoginError",
+      "code": "needs-login",
+      "reason": "key-rejected",
+      "fix": "oort login",
+      "status": 401,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud rejected the Oort key (HTTP 401): it is unknown or revoked. Run `oort login` again."
+    }
+  },
+  {
+    "status": 402,
+    "code": "payment_required",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "payment-required",
+      "fix": "oort cloud use --local",
+      "status": 402,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Pro is not active on this account (HTTP 402). Subscribe or update billing at https://oortcloud.dev/account, or run `oort cloud use --local`. `oort cloud export` still works."
+    }
+  },
+  {
+    "status": 403,
+    "code": "cloud_not_enabled",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "not-enabled",
+      "fix": "oort cloud use --local",
+      "status": 403,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud is not enabled for this account yet (HTTP 403). Your memories stay on this machine; run `oort cloud use --local`."
+    }
+  },
+  {
+    "status": 403,
+    "code": "hive_not_enabled",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "hive-not-enabled",
+      "fix": null,
+      "status": 403,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Constellations are not enabled for this account yet (an invite-only beta). Your memories stay in your Planet."
+    }
+  },
+  {
+    "status": 403,
+    "code": "role_required",
+    "message": "Only a maintainer can do this; run `oort constellation members`.",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "forbidden",
+      "fix": "oort constellation members",
+      "status": 403,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused this (HTTP 403): Only a maintainer can do this; run `oort constellation members`."
+    }
+  },
+  {
+    "status": 404,
+    "code": "not_found",
+    "expect": {
+      "name": "OortNotFoundError",
+      "code": "not-found",
+      "reason": null,
+      "fix": null,
+      "status": 404,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "No such memory in Oort Cloud."
+    }
+  },
+  {
+    "status": 409,
+    "code": "ambiguous",
+    "expect": {
+      "name": "OortAmbiguousIdError",
+      "code": "ambiguous-id",
+      "reason": null,
+      "fix": null,
+      "status": 409,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "That id prefix matches more than one memory in Oort Cloud; give more of the id."
+    }
+  },
+  {
+    "status": 409,
+    "code": "preview_required",
+    "message": "preview first",
+    "expect": {
+      "name": "OortNeedsConfirmationError",
+      "code": "needs-confirmation",
+      "reason": "preview-required",
+      "fix": null,
+      "status": 409,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 409): preview first"
+    }
+  },
+  {
+    "status": 409,
+    "code": "findings_unacknowledged",
+    "expect": {
+      "name": "OortNeedsConfirmationError",
+      "code": "needs-confirmation",
+      "reason": "findings-unacknowledged",
+      "fix": null,
+      "status": 409,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 409)."
+    }
+  },
+  {
+    "status": 409,
+    "code": "conflict",
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "bad-request",
+      "fix": null,
+      "status": 409,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 409)."
+    }
+  },
+  {
+    "status": 413,
+    "code": "too_large",
+    "message": "observation over 128 KiB",
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "too-large",
+      "fix": null,
+      "status": 413,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused a request that is too large (HTTP 413): observation over 128 KiB"
+    }
+  },
+  {
+    "status": 429,
+    "code": "rate_limit",
+    "message": "monthly recall cap reached",
+    "retryAfter": "30",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "rate-limit",
+      "fix": null,
+      "status": 429,
+      "retryable": true,
+      "retryAfter": 30,
+      "message": "Oort Cloud limit reached (HTTP 429): monthly recall cap reached Usage is at https://oortcloud.dev/account."
+    }
+  },
+  {
+    "status": 429,
+    "code": "rate_limit",
+    "retryAfter": "99999",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "rate-limit",
+      "fix": null,
+      "status": 429,
+      "retryable": true,
+      "retryAfter": 3600,
+      "message": "Oort Cloud limit reached (HTTP 429). Usage is at https://oortcloud.dev/account."
+    }
+  },
+  {
+    "status": 429,
+    "code": "rate_limit",
+    "retryAfter": "soon",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "rate-limit",
+      "fix": null,
+      "status": 429,
+      "retryable": true,
+      "retryAfter": null,
+      "message": "Oort Cloud limit reached (HTTP 429). Usage is at https://oortcloud.dev/account."
+    }
+  },
+  {
+    "status": 500,
+    "expect": {
+      "name": "OortNetworkError",
+      "code": "network",
+      "reason": "busy",
+      "fix": null,
+      "status": 500,
+      "retryable": true,
+      "retryAfter": null,
+      "message": "Oort Cloud is busy or down, try again shortly (HTTP 500)."
+    }
+  },
+  {
+    "status": 503,
+    "retryAfter": "5",
+    "expect": {
+      "name": "OortNetworkError",
+      "code": "network",
+      "reason": "busy",
+      "fix": null,
+      "status": 503,
+      "retryable": true,
+      "retryAfter": 5,
+      "message": "Oort Cloud is busy or down, try again shortly (HTTP 503)."
+    }
+  },
+  {
+    "status": 418,
+    "message": "bad \u001b[31mcolour\u001b[0m and \u202eflip",
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "bad-request",
+      "fix": null,
+      "status": 418,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 418): bad \\u{1b}[31mcolour\\u{1b}[0m and \\u{202e}flip"
+    }
+  }
+]
