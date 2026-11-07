@@ -1,6 +1,6 @@
 # The CLI from scripts and other languages (Python today)
 
-`oortmem` 0.6.3 has no native Python client; that arrives in 0.7. Today, Python (and any other
+`oortmem` 0.6.4 has no native Python client; that arrives in 0.7. Today, Python (and any other
 language) calls the `oort` command with `--json` and reads one `oort.v1` envelope from stdout.
 Install the CLI with `npm install -g oortmem`, or `pipx install oortmem` (a launcher that runs the
 same npm release and still needs Node.js 22.15 or newer).

@@ -1,7 +1,7 @@
 {
   "name": "oort-dev",
   "displayName": "Oort for developers",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Build with Oort: the oort-sdk skill teaches Claude to add Oort memory to your own apps and agents with the oortmem TypeScript SDK and the oort CLI. No hooks and no MCP server; install the oort plugin for memory in your own sessions.",
   "author": {
     "name": "Oort",
