@@ -16,3 +16,4 @@ dist-ssr
 __pycache__/
 *.egg-info/
 packages/mcp/src/widgets.generated.ts
+.test-homes/
