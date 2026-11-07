@@ -71,11 +71,9 @@ Every command except `oort hook`, `oort mcp` and a foreground `oort serve` takes
 `OORT_OUTPUT=json`) and prints one `oort.v1` envelope on stdout. That is the contract for
 Python today and for any other language. See [cli-and-python.md](cli-and-python.md).
 
-## Not in 0.6.4
+## Not in 0.7.0
 
-- A native Python client (`from oortmem import Oort`) arrives in 0.7. Today the PyPI package
-  `oortmem` is a launcher for the `oort` command and still needs Node.js 22.15 or newer.
-- A `remote` SDK mode against `oort serve` arrives in 0.7. `oort serve` today is a daemon that
-  makes the Claude Code hooks faster; it is not an API for your app.
+- A TypeScript `remote` mode. `oort serve --listen` (service mode) and the Python client's
+  `mode="remote"` ship in 0.7.0; the TypeScript SDK has `local` and `cloud` only.
 - Per-user agent memory (a Star per end user) and `user` in cloud mode come with CON-92.
 - `place`, `near` and `within` are reserved for spatial memory: passing them is a usage error.

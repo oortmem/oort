@@ -1,6 +1,6 @@
 {
   "name": "@oortmem/rerank-voyage",
-  "version": "0.6.4",
+  "version": "0.7.0",
   "description": "Oort reranking through Voyage AI.",
   "keywords": [
     "oort",
