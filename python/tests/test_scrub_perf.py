@@ -4,9 +4,11 @@ the start of the text per candidate took minutes on ``":" * 200_000``. The limit
 loaded CI machine cannot flake it; a quadratic misses it by orders of magnitude."""
 
 import os
+import random
 import sys
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
@@ -44,6 +46,30 @@ class ScrubPerformance(unittest.TestCase):
         # overlapping markers: the trailing dashes of one BEGIN start the next
         two = "-----BEGIN PRIVATE KEY-----BEGIN PRIVATE KEY-----x-----END PRIVATE KEY-----"
         self.assertEqual(scrub(two).text, "[REDACTED:pem-private-key]")
+
+
+class ScrubThreadSafety(unittest.TestCase):
+    """The scrubber keeps no shared mutable state: concurrent calls give single-threaded results."""
+
+    def test_concurrent_calls_match_serial_results(self) -> None:
+        rng = random.Random(11)
+        parts = [
+            "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----",
+            "curl -u bob:hunter2xyz https://x", "-u a:b", "token=abcdefghijklmnop12345", "http://u:pw@host/",
+            '{"password":"s3cretvalue99"}', "ABCdef0123456789ABCdef0123456789xyzQ", "plain words here\n", ":", "[REDACTED:a]",
+            "\\n", "x\r\n", "eyJabcdefghijk.abcdefghijkl.abcdefghijkl",
+        ]
+        texts = ["".join(rng.choice(parts) for _ in range(rng.randint(1, 25))) for _ in range(400)]
+        serial = [scrub(t) for t in texts]
+        interval = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)  # switch threads as often as possible
+        try:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                for _ in range(5):
+                    got = list(pool.map(scrub, texts))
+                    self.assertEqual(got, serial)
+        finally:
+            sys.setswitchinterval(interval)
 
 
 if __name__ == "__main__":

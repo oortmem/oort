@@ -126,7 +126,39 @@ class _Rep:
     length: Optional[int] = None
 
 
-Hit = Callable[[str, int, str], Optional[_Rep]]
+class _Ctx:
+    """The per-call state of one rule pass over one text: the text and what is derived from it
+    (quote parity, the lookbehind ends, the PEM markers), each computed on first use. A new one
+    is made for every text in every ``_run`` call, and nothing is kept at module level, so
+    concurrent calls (threads, executors) never see each other's offsets."""
+
+    __slots__ = ("text", "_parity", "_basic", "_pem")
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self._parity: Optional[bytearray] = None
+        self._basic: Optional[List[int]] = None
+        self._pem: Optional[Tuple[List[int], List[int]]] = None
+
+    def parity(self) -> bytearray:
+        if self._parity is None:
+            self._parity = _quote_parity(self.text)
+        return self._parity
+
+    def basic_ends(self) -> List[int]:
+        if self._basic is None:
+            self._basic = [m.end(1) for m in _BASIC_ENDS.finditer(self.text)]
+        return self._basic
+
+    def pem_ends(self) -> Tuple[List[int], List[int]]:
+        """Start and end offsets of every END marker."""
+        if self._pem is None:
+            ends = list(_PEM_END.finditer(self.text))
+            self._pem = ([m.start(1) for m in ends], [m.end(1) for m in ends])
+        return self._pem
+
+
+Hit = Callable[[str, int, _Ctx], Optional[_Rep]]
 Pre = Callable[[str, int], bool]
 
 
@@ -135,14 +167,14 @@ def _tag(kind: str) -> str:
 
 
 def _with_digit(kind: str, skip: int) -> Hit:
-    def hit(m: str, offset: int, text: str) -> Optional[_Rep]:
+    def hit(m: str, offset: int, ctx: _Ctx) -> Optional[_Rep]:
         return _Rep(_tag(kind), _u16(m)) if re.search(r"[0-9]", m[skip:]) else None
 
     return hit
 
 
 def _keep_name(kind: str, prefix: Pattern[str]) -> Hit:
-    def hit(m: str, offset: int, text: str) -> Optional[_Rep]:
+    def hit(m: str, offset: int, ctx: _Ctx) -> Optional[_Rep]:
         p = prefix.match(m)
         cut = len(p.group(0)) if p else 0
         value = m[cut:]
@@ -224,7 +256,8 @@ _ENV_HEAD_KEY = _re(r"^[\"']?(?:export[ \t]+)?([A-Za-z][A-Za-z0-9_]*)")
 _QUOTED_ELEM = _re(r"\"[^\"\n]*\"|'[^'\n]*'")
 
 
-def _env_secret(head: str, offset: int, text: str) -> Optional[_Rep]:
+def _env_secret(head: str, offset: int, ctx: _Ctx) -> Optional[_Rep]:
+    text = ctx.text
     hk = _ENV_HEAD_KEY.search(head)
     level = _env_key(hk.group(1)) if hk else None
     if level is None:
@@ -380,9 +413,6 @@ def _escape_at(full: str, offset: int, text: str) -> Optional[str]:
     return m.group(0) if m else None
 
 
-_parity: Optional[Tuple[str, bytearray]] = None
-
-
 def _quote_parity(text: str) -> bytearray:
     odd = bytearray(len(text) + 1)
     inside = 0
@@ -402,19 +432,15 @@ def _quote_parity(text: str) -> bytearray:
     return odd
 
 
-def _in_json_string(text: str, at: int) -> bool:
-    global _parity
-    if at < 0:
-        return False
-    if _parity is None or _parity[0] != text:
-        _parity = (text, _quote_parity(text))
-    return _parity[1][at] == 1
+def _in_json_string(ctx: _Ctx, at: int) -> bool:
+    return at >= 0 and ctx.parity()[at] == 1
 
 
 _NAME = _re(r"^[A-Za-z_][A-Za-z0-9_]*=(?=[^=])")
 
 
-def _high_entropy(full: str, offset: int, text: str) -> Optional[_Rep]:
+def _high_entropy(full: str, offset: int, ctx: _Ctx) -> Optional[_Rep]:
+    text = ctx.text
     esc = _escape_at(full, offset, text)
     if esc is None:
         return _read_token(full, offset, text)
@@ -423,7 +449,7 @@ def _high_entropy(full: str, offset: int, text: str) -> Optional[_Rep]:
         rest = _read_token(full[len(esc) :], offset + len(esc), text)
         return None if rest is None else _Rep(esc + rest.out, rest.removed)
 
-    if _in_json_string(text, offset - 1):
+    if _in_json_string(ctx, offset - 1):
         return as_json() or _read_token(full, offset, text)
     return _read_token(full, offset, text) or as_json()
 
@@ -585,19 +611,15 @@ def _scheme_before(text: str, p: int) -> bool:
 # unescaped whitespace or ``:``, so each flag has at most one end, and the ends of the whole text
 # come from one linear forward pass (cached per text) instead of a backward search per candidate.
 _BASIC_ENDS = _re(r"(?=((?:^|\s|\\[nrt])(?:-u[ \t]+|--user[ \t=]+)(?:[^\s:\\]|\\.)+:))")
-_basic_cache: Optional[Tuple[str, List[int]]] = None
 _NON_WS = _re(r"\S+")
 
 
-def _basic_find(text: str, pos: int) -> Optional[Tuple[int, int]]:
+def _basic_find(ctx: _Ctx, pos: int) -> Optional[Tuple[int, int]]:
     """The rule's ``(?<=...)\\S+`` search, driven by the lookbehind's ends rather than by ``\\S+``
     (a bare ``(?<=:)\\S+`` match attempt at each ``:`` runs to the end of the word: quadratic)."""
-    global _basic_cache
-    if _basic_cache is None or _basic_cache[0] is not text:
-        _basic_cache = (text, [m.end(1) for m in _BASIC_ENDS.finditer(text)])
-    ends = _basic_cache[1]
+    ends = ctx.basic_ends()
     for i in range(bisect_left(ends, pos), len(ends)):
-        m = _NON_WS.match(text, ends[i])
+        m = _NON_WS.match(ctx.text, ends[i])
         if m is not None:
             return m.start(), m.end()
     return None
@@ -621,16 +643,11 @@ def _not_after_marker(text: str, p: int) -> bool:
 # past every END means no later BEGIN can match either.
 _PEM_BEGIN = _re(r"(?=(-----BEGIN [A-Z ]*PRIVATE KEY-----))")
 _PEM_END = _re(r"(?=(-----END [A-Z ]*PRIVATE KEY-----))")
-_pem_cache: Optional[Tuple[str, List[int], List[int]]] = None
 
 
-def _pem_find(text: str, pos: int) -> Optional[Tuple[int, int]]:
-    global _pem_cache
-    if _pem_cache is None or _pem_cache[0] is not text:
-        ends = list(_PEM_END.finditer(text))
-        _pem_cache = (text, [m.start(1) for m in ends], [m.end(1) for m in ends])
-    _, starts, stops = _pem_cache
-    for b in _PEM_BEGIN.finditer(text, pos):
+def _pem_find(ctx: _Ctx, pos: int) -> Optional[Tuple[int, int]]:
+    starts, stops = ctx.pem_ends()
+    for b in _PEM_BEGIN.finditer(ctx.text, pos):
         i = bisect_left(starts, b.end(1))
         if i == len(starts):
             return None
@@ -646,7 +663,7 @@ class _Rule:
     retry: bool = False
     pre: Optional[Pre] = None
     #: A hand-written search in place of ``re`` (start, end), for a rule whose regex is quadratic.
-    find: Optional[Callable[[str, int], Optional[Tuple[int, int]]]] = None
+    find: Optional[Callable[[_Ctx, int], Optional[Tuple[int, int]]]] = None
 
 
 def _rule(
@@ -658,7 +675,7 @@ def _rule(
     own: bool = False,
     retry: bool = False,
     pre: Optional[Pre] = None,
-    find: Optional[Callable[[str, int], Optional[Tuple[int, int]]]] = None,
+    find: Optional[Callable[[_Ctx, int], Optional[Tuple[int, int]]]] = None,
 ) -> _Rule:
     return _Rule(kind, _re(_escape_bounded(src, own), flags), hit, retry, pre, find)
 
@@ -667,23 +684,24 @@ _NB = r"(?<![A-Za-z0-9_-])"
 _BASIC_BODY = r"(?<=:)\S+"
 
 
-def _hit_aws_secret(m: str, offset: int, text: str) -> Optional[_Rep]:
+def _hit_aws_secret(m: str, offset: int, ctx: _Ctx) -> Optional[_Rep]:
     at = _re(r"[A-Za-z0-9/+=]{40}$").search(m)
     assert at is not None
     return _Rep(f"{m[: at.start()]}{_tag('aws-secret-key')}", _u16(m) - _u16(m[: at.start()]))
 
 
-def _hit_twilio_sid(m: str, offset: int, text: str) -> Optional[_Rep]:
+def _hit_twilio_sid(m: str, offset: int, ctx: _Ctx) -> Optional[_Rep]:
+    text = ctx.text
     if re.search(r"sid|account", _tail16(text, offset, 20), re.IGNORECASE):
         return _Rep(_tag("twilio-sid"), _u16(m))
     return None
 
 
-def _hit_url_credentials(m: str, offset: int, text: str) -> Optional[_Rep]:
+def _hit_url_credentials(m: str, offset: int, ctx: _Ctx) -> Optional[_Rep]:
     return None if MARK in m else _Rep(_tag("url-credentials"), _u16(m))
 
 
-def _hit_basic_auth(m: str, offset: int, text: str) -> Optional[_Rep]:
+def _hit_basic_auth(m: str, offset: int, ctx: _Ctx) -> Optional[_Rep]:
     if _DIGITS.search(m) or MARK in m:
         return None
     return _Rep(_tag("basic-auth-arg"), _u16(m))
@@ -778,17 +796,17 @@ RULE_KINDS: Tuple[str, ...] = tuple(r.kind for r in _RULES)
 
 
 def _run(text0: str) -> Tuple[str, List[Redaction], int]:
-    global _parity
     text = text0
     removed = 0
     counts: Dict[str, int] = {}
     for rule in _RULES:
+        ctx = _Ctx(text)
         out: List[str] = []
         frm = 0
         pos = 0
         while pos <= len(text):
             if rule.find is not None:
-                span = rule.find(text, pos)
+                span = rule.find(ctx, pos)
                 if span is None:
                     break
                 start, end = span
@@ -804,7 +822,7 @@ def _run(text0: str) -> Tuple[str, List[Redaction], int]:
             r = (
                 _Rep(_tag(rule.kind), _u16(matched))
                 if rule.hit is None
-                else rule.hit(matched, start, text)
+                else rule.hit(matched, start, ctx)
             )
             if r is None:
                 pos = start + 1 if rule.retry else max(end, start + 1)
@@ -816,7 +834,6 @@ def _run(text0: str) -> Tuple[str, List[Redaction], int]:
             counts[rule.kind] = counts.get(rule.kind, 0) + 1
             removed += r.removed
         text = "".join(out) + text[frm:]
-    _parity = None
     return text, [Redaction(k, c) for k, c in counts.items()], removed
 
 
