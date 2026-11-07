@@ -14,7 +14,9 @@ Porting notes (JavaScript regular expressions are not Python's):
   JavaScript means by them (Python's ``\\s`` differs on U+001C..U+001F and U+FEFF, ``.`` matches
   ``\\r``, ``$`` matches before a final newline);
 * Python lookbehinds are fixed-width, so the variable-width ones become a fixed lookbehind plus a
-  ``pre`` check (``_scheme_before``, ``_basic_auth_before``, ``_after_marker``);
+  ``pre`` check or a hand-written search (``_scheme_before``, ``_basic_find``, ``_not_after_marker``)
+  that looks only at the text the lookbehind can reach (never a search from the start per
+  candidate, which is quadratic), and the PEM rule pairs its markers by bisection (``_pem_find``);
 * ``removed`` and the ratio count UTF-16 code units, as JavaScript's ``.length`` does.
 """
 
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import math
 import re
+from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Pattern, Sequence, Tuple
 
@@ -87,6 +90,9 @@ def _u16(s: str) -> int:
 
 def _tail16(text: str, at: int, n: int) -> str:
     """``text.slice(max(0, at - n), at)`` with ``n`` UTF-16 units (a split pair is left out)."""
+    window = text[max(0, at - n) : at]
+    if window.isascii():  # every unit is one code point: the common case, with no loop
+        return window
     used = 0
     i = at
     while i > 0:
@@ -405,7 +411,6 @@ def _in_json_string(text: str, at: int) -> bool:
     return _parity[1][at] == 1
 
 
-_TRAIL = _re(r"\.*$")
 _NAME = _re(r"^[A-Za-z_][A-Za-z0-9_]*=(?=[^=])")
 
 
@@ -424,8 +429,8 @@ def _high_entropy(full: str, offset: int, text: str) -> Optional[_Rep]:
 
 
 def _read_token(full: str, offset: int, text: str) -> Optional[_Rep]:
-    trail = _TRAIL.search(full).group(0)  # type: ignore[union-attr]
-    m = full[: len(full) - len(trail)]
+    m = full.rstrip(".")  # the trailing dots, in one pass (a ``\\.*$`` search is quadratic)
+    trail = full[len(m) :]
     nm = _NAME.search(m)
     name = nm.group(0) if nm else ""
     r = _judge_token(m[len(name) :], offset + len(name), text)
@@ -551,21 +556,86 @@ def _escape_bounded(src: str, own: bool) -> str:
     return f"(?:{lead.group(0)}|{_AFTER_ESC}){src[lead.end():]}"
 
 
-_SCHEME_BEFORE = _re(r"\b[a-z][a-z0-9+.-]*://$", "i")
-_BASIC_BEFORE = _re(r"(?:^|\s|\\[nrt])(?:-u[ \t]+|--user[ \t=]+)(?:[^\s:\\]|\\.)+:$")
-_AFTER_MARKER = _re(r"\[REDACTED:[a-z-]+\]$")
+# The three variable-width lookbehinds JavaScript allows and Python's ``re`` does not. Each is
+# emulated in time proportional to the text it actually examines: none of them searches from the
+# start of the text per candidate (that is quadratic: ``":" * 200_000`` took minutes).
+_SCHEME_RUN = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-")
+_WORD_CH = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+_NAME_CH = frozenset("abcdefghijklmnopqrstuvwxyz-")
 
 
 def _scheme_before(text: str, p: int) -> bool:
-    return text[p - 3 : p] == "://" and _SCHEME_BEFORE.search(text, 0, p) is not None
+    """``(?<=\\b[a-z][a-z0-9+.-]*://)`` (``/i``) at ``p``. Walks back over the one run of scheme
+    characters before the ``://`` (``:`` and ``/`` end it, so the runs of different candidates
+    never overlap), then looks in that run for a letter that starts a word."""
+    q = p - 3
+    if q < 0 or text[q:p] != "://":
+        return False
+    i = q
+    while i > 0 and text[i - 1] in _SCHEME_RUN:
+        i -= 1
+    for s in range(i, q):
+        c = text[s]
+        if c.isascii() and c.isalpha() and (s == 0 or text[s - 1] not in _WORD_CH):
+            return True
+    return False
 
 
-def _basic_auth_before(text: str, p: int) -> bool:
-    return p > 0 and text[p - 1] == ":" and _BASIC_BEFORE.search(text, 0, p) is not None
+# ``(?<=(?:^|\s|\\[nrt])(?:-u[ \t]+|--user[ \t=]+)(?:[^\s:\\]|\\.)+:)``: the user part holds no
+# unescaped whitespace or ``:``, so each flag has at most one end, and the ends of the whole text
+# come from one linear forward pass (cached per text) instead of a backward search per candidate.
+_BASIC_ENDS = _re(r"(?=((?:^|\s|\\[nrt])(?:-u[ \t]+|--user[ \t=]+)(?:[^\s:\\]|\\.)+:))")
+_basic_cache: Optional[Tuple[str, List[int]]] = None
+_NON_WS = _re(r"\S+")
+
+
+def _basic_find(text: str, pos: int) -> Optional[Tuple[int, int]]:
+    """The rule's ``(?<=...)\\S+`` search, driven by the lookbehind's ends rather than by ``\\S+``
+    (a bare ``(?<=:)\\S+`` match attempt at each ``:`` runs to the end of the word: quadratic)."""
+    global _basic_cache
+    if _basic_cache is None or _basic_cache[0] is not text:
+        _basic_cache = (text, [m.end(1) for m in _BASIC_ENDS.finditer(text)])
+    ends = _basic_cache[1]
+    for i in range(bisect_left(ends, pos), len(ends)):
+        m = _NON_WS.match(text, ends[i])
+        if m is not None:
+            return m.start(), m.end()
+    return None
 
 
 def _not_after_marker(text: str, p: int) -> bool:
-    return not (p > 0 and text[p - 1] == "]" and _AFTER_MARKER.search(text, 0, p) is not None)
+    """The ``(?<!\\[REDACTED:[a-z-]+\\])`` half of high-entropy's left boundary: walks back over
+    the ``[a-z-]`` run once (``]`` ends it, so runs of different candidates never overlap)."""
+    if p == 0 or text[p - 1] != "]":
+        return True
+    j = p - 1
+    while j > 0 and text[j - 1] in _NAME_CH:
+        j -= 1
+    return not (j < p - 1 and text.endswith("[REDACTED:", 0, j))
+
+
+# PEM: ``-----BEGIN ... PRIVATE KEY-----`` up to the first ``-----END ... PRIVATE KEY-----``. As one
+# regex with a lazy ``.*?`` every BEGIN with no END after it rescans the rest of the text
+# (quadratic), so the two markers are found separately, once per text, and paired by bisection.
+# Each marker has exactly one possible end (``-`` is not in ``[A-Z ]``), and a BEGIN whose end is
+# past every END means no later BEGIN can match either.
+_PEM_BEGIN = _re(r"(?=(-----BEGIN [A-Z ]*PRIVATE KEY-----))")
+_PEM_END = _re(r"(?=(-----END [A-Z ]*PRIVATE KEY-----))")
+_pem_cache: Optional[Tuple[str, List[int], List[int]]] = None
+
+
+def _pem_find(text: str, pos: int) -> Optional[Tuple[int, int]]:
+    global _pem_cache
+    if _pem_cache is None or _pem_cache[0] is not text:
+        ends = list(_PEM_END.finditer(text))
+        _pem_cache = (text, [m.start(1) for m in ends], [m.end(1) for m in ends])
+    _, starts, stops = _pem_cache
+    for b in _PEM_BEGIN.finditer(text, pos):
+        i = bisect_left(starts, b.end(1))
+        if i == len(starts):
+            return None
+        return b.start(1), stops[i]
+    return None
 
 
 @dataclass
@@ -575,6 +645,8 @@ class _Rule:
     hit: Optional[Hit] = None
     retry: bool = False
     pre: Optional[Pre] = None
+    #: A hand-written search in place of ``re`` (start, end), for a rule whose regex is quadratic.
+    find: Optional[Callable[[str, int], Optional[Tuple[int, int]]]] = None
 
 
 def _rule(
@@ -586,8 +658,9 @@ def _rule(
     own: bool = False,
     retry: bool = False,
     pre: Optional[Pre] = None,
+    find: Optional[Callable[[str, int], Optional[Tuple[int, int]]]] = None,
 ) -> _Rule:
-    return _Rule(kind, _re(_escape_bounded(src, own), flags), hit, retry, pre)
+    return _Rule(kind, _re(_escape_bounded(src, own), flags), hit, retry, pre, find)
 
 
 _NB = r"(?<![A-Za-z0-9_-])"
@@ -617,7 +690,12 @@ def _hit_basic_auth(m: str, offset: int, text: str) -> Optional[_Rep]:
 
 
 _RULES: List[_Rule] = [
-    _rule("pem-private-key", r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "s"),
+    _rule(
+        "pem-private-key",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+        "s",
+        find=_pem_find,
+    ),
     _rule("aws-access-key", r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
     _rule(
         "aws-secret-key",
@@ -666,7 +744,7 @@ _RULES: List[_Rule] = [
         own=True,
         pre=_scheme_before,
     ),
-    _rule("basic-auth-arg", _BASIC_BODY, hit=_hit_basic_auth, own=True, pre=_basic_auth_before),
+    _rule("basic-auth-arg", _BASIC_BODY, hit=_hit_basic_auth, own=True, find=_basic_find),
     _rule(
         "auth-header",
         r"[\"']?(?:\b|" + _AFTER_ESC + r")(?:authorization|x-api-key|api-key|x-auth-token)[\"']?[ \t]*[:=][ \t]*[\"']?"
@@ -709,25 +787,31 @@ def _run(text0: str) -> Tuple[str, List[Redaction], int]:
         frm = 0
         pos = 0
         while pos <= len(text):
-            m = rule.re.search(text, pos)
-            if m is None:
-                break
-            start = m.start()
+            if rule.find is not None:
+                span = rule.find(text, pos)
+                if span is None:
+                    break
+                start, end = span
+                matched = text[start:end]
+            else:
+                m = rule.re.search(text, pos)
+                if m is None:
+                    break
+                start, end, matched = m.start(), m.end(), m.group(0)
             if rule.pre is not None and not rule.pre(text, start):
                 pos = start + 1
                 continue
-            end = m.end()
             r = (
-                _Rep(_tag(rule.kind), _u16(m.group(0)))
+                _Rep(_tag(rule.kind), _u16(matched))
                 if rule.hit is None
-                else rule.hit(m.group(0), start, text)
+                else rule.hit(matched, start, text)
             )
             if r is None:
                 pos = start + 1 if rule.retry else max(end, start + 1)
                 continue
             out.append(text[frm:start])
             out.append(r.out)
-            frm = start + (r.length if r.length is not None else len(m.group(0)))
+            frm = start + (r.length if r.length is not None else len(matched))
             pos = max(frm, start + 1)
             counts[rule.kind] = counts.get(rule.kind, 0) + 1
             removed += r.removed
