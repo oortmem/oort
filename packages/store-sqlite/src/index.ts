@@ -132,6 +132,32 @@ export interface SqliteStoreOptions {
  */
 export const MIGRATION_BUSY_TIMEOUT_MS = 60_000;
 
+/**
+ * Switches a connection to WAL, waiting up to `timeoutMs` for other connections. Two processes
+ * opening a brand-new database at once (a hook and the daemon on first run) both need every
+ * other connection out to switch it, and SQLite reports SQLITE_BUSY for that at once, without
+ * the busy timeout, since waiting could deadlock. So this retries, backing off up to 100 ms. A
+ * database already in WAL switches without a lock, on the first try.
+ */
+function enableWal(conn: Database.Database, timeoutMs: number): void {
+  const deadline = Date.now() + timeoutMs;
+  for (let wait = 5; ; wait = Math.min(wait * 2, 100)) {
+    let mode: unknown;
+    try {
+      mode = conn.pragma('journal_mode = WAL', { simple: true });
+    } catch (e) {
+      if ((e as { code?: unknown }).code !== 'SQLITE_BUSY' || Date.now() >= deadline) throw e;
+    }
+    if (mode === 'wal') return;
+    if (mode !== undefined && Date.now() >= deadline) {
+      throw new Error(
+        `sqlite store: could not switch ${conn.name} to WAL (it stayed ${String(mode)})`,
+      );
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait);
+  }
+}
+
 /** sqlite-vec's upper bound on `k` in a KNN query. */
 const MAX_KNN = 4096;
 
@@ -461,7 +487,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     const conn = new Database(dbPath);
     try {
       conn.pragma(`busy_timeout = ${busyTimeoutMs}`);
-      conn.pragma('journal_mode = WAL');
+      enableWal(conn, busyTimeoutMs);
       conn.pragma('foreign_keys = ON');
       sqliteVec.load(conn);
       const from = schemaVersionOf(conn);

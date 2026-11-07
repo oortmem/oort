@@ -469,6 +469,41 @@ describe('sqlite store', () => {
     await store.close();
   });
 
+  /** Opens the store in a worker while another connection holds a fresh database's write
+   * reservation for `holdMs`, as a second first-run opener does mid-switch. */
+  async function openWhileReserved(holdMs: number, busyTimeoutMs?: number) {
+    const opts = optsIn(freshDir());
+    fs.mkdirSync(path.dirname(opts.path), { recursive: true });
+    const other = new Database(opts.path); // a fresh file: rollback journal, not yet WAL
+    other.exec('CREATE TABLE IF NOT EXISTS held (x)');
+    other.exec('BEGIN IMMEDIATE');
+    other.exec('INSERT INTO held VALUES (1)');
+    const worker = new Worker(new URL('../test/open-store.mjs', import.meta.url), {
+      workerData: { ...opts, busyTimeoutMs },
+    });
+    const result = new Promise<{ ok: boolean; mode?: string; error?: string }>(
+      (resolve, reject) => {
+        worker.once('message', resolve);
+        worker.once('error', reject);
+      },
+    );
+    await new Promise((r) => setTimeout(r, holdMs));
+    other.exec('COMMIT');
+    other.close();
+    return result;
+  }
+
+  it('store.open-waits-for-the-wal-switch', async () => {
+    // Two processes opening a brand-new database at once (a hook and the daemon on first run):
+    // switching it to WAL needs every other connection out, and SQLite reports SQLITE_BUSY for
+    // that switch at once, without the busy timeout. The open must wait, not fail.
+    expect(await openWhileReserved(300)).toEqual({ ok: true, mode: 'wal' });
+  });
+
+  it('store.open-gives-up-on-the-wal-switch-after-the-busy-timeout', async () => {
+    expect(await openWhileReserved(600, 100)).toEqual({ ok: false, error: 'SQLITE_BUSY' });
+  });
+
   it('store.open-sweeps-orphan-blobs', async () => {
     const dir = freshDir();
     const cold = path.join(dir, 'cold');
