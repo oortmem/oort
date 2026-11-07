@@ -340,6 +340,73 @@ describe('rotating the service token under a running service', () => {
     }
   });
 
+  it('follows a kubelet secret rotation (..data swapped, the old directory deleted) with no restart', async () => {
+    const base = tmpdir('oort-kube-');
+    const h = path.join(base, 'home');
+    fs.mkdirSync(h, { recursive: true, mode: 0o700 });
+    // The layout a kubelet mounts: token -> ..data/token, ..data -> ..<generation>.
+    const mount = path.join(base, 'secret');
+    const generation = (name: string, token: string): void => {
+      const dir = path.join(mount, name);
+      fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
+      fs.chmodSync(dir, 0o755);
+      fs.writeFileSync(path.join(dir, 'token'), `${token}\n`, { mode: 0o640 });
+    };
+    const first = 'A'.repeat(43);
+    const second = 'B'.repeat(43);
+    generation('..a', first);
+    fs.symlinkSync('..a', path.join(mount, '..data'));
+    fs.symlinkSync(path.join('..data', 'token'), path.join(mount, 'token'));
+    const env = { OORT_SERVE_TOKEN_FILE: path.join(mount, 'token') };
+    const settings = serviceSettings({ listen: '127.0.0.1:0', org: 'acme' }, env, h);
+    const d = await startDaemon({
+      home: h,
+      env: { HOME: base, OORT_HOME: h, OORT_NO_KEYCHAIN: '1' },
+      wire,
+      version: VERSION,
+      idleMs: 600_000,
+      spawnDrain: () => {},
+      log: () => {},
+      warmCwd: base,
+      createHandle: (o) => createOortWith(o, { adapters: fakeAdapters() }),
+      listen: { host: settings.host, port: settings.port, auth: settings.auth },
+    });
+    try {
+      const get = (token: string): Promise<number> =>
+        new Promise((resolve, reject) => {
+          http
+            .get(
+              {
+                host: '127.0.0.1',
+                port: d.tcp!.port,
+                path: '/v1/whoami',
+                headers: {
+                  authorization: `Bearer ${token}`,
+                  'oort-project': '-',
+                  'oort-user': 'u1',
+                },
+              },
+              (res) => {
+                res.resume();
+                res.on('end', () => resolve(res.statusCode ?? 0));
+              },
+            )
+            .on('error', reject);
+        });
+      expect(await get(first)).toBe(200);
+      // The kubelet's atomic swap: a new generation, a new link, a rename over ..data, then the
+      // old generation is deleted.
+      generation('..b', second);
+      fs.symlinkSync('..b', path.join(mount, '..data_tmp'));
+      fs.renameSync(path.join(mount, '..data_tmp'), path.join(mount, '..data'));
+      fs.rmSync(path.join(mount, '..a'), { recursive: true });
+      expect(await get(second)).toBe(200);
+      expect(await get(first)).toBe(401);
+    } finally {
+      await d.stop('test');
+    }
+  });
+
   it('forceReload (SIGHUP) reads the file again even when its stat did not change', () => {
     const h = path.join(tmpdir('oort-hup-'), 'home');
     fs.mkdirSync(h, { recursive: true, mode: 0o700 });
@@ -386,6 +453,17 @@ describe('OORT_SERVE_TOKEN_FILE', () => {
     const open = make(0o600, 0o777);
     expect(() => serviceDigests({ OORT_SERVE_TOKEN_FILE: open.file }, h)).toThrow(/directory/);
     expect(() => serviceDigests({ OORT_SERVE_TOKEN_FILE: 'relative' }, h)).toThrow(/absolute/);
+  });
+
+  it('refuses a group-writable directory for a mounted secret, which a group member could hard-link into', () => {
+    for (const dirMode of [0o775, 0o770, 0o720]) {
+      const { file } = make(0o640, dirMode);
+      expect(() => serviceDigests({ OORT_SERVE_TOKEN_FILE: file }, h), dirMode.toString(8)).toThrow(
+        /directory/,
+      );
+    }
+    const { file } = make(0o640, 0o750);
+    expect(serviceDigests({ OORT_SERVE_TOKEN_FILE: file }, h)).toHaveLength(1);
   });
 });
 

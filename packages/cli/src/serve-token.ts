@@ -48,9 +48,12 @@ const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
  * A token file's contents, refused unless it is a regular file of this user's (or root's, for a
  * mounted secret) that neither group nor others may write and others may not read (`mask`: 0o077
  * for the home's own file; 0o027 for a mounted secret, which a group may share), in a directory
- * others cannot write. The file is opened with O_NOFOLLOW, so a swap of the last component for a
- * link is refused; `file` itself must already be the real path for a mounted secret (the caller
- * resolves the links an orchestrator puts in the path, once, before this).
+ * others cannot write (for a mounted secret the group cannot either: a group member could
+ * hard-link an old, readable file back in after a rotation). The file is opened with O_NOFOLLOW,
+ * so a swap of the last component for a link is refused; `file` itself must be the real path at
+ * this moment for a mounted secret: the caller resolves the links an orchestrator puts in the
+ * path (`token -> ..data/token`, `..data -> ..<timestamp>`) on every read, because a kubelet
+ * rotation swaps `..data` and deletes the old directory, so a path resolved once goes stale.
  */
 function readTokenFile(file: string, mask: number, root: boolean): string {
   let fd: number;
@@ -79,7 +82,8 @@ function readTokenFile(file: string, mask: number, root: boolean): string {
     }
     if (root && process.platform !== 'win32') {
       const dir = fs.statSync(path.dirname(file));
-      if ((dir.mode & 0o002) !== 0 || (me !== undefined && dir.uid !== me && dir.uid !== 0)) {
+      const dirMask = 0o002 | (mask === 0o027 ? 0o020 : 0);
+      if ((dir.mode & dirMask) !== 0 || (me !== undefined && dir.uid !== me && dir.uid !== 0)) {
         throw new Refusal(
           `${shown(path.dirname(file))} (the token file's directory) can be changed by others; refusing to use ${shown(file)}.`,
         );
@@ -94,8 +98,9 @@ function readTokenFile(file: string, mask: number, root: boolean): string {
 /** Where the token comes from, and how a file is judged. */
 interface TokenSource {
   where: string;
-  /** Undefined for `OORT_SERVE_TOKEN`: fixed for the life of the process. */
-  file?: string;
+  /** Undefined for `OORT_SERVE_TOKEN`: fixed for the life of the process. Else the file's real
+   * path now (links followed afresh on each call: a mounted secret's path changes on rotation). */
+  locate?: () => string;
   mask: number;
   mounted: boolean;
   read: () => string;
@@ -110,25 +115,27 @@ function sourceOf(env: Env, home: string): TokenSource {
   if (fileEnv !== undefined && fileEnv !== '') {
     if (!path.isAbsolute(fileEnv))
       throw new Refusal('OORT_SERVE_TOKEN_FILE must be an absolute path.');
-    // A mounted secret is reached through links (`token -> ..data/token`): resolved once here.
-    let real = fileEnv;
-    try {
-      real = fs.realpathSync(fileEnv);
-    } catch {
-      // readTokenFile reports it.
-    }
+    // A mounted secret is reached through links (`token -> ..data/token`) that a rotation
+    // re-points and whose targets it deletes: resolved again on every stamp and every read.
+    const locate = (): string => {
+      try {
+        return fs.realpathSync(fileEnv);
+      } catch {
+        return fileEnv; // readTokenFile reports it (ENOENT, a loop)
+      }
+    };
     return {
       where: 'OORT_SERVE_TOKEN_FILE',
-      file: real,
+      locate,
       mask: 0o027,
       mounted: true,
-      read: () => readTokenFile(real, 0o027, true),
+      read: () => readTokenFile(locate(), 0o027, true),
     };
   }
   const file = tokenPathFor(home);
   return {
     where: shown(file),
-    file,
+    locate: () => file,
     mask: 0o077,
     mounted: false,
     read: () => readTokenFile(file, 0o077, false),
@@ -183,11 +190,11 @@ export function serviceTokens(
 } {
   const src = sourceOf(env, home);
   let current = digestsOf(src.read(), src.where);
-  const file = src.file;
-  if (file === undefined) return { digests: current };
+  const locate = src.locate;
+  if (locate === undefined) return { digests: current };
   const stamp = (): string | undefined => {
     try {
-      const st = fs.statSync(file, { bigint: true });
+      const st = fs.statSync(locate(), { bigint: true });
       return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
     } catch {
       return undefined;
