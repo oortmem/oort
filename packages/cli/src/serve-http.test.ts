@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as net from 'node:net';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { VERSION } from '@oortmem/core';
 import { tmpdir } from '../test/helpers.js';
@@ -12,7 +13,6 @@ import { callDaemon } from './serve-client.js';
 import { startDaemon, type Daemon } from './serve-daemon.js';
 import { MAX_BODY_BYTES, allowedHost, digestOf, tokenMatches } from './serve-http.js';
 import {
-  groupCanBecomeRoot,
   isLoopback,
   parseListen,
   readTokenFile,
@@ -21,9 +21,24 @@ import {
   serviceTokens,
   tokenPathFor,
   writeTokenFile,
-  type SystemGroups,
 } from './serve-token.js';
 import { wire } from './wire.js';
+
+/**
+ * A private (0700) directory under the checkout's `.test-homes`, not under the system temp
+ * directory: a mounted-secret test is about the directories above the file, so those must not
+ * depend on what `/tmp` looks like on the machine running it.
+ */
+const sealed = (prefix: string): string => {
+  const root = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../../..',
+    '.test-homes',
+  );
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  fs.chmodSync(root, 0o700);
+  return fs.realpathSync(fs.mkdtempSync(path.join(root, prefix)));
+};
 
 /**
  * The memory protocol on `oort serve` (CON-108 §8.1): HTTP and hook frames on one socket, the
@@ -344,7 +359,7 @@ describe('rotating the service token under a running service', () => {
   });
 
   it('follows a kubelet secret rotation (..data swapped, the old directory deleted) with no restart', async () => {
-    const base = tmpdir('oort-kube-');
+    const base = sealed('oort-kube-');
     const h = path.join(base, 'home');
     fs.mkdirSync(h, { recursive: true, mode: 0o700 });
     // The layout a kubelet mounts: token -> ..data/token, ..data -> ..<generation>.
@@ -425,7 +440,7 @@ describe('rotating the service token under a running service', () => {
 
 describe('OORT_SERVE_TOKEN_FILE', () => {
   const make = (mode: number, dirMode = 0o755) => {
-    const dir = path.join(tmpdir('oort-tf-'), 'secret');
+    const dir = path.join(sealed('oort-tf-'), 'secret');
     fs.mkdirSync(dir, { recursive: true });
     fs.chmodSync(dir, dirMode);
     const file = path.join(dir, 'token');
@@ -433,7 +448,7 @@ describe('OORT_SERVE_TOKEN_FILE', () => {
     fs.chmodSync(file, mode);
     return { dir, file };
   };
-  const h = path.join(tmpdir('oort-tfh-'), 'home');
+  const h = path.join(sealed('oort-tfh-'), 'home');
 
   it('takes a private or group-readable file, and a link to it (an orchestrator mount)', () => {
     for (const mode of [0o600, 0o640, 0o440]) {
@@ -458,47 +473,60 @@ describe('OORT_SERVE_TOKEN_FILE', () => {
     expect(() => serviceDigests({ OORT_SERVE_TOKEN_FILE: 'relative' }, h)).toThrow(/absolute/);
   });
 
-  it('refuses a group-writable directory for a mounted secret, unless that group can become root', () => {
+  it('refuses a group-writable directory unless its group is root (or admin on macOS), by number', () => {
     for (const dirMode of [0o775, 0o770, 0o720]) {
       const { dir, file } = make(0o640, dirMode);
+      const gid = fs.statSync(dir).gid;
       const call = () => serviceDigests({ OORT_SERVE_TOKEN_FILE: file }, h);
-      // The directory's group is this user's own: refused unless that group is a root-equivalent
-      // one (a private group on Linux, `admin` on macOS), which adds no power by writing.
-      if (groupCanBecomeRoot(fs.statSync(dir).gid)) expect(call).not.toThrow();
+      // Only gid 0 (and 80 on macOS) may hold group write: never a private group, never a name.
+      if (gid === 0 || (process.platform === 'darwin' && gid === 80)) expect(call).not.toThrow();
       else expect(call, dirMode.toString(8)).toThrow(/directory/);
     }
     const { file } = make(0o640, 0o750);
     expect(serviceDigests({ OORT_SERVE_TOKEN_FILE: file }, h)).toHaveLength(1);
   });
 
-  it('decides which groups can already become root', () => {
-    const sys = (over: Partial<SystemGroups>): SystemGroups => ({
-      platform: 'linux',
-      group:
-        'root:x:0:\nsudo:x:27:alice\nstaff:x:50:alice,bob\nalice:x:1000:\nbob:x:1001:\ndev:x:1002:alice',
-      passwd: 'alice:x:1000:1000::/home/alice:/bin/sh\nbob:x:1001:1001::/home/bob:/bin/sh',
-      user: 'alice',
-      ...over,
-    });
-    expect(groupCanBecomeRoot(0, sys({}))).toBe(true);
-    expect(groupCanBecomeRoot(27, sys({}))).toBe(true); // sudo
-    expect(groupCanBecomeRoot(1000, sys({}))).toBe(true); // alice's private group
-    expect(groupCanBecomeRoot(1001, sys({}))).toBe(false); // someone else's
-    expect(groupCanBecomeRoot(50, sys({}))).toBe(false); // shared
-    expect(groupCanBecomeRoot(1002, sys({}))).toBe(false);
-    expect(groupCanBecomeRoot(99, sys({}))).toBe(false); // unknown
-    const mac = sys({ platform: 'darwin' });
-    expect([0, 80, 20, 1000].map((g) => groupCanBecomeRoot(g, mac))).toEqual([
-      true,
-      true,
-      false,
-      false,
-    ]);
-  });
+  const sharedTmp = ((): string | undefined => {
+    if (process.platform === 'win32') return undefined;
+    try {
+      const real = fs.realpathSync('/tmp');
+      const st = fs.statSync(real);
+      return st.uid === 0 && (st.mode & 0o1002) === 0o1002 ? real : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+
+  it.skipIf(sharedTmp === undefined)(
+    "takes a link in a root-owned sticky directory (/tmp) only if the link is the user's or root's",
+    () => {
+      const dir = fs.mkdtempSync(path.join(sharedTmp!, 'oort-st-'));
+      try {
+        fs.chmodSync(dir, 0o755);
+        const target = path.join(dir, 'token');
+        fs.writeFileSync(target, `${TOKEN}\n`, { mode: 0o640 });
+        const link = path.join(sharedTmp!, `oort-st-link-${path.basename(dir)}`);
+        fs.symlinkSync(target, link);
+        try {
+          // Ours, in the shared directory: taken.
+          expect(readTokenFile(link, 0o027, true)).toContain(TOKEN);
+          // The same link, seen by a process that is another user: refused, whatever the target.
+          const me = process.getuid!();
+          expect(() => readTokenFile(link, 0o027, true, undefined, { uid: me + 1 })).toThrow(
+            /belongs to another user/,
+          );
+        } finally {
+          fs.rmSync(link, { force: true });
+        }
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('refuses a link held in a directory others can write, though its target is safe', () => {
     const { file } = make(0o640);
-    const folder = path.join(tmpdir('oort-wl-'), 'links');
+    const folder = path.join(sealed('oort-wl-'), 'links');
     fs.mkdirSync(folder);
     fs.chmodSync(folder, 0o777);
     const link = path.join(folder, 'token');

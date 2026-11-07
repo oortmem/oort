@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { writePrivateFile } from '@oortmem/core';
 import type { Env } from './io.js';
@@ -45,102 +44,86 @@ export function writeTokenFile(home: string, rotate: boolean): { file: string; c
 
 const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 
-/** Linux groups whose members can already become root: group write from them adds nothing. */
-const ROOT_GROUPS = new Set(['root', 'sudo', 'wheel', 'admin']);
+/** Group write on a directory is taken from root (gid 0) and, on macOS, `admin` (80): by number. */
+const groupMayWrite = (gid: number): boolean =>
+  gid === 0 || (process.platform === 'darwin' && gid === 80);
 
-/** What `groupCanBecomeRoot` reads: the system's group and user databases, and who this is. */
-export interface SystemGroups {
-  platform: NodeJS.Platform;
-  /** `/etc/group`'s text (`name:x:gid:member,member`). */
-  group: string;
-  /** `/etc/passwd`'s text (`name:x:uid:gid:...`). */
-  passwd: string;
-  user: string;
-}
+/** A directory every user may write into but only the owner of an entry may rename or remove. */
+const sharedSticky = (st: fs.Stats): boolean =>
+  (st.mode & 0o002) !== 0 && (st.mode & 0o1000) !== 0 && st.uid === 0;
 
-let systemGroups: SystemGroups | undefined;
-
-function readSystemGroups(): SystemGroups {
-  const read = (f: string): string => {
-    try {
-      return fs.readFileSync(f, 'utf8');
-    } catch {
-      return '';
+/**
+ * Every path entry met resolving `p` from `/`: each component, and each link's target components
+ * in turn (so `token -> ..data/token` yields `token`, `..data`, `..data`'s target, ...).
+ */
+function entriesOn(p: string): string[] {
+  const seen: string[] = [];
+  const parts = (x: string): string[] => x.split(path.sep).filter((c) => c !== '' && c !== '.');
+  let pending = parts(p);
+  let cur: string = path.sep;
+  for (let hops = 0; pending.length > 0;) {
+    const c = pending.shift() as string;
+    if (c === '..') {
+      cur = path.dirname(cur);
+      continue;
     }
-  };
-  let user = '';
-  try {
-    user = os.userInfo().username;
-  } catch {
-    // No user name: no user-private group either.
+    const next = path.join(cur, c);
+    seen.push(next);
+    if (fs.lstatSync(next).isSymbolicLink()) {
+      if (++hops > 40) throw Object.assign(new Error('too many links'), { code: 'ELOOP' });
+      const target = fs.readlinkSync(next);
+      pending = [...parts(target), ...pending];
+      if (path.isAbsolute(target)) cur = path.sep;
+    } else {
+      cur = next;
+    }
   }
-  return {
-    platform: process.platform,
-    group: read('/etc/group'),
-    passwd: read('/etc/passwd'),
-    user,
-  };
+  return seen;
 }
 
 /**
- * Whether members of group `gid` can already become root, so letting them write changes nothing.
- * macOS: `wheel` (0) and `admin` (80), by number (an account's own group there is `staff`, 20,
- * which never counts). Elsewhere, from `/etc/group`: `root`, `sudo`, `wheel` or `admin`, or this
- * user's private group (named after the user, with no other members and no other user's primary
- * group). The same rule as `groupCanBecomeRoot` in trust.ts (PR #78), which this branch does not
- * have yet: fold the two together when both are in.
+ * The trust rules for the directories a mounted token is reached through. Every directory from
+ * each entry's parent up to `/` must belong to this user or root, and:
+ *
+ * - others may not write it, except a root-owned sticky directory (`/tmp`, a Kubernetes secret
+ *   mount's tmpfs), where the sticky bit stops anyone replacing an entry that is not theirs, so
+ *   every entry met on the path inside it (the `token` link, the `..data` link, a generation
+ *   directory) must itself belong to this user or root (`lstat`, on the link, not its target);
+ * - a group may not write it (when the mask lets a group read at all) except gid 0, and gid 80
+ *   on macOS. Groups are never trusted by name or as a "private group".
  */
-export function groupCanBecomeRoot(gid: number, sys?: SystemGroups): boolean {
-  const s = sys ?? (systemGroups ??= readSystemGroups());
-  if (s.platform === 'darwin') return gid === 0 || gid === 80;
-  if (gid === 0) return true;
-  const entry = s.group
-    .split('\n')
-    .map((l) => l.split(':'))
-    .find((f) => f.length >= 3 && Number(f[2]) === gid);
-  if (entry === undefined) return false;
-  const name = entry[0] ?? '';
-  if (ROOT_GROUPS.has(name)) return true;
-  const members = (entry[3] ?? '').split(',').filter((m) => m.trim() !== '');
-  if (s.user === '' || name !== s.user || members.some((m) => m.trim() !== s.user)) return false;
-  const others = s.passwd
-    .split('\n')
-    .map((l) => l.split(':'))
-    .filter((f) => f.length >= 4 && Number(f[3]) === gid && f[0] !== s.user);
-  return others.length === 0;
-}
-
-/**
- * Every directory from `file`'s parent up to `/`: each must belong to this user or root, and
- * not be writable by others (nor, for a mounted secret, by a group that cannot already become
- * root): whoever can change one can re-point the link or put a file of their own in the way.
- */
-function checkDirectories(file: string, mask: number, seen: Set<string>): void {
-  const me = currentUid();
-  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
-    if (!seen.has(dir)) {
-      seen.add(dir);
-      let st: fs.Stats;
-      try {
-        st = fs.statSync(dir);
-      } catch {
-        throw new Refusal(
-          `${shown(dir)} (on the token file's path) cannot be examined; refusing to use ${shown(file)}.`,
-        );
-      }
-      // A root-owned sticky directory (`/tmp`) is shared by design, and the sticky bit stops
-      // anyone renaming or removing an entry that is not theirs: the one world-writable case taken.
-      const systemShared = (st.mode & 0o1000) !== 0 && st.uid === 0;
-      const others = (st.mode & 0o002) !== 0 && !systemShared;
-      // mask 0o027 (a mounted secret) allows group *read*; group *write* only from a root group.
-      const group = mask === 0o027 && (st.mode & 0o020) !== 0 && !groupCanBecomeRoot(st.gid);
-      if (others || group || (me !== undefined && st.uid !== me && st.uid !== 0)) {
-        throw new Refusal(
-          `${shown(dir)} (a directory on the token file's path) can be changed by others; refusing to use ${shown(file)}.`,
-        );
-      }
+function checkMountedPath(
+  configured: string,
+  real: string,
+  mask: number,
+  me: number | undefined,
+): void {
+  const entries = [...new Set([...entriesOn(configured), ...entriesOn(real)])];
+  const owned = (uid: number): boolean => me === undefined || uid === me || uid === 0;
+  for (const e of entries) {
+    const parent = path.dirname(e);
+    if (sharedSticky(fs.statSync(parent)) && !owned(fs.lstatSync(e).uid)) {
+      throw new Refusal(
+        `${shown(e)} (on the token file's path, in the shared directory ${shown(parent)}) belongs to another user; refusing to use ${shown(configured)}.`,
+      );
     }
-    if (path.dirname(dir) === dir) break;
+  }
+  const dirs = new Set<string>();
+  for (const e of entries) {
+    for (let d = path.dirname(e); !dirs.has(d); d = path.dirname(d)) {
+      dirs.add(d);
+      if (path.dirname(d) === d) break;
+    }
+  }
+  for (const d of dirs) {
+    const st = fs.statSync(d);
+    const othersWrite = (st.mode & 0o002) !== 0 && !sharedSticky(st);
+    const groupWrite = mask === 0o027 && (st.mode & 0o020) !== 0 && !groupMayWrite(st.gid);
+    if (othersWrite || groupWrite || !owned(st.uid)) {
+      throw new Refusal(
+        `${shown(d)} (a directory on the token file's path) can be changed by others; refusing to use ${shown(configured)}.`,
+      );
+    }
   }
 }
 
@@ -151,9 +134,9 @@ function checkDirectories(file: string, mask: number, seen: Set<string>): void {
  *
  * A mounted secret (`mounted`) is reached through links an orchestrator re-points on rotation
  * (`token -> ..data/token`, `..data -> ..<generation>`, the old generation then deleted), so the
- * path is resolved afresh on every call, and then: every directory on the path as configured
- * (including the one holding the link) and on the resolved path must be this user's or root's and
- * unwritable by others (and by a group that cannot become root); the resolved file is opened with
+ * path is resolved afresh on every call, and then: every entry and directory on the path as
+ * configured (the folder holding the link, the links, the generation) and on the resolved path
+ * passes `checkMountedPath` (owners, others, groups, shared sticky directories); the resolved file is opened with
  * O_NOFOLLOW; and the opened file must be the very file that was checked (same device and inode
  * as a `stat` of the resolved path), so a swap between the checks and the open is refused.
  * `between` runs after the checks and before the open (tests swap the file there).
@@ -163,6 +146,7 @@ export function readTokenFile(
   mask: number,
   mounted: boolean,
   between?: () => void,
+  opts?: { uid?: number },
 ): string {
   const win = process.platform === 'win32';
   let file = configured;
@@ -179,9 +163,14 @@ export function readTokenFile(
       );
     }
     if (!win) {
-      const seen = new Set<string>();
-      checkDirectories(configured, mask, seen);
-      checkDirectories(file, mask, seen);
+      try {
+        checkMountedPath(configured, file, mask, opts?.uid ?? currentUid());
+      } catch (e) {
+        if (e instanceof Refusal) throw e;
+        throw new Refusal(
+          `${shown(configured)} cannot be examined (${(e as NodeJS.ErrnoException).code ?? 'error'}).`,
+        );
+      }
     }
   }
   let checked: fs.Stats | undefined;
