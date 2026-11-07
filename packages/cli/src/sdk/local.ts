@@ -10,7 +10,12 @@ import {
   type Observation,
 } from '@oortmem/core';
 import { supersedeChain } from '../engine/chain.js';
-import { runRecall, viewIgnored, viewIgnoredWarning } from '../engine/recall.js';
+import {
+  chosenDegradations,
+  runRecall,
+  viewIgnored,
+  viewIgnoredWarning,
+} from '../engine/recall.js';
 import { rememberFacts } from '../remember.js';
 import { adapterProblem, shapeLinks } from '../util.js';
 import { LOCAL_PROVIDER } from '../local-models.js';
@@ -124,12 +129,7 @@ function recallWarnings(
 }
 
 /** Degradations the caller chose (`speed`) are not reported as degradations. */
-function chosen(degraded: readonly string[], speed: NonNullable<RecallOptions['speed']>): string[] {
-  return degraded.filter(
-    (d) =>
-      !(speed !== 'full' && d === 'no-reranker') && !(speed === 'lexical' && d === 'no-embedder'),
-  );
-}
+const chosen = chosenDegradations;
 
 export async function recall(ctx: Ctx, query: string, o: RecallOptions): Promise<RecallResult> {
   if (

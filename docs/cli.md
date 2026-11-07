@@ -194,7 +194,10 @@ is slate blue. Where a row shows a tier with its glyph, the glyphs are `●` hot
 `◐` warm and `○` cold. A one-line confirmation (`pin`, `forget`, `project link`,
 `keys set`) is its own header.
 
-`oort` with no arguments prints the help, like `oort --help`. On a colour
+`oort` with no arguments prints the help, like `oort --help`. It groups the
+commands by purpose (Start, Memory, Agents, Cloud and sharing, Maintenance) and
+ends with an example of each common command and where these docs are. `oort
+<command> --help` prints that command's own usage and flags. On a colour
 terminal the help, the start of `oort setup` and a finished `oort login` show
 the Oort mark (a dotted spiral with a comet); nowhere else, and never in a pipe.
 
@@ -239,14 +242,15 @@ needed.
 stderr, never stdout, so it still asks with stdout piped (`oort import
 claude-code | tee log`). It refuses (exit 2) instead of asking when stdin is not
 a terminal, or when `--json` is set, and names `--yes`, the flag to pass
-instead. `setup` takes `--yes` too. Declining a question changes nothing and
+instead. `setup` takes `--yes` too, and its interactive wizard asks its
+questions on stderr as well. Declining a question changes nothing and
 exits 0. `oort hook` always exits 0.
 
 **Missing keys.** Every missing-key message gives the same three ways, in this
 order: `oort models pull` (free local embed and rerank models, no keys),
 `oort keys set <provider>` (your own key), or `oort login` (Oort Pro). Local
-models do not decide or write, so saving new memories (`observe`, `import`, the
-MCP `remember` tool) also needs a TypeSafe and an Anthropic key, or Oort Pro,
+models do not decide or write, so saving new memories (`observe`, `remember`,
+`import`, the MCP `remember` tool) also needs a TypeSafe and an Anthropic key, or Oort Pro,
 even with local models. Recall works without any of them, lexical-only. No
 message suggests `export KEY=...`, which would leave the key in your shell
 history. Without a Keychain or `credentials.json` (`OORT_NO_KEYCHAIN=1`, CI,
@@ -258,6 +262,11 @@ instead.
 echoed in an error message is scrubbed first (every known key format, Oort keys
 included, becomes `[REDACTED:<kind>]`) and then clipped to 24 characters, so a
 value in an unrecognised format shows at most its first 23 characters.
+Everything Oort saves is scrubbed on your machine before it leaves, in local
+and cloud mode: a turn, a fact or a shared text bound for Oort Cloud goes
+through the same scrubber as the local write path (the API scrubs again), and
+one that is mostly secret is skipped without any request. `oort cloud import`
+scrubs each memory again as it uploads it.
 
 **Environment.**
 
@@ -344,6 +353,30 @@ on stderr:
 }
 ```
 
+Two optional fields say whether trying again can help, as the SDK's
+`OortError` does: `retryable` is `true` for a network failure or a service
+that is busy or down (`network`), a rate limit (`refused`, HTTP 429) and a
+local store locked by another process (`internal`); `retryAfter` is the number
+of seconds the service asked to wait (its `Retry-After` header), when it sent
+one. Both are absent otherwise, so read a missing `retryable` as "a retry
+alone will not fix this":
+
+```json
+{
+  "schema": "oort.v1",
+  "command": "recall",
+  "ok": false,
+  "error": {
+    "code": "refused",
+    "message": "Oort Cloud limit reached (HTTP 429): … Usage is at https://oortcloud.dev/account.",
+    "fix": null,
+    "exitCode": 2,
+    "retryable": true,
+    "retryAfter": 30
+  }
+}
+```
+
 `fix` is a command you can run as it is, where one fixes it, else `null`. The
 "same command with `--yes`" fix repeats your arguments only when every one of
 them is a known flag, a subcommand, an id, a name or an enum; anything else
@@ -391,6 +424,7 @@ every error that exits 1.
 ```sh
 oort recall "auth port" --json | jq '.data.memories[0].text'
 oort inspect --json | jq '.data.memories | length'
+oort remember "We deploy on Fridays." --json # { "results": [{ "fact": 0, "outcome", "id", "supersedes"?, "reason"? }] }
 oort forget 1b2c3d4e --yes --json            # { "id", "forgotten": true, "everywhere", "withdrawnFrom", "removalRequested", "unreachable", "stillShared", "constellations" }
 oort consolidate --json                      # { "promoted": [ids], "demoted", "evicted", "expired", "counts": {…}, "complete" }
 oort import claude-code --since 14d --yes --json   # { "outcome", "estimate": {…}, "imported": { "observations", "outcomes", "failedSessions" } }
@@ -736,8 +770,9 @@ Every tool sets `openWorldHint: false` and has a `title`.
 `remember` runs each fact through the normal write path, exactly as
 `oort observe` builds a turn: a user turn "Remember this: <fact>" and an
 assistant turn "Noted: <fact>". The path is scrub, gate, reconcile and the
-writer. Secrets are therefore scrubbed, and a fact that is only a secret is
-skipped. A duplicate fact reinforces the existing memory, and a contradicting
+writer. Secrets are therefore scrubbed on your machine before the fact leaves
+it, in local and cloud mode, and a fact that is mostly a secret is skipped
+(reason `secret`) without being sent. A duplicate fact reinforces the existing memory, and a contradicting
 one supersedes it; the old fact is kept with its validity closed. The tool
 needs all three roles of the write path (embed, decide and write), from your
 own keys or Oort Pro. Without them it returns an error that names
@@ -917,7 +952,8 @@ it exits, or until `oort serve stop && oort serve --detach`.
 
 | Command | What it does | Flags |
 | --- | --- | --- |
-| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)) |
+| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)), `--limit <n>`, `--speed <speed>`, `--budget-chars <n>` (see below) |
+| `oort remember <fact>` | Saves a fact you state, as the MCP `remember` tool and the SDK's `remember()` do: one turn framed as your statement (`Remember this: <fact>`, answered `Noted: <fact>`), through the write path (scrub, gate, reconcile, writer), as the acting agent on the cwd's project. The fact is scrubbed on your machine before it leaves, in local and cloud mode; one that is mostly a secret is `skipped (secret)` and never sent. Words without quotes are joined into one fact; a fact is one line of at most 500 characters (no line or paragraph separators). The header says what happened (`added 1b2c3d4e`, `superseded 1b2c3d4e (replaces 9f8e7d6c)`, `skipped (not durable)`; an outcome Oort does not know is `unknown`). In Oort Cloud it saves in your account, as `observe` does, with a `turnRef` built from the project, the type and the fact and the UTC day, so a retry after a lost answer is not saved twice. | `--type <type>` (a hint: `semantic`, `episodic`, `procedural` or `preference`; the write path decides), `--dry-run` (reports scrubbing only; touches nothing), `--json` (`data.results`, the SDK's `RememberResult`) |
 | `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation, hydrated, and where it came from (`your Planet`, `this agent's Star`, with `(overridden)` when a narrower memory contradicts it). The header names the agent, the nodes read (`reads: your Planet, Star cursor`) and the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (agent; read; rank, id, type, tier, validFrom, text, explanation, origin; temporal; timings; degraded), `--include <levels>`, `--as-of`, `--known-at`, `--history` |
 | `oort revalidate` | Lists volatile facts (a status, a current version, an owner) that nobody confirmed within `recall.staleAfterDays`, oldest first. | `--json` (`data.memories`: id, type, text, lastConfirmed; `data.staleAfterDays`) |
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
@@ -928,6 +964,27 @@ it exits, or until `oort serve stop && oort serve --detach`.
 | `oort consolidate` | Expires, re-tiers and evicts memories, every project and the global ones: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each node, and inside it each project and the global memories, is re-tiered on its own. The hooks also run it about daily (see `docs/claude-code.md`); a manual run counts as that day's. | |
 | `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. Withdrawn judgments are left out. | `--out <file>` (0600), `--force`, `--format 1\|2`, `--include-withdrawn` |
 | `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. It exits 3 when some sessions stopped at a failed observation (the rest are imported; run it again to retry them). | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
+
+`oort recall` takes the SDK's recall options as flags. `--limit <n>` returns
+at most `n` memories, 1 to 50 (default `recall.returnK`, 10). `--speed fast`
+skips the reranker and `--speed lexical` calls no model at all (keyword
+search only); `full`, the default, embeds and reranks. A stage `--speed` turns
+off is not reported as degraded. `--budget-chars <n>` caps the printed
+`<oort-memory>` block at `n` characters (default `recall.budgetChars`, 6000;
+at least 30, since the block's tags take 29); the header then counts the
+memories that fit (`3 memories (of 6; --budget-chars)`, or `none fit
+--budget-chars`). `--json` lists every memory either way.
+
+```sh
+oort recall "auth port" --limit 3 --speed fast
+oort recall "auth port" --budget-chars 1500
+```
+
+```sh
+oort remember "We deploy on Fridays."
+oort remember --type preference "I prefer pnpm over npm."
+oort remember "The CI key is in 1Password." --dry-run   # what the scrubber would redact
+```
 
 Ids are full ids or unique prefixes. Every command reads the cwd's project
 plus global memories, as the acting agent (`--agent`, `OORT_AGENT`, else
@@ -1170,7 +1227,7 @@ Judgment memory is local for now: in cloud mode the `oort judge` commands refuse
 ```sh
 oort keys set voyage      # prompts for the value, hidden (Keychain on macOS, credentials.json elsewhere)
 oort keys list [--json]   # where each key comes from: env, keychain or missing
-oort keys rm voyage
+oort keys rm voyage       # also: oort keys remove voyage
 ```
 
 `oort keys create [--name <n>] [--scope <list>] [--json]` makes a new Oort Cloud key for your
@@ -1218,7 +1275,7 @@ npm i -g @oortmem/local-models   # the runtime: ONNX Runtime, about 115 MB
 oort models pull                 # download the default models (58 MB), verify, and use them
 oort models [list] [--json]      # the catalog: downloaded, in use
 oort models verify [models...]   # re-hash downloaded files against their pins
-oort models rm [models...]       # delete them and switch back to the default provider
+oort models rm [models...]       # delete them and switch back to the default provider (also: models remove)
 oort reembed [--force] [--yes]   # re-embed every memory with the configured embedder
 ```
 
@@ -1445,9 +1502,14 @@ Every adapter role picks its key on its own:
 ```sh
 oort cloud use [--local]
 oort cloud status [--json]
-oort cloud import [--dry-run] [--yes]
-oort cloud export [--out <file>] [--force]
+oort cloud import [--dry-run] [--yes]    # also: oort cloud upload
+oort cloud export [--out <file>] [--force]   # also: oort cloud download
 ```
+
+`oort cloud upload` and `oort cloud download` are the same commands as
+`oort cloud import` and `oort cloud export` (which upload this machine's store
+and download your account's, unlike `oort import claude-code`, which reads
+transcripts). Both names work; `--json` reports the first.
 
 With Oort Pro your memories can live in Oort Cloud (stored in the EU) instead of on this machine.
 Then the Claude Code hooks, `oort mcp` and the memory commands read and save in your account, and

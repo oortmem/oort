@@ -1,4 +1,5 @@
 import { privacyStatement } from '../wire.js';
+import { scrubTextForCloud } from '../cloud-scrub.js';
 import { findCloudMemory, type CloudShareResult, type ShareFinding } from '../cloud.js';
 import { emit, jsonMode } from '../output.js';
 import { uiFor, type Ui } from '../ui.js';
@@ -102,9 +103,16 @@ export async function shareCommand(
     // State this project's privacy: the cloud decides from the shared memory's own project, and
     // refuses one whose privacy no client inside it has stated yet.
     const project = w.scope.projectId;
+    // An edited text is scrubbed here, before it leaves the machine.
+    const text = opts.text === undefined ? undefined : scrubTextForCloud(opts.text);
+    if (text?.dropped === true) {
+      throw new Refusal(
+        'That text is mostly secret; nothing was shared. Share it without the secret.',
+      );
+    }
     const body = {
       memoryId: m.id,
-      ...(opts.text !== undefined && { text: opts.text }),
+      ...(text !== undefined && { text: text.text }),
       ...(project !== undefined && { project, ...privacyStatement(w) }),
     };
     const ui = uiFor(ctx.io);
