@@ -12,13 +12,16 @@ import { callDaemon } from './serve-client.js';
 import { startDaemon, type Daemon } from './serve-daemon.js';
 import { MAX_BODY_BYTES, allowedHost, digestOf, tokenMatches } from './serve-http.js';
 import {
+  groupCanBecomeRoot,
   isLoopback,
   parseListen,
+  readTokenFile,
   serviceDigests,
   serviceSettings,
   serviceTokens,
   tokenPathFor,
   writeTokenFile,
+  type SystemGroups,
 } from './serve-token.js';
 import { wire } from './wire.js';
 
@@ -455,15 +458,79 @@ describe('OORT_SERVE_TOKEN_FILE', () => {
     expect(() => serviceDigests({ OORT_SERVE_TOKEN_FILE: 'relative' }, h)).toThrow(/absolute/);
   });
 
-  it('refuses a group-writable directory for a mounted secret, which a group member could hard-link into', () => {
+  it('refuses a group-writable directory for a mounted secret, unless that group can become root', () => {
     for (const dirMode of [0o775, 0o770, 0o720]) {
-      const { file } = make(0o640, dirMode);
-      expect(() => serviceDigests({ OORT_SERVE_TOKEN_FILE: file }, h), dirMode.toString(8)).toThrow(
-        /directory/,
-      );
+      const { dir, file } = make(0o640, dirMode);
+      const call = () => serviceDigests({ OORT_SERVE_TOKEN_FILE: file }, h);
+      // The directory's group is this user's own: refused unless that group is a root-equivalent
+      // one (a private group on Linux, `admin` on macOS), which adds no power by writing.
+      if (groupCanBecomeRoot(fs.statSync(dir).gid)) expect(call).not.toThrow();
+      else expect(call, dirMode.toString(8)).toThrow(/directory/);
     }
     const { file } = make(0o640, 0o750);
     expect(serviceDigests({ OORT_SERVE_TOKEN_FILE: file }, h)).toHaveLength(1);
+  });
+
+  it('decides which groups can already become root', () => {
+    const sys = (over: Partial<SystemGroups>): SystemGroups => ({
+      platform: 'linux',
+      group:
+        'root:x:0:\nsudo:x:27:alice\nstaff:x:50:alice,bob\nalice:x:1000:\nbob:x:1001:\ndev:x:1002:alice',
+      passwd: 'alice:x:1000:1000::/home/alice:/bin/sh\nbob:x:1001:1001::/home/bob:/bin/sh',
+      user: 'alice',
+      ...over,
+    });
+    expect(groupCanBecomeRoot(0, sys({}))).toBe(true);
+    expect(groupCanBecomeRoot(27, sys({}))).toBe(true); // sudo
+    expect(groupCanBecomeRoot(1000, sys({}))).toBe(true); // alice's private group
+    expect(groupCanBecomeRoot(1001, sys({}))).toBe(false); // someone else's
+    expect(groupCanBecomeRoot(50, sys({}))).toBe(false); // shared
+    expect(groupCanBecomeRoot(1002, sys({}))).toBe(false);
+    expect(groupCanBecomeRoot(99, sys({}))).toBe(false); // unknown
+    const mac = sys({ platform: 'darwin' });
+    expect([0, 80, 20, 1000].map((g) => groupCanBecomeRoot(g, mac))).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  it('refuses a link held in a directory others can write, though its target is safe', () => {
+    const { file } = make(0o640);
+    const folder = path.join(tmpdir('oort-wl-'), 'links');
+    fs.mkdirSync(folder);
+    fs.chmodSync(folder, 0o777);
+    const link = path.join(folder, 'token');
+    fs.symlinkSync(file, link);
+    expect(() => serviceDigests({ OORT_SERVE_TOKEN_FILE: link }, h)).toThrow(/directory/);
+    // Closing the folder makes the same link acceptable.
+    fs.chmodSync(folder, 0o755);
+    expect(serviceDigests({ OORT_SERVE_TOKEN_FILE: link }, h)).toHaveLength(1);
+  });
+
+  it('refuses a file swapped for another between the checks and the open (device and inode differ)', () => {
+    const { dir, file } = make(0o640);
+    const swap = () => {
+      const other = path.join(dir, 'other');
+      fs.writeFileSync(other, `${'C'.repeat(43)}\n`, { mode: 0o640 });
+      fs.renameSync(other, file);
+    };
+    expect(readTokenFile(file, 0o027, true)).toContain(TOKEN);
+    expect(() => readTokenFile(file, 0o027, true, swap)).toThrow(/changed while/);
+  });
+
+  it('fails closed and logs a reason, never the token, when the path becomes unsafe', () => {
+    const { dir, file } = make(0o640);
+    const lines: string[] = [];
+    const t = serviceTokens({ OORT_SERVE_TOKEN_FILE: file }, h);
+    expect(t.digests).toHaveLength(1);
+    fs.chmodSync(dir, 0o757);
+    t.forceReload!();
+    expect(t.reload!((l) => lines.push(l))).toHaveLength(0);
+    const text = lines.join('\n');
+    expect(text).toMatch(/refusing every request/);
+    expect(text).not.toContain(TOKEN);
   });
 });
 

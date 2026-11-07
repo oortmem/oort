@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { writePrivateFile } from '@oortmem/core';
 import type { Env } from './io.js';
@@ -44,18 +45,152 @@ export function writeTokenFile(home: string, rotate: boolean): { file: string; c
 
 const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 
+/** Linux groups whose members can already become root: group write from them adds nothing. */
+const ROOT_GROUPS = new Set(['root', 'sudo', 'wheel', 'admin']);
+
+/** What `groupCanBecomeRoot` reads: the system's group and user databases, and who this is. */
+export interface SystemGroups {
+  platform: NodeJS.Platform;
+  /** `/etc/group`'s text (`name:x:gid:member,member`). */
+  group: string;
+  /** `/etc/passwd`'s text (`name:x:uid:gid:...`). */
+  passwd: string;
+  user: string;
+}
+
+let systemGroups: SystemGroups | undefined;
+
+function readSystemGroups(): SystemGroups {
+  const read = (f: string): string => {
+    try {
+      return fs.readFileSync(f, 'utf8');
+    } catch {
+      return '';
+    }
+  };
+  let user = '';
+  try {
+    user = os.userInfo().username;
+  } catch {
+    // No user name: no user-private group either.
+  }
+  return {
+    platform: process.platform,
+    group: read('/etc/group'),
+    passwd: read('/etc/passwd'),
+    user,
+  };
+}
+
+/**
+ * Whether members of group `gid` can already become root, so letting them write changes nothing.
+ * macOS: `wheel` (0) and `admin` (80), by number (an account's own group there is `staff`, 20,
+ * which never counts). Elsewhere, from `/etc/group`: `root`, `sudo`, `wheel` or `admin`, or this
+ * user's private group (named after the user, with no other members and no other user's primary
+ * group). The same rule as `groupCanBecomeRoot` in trust.ts (PR #78), which this branch does not
+ * have yet: fold the two together when both are in.
+ */
+export function groupCanBecomeRoot(gid: number, sys?: SystemGroups): boolean {
+  const s = sys ?? (systemGroups ??= readSystemGroups());
+  if (s.platform === 'darwin') return gid === 0 || gid === 80;
+  if (gid === 0) return true;
+  const entry = s.group
+    .split('\n')
+    .map((l) => l.split(':'))
+    .find((f) => f.length >= 3 && Number(f[2]) === gid);
+  if (entry === undefined) return false;
+  const name = entry[0] ?? '';
+  if (ROOT_GROUPS.has(name)) return true;
+  const members = (entry[3] ?? '').split(',').filter((m) => m.trim() !== '');
+  if (s.user === '' || name !== s.user || members.some((m) => m.trim() !== s.user)) return false;
+  const others = s.passwd
+    .split('\n')
+    .map((l) => l.split(':'))
+    .filter((f) => f.length >= 4 && Number(f[3]) === gid && f[0] !== s.user);
+  return others.length === 0;
+}
+
+/**
+ * Every directory from `file`'s parent up to `/`: each must belong to this user or root, and
+ * not be writable by others (nor, for a mounted secret, by a group that cannot already become
+ * root): whoever can change one can re-point the link or put a file of their own in the way.
+ */
+function checkDirectories(file: string, mask: number, seen: Set<string>): void {
+  const me = currentUid();
+  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+    if (!seen.has(dir)) {
+      seen.add(dir);
+      let st: fs.Stats;
+      try {
+        st = fs.statSync(dir);
+      } catch {
+        throw new Refusal(
+          `${shown(dir)} (on the token file's path) cannot be examined; refusing to use ${shown(file)}.`,
+        );
+      }
+      // A root-owned sticky directory (`/tmp`) is shared by design, and the sticky bit stops
+      // anyone renaming or removing an entry that is not theirs: the one world-writable case taken.
+      const systemShared = (st.mode & 0o1000) !== 0 && st.uid === 0;
+      const others = (st.mode & 0o002) !== 0 && !systemShared;
+      // mask 0o027 (a mounted secret) allows group *read*; group *write* only from a root group.
+      const group = mask === 0o027 && (st.mode & 0o020) !== 0 && !groupCanBecomeRoot(st.gid);
+      if (others || group || (me !== undefined && st.uid !== me && st.uid !== 0)) {
+        throw new Refusal(
+          `${shown(dir)} (a directory on the token file's path) can be changed by others; refusing to use ${shown(file)}.`,
+        );
+      }
+    }
+    if (path.dirname(dir) === dir) break;
+  }
+}
+
 /**
  * A token file's contents, refused unless it is a regular file of this user's (or root's, for a
  * mounted secret) that neither group nor others may write and others may not read (`mask`: 0o077
- * for the home's own file; 0o027 for a mounted secret, which a group may share), in a directory
- * others cannot write (for a mounted secret the group cannot either: a group member could
- * hard-link an old, readable file back in after a rotation). The file is opened with O_NOFOLLOW,
- * so a swap of the last component for a link is refused; `file` itself must be the real path at
- * this moment for a mounted secret: the caller resolves the links an orchestrator puts in the
- * path (`token -> ..data/token`, `..data -> ..<timestamp>`) on every read, because a kubelet
- * rotation swaps `..data` and deletes the old directory, so a path resolved once goes stale.
+ * for the home's own file; 0o027 for a mounted secret, which a group may share).
+ *
+ * A mounted secret (`mounted`) is reached through links an orchestrator re-points on rotation
+ * (`token -> ..data/token`, `..data -> ..<generation>`, the old generation then deleted), so the
+ * path is resolved afresh on every call, and then: every directory on the path as configured
+ * (including the one holding the link) and on the resolved path must be this user's or root's and
+ * unwritable by others (and by a group that cannot become root); the resolved file is opened with
+ * O_NOFOLLOW; and the opened file must be the very file that was checked (same device and inode
+ * as a `stat` of the resolved path), so a swap between the checks and the open is refused.
+ * `between` runs after the checks and before the open (tests swap the file there).
  */
-function readTokenFile(file: string, mask: number, root: boolean): string {
+export function readTokenFile(
+  configured: string,
+  mask: number,
+  mounted: boolean,
+  between?: () => void,
+): string {
+  const win = process.platform === 'win32';
+  let file = configured;
+  if (mounted) {
+    try {
+      file = fs.realpathSync(configured);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      throw new Refusal(
+        code === 'ENOENT'
+          ? `${shown(configured)} does not exist: run \`oort serve token\` first.`
+          : `${shown(configured)} cannot be resolved (${code ?? 'error'}).`,
+        { fix: code === 'ENOENT' ? 'oort serve token' : undefined },
+      );
+    }
+    if (!win) {
+      const seen = new Set<string>();
+      checkDirectories(configured, mask, seen);
+      checkDirectories(file, mask, seen);
+    }
+  }
+  let checked: fs.Stats | undefined;
+  try {
+    checked = fs.statSync(file);
+  } catch {
+    checked = undefined; // the open below reports it
+  }
+  between?.();
   let fd: number;
   try {
     fd = fs.openSync(file, fs.constants.O_RDONLY | NOFOLLOW);
@@ -72,22 +207,18 @@ function readTokenFile(file: string, mask: number, root: boolean): string {
     const st = fs.fstatSync(fd);
     const me = currentUid();
     if (!st.isFile()) throw new Refusal(`${shown(file)} is not a regular file.`);
-    if (me !== undefined && st.uid !== me && !(root && st.uid === 0)) {
+    if (checked !== undefined && (st.dev !== checked.dev || st.ino !== checked.ino)) {
+      throw new Refusal(
+        `${shown(file)} changed while it was being checked (a different file than the one examined); refusing to use it.`,
+      );
+    }
+    if (me !== undefined && st.uid !== me && !(mounted && st.uid === 0)) {
       throw new Refusal(`${shown(file)} belongs to another user; refusing to use it.`);
     }
-    if (process.platform !== 'win32' && (st.mode & mask) !== 0) {
+    if (!win && (st.mode & mask) !== 0) {
       throw new Refusal(
         `${shown(file)} is mode ${(st.mode & 0o777).toString(8)}, so others could read or change the service token. Fix: chmod ${mask === 0o077 ? '600' : '640'} ${shown(file)}`,
       );
-    }
-    if (root && process.platform !== 'win32') {
-      const dir = fs.statSync(path.dirname(file));
-      const dirMask = 0o002 | (mask === 0o027 ? 0o020 : 0);
-      if ((dir.mode & dirMask) !== 0 || (me !== undefined && dir.uid !== me && dir.uid !== 0)) {
-        throw new Refusal(
-          `${shown(path.dirname(file))} (the token file's directory) can be changed by others; refusing to use ${shown(file)}.`,
-        );
-      }
     }
     return fs.readFileSync(fd, 'utf8');
   } finally {
@@ -129,7 +260,7 @@ function sourceOf(env: Env, home: string): TokenSource {
       locate,
       mask: 0o027,
       mounted: true,
-      read: () => readTokenFile(locate(), 0o027, true),
+      read: () => readTokenFile(fileEnv, 0o027, true),
     };
   }
   const file = tokenPathFor(home);
