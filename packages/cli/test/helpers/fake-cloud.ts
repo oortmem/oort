@@ -58,6 +58,47 @@ export interface FakeCloud {
   keyRequests: Record<string, unknown>[];
   /** Whether the key in use is narrowed (whoami's `scope`). */
   narrowed?: boolean;
+  /** Per-user memory (CON-132): the contract's `endUsers`. */
+  endUsers: FakeEndUsers;
+}
+
+/** Per-user memory as the fake runs it (CON-132). */
+export interface FakeEndUsers {
+  /**
+   * `current` follows the contract; `legacy` is an Oort Cloud from before CON-132: it lists no
+   * capabilities, has no end-user routes and ignores `Oort-User`, so a request naming an end user
+   * reads and writes the account's own Planet (what clients must never let happen).
+   */
+  server: 'current' | 'legacy';
+  /** The key in use is a server key (capability `end-users`). */
+  serverKey: boolean;
+  /** End users the account may have (the API's is 100). */
+  limit: number;
+  /** Each end user's own store: a fake cloud of their own, which the request is passed to. */
+  users: Map<string, FakeCloud>;
+  /** The `Oort-User` header of every request, in order (null: none). */
+  headers: (string | null)[];
+}
+
+/** The routes an end user's request may take (the contract's `endUsers.memoryRoutes`). */
+const END_USER_ROUTES = CONTRACT.endUsers.memoryRoutes.map((r) => {
+  const [method = '', path = ''] = r.split(' ');
+  return { method, re: new RegExp(`^${path.replace(/:[a-z]+/g, '[^/]+')}$`) };
+});
+
+/** The API's end-user id rules: the refusal, or null for a good id. */
+function endUserRefusal(raw: string): Response | null {
+  const id = raw.trim();
+  if (id === '') return err(400, 'user_missing', 'Oort-User is empty.');
+  const lower = id.toLowerCase();
+  if (lower === 'self') return err(400, 'self_not_derivable', 'self is reserved.');
+  if (
+    ['anonymous', 'default', 'local', 'root'].includes(lower) ||
+    !/^[A-Za-z0-9_.:@-]{1,128}$/.test(id)
+  ) {
+    return err(400, 'bad_user', 'An end user id is 1 to 128 letters, digits and - _ . : @.');
+  }
+  return null;
 }
 
 /** A Galaxy as the API lists it (CON-97). */
@@ -145,6 +186,7 @@ const MATCHERS = [
   ...CONTRACT.galaxies.routes,
   ...CONTRACT.archive.routes,
   ...CONTRACT.keys.routes,
+  ...CONTRACT.endUsers.routes,
 ].map((r) => ({
   method: r.method,
   re: new RegExp(`^${r.path.replace(/\?.*$/, '').replace(/:[a-z]+/g, '[^/]+')}$`),
@@ -276,19 +318,93 @@ export function fakeCloud(key: string): FakeCloud {
     recalls: [],
     whoamiAgents: [],
     keyRequests: [],
+    endUsers: { server: 'current', serverKey: false, limit: 100, users: new Map(), headers: [] },
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
       const req = new Request(input, init);
       const url = new URL(req.url);
       c.seen.push(`${req.method} ${url.pathname}`);
-      if (!MATCHERS.some((m) => m.method === req.method && m.re.test(url.pathname))) {
+      const eu = c.endUsers;
+      const userHeader = req.headers.get('oort-user');
+      eu.headers.push(userHeader);
+      const legacy = eu.server === 'legacy';
+      if (
+        !MATCHERS.some((m) => m.method === req.method && m.re.test(url.pathname)) ||
+        (legacy && url.pathname.startsWith('/v1/end-users'))
+      ) {
         return err(404, 'not_found', 'not a contract route');
+      }
+      // CON-132: Oort-User on a route that can't act for an end user, before authentication.
+      const forEndUser =
+        !legacy &&
+        userHeader !== null &&
+        END_USER_ROUTES.some((r) => r.method === req.method && r.re.test(url.pathname)) &&
+        !url.searchParams.has('everywhere');
+      if (!legacy && userHeader !== null && !forEndUser) {
+        return err(400, 'user_not_supported', 'This route acts for the account itself.');
       }
       if (req.headers.get('authorization') !== `Bearer ${c.key}`) {
         return err(401, 'unauthorized', 'unknown key');
       }
       if (c.refuse !== undefined) return err(c.refuse.status, c.refuse.code, c.refuse.message);
+      const serverKey = !legacy && eu.serverKey;
+      if (forEndUser && !serverKey) {
+        return err(403, 'end_users_not_allowed', 'Only a server key can act for an end user.');
+      }
+      const accountRoute =
+        url.pathname === '/v1/whoami' || url.pathname.startsWith('/v1/end-users');
+      if (serverKey && userHeader === null && !accountRoute) {
+        return err(400, 'user_missing', 'This is a server key for end users: send Oort-User.');
+      }
+      if (url.pathname.startsWith('/v1/end-users') && !serverKey) {
+        return err(403, 'end_users_not_allowed', 'Only a server key can do this.');
+      }
       const forced = forcedFailure(c.fail, req.method, url.pathname);
       if (forced !== undefined) return forced;
+      if (forEndUser) {
+        const bad = endUserRefusal(userHeader);
+        if (bad !== null) return bad;
+        const id = userHeader.trim();
+        let body: string | undefined;
+        if (req.method !== 'GET' && req.method !== 'DELETE') body = await req.text();
+        if (url.pathname === '/v1/recall' && body !== undefined) {
+          const include = (JSON.parse(body) as { include?: string[] }).include ?? [];
+          if (include.includes('star'))
+            return err(400, 'star_with_user', 'An end user has no Star.');
+          if (include.some((l) => l === 'constellation' || l === 'galaxy')) {
+            return err(400, 'scope_denied', 'An end user reads only their own Planet.');
+          }
+        }
+        let store = eu.users.get(id);
+        if (store === undefined) {
+          store = fakeCloud(c.key);
+          // A new end user is listed by their first write, within the limit.
+          if (url.pathname === '/v1/observe') {
+            if (eu.users.size >= eu.limit) {
+              return err(402, 'end_user_limit', `This account has ${eu.limit} end users.`);
+            }
+            eu.users.set(id, store);
+          }
+        }
+        const headers = new Headers(req.headers);
+        headers.delete('oort-user');
+        return store.fetch(req.url, {
+          method: req.method,
+          headers,
+          ...(body !== undefined && { body }),
+        });
+      }
+      if (url.pathname === '/v1/end-users/count') {
+        return Response.json({ endUsers: eu.users.size, limit: eu.limit });
+      }
+      const erase = /^\/v1\/end-users\/([^/]+)$/.exec(url.pathname);
+      if (erase !== null && req.method === 'DELETE') {
+        const id = decodeURIComponent(erase[1] ?? '');
+        const bad = endUserRefusal(id);
+        if (bad !== null) return bad;
+        const memories = eu.users.get(id)?.memories.size ?? 0;
+        eu.users.delete(id);
+        return Response.json({ erased: { memories, coldCopies: 0, turnRefs: 0, cursors: 0 } });
+      }
       const p = url.pathname;
       const byName = (ref: string) =>
         [...c.hive.constellations.values()].find((x) => x.id === ref || x.name === ref);
@@ -331,6 +447,7 @@ export function fakeCloud(key: string): FakeCloud {
           spaces,
           ...(galaxies.length > 0 && { galaxies }),
           scope: c.narrowed === true ? 'narrowed' : 'full',
+          ...(serverKey && { capabilities: [CONTRACT.endUsers.capability] }),
         });
       }
       if (p === '/v1/keys') {

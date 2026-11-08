@@ -116,6 +116,8 @@ export type CloudErrorKind =
   | 'busy'
   | 'network'
   | 'hive-not-enabled'
+  | 'end-user-limit'
+  | 'end-users-unsupported'
   | 'refused';
 
 /** Kinds the account has to fix, or that pass with time: a hook's queue waits instead. */
@@ -187,6 +189,10 @@ function messageFor(kind: CloudErrorKind, status: number, apiRaw?: string): stri
       return `Oort Cloud is busy or down, try again shortly (HTTP ${status}).`;
     case 'hive-not-enabled':
       return 'Constellations are not enabled for this account yet (an invite-only beta). Your memories stay in your Planet.';
+    case 'end-user-limit':
+      return `Oort Cloud refused a new end user (HTTP 402)${api !== undefined ? `: ${api}` : '.'}`;
+    case 'end-users-unsupported':
+      return END_USERS_UNSUPPORTED;
     case 'refused':
       return `Oort Cloud refused this (HTTP ${status})${api !== undefined ? `: ${api}` : '.'}`;
     case 'network':
@@ -194,9 +200,25 @@ function messageFor(kind: CloudErrorKind, status: number, apiRaw?: string): stri
   }
 }
 
+/**
+ * Refused before any request names an end user: whoami does not list the key's `end-users`
+ * capability. An Oort Cloud from before CON-132 ignores `Oort-User` and would write the end
+ * user's memories into the account's own Planet, so the header is never sent to one.
+ */
+export const END_USERS_UNSUPPORTED =
+  'Per-user memory needs Oort Cloud with server keys: whoami does not list the end-users capability for this Oort key (an Oort Cloud without per-user memory, or a key made without "Acts for end users"), so nothing was sent for this end user. Make a server key on https://oortcloud.dev/account.';
+
+/** The key capability that lets a server key act for its account's end users (CON-132). */
+export const END_USERS_CAPABILITY = 'end-users';
+
+/** The request header that names the end user a server key acts for (CON-132). */
+export const END_USER_HEADER = 'oort-user';
+
 /** The kind an API status (and `{ error: { code } }`) stands for. */
 export function cloudErrorKind(status: number, code?: string): CloudErrorKind {
   if (status === 401) return 'unauthorized';
+  // A plan's end-user limit (CON-132), not a lapsed plan: the end users already there keep working.
+  if (status === 402 && code === 'end_user_limit') return 'end-user-limit';
   if (status === 402) return 'payment-required';
   if (status === 403) {
     if (code === 'cloud_not_enabled') return 'not-enabled';
@@ -302,6 +324,25 @@ export interface CloudWhoami {
   galaxies?: Pick<CloudGalaxy, 'id' | 'name' | 'slug' | 'role'>[];
   /** `narrowed`: the key was limited to some spaces when it was made. */
   scope?: 'full' | 'narrowed';
+  /**
+   * What this key may do beyond its account's own memory: `end-users` for a server key that
+   * acts for end users (CON-132). Absent from an older API, and for every other key.
+   */
+  capabilities?: string[];
+}
+
+/** How many end users the account has, and how many its plan includes (CON-132). */
+export interface CloudEndUserCount {
+  endUsers: number;
+  limit: number;
+}
+
+/** What erasing an end user removed: counts only (CON-132). */
+export interface CloudEndUserErasure {
+  memories: number;
+  coldCopies: number;
+  turnRefs: number;
+  cursors: number;
 }
 
 /** An invite as the inviter sees it: the token only ever appears inside `link`. */
@@ -571,6 +612,18 @@ export interface CloudClient {
    * `next` is set, post the same lines again with `from = next` to continue.
    */
   importLines(lines: string[], from?: number): Promise<CloudImportResult>;
+  /**
+   * This client acting for end user `id` (CON-132): every memory request sends `Oort-User`, and
+   * reads and writes that end user's Planet only. Before the first one, the client checks once
+   * that whoami lists the key's `end-users` capability (refused with `end-users-unsupported`
+   * otherwise): an Oort Cloud without per-user memory would ignore the header and write the
+   * account's own Planet. whoami itself is sent without the header.
+   */
+  forEndUser(id: string): CloudClient;
+  /** How many end users the account has (a server key; the same capability check). */
+  endUsersCount(): Promise<CloudEndUserCount>;
+  /** Erases end user `id` completely (a server key; the same capability check). */
+  eraseEndUser(id: string): Promise<CloudEndUserErasure>;
 }
 
 export interface CloudClientOptions {
@@ -624,6 +677,26 @@ export function withCloudTimings(r: RecallResult, t: CloudTiming): RecallResult 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 export function createCloudClient(opts: CloudClientOptions): CloudClient {
+  // Whether this key may act for end users, checked once (CON-132). Only a yes is kept: a refusal
+  // or a failed check is asked again next time, so an Oort Cloud upgrade needs no restart.
+  let endUsers: Promise<void> | undefined;
+  const requireEndUsers = (): Promise<void> => {
+    if (endUsers === undefined) {
+      const check = (async () => {
+        const me = (await (
+          await timedCall('GET', '/v1/whoami', undefined, undefined)
+        ).res.json()) as CloudWhoami;
+        if (!Array.isArray(me.capabilities) || !me.capabilities.includes(END_USERS_CAPABILITY)) {
+          throw new OortCloudError('end-users-unsupported', 0);
+        }
+      })();
+      endUsers = check;
+      check.catch(() => {
+        if (endUsers === check) endUsers = undefined;
+      });
+    }
+    return endUsers;
+  };
   const pooled =
     opts.fetch === undefined && (opts.keepAlive === true || opts.serverTiming === true);
   const doFetch =
@@ -635,24 +708,22 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
         : globalThis.fetch);
   const timeout = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  async function call(
-    method: string,
-    route: string,
-    body?: { json?: unknown; text?: string },
-  ): Promise<Response> {
-    return (await timedCall(method, route, body)).res;
-  }
-
-  /** `call`, with a clock: `done()` after reading the body says where the time went. */
+  /**
+   * `call`, with a clock: `done()` after reading the body says where the time went. With `user`,
+   * the request names that end user (`Oort-User`), and only once the key's capability is known.
+   */
   async function timedCall(
     method: string,
     route: string,
-    body?: { json?: unknown; text?: string },
+    body: { json?: unknown; text?: string } | undefined,
+    user: string | undefined,
   ): Promise<{ res: Response; done: () => CloudTiming }> {
+    if (user !== undefined) await requireEndUsers();
     const t0 = performance.now();
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeout);
     const headers: Record<string, string> = { authorization: `Bearer ${opts.key}` };
+    if (user !== undefined) headers[END_USER_HEADER] = user;
     if (opts.serverTiming === true) headers[TIMING_HEADER] = '1';
     let payload: string | undefined;
     if (body?.json !== undefined) {
@@ -719,97 +790,134 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       },
     };
   }
-  const json = async <T>(method: string, route: string, body?: unknown): Promise<T> =>
-    (await (
-      await call(method, route, body === undefined ? undefined : { json: body })
-    ).json()) as T;
-  const idPath = (id: string): string => `/v1/memories/${encodeURIComponent(id)}`;
-  const cPath = (c: string, rest = ''): string =>
-    `/v1/constellations/${encodeURIComponent(c)}${rest}`;
-
-  return {
-    url: opts.url,
-    whoami: (agent) =>
-      json('GET', `/v1/whoami${agent === undefined ? '' : `?agent=${encodeURIComponent(agent)}`}`),
-    invite: (c, email, role) =>
-      json('POST', cPath(c, '/invites'), { email, ...(role !== undefined && { role }) }),
-    invites: async (c) =>
-      (await json<{ invites: CloudPendingInvite[] }>('GET', cPath(c, '/invites'))).invites,
-    revokeInvite: (c, invite) => json('DELETE', cPath(c, `/invites/${encodeURIComponent(invite)}`)),
-    members: async (c) =>
-      (await json<{ members: CloudMember[] }>('GET', cPath(c, '/members'))).members,
-    setRole: (c, member, role) =>
-      json('PUT', cPath(c, `/members/${encodeURIComponent(member)}`), { role }),
-    removeMember: (c, member) => json('DELETE', cPath(c, `/members/${encodeURIComponent(member)}`)),
-    leave: (c) => json('POST', cPath(c, '/leave')),
-    attach: (c, agent, share) =>
-      json('POST', cPath(c, '/stars'), { agent, ...(share === true && { share: true }) }),
-    detach: (c, agent) => json('DELETE', cPath(c, `/stars/${encodeURIComponent(agent)}`)),
-    setPolicy: (c, set) => json('PUT', cPath(c, '/policy'), set),
-    contested: async (c) =>
-      (await json<{ contested: CloudContest[] }>('GET', cPath(c, '/contested'))).contested,
-    resolve: (c, id, keep) =>
-      json('POST', cPath(c, `/contested/${encodeURIComponent(id)}`), { keep }),
-    bindProject: (c, project) => json('PUT', cPath(c, `/projects/${encodeURIComponent(project)}`)),
-    unbindProject: (c, project) =>
-      json('DELETE', cPath(c, `/projects/${encodeURIComponent(project)}`)),
-    transfer: (c, member) => json('POST', cPath(c, '/transfer'), { member }),
-    deleteConstellation: (c) => json('DELETE', cPath(c)),
-    adoptConstellation: (c) => json('POST', cPath(c, '/adopt'), {}),
-    createKey: (b) => json('POST', '/v1/keys', b),
-    recall: async (q) => {
-      const { res, done } = await timedCall('POST', '/v1/recall', { json: q });
-      const r = (await res.json()) as RecallResult;
-      return withCloudTimings(r, done());
-    },
-    constellations: async () =>
-      (await json<{ constellations: CloudConstellation[] }>('GET', '/v1/constellations'))
-        .constellations,
-    createConstellation: (name, galaxy) =>
-      json('POST', '/v1/constellations', { name, ...(galaxy !== undefined && { galaxy }) }),
-    galaxies: async () => (await json<{ galaxies: CloudGalaxy[] }>('GET', '/v1/galaxies')).galaxies,
-    galaxyMembers: (g) => json('GET', `/v1/galaxies/${encodeURIComponent(g)}/members`),
-    share: (to, b) => json('POST', `/v1/constellations/${encodeURIComponent(to)}/share`, b),
-    setProjectPrivacy: (project, priv) =>
-      json('PUT', `/v1/projects/${encodeURIComponent(project)}/privacy`, { private: priv }),
-    shares: async (id) =>
-      (await json<{ shares: CloudShareEdge[] }>('GET', `${idPath(id)}/shares`)).shares,
-    forgetEverywhere: async (id) => {
-      const r = await json<Partial<Record<keyof CloudForgetEverywhere, unknown>>>(
-        'DELETE',
-        `${idPath(id)}?everywhere=1`,
-      );
-      const ids = (v: unknown): string[] =>
-        Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
-      return {
-        withdrawn: ids(r.withdrawn),
-        requested: ids(r.requested),
-        unreachable: ids(r.unreachable),
-      };
-    },
-    observe: (b) => json('POST', '/v1/observe', b),
-    list: (q = {}) => {
-      const p = new URLSearchParams();
-      for (const [k, v] of Object.entries(q)) if (v !== undefined) p.set(k, String(v));
-      const qs = p.toString();
-      return json('GET', `/v1/memories${qs === '' ? '' : `?${qs}`}`);
-    },
-    get: (id) => json('GET', idPath(id)),
-    forget: async (id) => {
-      await call('DELETE', idPath(id));
-    },
-    pin: async (id, pinned) => {
-      await call('POST', `${idPath(id)}/${pinned ? 'pin' : 'unpin'}`);
-    },
-    stats: () => json('GET', '/v1/stats'),
-    exportText: async () => (await call('GET', '/v1/export')).text(),
-    importLines: async (lines, from = 0) =>
+  /** The client, acting as the account (`user` undefined) or for one end user. */
+  const build = (user: string | undefined): CloudClient => {
+    const call = async (
+      method: string,
+      route: string,
+      body?: { json?: unknown; text?: string },
+    ): Promise<Response> => (await timedCall(method, route, body, user)).res;
+    const json = async <T>(method: string, route: string, body?: unknown): Promise<T> =>
       (await (
-        await call('POST', `/v1/import?from=${from}`, {
-          text: lines.map((l) => `${l}\n`).join(''),
-        })
-      ).json()) as CloudImportResult,
+        await call(method, route, body === undefined ? undefined : { json: body })
+      ).json()) as T;
+    /** As the account, whatever this client is: whoami and the end-user routes never name one. */
+    const accountJson = async <T>(method: string, route: string): Promise<T> =>
+      (await (await timedCall(method, route, undefined, undefined)).res.json()) as T;
+    const idPath = (id: string): string => `/v1/memories/${encodeURIComponent(id)}`;
+    const cPath = (c: string, rest = ''): string =>
+      `/v1/constellations/${encodeURIComponent(c)}${rest}`;
+
+    return {
+      url: opts.url,
+      whoami: (agent) =>
+        accountJson(
+          'GET',
+          `/v1/whoami${agent === undefined ? '' : `?agent=${encodeURIComponent(agent)}`}`,
+        ),
+      forEndUser: (id) => build(id),
+      endUsersCount: async () => {
+        await requireEndUsers();
+        return accountJson('GET', '/v1/end-users/count');
+      },
+      eraseEndUser: async (id) => {
+        await requireEndUsers();
+        const r = await accountJson<{
+          erased?: Partial<Record<keyof CloudEndUserErasure, unknown>>;
+        }>('DELETE', `/v1/end-users/${encodeURIComponent(id)}`);
+        const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+        return {
+          memories: n(r.erased?.memories),
+          coldCopies: n(r.erased?.coldCopies),
+          turnRefs: n(r.erased?.turnRefs),
+          cursors: n(r.erased?.cursors),
+        };
+      },
+      invite: (c, email, role) =>
+        json('POST', cPath(c, '/invites'), { email, ...(role !== undefined && { role }) }),
+      invites: async (c) =>
+        (await json<{ invites: CloudPendingInvite[] }>('GET', cPath(c, '/invites'))).invites,
+      revokeInvite: (c, invite) =>
+        json('DELETE', cPath(c, `/invites/${encodeURIComponent(invite)}`)),
+      members: async (c) =>
+        (await json<{ members: CloudMember[] }>('GET', cPath(c, '/members'))).members,
+      setRole: (c, member, role) =>
+        json('PUT', cPath(c, `/members/${encodeURIComponent(member)}`), { role }),
+      removeMember: (c, member) =>
+        json('DELETE', cPath(c, `/members/${encodeURIComponent(member)}`)),
+      leave: (c) => json('POST', cPath(c, '/leave')),
+      attach: (c, agent, share) =>
+        json('POST', cPath(c, '/stars'), { agent, ...(share === true && { share: true }) }),
+      detach: (c, agent) => json('DELETE', cPath(c, `/stars/${encodeURIComponent(agent)}`)),
+      setPolicy: (c, set) => json('PUT', cPath(c, '/policy'), set),
+      contested: async (c) =>
+        (await json<{ contested: CloudContest[] }>('GET', cPath(c, '/contested'))).contested,
+      resolve: (c, id, keep) =>
+        json('POST', cPath(c, `/contested/${encodeURIComponent(id)}`), { keep }),
+      bindProject: (c, project) =>
+        json('PUT', cPath(c, `/projects/${encodeURIComponent(project)}`)),
+      unbindProject: (c, project) =>
+        json('DELETE', cPath(c, `/projects/${encodeURIComponent(project)}`)),
+      transfer: (c, member) => json('POST', cPath(c, '/transfer'), { member }),
+      deleteConstellation: (c) => json('DELETE', cPath(c)),
+      adoptConstellation: (c) => json('POST', cPath(c, '/adopt'), {}),
+      createKey: (b) => json('POST', '/v1/keys', b),
+      recall: async (q) => {
+        const { res, done } = await timedCall('POST', '/v1/recall', { json: q }, user);
+        const r = (await res.json()) as RecallResult;
+        return withCloudTimings(r, done());
+      },
+      constellations: async () =>
+        (await json<{ constellations: CloudConstellation[] }>('GET', '/v1/constellations'))
+          .constellations,
+      createConstellation: (name, galaxy) =>
+        json('POST', '/v1/constellations', { name, ...(galaxy !== undefined && { galaxy }) }),
+      galaxies: async () =>
+        (await json<{ galaxies: CloudGalaxy[] }>('GET', '/v1/galaxies')).galaxies,
+      galaxyMembers: (g) => json('GET', `/v1/galaxies/${encodeURIComponent(g)}/members`),
+      share: (to, b) => json('POST', `/v1/constellations/${encodeURIComponent(to)}/share`, b),
+      setProjectPrivacy: (project, priv) =>
+        json('PUT', `/v1/projects/${encodeURIComponent(project)}/privacy`, { private: priv }),
+      shares: async (id) =>
+        (await json<{ shares: CloudShareEdge[] }>('GET', `${idPath(id)}/shares`)).shares,
+      forgetEverywhere: async (id) => {
+        const r = await json<Partial<Record<keyof CloudForgetEverywhere, unknown>>>(
+          'DELETE',
+          `${idPath(id)}?everywhere=1`,
+        );
+        const ids = (v: unknown): string[] =>
+          Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+        return {
+          withdrawn: ids(r.withdrawn),
+          requested: ids(r.requested),
+          unreachable: ids(r.unreachable),
+        };
+      },
+      observe: (b) => json('POST', '/v1/observe', b),
+      list: (q = {}) => {
+        const p = new URLSearchParams();
+        for (const [k, v] of Object.entries(q)) if (v !== undefined) p.set(k, String(v));
+        const qs = p.toString();
+        return json('GET', `/v1/memories${qs === '' ? '' : `?${qs}`}`);
+      },
+      get: (id) => json('GET', idPath(id)),
+      forget: async (id) => {
+        await call('DELETE', idPath(id));
+      },
+      pin: async (id, pinned) => {
+        await call('POST', `${idPath(id)}/${pinned ? 'pin' : 'unpin'}`);
+      },
+      stats: () => json('GET', '/v1/stats'),
+      exportText: async () => (await call('GET', '/v1/export')).text(),
+      importLines: async (lines, from = 0) =>
+        (await (
+          await call('POST', `/v1/import?from=${from}`, {
+            text: lines.map((l) => `${l}\n`).join(''),
+          })
+        ).json()) as CloudImportResult,
+    };
   };
+  return build(undefined);
 }
 
 /** The shortest id prefix the API looks up (it answers 404 below this). */

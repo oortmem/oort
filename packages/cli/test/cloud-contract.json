@@ -6,7 +6,7 @@
     {
       "method": "GET",
       "path": "/v1/whoami",
-      "response": ["account", "plan", "via", "spaces?", "galaxies?", "scope?"],
+      "response": ["account", "plan", "via", "spaces?", "galaxies?", "scope?", "capabilities?"],
       "query": ["agent"]
     },
     {
@@ -146,6 +146,7 @@
   "errors": {
     "400": "bad-request",
     "401": "unauthorized",
+    "402:end_user_limit": "end-user-limit",
     "402": "payment-required",
     "403:cloud_not_enabled": "not-enabled",
     "403:hive_not_enabled": "hive-not-enabled",
@@ -474,5 +475,43 @@
         "response": ["id", "key", "prefix", "name", "scope"]
       }
     ]
+  },
+  "endUsers": {
+    "$comment": "Per-user memory (CON-132). A server key (made on https://oortcloud.dev/account with \"Acts for end users\") carries the capability end-users, and whoami lists capabilities: ['end-users'] for that key alone. It acts for one of its account's end users by sending Oort-User: <id> on the memoryRoutes; that request reads and writes only that end user's Planet: never the account's own memory, a Star, a Constellation or a Galaxy. An id is 1 to 128 letters, digits and - _ . : @. An empty header answers 400 user_missing; self 400 self_not_derivable; anonymous, default, local, root or any other bad id 400 bad_user. Oort-User on any other route (forget ?everywhere included) answers 400 user_not_supported, before authentication. A credential without the capability that sends it answers 403 end_users_not_allowed. A server key never acts as the account: without Oort-User every route but whoami and the two below answers 400 user_missing (POST /v1/keys 403 forbidden). An end user's recall with star in include answers 400 star_with_user; with constellation or galaxy 400 scope_denied. An account has at most 100 end users on Pro: a write for a new one past that answers 402 end_user_limit, and the ones there keep working. A write still running when its end user is erased answers 409 end_user_erased: nothing was stored, and it is not retried as is. DELETE /v1/end-users/:id erases the end user completely and answers counts only (erased: the fields below); erasing one with nothing is not an error. GET /v1/end-users/count answers how many end users the account has and its limit. Both take a server key without Oort-User (403 end_users_not_allowed otherwise). An Oort Cloud from before CON-132 ignores Oort-User and lists no capabilities: clients check whoami's capabilities before they send the header.",
+    "header": "Oort-User",
+    "capability": "end-users",
+    "memoryRoutes": [
+      "POST /v1/observe",
+      "POST /v1/recall",
+      "GET /v1/memories",
+      "GET /v1/memories/:id",
+      "DELETE /v1/memories/:id",
+      "POST /v1/memories/:id/pin",
+      "POST /v1/memories/:id/unpin"
+    ],
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/v1/end-users/count",
+        "response": ["endUsers", "limit"]
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/end-users/:id",
+        "response": ["erased"]
+      }
+    ],
+    "erased": ["memories", "coldCopies", "turnRefs", "cursors"],
+    "errors": {
+      "400:user_missing": "bad-request",
+      "400:self_not_derivable": "bad-request",
+      "400:bad_user": "bad-request",
+      "400:star_with_user": "bad-request",
+      "400:scope_denied": "bad-request",
+      "400:user_not_supported": "bad-request",
+      "402:end_user_limit": "end-user-limit",
+      "403:end_users_not_allowed": "refused",
+      "409:end_user_erased": "bad-request"
+    }
   }
 }
