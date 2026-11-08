@@ -17,7 +17,7 @@
     },
     {
       "name": "oort-dev",
-      "description": "Build with Oort: a skill that teaches Claude to integrate the oortmem TypeScript SDK and the oort CLI into your own apps, services and agent frameworks (Vercel AI SDK, LangGraph.js, OpenAI Agents JS, Python via the CLI). No hooks, no MCP server.",
+      "description": "Build with Oort: a skill that teaches Claude to integrate the oortmem TypeScript SDK, the native Python client (from oortmem import Oort) and the oort CLI into your own apps, services and agent frameworks (Vercel AI SDK, LangGraph.js, OpenAI Agents JS; LangGraph, OpenAI Agents and CrewAI in Python). No hooks, no MCP server.",
       "source": "./distribution/claude-code/oort-dev",
       "category": "development",
       "keywords": [
@@ -26,6 +26,7 @@
         "agent-memory",
         "sdk",
         "typescript",
+        "python",
         "skills",
         "ai-sdk",
         "langgraph",

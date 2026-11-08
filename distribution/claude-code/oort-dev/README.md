@@ -3,7 +3,8 @@
 The `oort-sdk` skill, for building Oort into your own apps and agents: the `oortmem` TypeScript
 SDK (`createOort`, recall, observe, `formatForPrompt`, multi-user `scoped({ user })`,
 judgments, typed errors), the Vercel AI SDK adapter, LangGraph.js and OpenAI Agents JS recipes,
-serverless and self-hosting, and the `oort` CLI's JSON for Python and scripts.
+serverless and self-hosting, the native Python client (`from oortmem import Oort`) with LangGraph,
+OpenAI Agents and CrewAI recipes, and the `oort` CLI's JSON for scripts and other languages.
 
 It adds no hooks and no MCP server. For memory in your own Claude Code sessions, install the
 `oort` plugin from the same marketplace; the two work alone or together.
