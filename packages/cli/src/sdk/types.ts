@@ -55,9 +55,16 @@ export interface OortOptions {
   projectConfig?: boolean;
   /** The agent to act as; default `OORT_AGENT`, else anonymous (the Planet only). */
   agent?: string;
-  /** An end user (local mode). Requires `org`, not `local`. Their Planet only, never a Star. */
+  /**
+   * An end user: their Planet only, never a Star. Requires `org`, not `local`. In cloud mode it
+   * also needs Oort Cloud with server keys (CON-132) and a server key ("Acts for end users").
+   */
   user?: string;
-  /** The tenant (local mode); default `local`. */
+  /**
+   * The tenant; default `local`. Local mode: the storage and deletion boundary. Cloud mode: the
+   * Oort key's account is that boundary, so `org` is your name for it and is not sent; `user`
+   * still needs it, so a handle made for the account's own memory never derives an end user.
+   */
   org?: string;
   /** Keys given in code (local; cloud takes `oort` only). */
   keys?: OortKeys;
@@ -374,6 +381,37 @@ export interface OortJudge {
   confirm(id: string): Promise<{ id: string; changed: boolean }>;
 }
 
+/** How many end users the account has, and how many its plan includes. */
+export interface EndUserCount {
+  endUsers: number;
+  limit: number;
+}
+
+/** What erasing an end user removed: the id you erased, and counts only. */
+export interface EndUserErasure {
+  erased: string;
+  memories: number;
+  coldCopies: number;
+  turnRefs: number;
+  cursors: number;
+}
+
+/**
+ * The account's end users in Oort Cloud (CON-132): per-user memory a server key writes with
+ * `scoped({ user })`. Requires Oort Cloud with server keys; refused with `end-users-unsupported`
+ * when whoami does not list the key's `end-users` capability.
+ */
+export interface OortEndUsers {
+  /**
+   * Erases an end user completely: every memory stored for them, with its indexes and cold
+   * copies. The account's own memory and every other end user are untouched. Erasing one who
+   * has nothing is not an error. A write for them still in flight is refused (`end-user-erased`).
+   */
+  erase(user: string): Promise<EndUserErasure>;
+  /** How many end users the account has, and its plan's limit. */
+  count(): Promise<EndUserCount>;
+}
+
 /** A handle on Oort memory, its scope fixed when it was made (`createOort`, `scoped`). */
 export interface Oort {
   readonly mode: 'local' | 'cloud';
@@ -395,6 +433,11 @@ export interface Oort {
   whoami(): Promise<Whoami>;
   /** Local only. */
   consolidate(opts?: { budgetMs?: number; signal?: AbortSignal }): Promise<ConsolidateResult>;
+  /**
+   * The account's end users (Oort Cloud with server keys, CON-132): erase one, or count them.
+   * Cloud mode only, on a handle that is not scoped to an end user.
+   */
+  readonly endUsers: OortEndUsers;
   /** A derived handle sharing this one's engine; its scope is fixed. */
   scoped(s: ScopedOptions): Oort;
   close(): Promise<void>;
