@@ -280,6 +280,13 @@ class OortHandle implements Oort {
       const { ctx, org } = this.#s;
       const engine = this.#root.engine;
       checkUser(o.user, o.user === undefined ? undefined : org);
+      if (o.user !== undefined && ctx.user !== null && o.user !== ctx.user) {
+        // A handle for one end user never becomes another's (CON-132 hardening).
+        throw new OortUsageError(
+          "This handle is scoped to an end user and cannot switch to another: derive each end user's handle from the handle you made it from.",
+          { reason: 'user-hop' },
+        );
+      }
       const user = o.user ?? ctx.user;
       const agent =
         o.agent === undefined ? ctx.principal.agent : agentFor(engine.config.home, {}, o.agent);

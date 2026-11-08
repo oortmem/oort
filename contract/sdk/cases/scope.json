@@ -682,6 +682,122 @@
     ]
   },
   {
+    "id": "scope.a-user-handle-never-switches-users",
+    "description": "A handle scoped to one end user refuses another user (user-hop); the same id, an agent or a project still derive. End-user ids follow one rule, never trimmed (contract/sdk/vectors/end-user-ids.json).",
+    "transports": ["local", "cloud"],
+    "options": {
+      "org": "acme"
+    },
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u1"
+        },
+        "as": "u1"
+      },
+      {
+        "call": "scoped",
+        "on": "u1",
+        "args": {
+          "user": "u2"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "user-hop"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "on": "u1",
+        "args": {
+          "user": "u1",
+          "agent": "bot"
+        },
+        "as": "u1bot"
+      },
+      {
+        "call": "scoped",
+        "on": "u1bot",
+        "args": {
+          "project": null
+        }
+      },
+      {
+        "call": "whoami",
+        "on": "u1bot",
+        "expect": {
+          "result": {
+            "user": "u1",
+            "agent": "bot"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "alice\n"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": " alice"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "COUNT"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "Self"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "self-not-derivable"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "-x"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      }
+    ]
+  },
+  {
     "id": "scope.a-star-agent-with-a-user-is-refused",
     "transports": ["local", "cloud"],
     "agents": {
@@ -1063,6 +1179,30 @@
           "error": {
             "code": "usage",
             "reason": "user-missing"
+          }
+        }
+      },
+      {
+        "call": "endUsers.erase",
+        "args": {
+          "user": "alice\n"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      },
+      {
+        "call": "endUsers.erase",
+        "args": {
+          "user": "Root"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
           }
         }
       },

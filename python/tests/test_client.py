@@ -982,7 +982,7 @@ class CloudEndUsers(unittest.TestCase):
         from oortmem import Oort, OortCloudOnlyError, OortRefusedError, OortUsageError
 
         o = self.oort()
-        for user, reason in (("self", "self-not-derivable"), ("", "user-missing"), (None, "user-missing"), ("bad id", "invalid-argument")):
+        for user, reason in (("self", "self-not-derivable"), ("", "user-missing"), (None, "user-missing"), ("bad id", "bad-user")):
             with self.assertRaises(OortUsageError) as e:
                 o.scoped(user=user)
             self.assertEqual(e.exception.reason, reason)
@@ -1015,13 +1015,42 @@ class CloudEndUsers(unittest.TestCase):
             local.end_users.count()
         self.assertEqual(e.exception.reason, "end-users")
 
+    def test_a_user_handle_never_switches_users(self) -> None:
+        from oortmem import OortUsageError
+
+        o = self.oort()
+        ada = o.scoped(user="ada")
+        with self.assertRaises(OortUsageError) as e:
+            ada.scoped(user="bob")
+        self.assertEqual(e.exception.reason, "user-hop")
+        ada.scoped(user="ada").scoped(agent="bot", project=None)  # the same user, narrowed: fine
+        for_ada = self.oort(user="ada")
+        with self.assertRaises(OortUsageError) as e:
+            for_ada.scoped(user="bob")
+        self.assertEqual(e.exception.reason, "user-hop")
+        self.assertEqual(self.rec.seen, [])
+
+    def test_ids_are_never_trimmed_and_reserved_names_are_refused(self) -> None:
+        from oortmem import OortUsageError
+
+        o = self.oort()
+        for user in ("alice\n", " alice", "COUNT", "Root", "-x", "_x", "a" * 129):
+            with self.subTest(user=user):
+                with self.assertRaises(OortUsageError) as e:
+                    o.scoped(user=user)
+                self.assertEqual(e.exception.reason, "bad-user")
+                with self.assertRaises(OortUsageError) as e:
+                    o.end_users.erase(user)
+                self.assertEqual(e.exception.reason, "bad-user")
+        self.assertEqual(self.rec.seen, [])
+
     def test_each_refusal_maps(self) -> None:
         self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
         ada = self.oort().scoped(user="ada")
         for status, code, cls, reason in (
             (400, "user_missing", "OortUsageError", "user-missing"),
             (400, "self_not_derivable", "OortUsageError", "self-not-derivable"),
-            (400, "bad_user", "OortUsageError", "invalid-argument"),
+            (400, "bad_user", "OortUsageError", "bad-user"),
             (400, "star_with_user", "OortRefusedError", "star-with-user"),
             (400, "scope_denied", "OortRefusedError", "scope-denied"),
             (400, "user_not_supported", "OortUsageError", "user-not-supported"),

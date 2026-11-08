@@ -186,7 +186,7 @@ describe('cloud end users (CON-132)', () => {
     });
     await expect(oort.endUsers.erase('')).rejects.toMatchObject({ reason: 'user-missing' });
     await expect(oort.endUsers.erase('bad id')).rejects.toMatchObject({
-      reason: 'invalid-argument',
+      reason: 'bad-user',
     });
     await oort.close();
   });
@@ -224,6 +224,35 @@ describe('cloud end users (CON-132)', () => {
     await oort.close();
   });
 
+  it('sdk.end-users-a-user-handle-never-switches-users', async () => {
+    const { oort, c } = await cloud((c) => (c.endUsers.serverKey = true));
+    const ada = oort.scoped({ user: 'ada' });
+    expect(() => ada.scoped({ user: 'bob' })).toThrow(
+      expect.objectContaining({ code: 'usage', reason: 'user-hop' }),
+    );
+    expect(() => ada.scoped({ user: 'ada' }).scoped({ agent: 'bot', project: null })).not.toThrow();
+    // A root handle made for an end user is held to it too.
+    const { oort: forAda } = await cloud((c) => (c.endUsers.serverKey = true), { user: 'ada' });
+    expect(() => forAda.scoped({ user: 'bob' })).toThrow(
+      expect.objectContaining({ reason: 'user-hop' }),
+    );
+    expect(c.seen).toEqual([]);
+    await forAda.close();
+    await oort.close();
+  });
+
+  it('sdk.end-users-ids-are-never-trimmed-and-reserved-names-are-refused', async () => {
+    const { oort, c } = await cloud((c) => (c.endUsers.serverKey = true));
+    for (const id of ['alice\n', ' alice', 'COUNT', 'Root', '-x', '_x', 'a'.repeat(129)]) {
+      expect(() => oort.scoped({ user: id }), id).toThrow(
+        expect.objectContaining({ reason: 'bad-user' }),
+      );
+      await expect(oort.endUsers.erase(id), id).rejects.toMatchObject({ reason: 'bad-user' });
+    }
+    expect(c.seen).toEqual([]);
+    await oort.close();
+  });
+
   it('sdk.end-users-a-server-key-never-acts-as-the-account', async () => {
     const { oort } = await cloud((c) => (c.endUsers.serverKey = true));
     await expect(oort.recall('x')).rejects.toMatchObject({
@@ -240,7 +269,7 @@ describe('cloud end users (CON-132)', () => {
     const table: [number, string, Record<string, unknown>][] = [
       [400, 'user_missing', { code: 'usage', reason: 'user-missing' }],
       [400, 'self_not_derivable', { code: 'usage', reason: 'self-not-derivable' }],
-      [400, 'bad_user', { code: 'usage', reason: 'invalid-argument' }],
+      [400, 'bad_user', { code: 'usage', reason: 'bad-user' }],
       [400, 'star_with_user', { code: 'refused', reason: 'star-with-user' }],
       [400, 'scope_denied', { code: 'refused', reason: 'scope-denied' }],
       [400, 'user_not_supported', { code: 'usage', reason: 'user-not-supported' }],

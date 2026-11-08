@@ -377,7 +377,7 @@ def cloud_error(
 _END_USER_USAGE = {
     "user_missing": "user-missing",
     "self_not_derivable": "self-not-derivable",
-    "bad_user": "invalid-argument",
+    "bad_user": "bad-user",
     "user_not_supported": "user-not-supported",
 }
 

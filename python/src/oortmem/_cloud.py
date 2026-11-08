@@ -416,7 +416,7 @@ class CloudOps:
         try:
             m = find_memory(self.c, ref)
         except OortNotFoundError as e:
-            if not _FULL_ID.match(ref):
+            if not _FULL_ID.fullmatch(ref):
                 raise
             try:
                 shares = (self.c.call("GET", _id_path(ref) + "/shares") or {}).get("shares") or []

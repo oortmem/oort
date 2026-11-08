@@ -175,7 +175,7 @@ function endUserRefusal(
     case 'self_not_derivable':
       return new OortUsageError(e.message, { ...opts, reason: 'self-not-derivable' });
     case 'bad_user':
-      return new OortUsageError(e.message, { ...opts, reason: 'invalid-argument' });
+      return new OortUsageError(e.message, { ...opts, reason: 'bad-user' });
     case 'user_not_supported':
       return new OortUsageError(e.message, { ...opts, reason: 'user-not-supported' });
     case 'star_with_user':

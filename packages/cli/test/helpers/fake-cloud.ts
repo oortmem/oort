@@ -86,17 +86,19 @@ const END_USER_ROUTES = CONTRACT.endUsers.memoryRoutes.map((r) => {
   return { method, re: new RegExp(`^${path.replace(/:[a-z]+/g, '[^/]+')}$`) };
 });
 
-/** The API's end-user id rules: the refusal, or null for a good id. */
-function endUserRefusal(raw: string): Response | null {
-  const id = raw.trim();
+/**
+ * The API's end-user id rule (the SDKs' too): 1 to 128 characters, a letter or digit first, then
+ * letters, digits and `_ . : @ -`; never trimmed; reserved names compared without case.
+ */
+function endUserRefusal(id: string): Response | null {
   if (id === '') return err(400, 'user_missing', 'Oort-User is empty.');
   const lower = id.toLowerCase();
   if (lower === 'self') return err(400, 'self_not_derivable', 'self is reserved.');
   if (
-    ['anonymous', 'default', 'local', 'root'].includes(lower) ||
-    !/^[A-Za-z0-9_.:@-]{1,128}$/.test(id)
+    ['anonymous', 'default', 'local', 'root', 'count'].includes(lower) ||
+    !/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/.test(id)
   ) {
-    return err(400, 'bad_user', 'An end user id is 1 to 128 letters, digits and - _ . : @.');
+    return err(400, 'bad_user', 'An end user id is 1 to 128 letters, digits and _ . : @ -.');
   }
   return null;
 }
@@ -363,7 +365,7 @@ export function fakeCloud(key: string): FakeCloud {
       if (forEndUser) {
         const bad = endUserRefusal(userHeader);
         if (bad !== null) return bad;
-        const id = userHeader.trim();
+        const id = userHeader;
         let body: string | undefined;
         if (req.method !== 'GET' && req.method !== 'DELETE') body = await req.text();
         if (url.pathname === '/v1/recall' && body !== undefined) {

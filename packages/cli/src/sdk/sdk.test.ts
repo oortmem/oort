@@ -320,7 +320,7 @@ describe('toOortError (§5): every source maps to its code and reason', () => {
       'usage',
       'self-not-derivable',
     ],
-    [new OortCloudError('bad-request', 400, 'x', 'bad_user'), 'usage', 'invalid-argument'],
+    [new OortCloudError('bad-request', 400, 'x', 'bad_user'), 'usage', 'bad-user'],
     [new OortCloudError('bad-request', 400, 'x', 'star_with_user'), 'refused', 'star-with-user'],
     [
       new OortCloudError('bad-request', 400, 'x', 'user_not_supported'),

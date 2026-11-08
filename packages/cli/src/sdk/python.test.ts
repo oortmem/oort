@@ -36,6 +36,7 @@ import { startDaemon, type Daemon } from '../serve-daemon.js';
 import { errorBody, statusFor } from '../serve-http.js';
 import { wire } from '../wire.js';
 import { createOortWith } from './create.js';
+import { RESERVED_USER_IDS, USER_ID, userIdProblem } from './principal.js';
 import {
   OortAmbiguousIdError,
   OortCloudOnlyError,
@@ -581,6 +582,50 @@ describe('golden vectors (contract/sdk/vectors)', () => {
       capability: END_USERS_CAPABILITY,
       unsupported: shapeOf(toOortError(new OortCloudError('end-users-unsupported', 0))),
       whoami: answers.map((response) => ({ response, allowed: endUsersAllowed(response) })),
+    });
+  });
+
+  it('end-user ids (CON-132): one rule in both SDKs and Oort Cloud', () => {
+    const ids: unknown[] = [
+      'alice',
+      'user-ada',
+      'A1',
+      'a:b@c.d-e_f',
+      '0',
+      'a'.repeat(128),
+      'a'.repeat(129),
+      'alice\n',
+      ' alice',
+      'alice ',
+      'al ice',
+      'al/ice',
+      'al\u00e9',
+      'alice\u0000',
+      '\u202ealice',
+      '  ',
+      '-x',
+      '_x',
+      '.x',
+      ':x',
+      '@x',
+      'self',
+      'Self',
+      'SELF',
+      'count',
+      'COUNT',
+      'Root',
+      'anonymous',
+      'Default',
+      'local',
+      'selfie',
+      'root2',
+      '',
+      null,
+    ];
+    vector('end-user-ids.json', {
+      rule: USER_ID.source,
+      reserved: RESERVED_USER_IDS,
+      ids: ids.map((user) => ({ user, reason: userIdProblem(user)?.reason ?? null })),
     });
   });
 

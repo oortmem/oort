@@ -638,6 +638,12 @@ class Oort:
         s = self._scope
         if user is not UNSET:
             check_user(user, s.org, given=True, org_required=self._mode() != "remote")
+            if s.user_given and user != s.user:
+                # A handle for one end user never becomes another's (CON-132 hardening).
+                raise OortUsageError(
+                    "This handle is scoped to an end user and cannot switch to another: derive each end user's handle from the handle you made it from.",
+                    reason="user-hop",
+                )
         child = object.__new__(type(self))
         child.__dict__.update(self.__dict__)
         child._is_root = False

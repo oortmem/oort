@@ -170,6 +170,17 @@ class EndUsers(unittest.TestCase):
             with self.subTest(response=w["response"]):
                 self.assertIs(end_users_allowed(w["response"]), w["allowed"])
 
+    def test_each_end_user_id_is_judged_as_in_typescript(self):
+        from oortmem._validate import RESERVED_USER_IDS, user_id_problem
+
+        v = load("end-user-ids.json")
+        self.assertEqual(list(RESERVED_USER_IDS), v["reserved"])
+        self.assertGreater(len(v["ids"]), 30)
+        for c in v["ids"]:
+            with self.subTest(user=c["user"]):
+                p = user_id_problem(c["user"])
+                self.assertEqual(None if p is None else p[0], c["reason"])
+
     def test_the_refusal_matches_typescript(self):
         from oortmem.errors import end_users_unsupported, error_shape
 

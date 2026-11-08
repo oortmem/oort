@@ -337,7 +337,7 @@
     "expect": {
       "name": "OortUsageError",
       "code": "usage",
-      "reason": "invalid-argument",
+      "reason": "bad-user",
       "fix": null,
       "status": 400,
       "retryable": false,
