@@ -1,0 +1,74 @@
+# Publishes server.json to the official MCP Registry as io.github.oortmem/oort.
+#
+# The registry only lets an organization namespace be published with GitHub Actions OIDC (the
+# interactive `mcp-publisher login github` sees personal namespaces only), and it checks `mcpName`
+# in the oortmem package already on npm. So this runs after a successful Release run, at the commit
+# that run tagged, and can be started by hand for a tag that is already on npm.
+name: MCP Registry
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag already on npm, e.g. v0.7.1'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-registry-${{ github.event.workflow_run.head_sha || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    # Required reviewers (Marcus) and a deployment-branch policy (main and v* tags) are set on this
+    # environment in the repo settings, so neither a dispatch nor a modified branch can mint a
+    # registry token unreviewed.
+    environment: mcp-registry
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # the registry's github-oidc login; no secret is used
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: server.json matches the release on npm
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG" >&2; exit 1; }
+          v="${TAG#v}"
+          test "$(jq -r .version server.json)" = "$v"
+          test "$(jq -r '.packages[0].version' server.json)" = "$v"
+          test "$(jq -r .mcpName packages/cli/package.json)" = "$(jq -r .name server.json)"
+          npm_name="$(curl -fsS "https://registry.npmjs.org/oortmem/$v" | jq -r .mcpName)"
+          test "$npm_name" = "$(jq -r .name server.json)"
+      - name: Install mcp-publisher (pinned, checksum verified)
+        env:
+          VERSION: v1.8.4
+          SHA256: 5dc2fd415369c73551259f31cd33e2aacc9e0d1021e7f08fef1492d93b781628
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/mcp-publisher.tgz" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/$VERSION/mcp-publisher_linux_amd64.tar.gz"
+          echo "$SHA256  $RUNNER_TEMP/mcp-publisher.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/mcp-publisher.tgz" -C "$RUNNER_TEMP" mcp-publisher
+      - name: Publish
+        run: |
+          "$RUNNER_TEMP/mcp-publisher" login github-oidc
+          "$RUNNER_TEMP/mcp-publisher" publish
+      - name: Listed
+        run: |
+          sleep 5
+          curl -fsS "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.oortmem/oort" |
+            jq -e --arg v "$(jq -r .version server.json)" --arg n "$(jq -r .name server.json)" \
+              '[.servers[]? | (.server // .) | select(.name == $n and .version == $v)] | length > 0'
