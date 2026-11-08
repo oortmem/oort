@@ -30,3 +30,16 @@ OORT_API_KEY=… node examples/src/cloud-quick-start.ts
 node examples/src/local-quick-start.ts          # uses what `oort setup` chose
 ANTHROPIC_API_KEY=… node examples/src/langgraph.ts
 ```
+
+The Python examples in [`python/`](python) are shown in [docs/python.md](../docs/python.md). The
+framework ones (LangGraph, OpenAI Agents SDK, CrewAI) run in
+[python/tests/test_frameworks.py](../python/tests/test_frameworks.py) against the built
+`oort serve`, each in its own environment from [`python/requirements/`](python/requirements):
+`<framework>.in` names the versions, `<framework>.txt` locks the whole tree with hashes
+(regenerate it with the `uv pip compile` command at its top). For example:
+
+```sh
+python3.13 -m venv /tmp/venv-crewai
+/tmp/venv-crewai/bin/pip install --require-hashes --only-binary=:all: -r examples/python/requirements/crewai.txt
+OORT_FRAMEWORKS=crewai /tmp/venv-crewai/bin/python -m unittest discover -s python/tests -p test_frameworks.py
+```

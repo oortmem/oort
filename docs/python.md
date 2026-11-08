@@ -231,6 +231,228 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+## Frameworks
+
+The pattern is the same in every framework: recall before the model call and put
+`format_for_prompt(result)` in the system prompt or instructions, observe the turn after the
+answer, and give the model a handle already scoped to one user or agent. These three are examples
+you copy into your app, not adapters `oortmem` ships: `pip install oortmem` stays free of
+dependencies, and `import oortmem` imports no framework.
+
+Each is tested in its own environment (Python 3.13 in CI), with its own fake model in place of
+the vendor's. [`examples/python/requirements/`](../examples/python/requirements) has, per
+framework, the top-level versions (`<framework>.in`) and the whole tree locked with hashes
+(`<framework>.txt`). To run one, install its lock and `oortmem`:
+
+```sh
+python3.13 -m venv .venv-langgraph
+.venv-langgraph/bin/pip install --require-hashes -r examples/python/requirements/langgraph.txt
+.venv-langgraph/bin/pip install oortmem
+```
+
+The same for `openai-agents` and `crewai`. They need separate environments: CrewAI requires
+`openai<3`, the OpenAI Agents SDK `openai>=3`.
+
+### LangGraph: an Oort `BaseStore`
+
+`OortStore` gives a graph Oort as its long-term store, with the semantics of the LangGraph.js
+example in [docs/sdk.md](sdk.md): `search` with a query recalls, `put` with `{"text": ...}`
+remembers, `delete` (a `None` put) forgets, and `get` explains. Oort assigns ids, so the key a
+`put` names is not kept: `get` and `delete` take the ids `search` returns. `scope_of` maps a
+namespace to `scoped()` options. Accept one shape and refuse the rest, as `user_scope` does with
+`(user_id,)`: taking the first label of LangMem's `("memories", user_id)` would put every user in
+one Planet. What Oort cannot do honestly it refuses or leaves empty, never fakes: a search
+without a query returns `[]` (Oort ranks by relevance, it does not list), its `limit` is
+recall's (1 to 50; more is an `OortUsageError`), `filter` and `offset` raise `NotImplementedError`,
+`index` is ignored, a `ttl` is refused (by LangGraph: the store declares no TTL support), and
+`list_namespaces` returns `[]` (your app owns its users).
+`abatch` runs `batch` in a worker thread, as `AsyncOort` does: the client is blocking I/O.
+
+<!-- example: examples/python/langgraph_store.py -->
+
+```python
+import asyncio
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Callable, Iterable, Mapping
+
+from langchain_anthropic import ChatAnthropic
+from langgraph.graph import START, MessagesState, StateGraph
+from langgraph.runtime import Runtime
+from langgraph.store.base import BaseStore, GetOp, Item, Op, PutOp, Result, SearchItem, SearchOp
+
+from oortmem import Oort, OortNotFoundError, format_for_prompt
+
+
+class OortStore(BaseStore):
+    """A LangGraph ``BaseStore`` over Oort: ``search`` with a query recalls, ``put`` remembers
+    ``{"text": ...}``, a ``None`` put (``delete``) forgets, and ``get`` explains. Oort assigns the
+    ids, so a put's key is not kept: ``get`` and ``delete`` take Oort ids. ``scope_of`` (your code)
+    maps a namespace to ``scoped()`` options. Oort ranks by relevance: a search without a query
+    returns nothing, ``filter`` and ``offset`` are refused, and ``index`` is ignored."""
+
+    def __init__(self, oort: Oort, scope_of: Callable[[tuple], Mapping[str, Any]]) -> None:
+        self.oort = oort
+        self.scope_of = scope_of
+
+    def handle(self, namespace: tuple) -> Oort:
+        return self.oort.scoped(**self.scope_of(namespace), judge_role="agent")
+
+    def batch(self, ops: Iterable[Op]) -> list[Result]:
+        return [self._run(op) for op in ops]  # in order: a put, then a get, sees the put
+
+    async def abatch(self, ops: Iterable[Op]) -> list[Result]:
+        return await asyncio.to_thread(self.batch, list(ops))  # the client is blocking I/O
+
+    def _run(self, op: Op) -> Result:
+        if isinstance(op, SearchOp):
+            if op.filter or op.offset:
+                raise NotImplementedError("OortStore searches by relevance only: no filter or offset")
+            if op.query is None:
+                return []  # Oort lists by relevance only
+            r = self.handle(op.namespace_prefix).recall(op.query, limit=op.limit)
+            return [SearchItem(op.namespace_prefix, m.id, {"text": m.text}, *_dates(m), m.score) for m in r.memories]
+        if isinstance(op, PutOp):
+            mem = self.handle(op.namespace)
+            text = None if op.value is None else op.value.get("text")
+            if op.value is None:
+                mem.forget(op.key)
+            elif isinstance(text, str):
+                mem.remember(text)
+            else:
+                raise TypeError("OortStore stores values of the form {'text': str}")
+            return None
+        if isinstance(op, GetOp):
+            try:
+                m = self.handle(op.namespace).explain(op.key).memory
+            except OortNotFoundError:
+                return None
+            created, updated = _dates(m)
+            return Item(value={"text": m.text}, key=m.id, namespace=op.namespace, created_at=created, updated_at=updated)
+        return []  # list_namespaces: users are your app's, not Oort's
+
+
+def _dates(m: Any) -> tuple[datetime, datetime]:
+    iso = lambda s: datetime.fromisoformat(s.replace("Z", "+00:00"))  # noqa: E731 (3.10 needs it)
+    return iso(m.recorded_at), iso(m.updated_at)
+
+
+@dataclass
+class Context:
+    user_id: str
+
+
+def user_scope(namespace: tuple) -> dict:
+    """This app's namespaces are ``(user_id,)``, exactly: that end user's Planet. Any other shape
+    is refused, never guessed: reading the first label of LangMem's ``("memories", user_id)``
+    would put every user in one Planet."""
+    if len(namespace) != 1 or not isinstance(namespace[0], str) or namespace[0] == "":
+        raise ValueError(f"OortStore namespaces here are (user_id,), not {namespace!r}")
+    return {"user": namespace[0]}
+
+
+oort = Oort(mode="local", org="acme", project=None, project_config=False)
+store = OortStore(oort, user_scope)
+model = ChatAnthropic(model="claude-haiku-5-5")
+
+
+def answer(state: MessagesState, runtime: Runtime[Context]) -> dict:
+    question = state["messages"][-1].text
+    mem = store.handle((runtime.context.user_id,))
+    memory = format_for_prompt(mem.recall(question))
+    reply = model.invoke([{"role": "system", "content": f"You help customers.\n{memory}"}, *state["messages"]])
+    mem.observe(user=question, assistant=reply.text)
+    return {"messages": [reply]}
+
+
+graph = StateGraph(MessagesState, context_schema=Context).add_node(answer).add_edge(START, "answer").compile(store=store)
+
+store.put(("user-ada",), "order", {"text": "My order number is 1042."})
+out = graph.invoke(
+    {"messages": [{"role": "user", "content": "What is my order number?"}]},
+    context=Context(user_id="user-ada"),
+)
+print(out["messages"][-1].text)
+oort.close()
+```
+
+### OpenAI Agents SDK
+
+Recall runs in dynamic instructions, so the history is never rewritten; the turn is observed
+once the run returns.
+
+<!-- example: examples/python/openai_agents.py -->
+
+```python
+import asyncio
+from dataclasses import dataclass
+
+from agents import Agent, RunContextWrapper, Runner
+
+from oortmem import AsyncOort, format_for_prompt
+
+
+@dataclass
+class Turn:
+    question: str
+
+
+async def main() -> None:
+    async with AsyncOort() as root:
+        oort = root.scoped(agent="support-bot", judge_role="agent")
+
+        # Recall goes through dynamic instructions, never by rewriting the history.
+        async def instructions(ctx: RunContextWrapper[Turn], agent: Agent[Turn]) -> str:
+            return f"You help customers.\n{format_for_prompt(await oort.recall(ctx.context.question))}"
+
+        agent = Agent[Turn](name="support", instructions=instructions)
+        question = "When do we deploy billing?"
+        result = await Runner.run(agent, question, context=Turn(question))
+        print(result.final_output)
+        await oort.observe(user=question, assistant=str(result.final_output))  # after answering
+
+
+asyncio.run(main())
+```
+
+### CrewAI
+
+The recalled block goes into the task as an input, so a brace in a stored memory is never read
+as a template variable. `memory=False` keeps CrewAI's own memory off: Oort is the memory.
+
+<!-- example: examples/python/crewai_agent.py -->
+
+```python
+from crewai import LLM, Agent, Crew, Task
+
+from oortmem import Oort, format_for_prompt
+
+
+def answer(oort: Oort, question: str) -> str:
+    memory = format_for_prompt(oort.recall(question))
+    agent = Agent(
+        role="Support agent",
+        goal="Answer the customer's question from what the team knows.",
+        backstory="You help customers.",
+        llm=LLM(model="anthropic/claude-haiku-5-5"),
+    )
+    # The memory goes in as an input, so braces in a stored memory are never a template.
+    task = Task(
+        description="Answer this question: {question}\n\nWhat you remember:\n{memory}",
+        expected_output="A short answer.",
+        agent=agent,
+    )
+    # CrewAI's own memory stays off: Oort is the memory.
+    crew = Crew(agents=[agent], tasks=[task], memory=False)
+    reply = crew.kickoff(inputs={"question": question, "memory": memory}).raw
+    oort.observe(user=question, assistant=reply)  # after answering: it can take seconds
+    return reply
+
+
+with Oort() as root:
+    print(answer(root.scoped(agent="support-crew", judge_role="agent"), "When do we deploy billing?"))
+```
+
 ## Judgments
 
 The same rules as TypeScript. In agent role (the default) `by` must be an expert listed in the

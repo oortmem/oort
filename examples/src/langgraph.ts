@@ -45,6 +45,9 @@ export class OortStore extends BaseStore {
 
   private async run(op: Operation): Promise<Item | Item[] | string[][] | null | void> {
     if ('namespacePrefix' in op) {
+      if (Object.keys(op.filter ?? {}).length > 0 || (op.offset ?? 0) > 0) {
+        throw new Error('OortStore searches by relevance only: no filter or offset');
+      }
       if (op.query === undefined) return []; // Oort lists by relevance only
       const r = await this.handle(op.namespacePrefix).recall(op.query, { limit: op.limit ?? 10 });
       return r.memories.map((m) => ({ ...item(op.namespacePrefix, m), score: m.score }));
@@ -81,9 +84,20 @@ const item = (
 });
 
 const oort = await createOort({ mode: 'local', org: 'acme', project: null, projectConfig: false });
-// The first namespace part is the end user. A missing one throws (`user-missing`), never
-// falling back to the tenant's own memory.
-const store = new OortStore(oort, ([user]) => ({ user: user ?? '' }));
+/**
+ * This app's namespaces are `[userId]`, exactly: that end user's Planet. Any other shape is
+ * refused, never guessed: reading the first label of LangMem's `['memories', userId]` would put
+ * every user in one Planet.
+ */
+export function userScope(namespace: string[]): ScopedOptions {
+  const [user] = namespace;
+  if (namespace.length !== 1 || typeof user !== 'string' || user === '') {
+    throw new TypeError(`OortStore namespaces here are [userId], not ${JSON.stringify(namespace)}`);
+  }
+  return { user };
+}
+
+const store = new OortStore(oort, userScope);
 const model = new ChatAnthropic({ model: 'claude-haiku-5-5' });
 
 const State = new StateSchema({ messages: MessagesValue });

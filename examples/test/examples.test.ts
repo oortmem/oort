@@ -5,6 +5,7 @@ import { customProvider } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createOortWith } from '../../packages/cli/src/sdk/create.js';
+import { OortNotFoundError } from '../../packages/cli/src/sdk/errors.js';
 import type { Oort, OortOptions } from '../../packages/cli/src/sdk/types.js';
 import { newHarness, runExample, type Harness } from './harness.js';
 
@@ -233,7 +234,8 @@ describe('framework examples (run with each framework’s fake model)', () => {
       o: Oort,
       scopeOf: (ns: string[]) => { user: string },
     ) => import('@langchain/langgraph').BaseStore;
-    const store = new OortStore(oort, ([user]) => ({ user: user ?? '' }));
+    const userScope = module['userScope'] as (ns: string[]) => { user: string };
+    const store = new OortStore(oort, userScope); // the example's own scope
     const found = await store.search(['user-ada'], { query: 'order number' });
     expect(found.map((i) => i.value['text'])).toContain('My order number is 1042.');
     const id = found.find((i) => i.value['text'] === 'My order number is 1042.')!.key;
@@ -247,6 +249,39 @@ describe('framework examples (run with each framework’s fake model)', () => {
     expect(await texts(oort.scoped({ user: 'user-ada' }), 'What is my order number')).toContain(
       'What is my order number?',
     );
+
+    // Two users, one query: each reads, gets and forgets only their own.
+    await store.put(['user-fay'], 'code', { text: 'My locker code is 4410.' });
+    await store.put(['user-gus'], 'code', { text: 'My locker code is 7782.' });
+    const q = { query: 'what is my locker code' };
+    const fay = await store.search(['user-fay'], q);
+    expect(fay.map((i) => i.value['text'])).toEqual(['My locker code is 4410.']);
+    expect((await store.search(['user-gus'], q)).map((i) => i.value['text'])).toEqual([
+      'My locker code is 7782.',
+    ]);
+    const mine = fay[0]!.key;
+    expect(await store.get(['user-gus'], mine)).toBeNull(); // another user's id: as unknown
+    await expect(store.delete(['user-gus'], mine)).rejects.toBeInstanceOf(OortNotFoundError);
+    expect((await store.get(['user-fay'], mine))?.value).toEqual({
+      text: 'My locker code is 4410.',
+    });
+
+    // Any namespace but [userId] is refused, never read as some user (or as no one).
+    for (const bad of [[], ['memories', 'user-fay'], ['user-fay', 'notes']]) {
+      await expect(store.search(bad, q), JSON.stringify(bad)).rejects.toBeInstanceOf(TypeError);
+    }
+    await expect(store.search([''], q)).rejects.toThrow(); // LangGraph.js refuses it first
+    // Relevance only: a filter or an offset is refused, not silently ignored.
+    await expect(store.search(['user-fay'], { ...q, filter: { tag: 'x' } })).rejects.toThrow(
+      /no filter or offset/,
+    );
+    await expect(store.search(['user-fay'], { ...q, offset: 5 })).rejects.toThrow(
+      /no filter or offset/,
+    );
+    expect(await store.search(['user-fay'], { ...q, filter: {}, offset: 0 })).toHaveLength(1);
+    await expect(
+      store.put(['memories', 'user-fay'], 'k', { text: "LangMem's namespace shape" }),
+    ).rejects.toBeInstanceOf(TypeError);
     await oort.close();
   });
 

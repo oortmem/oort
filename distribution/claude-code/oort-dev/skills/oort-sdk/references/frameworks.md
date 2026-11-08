@@ -6,6 +6,11 @@ answer, and give the model a handle already scoped to one user. Only the Vercel 
 shipped adapter (`oortmem/ai-sdk`); LangGraph.js and OpenAI Agents JS are tested examples you
 copy into your app. Any MCP-capable framework can also run `oort mcp` with no code.
 
+For Python, the same pattern has tested examples for LangGraph (an Oort `BaseStore` with the
+semantics of the LangGraph.js one below), the OpenAI Agents SDK and CrewAI, in
+[docs/python.md](https://github.com/oortmem/oort/blob/main/docs/python.md#frameworks), with the
+framework versions they are tested with.
+
 ## Vercel AI SDK: `oortmem/ai-sdk` (`@experimental`)
 
 Tested with `ai` 7.0.162. `ai` 7 is an optional peer dependency; the adapter does not import it.
@@ -52,7 +57,7 @@ Tested with `@langchain/langgraph` 1.7.0 and `@langchain/core` 1.3.4. `OortStore
 `BaseStore` over a scoped handle, passed with `compile({ store })`: `search` with a query is
 `recall`, `put` of `{ text }` is `remember`, `delete` is `forget` and `get` is `explain`. Oort
 assigns memory ids, so a put's key is not kept, and `get` and `delete` take Oort ids. Your own
-`scopeOf` decides which namespace is which end user. A node prompts with `formatForPrompt` on
+`scopeOf` decides which namespace is which end user. Accept one shape and refuse the rest, as `userScope` does with `[userId]`: taking the first label of LangMem's `['memories', userId]` would put every user in one Planet. A node prompts with `formatForPrompt` on
 that user's handle, never with raw store values, and observes the turn.
 
 <!-- example: examples/src/langgraph.ts -->
@@ -105,6 +110,9 @@ export class OortStore extends BaseStore {
 
   private async run(op: Operation): Promise<Item | Item[] | string[][] | null | void> {
     if ('namespacePrefix' in op) {
+      if (Object.keys(op.filter ?? {}).length > 0 || (op.offset ?? 0) > 0) {
+        throw new Error('OortStore searches by relevance only: no filter or offset');
+      }
       if (op.query === undefined) return []; // Oort lists by relevance only
       const r = await this.handle(op.namespacePrefix).recall(op.query, { limit: op.limit ?? 10 });
       return r.memories.map((m) => ({ ...item(op.namespacePrefix, m), score: m.score }));
@@ -141,9 +149,20 @@ const item = (
 });
 
 const oort = await createOort({ mode: 'local', org: 'acme', project: null, projectConfig: false });
-// The first namespace part is the end user. A missing one throws (`user-missing`), never
-// falling back to the tenant's own memory.
-const store = new OortStore(oort, ([user]) => ({ user: user ?? '' }));
+/**
+ * This app's namespaces are `[userId]`, exactly: that end user's Planet. Any other shape is
+ * refused, never guessed: reading the first label of LangMem's `['memories', userId]` would put
+ * every user in one Planet.
+ */
+export function userScope(namespace: string[]): ScopedOptions {
+  const [user] = namespace;
+  if (namespace.length !== 1 || typeof user !== 'string' || user === '') {
+    throw new TypeError(`OortStore namespaces here are [userId], not ${JSON.stringify(namespace)}`);
+  }
+  return { user };
+}
+
+const store = new OortStore(oort, userScope);
 const model = new ChatAnthropic({ model: 'claude-haiku-5-5' });
 
 const State = new StateSchema({ messages: MessagesValue });

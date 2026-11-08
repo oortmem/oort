@@ -1,0 +1,2 @@
+# The OpenAI Agents SDK example (openai_agents.py). openai-agents.txt locks it: see its top line.
+openai-agents==0.24.0

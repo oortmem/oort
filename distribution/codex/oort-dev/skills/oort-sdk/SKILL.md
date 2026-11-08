@@ -1,6 +1,6 @@
 ---
 name: oort-sdk
-description: Integrate Oort, open-source long-term memory for AI agents, into an app, service or agent framework with the oortmem TypeScript SDK (createOort, recall, observe, remember, formatForPrompt, scoped, judgments, OortError) the native Python client (from oortmem import Oort), or the oort CLI's oort.v1 JSON. Use when adding memory to a Node.js, TypeScript or Python agent, a Vercel AI SDK, LangGraph.js or OpenAI Agents JS app, a multi-user or serverless backend, or a program in another language that calls the oort CLI, and when choosing between Oort's hooks, MCP server, SDK and CLI.
+description: Integrate Oort, open-source long-term memory for AI agents, into an app, service or agent framework with the oortmem TypeScript SDK (createOort, recall, observe, remember, formatForPrompt, scoped, judgments, OortError) the native Python client (from oortmem import Oort), or the oort CLI's oort.v1 JSON. Use when adding memory to a Node.js, TypeScript or Python agent, a Vercel AI SDK, LangGraph.js or OpenAI Agents JS app, a LangGraph, OpenAI Agents or CrewAI Python app, a multi-user or serverless backend, or a program in another language that calls the oort CLI, and when choosing between Oort's hooks, MCP server, SDK and CLI.
 license: Apache-2.0
 compatibility: Written for oortmem 0.7.0. The SDK needs Node.js 22.15 or newer and is ESM. The CLI is `npm i -g oortmem`, or `pipx install oortmem`, which still runs Node.
 metadata:
@@ -81,17 +81,17 @@ Every method, option, result field and limit: [references/sdk.md](references/sdk
 
 ## 4. Load the reference you need
 
-| Task                                                                                        | Read                                                         |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Modes (`local`, `cloud`, `auto`), every option and method, results, ids, limits, lifecycle  | [references/sdk.md](references/sdk.md)                       |
-| A multi-user or multi-tenant app: `scoped({ user })`, `org`, what is refused                | [references/multi-user.md](references/multi-user.md)         |
-| Expert judgments: `judge.record`, `judge.apply`, `judge.confirm`, agent and expert roles    | [references/judgments.md](references/judgments.md)           |
-| Errors: classes, `code`, `reason`, `fix`, `retryable`, `retryAfter`, a retry helper         | [references/errors.md](references/errors.md)                 |
-| Vercel AI SDK (`oortmem/ai-sdk`), LangGraph.js, OpenAI Agents JS                            | [references/frameworks.md](references/frameworks.md)         |
-| A long-running service, serverless (Lambda, Cloud Functions, Cloud Run), bundling           | [references/deployment.md](references/deployment.md)         |
-| Which calls bill a model vendor, the Oort Pro relay or Oort Cloud                           | [references/costs.md](references/costs.md)                   |
-| Python (the native client), shell scripts, CI: the CLI with `--json`, `oort.v1`, exit codes | [references/cli-and-python.md](references/cli-and-python.md) |
-| Keys, secret scrubbing, prompt injection, scopes and trust                                  | [references/security.md](references/security.md)             |
+| Task                                                                                                      | Read                                                         |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Modes (`local`, `cloud`, `auto`), every option and method, results, ids, limits, lifecycle                | [references/sdk.md](references/sdk.md)                       |
+| A multi-user or multi-tenant app: `scoped({ user })`, `org`, what is refused                              | [references/multi-user.md](references/multi-user.md)         |
+| Expert judgments: `judge.record`, `judge.apply`, `judge.confirm`, agent and expert roles                  | [references/judgments.md](references/judgments.md)           |
+| Errors: classes, `code`, `reason`, `fix`, `retryable`, `retryAfter`, a retry helper                       | [references/errors.md](references/errors.md)                 |
+| Vercel AI SDK (`oortmem/ai-sdk`), LangGraph.js, OpenAI Agents JS; Python LangGraph, OpenAI Agents, CrewAI | [references/frameworks.md](references/frameworks.md)         |
+| A long-running service, serverless (Lambda, Cloud Functions, Cloud Run), bundling                         | [references/deployment.md](references/deployment.md)         |
+| Which calls bill a model vendor, the Oort Pro relay or Oort Cloud                                         | [references/costs.md](references/costs.md)                   |
+| Python (the native client), shell scripts, CI: the CLI with `--json`, `oort.v1`, exit codes               | [references/cli-and-python.md](references/cli-and-python.md) |
+| Keys, secret scrubbing, prompt injection, scopes and trust                                                | [references/security.md](references/security.md)             |
 
 Every TypeScript block marked `<!-- example: … -->` in this skill is a file in
 [examples/src](https://github.com/oortmem/oort/tree/main/examples/src), typechecked against the
