@@ -296,6 +296,14 @@ await oort.close();
   Per-user agent memory comes with CON-92.
 - **`user` needs an explicit `org` other than `local`**, and `scoped({ user: 'self' })` is refused
   (`self-not-derivable`).
+- **An end user's id** is 1 to 128 characters: a letter or digit first, then letters, digits and
+  `_ . : @ -`. It is never trimmed or normalized, and `self`, `anonymous`, `default`, `local`,
+  `root` and `count` are reserved, in any case. Anything else is refused before any I/O:
+  `user-missing` for `undefined`, `null` or `''`, `self-not-derivable` for `self`, else
+  `bad-user`. Map your own ids to this (a hash works). Local mode and Oort Cloud use the same rule.
+- **A user handle never switches users.** `scoped({ user })` on a handle already scoped to
+  another end user is refused (`user-hop`); the same id, `agent`, `project` and `judgeRole` still
+  derive. Make each end user's handle from the handle you made the first one from.
 - **A dropped user id fails loudly.** When the `user` key is present, it must hold a user id:
   `scoped({ user: req.user?.id })` with no user (`undefined`, `null` or an empty string) throws
   `OortUsageError` (`user-missing`). Only an options object without a `user` key at all acts as
@@ -361,7 +369,7 @@ await oort.close();
   `star-with-user`, and `user` needs an explicit `org` other than `local`. In cloud mode the key's
   account is the storage boundary, so `org` is your name for it and is never sent; requiring it
   still keeps a handle made for the account's own memory from deriving an end user by accident.
-  An end user's id is 1 to 128 letters, digits and `. _ : @ -`, starting with a letter or digit.
+  The id rule and the one-user-per-handle rule are the ones above.
 - **The header.** An end user's handle sends `Oort-User: <id>` on `observe`, `remember`,
   `recall`, `recent`, `explain`, `forget`, `pin` and `unpin`; `whoami` and `endUsers` act as the
   account and never send it. A handle without `user` never sends it.
@@ -394,7 +402,7 @@ own error is reported by its class name only.
 
 | Class                          | `code`               | Typical `reason`                                                                    |
 | ------------------------------ | -------------------- | ----------------------------------------------------------------------------------- |
-| `OortUsageError`               | `usage`              | `invalid-argument`, `principal-required`, `self-not-derivable`, `user-missing`, `user-not-supported`, `closed`, `embedder-mismatch` (fix `oort reembed`), `bad-request`, `too-large` |
+| `OortUsageError`               | `usage`              | `invalid-argument`, `principal-required`, `self-not-derivable`, `user-missing`, `bad-user`, `user-hop`, `user-not-supported`, `closed`, `embedder-mismatch` (fix `oort reembed`), `bad-request`, `too-large` |
 | `OortNotFoundError`            | `not-found`          |                                                                                     |
 | `OortAmbiguousIdError`         | `ambiguous-id`       |                                                                                     |
 | `OortNeedsKeyError`            | `needs-key`          | `missing-key`, with `role` and `envVar` (fix `oort models pull` or `oort keys set <vendor>`) |

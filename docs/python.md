@@ -179,7 +179,15 @@ alone: `oort doctor`).
 A handle's scope is fixed when it is made. `scoped()` derives one from trusted host code: hand
 only that handle to model-facing tools. An end user (`user`) gets their own Planet and nothing
 else, never the person's memories and never a Star, under your tenant (`org`). A missing user id
-(`""`, `None`) is refused, never a fall-back to the operator.
+(`""`, `None`) is refused (`user-missing`), never a fall-back to the operator.
+
+An end user's id is 1 to 128 characters: a letter or digit first, then letters, digits and
+`_ . : @ -`. It is never trimmed or normalized (`"alice\n"` is refused, not read as `alice`), and
+`self`, `anonymous`, `default`, `local`, `root` and `count` are reserved, in any case. Anything
+else is refused before any I/O: `self-not-derivable` for `self`, else `bad-user`. Local mode and
+Oort Cloud use the same rule. A user handle never switches users: `scoped(user=...)` on a handle
+already scoped to another end user is refused (`user-hop`); the same id, `agent`, `project` and
+`judge_role` still derive.
 
 <!-- example: examples/python/multi_user.py -->
 

@@ -44,6 +44,14 @@ await oort.close();
   their own Planet. The agent is still recorded as the author.
 - **`user` needs an explicit `org` other than `'local'`**, and `scoped({ user: 'self' })` is
   refused (`self-not-derivable`).
+- **An end user's id** is 1 to 128 characters: a letter or digit first, then letters, digits and
+  `_ . : @ -`. It is never trimmed or normalized, and `self`, `anonymous`, `default`, `local`,
+  `root` and `count` are reserved, in any case. Anything else is refused before any I/O:
+  `user-missing` for `undefined`, `null` or `''`, `self-not-derivable` for `self`, else
+  `bad-user`. Map your own ids to this (a hash works). Local mode and Oort Cloud use the same rule.
+- **A user handle never switches users.** `scoped({ user })` on a handle already scoped to
+  another end user is refused (`user-hop`); the same id, `agent`, `project` and `judgeRole` still
+  derive. Make each end user's handle from the handle you made the first one from.
 - **An end user gets their Planet only, never a Star.** An agent's Star is kept per org and
   agent, not per user, so it would leak between users. `include: ['star']` on a user handle is
   `refused`, and an agent configured as a Star together with `user` is refused (`star-with-user`).
