@@ -1,0 +1,2477 @@
+{
+  "embed": "voyage",
+  "rerank": "none",
+  "ks": [5, 10],
+  "results": [
+    {
+      "lang": "en",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9333333333333333,
+              "10": 0.9333333333333333
+            },
+            "mrr": 0.9166666666666666,
+            "staleLeak": 0,
+            "abstainFp": 0.25
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.9,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 0.9285714285714286,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.25
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 284.7228750000004,
+        "p95": 688.9622080000001
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "es",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9333333333333333,
+              "10": 0.9333333333333333
+            },
+            "mrr": 0.9166666666666666,
+            "staleLeak": 0,
+            "abstainFp": 0.25
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 0.9285714285714286,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.25
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 288.8209999999999,
+        "p95": 435.89000000000124
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "es",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.7333333333333333,
+              "10": 0.7333333333333333
+            },
+            "mrr": 0.7333333333333333,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.8,
+              "10": 0.8
+            },
+            "mrr": 0.8,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.5714285714285714,
+              "10": 0.5714285714285714
+            },
+            "mrr": 0.5714285714285714,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 285.8512090000004,
+        "p95": 316.1381249999977
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "pt-BR",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9666666666666667,
+              "10": 0.9666666666666667
+            },
+            "mrr": 0.95,
+            "staleLeak": 0,
+            "abstainFp": 0.25
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 0.9285714285714286,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.25
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 274.43404099999316,
+        "p95": 313.50104100000317
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "pt-BR",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.9,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.8571428571428571,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 289.7381249999962,
+        "p95": 524.3839169999992
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "de",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9333333333333333,
+              "10": 0.9333333333333333
+            },
+            "mrr": 0.9333333333333333,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.3333333333333333,
+              "10": 0.3333333333333333
+            },
+            "mrr": 0.3333333333333333,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 273.5382079999981,
+        "p95": 301.53008399999817
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "de",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.6,
+              "10": 0.6
+            },
+            "mrr": 0.6,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.7,
+              "10": 0.7
+            },
+            "mrr": 0.7,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.42857142857142855,
+              "10": 0.42857142857142855
+            },
+            "mrr": 0.42857142857142855,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.3333333333333333,
+              "10": 0.3333333333333333
+            },
+            "mrr": 0.3333333333333333,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 283.00491700000566,
+        "p95": 314.80591699999786
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "fr",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.9,
+            "staleLeak": 0,
+            "abstainFp": 0.25
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.8571428571428571,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.25
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 291.3784169999999,
+        "p95": 494.6480409999931
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "fr",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.7666666666666667,
+              "10": 0.7666666666666667
+            },
+            "mrr": 0.7666666666666667,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.8,
+              "10": 0.8
+            },
+            "mrr": 0.8,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.7142857142857143,
+              "10": 0.7142857142857143
+            },
+            "mrr": 0.7142857142857143,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 259.7116250000108,
+        "p95": 343.2513750000071
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "ja",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.8333333333333334,
+              "10": 0.8333333333333334
+            },
+            "mrr": 0.8166666666666667,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.85,
+              "10": 0.85
+            },
+            "mrr": 0.85,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.7857142857142857,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 265.518624999997,
+        "p95": 302.14833300000464
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "ja",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.7333333333333333,
+              "10": 0.7333333333333333
+            },
+            "mrr": 0.7,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.8,
+              "10": 0.8
+            },
+            "mrr": 0.775,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.5714285714285714,
+              "10": 0.5714285714285714
+            },
+            "mrr": 0.5,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 297.72404200000165,
+        "p95": 430.7836249999964
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "zh-Hans",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9333333333333333,
+              "10": 0.9333333333333333
+            },
+            "mrr": 0.9166666666666666,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 0.9285714285714286,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 267.87608299999556,
+        "p95": 305.0043330000044
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "zh-Hans",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.8,
+              "10": 0.8
+            },
+            "mrr": 0.7666666666666667,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.8,
+              "10": 0.8
+            },
+            "mrr": 0.775,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.7857142857142857,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 292.41929200000595,
+        "p95": 305.7971249999973
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "ko",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.8333333333333334,
+              "10": 0.8333333333333334
+            },
+            "mrr": 0.8333333333333334,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.9,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.7142857142857143,
+              "10": 0.7142857142857143
+            },
+            "mrr": 0.7142857142857143,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 275.00737500000105,
+        "p95": 303.4869580000086
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "ko",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.43333333333333335,
+              "10": 0.43333333333333335
+            },
+            "mrr": 0.43333333333333335,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.45,
+              "10": 0.45
+            },
+            "mrr": 0.45,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.2857142857142857,
+              "10": 0.2857142857142857
+            },
+            "mrr": 0.2857142857142857,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 285.6762499999895,
+        "p95": 466.13154200001736
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "hi",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.9,
+            "staleLeak": 0,
+            "abstainFp": 0.25
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.8571428571428571,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.25
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 272.68799999999464,
+        "p95": 306.3086670000048
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "hi",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.8,
+              "10": 0.8
+            },
+            "mrr": 0.7833333333333333,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.85,
+              "10": 0.85
+            },
+            "mrr": 0.825,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.7142857142857143,
+              "10": 0.7142857142857143
+            },
+            "mrr": 0.7142857142857143,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 281.19933400000446,
+        "p95": 310.52491599999485
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "ar",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9333333333333333,
+              "10": 0.9333333333333333
+            },
+            "mrr": 0.9333333333333333,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 291.8021249999874,
+        "p95": 359.00633300002664
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "ar",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.7666666666666667,
+              "10": 0.7666666666666667
+            },
+            "mrr": 0.7666666666666667,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.75,
+              "10": 0.75
+            },
+            "mrr": 0.75,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.8571428571428571,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 269.39395800000057,
+        "p95": 307.87833300000057
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "th",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.7333333333333333,
+              "10": 0.7333333333333333
+            },
+            "mrr": 0.7333333333333333,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.85,
+              "10": 0.85
+            },
+            "mrr": 0.85,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.5714285714285714,
+              "10": 0.5714285714285714
+            },
+            "mrr": 0.5714285714285714,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.3333333333333333,
+              "10": 0.3333333333333333
+            },
+            "mrr": 0.3333333333333333,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 245.01149999999325,
+        "p95": 305.4390419999836
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "th",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.43333333333333335,
+              "10": 0.43333333333333335
+            },
+            "mrr": 0.43333333333333335,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.55,
+              "10": 0.55
+            },
+            "mrr": 0.55,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.14285714285714285,
+              "10": 0.14285714285714285
+            },
+            "mrr": 0.14285714285714285,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.3333333333333333,
+              "10": 0.3333333333333333
+            },
+            "mrr": 0.3333333333333333,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 278.1453329999931,
+        "p95": 643.8879580000066
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "ru",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.8333333333333334,
+              "10": 0.8333333333333334
+            },
+            "mrr": 0.8166666666666667,
+            "staleLeak": 0,
+            "abstainFp": 0.25
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.85,
+              "10": 0.85
+            },
+            "mrr": 0.85,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.7857142857142857,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.25
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 282.4065409999748,
+        "p95": 303.02704200000153
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "ru",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.6,
+              "10": 0.6
+            },
+            "mrr": 0.6,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.7,
+              "10": 0.7
+            },
+            "mrr": 0.7,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.2857142857142857,
+              "10": 0.2857142857142857
+            },
+            "mrr": 0.2857142857142857,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 285.91829100000905,
+        "p95": 303.4502499999944
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "id",
+      "condition": "mono",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.8833333333333333,
+            "staleLeak": 0,
+            "abstainFp": 0.25
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.7857142857142857,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.25
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 288.19162500000675,
+        "p95": 356.3046669999894
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "id",
+      "condition": "cross",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.8333333333333334,
+              "10": 0.8333333333333334
+            },
+            "mrr": 0.8333333333333334,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.85,
+              "10": 0.85
+            },
+            "mrr": 0.85,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.8571428571428571,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 294.9931669999787,
+        "p95": 308.1408750000119
+      },
+      "sameLanguageFirst": null
+    },
+    {
+      "lang": "en",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9666666666666667,
+              "10": 0.9666666666666667
+            },
+            "mrr": 0.9444444444444444,
+            "staleLeak": 0,
+            "abstainFp": 0.5
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 0.9047619047619048,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.5
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 257.606334000011,
+        "p95": 361.4195839999884
+      },
+      "sameLanguageFirst": 0.8620689655172413
+    },
+    {
+      "lang": "es",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9333333333333333,
+              "10": 0.9333333333333333
+            },
+            "mrr": 0.9166666666666666,
+            "staleLeak": 0,
+            "abstainFp": 0.5
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 0.9285714285714286,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.5
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 243.4717079999973,
+        "p95": 302.7087499999907
+      },
+      "sameLanguageFirst": 0.8571428571428571
+    },
+    {
+      "lang": "pt-BR",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9666666666666667,
+              "10": 0.9666666666666667
+            },
+            "mrr": 0.95,
+            "staleLeak": 0,
+            "abstainFp": 0.5
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 0.9285714285714286,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.5
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 274.710167000012,
+        "p95": 520.2724579999922
+      },
+      "sameLanguageFirst": 0.8620689655172413
+    },
+    {
+      "lang": "de",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9666666666666667,
+              "10": 0.9666666666666667
+            },
+            "mrr": 0.9666666666666667,
+            "staleLeak": 0,
+            "abstainFp": 0.25
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.25
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 284.25224999996135,
+        "p95": 302.28208400000585
+      },
+      "sameLanguageFirst": 0.8620689655172413
+    },
+    {
+      "lang": "fr",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.9,
+            "staleLeak": 0,
+            "abstainFp": 0.5
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.8571428571428571,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.5
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 268.17058299999917,
+        "p95": 303.63737499999115
+      },
+      "sameLanguageFirst": 0.9259259259259259
+    },
+    {
+      "lang": "ja",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.8666666666666667,
+              "10": 0.8666666666666667
+            },
+            "mrr": 0.8277777777777777,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.8666666666666666,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.7857142857142857,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 278.48433300002944,
+        "p95": 299.81487499998184
+      },
+      "sameLanguageFirst": 0.8076923076923077
+    },
+    {
+      "lang": "zh-Hans",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9333333333333333,
+              "10": 0.9333333333333333
+            },
+            "mrr": 0.9083333333333333,
+            "staleLeak": 0,
+            "abstainFp": 0.25
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.9125,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.25
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 278.44745800003875,
+        "p95": 517.8817080000299
+      },
+      "sameLanguageFirst": 0.8571428571428571
+    },
+    {
+      "lang": "ko",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.8666666666666667,
+              "10": 0.8666666666666667
+            },
+            "mrr": 0.8666666666666667,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.9,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.8571428571428571,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 276.37958399998024,
+        "p95": 301.0302499999525
+      },
+      "sameLanguageFirst": 0.8461538461538461
+    },
+    {
+      "lang": "hi",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9333333333333333,
+              "10": 0.9333333333333333
+            },
+            "mrr": 0.9333333333333333,
+            "staleLeak": 0,
+            "abstainFp": 0.5
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.5
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 272.71000000002095,
+        "p95": 304.67425000004005
+      },
+      "sameLanguageFirst": 0.7857142857142857
+    },
+    {
+      "lang": "ar",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9333333333333333,
+              "10": 0.9333333333333333
+            },
+            "mrr": 0.9333333333333333,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 1,
+              "10": 1
+            },
+            "mrr": 1,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 281.1395419999608,
+        "p95": 479.65387500001816
+      },
+      "sameLanguageFirst": 0.7857142857142857
+    },
+    {
+      "lang": "th",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.7666666666666667,
+              "10": 0.7666666666666667
+            },
+            "mrr": 0.7666666666666667,
+            "staleLeak": 0,
+            "abstainFp": 0
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.9,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.5714285714285714,
+              "10": 0.5714285714285714
+            },
+            "mrr": 0.5714285714285714,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.3333333333333333,
+              "10": 0.3333333333333333
+            },
+            "mrr": 0.3333333333333333,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 273.3594999999623,
+        "p95": 305.1425000000163
+      },
+      "sameLanguageFirst": 0.8260869565217391
+    },
+    {
+      "lang": "ru",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.8666666666666667,
+              "10": 0.8666666666666667
+            },
+            "mrr": 0.8666666666666667,
+            "staleLeak": 0,
+            "abstainFp": 0.5
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.9,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.8571428571428571,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.5
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 265.77204099996015,
+        "p95": 302.1831250000396
+      },
+      "sameLanguageFirst": 0.8461538461538461
+    },
+    {
+      "lang": "id",
+      "condition": "mixed",
+      "report": {
+        "ks": [5, 10],
+        "skippedEmpty": 0,
+        "groups": {
+          "overall": {
+            "rows": 34,
+            "recallAt": {
+              "5": 0.9,
+              "10": 0.9
+            },
+            "mrr": 0.9,
+            "staleLeak": 0,
+            "abstainFp": 0.5
+          },
+          "single-fact": {
+            "rows": 20,
+            "recallAt": {
+              "5": 0.95,
+              "10": 0.95
+            },
+            "mrr": 0.95,
+            "staleLeak": null,
+            "abstainFp": null
+          },
+          "knowledge-update": {
+            "rows": 7,
+            "recallAt": {
+              "5": 0.8571428571428571,
+              "10": 0.8571428571428571
+            },
+            "mrr": 0.8571428571428571,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "temporal": {
+            "rows": 3,
+            "recallAt": {
+              "5": 0.6666666666666666,
+              "10": 0.6666666666666666
+            },
+            "mrr": 0.6666666666666666,
+            "staleLeak": 0,
+            "abstainFp": null
+          },
+          "abstention": {
+            "rows": 4,
+            "recallAt": {
+              "5": null,
+              "10": null
+            },
+            "mrr": null,
+            "staleLeak": null,
+            "abstainFp": 0.5
+          }
+        }
+      },
+      "latencyMs": {
+        "p50": 288.8832500000135,
+        "p95": 366.3997500000405
+      },
+      "sameLanguageFirst": 0.8518518518518519
+    }
+  ]
+}
