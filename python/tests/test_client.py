@@ -800,7 +800,8 @@ class CloudMode(unittest.TestCase):
     def test_cloud_mode_refuses_local_only_options(self) -> None:
         from oortmem import Oort, OortUsageError
 
-        for kw in ({"user": "u1", "org": "acme"}, {"org": "acme"}, {"judge_role": "expert"}, {"home": "/x"}, {"url": "ftp://x"}, {"url": "http://example.com"}):
+        # user and org are cloud options too (CON-132), under the local rules: user needs an org.
+        for kw in ({"user": "u1"}, {"user": "u1", "org": "local"}, {"judge_role": "expert"}, {"home": "/x"}, {"url": "ftp://x"}, {"url": "http://example.com"}):
             with self.assertRaises(OortUsageError, msg=str(kw)):
                 Oort(mode="cloud", **kw)
 
@@ -856,6 +857,201 @@ class CloudMode(unittest.TestCase):
         o = Oort(env={**self.box.env, "OORT_API_KEY": KEY, "OORT_CLOUD_URL": self.cloud.url}, cwd=self.box.tmp)
         self.assertEqual(o.whoami().account, "acct")
         self.assertEqual(o.mode, "cloud")
+
+
+WHOAMI_SERVER_KEY = (200, {"account": "acct", "plan": "pro", "via": "key", "capabilities": ["end-users"]})
+OBSERVED = (200, {"outcome": "added", "memories": [{"id": "m1", "action": "added"}], "counts": {"added": 1}})
+
+
+@NEEDS_310
+class CloudEndUsers(unittest.TestCase):
+    """Per-user memory in Oort Cloud (CON-132): Oort-User from an end user's handle only, and
+    only once whoami lists the key's end-users capability."""
+
+    def setUp(self) -> None:
+        self.box = Sandbox()
+        self.rec = Recorder()
+        self.cloud = FakeCloud(self.rec)
+
+    def tearDown(self) -> None:
+        self.cloud.close()
+        self.box.cleanup()
+
+    def oort(self, **kw: Any):
+        from oortmem import Oort
+
+        env = {**self.box.env, "OORT_API_KEY": KEY}
+        return Oort(mode="cloud", url=self.cloud.url, env=env, cwd=self.box.tmp, org="acme", project=None, **kw)
+
+    def sent(self) -> List[Any]:
+        return [(r["method"], r["path"].split("?")[0], r["headers"].get("oort-user")) for r in self.rec.seen]
+
+    def test_the_header_goes_only_with_an_end_users_memory_calls(self) -> None:
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
+        self.rec.answers["POST /v1/observe"] = OBSERVED
+        self.rec.answers["GET /v1/memories"] = (200, {"memories": []})
+        with self.oort() as o:
+            ada = o.scoped(user="ada", agent="bot")
+            ada.remember("Ada likes tea.")
+            ada.recent()
+            w = ada.whoami()
+        self.assertEqual((w.user, w.reads, w.writes_to), ("ada", ["Planet ada"], "Planet ada"))
+        self.assertEqual(
+            self.sent(),
+            [
+                ("GET", "/v1/whoami", None),
+                ("POST", "/v1/observe", "ada"),
+                ("GET", "/v1/memories", "ada"),
+                ("GET", "/v1/whoami", None),
+            ],
+        )
+
+    def test_never_from_an_unscoped_handle(self) -> None:
+        self.rec.answers["GET /v1/whoami"] = (200, {"account": "acct", "plan": "pro", "via": "key"})
+        self.rec.answers["POST /v1/observe"] = OBSERVED
+        self.rec.answers["POST /v1/recall"] = (200, {"memories": [], "timings": {}})
+        self.rec.answers["GET /v1/memories"] = (200, {"memories": []})
+        with self.oort() as o:
+            for h in (o, o.scoped(agent="bot"), o.scoped(project="web")):
+                h.remember("x is y")
+                h.observe(user="u", assistant="a")
+                h.recall("x")
+                h.recent()
+                h.whoami()
+        self.assertGreater(len(self.rec.seen), 10)
+        self.assertTrue(all(r["headers"].get("oort-user") is None for r in self.rec.seen))
+
+    def test_an_older_cloud_is_refused_and_nothing_names_the_user(self) -> None:
+        from oortmem import OortRefusedError
+        from oortmem.errors import END_USERS_UNSUPPORTED
+
+        # Before CON-132: whoami lists no capabilities, and the header would be ignored.
+        self.rec.answers["GET /v1/whoami"] = (200, {"account": "acct", "plan": "pro", "via": "key"})
+        self.rec.answers["POST /v1/observe"] = OBSERVED
+        o = self.oort()
+        ada = o.scoped(user="ada")
+        for call in (
+            lambda: ada.remember("x is y"),
+            lambda: ada.observe(user="u", assistant="a"),
+            lambda: ada.recall("x"),
+            lambda: ada.recent(),
+            lambda: ada.forget("11111111"),
+            lambda: ada.pin("11111111"),
+            lambda: ada.explain("11111111"),
+            lambda: o.end_users.count(),
+            lambda: o.end_users.erase("ada"),
+        ):
+            with self.assertRaises(OortRefusedError) as e:
+                call()
+            self.assertEqual((e.exception.reason, e.exception.retryable, e.exception.fix), ("end-users-unsupported", False, None))
+            self.assertEqual(e.exception.message, END_USERS_UNSUPPORTED)
+        self.assertEqual({(m, p) for m, p, _ in self.sent()}, {("GET", "/v1/whoami")})
+        self.assertTrue(all(u is None for _, _, u in self.sent()))
+
+    def test_the_capability_is_checked_once_per_root_and_again_after_a_refusal(self) -> None:
+        from oortmem import OortRefusedError
+
+        self.rec.answers["GET /v1/whoami"] = (200, {"account": "acct", "plan": "pro", "via": "key"})
+        self.rec.answers["POST /v1/observe"] = OBSERVED
+        o = self.oort()
+        with self.assertRaises(OortRefusedError):
+            o.scoped(user="ada").remember("x is y")
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY  # the cloud upgraded: no restart
+        o.scoped(user="ada").remember("x is y")
+        o.scoped(user="bob").remember("x is y")
+        o.scoped(user="ada").remember("x is y")
+        self.assertEqual(sum(1 for m, p, _ in self.sent() if p == "/v1/whoami"), 2)
+
+    def test_erase_and_count(self) -> None:
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
+        self.rec.answers["GET /v1/end-users/count"] = (200, {"endUsers": 3, "limit": 100})
+        self.rec.answers["DELETE /v1/end-users/*"] = (200, {"erased": {"memories": 2, "coldCopies": 1, "turnRefs": 4, "cursors": 1}})
+        o = self.oort()
+        c = o.end_users.count()
+        self.assertEqual((c.end_users, c.limit), (3, 100))
+        e = o.end_users.erase("ada:1")
+        self.assertEqual((e.erased, e.memories, e.cold_copies, e.turn_refs, e.cursors), ("ada:1", 2, 1, 4, 1))
+        self.assertEqual(
+            self.sent(),
+            [("GET", "/v1/whoami", None), ("GET", "/v1/end-users/count", None), ("DELETE", "/v1/end-users/ada%3A1", None)],
+        )
+
+    def test_the_same_client_side_rules_as_local(self) -> None:
+        from oortmem import Oort, OortCloudOnlyError, OortRefusedError, OortUsageError
+
+        o = self.oort()
+        for user, reason in (("self", "self-not-derivable"), ("", "user-missing"), (None, "user-missing"), ("bad id", "invalid-argument")):
+            with self.assertRaises(OortUsageError) as e:
+                o.scoped(user=user)
+            self.assertEqual(e.exception.reason, reason)
+            with self.assertRaises(OortUsageError) as e:
+                o.end_users.erase(user)  # type: ignore[arg-type]
+            self.assertEqual(e.exception.reason, reason)
+        ada = o.scoped(user="ada")
+        with self.assertRaises(OortRefusedError) as e:
+            ada.recall("x", include=["star"])
+        self.assertEqual(e.exception.reason, "scope-denied")
+        with self.assertRaises(OortUsageError) as e:
+            ada.forget("11111111", everywhere=True)
+        self.assertEqual(e.exception.reason, "user-not-supported")
+        with self.assertRaises(OortUsageError) as e:
+            ada.end_users.count()
+        self.assertEqual(e.exception.reason, "user-not-supported")
+        no_org = Oort(mode="cloud", url=self.cloud.url, env={**self.box.env, "OORT_API_KEY": KEY}, cwd=self.box.tmp)
+        with self.assertRaises(OortUsageError) as e:
+            no_org.scoped(user="ada")
+        self.assertEqual(e.exception.reason, "principal-required")
+        with open(os.path.join(self.box.home, "agents.json"), "w") as f:
+            json.dump({"version": 1, "agents": {"cursor": {"star": True}}}, f)
+        with self.assertRaises(OortRefusedError) as e:
+            o.scoped(user="ada", agent="cursor").remember("x is y")
+        self.assertEqual(e.exception.reason, "star-with-user")
+        self.assertEqual(self.rec.seen, [])
+        local = Oort(mode="local", env=self.box.env, cwd=self.box.tmp, org="acme")
+        with self.assertRaises(OortCloudOnlyError) as e:
+            local.end_users.count()
+        self.assertEqual(e.exception.reason, "end-users")
+
+    def test_each_refusal_maps(self) -> None:
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
+        ada = self.oort().scoped(user="ada")
+        for status, code, cls, reason in (
+            (400, "user_missing", "OortUsageError", "user-missing"),
+            (400, "self_not_derivable", "OortUsageError", "self-not-derivable"),
+            (400, "bad_user", "OortUsageError", "invalid-argument"),
+            (400, "star_with_user", "OortRefusedError", "star-with-user"),
+            (400, "scope_denied", "OortRefusedError", "scope-denied"),
+            (400, "user_not_supported", "OortUsageError", "user-not-supported"),
+            (402, "end_user_limit", "OortRefusedError", "end-user-limit"),
+            (403, "end_users_not_allowed", "OortRefusedError", "end-users-not-allowed"),
+            (409, "end_user_erased", "OortRefusedError", "end-user-erased"),
+        ):
+            self.rec.answers["POST /v1/observe"] = (status, {"error": {"code": code, "message": "m"}})
+            with self.subTest(code=code):
+                from oortmem import OortError
+
+                with self.assertRaises(OortError) as e:
+                    ada.observe(user="u", assistant="a")
+                self.assertEqual((type(e.exception).__name__, e.exception.reason, e.exception.status, e.exception.retryable), (cls, reason, status, False))
+
+    def test_asyncio(self) -> None:
+        import asyncio
+
+        from oortmem import AsyncOort
+
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
+        self.rec.answers["POST /v1/observe"] = OBSERVED
+        self.rec.answers["GET /v1/end-users/count"] = (200, {"endUsers": 1, "limit": 100})
+        self.rec.answers["DELETE /v1/end-users/*"] = (200, {"erased": {"memories": 1, "coldCopies": 0, "turnRefs": 0, "cursors": 0}})
+
+        async def run() -> Any:
+            async with AsyncOort(mode="cloud", url=self.cloud.url, env={**self.box.env, "OORT_API_KEY": KEY}, cwd=self.box.tmp, org="acme") as o:
+                await o.scoped(user="ada").remember("Ada likes tea.")
+                return await o.end_users.count(), await o.end_users.erase("ada")
+
+        count, erased = asyncio.run(run())
+        self.assertEqual((count.end_users, erased.erased, erased.memories), (1, "ada", 1))
+        self.assertEqual([u for _, _, u in self.sent()], [None, "ada", None, None])
 
 
 @NEEDS_310

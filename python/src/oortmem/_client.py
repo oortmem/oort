@@ -36,10 +36,19 @@ from ._validate import (
     view_of,
     wire_date,
 )
-from .errors import OortError, OortInternalError, OortNeedsLoginError, OortUsageError
+from .errors import (
+    OortCloudOnlyError,
+    OortError,
+    OortInternalError,
+    OortNeedsLoginError,
+    OortRefusedError,
+    OortUsageError,
+)
 from .types import (
     ConfirmResult,
     ConsolidateResult,
+    EndUserCount,
+    EndUserErasure,
     Explanation,
     ForgetResult,
     JudgeResult,
@@ -55,7 +64,7 @@ from .types import (
     from_wire,
 )
 
-__all__ = ["Oort", "AsyncOort", "OortJudge", "AsyncOortJudge"]
+__all__ = ["Oort", "AsyncOort", "OortJudge", "AsyncOortJudge", "OortEndUsers", "AsyncOortEndUsers"]
 
 MODES = ("auto", "local", "cloud", "remote")
 
@@ -253,11 +262,10 @@ class Oort:
                 )
             return
         if mode == "cloud":
-            if o["user_given"]:
-                raise _usage("user is not available in cloud mode yet: one Oort key is one account (CON-92).")
-            for k in ("org", "token"):
-                if o[k] is not None:
-                    raise _not_in_mode(k, mode)
+            # user and org take the local rules (CON-132): the key's account is the tenant, and
+            # org is the host's name for it (not sent), still required with user.
+            if o["token"] is not None:
+                raise _not_in_mode("token", mode)
             if o["judge_role"] != "agent" or o["operator"] is not None:
                 raise _not_in_mode("judge_role", mode)
             if explicit and o["home"] is not None:
@@ -366,7 +374,9 @@ class Oort:
                             reason="no-key",
                         )
                     root.cloud = CloudClient(url, key, self._timeout, self._env)
-        return CloudOps(root.cloud, self._now_ms)
+        s = self._scope
+        # An end user's handle names them on every memory call (Oort-User, CON-132).
+        return CloudOps(root.cloud, self._now_ms, s.user if s.user_given else None)
 
     def _now_ms(self) -> float:
         now = self._internals.get("now")
@@ -383,6 +393,11 @@ class Oort:
             project = CONFIGURED_ID_PREFIX + s.project
         privacy = stated_privacy(s.cwd) if s.project_config and project is not None and project == cwd_project else None
         star = s.agent is not None and _agent_is_star(self._home, s.agent)
+        if star and s.user_given:
+            raise OortRefusedError(
+                "This agent is configured as a Star, and a Star is shared by every user of the agent; an end-user handle gets their Planet only. Use an agent that writes the Planet (`oort connect <agent> --no-star`).",
+                reason="star-with-user",
+            )
         return CloudPrincipal(project, privacy, s.agent, star, [])
 
     def _headers(self) -> Dict[str, str]:
@@ -580,6 +595,26 @@ class Oort:
         """Judgment memory: ``record``, ``apply``, ``list`` and ``confirm`` (local only)."""
         return self._judge
 
+    @property
+    def end_users(self) -> "OortEndUsers":
+        """The account's end users in Oort Cloud (CON-132): ``erase(user)`` and ``count()``.
+        Cloud mode with a server key, on a handle not scoped to an end user."""
+        return OortEndUsers(self)
+
+    def _end_users_ops(self) -> CloudOps:
+        """The account's cloud operations, for ``end_users``: never from an end user's handle."""
+        if self._mode() != "cloud":
+            raise OortCloudOnlyError(
+                "end_users works on Oort Cloud end users. Locally, an end user lives under your org in your own store.",
+                reason="end-users",
+            )
+        if self._scope.user_given:
+            raise OortUsageError(
+                "end_users acts for the account; this handle is scoped to an end user. Call it on the handle you made the end user's from.",
+                reason="user-not-supported",
+            )
+        return CloudOps(self._cloud().c, self._now_ms)
+
     # --- handles ----------------------------------------------------------------------------
 
     def scoped(
@@ -602,8 +637,6 @@ class Oort:
         check_agent(agent)
         s = self._scope
         if user is not UNSET:
-            if self._mode() == "cloud":
-                raise _usage("user is not available in cloud mode yet: one Oort key is one account (CON-92).")
             check_user(user, s.org, given=True, org_required=self._mode() != "remote")
         child = object.__new__(type(self))
         child.__dict__.update(self.__dict__)
@@ -747,6 +780,39 @@ class OortJudge:
         )
 
 
+class OortEndUsers:
+    """The account's end users in Oort Cloud (CON-132): per-user memory a server key writes with
+    ``scoped(user=...)``. Requires Oort Cloud with server keys: refused with
+    ``end-users-unsupported`` when whoami does not list the key's ``end-users`` capability."""
+
+    def __init__(self, oort: Oort) -> None:
+        self._o = oort
+
+    def _run(self, fn: Callable[[CloudOps], Any]) -> Any:
+        o = self._o
+        if o._root.closed:
+            raise OortUsageError("This Oort handle is closed.", reason="closed")
+        try:
+            return fn(o._end_users_ops())
+        except OortError:
+            raise
+        except (TypeError, ValueError, KeyError, AttributeError) as e:
+            raise OortInternalError(f"An internal error stopped this call ({type(e).__name__}).") from None
+
+    def erase(self, user: str) -> EndUserErasure:
+        """Erase an end user completely: every memory stored for them, with its indexes and cold
+        copies. The account's own memory and every other end user are untouched; erasing one who
+        has nothing is not an error. A write for them still in flight is refused
+        (``end-user-erased``)."""
+        # The same rules as scoped(user=...): never empty, never self, an explicit org.
+        check_user(user, self._o._scope.org, given=True)
+        return self._run(lambda c: from_wire(EndUserErasure, c.erase_end_user(user)))
+
+    def count(self) -> EndUserCount:
+        """How many end users the account has, and its plan's limit."""
+        return self._run(lambda c: from_wire(EndUserCount, c.count_end_users()))
+
+
 def _local_only(what: str) -> Callable[[CloudOps, CloudPrincipal], Any]:
     def f(c: CloudOps, p: CloudPrincipal) -> Any:
         raise local_only(what)
@@ -808,12 +874,14 @@ class AsyncOort:
         self._sync = Oort(**options)
         self._sync._root.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="oortmem")
         self.judge = AsyncOortJudge(self)
+        self.end_users = AsyncOortEndUsers(self)
 
     @classmethod
     def _wrap(cls, sync: Oort) -> "AsyncOort":
         a = object.__new__(cls)
         a._sync = sync
         a.judge = AsyncOortJudge(a)
+        a.end_users = AsyncOortEndUsers(a)
         return a
 
     async def _call(self, fn: Callable[..., Any], *args: Any, **kw: Any) -> Any:
@@ -886,6 +954,19 @@ class AsyncOortJudge:
 
     async def confirm(self, id: str) -> ConfirmResult:  # noqa: A002
         return await self._a._call(self._a._sync.judge.confirm, id)
+
+
+class AsyncOortEndUsers:
+    """``OortEndUsers`` for asyncio."""
+
+    def __init__(self, a: AsyncOort) -> None:
+        self._a = a
+
+    async def erase(self, user: str) -> EndUserErasure:
+        return await self._a._call(self._a._sync.end_users.erase, user)
+
+    async def count(self) -> EndUserCount:
+        return await self._a._call(self._a._sync.end_users.count)
 
 
 __all__ += ["format_for_prompt"]

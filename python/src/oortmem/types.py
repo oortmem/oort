@@ -51,6 +51,8 @@ __all__ = [
     "ConfirmResult",
     "ConsolidateResult",
     "Whoami",
+    "EndUserErasure",
+    "EndUserCount",
     "Turn",
 ]
 
@@ -360,6 +362,25 @@ class Whoami:
     writes_to: str
     version: str
     routes: Dict[str, str]
+
+
+@dataclass(**_FROZEN)
+class EndUserErasure:
+    """What ``end_users.erase`` removed (Oort Cloud, CON-132): the id you erased, and counts."""
+
+    erased: str
+    memories: int
+    cold_copies: int
+    turn_refs: int
+    cursors: int
+
+
+@dataclass(**_FROZEN)
+class EndUserCount:
+    """How many end users the account has, and how many its plan includes (CON-132)."""
+
+    end_users: int
+    limit: int
 
 
 @dataclass(**_FROZEN)
