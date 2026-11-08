@@ -65,7 +65,7 @@ pnpm eval --set multilingual --lang ja,zh-Hans --condition mono --json --out res
 `oort models pull` first. The reranker is given as long as it takes (`rerankBudgetMs` 0) so runs
 repeat. Everything else is recall's default configuration, with the relevance gate on.
 
-**Vendor models (not run yet).** The cloud's models need `VOYAGE_API_KEY` and are run by hand:
+**Vendor models.** The cloud's models need `VOYAGE_API_KEY` and are run by hand:
 
 ```sh
 VOYAGE_API_KEY=… pnpm eval --set multilingual --embed voyage --rerank voyage --out voyage.json
@@ -74,12 +74,49 @@ VOYAGE_API_KEY=… pnpm eval --set multilingual --embed voyage --rerank voyage -
 
 That run answers the design's main open question (is `voyage-3.5-lite` good enough per language?)
 and calibrates the cross-lingual `minDenseScore` (design §4.3). It embeds about 3,100 memories and 1,300
-questions, and makes at most one rerank call per question and condition. Record its table here when it runs.
+questions, and makes at most one rerank call per question and condition. The first run is below
+("Voyage, 2026-11-08").
 
 `src/multilingual.test.ts` runs the lexical condition set and compares it with
 `baseline-lexical.json`. A tokeniser change shows up there as a changed number;
 `OORT_UPDATE_GOLDEN=1` rewrites it, which is only right for an intended change, with the tables
 below updated in the same commit.
+
+## Voyage, 2026-11-08
+
+The cloud's default models, `voyage-3.5-lite` (512 dimensions, int8) and `rerank-3-lite`, at oortmem
+0.7.0 (`496d4aa`), run from Europe. Two runs: with rerank (MCP and SDK recall) and with `--rerank none`
+(the cloud prompt hook's default `fast` mode). The full results are `results-voyage-rerank.json` and
+`results-voyage-norerank.json`. The set is not native-reviewed yet, and 4 abstention rows per
+language means one row moves abstention FP by 0.25: read these as directions, not release numbers.
+
+| Language | mono R@10, rerank / none | cross R@10, rerank / none | mixed R@10, rerank / none | Abstain FP (mono), rerank / none |
+| -------- | ------------------------ | ------------------------- | ------------------------- | -------------------------------- |
+| en       | 0.967 / 0.933            | —                         | 0.967 / 0.967             | 0.50 / 0.25                      |
+| es       | 1.000 / 0.933            | 1.000 / 0.733             | 1.000 / 0.933             | 0.75 / 0.25                      |
+| pt-BR    | 1.000 / 0.967            | 1.000 / 0.900             | 1.000 / 0.967             | 0.75 / 0.25                      |
+| de       | 1.000 / 0.933            | 1.000 / 0.600             | 1.000 / 0.967             | 0.75 / 0.00                      |
+| fr       | 1.000 / 0.900            | 1.000 / 0.767             | 1.000 / 0.900             | 0.75 / 0.25                      |
+| ja       | 1.000 / 0.833            | 1.000 / 0.733             | 1.000 / 0.867             | 1.00 / 0.00                      |
+| zh-Hans  | 1.000 / 0.933            | 1.000 / 0.800             | 1.000 / 0.933             | 0.75 / 0.00                      |
+| ko       | 1.000 / 0.833            | 1.000 / 0.433             | 1.000 / 0.867             | 0.75 / 0.00                      |
+| hi       | 1.000 / 0.900            | 1.000 / 0.800             | 1.000 / 0.933             | 0.50 / 0.25                      |
+| ar       | 1.000 / 0.933            | 1.000 / 0.767             | 1.000 / 0.933             | 0.75 / 0.00                      |
+| th       | 1.000 / 0.733            | 1.000 / 0.433             | 1.000 / 0.767             | 0.50 / 0.00                      |
+| ru       | 1.000 / 0.833            | 1.000 / 0.600             | 1.000 / 0.867             | 0.75 / 0.25                      |
+| id       | 1.000 / 0.900            | 1.000 / 0.833             | 1.000 / 0.900             | 0.75 / 0.25                      |
+
+- **With rerank, recall holds everywhere:** recall@10 is 1.000 in every language and condition,
+  including cross-lingual (question in one language, memory in English).
+- **Without rerank, cross-lingual recall drops** below the design's bar (0.75 × English mono, 0.70)
+  for German and Russian (0.600) and Korean and Thai (0.433). Thai mono (0.733) misses the mono bar
+  (0.9 × English). The relevance gate drops the cross-lingual matches; the design's gate-miss rerank
+  (multilingual design of 8 November, §3) targets exactly this.
+- **Rerank makes abstention worse:** abstention FP rises from 0–0.25 to 0.50–1.00, above the bar
+  (English + 0.1) in most languages. The rerank floor needs calibrating per language (design §6,
+  step 2) before the escalation ships.
+- **Latency:** recall p50 was about 280 ms without rerank and about 525 ms with it, measured from this
+  machine, so the rerank adds about 240 ms. That is why the design reranks only on a gate miss.
 
 ## Baseline, tokeniser v1 (2026-11-06)
 
