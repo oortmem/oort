@@ -881,7 +881,9 @@ class CloudEndUsers(unittest.TestCase):
         from oortmem import Oort
 
         env = {**self.box.env, "OORT_API_KEY": KEY}
-        return Oort(mode="cloud", url=self.cloud.url, env=env, cwd=self.box.tmp, org="acme", project=None, **kw)
+        o = Oort(mode="cloud", url=self.cloud.url, env=env, cwd=self.box.tmp, org="acme", project=None, **kw)
+        self.addCleanup(o.close)
+        return o
 
     def sent(self) -> List[Any]:
         return [(r["method"], r["path"].split("?")[0], r["headers"].get("oort-user")) for r in self.rec.seen]
@@ -998,6 +1000,7 @@ class CloudEndUsers(unittest.TestCase):
             ada.end_users.count()
         self.assertEqual(e.exception.reason, "user-not-supported")
         no_org = Oort(mode="cloud", url=self.cloud.url, env={**self.box.env, "OORT_API_KEY": KEY}, cwd=self.box.tmp)
+        self.addCleanup(no_org.close)
         with self.assertRaises(OortUsageError) as e:
             no_org.scoped(user="ada")
         self.assertEqual(e.exception.reason, "principal-required")
@@ -1033,6 +1036,34 @@ class CloudEndUsers(unittest.TestCase):
                 with self.assertRaises(OortError) as e:
                     ada.observe(user="u", assistant="a")
                 self.assertEqual((type(e.exception).__name__, e.exception.reason, e.exception.status, e.exception.retryable), (cls, reason, status, False))
+
+    def test_the_documented_example_runs(self) -> None:
+        import contextlib
+        import io
+        import runpy
+        from unittest import mock
+
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
+        self.rec.answers["POST /v1/observe"] = OBSERVED
+        self.rec.answers["POST /v1/recall"] = (200, {"memories": [], "timings": {}})
+        self.rec.answers["GET /v1/end-users/count"] = (200, {"endUsers": 1, "limit": 100})
+        self.rec.answers["DELETE /v1/end-users/*"] = (200, {"erased": {"memories": 1, "coldCopies": 0, "turnRefs": 0, "cursors": 0}})
+        example = os.path.join(os.path.dirname(HERE), "..", "examples", "python", "cloud_multi_user.py")
+        env = {**self.box.env, "OORT_API_KEY": KEY, "OORT_CLOUD_URL": self.cloud.url}
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(out):
+            runpy.run_path(example, run_name="__main__")
+        self.assertEqual(out.getvalue().splitlines(), ["I found 0 things I know about you.", "1 of 100 end users", "erased 1 memories"])
+        self.assertEqual(
+            self.sent(),
+            [
+                ("GET", "/v1/whoami", None),
+                ("POST", "/v1/recall", "u-123"),
+                ("POST", "/v1/observe", "u-123"),
+                ("GET", "/v1/end-users/count", None),
+                ("DELETE", "/v1/end-users/u-123", None),
+            ],
+        )
 
     def test_asyncio(self) -> None:
         import asyncio

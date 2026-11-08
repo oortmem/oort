@@ -73,8 +73,8 @@ ignored.
 | `project`       | `string \| null`                                     | all                         | derived from `cwd` as the CLI does. A string becomes `cfg:<id>` (as `oort project link`); `null` means global memories only |
 | `projectConfig` | `boolean`                                            | local, cloud                | `true`. `false` skips the repository's `oort.config.json` (a server whose cwd is a checkout)         |
 | `agent`         | `string`                                             | all                         | `OORT_AGENT`, else anonymous (the Planet only)                                                       |
-| `user`          | `string`                                             | local                       | unset: the person (`self`). Setting it requires `org`                                                |
-| `org`           | `string`                                             | local                       | `'local'`. Required, and not `'local'`, whenever `user` is set                                       |
+| `user`          | `string`                                             | local, cloud                | unset: the person (`self`). Setting it requires `org`; in cloud mode a server key ([Per-user memory in Oort Cloud](#per-user-memory-in-oort-cloud)) |
+| `org`           | `string`                                             | local, cloud                | `'local'`. Required, and not `'local'`, whenever `user` is set. Cloud mode: your name for the key's account, not sent |
 | `keys`          | `{ voyage?, typesafe?, anthropic?, oort? }`          | local; cloud (`oort` only)  | none                                                                                                 |
 | `keySources`    | `('explicit' \| 'env' \| 'keychain')[]`              | all                         | all three; `keychain` is skipped with `OORT_NO_KEYCHAIN=1`                                           |
 | `config`        | a deep partial of the home config                    | local                       | none. Laid over the resolved config; `serve` cannot be set                                           |
@@ -118,7 +118,9 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 | `judge.list({ domain?, by?, all?, limit? })`   | `{ judgments }`                            | yes   | `refused`                 |
 | `judge.confirm(id)`                            | `{ id, changed }`                          | expert role only | `refused`      |
 | `consolidate({ budgetMs?, signal? })`          | `ConsolidateResult`                        | yes   | `refused`                 |
-| `scoped({ user?, project?, agent?, judgeRole? })` | a new handle                            | yes   | `project`, `agent` only   |
+| `scoped({ user?, project?, agent?, judgeRole? })` | a new handle                            | yes   | yes (`user`: a server key) |
+| `endUsers.erase(user)`                         | `EndUserErasure` (`erased`, `memories`, `coldCopies`, `turnRefs`, `cursors`) | `cloud-only` | a server key |
+| `endUsers.count()`                             | `EndUserCount` (`endUsers`, `limit`)       | `cloud-only` | a server key        |
 | `close()`, `[Symbol.asyncDispose]()`           | `void`                                     |       |                           |
 | `formatForPrompt(result, { budgetChars? })`    | `string` (a function, not a method)        | both  | both                      |
 
@@ -302,8 +304,10 @@ await oort.close();
   any other level the scope lacks is `refused` (`scope-denied`).
 - `agent` and `user` are configuration, not authentication. Every process running as the same OS
   user can open the same home as that person, exactly as the CLI and the hooks do.
-- **Cloud mode** applies the Oort key's scope: one key is one account, so `user` is a usage error
-  there until CON-92. An agent configured as a Star cannot write in cloud mode (`star-in-cloud`).
+- **Cloud mode** applies the Oort key's scope: one key is one account. `user` there needs a
+  server key and an Oort Cloud with per-user memory: see
+  [Per-user memory in Oort Cloud](#per-user-memory-in-oort-cloud). An agent configured as a Star
+  cannot write in cloud mode (`star-in-cloud`).
 - **Consolidation** runs per scope. The hooks consolidate only the person's own memories, so a
   multi-tenant host calls `mem.consolidate({ budgetMs: 200 })` at the end of a user's session, or
   from a scheduled job. It calls no model.
@@ -311,6 +315,74 @@ await oort.close();
 
 A separate `home` per tenant gives physical separation (files, backups, deletion) when a contract
 needs it.
+
+### Per-user memory in Oort Cloud
+
+> **Requires Oort Cloud with server keys (rolling out after 18 Nov 2026).** Until your account
+> has it, every end-user call below is refused with `end-users-unsupported` and nothing is sent.
+
+The same `scoped({ user })` works against Oort Cloud with a **server key**: an Oort key made on
+[oortcloud.dev/account](https://oortcloud.dev/account) with "Acts for end users". Each end user
+gets a Planet of their own inside your account; your own memory, Stars, Constellations and
+Galaxies stay out of their reach.
+
+<!-- example: examples/src/cloud-multi-user.ts -->
+
+```ts
+import { createOort, formatForPrompt } from 'oortmem';
+
+// Oort Cloud with a server key ("Acts for end users", made on oortcloud.dev/account) in
+// OORT_API_KEY. An Oort Cloud without per-user memory refuses end users (end-users-unsupported).
+const oort = await createOort({
+  mode: 'cloud',
+  org: 'acme',
+  project: null,
+  projectConfig: false,
+  keySources: ['env'],
+});
+
+// Per request: a handle fixed to one end user (it sends Oort-User). Hand only this one to tools.
+const forUser = (userId: string) => oort.scoped({ user: userId, agent: 'support-bot' });
+
+await forUser('user-ada').remember('My order number is 1042.');
+
+console.log(formatForPrompt(await forUser('user-ada').recall('what is my order number?')));
+console.log((await forUser('user-bob').recall('what is my order number?')).memories.length); // 0
+
+// The account's end users: how many, and erasing one (a deletion request). Server code only.
+const { endUsers, limit } = await oort.endUsers.count();
+console.log(`${endUsers} of ${limit} end users`);
+const erased = await oort.endUsers.erase('user-ada');
+console.log(`erased ${erased.memories} memories`);
+await oort.close();
+```
+
+- **The client-side rules are the local ones**: `user-missing`, `self-not-derivable`,
+  `star-with-user`, and `user` needs an explicit `org` other than `local`. In cloud mode the key's
+  account is the storage boundary, so `org` is your name for it and is never sent; requiring it
+  still keeps a handle made for the account's own memory from deriving an end user by accident.
+  An end user's id is 1 to 128 letters, digits and `. _ : @ -`, starting with a letter or digit.
+- **The header.** An end user's handle sends `Oort-User: <id>` on `observe`, `remember`,
+  `recall`, `recent`, `explain`, `forget`, `pin` and `unpin`; `whoami` and `endUsers` act as the
+  account and never send it. A handle without `user` never sends it.
+- **Checked before the first one.** An Oort Cloud from before per-user memory ignores
+  `Oort-User` and would write the end user's memories into your own Planet. So before the first
+  request that names an end user, the SDK asks `whoami` once per root handle (its scoped handles
+  share the answer) whether the key has the `end-users` capability, and refuses with
+  `OortRefusedError` (`end-users-unsupported`) when it does not. Only a yes is kept: after a
+  refusal the next call asks again, so an upgrade needs no restart.
+- **A server key never acts as the account.** On a handle without `user` its memory calls are
+  refused (`usage`, `user-missing`); keep a normal key for the account's own memory.
+- **An end user's handle reads their Planet only**: `include` with `star`, `constellation` or
+  `galaxy` is `refused` (`scope-denied`), and `forget(id, { everywhere: true })` is a usage error
+  (`user-not-supported`).
+- **`endUsers.erase(user)`** erases one end user completely (every memory, its indexes and cold
+  copies) and returns counts; erasing one with nothing is not an error. A write for them still in
+  flight is refused (`end-user-erased`) and is not retried. **`endUsers.count()`** returns how
+  many end users the account has and its plan's `limit` (Pro includes 100; a new one past it is
+  `end-user-limit`, and the ones there keep working). Both are cloud only (`cloud-only`,
+  `end-users` in local mode, where an end user lives under your `org` in your own store) and
+  refused on a handle scoped to an end user (`user-not-supported`).
 
 ## Errors
 
@@ -322,15 +394,15 @@ own error is reported by its class name only.
 
 | Class                          | `code`               | Typical `reason`                                                                    |
 | ------------------------------ | -------------------- | ----------------------------------------------------------------------------------- |
-| `OortUsageError`               | `usage`              | `invalid-argument`, `principal-required`, `self-not-derivable`, `user-missing`, `closed`, `embedder-mismatch` (fix `oort reembed`), `bad-request`, `too-large` |
+| `OortUsageError`               | `usage`              | `invalid-argument`, `principal-required`, `self-not-derivable`, `user-missing`, `user-not-supported`, `closed`, `embedder-mismatch` (fix `oort reembed`), `bad-request`, `too-large` |
 | `OortNotFoundError`            | `not-found`          |                                                                                     |
 | `OortAmbiguousIdError`         | `ambiguous-id`       |                                                                                     |
 | `OortNeedsKeyError`            | `needs-key`          | `missing-key`, with `role` and `envVar` (fix `oort models pull` or `oort keys set <vendor>`) |
 | `OortNeedsLoginError`          | `needs-login`        | `no-key`, `key-rejected` (fix `oort login`)                                         |
 | `OortNeedsConfirmationError`   | `needs-confirmation` | `preview-required`, `findings-unacknowledged` (Oort Cloud 409)                      |
-| `OortCloudOnlyError`           | `cloud-only`         | `hive-level`, or `forget({ everywhere })` locally                                   |
+| `OortCloudOnlyError`           | `cloud-only`         | `hive-level`, `end-users` (`endUsers` locally), or `forget({ everywhere })` locally |
 | `OortNetworkError`             | `network`            | `unreachable`, `timeout`, `busy` (retryable)                                        |
-| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
+| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
 | `OortInternalError`            | `internal`           | `store-busy` (retryable), else none                                                 |
 
 Retry what is `retryable`, then branch on `code`:

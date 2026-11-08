@@ -70,8 +70,8 @@ Inject memory into a prompt only through it.
 | `project`        | all              | derived from `cwd`, as the CLI does; a name means `cfg:<name>`; `None` is global only      |
 | `project_config` | local, cloud     | `True`. `False` skips the repository's `oort.config.json` (a server whose cwd is a checkout) |
 | `agent`          | all              | `OORT_AGENT`, else anonymous (the Planet only)                                            |
-| `user`           | local, remote    | unset: the person. An end user: their Planet only. Local mode requires `org`              |
-| `org`            | local            | `"local"`. Required, and not `"local"`, whenever `user` is set                            |
+| `user`           | all              | unset: the person. An end user: their Planet only. Local and cloud mode require `org`; cloud mode a server key |
+| `org`            | local, cloud     | `"local"`. Required, and not `"local"`, whenever `user` is set. Cloud mode: your name for the key's account, not sent |
 | `api_key`        | cloud            | the Oort key; else `OORT_API_KEY`, else where `oort login` put it. Held privately         |
 | `key_sources`    | cloud            | `["explicit", "env", "keychain"]`; `OORT_NO_KEYCHAIN=1` drops the keychain                |
 | `url`            | cloud, remote    | cloud: `OORT_CLOUD_URL`, else `https://api.oortcloud.dev`; remote: required               |
@@ -106,6 +106,8 @@ The TypeScript methods, in snake_case. `AsyncOort` has the same ones as `async d
 | `judge.list(*, domain=None, by=None, all=False, limit=None)` (local only)                                                                                | `JudgmentList`       |
 | `judge.confirm(id)` (expert role only)                                                                                                                  | `ConfirmResult`      |
 | `scoped(*, user=..., project=..., agent=None, judge_role=None)`                                                                                         | a new handle         |
+| `end_users.erase(user)` (cloud only, a server key)                                                                                                      | `EndUserErasure`     |
+| `end_users.count()` (cloud only, a server key)                                                                                                          | `EndUserCount`       |
 | `close()`, `with Oort() as oort:`, `async with AsyncOort() as oort:`                                                                                    |                      |
 | `format_for_prompt(result, *, budget_chars=None)` (a function)                                                                                          | `str`                |
 
@@ -201,8 +203,57 @@ print(handle_message("u-456", "How do you contact me?"))  # never sees u-123's m
 oort.close()
 ```
 
-In cloud mode `user` is a usage error until Oort Cloud separates end users (CON-92): one Oort key
-is one account.
+### End users in Oort Cloud
+
+> **Requires Oort Cloud with server keys (rolling out after 18 Nov 2026).** Until your account
+> has it, every end-user call below is refused with `end-users-unsupported` and nothing is sent.
+
+With a **server key** (an Oort key made on [oortcloud.dev/account](https://oortcloud.dev/account)
+with "Acts for end users"), the same `scoped(user=...)` works in cloud mode: each end user gets a
+Planet of their own inside your account, and your own memory stays out of their reach.
+
+<!-- example: examples/python/cloud_multi_user.py -->
+
+```python
+from oortmem import Oort
+
+# Oort Cloud with a server key ("Acts for end users", made on oortcloud.dev/account) in
+# OORT_API_KEY. An Oort Cloud without per-user memory refuses end users (end-users-unsupported).
+oort = Oort(mode="cloud", org="acme", project=None, project_config=False, key_sources=["env"])
+
+
+def handle_message(user_id: str, text: str) -> str:
+    mem = oort.scoped(user=user_id, agent="support-bot")  # sends Oort-User: their Planet only
+    context = mem.recall(text, limit=5)
+    reply = f"I found {len(context.memories)} things I know about you."
+    mem.observe(user=text, assistant=reply)  # after answering: it can take seconds
+    return reply
+
+
+print(handle_message("u-123", "I prefer email over phone calls."))
+count = oort.end_users.count()  # the account's end users: server code only
+print(f"{count.end_users} of {count.limit} end users")
+print("erased", oort.end_users.erase("u-123").memories, "memories")  # a deletion request
+oort.close()
+```
+
+The behaviour is the TypeScript SDK's ([docs/sdk.md](sdk.md#per-user-memory-in-oort-cloud)):
+
+- The same client-side rules as local mode (`user-missing`, `self-not-derivable`,
+  `star-with-user`, and an explicit `org` other than `"local"`). In cloud mode `org` is your name
+  for the key's account and is never sent.
+- An end user's handle sends `Oort-User: <id>` on its memory calls; `whoami` and `end_users` act
+  as the account, and a handle without `user` never sends it.
+- Before the first request that names an end user, the client asks `whoami` once per root handle
+  whether the key has the `end-users` capability, and refuses with `OortRefusedError`
+  (`end-users-unsupported`) when it does not: an Oort Cloud from before per-user memory would
+  ignore the header and write your own Planet. Only a yes is kept.
+- A server key never acts as the account: a handle without `user` gets `user-missing`.
+- `end_users.erase(user)` returns `EndUserErasure` (`erased`, `memories`, `cold_copies`,
+  `turn_refs`, `cursors`); `end_users.count()` returns `EndUserCount` (`end_users`, `limit`).
+  `AsyncOort` has both as `async def`. Refusals: `end-user-limit` (the plan's end users are all
+  taken), `end-user-erased` (a write lost the race with an erasure; not retried),
+  `end-users-not-allowed` (not a server key), all `refused` and none retryable.
 
 ## asyncio
 

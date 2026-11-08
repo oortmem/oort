@@ -8,6 +8,7 @@ private workspace package: never published.
 | [`local-quick-start.ts`](src/local-quick-start.ts) | Local quick start                                          | typecheck, run                         |
 | [`cloud-quick-start.ts`](src/cloud-quick-start.ts) | Cloud quick start (`OORT_API_KEY`)                         | typecheck, run (fake Oort Cloud)       |
 | [`multi-user.ts`](src/multi-user.ts)               | A multi-user app: `scoped({ user })` and an explicit `org` | typecheck, run                         |
+| [`cloud-multi-user.ts`](src/cloud-multi-user.ts)   | Per-user memory in Oort Cloud: a server key, `endUsers`    | typecheck, run (fake Oort Cloud)       |
 | [`judgments.ts`](src/judgments.ts)                 | Judgments: record, confirm in the expert role, apply       | typecheck, run                         |
 | [`errors.ts`](src/errors.ts)                       | Errors: `OortError.code`, `retryable`, `retryAfter`        | typecheck, run (fake Oort Cloud)       |
 | [`serverless.ts`](src/serverless.ts)               | Serverless: cloud mode, a handler and `await using`        | typecheck, run (fake Oort Cloud)       |

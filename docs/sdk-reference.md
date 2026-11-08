@@ -26,7 +26,7 @@ await oort.observe({ user: 'We deploy on Fridays now.', assistant: 'Noted.' });
 
 **Classes:** [`OortError`](#oortmem-oorterror), [`OortAmbiguousIdError`](#oortmem-oortambiguousiderror), [`OortCloudOnlyError`](#oortmem-oortcloudonlyerror), [`OortInternalError`](#oortmem-oortinternalerror), [`OortNeedsConfirmationError`](#oortmem-oortneedsconfirmationerror), [`OortNeedsKeyError`](#oortmem-oortneedskeyerror), [`OortNeedsLoginError`](#oortmem-oortneedsloginerror), [`OortNetworkError`](#oortmem-oortnetworkerror), [`OortNotFoundError`](#oortmem-oortnotfounderror), [`OortRefusedError`](#oortmem-oortrefusederror), [`OortUsageError`](#oortmem-oortusageerror)
 
-**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`Oort`](#oortmem-oort)
+**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`EndUserCount`](#oortmem-endusercount), [`EndUserErasure`](#oortmem-endusererasure), [`OortEndUsers`](#oortmem-oortendusers), [`Oort`](#oortmem-oort)
 
 ### Functions
 
@@ -336,9 +336,16 @@ export interface OortOptions {
   projectConfig?: boolean;
   /** The agent to act as; default `OORT_AGENT`, else anonymous (the Planet only). */
   agent?: string;
-  /** An end user (local mode). Requires `org`, not `local`. Their Planet only, never a Star. */
+  /**
+   * An end user: their Planet only, never a Star. Requires `org`, not `local`. In cloud mode it
+   * also needs Oort Cloud with server keys (CON-132) and a server key ("Acts for end users").
+   */
   user?: string;
-  /** The tenant (local mode); default `local`. */
+  /**
+   * The tenant; default `local`. Local mode: the storage and deletion boundary. Cloud mode: the
+   * Oort key's account is that boundary, so `org` is your name for it and is not sent; `user`
+   * still needs it, so a handle made for the account's own memory never derives an end user.
+   */
   org?: string;
   /** Keys given in code (local; cloud takes `oort` only). */
   keys?: OortKeys;
@@ -888,6 +895,56 @@ export interface OortJudge {
 }
 ```
 
+<a id="oortmem-endusercount"></a>
+
+#### `EndUserCount`
+
+How many end users the account has, and how many its plan includes.
+
+```ts
+export interface EndUserCount {
+  endUsers: number;
+  limit: number;
+}
+```
+
+<a id="oortmem-endusererasure"></a>
+
+#### `EndUserErasure`
+
+What erasing an end user removed: the id you erased, and counts only.
+
+```ts
+export interface EndUserErasure {
+  erased: string;
+  memories: number;
+  coldCopies: number;
+  turnRefs: number;
+  cursors: number;
+}
+```
+
+<a id="oortmem-oortendusers"></a>
+
+#### `OortEndUsers`
+
+The account's end users in Oort Cloud (CON-132): per-user memory a server key writes with
+`scoped({ user })`. Requires Oort Cloud with server keys; refused with `end-users-unsupported`
+when whoami does not list the key's `end-users` capability.
+
+```ts
+export interface OortEndUsers {
+  /**
+   * Erases an end user completely: every memory stored for them, with its indexes and cold
+   * copies. The account's own memory and every other end user are untouched. Erasing one who
+   * has nothing is not an error. A write for them still in flight is refused (`end-user-erased`).
+   */
+  erase(user: string): Promise<EndUserErasure>;
+  /** How many end users the account has, and its plan's limit. */
+  count(): Promise<EndUserCount>;
+}
+```
+
 <a id="oortmem-oort"></a>
 
 #### `Oort`
@@ -924,6 +981,11 @@ export interface Oort {
     budgetMs?: number;
     signal?: AbortSignal;
   }): Promise<ConsolidateResult>;
+  /**
+   * The account's end users (Oort Cloud with server keys, CON-132): erase one, or count them.
+   * Cloud mode only, on a handle that is not scoped to an end user.
+   */
+  readonly endUsers: OortEndUsers;
   /** A derived handle sharing this one's engine; its scope is fixed. */
   scoped(s: ScopedOptions): Oort;
   close(): Promise<void>;
