@@ -1,6 +1,7 @@
 {
   "name": "oortmem",
   "version": "0.7.0",
+  "mcpName": "io.github.oortmem/oort",
   "description": "Oort: memory for AI coding agents. The oort command line, MCP server and agent connectors.",
   "keywords": [
     "oort",

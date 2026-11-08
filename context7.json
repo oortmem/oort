@@ -1,0 +1,28 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "Oort",
+  "description": "Open-source long-term memory for AI agents that stays correct as facts change. The npm package oortmem is a TypeScript SDK, the oort command line and an MCP server; the Python package oortmem is a native client. Old facts are closed out instead of overwritten, and recall returns what is true now.",
+  "folders": ["docs", "skills", "examples", "python"],
+  "excludeFolders": [
+    "docs/design",
+    "examples/test",
+    "examples/python/requirements",
+    "python/src",
+    "python/tests",
+    "./contract",
+    "./distribution",
+    "./packages",
+    "**/node_modules",
+    "**/dist"
+  ],
+  "excludeFiles": ["RELEASING.md"],
+  "rules": [
+    "Put memory into a prompt only through formatForPrompt (TypeScript) or format_for_prompt (Python). It escapes the block; never concatenate memory text into a prompt.",
+    "Keep keys in the environment or a secret manager, never in source code, a committed config, a prompt or a log line. On a server pass keySources: ['env'] or ['explicit'].",
+    "In a multi-user app keep one root handle per tenant (org, never 'local') in trusted host code, and give the model only a handle scoped to one end user: oort.scoped({ user: userId }).",
+    "Create one handle per process and close it with await using or close(). Await observe before a serverless function returns.",
+    "Call observe after the answer is sent. Use remember only for facts the user stated or confirmed.",
+    "Handle errors by OortError.code, not the message, and retry only errors that are retryable, waiting retryAfter seconds when it is set.",
+    "Model-facing code runs in the agent judge role; use judge: { role: 'expert' } only on a code path where a person really decided."
+  ]
+}

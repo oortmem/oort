@@ -175,6 +175,38 @@ describe('distribution', () => {
     }
   });
 
+  // The MCP Registry entry (server.json, modelcontextprotocol.io/registry, checked 2026-11-08). The
+  // registry accepts it only when its name equals the published package's mcpName, so the two move
+  // together, and it lists the release the version bump names.
+  it('distribution.mcp-registry-server-json-matches-the-cli', () => {
+    const s = json('server.json');
+    const cli = json('packages/cli/package.json');
+    expect(s.$schema).toMatch(
+      /^https:\/\/static\.modelcontextprotocol\.io\/schemas\/\d{4}-\d{2}-\d{2}\/server\.schema\.json$/,
+    );
+    expect(s.name).toBe('io.github.oortmem/oort');
+    expect(cli.mcpName).toBe(s.name);
+    expect(s.version).toBe(version);
+    expect(s.description.length).toBeLessThanOrEqual(100);
+    expect(s.packages).toHaveLength(1);
+    const npm = s.packages[0];
+    expect(npm).toMatchObject({
+      registryType: 'npm',
+      identifier: cli.name,
+      version,
+      runtimeHint: 'npx',
+      transport: { type: 'stdio' },
+      packageArguments: [{ type: 'positional', value: 'mcp' }],
+    });
+    // The same settings the Claude Desktop bundle passes to `oort mcp`, all optional.
+    const env = npm.environmentVariables as { name: string; isRequired: boolean }[];
+    expect(env.map((e) => e.name).sort()).toEqual(
+      Object.keys(json('distribution/claude-desktop/manifest.json').server.mcp_config.env).sort(),
+    );
+    for (const e of env) expect(e.isRequired, e.name).toBe(false);
+    expect(s.remotes).toEqual([{ type: 'streamable-http', url: 'https://mcp.oortcloud.dev/mcp' }]);
+  });
+
   it('distribution.mcpb-manifest-runs-the-bundled-cli-and-holds-no-secrets', () => {
     const m = json('distribution/claude-desktop/manifest.json');
     expect(m.manifest_version).toBe('0.3');

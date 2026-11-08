@@ -1,0 +1,67 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.oortmem/oort",
+  "title": "Oort",
+  "description": "Memory for AI agents that stays correct as facts change.",
+  "version": "0.7.0",
+  "websiteUrl": "https://oortcloud.dev",
+  "repository": {
+    "url": "https://github.com/oortmem/oort",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "oortmem",
+      "version": "0.7.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "OORT_HOME",
+          "description": "Where Oort keeps your memories. Defaults to ~/.oort, shared with the oort command line.",
+          "format": "filepath",
+          "isRequired": false
+        },
+        {
+          "name": "OORT_API_KEY",
+          "description": "Oort Pro key. With it you need no other keys.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "VOYAGE_API_KEY",
+          "description": "Voyage AI key, for search by meaning. Leave empty to use Oort Pro, or keyword search only.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "TYPESAFE_API_KEY",
+          "description": "TypeSafe key, for deciding what to keep when saving. Leave empty to use Oort Pro.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "description": "Anthropic key, for writing saved facts. Leave empty to use Oort Pro.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.oortcloud.dev/mcp"
+    }
+  ]
+}

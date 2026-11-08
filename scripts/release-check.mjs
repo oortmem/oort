@@ -1,6 +1,6 @@
 // Fails unless every publishable package in packages/*, core's VERSION, every plugin and
-// marketplace manifest, the MCPB manifest, the Python launcher and the skills under skills/ equal
-// the given version.
+// marketplace manifest, the MCPB manifest, the MCP Registry server.json, the Python launcher and
+// the skills under skills/ equal the given version.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -32,6 +32,12 @@ for (const file of [
 ]) {
   const v = json(file).version;
   if (v !== want) bad.push(`${file} is ${v}`);
+}
+// The MCP Registry entry (server.json) names the release and the oortmem package version it runs.
+const server = json('server.json');
+if (server.version !== want) bad.push(`server.json is ${server.version}`);
+for (const p of server.packages ?? []) {
+  if (p.version !== want) bad.push(`server.json package ${p.identifier} is ${p.version}`);
 }
 // A skill for building with Oort names the release it describes (skills/<name>/SKILL.md).
 for (const e of readdirSync('skills', { withFileTypes: true }).filter((d) => d.isDirectory())) {
