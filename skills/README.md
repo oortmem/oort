@@ -40,11 +40,11 @@ or open `/plugins` in Codex and install `oort-dev` from the Oort marketplace. Me
 **Any agent that reads SKILL.md**, by copying the folder into its skills directory:
 
 ```sh
-git clone --depth 1 https://github.com/oortmem/oort /tmp/oort
-cp -R /tmp/oort/skills/oort-sdk ~/.claude/skills/     # Claude Code, every project
-cp -R /tmp/oort/skills/oort-sdk .claude/skills/       # Claude Code, this repository
-cp -R /tmp/oort/skills/oort-sdk ~/.agents/skills/     # Codex, every project
-cp -R /tmp/oort/skills/oort-sdk .agents/skills/       # Codex, Cursor, Gemini CLI, GitHub Copilot, OpenCode and others, this repository
+src="$(mktemp -d)" && git clone --depth 1 https://github.com/oortmem/oort "$src"
+mkdir -p ~/.claude/skills && cp -R "$src/skills/oort-sdk" ~/.claude/skills/   # Claude Code, every project
+mkdir -p .claude/skills && cp -R "$src/skills/oort-sdk" .claude/skills/       # Claude Code, this repository
+mkdir -p ~/.agents/skills && cp -R "$src/skills/oort-sdk" ~/.agents/skills/   # Codex, every project
+mkdir -p .agents/skills && cp -R "$src/skills/oort-sdk" .agents/skills/       # Codex, Cursor, Gemini CLI, GitHub Copilot, OpenCode and others, this repository
 ```
 
 or with the [`skills`](https://github.com/vercel-labs/skills) installer, which knows each agent's

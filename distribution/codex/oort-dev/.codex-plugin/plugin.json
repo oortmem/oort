@@ -1,7 +1,7 @@
 {
   "name": "oort-dev",
   "version": "0.7.0",
-  "description": "Build with Oort: the oort-sdk skill teaches Codex to add Oort memory to your own apps and agents with the oortmem TypeScript SDK and the oort CLI. No hooks and no MCP server; install the oort plugin for memory in your own sessions.",
+  "description": "Build with Oort: the oort-sdk skill teaches Codex to add Oort memory to your own apps and agents with the oortmem TypeScript SDK, the native Python client (from oortmem import Oort) and the oort CLI. No hooks and no MCP server; install the oort plugin for memory in your own sessions.",
   "author": {
     "name": "Oort",
     "email": "hello@oortcloud.dev",
@@ -16,6 +16,7 @@
     "agent-memory",
     "sdk",
     "typescript",
+    "python",
     "skills",
     "ai-sdk",
     "langgraph"
@@ -24,7 +25,7 @@
   "interface": {
     "displayName": "Oort for developers",
     "shortDescription": "Add Oort memory to your apps",
-    "longDescription": "A skill for building with Oort, open-source long-term memory for AI agents. It teaches Codex to integrate the oortmem TypeScript SDK (createOort, recall, observe, formatForPrompt, scoped users, judgments, typed errors) and the oort CLI's JSON output into your own apps, services and agent frameworks, with tested examples for the Vercel AI SDK, LangGraph.js and OpenAI Agents JS. It adds no hooks and no MCP server.",
+    "longDescription": "A skill for building with Oort, open-source long-term memory for AI agents. It teaches Codex to integrate the oortmem TypeScript SDK (createOort, recall, observe, formatForPrompt, scoped users, judgments, typed errors), the native Python client (Oort, AsyncOort) and the oort CLI's JSON output into your own apps, services and agent frameworks, with tested examples for the Vercel AI SDK, LangGraph.js and OpenAI Agents JS, and for LangGraph, OpenAI Agents and CrewAI in Python. It adds no hooks and no MCP server.",
     "developerName": "Oort",
     "category": "Developer Tools",
     "capabilities": ["Read", "Write"],
@@ -32,7 +33,7 @@
     "defaultPrompt": [
       "Add Oort memory to this agent with the oortmem SDK.",
       "Give each user of this app their own Oort memory.",
-      "Use Oort from this Python script through the oort CLI."
+      "Add Oort memory to this Python agent with from oortmem import Oort."
     ],
     "composerIcon": "./assets/icon.png",
     "logo": "./assets/icon.png"

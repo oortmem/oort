@@ -1,6 +1,6 @@
 ---
 name: oort-sdk
-description: Integrate Oort, open-source long-term memory for AI agents, into an app, service or agent framework with the oortmem TypeScript SDK (createOort, recall, observe, remember, formatForPrompt, scoped, judgments, OortError) the native Python client (from oortmem import Oort), or the oort CLI's oort.v1 JSON. Use when adding memory to a Node.js, TypeScript or Python agent, a Vercel AI SDK, LangGraph.js or OpenAI Agents JS app, a LangGraph, OpenAI Agents or CrewAI Python app, a multi-user or serverless backend, or a program in another language that calls the oort CLI, and when choosing between Oort's hooks, MCP server, SDK and CLI.
+description: Integrate Oort, open-source long-term memory for AI agents, into an app, service or agent framework with the oortmem TypeScript SDK (createOort, recall, observe, remember, formatForPrompt, scoped, judgments, OortError), the native Python client (from oortmem import Oort), or the oort CLI's oort.v1 JSON. Use when adding memory to a Node.js, TypeScript or Python agent, a Vercel AI SDK, LangGraph.js or OpenAI Agents JS app, a LangGraph, OpenAI Agents or CrewAI Python app, a multi-user or serverless backend, or a program in another language that calls the oort CLI, and when choosing between Oort's hooks, MCP server, SDK and CLI.
 license: Apache-2.0
 compatibility: Written for oortmem 0.7.0. The SDK needs Node.js 22.15 or newer and is ESM. The CLI is `npm i -g oortmem`, or `pipx install oortmem`, which still runs Node.
 metadata:

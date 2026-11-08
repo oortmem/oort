@@ -1,8 +1,9 @@
 # Oort for developers (Codex)
 
 The `oort-sdk` skill, for building Oort into your own apps and agents with the `oortmem`
-TypeScript SDK and the `oort` CLI. It adds no hooks and no MCP server; install the `oort`
-plugin from the same marketplace for memory in your own Codex sessions.
+TypeScript SDK, the native Python client (`from oortmem import Oort`) and the `oort` CLI. It
+adds no hooks and no MCP server; install the `oort` plugin from the same marketplace for memory
+in your own Codex sessions.
 
 ```sh
 codex plugin marketplace add oortmem/oort
