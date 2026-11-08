@@ -1,0 +1,8 @@
+# The framework versions the Python framework examples are tested with (CI, Python 3.13:
+# crewai supports >=3.10,<3.14; the others >=3.10). Not needed by `pip install oortmem`, which
+# has no dependencies. Install with: pip install -r examples/python/requirements-frameworks.txt
+langgraph==1.2.16
+langchain-core==1.7.0
+langchain-anthropic==1.7.6
+openai-agents==0.20.0
+crewai==1.15.30

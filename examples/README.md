@@ -30,3 +30,9 @@ OORT_API_KEY=… node examples/src/cloud-quick-start.ts
 node examples/src/local-quick-start.ts          # uses what `oort setup` chose
 ANTHROPIC_API_KEY=… node examples/src/langgraph.ts
 ```
+
+The Python examples in [`python/`](python) are shown in [docs/python.md](../docs/python.md). The
+framework ones (LangGraph, OpenAI Agents SDK, CrewAI) run in
+[python/tests/test_frameworks.py](../python/tests/test_frameworks.py) against the built
+`oort serve`, with the versions pinned in
+[`python/requirements-frameworks.txt`](python/requirements-frameworks.txt).

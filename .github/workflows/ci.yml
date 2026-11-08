@@ -41,6 +41,15 @@ jobs:
         run: |
           python3.13 -m unittest discover -s python/tests -v
           python3.9 -m unittest discover -s python/tests -v
+      # The framework examples (LangGraph, OpenAI Agents, CrewAI) against the built `oort serve`,
+      # with the pinned frameworks. Python 3.13: crewai supports <3.14. Never skipped here.
+      - name: Python framework examples on 3.13
+        env:
+          OORT_REQUIRE_FRAMEWORKS: '1'
+        run: |
+          python3.13 -m venv /tmp/frameworks-venv
+          /tmp/frameworks-venv/bin/pip install -r examples/python/requirements-frameworks.txt ./python
+          /tmp/frameworks-venv/bin/python -m unittest discover -s python/tests -p test_frameworks.py -v
       - name: The Python package builds a wheel that imports
         run: |
           python3.10 -m pip install build==1.6.1

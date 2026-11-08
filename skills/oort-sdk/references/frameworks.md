@@ -6,6 +6,11 @@ answer, and give the model a handle already scoped to one user. Only the Vercel 
 shipped adapter (`oortmem/ai-sdk`); LangGraph.js and OpenAI Agents JS are tested examples you
 copy into your app. Any MCP-capable framework can also run `oort mcp` with no code.
 
+For Python, the same pattern has tested examples for LangGraph (an Oort `BaseStore` with the
+semantics of the LangGraph.js one below), the OpenAI Agents SDK and CrewAI, in
+[docs/python.md](https://github.com/oortmem/oort/blob/main/docs/python.md#frameworks), with the
+framework versions they are tested with.
+
 ## Vercel AI SDK: `oortmem/ai-sdk` (`@experimental`)
 
 Tested with `ai` 7.0.162. `ai` 7 is an optional peer dependency; the adapter does not import it.

@@ -11,7 +11,8 @@ Local mode talks to `oort serve` over its Unix socket and starts it on first use
 (`mode="cloud"`) calls Oort Cloud over HTTPS with `OORT_API_KEY` and needs no Node; remote mode
 reaches an `oort serve --listen` service with its bearer token. Put memory into a prompt only
 through the `format_for_prompt` helper of the Python package, which escapes exactly as the TypeScript `formatForPrompt`
-does. The full guide, with tested examples, is [docs/python.md](https://github.com/oortmem/oort/blob/main/docs/python.md).
+does. The full guide, with tested examples (LangGraph, OpenAI Agents and CrewAI among them), is
+[docs/python.md](https://github.com/oortmem/oort/blob/main/docs/python.md).
 
 ```sh
 pip install oortmem
