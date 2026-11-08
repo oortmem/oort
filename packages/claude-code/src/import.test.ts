@@ -20,7 +20,7 @@ import {
   type TempHome,
 } from '../test/helpers.js';
 import { handleStop } from './hooks.js';
-import { importTranscripts } from './import.js';
+import { importTranscripts, type TranscriptImportProgress } from './import.js';
 import { parseTranscript, turnsToObservations } from './transcript.js';
 import { TG } from '@oortmem/core/store-conformance';
 import { localGrant } from '@oortmem/core';
@@ -412,6 +412,83 @@ describe('importTranscripts', () => {
     // The Stop hook (or a later import) picks the session up where it stopped.
     const again = await importTranscripts({ projectsDir: dir, estimateOnly: true }, base);
     expect(again).toMatchObject({ sessions: 1, observations: 4 });
+  });
+
+  it('import.progress-reports-scan-then-each-observation', async () => {
+    const t = tempHome();
+    const dir = projects(t);
+    const seen: TranscriptImportProgress[] = [];
+    const est = await importTranscripts(
+      { projectsDir: dir, estimateOnly: true, onProgress: (p) => seen.push(p) },
+      makeDeps(t),
+    );
+    // Two transcripts (the subagent and orphaned copies are not sessions), five new turns each.
+    expect(seen).toEqual([
+      { phase: 'scan', files: 1, totalFiles: 2, turns: 5 },
+      { phase: 'scan', files: 2, totalFiles: 2, turns: 10 },
+    ]);
+    expect(est.observations).toBe(10);
+
+    seen.length = 0;
+    const r = await importTranscripts(
+      { projectsDir: dir, estimateOnly: false, onProgress: (p) => seen.push(p) },
+      makeDeps(t),
+    );
+    const observed = seen.filter((p) => p.phase === 'observe');
+    expect(observed).toHaveLength(10);
+    expect(observed.map((p) => p.done)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(observed.at(-1)).toEqual({ phase: 'observe', done: 10, total: 10, kept: 10, failed: 0 });
+    expect(r.outcomes).toEqual({ added: 10 });
+  });
+
+  it('import.progress-counts-failed-and-not-attempted', async () => {
+    const t = tempHome();
+    const base = makeDeps(t);
+    const write: MemoryWriter = {
+      async write(obs, action, prior) {
+        if (obs.turnRef === 'o-a-0002') throw new Error('writer unavailable');
+        return base.write!.write(obs, action, prior);
+      },
+    };
+    const seen: TranscriptImportProgress[] = [];
+    await importTranscripts(
+      { projectsDir: projects(t), estimateOnly: false, onProgress: (p) => seen.push(p) },
+      { ...base, write },
+    );
+    // Every observation is finished one way or another: 6 kept, 1 failed, 3 not attempted.
+    expect(seen.at(-1)).toEqual({ phase: 'observe', done: 10, total: 10, kept: 6, failed: 1 });
+  });
+
+  it('import.signal-stops-between-observations-with-cursors-consistent', async () => {
+    const t = tempHome();
+    const dir = projects(t);
+    const calls = newCalls();
+    const deps = makeDeps(t, { calls });
+    const stop = new AbortController();
+    // Ctrl-C during the second observation: it finishes, nothing after it starts.
+    const r = await importTranscripts(
+      {
+        projectsDir: dir,
+        estimateOnly: false,
+        signal: stop.signal,
+        onProgress: (p) => {
+          if (p.phase === 'observe' && p.done === 2) stop.abort();
+        },
+      },
+      deps,
+    );
+    expect(r.interrupted).toEqual({ notAttempted: 8 });
+    expect(r.outcomes).toEqual({ added: 2 });
+    expect(calls.written.map((o) => o.turnRef)).toEqual(['o-a-0001c', 'o-a-0002']);
+    expect(await deps.store.getCursor(TG, `claude-code:${OTHER}`)).toBe('o-a-0002');
+    expect(await deps.store.getCursor(TG, `claude-code:${SESSION}`)).toBeNull();
+
+    // A re-run imports exactly the rest: nothing twice, nothing lost.
+    const again = await importTranscripts({ projectsDir: dir, estimateOnly: false }, deps);
+    expect(again).toMatchObject({ observations: 8, outcomes: { added: 8 } });
+    expect(again.interrupted).toBeUndefined();
+    expect(calls.written).toHaveLength(10);
+    expect(new Set(calls.written.map((o) => `${o.sessionId}:${o.turnRef}`)).size).toBe(10);
   });
 
   it('import.counts-unreadable-transcripts', async () => {
