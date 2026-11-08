@@ -7,6 +7,7 @@ import {
   CASES,
   DEFAULT_NOW,
   ROOT,
+  endUsersOf,
   SECRETS,
   errorShape,
   expectMatch,
@@ -67,6 +68,10 @@ async function call(oort: Oort, step: Step, args: Record<string, unknown>): Prom
       return oort.consolidate(args);
     case 'scoped':
       return oort.scoped(args);
+    case 'endUsers.erase':
+      return oort.endUsers.erase(args['user'] as string);
+    case 'endUsers.count':
+      return oort.endUsers.count();
     case 'judge.record':
       return oort.judge.record(args as never);
     case 'judge.apply': {
@@ -139,6 +144,7 @@ async function runCase(c: Case, transport: Transport): Promise<void> {
       fake.memories.set(m.id, m);
     }
     if (c.cloud?.fail !== undefined) fake.fail = { ...c.cloud.fail };
+    endUsersOf(fake, c);
     const env: Record<string, string> = { HOME: root, OORT_HOME: home, OORT_NO_KEYCHAIN: '1' };
     if (c.cloud?.noKey !== true) env['OORT_API_KEY'] = key;
     const f = fake;

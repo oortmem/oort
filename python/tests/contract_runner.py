@@ -209,6 +209,10 @@ def call(o: Oort, step: Dict[str, Any], args: Dict[str, Any], now: datetime) -> 
         return o.consolidate(**kwargs(a))
     if c == "scoped":
         return o.scoped(**kwargs(a))
+    if c == "endUsers.erase":
+        return o.end_users.erase(a["user"])
+    if c == "endUsers.count":
+        return o.end_users.count()
     if c == "judge.record":
         return o.judge.record(**kwargs(a))
     if c == "judge.apply":

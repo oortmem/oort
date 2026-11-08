@@ -153,6 +153,33 @@ class CloudErrors(unittest.TestCase):
 
 
 @NEEDS_310
+class EndUsers(unittest.TestCase):
+    """Per-user memory (CON-132): the header, the capability check, and its refusal."""
+
+    def test_the_header_and_capability_match_typescript(self):
+        from oortmem._cloud import END_USER_HEADER, END_USERS_CAPABILITY
+
+        v = load("end-users.json")
+        self.assertEqual(END_USER_HEADER, v["header"])
+        self.assertEqual(END_USERS_CAPABILITY, v["capability"])
+
+    def test_each_whoami_answer_allows_as_in_typescript(self):
+        from oortmem._cloud import end_users_allowed
+
+        for w in load("end-users.json")["whoami"]:
+            with self.subTest(response=w["response"]):
+                self.assertIs(end_users_allowed(w["response"]), w["allowed"])
+
+    def test_the_refusal_matches_typescript(self):
+        from oortmem.errors import end_users_unsupported, error_shape
+
+        want = load("end-users.json")["unsupported"]
+        got = error_shape(end_users_unsupported())
+        for k in ("name", "code", "reason", "fix", "status", "retryable", "retryAfter", "message"):
+            self.assertEqual(got[k], want[k], k)
+
+
+@NEEDS_310
 class DaemonErrors(unittest.TestCase):
     def test_each_envelope_error_is_its_class(self):
         from oortmem import errors

@@ -299,5 +299,139 @@
       "retryAfter": null,
       "message": "Oort Cloud refused the request (HTTP 418): bad \\u{1b}[31mcolour\\u{1b}[0m and \\u{202e}flip"
     }
+  },
+  {
+    "status": 400,
+    "code": "user_missing",
+    "message": "send Oort-User",
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "user-missing",
+      "fix": null,
+      "status": 400,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 400): send Oort-User"
+    }
+  },
+  {
+    "status": 400,
+    "code": "self_not_derivable",
+    "message": "self is reserved.",
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "self-not-derivable",
+      "fix": null,
+      "status": 400,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 400): self is reserved."
+    }
+  },
+  {
+    "status": 400,
+    "code": "bad_user",
+    "message": "An end user id is 1 to 128 letters.",
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "invalid-argument",
+      "fix": null,
+      "status": 400,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 400): An end user id is 1 to 128 letters."
+    }
+  },
+  {
+    "status": 400,
+    "code": "star_with_user",
+    "message": "An end user has no Star.",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "star-with-user",
+      "fix": null,
+      "status": 400,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 400): An end user has no Star."
+    }
+  },
+  {
+    "status": 400,
+    "code": "user_not_supported",
+    "message": "This route acts for the account.",
+    "expect": {
+      "name": "OortUsageError",
+      "code": "usage",
+      "reason": "user-not-supported",
+      "fix": null,
+      "status": 400,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 400): This route acts for the account."
+    }
+  },
+  {
+    "status": 402,
+    "code": "end_user_limit",
+    "message": "This account has 100 end users.",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "end-user-limit",
+      "fix": null,
+      "status": 402,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused a new end user (HTTP 402): This account has 100 end users."
+    }
+  },
+  {
+    "status": 402,
+    "code": "end_user_limit",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "end-user-limit",
+      "fix": null,
+      "status": 402,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused a new end user (HTTP 402)."
+    }
+  },
+  {
+    "status": 403,
+    "code": "end_users_not_allowed",
+    "message": "Only a server key can act for an end user.",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "end-users-not-allowed",
+      "fix": null,
+      "status": 403,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused this (HTTP 403): Only a server key can act for an end user."
+    }
+  },
+  {
+    "status": 409,
+    "code": "end_user_erased",
+    "message": "This end user was erased.",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "end-user-erased",
+      "fix": null,
+      "status": 409,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 409): This end user was erased."
+    }
   }
 ]

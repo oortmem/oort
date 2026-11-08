@@ -212,7 +212,13 @@ export const END_USERS_UNSUPPORTED =
 export const END_USERS_CAPABILITY = 'end-users';
 
 /** The request header that names the end user a server key acts for (CON-132). */
-export const END_USER_HEADER = 'oort-user';
+export const END_USER_HEADER = 'Oort-User';
+
+/** Whether a whoami answer lists the `end-users` capability: exactly that string, in a list. */
+export function endUsersAllowed(me: unknown): boolean {
+  const caps = (me as { capabilities?: unknown } | null)?.capabilities;
+  return Array.isArray(caps) && caps.includes(END_USERS_CAPABILITY);
+}
 
 /** The kind an API status (and `{ error: { code } }`) stands for. */
 export function cloudErrorKind(status: number, code?: string): CloudErrorKind {
@@ -686,7 +692,7 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
         const me = (await (
           await timedCall('GET', '/v1/whoami', undefined, undefined)
         ).res.json()) as CloudWhoami;
-        if (!Array.isArray(me.capabilities) || !me.capabilities.includes(END_USERS_CAPABILITY)) {
+        if (!endUsersAllowed(me)) {
           throw new OortCloudError('end-users-unsupported', 0);
         }
       })();

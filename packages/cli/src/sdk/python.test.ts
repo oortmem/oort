@@ -11,6 +11,7 @@ import {
   CASES,
   DEFAULT_NOW,
   ROOT,
+  endUsersOf,
   readJson,
   readJudgment,
   seedLocal,
@@ -23,7 +24,13 @@ import {
 } from '../../test/helpers/contract.js';
 import { fakeCloud, fakeMemory, type FakeCloud } from '../../test/helpers/fake-cloud.js';
 import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
-import { OortCloudError, cloudErrorKind } from '../cloud.js';
+import {
+  END_USERS_CAPABILITY,
+  END_USER_HEADER,
+  OortCloudError,
+  cloudErrorKind,
+  endUsersAllowed,
+} from '../cloud.js';
 import { parseRetryAfter } from '../relay.js';
 import { startDaemon, type Daemon } from '../serve-daemon.js';
 import { errorBody, statusFor } from '../serve-http.js';
@@ -231,6 +238,7 @@ async function runCase(c: Case, transport: Transport): Promise<void> {
       const m = fakeMemory({ text: `bulk memory number ${i}`, updatedAt: at, createdAt: at });
       fake.memories.set(m.id, m);
     }
+    endUsersOf(fake, c);
     const served = await serveFake(fake);
     spec['url'] = served.url;
     onStep = (i) => {
@@ -523,6 +531,20 @@ describe('golden vectors (contract/sdk/vectors)', () => {
       { status: 500 },
       { status: 503, retryAfter: '5' },
       { status: 418, message: 'bad \u001b[31mcolour\u001b[0m and \u202eflip' },
+      // CON-132: per-user memory's refusals.
+      { status: 400, code: 'user_missing', message: 'send Oort-User' },
+      { status: 400, code: 'self_not_derivable', message: 'self is reserved.' },
+      { status: 400, code: 'bad_user', message: 'An end user id is 1 to 128 letters.' },
+      { status: 400, code: 'star_with_user', message: 'An end user has no Star.' },
+      { status: 400, code: 'user_not_supported', message: 'This route acts for the account.' },
+      { status: 402, code: 'end_user_limit', message: 'This account has 100 end users.' },
+      { status: 402, code: 'end_user_limit' },
+      {
+        status: 403,
+        code: 'end_users_not_allowed',
+        message: 'Only a server key can act for an end user.',
+      },
+      { status: 409, code: 'end_user_erased', message: 'This end user was erased.' },
     ];
     vector(
       'cloud-errors.json',
@@ -539,6 +561,27 @@ describe('golden vectors (contract/sdk/vectors)', () => {
         return { ...i, expect: shapeOf(e) };
       }),
     );
+  });
+
+  it('per-user memory (CON-132): the header, and which whoami answers allow it', () => {
+    const answers: unknown[] = [
+      { account: 'a1', plan: 'pro', via: 'key', capabilities: ['end-users'] },
+      { account: 'a1', plan: 'pro', via: 'key', capabilities: ['other', 'end-users'] },
+      { account: 'a1', plan: 'pro', via: 'key' },
+      { account: 'a1', plan: 'pro', via: 'key', capabilities: [] },
+      { account: 'a1', plan: 'pro', via: 'key', capabilities: 'end-users' },
+      { account: 'a1', plan: 'pro', via: 'key', capabilities: ['End-Users'] },
+      { account: 'a1', plan: 'pro', via: 'key', capabilities: ['end-users '] },
+      { account: 'a1', plan: 'pro', via: 'key', capabilities: { 'end-users': true } },
+      null,
+      [],
+    ];
+    vector('end-users.json', {
+      header: END_USER_HEADER,
+      capability: END_USERS_CAPABILITY,
+      unsupported: shapeOf(toOortError(new OortCloudError('end-users-unsupported', 0))),
+      whoami: answers.map((response) => ({ response, allowed: endUsersAllowed(response) })),
+    });
   });
 
   it("the daemon's error envelope: each code, its HTTP status and its fields", () => {

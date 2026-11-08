@@ -43,7 +43,14 @@
         "properties": {
           "fail": { "$ref": "#/$defs/fail" },
           "noKey": { "type": "boolean" },
-          "memories": { "type": "integer", "description": "Extra bulk memories in the fake cloud." }
+          "memories": {
+            "type": "integer",
+            "description": "Extra bulk memories in the fake cloud."
+          },
+          "endUsers": {
+            "enum": ["server-key", "legacy"],
+            "description": "Per-user memory (CON-132): server-key, the key acts for end users (whoami lists end-users); legacy, an Oort Cloud from before it, which ignores Oort-User. Absent: a current cloud and a key without the capability."
+          }
         }
       },
       "expectCreate": {
@@ -92,6 +99,8 @@
             "whoami",
             "consolidate",
             "scoped",
+            "endUsers.erase",
+            "endUsers.count",
             "judge.record",
             "judge.apply",
             "judge.list",
