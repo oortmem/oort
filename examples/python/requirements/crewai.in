@@ -1,0 +1,2 @@
+# The CrewAI example (crewai_agent.py), Python >=3.10,<3.14. crewai.txt locks it: see its top line.
+crewai==1.15.30

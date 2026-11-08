@@ -4,9 +4,11 @@ models (fixtures/fake-models.mjs), and each framework with its own fake model in
 vendor's, as examples/test/examples.test.ts does for TypeScript. No network (a guard refuses every
 connection but loopback and Unix sockets, and the test fails on any attempt), no keys.
 
-Skipped when a framework is not installed (``pip install -r
-examples/python/requirements-frameworks.txt``); ``OORT_REQUIRE_FRAMEWORKS=1`` (CI) turns every
-skip into a failure."""
+Each framework has its own environment (``pip install --require-hashes -r
+examples/python/requirements/<framework>.txt``). A framework that is not installed is skipped;
+``OORT_FRAMEWORKS=langgraph`` (a comma-separated list of ``langgraph``, ``openai-agents``,
+``crewai``) runs only those, and ``OORT_REQUIRE_FRAMEWORKS=1`` (CI) turns a selected one's skip
+into a failure."""
 
 import asyncio
 import contextlib
@@ -28,16 +30,23 @@ from test_integration import BIN, HERE, NODE, READY, ROOT, Home
 EXAMPLES = os.path.join(ROOT, "examples", "python")
 FAKE_MODELS = os.path.join(HERE, "fixtures", "fake-models.mjs")
 REQUIRE = os.environ.get("OORT_REQUIRE_FRAMEWORKS") == "1"
+ONLY = [f for f in os.environ.get("OORT_FRAMEWORKS", "").split(",") if f != ""]
 
 
-def require(*modules: str) -> None:
-    """Skips (or, with OORT_REQUIRE_FRAMEWORKS=1, fails) unless the daemon and ``modules`` exist."""
+def require(framework: str, *modules: str) -> None:
+    """Skips a framework OORT_FRAMEWORKS leaves out. Otherwise skips (or, with
+    OORT_REQUIRE_FRAMEWORKS=1, fails) unless the daemon and ``modules`` exist."""
+    unknown = set(ONLY) - {"langgraph", "openai-agents", "crewai"}
+    if unknown:
+        raise AssertionError(f"OORT_FRAMEWORKS names no such framework: {', '.join(sorted(unknown))}")
+    if ONLY and framework not in ONLY:
+        raise unittest.SkipTest(f"OORT_FRAMEWORKS={','.join(ONLY)}")
     missing = [m for m in modules if importlib.util.find_spec(m) is None]
     why = None
     if not READY:
         why = "needs Python 3.10+, Node and the built CLI (pnpm build)"
     elif missing:
-        why = f"{', '.join(missing)} not installed (pip install -r examples/python/requirements-frameworks.txt)"
+        why = f"{', '.join(missing)} not installed (pip install --require-hashes -r examples/python/requirements/{framework}.txt)"
     if why is not None:
         if REQUIRE:
             raise AssertionError(f"OORT_REQUIRE_FRAMEWORKS=1: {why}")
@@ -162,12 +171,13 @@ class NoNetwork:
 
 
 class FrameworkCase(unittest.TestCase):
+    framework = ""
     modules: tuple = ()
     d: Daemon
 
     @classmethod
     def setUpClass(cls) -> None:
-        require(*cls.modules)
+        require(cls.framework, *cls.modules)
         cls.d = Daemon()
 
     @classmethod
@@ -197,6 +207,7 @@ class FrameworkCase(unittest.TestCase):
 
 
 class LangGraph(FrameworkCase):
+    framework = "langgraph"
     modules = ("langgraph", "langchain_core", "langchain_anthropic")
 
     @classmethod
@@ -296,6 +307,7 @@ class LangGraph(FrameworkCase):
 
 
 class OpenAIAgents(FrameworkCase):
+    framework = "openai-agents"
     modules = ("agents",)
 
     def test_recalls_into_the_instructions_then_observes(self) -> None:
@@ -332,6 +344,7 @@ class OpenAIAgents(FrameworkCase):
 
 
 class CrewAI(FrameworkCase):
+    framework = "crewai"
     modules = ("crewai",)
 
     def test_recalls_into_the_task_then_observes(self) -> None:

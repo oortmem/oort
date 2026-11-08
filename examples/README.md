@@ -34,5 +34,13 @@ ANTHROPIC_API_KEY=… node examples/src/langgraph.ts
 The Python examples in [`python/`](python) are shown in [docs/python.md](../docs/python.md). The
 framework ones (LangGraph, OpenAI Agents SDK, CrewAI) run in
 [python/tests/test_frameworks.py](../python/tests/test_frameworks.py) against the built
-`oort serve`, with the versions pinned in
-[`python/requirements-frameworks.txt`](python/requirements-frameworks.txt).
+`oort serve`, each in its own environment from [`python/requirements/`](python/requirements):
+`<framework>.in` names the versions, `<framework>.txt` locks the whole tree with hashes
+(regenerate it with the `uv pip compile` command at its top). For example:
+
+```sh
+python3.13 -m venv /tmp/venv-crewai
+/tmp/venv-crewai/bin/pip install --require-hashes -r examples/python/requirements/crewai.txt
+/tmp/venv-crewai/bin/pip install --no-deps ./python
+OORT_FRAMEWORKS=crewai /tmp/venv-crewai/bin/python -m unittest discover -s python/tests -p test_frameworks.py
+```

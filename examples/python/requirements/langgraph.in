@@ -1,0 +1,4 @@
+# The LangGraph example (langgraph_store.py). langgraph.txt locks it: see the command at its top.
+langgraph==1.2.16
+langchain-core==1.7.0
+langchain-anthropic==1.7.6

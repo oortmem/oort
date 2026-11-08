@@ -239,12 +239,19 @@ answer, and give the model a handle already scoped to one user or agent. These t
 you copy into your app, not adapters `oortmem` ships: `pip install oortmem` stays free of
 dependencies, and `import oortmem` imports no framework.
 
-They are tested with the versions pinned in
-[`examples/python/requirements-frameworks.txt`](../examples/python/requirements-frameworks.txt)
-(Python 3.13 in CI), each with its own fake model in place of the vendor's. CrewAI 1.15 requires
-`openai<3` and OpenAI Agents 0.21 and newer require `openai>=3`, so the two cannot share one
-environment at their newest versions: the file pins `openai-agents` 0.20.0, the newest that
-installs beside CrewAI. In an app that uses only one of them, use its current release.
+Each is tested in its own environment (Python 3.13 in CI), with its own fake model in place of
+the vendor's. [`examples/python/requirements/`](../examples/python/requirements) has, per
+framework, the top-level versions (`<framework>.in`) and the whole tree locked with hashes
+(`<framework>.txt`). To run one, install its lock and `oortmem`:
+
+```sh
+python3.13 -m venv .venv-langgraph
+.venv-langgraph/bin/pip install --require-hashes -r examples/python/requirements/langgraph.txt
+.venv-langgraph/bin/pip install oortmem
+```
+
+The same for `openai-agents` and `crewai`. They need separate environments: CrewAI requires
+`openai<3`, the OpenAI Agents SDK `openai>=3`.
 
 ### LangGraph: an Oort `BaseStore`
 
