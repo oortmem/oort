@@ -110,6 +110,9 @@ export class OortStore extends BaseStore {
 
   private async run(op: Operation): Promise<Item | Item[] | string[][] | null | void> {
     if ('namespacePrefix' in op) {
+      if (Object.keys(op.filter ?? {}).length > 0 || (op.offset ?? 0) > 0) {
+        throw new Error('OortStore searches by relevance only: no filter or offset');
+      }
       if (op.query === undefined) return []; // Oort lists by relevance only
       const r = await this.handle(op.namespacePrefix).recall(op.query, { limit: op.limit ?? 10 });
       return r.memories.map((m) => ({ ...item(op.namespacePrefix, m), score: m.score }));

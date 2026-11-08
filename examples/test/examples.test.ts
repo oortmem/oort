@@ -271,6 +271,14 @@ describe('framework examples (run with each framework’s fake model)', () => {
       await expect(store.search(bad, q), JSON.stringify(bad)).rejects.toBeInstanceOf(TypeError);
     }
     await expect(store.search([''], q)).rejects.toThrow(); // LangGraph.js refuses it first
+    // Relevance only: a filter or an offset is refused, not silently ignored.
+    await expect(store.search(['user-fay'], { ...q, filter: { tag: 'x' } })).rejects.toThrow(
+      /no filter or offset/,
+    );
+    await expect(store.search(['user-fay'], { ...q, offset: 5 })).rejects.toThrow(
+      /no filter or offset/,
+    );
+    expect(await store.search(['user-fay'], { ...q, filter: {}, offset: 0 })).toHaveLength(1);
     await expect(
       store.put(['memories', 'user-fay'], 'k', { text: "LangMem's namespace shape" }),
     ).rejects.toBeInstanceOf(TypeError);
