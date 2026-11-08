@@ -57,7 +57,7 @@ Tested with `@langchain/langgraph` 1.7.0 and `@langchain/core` 1.3.4. `OortStore
 `BaseStore` over a scoped handle, passed with `compile({ store })`: `search` with a query is
 `recall`, `put` of `{ text }` is `remember`, `delete` is `forget` and `get` is `explain`. Oort
 assigns memory ids, so a put's key is not kept, and `get` and `delete` take Oort ids. Your own
-`scopeOf` decides which namespace is which end user. A node prompts with `formatForPrompt` on
+`scopeOf` decides which namespace is which end user. Accept one shape and refuse the rest, as `userScope` does with `[userId]`: taking the first label of LangMem's `['memories', userId]` would put every user in one Planet. A node prompts with `formatForPrompt` on
 that user's handle, never with raw store values, and observes the turn.
 
 <!-- example: examples/src/langgraph.ts -->
@@ -146,9 +146,20 @@ const item = (
 });
 
 const oort = await createOort({ mode: 'local', org: 'acme', project: null, projectConfig: false });
-// The first namespace part is the end user. A missing one throws (`user-missing`), never
-// falling back to the tenant's own memory.
-const store = new OortStore(oort, ([user]) => ({ user: user ?? '' }));
+/**
+ * This app's namespaces are `[userId]`, exactly: that end user's Planet. Any other shape is
+ * refused, never guessed: reading the first label of LangMem's `['memories', userId]` would put
+ * every user in one Planet.
+ */
+export function userScope(namespace: string[]): ScopedOptions {
+  const [user] = namespace;
+  if (namespace.length !== 1 || typeof user !== 'string' || user === '') {
+    throw new TypeError(`OortStore namespaces here are [userId], not ${JSON.stringify(namespace)}`);
+  }
+  return { user };
+}
+
+const store = new OortStore(oort, userScope);
 const model = new ChatAnthropic({ model: 'claude-haiku-5-5' });
 
 const State = new StateSchema({ messages: MessagesValue });

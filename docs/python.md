@@ -259,9 +259,11 @@ The same for `openai-agents` and `crewai`. They need separate environments: Crew
 example in [docs/sdk.md](sdk.md): `search` with a query recalls, `put` with `{"text": ...}`
 remembers, `delete` (a `None` put) forgets, and `get` explains. Oort assigns ids, so the key a
 `put` names is not kept: `get` and `delete` take the ids `search` returns. `scope_of` maps a
-namespace to `scoped()` options, here the first label to the end user. What Oort cannot do
-honestly it refuses or leaves empty, never fakes: a search without a query returns `[]` (Oort
-ranks by relevance, it does not list), `filter` and `offset` raise `NotImplementedError`,
+namespace to `scoped()` options. Accept one shape and refuse the rest, as `user_scope` does with
+`(user_id,)`: taking the first label of LangMem's `("memories", user_id)` would put every user in
+one Planet. What Oort cannot do honestly it refuses or leaves empty, never fakes: a search
+without a query returns `[]` (Oort ranks by relevance, it does not list), its `limit` is
+recall's (1 to 50; more is an `OortUsageError`), `filter` and `offset` raise `NotImplementedError`,
 `index` is ignored, a `ttl` is refused (by LangGraph: the store declares no TTL support), and
 `list_namespaces` returns `[]` (your app owns its users).
 `abatch` runs `batch` in a worker thread, as `AsyncOort` does: the client is blocking I/O.
@@ -340,10 +342,17 @@ class Context:
     user_id: str
 
 
+def user_scope(namespace: tuple) -> dict:
+    """This app's namespaces are ``(user_id,)``, exactly: that end user's Planet. Any other shape
+    is refused, never guessed: reading the first label of LangMem's ``("memories", user_id)``
+    would put every user in one Planet."""
+    if len(namespace) != 1 or not isinstance(namespace[0], str) or namespace[0] == "":
+        raise ValueError(f"OortStore namespaces here are (user_id,), not {namespace!r}")
+    return {"user": namespace[0]}
+
+
 oort = Oort(mode="local", org="acme", project=None, project_config=False)
-# The first namespace part is the end user. A missing one is refused (`user-missing`), never
-# falling back to the tenant's own memory.
-store = OortStore(oort, lambda namespace: {"user": namespace[0] if namespace else ""})
+store = OortStore(oort, user_scope)
 model = ChatAnthropic(model="claude-haiku-5-5")
 
 

@@ -1,8 +1,9 @@
 """The framework examples (examples/python/langgraph_store.py, openai_agents.py, crewai_agent.py),
 run end to end as written: the real, built ``oort serve`` in a throwaway home with deterministic
 models (fixtures/fake-models.mjs), and each framework with its own fake model in place of the
-vendor's, as examples/test/examples.test.ts does for TypeScript. No network (a guard refuses every
-connection but loopback and Unix sockets, and the test fails on any attempt), no keys.
+vendor's, as examples/test/examples.test.ts does for TypeScript. No keys. A guard (``NoNetwork``:
+Python-level connects and name lookups in this process) fails a test on any attempt to reach
+beyond loopback.
 
 Each framework has its own environment (``pip install --require-hashes -r
 examples/python/requirements/<framework>.txt``). A framework that is not installed is skipped;
@@ -118,7 +119,10 @@ class Daemon:
 
 
 class NoNetwork:
-    """Refuses every connection and name lookup but loopback and Unix sockets; records each."""
+    """In this test process only, patches Python's ``socket.socket.connect`` and ``connect_ex``
+    and ``socket.getaddrinfo`` to refuse (and record) anything but loopback and Unix sockets. It
+    does not see native extensions that open sockets themselves, ``socket.gethostbyname``, UDP
+    sends without connect, or the Node daemon (a separate process, whose models are fakes)."""
 
     def __init__(self) -> None:
         self.blocked: list = []
@@ -238,7 +242,7 @@ class LangGraph(FrameworkCase):
     def store(self):
         o = self.d.oort(org="acme", project=None, project_config=False)
         self.addCleanup(o.close)
-        return self.ns["OortStore"](o, lambda namespace: {"user": namespace[0] if namespace else ""})
+        return self.ns["OortStore"](o, self.ns["user_scope"])  # the example's own scope
 
     def test_a_put_remembers_and_the_node_recalls_then_observes(self) -> None:
         self.assertEqual(self.out, "Your order number is 1042.\n")
@@ -283,9 +287,30 @@ class LangGraph(FrameworkCase):
         with self.assertRaises(NotImplementedError):
             store.search(ns, query="tea", filter={"kind": "drink"})
         with self.assertRaises(OortUsageError):
-            store.search((), query="tea")  # no user: refused, never the tenant's own memory
+            store.search(ns, query="tea", limit=51)  # recall takes 1 to 50
+        # Any namespace but (user_id,) is refused, never read as some user (or as no one).
+        for bad in [(), ("",), ("memories", "user-cy"), ("user-cy", "notes")]:
+            with self.assertRaises(ValueError, msg=bad):
+                store.search(bad, query="tea")
+        with self.assertRaises(ValueError):
+            store.put(("memories", "user-cy"), "k", {"text": "LangMem's namespace shape"})
 
-    def test_c_abatch_runs_in_order(self) -> None:
+    def test_c_each_user_reads_and_forgets_only_their_own(self) -> None:
+        from oortmem import OortNotFoundError
+
+        store, fay, gus = self.store(), ("user-fay",), ("user-gus",)
+        store.put(fay, "code", {"text": "My locker code is 4410."})
+        store.put(gus, "code", {"text": "My locker code is 7782."})
+        q = "what is my locker code"
+        self.assertEqual([i.value["text"] for i in store.search(fay, query=q)], ["My locker code is 4410."])
+        self.assertEqual([i.value["text"] for i in store.search(gus, query=q)], ["My locker code is 7782."])
+        [mine] = store.search(fay, query=q)
+        self.assertIsNone(store.get(gus, mine.key))  # another user's id: not found, as unknown
+        with self.assertRaises(OortNotFoundError):
+            store.delete(gus, mine.key)
+        self.assertEqual(store.get(fay, mine.key).value, {"text": "My locker code is 4410."})
+
+    def test_d_abatch_runs_in_order(self) -> None:
         from langgraph.store.base import GetOp, PutOp, SearchOp
 
         store, ns = self.store(), ("user-eve",)

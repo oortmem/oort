@@ -81,9 +81,20 @@ const item = (
 });
 
 const oort = await createOort({ mode: 'local', org: 'acme', project: null, projectConfig: false });
-// The first namespace part is the end user. A missing one throws (`user-missing`), never
-// falling back to the tenant's own memory.
-const store = new OortStore(oort, ([user]) => ({ user: user ?? '' }));
+/**
+ * This app's namespaces are `[userId]`, exactly: that end user's Planet. Any other shape is
+ * refused, never guessed: reading the first label of LangMem's `['memories', userId]` would put
+ * every user in one Planet.
+ */
+export function userScope(namespace: string[]): ScopedOptions {
+  const [user] = namespace;
+  if (namespace.length !== 1 || typeof user !== 'string' || user === '') {
+    throw new TypeError(`OortStore namespaces here are [userId], not ${JSON.stringify(namespace)}`);
+  }
+  return { user };
+}
+
+const store = new OortStore(oort, userScope);
 const model = new ChatAnthropic({ model: 'claude-haiku-5-5' });
 
 const State = new StateSchema({ messages: MessagesValue });

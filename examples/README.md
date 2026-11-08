@@ -40,7 +40,6 @@ framework ones (LangGraph, OpenAI Agents SDK, CrewAI) run in
 
 ```sh
 python3.13 -m venv /tmp/venv-crewai
-/tmp/venv-crewai/bin/pip install --require-hashes -r examples/python/requirements/crewai.txt
-/tmp/venv-crewai/bin/pip install --no-deps ./python
+/tmp/venv-crewai/bin/pip install --require-hashes --only-binary=:all: -r examples/python/requirements/crewai.txt
 OORT_FRAMEWORKS=crewai /tmp/venv-crewai/bin/python -m unittest discover -s python/tests -p test_frameworks.py
 ```
