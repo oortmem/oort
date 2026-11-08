@@ -20,13 +20,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: mcp-registry
+  group: mcp-registry-${{ github.event.workflow_run.head_sha || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    # Required reviewers (Marcus) and a deployment-branch policy (main and v* tags) are set on this
+    # environment in the repo settings, so neither a dispatch nor a modified branch can mint a
+    # registry token unreviewed.
+    environment: mcp-registry
     timeout-minutes: 10
     permissions:
       contents: read
@@ -40,7 +46,7 @@ jobs:
         env:
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
         run: |
-          case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "not a release tag: $TAG" >&2; exit 1 ;; esac
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG" >&2; exit 1; }
           v="${TAG#v}"
           test "$(jq -r .version server.json)" = "$v"
           test "$(jq -r '.packages[0].version' server.json)" = "$v"
@@ -64,4 +70,5 @@ jobs:
         run: |
           sleep 5
           curl -fsS "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.oortmem/oort" |
-            jq -e --arg v "$(jq -r .version server.json)" '[.servers[]? | (.server // .) | select(.version == $v)] | length > 0'
+            jq -e --arg v "$(jq -r .version server.json)" --arg n "$(jq -r .name server.json)" \
+              '[.servers[]? | (.server // .) | select(.name == $n and .version == $v)] | length > 0'
