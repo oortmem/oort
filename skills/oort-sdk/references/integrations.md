@@ -71,7 +71,7 @@ Every command except `oort hook`, `oort mcp` and a foreground `oort serve` takes
 `OORT_OUTPUT=json`) and prints one `oort.v1` envelope on stdout. That is the contract for
 Python today and for any other language. See [cli-and-python.md](cli-and-python.md).
 
-## Not in 0.7.0
+## Not in 0.7.1
 
 - A TypeScript `remote` mode. `oort serve --listen` (service mode) and the Python client's
   `mode="remote"` ship in 0.7.0; the TypeScript SDK has `local` and `cloud` only.
