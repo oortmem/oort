@@ -1,6 +1,6 @@
 {
   "name": "@oortmem/decide-jev",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Oort decisions: add, update, supersede or skip, using TypeSafe Jev.",
   "keywords": [
     "oort",

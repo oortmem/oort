@@ -1,6 +1,6 @@
 {
   "name": "@oortmem/local-models",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Oort embeddings and reranking on this machine's CPU (ONNX Runtime): no API keys, no account.",
   "keywords": [
     "oort",

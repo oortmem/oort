@@ -3,7 +3,7 @@
   "name": "io.github.oortmem/oort",
   "title": "Oort",
   "description": "Memory for AI agents that stays correct as facts change.",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "websiteUrl": "https://oortcloud.dev",
   "icons": [
     {
@@ -20,7 +20,7 @@
     {
       "registryType": "npm",
       "identifier": "oortmem",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

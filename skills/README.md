@@ -7,7 +7,7 @@ the agent reads only when it needs them.
 
 | Skill                  | For                                                                                                                                                                                                                                                                                                                                                  |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`oort-sdk`](oort-sdk) | Integrating `oortmem` 0.7.2: when to use hooks, MCP, the SDK or the CLI; `createOort` modes and options; recall, observe and `formatForPrompt` in an agent loop; multi-user apps; judgments; errors; the Vercel AI SDK, LangGraph.js and OpenAI Agents JS; serverless and self-hosting; costs; the native Python client and the CLI's JSON; security |
+| [`oort-sdk`](oort-sdk) | Integrating `oortmem` 0.7.3: when to use hooks, MCP, the SDK or the CLI; `createOort` modes and options; recall, observe and `formatForPrompt` in an agent loop; multi-user apps; judgments; errors; the Vercel AI SDK, LangGraph.js and OpenAI Agents JS; serverless and self-hosting; costs; the native Python client and the CLI's JSON; security |
 
 This is not the skill for using memory as an assistant: that one, `oort-memory`, ships with the
 `oort` plugin and the `@oortmem/mcp` package.

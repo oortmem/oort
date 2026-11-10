@@ -66,7 +66,7 @@ with OIDC.
 `.github/workflows/mcp-registry.yml` does it: after each successful Release run it checks out the
 tagged commit, confirms `server.json` and npm agree, installs a pinned, checksum-verified
 `mcp-publisher`, logs in with `github-oidc` (no secret) and publishes. To publish a tag that is
-already on npm by hand: Actions → MCP Registry → Run workflow, with the tag (for example `v0.7.2`).
+already on npm by hand: Actions → MCP Registry → Run workflow, with the tag (for example `v0.7.3`).
 0.7.1 was released before this workflow existed and was listed with one manual run; from 0.7.2 on
 it runs after each Release.
 
