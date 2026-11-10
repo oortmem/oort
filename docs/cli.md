@@ -1252,9 +1252,10 @@ then at a turn that finished, so nothing is half-imported and running the same
 command again imports exactly the rest, none twice. It prints
 `Imported 1 of 5 observations: …` and `Stopped by Ctrl-C: 4 observations were
 not attempted …`, and exits 130 (with `--json`: `outcome: "interrupted"`,
-`imported.notAttempted`, an `interrupted` warning and `exitCode: 130`). A
-second Ctrl-C quits at once. Ctrl-C while it reads or asks quits at once too:
-nothing has been written then.
+`imported.notAttempted`, an `interrupted` warning and `exitCode: 130`). The exit
+code is 130 even when some sessions had already failed; `failedSessions` still
+lists them. A second Ctrl-C quits at once. Ctrl-C while it reads the transcripts
+or asks stops before the first observation, so nothing has been written.
 
 Ids are full ids or unique prefixes. Every command reads the cwd's project
 plus global memories, as the acting agent (`--agent`, `OORT_AGENT`, else
