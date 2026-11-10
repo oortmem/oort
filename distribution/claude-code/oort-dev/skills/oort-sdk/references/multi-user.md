@@ -58,7 +58,7 @@ await oort.close();
   user can open the same home. Authenticate your end users yourself, then map the verified id to
   `user`.
 - **Cloud mode** applies the Oort key's scope: one key is one account, so `user` is a usage error
-  there in 0.7.1. Multi-user apps run local mode today. An agent configured as a Star cannot write
+  there in 0.7.2. Multi-user apps run local mode today. An agent configured as a Star cannot write
   in cloud mode (`star-in-cloud`).
 - **Consolidation** runs per scope. The hooks consolidate only the person's own memories, so a
   multi-tenant host calls `consolidate({ budgetMs: 200 })` on each user's handle at the end of a
