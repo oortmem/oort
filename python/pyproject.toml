@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "oortmem"
-version = "0.7.1"
+version = "0.7.2"
 description = "Open-source memory for AI agents: the native Python client (Oort, AsyncOort) and the oort CLI launcher."
 readme = "README.md"
 license = "Apache-2.0"
