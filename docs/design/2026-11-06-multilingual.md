@@ -354,7 +354,7 @@ A user who wants no question sets `multi` and gets the pull at once.
 | Any query                             | Tokeniser v2 (§5): no setting, no detection cost beyond the script regex      |
 | Script group of the query             | chrono locales for that group, limited to the store's languages (§6)          |
 | Query script or language ≠ the top candidates' `lang` | Cross-lingual gate: word coverage is not a reason to drop; use the rerank score, or the dense floor calibrated on cross-lingual pairs |
-| Cross-lingual, prompt hook in `fast` mode, cloud | Call `rerank-3-lite` anyway, within the existing `rerankBudgetMs` |
+| Cross-lingual, prompt hook in `fast` mode, cloud | Call `rerank-3-lite` anyway, within `promptRerankBudgetMs` (400 ms) |
 | Cross-lingual, local, no multilingual reranker | Dense floor only (`minDenseScore`, calibrated per embedder)            |
 
 The cross-lingual gate is the part `auto` most needs. Without it, `fast` mode quietly drops the
