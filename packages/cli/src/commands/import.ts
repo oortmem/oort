@@ -1,6 +1,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { importTranscripts } from '@oortmem/claude-code';
+import { importProgressFor } from '../import-progress.js';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import {
@@ -28,13 +29,49 @@ export interface ImportCommandOptions {
   confirmWith?: (estimate: { observations: number; estimatedTokens: number }) => Promise<boolean>;
   /** What happened, for the setup wizard's summary (the exit code alone cannot tell a decline). */
   onOutcome?: (outcome: ImportOutcome) => void;
+  /**
+   * Stops the import between observations. Default: the first Ctrl-C (SIGINT) while observing,
+   * and a second one quits at once, as without this.
+   */
+  signal?: AbortSignal;
+  /** The progress line's clock (tests pass a fake one). */
+  clock?: () => number;
 }
 
 /**
  * `nothing`: no observations to import (or `--estimate-only`); `declined`: the person said no;
- * `imported`: every session; `partial`: some sessions stopped at a failed observation (exit 3).
+ * `imported`: every session; `partial`: some sessions stopped at a failed observation (exit 3);
+ * `interrupted`: Ctrl-C stopped it between observations (exit 130; a re-run imports the rest).
  */
-export type ImportOutcome = 'nothing' | 'declined' | 'imported' | 'partial';
+export type ImportOutcome = 'nothing' | 'declined' | 'imported' | 'partial' | 'interrupted';
+
+/** The exit code of an import Ctrl-C stopped: 128 + SIGINT, as a shell reports it. */
+export const INTERRUPTED_EXIT = 130;
+
+/**
+ * The signal that stops an import: `given`, or one the first Ctrl-C aborts (with a line saying
+ * so); a second Ctrl-C removes the handler and re-raises SIGINT, so it quits at once as before.
+ */
+function interruptOnSigint(
+  given: AbortSignal | undefined,
+  before: () => void,
+  say: (text: string) => void,
+): { signal: AbortSignal; release: () => void } {
+  if (given !== undefined) return { signal: given, release: () => {} };
+  const stop = new AbortController();
+  const onSigint = (): void => {
+    before();
+    if (!stop.signal.aborted) {
+      say('Stopping after the observation in progress (Ctrl-C again quits now) …\n');
+      stop.abort();
+      return;
+    }
+    process.off('SIGINT', onSigint);
+    process.kill(process.pid, 'SIGINT');
+  };
+  process.on('SIGINT', onSigint);
+  return { signal: stop.signal, release: () => void process.off('SIGINT', onSigint) };
+}
 
 const UNIT_MS = { h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 } as const;
 
@@ -72,7 +109,12 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
         ...(since !== undefined && { since }),
         includeUnresolved: opts.includeUnresolved === true,
       };
-      const est = await importTranscripts({ ...base, estimateOnly: true }, deps);
+      const json = jsonMode(ctx);
+      const scanning = importProgressFor(ctx.io, json, opts.clock);
+      const est = await importTranscripts(
+        { ...base, estimateOnly: true, onProgress: (p) => scanning.update(p) },
+        deps,
+      ).finally(() => scanning.clear());
       const ui = uiFor(ctx.io);
       ctx.io.out(ui.header('import claude-code', 'estimate first, then asks'));
       const unresolvedHint =
@@ -101,7 +143,6 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
         skippedUnresolved: est.skippedUnresolved,
         skippedUnreadable: est.skippedUnreadable,
       };
-      const json = jsonMode(ctx);
       if (opts.estimateOnly === true || est.observations === 0) {
         opts.onOutcome?.('nothing');
         if (json) emit(ctx, { outcome: 'nothing', estimate, imported: null });
@@ -123,11 +164,27 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
         opts.onOutcome?.('declined');
         return 0;
       }
-      const r = await importTranscripts({ ...base, estimateOnly: false }, deps);
+      const progress = importProgressFor(ctx.io, json, opts.clock);
+      const { signal, release } = interruptOnSigint(
+        opts.signal,
+        () => progress.clear(),
+        (t) => ctx.io.err(t),
+      );
+      const r = await importTranscripts(
+        { ...base, estimateOnly: false, signal, onProgress: (p) => progress.update(p) },
+        deps,
+      ).finally(() => {
+        progress.clear();
+        release();
+      });
       const outcomes = Object.entries(r.outcomes ?? {})
         .map(([k, n]) => `${k} ${n}`)
         .join(', ');
-      ctx.io.out(`Imported ${r.observations} observations: ${outcomes || 'nothing new'}.\n`);
+      const attempted =
+        r.interrupted === undefined
+          ? `${r.observations}`
+          : `${r.observations - r.interrupted.notAttempted} of ${r.observations}`;
+      ctx.io.out(`Imported ${attempted} observations: ${outcomes || 'nothing new'}.\n`);
       const skippedWhy = Object.entries(r.unwritable ?? {});
       if (skippedWhy.length > 0) {
         ctx.io.out(
@@ -145,7 +202,18 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
           notAttempted: f.notAttempted,
           reason: f.reason,
         })),
+        ...(r.interrupted !== undefined && { notAttempted: r.interrupted.notAttempted }),
       };
+      if (r.interrupted !== undefined) {
+        // Every session's cursor is at an observation that finished: a re-run imports the rest.
+        const n = r.interrupted.notAttempted;
+        const msg = `Stopped by Ctrl-C: ${n} ${n === 1 ? 'observation was' : 'observations were'} not attempted; run the same command again to import them.`;
+        if (json) warn(ctx, 'interrupted', msg);
+        else ctx.io.out(`${msg}\n`);
+        opts.onOutcome?.('interrupted');
+        if (json) emit(ctx, { outcome: 'interrupted', estimate, imported });
+        return INTERRUPTED_EXIT;
+      }
       if (failed > 0) {
         const reasons = new Set(Object.values(r.failedSessions ?? {}).map((f) => f.reason));
         if (json) {

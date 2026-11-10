@@ -16,6 +16,7 @@ import {
   type ScopeFilter,
 } from '@oortmem/core';
 import type { LoginDeps } from './commands/login.js';
+import type { OpenDeps } from './commands/open.js';
 import { ROLE_VENDOR, type AdapterRole } from './credentials.js';
 import type { Io } from './io.js';
 import { PROVIDER_ENV, type Keychain } from './keychain.js';
@@ -102,6 +103,8 @@ export interface Ctx {
   keychain: Keychain;
   /** The network and browser `oort login` uses; tests inject a fake site. */
   login?: LoginDeps;
+  /** The browser `oort open` starts and the platform it checks; tests inject a fake opener. */
+  open?: OpenDeps;
   /** The network `oort doctor` probes the relay with; tests inject a fake. */
   fetch?: typeof fetch;
   /** The agent to act as (`oort --agent <id>`); wiring falls back to `OORT_AGENT`, then `claude-code`. */

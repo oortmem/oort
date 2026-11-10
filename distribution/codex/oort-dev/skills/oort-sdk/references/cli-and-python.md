@@ -130,3 +130,4 @@ inject; that human output is not a stable contract, so prefer `--json`.
 | `oort judge record`, `oort judge apply` | Judgment memory, as in [judgments.md](judgments.md)                                                            |
 | `oort whoami --json`                    | Which store, agent and spaces this runs against                                                                |
 | `oort doctor --json`                    | Check keys, store, hooks and MCP entries; prints a fix per problem                                             |
+| `oort open [target] --json`             | The oortcloud.dev URL (dashboard, star map, `memory <id>`, account, docs) without opening a browser            |

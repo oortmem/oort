@@ -25,6 +25,8 @@ export interface Io {
   stdoutIsTTY?: boolean;
   /** Whether stderr is a terminal: the update notice is printed there only then. Absent means no. */
   stderrIsTTY?: boolean;
+  /** The terminal's width on stderr, when it is one (a progress line must not wrap). */
+  stderrColumns?(): number | undefined;
   out(text: string): void;
   err(text: string): void;
   /** All of stdin, or what arrived within `capMs`. */
@@ -159,6 +161,7 @@ export function processIo(
     stdinIsTTY: process.stdin.isTTY === true,
     stdoutIsTTY: process.stdout.isTTY === true,
     stderrIsTTY: process.stderr.isTTY === true,
+    stderrColumns: () => process.stderr.columns,
     out: (text) => void process.stdout.write(text),
     err: (text) => void process.stderr.write(text),
     readStdin(capMs) {

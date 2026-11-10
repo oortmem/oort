@@ -29,7 +29,42 @@ export interface ImportOptions {
    * memories would otherwise surface in every project.
    */
   includeUnresolved?: boolean;
+  /**
+   * Called as the import goes: after each transcript is read (`scan`) and after each observation
+   * (`observe`). It must not throw; the CLI draws its progress line from it.
+   */
+  onProgress?: (p: TranscriptImportProgress) => void;
+  /**
+   * Stops the import between observations (Ctrl-C): the observation running finishes, its
+   * session's cursor moves past it as usual, and nothing after it is attempted. The result then
+   * has `interrupted: true`; a later import (or the Stop hook) picks up the rest.
+   */
+  signal?: AbortSignal;
 }
+
+/** Where an import is: reading transcripts, then observing their turns. */
+export type TranscriptImportProgress =
+  | {
+      phase: 'scan';
+      /** Transcripts read so far, of `totalFiles`. */
+      files: number;
+      totalFiles: number;
+      /** Turns found so far that are new (after each session's cursor). */
+      turns: number;
+    }
+  | {
+      phase: 'observe';
+      /** Observations finished (observed, skipped or failed), of `total`. */
+      done: number;
+      total: number;
+      /** Memories written so far: added, updated, superseded or corrected. */
+      kept: number;
+      /** Observations that failed so far (their sessions stop). */
+      failed: number;
+    };
+
+/** The outcomes that keep a fact: a memory written or rewritten. */
+const KEPT = new Set(['added', 'updated', 'superseded', 'corrected']);
 
 export interface ImportResult {
   /** Sessions with at least one observation to import. */
@@ -59,6 +94,11 @@ export interface ImportResult {
    * keyed by `failureReason`. Their sessions continue and the cursor passes them.
    */
   unwritable?: Record<string, number>;
+  /**
+   * Set when `signal` stopped the import: how many observations were not attempted. Every
+   * session's cursor stays before its first unattempted turn, so a re-run imports exactly those.
+   */
+  interrupted?: { notAttempted: number };
 }
 
 /** A failure a re-run would repeat for the same observation: skip it rather than stop the session. */
@@ -178,13 +218,19 @@ export async function importTranscripts(
   const skip = (): void => {
     skippedUnreadable++;
   };
-  for (const file of transcripts(opts.projectsDir, opts.since, skip)) {
+  const files = transcripts(opts.projectsDir, opts.since, skip);
+  let scanned = 0;
+  let turns = 0;
+  const scanProgress = (): void =>
+    opts.onProgress?.({ phase: 'scan', files: ++scanned, totalFiles: files.length, turns });
+  for (const file of files) {
     const session = path.basename(file, '.jsonl');
     let text: string;
     try {
       text = fs.readFileSync(file, 'utf8');
     } catch {
       skip();
+      scanProgress();
       continue;
     }
     const detailed = parseTranscriptDetailed(text);
@@ -201,14 +247,20 @@ export async function importTranscripts(
       if (s.dropped) continue;
       mine.push({ session, pos: mine.length, obs: s.obs, scope });
     }
-    if (mine.length === 0) continue;
+    if (mine.length === 0) {
+      scanProgress();
+      continue;
+    }
     if (projectId === undefined && opts.includeUnresolved !== true) {
       skippedUnresolved++;
+      scanProgress();
       continue;
     }
     for (const item of mine) weighted += chars(item.obs) / 4 + WRITER_OVERHEAD_TOKENS;
     items.push(...mine);
     sessions.add(session);
+    turns += mine.length;
+    scanProgress();
   }
   const fraction = opts.writerFraction ?? DEFAULT_WRITER_FRACTION;
   const summary = {
@@ -252,11 +304,28 @@ export async function importTranscripts(
       done.set(item.session, item.pos);
     }
   };
-  for (const item of items) {
+  let finished = 0;
+  let kept = 0;
+  const observeProgress = (): void =>
+    opts.onProgress?.({
+      phase: 'observe',
+      done: ++finished,
+      total: items.length,
+      kept,
+      failed: outcomes['failed'] ?? 0,
+    });
+  let interrupted: number | undefined;
+  for (const [i, item] of items.entries()) {
+    if (opts.signal?.aborted === true) {
+      // Stopped between observations: every cursor is at an observation that finished.
+      interrupted = items.length - i;
+      break;
+    }
     const stopped = failedSessions[item.session];
     if (stopped !== undefined) {
       // The session stopped at an earlier failure; its cursor must not pass it.
       stopped.notAttempted++;
+      observeProgress();
       continue;
     }
     let r: ObserveResult;
@@ -277,16 +346,19 @@ export async function importTranscripts(
         const why = failureReason(e);
         unwritable[why] = (unwritable[why] ?? 0) + 1;
         await advance(item);
+        observeProgress();
         continue;
       }
       outcomes['failed'] = (outcomes['failed'] ?? 0) + 1;
       failedSessions[item.session] = { failed: 1, notAttempted: 0, reason: failureReason(e) };
+      observeProgress();
       continue;
     }
     results.push(r);
     // A turn can become several memories (CON-56): count and log each one.
     for (const m of r.memories) {
       outcomes[m.outcome] = (outcomes[m.outcome] ?? 0) + 1;
+      if (KEPT.has(m.outcome)) kept++;
       if (m.outcome !== 'added' || m.memoryId === undefined) continue;
       const row = {
         memoryId: m.memoryId,
@@ -297,6 +369,7 @@ export async function importTranscripts(
       appendPrivateFile(evalFile, `${JSON.stringify(row)}\n`);
     }
     await advance(item);
+    observeProgress();
   }
   return {
     ...summary,
@@ -304,5 +377,6 @@ export async function importTranscripts(
     outcomes,
     ...(Object.keys(failedSessions).length > 0 && { failedSessions }),
     ...(Object.keys(unwritable).length > 0 && { unwritable }),
+    ...(interrupted !== undefined && { interrupted: { notAttempted: interrupted } }),
   };
 }
