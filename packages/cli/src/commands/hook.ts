@@ -119,12 +119,6 @@ export interface WiredHookOptions {
 }
 
 /**
- * Runs `event` on an engine already wired for it, as the in-process hook and `oort serve` both
- * do: the same handlers, the same injection format and scrubbing. Resolves the hook's stdout,
- * empty when the store was locked (the log then records `degraded:busy`), or `skipped` when a Star
- * agent in cloud mode must not save. Never throws for a handler's failure (runHook swallows it).
- */
-/**
  * The prompt hook keeps its own, shorter rerank wait (CON-136): it runs before every prompt, while
  * `oort recall`, `oort mcp` and the SDK wait up to `recall.rerankBudgetMs`.
  */
@@ -137,6 +131,12 @@ export function promptRecallConfig<
   };
 }
 
+/**
+ * Runs `event` on an engine already wired for it, as the in-process hook and `oort serve` both
+ * do: the same handlers, the same injection format and scrubbing. Resolves the hook's stdout,
+ * empty when the store was locked (the log then records `degraded:busy`), or `skipped` when a Star
+ * agent in cloud mode must not save. Never throws for a handler's failure (runHook swallows it).
+ */
 export async function runWiredHook(
   event: HookEvent,
   stdin: string,
