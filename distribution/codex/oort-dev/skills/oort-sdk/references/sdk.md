@@ -79,8 +79,8 @@ usage error.
 | `judge.confirm(id)`                               | `{ id, changed }` (expert role)     | `refused`                                                         |
 | `consolidate({ budgetMs?, signal? })`             | `ConsolidateResult`                 | `refused`                                                         |
 | `scoped({ user?, project?, agent?, judgeRole? })` | a new handle                        | `project`, `agent` only in 0.7.0 (`user`: after it, a server key) |
-| `endUsers.erase(user)`                            | `EndUserErasure`                    | after 0.7.0, a server key                                         |
-| `endUsers.count()`                                | `EndUserCount`                      | after 0.7.0, a server key                                         |
+| `endUsers.erase(user)`                            | `EndUserErasure`                    | after 0.7.1, a server key                                         |
+| `endUsers.count()`                                | `EndUserCount`                      | after 0.7.1, a server key                                         |
 | `close()`, `[Symbol.asyncDispose]()`              | `void`                              |                                                                   |
 | `formatForPrompt(result, { budgetChars? })`       | `string` (a function, not a method) | both                                                              |
 

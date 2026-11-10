@@ -65,9 +65,9 @@ await oort.close();
 - `agent` and `user` are configuration, not authentication. Every process running as the same OS
   user can open the same home. Authenticate your end users yourself, then map the verified id to
   `user`.
-- **Cloud mode** applies the Oort key's scope: one key is one account. In 0.7.0 `user` is a usage
+- **Cloud mode** applies the Oort key's scope: one key is one account. In 0.7.1 `user` is a usage
   error there and multi-user apps run local mode. Per-user memory in Oort Cloud comes after
-  0.7.0, with a server key: see "Per-user memory in Oort Cloud" below.
+  0.7.1, with a server key: see "Per-user memory in Oort Cloud" below.
   An agent configured as a Star cannot write in cloud mode (`star-in-cloud`).
 - **Consolidation** runs per scope. The hooks consolidate only the person's own memories, so a
   multi-tenant host calls `consolidate({ budgetMs: 200 })` on each user's handle at the end of a
@@ -79,7 +79,7 @@ await oort.close();
 ## Per-user memory in Oort Cloud
 
 > **Requires Oort Cloud with server keys (rolling out after 18 Nov 2026)** and an `oortmem`
-> newer than 0.7.0. Until the account has it, every end-user call is refused with
+> newer than 0.7.1. Until the account has it, every end-user call is refused with
 > `end-users-unsupported` and nothing is sent. Do not tell a user it is available before then.
 
 The same `scoped({ user })` against Oort Cloud, with a **server key**: an Oort key made on

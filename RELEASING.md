@@ -59,17 +59,25 @@ publishes in dependency order, skipping any version already on npm so a re-run i
 
 `server.json` lists Oort in the official MCP Registry as `io.github.oortmem/oort`. The registry
 checks `mcpName` in the published `oortmem` package, so a version can only be listed once it is on
-npm. Publishing to the registry is not automated: after the npm run finishes, publish the same
-version by hand (Marcus, signed in to GitHub as a member of the `oortmem` org):
+npm. For the `io.github.oortmem` namespace the interactive `mcp-publisher login github` was refused
+("You have permission to publish: io.github.mong-x/*"), so it is published from GitHub Actions
+with OIDC.
+
+`.github/workflows/mcp-registry.yml` does it: after each successful Release run it checks out the
+tagged commit, confirms `server.json` and npm agree, installs a pinned, checksum-verified
+`mcp-publisher`, logs in with `github-oidc` (no secret) and publishes. To publish a tag that is
+already on npm by hand: Actions → MCP Registry → Run workflow, with the tag (for example `v0.7.1`).
+0.7.1 was released before this workflow existed, so it needs that one manual run.
+
+The job runs in the `mcp-registry` environment. Set it up once in the repo settings: required
+reviewer Marcus, and deployment branches limited to `main` and `v*` tags, so every publish is
+approved like the npm release.
+
+Check the listing:
 
 ```sh
-brew install mcp-publisher        # once
-mcp-publisher login github        # once per machine; a device-code sign-in
-mcp-publisher publish             # from the repo root, on the tagged commit
 curl -s "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.oortmem/oort"
 ```
-
-Skip a release and the registry keeps showing the last version you published.
 
 ## After the first release
 

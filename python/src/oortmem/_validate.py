@@ -50,7 +50,8 @@ _BAD_USER = (
 
 def user_id_problem(user: Any) -> Optional[Tuple[str, str]]:
     """Why ``user`` is not an end-user id (``reason``, ``message``), or ``None`` when it is one."""
-    if user is None or user == "":
+    # Blank (empty or only whitespace) reads as a dropped id, never as a name.
+    if user is None or (isinstance(user, str) and user.strip() == ""):
         return _USER_MISSING
     if not isinstance(user, str) or not USER_ID.fullmatch(user):
         return _BAD_USER

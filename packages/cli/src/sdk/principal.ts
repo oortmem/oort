@@ -55,7 +55,8 @@ const BAD_USER =
 
 /** Why `user` is not an end-user id (`reason`, `message`), or null when it is one. */
 export function userIdProblem(user: unknown): { reason: string; message: string } | null {
-  if (user === undefined || user === null || user === '') {
+  // Blank (empty or only whitespace) reads as a dropped id, never as a name.
+  if (user === undefined || user === null || (typeof user === 'string' && user.trim() === '')) {
     return { reason: 'user-missing', message: USER_MISSING };
   }
   if (typeof user !== 'string' || !USER_ID.test(user) || user.length > 128) {
