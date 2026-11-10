@@ -51,7 +51,7 @@
       "reason": "bad-user"
     },
     {
-      "user": "alé",
+      "user": "al\u00e9",
       "reason": "bad-user"
     },
     {
@@ -59,7 +59,7 @@
       "reason": "bad-user"
     },
     {
-      "user": "‮alice",
+      "user": "\u202ealice",
       "reason": "bad-user"
     },
     {
