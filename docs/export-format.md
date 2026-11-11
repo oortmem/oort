@@ -121,7 +121,10 @@ erased, or never existed, gets the manifest alone with `memories: 0`.
 memories move to this machine's Planet with their project, history, pin and
 tier; memories of other levels are left out and counted; ids already in the
 store are skipped. The embeddings in the file are not reused: each memory is
-embedded again by the store's embedder.
+embedded again by the store's embedder. The importer trusts nothing a line
+claims: a line whose id, type, tier, salience (0 to 1), pin or judgment no
+store would write is left out and counted, and a judgment becomes an imported
+one (`via: "pack"` with the file as its origin, never `confirmed`).
 
 ## Limitations
 
