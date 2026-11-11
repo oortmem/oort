@@ -201,8 +201,22 @@ END_USERS_UNSUPPORTED = (
 )
 
 
+#: An account's end-user route (count, erase) answered 404: an Oort Cloud from before CON-132.
+#: These routes ask no whoami first: whoami is refused while Pro has lapsed or the account is
+#: blocked, and an end user's deletion must still go through.
+END_USERS_NOT_OFFERED = (
+    "Per-user memory needs Oort Cloud with server keys: this Oort Cloud has no end-user routes "
+    "(HTTP 404), so nothing was done for this end user. Make a server key on "
+    "https://oortcloud.dev/account."
+)
+
+
 def end_users_unsupported() -> OortError:
     return OortRefusedError(END_USERS_UNSUPPORTED, reason="end-users-unsupported")
+
+
+def end_users_not_offered() -> OortError:
+    return OortRefusedError(END_USERS_NOT_OFFERED, reason="end-users-unsupported", status=404)
 
 
 def _cloud_kind(status: int, code: Optional[str]) -> str:

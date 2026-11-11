@@ -28,6 +28,7 @@ from .errors import (
     OortRefusedError,
     OortUsageError,
     cloud_error,
+    end_users_not_offered,
     end_users_unsupported,
     parse_retry_after,
 )
@@ -551,10 +552,18 @@ class CloudOps:
             "routes": routes,
         }
 
-    # The account's end users (CON-132): sent as the account, after the same capability check.
+    # The account's end users (CON-132): sent as the account, with no whoami first (security
+    # review, L-b). whoami is refused while Pro has lapsed or the account is blocked, yet Oort Cloud
+    # keeps end-user erasure open then; it refuses a key that is not a server key itself (403
+    # end_users_not_allowed), and an Oort Cloud without these routes answers 404.
+    def _end_user_route(self, method: str, route: str) -> Any:
+        try:
+            return self.c.call(method, route)
+        except OortNotFoundError:
+            raise end_users_not_offered() from None
+
     def erase_end_user(self, user: str) -> Dict[str, Any]:
-        self.c.require_end_users()
-        r = self.c.call("DELETE", "/v1/end-users/" + urllib.parse.quote(user, safe="")) or {}
+        r = self._end_user_route("DELETE", "/v1/end-users/" + urllib.parse.quote(user, safe="")) or {}
         e = r.get("erased") if isinstance(r, Mapping) and isinstance(r.get("erased"), Mapping) else {}
         n = lambda v: v if isinstance(v, int) and not isinstance(v, bool) else 0  # noqa: E731
         return {
@@ -566,8 +575,7 @@ class CloudOps:
         }
 
     def count_end_users(self) -> Dict[str, Any]:
-        self.c.require_end_users()
-        r = self.c.call("GET", "/v1/end-users/count")
+        r = self._end_user_route("GET", "/v1/end-users/count")
         if not isinstance(r, Mapping):
             raise OortInternalError("An internal error stopped this call (TypeError).")
         return {"endUsers": r.get("endUsers"), "limit": r.get("limit")}
