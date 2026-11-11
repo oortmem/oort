@@ -302,19 +302,28 @@ export const IMPORT_FILE_MAX_BYTES = 100 * 1024 * 1024;
 
 const isText = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max;
 
-/** A time from a file, normalised; one ahead of `now` becomes `now`; unreadable: undefined. */
-function fileTime(v: unknown, now: Date): string | undefined {
-  if (typeof v !== 'string' || v.length > 64) return undefined;
+/** The times a file may state: years 0000 to 9999 (re-review Info 3). */
+const MIN_TIME = Date.parse('0000-01-01T00:00:00.000Z');
+const MAX_TIME = Date.parse('9999-12-31T23:59:59.999Z');
+
+/** A time from a file, in milliseconds; an extended year or an unreadable one: undefined. */
+function fileTime(v: unknown): number | undefined {
+  if (typeof v !== 'string' || v.length > 64 || /^\s*[+-]/.test(v)) return undefined;
   const t = Date.parse(v);
-  if (Number.isNaN(t)) return undefined;
-  return new Date(Math.min(t, now.getTime())).toISOString();
+  return Number.isNaN(t) || t < MIN_TIME || t > MAX_TIME ? undefined : t;
 }
 
-/** A time from a file that must already have passed, normalised; otherwise null. */
-function pastTime(v: unknown, now: Date): string | null {
-  if (typeof v !== 'string' || v.length > 64) return null;
-  const t = Date.parse(v);
-  return Number.isNaN(t) || t > now.getTime() ? null : new Date(t).toISOString();
+/** An end a file states: null when there is none, undefined when it cannot be read. */
+const endTime = (v: unknown): number | null | undefined =>
+  v === null || v === undefined ? null : fileTime(v);
+
+const iso = (t: number): string => new Date(t).toISOString();
+
+/** Whether a line's judgment says it was withdrawn or purged. */
+function endedJudgment(v: unknown): boolean {
+  if (typeof v !== 'object' || v === null) return false;
+  const j = v as Record<string, unknown>;
+  return (j['withdrawn'] ?? null) !== null || (j['purged'] ?? null) !== null;
 }
 
 /** A memory's source, when it has the shape a store writes; otherwise a plain one. */
@@ -356,37 +365,50 @@ function fileSource(v: unknown): MemorySource {
  * alone, so nothing else a file claims reaches the store. Kept: id, type, text, stub, entities,
  * salience (0 to 1), pin, source (when well formed), project and author, and the times. Reset as
  * for a new memory: tier warm, access log empty, never confirmed here, no provenance. Times are
- * normalised and clamped to now; an end is kept only when it is consistent and past. Links are
+ * normalised and clamped to now; an end that has passed must hold together. Links are
  * set afterwards (only to other lines of the file). A judgment is the one importedJudgment
- * builds, kept as recording one keeps it (pinned, its text and stub rendered from it). Returns
- * undefined when the line is not something a store writes.
+ * builds, kept as recording one keeps it (pinned, its text and stub rendered from it); one the
+ * file says was withdrawn or purged is 'ended'. 'invalid' when the line is not something a store
+ * writes.
  */
 function rebuilt(
   m: Memory,
   now: Date,
   origin: (id: string) => JudgmentPackOrigin,
-): Memory | undefined {
+): Memory | 'invalid' | 'ended' {
   const x = m as unknown as Record<string, unknown>;
   const id = x['id'];
   const type = x['type'];
-  if (typeof id !== 'string' || !MEMORY_ID.test(id)) return undefined;
-  if (typeof type !== 'string' || !MEMORY_TYPES.has(type)) return undefined;
-  if (!TIERS.has(x['tier'] as string) || typeof x['pinned'] !== 'boolean') return undefined;
+  if (typeof id !== 'string' || !MEMORY_ID.test(id)) return 'invalid';
+  if (typeof type !== 'string' || !MEMORY_TYPES.has(type)) return 'invalid';
+  if (!TIERS.has(x['tier'] as string) || typeof x['pinned'] !== 'boolean') return 'invalid';
   const salience = x['salience'];
-  if (typeof salience !== 'number' || !Number.isFinite(salience)) return undefined;
-  if (salience < 0 || salience > 1) return undefined;
-  const createdAt = fileTime(x['createdAt'], now);
-  const updatedAt = fileTime(x['updatedAt'], now);
-  const validFrom = fileTime(x['validFrom'], now);
-  if (createdAt === undefined || updatedAt === undefined || validFrom === undefined) {
-    return undefined;
+  if (typeof salience !== 'number' || !Number.isFinite(salience)) return 'invalid';
+  if (salience < 0 || salience > 1) return 'invalid';
+  // Times as numbers (re-review Info 3), a start after now clamped to now.
+  const nowT = now.getTime();
+  const createdRaw = fileTime(x['createdAt']);
+  const updatedRaw = fileTime(x['updatedAt']);
+  const validFromRaw = fileTime(x['validFrom']);
+  if (createdRaw === undefined || updatedRaw === undefined || validFromRaw === undefined) {
+    return 'invalid';
   }
-  // Ended in valid time: only after it began, and already. Ended in transaction time: with a
-  // reason, after it was recorded, and already; anything else is left open.
-  const validTo = pastTime(x['validTo'], now);
-  const expiredAt = pastTime(x['expiredAt'], now);
-  const keepValidTo = validTo !== null && validTo > validFrom ? validTo : null;
-  const ended = expiredAt !== null && expiredAt >= createdAt && END_REASONS.has(x['endReason']);
+  const created = Math.min(createdRaw, nowT);
+  const validFrom = Math.min(validFromRaw, nowT);
+  const updated = Math.max(Math.min(updatedRaw, nowT), created);
+  // An end that has passed is kept only when it holds together: in valid time after the start,
+  // in transaction time with a reason and not before the record. One that does not (including
+  // one a clamped start overtook) leaves the line out: an ended fact never becomes current
+  // (re-review Info 2). An end still ahead is left open, as is the fact until then.
+  const validToT = endTime(x['validTo']);
+  const expiredT = endTime(x['expiredAt']);
+  if (validToT === undefined || expiredT === undefined) return 'invalid';
+  const validTo = validToT !== null && validToT <= nowT ? validToT : null;
+  const expiredAt = expiredT !== null && expiredT <= nowT ? expiredT : null;
+  if (validTo !== null && validTo <= validFrom) return 'invalid';
+  if (expiredAt !== null && (expiredAt < created || !END_REASONS.has(x['endReason']))) {
+    return 'invalid';
+  }
   const scope = { ...m.scope, agentId: m.scope.agentId };
   const common = {
     id,
@@ -395,23 +417,25 @@ function rebuilt(
     ...(m.author !== undefined && { author: { agentId: m.author.agentId } }),
     tier: 'warm' as const,
     accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
-    validFrom,
-    validTo: keepValidTo,
-    expiredAt: ended ? expiredAt : null,
-    endReason: ended ? (x['endReason'] as Memory['endReason']) : null,
+    validFrom: iso(validFrom),
+    validTo: validTo === null ? null : iso(validTo),
+    expiredAt: expiredAt === null ? null : iso(expiredAt),
+    endReason: expiredAt === null ? null : (x['endReason'] as Memory['endReason']),
     lastConfirmedAt: null,
     supersedes: null,
     supersededBy: null,
     source: fileSource(x['source']),
-    createdAt,
-    updatedAt: updatedAt < createdAt ? createdAt : updatedAt,
+    createdAt: iso(created),
+    updatedAt: iso(updated),
   };
   if (type === 'judgment') {
+    // Ended in the file: only a person here may end a decision (re-review N1).
+    if (endedJudgment(x['judgment'])) return 'ended';
     let j: Judgment;
     try {
       j = importedJudgment(x['judgment'], origin(id));
     } catch {
-      return undefined;
+      return 'invalid';
     }
     // As recording one keeps it (judgment memories are the expert's, unbound to a project).
     const { projectId: _p, ...unbound } = scope;
@@ -427,7 +451,7 @@ function rebuilt(
       judgment: j,
     };
   }
-  if (x['judgment'] !== undefined) return undefined;
+  if (x['judgment'] !== undefined) return 'invalid';
   const entities = x['entities'];
   if (
     !isText(x['text'], LINE_LIMITS.text) ||
@@ -437,7 +461,7 @@ function rebuilt(
     entities.length > LINE_LIMITS.entities ||
     !entities.every((e) => isText(e, LINE_LIMITS.entity))
   ) {
-    return undefined;
+    return 'invalid';
   }
   return {
     ...common,
@@ -491,6 +515,18 @@ export async function importFileCommand(
       }
       throw e;
     }
+    // An export never repeats an id: which copy is real is unknowable, and the counts asked
+    // about would not match what is stored (re-review Info 1).
+    const seen = new Set<unknown>();
+    for (const m of memories) {
+      const id = (m as unknown as Record<string, unknown>)['id'];
+      if (seen.has(id)) {
+        throw new Refusal(
+          `${echo(file)} repeats the id ${shown(String(id).slice(0, 64))}, which an Oort export never does: nothing was imported.`,
+        );
+      }
+      seen.add(id);
+    }
     const planet = { node: planetNode({ orgId, customerId }), projectIds: 'all' as const };
     const grant = nodeGrant({
       principal: { orgId, customerId, agentId },
@@ -506,11 +542,13 @@ export async function importFileCommand(
     const links = new Map<string, { supersedes: unknown; supersededBy: unknown }>();
     let already = 0;
     let invalid = 0;
+    let ended = 0;
     for (const m of memories) {
       if (addressOf(m).level !== 'user') continue;
       const r = rebuilt(m, now, origin);
-      if (r === undefined) {
+      if (r === 'invalid' || r === 'ended') {
         invalid++;
+        if (r === 'ended') ended++;
         continue;
       }
       if ((await w.store.get(grant, r.id)) !== null) {
@@ -542,7 +580,10 @@ export async function importFileCommand(
         ['memories', String(memories.length)],
         ['already here', String(already)],
         ['outside a Planet', `${outside}${outside > 0 ? ' (left out)' : ''}`],
-        ['not valid', `${invalid}${invalid > 0 ? ' (left out)' : ''}`],
+        [
+          'not valid',
+          `${invalid}${invalid > 0 ? ` (left out${ended > 0 ? `; ${ended} ended ${ended === 1 ? 'decision is' : 'decisions are'} not imported` : ''})` : ''}`,
+        ],
       ]),
     );
     const result = (imported: number) => ({
@@ -552,6 +593,7 @@ export async function importFileCommand(
       skipped: already,
       outside,
       invalid,
+      ended,
       pinned,
       judgments,
     });
@@ -568,10 +610,11 @@ export async function importFileCommand(
       throw new Refusal(`Importing embeds each memory with this store's embedder. ${why}`);
     }
     const what = [
-      ...(pinned > 0 ? [`${pinned} pinned`] : []),
+      // Pinned memories are shown to the agent at every session start: the person sees that.
+      ...(pinned > 0 ? [`${pinned} pinned, shown at every session start`] : []),
       ...(judgments > 0
         ? [
-            `${judgments} ${judgments === 1 ? 'judgment' : 'judgments'}, counted only when judging includes imports`,
+            `${judgments} ${judgments === 1 ? 'judgment' : 'judgments'}, pinned and shown at every session start, counted only when judging includes imports`,
           ]
         : []),
     ];
