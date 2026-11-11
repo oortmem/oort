@@ -108,6 +108,7 @@ The TypeScript methods, in snake_case. `AsyncOort` has the same ones as `async d
 | `scoped(*, user=..., project=..., agent=None, judge_role=None)`                                                                                         | a new handle         |
 | `end_users.erase(user)` (cloud only, a server key)                                                                                                      | `EndUserErasure`     |
 | `end_users.count()` (cloud only, a server key)                                                                                                          | `EndUserCount`       |
+| `end_users.export(user)` (cloud only, a server key)                                                                                                     | `EndUserExport`      |
 | `close()`, `with Oort() as oort:`, `async with AsyncOort() as oort:`                                                                                    |                      |
 | `format_for_prompt(result, *, budget_chars=None)` (a function)                                                                                          | `str`                |
 
@@ -263,6 +264,57 @@ The behaviour is the TypeScript SDK's ([docs/sdk.md](sdk.md#per-user-memory-in-o
   `AsyncOort` has both as `async def`. Refusals: `end-user-limit` (the plan's end users are all
   taken), `end-user-erased` (a write lost the race with an erasure; not retried),
   `end-users-not-allowed` (not a server key), all `refused` and none retryable.
+
+### An end user's data requests
+
+When a person asks what you hold about them, for a copy, to correct it or to delete it, you
+answer from your server with the server key; the reasoning and the export's contents are in
+[An end user's data requests](sdk.md#an-end-users-data-requests).
+
+<!-- example: examples/python/cloud_data_requests.py -->
+
+```python
+import os
+import tempfile
+
+from oortmem import Oort
+
+# Answering an end user's data requests (GDPR access, portability, rectification, erasure) from
+# your server, with a server key in OORT_API_KEY. The person asks you; you answer with this.
+oort = Oort(mode="cloud", org="acme", project=None, project_config=False, key_sources=["env"])
+ada = oort.scoped(user="user-ada")
+ada.remember("I live in Oslo.")
+
+# Access and portability: every memory Oort holds for them, in every state, as one file in the
+# Oort export format. Hand it over as it is; `oort import <file>` reads it into any Oort.
+copy = oort.end_users.export("user-ada")
+path = os.path.join(tempfile.gettempdir(), "user-ada-memories.jsonl")
+with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+    f.write(copy.jsonl)
+print(f"exported {copy.memories} memories")
+
+# Rectification: save the corrected fact as them. Oort ends the wrong one (kept as history with
+# an end date, never rewritten), and recall answers with the correction.
+found = ada.recall("where do I live?").memories
+ada.remember("Correction: I live in Bergen, not Oslo.")
+# A wrong fact Oort did not end, or one they want gone even as history: forgetting deletes it.
+if found and ada.explain(found[0].id).memory.status == "current":
+    ada.forget(found[0].id)
+    print("forgot the wrong fact")
+
+# Erasure: everything of theirs at once. Their export is then empty, as for an id you never had.
+print(f"erased {oort.end_users.erase('user-ada').memories} memories")
+print(f"left {oort.end_users.export('user-ada').memories}")
+oort.close()
+```
+
+- `end_users.export(user)` returns `EndUserExport` (`exported`, `memories`, `jsonl`): `jsonl` is
+  every memory of that end user, in every state, in the [export format](export-format.md), and
+  `oort import <file>` reads it into a self-hosted Oort. An unknown or erased end user exports
+  empty (`memories == 0`), the same either way. `AsyncOort` has it as `async def`.
+- Rectification is a new `remember` on their handle: the wrong fact gets an end date and stays as
+  history, never rewritten. `forget(id)` deletes a memory outright, for a fact Oort did not end
+  or one they want gone even as history.
 
 ## asyncio
 

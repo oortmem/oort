@@ -71,7 +71,7 @@ class Recorder:
         key = f"{method} {path.split('?')[0]}"
         for k, v in self.answers.items():
             if k == key or (k.endswith("*") and key.startswith(k[:-1])):
-                return v
+                return v.pop(0) if isinstance(v, list) and len(v) > 1 else v[0] if isinstance(v, list) else v  # a list answers in turn
         return (404, envelope(error={"code": "usage", "message": "No such route.", "reason": "unknown-route"}))
 
 
@@ -1153,6 +1153,52 @@ class CloudEndUsers(unittest.TestCase):
                 ("POST", "/v1/observe", "u-123"),
                 ("GET", "/v1/end-users/count", None),
                 ("DELETE", "/v1/end-users/u-123", None),
+            ],
+        )
+
+    def test_the_documented_data_requests_example_runs(self) -> None:
+        import contextlib
+        import io
+        import runpy
+        import stat
+        import tempfile
+        from unittest import mock
+
+        wrong = {**{k: v for k, v in RECALL["memories"][0].items() if k not in ("score", "why", "someFutureField")}, "id": "a1b2c3d4", "text": "I live in Oslo.", "createdAt": "2026-11-01T00:00:00.000Z", "expiredAt": None, "endReason": None}
+        one = b'{"oort":"export","version":1,"exportedAt":"2026-11-11T12:00:00.000Z","memories":1,"scopes":[]}\n{"id":"a1b2c3d4","text":"I live in Oslo."}\n'
+        none = b'{"oort":"export","version":1,"exportedAt":"2026-11-11T12:00:00.000Z","memories":0,"scopes":[]}\n'
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
+        self.rec.answers["POST /v1/observe"] = OBSERVED
+        self.rec.answers["GET /v1/end-users/user-ada/export"] = [(200, one), (200, none)]
+        self.rec.answers["POST /v1/recall"] = (200, {"memories": [wrong], "timings": {}, "temporal": {"mode": "current", "inferred": True}, "degraded": []})
+        self.rec.answers["GET /v1/memories/a1b2c3d4"] = (200, wrong)
+        self.rec.answers["DELETE /v1/memories/a1b2c3d4"] = (200, {"forgotten": "a1b2c3d4"})
+        self.rec.answers["DELETE /v1/end-users/*"] = (200, {"erased": {"memories": 2, "coldCopies": 0, "turnRefs": 0, "cursors": 0}})
+        example = os.path.join(os.path.dirname(HERE), "..", "examples", "python", "cloud_data_requests.py")
+        tmp = tempfile.mkdtemp(dir=self.box.tmp)
+        env = {**self.box.env, "OORT_API_KEY": KEY, "OORT_CLOUD_URL": self.cloud.url, "TMPDIR": tmp}
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(tempfile, "tempdir", tmp), contextlib.redirect_stdout(out):
+            runpy.run_path(example, run_name="__main__")
+        self.assertEqual(out.getvalue().splitlines(), ["exported 1 memories", "forgot the wrong fact", "erased 2 memories", "left 0"])
+        written = os.path.join(tmp, "user-ada-memories.jsonl")
+        with open(written, "rb") as f:
+            self.assertEqual(f.read(), one)
+        if os.name == "posix":
+            self.assertEqual(stat.S_IMODE(os.stat(written).st_mode), 0o600)
+        self.assertEqual(
+            self.sent(),
+            [
+                ("GET", "/v1/whoami", None),
+                ("POST", "/v1/observe", "user-ada"),
+                ("GET", "/v1/end-users/user-ada/export", None),
+                ("POST", "/v1/recall", "user-ada"),
+                ("POST", "/v1/observe", "user-ada"),
+                ("GET", "/v1/memories/a1b2c3d4", "user-ada"),
+                ("GET", "/v1/memories/a1b2c3d4", "user-ada"),
+                ("DELETE", "/v1/memories/a1b2c3d4", "user-ada"),
+                ("DELETE", "/v1/end-users/user-ada", None),
+                ("GET", "/v1/end-users/user-ada/export", None),
             ],
         )
 
