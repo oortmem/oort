@@ -808,7 +808,7 @@ class OortEndUsers:
             raise OortInternalError(f"An internal error stopped this call ({type(e).__name__}).") from None
 
     def erase(self, user: str) -> EndUserErasure:
-        """Erase an end user completely: every memory stored for them, with its indexes and cold
+        """Erase an end user: every memory stored for them, with its indexes and cold
         copies. The account's own memory and every other end user are untouched; erasing one who
         has nothing is not an error. A write for them still in flight is refused
         (``end-user-erased``)."""

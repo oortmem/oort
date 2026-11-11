@@ -955,7 +955,7 @@ when whoami does not list the key's `end-users` capability.
 ```ts
 export interface OortEndUsers {
   /**
-   * Erases an end user completely: every memory stored for them, with its indexes and cold
+   * Erases an end user: every memory stored for them, with its indexes and cold
    * copies. The account's own memory and every other end user are untouched. Erasing one who
    * has nothing is not an error. A write for them still in flight is refused (`end-user-erased`).
    */

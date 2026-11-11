@@ -387,7 +387,7 @@ await oort.close();
 - **An end user's handle reads their Planet only**: `include` with `star`, `constellation` or
   `galaxy` is `refused` (`scope-denied`), and `forget(id, { everywhere: true })` is a usage error
   (`user-not-supported`).
-- **`endUsers.erase(user)`** erases one end user completely (every memory, its indexes and cold
+- **`endUsers.erase(user)`** erases one end user (every memory, its indexes and cold
   copies) and returns counts; erasing one with nothing is not an error. A write for them still in
   flight is refused (`end-user-erased`) and is not retried. **`endUsers.count()`** returns how
   many end users the account has and its plan's `limit` (Pro includes 100; a new one past it is
