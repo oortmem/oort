@@ -128,9 +128,15 @@ await oort.close();
 - A server key never acts as the account: its handle without `user` gets `user-missing`. Keep a
   normal key for the account's own memory.
 - `oort.endUsers.erase(id)` erases one end user completely (a deletion request) and returns
-  counts; `oort.endUsers.count()` returns `{ endUsers, limit }`. Both cloud only, from server
-  code, never from a handle scoped to an end user. Python: `oort.end_users.erase(id)` and
-  `oort.end_users.count()`.
+  counts; `oort.endUsers.count()` returns `{ endUsers, limit }`; `oort.endUsers.export(id)`
+  returns `{ exported, memories, jsonl }`, every memory of that end user in the Oort export
+  format (an access or portability request; an unknown or erased id exports empty, the same
+  either way). All three are cloud only, from server code, never from a handle scoped to an end
+  user. Python: `oort.end_users.erase(id)`, `oort.end_users.count()` and
+  `oort.end_users.export(id)`.
+- To correct a wrong fact (a rectification request), `remember` the correction on their handle:
+  the wrong one gets an end date and stays as history. `forget(id)` deletes a memory outright;
+  it does not end it. See docs/sdk.md, "An end user's data requests".
 - Refusals to handle: `end-user-limit` (the plan's end users are all taken; erase ones you no
   longer serve), `end-user-erased` (a write lost the race with an erasure; do not retry),
   `end-users-not-allowed` (not a server key).
