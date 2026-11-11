@@ -158,6 +158,7 @@ describe('cloud end users (CON-132)', () => {
       if (state === 'lapsed') {
         expect(await oort.endUsers.count()).toEqual({ endUsers: 1, limit: 100 });
       }
+      expect(await oort.endUsers.export('ada')).toMatchObject({ exported: 'ada', memories: 2 });
       expect(await oort.endUsers.erase('ada')).toMatchObject({ erased: 'ada', memories: 2 });
       expect(c.seen.filter((r) => r === 'GET /v1/whoami')).toEqual([]);
       // An end user's own memory calls still check whoami first, and so are refused.
@@ -296,14 +297,23 @@ describe('cloud end users (CON-132)', () => {
   });
 
   it('sdk.end-users-export-needs-a-server-key-and-a-readable-export', async () => {
-    // A key without the capability: refused before the route is called.
+    // A key without the capability: no whoami first; Oort Cloud refuses it (security review, L-b).
     const { oort, c } = await cloud();
     await expect(oort.endUsers.export('ada')).rejects.toMatchObject({
       code: 'refused',
-      reason: 'end-users-unsupported',
+      reason: 'end-users-not-allowed',
+      status: 403,
     });
-    expect(c.seen).toEqual(['GET /v1/whoami']);
+    expect(c.seen).toEqual(['GET /v1/end-users/ada/export']);
     await oort.close();
+    // An Oort Cloud from before per-user memory: its 404 is end-users-unsupported.
+    const { oort: old } = await cloud((c) => (c.endUsers.server = 'legacy'));
+    await expect(old.endUsers.export('ada')).rejects.toMatchObject({
+      reason: 'end-users-unsupported',
+      status: 404,
+      message: END_USERS_NOT_OFFERED,
+    });
+    await old.close();
     // The API's own refusal maps like erase's.
     const { oort: o2, c: c2 } = await cloud((c) => (c.endUsers.serverKey = true));
     c2.fail = { 'GET /v1/end-users/:id/export': { status: 403, code: 'end_users_not_allowed' } };
@@ -315,6 +325,53 @@ describe('cloud end users (CON-132)', () => {
     c2.fail = { 'GET /v1/end-users/:id/export': 'garbage' };
     await expect(o2.endUsers.export('ada')).rejects.toMatchObject({ code: 'internal' });
     await o2.close();
+  });
+
+  it('sdk.end-users-export-holds-only-that-end-users-memories-in-version-1', async () => {
+    // A server-side mix-up must never reach the person as their data (security review): a line
+    // of another end user, of the account, or a format this SDK does not check is refused.
+    const line = (customerId: string) =>
+      JSON.stringify({ id: 'm1', text: 't', scope: { orgId: 'acct:a1', customerId } });
+    const answers: Record<string, string> = {
+      ok: [{ oort: 'export', version: 1, memories: 1, scopes: [] }, null]
+        .map((h) => (h === null ? line('u:ada') : JSON.stringify(h)))
+        .join('\n'),
+      v2: [
+        JSON.stringify({ oort: 'export', version: 2, memories: 1, scopes: [] }),
+        line('u:ada'),
+      ].join('\n'),
+      bob: [
+        JSON.stringify({ oort: 'export', version: 1, memories: 1, scopes: [] }),
+        line('u:bob'),
+      ].join('\n'),
+      account: [
+        JSON.stringify({ oort: 'export', version: 1, memories: 1, scopes: [] }),
+        line('self'),
+      ].join('\n'),
+      noScope: [
+        JSON.stringify({ oort: 'export', version: 1, memories: 1, scopes: [] }),
+        JSON.stringify({ id: 'm1', text: 't' }),
+      ].join('\n'),
+    };
+    let answer = 'ok';
+    const c = fakeCloud(KEY);
+    c.endUsers.serverKey = true;
+    const fetch: typeof globalThis.fetch = async (input, init) =>
+      new URL(new Request(input, init).url).pathname.endsWith('/export')
+        ? new Response(`${answers[answer]}\n`, {
+            headers: { 'content-type': 'application/x-ndjson' },
+          })
+        : c.fetch(input, init);
+    const { oort } = await cloud(() => {}, { fetch }, c);
+    expect(await oort.endUsers.export('ada')).toMatchObject({ exported: 'ada', memories: 1 });
+    for (const bad of ['v2', 'bob', 'account', 'noScope']) {
+      answer = bad;
+      await expect(oort.endUsers.export('ada'), bad).rejects.toMatchObject({
+        name: 'OortInternalError',
+        code: 'internal',
+      });
+    }
+    await oort.close();
   });
 
   it('sdk.end-users-the-same-client-side-rules-as-local', async () => {

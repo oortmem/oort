@@ -366,9 +366,25 @@ export async function exportEndUser(ctx: Ctx, user: string): Promise<EndUserExpo
   } catch {
     head = undefined;
   }
-  const h = head as { oort?: unknown; memories?: unknown } | undefined;
-  if (h?.oort !== 'export' || h.memories !== lines.length - 1) {
+  const h = head as { oort?: unknown; version?: unknown; memories?: unknown } | undefined;
+  if (h?.oort !== 'export' || h.version !== 1 || h.memories !== lines.length - 1) {
     throw new OortInternalError('Oort Cloud sent an export this SDK cannot read.');
+  }
+  // Every line must be this end user's (a version 1 line's scope names its customer): a
+  // server-side mix-up must never reach the person as their data.
+  const customer = `u:${user}`;
+  for (const l of lines.slice(1)) {
+    let m: unknown;
+    try {
+      m = JSON.parse(l);
+    } catch {
+      m = undefined;
+    }
+    if ((m as { scope?: { customerId?: unknown } } | undefined)?.scope?.customerId !== customer) {
+      throw new OortInternalError(
+        "Oort Cloud sent an export with a memory that is not this end user's; nothing was returned.",
+      );
+    }
   }
   return { exported: user, memories: lines.length - 1, jsonl };
 }

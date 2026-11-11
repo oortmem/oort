@@ -878,7 +878,8 @@
         "expect": {
           "error": {
             "code": "refused",
-            "reason": "end-users-unsupported"
+            "reason": "end-users-not-allowed",
+            "status": 403
           }
         }
       },

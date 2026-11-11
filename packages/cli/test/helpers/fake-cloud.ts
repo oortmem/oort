@@ -406,8 +406,19 @@ export function fakeCloud(key: string): FakeCloud {
         if (bad !== null) return bad;
         const store = eu.users.get(id);
         if (store !== undefined) {
-          return store.fetch(`${url.origin}/v1/export`, {
-            headers: { authorization: `Bearer ${c.key}` },
+          // As Oort Cloud stores them: each line's scope names the end user (customer u:<id>).
+          const text = await (
+            await store.fetch(`${url.origin}/v1/export`, {
+              headers: { authorization: `Bearer ${c.key}` },
+            })
+          ).text();
+          const [head, ...lines] = text.split('\n').filter((l) => l !== '');
+          const owned = lines.map((l) => {
+            const m = JSON.parse(l) as { scope?: Record<string, unknown> };
+            return JSON.stringify({ ...m, scope: { ...m.scope, customerId: `u:${id}` } });
+          });
+          return new Response([head, ...owned].map((l) => `${l}\n`).join(''), {
+            headers: { 'content-type': 'application/x-ndjson' },
           });
         }
         return new Response(
