@@ -1207,6 +1207,7 @@ For a container sidecar, or a backend that is not you. The same protocol on TCP,
 | `oort consolidate` | Expires, re-tiers and evicts memories, every project and the global ones: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each node, and inside it each project and the global memories, is re-tiered on its own. The hooks also run it about daily (see `docs/claude-code.md`); a manual run counts as that day's. | |
 | `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. Withdrawn judgments are left out. | `--out <file>` (0600), `--force`, `--format 1\|2`, `--include-withdrawn` |
 | `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. On a terminal a progress line on stderr shows how far it is (see below). It exits 3 when some sessions stopped at a failed observation (the rest are imported; run it again to retry them), and 130 when Ctrl-C stopped it. | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
+| `oort import <file>` | Reads an Oort export (from `oort export`, `oort cloud export` or an end user's export from Oort Cloud) into the local store. It shows how many memories are new, then asks. Planet memories move to this machine's Planet with their project, dates, history, pin and tier; memories of a Star or a Constellation are left out and counted; ids already here are skipped, so running it twice is safe. Each memory is embedded again by this machine's embedder. Local mode only: in cloud mode, run `oort cloud use --local` first. | `--yes` |
 
 `oort recall` takes the SDK's recall options as flags. `--limit <n>` returns
 at most `n` memories, 1 to 50 (default `recall.returnK`, 10). `--speed fast`
@@ -1796,8 +1797,9 @@ the dashboard on oortcloud.dev shows them.
   question, `--dry-run` only shows it). It is resumable: if the network drops, run it again and it
   continues where it stopped. It is also safe to run twice: the cloud skips memories it already
   has. Embeddings of the same model and dimension are reused; others are made again in the cloud.
-- `oort cloud export` downloads every memory in your account, so you can always go back to local.
-  It works in every billing state, including after Pro lapses.
+- `oort cloud export` downloads every memory in your account, so you can always go back to local:
+  `oort cloud use --local`, then `oort import <file>`. It works in every billing state, including
+  after Pro lapses.
 - `oort cloud status` shows the store, the account and plan, the cloud's memory count and import
   progress.
 

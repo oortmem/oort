@@ -26,7 +26,7 @@ await oort.observe({ user: 'We deploy on Fridays now.', assistant: 'Noted.' });
 
 **Classes:** [`OortError`](#oortmem-oorterror), [`OortAmbiguousIdError`](#oortmem-oortambiguousiderror), [`OortCloudOnlyError`](#oortmem-oortcloudonlyerror), [`OortInternalError`](#oortmem-oortinternalerror), [`OortNeedsConfirmationError`](#oortmem-oortneedsconfirmationerror), [`OortNeedsKeyError`](#oortmem-oortneedskeyerror), [`OortNeedsLoginError`](#oortmem-oortneedsloginerror), [`OortNetworkError`](#oortmem-oortnetworkerror), [`OortNotFoundError`](#oortmem-oortnotfounderror), [`OortRefusedError`](#oortmem-oortrefusederror), [`OortUsageError`](#oortmem-oortusageerror)
 
-**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`EndUserCount`](#oortmem-endusercount), [`EndUserErasure`](#oortmem-endusererasure), [`OortEndUsers`](#oortmem-oortendusers), [`Oort`](#oortmem-oort)
+**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`EndUserCount`](#oortmem-endusercount), [`EndUserErasure`](#oortmem-endusererasure), [`EndUserExport`](#oortmem-enduserexport), [`OortEndUsers`](#oortmem-oortendusers), [`Oort`](#oortmem-oort)
 
 ### Functions
 
@@ -924,6 +924,26 @@ export interface EndUserErasure {
 }
 ```
 
+<a id="oortmem-enduserexport"></a>
+
+#### `EndUserExport`
+
+One end user's memories, exported (CON-137): what an access or portability request asks for.
+`jsonl` is the Oort export format (docs/export-format.md, version 1 from Oort Cloud): the
+manifest line, then one memory per line, in every tier and validity state, oldest first. Write
+it to a `.jsonl` file to hand over; `oort import <file>` reads it into a self-hosted store.
+
+```ts
+export interface EndUserExport {
+  /** The end user you exported. */
+  exported: string;
+  /** How many memories the export holds (0 for an end user who was erased or never had one). */
+  memories: number;
+  /** The export, JSON Lines: the manifest first, each line ending in a newline. */
+  jsonl: string;
+}
+```
+
 <a id="oortmem-oortendusers"></a>
 
 #### `OortEndUsers`
@@ -940,6 +960,13 @@ export interface OortEndUsers {
    * has nothing is not an error. A write for them still in flight is refused (`end-user-erased`).
    */
   erase(user: string): Promise<EndUserErasure>;
+  /**
+   * Exports an end user's memories (CON-137): every memory stored for them, in every tier and
+   * validity state, as Oort export JSON Lines. Nothing of the account's own memory or any other
+   * end user. Exporting one who was erased, or never had a memory, is not an error: the export is
+   * empty (`memories: 0`), the same either way.
+   */
+  export(user: string): Promise<EndUserExport>;
   /** How many end users the account has, and its plan's limit. */
   count(): Promise<EndUserCount>;
 }
@@ -982,7 +1009,8 @@ export interface Oort {
     signal?: AbortSignal;
   }): Promise<ConsolidateResult>;
   /**
-   * The account's end users (Oort Cloud with server keys, CON-132): erase one, or count them.
+   * The account's end users (Oort Cloud with server keys, CON-132): erase or export one, or count
+   * them.
    * Cloud mode only, on a handle that is not scoped to an end user.
    */
   readonly endUsers: OortEndUsers;

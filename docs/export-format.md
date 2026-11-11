@@ -112,6 +112,17 @@ account moves it to that account's Planet. `oort cloud import` uploads
 version 1, which Oort Cloud reads, and `oort cloud export` returns what Oort
 Cloud writes.
 
+Oort Cloud also writes version 1 for one end user of an account
+(`GET /v1/end-users/:id/export`, `oort.endUsers.export(id)` in the SDK): every
+memory of that end user, in every state, and nothing else. An end user who was
+erased, or never existed, gets the manifest alone with `memories: 0`.
+
+`oort import <file>` reads either version into the local store: Planet
+memories move to this machine's Planet with their project, history, pin and
+tier; memories of other levels are left out and counted; ids already in the
+store are skipped. The embeddings in the file are not reused: each memory is
+embedded again by the store's embedder.
+
 ## Limitations
 
 - **Scope.** In Phase 1, an export covers the current project (the git root
