@@ -820,7 +820,7 @@
   },
   {
     "id": "scope.cloud-user-needs-a-server-key",
-    "description": "Per-user memory in Oort Cloud needs a server key: without the end-users capability in whoami, nothing is sent for an end user (CON-132).",
+    "description": "Per-user memory in Oort Cloud needs a server key: without the end-users capability in whoami, nothing is sent for an end user (CON-132). The account's endUsers routes ask no whoami first (they stay open while Pro has lapsed or the account is blocked), and Oort Cloud refuses a key without the capability itself (403).",
     "transports": ["cloud"],
     "options": {
       "org": "acme"
@@ -865,7 +865,8 @@
         "expect": {
           "error": {
             "code": "refused",
-            "reason": "end-users-unsupported"
+            "reason": "end-users-not-allowed",
+            "status": 403
           }
         }
       },
@@ -890,7 +891,7 @@
   },
   {
     "id": "scope.cloud-user-on-an-older-cloud-writes-nothing",
-    "description": "An Oort Cloud from before CON-132 ignores Oort-User and would write the account's own Planet: the SDK checks whoami first and sends nothing.",
+    "description": "An Oort Cloud from before CON-132 ignores Oort-User and would write the account's own Planet: the SDK checks whoami first and sends nothing. Its 404 on the account's endUsers routes is the same refusal.",
     "transports": ["cloud"],
     "cloud": {
       "endUsers": "legacy"
