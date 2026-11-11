@@ -49,6 +49,7 @@ from .types import (
     ConsolidateResult,
     EndUserCount,
     EndUserErasure,
+    EndUserExport,
     Explanation,
     ForgetResult,
     JudgeResult,
@@ -597,7 +598,8 @@ class Oort:
 
     @property
     def end_users(self) -> "OortEndUsers":
-        """The account's end users in Oort Cloud (CON-132): ``erase(user)`` and ``count()``.
+        """The account's end users in Oort Cloud (CON-132): ``erase(user)``, ``export(user)``
+        (CON-137) and ``count()``.
         Cloud mode with a server key, on a handle not scoped to an end user."""
         return OortEndUsers(self)
 
@@ -814,6 +816,14 @@ class OortEndUsers:
         check_user(user, self._o._scope.org, given=True)
         return self._run(lambda c: from_wire(EndUserErasure, c.erase_end_user(user)))
 
+    def export(self, user: str) -> EndUserExport:
+        """Export an end user's memories (CON-137): every memory stored for them, in every tier
+        and validity state, as Oort export JSON Lines. Nothing of the account's own memory or any
+        other end user. Exporting one who was erased, or never had a memory, is not an error: the
+        export is empty (``memories == 0``), the same either way."""
+        check_user(user, self._o._scope.org, given=True)
+        return self._run(lambda c: from_wire(EndUserExport, c.export_end_user(user)))
+
     def count(self) -> EndUserCount:
         """How many end users the account has, and its plan's limit."""
         return self._run(lambda c: from_wire(EndUserCount, c.count_end_users()))
@@ -970,6 +980,9 @@ class AsyncOortEndUsers:
 
     async def erase(self, user: str) -> EndUserErasure:
         return await self._a._call(self._a._sync.end_users.erase, user)
+
+    async def export(self, user: str) -> EndUserExport:
+        return await self._a._call(self._a._sync.end_users.export, user)
 
     async def count(self) -> EndUserCount:
         return await self._a._call(self._a._sync.end_users.count)

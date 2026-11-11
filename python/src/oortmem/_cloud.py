@@ -189,9 +189,10 @@ class CloudClient:
                 raise end_users_unsupported()
             self._end_users = True
 
-    def call(self, method: str, route: str, body: Optional[Any] = None, user: Optional[str] = None) -> Any:
+    def call(self, method: str, route: str, body: Optional[Any] = None, user: Optional[str] = None, text: bool = False) -> Any:
         """One request. With ``user``, it names that end user (``Oort-User``), and only once the
-        key's capability is known."""
+        key's capability is known. With ``text``, the answer is returned as text (an export's
+        JSON Lines), not parsed as JSON."""
         if user is not None:
             self.require_end_users()
         headers = {
@@ -221,6 +222,11 @@ class CloudClient:
                 pass
             # A redirect is never followed: the key must not travel to another origin.
             raise cloud_error(r.status, code, msg, parse_retry_after(r.headers.get("retry-after")))
+        if text:
+            try:
+                return r.body.decode("utf-8")
+            except UnicodeDecodeError:
+                raise OortInternalError("An internal error stopped this call (UnicodeDecodeError).") from None
         if r.status == 204 or not r.body:
             return None
         try:
@@ -564,6 +570,22 @@ class CloudOps:
             "turnRefs": n(e.get("turnRefs")),
             "cursors": n(e.get("cursors")),
         }
+
+    def export_end_user(self, user: str) -> Dict[str, Any]:
+        """End user ``user``'s memories as export JSON Lines (CON-137), sent as the account. The
+        count is the manifest's, checked against the lines that follow it."""
+        self.c.require_end_users()
+        route = "/v1/end-users/" + urllib.parse.quote(user, safe="") + "/export"
+        jsonl = self.c.call("GET", route, text=True)
+        lines = [ln for ln in jsonl.split("\n") if ln.strip() != ""]
+        try:
+            head = json.loads(lines[0]) if lines else None
+        except ValueError:
+            head = None
+        n = head.get("memories") if isinstance(head, Mapping) else None
+        if not isinstance(head, Mapping) or head.get("oort") != "export" or isinstance(n, bool) or n != len(lines) - 1:
+            raise OortInternalError("Oort Cloud sent an export this SDK cannot read.")
+        return {"exported": user, "memories": len(lines) - 1, "jsonl": jsonl}
 
     def count_end_users(self) -> Dict[str, Any]:
         self.c.require_end_users()

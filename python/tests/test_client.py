@@ -978,6 +978,65 @@ class CloudEndUsers(unittest.TestCase):
             [("GET", "/v1/whoami", None), ("GET", "/v1/end-users/count", None), ("DELETE", "/v1/end-users/ada%3A1", None)],
         )
 
+    def test_export(self) -> None:
+        # CON-137: one end user's memories, as the account (no Oort-User), the body kept as text.
+        jsonl = (
+            json.dumps({"oort": "export", "version": 1, "memories": 2, "scopes": []}) + "\n"
+            + json.dumps({"id": "m1", "text": "Ada likes tea."}) + "\n"
+            + json.dumps({"id": "m2", "text": "Ada lives in Lund."}) + "\n"
+        )
+        empty = json.dumps({"oort": "export", "version": 1, "memories": 0, "scopes": []}) + "\n"
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
+        self.rec.answers["GET /v1/end-users/ada%3A1/export"] = (200, jsonl.encode())
+        self.rec.answers["GET /v1/end-users/*"] = (200, empty.encode())
+        o = self.oort()
+        e = o.end_users.export("ada:1")
+        self.assertEqual((e.exported, e.memories, e.jsonl), ("ada:1", 2, jsonl))
+        # Erased or never there: an empty export, not an error.
+        none = o.end_users.export("carol")
+        self.assertEqual((none.exported, none.memories, none.jsonl), ("carol", 0, empty))
+        self.assertEqual(
+            self.sent(),
+            [
+                ("GET", "/v1/whoami", None),
+                ("GET", "/v1/end-users/ada%3A1/export", None),
+                ("GET", "/v1/end-users/carol/export", None),
+            ],
+        )
+
+    def test_export_refuses_what_it_cannot_read_and_maps_refusals(self) -> None:
+        from oortmem import OortInternalError, OortRefusedError, OortUsageError
+
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
+        o = self.oort()
+        for body in (b"garbage\n", b'{"oort": "export", "memories": 3}\n{"id": "m1"}\n', b"", b'{"oort": "export", "memories": true}\n{}\n'):
+            self.rec.answers["GET /v1/end-users/*"] = (200, body)
+            with self.subTest(body=body):
+                with self.assertRaises(OortInternalError):
+                    o.end_users.export("ada")
+        self.rec.answers["GET /v1/end-users/*"] = (403, {"error": {"code": "end_users_not_allowed", "message": "m"}})
+        with self.assertRaises(OortRefusedError) as e:
+            o.end_users.export("ada")
+        self.assertEqual((e.exception.reason, e.exception.status), ("end-users-not-allowed", 403))
+        n = len(self.rec.seen)
+        for user, reason in (("self", "self-not-derivable"), ("", "user-missing"), (None, "user-missing"), ("alice\n", "bad-user"), ("Root", "bad-user")):
+            with self.assertRaises(OortUsageError) as e:
+                o.end_users.export(user)  # type: ignore[arg-type]
+            self.assertEqual(e.exception.reason, reason)
+        with self.assertRaises(OortUsageError) as e:
+            o.scoped(user="ada").end_users.export("ada")
+        self.assertEqual(e.exception.reason, "user-not-supported")
+        self.assertEqual(len(self.rec.seen), n)
+
+    def test_export_needs_a_server_key(self) -> None:
+        from oortmem import OortRefusedError
+
+        self.rec.answers["GET /v1/whoami"] = (200, {"account": "acct", "plan": "pro", "via": "key"})
+        with self.assertRaises(OortRefusedError) as e:
+            self.oort().end_users.export("ada")
+        self.assertEqual(e.exception.reason, "end-users-unsupported")
+        self.assertEqual(self.sent(), [("GET", "/v1/whoami", None)])
+
     def test_the_same_client_side_rules_as_local(self) -> None:
         from oortmem import Oort, OortCloudOnlyError, OortRefusedError, OortUsageError
 
@@ -1013,6 +1072,9 @@ class CloudEndUsers(unittest.TestCase):
         local = Oort(mode="local", env=self.box.env, cwd=self.box.tmp, org="acme")
         with self.assertRaises(OortCloudOnlyError) as e:
             local.end_users.count()
+        self.assertEqual(e.exception.reason, "end-users")
+        with self.assertRaises(OortCloudOnlyError) as e:
+            local.end_users.export("ada")
         self.assertEqual(e.exception.reason, "end-users")
 
     def test_a_user_handle_never_switches_users(self) -> None:
@@ -1103,15 +1165,18 @@ class CloudEndUsers(unittest.TestCase):
         self.rec.answers["POST /v1/observe"] = OBSERVED
         self.rec.answers["GET /v1/end-users/count"] = (200, {"endUsers": 1, "limit": 100})
         self.rec.answers["DELETE /v1/end-users/*"] = (200, {"erased": {"memories": 1, "coldCopies": 0, "turnRefs": 0, "cursors": 0}})
+        self.rec.answers["GET /v1/end-users/ada/export"] = (200, b'{"oort": "export", "version": 1, "memories": 0, "scopes": []}\n')
 
         async def run() -> Any:
             async with AsyncOort(mode="cloud", url=self.cloud.url, env={**self.box.env, "OORT_API_KEY": KEY}, cwd=self.box.tmp, org="acme") as o:
                 await o.scoped(user="ada").remember("Ada likes tea.")
-                return await o.end_users.count(), await o.end_users.erase("ada")
+                exported = await o.end_users.export("ada")
+                return await o.end_users.count(), await o.end_users.erase("ada"), exported
 
-        count, erased = asyncio.run(run())
+        count, erased, exported = asyncio.run(run())
         self.assertEqual((count.end_users, erased.erased, erased.memories), (1, "ada", 1))
-        self.assertEqual([u for _, _, u in self.sent()], [None, "ada", None, None])
+        self.assertEqual((exported.exported, exported.memories), ("ada", 0))
+        self.assertEqual([u for _, _, u in self.sent()], [None, "ada", None, None, None])
 
 
 @NEEDS_310
