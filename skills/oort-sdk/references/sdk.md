@@ -147,7 +147,9 @@ searchable vectors, then builds a binary index (1-bit codes, the best 10 × k re
 missed. `recall.adaptiveStop`: `rule` (default) leaves cold (archived) matches out, unread, when
 the top hot or warm memory holds every informative query word and no cold match comes close;
 `decide` asks the decision model instead (one TypeSafe call per `full` recall with cold matches);
-`off` always returns them. Python local mode reads both from `~/.oort/config.json`.
+`off` always returns them. A repository's `oort.config.json` cannot set either (nor
+`recall.sufficientAt`); `config` in code or the home config can. Python local mode reads them
+from `~/.oort/config.json`.
 
 <!-- example: examples/src/large-store.ts -->
 

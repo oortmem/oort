@@ -228,7 +228,10 @@ console.log(memories.map((m) => m.text).join('\n'));
   recall, see the table below; `recall.sufficientAt`, default 0.7); `off` always returns them. See
   [the CLI's description](cli.md#large-stores-the-binary-vector-index-090-or-newer).
 
-`store` set in a repository's `oort.config.json` is ignored: a home has one store.
+A repository's `oort.config.json` cannot set `store`, `recall.adaptiveStop` or
+`recall.sufficientAt` (they are ignored there, with a warning): a home has one store, and asking
+the decision model sends recalled text to its vendor. Your own code's `config`, or the home
+config, can.
 
 ## Judgments
 

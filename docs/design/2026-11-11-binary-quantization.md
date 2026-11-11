@@ -73,19 +73,24 @@ CREATE VIRTUAL TABLE memories_vec_bit USING vec0(
   memories are never dense candidates). Every write keeps it in step in the same transaction:
   `upsert`, `upsertMany`, `forget`, `coldPut(Many)`, `setTier` (a hydrated memory gets its code
   back) and `reembedSqliteStore`.
-- **Migration from version 4.** Additive. The open copies the store to `<path>.pre-v5.<UTC
-  time>` first (the same `backupDatabase` as earlier migrations: `VACUUM INTO`, fsync, reopened
-  and counted, renamed), then in one `IMMEDIATE` transaction adds the writer guard and, when
-  `store.vectorIndex` asks for it, builds the index from `memories_vec` in pages of rows.
-  `migrate: false` (the hooks) refuses a version 4 store with `StoreMigrationRequiredError` and
-  never builds or drops the index.
+- **Migration from version 4.** Additive. In one `IMMEDIATE` transaction the open adds the writer
+  guard and, when `store.vectorIndex` asks for it, builds the index from `memories_vec` in pages
+  of rows. Unlike the earlier migrations it takes no `pre-v5` copy: nothing is rewritten, the
+  downgrade to 4 loses nothing, and a full plaintext copy that `forget` never reaches and the
+  pruning keeps would cost more than it protects. `downgradeSqliteStore` still copies the store
+  first (`pre-downgrade`). `migrate: false` (the hooks) refuses a version 4 store with
+  `StoreMigrationRequiredError`, as for the version 4 upgrade: the hooks skip the turn with one
+  line until an `oort` command has migrated. An open with `migrate: false` never builds or drops
+  the index.
+- **Reembedding.** `reembedSqliteStore` looks for the index in each batch's transaction, so an
+  index another process builds during a long reembed gets the new model's vectors.
 - **Interrupted.** The build runs inside the migration's transaction. A process killed during it
   (tested with `SIGKILL` in a child process at the build's first line) leaves the version 4 store
   as it was; the next open migrates again.
 - **The writer guard.** Version 5 creates `BEFORE INSERT / UPDATE / DELETE` triggers on `memories`
   that call `oort_writer_v5()`, a function only 0.9.0 or newer defines on its connections. An Oort
-  that was already running before the upgrade (an MCP server, a daemon) can still read, but its
-  next write fails, changing nothing, instead of writing a memory the binary index would miss. As
+  that was already running before the upgrade (an MCP server, a daemon) can still read through
+  the connection it has, but its next write fails, changing nothing, instead of writing a memory the binary index would miss. As
   in the version 4 migration, `oort doctor` tells you to restart such processes.
 - **An older Oort opening the new store.** Every version refuses a schema newer than its own.
   Checked by hand: the 0.8.0 build (`main` at `d9b67e3`) opening a version 5 store fails with
@@ -178,6 +183,9 @@ memories, recall asks whether the live ones are enough:
   memory is live and holds all of them (coverage 1), and every cold candidate's coverage is at
   most the top's minus 0.3 (`CONFIDENT_COVERAGE_GAP`, the gap `lexicalIsConfident` uses). An exact
   lookup the live memories answer stops; anything less certain widens.
+- **Home config only.** `recall.adaptiveStop` and `recall.sufficientAt` are read from the home
+  config only (a repository's file is ignored for them, with a warning): `decide` sends recalled
+  text to the decision vendor and a low threshold hides cold matches, which is the person's call.
 - **`decide`.** A full recall asks `DecisionController.sufficient({ query, memories, cold })`:
   the reranked live memories' text and the cold candidates' stubs, never their text (it is not
   read yet). In `@oortmem/decide-jev` it is one Noul (`sufficient`), with each memory cut to 1 KB,

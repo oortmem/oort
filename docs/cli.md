@@ -1293,10 +1293,15 @@ and is safe to interrupt. Hooks never build or drop it. Only the home config is 
 a repository's `oort.config.json` cannot change it (the key is ignored there, with a warning).
 `oort doctor` shows which index the store searches.
 
-After an upgrade to 0.9.0 the store is at schema version 5: restart any Oort MCP server or daemon
-started before the upgrade. An older Oort can still read the store but its next write fails,
-changing nothing. To go back to 0.8 or older, see `downgradeSqliteStore` in
-[the store contract](store-contract.md#sqlite-schema-versions) (`to: 4`).
+**Upgrading to 0.9.0.** The first `oort` command (or MCP server, or daemon) after the upgrade
+moves the store to schema version 5. It only adds (no copy of the store is taken; going back
+loses nothing), and builds the binary index only when `store.vectorIndex` asks for it. Until then
+the hooks skip recall and saving for the turn, as after the upgrade to schema version 4, and print one line:
+"Oort is upgrading its store; run `oort doctor` once, then restart any Oort MCP server started
+before the upgrade". Do that: Oort 0.8 or older refuses to open a version 5 store, and a process
+that already had it open (an MCP server or daemon started before the upgrade) can keep reading,
+but its next write fails, changing nothing. To go back to 0.8 or older, see
+`downgradeSqliteStore` in [the store contract](store-contract.md#sqlite-schema-versions) (`to: 4`).
 
 **The adaptive stop (0.9.0 or newer).** Cold memories are archived: only their stubs are searched,
 and returning one reads it back from the cold store and makes it warm again (it is *hydrated*).
@@ -1320,6 +1325,11 @@ History, as-of and known-at recalls never stop early: the versions they look for
 ```json
 { "recall": { "adaptiveStop": "decide", "sufficientAt": 0.8 } }
 ```
+
+Only the home config (`~/.oort/config.json`) is read for these two keys: `decide` sends your
+recalled memories' text to the decision model, and a low `sufficientAt` hides cold matches, so a
+repository's `oort.config.json` cannot set them (they are ignored there, with a warning; the rest
+of its `recall` settings still apply).
 
 ### Time: recall modes
 

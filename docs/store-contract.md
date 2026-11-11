@@ -245,11 +245,13 @@ dense index beside the int8 vectors, and a guard that stops an older Oort from w
   `upsert`, `forget`, `coldPut`, `setTier` and `reembedSqliteStore`. A cold memory has no code.
 - **The writer guard.** Version 5 adds triggers on `memories` that call a function only Oort 0.9.0
   or newer defines, so an Oort that started before the upgrade (an MCP server, a daemon) fails on
-  its next write, changing nothing, instead of writing memories the binary index would not hold. It
-  can still read. Restart it after the upgrade.
-- **Migration.** Opening a version 4 store adds the guard in one transaction after a copy to
-  `<path>.pre-v5.<UTC time>` (`listBackups(path, 'pre-v5')`); nothing else is rewritten, and the
-  binary index follows the rules above. `migrate: false` refuses a version 4 store with
+  its next write, changing nothing, instead of writing memories the binary index would not hold. A
+  connection it already has can still read. Restart it after the upgrade.
+- **Migration.** Opening a version 4 store adds the guard in one transaction; nothing else is
+  rewritten, and the binary index follows the rules above. It takes no copy first, unlike the
+  earlier migrations: version 5 only adds (triggers and an index built from the int8 vectors) and
+  `downgradeSqliteStore({ to: 4 })` goes back without loss, so a plaintext copy of every memory,
+  which `forget` would never reach, is not worth keeping. `migrate: false` refuses a version 4 store with
   `StoreMigrationRequiredError` and never builds or drops the index. An Oort older than 0.9.0
   refuses a version 5 store without changing it, as every version refuses a newer schema.
   `sqliteVectorIndex(path)` says which index a store searches and how many vectors, read-only.
