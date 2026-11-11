@@ -15,6 +15,7 @@ import {
   scopeLabel,
   shapeLinks,
   short,
+  shown,
   when,
   withoutEmbedding,
   withWired,
@@ -117,7 +118,7 @@ export async function inspectCommand(
         ui.tier(m.tier),
         fixed(activation(m.accessLog, m.salience, now, w.config.activation)),
         age(m.validFrom, now),
-        clip(m.text, 60),
+        shown(clip(m.text, 60)),
       ]);
       const n = current.length;
       ctx.io.out(
@@ -150,10 +151,10 @@ export async function inspectCommand(
     ctx.io.out(ui.header('inspect', short(m.id), scopeLabel(w)));
     ctx.io.out(
       ui.kv([
-        ['id', m.id],
+        ['id', shown(m.id)],
         ['type', m.type],
         ['tier', `${ui.tier(m.tier)}${m.pinned ? ' (pinned)' : ''}`],
-        ['scope', JSON.stringify(m.scope)],
+        ['scope', shown(JSON.stringify(m.scope))],
         ['salience', fixed(m.salience)],
         ['activation', `${fixed(a)} (${m.accessLog.count} accesses)`],
         [
@@ -169,19 +170,21 @@ export async function inspectCommand(
         ['updated', when(m.updatedAt, now)],
         [
           'source',
-          `${m.source.harness}${m.source.sessionId !== undefined ? ` session ${m.source.sessionId}` : ''}${m.source.turnRef !== undefined ? ` turn ${m.source.turnRef}` : ''}`,
+          shown(
+            `${m.source.harness}${m.source.sessionId !== undefined ? ` session ${m.source.sessionId}` : ''}${m.source.turnRef !== undefined ? ` turn ${m.source.turnRef}` : ''}`,
+          ),
         ],
         ['embedding', m.embedding !== undefined ? `${m.embedding.length} dims` : 'none'],
-        ['stub', m.stub],
-        ['entities', m.entities.join(', ') || '-'],
+        ['stub', shown(m.stub)],
+        ['entities', shown(m.entities.join(', ')) || '-'],
       ]),
     );
-    ctx.io.out(`\n${m.text}\n\n${ui.bold('decisions')}\n`);
+    ctx.io.out(`\n${shown(m.text, { newlines: true })}\n\n${ui.bold('decisions')}\n`);
     ctx.io.out(
       ui.table(
         ['stage', 'question', 'answer', 'p'],
         (cloud !== undefined ? m : await shapeLinks(w.store, filter, m)).source.decisions.map(
-          (d) => [d.stage, d.question, d.answer, fixed(d.probability, 3)],
+          (d) => [shown(d.stage), shown(d.question), shown(d.answer), fixed(d.probability, 3)],
         ),
       ),
     );
@@ -191,11 +194,11 @@ export async function inspectCommand(
         ['', 'id', 'valid from', 'valid to', 'end', 'text'],
         chain.map((c) => [
           c.id === m.id ? '*' : '',
-          short(c.id),
+          shown(short(c.id)),
           when(c.validFrom, now, { short: true }),
           c.validTo === null ? 'open' : when(c.validTo, now, { short: true }),
           c.endReason ?? '-',
-          clip(c.text, 60),
+          shown(clip(c.text, 60)),
         ]),
       ),
     );

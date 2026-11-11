@@ -3,6 +3,7 @@ import {
   addressed,
   addressOf,
   assertAddress,
+  assertAuthor,
   authorOf,
   canonicalMemory,
   GALAXY_ROOT,
@@ -113,6 +114,30 @@ describe('addresses', () => {
     expect(canonicalMemory(m).address).toEqual(at.address);
     expect(canonicalMemory(m).author).toBeUndefined(); // scope.agentId already says cursor
     expect(canonicalMemory({ ...m, provenance: null })).not.toHaveProperty('provenance');
+  });
+});
+
+describe('address errors name a field safely (CON-137 security review, L-c)', () => {
+  // A field name comes from a file (an export line) and ends up in a message on a terminal.
+  const osc = '\u001b]8;;https://evil.example\u0007click\u001b]8;;\u0007';
+  it('quotes and escapes an unknown field name', () => {
+    expect(() => assertAddress({ level: 'user', orgId: 'o', customerId: 'c', [osc]: 1 })).toThrow(
+      `address: unknown field ${JSON.stringify(osc)}`,
+    );
+    expect(() => assertAuthor({ agentId: 'a', [osc]: 1 })).toThrow(
+      `author: unknown field ${JSON.stringify(osc)}`,
+    );
+    for (const f of [
+      () => assertAddress({ level: 'user', orgId: 'o', customerId: 'c', [osc]: 1 }),
+      () => assertAuthor({ agentId: 'a', [osc]: 1 }),
+    ]) {
+      try {
+        f();
+      } catch (e) {
+        expect((e as Error).message).not.toContain('\u001b');
+        expect((e as Error).message).not.toContain('\u0007');
+      }
+    }
   });
 });
 

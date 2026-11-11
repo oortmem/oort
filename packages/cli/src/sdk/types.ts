@@ -397,6 +397,21 @@ export interface EndUserErasure {
 }
 
 /**
+ * One end user's memories, exported (CON-137): what an access or portability request asks for.
+ * `jsonl` is the Oort export format (docs/export-format.md, version 1 from Oort Cloud): the
+ * manifest line, then one memory per line, in every tier and validity state, oldest first. Write
+ * it to a `.jsonl` file to hand over; `oort import <file>` reads it into a self-hosted store.
+ */
+export interface EndUserExport {
+  /** The end user you exported. */
+  exported: string;
+  /** How many memories the export holds (0 for an end user who was erased or never had one). */
+  memories: number;
+  /** The export, JSON Lines: the manifest first, each line ending in a newline. */
+  jsonl: string;
+}
+
+/**
  * The account's end users in Oort Cloud (CON-132): per-user memory a server key writes with
  * `scoped({ user })`. Requires Oort Cloud with server keys; refused with `end-users-unsupported`
  * when whoami does not list the key's `end-users` capability.
@@ -408,6 +423,13 @@ export interface OortEndUsers {
    * has nothing is not an error. A write for them still in flight is refused (`end-user-erased`).
    */
   erase(user: string): Promise<EndUserErasure>;
+  /**
+   * Exports an end user's memories (CON-137): every memory stored for them, in every tier and
+   * validity state, as Oort export JSON Lines. Nothing of the account's own memory or any other
+   * end user. Exporting one who was erased, or never had a memory, is not an error: the export is
+   * empty (`memories: 0`), the same either way.
+   */
+  export(user: string): Promise<EndUserExport>;
   /** How many end users the account has, and its plan's limit. */
   count(): Promise<EndUserCount>;
 }
@@ -434,7 +456,8 @@ export interface Oort {
   /** Local only. */
   consolidate(opts?: { budgetMs?: number; signal?: AbortSignal }): Promise<ConsolidateResult>;
   /**
-   * The account's end users (Oort Cloud with server keys, CON-132): erase one, or count them.
+   * The account's end users (Oort Cloud with server keys, CON-132): erase or export one, or count
+   * them.
    * Cloud mode only, on a handle that is not scoped to an end user.
    */
   readonly endUsers: OortEndUsers;

@@ -2,7 +2,7 @@ import { filterFor } from '@oortmem/claude-code';
 import { isStale, lastConfirmed, localGrant, type Memory } from '@oortmem/core';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
-import { age, clip, cloudOf, scopeLabel, short, withWired, type Ctx } from '../util.js';
+import { age, clip, cloudOf, scopeLabel, short, withWired, type Ctx, shown } from '../util.js';
 
 /** Pages of 100 read from the cloud API; the local store is read whole. */
 const CLOUD_PAGES = 20;
@@ -64,7 +64,7 @@ export async function revalidateCommand(opts: { json?: boolean }, ctx: Ctx): Pro
           short(m.id),
           m.type,
           `${age(lastConfirmed(m), now)} ago`,
-          clip(m.text, 80),
+          shown(clip(m.text, 80)),
         ]),
       ),
     );

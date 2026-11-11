@@ -261,6 +261,13 @@ class OortHandle implements Oort {
           guard(ctx);
           return cloud.eraseEndUser(ctx, user);
         }),
+      export: (user: string) =>
+        this.#run(async (ctx) => {
+          requireUserIfNamed({ user });
+          checkUser(user, this.#s.org);
+          guard(ctx);
+          return cloud.exportEndUser(ctx, user);
+        }),
       count: () =>
         this.#run(async (ctx) => {
           guard(ctx);

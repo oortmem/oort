@@ -190,9 +190,10 @@ class CloudClient:
                 raise end_users_unsupported()
             self._end_users = True
 
-    def call(self, method: str, route: str, body: Optional[Any] = None, user: Optional[str] = None) -> Any:
+    def call(self, method: str, route: str, body: Optional[Any] = None, user: Optional[str] = None, text: bool = False) -> Any:
         """One request. With ``user``, it names that end user (``Oort-User``), and only once the
-        key's capability is known."""
+        key's capability is known. With ``text``, the answer is returned as text (an export's
+        JSON Lines), not parsed as JSON."""
         if user is not None:
             self.require_end_users()
         headers = {
@@ -222,6 +223,11 @@ class CloudClient:
                 pass
             # A redirect is never followed: the key must not travel to another origin.
             raise cloud_error(r.status, code, msg, parse_retry_after(r.headers.get("retry-after")))
+        if text:
+            try:
+                return r.body.decode("utf-8")
+            except UnicodeDecodeError:
+                raise OortInternalError("An internal error stopped this call (UnicodeDecodeError).") from None
         if r.status == 204 or not r.body:
             return None
         try:
@@ -556,9 +562,9 @@ class CloudOps:
     # review, L-b). whoami is refused while Pro has lapsed or the account is blocked, yet Oort Cloud
     # keeps end-user erasure open then; it refuses a key that is not a server key itself (403
     # end_users_not_allowed), and an Oort Cloud without these routes answers 404.
-    def _end_user_route(self, method: str, route: str) -> Any:
+    def _end_user_route(self, method: str, route: str, text: bool = False) -> Any:
         try:
-            return self.c.call(method, route)
+            return self.c.call(method, route, text=text)
         except OortNotFoundError:
             raise end_users_not_offered() from None
 
@@ -576,6 +582,40 @@ class CloudOps:
             "turnRefs": n(e.get("turnRefs")),
             "cursors": n(e.get("cursors")),
         }
+
+    def export_end_user(self, user: str) -> Dict[str, Any]:
+        """End user ``user``'s memories as export JSON Lines (CON-137), sent as the account. The
+        count is the manifest's, checked against the lines that follow it."""
+        route = "/v1/end-users/" + urllib.parse.quote(user, safe="") + "/export"
+        jsonl = self._end_user_route("GET", route, text=True)
+        lines = [ln for ln in jsonl.split("\n") if ln.strip() != ""]
+        try:
+            head = json.loads(lines[0]) if lines else None
+        except ValueError:
+            head = None
+        n = head.get("memories") if isinstance(head, Mapping) else None
+        version = head.get("version") if isinstance(head, Mapping) else None
+        if (
+            not isinstance(head, Mapping)
+            or head.get("oort") != "export"
+            or isinstance(version, bool)
+            or version != 1
+            or isinstance(n, bool)
+            or n != len(lines) - 1
+        ):
+            raise OortInternalError("Oort Cloud sent an export this SDK cannot read.")
+        # Every line must be this end user's (a version 1 line's scope names its customer): a
+        # server-side mix-up must never reach the person as their data.
+        customer = "u:" + user
+        for ln in lines[1:]:
+            try:
+                m = json.loads(ln)
+            except ValueError:
+                m = None
+            scope = m.get("scope") if isinstance(m, Mapping) else None
+            if not isinstance(scope, Mapping) or scope.get("customerId") != customer:
+                raise OortInternalError("Oort Cloud sent an export with a memory that is not this end user's; nothing was returned.")
+        return {"exported": user, "memories": len(lines) - 1, "jsonl": jsonl}
 
     def count_end_users(self) -> Dict[str, Any]:
         r = self._end_user_route("GET", "/v1/end-users/count")

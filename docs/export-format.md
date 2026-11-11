@@ -112,6 +112,49 @@ account moves it to that account's Planet. `oort cloud import` uploads
 version 1, which Oort Cloud reads, and `oort cloud export` returns what Oort
 Cloud writes.
 
+Oort Cloud also writes version 1 for one end user of an account
+(`GET /v1/end-users/:id/export`, `oort.endUsers.export(id)` in the SDK): every
+memory of that end user, in every state, and nothing else. An end user who was
+erased, or never existed, gets the manifest alone with `memories: 0`.
+
+`oort import <file>` reads either version into the local store. Planet
+memories move to this machine's Planet; memories of other levels are left out
+and counted; ids already in the store are skipped. A file is not trusted, so
+each memory is rebuilt from its content alone:
+
+- **Kept:** `id`, `type`, `text`, `stub`, `entities`, `salience` (0 to 1),
+  `pinned`, the project and author, and `source` when it has the shape a
+  store writes (otherwise `{ "harness": "oort import", "decisions": [] }`).
+- **Reset, as for a new memory:** `tier` is `warm` (consolidation moves it
+  later), `accessLog` is empty, `lastConfirmedAt` is `null`, `provenance` is
+  dropped, and the embedding is computed again by this store's embedder.
+- **Times:** `createdAt`, `updatedAt` and `validFrom` are normalised to ISO
+  8601 and compared as times, not text; a time after now becomes now. An
+  unreadable time, or a year outside 0000 to 9999, makes the line not valid.
+- **Ends:** a `validTo` is kept, also one still ahead, so a fact planned to
+  end does so on time; it must come after `validFrom` (as the file gives it and
+  as moved back to now). An `expiredAt` ahead of now is dropped, since no record
+  was ended in the future; one that has passed must not be before `createdAt`
+  and needs a known `endReason`. Otherwise the line is not valid, even when it
+  is a start moved back to now that overtook the end: an ended fact never
+  arrives as a current one.
+- **Links:** `supersedes` and `supersededBy` are kept only when they name
+  another memory of the same file that is imported too.
+- **Judgments** are kept as recording one keeps them (pinned, so shown to the
+  agent at every session start, with their text, stub and entities rendered
+  from the decision). Each becomes an imported one (`via: "pack"` with the
+  file as its origin, normalised and redacted as a pack's, never
+  `confirmed`, with no `tombstone`). A judgment the file says was withdrawn
+  or purged is not imported: only a person here may end a decision. An
+  imported judgment that is no longer current is no evidence, so it never
+  keeps a decision out of a later import; only one withdrawn here does.
+
+A line that breaks these rules (an unknown type or tier, an id over 64
+characters, text over 64,000 characters, more than 64 entities, a judgment
+that does not check or has ended) is left out and counted as not valid. A
+file over 100 MB is refused before it is read, and one that repeats an id
+before anything is asked.
+
 ## Limitations
 
 - **Scope.** In Phase 1, an export covers the current project (the git root

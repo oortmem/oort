@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { setDefaultModelProvider, setTracingDisabled, type ModelRequest } from '@openai/agents';
 import { ScriptedModel, assistantMessage, modelResponder } from '@openai/agents/testing';
@@ -108,6 +111,41 @@ describe('SDK examples (run)', () => {
     expect(named.filter(([r]) => r === 'POST /v1/observe')).toEqual([
       ['POST /v1/observe', 'user-ada'],
     ]);
+  });
+
+  it('cloud-data-requests: access, portability, rectification and erasure (CON-137)', async () => {
+    h.cloud.endUsers.serverKey = true;
+    const file = path.join(os.tmpdir(), 'user-ada-memories.jsonl');
+    fs.rmSync(file, { force: true });
+    try {
+      const { out } = await runExample('cloud-data-requests.ts');
+      expect(out).toEqual([
+        'exported 1 memories',
+        // The fake cloud's writer never ends a fact, so the example forgets the wrong one.
+        'forgot the wrong fact',
+        'erased 1 memories',
+        'left 0',
+      ]);
+      // The file handed over: owner-only, the export format, the fact as it was then.
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+      const [head, ...lines] = fs.readFileSync(file, 'utf8').trimEnd().split('\n');
+      expect(JSON.parse(head!)).toMatchObject({ oort: 'export', memories: 1 });
+      expect(lines.join('\n')).toContain('Oslo');
+      // Export and erasure act as the account; every memory call named the end user.
+      const named = h.cloud.seen.map((r, i) => [r, h.cloud.endUsers.headers[i]] as const);
+      for (const [route, user] of named) {
+        expect([route, user]).toEqual([
+          route,
+          route.startsWith('GET /v1/whoami') || route.includes('/v1/end-users/')
+            ? null
+            : 'user-ada',
+        ]);
+      }
+      expect(named.filter(([r]) => r.startsWith('DELETE /v1/memories/'))).toHaveLength(1);
+      expect(h.cloud.endUsers.users.size).toBe(0);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
   });
 
   it('cloud-multi-user: an Oort Cloud without per-user memory sends nothing', async () => {

@@ -642,6 +642,11 @@ export interface CloudClient {
   endUsersCount(): Promise<CloudEndUserCount>;
   /** Erases end user `id` completely (a server key; open whatever the plan's state). */
   eraseEndUser(id: string): Promise<CloudEndUserErasure>;
+  /**
+   * End user `id`'s memories as export JSON Lines, the manifest first (CON-137; a server key; the
+   * same capability check). An erased or unknown end user's export is the manifest alone.
+   */
+  exportEndUser(id: string): Promise<string>;
 }
 
 export interface CloudClientOptions {
@@ -849,6 +854,10 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       // account is blocked, yet Oort Cloud keeps end-user erasure open then. It refuses a key that
       // is not a server key itself (403 end_users_not_allowed); an older one answers 404.
       endUsersCount: () => endUserRoute(accountJson('GET', '/v1/end-users/count')),
+      exportEndUser: (id) =>
+        endUserRoute(
+          timedCall('GET', `/v1/end-users/${encodeURIComponent(id)}/export`, undefined, undefined),
+        ).then((r) => r.res.text()),
       eraseEndUser: async (id) => {
         const r: unknown = await endUserRoute(
           accountJson<unknown>('DELETE', `/v1/end-users/${encodeURIComponent(id)}`),

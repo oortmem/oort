@@ -25,6 +25,7 @@ import {
   withWired,
   warn,
   type Ctx,
+  shown,
 } from '../util.js';
 import type { Wired } from '../wire.js';
 
@@ -157,7 +158,8 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
           agentLabel(w),
         ),
       );
-      if (block.length > 0) ctx.io.out(`${block}\n`);
+      // Memory text is a file's or a session's words: shown with its control characters escaped.
+      if (block.length > 0) ctx.io.out(`${shown(block, { newlines: true })}\n`);
       else if (recalled > 0)
         ctx.io.err(
           `oort: none of the ${recalled} recalled memories fit within ${budget} characters (${which}).\n`,

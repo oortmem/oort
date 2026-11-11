@@ -52,6 +52,7 @@ __all__ = [
     "ConsolidateResult",
     "Whoami",
     "EndUserErasure",
+    "EndUserExport",
     "EndUserCount",
     "Turn",
 ]
@@ -373,6 +374,19 @@ class EndUserErasure:
     cold_copies: int
     turn_refs: int
     cursors: int
+
+
+@dataclass(**_FROZEN)
+class EndUserExport:
+    """One end user's memories, exported (Oort Cloud, CON-137): what an access or portability
+    request asks for. ``jsonl`` is the Oort export format (docs/export-format.md, version 1 from
+    Oort Cloud): the manifest line, then one memory per line, in every tier and validity state.
+    Write it to a ``.jsonl`` file to hand over; ``oort import <file>`` reads it into a
+    self-hosted store."""
+
+    exported: str
+    memories: int
+    jsonl: str
 
 
 @dataclass(**_FROZEN)

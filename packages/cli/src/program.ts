@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { Argument, Command, CommanderError, Option } from 'commander';
 import { VERSION, resolveHome } from '@oortmem/core';
 import { connectCommand } from './commands/connect.js';
@@ -29,7 +31,7 @@ import { explainCommand } from './commands/explain.js';
 import { exportCommand } from './commands/export.js';
 import { forgetCommand } from './commands/forget.js';
 import { hookCommand } from './commands/hook.js';
-import { importCommand } from './commands/import.js';
+import { importCommand, importFileCommand } from './commands/import.js';
 import { initCommand } from './commands/init.js';
 import {
   judgeApplyCommand,
@@ -110,7 +112,7 @@ import {
   requestRefresh,
   updateCheckOff,
 } from './update-check.js';
-import { Refusal, commanderText, echo, safeJson, type Ctx } from './util.js';
+import { Refusal, commanderText, echo, safeJson, shown, type Ctx } from './util.js';
 import { wire as defaultWire, type WireFn } from './wire.js';
 
 export function program(ctx: Ctx, setCode: (code: number) => void): Command {
@@ -992,8 +994,8 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .action(run((o: { force?: boolean; yes?: boolean }) => reembedCommand(o, ctx)));
 
   p.command('import')
-    .description('import existing Claude Code transcripts (estimates first, then asks)')
-    .argument('<harness>', 'claude-code')
+    .description('import Claude Code transcripts, or an Oort export file (JSON Lines); asks first')
+    .argument('<source>', 'claude-code, or an export file (oort export, oort cloud export)')
     .option('--since <age>', 'only transcripts modified within this age: 12h, 30d, 2w')
     .option('--yes', 'do not ask before importing')
     .option('--estimate-only', 'print the estimate and stop')
@@ -1013,9 +1015,23 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
           },
         ) => {
           if (harness !== 'claude-code') {
-            throw new Refusal(`Unknown harness ${echo(harness)}; import supports claude-code.`, {
-              fix: 'oort import claude-code',
-            });
+            // An Oort export file (CON-137): any path that names a file.
+            const file = path.resolve(ctx.io.cwd, harness);
+            if (fs.existsSync(file) && fs.statSync(file).isFile()) {
+              const transcriptOnly = (
+                ['since', 'estimateOnly', 'includeUnresolved', 'projectsDir'] as const
+              ).filter((k) => o[k] !== undefined);
+              if (transcriptOnly.length > 0) {
+                throw new Refusal(
+                  `--${transcriptOnly[0]!.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} is for transcripts; an export file takes --yes and --json only.`,
+                );
+              }
+              return importFileCommand(harness, { yes: o.yes === true }, ctx);
+            }
+            throw new Refusal(
+              `Unknown source ${echo(harness)}: import reads claude-code transcripts or an Oort export file, and no file is at that path.`,
+              { fix: 'oort import claude-code' },
+            );
           }
           return importCommand(o, ctx);
         },
@@ -1157,7 +1173,9 @@ export async function runCli(
     const target = commandFor(p, args);
     const info = describeError(e, (flag) => rerunWith(p, target, args, flag));
     // Commander has printed its own line (with the usage hint).
-    if (!(e instanceof CommanderError)) io.err(`oort: ${info.message}\n`);
+    // Any message may quote input (a file's field, a server's words): never raw escapes (L-c).
+    if (!(e instanceof CommanderError))
+      io.err(`oort: ${shown(info.message, { newlines: true })}\n`);
     // --debug: the stack of every unexpected (exit 1) error.
     if (info.exitCode === 1 && args.includes('--debug') && e instanceof Error && e.stack) {
       io.err(`${e.stack}\n`);

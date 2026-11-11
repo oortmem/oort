@@ -15,8 +15,10 @@ import {
   JudgmentPackError,
   confirmJudgment,
   evaluateJudgments,
+  fileOrigin,
   formatJudgmentPack,
   importJudgmentPack,
+  importedJudgment,
   importJudgments,
   isActiveJudgment,
   judge,
@@ -295,6 +297,209 @@ describe('M2: tombstones', () => {
         await import('./judgment.js')
       ).activeJudgments(store, grant, { includeImported: true }, NOW),
     ).toEqual([]);
+  });
+
+  it('review.an-imported-record-leaves-no-tombstone-or-fingerprint', async () => {
+    // CON-137 review: a record that arrived in an export file or pack cannot speak for a person.
+    // Planted withdrawn records (one naming the real decision's tombstone, one an exact copy of
+    // it) must not keep the genuine decision out when its pack arrives later.
+    const from = createMemoryStore({ now: () => NOW });
+    const real = await recordJudgment(base({ ref: undefined }), { ...deps(from), via: 'cli' });
+    const pack = parseJudgmentPack(
+      formatJudgmentPack(await from.list(grant), { name: 'ada', exportedBy: 'x', exportedAt: NOW }),
+    );
+    const store = createMemoryStore({ now: () => NOW });
+    const other = await recordJudgment(base({ ref: undefined, subject: 'Another post' }), {
+      ...deps(store),
+      via: 'cli',
+    });
+    const origin = fileOrigin({
+      digest: 'f'.repeat(64),
+      name: 'planted.jsonl',
+      exportedAt: NOW.toISOString(),
+      originalId: 'p1',
+      now: NOW,
+    });
+    const withdrawn = { at: NOW.toISOString(), by: 'mallory' };
+    // As an imported record that is somehow ended: through importedJudgment (which drops
+    // `tombstone` and refuses an ended decision), then marked withdrawn by hand.
+    const planted = (m: Memory, id: string, extra: Record<string, unknown>): Memory => ({
+      ...m,
+      id,
+      judgment: { ...importedJudgment({ ...m.judgment!, ...extra }, origin), withdrawn },
+    });
+    await store.upsertMany(grant, [
+      planted(other.memory, 'planted-key', { tombstone: tombstoneKey(real.memory.judgment!) }),
+      planted(real.memory, 'planted-copy', {}),
+    ]);
+    expect((await store.get(grant, 'planted-key'))!.judgment).not.toHaveProperty('tombstone');
+    const r = await importJudgmentPack(pack, deps(store));
+    expect(r).toMatchObject({ tombstoned: [], skipped: [] });
+    expect(r.added).toHaveLength(1);
+  });
+
+  it('review.a-person-withdrawing-an-imported-decision-still-keeps-it-out', async () => {
+    // The other side: withdrawn here by a person, an imported decision stays out of later packs,
+    // also when one shifts decidedAt (the tombstone, not the exact fingerprint, catches that).
+    const from = createMemoryStore({ now: () => NOW });
+    await recordJudgment(base({ ref: undefined }), { ...deps(from), via: 'cli' });
+    const text = formatJudgmentPack(await from.list(grant), {
+      name: 'ada',
+      exportedBy: 'x',
+      exportedAt: NOW,
+    });
+    const store = createMemoryStore({ now: () => NOW });
+    const first = await importJudgmentPack(parseJudgmentPack(text), deps(store));
+    const kept = (await store.get(grant, first.added[0]!))!;
+    await withdrawJudgment(store, grant, kept, 'marcus', NOW);
+    const lines = text.trim().split('\n');
+    const man = JSON.parse(lines[0]!) as Record<string, string>;
+    const line = JSON.parse(lines[1]!) as { judgment: Record<string, unknown> };
+    line.judgment['decidedAt'] = '2026-10-01T00:00:01.000Z';
+    const nl = JSON.stringify(line);
+    man['name'] = 'shifted';
+    man['digest'] = packDigest(
+      { name: man['name'], exportedAt: man['exportedAt']!, exportedBy: man['exportedBy']! },
+      [nl],
+    );
+    const r = await importJudgmentPack(
+      parseJudgmentPack(`${JSON.stringify(man)}\n${nl}\n`),
+      deps(store),
+    );
+    expect(r.added).toEqual([]);
+    expect(r.tombstoned).toHaveLength(1);
+  });
+
+  it('review.an-inactive-imported-judgment-leaves-no-fingerprint', async () => {
+    // Re-review M2: an imported copy that is not active (ended in valid or transaction time, or
+    // not yet valid) is no evidence the decision is here, so it never keeps the pack out.
+    const from = createMemoryStore({ now: () => NOW });
+    const real = await recordJudgment(base({ ref: undefined }), { ...deps(from), via: 'cli' });
+    const text = formatJudgmentPack(await from.list(grant), {
+      name: 'ada',
+      exportedBy: 'x',
+      exportedAt: NOW,
+    });
+    const origin = fileOrigin({
+      digest: 'c'.repeat(64),
+      name: 'copy.jsonl',
+      exportedAt: NOW.toISOString(),
+      originalId: 'c1',
+      now: NOW,
+    });
+    const PAST = '2026-01-01T00:00:00.000Z';
+    const variants: Record<string, Partial<Memory>> = {
+      'past-validTo': { validTo: '2026-01-02T00:00:00.000Z' },
+      'future-validFrom': { validFrom: '2999-01-01T00:00:00.000Z' },
+      superseded: { expiredAt: PAST, endReason: 'superseded' },
+      expired: { expiredAt: PAST, endReason: 'expired' },
+    };
+    for (const [name, over] of Object.entries(variants)) {
+      const store = createMemoryStore({ now: () => NOW });
+      await store.upsert(grant, {
+        ...real.memory,
+        id: `copy-${name}`,
+        judgment: importedJudgment(real.memory.judgment!, origin),
+        ...over,
+      });
+      expect(isActiveJudgment((await store.get(grant, `copy-${name}`))!, NOW), name).toBe(false);
+      const r = await importJudgmentPack(parseJudgmentPack(text), deps(store));
+      expect(r, name).toMatchObject({ tombstoned: [], skipped: [] });
+      expect(r.added, name).toHaveLength(1);
+    }
+  });
+
+  it('review.a-judgment-from-a-file-that-ended-is-refused', () => {
+    // Re-review N1: a decision that arrives withdrawn or purged would be stored open and pinned,
+    // so SessionStart and recall would show it. A file's ended decision is not imported at all.
+    const origin = fileOrigin({
+      digest: 'd'.repeat(64),
+      name: 'ended.jsonl',
+      exportedAt: NOW.toISOString(),
+      originalId: 'e1',
+      now: NOW,
+    });
+    const raw = {
+      ...base(),
+      subject: { summary: 'S' },
+      verdicts: ['approved', 'rejected'],
+      verdict: 'rejected',
+      criteria: [],
+    };
+    const mark = { at: NOW.toISOString(), by: 'someone' };
+    for (const ended of [
+      { withdrawn: mark },
+      { purged: mark },
+      { withdrawn: mark, purged: mark },
+      { withdrawn: 'yes' },
+      { purged: {} },
+    ]) {
+      expect(() => importedJudgment({ ...raw, ...ended }, origin), JSON.stringify(ended)).toThrow(
+        /ended decision/,
+      );
+    }
+    // Absent or null is not ended.
+    expect(importedJudgment({ ...raw, withdrawn: null, purged: null }, origin)).not.toHaveProperty(
+      'withdrawn',
+    );
+  });
+
+  it('review.pack-times-are-stored-as-iso', () => {
+    // Re-review info: Date.parse accepts words, so a checked time is stored normalised.
+    for (const [given, want] of [
+      ['2026-11-01T00:00:00Z', '2026-11-01T00:00:00.000Z'],
+      ['Verified by Oort 2026', new Date('Verified by Oort 2026').toISOString()],
+    ] as const) {
+      const o = fileOrigin({
+        digest: 'e'.repeat(64),
+        name: 'f.jsonl',
+        exportedAt: given,
+        originalId: 'x',
+        now: NOW,
+      });
+      expect(o.exportedAt).toBe(want);
+    }
+  });
+
+  it('review.a-judgment-from-a-file-is-normalised-redacted-and-imported', () => {
+    const key = 'AKIA' + 'IOSFODNN7' + 'EXAMPLE';
+    const origin = fileOrigin({
+      digest: 'a'.repeat(64),
+      name: 'evil\u001b[2J.jsonl',
+      exportedAt: 'not a time\u0007',
+      originalId: 'j1',
+      now: NOW,
+    });
+    // An unsafe name or time falls back: a constant name, and now.
+    expect(origin).toEqual({
+      id: 'a'.repeat(16),
+      name: 'export file',
+      exportedAt: NOW.toISOString(),
+      exportedBy: 'oort import',
+      originalId: 'j1',
+      importedAt: NOW.toISOString(),
+    });
+    const raw = {
+      subject: { summary: 'PR 12' },
+      verdict: 'approved',
+      verdicts: ['approved', 'rejected'],
+      reason: `Uses ${key} in the test.`,
+      criteria: ['tests', 'tests'],
+      domain: 'review',
+      by: 'marcus',
+      decidedAt: '2026-10-01T00:00:00.000Z',
+      via: 'cli',
+      confirmed: { at: NOW.toISOString(), by: 'marcus' },
+      tombstone: 'b'.repeat(64),
+      evil: 1,
+    };
+    const j = importedJudgment(raw, origin);
+    expect(j.via).toBe('pack');
+    expect(j.pack).toEqual(origin);
+    expect(j.reason).not.toContain(key);
+    expect(j.criteria).toEqual(['tests']);
+    for (const k of ['confirmed', 'tombstone', 'evil']) expect(j).not.toHaveProperty(k);
+    expect(() => importedJudgment({ ...raw, verdict: 'maybe' }, origin)).toThrow();
   });
 
   it('review.bulk-import-skips-tombstoned-decisions', async () => {

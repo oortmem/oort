@@ -71,7 +71,7 @@ class Recorder:
         key = f"{method} {path.split('?')[0]}"
         for k, v in self.answers.items():
             if k == key or (k.endswith("*") and key.startswith(k[:-1])):
-                return v
+                return v.pop(0) if isinstance(v, list) and len(v) > 1 else v[0] if isinstance(v, list) else v  # a list answers in turn
         return (404, envelope(error={"code": "usage", "message": "No such route.", "reason": "unknown-route"}))
 
 
@@ -1012,6 +1012,82 @@ class CloudEndUsers(unittest.TestCase):
             [("GET", "/v1/end-users/count", None), ("DELETE", "/v1/end-users/ada%3A1", None)],
         )
 
+    def test_export(self) -> None:
+        # CON-137: one end user's memories, as the account (no Oort-User), the body kept as text.
+        jsonl = (
+            json.dumps({"oort": "export", "version": 1, "memories": 2, "scopes": []}) + "\n"
+            + json.dumps({"id": "m1", "text": "Ada likes tea.", "scope": {"orgId": "acct:a1", "customerId": "u:ada:1"}}) + "\n"
+            + json.dumps({"id": "m2", "text": "Ada lives in Lund.", "scope": {"orgId": "acct:a1", "customerId": "u:ada:1"}}) + "\n"
+        )
+        empty = json.dumps({"oort": "export", "version": 1, "memories": 0, "scopes": []}) + "\n"
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
+        self.rec.answers["GET /v1/end-users/ada%3A1/export"] = (200, jsonl.encode())
+        self.rec.answers["GET /v1/end-users/*"] = (200, empty.encode())
+        o = self.oort()
+        e = o.end_users.export("ada:1")
+        self.assertEqual((e.exported, e.memories, e.jsonl), ("ada:1", 2, jsonl))
+        # Erased or never there: an empty export, not an error.
+        none = o.end_users.export("carol")
+        self.assertEqual((none.exported, none.memories, none.jsonl), ("carol", 0, empty))
+        self.assertEqual(
+            self.sent(),
+            [
+                ("GET", "/v1/end-users/ada%3A1/export", None),
+                ("GET", "/v1/end-users/carol/export", None),
+            ],
+        )
+
+    def test_export_refuses_what_it_cannot_read_and_maps_refusals(self) -> None:
+        from oortmem import OortInternalError, OortRefusedError, OortUsageError
+
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
+        o = self.oort()
+        head = b'{"oort": "export", "version": 1, "memories": 1, "scopes": []}\n'
+        line = lambda customer: json.dumps({"id": "m1", "text": "t", "scope": {"orgId": "acct:a1", "customerId": customer}}).encode() + b"\n"  # noqa: E731
+        for body in (
+            b"garbage\n",
+            b'{"oort": "export", "version": 1, "memories": 3}\n{"id": "m1"}\n',
+            b"",
+            b'{"oort": "export", "version": 1, "memories": true}\n{}\n',
+            # Hardening (security review): only version 1, and every line this end user's.
+            b'{"oort": "export", "version": 2, "memories": 1, "scopes": []}\n' + line("u:ada"),
+            head + line("u:bob"),
+            head + line("self"),
+            head + b'{"id": "m1", "text": "t"}\n',
+        ):
+            self.rec.answers["GET /v1/end-users/*"] = (200, body)
+            with self.subTest(body=body):
+                with self.assertRaises(OortInternalError):
+                    o.end_users.export("ada")
+        self.rec.answers["GET /v1/end-users/*"] = (403, {"error": {"code": "end_users_not_allowed", "message": "m"}})
+        with self.assertRaises(OortRefusedError) as e:
+            o.end_users.export("ada")
+        self.assertEqual((e.exception.reason, e.exception.status), ("end-users-not-allowed", 403))
+        n = len(self.rec.seen)
+        for user, reason in (("self", "self-not-derivable"), ("", "user-missing"), (None, "user-missing"), ("alice\n", "bad-user"), ("Root", "bad-user")):
+            with self.assertRaises(OortUsageError) as e:
+                o.end_users.export(user)  # type: ignore[arg-type]
+            self.assertEqual(e.exception.reason, reason)
+        with self.assertRaises(OortUsageError) as e:
+            o.scoped(user="ada").end_users.export("ada")
+        self.assertEqual(e.exception.reason, "user-not-supported")
+        self.assertEqual(len(self.rec.seen), n)
+
+    def test_export_asks_no_whoami_and_maps_an_older_cloud(self) -> None:
+        from oortmem import OortRefusedError
+        from oortmem.errors import END_USERS_NOT_OFFERED
+
+        # Open while Pro has lapsed or the account is blocked, when whoami is refused (L-b).
+        self.rec.answers["GET /v1/whoami"] = (403, {"error": {"code": "cloud_blocked", "message": "m"}})
+        self.rec.answers["GET /v1/end-users/ada/export"] = (200, b'{"oort": "export", "version": 1, "memories": 0, "scopes": []}\n')
+        o = self.oort()
+        self.assertEqual(o.end_users.export("ada").memories, 0)
+        self.assertEqual(self.sent(), [("GET", "/v1/end-users/ada/export", None)])
+        # An Oort Cloud without the route (the Recorder's 404).
+        with self.assertRaises(OortRefusedError) as e:
+            o.end_users.export("bob")
+        self.assertEqual((e.exception.reason, e.exception.status, e.exception.message), ("end-users-unsupported", 404, END_USERS_NOT_OFFERED))
+
     def test_erase_needs_what_was_erased_in_the_answer(self) -> None:
         # Re-review info: a 2xx without the `erased` object is no proof anything was erased.
         from oortmem import OortInternalError
@@ -1059,6 +1135,9 @@ class CloudEndUsers(unittest.TestCase):
         local = Oort(mode="local", env=self.box.env, cwd=self.box.tmp, org="acme")
         with self.assertRaises(OortCloudOnlyError) as e:
             local.end_users.count()
+        self.assertEqual(e.exception.reason, "end-users")
+        with self.assertRaises(OortCloudOnlyError) as e:
+            local.end_users.export("ada")
         self.assertEqual(e.exception.reason, "end-users")
 
     def test_a_user_handle_never_switches_users(self) -> None:
@@ -1140,6 +1219,52 @@ class CloudEndUsers(unittest.TestCase):
             ],
         )
 
+    def test_the_documented_data_requests_example_runs(self) -> None:
+        import contextlib
+        import io
+        import runpy
+        import stat
+        import tempfile
+        from unittest import mock
+
+        wrong = {**{k: v for k, v in RECALL["memories"][0].items() if k not in ("score", "why", "someFutureField")}, "id": "a1b2c3d4", "text": "I live in Oslo.", "createdAt": "2026-11-01T00:00:00.000Z", "expiredAt": None, "endReason": None}
+        one = b'{"oort":"export","version":1,"exportedAt":"2026-11-11T12:00:00.000Z","memories":1,"scopes":[]}\n{"id":"a1b2c3d4","text":"I live in Oslo.","scope":{"orgId":"acct:a1","customerId":"u:user-ada"}}\n'
+        none = b'{"oort":"export","version":1,"exportedAt":"2026-11-11T12:00:00.000Z","memories":0,"scopes":[]}\n'
+        self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
+        self.rec.answers["POST /v1/observe"] = OBSERVED
+        self.rec.answers["GET /v1/end-users/user-ada/export"] = [(200, one), (200, none)]
+        self.rec.answers["POST /v1/recall"] = (200, {"memories": [wrong], "timings": {}, "temporal": {"mode": "current", "inferred": True}, "degraded": []})
+        self.rec.answers["GET /v1/memories/a1b2c3d4"] = (200, wrong)
+        self.rec.answers["DELETE /v1/memories/a1b2c3d4"] = (200, {"forgotten": "a1b2c3d4"})
+        self.rec.answers["DELETE /v1/end-users/*"] = (200, {"erased": {"memories": 2, "coldCopies": 0, "turnRefs": 0, "cursors": 0}})
+        example = os.path.join(os.path.dirname(HERE), "..", "examples", "python", "cloud_data_requests.py")
+        tmp = tempfile.mkdtemp(dir=self.box.tmp)
+        env = {**self.box.env, "OORT_API_KEY": KEY, "OORT_CLOUD_URL": self.cloud.url, "TMPDIR": tmp}
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(tempfile, "tempdir", tmp), contextlib.redirect_stdout(out):
+            runpy.run_path(example, run_name="__main__")
+        self.assertEqual(out.getvalue().splitlines(), ["exported 1 memories", "forgot the wrong fact", "erased 2 memories", "left 0"])
+        written = os.path.join(tmp, "user-ada-memories.jsonl")
+        with open(written, "rb") as f:
+            self.assertEqual(f.read(), one)
+        if os.name == "posix":
+            self.assertEqual(stat.S_IMODE(os.stat(written).st_mode), 0o600)
+        self.assertEqual(
+            self.sent(),
+            [
+                ("GET", "/v1/whoami", None),
+                ("POST", "/v1/observe", "user-ada"),
+                ("GET", "/v1/end-users/user-ada/export", None),
+                ("POST", "/v1/recall", "user-ada"),
+                ("POST", "/v1/observe", "user-ada"),
+                ("GET", "/v1/memories/a1b2c3d4", "user-ada"),
+                ("GET", "/v1/memories/a1b2c3d4", "user-ada"),
+                ("DELETE", "/v1/memories/a1b2c3d4", "user-ada"),
+                ("DELETE", "/v1/end-users/user-ada", None),
+                ("GET", "/v1/end-users/user-ada/export", None),
+            ],
+        )
+
     def test_asyncio(self) -> None:
         import asyncio
 
@@ -1149,15 +1274,18 @@ class CloudEndUsers(unittest.TestCase):
         self.rec.answers["POST /v1/observe"] = OBSERVED
         self.rec.answers["GET /v1/end-users/count"] = (200, {"endUsers": 1, "limit": 100})
         self.rec.answers["DELETE /v1/end-users/*"] = (200, {"erased": {"memories": 1, "coldCopies": 0, "turnRefs": 0, "cursors": 0}})
+        self.rec.answers["GET /v1/end-users/ada/export"] = (200, b'{"oort": "export", "version": 1, "memories": 0, "scopes": []}\n')
 
         async def run() -> Any:
             async with AsyncOort(mode="cloud", url=self.cloud.url, env={**self.box.env, "OORT_API_KEY": KEY}, cwd=self.box.tmp, org="acme") as o:
                 await o.scoped(user="ada").remember("Ada likes tea.")
-                return await o.end_users.count(), await o.end_users.erase("ada")
+                exported = await o.end_users.export("ada")
+                return await o.end_users.count(), await o.end_users.erase("ada"), exported
 
-        count, erased = asyncio.run(run())
+        count, erased, exported = asyncio.run(run())
         self.assertEqual((count.end_users, erased.erased, erased.memories), (1, "ada", 1))
-        self.assertEqual([u for _, _, u in self.sent()], [None, "ada", None, None])
+        self.assertEqual((exported.exported, exported.memories), ("ada", 0))
+        self.assertEqual([u for _, _, u in self.sent()], [None, "ada", None, None, None])
 
 
 @NEEDS_310

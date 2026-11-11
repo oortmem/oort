@@ -81,6 +81,7 @@ usage error.
 | `scoped({ user?, project?, agent?, judgeRole? })` | a new handle                        | `project`, `agent` only in 0.7.0 (`user`: after it, a server key) |
 | `endUsers.erase(user)`                            | `EndUserErasure`                    | 0.8.0, a server key                                               |
 | `endUsers.count()`                                | `EndUserCount`                      | 0.8.0, a server key                                               |
+| `endUsers.export(user)`                           | `EndUserExport`                     | 0.8.0, a server key                                               |
 | `close()`, `[Symbol.asyncDispose]()`              | `void`                              |                                                                   |
 | `formatForPrompt(result, { budgetChars? })`       | `string` (a function, not a method) | both                                                              |
 
