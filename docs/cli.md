@@ -1270,6 +1270,57 @@ levels. In cloud mode a recall reads your Planet and, for accounts in the
 Constellations beta, the Constellations you belong to (see
 [Constellations](#constellations-oort-share)).
 
+### Large stores: the binary vector index (0.9.0 or newer)
+
+Dense recall compares the query with every hot and warm memory's int8 vector, so each query reads
+all of them: 544 MB at a million memories of 512 dimensions. Past 100,000 memories Oort keeps a second index, a
+1-bit code per vector, so a query reads about a fifth as much (101 MB at a million). It takes the
+10 × k nearest codes (500 for the default 50 dense candidates) and rescores them with their int8
+vectors, so scores stay the same; a memory the codes rank outside those candidates can be missed.
+The index saves memory, not time: with everything cached, a query takes about as long. The
+measurements are in [the design note](design/2026-11-11-binary-quantization.md#9-measurements).
+
+```json
+{ "store": { "vectorIndex": "auto" } }
+```
+
+`store.vectorIndex` in `~/.oort/config.json`: `auto` (the default) builds the index the first time
+an `oort` command opens a store that holds 100,000 searchable vectors (`store.binaryAutoThreshold`
+changes the number) and keeps it from then on; `binary` builds it on the next `oort` command,
+whatever the size; `int8` never uses one and drops one already built. The build reads the stored
+vectors (no model or vendor is called), prints `Building the binary vector index (N vectors)…`,
+and is safe to interrupt. Hooks never build or drop it. Only the home config is read for `store`;
+a repository's `oort.config.json` cannot change it (the key is ignored there, with a warning).
+`oort doctor` shows which index the store searches.
+
+After an upgrade to 0.9.0 the store is at schema version 5: restart any Oort MCP server or daemon
+started before the upgrade. An older Oort can still read the store but its next write fails,
+changing nothing. To go back to 0.8 or older, see `downgradeSqliteStore` in
+[the store contract](store-contract.md#sqlite-schema-versions) (`to: 4`).
+
+**The adaptive stop (0.9.0 or newer).** Cold memories are archived: only their stubs are searched,
+and returning one reads it back from the cold store and makes it warm again (it is *hydrated*).
+When a recall finds cold matches beside hot and warm ones, it first asks whether the hot and warm
+memories already answer the query. If they do, the cold matches are left out and nothing is
+hydrated. `recall.adaptiveStop` picks who answers:
+
+- `rule` (the default): code, no model call. The hot and warm memories are enough when the query
+  has at least two informative words, the top memory is hot or warm and holds all of them, and
+  every cold match holds clearly fewer (at least 0.3 less of the query's words).
+- `decide`: a full recall (`--speed full`, the default) asks the decision model, one call per
+  recall that has cold matches beside hot and warm ones, and stops when its answer reaches
+  `recall.sufficientAt` (default 0.7). With `--speed fast` or `lexical`, or without a decision
+  model, the rule answers. A question that fails widens, as before, and the recall reports
+  `stop-failed` in `degraded`.
+- `off`: always widen into the cold matches, as before 0.9.0.
+
+History, as-of and known-at recalls never stop early: the versions they look for are often cold.
+`--json` reports it as `adaptiveStop` (`stopped`, `by`, `cold`, and the model's `probability`).
+
+```json
+{ "recall": { "adaptiveStop": "decide", "sufficientAt": 0.8 } }
+```
+
 ### Time: recall modes
 
 Every memory has a valid time (`validFrom` to `validTo`: when the fact held in the world) and a
@@ -2104,7 +2155,7 @@ Pro, with no key and a 3 second timeout.
 | `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, and the binary they run. Hooks that run the managed `~/.oort/cli` while you run a copy from `PATH` are fine: the `claude-code bin` row names both, each with its own version. A managed copy that is there but not safe to run (`managed copy`) is a fail, and its fix always removes and reinstalls it (`rm -r <prefix> && oort setup`, with `chmod go-w` on `OORT_HOME` after the `rm` when only `OORT_HOME` itself is too open): Oort never repairs a copy like this in place. | Missing, or a command that is not executable: `oort install claude-code`. Doctor never runs a hook's binary: versions come from the package's files. The managed copy (when it checks out and is safe) and the copy you ran are ok at this version or newer. Any other copy that stays put and is yours, such as your own build written with `--this-copy`, is an info line naming it ("the hooks run another copy at X (oort V)", try: `oort install claude-code` to use the managed copy, or keep it if you built it). A copy in a temp directory or package cache, or one someone else could change, is a fail. A hook binary that is older than the oort you run, or whose files do not say a version, is a warning naming both versions and the path: `oort update` (or `oort install claude-code` from the oort you want). When the oort you run lives somewhere temporary or under a Node version manager (the npx or pnpm dlx cache, a temp directory, `fnm_multishells`, `.nvm/`, `node-versions/`, `.volta/`, `.asdf/`), the fix never points the hooks at it: it names the managed copy instead, `~/.oort/cli/bin/oort install claude-code` (with `npm i -g --prefix ~/.oort/cli oortmem &&` first when there is none). Hooks that run a copy that does not stay put (under a version manager, in `fnm_multishells`, or in the npx or pnpm dlx cache) get an info line (`claude-code node`) naming the fix: with no managed copy, `oort setup, or npm i -g --prefix ~/.oort/cli oortmem and then oort install claude-code`; with one, `~/.oort/cli/bin/oort install claude-code`. Unparseable settings: fix the JSON, then the same fix. |
 | `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. Whether the hooks skip the daemon after a timeout or refusal, and until when. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
 | `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. Entries are judged against the binary `oort connect` would write now: the managed copy when it checks out, else the copy you ran. The binary an entry runs follows the hooks' rules, also for an entry that is exactly what `oort connect` writes: the managed or the running copy is ok, another copy of yours that stays put and is this version or newer (one written with `--this-copy`) is an info line naming it, and one in a temp directory or someone else's is a fail. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
-| `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
+| `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; the dense index it searches (`vector-index`, 0.9.0 or newer: `int8, exact` or `binary, 1-bit codes rescored in int8`, with the number of searchable vectors and the `store.vectorIndex` setting); `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
 | `updates` | From the [update check](#the-update-notice)'s file only (doctor makes no request for it): a newer release, or that this one is the latest. Shown to people only, never in `--json`, and not when the check is off. | A newer release (information): `oort update`. |
 

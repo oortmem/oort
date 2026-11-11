@@ -312,6 +312,11 @@ export interface OortConfigOverlay {
     experts?: string[];
     operator?: string;
   };
+  /** The local store's dense index (0.9.0 or newer): `auto`, `int8` or `binary`. */
+  store?: {
+    vectorIndex?: 'auto' | 'int8' | 'binary';
+    binaryAutoThreshold?: number;
+  };
 }
 ```
 

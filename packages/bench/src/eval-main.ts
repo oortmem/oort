@@ -30,10 +30,12 @@ import { seedStore } from './seed.js';
 const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>] [--k 5,10]
                  [--min-recall10 <0..1>] [--dimension <n>] [--dense] [--now <iso>]
                  [--abstain-threshold <n>] [--no-gate] [--json]
+                 [--vector-index auto|int8|binary] [--cold-share <0..1>] [--no-adaptive-stop]
        pnpm eval --demo [--json]    synthetic 1500-memory store + the bundled 23-row fixture
        pnpm eval --set multilingual [--embed none|fake|local[:model]|voyage[:model]]
                  [--rerank none|local[:model]|voyage[:model]] [--home <dir>]
                  [--lang en,ja,...] [--condition mono,cross,mixed] [--json] [--out <file>]
+                 [--vector-index auto|int8|binary]
 
 Runs recall for each row against a temp copy of the store (the live store is never written).`;
 
@@ -54,6 +56,9 @@ async function main(): Promise<number> {
       now: { type: 'string' },
       'abstain-threshold': { type: 'string' },
       'no-gate': { type: 'boolean', default: false },
+      'vector-index': { type: 'string' },
+      'cold-share': { type: 'string', default: '0' },
+      'no-adaptive-stop': { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
       demo: { type: 'boolean', default: false },
       set: { type: 'string' },
@@ -72,11 +77,19 @@ async function main(): Promise<number> {
   }
   if (values.set !== undefined) {
     if (values.set !== 'multilingual') throw new Error(`unknown --set "${values.set}"`);
+    const vi = values['vector-index'];
+    if (vi !== undefined && !['auto', 'int8', 'binary'].includes(vi))
+      throw new Error(`--vector-index must be auto, int8 or binary, got "${vi}"`);
     return multilingual(values);
   }
   const ks = values.k.split(',').map((s) => Number(s.trim()));
   if (ks.some((k) => !Number.isInteger(k) || k <= 0))
     throw new Error(`--k must be positive integers, got "${values.k}"`);
+  const vectorIndex = values['vector-index'];
+  if (vectorIndex !== undefined && !['auto', 'int8', 'binary'].includes(vectorIndex))
+    throw new Error(`--vector-index must be auto, int8 or binary, got "${vectorIndex}"`);
+  const coldShare = Number(values['cold-share']);
+  if (!(coldShare >= 0 && coldShare <= 1)) throw new Error('--cold-share must be between 0 and 1');
   const minRecall10 = Number(values['min-recall10']);
   if (!(minRecall10 >= 0 && minRecall10 <= 1))
     throw new Error('--min-recall10 must be between 0 and 1');
@@ -130,6 +143,9 @@ async function main(): Promise<number> {
       ...(now !== undefined ? { now } : {}),
       ...(dense ? { embed: fakeEmbedder(dimension) } : {}),
       ...(values['no-gate'] && { gate: false }),
+      ...(vectorIndex !== undefined && { vectorIndex: vectorIndex as 'auto' | 'int8' | 'binary' }),
+      ...(coldShare > 0 && { coldShare }),
+      ...(values['no-adaptive-stop'] && { recall: { adaptiveStop: 'off' as const } }),
       ...(values['abstain-threshold'] !== undefined
         ? { abstainThreshold: Number(values['abstain-threshold']) }
         : {}),
@@ -163,6 +179,7 @@ function list<T extends string>(raw: string | undefined, allowed: readonly T[], 
  * `$OORT_HOME`) and never downloads; `voyage` needs `VOYAGE_API_KEY` and is run by hand.
  */
 async function multilingual(values: {
+  'vector-index'?: string | undefined;
   embed: string;
   rerank: string;
   home?: string | undefined;
@@ -200,6 +217,9 @@ async function multilingual(values: {
     conditions: list<Condition>(values.condition, CONDITIONS, 'condition'),
     ...(embed !== undefined && { embed }),
     ...(rerank !== undefined && { rerank }),
+    ...(values['vector-index'] !== undefined && {
+      vectorIndex: values['vector-index'] as 'auto' | 'int8' | 'binary',
+    }),
     log: (m) => process.stderr.write(`${m}\n`),
   });
   const json = `${JSON.stringify({ embed: values.embed, rerank: values.rerank, ...report }, null, 2)}\n`;

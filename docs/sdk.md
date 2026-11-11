@@ -187,6 +187,49 @@ createOort()` closes it for you.
 Anything over a limit throws `OortUsageError` before any I/O. The error names the field, never
 its value.
 
+### Large local stores (0.9.0 or newer)
+
+Two settings in `config` (or the home config) change how a local recall reads a large store. Both
+leave the results' shape and scores as they were.
+
+<!-- example: examples/src/large-store.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+// A large local store (0.9.0 or newer). `vectorIndex: 'binary'` searches a 1-bit code per memory
+// and rescores the best 10 × k with their int8 vectors; the default, `auto`, does so from 100,000
+// memories on. `adaptiveStop: 'rule'` (the default) leaves archived matches out, unread, when the
+// hot and warm memories already answer.
+await using oort = await createOort({
+  mode: 'local',
+  config: {
+    store: { vectorIndex: 'binary' },
+    recall: { adaptiveStop: 'rule' },
+  },
+});
+
+await oort.remember('The auth service listens on port 8080 in staging.');
+const { memories } = await oort.recall('which port does the auth service use?');
+console.log(memories.map((m) => m.text).join('\n'));
+```
+
+- **`store.vectorIndex`**: the dense index. `auto` scans the int8 vectors exactly until the store
+  holds 100,000 searchable vectors (`store.binaryAutoThreshold`), then builds a binary index (a
+  1-bit code per vector, 10 × k candidates rescored with their int8 vectors) when a handle that may
+  migrate opens it, and keeps it. `binary` builds it on the next open, `int8` drops it. A memory
+  the codes rank outside the candidates can be missed;
+  [the design note](design/2026-11-11-binary-quantization.md#9-measurements) has the measured
+  recall and memory.
+- **`recall.adaptiveStop`**: whether a recall that finds cold (archived) matches beside hot and
+  warm ones returns them, which reads each one back and makes it warm again. `rule` leaves them
+  out when the top hot or warm memory holds every informative word of the query and no cold match
+  comes close; `decide` asks the decision model instead on a `full` recall (one call per such
+  recall, see the table below; `recall.sufficientAt`, default 0.7); `off` always returns them. See
+  [the CLI's description](cli.md#large-stores-the-binary-vector-index-090-or-newer).
+
+`store` set in a repository's `oort.config.json` is ignored: a home has one store.
+
 ## Judgments
 
 The same judgment memory as `oort judge`: record an expert's decisions, then predict how they
@@ -553,7 +596,7 @@ your Oort account); `whoami().routes` says which applies to each role.
 
 | Call | Local, own keys or Oort Pro relay | Local models | Cloud mode |
 | --- | --- | --- | --- |
-| `recall` | A Voyage embed (skipped on a cache hit or a confident keyword answer) and a Voyage rerank (skipped when confident, or with `speed: 'fast'`). `speed: 'lexical'`: no model call | none | Metered Oort Cloud recall |
+| `recall` | A Voyage embed (skipped on a cache hit or a confident keyword answer) and a Voyage rerank (skipped when confident, or with `speed: 'fast'`). With `recall.adaptiveStop: 'decide'` (0.9.0 or newer), a TypeSafe call when a `full` recall finds cold matches beside hot and warm ones. `speed: 'lexical'`: no model call | none (`decide` still needs a key) | Metered Oort Cloud recall |
 | `observe` | A TypeSafe gate, always. If kept: one Anthropic writer call, one batched Voyage embed, and a TypeSafe reconcile per fact | Gate, writer and reconcile still need keys | Metered Oort Cloud observe |
 | `remember` | One observe per fact | as above | One metered observe per fact |
 | `judge.record` | One Voyage embed | none | `refused` |

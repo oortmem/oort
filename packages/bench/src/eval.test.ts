@@ -302,6 +302,34 @@ describe('eval', () => {
     }
   }, 60_000);
 
+  it('eval.binary-vector-index-and-the-adaptive-stop (CON-17)', async () => {
+    const dir = fs.mkdtempSync(path.join(root, 'binary-'));
+    const dbPath = path.join(dir, 'oort.sqlite');
+    const coldDir = path.join(dir, 'cold');
+    const store = await openSqliteStore({ path: dbPath, coldDir, dimension: 512, log: () => {} });
+    await seedStore(store, generateMemories(FIXTURE_COUNT, FIXTURE_SEED));
+    await store.close();
+    const { rows } = loadEvalRows(
+      fs.readFileSync(fileURLToPath(new URL('../eval/fixture.jsonl', import.meta.url)), 'utf8'),
+    );
+    const base = { rows, storePath: dbPath, coldDir, now: GENERATOR_NOW, embed: fakeEmbedder(512) };
+    const int8 = await runEval({ ...base, vectorIndex: 'int8' });
+    const binary = await runEval({ ...base, vectorIndex: 'binary' });
+    expect(int8.vectorIndex).toEqual({ index: 'int8', vectors: FIXTURE_COUNT });
+    expect(binary.vectorIndex).toEqual({ index: 'binary', vectors: FIXTURE_COUNT });
+    const r10 = (r: typeof int8) => r.groups['overall']?.recallAt[10] ?? 0;
+    expect(r10(binary)).toBeGreaterThanOrEqual(r10(int8) - 0.01);
+    // A third of the memories archived: the stop leaves cold matches out, and loses no recall.
+    const cold = { ...base, coldShare: 1 / 3 };
+    const widened = await runEval({ ...cold, recall: { adaptiveStop: 'off' } });
+    const stopped = await runEval(cold);
+    expect(widened.reads).toMatchObject({ asked: 0, stopped: 0 });
+    expect(widened.reads?.hydrated).toBeGreaterThan(0);
+    expect(stopped.reads?.stopped).toBeGreaterThan(0);
+    expect(stopped.reads?.hydrated).toBeLessThan(widened.reads?.hydrated ?? 0);
+    expect(r10(stopped)).toBeGreaterThanOrEqual(r10(widened));
+  }, 120_000);
+
   it('fixture.single-fact-questions-have-unique-answers', () => {
     const memories = generateMemories(FIXTURE_COUNT, FIXTURE_SEED);
     const rows = buildFixtureRows(memories).filter((r) => r.category === 'single-fact');

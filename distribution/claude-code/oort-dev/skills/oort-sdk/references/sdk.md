@@ -138,6 +138,39 @@ its value.
 | `remember`        | 5 facts of at most 500 characters                                |
 | `recent` `limit`  | 1 to 100                                                         |
 
+## Large local stores (0.9.0 or newer)
+
+Two config settings change how a local recall reads a large store; results keep their shape and
+scores. `store.vectorIndex`: `auto` (default) searches int8 vectors exactly until 100,000
+searchable vectors, then builds a binary index (1-bit codes, the best 10 × k rescored in int8);
+`binary` builds it now, `int8` drops it. A memory the codes rank outside the candidates can be
+missed. `recall.adaptiveStop`: `rule` (default) leaves cold (archived) matches out, unread, when
+the top hot or warm memory holds every informative query word and no cold match comes close;
+`decide` asks the decision model instead (one TypeSafe call per `full` recall with cold matches);
+`off` always returns them. Python local mode reads both from `~/.oort/config.json`.
+
+<!-- example: examples/src/large-store.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+// A large local store (0.9.0 or newer). `vectorIndex: 'binary'` searches a 1-bit code per memory
+// and rescores the best 10 × k with their int8 vectors; the default, `auto`, does so from 100,000
+// memories on. `adaptiveStop: 'rule'` (the default) leaves archived matches out, unread, when the
+// hot and warm memories already answer.
+await using oort = await createOort({
+  mode: 'local',
+  config: {
+    store: { vectorIndex: 'binary' },
+    recall: { adaptiveStop: 'rule' },
+  },
+});
+
+await oort.remember('The auth service listens on port 8080 in staging.');
+const { memories } = await oort.recall('which port does the auth service use?');
+console.log(memories.map((m) => m.text).join('\n'));
+```
+
 ## Stability
 
 Before 1.0, a breaking change to anything not marked `@experimental` lands only in a minor

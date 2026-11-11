@@ -11,6 +11,7 @@ private workspace package: never published.
 | [`cloud-multi-user.ts`](src/cloud-multi-user.ts)       | Per-user memory in Oort Cloud: a server key, `endUsers`    | typecheck, run (fake Oort Cloud)       |
 | [`cloud-data-requests.ts`](src/cloud-data-requests.ts) | An end user's data requests: export, correct, erase        | typecheck, run (fake Oort Cloud)       |
 | [`judgments.ts`](src/judgments.ts)                     | Judgments: record, confirm in the expert role, apply       | typecheck, run                         |
+| [`large-store.ts`](src/large-store.ts)                 | A large local store: the binary index, the adaptive stop   | typecheck, run                         |
 | [`errors.ts`](src/errors.ts)                           | Errors: `OortError.code`, `retryable`, `retryAfter`        | typecheck, run (fake Oort Cloud)       |
 | [`serverless.ts`](src/serverless.ts)                   | Serverless: cloud mode, a handler and `await using`        | typecheck, run (fake Oort Cloud)       |
 | [`ai-sdk.ts`](src/ai-sdk.ts)                           | Vercel AI SDK through `oortmem/ai-sdk`                     | typecheck, run (`MockLanguageModelV4`) |

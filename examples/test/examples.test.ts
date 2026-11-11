@@ -7,6 +7,7 @@ import { ScriptedModel, assistantMessage, modelResponder } from '@openai/agents/
 import { customProvider } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { sqliteVectorIndex } from '../../packages/store-sqlite/src/index.js';
 import { createOortWith } from '../../packages/cli/src/sdk/create.js';
 import { OortNotFoundError } from '../../packages/cli/src/sdk/errors.js';
 import type { Oort, OortOptions } from '../../packages/cli/src/sdk/types.js';
@@ -158,6 +159,15 @@ describe('SDK examples (run)', () => {
     expect(err).toEqual(['OortRefusedError', 'end-users-unsupported']);
     expect(h.cloud.seen).toEqual(['GET /v1/whoami']);
     expect(h.cloud.memories.size).toBe(0);
+  });
+
+  it('large-store: builds the binary index and recalls through it (0.9.0 or newer)', async () => {
+    const { out } = await runExample('large-store.ts');
+    expect(out).toEqual(['The auth service listens on port 8080 in staging.']);
+    expect(sqliteVectorIndex(path.join(h.home, 'oort.sqlite'))).toEqual({
+      index: 'binary',
+      vectors: 1,
+    });
   });
 
   it('judgments: records as an expert, confirms an agent record, applies', async () => {

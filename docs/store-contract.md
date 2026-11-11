@@ -224,6 +224,36 @@ nothing. Versions 1 and 2 go up to 4 in the same single transaction. An open tha
 index (N memories)…", and waits up to 60 seconds (`MIGRATION_BUSY_TIMEOUT_MS`) for another
 connection's write lock, whatever `busyTimeoutMs` is.
 
+Schema version 5 (the binary vector index, CON-17; Oort 0.9.0 or newer) adds a second, optional
+dense index beside the int8 vectors, and a guard that stops an older Oort from writing.
+
+- **The binary index.** `memories_vec_bit` is a sqlite-vec `vec0` table holding, for every hot and
+  warm memory with a vector, a 1-bit code of the vector (`bit[W]`, W the dimension rounded up to a
+  power of two: 512 for 512, 512 for 384, 1024 for 1024), partitioned by node with project and
+  author as filter columns like `memories_vec`, and the memory's int8 vector again as an auxiliary
+  column for rescoring. The code is the sign of each value after a fixed randomized Hadamard
+  rotation (the rotation RaBitQ uses), so Hamming distance estimates the angle between vectors. A
+  dense query takes the `10 × k` nearest codes by Hamming distance (at most 4096) and rescores them
+  with the exact int8 cosine. `dense` returns the same scores either way (the int8 cosine); with the
+  binary index, a memory the codes rank outside the `10 × k` candidates can be missed.
+- **When it exists.** `openSqliteStore({ vectorIndex })`: `auto` (the default) builds it when an
+  open that may migrate finds at least `binaryAutoThreshold` (100,000) searchable vectors and keeps
+  it from then on; `binary` builds it now; `int8` drops it. The build reads the int8 vectors (no
+  vendor is called, nothing else changes), prints "Building the binary vector index (N vectors)…"
+  and runs in one transaction, waiting up to 60 seconds for another connection's write lock. A
+  process killed during it leaves the store as it was. Every write after that keeps it in step:
+  `upsert`, `forget`, `coldPut`, `setTier` and `reembedSqliteStore`. A cold memory has no code.
+- **The writer guard.** Version 5 adds triggers on `memories` that call a function only Oort 0.9.0
+  or newer defines, so an Oort that started before the upgrade (an MCP server, a daemon) fails on
+  its next write, changing nothing, instead of writing memories the binary index would not hold. It
+  can still read. Restart it after the upgrade.
+- **Migration.** Opening a version 4 store adds the guard in one transaction after a copy to
+  `<path>.pre-v5.<UTC time>` (`listBackups(path, 'pre-v5')`); nothing else is rewritten, and the
+  binary index follows the rules above. `migrate: false` refuses a version 4 store with
+  `StoreMigrationRequiredError` and never builds or drops the index. An Oort older than 0.9.0
+  refuses a version 5 store without changing it, as every version refuses a newer schema.
+  `sqliteVectorIndex(path)` says which index a store searches and how many vectors, read-only.
+
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the
 vector table is rebuilt from the stored embeddings.
@@ -249,7 +279,8 @@ vector table is rebuilt from the stored embeddings.
 `downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x,
 `downgradeSqliteStore({ path, to: 2 })` to version 2 for Oort 0.3 to 0.5, and `{ path, to: 3 }` to
 version 3 for Oort before tokeniser v2 (the lexical index is rebuilt with tokeniser v1, as
-`memories_fts` again). Opening a store never goes down: migrations only roll forward. It first
+`memories_fts` again), and `{ path, to: 4 }` to version 4 for Oort 0.6 to 0.8 (the binary index
+and the writer guard are dropped; the int8 vectors were never moved). Opening a store never goes down: migrations only roll forward. It first
 copies the database to `<path>.pre-downgrade.<UTC time>` (the three newest are kept), and refuses
 while the store holds anything the target version cannot represent (for version 2, any judgment; for
 version 1, also any memory outside the Planet, an author with an account, or provenance). **Run it
