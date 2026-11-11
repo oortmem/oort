@@ -12,7 +12,7 @@ from __future__ import annotations
 import dataclasses
 import re
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .errors import OortUsageError
 from .types import Turn, camel
@@ -32,6 +32,42 @@ LIMITS = {
 #: A name (agent, user, org, project): one word, no spaces or control characters.
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$")
 AGENT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+#: An end user's id (CON-132; the same rule in TypeScript and Oort Cloud): 1 to 128 characters,
+#: a letter or digit first, then letters, digits and ``_ . : @ -``. Never trimmed or normalized.
+USER_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}")
+#: Ids that would read as someone other than an end user, compared without case.
+RESERVED_USER_IDS = ("self", "anonymous", "default", "local", "root", "count")
+_USER_MISSING = (
+    "user-missing",
+    "user was given but is empty: a missing end-user id never falls back to the operator. Leave the user key out to act as the person.",
+)
+_SELF = ("self-not-derivable", 'user cannot be "self": a handle for an end user never reaches the person\u2019s own memories.')
+_BAD_USER = (
+    "bad-user",
+    "user is not a valid end-user id: 1 to 128 letters, digits and _ . : @ -, starting with a letter or digit, and not self, anonymous, default, local, root or count.",
+)
+
+
+def user_id_problem(user: Any) -> Optional[Tuple[str, str]]:
+    """Why ``user`` is not an end-user id (``reason``, ``message``), or ``None`` when it is one."""
+    # Blank (empty or only whitespace) reads as a dropped id, never as a name.
+    if user is None or (isinstance(user, str) and user.strip() == ""):
+        return _USER_MISSING
+    if not isinstance(user, str) or not USER_ID.fullmatch(user):
+        return _BAD_USER
+    low = user.lower()
+    if low == "self":
+        return _SELF
+    if low in RESERVED_USER_IDS:
+        return _BAD_USER
+    return None
+
+
+def check_user_id(user: Any) -> None:
+    """Refuses anything but an end-user id, before any I/O."""
+    p = user_id_problem(user)
+    if p is not None:
+        raise OortUsageError(p[1], reason=p[0])
 _ID = re.compile(r"^[A-Za-z0-9_:.-]+$")
 LEVELS = ("self", "planet", "star", "constellation", "galaxy")
 
@@ -216,7 +252,7 @@ def check_type(t: Any) -> None:
 
 
 def check_id(i: Any) -> str:
-    if not (isinstance(i, str) and LIMITS["id_min_prefix"] <= js_len(i) <= LIMITS["id_max"] and _ID.match(i)):
+    if not (isinstance(i, str) and LIMITS["id_min_prefix"] <= js_len(i) <= LIMITS["id_max"] and _ID.fullmatch(i)):
         raise bad("id", ["id"])
     return i
 
@@ -232,12 +268,12 @@ def check_recent(since: Any, limit: Any) -> None:
 
 
 def check_name(what: str, v: Optional[str]) -> None:
-    if v is not None and not (isinstance(v, str) and NAME.match(v)):
+    if v is not None and not (isinstance(v, str) and NAME.fullmatch(v)):
         raise OortUsageError(f"{what} is not a valid id.", reason="invalid-argument")
 
 
 def check_agent(v: Optional[str], from_env: bool = False) -> None:
-    if v is not None and not (isinstance(v, str) and AGENT_ID.match(v) and v != "anonymous"):
+    if v is not None and not (isinstance(v, str) and AGENT_ID.fullmatch(v) and v != "anonymous"):
         label = "OORT_AGENT" if from_env else "agent"
         raise OortUsageError(
             f'{label} is not an agent id: lowercase letters, digits, ".", "_" or "-", starting with a letter or digit (not "anonymous").',
@@ -252,18 +288,7 @@ def check_user(user: Any, org: Optional[str], given: bool, org_required: bool = 
         check_name("org", org)
     if not given:
         return
-    if not isinstance(user, str) or user.strip() == "":
-        raise OortUsageError(
-            "user was given but is empty: a missing end-user id never falls back to the operator. Leave the user key out to act as the person.",
-            reason="user-missing",
-        )
-    if user == "self":
-        raise OortUsageError(
-            "user cannot be \"self\": a handle for an end user never reaches the person\u2019s own memories.",
-            reason="self-not-derivable",
-        )
-    if not NAME.match(user):
-        raise OortUsageError("user is not a valid id.", reason="invalid-argument")
+    check_user_id(user)
     # Remote mode: the service token decides the org (never `local`), so none is named here.
     if org_required and (org is None or org == "local"):
         raise OortUsageError(

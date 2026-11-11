@@ -46,6 +46,8 @@ const CLOUD_CODE: Record<CloudErrorKind, ErrorCode> = {
   'payment-required': 'refused',
   'not-enabled': 'refused',
   'hive-not-enabled': 'refused',
+  'end-user-limit': 'refused',
+  'end-users-unsupported': 'refused',
   'rate-limit': 'refused',
   'too-large': 'usage',
   'not-found': 'not-found',

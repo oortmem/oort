@@ -20,6 +20,8 @@ _CLIENT = {
     "AsyncOort": "_client",
     "OortJudge": "_client",
     "AsyncOortJudge": "_client",
+    "OortEndUsers": "_client",
+    "AsyncOortEndUsers": "_client",
     "format_for_prompt": "_format",
 }
 _ERRORS = (

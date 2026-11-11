@@ -259,9 +259,11 @@ describe('options are checked strictly (§4.1)', () => {
     await expect(
       createOort({ env: base.env, mode: 'cloud', keys: { voyage: fakeKey('pa') } }),
     ).rejects.toMatchObject({ code: 'usage', message: expect.stringContaining('keys.voyage') });
-    await expect(
-      createOort({ env: base.env, mode: 'cloud', user: 'u', org: 'acme' }),
-    ).rejects.toMatchObject({ code: 'usage' });
+    // Cloud mode takes user (CON-132) under the same rules: an explicit org, never `local`.
+    await expect(createOort({ env: base.env, mode: 'cloud', user: 'u' })).rejects.toMatchObject({
+      code: 'usage',
+      reason: 'principal-required',
+    });
     await expect(
       createOort({ ...base, mode: 'local', url: 'https://x.test' }),
     ).rejects.toMatchObject({ code: 'usage', message: expect.stringContaining('url') });
@@ -305,6 +307,27 @@ describe('toOortError (§5): every source maps to its code and reason', () => {
       'needs-confirmation',
       'findings-unacknowledged',
     ],
+    [new OortCloudError('end-user-limit', 402, 'x', 'end_user_limit'), 'refused', 'end-user-limit'],
+    [new OortCloudError('end-users-unsupported', 0), 'refused', 'end-users-unsupported'],
+    [
+      new OortCloudError('refused', 403, 'x', 'end_users_not_allowed'),
+      'refused',
+      'end-users-not-allowed',
+    ],
+    [new OortCloudError('bad-request', 400, 'x', 'user_missing'), 'usage', 'user-missing'],
+    [
+      new OortCloudError('bad-request', 400, 'x', 'self_not_derivable'),
+      'usage',
+      'self-not-derivable',
+    ],
+    [new OortCloudError('bad-request', 400, 'x', 'bad_user'), 'usage', 'bad-user'],
+    [new OortCloudError('bad-request', 400, 'x', 'star_with_user'), 'refused', 'star-with-user'],
+    [
+      new OortCloudError('bad-request', 400, 'x', 'user_not_supported'),
+      'usage',
+      'user-not-supported',
+    ],
+    [new OortCloudError('bad-request', 409, 'x', 'end_user_erased'), 'refused', 'end-user-erased'],
     [new OortCloudError('busy', 503), 'network', 'busy'],
     [new OortCloudError('network', 0), 'network', 'unreachable'],
     [new OortCloudError('network', 0, undefined, 'timeout'), 'network', 'timeout'],

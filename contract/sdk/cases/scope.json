@@ -554,7 +554,7 @@
   },
   {
     "id": "scope.user-needs-an-org",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "options": {
       "user": "u1"
     },
@@ -568,7 +568,7 @@
   },
   {
     "id": "scope.user-needs-an-org-other-than-local",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "options": {
       "user": "u1",
       "org": "local"
@@ -584,7 +584,7 @@
   {
     "id": "scope.a-dropped-user-id-never-falls-back",
     "description": "A user key that is present must hold an id; only a missing key acts as the person.",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "options": {
       "org": "acme"
     },
@@ -636,7 +636,7 @@
   },
   {
     "id": "scope.create-with-an-empty-user-is-user-missing",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "options": {
       "org": "acme",
       "user": null
@@ -651,7 +651,7 @@
   },
   {
     "id": "scope.self-is-never-derivable",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "options": {
       "org": "acme"
     },
@@ -682,8 +682,124 @@
     ]
   },
   {
+    "id": "scope.a-user-handle-never-switches-users",
+    "description": "A handle scoped to one end user refuses another user (user-hop); the same id, an agent or a project still derive. End-user ids follow one rule, never trimmed (contract/sdk/vectors/end-user-ids.json).",
+    "transports": ["local", "cloud"],
+    "options": {
+      "org": "acme"
+    },
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u1"
+        },
+        "as": "u1"
+      },
+      {
+        "call": "scoped",
+        "on": "u1",
+        "args": {
+          "user": "u2"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "user-hop"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "on": "u1",
+        "args": {
+          "user": "u1",
+          "agent": "bot"
+        },
+        "as": "u1bot"
+      },
+      {
+        "call": "scoped",
+        "on": "u1bot",
+        "args": {
+          "project": null
+        }
+      },
+      {
+        "call": "whoami",
+        "on": "u1bot",
+        "expect": {
+          "result": {
+            "user": "u1",
+            "agent": "bot"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "alice\n"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": " alice"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "COUNT"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "Self"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "self-not-derivable"
+          }
+        }
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "-x"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      }
+    ]
+  },
+  {
     "id": "scope.a-star-agent-with-a-user-is-refused",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "agents": {
       "cursor": {
         "star": true
@@ -703,18 +819,478 @@
     "steps": []
   },
   {
-    "id": "scope.user-is-local-only",
+    "id": "scope.cloud-user-needs-a-server-key",
+    "description": "Per-user memory in Oort Cloud needs a server key: without the end-users capability in whoami, nothing is sent for an end user (CON-132). The account's endUsers routes ask no whoami first (they stay open while Pro has lapsed or the account is blocked), and Oort Cloud refuses a key without the capability itself (403).",
     "transports": ["cloud"],
     "options": {
-      "user": "u1",
       "org": "acme"
     },
-    "expectCreate": {
-      "error": {
-        "code": "usage"
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u1"
+        },
+        "as": "u1"
+      },
+      {
+        "call": "remember",
+        "on": "u1",
+        "args": {
+          "facts": ["The garden of u1 is in Kyoto."]
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "end-users-unsupported",
+            "retryable": false
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u1",
+        "args": {
+          "query": "garden Kyoto"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "end-users-unsupported"
+          }
+        }
+      },
+      {
+        "call": "endUsers.count",
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "end-users-not-allowed",
+            "status": 403
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "garden Kyoto"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$none": {
+                "text": {
+                  "$regex": "Kyoto"
+                }
+              }
+            }
+          }
+        }
       }
+    ]
+  },
+  {
+    "id": "scope.cloud-user-on-an-older-cloud-writes-nothing",
+    "description": "An Oort Cloud from before CON-132 ignores Oort-User and would write the account's own Planet: the SDK checks whoami first and sends nothing. Its 404 on the account's endUsers routes is the same refusal.",
+    "transports": ["cloud"],
+    "cloud": {
+      "endUsers": "legacy"
     },
-    "steps": []
+    "options": {
+      "org": "acme"
+    },
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u1",
+          "agent": "bot"
+        },
+        "as": "u1"
+      },
+      {
+        "call": "remember",
+        "on": "u1",
+        "args": {
+          "facts": ["The garden of u1 is in Kyoto."]
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "end-users-unsupported"
+          }
+        }
+      },
+      {
+        "call": "observe",
+        "on": "u1",
+        "args": {
+          "user": "My garden is in Kyoto.",
+          "assistant": "Noted."
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "end-users-unsupported"
+          }
+        }
+      },
+      {
+        "call": "endUsers.erase",
+        "args": {
+          "user": "u1"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "end-users-unsupported"
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "garden Kyoto"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$none": {
+                "text": {
+                  "$regex": "Kyoto"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "recent",
+        "expect": {
+          "result": {
+            "memories": {
+              "$none": {
+                "text": {
+                  "$regex": "Kyoto"
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "scope.cloud-two-end-users-never-see-each-other",
+    "description": "A server key: each end user reads and writes their own Planet in the account (CON-132), the account's own memory is out of reach, and erasure removes one end user only.",
+    "transports": ["cloud"],
+    "cloud": {
+      "endUsers": "server-key"
+    },
+    "options": {
+      "org": "acme"
+    },
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u1",
+          "agent": "bot"
+        },
+        "as": "u1"
+      },
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u2",
+          "agent": "bot"
+        },
+        "as": "u2"
+      },
+      {
+        "call": "remember",
+        "on": "u1",
+        "args": {
+          "facts": ["The garden of u1 is in Kyoto."]
+        },
+        "save": {
+          "kyoto": "$.results[0].id"
+        }
+      },
+      {
+        "call": "remember",
+        "on": "u2",
+        "args": {
+          "facts": ["The garden of u2 is in Lund."]
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u2",
+        "args": {
+          "query": "garden Kyoto"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$none": {
+                "text": {
+                  "$regex": "Kyoto"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u1",
+        "args": {
+          "query": "garden Kyoto"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$some": {
+                "id": "${kyoto}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "explain",
+        "on": "u2",
+        "args": {
+          "id": "${kyoto}"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "recent",
+        "on": "u2",
+        "expect": {
+          "result": {
+            "memories": {
+              "$len": 1,
+              "$none": {
+                "text": {
+                  "$regex": "Kyoto"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "whoami",
+        "on": "u1",
+        "expect": {
+          "result": {
+            "mode": "cloud",
+            "user": "u1",
+            "agent": "bot",
+            "reads": ["Planet u1"],
+            "writesTo": "Planet u1"
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u1",
+        "args": {
+          "query": "garden",
+          "include": ["star"]
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "scope-denied"
+          }
+        }
+      },
+      {
+        "call": "forget",
+        "on": "u1",
+        "args": {
+          "id": "${kyoto}",
+          "everywhere": true
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "user-not-supported"
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "garden"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "user-missing",
+            "status": 400
+          }
+        }
+      },
+      {
+        "call": "endUsers.count",
+        "on": "u1",
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "user-not-supported"
+          }
+        }
+      },
+      {
+        "call": "endUsers.count",
+        "expect": {
+          "result": {
+            "endUsers": 2,
+            "limit": 100
+          }
+        }
+      },
+      {
+        "call": "endUsers.erase",
+        "args": {
+          "user": "self"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "self-not-derivable"
+          }
+        }
+      },
+      {
+        "call": "endUsers.erase",
+        "args": {
+          "user": ""
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "user-missing"
+          }
+        }
+      },
+      {
+        "call": "endUsers.erase",
+        "args": {
+          "user": "alice\n"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      },
+      {
+        "call": "endUsers.erase",
+        "args": {
+          "user": "Root"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      },
+      {
+        "call": "endUsers.erase",
+        "args": {
+          "user": "u1"
+        },
+        "expect": {
+          "result": {
+            "erased": "u1",
+            "memories": 1,
+            "coldCopies": 0,
+            "turnRefs": 0,
+            "cursors": 0
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u1",
+        "args": {
+          "query": "garden Kyoto"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$len": 0
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u2",
+        "args": {
+          "query": "garden Lund"
+        },
+        "expect": {
+          "result": {
+            "memories": {
+              "$len": 1
+            }
+          }
+        }
+      },
+      {
+        "call": "endUsers.count",
+        "expect": {
+          "result": {
+            "endUsers": 1,
+            "limit": 100
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "scope.end-users-is-cloud-only",
+    "description": "endUsers erases and counts Oort Cloud end users; a local store has none of its own.",
+    "transports": ["local"],
+    "options": {
+      "org": "acme"
+    },
+    "steps": [
+      {
+        "call": "endUsers.count",
+        "expect": {
+          "error": {
+            "code": "cloud-only",
+            "reason": "end-users"
+          }
+        }
+      },
+      {
+        "call": "endUsers.erase",
+        "args": {
+          "user": "u1"
+        },
+        "expect": {
+          "error": {
+            "code": "cloud-only",
+            "reason": "end-users"
+          }
+        }
+      }
+    ]
   },
   {
     "id": "scope.a-star-agent-cannot-write-in-the-cloud",

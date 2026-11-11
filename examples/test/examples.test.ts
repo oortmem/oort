@@ -96,6 +96,32 @@ describe('SDK examples (run)', () => {
     await oort.close();
   });
 
+  it('cloud-multi-user: a server key gives each end user their own Planet (CON-132)', async () => {
+    h.cloud.endUsers.serverKey = true;
+    const { out } = await runExample('cloud-multi-user.ts');
+    expect(out[0]).toMatch(/^<oort-memory>\n.*My order number is 1042\./);
+    expect(out.slice(1)).toEqual(['0', '1 of 100 end users', 'erased 1 memories']);
+    // Every memory request named its end user; the account's own Planet holds nothing.
+    expect(h.cloud.memories.size).toBe(0);
+    expect(h.cloud.endUsers.users.size).toBe(0);
+    const named = h.cloud.seen.map((r, i) => [r, h.cloud.endUsers.headers[i]]);
+    expect(named.filter(([r]) => r === 'POST /v1/observe')).toEqual([
+      ['POST /v1/observe', 'user-ada'],
+    ]);
+  });
+
+  it('cloud-multi-user: an Oort Cloud without per-user memory sends nothing', async () => {
+    h.cloud.endUsers.server = 'legacy';
+    const { out, err } = await runExample('cloud-multi-user.ts').catch((e: unknown) => ({
+      out: [],
+      err: [String((e as Error).name), String((e as { reason?: string }).reason)],
+    }));
+    expect(out).toEqual([]);
+    expect(err).toEqual(['OortRefusedError', 'end-users-unsupported']);
+    expect(h.cloud.seen).toEqual(['GET /v1/whoami']);
+    expect(h.cloud.memories.size).toBe(0);
+  });
+
   it('judgments: records as an expert, confirms an agent record, applies', async () => {
     const { out } = await runExample('judgments.ts');
     expect(out[0]).toBe('agent-recorded');

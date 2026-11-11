@@ -12,8 +12,10 @@ import { cloudRememberRequest } from '../remember.js';
 import { starInCloudMessage } from '../util.js';
 import { privacyStatement } from '../wire.js';
 import type { Ctx } from './context.js';
-import { OortRefusedError } from './errors.js';
+import { OortRefusedError, OortUsageError } from './errors.js';
 import type {
+  EndUserCount,
+  EndUserErasure,
   Explanation,
   ForgetResult,
   MemoryType,
@@ -34,11 +36,45 @@ import { clean, memoryView } from './views.js';
  * through the shared `runRecall` (local.ts), which already calls the cloud in cloud mode.
  */
 
-/** The Oort Cloud client (a handle in cloud mode always has one). */
+/**
+ * The Oort Cloud client this handle's memory calls use: for an end user, the one that sends
+ * `Oort-User` (and checks the key's capability first); else the account's.
+ */
 export function clientOf(ctx: Ctx): CloudClient {
+  const c = ctx.cloud ?? ctx.engine.cloud;
+  if (c === undefined) throw new Error('unreachable: cloud mode without a client');
+  return c;
+}
+
+/** The account's client: whoami and the end-user routes never name an end user. */
+function accountClient(ctx: Ctx): CloudClient {
   const c = ctx.engine.cloud;
   if (c === undefined) throw new Error('unreachable: cloud mode without a client');
   return c;
+}
+
+/**
+ * The client for end user `user` (CON-132), from the engine's: it shares the engine's connection
+ * and its once-per-key capability check.
+ */
+export function endUserClient(ctx: Pick<Ctx, 'engine'>, user: string): CloudClient {
+  const c = ctx.engine.cloud;
+  if (c === undefined) throw new Error('unreachable: cloud mode without a client');
+  return c.forEndUser(user);
+}
+
+/**
+ * An end user reads their Planet only (CON-132, as a local end-user handle): a Star, a
+ * Constellation or a Galaxy in `include` is refused before anything is sent.
+ */
+export function checkUserInclude(ctx: Ctx, include: readonly string[] | undefined): void {
+  if (ctx.user === null || include === undefined) return;
+  if (include.some((l) => l !== 'planet' && l !== 'self')) {
+    throw new OortRefusedError(
+      "This end user's handle reads only their Planet: leave star, constellation and galaxy out of include.",
+      { reason: 'scope-denied' },
+    );
+  }
 }
 
 /** Oort Cloud has no Stars yet: an agent whose home is its Star would write the shared Planet. */
@@ -150,6 +186,13 @@ export async function remember(
 export async function forget(ctx: Ctx, id: string, everywhere: boolean): Promise<ForgetResult> {
   refuseStar(ctx);
   const c = clientOf(ctx);
+  if (everywhere && ctx.user !== null) {
+    // Constellation copies are the account's: an end user has none (the API refuses it too).
+    throw new OortUsageError(
+      "forget({ everywhere }) withdraws the account's Constellation copies; an end user has none. Leave everywhere out.",
+      { reason: 'user-not-supported' },
+    );
+  }
   if (everywhere) {
     // As `oort forget --everywhere`: by full id, a memory already forgotten is still found through
     // the edges its shared copies left, and outside the hive beta this is refused before anything
@@ -272,7 +315,22 @@ export async function explain(ctx: Ctx, id: string): Promise<Explanation> {
 export async function whoami(ctx: Ctx): Promise<Whoami> {
   const a = ctx.principal.agent;
   const agent = a.source === 'none' ? undefined : a.id;
-  const me = await clientOf(ctx).whoami(agent);
+  const me = await accountClient(ctx).whoami(agent);
+  if (ctx.user !== null) {
+    // An end user's handle reads and writes their Planet alone, never the account's spaces.
+    const planet = `Planet ${ctx.user}`;
+    return {
+      mode: 'cloud',
+      account: me.account,
+      agent: agent ?? null,
+      project: ctx.principal.scope.projectId ?? null,
+      user: ctx.user,
+      reads: [planet],
+      writesTo: planet,
+      version: VERSION,
+      routes: { embed: 'cloud', rerank: 'cloud', decide: 'cloud', write: 'cloud' },
+    };
+  }
   return {
     mode: 'cloud',
     account: me.account,
@@ -286,6 +344,18 @@ export async function whoami(ctx: Ctx): Promise<Whoami> {
     version: VERSION,
     routes: { embed: 'cloud', rerank: 'cloud', decide: 'cloud', write: 'cloud' },
   };
+}
+
+/** Erases end user `user` (CON-132): the account's route, sent without `Oort-User`. */
+export async function eraseEndUser(ctx: Ctx, user: string): Promise<EndUserErasure> {
+  const r = await accountClient(ctx).eraseEndUser(user);
+  return { erased: user, ...r };
+}
+
+/** How many end users the account has, and its plan's limit (CON-132). */
+export async function countEndUsers(ctx: Ctx): Promise<EndUserCount> {
+  const r = await accountClient(ctx).endUsersCount();
+  return { endUsers: r.endUsers, limit: r.limit };
 }
 
 /** Judgments and consolidation live in the local engine only. */

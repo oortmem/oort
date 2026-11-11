@@ -44,6 +44,14 @@ await oort.close();
   their own Planet. The agent is still recorded as the author.
 - **`user` needs an explicit `org` other than `'local'`**, and `scoped({ user: 'self' })` is
   refused (`self-not-derivable`).
+- **An end user's id** is 1 to 128 characters: a letter or digit first, then letters, digits and
+  `_ . : @ -`. It is never trimmed or normalized, and `self`, `anonymous`, `default`, `local`,
+  `root` and `count` are reserved, in any case. Anything else is refused before any I/O:
+  `user-missing` for `undefined`, `null` or `''`, `self-not-derivable` for `self`, else
+  `bad-user`. Map your own ids to this (a hash works). Local mode and Oort Cloud use the same rule.
+- **A user handle never switches users.** `scoped({ user })` on a handle already scoped to
+  another end user is refused (`user-hop`); the same id, `agent`, `project` and `judgeRole` still
+  derive. Make each end user's handle from the handle you made the first one from.
 - **An end user gets their Planet only, never a Star.** An agent's Star is kept per org and
   agent, not per user, so it would leak between users. `include: ['star']` on a user handle is
   `refused`, and an agent configured as a Star together with `user` is refused (`star-with-user`).
@@ -57,12 +65,74 @@ await oort.close();
 - `agent` and `user` are configuration, not authentication. Every process running as the same OS
   user can open the same home. Authenticate your end users yourself, then map the verified id to
   `user`.
-- **Cloud mode** applies the Oort key's scope: one key is one account, so `user` is a usage error
-  there in 0.7.3. Multi-user apps run local mode today. An agent configured as a Star cannot write
-  in cloud mode (`star-in-cloud`).
+- **Cloud mode** applies the Oort key's scope: one key is one account. To serve many end users
+  from one account, use a server key and `scoped({ user })` (0.8.0 or newer): see "Per-user
+  memory in Oort Cloud" below. An agent configured as a Star cannot write in cloud mode
+  (`star-in-cloud`).
 - **Consolidation** runs per scope. The hooks consolidate only the person's own memories, so a
   multi-tenant host calls `consolidate({ budgetMs: 200 })` on each user's handle at the end of a
   session, or from a scheduled job. It calls no model.
 - A separate `home` per tenant gives physical separation (files, backups, deletion) when a
   contract needs it.
 - The CLI acts as the person: memories written for a `user` are invisible to `oort recall`.
+
+## Per-user memory in Oort Cloud
+
+> **Requires a server key on Oort Pro** and `oortmem` 0.8.0 or newer. Without per-user memory,
+> an end user's handle is refused with `end-users-unsupported` before anything is sent, and the
+> account's `endUsers` calls with `end-users-not-allowed` or `end-users-unsupported`.
+
+The same `scoped({ user })` against Oort Cloud, with a **server key**: an Oort key made on
+oortcloud.dev/account with "Acts for end users". Each end user gets a Planet of their own inside
+the account; the account's own memory, Stars, Constellations and Galaxies stay out of their reach.
+
+<!-- example: examples/src/cloud-multi-user.ts -->
+
+```ts
+import { createOort, formatForPrompt } from 'oortmem';
+
+// Oort Cloud with a server key ("Acts for end users", made on oortcloud.dev/account) in
+// OORT_API_KEY. An Oort Cloud without per-user memory refuses end users (end-users-unsupported).
+const oort = await createOort({
+  mode: 'cloud',
+  org: 'acme',
+  project: null,
+  projectConfig: false,
+  keySources: ['env'],
+});
+
+// Per request: a handle fixed to one end user (it sends Oort-User). Hand only this one to tools.
+// Take userId from your own signed-in session, never from the request: the key reads every end user.
+const forUser = (userId: string) => oort.scoped({ user: userId, agent: 'support-bot' });
+
+await forUser('user-ada').remember('My order number is 1042.');
+
+console.log(formatForPrompt(await forUser('user-ada').recall('what is my order number?')));
+console.log((await forUser('user-bob').recall('what is my order number?')).memories.length); // 0
+
+// The account's end users: how many, and erasing one (a deletion request). Server code only.
+const { endUsers, limit } = await oort.endUsers.count();
+console.log(`${endUsers} of ${limit} end users`);
+const erased = await oort.endUsers.erase('user-ada');
+console.log(`erased ${erased.memories} memories`);
+await oort.close();
+```
+
+- The client-side rules are the local ones: `user-missing`, `self-not-derivable`,
+  `star-with-user`, and `user` needs an explicit `org` other than `'local'`. In cloud mode `org`
+  is your name for the key's account and is never sent.
+- An end user's handle sends `Oort-User: <id>` on its memory calls; `whoami` and `endUsers` act
+  as the account, and a handle without `user` never sends it.
+- Before the first request that names an end user, the SDK checks once per root handle that
+  `whoami` lists the key's `end-users` capability, and otherwise throws `OortRefusedError`
+  (`end-users-unsupported`): an Oort Cloud without per-user memory would ignore the header and
+  write the account's own Planet. Never work around this refusal by dropping `user`.
+- A server key never acts as the account: its handle without `user` gets `user-missing`. Keep a
+  normal key for the account's own memory.
+- `oort.endUsers.erase(id)` erases one end user completely (a deletion request) and returns
+  counts; `oort.endUsers.count()` returns `{ endUsers, limit }`. Both cloud only, from server
+  code, never from a handle scoped to an end user. Python: `oort.end_users.erase(id)` and
+  `oort.end_users.count()`. Erasure works while Pro has lapsed or the account is blocked.
+- Refusals to handle: `end-user-limit` (the plan's end users are all taken; erase ones you no
+  longer serve), `end-user-erased` (a write lost the race with an erasure; do not retry),
+  `end-users-not-allowed` (not a server key).

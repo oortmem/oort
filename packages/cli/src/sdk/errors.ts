@@ -161,6 +161,35 @@ function sdkFix(fix: string | null): string | null {
 /** A safe class name for a message: letters and digits only. */
 const safeName = (e: Error): string => e.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 64) || 'Error';
 
+/**
+ * Oort Cloud's end-user refusals (CON-132), with the reasons the SDK's own checks use for the
+ * same mistakes: a server key without `Oort-User` is `user-missing`, as a dropped id is here.
+ */
+function endUserRefusal(
+  e: OortCloudError,
+  opts: { fix: string | null; status: number; retryAfter?: number },
+): OortError | undefined {
+  switch (e.apiCode) {
+    case 'user_missing':
+      return new OortUsageError(e.message, { ...opts, reason: 'user-missing' });
+    case 'self_not_derivable':
+      return new OortUsageError(e.message, { ...opts, reason: 'self-not-derivable' });
+    case 'bad_user':
+      return new OortUsageError(e.message, { ...opts, reason: 'bad-user' });
+    case 'user_not_supported':
+      return new OortUsageError(e.message, { ...opts, reason: 'user-not-supported' });
+    case 'star_with_user':
+      return new OortRefusedError(e.message, { ...opts, reason: 'star-with-user' });
+    case 'end_user_erased':
+      // Erased while the write ran: nothing was stored, and a retry would make a new end user.
+      return e.status === 409
+        ? new OortRefusedError(e.message, { ...opts, reason: 'end-user-erased', retryable: false })
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
 /** Oort Cloud's refusal as its SDK class, with the reason its kind and the API's code give. */
 function fromCloud(e: OortCloudError): OortError {
   const info = describeError(e, () => '');
@@ -184,7 +213,15 @@ function fromCloud(e: OortCloudError): OortError {
     case 'hive-not-enabled':
       return new OortRefusedError(e.message, { ...opts, reason: e.kind });
     case 'refused':
+      // CON-132: only a server key acts for end users.
+      if (e.apiCode === 'end_users_not_allowed')
+        return new OortRefusedError(e.message, { ...opts, reason: 'end-users-not-allowed' });
       return new OortRefusedError(e.message, { ...opts, reason: 'forbidden' });
+    case 'end-user-limit':
+      // The plan's end users are all taken: a new one waits for an erasure, not for time.
+      return new OortRefusedError(e.message, { ...opts, reason: e.kind });
+    case 'end-users-unsupported':
+      return new OortRefusedError(e.message, { ...opts, reason: e.kind });
     case 'too-large':
       return new OortUsageError(e.message, { ...opts, reason: 'too-large' });
     case 'not-found':
@@ -209,7 +246,9 @@ function fromCloud(e: OortCloudError): OortError {
         });
       if (e.apiCode === 'scope_denied')
         return new OortRefusedError(e.message, { ...opts, reason: 'scope-denied' });
-      return new OortUsageError(e.message, { ...opts, reason: 'bad-request' });
+      return (
+        endUserRefusal(e, opts) ?? new OortUsageError(e.message, { ...opts, reason: 'bad-request' })
+      );
   }
 }
 

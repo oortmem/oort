@@ -1,0 +1,97 @@
+{
+  "header": "Oort-User",
+  "capability": "end-users",
+  "unsupported": {
+    "name": "OortRefusedError",
+    "code": "refused",
+    "reason": "end-users-unsupported",
+    "fix": null,
+    "status": null,
+    "retryable": false,
+    "retryAfter": null,
+    "message": "Per-user memory needs Oort Cloud with server keys: whoami does not list the end-users capability for this Oort key (an Oort Cloud without per-user memory, or a key made without \"Acts for end users\"), so nothing was sent for this end user. Make a server key on https://oortcloud.dev/account."
+  },
+  "whoami": [
+    {
+      "response": {
+        "account": "a1",
+        "plan": "pro",
+        "via": "key",
+        "capabilities": ["end-users"]
+      },
+      "allowed": true
+    },
+    {
+      "response": {
+        "account": "a1",
+        "plan": "pro",
+        "via": "key",
+        "capabilities": ["other", "end-users"]
+      },
+      "allowed": true
+    },
+    {
+      "response": {
+        "account": "a1",
+        "plan": "pro",
+        "via": "key"
+      },
+      "allowed": false
+    },
+    {
+      "response": {
+        "account": "a1",
+        "plan": "pro",
+        "via": "key",
+        "capabilities": []
+      },
+      "allowed": false
+    },
+    {
+      "response": {
+        "account": "a1",
+        "plan": "pro",
+        "via": "key",
+        "capabilities": "end-users"
+      },
+      "allowed": false
+    },
+    {
+      "response": {
+        "account": "a1",
+        "plan": "pro",
+        "via": "key",
+        "capabilities": ["End-Users"]
+      },
+      "allowed": false
+    },
+    {
+      "response": {
+        "account": "a1",
+        "plan": "pro",
+        "via": "key",
+        "capabilities": ["end-users "]
+      },
+      "allowed": false
+    },
+    {
+      "response": {
+        "account": "a1",
+        "plan": "pro",
+        "via": "key",
+        "capabilities": {
+          "end-users": true
+        }
+      },
+      "allowed": false
+    },
+    {
+      "response": null,
+      "allowed": false
+    },
+    {
+      "response": [],
+      "allowed": false
+    }
+  ]
+}

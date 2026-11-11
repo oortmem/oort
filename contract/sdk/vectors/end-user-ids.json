@@ -1,0 +1,142 @@
+{
+  "rule": "^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$",
+  "reserved": ["self", "anonymous", "default", "local", "root", "count"],
+  "ids": [
+    {
+      "user": "alice",
+      "reason": null
+    },
+    {
+      "user": "user-ada",
+      "reason": null
+    },
+    {
+      "user": "A1",
+      "reason": null
+    },
+    {
+      "user": "a:b@c.d-e_f",
+      "reason": null
+    },
+    {
+      "user": "0",
+      "reason": null
+    },
+    {
+      "user": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "reason": null
+    },
+    {
+      "user": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "reason": "bad-user"
+    },
+    {
+      "user": "alice\n",
+      "reason": "bad-user"
+    },
+    {
+      "user": " alice",
+      "reason": "bad-user"
+    },
+    {
+      "user": "alice ",
+      "reason": "bad-user"
+    },
+    {
+      "user": "al ice",
+      "reason": "bad-user"
+    },
+    {
+      "user": "al/ice",
+      "reason": "bad-user"
+    },
+    {
+      "user": "al\u00e9",
+      "reason": "bad-user"
+    },
+    {
+      "user": "alice\u0000",
+      "reason": "bad-user"
+    },
+    {
+      "user": "\u202ealice",
+      "reason": "bad-user"
+    },
+    {
+      "user": "  ",
+      "reason": "user-missing"
+    },
+    {
+      "user": "-x",
+      "reason": "bad-user"
+    },
+    {
+      "user": "_x",
+      "reason": "bad-user"
+    },
+    {
+      "user": ".x",
+      "reason": "bad-user"
+    },
+    {
+      "user": ":x",
+      "reason": "bad-user"
+    },
+    {
+      "user": "@x",
+      "reason": "bad-user"
+    },
+    {
+      "user": "self",
+      "reason": "self-not-derivable"
+    },
+    {
+      "user": "Self",
+      "reason": "self-not-derivable"
+    },
+    {
+      "user": "SELF",
+      "reason": "self-not-derivable"
+    },
+    {
+      "user": "count",
+      "reason": "bad-user"
+    },
+    {
+      "user": "COUNT",
+      "reason": "bad-user"
+    },
+    {
+      "user": "Root",
+      "reason": "bad-user"
+    },
+    {
+      "user": "anonymous",
+      "reason": "bad-user"
+    },
+    {
+      "user": "Default",
+      "reason": "bad-user"
+    },
+    {
+      "user": "local",
+      "reason": "bad-user"
+    },
+    {
+      "user": "selfie",
+      "reason": null
+    },
+    {
+      "user": "root2",
+      "reason": null
+    },
+    {
+      "user": "",
+      "reason": "user-missing"
+    },
+    {
+      "user": null,
+      "reason": "user-missing"
+    }
+  ]
+}

@@ -190,9 +190,41 @@ def shown(s: str) -> str:
     return _DISPLAY_UNSAFE.sub(lambda m: "\\u{%x}" % ord(m.group(0)), s)
 
 
+#: Refused before any request names an end user (CON-132): whoami does not list the key's
+#: ``end-users`` capability. An Oort Cloud from before it ignores ``Oort-User`` and would write the
+#: end user's memories into the account's own Planet, so the header is never sent to one.
+END_USERS_UNSUPPORTED = (
+    "Per-user memory needs Oort Cloud with server keys: whoami does not list the end-users "
+    'capability for this Oort key (an Oort Cloud without per-user memory, or a key made without "Acts '
+    'for end users"), so nothing was sent for this end user. Make a server key on '
+    "https://oortcloud.dev/account."
+)
+
+
+#: An account's end-user route (count, erase) answered 404: an Oort Cloud from before CON-132.
+#: These routes ask no whoami first: whoami is refused while Pro has lapsed or the account is
+#: blocked, and an end user's deletion must still go through.
+END_USERS_NOT_OFFERED = (
+    "Per-user memory needs Oort Cloud with server keys: this Oort Cloud has no end-user routes "
+    "(HTTP 404), so nothing was done for this end user. Make a server key on "
+    "https://oortcloud.dev/account."
+)
+
+
+def end_users_unsupported() -> OortError:
+    return OortRefusedError(END_USERS_UNSUPPORTED, reason="end-users-unsupported")
+
+
+def end_users_not_offered() -> OortError:
+    return OortRefusedError(END_USERS_NOT_OFFERED, reason="end-users-unsupported", status=404)
+
+
 def _cloud_kind(status: int, code: Optional[str]) -> str:
     if status == 401:
         return "unauthorized"
+    if status == 402 and code == "end_user_limit":
+        # A plan's end-user limit (CON-132), not a lapsed plan.
+        return "end-user-limit"
     if status == 402:
         return "payment-required"
     if status == 403:
@@ -248,6 +280,8 @@ def _cloud_message(kind: str, status: int, api_raw: Optional[str]) -> str:
         )
     if kind == "refused":
         return f"Oort Cloud refused this (HTTP {status}){tail}"
+    if kind == "end-user-limit":
+        return f"Oort Cloud refused a new end user (HTTP 402){tail}"
     return "Oort Cloud is unreachable: check your network, then try again."
 
 
@@ -317,7 +351,12 @@ def cloud_error(
     if kind in ("payment-required", "not-enabled", "hive-not-enabled"):
         return OortRefusedError(message, **opts, reason=kind)
     if kind == "refused":
+        # CON-132: only a server key acts for end users.
+        if api_code == "end_users_not_allowed":
+            return OortRefusedError(message, **opts, reason="end-users-not-allowed")
         return OortRefusedError(message, **opts, reason="forbidden")
+    if kind == "end-user-limit":
+        return OortRefusedError(message, **opts, reason="end-user-limit")
     if kind == "too-large":
         return OortUsageError(message, **opts, reason="too-large")
     if kind == "not-found":
@@ -337,7 +376,24 @@ def cloud_error(
         return OortNeedsConfirmationError(message, **opts, reason="findings-unacknowledged")
     if api_code == "scope_denied":
         return OortRefusedError(message, **opts, reason="scope-denied")
+    # CON-132's end-user refusals, with the reasons the client's own checks use.
+    usage = _END_USER_USAGE.get(api_code or "")
+    if usage is not None:
+        return OortUsageError(message, **opts, reason=usage)
+    if api_code == "star_with_user":
+        return OortRefusedError(message, **opts, reason="star-with-user")
+    if status == 409 and api_code == "end_user_erased":
+        # Erased while the write ran: nothing was stored, and a retry would make a new end user.
+        return OortRefusedError(message, **opts, reason="end-user-erased")
     return OortUsageError(message, **opts, reason="bad-request")
+
+
+_END_USER_USAGE = {
+    "user_missing": "user-missing",
+    "self_not_derivable": "self-not-derivable",
+    "bad_user": "bad-user",
+    "user_not_supported": "user-not-supported",
+}
 
 
 def error_shape(e: BaseException) -> Dict[str, Any]:

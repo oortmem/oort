@@ -120,9 +120,13 @@ describe('cloud url and errors', () => {
   });
 
   it('cloud.errors-follow-the-contract', () => {
-    for (const [k, kind] of Object.entries(CONTRACT.errors)) {
+    // CON-132's end-user refusals too: a plan's end-user limit is not a lapsed plan.
+    for (const [k, kind] of [
+      ...Object.entries(CONTRACT.errors),
+      ...Object.entries(CONTRACT.endUsers.errors),
+    ]) {
       const [status, code] = k.split(':');
-      expect(cloudErrorKind(Number(status), code)).toBe(kind);
+      expect(cloudErrorKind(Number(status), code), k).toBe(kind);
     }
     expect(new OortCloudError('payment-required', 402).holdQueue).toBe(true);
     expect(new OortCloudError('bad-request', 400).holdQueue).toBe(false);

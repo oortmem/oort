@@ -3,7 +3,13 @@ import { closeCloudPool } from '../cloud-http.js';
 import { wireEngine, type Engine } from '../wire.js';
 import * as cloud from './cloud.js';
 import { Aborted, abortable, type Ctx } from './context.js';
-import { OortNeedsLoginError, OortUsageError, toOortError, type OortError } from './errors.js';
+import {
+  OortCloudOnlyError,
+  OortNeedsLoginError,
+  OortUsageError,
+  toOortError,
+  type OortError,
+} from './errors.js';
 import * as judge from './judge.js';
 import * as local from './local.js';
 import {
@@ -28,6 +34,7 @@ import type {
   MemoryView,
   ObserveResult,
   Oort,
+  OortEndUsers,
   OortJudge,
   OortOptions,
   PinResult,
@@ -81,7 +88,7 @@ interface State {
 let poolRefs = 0;
 
 const CLOUD_ONLY = ['url', 'timeoutMs', 'fetch'] as const;
-const LOCAL_ONLY = ['user', 'org', 'config', 'migrate', 'judge'] as const;
+const LOCAL_ONLY = ['config', 'migrate', 'judge'] as const;
 
 /** Refuses an option the resolved mode does not take: never silently ignored. */
 function checkMode(o: OortOptions, mode: 'local' | 'cloud'): void {
@@ -131,6 +138,7 @@ class OortHandle implements Oort {
     return this.#run(async (ctx) => {
       const q = check(QuerySchema, query, 'query');
       const o = check(RecallOptionsSchema, opts, 'recall options');
+      if (this.#cloud()) cloud.checkUserInclude(ctx, o.include);
       return abortable(o.signal, () => local.recall(ctx, q, o));
     });
   }
@@ -228,6 +236,39 @@ class OortHandle implements Oort {
     };
   }
 
+  get endUsers(): OortEndUsers {
+    /** The account's end users: Oort Cloud only, and never from an end user's own handle. */
+    const guard = (ctx: Ctx): void => {
+      if (!this.#cloud()) {
+        throw new OortCloudOnlyError(
+          'endUsers works on Oort Cloud end users. Locally, an end user lives under your org in your own store.',
+          { reason: 'end-users' },
+        );
+      }
+      if (ctx.user !== null) {
+        throw new OortUsageError(
+          "endUsers acts for the account; this handle is scoped to an end user. Call it on the handle you made the end user's from.",
+          { reason: 'user-not-supported' },
+        );
+      }
+    };
+    return {
+      erase: (user: string) =>
+        this.#run(async (ctx) => {
+          // The same rules as scoped({ user }): never empty, never self, an explicit org.
+          requireUserIfNamed({ user });
+          checkUser(user, this.#s.org);
+          guard(ctx);
+          return cloud.eraseEndUser(ctx, user);
+        }),
+      count: () =>
+        this.#run(async (ctx) => {
+          guard(ctx);
+          return cloud.countEndUsers(ctx);
+        }),
+    };
+  }
+
   scoped(s: ScopedOptions): Oort {
     if (this.#root.closed) {
       throw new OortUsageError('This Oort handle is closed.', { reason: 'closed' });
@@ -238,13 +279,14 @@ class OortHandle implements Oort {
       const o = check(ScopedSchema, raw, 'scoped options');
       const { ctx, org } = this.#s;
       const engine = this.#root.engine;
-      if (o.user !== undefined && engine.mode === 'cloud') {
+      checkUser(o.user, o.user === undefined ? undefined : org);
+      if (o.user !== undefined && ctx.user !== null && o.user !== ctx.user) {
+        // A handle for one end user never becomes another's (CON-132 hardening).
         throw new OortUsageError(
-          'user is not available in cloud mode yet: one Oort key is one account (CON-92).',
-          { reason: 'invalid-argument' },
+          "This handle is scoped to an end user and cannot switch to another: derive each end user's handle from the handle you made it from.",
+          { reason: 'user-hop' },
         );
       }
-      checkUser(o.user, o.user === undefined ? undefined : org);
       const user = o.user ?? ctx.user;
       const agent =
         o.agent === undefined ? ctx.principal.agent : agentFor(engine.config.home, {}, o.agent);
@@ -252,10 +294,16 @@ class OortHandle implements Oort {
       const projectId =
         o.project === undefined ? ctx.principal.scope.projectId : projectIdFor(o.project, engine);
       const principal = principalOf(engine, { org, user, agent, projectId });
+      // Cloud mode: a new end user gets a client that names them (CON-132); else the parent's.
+      const userCloud =
+        o.user !== undefined && engine.mode === 'cloud'
+          ? cloud.endUserClient({ engine }, o.user)
+          : ctx.cloud;
       const child: Ctx = {
         ...ctx,
         principal,
         user,
+        ...(userCloud !== undefined && { cloud: userCloud }),
         statedPrivacy: projectId === this.#s.cwdProject ? engine.statedPrivacy : undefined,
         judge: { role: o.judgeRole ?? ctx.judge.role, operator: ctx.judge.operator },
       };
@@ -395,6 +443,8 @@ export async function createOortWith(options: OortOptions, internals: Internals)
       engine,
       principal,
       user,
+      ...(user !== null &&
+        engine.mode === 'cloud' && { cloud: cloud.endUserClient({ engine }, user) }),
       now: root.now,
       statedPrivacy: projectId === engine.project.projectId ? engine.statedPrivacy : undefined,
       judge: { role, operator },

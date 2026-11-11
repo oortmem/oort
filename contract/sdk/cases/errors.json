@@ -505,5 +505,95 @@
         }
       }
     ]
+  },
+  {
+    "id": "errors.cloud-end-user-refusals",
+    "description": "Oort Cloud's end-user refusals on a server key's end-user handle (CON-132): a plan's end-user limit and an erasure that won the race are refused, neither retryable.",
+    "transports": ["cloud"],
+    "cloud": {
+      "endUsers": "server-key"
+    },
+    "options": {
+      "org": "acme"
+    },
+    "steps": [
+      {
+        "call": "scoped",
+        "args": {
+          "user": "u1"
+        },
+        "as": "u1"
+      },
+      {
+        "call": "remember",
+        "on": "u1",
+        "args": {
+          "facts": ["x is y"]
+        },
+        "cloud": {
+          "fail": {
+            "POST /v1/observe": {
+              "status": 402,
+              "code": "end_user_limit"
+            }
+          }
+        },
+        "expect": {
+          "error": {
+            "name": "OortRefusedError",
+            "code": "refused",
+            "reason": "end-user-limit",
+            "status": 402,
+            "retryable": false
+          }
+        }
+      },
+      {
+        "call": "remember",
+        "on": "u1",
+        "args": {
+          "facts": ["x is y"]
+        },
+        "cloud": {
+          "fail": {
+            "POST /v1/observe": {
+              "status": 409,
+              "code": "end_user_erased"
+            }
+          }
+        },
+        "expect": {
+          "error": {
+            "name": "OortRefusedError",
+            "code": "refused",
+            "reason": "end-user-erased",
+            "status": 409,
+            "retryable": false
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "on": "u1",
+        "args": {
+          "query": "x"
+        },
+        "cloud": {
+          "fail": {
+            "POST /v1/recall": {
+              "status": 403,
+              "code": "end_users_not_allowed"
+            }
+          }
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "end-users-not-allowed",
+            "status": 403
+          }
+        }
+      }
+    ]
   }
 ]

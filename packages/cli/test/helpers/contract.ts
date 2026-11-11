@@ -54,7 +54,16 @@ export interface Case {
   counter?: number;
   /** `agents.json` in the home: which agents keep a Star. */
   agents?: Record<string, { star: boolean }>;
-  cloud?: { fail?: FailSpec; noKey?: boolean; memories?: number };
+  cloud?: {
+    fail?: FailSpec;
+    noKey?: boolean;
+    memories?: number;
+    /**
+     * Per-user memory (CON-132): `server-key`, the key acts for end users; `legacy`, an Oort Cloud
+     * from before it (Oort-User ignored). Absent: a current cloud, a key without the capability.
+     */
+    endUsers?: 'server-key' | 'legacy';
+  };
   expectCreate?: { error: unknown };
   steps: Step[];
 }
@@ -406,4 +415,10 @@ export async function readJudgment(home: string, id: string): Promise<Record<str
   } finally {
     await store.close();
   }
+}
+
+/** Sets the fake cloud's per-user memory as a case's `cloud.endUsers` names it (CON-132). */
+export function endUsersOf(fake: FakeCloud, c: Case): void {
+  if (c.cloud?.endUsers === 'legacy') fake.endUsers.server = 'legacy';
+  if (c.cloud?.endUsers === 'server-key') fake.endUsers.serverKey = true;
 }

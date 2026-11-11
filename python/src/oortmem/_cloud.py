@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 import urllib.parse
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -27,6 +28,8 @@ from .errors import (
     OortRefusedError,
     OortUsageError,
     cloud_error,
+    end_users_not_offered,
+    end_users_unsupported,
     parse_retry_after,
 )
 
@@ -34,6 +37,16 @@ DEFAULT_CLOUD_URL = "https://api.oortcloud.dev"
 _LOOPBACK = ("localhost", "127.0.0.1", "[::1]", "::1")
 _FULL_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 RECENT_SCAN = 500
+#: The key capability that lets a server key act for its account's end users (CON-132).
+END_USERS_CAPABILITY = "end-users"
+#: The request header that names the end user a server key acts for (CON-132).
+END_USER_HEADER = "Oort-User"
+
+
+def end_users_allowed(me: Any) -> bool:
+    """Whether a whoami answer lists the ``end-users`` capability: exactly that string, in a list."""
+    caps = me.get("capabilities") if isinstance(me, Mapping) else None
+    return isinstance(caps, list) and END_USERS_CAPABILITY in caps
 _OUTCOMES = ("added", "reinforced", "updated", "superseded", "corrected", "skipped")
 
 
@@ -156,16 +169,39 @@ class CloudClient:
         self.url = url
         self._key = key
         self._http = TcpTransport(url, timeout, env)
+        # Whether this key may act for end users, checked once (CON-132). Only a yes is kept: a
+        # refusal or a failed check is asked again, so an Oort Cloud upgrade needs no restart.
+        self._end_users = False
+        self._end_users_lock = threading.Lock()
 
     def __repr__(self) -> str:
         return f"CloudClient(url={self.url!r})"
 
-    def call(self, method: str, route: str, body: Optional[Any] = None) -> Any:
+    def require_end_users(self) -> None:
+        """Refuses (``end-users-unsupported``) unless whoami lists the key's ``end-users``
+        capability: an Oort Cloud from before CON-132 ignores ``Oort-User`` and would write the
+        end user's memories into the account's own Planet."""
+        if self._end_users:
+            return
+        with self._end_users_lock:
+            if self._end_users:
+                return
+            if not end_users_allowed(self.call("GET", "/v1/whoami")):
+                raise end_users_unsupported()
+            self._end_users = True
+
+    def call(self, method: str, route: str, body: Optional[Any] = None, user: Optional[str] = None) -> Any:
+        """One request. With ``user``, it names that end user (``Oort-User``), and only once the
+        key's capability is known."""
+        if user is not None:
+            self.require_end_users()
         headers = {
             "Authorization": f"Bearer {self._key.reveal()}",
             "User-Agent": f"oortmem-python/{__version__}",
             "Accept": "application/json",
         }
+        if user is not None:
+            headers[END_USER_HEADER] = user
         payload = None
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -201,19 +237,28 @@ def _id_path(i: str) -> str:
     return "/v1/memories/" + urllib.parse.quote(i, safe="")
 
 
-def find_memory(c: CloudClient, ref: str) -> Mapping[str, Any]:
-    m = c.call("GET", _id_path(ref))
+def find_memory(c: CloudClient, ref: str, user: Optional[str] = None) -> Mapping[str, Any]:
+    m = c.call("GET", _id_path(ref), user=user)
     if not isinstance(m, Mapping):
         raise OortInternalError("An internal error stopped this call (TypeError).")
     return m
 
 
 class CloudOps:
-    """The SDK's cloud operations, for one handle's principal."""
+    """The SDK's cloud operations, for one handle's principal. ``user`` is the end user the
+    memory calls name (``Oort-User``, CON-132), or ``None`` for the account."""
 
-    def __init__(self, client: CloudClient, now_ms) -> None:
+    def __init__(self, client: CloudClient, now_ms, user: Optional[str] = None) -> None:
         self.c = client
         self.now_ms = now_ms
+        self.user = user
+
+    def _call(self, method: str, route: str, body: Optional[Any] = None) -> Any:
+        """A memory route: as this handle's end user when it has one."""
+        return self.c.call(method, route, body, user=self.user)
+
+    def _find(self, ref: str) -> Mapping[str, Any]:
+        return find_memory(self.c, ref, self.user)
 
     # The principal: project id, its stated privacy, the agent, and whether it keeps a Star.
     def _project(self, p: "CloudPrincipal") -> Dict[str, Any]:
@@ -235,6 +280,13 @@ class CloudOps:
 
     def recall(self, p: "CloudPrincipal", query: str, o: Mapping[str, Any], view: Mapping[str, str]) -> Dict[str, Any]:
         speed = o.get("speed") or "full"
+        include = o.get("include")
+        if self.user is not None and include is not None and any(lvl not in ("planet", "self") for lvl in include):
+            # An end user reads their Planet only (CON-132, as a local end-user handle).
+            raise OortRefusedError(
+                "This end user's handle reads only their Planet: leave star, constellation and galaxy out of include.",
+                reason="scope-denied",
+            )
         body: Dict[str, Any] = {"text": query, **self._project(p)}
         if o.get("include") is not None:
             body["include"] = list(o["include"])
@@ -246,7 +298,7 @@ class CloudOps:
             body["rerank"] = False
         if speed == "lexical":
             body["embed"] = False
-        r = self.c.call("POST", "/v1/recall", body)
+        r = self._call("POST", "/v1/recall", body)
         if not isinstance(r, Mapping) or not isinstance(r.get("memories"), list):
             raise OortInternalError("An internal error stopped this call (TypeError).")
         now = self.now_ms()
@@ -308,14 +360,14 @@ class CloudOps:
         if t.get("turnRef") is not None:
             body["turnRef"] = t["turnRef"]
         body["observation"] = obs
-        return self._observe_view(self.c.call("POST", "/v1/observe", body), p)
+        return self._observe_view(self._call("POST", "/v1/observe", body), p)
 
     def remember(self, p: "CloudPrincipal", facts: List[str], type_: Optional[str]) -> Dict[str, Any]:
         self._refuse_star(p)
         hint = "" if type_ is None else f" (a {type_} fact)"
         results = []
         for i, fact in enumerate(facts):
-            r = self.c.call(
+            r = self._call(
                 "POST",
                 "/v1/observe",
                 {
@@ -339,6 +391,12 @@ class CloudOps:
 
     def forget(self, p: "CloudPrincipal", ref: str, everywhere: bool) -> Dict[str, Any]:
         self._refuse_star(p)
+        if everywhere and self.user is not None:
+            # Constellation copies are the account's: an end user has none (the API refuses it too).
+            raise OortUsageError(
+                "forget(everywhere=True) withdraws the account's Constellation copies; an end user has none. Leave everywhere out.",
+                reason="user-not-supported",
+            )
         if everywhere:
             target = self._everywhere_target(ref)
             r = self.c.call("DELETE", _id_path(target) + "?everywhere=1") or {}
@@ -349,8 +407,8 @@ class CloudOps:
                 "requested": ids(r.get("requested")),
                 "unreachable": ids(r.get("unreachable")),
             }
-        m = find_memory(self.c, ref)
-        self.c.call("DELETE", _id_path(m["id"]))
+        m = self._find(ref)
+        self._call("DELETE", _id_path(m["id"]))
         return {"forgotten": m["id"]}
 
     def _everywhere_target(self, ref: str) -> str:
@@ -359,7 +417,7 @@ class CloudOps:
         try:
             m = find_memory(self.c, ref)
         except OortNotFoundError as e:
-            if not _FULL_ID.match(ref):
+            if not _FULL_ID.fullmatch(ref):
                 raise
             try:
                 shares = (self.c.call("GET", _id_path(ref) + "/shares") or {}).get("shares") or []
@@ -374,8 +432,8 @@ class CloudOps:
 
     def pin(self, p: "CloudPrincipal", ref: str, pinned: bool) -> Dict[str, Any]:
         self._refuse_star(p)
-        m = find_memory(self.c, ref)
-        self.c.call("POST", _id_path(m["id"]) + ("/pin" if pinned else "/unpin"))
+        m = self._find(ref)
+        self._call("POST", _id_path(m["id"]) + ("/pin" if pinned else "/unpin"))
         return {"id": m["id"], "pinned": pinned, "changed": None}
 
     def recent(self, p: "CloudPrincipal", since: Optional[Any], limit: int) -> Dict[str, Any]:
@@ -395,7 +453,7 @@ class CloudOps:
             q["limit"] = 100
             if cursor is not None:
                 q["cursor"] = cursor
-            r = self.c.call("GET", "/v1/memories?" + urllib.parse.urlencode(q)) or {}
+            r = self._call("GET", "/v1/memories?" + urllib.parse.urlencode(q)) or {}
             mems = [m for m in (r.get("memories") or []) if isinstance(m, Mapping)]
             seen.extend(mems)
             nxt = r.get("next")
@@ -417,14 +475,14 @@ class CloudOps:
 
     def explain(self, p: "CloudPrincipal", ref: str) -> Dict[str, Any]:
         now = self.now_ms()
-        m = find_memory(self.c, ref)
+        m = self._find(ref)
         chain = []
         hidden = 0
         for link in (m.get("supersedes"), m.get("supersededBy")):
             if link is None:
                 continue
             try:
-                lk = find_memory(self.c, link)
+                lk = self._find(link)
             except OortNotFoundError:
                 hidden += 1
                 continue
@@ -462,6 +520,21 @@ class CloudOps:
     def whoami(self, p: "CloudPrincipal") -> Dict[str, Any]:
         route = "/v1/whoami" + ("" if p.agent is None else "?agent=" + urllib.parse.quote(p.agent, safe=""))
         me = self.c.call("GET", route) or {}
+        routes = {"embed": "cloud", "rerank": "cloud", "decide": "cloud", "write": "cloud"}
+        if self.user is not None:
+            # An end user's handle reads and writes their Planet alone, never the account's spaces.
+            planet = f"Planet {self.user}"
+            return {
+                "mode": "cloud",
+                "account": me.get("account"),
+                "agent": p.agent,
+                "project": p.project,
+                "user": self.user,
+                "reads": [planet],
+                "writesTo": planet,
+                "version": __version__,
+                "routes": routes,
+            }
         spaces = me.get("spaces") if isinstance(me.get("spaces"), list) else [{"level": "planet"}]
         return {
             "mode": "cloud",
@@ -476,8 +549,39 @@ class CloudOps:
             ],
             "writesTo": "your Planet",
             "version": __version__,
-            "routes": {"embed": "cloud", "rerank": "cloud", "decide": "cloud", "write": "cloud"},
+            "routes": routes,
         }
+
+    # The account's end users (CON-132): sent as the account, with no whoami first (security
+    # review, L-b). whoami is refused while Pro has lapsed or the account is blocked, yet Oort Cloud
+    # keeps end-user erasure open then; it refuses a key that is not a server key itself (403
+    # end_users_not_allowed), and an Oort Cloud without these routes answers 404.
+    def _end_user_route(self, method: str, route: str) -> Any:
+        try:
+            return self.c.call(method, route)
+        except OortNotFoundError:
+            raise end_users_not_offered() from None
+
+    def erase_end_user(self, user: str) -> Dict[str, Any]:
+        r = self._end_user_route("DELETE", "/v1/end-users/" + urllib.parse.quote(user, safe=""))
+        # What was erased is the proof it happened: an answer without it is not a success.
+        e = r.get("erased") if isinstance(r, Mapping) else None
+        if not isinstance(e, Mapping):
+            raise OortInternalError("An internal error stopped this call (TypeError).")
+        n = lambda v: v if isinstance(v, int) and not isinstance(v, bool) else 0  # noqa: E731
+        return {
+            "erased": user,
+            "memories": n(e.get("memories")),
+            "coldCopies": n(e.get("coldCopies")),
+            "turnRefs": n(e.get("turnRefs")),
+            "cursors": n(e.get("cursors")),
+        }
+
+    def count_end_users(self) -> Dict[str, Any]:
+        r = self._end_user_route("GET", "/v1/end-users/count")
+        if not isinstance(r, Mapping):
+            raise OortInternalError("An internal error stopped this call (TypeError).")
+        return {"endUsers": r.get("endUsers"), "limit": r.get("limit")}
 
 
 def local_only(what: str) -> OortError:

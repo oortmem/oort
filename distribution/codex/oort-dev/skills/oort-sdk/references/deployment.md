@@ -37,6 +37,9 @@ Use cloud mode:
   sockets do not keep the process alive, so a function that never calls `close()` still ends.
 - **Await `observe` before returning**: the runtime freezes after the response. A `turnRef` (the
   request id) makes a retried invocation save the turn once.
+- **A multi-user app in cloud mode** needs per-user memory in Oort Cloud: a server key and
+  `scoped({ user })`. It requires Oort Pro and `oortmem` 0.8.0 or newer. See
+  [multi-user.md](multi-user.md#per-user-memory-in-oort-cloud).
 
 <!-- example: examples/src/serverless.ts -->
 

@@ -31,24 +31,60 @@ export function agentFor(home: string, env: Env, name: string | undefined): Wire
 }
 
 /**
- * Checks an end user and the org: `user` needs an explicit `org` other than `local`, and is never
- * `self` (the person), so a server bug that drops the user id cannot fall back to the person's
- * own memories.
+ * An end user's id (CON-132; the same rule in Python and Oort Cloud): 1 to 128 characters, a
+ * letter or digit first, then letters, digits and `_ . : @ -`. Never trimmed or normalized.
+ */
+export const USER_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/;
+
+/** Ids that would read as someone other than an end user, compared without case. */
+export const RESERVED_USER_IDS: readonly string[] = [
+  'self',
+  'anonymous',
+  'default',
+  'local',
+  'root',
+  'count',
+];
+
+const USER_MISSING =
+  'user was given but is empty: a missing end-user id never falls back to the operator. Leave the user key out to act as the person.';
+const SELF =
+  'user cannot be "self": a handle for an end user never reaches the person’s own memories.';
+const BAD_USER =
+  'user is not a valid end-user id: 1 to 128 letters, digits and _ . : @ -, starting with a letter or digit, and not self, anonymous, default, local, root or count.';
+
+/** Why `user` is not an end-user id (`reason`, `message`), or null when it is one. */
+export function userIdProblem(user: unknown): { reason: string; message: string } | null {
+  // Blank (empty or only whitespace) reads as a dropped id, never as a name.
+  if (user === undefined || user === null || (typeof user === 'string' && user.trim() === '')) {
+    return { reason: 'user-missing', message: USER_MISSING };
+  }
+  if (typeof user !== 'string' || !USER_ID.test(user) || user.length > 128) {
+    return { reason: 'bad-user', message: BAD_USER };
+  }
+  const low = user.toLowerCase();
+  if (low === 'self') return { reason: 'self-not-derivable', message: SELF };
+  if (RESERVED_USER_IDS.includes(low)) return { reason: 'bad-user', message: BAD_USER };
+  return null;
+}
+
+/** Refuses anything but an end-user id, before any I/O. */
+export function checkUserId(user: unknown): asserts user is string {
+  const p = userIdProblem(user);
+  if (p !== null) throw new OortUsageError(p.message, { reason: p.reason });
+}
+
+/**
+ * Checks an end user and the org: `user` is an end-user id (never `self`, never empty), and
+ * needs an explicit `org` other than `local`, so a server bug that drops the user id cannot fall
+ * back to the person's own memories.
  */
 export function checkUser(user: string | undefined, org: string | undefined): void {
   if (org !== undefined && !NAME.test(org)) {
     throw new OortUsageError('org is not a valid id.', { reason: 'invalid-argument' });
   }
   if (user === undefined) return;
-  if (user === 'self') {
-    throw new OortUsageError(
-      'user cannot be "self": a handle for an end user never reaches the person’s own memories.',
-      { reason: 'self-not-derivable' },
-    );
-  }
-  if (!NAME.test(user)) {
-    throw new OortUsageError('user is not a valid id.', { reason: 'invalid-argument' });
-  }
+  checkUserId(user);
   if (org === undefined || org === 'local') {
     throw new OortUsageError('user needs an explicit org (your tenant), other than "local".', {
       reason: 'principal-required',
@@ -56,11 +92,6 @@ export function checkUser(user: string | undefined, org: string | undefined): vo
   }
 }
 
-/**
- * A `user` key that is present must name a user: `undefined`, `null` or an empty string is a
- * dropped id (`req.user?.id` with no user), never a fallback to the operator's own principal.
- * Only an options object without the key at all acts as the person.
- */
 /**
  * The options as one snapshot: every property read once, so a getter or proxy cannot pass the
  * user check and then hand the parser something else. A `user` that is named but not an own
@@ -73,15 +104,15 @@ export function readOnce<T>(input: T): T {
   return raw as T;
 }
 
+/**
+ * A `user` key that is present must name a user: `undefined`, `null` or an empty string is a
+ * dropped id (`req.user?.id` with no user), never a fallback to the operator's own principal;
+ * anything else that is not an end-user id is `bad-user`. Only an options object without the key
+ * at all acts as the person.
+ */
 export function requireUserIfNamed(input: unknown): void {
   if (input === null || typeof input !== 'object' || !('user' in input)) return;
-  const u = (input as { user?: unknown }).user;
-  if (typeof u !== 'string' || u.trim() === '') {
-    throw new OortUsageError(
-      'user was given but is empty: a missing end-user id never falls back to the operator. Leave the user key out to act as the person.',
-      { reason: 'user-missing' },
-    );
-  }
+  checkUserId((input as { user?: unknown }).user);
 }
 
 /** An agent configured as a Star keeps one Star per org, shared by every user: refused with `user`. */

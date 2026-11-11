@@ -1,4 +1,5 @@
 import type { MemoryStore } from '@oortmem/core';
+import type { CloudClient } from '../cloud.js';
 import type { RecallTarget, TemporalView } from '../engine/recall.js';
 import type { Engine, Principal } from '../wire.js';
 import { OortUsageError } from './errors.js';
@@ -11,6 +12,12 @@ export interface Ctx {
   principal: Principal;
   /** The end user, or null for the person (`self`). */
   user: string | null;
+  /**
+   * The Oort Cloud client this handle's memory calls use (cloud mode): the engine's, or for an
+   * end user the one that sends `Oort-User` (CON-132). whoami and the account's own routes use
+   * the engine's.
+   */
+  cloud?: CloudClient;
   now: () => Date;
   /** The cwd project's own privacy statement, only while the handle reads that project. */
   statedPrivacy: boolean | undefined;
@@ -22,10 +29,11 @@ export interface Ctx {
 /** The engine and principal as the shared recall reads them. */
 export function target(ctx: Ctx): RecallTarget {
   const e = ctx.engine;
+  const cloud = ctx.cloud ?? e.cloud;
   return {
     mode: e.mode,
     config: e.config,
-    ...(e.cloud !== undefined && { cloud: e.cloud }),
+    ...(cloud !== undefined && { cloud }),
     ...(e.cloudProblem !== undefined && { cloudProblem: e.cloudProblem }),
     ...(e.store !== undefined && { store: e.store }),
     ...(e.embed !== undefined && { embed: e.embed }),
