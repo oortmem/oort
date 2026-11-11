@@ -11,6 +11,7 @@ const oort = await createOort({
 });
 
 // Per request: a handle fixed to one end user (it sends Oort-User). Hand only this one to tools.
+// Take userId from your own signed-in session, never from the request: the key reads every end user.
 const forUser = (userId: string) => oort.scoped({ user: userId, agent: 'support-bot' });
 
 await forUser('user-ada').remember('My order number is 1042.');

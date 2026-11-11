@@ -231,6 +231,8 @@ from oortmem import Oort
 oort = Oort(mode="cloud", org="acme", project=None, project_config=False, key_sources=["env"])
 
 
+# user_id comes from your own signed-in session, never from the request: the key reads
+# every end user.
 def handle_message(user_id: str, text: str) -> str:
     mem = oort.scoped(user=user_id, agent="support-bot")  # sends Oort-User: their Planet only
     context = mem.recall(text, limit=5)
