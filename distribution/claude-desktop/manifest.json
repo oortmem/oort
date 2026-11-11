@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "oort",
   "display_name": "Oort memory",
-  "version": "0.7.1",
+  "version": "0.7.3",
   "description": "Long-term memory for Claude: recall facts you chose to keep, remember decisions and preferences, forget on request.",
   "long_description": "Oort keeps facts across conversations on your own computer: decisions, preferences and project details. Claude can recall them, save new ones you state or confirm, explain why a memory exists, and forget it permanently. Memories stay on this machine. Use your own Voyage, TypeSafe and Anthropic keys, or an Oort Pro key so you need none.",
   "author": {

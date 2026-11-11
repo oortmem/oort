@@ -38,7 +38,12 @@ export {
   uninstallHooks,
   type HookEventStatus,
 } from './install.js';
-export { importTranscripts, type ImportOptions, type ImportResult } from './import.js';
+export {
+  importTranscripts,
+  type ImportOptions,
+  type ImportResult,
+  type TranscriptImportProgress,
+} from './import.js';
 export {
   CONSOLIDATE_BUDGET_MS,
   CONSOLIDATE_EVERY_MS,

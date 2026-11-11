@@ -119,6 +119,19 @@ export interface WiredHookOptions {
 }
 
 /**
+ * The prompt hook keeps its own, shorter rerank wait (CON-136): it runs before every prompt, while
+ * `oort recall`, `oort mcp` and the SDK wait up to `recall.rerankBudgetMs`.
+ */
+export function promptRecallConfig<
+  C extends { recall: { rerankBudgetMs: number; promptRerankBudgetMs: number } },
+>(config: C): C {
+  return {
+    ...config,
+    recall: { ...config.recall, rerankBudgetMs: config.recall.promptRerankBudgetMs },
+  };
+}
+
+/**
  * Runs `event` on an engine already wired for it, as the in-process hook and `oort serve` both
  * do: the same handlers, the same injection format and scrubbing. Resolves the hook's stdout,
  * empty when the store was locked (the log then records `degraded:busy`), or `skipped` when a Star
@@ -187,6 +200,7 @@ export async function runWiredHook(
   // The scope is left out: each handler derives it from the session's cwd.
   const out = await runHook(event, stdin, {
     ...rest,
+    ...(prompt && { config: promptRecallConfig(rest.config) }),
     ...(hookEmbed !== undefined && { embed: hookEmbed }),
     ...(hookRerank !== undefined && { rerank: hookRerank }),
     store: busyAware(store, () => {

@@ -326,8 +326,9 @@ needs it.
 
 ### Per-user memory in Oort Cloud
 
-> **Requires Oort Cloud with server keys (rolling out after 18 Nov 2026).** Until your account
-> has it, every end-user call below is refused with `end-users-unsupported` and nothing is sent.
+> **Requires a server key on Oort Pro** and `oortmem` 0.8.0 or newer. An account without
+> per-user memory refuses every end-user call below with `end-users-unsupported`, and nothing
+> is sent.
 
 The same `scoped({ user })` works against Oort Cloud with a **server key**: an Oort key made on
 [oortcloud.dev/account](https://oortcloud.dev/account) with "Acts for end users". Each end user

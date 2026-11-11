@@ -66,8 +66,14 @@ const recall = z
      * informative query word and the runner-up is clearly weaker (CON-57).
      */
     lexicalFirst: z.boolean().default(true),
-    /** Longest wait for the reranker, in ms; past it the fused order is used. 0 waits forever. */
-    rerankBudgetMs: z.number().int().min(0).default(400),
+    /**
+     * Longest wait for the reranker, in ms, for `oort recall`, `oort mcp` and the SDK; past it the
+     * fused order is used. 0 waits forever. 2000 since CON-136: a hosted reranker's round trip is
+     * often near 400 ms, and a timeout drops paraphrase matches that share no words.
+     */
+    rerankBudgetMs: z.number().int().min(0).default(2000),
+    /** The same wait for the prompt hook (`promptMode` `full` only; `fast` and `lexical` skip it). */
+    promptRerankBudgetMs: z.number().int().min(0).default(400),
     /** How long a query embedding is reused, in seconds. 0 turns the cache off. */
     queryCacheTtlSec: z.number().int().min(0).default(600),
     /**
@@ -100,7 +106,8 @@ const recall = z
     minDenseScore: 0.6,
     skipRerankWhenConfident: true,
     lexicalFirst: true,
-    rerankBudgetMs: 400,
+    rerankBudgetMs: 2000,
+    promptRerankBudgetMs: 400,
     queryCacheTtlSec: 600,
     staleAfterDays: 30,
     specificityPrior: 0,

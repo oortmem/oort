@@ -118,7 +118,8 @@ Three settings under `recall` cut them:
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `lexicalFirst` | true | Run the lexical search first. When its top result holds every informative word of the prompt (at least two of them), is current, and the runner-up holds clearly fewer, the prompt is not embedded at all. In cloud mode the prompt hook sends this setting to Oort Cloud, which does the same. |
-| `rerankBudgetMs` | 400 | The longest wait for the reranker. Past it, recall uses the fused order, logs `rerank-timeout`, and the relevance gate falls back to word coverage and dense similarity. 0 waits as long as the reranker takes. |
+| `rerankBudgetMs` | 2000 | The longest wait for the reranker in `oort recall`, `oort mcp` and the SDK. Past it, recall uses the fused order, logs `rerank-timeout`, and the relevance gate falls back to word coverage and dense similarity. 0 waits as long as the reranker takes. |
+| `promptRerankBudgetMs` | 400 | The same wait for the prompt hook, which runs before every prompt. It applies only when `promptMode` is `full`: `fast` and `lexical` skip the reranker. Before 0.7.3, `rerankBudgetMs` set this wait too: a value you set there no longer reaches the prompt hook. |
 | `queryCacheTtlSec` | 600 | How long a prompt's embedding is reused. The cache is in memory and on disk under `~/.oort/cache/query-embed` (files are named by a SHA-256 hash; no prompt text is stored). 0 turns it off. |
 
 Lexical first is conservative: it skips the embedding only when one memory clearly holds the

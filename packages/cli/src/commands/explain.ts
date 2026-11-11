@@ -87,7 +87,7 @@ export async function explainCommand(
     ctx.io.out(
       ui.header(
         'explain',
-        `${result.memories.length} memories in ${fixed(t['totalMs'], 1)} ms`,
+        `${result.memories.length} ${result.memories.length === 1 ? 'memory' : 'memories'} in ${fixed(t['totalMs'], 1)} ms`,
         scopeLabel(w),
         agentLabel(w),
         ...(result.read !== undefined ? [`reads: ${result.read.join(', ')}`] : []),

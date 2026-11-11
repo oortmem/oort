@@ -107,6 +107,7 @@ const CONTRACT = [
   'update',
   'login',
   'logout',
+  'open',
   'keys set',
   'keys list',
   'keys create',
@@ -633,6 +634,19 @@ describe('oort.v1: keys, login, logout', () => {
     const noStore = { env: { OORT_NO_KEYCHAIN: '1', OORT_SITE_URL: site.url } };
     bad(await run(['login', '--json'], noStore, k.kc, deps), 'login', 'usage');
     bad(await run(['logout', '--json'], noStore, k.kc), 'logout', 'usage');
+  });
+
+  it('open', async () => {
+    const e = cloudEnv();
+    e.cloud.memories.set(MEM, fakeMemory({ id: MEM, text: 'We deploy with wrangler.' }));
+    expect(ok(await e.run(['open', 'memory', MEM.slice(0, 8), '--json']), 'open')).toEqual({
+      target: 'memory',
+      url: `https://oortcloud.dev/dashboard/memories/${MEM}`,
+      opened: false,
+    });
+    expect(ok(await e.run(['open', '--json']), 'open')).toMatchObject({ target: 'dashboard' });
+    bad(await cloudEnv('local').run(['open', 'memory', MEM, '--json']), 'open', 'cloud-only');
+    bad(await e.run(['open', 'memory', '--json']), 'open', 'usage');
   });
 });
 
