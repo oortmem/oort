@@ -45,6 +45,27 @@ describe('check-seams', () => {
     expect(checkSeams()).toEqual([]);
   });
 
+  it('seams.fetch-outside-the-network-packages-fails', () => {
+    // CON-19: "a deliberately added fetch call in core fails pnpm verify". fetch is a global, so
+    // no import shows it; the check reads the identifiers instead.
+    const root = workspace({
+      core: core({
+        'a.ts': "export const get = () => fetch('https://example.com');\n",
+        'b.ts': 'export const ws = () => new globalThis.WebSocket("wss://x");\n',
+        'ok.ts':
+          '// a comment may say fetch\nexport const s = "fetch";\nexport const f = (store: { fetch: () => void; fetchAll?: () => void }) => store.fetch();\n',
+      }),
+      'embed-voyage': adapter('@oortmem/embed-voyage', {
+        'index.ts': "export const e = () => fetch('https://api.voyageai.com');\n",
+      }),
+    });
+    const seams = { core: { uses: [] }, 'embed-voyage': { uses: ['core'], fetch: true } };
+    expect(checkSeams({ root, seams })).toEqual([
+      "packages/core/src/a.ts:1: 'fetch' reaches the network; only packages with network or fetch in SEAMS may",
+      "packages/core/src/b.ts:1: 'WebSocket' reaches the network; only packages with network or fetch in SEAMS may",
+    ]);
+  });
+
   it('seams.core-importing-an-adapter-fails', () => {
     const root = workspace({
       core: core({

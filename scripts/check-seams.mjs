@@ -15,7 +15,8 @@
 //   - every other bare import is declared in the package's own dependencies, peerDependencies or
 //     optionalDependencies, so a vendor SDK reaches a package only through its package.json;
 //   - only cli and bench touch the raw network and process builtins (http, net, child_process, …).
-//     The adapters reach the network through `fetch` only.
+//     The adapters reach the network through `fetch` only, and only the ones marked `fetch: true`
+//     may: core, store-sqlite, mcp and claude-code never name fetch, WebSocket and the like.
 //
 // It reads import, export ... from, side-effect, `import()` and `require()` specifiers in
 // packages/*/src, skipping *.test.ts. Specifiers built at run time are not seen.
@@ -37,12 +38,12 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
  */
 export const SEAMS = {
   core: { uses: [] },
-  'embed-voyage': { uses: ['core'] },
-  'rerank-voyage': { uses: ['core'] },
-  'decide-jev': { uses: ['core'] },
-  writer: { uses: ['core'] },
+  'embed-voyage': { uses: ['core'], fetch: true },
+  'rerank-voyage': { uses: ['core'], fetch: true },
+  'decide-jev': { uses: ['core'], fetch: true },
+  writer: { uses: ['core'], fetch: true },
   'store-sqlite': { uses: ['core'] },
-  'local-models': { uses: ['core'] },
+  'local-models': { uses: ['core'], fetch: true }, // downloads the model files
   mcp: { uses: ['core'] },
   'claude-code': { uses: ['core'] },
   cli: {
@@ -62,6 +63,17 @@ export const SEAMS = {
  * An entry that no longer matches an import fails the check, so the list only shrinks.
  */
 export const EXCEPTIONS = [];
+
+/** Globals that reach the network without an import: only `network` or `fetch` packages name them. */
+const NETWORK_GLOBALS = new Set([
+  'fetch',
+  'WebSocket',
+  'XMLHttpRequest',
+  'EventSource',
+  'sendBeacon',
+]);
+/** `globalThis.fetch` is the global; `store.fetch` is someone's method. */
+const GLOBAL_OBJECTS = new Set(['globalThis', 'global', 'self', 'window', 'navigator']);
 
 /** Builtins that open a socket or start a process or thread the zero-network stubs can't see. */
 const NETWORK_BUILTINS = new Set([
@@ -286,7 +298,16 @@ function sourceFiles(dir) {
   return out.sort();
 }
 
-/** Every seam problem under `root`, as `file:line: message` strings; empty when clean. */
+/**
+ * @typedef {{ uses?: string[], lazy?: string[], network?: boolean, fetch?: boolean }} Seam
+ * @typedef {{ file: string, specifier: string, why: string }} Exception
+ */
+
+/**
+ * Every seam problem under `root`, as `file:line: message` strings; empty when clean.
+ * @param {{ root?: string, seams?: Record<string, Seam>, exceptions?: Exception[] }} [options]
+ * @returns {string[]}
+ */
 export function checkSeams({ root = ROOT, seams = SEAMS, exceptions = EXCEPTIONS } = {}) {
   const problems = [];
   const pkgsDir = path.join(root, 'packages');
@@ -334,7 +355,22 @@ export function checkSeams({ root = ROOT, seams = SEAMS, exceptions = EXCEPTIONS
     }
     for (const file of files) {
       const rel = path.relative(root, file).split(path.sep).join('/');
-      for (const { specifier, line, kind } of importsOf(readFileSync(file, 'utf8'))) {
+      const src = readFileSync(file, 'utf8');
+      if (rule.network !== true && rule.fetch !== true) {
+        const toks = tokenize(src);
+        toks.forEach((t, k) => {
+          if (t.t !== 'id' || !NETWORK_GLOBALS.has(t.v)) return;
+          if (toks[k - 1]?.v === '.' && !GLOBAL_OBJECTS.has(toks[k - 2]?.v)) return;
+          // A property key (`fetch: …`, `fetch?: …`) is a name, not the global. A method signature
+          // (`fetch(): void`) looks like a call to this tokenizer, so it is flagged: write it as a
+          // property instead.
+          if (toks[k + 1]?.v === ':' || (toks[k + 1]?.v === '?' && toks[k + 2]?.v === ':')) return;
+          problems.push(
+            `${rel}:${t.line}: '${t.v}' reaches the network; only packages with network or fetch in SEAMS may`,
+          );
+        });
+      }
+      for (const { specifier, line, kind } of importsOf(src)) {
         const problem = judge(specifier, kind);
         if (problem !== undefined && !excepted(rel, specifier)) {
           problems.push(`${rel}:${line}: '${specifier}' ${problem}`);
@@ -388,7 +424,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const root = at === -1 ? ROOT : path.resolve(process.argv[at + 1]);
   const problems = checkSeams({ root });
   if (problems.length > 0) {
-    console.error('check-seams: these imports cross a seam:\n');
+    console.error('check-seams: these imports or network calls cross a seam:\n');
     for (const p of problems) console.error(`  ${p}`);
     console.error('\nSee the rules at the top of scripts/check-seams.mjs.');
     process.exit(1);
