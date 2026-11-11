@@ -1,6 +1,16 @@
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
-import { age, agentLabel, clip, fixed, scopeLabel, short, withWired, type Ctx } from '../util.js';
+import {
+  age,
+  agentLabel,
+  clip,
+  fixed,
+  scopeLabel,
+  short,
+  withWired,
+  type Ctx,
+  shown,
+} from '../util.js';
 import type { RecallResult } from '@oortmem/core';
 import { timeMode } from '../engine/recall.js';
 
@@ -80,7 +90,7 @@ export async function explainCommand(
         fixed(e.activation),
         e.hydrated ? 'yes' : 'no',
         fromLabel(m.origin),
-        clip(m.text, 80),
+        shown(clip(m.text, 80)),
       ];
     });
     const t = result.timings;

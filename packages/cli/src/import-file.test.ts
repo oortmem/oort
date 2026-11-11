@@ -628,6 +628,46 @@ describe('oort import <file> (CON-137)', () => {
     expect(await all(h.sqlite)).toEqual([]);
   });
 
+  it('cli.read-commands-never-print-terminal-escapes-from-memory-text', async () => {
+    // Re-review Low 2 (proof P4): a memory's text, stub, entities and source are a file's words,
+    // and inspect, recall, explain and revalidate printed them raw. ESC, a C1 CSI and a bidi
+    // override are shown escaped instead.
+    const h = await onSqlite();
+    const bad = 'deploy\u001b]52;c;Zm9v\u0007 \u009b31m ‮';
+    const f = craftedFile(h, 'escapes.jsonl', [
+      craftedLine('esc-one', {
+        text: `The deploy runbook says ${bad} first.`,
+        stub: `stub ${bad}`,
+        entities: [`entity ${bad}`],
+        source: {
+          harness: `harness ${bad}`,
+          sessionId: `s ${bad}`,
+          decisions: [
+            { stage: `g ${bad}`, question: `q ${bad}`, answer: `a ${bad}`, probability: 0.5 },
+          ],
+        },
+        validFrom: '2025-01-01T00:00:00.000Z',
+        createdAt: '2025-01-01T00:00:00.000Z',
+        updatedAt: '2025-01-01T00:00:00.000Z',
+      }),
+      craftedLine('esc-two', { text: `Deploy notes ${bad} later.`, supersedes: 'esc-one' }),
+    ]);
+    expect((await h.run(['import', f, '--yes'])).code).toBe(0);
+    for (const args of [
+      ['inspect'],
+      ['inspect', 'esc-one'],
+      ['inspect', 'esc-two'],
+      ['recall', 'deploy runbook'],
+      ['explain', 'deploy runbook'],
+      ['revalidate'],
+    ]) {
+      const r = await h.run(args);
+      expect(r.code, `${args.join(' ')}: ${r.io.stderr}`).toBe(0);
+      expect(r.io.stdout, args.join(' ')).not.toMatch(/[\u001b\u0007\u009b‮]/);
+    }
+    expect((await h.run(['inspect', 'esc-one'])).io.stdout).toContain('\\u{1b}');
+  });
+
   it('cli.errors-never-print-terminal-escapes', async () => {
     // L-c: a field name in a crafted file, or any error's message, reaches stderr escaped.
     const h = await onSqlite();
