@@ -511,8 +511,9 @@ describe('oort import <file> (CON-137)', () => {
 
   it('cli.import-file-normalises-times-and-keeps-links-within-the-file', async () => {
     // Re-review Low 1 and Low 3 (proof P5): times are normalised (an unreadable one makes the line
-    // not valid; one ahead of now is clamped to now), an end is kept only when consistent and
-    // past, a link only to another line of the file, and a source only of the right shape.
+    // not valid; one ahead of now is clamped to now), an end is kept only when consistent (an end
+    // in valid time may still be ahead: the fact then ends on time), a link only to another line
+    // of the file, and a source only of the right shape.
     const h = await onSqlite();
     const ahead = '2999-01-01T00:00:00.000Z';
     const f = craftedFile(h, 'times.jsonl', [
@@ -549,6 +550,12 @@ describe('oort import <file> (CON-137)', () => {
         endReason: 'superseded',
       }),
       craftedLine('unreadable-end', { validTo: 'soon' }),
+      // A planned end before the line's own start, as the file gives it, does not hold together.
+      craftedLine('ends-before-start', {
+        createdAt: ahead,
+        validFrom: ahead,
+        validTo: '2998-01-01T00:00:00.000Z',
+      }),
       // Re-review Info 3: years outside 0000 to 9999 are not read.
       craftedLine('year-plus', { validFrom: '+010000-01-01T00:00:00.000Z' }),
       craftedLine('year-minus', {
@@ -558,7 +565,7 @@ describe('oort import <file> (CON-137)', () => {
     ]);
     const r = await h.run(['import', f, '--yes', '--json']);
     expect(r.code, r.io.stderr).toBe(0);
-    expect(JSON.parse(r.io.stdout).data).toMatchObject({ imported: 7, invalid: 8 });
+    expect(JSON.parse(r.io.stdout).data).toMatchObject({ imported: 7, invalid: 9 });
     const by = new Map((await all(h.sqlite)).map((m) => [m.id, m]));
     expect(by.get('a')).toMatchObject({
       supersededBy: 'b',
@@ -571,13 +578,20 @@ describe('oort import <file> (CON-137)', () => {
     for (const k of ['createdAt', 'updatedAt', 'validFrom'] as const) {
       expect(Date.parse(clamped[k]), k).toBeLessThanOrEqual(Date.now());
     }
-    expect(by.get('ends-ahead')).toMatchObject({ validTo: null, expiredAt: null, endReason: null });
+    // A fact planned to end ("valid until 2999") keeps that end; a record cannot have been ended
+    // in the future, so an expiry ahead of now is dropped.
+    expect(by.get('ends-ahead')).toMatchObject({
+      validTo: ahead,
+      expiredAt: null,
+      endReason: null,
+    });
     // An end that does not hold together leaves the line out rather than make it current.
     for (const id of [
       'ends-oddly',
       'clamp-drops-validto',
       'clamp-drops-expiry',
       'unreadable-end',
+      'ends-before-start',
       'year-plus',
       'year-minus',
     ]) {

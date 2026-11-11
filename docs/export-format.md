@@ -131,11 +131,13 @@ each memory is rebuilt from its content alone:
 - **Times:** `createdAt`, `updatedAt` and `validFrom` are normalised to ISO
   8601 and compared as times, not text; a time after now becomes now. An
   unreadable time, or a year outside 0000 to 9999, makes the line not valid.
-- **Ends:** an end that has not come yet is left open. One that has passed
-  must hold together: `validTo` after `validFrom`, and `expiredAt` not before
-  `createdAt` with a known `endReason`. Otherwise the line is not valid, even
-  when it is a start moved back to now that overtook the end: an ended fact
-  never arrives as a current one.
+- **Ends:** a `validTo` is kept, also one still ahead, so a fact planned to
+  end does so on time; it must come after `validFrom` (as the file gives it and
+  as moved back to now). An `expiredAt` ahead of now is dropped, since no record
+  was ended in the future; one that has passed must not be before `createdAt`
+  and needs a known `endReason`. Otherwise the line is not valid, even when it
+  is a start moved back to now that overtook the end: an ended fact never
+  arrives as a current one.
 - **Links:** `supersedes` and `supersededBy` are kept only when they name
   another memory of the same file that is imported too.
 - **Judgments** are kept as recording one keeps them (pinned, so shown to the

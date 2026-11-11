@@ -396,16 +396,18 @@ function rebuilt(
   const created = Math.min(createdRaw, nowT);
   const validFrom = Math.min(validFromRaw, nowT);
   const updated = Math.max(Math.min(updatedRaw, nowT), created);
-  // An end that has passed is kept only when it holds together: in valid time after the start,
-  // in transaction time with a reason and not before the record. One that does not (including
-  // one a clamped start overtook) leaves the line out: an ended fact never becomes current
-  // (re-review Info 2). An end still ahead is left open, as is the fact until then.
+  // An end is kept only when it holds together: in valid time after the start (both the start the
+  // file gives and the clamped one), in transaction time with a reason and not before the record.
+  // One that does not (including one a clamped start overtook) leaves the line out: an ended fact
+  // never becomes current (re-review Info 2). A valid-time end still ahead is kept, so a fact
+  // planned to end does so on time; a record cannot have been ended in the future, so an expiry
+  // ahead of now is dropped.
   const validToT = endTime(x['validTo']);
   const expiredT = endTime(x['expiredAt']);
   if (validToT === undefined || expiredT === undefined) return 'invalid';
-  const validTo = validToT !== null && validToT <= nowT ? validToT : null;
+  const validTo = validToT;
   const expiredAt = expiredT !== null && expiredT <= nowT ? expiredT : null;
-  if (validTo !== null && validTo <= validFrom) return 'invalid';
+  if (validTo !== null && (validTo <= validFrom || validTo <= validFromRaw)) return 'invalid';
   if (expiredAt !== null && (expiredAt < created || !END_REASONS.has(x['endReason']))) {
     return 'invalid';
   }
