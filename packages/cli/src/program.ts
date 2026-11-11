@@ -112,7 +112,7 @@ import {
   requestRefresh,
   updateCheckOff,
 } from './update-check.js';
-import { Refusal, commanderText, echo, safeJson, type Ctx } from './util.js';
+import { Refusal, commanderText, echo, safeJson, shown, type Ctx } from './util.js';
 import { wire as defaultWire, type WireFn } from './wire.js';
 
 export function program(ctx: Ctx, setCode: (code: number) => void): Command {
@@ -1173,7 +1173,9 @@ export async function runCli(
     const target = commandFor(p, args);
     const info = describeError(e, (flag) => rerunWith(p, target, args, flag));
     // Commander has printed its own line (with the usage hint).
-    if (!(e instanceof CommanderError)) io.err(`oort: ${info.message}\n`);
+    // Any message may quote input (a file's field, a server's words): never raw escapes (L-c).
+    if (!(e instanceof CommanderError))
+      io.err(`oort: ${shown(info.message, { newlines: true })}\n`);
     // --debug: the stack of every unexpected (exit 1) error.
     if (info.exitCode === 1 && args.includes('--debug') && e instanceof Error && e.stack) {
       io.err(`${e.stack}\n`);

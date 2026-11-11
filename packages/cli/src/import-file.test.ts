@@ -291,6 +291,46 @@ describe('oort import <file> (CON-137)', () => {
     expect(j.pack!.id).toMatch(/^[0-9a-f]{16}$/);
   });
 
+  it('cli.errors-never-print-terminal-escapes', async () => {
+    // L-c: a field name in a crafted file, or any error's message, reaches stderr escaped.
+    const h = await onSqlite();
+    const osc = '\u001b]8;;https://evil.example\u0007click\u001b]8;;\u0007\u001b[2J';
+    const file = path.join(h.root, 'escapes.jsonl');
+    fs.writeFileSync(
+      file,
+      [
+        JSON.stringify({
+          oort: 'export',
+          version: 2,
+          exportedAt: '2026-11-15T12:00:00.000Z',
+          memories: 1,
+          scopes: [],
+          addresses: [],
+        }),
+        JSON.stringify({
+          id: 'm1',
+          address: { level: 'user', orgId: 'local', customerId: 'self', [osc]: 1 },
+          author: { agentId: 'anonymous' },
+        }),
+      ].join('\n') + '\n',
+    );
+    const r = await h.run(['import', file, '--yes']);
+    expect(r.code).not.toBe(0);
+    expect(r.io.stderr).not.toMatch(/[\u0007\u001b]/);
+    expect(r.io.stderr).toContain('unknown field');
+    // Any unexpected error's message, not only the ones Oort words itself.
+    const base = h.wire;
+    h.wire = async () => {
+      throw new Error(`the store said ${osc}`);
+    };
+    const odd = await h.run(['stats']);
+    expect(odd.code).not.toBe(0);
+    expect(odd.io.stderr).toContain('the store said');
+    expect(odd.io.stderr).not.toMatch(/[\u0007\u001b]/);
+    expect(odd.io.stderr).toContain('\\u{1b}');
+    h.wire = base;
+  });
+
   it('cli.import-file-is-refused-in-cloud-mode', async () => {
     const h = harness();
     const base = h.wire;

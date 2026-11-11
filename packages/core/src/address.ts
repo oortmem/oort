@@ -153,7 +153,8 @@ function checkNode(a: Record<string, unknown>, what: string, allowProject: boole
   }
   const known = new Set(['level', 'orgId', 'projectId', ...NODE_FIELDS]);
   for (const k of Object.keys(a)) {
-    if (!known.has(k)) throw new RangeError(`${what}: unknown field ${k}`);
+    // The name comes from input (an export line): quoted and escaped, never raw on a terminal.
+    if (!known.has(k)) throw new RangeError(`${what}: unknown field ${JSON.stringify(k)}`);
   }
 }
 
@@ -178,7 +179,9 @@ export function assertAuthor(a: unknown): asserts a is Author {
     throw new RangeError('author: accountRef must be a non-empty string');
   }
   for (const k of Object.keys(o)) {
-    if (k !== 'agentId' && k !== 'accountRef') throw new RangeError(`author: unknown field ${k}`);
+    if (k !== 'agentId' && k !== 'accountRef') {
+      throw new RangeError(`author: unknown field ${JSON.stringify(k)}`);
+    }
   }
 }
 
