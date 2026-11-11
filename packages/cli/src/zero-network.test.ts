@@ -3,8 +3,9 @@
  * commands that need no model make no network call at all. Each command runs in-process
  * through the real `wire` (real SQLite store under a temp `OORT_HOME`, no injected adapters),
  * with every way out of the process stubbed to record the attempt and throw: `fetch`,
- * `http`/`https` requests, `net`/`tls` sockets, DNS, UDP, and child processes (a spawned
- * process could reach the network where these stubs cannot see it).
+ * `http`/`https` requests, `http2` sessions, `net`/`tls` sockets, DNS, UDP, child processes
+ * and worker threads (a spawned process or a worker could reach the network where these stubs
+ * cannot see it).
  */
 import * as fs from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
@@ -78,6 +79,7 @@ function installNetworkGuard(): Guard {
   block(net, 'createConnection', 'net.createConnection');
   block(net.Socket.prototype, 'connect', 'net.Socket#connect');
   block(require('node:tls') as object, 'connect', 'tls.connect');
+  block(require('node:http2') as object, 'connect', 'http2.connect');
   const dns = require('node:dns') as typeof import('node:dns');
   for (const fn of ['lookup', 'resolve', 'resolve4', 'resolve6']) block(dns, fn, `dns.${fn}`);
   for (const fn of ['lookup', 'resolve', 'resolve4', 'resolve6']) {
@@ -88,6 +90,8 @@ function installNetworkGuard(): Guard {
   for (const fn of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {
     block(cp, fn, `child_process.${fn}`);
   }
+  // A worker gets fresh builtin modules, so none of these stubs would apply inside it.
+  block(require('node:worker_threads') as object, 'Worker', 'worker_threads.Worker');
   syncBuiltinESMExports();
   return {
     attempts,
@@ -172,15 +176,21 @@ describe('zero network without keys or Oort Pro', () => {
   it('offline.guard-records-every-way-out', async () => {
     const net = await import('node:net');
     const http = await import('node:http');
+    const http2 = await import('node:http2');
+    const { Worker } = await import('node:worker_threads');
     expect(() => fetch('https://example.invalid/')).toThrow();
     expect(() => http.get('http://example.invalid/')).toThrow();
     expect(() => net.connect(443, 'example.invalid')).toThrow();
     expect(() => new net.Socket().connect(443, 'example.invalid')).toThrow();
+    expect(() => http2.connect('https://example.invalid/')).toThrow();
+    expect(() => new Worker('process.exit()', { eval: true })).toThrow();
     expect(guard.attempts).toEqual([
       'fetch https://example.invalid/',
       'node:http get http://example.invalid/',
       'net.connect',
       'net.Socket#connect',
+      'http2.connect https://example.invalid/',
+      'worker_threads.Worker process.exit()',
     ]);
   });
 
