@@ -9,6 +9,10 @@ import {
   importedJudgment,
   judgmentText,
   nodeGrant,
+  type Decision,
+  type Judgment,
+  type JudgmentPackOrigin,
+  type MemorySource,
   parseExport,
   planetNode,
   type Memory,
@@ -281,24 +285,169 @@ const MEMORY_TYPES: ReadonlySet<string> = new Set([
   'judgment',
 ]);
 const TIERS: ReadonlySet<string> = new Set(['hot', 'warm', 'cold']);
-const END_REASONS: ReadonlySet<unknown> = new Set([null, 'superseded', 'corrected', 'expired']);
+const END_REASONS: ReadonlySet<unknown> = new Set(['superseded', 'corrected', 'expired']);
 const MEMORY_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** What one imported memory may hold (a file is not trusted to be small). */
+const LINE_LIMITS = Object.freeze({
+  text: 64_000,
+  stub: 2_000,
+  entities: 64,
+  entity: 200,
+  decisions: 64,
+  decisionText: 4_000,
+  harness: 128,
+});
+/** The largest file `oort import <file>` reads (a cap on memory, not on any real export). */
+export const IMPORT_FILE_MAX_BYTES = 100 * 1024 * 1024;
+
+const isText = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max;
+
+/** A time from a file, normalised; one ahead of `now` becomes `now`; unreadable: undefined. */
+function fileTime(v: unknown, now: Date): string | undefined {
+  if (typeof v !== 'string' || v.length > 64) return undefined;
+  const t = Date.parse(v);
+  if (Number.isNaN(t)) return undefined;
+  return new Date(Math.min(t, now.getTime())).toISOString();
+}
+
+/** A time from a file that must already have passed, normalised; otherwise null. */
+function pastTime(v: unknown, now: Date): string | null {
+  if (typeof v !== 'string' || v.length > 64) return null;
+  const t = Date.parse(v);
+  return Number.isNaN(t) || t > now.getTime() ? null : new Date(t).toISOString();
+}
+
+/** A memory's source, when it has the shape a store writes; otherwise a plain one. */
+function fileSource(v: unknown): MemorySource {
+  const plain: MemorySource = { harness: 'oort import', decisions: [] };
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return plain;
+  const o = v as Record<string, unknown>;
+  const decisions = o['decisions'];
+  if (!isText(o['harness'], LINE_LIMITS.harness) || !Array.isArray(decisions)) return plain;
+  if (decisions.length > LINE_LIMITS.decisions) return plain;
+  const out: Decision[] = [];
+  for (const d of decisions) {
+    if (typeof d !== 'object' || d === null) return plain;
+    const x = d as Record<string, unknown>;
+    const p = x['probability'];
+    if (
+      !isText(x['stage'], LINE_LIMITS.decisionText) ||
+      !isText(x['question'], LINE_LIMITS.decisionText) ||
+      !isText(x['answer'], LINE_LIMITS.decisionText) ||
+      typeof p !== 'number' ||
+      !Number.isFinite(p) ||
+      p < 0 ||
+      p > 1
+    ) {
+      return plain;
+    }
+    out.push({ stage: x['stage'], question: x['question'], answer: x['answer'], probability: p });
+  }
+  return {
+    harness: o['harness'],
+    ...(isText(o['sessionId'], LINE_LIMITS.harness) && { sessionId: o['sessionId'] }),
+    ...(isText(o['turnRef'], LINE_LIMITS.harness) && { turnRef: o['turnRef'] }),
+    decisions: out,
+  };
+}
 
 /**
- * Whether an export line holds what a store writes (security review of CON-137, M1): a file is
- * not trusted, so a type, tier, salience, pin, id or judgment no store writes leaves it out.
+ * One export line as this store keeps it (security review of CON-137): rebuilt from its content
+ * alone, so nothing else a file claims reaches the store. Kept: id, type, text, stub, entities,
+ * salience (0 to 1), pin, source (when well formed), project and author, and the times. Reset as
+ * for a new memory: tier warm, access log empty, never confirmed here, no provenance. Times are
+ * normalised and clamped to now; an end is kept only when it is consistent and past. Links are
+ * set afterwards (only to other lines of the file). A judgment is the one importedJudgment
+ * builds, kept as recording one keeps it (pinned, its text and stub rendered from it). Returns
+ * undefined when the line is not something a store writes.
  */
-function wellFormed(m: Memory): boolean {
+function rebuilt(
+  m: Memory,
+  now: Date,
+  origin: (id: string) => JudgmentPackOrigin,
+): Memory | undefined {
   const x = m as unknown as Record<string, unknown>;
-  if (typeof x['id'] !== 'string' || !MEMORY_ID.test(x['id'])) return false;
-  if (!MEMORY_TYPES.has(x['type'] as string) || !TIERS.has(x['tier'] as string)) return false;
+  const id = x['id'];
+  const type = x['type'];
+  if (typeof id !== 'string' || !MEMORY_ID.test(id)) return undefined;
+  if (typeof type !== 'string' || !MEMORY_TYPES.has(type)) return undefined;
+  if (!TIERS.has(x['tier'] as string) || typeof x['pinned'] !== 'boolean') return undefined;
   const salience = x['salience'];
-  if (typeof salience !== 'number' || !Number.isFinite(salience)) return false;
-  if (salience < 0 || salience > 1) return false;
-  if (typeof x['pinned'] !== 'boolean' || typeof x['text'] !== 'string') return false;
-  if (!END_REASONS.has(x['endReason'])) return false;
-  // A judgment is checked as it is stored, by importedJudgment.
-  return m.type === 'judgment' || x['judgment'] === undefined;
+  if (typeof salience !== 'number' || !Number.isFinite(salience)) return undefined;
+  if (salience < 0 || salience > 1) return undefined;
+  const createdAt = fileTime(x['createdAt'], now);
+  const updatedAt = fileTime(x['updatedAt'], now);
+  const validFrom = fileTime(x['validFrom'], now);
+  if (createdAt === undefined || updatedAt === undefined || validFrom === undefined) {
+    return undefined;
+  }
+  // Ended in valid time: only after it began, and already. Ended in transaction time: with a
+  // reason, after it was recorded, and already; anything else is left open.
+  const validTo = pastTime(x['validTo'], now);
+  const expiredAt = pastTime(x['expiredAt'], now);
+  const keepValidTo = validTo !== null && validTo > validFrom ? validTo : null;
+  const ended = expiredAt !== null && expiredAt >= createdAt && END_REASONS.has(x['endReason']);
+  const scope = { ...m.scope, agentId: m.scope.agentId };
+  const common = {
+    id,
+    scope,
+    ...(m.address !== undefined && { address: m.address }),
+    ...(m.author !== undefined && { author: { agentId: m.author.agentId } }),
+    tier: 'warm' as const,
+    accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
+    validFrom,
+    validTo: keepValidTo,
+    expiredAt: ended ? expiredAt : null,
+    endReason: ended ? (x['endReason'] as Memory['endReason']) : null,
+    lastConfirmedAt: null,
+    supersedes: null,
+    supersededBy: null,
+    source: fileSource(x['source']),
+    createdAt,
+    updatedAt: updatedAt < createdAt ? createdAt : updatedAt,
+  };
+  if (type === 'judgment') {
+    let j: Judgment;
+    try {
+      j = importedJudgment(x['judgment'], origin(id));
+    } catch {
+      return undefined;
+    }
+    // As recording one keeps it (judgment memories are the expert's, unbound to a project).
+    const { projectId: _p, ...unbound } = scope;
+    return {
+      ...common,
+      scope: unbound,
+      type: 'judgment',
+      text: judgmentText(j),
+      stub: `${j.verdict}: ${j.subject.summary.slice(0, 80)}`,
+      entities: [...new Set([j.domain, ...j.criteria])],
+      salience: 0.8,
+      pinned: true,
+      judgment: j,
+    };
+  }
+  if (x['judgment'] !== undefined) return undefined;
+  const entities = x['entities'];
+  if (
+    !isText(x['text'], LINE_LIMITS.text) ||
+    x['text'] === '' ||
+    !isText(x['stub'], LINE_LIMITS.stub) ||
+    !Array.isArray(entities) ||
+    entities.length > LINE_LIMITS.entities ||
+    !entities.every((e) => isText(e, LINE_LIMITS.entity))
+  ) {
+    return undefined;
+  }
+  return {
+    ...common,
+    type: type as Memory['type'],
+    text: x['text'],
+    stub: x['stub'],
+    entities: [...entities],
+    salience,
+    pinned: x['pinned'],
+  };
 }
 
 export async function importFileCommand(
@@ -309,8 +458,16 @@ export async function importFileCommand(
   const full = path.resolve(ctx.io.cwd, file);
   let text: string;
   try {
+    const size = fs.statSync(full).size;
+    if (size > IMPORT_FILE_MAX_BYTES) {
+      throw new Refusal(
+        `${echo(file)} is ${Math.ceil(size / 1024 / 1024)} MB; oort import reads at most ${IMPORT_FILE_MAX_BYTES / 1024 / 1024} MB.`,
+        { fix: 'oort import <file.jsonl>' },
+      );
+    }
     text = fs.readFileSync(full, 'utf8');
   } catch (e) {
+    if (e instanceof Refusal) throw e;
     const code = (e as NodeJS.ErrnoException).code ?? 'unreadable';
     throw new Refusal(`Cannot read ${echo(file)} (${code}).`, { fix: 'oort import <file.jsonl>' });
   }
@@ -343,36 +500,36 @@ export async function importFileCommand(
     const outside = memories.filter((m) => addressOf(m).level !== 'user').length;
     const now = new Date();
     const digest = createHash('sha256').update(text).digest('hex');
+    const origin = (id: string) =>
+      fileOrigin({ digest, name: path.basename(full), exportedAt, originalId: id, now });
     const fresh: Memory[] = [];
+    const links = new Map<string, { supersedes: unknown; supersededBy: unknown }>();
     let already = 0;
     let invalid = 0;
     for (const m of memories) {
       if (addressOf(m).level !== 'user') continue;
-      if (!wellFormed(m)) {
+      const r = rebuilt(m, now, origin);
+      if (r === undefined) {
         invalid++;
         continue;
       }
-      if ((await w.store.get(grant, m.id)) !== null) {
+      if ((await w.store.get(grant, r.id)) !== null) {
         already++;
         continue;
       }
-      if (m.type !== 'judgment') {
-        fresh.push(m);
-        continue;
-      }
-      // What is stored is what was checked: the normalised, redacted decision, imported from
-      // this file (never confirmed, no tombstone), and the text recall shows rendered from it.
-      try {
-        const judgment = importedJudgment(
-          m.judgment,
-          fileOrigin({ digest, name: path.basename(full), exportedAt, originalId: m.id, now }),
-        );
-        fresh.push({ ...m, judgment, text: judgmentText(judgment) });
-      } catch {
-        invalid++;
-      }
+      fresh.push(r);
+      links.set(r.id, { supersedes: m.supersedes, supersededBy: m.supersededBy });
     }
-    const pinned = fresh.filter((m) => m.pinned).length;
+    // A link is kept only to another memory of this file that is being imported.
+    for (const r of fresh) {
+      const l = links.get(r.id)!;
+      const to = (v: unknown): string | null =>
+        typeof v === 'string' && v !== r.id && links.has(v) ? v : null;
+      r.supersedes = to(l.supersedes);
+      r.supersededBy = to(l.supersededBy);
+    }
+    // Judgments are pinned as recorded ones are, and counted on their own.
+    const pinned = fresh.filter((m) => m.pinned && m.type !== 'judgment').length;
     const judgments = fresh.filter((m) => m.type === 'judgment').length;
     const json = jsonMode(ctx);
     const ui = uiFor(ctx.io);
@@ -434,8 +591,7 @@ export async function importFileCommand(
       ctx.io.out('Nothing imported.\n');
       return 0;
     }
-    // Written warm with a fresh vector; a cold memory is then moved to cold again, so the store
-    // holds it as it held it before (stub indexed, the full text in its cold copy).
+    // Written warm, with a fresh vector from this store's embedder.
     const ready: Memory[] = [];
     for (let i = 0; i < fresh.length; i += EMBED_BATCH) {
       const batch = fresh.slice(i, i + EMBED_BATCH);
@@ -444,23 +600,11 @@ export async function importFileCommand(
         'document',
       );
       batch.forEach((m, k) => {
-        const { embedding: _old, ...rest } = m;
         const v = vectors[k];
-        ready.push({
-          ...rest,
-          tier: m.tier === 'cold' ? 'warm' : m.tier,
-          ...(v !== undefined && { embedding: v }),
-        } as Memory);
+        ready.push({ ...m, ...(v !== undefined && { embedding: v }) });
       });
     }
     await w.store.upsertMany(grant, ready);
-    const cold: Memory[] = [];
-    for (const m of fresh) {
-      if (m.tier !== 'cold') continue;
-      const stored = await w.store.get(grant, m.id);
-      if (stored !== null) cold.push(stored);
-    }
-    if (cold.length > 0) await w.store.coldPutMany(grant, cold);
     ctx.io.out(
       `Imported ${ready.length} memories from ${fileShown}${already > 0 ? ` (${already} already here)` : ''}.\n`,
     );
