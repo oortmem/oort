@@ -369,6 +369,120 @@ describe('M2: tombstones', () => {
     expect(r.tombstoned).toHaveLength(1);
   });
 
+  it('review.an-inactive-imported-judgment-leaves-no-fingerprint', async () => {
+    // Re-review M2: an imported copy that is not active (ended in valid or transaction time, or
+    // not yet valid) is no evidence the decision is here, so it never keeps the pack out.
+    const from = createMemoryStore({ now: () => NOW });
+    const real = await recordJudgment(base({ ref: undefined }), { ...deps(from), via: 'cli' });
+    const text = formatJudgmentPack(await from.list(grant), {
+      name: 'ada',
+      exportedBy: 'x',
+      exportedAt: NOW,
+    });
+    const origin = fileOrigin({
+      digest: 'c'.repeat(64),
+      name: 'copy.jsonl',
+      exportedAt: NOW.toISOString(),
+      originalId: 'c1',
+      now: NOW,
+    });
+    const PAST = '2026-01-01T00:00:00.000Z';
+    const variants: Record<string, Partial<Memory>> = {
+      'past-validTo': { validTo: '2026-01-02T00:00:00.000Z' },
+      'future-validFrom': { validFrom: '2999-01-01T00:00:00.000Z' },
+      superseded: { expiredAt: PAST, endReason: 'superseded' },
+      expired: { expiredAt: PAST, endReason: 'expired' },
+    };
+    for (const [name, over] of Object.entries(variants)) {
+      const store = createMemoryStore({ now: () => NOW });
+      await store.upsert(grant, {
+        ...real.memory,
+        id: `copy-${name}`,
+        judgment: importedJudgment(real.memory.judgment!, origin),
+        ...over,
+      });
+      expect(isActiveJudgment((await store.get(grant, `copy-${name}`))!, NOW), name).toBe(false);
+      const r = await importJudgmentPack(parseJudgmentPack(text), deps(store));
+      expect(r, name).toMatchObject({ tombstoned: [], skipped: [] });
+      expect(r.added, name).toHaveLength(1);
+    }
+  });
+
+  it('review.a-person-can-withdraw-or-purge-a-record-that-arrived-ended', async () => {
+    // Re-review Low 4: a record that arrived withdrawn or purged leaves no tombstone, so a person
+    // here must still be able to withdraw or purge it, which writes one and blocks the decision.
+    const from = createMemoryStore({ now: () => NOW });
+    const real = await recordJudgment(base({ ref: undefined }), { ...deps(from), via: 'cli' });
+    const text = formatJudgmentPack(await from.list(grant), {
+      name: 'ada',
+      exportedBy: 'x',
+      exportedAt: NOW,
+    });
+    const origin = fileOrigin({
+      digest: 'd'.repeat(64),
+      name: 'ended.jsonl',
+      exportedAt: NOW.toISOString(),
+      originalId: 'e1',
+      now: NOW,
+    });
+    const mark = { at: NOW.toISOString(), by: 'someone' };
+    for (const [how, act] of [
+      ['withdraw', withdrawJudgment],
+      ['purge', purgeJudgment],
+    ] as const) {
+      const store = createMemoryStore({ now: () => NOW });
+      const arrived = {
+        ...real.memory,
+        id: `arrived-${how}`,
+        judgment: importedJudgment(
+          { ...real.memory.judgment!, withdrawn: mark, ...(how === 'purge' && { purged: mark }) },
+          origin,
+        ),
+      };
+      await store.upsert(grant, arrived);
+      expect(await act(store, grant, arrived, 'marcus', NOW), how).toBe(true);
+      const after = (await store.get(grant, arrived.id))!.judgment!;
+      expect(after.tombstone, how).toBe(tombstoneKey(real.memory.judgment!));
+      // Done once: a second time changes nothing.
+      expect(await act(store, grant, (await store.get(grant, arrived.id))!, 'marcus', NOW)).toBe(
+        false,
+      );
+      const r = await importJudgmentPack(parseJudgmentPack(text), deps(store));
+      expect(r.added, how).toEqual([]);
+      expect(r.tombstoned, how).toHaveLength(1);
+    }
+  });
+
+  it('review.pack-times-are-stored-as-iso', () => {
+    // Re-review info: Date.parse accepts words, so a checked time is stored normalised.
+    for (const [given, want] of [
+      ['2026-11-01T00:00:00Z', '2026-11-01T00:00:00.000Z'],
+      ['Verified by Oort 2026', new Date('Verified by Oort 2026').toISOString()],
+    ] as const) {
+      const o = fileOrigin({
+        digest: 'e'.repeat(64),
+        name: 'f.jsonl',
+        exportedAt: given,
+        originalId: 'x',
+        now: NOW,
+      });
+      expect(o.exportedAt).toBe(want);
+      expect(
+        importedJudgment(
+          {
+            ...base(),
+            subject: { summary: 'S' },
+            verdicts: ['approved', 'rejected'],
+            verdict: 'rejected',
+            criteria: [],
+            withdrawn: { at: given, by: 'm' },
+          },
+          o,
+        ).withdrawn,
+      ).toEqual({ at: want, by: 'm' });
+    }
+  });
+
   it('review.a-judgment-from-a-file-is-normalised-redacted-and-imported', () => {
     const key = 'AKIA' + 'IOSFODNN7' + 'EXAMPLE';
     const origin = fileOrigin({

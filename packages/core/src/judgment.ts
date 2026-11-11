@@ -395,17 +395,19 @@ async function indexJudgments(store: MemoryStore, grant: Grant, now: Date): Prom
     const j = m.judgment;
     const ended =
       j.withdrawn !== undefined || j.purged !== undefined || m.endReason === 'corrected';
-    // An imported record (a pack's or an export file's) cannot speak for a person (CON-137): one
-    // that arrived withdrawn, purged or corrected is no evidence and leaves no tombstone, so a
-    // file cannot plant one to keep a genuine decision out. Ended here, it does: withdrawing,
-    // purging or correcting writes `tombstone`, which no import stores.
-    const importedEnded = j.pack !== undefined && ended && j.tombstone === undefined;
+    // An imported record (a pack's or an export file's) cannot speak for a person (CON-137): it
+    // is evidence the decision is here only while it is active, and it leaves a tombstone only
+    // when a person ended it here (withdrawing, purging or correcting writes `tombstone`, which
+    // no import stores), so a file cannot plant either to keep a genuine decision out.
+    const imported = j.pack !== undefined;
     // An agent's unconfirmed record is no evidence the decision is already here.
-    if (!isUnconfirmedAgentJudgment(j) && !importedEnded) index.fingerprints.add(fingerprint(j));
-    if (j.pack !== undefined) index.imported.add(`${j.pack.id}:${j.pack.originalId}`);
+    if (!isUnconfirmedAgentJudgment(j) && (!imported || isActiveJudgment(m, now))) {
+      index.fingerprints.add(fingerprint(j));
+    }
+    if (imported) index.imported.add(`${j.pack!.id}:${j.pack!.originalId}`);
     // Only a person's decision leaves a tombstone that blocks imports: an agent withdrawing or
     // correcting its own unconfirmed record must not keep a genuine expert decision out.
-    if (ended && !isUnconfirmedAgentJudgment(j) && !importedEnded) {
+    if (ended && !isUnconfirmedAgentJudgment(j) && (!imported || j.tombstone !== undefined)) {
       index.tombstones.add(j.tombstone ?? tombstoneKey(j));
     }
     const key = itemKey(j);
@@ -415,6 +417,9 @@ async function indexJudgments(store: MemoryStore, grant: Grant, now: Date): Prom
   }
   return index;
 }
+
+/** An imported judgment that came ended and that no person here has ended since. */
+const arrivedEnded = (j: Judgment): boolean => j.pack !== undefined && j.tombstone === undefined;
 
 /** One write a record or an import will make, before embedding. */
 interface Planned {
@@ -741,9 +746,10 @@ export async function withdrawJudgment(
   by: string,
   now = new Date(),
 ): Promise<boolean> {
-  if (m.type !== 'judgment' || m.judgment === undefined || m.judgment.withdrawn !== undefined) {
-    return false;
-  }
+  if (m.type !== 'judgment' || m.judgment === undefined) return false;
+  // Withdrawn already, unless it arrived so (imported, no tombstone of a person here): then this
+  // withdrawal is a person's, and writes the tombstone that keeps the decision out (CON-137).
+  if (m.judgment.withdrawn !== undefined && !arrivedEnded(m.judgment)) return false;
   const iso = now.toISOString();
   const full = (await store.get(grant, m.id)) ?? m;
   const j = full.judgment ?? m.judgment;
@@ -798,9 +804,9 @@ export async function purgeJudgment(
   by: string,
   now = new Date(),
 ): Promise<boolean> {
-  if (m.type !== 'judgment' || m.judgment === undefined || m.judgment.purged !== undefined) {
-    return false;
-  }
+  if (m.type !== 'judgment' || m.judgment === undefined) return false;
+  // Purged already, unless it arrived so: as for withdrawing (CON-137).
+  if (m.judgment.purged !== undefined && !arrivedEnded(m.judgment)) return false;
   const iso = now.toISOString();
   const full = (await store.get(grant, m.id)) ?? m;
   const j = full.judgment ?? m.judgment;
@@ -1295,7 +1301,8 @@ function packText(field: string, v: unknown, max: number): string {
 function packTime(field: string, v: unknown): string {
   const t = packText(field, v, PACK_LIMITS.time);
   if (Number.isNaN(Date.parse(t))) throw new JudgmentPackError(`${field} is not an ISO time`);
-  return t;
+  // Stored normalised: Date.parse also accepts words ("Verified by Oort 2026").
+  return new Date(t).toISOString();
 }
 
 /**
@@ -1516,7 +1523,8 @@ export function parseJudgmentPack(textIn: string): ParsedJudgmentPack {
       `the manifest says ${String(head.count)} judgments, the file holds ${body.length}`,
     );
   }
-  const digest = packDigest(meta, body);
+  // The digest binds the manifest as written; what is kept is the normalised time.
+  const digest = packDigest({ ...meta, exportedAt: head.exportedAt as string }, body);
   if (head.digest !== digest) {
     throw new JudgmentPackError('the digest does not match: the pack was changed or cut short');
   }
