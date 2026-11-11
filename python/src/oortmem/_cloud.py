@@ -569,8 +569,11 @@ class CloudOps:
             raise end_users_not_offered() from None
 
     def erase_end_user(self, user: str) -> Dict[str, Any]:
-        r = self._end_user_route("DELETE", "/v1/end-users/" + urllib.parse.quote(user, safe="")) or {}
-        e = r.get("erased") if isinstance(r, Mapping) and isinstance(r.get("erased"), Mapping) else {}
+        r = self._end_user_route("DELETE", "/v1/end-users/" + urllib.parse.quote(user, safe=""))
+        # What was erased is the proof it happened: an answer without it is not a success.
+        e = r.get("erased") if isinstance(r, Mapping) else None
+        if not isinstance(e, Mapping):
+            raise OortInternalError("An internal error stopped this call (TypeError).")
         n = lambda v: v if isinstance(v, int) and not isinstance(v, bool) else 0  # noqa: E731
         return {
             "erased": user,
