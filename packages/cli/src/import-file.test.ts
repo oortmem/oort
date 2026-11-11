@@ -199,6 +199,98 @@ describe('oort import <file> (CON-137)', () => {
     expect(await all(h.sqlite)).toEqual([]);
   });
 
+  it('cli.import-file-checks-what-a-file-claims-and-trusts-no-judgment', async () => {
+    // Security review of CON-137 (M1): a crafted file is not trusted. Lines with a type, tier,
+    // salience, pin or id a store never writes are left out and counted; a judgment arrives as an
+    // imported one (via pack, unconfirmed), so it counts only when judging asks for imports.
+    const h = await onSqlite();
+    const base = JSON.parse(fs.readFileSync(FIXTURE, 'utf8').split('\n')[1]!) as Record<
+      string,
+      unknown
+    >;
+    const judgment = {
+      subject: { summary: 'PR 12' },
+      verdict: 'approved',
+      verdicts: ['approved', 'rejected'],
+      reason: 'The tests pass.',
+      criteria: [],
+      domain: 'review',
+      by: 'marcus',
+      decidedAt: '2026-11-01T00:00:00.000Z',
+      via: 'cli',
+      confirmed: { at: '2026-11-02T00:00:00.000Z', by: 'marcus' },
+    };
+    const line = (id: string, over: Record<string, unknown>) =>
+      JSON.stringify({
+        ...base,
+        id,
+        supersedes: null,
+        supersededBy: null,
+        expiredAt: null,
+        endReason: null,
+        validTo: null,
+        ...over,
+      });
+    const lines = [
+      line('ok-1', { pinned: false }),
+      line('ok-pinned', { pinned: true }),
+      line('ok-judgment', { type: 'judgment', judgment }),
+      line('bad-type', { type: 'admin' }),
+      line('bad-tier', { tier: 'frozen' }),
+      line('bad-salience-high', { salience: 1e9 }),
+      line('bad-salience-low', { salience: -0.1 }),
+      line('bad-pinned', { pinned: 'true' }),
+      line('bad-judgment', { type: 'judgment', judgment: { ...judgment, verdict: undefined } }),
+      line('bad-stray-judgment', { judgment }),
+      line('bad/id', {}),
+    ];
+    const file = path.join(h.root, 'crafted.jsonl');
+    fs.writeFileSync(
+      file,
+      [
+        JSON.stringify({
+          oort: 'export',
+          version: 1,
+          exportedAt: '2026-11-15T12:00:00.000Z',
+          memories: lines.length,
+          scopes: [],
+        }),
+        ...lines,
+      ].join('\n') + '\n',
+    );
+    // The question says what it brings in and where each memory's text goes.
+    const asked = await h.run(['import', file], { tty: true, answer: 'n' });
+    expect(asked.code).toBe(0);
+    expect(asked.io.asked[0]).toMatch(
+      /^Import 3 memories \(1 pinned; 1 judgment, counted only when judging includes imports\)\? Each memory's text is sent to Voyage AI to be embedded/,
+    );
+    expect(asked.io.stdout).toMatch(/not valid\s+8 \(left out\)/);
+    expect(await all(h.sqlite)).toEqual([]);
+
+    const r = await h.run(['import', file, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(JSON.parse(r.io.stdout).data).toMatchObject({
+      outcome: 'imported',
+      memories: 11,
+      imported: 3,
+      invalid: 8,
+      pinned: 1,
+      judgments: 1,
+    });
+    const here = await all(h.sqlite);
+    expect(here.map((m) => m.id)).toEqual(['ok-1', 'ok-judgment', 'ok-pinned']);
+    const j = here.find((m) => m.id === 'ok-judgment')!.judgment!;
+    expect(j.via).toBe('pack');
+    expect(j.confirmed).toBeUndefined();
+    expect(j.pack).toMatchObject({
+      name: 'crafted.jsonl',
+      exportedAt: '2026-11-15T12:00:00.000Z',
+      exportedBy: 'oort import',
+      originalId: 'ok-judgment',
+    });
+    expect(j.pack!.id).toMatch(/^[0-9a-f]{16}$/);
+  });
+
   it('cli.import-file-is-refused-in-cloud-mode', async () => {
     const h = harness();
     const base = h.wire;

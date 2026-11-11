@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -5,12 +6,17 @@ import {
   ExportFormatError,
   addressOf,
   nodeGrant,
+  normaliseJudgment,
+  packInput,
   parseExport,
   planetNode,
+  type Judgment,
+  type JudgmentPackOrigin,
   type Memory,
 } from '@oortmem/core';
 import { importTranscripts } from '@oortmem/claude-code';
 import { importProgressFor } from '../import-progress.js';
+import { LOCAL_PROVIDER } from '../local-models.js';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import {
@@ -267,6 +273,50 @@ const EMBED_BATCH = 64;
  * again is safe. Each memory is embedded again with the store's embedder, since the file's
  * vectors may come from another model. Asks first (`--yes` skips the question).
  */
+const MEMORY_TYPES: ReadonlySet<string> = new Set([
+  'semantic',
+  'episodic',
+  'procedural',
+  'preference',
+  'judgment',
+]);
+const TIERS: ReadonlySet<string> = new Set(['hot', 'warm', 'cold']);
+const END_REASONS: ReadonlySet<unknown> = new Set([null, 'superseded', 'corrected', 'expired']);
+const MEMORY_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Whether an export line holds what a store writes (security review of CON-137, M1): a file is
+ * not trusted, so a type, tier, salience, pin, id or judgment no store writes leaves it out.
+ */
+function wellFormed(m: Memory): boolean {
+  const x = m as unknown as Record<string, unknown>;
+  if (typeof x['id'] !== 'string' || !MEMORY_ID.test(x['id'])) return false;
+  if (!MEMORY_TYPES.has(x['type'] as string) || !TIERS.has(x['tier'] as string)) return false;
+  const salience = x['salience'];
+  if (typeof salience !== 'number' || !Number.isFinite(salience)) return false;
+  if (salience < 0 || salience > 1) return false;
+  if (typeof x['pinned'] !== 'boolean' || typeof x['text'] !== 'string') return false;
+  if (!END_REASONS.has(x['endReason'])) return false;
+  if (m.type !== 'judgment') return x['judgment'] === undefined;
+  if (typeof m.judgment !== 'object' || m.judgment === null) return false;
+  try {
+    normaliseJudgment(packInput(m.judgment), new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A judgment from a file arrives as an imported one, as from a pack: `via: 'pack'` with this file
+ * as its origin, never confirmed, so it counts only when judging asks for imports (CON-71). What
+ * the line says about how it was recorded is not trusted. A withdrawal or purge it carries stays.
+ */
+function asImported(j: Judgment, origin: JudgmentPackOrigin): Judgment {
+  const { confirmed: _confirmed, pack: _pack, via: _via, ...rest } = j;
+  return { ...rest, via: 'pack', pack: origin };
+}
+
 export async function importFileCommand(
   file: string,
   opts: ImportFileOptions,
@@ -304,13 +354,34 @@ export async function importFileCommand(
       write: [planet],
     });
     const outside = memories.filter((m) => addressOf(m).level !== 'user').length;
+    const now = new Date().toISOString();
+    const digest = createHash('sha256').update(text).digest('hex');
+    const exportedAt = /"exportedAt"\s*:\s*"([^"]{1,64})"/.exec(text.slice(0, 4096))?.[1] ?? now;
+    const origin = (originalId: string): JudgmentPackOrigin => ({
+      id: digest.slice(0, 16),
+      name: path.basename(full),
+      exportedAt,
+      exportedBy: 'oort import',
+      originalId,
+      importedAt: now,
+    });
     const fresh: Memory[] = [];
     let already = 0;
+    let invalid = 0;
     for (const m of memories) {
       if (addressOf(m).level !== 'user') continue;
+      if (!wellFormed(m)) {
+        invalid++;
+        continue;
+      }
       if ((await w.store.get(grant, m.id)) !== null) already++;
-      else fresh.push(m);
+      else
+        fresh.push(
+          m.judgment === undefined ? m : { ...m, judgment: asImported(m.judgment, origin(m.id)) },
+        );
     }
+    const pinned = fresh.filter((m) => m.pinned).length;
+    const judgments = fresh.filter((m) => m.type === 'judgment').length;
     const json = jsonMode(ctx);
     const ui = uiFor(ctx.io);
     const shown = tilde(full, ctx.io.env['HOME'] || os.homedir());
@@ -321,6 +392,7 @@ export async function importFileCommand(
         ['memories', String(memories.length)],
         ['already here', String(already)],
         ['outside a Planet', `${outside}${outside > 0 ? ' (left out)' : ''}`],
+        ['not valid', `${invalid}${invalid > 0 ? ' (left out)' : ''}`],
       ]),
     );
     const result = (imported: number) => ({
@@ -329,6 +401,9 @@ export async function importFileCommand(
       imported,
       skipped: already,
       outside,
+      invalid,
+      pinned,
+      judgments,
     });
     if (fresh.length === 0) {
       ctx.io.out('Nothing to import.\n');
@@ -342,9 +417,22 @@ export async function importFileCommand(
         'No embedder is configured.';
       throw new Refusal(`Importing embeds each memory with this store's embedder. ${why}`);
     }
+    const what = [
+      ...(pinned > 0 ? [`${pinned} pinned`] : []),
+      ...(judgments > 0
+        ? [
+            `${judgments} ${judgments === 1 ? 'judgment' : 'judgments'}, counted only when judging includes imports`,
+          ]
+        : []),
+    ];
+    // Where each memory's text goes to be embedded again: the person decides with that in view.
+    const where =
+      w.config.embed.provider === LOCAL_PROVIDER
+        ? 'embedded on this machine by the local model'
+        : 'sent to Voyage AI to be embedded (with your Voyage key, or through the Oort relay with Oort Pro)';
     const go = await confirm(
       ctx.io,
-      `Import ${fresh.length} memories (each embedded again by this store's embedder)?`,
+      `Import ${fresh.length} memories${what.length > 0 ? ` (${what.join('; ')})` : ''}? Each memory's text is ${where}.`,
       opts.yes === true,
       `import ${fresh.length} memories`,
       { json },
