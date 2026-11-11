@@ -129,24 +129,29 @@ each memory is rebuilt from its content alone:
   later), `accessLog` is empty, `lastConfirmedAt` is `null`, `provenance` is
   dropped, and the embedding is computed again by this store's embedder.
 - **Times:** `createdAt`, `updatedAt` and `validFrom` are normalised to ISO
-  8601; a time after now becomes now, and an unreadable one makes the line not
-  valid. `validTo` is kept only when it has passed and comes after
-  `validFrom`; `expiredAt` and `endReason` only together, when the end has
-  passed, comes after `createdAt` and has a known reason.
+  8601 and compared as times, not text; a time after now becomes now. An
+  unreadable time, or a year outside 0000 to 9999, makes the line not valid.
+- **Ends:** an end that has not come yet is left open. One that has passed
+  must hold together: `validTo` after `validFrom`, and `expiredAt` not before
+  `createdAt` with a known `endReason`. Otherwise the line is not valid, even
+  when it is a start moved back to now that overtook the end: an ended fact
+  never arrives as a current one.
 - **Links:** `supersedes` and `supersededBy` are kept only when they name
   another memory of the same file that is imported too.
-- **Judgments** are kept as recording one keeps them (pinned, their text,
-  stub and entities rendered from the decision). Each becomes an imported
-  one (`via: "pack"` with the file as its origin, normalised and redacted as
-  a pack's, never `confirmed`, with no `tombstone`). A withdrawal or purge a
-  line states is kept but leaves no tombstone, and an imported judgment that
-  is no longer current is no evidence: neither keeps a decision out of a
-  later import; only one withdrawn here does.
+- **Judgments** are kept as recording one keeps them (pinned, so shown to the
+  agent at every session start, with their text, stub and entities rendered
+  from the decision). Each becomes an imported one (`via: "pack"` with the
+  file as its origin, normalised and redacted as a pack's, never
+  `confirmed`, with no `tombstone`). A judgment the file says was withdrawn
+  or purged is not imported: only a person here may end a decision. An
+  imported judgment that is no longer current is no evidence, so it never
+  keeps a decision out of a later import; only one withdrawn here does.
 
 A line that breaks these rules (an unknown type or tier, an id over 64
 characters, text over 64,000 characters, more than 64 entities, a judgment
-that does not check) is left out and counted as not valid. A file over
-100 MB is refused before it is read.
+that does not check or has ended) is left out and counted as not valid. A
+file over 100 MB is refused before it is read, and one that repeats an id
+before anything is asked.
 
 ## Limitations
 
