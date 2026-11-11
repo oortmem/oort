@@ -16,6 +16,15 @@
 </p>
 
 <p align="center">
+  <a href="https://www.producthunt.com/products/oort-memory?utm_source=badge-featured&utm_medium=badge&utm_campaign=github-readme">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1308853&theme=dark" />
+      <img alt="Oort Memory on Product Hunt" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1308853&theme=light" width="250" height="54" />
+    </picture>
+  </a>
+</p>
+
+<p align="center">
   <b>Open-source memory for AI agents.</b><br />
   Old facts are closed out, not overwritten. Old history moves to cheap storage.<br />
   Every recall can explain why it was picked.
