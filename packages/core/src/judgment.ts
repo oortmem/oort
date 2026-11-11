@@ -393,15 +393,19 @@ async function indexJudgments(store: MemoryStore, grant: Grant, now: Date): Prom
   for (const m of all) {
     if (m.type !== 'judgment' || m.judgment === undefined) continue;
     const j = m.judgment;
+    const ended =
+      j.withdrawn !== undefined || j.purged !== undefined || m.endReason === 'corrected';
+    // An imported record (a pack's or an export file's) cannot speak for a person (CON-137): one
+    // that arrived withdrawn, purged or corrected is no evidence and leaves no tombstone, so a
+    // file cannot plant one to keep a genuine decision out. Ended here, it does: withdrawing,
+    // purging or correcting writes `tombstone`, which no import stores.
+    const importedEnded = j.pack !== undefined && ended && j.tombstone === undefined;
     // An agent's unconfirmed record is no evidence the decision is already here.
-    if (!isUnconfirmedAgentJudgment(j)) index.fingerprints.add(fingerprint(j));
+    if (!isUnconfirmedAgentJudgment(j) && !importedEnded) index.fingerprints.add(fingerprint(j));
     if (j.pack !== undefined) index.imported.add(`${j.pack.id}:${j.pack.originalId}`);
     // Only a person's decision leaves a tombstone that blocks imports: an agent withdrawing or
     // correcting its own unconfirmed record must not keep a genuine expert decision out.
-    if (
-      (j.withdrawn !== undefined || j.purged !== undefined || m.endReason === 'corrected') &&
-      !isUnconfirmedAgentJudgment(j)
-    ) {
+    if (ended && !isUnconfirmedAgentJudgment(j) && !importedEnded) {
       index.tombstones.add(j.tombstone ?? tombstoneKey(j));
     }
     const key = itemKey(j);
@@ -1292,6 +1296,77 @@ function packTime(field: string, v: unknown): string {
   const t = packText(field, v, PACK_LIMITS.time);
   if (Number.isNaN(Date.parse(t))) throw new JudgmentPackError(`${field} is not an ISO time`);
   return t;
+}
+
+/**
+ * The origin of a judgment read from an Oort export file (`oort import <file>`, CON-137), checked
+ * as a pack's is: the file's name and its manifest's `exportedAt` are plain text and a time, or
+ * fall back to a constant and `now`. `digest` is the file's SHA-256, hex.
+ */
+export function fileOrigin(o: {
+  digest: string;
+  name: unknown;
+  exportedAt: unknown;
+  originalId: string;
+  now: Date;
+}): JudgmentPackOrigin {
+  const or = <T>(f: () => T, fallback: T): T => {
+    try {
+      return f();
+    } catch {
+      return fallback;
+    }
+  };
+  return {
+    id: o.digest.slice(0, 16),
+    name: or(() => packText('name', o.name, PACK_LIMITS.name), 'export file'),
+    exportedAt: or(() => packTime('exportedAt', o.exportedAt), o.now.toISOString()),
+    exportedBy: 'oort import',
+    originalId: packText('id', o.originalId, PACK_LIMITS.id),
+    importedAt: o.now.toISOString(),
+  };
+}
+
+/** A withdrawal or purge as a file states it: exactly `{ at, by }`, a time and plain text. */
+function endMark(field: string, v: unknown): { at: string; by: string } | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw new JudgmentPackError(`${field} must be { at, by }`);
+  }
+  const o = v as Record<string, unknown>;
+  if (Object.keys(o).sort().join(',') !== 'at,by') {
+    throw new JudgmentPackError(`${field} must have exactly at and by`);
+  }
+  return {
+    at: packTime(`${field}.at`, o['at']),
+    by: packText(`${field}.by`, o['by'], PACK_LIMITS.exportedBy),
+  };
+}
+
+/**
+ * A judgment read from an Oort export file, as this store keeps it (CON-137): the decision
+ * normalised and redacted as a pack's is, imported (`via: 'pack'` from `origin`), never confirmed
+ * and with no tombstone of its own. A withdrawal or purge the line states is kept, checked, so an
+ * ended decision stays ended. Throws `JudgmentInputError` or `JudgmentPackError` otherwise.
+ */
+export function importedJudgment(raw: unknown, origin: JudgmentPackOrigin): Judgment {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new JudgmentPackError('judgment must be an object');
+  }
+  const j = raw as Record<string, unknown>;
+  if (typeof j['decidedAt'] !== 'string') throw new JudgmentPackError('decidedAt is missing');
+  const { judgment: core } = redactJudgment(
+    normaliseJudgment(packInput(j as unknown as JudgmentPackLine['judgment']), new Date(0)),
+  );
+  const withdrawn = endMark('withdrawn', j['withdrawn']);
+  const purged = endMark('purged', j['purged']);
+  return {
+    ...core,
+    via: 'pack',
+    pack: origin,
+    ...(withdrawn !== undefined && { withdrawn }),
+    ...(purged !== undefined && { purged }),
+  };
 }
 
 /** A line's claimed earlier origin: exactly the six fields, each plain text. */
