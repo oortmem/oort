@@ -1096,6 +1096,24 @@ describe('observe: places (CON-84)', () => {
     expect((await store.get(TG, a.memoryId!))?.place).toEqual(B3);
   });
 
+  it('observe.correct-takes-the-new-place-only', async () => {
+    let next: ReconcileDecision[] = [rec(null, 'ADD')];
+    const { store, deps } = setup(gate(0.9), () => next);
+    const a = await observe(
+      placed('toolbox on shelf B3', B3, '2026-01-01T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    next = [rec(a.memoryId!, 'CORRECT')];
+    const b = await observe(
+      obs('no, the toolbox was never there', '2026-01-02T00:00:00.000Z'),
+      localScope(),
+      { ...deps, now: new Date('2026-01-02T00:00:00.000Z') },
+    );
+    expect(b.outcome).toBe('corrected');
+    expect((await store.get(TG, b.memoryId!))?.place).toBeUndefined();
+  });
+
   it('observe.refine-keeps-its-place-unless-the-turn-gives-one', async () => {
     let next: ReconcileDecision[] = [rec(null, 'ADD')];
     const { store, deps } = setup(gate(0.9), () => next);
@@ -1150,6 +1168,32 @@ describe('observe: places (CON-84)', () => {
     const x = await store.get(TG, 'X');
     expect(x?.place).toEqual(B3);
     expect(x?.accessLog.count).toBe(0);
+  });
+
+  it('observe.a-matching-path-reinforces-when-only-one-side-has-coordinates', async () => {
+    // A missing pose is no evidence of being elsewhere: the same path is the same place.
+    for (const [known, seen] of [
+      [{ nodeId: B3.nodeId }, B3],
+      [B3, { nodeId: B3.nodeId }],
+    ]) {
+      const { store, deps } = setup(gate(0.9), [rec('X', 'REINFORCE')]);
+      await store.upsert(TG, makeMemory({ id: 'X', text: 'the toolbox', place: known }));
+      expect(await observe(placed('the toolbox', seen), localScope(), deps)).toMatchObject({
+        outcome: 'reinforced',
+        memoryId: 'X',
+      });
+    }
+  });
+
+  it('observe.a-low-gate-turn-never-reinforces-a-memory-seen-elsewhere', async () => {
+    const text = 'the red toolbox sits on the shelf';
+    const { store, deps } = setup(gate(0), [rec('X', 'REINFORCE')]);
+    await store.upsert(TG, makeMemory({ id: 'X', text, stub: text, place: B3 }));
+    const away = await observe(placed(text, BENCH), localScope(), deps);
+    expect(away.outcome).toBe('skipped');
+    expect((await store.get(TG, 'X'))?.accessLog.count).toBe(0);
+    const here = await observe(placed(text, B3), localScope(), deps);
+    expect(here).toMatchObject({ outcome: 'reinforced', memoryId: 'X' });
   });
 
   it('observe.a-place-for-a-placeless-memory-adds-a-memory', async () => {

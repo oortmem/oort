@@ -642,6 +642,9 @@ export async function observe(
     for (const hit of hits) {
       const m = await store.get(grant, hit.id);
       if (m === null || !isLive(m, now) || !strongMatch(turn, m)) continue;
+      // Seen somewhere else, it is not this memory being confirmed (CON-84). A low-gate turn is
+      // not worth a memory of its own, so it is skipped rather than added.
+      if (elsewhere(obs.place, m.place)) continue;
       // Activation only: `lastConfirmedAt` is reserved for a decided REINFORCE.
       await store.recordAccess(grant, [m.id], now);
       return single({ outcome: 'reinforced', memoryId: m.id }, g.decisions);

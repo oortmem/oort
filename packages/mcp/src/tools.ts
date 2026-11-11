@@ -142,8 +142,10 @@ export interface ToolSchemaOptions {
 /**
  * The tool input schemas for one connection's spaces: `recall.include` lists only the levels it
  * may read, `remember.visibility` only `private` and the Constellations it may share to, and
- * `share.to` only those. Unknown arguments (a `scope`, `project` or `agent` a model invents) are
- * stripped by zod and never reach a backend; so are the spatial ones on a backend without places.
+ * `share.to` only those. Unknown arguments (a `scope`, `project` or `agent` a model invents) never
+ * reach a backend. Without places, `recall` and `remember` are loose so that a spatial argument
+ * reaches the handler and is refused, never silently stripped (the handlers pass on only the
+ * schema's own keys).
  */
 export function inputSchemasFor(spaces: ToolSpaces, opts: ToolSchemaOptions = {}) {
   const include = spaces.include.filter((l) => (INCLUDE_LEVELS as readonly string[]).includes(l));
@@ -177,14 +179,20 @@ export function inputSchemasFor(spaces: ToolSpaces, opts: ToolSchemaOptions = {}
       .default('private')
       .describe('private (the default), or a Constellation to suggest sharing the fact with'),
   });
-  // Typed with the spatial fields either way (they are optional); without places they are left
-  // out of the schema, so a model never sees them and zod strips any it sends.
+  // Typed with the spatial fields either way (they are optional). Without places they are left
+  // out of the schema, so a model is never offered them; one it sends anyway passes the loose
+  // schema and is refused by the handler (as `forget.everywhere` is, CON-67).
   const spatialRecall = recall.extend(SPATIAL_RECALL);
   const spatialRemember = remember.extend(SPATIAL_REMEMBER);
   return {
-    recall: opts.spatial === true ? spatialRecall : (recall as unknown as typeof spatialRecall),
+    recall:
+      opts.spatial === true
+        ? spatialRecall
+        : (z.looseObject(recall.shape) as unknown as typeof spatialRecall),
     remember:
-      opts.spatial === true ? spatialRemember : (remember as unknown as typeof spatialRemember),
+      opts.spatial === true
+        ? spatialRemember
+        : (z.looseObject(remember.shape) as unknown as typeof spatialRemember),
     // Loose (CON-67): the model never withdraws shared copies (a person confirms that in the
     // terminal), so an `everywhere` it sends must reach the handler and be refused, never be
     // stripped into a plain forget. Other unknown arguments still never reach a backend: the

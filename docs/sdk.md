@@ -925,7 +925,7 @@ for (const m of near.memories) console.log(m.why.distanceM?.toFixed(2), '|', m.t
 
 | Field        | Meaning                                                                                       |
 | ------------ | --------------------------------------------------------------------------------------------- |
-| `nodeId`     | A place path, root first: `site:hq/floor:2/room:B/shelf:B3`. 1 to 16 segments of 1 to 64 letters, digits and `. _ : @ -` |
+| `nodeId`     | A place path, root first: `site:hq/floor:2/room:B/shelf:B3`. 1 to 16 segments of 1 to 64 letters (any script, with combining marks), digits and `. _ : @ -`; normalised to NFC |
 | `mapId`      | The map the coordinates are in. Required with `pose`                                          |
 | `mapVersion` | Recorded, not filtered on                                                                     |
 | `frame`      | The coordinate frame, default `map`. `odom` is refused: odometry drifts                       |

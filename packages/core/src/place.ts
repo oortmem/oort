@@ -80,7 +80,8 @@ export const MAX_METRES = 1e7;
 /** How R*Tree rows and queries span "all of z". */
 export const ALL_Z = 1e30;
 
-const SEGMENT = /^[\p{L}\p{N}._:@-]{1,64}$/u;
+/** A segment starts with a letter, digit or symbol, then may carry marks (Devanagari, Thai vowel signs). */
+const SEGMENT = /^[\p{L}\p{N}._:@-][\p{L}\p{M}\p{N}._:@-]{0,63}$/u;
 const WORD = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/;
 const MAX_SEGMENTS = 16;
 const MAX_PATH = 256;
@@ -123,8 +124,13 @@ function frame(v: unknown, at: string): string {
   return f;
 }
 
-/** A place path, checked: 1 to 16 segments of 1 to 64 letters, digits and `. _ : @ -`. */
-export function checkPlacePath(v: unknown, at = 'place.nodeId'): string {
+/**
+ * A place path, checked and in Unicode NFC (so a decomposed `é` is stored and filtered as the
+ * composed one): 1 to 16 segments of 1 to 64 letters (with their combining marks), digits and
+ * `. _ : @ -`.
+ */
+export function checkPlacePath(raw: unknown, at = 'place.nodeId'): string {
+  const v = typeof raw === 'string' ? raw.normalize('NFC') : raw;
   if (typeof v !== 'string' || v.length > MAX_PATH) {
     fail(at, `must be a place path of at most ${MAX_PATH} characters`);
   }
@@ -354,21 +360,4 @@ export function nearBox(q: NearQuery): PlaceBox {
     maxZ: z === undefined ? ALL_Z : z + r,
     mapKey: mapKeyOf(q.mapId, frameOf(q)),
   };
-}
-
-/** A place as one comparable string: its fields in a fixed order. */
-function placeKey(p: Place): string {
-  const sorted = (o: object): unknown =>
-    Object.fromEntries(
-      Object.entries(o)
-        .sort(([a], [b]) => (a < b ? -1 : 1))
-        .map(([k, v]) => [k, typeof v === 'object' && v !== null ? sorted(v) : v]),
-    );
-  return JSON.stringify(sorted(p));
-}
-
-/** True when two places are the same (both absent counts). */
-export function samePlace(a: Place | undefined, b: Place | undefined): boolean {
-  if (a === undefined || b === undefined) return a === b;
-  return placeKey(a) === placeKey(b);
 }

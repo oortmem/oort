@@ -55,7 +55,8 @@ interface Place {
   extent?: { dx: number; dy: number; dz?: number } | { radius: number };
   /** WGS84, outdoors. Stored and returned; not searchable in slice 1. */
   geo?: { lat: number; lon: number; alt?: number };
-  /** Pose uncertainty, metres (1 sigma), when the source knows it. Recorded only. */
+  /** Pose uncertainty, metres (1 sigma), when the source knows it. Not searched on; observe
+   *  treats two sightings within their combined sigma as the same place (section 2). */
   sigma?: number;
 }
 ```
@@ -64,8 +65,11 @@ A place needs `nodeId`, `pose` or `geo`. The rules, checked in code (core's `che
 reported by field name:
 
 - **`nodeId`:** 1 to 16 segments joined by `/`, at most 256 characters. A segment is 1 to 64
-  letters, digits and `. _ : @ -` (no spaces, no `/`). `kind:name` is the convention (`room:B`),
-  not a rule. Comparison is exact and case-sensitive.
+  letters (in any script, with their combining marks, so `कमरा` and `ห้อง` work), digits and
+  `. _ : @ -`, starting with a letter, digit or one of those symbols (no spaces, no `/`). Paths
+  are normalised to Unicode NFC when checked, so a decomposed `é` is stored and filtered as the
+  composed one. `kind:name` is the convention (`room:B`), not a rule. Comparison is otherwise
+  exact and case-sensitive.
 - **`mapId`, `frame`:** one word of 1 to 128 characters (letters, digits, `. _ : @ / -`). `frame`
   `odom` is refused, in any case: odometry drifts, so its coordinates mean nothing a day later.
 - **Numbers** are finite. Coordinates are within ±10,000 km of the origin, `radius`, `dx`, `dy`,
@@ -91,10 +95,14 @@ now (node anchors, re-anchoring after a loop closure, a box per room) is listed 
 - **A re-observation elsewhere is not a reinforcement.** When reconcile says REINFORCE but the
   observation's place differs from the memory's, the observation becomes a new memory (decision
   `place` / `elsewhere` / `add-instead`) instead of silently dropping where it was seen. The
-  places differ when their paths differ, when only one has coordinates to compare, or when their
-  poses (same map and frame) are further apart than the sum of their `sigma`; with no `sigma`,
-  any distance. An observation without a place reinforces as before. Deciding
-  that this is a *move* (SUPERSEDE, with `lastObservedAt`) is Spatial 2's job.
+  places differ when their paths differ; when both have poses and those are on different maps
+  or frames, or further apart than the sum of their `sigma` (with no `sigma`, any distance); or
+  when nothing could be compared (one has only a path, the other only coordinates). A matching
+  path where only one side has a pose is the same place: a missing pose is no evidence of being
+  elsewhere. An observation without a place reinforces as before. A low-gate turn (not worth a
+  memory of its own) that strongly matches a memory seen elsewhere is skipped rather than
+  reinforcing it. Deciding that this is a *move* (SUPERSEDE, with `lastObservedAt`) is Spatial
+  2's job.
 - **No person-location gate yet.** The bridge slice (CON-86) adds the default refusal of facts that
   place a person. Until then, `place` is written only by code that passes one explicitly; nothing
   infers a place from text.
@@ -179,7 +187,9 @@ passes it.
 - **Cloud mode** refuses `place`, `near` and `within` with `OortRefusedError` (`refused`,
   `local-only`, fix `oort cloud use --local`) before anything is sent, in both SDKs and the CLI.
 - **MCP:** the shared tool definitions offer `place`, `near` and `within` only when the backend
-  says it has spatial memory (`MemoryBackend.spatial`), as with judgment tools. The remote
+  says it has spatial memory (`MemoryBackend.spatial`), as with judgment tools. On any other
+  backend (Oort Cloud's included) one sent anyway is refused as a tool error naming `local-only`,
+  never stripped, so the model never believes its recall was filtered or its place stored. The remote
   connector's tool set is unchanged until Spatial 4.
 - The `<oort-memory>` block is unchanged: no prompt format change in this slice.
 

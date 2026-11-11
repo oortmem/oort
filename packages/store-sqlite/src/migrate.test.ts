@@ -858,11 +858,20 @@ describe('schema migration 4 to 5', () => {
     const store = await openSqliteStore(optsFor(s));
     await store.upsert(
       g,
-      memoryAt('a', planet, author, { text: 'the toolbox is blue', embedding: v(1, 2) }),
+      memoryAt('a', planet, author, {
+        text: 'the toolbox is blue',
+        embedding: v(1, 2),
+        updatedAt: '2026-11-01T00:00:00.000Z',
+      }),
     );
+    // Its own update time: list() orders by it, and two writes can share a millisecond.
     await store.upsert(
       g,
-      memoryAt('b', planet, author, { text: 'the bench is tidy', embedding: v(2, 1) }),
+      memoryAt('b', planet, author, {
+        text: 'the bench is tidy',
+        embedding: v(2, 1),
+        updatedAt: '2026-11-02T00:00:00.000Z',
+      }),
     );
     await store.close();
     downgradeSqliteStore({ path: s.dbPath, to: 4 });

@@ -909,8 +909,8 @@ Tools:
 
 | Tool | Input | Annotations | Returns |
 | --- | --- | --- | --- |
-| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10, default 5); on a local store (0.9.0 or newer), also `within?` (a place path) and `near?` (`map_id`, `frame?`, `pose` `{x, y, z?}`, `radius` in metres): see [Places](#places-spatial-memory) | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`), `from` (`from your Planet` or `from this agent's Star`), `overridden_by` (the id of a narrower memory in the result that contradicts it), `place` (its place path) and `distance_m` (with `near`); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
-| `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`); on a local store (0.9.0 or newer), also `place?` (`node_id`, `map_id`, `map_version`, `frame`, `pose`, `radius`) | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
+| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10, default 5); on a local store (0.9.0 or newer), also `within?` (a place path) and `near?` (`map_id`, `frame?`, `pose` `{x, y, z?}`, `radius` in metres): see [Places](#places-spatial-memory). Elsewhere (Oort Cloud) they are not offered, and one sent anyway is a tool error (`local-only`), never dropped | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`), `from` (`from your Planet` or `from this agent's Star`), `overridden_by` (the id of a narrower memory in the result that contradicts it), `place` (its place path) and `distance_m` (with `near`); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
+| `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`); on a local store (0.9.0 or newer), also `place?` (`node_id`, `map_id`, `map_version`, `frame`, `pose`, `radius`); elsewhere a `place` is a tool error (`local-only`) and nothing is saved | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
 | `forget` | `id` (required) | destructive, idempotent | `{ forgotten: id }`; in Oort Cloud, when copies were shared to Constellations (they stay), also `stillShared` (their names) and a `note` with the command that withdraws them: `oort forget <id> --everywhere`, which you run and confirm yourself. The model can't withdraw them: a call with `everywhere` is refused before anything is forgotten, with that command |
 | `pin` | `id`, `pinned` (boolean) | write, not destructive, idempotent | `{ id, pinned, changed }` |
 | `explain` | `id` | read-only, idempotent | the memory, its stored decisions, and its supersede chain |
@@ -1341,7 +1341,8 @@ oort recall "toolbox" --near 13,3 --radius 1.5 --map hq
 ```
 
 - **A place path** (`--place`) names where, root first: `site:hq/floor:2/room:B/shelf:B3`. 1 to
-  16 segments of 1 to 64 letters, digits and `. _ : @ -`.
+  16 segments of 1 to 64 letters (any script, with its combining marks), digits and `. _ : @ -`,
+  normalised to Unicode NFC.
 - **Map coordinates** (`--pose x,y[,z]`, in metres, with `--map`) say where on a map. `--radius`
   gives the place a size, `--frame` a coordinate frame other than `map`. `odom` is refused:
   odometry drifts, so a fact pinned to it would end up in the wrong place.
@@ -1358,7 +1359,8 @@ a filter, and a recall without one is unchanged. `--json` adds each memory's `pl
 
 A turn seen somewhere else than a memory it would reinforce adds a memory instead (decision
 `place` / `elsewhere`): the two places differ when their paths differ, or their poses are further
-apart than their combined `sigma`. Deciding that a thing moved, and replacing the old place, is
+apart than their combined `sigma` (a matching path where only one side has a pose is the same
+place). Deciding that a thing moved, and replacing the old place, is
 later work.
 
 Places are kept by the local store (schema version 5; opening an older store adds the columns and

@@ -7,7 +7,6 @@ import {
   matchesSpatial,
   placeBox,
   placeDistance,
-  samePlace,
   withinPath,
   type NearQuery,
   type Place,
@@ -201,19 +200,21 @@ describe('place', () => {
     expect(checkSpatialFilter({ within: 'a/b' })).toEqual({ within: 'a/b' });
   });
 
-  it('place.same-place-compares-every-field', () => {
-    expect(samePlace(undefined, undefined)).toBe(true);
-    expect(samePlace({ nodeId: 'a' }, { nodeId: 'a' })).toBe(true);
-    expect(samePlace({ nodeId: 'a' }, { nodeId: 'b' })).toBe(false);
-    expect(samePlace({ nodeId: 'a' }, undefined)).toBe(false);
-    expect(
-      samePlace(
-        { mapId: 'hq', pose: { x: 1, y: 2 }, nodeId: 'a' },
-        { nodeId: 'a', pose: { y: 2, x: 1 }, mapId: 'hq' },
-      ),
-    ).toBe(true);
-    expect(
-      samePlace({ mapId: 'hq', pose: { x: 1, y: 2 } }, { mapId: 'hq', pose: { x: 1, y: 3 } }),
-    ).toBe(false);
+  it('place.paths-in-any-script-are-normalised-to-nfc', () => {
+    // Devanagari and Thai names need their combining vowel signs (\p{M}).
+    expect(checkPlacePath('site:hq/कमरा')).toBe('site:hq/कमरा');
+    expect(checkPlacePath('ห้อง:B')).toBe('ห้อง:B');
+    // A decomposed é (e + U+0301) is stored and filtered as the composed one.
+    const nfd = 'room:cafe\u0301';
+    const nfc = 'room:caf\u00e9';
+    expect(checkPlacePath(nfd)).toBe(nfc);
+    expect(checkPlace({ nodeId: `site:hq/${nfd}` }).nodeId).toBe(`site:hq/${nfc}`);
+    expect(checkSpatialFilter({ within: nfd })).toEqual({ within: nfc });
+    expect(withinPath(checkPlace({ nodeId: `site:hq/${nfc}` }).nodeId, checkPlacePath(nfd))).toBe(
+      true,
+    );
+    // A mark alone, or one leading a segment, is still not a name.
+    expect(() => checkPlacePath('\u0301')).toThrow(RangeError);
+    expect(() => checkPlacePath('a/\u0301b')).toThrow(RangeError);
   });
 });

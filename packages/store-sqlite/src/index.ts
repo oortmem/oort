@@ -624,7 +624,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     { deterministic: true },
     (place: unknown, mapId: unknown, frame: unknown, x: unknown, y: unknown, z: unknown) => {
       if (typeof place !== 'string') return null;
-      const d = placeDistance(JSON.parse(place) as Place, {
+      let stored: Place;
+      try {
+        stored = JSON.parse(place) as Place;
+      } catch {
+        return null; // a damaged place is near nothing; it never fails the recall
+      }
+      const d = placeDistance(stored, {
         mapId: String(mapId),
         frame: String(frame),
         pose: { x: Number(x), y: Number(y), ...(typeof z === 'number' && { z }) },

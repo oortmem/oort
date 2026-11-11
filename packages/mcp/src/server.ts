@@ -123,6 +123,26 @@ const everywhereNeedsPerson = (id: string): string =>
  */
 const commandSafeId = (id: string): string => (/^[A-Za-z0-9-]{1,64}$/.test(id) ? id : '<id>');
 
+/**
+ * The tool error for a spatial argument on a backend without places (CON-84), such as Oort
+ * Cloud: refused, never stripped, so the model never believes a recall was filtered by place or
+ * a place was stored. The same `local-only` refusal the SDK and the CLI give.
+ */
+const SPATIAL_LOCAL_ONLY =
+  'Places (within, near, place) are local-only for now: this memory does not hold them, so nothing was recalled or saved. Ask the person to use local Oort for them (oort cloud use --local).';
+
+function refuseSpatial(input: unknown, keys: readonly string[], spatial: boolean): void {
+  if (spatial) return;
+  const i = input as Record<string, unknown>;
+  if (keys.some((k) => i[k] !== undefined)) throw new MemoryToolError(SPATIAL_LOCAL_ONLY);
+}
+
+/** Only the keys `schema` declares: what a loose schema let through stays here. */
+function own<T extends object>(input: T, schema: { shape: object }): T {
+  const keys = new Set(Object.keys(schema.shape));
+  return Object.fromEntries(Object.entries(input).filter(([k]) => keys.has(k))) as T;
+}
+
 /** A refusal whose message is shown to the user as the tool error. */
 export class MemoryToolError extends Error {
   override readonly name = 'MemoryToolError';
@@ -204,7 +224,9 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
   // Zod already limits both to the spaces; these are the second line, so a schema change can't
   // widen what a connection reaches.
   const handlers: { [N in ToolName]: (input: ToolInput<N>) => Promise<unknown> } = {
-    recall: (i) => {
+    recall: (raw) => {
+      refuseSpatial(raw, ['within', 'near'], b.spatial === true);
+      const i = own(raw, schemas.recall);
       if (i.include === undefined) return b.recall(i);
       const include = i.include.filter((l) => spaces.include.includes(l));
       if (include.length === 0) {
@@ -212,12 +234,15 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
       }
       return b.recall({ ...i, include });
     },
-    remember: (i) =>
-      b.remember({
+    remember: (raw) => {
+      refuseSpatial(raw, ['place'], b.spatial === true);
+      const i = own(raw, schemas.remember);
+      return b.remember({
         ...i,
         facts: [...new Set(i.facts)],
         visibility: visibility.has(i.visibility) ? i.visibility : 'private',
-      }),
+      });
+    },
     forget: (i) => {
       // Never forget less than was asked: `everywhere` is refused before anything is forgotten,
       // with the command the person runs to confirm it (CON-67).

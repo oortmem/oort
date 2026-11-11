@@ -107,14 +107,24 @@ describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp (%s era)', (era) => {
   it('mcp.spatial-arguments-reach-only-a-backend-with-places', async () => {
     const near = { map_id: 'hq', pose: { x: 1, y: 2 }, radius: 3 };
     const place = { node_id: 'site:hq/room:B', map_id: 'hq', pose: { x: 1, y: 2 } };
+    // Without places (Oort Cloud), a spatial argument is refused, never stripped: the model must
+    // not believe its recall was filtered or its place stored.
     const plain = await connect(era, fakeBackend());
-    await plain.callTool({
-      name: 'recall',
-      arguments: { query: 'toolbox', within: 'room:B', near },
-    });
+    for (const [name, args] of [
+      ['recall', { query: 'toolbox', within: 'room:B' }],
+      ['recall', { query: 'toolbox', near }],
+      ['remember', { facts: ['The toolbox is here.'], place }],
+    ] as const) {
+      const r = await plain.callTool({ name, arguments: args });
+      expect(r.isError).toBe(true);
+      expect(JSON.stringify(r.content)).toContain('local-only');
+    }
+    expect(calls).toEqual([]);
+    // Other unknown arguments are still dropped before the backend, places or not.
+    await plain.callTool({ name: 'recall', arguments: { query: 'toolbox', scope: 'x' } });
     await plain.callTool({
       name: 'remember',
-      arguments: { facts: ['The toolbox is here.'], place },
+      arguments: { facts: ['The toolbox is here.'], project: 'x' },
     });
     expect(calls.map((c) => c.input)).toEqual([
       { query: 'toolbox', limit: 5 },
@@ -133,9 +143,11 @@ describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp (%s era)', (era) => {
       name: 'remember',
       arguments: { facts: ['The toolbox is here.'], place },
     });
+    await spatial.callTool({ name: 'recall', arguments: { query: 'toolbox', scope: 'x' } });
     expect(calls.map((c) => c.input)).toEqual([
       { query: 'toolbox', limit: 5, within: 'room:B', near },
       { facts: ['The toolbox is here.'], visibility: 'private', place },
+      { query: 'toolbox', limit: 5 },
     ]);
     const bad = await spatial.callTool({
       name: 'recall',

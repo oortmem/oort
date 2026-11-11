@@ -4,8 +4,10 @@ import {
   lexicalIcuVersion,
   LEXICAL_VERSION,
   nodeKey,
+  placeBox,
   tokenizerForVersion,
   type NodeRef,
+  type Place,
 } from '@oortmem/core';
 
 /**
@@ -38,6 +40,36 @@ function placeTable(): string {
   return `CREATE VIRTUAL TABLE IF NOT EXISTS ${PLACE_TABLE} USING rtree(
         rid, min_x, max_x, min_y, max_y, min_z, max_z, +map_key TEXT
       )`;
+}
+
+/**
+ * Creates the spatial index and fills it from the stored places: a version 5 store whose index
+ * went missing gets back every memory with coordinates, not an empty index that `near` would
+ * read as "nothing here". A place that does not parse is left out, as `near` leaves it out.
+ */
+function rebuildPlaceIndex(db: Database): void {
+  db.exec(placeTable());
+  const insert = db.prepare(
+    `INSERT INTO ${PLACE_TABLE} (rid, min_x, max_x, min_y, max_y, min_z, max_z, map_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const rows = db
+    .prepare<[], { rid: number; place: string }>(
+      'SELECT rid, place FROM memories WHERE place IS NOT NULL',
+    )
+    .all(); // read first: better-sqlite3 cannot write while a statement iterates
+  for (const { rid, place } of rows) {
+    let p: Place;
+    try {
+      p = JSON.parse(place) as Place;
+    } catch {
+      continue;
+    }
+    const b = placeBox(p);
+    if (b !== undefined) {
+      insert.run(rid, b.minX, b.maxX, b.minY, b.maxY, b.minZ, b.maxZ, b.mapKey);
+    }
+  }
 }
 
 /**
@@ -729,7 +761,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       recordLexical(db, opts.icu ?? lexicalIcuVersion());
     }
     if (!exists(db, 'memories_vec')) db.exec(vecV2(dimension));
-    if (!exists(db, PLACE_TABLE)) db.exec(placeTable());
+    if (!exists(db, PLACE_TABLE)) rebuildPlaceIndex(db);
   }).immediate();
 }
 
