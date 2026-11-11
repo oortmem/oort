@@ -1012,6 +1012,18 @@ class CloudEndUsers(unittest.TestCase):
             [("GET", "/v1/end-users/count", None), ("DELETE", "/v1/end-users/ada%3A1", None)],
         )
 
+    def test_erase_needs_what_was_erased_in_the_answer(self) -> None:
+        # Re-review info: a 2xx without the `erased` object is no proof anything was erased.
+        from oortmem import OortInternalError
+
+        for body in ({}, {"erased": None}, {"erased": "yes"}, {"erased": [1]}, ["erased"]):
+            self.rec.answers["DELETE /v1/end-users/*"] = (200, body)
+            with self.assertRaises(OortInternalError, msg=repr(body)):
+                self.oort().end_users.erase("ada")
+        self.rec.answers["DELETE /v1/end-users/*"] = (200, {"erased": {}})
+        e = self.oort().end_users.erase("ada")
+        self.assertEqual((e.erased, e.memories), ("ada", 0))
+
     def test_the_same_client_side_rules_as_local(self) -> None:
         from oortmem import Oort, OortCloudOnlyError, OortRefusedError, OortUsageError
 

@@ -247,6 +247,30 @@ describe('cloud end users (CON-132)', () => {
     await oort.close();
   });
 
+  it('sdk.end-users-erase-needs-what-was-erased-in-the-answer', async () => {
+    // Re-review info: a 2xx without the `erased` object is no proof anything was erased.
+    const c = fakeCloud(KEY);
+    let body: unknown = {};
+    const fetch: typeof c.fetch = async (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : (input as Request).url);
+      if (init?.method === 'DELETE' && url.pathname.startsWith('/v1/end-users/')) {
+        return Response.json(body);
+      }
+      return c.fetch(input, init);
+    };
+    const { oort } = await cloud((c) => (c.endUsers.serverKey = true), { fetch }, c);
+    for (const b of [{}, { erased: null }, { erased: 'yes' }, { erased: [1] }, ['erased']]) {
+      body = b;
+      await expect(oort.endUsers.erase('ada'), JSON.stringify(b)).rejects.toMatchObject({
+        code: 'internal',
+        name: 'OortInternalError',
+      });
+    }
+    body = { erased: {} };
+    expect(await oort.endUsers.erase('ada')).toMatchObject({ erased: 'ada', memories: 0 });
+    await oort.close();
+  });
+
   it('sdk.end-users-the-same-client-side-rules-as-local', async () => {
     const { oort, c } = await cloud((c) => (c.endUsers.serverKey = true));
     expect(() => oort.scoped({ user: 'self' })).toThrow(

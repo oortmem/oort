@@ -850,17 +850,22 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       // is not a server key itself (403 end_users_not_allowed); an older one answers 404.
       endUsersCount: () => endUserRoute(accountJson('GET', '/v1/end-users/count')),
       eraseEndUser: async (id) => {
-        const r = await endUserRoute(
-          accountJson<{
-            erased?: Partial<Record<keyof CloudEndUserErasure, unknown>>;
-          }>('DELETE', `/v1/end-users/${encodeURIComponent(id)}`),
+        const r: unknown = await endUserRoute(
+          accountJson<unknown>('DELETE', `/v1/end-users/${encodeURIComponent(id)}`),
         );
+        // What was erased is the proof it happened: an answer without it is not a success.
+        const e =
+          typeof r === 'object' && r !== null ? (r as { erased?: unknown }).erased : undefined;
+        if (typeof e !== 'object' || e === null || Array.isArray(e)) {
+          throw new TypeError('Oort Cloud answered an erasure without what it erased.');
+        }
+        const got = e as Partial<Record<keyof CloudEndUserErasure, unknown>>;
         const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
         return {
-          memories: n(r.erased?.memories),
-          coldCopies: n(r.erased?.coldCopies),
-          turnRefs: n(r.erased?.turnRefs),
-          cursors: n(r.erased?.cursors),
+          memories: n(got.memories),
+          coldCopies: n(got.coldCopies),
+          turnRefs: n(got.turnRefs),
+          cursors: n(got.cursors),
         };
       },
       invite: (c, email, role) =>
