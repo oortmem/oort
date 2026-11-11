@@ -107,7 +107,7 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 | ---------------------------------------------- | ------------------------------------------ | ----- | ------------------------- |
 | `recall(query, opts?)`                         | `RecallResult`                             | yes   | yes                       |
 | `observe(turn, { signal? })`                   | `ObserveResult`                            | yes   | yes                       |
-| `remember(facts, { type? })`                   | `RememberResult`                           | yes   | yes                       |
+| `remember(facts, { type?, place? })`           | `RememberResult`                           | yes   | yes (`place`: `refused`)  |
 | `forget(id, { everywhere? })`                  | `{ forgotten, withdrawn?, requested?, unreachable? }` | yes | yes (`everywhere`: cloud only) |
 | `pin(id)` / `unpin(id)`                        | `{ id, pinned, changed }`                  | yes   | yes (`changed: null`)     |
 | `recent({ since?, limit? })`                   | `{ memories, warnings }`                   | yes   | yes                       |
@@ -129,8 +129,9 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 `known-at`), `asOf` (valid time), `knownAt` (transaction time), `include` (narrows the levels
 read: `self`, `planet`, `star`, `constellation`, `galaxy`), `budgetChars` (the default block size
 for `formatForPrompt`), `includeWithdrawn`, `speed` (`full`: embed and rerank; `fast`: no rerank;
-`lexical`: no model call), `inferTime` (default true: "on 2 April" picks as-of, as the CLI does)
-and `signal`.
+`lexical`: no model call), `inferTime` (default true: "on 2 April" picks as-of, as the CLI does),
+`within` and `near` (spatial memory, 0.9.0 or newer, local mode only: see
+[Spatial memory](#spatial-memory)) and `signal`.
 
 **`forget` with `everywhere`** (Oort Cloud) does what `oort forget --everywhere` does: it forgets
 the memory, then withdraws your copies in Constellations. The result lists Constellation ids:
@@ -147,8 +148,9 @@ date without `mode` picks its view, and with neither `inferTime` decides.
 **Results.** Every memory comes back as a `MemoryView`: `id`, `text` (scrubbed of secrets again
 on the way out), `type`, `tier`, `pinned`, `status` (`current`, `superseded`, `corrected`,
 `expired`, `not-yet-valid` or `withdrawn`), `validFrom`, `validTo`, `recordedAt`, `updatedAt`,
-`entities`, `origin` and, for a judgment, `judgment`. Recalled memories add `score` (comparable
-within one result only), `stale` and `why` (`@experimental`). A degraded recall is not an error:
+`entities`, `origin`, for a judgment, `judgment`, and for a memory remembered with one (0.9.0 or
+newer), `place`. Recalled memories add `score` (comparable within one result only), `stale` and
+`why` (`@experimental`). A degraded recall is not an error:
 it returns what it found and fills `degraded` and `warnings` (`lexical-only`, `recall-degraded`,
 `time-mode-unreported`). Ignore result fields you do not know: new ones may appear in any release.
 
@@ -872,11 +874,91 @@ console.log(result.finalOutput);
 
 Any MCP-capable framework can also use `oort mcp` with no code at all.
 
-## Reserved names: spatial memory
+## Spatial memory
 
-`place` (on turns, `remember` and memory views) and `near` and `within` (on recall) are reserved
-for spatial memory (CON-84). No other field will use those names. Until then, passing any of
-them is a usage error, never a silent drop: a robot must not believe it stored a location.
+In 0.9.0 or newer, a memory can carry where it is, and recall can ask for what is in a place or
+near a point. It is for robots and anything else that knows where it is: a fact remembered with a
+place keeps it, and `within` and `near` keep only the memories there, before ranking and before
+`limit` is taken. The local engine holds places; Oort Cloud does not yet, so in cloud mode
+`within`, `near` and `place` are refused before anything is sent (`OortRefusedError`, reason
+`local-only`, fix `oort cloud use --local`).
+
+<!-- example: examples/src/spatial.ts -->
+
+```ts
+import { createOort, type Place } from 'oortmem';
+
+// A robot's memory of a site: each fact is remembered with where it was seen. Places are kept by
+// the local engine (0.9.0 or newer); Oort Cloud refuses them until it holds places too.
+await using oort = await createOort({ mode: 'local' });
+
+const room = (r: string, x: number, y: number, at?: string): Place => ({
+  nodeId: `site:hq/room:${r}${at === undefined ? '' : `/${at}`}`,
+  mapId: 'hq',
+  pose: { x, y },
+});
+const seen: [string, Place][] = [
+  ['The red toolbox is on shelf A1.', room('A', 1, 1, 'shelf:A1')],
+  ['The aluminium ladder leans on the north wall.', room('A', 3, 4)],
+  ['The cordless drill charges on bench A.', room('A', 2, 2, 'bench:A')],
+  ['The blue toolbox is on shelf B3.', room('B', 11, 1, 'shelf:B3')],
+  ['The torque wrench is in drawer 4.', room('B', 12, 3, 'drawer:4')],
+  ['Spare fuses are in the grey cabinet.', room('B', 14, 1)],
+  ['The green toolbox sits under the window.', room('B', 13, 4)],
+  ['The first aid kit hangs by the door.', room('C', 21, 1)],
+  ['The fire extinguisher is in the corner.', room('C', 24, 4)],
+  ['The forklift charger is on the east wall.', room('C', 22, 3)],
+];
+for (const [fact, place] of seen) await oort.remember(fact, { place });
+
+// Which toolboxes are in room B? `within` matches whole path segments: room:B, never room:B2.
+const inB = await oort.recall('toolbox', { within: 'room:B' });
+for (const m of inB.memories) console.log(m.why.placePath, '|', m.text);
+
+// What is within 1.5 m of the robot? Distance is measured on the same map and frame only.
+const here = { mapId: 'hq', pose: { x: 13, y: 3 }, radius: 1.5 };
+const near = await oort.recall('toolbox', { near: here });
+for (const m of near.memories) console.log(m.why.distanceM?.toFixed(2), '|', m.text);
+```
+
+**A place** (`Place`) is a place path, map coordinates, or both:
+
+| Field        | Meaning                                                                                       |
+| ------------ | --------------------------------------------------------------------------------------------- |
+| `nodeId`     | A place path, root first: `site:hq/floor:2/room:B/shelf:B3`. 1 to 16 segments of 1 to 64 letters, digits and `. _ : @ -` |
+| `mapId`      | The map the coordinates are in. Required with `pose`                                          |
+| `mapVersion` | Recorded, not filtered on                                                                     |
+| `frame`      | The coordinate frame, default `map`. `odom` is refused: odometry drifts                       |
+| `pose`       | `{ x, y, z?, yaw? }` in metres (x forward, y left, z up) and radians. Without `z`, 2D          |
+| `extent`     | The region around `pose`: a box `{ dx, dy, dz? }` (full sizes, centred) or `{ radius }`      |
+| `geo`        | `{ lat, lon, alt? }` (WGS84). Stored and returned, not searchable yet                        |
+| `sigma`      | Pose uncertainty in metres (1 sigma)                                                          |
+
+It needs a `nodeId`, a `pose` or `geo`. An unknown field, a value out of range or a bad path is a
+usage error naming the field, never its value.
+
+**`within: 'room:B'`** keeps memories whose place path contains `room:B` as whole segments, at
+any depth: `site:hq/room:B` and `site:hq/room:B/shelf:B3`, never `room:B2`. Nothing in the path
+is a wildcard.
+
+**`near: { mapId, frame?, pose: { x, y, z? }, radius }`** keeps memories within `radius` metres of
+`pose`, measured to the memory's region (0 inside it). Coordinates on another map or in another
+frame are never compared, so they never match. `z` counts only when both sides have it.
+
+Each memory a spatial recall returns carries its `place`, and its `why` adds `placePath` and, with
+`near`, `distanceM` (metres; 0 inside the region).
+
+**Both** must hold when you pass both. They compose with every time mode: `asOf` reads where things
+were then, and `history` returns each matching fact with the rest of its supersede chain (where it
+moved to, too). Memories without a place are unaffected by a recall that names neither, and never
+match one that does. Ranking is unchanged.
+
+**Writing.** `remember(facts, { place })` tags every fact of the call; `observe({ ..., place })`
+tags the memories the turn writes. A fact that supersedes or corrects another gets the turn's place
+only, never the old one's. A refinement keeps its place unless the turn gives one. A turn seen
+somewhere else than a memory it would reinforce adds a memory instead (decision `place` /
+`elsewhere`), within the two places' `sigma`; deciding that a thing moved is a later release's
+job.
 
 ## Stability
 

@@ -307,6 +307,11 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--limit <n>', 'at most this many memories, 1 to 50 (default 10)')
     .option('--speed <speed>', 'full (the default), fast (no rerank) or lexical (no model call)')
     .option('--budget-chars <n>', 'the printed block, at most this many characters')
+    .option('--within <path>', 'only memories at this place or below it (e.g. room:B)')
+    .option('--near <x,y[,z]>', 'only memories near this point, in metres (with --radius, --map)')
+    .option('--radius <m>', 'with --near: how far, in metres')
+    .option('--map <id>', 'with --near: the map the point is on')
+    .option('--frame <id>', 'with --near: the coordinate frame (default map)')
     .action(run((t: string, o: RecallOptions) => recallCommand(t, o, ctx)));
 
   p.command('remember')
@@ -319,6 +324,11 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
       'a hint for the kind of fact: semantic, episodic, procedural, preference',
     )
     .option('--dry-run', 'only report what the scrubber would redact; touches nothing')
+    .option('--place <path>', 'where the fact is: a place path such as site:hq/room:B/shelf:B3')
+    .option('--pose <x,y[,z]>', 'where the fact is on a map, in metres (with --map)')
+    .option('--map <id>', 'with --pose: the map the point is on')
+    .option('--radius <m>', 'with --pose: the size of the place, in metres')
+    .option('--frame <id>', 'with --pose: the coordinate frame (default map)')
     .option('--json', 'print oort.v1 JSON')
     .action(run((words: string[], o: RememberOptions) => rememberCommand(words, o, ctx)));
 
@@ -331,6 +341,11 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--history', 'explain a recall of every version of the matching facts')
     .option('--include <levels>', 'read only these levels: self, planet, star (comma list)')
     .option('--include-withdrawn', 'also show withdrawn judgments')
+    .option('--within <path>', 'only memories at this place or below it (e.g. room:B)')
+    .option('--near <x,y[,z]>', 'only memories near this point, in metres (with --radius, --map)')
+    .option('--radius <m>', 'with --near: how far, in metres')
+    .option('--map <id>', 'with --near: the map the point is on')
+    .option('--frame <id>', 'with --near: the coordinate frame (default map)')
     .action(run((q: string, o: RecallOptions) => explainCommand(q, o, ctx)));
 
   p.command('revalidate')

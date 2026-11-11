@@ -10,6 +10,7 @@ import {
   CONFORMANCE_DIMENSION,
   makeMemory,
   seedCold,
+  spatialConformance,
   storeConformance,
   vec,
 } from '@oortmem/core/store-conformance';
@@ -30,6 +31,7 @@ function optsIn(dir: string, dimension = CONFORMANCE_DIMENSION) {
 }
 
 storeConformance('sqlite', () => openSqliteStore(optsIn(freshDir())));
+spatialConformance('sqlite', () => openSqliteStore(optsIn(freshDir())));
 
 const LOCAL: ScopeFilter = {
   orgId: 'local',

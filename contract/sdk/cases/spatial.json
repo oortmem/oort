@@ -1,0 +1,221 @@
+[
+  {
+    "id": "spatial.within-keeps-whole-segments-and-explains-the-path",
+    "transports": ["local"],
+    "seed": "places",
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "where is the toolbox", "within": "room:B", "speed": "lexical" },
+        "expect": {
+          "result": {
+            "memories": [
+              {
+                "id": "e1e1e1e1-0000-4000-8000-000000000002",
+                "place": {
+                  "nodeId": "site:hq/room:B/shelf:B3",
+                  "mapId": "hq",
+                  "pose": { "x": 10, "y": 0, "z": 1.2 },
+                  "extent": { "dx": 2, "dy": 0.5 }
+                },
+                "why": { "placePath": "site:hq/room:B/shelf:B3", "distanceM": { "$absent": true } }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "args": { "query": "where is the toolbox", "within": "site:hq", "speed": "lexical" },
+        "expect": { "result": { "memories": { "$len": 3 } } }
+      },
+      {
+        "call": "recall",
+        "args": { "query": "where is the toolbox", "within": "room:C", "speed": "lexical" },
+        "expect": { "result": { "memories": [] } }
+      }
+    ]
+  },
+  {
+    "id": "spatial.near-keeps-the-radius-on-one-map-with-the-distance",
+    "transports": ["local"],
+    "seed": "places",
+    "steps": [
+      {
+        "call": "recall",
+        "args": {
+          "query": "where is the toolbox",
+          "near": { "mapId": "hq", "pose": { "x": 12, "y": 0 }, "radius": 1.5 },
+          "speed": "lexical"
+        },
+        "expect": {
+          "result": {
+            "memories": [
+              {
+                "id": "e1e1e1e1-0000-4000-8000-000000000002",
+                "why": { "distanceM": { "$approx": 1, "$tol": 0.000001 } }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "where is the toolbox",
+          "near": { "mapId": "lab", "pose": { "x": 10, "y": 0 }, "radius": 0.5 },
+          "speed": "lexical"
+        },
+        "expect": {
+          "result": { "memories": [{ "id": "e1e1e1e1-0000-4000-8000-000000000004" }] }
+        }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "where is the toolbox",
+          "within": "room:A",
+          "near": { "mapId": "hq", "pose": { "x": 10, "y": 0 }, "radius": 1 },
+          "speed": "lexical"
+        },
+        "expect": { "result": { "memories": [] } }
+      }
+    ]
+  },
+  {
+    "id": "spatial.recall-without-a-filter-ignores-places",
+    "transports": ["local"],
+    "seed": "places",
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "where is the toolbox", "speed": "lexical" },
+        "expect": {
+          "result": {
+            "memories": {
+              "$len": 5,
+              "$every": { "why": { "placePath": { "$absent": true } } }
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "spatial.remember-and-observe-carry-a-place",
+    "transports": ["local"],
+    "steps": [
+      {
+        "call": "remember",
+        "args": {
+          "facts": "The torque wrench is in drawer 4.",
+          "place": { "nodeId": "site:hq/room:B/drawer:4" }
+        },
+        "expect": { "result": { "results": [{ "outcome": "added" }] } },
+        "save": { "id": "$.results[0].id" }
+      },
+      {
+        "call": "observe",
+        "args": {
+          "user": "The forklift charger is by the loading dock.",
+          "assistant": "Noted.",
+          "place": { "nodeId": "site:hq/dock:1", "mapId": "hq", "pose": { "x": 40, "y": 2 } }
+        },
+        "expect": { "result": { "outcome": "added" } }
+      },
+      {
+        "call": "recent",
+        "expect": {
+          "result": {
+            "memories": {
+              "$some": { "id": "${id}", "place": { "nodeId": "site:hq/room:B/drawer:4" } }
+            }
+          }
+        }
+      },
+      {
+        "call": "recall",
+        "args": { "query": "forklift charger", "within": "dock:1", "speed": "lexical" },
+        "expect": {
+          "result": {
+            "memories": [{ "place": { "nodeId": "site:hq/dock:1", "pose": { "x": 40, "y": 2 } } }]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "spatial.a-bad-place-or-filter-is-a-usage-error",
+    "transports": ["local"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "q", "within": "room B" },
+        "expect": { "error": { "code": "usage", "message": { "$regex": "within" } } }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "q",
+          "near": { "mapId": "hq", "pose": { "x": 0, "y": 0 }, "radius": 0 }
+        },
+        "expect": { "error": { "code": "usage", "message": { "$regex": "near\\.radius" } } }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "q",
+          "near": { "mapId": "hq", "frame": "odom", "pose": { "x": 0, "y": 0 }, "radius": 1 }
+        },
+        "expect": { "error": { "code": "usage", "message": { "$regex": "near\\.frame" } } }
+      },
+      {
+        "call": "remember",
+        "args": { "facts": "x", "place": { "pose": { "x": 1, "y": 2 } } },
+        "expect": { "error": { "code": "usage", "reason": "invalid-argument" } }
+      },
+      {
+        "call": "observe",
+        "args": {
+          "user": "a",
+          "assistant": "b",
+          "place": { "nodeId": "shelf:B3", "colour": "red" }
+        },
+        "expect": { "error": { "code": "usage", "message": { "$regex": "place" } } }
+      }
+    ]
+  },
+  {
+    "id": "spatial.is-local-only-in-oort-cloud",
+    "transports": ["cloud"],
+    "steps": [
+      {
+        "call": "recall",
+        "args": { "query": "toolbox", "within": "room:B" },
+        "expect": { "error": { "code": "refused", "reason": "local-only" } }
+      },
+      {
+        "call": "recall",
+        "args": {
+          "query": "toolbox",
+          "near": { "mapId": "hq", "pose": { "x": 0, "y": 0 }, "radius": 1 }
+        },
+        "expect": { "error": { "code": "refused", "reason": "local-only" } }
+      },
+      {
+        "call": "remember",
+        "args": { "facts": "The toolbox is on shelf B3.", "place": { "nodeId": "shelf:B3" } },
+        "expect": { "error": { "code": "refused", "reason": "local-only" } }
+      },
+      {
+        "call": "observe",
+        "args": {
+          "user": "The toolbox is on shelf B3.",
+          "assistant": "Noted.",
+          "place": { "nodeId": "shelf:B3" }
+        },
+        "expect": { "error": { "code": "refused", "reason": "local-only" } }
+      }
+    ]
+  }
+]

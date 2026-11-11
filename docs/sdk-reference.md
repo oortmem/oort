@@ -26,7 +26,7 @@ await oort.observe({ user: 'We deploy on Fridays now.', assistant: 'Noted.' });
 
 **Classes:** [`OortError`](#oortmem-oorterror), [`OortAmbiguousIdError`](#oortmem-oortambiguousiderror), [`OortCloudOnlyError`](#oortmem-oortcloudonlyerror), [`OortInternalError`](#oortmem-oortinternalerror), [`OortNeedsConfirmationError`](#oortmem-oortneedsconfirmationerror), [`OortNeedsKeyError`](#oortmem-oortneedskeyerror), [`OortNeedsLoginError`](#oortmem-oortneedsloginerror), [`OortNetworkError`](#oortmem-oortnetworkerror), [`OortNotFoundError`](#oortmem-oortnotfounderror), [`OortRefusedError`](#oortmem-oortrefusederror), [`OortUsageError`](#oortmem-oortusageerror)
 
-**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`EndUserCount`](#oortmem-endusercount), [`EndUserErasure`](#oortmem-endusererasure), [`EndUserExport`](#oortmem-enduserexport), [`OortEndUsers`](#oortmem-oortendusers), [`Oort`](#oortmem-oort)
+**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`Pose`](#oortmem-pose), [`Place`](#oortmem-place), [`NearQuery`](#oortmem-nearquery), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`EndUserCount`](#oortmem-endusercount), [`EndUserErasure`](#oortmem-endusererasure), [`EndUserExport`](#oortmem-enduserexport), [`OortEndUsers`](#oortmem-oortendusers), [`Oort`](#oortmem-oort)
 
 ### Functions
 
@@ -448,6 +448,79 @@ export interface JudgmentView {
 }
 ```
 
+<a id="oortmem-pose"></a>
+
+#### `Pose`
+
+A position in metres on a map: x forward, y left, z up; yaw in radians.
+
+```ts
+export interface Pose {
+  x: number;
+  y: number;
+  z?: number;
+  yaw?: number;
+}
+```
+
+<a id="oortmem-place"></a>
+
+#### `Place`
+
+Where a memory is (spatial memory, 0.9.0 or newer). Local mode only until Oort Cloud holds
+places: in cloud mode a place is refused (`OortRefusedError`, reason `local-only`).
+
+```ts
+export interface Place {
+  /** A place path, root first, whole segments: `site:hq/floor:2/room:B/shelf:B3`. */
+  nodeId?: string;
+  /** The map the coordinates are in. Required with `pose`. */
+  mapId?: string;
+  /** Recorded, not filtered on. */
+  mapVersion?: number;
+  /** Default `map`. `odom` is refused: it drifts. */
+  frame?: string;
+  pose?: Pose;
+  /** The region around `pose`: a box (full sizes, centred) or a sphere. Default: the point. */
+  extent?: {
+    dx: number;
+    dy: number;
+    dz?: number;
+  } | {
+    radius: number;
+  };
+  /** WGS84; stored and returned, not searchable yet. */
+  geo?: {
+    lat: number;
+    lon: number;
+    alt?: number;
+  };
+  /** Pose uncertainty in metres (1 sigma). */
+  sigma?: number;
+}
+```
+
+<a id="oortmem-nearquery"></a>
+
+#### `NearQuery`
+
+`recall({ near })`: within `radius` metres of `pose` on the same map and frame.
+
+```ts
+export interface NearQuery {
+  mapId: string;
+  /** Default `map`. */
+  frame?: string;
+  pose: {
+    x: number;
+    y: number;
+    z?: number;
+  };
+  /** Metres, more than 0. */
+  radius: number;
+}
+```
+
 <a id="oortmem-memoryview"></a>
 
 #### `MemoryView`
@@ -476,6 +549,8 @@ export interface MemoryView {
   judgment?: JudgmentView & {
     id: string;
   };
+  /** Where it is (0.9.0 or newer), when it was remembered with a place. */
+  place?: Place;
 }
 ```
 
@@ -497,6 +572,10 @@ export interface RecalledMemory extends MemoryView {
     dense?: number;
     activation: number;
     chain?: true;
+    /** With `near` or `within`: the memory's place path. */
+    placePath?: string;
+    /** With `near`: metres from the query point to the memory's region (0 inside it). */
+    distanceM?: number;
   };
 }
 ```
@@ -784,6 +863,13 @@ export interface RecallOptions {
   speed?: 'full' | 'fast' | 'lexical';
   /** Default true: "on 2 April" picks as-of, as the CLI and MCP do. */
   inferTime?: boolean;
+  /**
+   * Only memories whose place path contains this path as whole segments (`room:B` keeps
+   * `site:hq/room:B/shelf:B3`, never `room:B2`). 0.9.0 or newer; local mode only.
+   */
+  within?: string;
+  /** Only memories within a radius on the same map and frame. 0.9.0 or newer; local mode only. */
+  near?: NearQuery;
   signal?: AbortSignal;
 }
 ```
@@ -803,6 +889,8 @@ export interface Turn {
   sessionId?: string;
   /** At most 128 characters; deduplicated by Oort Cloud only. */
   turnRef?: string;
+  /** Where this turn happened: the memories it writes carry it. 0.9.0 or newer; local mode only. */
+  place?: Place;
 }
 ```
 
@@ -988,6 +1076,7 @@ export interface Oort {
   }): Promise<ObserveResult>;
   remember(facts: string | readonly string[], opts?: {
     type?: MemoryType;
+    place?: Place;
   }): Promise<RememberResult>;
   forget(id: string, opts?: {
     everywhere?: boolean;

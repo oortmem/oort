@@ -9,6 +9,7 @@ import {
   nodeGrant,
   recordJudgment,
   type Memory,
+  type Place,
   type NodeRef,
 } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
@@ -86,6 +87,8 @@ export interface SeedMemory {
   supersededBy?: string | null;
   createdAt?: string;
   updatedAt?: string;
+  /** Where it is (spatial memory, CON-84); local transports only. */
+  place?: Place;
 }
 
 export interface SeedJudgment {
@@ -328,6 +331,7 @@ export function seedMemory(s: SeedMemory): Memory {
     lastConfirmedAt: null,
     supersedes: s.supersedes ?? null,
     supersededBy: s.supersededBy ?? null,
+    ...(s.place !== undefined && { place: s.place }),
     source: { harness: 'seed', decisions: [] },
     createdAt: created,
     updatedAt: s.updatedAt ?? created,

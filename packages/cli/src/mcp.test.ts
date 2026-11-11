@@ -352,3 +352,61 @@ describe('oort mcp over a cloud that does not report the time mode (review 12)',
     await w.store.close();
   });
 });
+
+describe('oort mcp with places (CON-84)', () => {
+  it('mcp.local-remembers-a-place-and-recalls-within-and-near-it', async () => {
+    const h = harness();
+    const w = await h.wire(h.cwd);
+    const backend = localBackend({ wired: w });
+    expect(backend.spatial).toBe(true);
+    const saved = await backend.remember({
+      facts: ['The torque wrench is in drawer 4 of the blue cabinet.'],
+      visibility: 'private',
+      place: {
+        node_id: 'site:hq/room:B/drawer:4',
+        map_id: 'hq',
+        pose: { x: 3, y: 4 },
+        radius: 0.5,
+      },
+    });
+    expect(saved.results[0]?.outcome).toBe('added');
+    const stored = await h.store.get(TG, saved.results[0]!.id!);
+    expect(stored?.place).toEqual({
+      nodeId: 'site:hq/room:B/drawer:4',
+      mapId: 'hq',
+      pose: { x: 3, y: 4 },
+      extent: { radius: 0.5 },
+    });
+    const within = await backend.recall({
+      query: 'torque wrench drawer',
+      within: 'room:B',
+      limit: 5,
+    });
+    expect(within.memories).toHaveLength(1);
+    expect(within.memories[0]).toMatchObject({ place: 'site:hq/room:B/drawer:4' });
+    const near = await backend.recall({
+      query: 'torque wrench drawer',
+      near: { map_id: 'hq', pose: { x: 3, y: 5 }, radius: 1 },
+      limit: 5,
+    });
+    expect(near.memories[0]).toMatchObject({ distance_m: 0.5 });
+    const elsewhere = await backend.recall({
+      query: 'torque wrench drawer',
+      within: 'room:C',
+      limit: 5,
+    });
+    expect(elsewhere.memories).toEqual([]);
+    await expect(
+      backend.recall({ query: 'torque wrench', within: 'room B', limit: 5 }),
+    ).rejects.toThrow(/within/);
+    await w.store.close();
+  });
+
+  it('mcp.cloud-mode-offers-no-place-arguments', async () => {
+    const h = harness({ adapters: false });
+    const w = await h.wire(h.cwd);
+    const backend = localBackend({ wired: { ...w, mode: 'cloud', cloud: {} as CloudClient } });
+    expect(backend.spatial).toBeUndefined();
+    await w.store.close();
+  });
+});

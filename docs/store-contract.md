@@ -173,6 +173,26 @@ rejects it, and every store rejects it at run time with a `TypeError`.
 - **Cursors belong to the principal.** All projects of one principal share them; other principals
   never see them.
 
+## Places (spatial memory)
+
+A store that sets `spatial: true` (0.9.0 or newer, CON-84) keeps `Memory.place` as written and
+takes a fourth argument on `lexical` and `dense`: `SearchOptions { spatial?: SpatialFilter }`.
+It applies the filter inside the search, before `k` is taken, exactly as it applies the grant, so a
+spatial recall never comes back short because other places filled the top `k`:
+
+- `within: 'room:B'` keeps memories whose `place.nodeId` contains those whole `/`-separated
+  segments, contiguously, at any depth (`room:B2` and a memory without a path never match);
+- `near: { mapId, frame?, pose, radius }` keeps memories whose `place` has a `pose` on the same
+  map and frame (`frame` defaults to `map`) within `radius` metres of `pose`, measured to the
+  memory's `extent` (0 inside it); `z` counts only when both sides have one;
+- both together must both hold.
+
+Recall checks the filter before any read, passes `SearchOptions` only when there is a filter, and
+refuses one (`SpatialUnsupportedError`) on a store without `spatial: true`, which would otherwise
+return every place. `spatialConformance(name, make)` in `@oortmem/core/store-conformance` proves a
+store: the place round-trips, whole-segment matching, the radius and its edge, other maps and frames,
+the combined filter, the grant still applying, and the filter applying before `k`.
+
 ## Known limit
 
 SQLite's lexical scores come from FTS5's `bm25`, which uses term statistics over the whole table.
@@ -224,6 +244,14 @@ nothing. Versions 1 and 2 go up to 4 in the same single transaction. An open tha
 index (N memories)…", and waits up to 60 seconds (`MIGRATION_BUSY_TIMEOUT_MS`) for another
 connection's write lock, whatever `busyTimeoutMs` is.
 
+Schema version 5 (spatial memory, CON-84) adds two nullable columns, `place` (the JSON place) and
+`place_node` (its path, for `within`), and an R*Tree, `memories_place`, holding the bounding box of
+each placed memory's region with its map and frame as an auxiliary column. `near` is a box query on
+the R*Tree, then an exact distance check (`oort_place_distance`, a deterministic SQL function the
+store registers). A version 4 store gains the columns and the empty R*Tree in one transaction,
+after a `pre-v5` copy (`listBackups(path, 'pre-v5')`); nothing is rewritten and the lexical index
+is not rebuilt. Older versions go up through 4 to 5 in the same transaction.
+
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the
 vector table is rebuilt from the stored embeddings.
@@ -249,9 +277,11 @@ vector table is rebuilt from the stored embeddings.
 `downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x,
 `downgradeSqliteStore({ path, to: 2 })` to version 2 for Oort 0.3 to 0.5, and `{ path, to: 3 }` to
 version 3 for Oort before tokeniser v2 (the lexical index is rebuilt with tokeniser v1, as
-`memories_fts` again). Opening a store never goes down: migrations only roll forward. It first
+`memories_fts` again), and `{ path, to: 4 }` to version 4 for Oort 0.6.1 to 0.8 (the place columns
+and the R*Tree are dropped). Opening a store never goes down: migrations only roll forward. It first
 copies the database to `<path>.pre-downgrade.<UTC time>` (the three newest are kept), and refuses
-while the store holds anything the target version cannot represent (for version 2, any judgment; for
+while the store holds anything the target version cannot represent (for version 4 and below, any
+memory with a place; for version 2, also any judgment; for
 version 1, also any memory outside the Planet, an author with an account, or provenance). **Run it
 with no other Oort process open**: no Claude Code session with Oort hooks, no MCP server, no drain.
 Any of them would fail on the changed schema, and the next `oort` command migrates the store

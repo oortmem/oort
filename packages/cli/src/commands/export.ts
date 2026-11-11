@@ -142,7 +142,7 @@ export async function exportCommand(
     }
     if (version === 1 && !memories.every(fitsVersion1)) {
       throw new Refusal(
-        'These memories include some outside your Planet, or judgments, which format 1 cannot hold; use --format 2.',
+        'These memories include some outside your Planet, judgments or memories with a place, which format 1 cannot hold; use --format 2.',
       );
     }
     const data = formatExport(memories, version);

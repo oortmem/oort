@@ -15,7 +15,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .errors import OortUsageError
-from .types import Turn, camel
+from .types import Turn, camel, to_wire
 
 LIMITS = {
     "query_bytes": 2048,
@@ -136,8 +136,18 @@ def turn_wire(turn: Any) -> Dict[str, Any]:
         if not isinstance(k, str):
             raise bad("turn", ["turn"])
         key = camel(k) if "_" in k else k
-        out[key] = wire_date(v) if key == "at" else v
+        out[key] = wire_date(v) if key == "at" else place_wire(v) if key == "place" else v
     return out
+
+
+def place_wire(v: Any) -> Any:
+    """A ``Place`` or ``NearQuery`` (or a mapping, snake_case or camelCase keys) as its wire
+    object. The values are checked where the rules live: ``oort serve`` in local mode."""
+    if dataclasses.is_dataclass(v) and not isinstance(v, type):
+        return to_wire(v)
+    if isinstance(v, Mapping):
+        return {(camel(k) if isinstance(k, str) and "_" in k else k): place_wire(x) for k, x in v.items()}
+    return v
 
 
 # ---------------------------------------------------------------------------------------------

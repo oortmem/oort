@@ -24,6 +24,7 @@ import {
 import { CONTRADICTS } from './levels.js';
 import { capObservation } from './cap.js';
 import type { Decision, Memory, Scope } from './model.js';
+import { checkPlace, frameOf, placeDistance, type Place } from './place.js';
 import { scrubObservation } from './scrub.js';
 import { checkWriterDate, factInterval, utcOffset } from './temporal.js';
 import { tokenizeLexical } from './tokenize.js';
@@ -236,17 +237,33 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   if (best === undefined) return { outcome: 'skipped' };
 
   if (best.action === 'REINFORCE') {
-    const target = candidates.find((c) => c.id === best.candidateId);
+    const id = best.candidateId;
+    const target = candidates.find((c) => c.id === id);
     if (target === undefined) return { outcome: 'skipped' };
-    await store.recordAccess(grant, [target.id], now);
-    // Confirming writes the memory: only where this agent may write (a Star agent reinforces a
-    // Planet memory's activation but never edits it).
-    if (grantWrites(grant, target)) await confirm(store, grant, target.id, now.toISOString());
-    return { outcome: 'reinforced', memoryId: target.id };
+    if (!elsewhere(obs.place, target.place)) {
+      await store.recordAccess(grant, [target.id], now);
+      // Confirming writes the memory: only where this agent may write (a Star agent reinforces a
+      // Planet memory's activation but never edits it).
+      if (grantWrites(grant, target)) await confirm(store, grant, target.id, now.toISOString());
+      return { outcome: 'reinforced', memoryId: target.id };
+    }
+    // Seen somewhere else (CON-84): a new memory, rather than drop where it was seen. Whether
+    // this is a move (a supersede) is Spatial 2's to decide.
+    decisions.push({
+      stage: 'place',
+      question: 'elsewhere',
+      answer: 'add-instead',
+      probability: 1,
+    });
+    best = { ...best, candidateId: null, action: 'ADD' };
   }
 
-  let action: WriteAction = best.action === 'UPDATE' ? 'REFINE' : best.action;
-  let prior = action === 'ADD' ? undefined : candidates.find((c) => c.id === best.candidateId);
+  const chosen = best;
+  let action: WriteAction =
+    chosen.action === 'UPDATE'
+      ? 'REFINE'
+      : (chosen.action as Exclude<typeof chosen.action, 'REINFORCE'>);
+  let prior = action === 'ADD' ? undefined : candidates.find((c) => c.id === chosen.candidateId);
   if (prior !== undefined && nodeKey(nodeOf(addressOf(prior))) !== nodeKey(grant.home)) {
     // The prior lives in another node (the Planet, for an agent writing to its Star, or the
     // reverse). A write never edits a memory outside its home node: the observation becomes a
@@ -336,6 +353,8 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     const to = bounds.validTo ?? prior.validTo;
     await store.upsert(grant, {
       ...prior,
+      // Its own place, unless this turn says where it is now (CON-84).
+      ...(obs.place !== undefined && { place: obs.place }),
       type: w.type,
       text: w.text,
       stub: w.stub,
@@ -390,6 +409,8 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     lastConfirmedAt: null,
     supersedes: prior?.id ?? null,
     supersededBy: null,
+    // The turn's place only: nothing is inherited from a prior (CON-84).
+    ...(obs.place !== undefined && { place: obs.place }),
     embedding: a.embedding,
     source: {
       harness: deps.harness ?? 'unknown',
@@ -500,6 +521,33 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
   return { outcome: OUTCOME[action], memoryId: id };
 }
 
+/**
+ * True when a turn seen at `seen` is not a sighting of a memory kept at `known` (CON-84): another
+ * place path, another map or frame, or a pose outside the memory's region by more than the two
+ * places' combined `sigma`. A turn that names no place is never elsewhere; a place for a memory
+ * without one is (it says something the memory does not).
+ */
+function elsewhere(seen: Place | undefined, known: Place | undefined): boolean {
+  if (seen === undefined) return false;
+  if (known === undefined) return true;
+  let compared = false;
+  if (seen.nodeId !== undefined && known.nodeId !== undefined) {
+    if (seen.nodeId !== known.nodeId) return true;
+    compared = true;
+  }
+  if (seen.pose !== undefined && seen.mapId !== undefined && known.pose !== undefined) {
+    const d = placeDistance(known, {
+      mapId: seen.mapId,
+      frame: frameOf(seen),
+      pose: seen.pose,
+      radius: 1,
+    });
+    if (d === undefined || d > (seen.sigma ?? 0) + (known.sigma ?? 0)) return true;
+    compared = true;
+  }
+  return !compared;
+}
+
 /** The gate's volatile answer: recorded on the memory, it is what marks a fact as volatile. */
 const isVolatileDecision = (d: Decision): boolean =>
   d.stage === 'gate' && d.question === 'volatile';
@@ -566,6 +614,9 @@ export async function observe(
   scope: Scope,
   deps: ObserveDeps,
 ): Promise<ObserveResult> {
+  // A place is checked before anything else sees the turn (CON-84): a bad one is the caller's
+  // error, never a write.
+  if (raw.place !== undefined) raw = { ...raw, place: checkPlace(raw.place) };
   // Secrets are scrubbed before any adapter, or the store, sees the text.
   const scrubbed = scrubObservation(raw);
   if (scrubbed.dropped) return single({ outcome: 'skipped', reason: 'secret' }, []);

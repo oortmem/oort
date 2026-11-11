@@ -84,6 +84,20 @@ describe('export format', () => {
     }
   });
 
+  it('export.v2-carries-a-place-and-v1-refuses-it', () => {
+    const place = { nodeId: 'site:hq/room:B', mapId: 'hq', pose: { x: 1, y: 2, z: 0.5 } };
+    const m = makeMemory({ id: 'placed', place });
+    const text = formatExport([m, makeMemory({ id: 'bare' })], 2, AT);
+    const lines = text.trimEnd().split('\n');
+    expect(JSON.parse(lines[1]!)['place']).toEqual(place);
+    expect('place' in JSON.parse(lines[2]!)).toBe(false);
+    expect(parseExport(text).memories[0]?.place).toEqual(place);
+    expect(() => exportLine(m, 1)).toThrow(ExportFormatError);
+    // A bad place fails its line, by number, never echoing it.
+    const bad = text.replace('"x":1', '"x":"one"');
+    expect(() => parseExport(bad)).toThrow(/^line 2: place\.pose\.x /);
+  });
+
   it('export.rejects-what-it-cannot-read', () => {
     const ok = formatExport([makeMemory({ id: 'x' })], 2, AT);
     const [head, line] = ok.trimEnd().split('\n');

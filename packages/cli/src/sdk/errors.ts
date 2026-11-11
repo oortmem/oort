@@ -280,6 +280,9 @@ export function toOortError(e: unknown): OortError {
   if (err.name === 'EmbedderMismatchError') {
     return new OortUsageError(err.message, { fix: 'oort reembed', reason: 'embedder-mismatch' });
   }
+  if (err.name === 'SpatialUnsupportedError') {
+    return new OortRefusedError(err.message, { reason: 'spatial-unsupported' });
+  }
   if (err.name === 'GrantError' || err.name === 'ScopeDeniedError') {
     return new OortRefusedError(err.message, { reason: 'scope-denied' });
   }

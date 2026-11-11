@@ -28,6 +28,10 @@ export interface RecalledFact {
   from?: string;
   /** A narrower memory in this result contradicts this one: its id (it ranks first). */
   overridden_by?: string;
+  /** Where it is (CON-84): its place path, when it has one. */
+  place?: string;
+  /** With `near`: metres from the query point to its region. */
+  distance_m?: number;
 }
 
 export interface RecallOutput {
@@ -59,6 +63,11 @@ export interface RememberOutcome {
  * `oort: <message>`.
  */
 export interface MemoryBackend {
+  /**
+   * The backend filters by place (CON-84): `recall` offers `within` and `near`, `remember` offers
+   * `place`. Without it those arguments are not offered, and stripped if a model sends them.
+   */
+  readonly spatial?: true;
   recall(input: ToolInput<'recall'>): Promise<RecallOutput>;
   /** `note`: what the person should know, e.g. that a suggested share still needs confirming. */
   remember(input: ToolInput<'remember'>): Promise<{ results: RememberOutcome[]; note?: string }>;
@@ -186,7 +195,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
   const b = opts.backend;
   const isRefusal = opts.isRefusal ?? (() => false);
   const spaces = opts.spaces ?? PLANET_ONLY;
-  const schemas = inputSchemasFor(spaces);
+  const schemas = inputSchemasFor(spaces, { spatial: b.spatial === true });
   const visibility = new Set(['private', ...spaces.visibility]);
   const server = new McpServer(
     { name: 'oort', title: 'Oort memory', version: opts.version ?? VERSION },

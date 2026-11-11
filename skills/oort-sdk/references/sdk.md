@@ -67,7 +67,7 @@ usage error.
 | ------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------- |
 | `recall(query, opts?)`                            | `RecallResult`                      | yes                                                               |
 | `observe(turn, { signal? })`                      | `ObserveResult`                     | yes                                                               |
-| `remember(facts, { type? })`                      | `RememberResult`                    | yes                                                               |
+| `remember(facts, { type?, place? })`              | `RememberResult`                    | yes (`place`: `refused`, `local-only`)                            |
 | `forget(id, { everywhere? })`                     | `ForgetResult`                      | yes (`everywhere`: cloud only)                                    |
 | `pin(id)` / `unpin(id)`                           | `PinResult`                         | yes (`changed: null`)                                             |
 | `recent({ since?, limit? })`                      | `{ memories, warnings }`            | yes                                                               |
@@ -89,17 +89,66 @@ usage error.
 `known-at`), `asOf` (valid time), `knownAt` (transaction time), `include` (narrows the levels
 read: `self`, `planet`, `star`, `constellation`, `galaxy`), `budgetChars` (the default block size
 for `formatForPrompt`), `includeWithdrawn`, `speed` (`full`: embed and rerank; `fast`: no rerank;
-`lexical`: no model call), `inferTime` (default true: "on 2 April" picks as-of) and `signal`.
+`lexical`: no model call), `inferTime` (default true: "on 2 April" picks as-of), `within` and
+`near` (spatial memory, below) and `signal`.
 `as-of` needs `asOf`, `known-at` needs `knownAt`, and `asOf` together with `knownAt` is a usage
 error.
 
 **A `Turn`** for `observe` is `{ user, assistant }`, plus optional `tools` (tool-call summaries),
-`at`, `sessionId` and `turnRef`. `turnRef` is deduplicated by Oort Cloud only (it answers
+`at`, `sessionId`, `turnRef` and `place`. `turnRef` is deduplicated by Oort Cloud only (it answers
 `duplicate: true`); locally a retry may write twice.
+
+**Spatial memory** (0.9.0 or newer, local mode only). `remember(facts, { place })` and a turn's
+`place` tag memories with where they are: `{ nodeId?, mapId?, mapVersion?, frame?, pose?, extent?,
+geo?, sigma? }`, with a place path such as `site:hq/room:B/shelf:B3`, map coordinates in metres
+(`pose: { x, y, z?, yaw? }`, `mapId` required with it), or both. `recall(q, { within: 'room:B' })`
+keeps memories whose path contains those whole segments; `near: { mapId, frame?, pose, radius }`
+keeps those within `radius` metres on the same map and frame. Both filter before ranking and
+`limit`, and compose with the time modes. Recalled memories carry `place`, `why.placePath` and
+`why.distanceM`. `frame: 'odom'` is refused. In cloud mode all three are `refused`, reason
+`local-only`, before anything is sent (until Oort Cloud holds places).
+
+<!-- example: examples/src/spatial.ts -->
+
+```ts
+import { createOort, type Place } from 'oortmem';
+
+// A robot's memory of a site: each fact is remembered with where it was seen. Places are kept by
+// the local engine (0.9.0 or newer); Oort Cloud refuses them until it holds places too.
+await using oort = await createOort({ mode: 'local' });
+
+const room = (r: string, x: number, y: number, at?: string): Place => ({
+  nodeId: `site:hq/room:${r}${at === undefined ? '' : `/${at}`}`,
+  mapId: 'hq',
+  pose: { x, y },
+});
+const seen: [string, Place][] = [
+  ['The red toolbox is on shelf A1.', room('A', 1, 1, 'shelf:A1')],
+  ['The aluminium ladder leans on the north wall.', room('A', 3, 4)],
+  ['The cordless drill charges on bench A.', room('A', 2, 2, 'bench:A')],
+  ['The blue toolbox is on shelf B3.', room('B', 11, 1, 'shelf:B3')],
+  ['The torque wrench is in drawer 4.', room('B', 12, 3, 'drawer:4')],
+  ['Spare fuses are in the grey cabinet.', room('B', 14, 1)],
+  ['The green toolbox sits under the window.', room('B', 13, 4)],
+  ['The first aid kit hangs by the door.', room('C', 21, 1)],
+  ['The fire extinguisher is in the corner.', room('C', 24, 4)],
+  ['The forklift charger is on the east wall.', room('C', 22, 3)],
+];
+for (const [fact, place] of seen) await oort.remember(fact, { place });
+
+// Which toolboxes are in room B? `within` matches whole path segments: room:B, never room:B2.
+const inB = await oort.recall('toolbox', { within: 'room:B' });
+for (const m of inB.memories) console.log(m.why.placePath, '|', m.text);
+
+// What is within 1.5 m of the robot? Distance is measured on the same map and frame only.
+const here = { mapId: 'hq', pose: { x: 13, y: 3 }, radius: 1.5 };
+const near = await oort.recall('toolbox', { near: here });
+for (const m of near.memories) console.log(m.why.distanceM?.toFixed(2), '|', m.text);
+```
 
 **Results.** Every memory is a `MemoryView`: `id`, `text` (scrubbed of secrets again on the way
 out), `type`, `tier`, `pinned`, `status`, `validFrom`, `validTo`, `recordedAt`, `updatedAt`,
-`entities`, `origin` and, for a judgment, `judgment`. A `RecalledMemory` adds `score`
+`entities`, `origin`, for a judgment, `judgment`, and `place` when it has one. A `RecalledMemory` adds `score`
 (comparable within one result only), `stale` and `why` (`@experimental`). A `RecallResult` has
 `memories`, `abstained` (nothing stored answered the query), `temporal` (the time mode used),
 `read` (the spaces read), and `degraded` and `warnings` when recall ran degraded

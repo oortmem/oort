@@ -1,4 +1,4 @@
-import { observe, type Grant, type MemoryType, type Scope } from '@oortmem/core';
+import { observe, type Grant, type MemoryType, type Place, type Scope } from '@oortmem/core';
 import { createHash } from 'node:crypto';
 import type { CloudClient } from './cloud.js';
 import { scrubForCloud } from './cloud-scrub.js';
@@ -61,6 +61,8 @@ export async function rememberFacts(
     now?: Date;
     /** The grant to read and write with (the SDK's principal); default the scope's local grant. */
     grant?: Grant;
+    /** Where every fact is (CON-84): each memory written carries it. Local only. */
+    place?: Place;
   },
 ): Promise<RememberResult[]> {
   const adapters = writePath(w, 'remember');
@@ -70,15 +72,23 @@ export async function rememberFacts(
     const at = (opts.now ?? new Date()).toISOString();
     const turn = rememberTurn(fact, opts.type);
     const obs = turnObservation(turn.user, turn.assistant, at);
-    const r = await observe({ ...obs, turnRef: `remember:${i}` }, scope, {
-      store: w.store,
-      ...adapters,
-      config: w.config,
-      harness: opts.harness,
-      home: w.agent.home,
-      ...(opts.now !== undefined && { now: opts.now }),
-      ...(opts.grant !== undefined && { grant: opts.grant }),
-    });
+    const r = await observe(
+      {
+        ...obs,
+        turnRef: `remember:${i}`,
+        ...(opts.place !== undefined && { place: opts.place }),
+      },
+      scope,
+      {
+        store: w.store,
+        ...adapters,
+        config: w.config,
+        harness: opts.harness,
+        home: w.agent.home,
+        ...(opts.now !== undefined && { now: opts.now }),
+        ...(opts.grant !== undefined && { grant: opts.grant }),
+      },
+    );
     const out: RememberResult = { fact: i, outcome: r.outcome };
     if (r.memoryId !== undefined) out.id = r.memoryId;
     if ((r.outcome === 'superseded' || r.outcome === 'corrected') && r.memoryId !== undefined) {

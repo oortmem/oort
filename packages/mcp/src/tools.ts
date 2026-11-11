@@ -94,47 +94,97 @@ function oneOf(values: readonly string[], none: string): z.ZodType<string> {
   return v.length === 0 ? z.string().refine(() => false, none) : z.enum(v as [string, ...string[]]);
 }
 
+/** A finite coordinate in metres. */
+const Metres = z.number().finite();
+const PlacePath = z
+  .string()
+  .trim()
+  .min(1)
+  .max(256)
+  .describe('A place path, root first, whole segments: site:hq/room:B/shelf:B3');
+const ToolPose = z.object({ x: Metres, y: Metres, z: Metres.optional() });
+
+/** The spatial arguments (CON-84), offered only by a backend that can filter by place. */
+const SPATIAL_RECALL = {
+  within: PlacePath.optional().describe(
+    'Only memories at this place or below it, e.g. room:B (matches whole path segments)',
+  ),
+  near: z
+    .object({
+      map_id: z.string().trim().min(1).max(128),
+      frame: z.string().trim().min(1).max(128).optional().describe('Default map'),
+      pose: ToolPose,
+      radius: z.number().positive().describe('Metres'),
+    })
+    .optional()
+    .describe('Only memories within radius metres of pose on this map'),
+};
+const SPATIAL_REMEMBER = {
+  place: z
+    .object({
+      node_id: PlacePath.optional(),
+      map_id: z.string().trim().min(1).max(128).optional(),
+      map_version: z.number().int().nonnegative().optional(),
+      frame: z.string().trim().min(1).max(128).optional(),
+      pose: ToolPose.optional(),
+      radius: z.number().positive().optional().describe('The size of the place, in metres'),
+    })
+    .optional()
+    .describe('Where the facts are: a place path, map coordinates, or both'),
+};
+
+/** Options for `inputSchemasFor`. */
+export interface ToolSchemaOptions {
+  /** The backend filters by place (CON-84): offer `recall.within`, `recall.near` and `remember.place`. */
+  spatial?: boolean;
+}
+
 /**
  * The tool input schemas for one connection's spaces: `recall.include` lists only the levels it
  * may read, `remember.visibility` only `private` and the Constellations it may share to, and
  * `share.to` only those. Unknown arguments (a `scope`, `project` or `agent` a model invents) are
- * stripped by zod and never reach a backend.
+ * stripped by zod and never reach a backend; so are the spatial ones on a backend without places.
  */
-export function inputSchemasFor(spaces: ToolSpaces) {
+export function inputSchemasFor(spaces: ToolSpaces, opts: ToolSchemaOptions = {}) {
   const include = spaces.include.filter((l) => (INCLUDE_LEVELS as readonly string[]).includes(l));
-  return {
-    recall: z.object({
-      query: z.string().trim().min(1).max(500).describe('What to look for, in plain words'),
-      as_of: IsoTime.optional().describe('Recall what was true at this time instead of now'),
-      known_at: IsoTime.optional().describe(
-        'Recall what was believed at this time, including facts corrected since',
+  const recall = z.object({
+    query: z.string().trim().min(1).max(500).describe('What to look for, in plain words'),
+    as_of: IsoTime.optional().describe('Recall what was true at this time instead of now'),
+    known_at: IsoTime.optional().describe(
+      'Recall what was believed at this time, including facts corrected since',
+    ),
+    mode: z
+      .enum(RECALL_MODES)
+      .optional()
+      .describe(
+        'current, as-of (requires as_of), history (every version, oldest first) or known-at (requires known_at). Omit it to let Oort read the mode from the query.',
       ),
-      mode: z
-        .enum(RECALL_MODES)
-        .optional()
-        .describe(
-          'current, as-of (requires as_of), history (every version, oldest first) or known-at (requires known_at). Omit it to let Oort read the mode from the query.',
-        ),
-      limit: z.number().int().min(1).max(10).default(5),
-      include: z
-        .array(oneOf(include, 'This connection cannot read that level.') as z.ZodType<IncludeLevel>)
-        .min(1)
-        .max(INCLUDE_LEVELS.length)
-        .optional()
-        .describe(
-          'Only these levels: planet is your own memory; omit it to read everything allowed',
-        ),
-    }),
-    remember: z.object({
-      facts: z.array(Fact).min(1).max(REMEMBER_MAX_FACTS),
-      type: z
-        .enum(MEMORY_TYPES)
-        .optional()
-        .describe('A hint for the kind of fact; Oort decides the final type'),
-      visibility: oneOf(['private', ...spaces.visibility], 'Not a space this connection can use.')
-        .default('private')
-        .describe('private (the default), or a Constellation to suggest sharing the fact with'),
-    }),
+    limit: z.number().int().min(1).max(10).default(5),
+    include: z
+      .array(oneOf(include, 'This connection cannot read that level.') as z.ZodType<IncludeLevel>)
+      .min(1)
+      .max(INCLUDE_LEVELS.length)
+      .optional()
+      .describe('Only these levels: planet is your own memory; omit it to read everything allowed'),
+  });
+  const remember = z.object({
+    facts: z.array(Fact).min(1).max(REMEMBER_MAX_FACTS),
+    type: z
+      .enum(MEMORY_TYPES)
+      .optional()
+      .describe('A hint for the kind of fact; Oort decides the final type'),
+    visibility: oneOf(['private', ...spaces.visibility], 'Not a space this connection can use.')
+      .default('private')
+      .describe('private (the default), or a Constellation to suggest sharing the fact with'),
+  });
+  // Typed with the spatial fields either way (they are optional); without places they are left
+  // out of the schema, so a model never sees them and zod strips any it sends.
+  const spatialRecall = recall.extend(SPATIAL_RECALL);
+  const spatialRemember = remember.extend(SPATIAL_REMEMBER);
+  return {
+    recall: opts.spatial === true ? spatialRecall : (recall as unknown as typeof spatialRecall),
+    remember:
+      opts.spatial === true ? spatialRemember : (remember as unknown as typeof spatialRemember),
     // Loose (CON-67): the model never withdraws shared copies (a person confirms that in the
     // terminal), so an `everywhere` it sends must reach the handler and be refused, never be
     // stripped into a plain forget. Other unknown arguments still never reach a backend: the
@@ -345,8 +395,9 @@ export const TOOLS: readonly ToolDefinition[] = [
 /** The JSON Schema of every tool's input, for hosts and docs that need it without zod. */
 export function toolJsonSchemas(
   spaces: ToolSpaces = PLANET_ONLY,
+  opts: ToolSchemaOptions = {},
 ): Record<ToolName, Record<string, unknown>> {
-  const schemas = inputSchemasFor(spaces);
+  const schemas = inputSchemasFor(spaces, opts);
   return Object.fromEntries(
     ALL_TOOL_NAMES.map((n) => [n, z.toJSONSchema(schemas[n], { io: 'input' })]),
   ) as unknown as Record<ToolName, Record<string, unknown>>;

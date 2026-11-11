@@ -104,6 +104,46 @@ describe.each<Era>(['legacy', 'modern'])('@oortmem/mcp (%s era)', (era) => {
     expect(client.getInstructions()).toBe(INSTRUCTIONS);
   });
 
+  it('mcp.spatial-arguments-reach-only-a-backend-with-places', async () => {
+    const near = { map_id: 'hq', pose: { x: 1, y: 2 }, radius: 3 };
+    const place = { node_id: 'site:hq/room:B', map_id: 'hq', pose: { x: 1, y: 2 } };
+    const plain = await connect(era, fakeBackend());
+    await plain.callTool({
+      name: 'recall',
+      arguments: { query: 'toolbox', within: 'room:B', near },
+    });
+    await plain.callTool({
+      name: 'remember',
+      arguments: { facts: ['The toolbox is here.'], place },
+    });
+    expect(calls.map((c) => c.input)).toEqual([
+      { query: 'toolbox', limit: 5 },
+      { facts: ['The toolbox is here.'], visibility: 'private' },
+    ]);
+    calls.length = 0;
+    const spatial = await connect(era, fakeBackend({ spatial: true }));
+    const listed = await spatial.listTools();
+    const recallTool = listed.tools.find((t) => t.name === 'recall');
+    expect(Object.keys(recallTool?.inputSchema.properties ?? {})).toContain('near');
+    await spatial.callTool({
+      name: 'recall',
+      arguments: { query: 'toolbox', within: 'room:B', near },
+    });
+    await spatial.callTool({
+      name: 'remember',
+      arguments: { facts: ['The toolbox is here.'], place },
+    });
+    expect(calls.map((c) => c.input)).toEqual([
+      { query: 'toolbox', limit: 5, within: 'room:B', near },
+      { facts: ['The toolbox is here.'], visibility: 'private', place },
+    ]);
+    const bad = await spatial.callTool({
+      name: 'recall',
+      arguments: { query: 'toolbox', near: { ...near, radius: -1 } },
+    });
+    expect(bad.isError).toBe(true);
+  });
+
   it('mcp.remember-rejects-transcript-shaped-input', async () => {
     const client = await connect(era, fakeBackend());
     const tooMany = await client.callTool({
@@ -367,6 +407,29 @@ describe('@oortmem/mcp definitions', () => {
       expect(s.forget).toEqual({ ...FORGET_SCHEMA_0_6_1, additionalProperties: {} });
     }
     for (const s of Object.values(team)) expect(JSON.stringify(s)).not.toMatch(/"scope"/);
+  });
+
+  it('mcp.spatial-arguments-only-for-a-backend-with-places', () => {
+    const plain = toolJsonSchemas() as Record<string, any>;
+    for (const k of ['within', 'near']) expect(plain.recall.properties[k], k).toBeUndefined();
+    expect(plain.remember.properties.place).toBeUndefined();
+    const spatial = toolJsonSchemas(undefined, { spatial: true }) as Record<string, any>;
+    expect(spatial.recall.properties.within.type).toBe('string');
+    expect(Object.keys(spatial.recall.properties.near.properties)).toEqual([
+      'map_id',
+      'frame',
+      'pose',
+      'radius',
+    ]);
+    expect(spatial.recall.properties.near.required).toEqual(['map_id', 'pose', 'radius']);
+    expect(Object.keys(spatial.remember.properties.place.properties)).toEqual([
+      'node_id',
+      'map_id',
+      'map_version',
+      'frame',
+      'pose',
+      'radius',
+    ]);
   });
 
   it('mcp.json-schemas-cover-every-tool', () => {
