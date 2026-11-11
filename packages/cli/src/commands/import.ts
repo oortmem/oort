@@ -5,13 +5,12 @@ import * as path from 'node:path';
 import {
   ExportFormatError,
   addressOf,
+  fileOrigin,
+  importedJudgment,
+  judgmentText,
   nodeGrant,
-  normaliseJudgment,
-  packInput,
   parseExport,
   planetNode,
-  type Judgment,
-  type JudgmentPackOrigin,
   type Memory,
 } from '@oortmem/core';
 import { importTranscripts } from '@oortmem/claude-code';
@@ -24,6 +23,7 @@ import {
   adapterProblem,
   confirm,
   echo,
+  shown,
   tilde,
   warn,
   when,
@@ -297,24 +297,8 @@ function wellFormed(m: Memory): boolean {
   if (salience < 0 || salience > 1) return false;
   if (typeof x['pinned'] !== 'boolean' || typeof x['text'] !== 'string') return false;
   if (!END_REASONS.has(x['endReason'])) return false;
-  if (m.type !== 'judgment') return x['judgment'] === undefined;
-  if (typeof m.judgment !== 'object' || m.judgment === null) return false;
-  try {
-    normaliseJudgment(packInput(m.judgment), new Date(0));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * A judgment from a file arrives as an imported one, as from a pack: `via: 'pack'` with this file
- * as its origin, never confirmed, so it counts only when judging asks for imports (CON-71). What
- * the line says about how it was recorded is not trusted. A withdrawal or purge it carries stays.
- */
-function asImported(j: Judgment, origin: JudgmentPackOrigin): Judgment {
-  const { confirmed: _confirmed, pack: _pack, via: _via, ...rest } = j;
-  return { ...rest, via: 'pack', pack: origin };
+  // A judgment is checked as it is stored, by importedJudgment.
+  return m.type === 'judgment' || x['judgment'] === undefined;
 }
 
 export async function importFileCommand(
@@ -339,8 +323,11 @@ export async function importFileCommand(
     }
     const { orgId, customerId, agentId } = w.scope;
     let memories: Memory[];
+    let exportedAt: unknown;
     try {
-      memories = parseExport(text, { planet: { orgId, customerId } }).memories;
+      const parsed = parseExport(text, { planet: { orgId, customerId } });
+      memories = parsed.memories;
+      exportedAt = parsed.manifest.exportedAt;
     } catch (e) {
       if (e instanceof ExportFormatError) {
         throw new Refusal(`${echo(file)} is not an Oort export: ${e.message}.`);
@@ -354,17 +341,8 @@ export async function importFileCommand(
       write: [planet],
     });
     const outside = memories.filter((m) => addressOf(m).level !== 'user').length;
-    const now = new Date().toISOString();
+    const now = new Date();
     const digest = createHash('sha256').update(text).digest('hex');
-    const exportedAt = /"exportedAt"\s*:\s*"([^"]{1,64})"/.exec(text.slice(0, 4096))?.[1] ?? now;
-    const origin = (originalId: string): JudgmentPackOrigin => ({
-      id: digest.slice(0, 16),
-      name: path.basename(full),
-      exportedAt,
-      exportedBy: 'oort import',
-      originalId,
-      importedAt: now,
-    });
     const fresh: Memory[] = [];
     let already = 0;
     let invalid = 0;
@@ -374,21 +352,36 @@ export async function importFileCommand(
         invalid++;
         continue;
       }
-      if ((await w.store.get(grant, m.id)) !== null) already++;
-      else
-        fresh.push(
-          m.judgment === undefined ? m : { ...m, judgment: asImported(m.judgment, origin(m.id)) },
+      if ((await w.store.get(grant, m.id)) !== null) {
+        already++;
+        continue;
+      }
+      if (m.type !== 'judgment') {
+        fresh.push(m);
+        continue;
+      }
+      // What is stored is what was checked: the normalised, redacted decision, imported from
+      // this file (never confirmed, no tombstone), and the text recall shows rendered from it.
+      try {
+        const judgment = importedJudgment(
+          m.judgment,
+          fileOrigin({ digest, name: path.basename(full), exportedAt, originalId: m.id, now }),
         );
+        fresh.push({ ...m, judgment, text: judgmentText(judgment) });
+      } catch {
+        invalid++;
+      }
     }
     const pinned = fresh.filter((m) => m.pinned).length;
     const judgments = fresh.filter((m) => m.type === 'judgment').length;
     const json = jsonMode(ctx);
     const ui = uiFor(ctx.io);
-    const shown = tilde(full, ctx.io.env['HOME'] || os.homedir());
+    // The name is the file's own: printed with its control characters escaped (L-c).
+    const fileShown = shown(tilde(full, ctx.io.env['HOME'] || os.homedir()));
     ctx.io.out(ui.header('import', 'an Oort export into this machine'));
     ctx.io.out(
       ui.kv([
-        ['file', shown],
+        ['file', fileShown],
         ['memories', String(memories.length)],
         ['already here', String(already)],
         ['outside a Planet', `${outside}${outside > 0 ? ' (left out)' : ''}`],
@@ -469,7 +462,7 @@ export async function importFileCommand(
     }
     if (cold.length > 0) await w.store.coldPutMany(grant, cold);
     ctx.io.out(
-      `Imported ${ready.length} memories from ${shown}${already > 0 ? ` (${already} already here)` : ''}.\n`,
+      `Imported ${ready.length} memories from ${fileShown}${already > 0 ? ` (${already} already here)` : ''}.\n`,
     );
     if (json) emit(ctx, { outcome: 'imported', ...result(ready.length) });
     return 0;

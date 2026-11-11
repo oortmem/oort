@@ -2,8 +2,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createMemoryStore,
+  formatJudgmentPack,
+  importJudgmentPack,
   nodeGrant,
   parseExport,
+  parseJudgmentPack,
+  recordJudgment,
+  tombstoneKey,
   planetNode,
   type Grant,
   type Memory,
@@ -289,6 +295,103 @@ describe('oort import <file> (CON-137)', () => {
       originalId: 'ok-judgment',
     });
     expect(j.pack!.id).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('cli.import-file-judgments-plant-no-tombstone-and-carry-a-checked-origin', async () => {
+    // Review of 3f35686: a withdrawn judgment in a file, naming a real decision's tombstone key or
+    // copying it exactly, must not keep that decision out of a pack imported afterwards; what is
+    // stored is the normalised decision; the origin's name and time are checked.
+    const h = await onSqlite();
+    const now = new Date('2026-11-11T12:00:00.000Z');
+    const scope = { orgId: 'local', customerId: 'self', agentId: 'anonymous' };
+    const planet = {
+      node: planetNode({ orgId: 'local', customerId: 'self' }),
+      projectIds: 'all' as const,
+    };
+    const rw = nodeGrant({ principal: scope, read: [planet], write: [planet] });
+    const decision = {
+      subject: 'Post says a vitamin cures the flu',
+      verdict: 'rejected',
+      reason: 'No source cited for a health claim.',
+      domain: 'content',
+      by: 'ada',
+      decidedAt: '2026-10-01T00:00:00.000Z',
+    };
+    const from = createMemoryStore({ now: () => now });
+    const real = await recordJudgment(decision, { store: from, grant: rw, scope, now, via: 'cli' });
+    const pack = formatJudgmentPack(await from.list(rw), {
+      name: 'ada',
+      exportedBy: 'x',
+      exportedAt: now,
+    });
+
+    const base = JSON.parse(fs.readFileSync(FIXTURE, 'utf8').split('\n')[1]!) as Record<
+      string,
+      unknown
+    >;
+    const withdrawn = { at: '2026-11-02T00:00:00.000Z', by: 'mallory' };
+    const line = (id: string, judgment: Record<string, unknown>) =>
+      JSON.stringify({
+        ...base,
+        id,
+        type: 'judgment',
+        supersedes: null,
+        supersededBy: null,
+        judgment,
+      });
+    const j = real.memory.judgment!;
+    const lines = [
+      line('planted-key', {
+        ...j,
+        subject: { summary: 'Another post' },
+        criteria: ['x', 'x'],
+        withdrawn,
+        tombstone: tombstoneKey(j),
+      }),
+      line('planted-copy', { ...j, withdrawn }),
+      line('bad-withdrawn', { ...j, subject: { summary: 'Third' }, withdrawn: { at: 'soon' } }),
+    ];
+    const file = path.join(h.root, 'evil\u001b[2J.jsonl');
+    fs.writeFileSync(
+      file,
+      [
+        JSON.stringify({
+          oort: 'export',
+          version: 1,
+          exportedAt: 'not a time\u0007',
+          memories: lines.length,
+          scopes: [],
+        }),
+        ...lines,
+      ].join('\n') + '\n',
+    );
+    // The summary and the question never print the name's escape raw.
+    const asked = await h.run(['import', file], { tty: true, answer: 'n' });
+    expect(asked.io.stdout + asked.io.stderr + asked.io.asked.join('')).not.toMatch(
+      /[\u0007\u001b]/,
+    );
+    const r = await h.run(['import', file, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).not.toMatch(/[\u0007\u001b]/);
+    expect(JSON.parse(r.io.stdout).data).toMatchObject({ imported: 2, invalid: 1, judgments: 2 });
+    const stored = (await all(h.sqlite)).find((m) => m.id === 'planted-key')!;
+    expect(stored.judgment).not.toHaveProperty('tombstone');
+    expect(stored.judgment!.criteria).toEqual(['x']);
+    expect(stored.judgment!.withdrawn).toEqual(withdrawn);
+    expect(stored.judgment!.pack).toMatchObject({
+      name: 'export file',
+      exportedAt: expect.not.stringContaining('not a time'),
+    });
+    expect(Number.isNaN(Date.parse(stored.judgment!.pack!.exportedAt))).toBe(false);
+    // The genuine decision still arrives from its pack.
+    const after = await importJudgmentPack(parseJudgmentPack(pack), {
+      store: h.sqlite,
+      grant: rw,
+      scope,
+      now,
+    });
+    expect(after).toMatchObject({ tombstoned: [], skipped: [] });
+    expect(after.added).toHaveLength(1);
   });
 
   it('cli.errors-never-print-terminal-escapes', async () => {
