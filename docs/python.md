@@ -213,8 +213,9 @@ oort.close()
 
 ### End users in Oort Cloud
 
-> **Requires Oort Cloud with server keys (rolling out after 18 Nov 2026).** Until your account
-> has it, every end-user call below is refused with `end-users-unsupported` and nothing is sent.
+> **Requires a server key on Oort Pro** and `oortmem` 0.8.0 or newer. An account without
+> per-user memory refuses every end-user call below with `end-users-unsupported`, and nothing
+> is sent.
 
 With a **server key** (an Oort key made on [oortcloud.dev/account](https://oortcloud.dev/account)
 with "Acts for end users"), the same `scoped(user=...)` works in cloud mode: each end user gets a

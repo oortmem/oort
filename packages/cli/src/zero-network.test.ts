@@ -15,6 +15,7 @@ import { TG } from '@oortmem/core/store-conformance';
 import { createKeychain } from './keychain.js';
 import { runCli } from './program.js';
 import {
+  AWS_KEY,
   fakeIo,
   memory,
   syntheticKey,
@@ -367,6 +368,48 @@ describe('zero network without keys or Oort Pro', () => {
     }
   });
 
+  it('offline.stop-hook-queues-without-network', async () => {
+    // The Stop hook reads the session transcript, queues its turns and asks for a drain. It
+    // calls no model, so with no keys it does all of that and nothing reaches the network.
+    const s = sandbox();
+    await seed(s);
+    const transcript = writeTranscript(path.join(s.home, 'claude-projects'), s.cwd);
+    const stop = await hook(s, 'Stop', stopInput(s, transcript));
+    expect(stop.code).toBe(0);
+    expect(stop.io.hookStdout).toBe(''); // any Stop output would make Claude keep going
+    const queued = queueSnapshot(s);
+    expect(Object.keys(queued).length).toBeGreaterThan(0);
+    expect(Object.values(queued).join('')).not.toContain(AWS_KEY); // scrubbed before queueing
+    expect(stop.io.spawnCwds).toEqual([s.oortHome]); // the drain is asked for, in OORT_HOME
+    expect(hookLog(s).find((e) => e.event === 'Stop')?.outcome).toBe('queued');
+    expect(guard.attempts).toEqual([]);
+  });
+
+  it('offline.drain-without-keys-leaves-the-queue-untouched', async () => {
+    // Without embed, decide and write adapters the drain leaves the queue as it is
+    // (`drain-skipped:missing-adapters`), so the turns are saved once keys or local models
+    // exist; the local consolidation it then runs needs no model either.
+    const s = sandbox();
+    await seed(s);
+    const transcript = writeTranscript(path.join(s.home, 'claude-projects'), s.cwd);
+    expect((await hook(s, 'Stop', stopInput(s, transcript))).code).toBe(0);
+    const before = queueSnapshot(s);
+    const lines = Object.values(before).join('').split('\n').filter(Boolean).length;
+    expect(lines).toBeGreaterThan(0);
+
+    const drain = await hook(s, 'drain');
+    expect(drain.code).toBe(0);
+    expect(drain.io.hookStdout).toBe('');
+    expect(queueSnapshot(s)).toEqual(before);
+    expect(fs.existsSync(path.join(s.oortHome, 'queue', 'dead'))).toBe(false);
+    const log = hookLog(s);
+    const drained = log.find((e) => e.event === 'drain');
+    expect(drained?.outcome).toBe('drain-skipped:missing-adapters');
+    expect(drained?.counts).toEqual({ remaining: lines });
+    expect(log.find((e) => e.event === 'consolidate')?.outcome).toBe('ok');
+    expect(guard.attempts).toEqual([]);
+  });
+
   it('offline.a-key-does-reach-the-guard (control)', async () => {
     // The same recall with a (synthetic) Voyage key goes through the real adapter, and the
     // guard sees it: the keyless runs above pass because nothing tried, not because the
@@ -380,4 +423,70 @@ describe('zero network without keys or Oort Pro', () => {
     expect(guard.attempts.length).toBeGreaterThan(0);
     expect(guard.attempts.every((a) => a.startsWith('fetch '))).toBe(true);
   });
+
+  it('offline.drain-with-keys-does-reach-the-guard (control)', async () => {
+    // The same queue drained with (synthetic) keys goes through the real adapters and the
+    // guard sees it: the keyless drain above passes because nothing tried. The decide SDK
+    // retries each refused call with backoff before the drain's breaker trips, hence the timeout.
+    const s = sandbox();
+    await seed(s);
+    const transcript = writeTranscript(path.join(s.home, 'claude-projects'), s.cwd);
+    expect((await hook(s, 'Stop', stopInput(s, transcript))).code).toBe(0);
+    expect(guard.attempts).toEqual([]);
+    const drain = await hook(s, 'drain', undefined, {
+      VOYAGE_API_KEY: syntheticKey('voyage'),
+      TYPESAFE_API_KEY: syntheticKey('typesafe'),
+      ANTHROPIC_API_KEY: syntheticKey('anthropic'),
+    });
+    expect(drain.code).toBe(0);
+    expect(guard.attempts.length).toBeGreaterThan(0);
+    expect(guard.attempts.every((a) => a.startsWith('fetch '))).toBe(true);
+  }, 30_000);
 });
+
+/** Claude Code's Stop hook input for the session `writeTranscript` wrote. */
+function stopInput(s: Sandbox, transcript: string): string {
+  return JSON.stringify({
+    session_id: path.basename(transcript, '.jsonl'),
+    transcript_path: transcript,
+    cwd: s.cwd,
+    hook_event_name: 'Stop',
+    stop_hook_active: false,
+  });
+}
+
+/** Runs `oort hook <event>` in-process with the real wiring, no keys, and no keychain. */
+async function hook(
+  s: Sandbox,
+  event: string,
+  stdin?: string,
+  extraEnv: Record<string, string> = {},
+): Promise<{ code: number; io: FakeIo }> {
+  const io = fakeIo({
+    cwd: s.cwd,
+    env: { HOME: s.home, OORT_HOME: s.oortHome, OORT_NO_KEYCHAIN: '1', ...extraEnv },
+    ...(stdin !== undefined && { stdin }),
+  });
+  const code = await runCli(['hook', event], io, undefined, createKeychain({ platform: 'none' }));
+  return { code, io };
+}
+
+/** Every queue file under `$OORT_HOME/queue` (not `dead/`), by name. */
+function queueSnapshot(s: Sandbox): Record<string, string> {
+  const dir = path.join(s.oortHome, 'queue');
+  const out: Record<string, string> = {};
+  for (const name of fs.readdirSync(dir).sort()) {
+    if (name.endsWith('.jsonl')) out[name] = fs.readFileSync(path.join(dir, name), 'utf8');
+  }
+  return out;
+}
+
+/** The hook log's entries, oldest first. */
+function hookLog(s: Sandbox): { event: string; outcome: string; counts: unknown }[] {
+  const file = path.join(s.oortHome, 'logs', 'hooks.log');
+  return fs
+    .readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l) as { event: string; outcome: string; counts: unknown });
+}

@@ -707,6 +707,65 @@ describe('recall latency (CON-57)', () => {
     expect(r.degraded ?? []).not.toContain('rerank-timeout');
     expect(r.memories[0]?.explanation.reranked).toBe(0.9);
   });
+
+  // CON-136: a hosted reranker's round trip is often near 400 ms. Past the old 400 ms budget a
+  // paraphrase match (no shared words, dense 0.53) fell to the fallback gate and was dropped.
+  describe('latency.a-reranker-slower-than-400-ms (CON-136)', () => {
+    const lisbon = () => [
+      makeMemory({
+        id: 'lisbon',
+        text: 'The user moved to Lisbon in March 2026.',
+        embedding: vec(100, 0, 0, 0),
+      }),
+    ];
+    const embed = fakeEmbedder([['where do I live', vec(53, 85, 0, 0)]]);
+    const rerank: Reranker = {
+      rerank: (q, docs) =>
+        new Promise((res) =>
+          setTimeout(
+            () => res(docs.map((d) => ({ id: d.id, score: q.includes('live') ? 0.586 : 0.05 }))),
+            450,
+          ),
+        ),
+    };
+
+    it('the default budget waits for it and keeps the paraphrase match', async () => {
+      const store = await setup(lisbon());
+      const r = await recall(
+        { text: 'where do I live', scope: SCOPE },
+        { store, embed, rerank, config },
+      );
+      expect(config.recall.rerankBudgetMs).toBe(2000);
+      expect(r.degraded ?? []).not.toContain('rerank-timeout');
+      expect(r.memories.map((m) => m.id)).toEqual(['lisbon']);
+      expect(r.memories[0]?.explanation.reranked).toBe(0.586);
+    });
+
+    it('still returns nothing for an unrelated question', async () => {
+      const store = await setup(lisbon());
+      const r = await recall(
+        { text: 'which compiler flags does the build use', scope: SCOPE },
+        { store, embed, rerank, config },
+      );
+      expect(r.memories).toEqual([]);
+    });
+
+    it('the prompt hook budget (400 ms) still times out, as before', async () => {
+      const store = await setup(lisbon());
+      const r = await recall(
+        { text: 'where do I live', scope: SCOPE },
+        {
+          store,
+          embed,
+          rerank,
+          config: withRecall({ rerankBudgetMs: config.recall.promptRerankBudgetMs }),
+        },
+      );
+      expect(config.recall.promptRerankBudgetMs).toBe(400);
+      expect(r.degraded).toContain('rerank-timeout');
+      expect(r.memories).toEqual([]);
+    });
+  });
 });
 
 describe('recall modes (CON-34)', () => {

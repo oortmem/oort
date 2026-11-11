@@ -38,8 +38,7 @@ Use cloud mode:
 - **Await `observe` before returning**: the runtime freezes after the response. A `turnRef` (the
   request id) makes a retried invocation save the turn once.
 - **A multi-user app in cloud mode** needs per-user memory in Oort Cloud: a server key and
-  `scoped({ user })`. It requires Oort Cloud with server keys (rolling out after 18 Nov 2026) and
-  an `oortmem` newer than 0.7.1; until then run multi-user apps in local mode. See
+  `scoped({ user })`. It requires Oort Pro and `oortmem` 0.8.0 or newer. See
   [multi-user.md](multi-user.md#per-user-memory-in-oort-cloud).
 
 <!-- example: examples/src/serverless.ts -->
@@ -87,7 +86,7 @@ async function answerWith(memory: string, question: string): Promise<string> {
 
 | Need                                                     | Mode                                                                                          |
 | -------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Several end users per tenant (`scoped({ user })`)        | `local` (cloud mode takes no `user` in 0.7.1)                                                 |
+| Several end users per tenant (`scoped({ user })`)        | `local` (cloud mode takes no `user` in 0.7.3)                                                 |
 | Serverless, no disk, no native build                     | `cloud`                                                                                       |
 | The store on your own hardware                           | `local` (saving still sends each turn to TypeSafe and Anthropic, with your keys or the relay) |
 | One person's memory shared with their CLI, hooks and MCP | `auto` on their machine                                                                       |

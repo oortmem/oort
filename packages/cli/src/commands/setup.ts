@@ -855,6 +855,12 @@ export async function setupCommand(
                 `Some sessions stopped at a failed observation; the rest were imported. Run ${later} to retry them.`,
               ),
             );
+          } else if (outcome === 'interrupted') {
+            done.push({
+              what: `imported part of the Claude Code sessions since ${since}`,
+              undo,
+            });
+            p.info(ui.warn(`Import stopped by Ctrl-C. Run ${later} to import the rest.`));
           } else if (outcome === 'imported') {
             done.push({ what: `imported Claude Code sessions since ${since}`, undo });
           } else if (outcome === 'declined') {

@@ -346,6 +346,7 @@ to stdout (see `docs/export-format.md`).
 | `1` | Unexpected error. Only the message is printed; add `--debug` for the stack. |
 | `2` | Refusal or usage problem, such as a bad flag, missing keys, a file Oort will not edit, or a confirmation that cannot be asked (see below). |
 | `3` | Partial success: `oort import claude-code` imported what it could, but some sessions stopped at a failed observation, or `oort forget --everywhere` forgot the memory but did not reach every Constellation holding a copy. Run it again to retry them. |
+| `130` | `oort import claude-code` stopped by Ctrl-C (128 + SIGINT, as a shell reports it). What was imported stays; run it again to import the rest. |
 
 `oort doctor` exits 1 when one of its checks fails; warnings alone exit 0 (a
 keyless or local-only install is a supported state), and `--json` tells them
@@ -442,7 +443,8 @@ envelope instead.
 - `exitCode` appears only when the command succeeded but exits non-zero:
   `serve status` when the daemon is not running (1), `models verify` with a
   changed file (1), `doctor` with a failed check (1), `import` with failed
-  sessions (3), `forget --everywhere` with a Constellation not reached (3).
+  sessions (3) or stopped by Ctrl-C (130), `forget --everywhere` with a
+  Constellation not reached (3).
 - `data` is always an object; a list is wrapped (`{ "memories": [...] }`).
   Field names are camelCase and stable, ids are full ids (never the 8-character
   prefix tables show), and times are ISO 8601.
@@ -450,7 +452,9 @@ envelope instead.
   a degraded recall (`lexical-only`, `recall-degraded`), a time mode the store
   did not report (`time-mode-unreported`), the wiring's own warnings
   (`project-id-untrusted`, `cloud-unavailable`, `keychain-unreadable`, …),
-  `partial` (`import`, exit 3), `redacted` and `embed-failed` (judgments),
+  `partial` (`import`, exit 3), `interrupted` (`import`, exit 130),
+  `no-dashboard` (`open` with no target on a machine that is not signed in),
+  `redacted` and `embed-failed` (judgments),
   `reembed-needed`, `checksum-mismatch` and `optimize-skipped` (models),
   `another-oort-on-path` (`install`), `managed-copy-unavailable` (`setup`:
   agents run the copy you ran instead of `~/.oort/cli`),
@@ -533,7 +537,8 @@ verify` with a changed file, `doctor` with a failed check: the envelope is a
 success that says so, with `exitCode: 1`), and an error raised outside the
 CLI's own checks, whatever its code (an adapter's relay or key error, a
 network failure, a sign-in that did not complete); `2` every refusal and usage
-error from the CLI itself; `3` partial success. A failure envelope's
+error from the CLI itself; `3` partial success; `130` an import stopped by
+Ctrl-C. A failure envelope's
 `exitCode` always matches the process's, and a success envelope carries one
 whenever it is not 0.
 
@@ -550,7 +555,8 @@ oort inspect --json | jq '.data.memories | length'
 oort remember "We deploy on Fridays." --json # { "results": [{ "fact": 0, "outcome", "id", "supersedes"?, "reason"? }] }
 oort forget 1b2c3d4e --yes --json            # { "id", "forgotten": true, "everywhere", "withdrawnFrom", "removalRequested", "unreachable", "stillShared", "constellations" }
 oort consolidate --json                      # { "promoted": [ids], "demoted", "evicted", "expired", "counts": {…}, "complete" }
-oort import claude-code --since 14d --yes --json   # { "outcome", "estimate": {…}, "imported": { "observations", "outcomes", "failedSessions" } }
+oort import claude-code --since 14d --yes --json   # { "outcome", "estimate": {…}, "imported": { "observations", "outcomes", "failedSessions", "notAttempted"? } }
+oort open memory 1b2c3d4e --json             # { "target": "memory", "url": "https://oortcloud.dev/dashboard/memories/…", "opened": false }
 oort judge record --subject … --json         # { "outcome", "id", "judgment" }
 oort judge withdraw 9f8e --yes --json        # { "id", "withdrawn": true, "changed", "by" }
 oort keys list --json                        # { "keys": [{ "provider", "envVar", "source" }] }
@@ -1200,7 +1206,7 @@ For a container sidecar, or a backend that is not you. The same protocol on TCP,
 | `oort pin <id>` / `oort unpin <id>` | A pinned memory is never sent to cold storage. | |
 | `oort consolidate` | Expires, re-tiers and evicts memories, every project and the global ones: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each node, and inside it each project and the global memories, is re-tiered on its own. The hooks also run it about daily (see `docs/claude-code.md`); a manual run counts as that day's. | |
 | `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. Withdrawn judgments are left out. | `--out <file>` (0600), `--force`, `--format 1\|2`, `--include-withdrawn` |
-| `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. It exits 3 when some sessions stopped at a failed observation (the rest are imported; run it again to retry them). | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
+| `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. On a terminal a progress line on stderr shows how far it is (see below). It exits 3 when some sessions stopped at a failed observation (the rest are imported; run it again to retry them), and 130 when Ctrl-C stopped it. | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
 
 `oort recall` takes the SDK's recall options as flags. `--limit <n>` returns
 at most `n` memories, 1 to 50 (default `recall.returnK`, 10). `--speed fast`
@@ -1222,6 +1228,34 @@ oort remember "We deploy on Fridays."
 oort remember --type preference "I prefer pnpm over npm."
 oort remember "The CI key is in 1Password." --dry-run   # what the scrubber would redact
 ```
+
+**Import progress.** While `oort import claude-code` reads transcripts and then
+observes their turns, it redraws one line on stderr, at most ten times a
+second:
+
+```
+  ━━━━━━────────── 340/1200 turns · 52 facts kept · 1m 12s · ~4m 10s left
+```
+
+Reading shows `reading 3/40 transcripts · 120 new turns`; observing shows the
+turns done, the facts kept so far (added, updated, superseded or corrected),
+failures when there are any, the time taken and, after two seconds, the time
+left. The line never wraps and is erased before anything else is printed, so
+the estimate and the closing `Imported … observations` line read as before. It
+is drawn only when stderr is a terminal: never with `--json` (or
+`OORT_OUTPUT=json`), in a pipe or log, or with `TERM=dumb`, which print no
+progress at all. `NO_COLOR` keeps the line without the bar.
+
+The first Ctrl-C while it observes stops after the observation in progress
+(`Stopping after the observation in progress …`): each session's cursor is
+then at a turn that finished, so nothing is half-imported and running the same
+command again imports exactly the rest, none twice. It prints
+`Imported 1 of 5 observations: …` and `Stopped by Ctrl-C: 4 observations were
+not attempted …`, and exits 130 (with `--json`: `outcome: "interrupted"`,
+`imported.notAttempted`, an `interrupted` warning and `exitCode: 130`). The exit
+code is 130 even when some sessions had already failed; `failedSessions` still
+lists them. A second Ctrl-C quits at once. Ctrl-C while it reads the transcripts
+or asks stops before the first observation, so nothing has been written.
 
 Ids are full ids or unique prefixes. Every command reads the cwd's project
 plus global memories, as the acting agent (`--agent`, `OORT_AGENT`, else
@@ -1999,6 +2033,44 @@ one, your own memory says so, and only you see it.
 No vendor key is read in cloud mode: Oort Cloud calls the models. `OORT_CLOUD_URL` points the CLI
 at another API (https, or http to localhost for `wrangler dev`). Errors are one line with the fix,
 and never contain your key.
+
+## Opening the dashboard: `oort open`
+
+```sh
+oort open [target] [--no-browser] [--json]
+oort open memory <id>
+```
+
+Opens a page on oortcloud.dev in your default browser. Oort has no local
+viewer: the visual layer, the star map included, is the dashboard, which shows
+the memories in Oort Cloud.
+
+| Target | Page |
+| --- | --- |
+| (none) | The dashboard when this machine is signed in to Oort Pro or uses Oort Cloud (`oort cloud use`); otherwise the quickstart, with a `no-dashboard` warning saying why (`oort open dashboard` opens the dashboard anyway). |
+| `dashboard` | https://oortcloud.dev/dashboard |
+| `star-map` | https://oortcloud.dev/dashboard/star-map |
+| `memory <id>` | https://oortcloud.dev/dashboard/memories/&lt;id&gt;. Oort Cloud only: a prefix (8 characters or more) is looked up to the full id first; on a machine using the local store it is refused (`cloud-only`, fix `oort inspect <id>`). |
+| `account` | https://oortcloud.dev/account (plan, usage and keys) |
+| `docs` | https://oortcloud.dev/docs |
+| `quickstart` | https://oortcloud.dev/docs/quickstart |
+
+On a terminal it prints `✓ Opened <url>`. It prints the address alone on stdout
+instead of starting a browser, and exits 0, when stdout is not a terminal (so
+`oort open docs | pbcopy` works), with `--no-browser`, with `BROWSER=none`,
+when `CI` is set, in an SSH session (`SSH_CONNECTION`, `SSH_TTY` or
+`SSH_CLIENT`), and on Linux without `DISPLAY` or `WAYLAND_DISPLAY`; a dim line
+on stderr says which. A browser that does not start (no `open` or `xdg-open`,
+or it exits with an error) also prints the address and exits 0. `--json`
+never opens anything: it prints `{ "target", "url", "opened": false }` in the
+envelope. An unknown target or a bad id is a usage error (exit 2).
+
+The browser is `$BROWSER` when it is set (one program name or path, given the
+address as its only argument), else `open` on macOS, `xdg-open` on Linux and
+`rundll32 url.dll,FileProtocolHandler` on Windows. The address is passed as one
+argument, never through a shell, and only an address the CLI built is opened:
+https on oortcloud.dev, or a loopback `OORT_SITE_URL` for local development
+(any other `OORT_SITE_URL` is refused).
 
 ## `oort whoami`
 

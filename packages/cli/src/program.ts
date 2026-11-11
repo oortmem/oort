@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Command, CommanderError, Option } from 'commander';
+import { Argument, Command, CommanderError, Option } from 'commander';
 import { VERSION, resolveHome } from '@oortmem/core';
 import { connectCommand } from './commands/connect.js';
 import {
@@ -65,6 +65,7 @@ import {
   modelsVerifyCommand,
 } from './commands/models.js';
 import { observeCommand } from './commands/observe.js';
+import { OPEN_TARGETS, openCommand, type OpenDeps, type OpenTarget } from './commands/open.js';
 import { pinCommand } from './commands/pin.js';
 import {
   projectConstellationCommand,
@@ -900,6 +901,25 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--json', 'print oort.v1 JSON')
     .action(run(() => logoutCommand(ctx)));
 
+  p.command('open')
+    .description(
+      'open the dashboard, the star map, a memory, your account or the docs on oortcloud.dev in the browser',
+    )
+    .addArgument(
+      new Argument(
+        '[target]',
+        'default: the dashboard when signed in to Oort Pro, else the quickstart',
+      ).choices(OPEN_TARGETS),
+    )
+    .argument('[id]', 'with memory: its id or a unique prefix (8+ characters)')
+    .option('--no-browser', 'print the address instead of opening it')
+    .option('--json', 'print oort.v1 JSON with the address (never opens a browser)')
+    .action(
+      run((target: OpenTarget | undefined, id: string | undefined, o: { browser?: boolean }) =>
+        openCommand(target, id, o, ctx),
+      ),
+    );
+
   const keys = p
     .command('keys')
     .description(
@@ -1061,7 +1081,7 @@ export const HELP_GROUPS: readonly (readonly [string, readonly string[]])[] = [
   ['Agents:', ['connect', 'disconnect', 'install', 'uninstall', 'mcp', 'hook', 'serve']],
   [
     'Cloud and sharing:',
-    ['login', 'logout', 'cloud', 'share', 'constellation', 'galaxy', 'project'],
+    ['login', 'logout', 'open', 'cloud', 'share', 'constellation', 'galaxy', 'project'],
   ],
   ['Maintenance:', ['doctor', 'update', 'stats', 'consolidate', 'reembed', 'models', 'keys']],
 ];
@@ -1134,6 +1154,7 @@ export async function runCli(
     fetch?: typeof fetch;
     binPath?: string;
     updateDeps?: Partial<UpdateDeps>;
+    open?: OpenDeps;
   } = {},
 ): Promise<number> {
   let code = 0;
