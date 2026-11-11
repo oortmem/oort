@@ -532,6 +532,8 @@ async function open(p: Prepared, opts: EngineOptions, env: Env): Promise<Engine>
     coldDir: path.join(config.home, 'cold'),
     dimension: config.embed.dimension,
     d: config.activation.d,
+    vectorIndex: config.store.vectorIndex,
+    binaryAutoThreshold: config.store.binaryAutoThreshold,
     ...(opts.busyTimeoutMs !== undefined && { busyTimeoutMs: opts.busyTimeoutMs }),
     ...(opts.migrate === false && { migrate: false }),
   });

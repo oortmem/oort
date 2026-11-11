@@ -27,6 +27,8 @@ import {
   type Observation,
   type ReconcileAction,
   type ReconcileDecision,
+  type SufficiencyDecision,
+  type SufficiencyRequest,
 } from '@oortmem/core';
 import {
   JUDGE_INSTRUCTIONS,
@@ -37,6 +39,7 @@ import {
   SALIENCE_LEVELS,
   SALIENCE_NAMES,
   SHOULD_STORE_INSTRUCTIONS,
+  SUFFICIENT_INSTRUCTIONS,
   TYPE_INSTRUCTIONS,
   VOLATILE_INSTRUCTIONS,
   novelManyInstructions,
@@ -230,6 +233,9 @@ const MEMORY_TYPES: ObservedMemoryType[] = ['semantic', 'episodic', 'procedural'
  */
 const STATE_TEXT_MAX_BYTES = 16 * 1024;
 const CANDIDATE_TEXT_MAX_BYTES = 1024;
+/** The adaptive stop's request: at most 20 memories of 1 KB and 20 stubs, well under 56 KB. */
+const SUFFICIENT_QUERY_MAX_BYTES = 2 * 1024;
+const SUFFICIENT_STUB_MAX_BYTES = 256;
 
 function obsState(obs: Observation) {
   return {
@@ -412,6 +418,36 @@ export function jevDecider(opts: JevDeciderOptions = {}): DecisionController {
         probabilities: a.probabilities,
         decisions: [
           { stage: 'judge', question: 'verdict', answer: a.label, probability: a.probability },
+        ],
+      };
+    },
+
+    /**
+     * The adaptive stop (CON-17): one Noul over the query, the reranked memories' text (cut to
+     * size, ids left out) and the cold matches' stubs.
+     */
+    async sufficient(req: SufficiencyRequest): Promise<SufficiencyDecision> {
+      const state = {
+        query: truncateUtf8(req.query, SUFFICIENT_QUERY_MAX_BYTES),
+        memories: req.memories.slice(0, 20).map((m) => ({
+          text: truncateUtf8(m.text, CANDIDATE_TEXT_MAX_BYTES),
+          ...(m.score !== undefined && { score: m.score }),
+        })),
+        cold: req.cold
+          .slice(0, 20)
+          .map((c) => ({ stub: truncateUtf8(c.stub, SUFFICIENT_STUB_MAX_BYTES) })),
+      };
+      const answers = await ask(state, { sufficient: noul(SUFFICIENT_INSTRUCTIONS) });
+      const p = noulOf(answers, 'sufficient');
+      return {
+        probability: p,
+        decisions: [
+          {
+            stage: 'recall',
+            question: 'sufficient',
+            answer: p >= 0.5 ? 'yes' : 'no',
+            probability: p,
+          },
         ],
       };
     },

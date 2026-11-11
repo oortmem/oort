@@ -37,6 +37,8 @@ export interface OortConfigOverlay {
   project?: { private?: boolean };
   /** Who counts as an expert (the host's code is the operator here). */
   judge?: { experts?: string[]; operator?: string };
+  /** The local store's dense index (0.9.0 or newer): `auto`, `int8` or `binary`. */
+  store?: { vectorIndex?: 'auto' | 'int8' | 'binary'; binaryAutoThreshold?: number };
 }
 
 export interface OortOptions {

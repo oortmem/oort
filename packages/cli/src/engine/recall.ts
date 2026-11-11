@@ -4,6 +4,7 @@ import {
   isIncludeLevel,
   readableNodes,
   recall,
+  type DecisionController,
   type Embedder,
   type Grant,
   type IncludeLevel,
@@ -104,6 +105,8 @@ export interface RecallTarget extends Pick<
   store?: MemoryStore;
   embed?: Embedder;
   rerank?: Reranker;
+  /** Answers the adaptive stop's question on a full recall (CON-17); the rule decides otherwise. */
+  decide?: DecisionController;
   scope: Scope;
   agent: WiredAgent;
   /** The principal's grant; default the agent's local grant for `scope` (`filterFor`). */
@@ -185,6 +188,7 @@ export async function runRecall(
         now,
         ...(w.embed !== undefined && speed !== 'lexical' && { embed: w.embed }),
         ...(w.rerank !== undefined && speed === 'full' && { rerank: w.rerank }),
+        ...(w.decide !== undefined && speed === 'full' && { decide: w.decide }),
       },
     );
   } catch (e) {

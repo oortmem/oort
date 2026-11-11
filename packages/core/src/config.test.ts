@@ -45,6 +45,8 @@ describe('config', () => {
       queryCacheTtlSec: 600,
       staleAfterDays: 30,
       promptMode: 'fast',
+      adaptiveStop: 'rule',
+      sufficientAt: 0.7,
     });
     expect(c.project).toEqual({ private: false });
     expect(c.sources['embed']).toBe('default');
@@ -160,6 +162,24 @@ describe('config', () => {
     expect(c.ignoredProjectKeys).toEqual(['serve']);
     expect(c.recall.budgetChars).toBe(100); // other project keys still apply
     expect(resolveConfig(home, { OORT_HOME: home }).ignoredProjectKeys).toBeUndefined();
+  });
+
+  it('config.store-vector-index-defaults-to-auto-and-is-read-from-the-home-config-only (CON-17)', () => {
+    const home = tmp();
+    const cwd = tmp();
+    expect(resolveConfig(cwd, { OORT_HOME: home }).store).toEqual({
+      vectorIndex: 'auto',
+      binaryAutoThreshold: 100_000,
+    });
+    // One store per home: a repository cannot change how it is indexed.
+    fs.writeFileSync(path.join(cwd, 'oort.config.json'), '{"store":{"vectorIndex":"int8"}}');
+    const fromRepo = resolveConfig(cwd, { OORT_HOME: home });
+    expect(fromRepo.store.vectorIndex).toBe('auto');
+    expect(fromRepo.ignoredProjectKeys).toEqual(['store']);
+    fs.writeFileSync(path.join(home, 'config.json'), '{"store":{"vectorIndex":"binary"}}');
+    expect(resolveConfig(cwd, { OORT_HOME: home }).store.vectorIndex).toBe('binary');
+    fs.writeFileSync(path.join(home, 'config.json'), '{"store":{"vectorIndex":"float"}}');
+    expect(() => resolveConfig(home, { OORT_HOME: home })).toThrow(/vectorIndex/);
   });
 
   it('config.updates-check-defaults-on-and-is-read-from-the-home-config-only (CON-114)', () => {

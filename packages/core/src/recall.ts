@@ -1,4 +1,11 @@
-import type { Embedder, Hit, MemoryStore, Reranker, ScopeFilter } from './adapters.js';
+import type {
+  DecisionController,
+  Embedder,
+  Hit,
+  MemoryStore,
+  Reranker,
+  ScopeFilter,
+} from './adapters.js';
 import type { ResolvedConfig } from './config.js';
 import { activation } from './activation.js';
 import { fuse, isVisible, type TemporalView } from './fusion.js';
@@ -110,7 +117,9 @@ export type Degradation =
   /** Reading or promoting a cold copy failed: those memories stay cold, unhydrated. */
   | 'hydrate-failed'
   /** Recording the access failed: the results stand, but their activation was not bumped. */
-  | 'access-failed';
+  | 'access-failed'
+  /** The adaptive stop's question failed: recall widened into the cold matches, as without it. */
+  | 'stop-failed';
 
 export interface RecallResult {
   memories: RecalledMemory[];
@@ -129,6 +138,12 @@ export interface RecallResult {
   temporal?: RecallTemporal;
   /** The nodes this recall read, as labels show them (`your Planet`, `Star cursor`). */
   read?: string[];
+  /**
+   * The adaptive stop (CON-17), when it was asked: cold memories passed the gate beside live
+   * ones. `stopped`: the live set was enough, so the `cold` matches were left out and nothing was
+   * hydrated. `by`: the decision model (`probability` is its answer) or the rule in code.
+   */
+  adaptiveStop?: { stopped: boolean; by: 'decide' | 'rule'; cold: number; probability?: number };
   timings: Record<string, number>;
 }
 
@@ -136,6 +151,8 @@ export interface RecallDeps {
   store: MemoryStore;
   embed?: Embedder;
   rerank?: Reranker;
+  /** Answers the adaptive stop's question with `recall.adaptiveStop: 'decide'`. */
+  decide?: DecisionController;
   config: ResolvedConfig;
   now?: Date;
 }
@@ -334,8 +351,50 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     if ((coverage.get(id) ?? 0) >= minCoverage) return true;
     return minDenseScore > 0 && (denseScore.get(id) ?? -1) >= minDenseScore;
   };
-  const kept = candidates.filter((f) => relevant(f.id));
+  let kept = candidates.filter((f) => relevant(f.id));
   const dropped = candidates.length - kept.length;
+
+  // Adaptive stop (CON-17): with the live set enough, the cold matches are left out, unhydrated.
+  let adaptiveStop: RecallResult['adaptiveStop'];
+  if (config.recall.adaptiveStop !== 'off' && view.mode === 'current') {
+    const isCold = (id: string) => memories.get(id)?.tier === 'cold';
+    const live = kept.filter((f) => !isCold(f.id));
+    const cold = kept.filter((f) => isCold(f.id));
+    if (live.length > 0 && cold.length > 0) {
+      const ask = config.recall.adaptiveStop === 'decide' ? deps.decide?.sufficient : undefined;
+      let stopped = false;
+      let probability: number | undefined;
+      if (ask !== undefined) {
+        try {
+          const answer = await ask.call(deps.decide, {
+            query: text,
+            memories: live.map((f) => {
+              const rs = rerankScores.get(f.id);
+              return {
+                id: f.id,
+                text: memories.get(f.id)?.text ?? '',
+                ...(rs !== undefined && { score: rs }),
+              };
+            }),
+            cold: cold.map((f) => ({ id: f.id, stub: memories.get(f.id)?.stub ?? '' })),
+          });
+          probability = answer.probability;
+          stopped = probability >= config.recall.sufficientAt;
+        } catch {
+          degraded.push('stop-failed');
+        }
+      } else {
+        stopped = liveIsEnough(kept[0]!.id, cold, isCold, coverage, queryTokens);
+      }
+      adaptiveStop = {
+        stopped,
+        by: ask !== undefined ? 'decide' : 'rule',
+        cold: cold.length,
+        ...(probability !== undefined && { probability }),
+      };
+      if (stopped) kept = live;
+    }
+  }
 
   let out: RecalledMemory[] = [];
   for (const f of kept) {
@@ -438,6 +497,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
       : {}),
     ...(rerankSkipped !== undefined ? { rerankSkipped } : {}),
     ...(embedSkipped !== undefined ? { embedSkipped } : {}),
+    ...(adaptiveStop !== undefined ? { adaptiveStop } : {}),
     temporal,
     read: nodes.map((n) => nodeLabel(n, full)),
     timings,
@@ -607,6 +667,25 @@ async function withChains(
     }
   }
   return result;
+}
+
+/**
+ * The adaptive stop's rule, for when no decision model answers (CON-17): the live set is enough
+ * when the query has at least two informative words, the top memory is live and holds every one
+ * of them, and every cold match holds clearly fewer. The same test as `lexicalIsConfident`: an
+ * exact lookup the live memories already answer.
+ */
+function liveIsEnough(
+  topId: string,
+  cold: { id: string }[],
+  isCold: (id: string) => boolean,
+  coverage: Map<string, number>,
+  queryTokens: Set<string>,
+): boolean {
+  if (queryTokens.size < 2 || isCold(topId)) return false;
+  const top = coverage.get(topId) ?? 0;
+  if (top < 1) return false;
+  return cold.every((f) => (coverage.get(f.id) ?? 0) <= top - CONFIDENT_COVERAGE_GAP);
 }
 
 const TIMED_OUT = Symbol('timed-out');

@@ -184,6 +184,43 @@ describe('oort doctor', () => {
     expect(listBackups(db, 'pre-v4')).toHaveLength(1);
   });
 
+  it('doctor.migrates-a-v4-store-and-names-its-vector-index (CON-17)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      log: () => {},
+    });
+    await s.upsert(TG, memory({ embedding: undefined }));
+    await s.close();
+    downgradeSqliteStore({ path: db, to: 4 });
+    const d = await doctor(h);
+    expect(d.human.io.stdout).toContain(
+      `migrated the store from schema version 4 to ${SCHEMA_VERSION}`,
+    );
+    // An Oort started before the upgrade can no longer write: it must be restarted.
+    expect(d.human.io.stdout).toContain('restart any Oort MCP server started before the upgrade');
+    expect(listBackups(db, 'pre-v5')).toHaveLength(1);
+    expect(d.check('store', 'backup')?.detail).toContain('oort.sqlite.pre-v5.');
+    expect(d.check('store', 'vector-index')).toMatchObject({
+      status: 'info',
+      detail: 'int8, exact (0 searchable vectors; store.vectorIndex is auto: binary from 100000)',
+    });
+    fs.writeFileSync(
+      path.join(h.home, 'config.json'),
+      JSON.stringify({ store: { vectorIndex: 'binary' } }),
+    );
+    const again = await doctor(h);
+    expect(again.check('store', 'vector-index')?.detail).toBe(
+      'binary, 1-bit codes rescored in int8 (0 searchable vectors; store.vectorIndex is binary)',
+    );
+  });
+
   it('doctor.a-hook-first-leaves-a-pre-rename-index-for-the-cli-to-repair (CON-110)', async () => {
     const h = harness();
     h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
