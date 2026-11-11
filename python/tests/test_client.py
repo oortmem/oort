@@ -1016,8 +1016,8 @@ class CloudEndUsers(unittest.TestCase):
         # CON-137: one end user's memories, as the account (no Oort-User), the body kept as text.
         jsonl = (
             json.dumps({"oort": "export", "version": 1, "memories": 2, "scopes": []}) + "\n"
-            + json.dumps({"id": "m1", "text": "Ada likes tea."}) + "\n"
-            + json.dumps({"id": "m2", "text": "Ada lives in Lund."}) + "\n"
+            + json.dumps({"id": "m1", "text": "Ada likes tea.", "scope": {"orgId": "acct:a1", "customerId": "u:ada:1"}}) + "\n"
+            + json.dumps({"id": "m2", "text": "Ada lives in Lund.", "scope": {"orgId": "acct:a1", "customerId": "u:ada:1"}}) + "\n"
         )
         empty = json.dumps({"oort": "export", "version": 1, "memories": 0, "scopes": []}) + "\n"
         self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
@@ -1032,7 +1032,6 @@ class CloudEndUsers(unittest.TestCase):
         self.assertEqual(
             self.sent(),
             [
-                ("GET", "/v1/whoami", None),
                 ("GET", "/v1/end-users/ada%3A1/export", None),
                 ("GET", "/v1/end-users/carol/export", None),
             ],
@@ -1043,7 +1042,19 @@ class CloudEndUsers(unittest.TestCase):
 
         self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
         o = self.oort()
-        for body in (b"garbage\n", b'{"oort": "export", "memories": 3}\n{"id": "m1"}\n', b"", b'{"oort": "export", "memories": true}\n{}\n'):
+        head = b'{"oort": "export", "version": 1, "memories": 1, "scopes": []}\n'
+        line = lambda customer: json.dumps({"id": "m1", "text": "t", "scope": {"orgId": "acct:a1", "customerId": customer}}).encode() + b"\n"  # noqa: E731
+        for body in (
+            b"garbage\n",
+            b'{"oort": "export", "version": 1, "memories": 3}\n{"id": "m1"}\n',
+            b"",
+            b'{"oort": "export", "version": 1, "memories": true}\n{}\n',
+            # Hardening (security review): only version 1, and every line this end user's.
+            b'{"oort": "export", "version": 2, "memories": 1, "scopes": []}\n' + line("u:ada"),
+            head + line("u:bob"),
+            head + line("self"),
+            head + b'{"id": "m1", "text": "t"}\n',
+        ):
             self.rec.answers["GET /v1/end-users/*"] = (200, body)
             with self.subTest(body=body):
                 with self.assertRaises(OortInternalError):
@@ -1062,14 +1073,20 @@ class CloudEndUsers(unittest.TestCase):
         self.assertEqual(e.exception.reason, "user-not-supported")
         self.assertEqual(len(self.rec.seen), n)
 
-    def test_export_needs_a_server_key(self) -> None:
+    def test_export_asks_no_whoami_and_maps_an_older_cloud(self) -> None:
         from oortmem import OortRefusedError
+        from oortmem.errors import END_USERS_NOT_OFFERED
 
-        self.rec.answers["GET /v1/whoami"] = (200, {"account": "acct", "plan": "pro", "via": "key"})
+        # Open while Pro has lapsed or the account is blocked, when whoami is refused (L-b).
+        self.rec.answers["GET /v1/whoami"] = (403, {"error": {"code": "cloud_blocked", "message": "m"}})
+        self.rec.answers["GET /v1/end-users/ada/export"] = (200, b'{"oort": "export", "version": 1, "memories": 0, "scopes": []}\n')
+        o = self.oort()
+        self.assertEqual(o.end_users.export("ada").memories, 0)
+        self.assertEqual(self.sent(), [("GET", "/v1/end-users/ada/export", None)])
+        # An Oort Cloud without the route (the Recorder's 404).
         with self.assertRaises(OortRefusedError) as e:
-            self.oort().end_users.export("ada")
-        self.assertEqual(e.exception.reason, "end-users-unsupported")
-        self.assertEqual(self.sent(), [("GET", "/v1/whoami", None)])
+            o.end_users.export("bob")
+        self.assertEqual((e.exception.reason, e.exception.status, e.exception.message), ("end-users-unsupported", 404, END_USERS_NOT_OFFERED))
 
     def test_the_same_client_side_rules_as_local(self) -> None:
         from oortmem import Oort, OortCloudOnlyError, OortRefusedError, OortUsageError
@@ -1199,7 +1216,7 @@ class CloudEndUsers(unittest.TestCase):
         from unittest import mock
 
         wrong = {**{k: v for k, v in RECALL["memories"][0].items() if k not in ("score", "why", "someFutureField")}, "id": "a1b2c3d4", "text": "I live in Oslo.", "createdAt": "2026-11-01T00:00:00.000Z", "expiredAt": None, "endReason": None}
-        one = b'{"oort":"export","version":1,"exportedAt":"2026-11-11T12:00:00.000Z","memories":1,"scopes":[]}\n{"id":"a1b2c3d4","text":"I live in Oslo."}\n'
+        one = b'{"oort":"export","version":1,"exportedAt":"2026-11-11T12:00:00.000Z","memories":1,"scopes":[]}\n{"id":"a1b2c3d4","text":"I live in Oslo.","scope":{"orgId":"acct:a1","customerId":"u:user-ada"}}\n'
         none = b'{"oort":"export","version":1,"exportedAt":"2026-11-11T12:00:00.000Z","memories":0,"scopes":[]}\n'
         self.rec.answers["GET /v1/whoami"] = WHOAMI_SERVER_KEY
         self.rec.answers["POST /v1/observe"] = OBSERVED

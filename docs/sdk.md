@@ -457,7 +457,9 @@ await oort.close();
   `jsonl` is one file in the [export format](export-format.md) (version 1), a manifest line, then
   one memory per line, holding every memory of that end user in every state: current ones, ended
   and corrected ones with their dates, pinned ones and ones kept in cold storage. Nothing from
-  other end users or from your own memory is in it. It is JSON, readable as it is, and
+  other end users or from your own memory is in it: the SDK checks that every line's scope is
+  that end user's and refuses the whole answer (`OortInternalError`) otherwise. It is JSON,
+  readable as it is, and
   `oort import <file>` reads it into a self-hosted Oort (each memory moves to that machine's
   Planet and is embedded again there). Treat the file as the person's data: write it with
   restricted permissions, send it to them only, and do not keep copies.

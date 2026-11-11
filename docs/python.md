@@ -267,8 +267,8 @@ The behaviour is the TypeScript SDK's ([docs/sdk.md](sdk.md#per-user-memory-in-o
   `AsyncOort` has both as `async def`. Refusals: `end-user-limit` (the plan's end users are all
   taken), `end-user-erased` (a write lost the race with an erasure; not retried),
   `end-users-not-allowed` (not a server key), all `refused` and none retryable. `end_users`
-  asks no `whoami` first: Oort Cloud keeps erasure open while Pro has lapsed or the account is
-  blocked, when `whoami` itself is refused.
+  asks no `whoami` first: Oort Cloud keeps erasure and export open while Pro has lapsed or the
+  account is blocked, when `whoami` itself is refused.
 
 ### An end user's data requests
 
