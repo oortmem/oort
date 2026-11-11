@@ -263,7 +263,8 @@ The behaviour is the TypeScript SDK's ([docs/sdk.md](sdk.md#per-user-memory-in-o
   ignore the header and write your own Planet. Only a yes is kept.
 - A server key never acts as the account: a handle without `user` gets `user-missing`.
 - `end_users.erase(user)` returns `EndUserErasure` (`erased`, `memories`, `cold_copies`,
-  `turn_refs`, `cursors`); `end_users.count()` returns `EndUserCount` (`end_users`, `limit`).
+  `turn_refs`, `cursors`); an answer that does not say what was erased raises
+  `OortInternalError`. `end_users.count()` returns `EndUserCount` (`end_users`, `limit`).
   `AsyncOort` has both as `async def`. Refusals: `end-user-limit` (the plan's end users are all
   taken), `end-user-erased` (a write lost the race with an erasure; not retried),
   `end-users-not-allowed` (not a server key), all `refused` and none retryable. `end_users`

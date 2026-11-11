@@ -117,17 +117,36 @@ Oort Cloud also writes version 1 for one end user of an account
 memory of that end user, in every state, and nothing else. An end user who was
 erased, or never existed, gets the manifest alone with `memories: 0`.
 
-`oort import <file>` reads either version into the local store: Planet
-memories move to this machine's Planet with their project, history, pin and
-tier; memories of other levels are left out and counted; ids already in the
-store are skipped. The embeddings in the file are not reused: each memory is
-embedded again by the store's embedder. The importer trusts nothing a line
-claims: a line whose id, type, tier, salience (0 to 1), pin or judgment no
-store would write is left out and counted, and a judgment becomes an imported
-one (`via: "pack"` with the file as its origin, normalised and redacted as a
-pack's, never `confirmed`, with no `tombstone`). A withdrawal or purge a line
-states is kept but leaves no tombstone: an imported record cannot keep a
-decision out of a later import; only one withdrawn here can.
+`oort import <file>` reads either version into the local store. Planet
+memories move to this machine's Planet; memories of other levels are left out
+and counted; ids already in the store are skipped. A file is not trusted, so
+each memory is rebuilt from its content alone:
+
+- **Kept:** `id`, `type`, `text`, `stub`, `entities`, `salience` (0 to 1),
+  `pinned`, the project and author, and `source` when it has the shape a
+  store writes (otherwise `{ "harness": "oort import", "decisions": [] }`).
+- **Reset, as for a new memory:** `tier` is `warm` (consolidation moves it
+  later), `accessLog` is empty, `lastConfirmedAt` is `null`, `provenance` is
+  dropped, and the embedding is computed again by this store's embedder.
+- **Times:** `createdAt`, `updatedAt` and `validFrom` are normalised to ISO
+  8601; a time after now becomes now, and an unreadable one makes the line not
+  valid. `validTo` is kept only when it has passed and comes after
+  `validFrom`; `expiredAt` and `endReason` only together, when the end has
+  passed, comes after `createdAt` and has a known reason.
+- **Links:** `supersedes` and `supersededBy` are kept only when they name
+  another memory of the same file that is imported too.
+- **Judgments** are kept as recording one keeps them (pinned, their text,
+  stub and entities rendered from the decision). Each becomes an imported
+  one (`via: "pack"` with the file as its origin, normalised and redacted as
+  a pack's, never `confirmed`, with no `tombstone`). A withdrawal or purge a
+  line states is kept but leaves no tombstone, and an imported judgment that
+  is no longer current is no evidence: neither keeps a decision out of a
+  later import; only one withdrawn here does.
+
+A line that breaks these rules (an unknown type or tier, an id over 64
+characters, text over 64,000 characters, more than 64 entities, a judgment
+that does not check) is left out and counted as not valid. A file over
+100 MB is refused before it is read.
 
 ## Limitations
 
