@@ -1,10 +1,20 @@
+import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import {
+  ExportFormatError,
+  addressOf,
+  nodeGrant,
+  parseExport,
+  planetNode,
+  type Memory,
+} from '@oortmem/core';
 import { importTranscripts } from '@oortmem/claude-code';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
 import {
   Refusal,
+  adapterProblem,
   confirm,
   echo,
   tilde,
@@ -171,4 +181,141 @@ export async function importCommand(opts: ImportCommandOptions, ctx: Ctx): Promi
     },
     { agent: 'claude-code' },
   );
+}
+
+export interface ImportFileOptions {
+  yes?: boolean;
+}
+
+/** How many memories one embedding request carries. */
+const EMBED_BATCH = 64;
+
+/**
+ * `oort import <file>`: an Oort export (docs/export-format.md, version 1 or 2: `oort export`,
+ * `oort cloud export`, or one end user's export from Oort Cloud, CON-137) into this machine's
+ * store. Every Planet memory moves to this machine's Planet, everything else about it kept: its
+ * project, author, type, text, validity and history, pin and tier. Memories at other levels (a
+ * Star, a Constellation) are left out and counted. An id already here is skipped, so running it
+ * again is safe. Each memory is embedded again with the store's embedder, since the file's
+ * vectors may come from another model. Asks first (`--yes` skips the question).
+ */
+export async function importFileCommand(
+  file: string,
+  opts: ImportFileOptions,
+  ctx: Ctx,
+): Promise<number> {
+  const full = path.resolve(ctx.io.cwd, file);
+  let text: string;
+  try {
+    text = fs.readFileSync(full, 'utf8');
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code ?? 'unreadable';
+    throw new Refusal(`Cannot read ${echo(file)} (${code}).`, { fix: 'oort import <file.jsonl>' });
+  }
+  return withWired(ctx, async (w) => {
+    if (w.mode === 'cloud') {
+      throw new Refusal(
+        'oort import <file> writes to the local store: run `oort cloud use --local` first (`oort cloud import` then uploads it).',
+        { code: 'refused', fix: 'oort cloud use --local' },
+      );
+    }
+    const { orgId, customerId, agentId } = w.scope;
+    let memories: Memory[];
+    try {
+      memories = parseExport(text, { planet: { orgId, customerId } }).memories;
+    } catch (e) {
+      if (e instanceof ExportFormatError) {
+        throw new Refusal(`${echo(file)} is not an Oort export: ${e.message}.`);
+      }
+      throw e;
+    }
+    const planet = { node: planetNode({ orgId, customerId }), projectIds: 'all' as const };
+    const grant = nodeGrant({
+      principal: { orgId, customerId, agentId },
+      read: [planet],
+      write: [planet],
+    });
+    const outside = memories.filter((m) => addressOf(m).level !== 'user').length;
+    const fresh: Memory[] = [];
+    let already = 0;
+    for (const m of memories) {
+      if (addressOf(m).level !== 'user') continue;
+      if ((await w.store.get(grant, m.id)) !== null) already++;
+      else fresh.push(m);
+    }
+    const json = jsonMode(ctx);
+    const ui = uiFor(ctx.io);
+    const shown = tilde(full, ctx.io.env['HOME'] || os.homedir());
+    ctx.io.out(ui.header('import', 'an Oort export into this machine'));
+    ctx.io.out(
+      ui.kv([
+        ['file', shown],
+        ['memories', String(memories.length)],
+        ['already here', String(already)],
+        ['outside a Planet', `${outside}${outside > 0 ? ' (left out)' : ''}`],
+      ]),
+    );
+    const result = (imported: number) => ({
+      file: full,
+      memories: memories.length,
+      imported,
+      skipped: already,
+      outside,
+    });
+    if (fresh.length === 0) {
+      ctx.io.out('Nothing to import.\n');
+      if (json) emit(ctx, { outcome: 'nothing', ...result(0) });
+      return 0;
+    }
+    const embed = w.embed;
+    if (embed === undefined) {
+      const why =
+        adapterProblem(w.unavailable.embed, 'embed', w.keyStore !== false) ??
+        'No embedder is configured.';
+      throw new Refusal(`Importing embeds each memory with this store's embedder. ${why}`);
+    }
+    const go = await confirm(
+      ctx.io,
+      `Import ${fresh.length} memories (each embedded again by this store's embedder)?`,
+      opts.yes === true,
+      `import ${fresh.length} memories`,
+      { json },
+    );
+    if (!go) {
+      ctx.io.out('Nothing imported.\n');
+      return 0;
+    }
+    // Written warm with a fresh vector; a cold memory is then moved to cold again, so the store
+    // holds it as it held it before (stub indexed, the full text in its cold copy).
+    const ready: Memory[] = [];
+    for (let i = 0; i < fresh.length; i += EMBED_BATCH) {
+      const batch = fresh.slice(i, i + EMBED_BATCH);
+      const vectors = await embed.embed(
+        batch.map((m) => m.text),
+        'document',
+      );
+      batch.forEach((m, k) => {
+        const { embedding: _old, ...rest } = m;
+        const v = vectors[k];
+        ready.push({
+          ...rest,
+          tier: m.tier === 'cold' ? 'warm' : m.tier,
+          ...(v !== undefined && { embedding: v }),
+        } as Memory);
+      });
+    }
+    await w.store.upsertMany(grant, ready);
+    const cold: Memory[] = [];
+    for (const m of fresh) {
+      if (m.tier !== 'cold') continue;
+      const stored = await w.store.get(grant, m.id);
+      if (stored !== null) cold.push(stored);
+    }
+    if (cold.length > 0) await w.store.coldPutMany(grant, cold);
+    ctx.io.out(
+      `Imported ${ready.length} memories from ${shown}${already > 0 ? ` (${already} already here)` : ''}.\n`,
+    );
+    if (json) emit(ctx, { outcome: 'imported', ...result(ready.length) });
+    return 0;
+  });
 }
