@@ -19,6 +19,7 @@ import { makeMemory } from '@oortmem/core/store-conformance';
 import {
   downgradeSqliteStore,
   openSqliteStore,
+  SCHEMA_VERSION,
   sqliteSchemaVersion,
   StoreMigrationRequiredError,
 } from './index.js';
@@ -194,7 +195,7 @@ describe('rebuild under load (CON-110 review)', { timeout: 300_000 }, () => {
     const migrating = await openInChild(s).exit;
     expect(migrating.code).toBe(0);
     expect(migrating.out).toContain(`Rebuilding the search index (${N} memories)…`);
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     // The same open of the migrated store, without a rebuild: the baseline.
     const plain = await openInChild(s).exit;
     expect(plain.out).not.toContain('Rebuilding');
@@ -218,7 +219,7 @@ describe('rebuild under load (CON-110 review)', { timeout: 300_000 }, () => {
     integrityCheck3(s.dbPath);
     // The next open migrates from the start, and completes.
     expect(await finds(s, '认证 服务')).toBeGreaterThan(0);
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     integrityCheck(s.dbPath);
     const after = raw(s.dbPath);
     try {
@@ -256,7 +257,7 @@ describe('rebuild under load (CON-110 review)', { timeout: 300_000 }, () => {
       log: (m) => lines.push(m),
     });
     try {
-      expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+      expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
       expect(lines.filter((l) => l.startsWith('Rebuilding'))).toEqual([]);
       expect((await store.lexical(grant, 'บริการยืนยันตัวตน', 10)).length).toBeGreaterThan(0);
     } finally {

@@ -43,26 +43,37 @@ import {
 } from './blobs.js';
 import { ColdBlobCorruptError, createColdCodec } from './cold.js';
 import { backupDatabase, sweepStaleCopies } from './backup.js';
+import { BINARY_OVERSAMPLE, binaryCode } from './binary.js';
 import {
   applySchema,
   assertMigratable,
+  binaryIndexPlan,
+  BIT_TABLE,
+  defineWriterGuard,
   downgradeSchema,
   FTS_TABLE,
+  hasBinaryIndex,
   lexicalIndexState,
   judgmentCount,
   migrationBlockers,
   schemaVersionOf,
+  searchableVectors,
   SCHEMA_VERSION,
   StoreMigrationRequiredError,
+  type VectorIndex,
 } from './schema.js';
 
 export {
+  BIT_TABLE,
   FTS_TABLE,
   FTS_TOKENIZE,
   FTS_TOKENIZE_V1,
   SCHEMA_VERSION,
   StoreMigrationRequiredError,
+  WRITER_GUARD,
+  type VectorIndex,
 } from './schema.js';
+export { BINARY_AUTO_THRESHOLD, BINARY_OVERSAMPLE } from './binary.js';
 export { BACKUPS_KEPT, listBackups, type BackupKind } from './backup.js';
 export {
   readEmbedderBinding,
@@ -124,6 +135,23 @@ export interface SqliteStoreOptions {
    * `lexicalIcuVersion()` (`process.versions.icu`); for runtimes that report it some other way.
    */
   icu?: string;
+  /**
+   * How dense search scans the hot and warm vectors (0.9.0 or newer; design
+   * `docs/design/2026-11-11-binary-quantization.md`):
+   *
+   * - `auto` (default): an exact int8 scan, until the store holds `binaryAutoThreshold`
+   *   searchable vectors; from then on the binary index, which an open that may migrate builds
+   *   once and keeps.
+   * - `binary`: the binary index from the start: 1-bit codes are scanned, and the
+   *   `BINARY_OVERSAMPLE` × k nearest are rescored with their int8 vectors.
+   * - `int8`: always the exact int8 scan; an open that may migrate drops a binary index.
+   *
+   * Scores are int8 cosine similarities either way. An open with `migrate: false` never builds or
+   * drops the index; it searches with whatever the store has.
+   */
+  vectorIndex?: VectorIndex;
+  /** `vectorIndex: 'auto'` builds the binary index at this many searchable vectors (default 100,000). */
+  binaryAutoThreshold?: number;
 }
 
 /**
@@ -402,6 +430,25 @@ function live(patterns: readonly NodePattern[]): NodePattern[] {
 }
 
 /**
+ * Which dense index the store at `dbPath` searches with, and how many vectors it searches (the
+ * hot and warm memories' vectors), read without changing it: undefined when there is no store yet.
+ */
+export function sqliteVectorIndex(
+  dbPath: string,
+): { index: 'int8' | 'binary'; vectors: number } | undefined {
+  if (!fs.existsSync(dbPath)) return undefined;
+  const db = new Database(path.resolve(dbPath), { readonly: true, fileMustExist: true });
+  try {
+    if (schemaVersionOf(db) === undefined) return undefined;
+    if (!hasBinaryIndex(db)) return { index: 'int8', vectors: searchableVectors(db) };
+    const n = db.prepare<[], { n: number }>(`SELECT count(*) AS n FROM ${BIT_TABLE}_rowids`).get();
+    return { index: 'binary', vectors: n?.n ?? 0 };
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * The schema version of the store at `dbPath`, read without changing it:
  * undefined when there is no store (or an empty one) yet.
  */
@@ -417,14 +464,15 @@ export function sqliteSchemaVersion(dbPath: string): number | undefined {
 
 /**
  * Takes the store at `path` back to schema version `to`: 1 (the default) so Oort 0.2.x can open
- * it again, 2 for Oort 0.3 to 0.5, or 3 for Oort before tokeniser v2 (CON-110; the lexical index
- * is rebuilt with tokeniser v1). First copies it to `<path>.pre-downgrade.<UTC time>` (the
+ * it again, 2 for Oort 0.3 to 0.5, 3 for Oort before tokeniser v2 (CON-110; the lexical index
+ * is rebuilt with tokeniser v1), or 4 for Oort 0.6 to 0.8 (the binary vector index and the
+ * writer guard are dropped; the int8 vectors were never moved). First copies it to `<path>.pre-downgrade.<UTC time>` (the
  * three newest such copies are kept). Refuses, changing nothing, when it holds memories that
  * version cannot represent: for 1, any level but Planet, an author with an account, provenance or
  * a judgment; for 2, a judgment. No other Oort process (hooks, the MCP server, a drain) may have
  * the store open while it runs: one would migrate it straight back, or fail on the changed schema.
  */
-export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 }): void {
+export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 | 4 }): void {
   const to = opts.to ?? 1;
   const dbPath = path.resolve(opts.path);
   const db = withPrivateUmask(() => new Database(dbPath, { fileMustExist: true }));
@@ -480,6 +528,18 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const clock = opts.now ?? (() => new Date());
   const log = opts.log ?? ((message: string) => process.stderr.write(`${message}\n`));
   const icu = opts.icu ?? lexicalIcuVersion();
+  const vectorIndex: VectorIndex = opts.vectorIndex ?? 'auto';
+  if (!['auto', 'int8', 'binary'].includes(vectorIndex)) {
+    throw new RangeError(
+      `sqlite store: vectorIndex must be auto, int8 or binary, got ${String(vectorIndex)}`,
+    );
+  }
+  const threshold = opts.binaryAutoThreshold;
+  if (threshold !== undefined && (!Number.isInteger(threshold) || threshold < 0)) {
+    throw new RangeError(
+      `sqlite store: binaryAutoThreshold must be a non-negative integer, got ${threshold}`,
+    );
+  }
   const dbPath = path.resolve(opts.path);
   const coldDir = path.resolve(opts.coldDir);
   prepareDbDir(path.dirname(dbPath), log);
@@ -495,26 +555,41 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       enableWal(conn, busyTimeoutMs);
       conn.pragma('foreign_keys = ON');
       sqliteVec.load(conn);
+      defineWriterGuard(conn);
       const from = schemaVersionOf(conn);
-      if (from === 1 || from === 2 || from === 3) {
+      if (from === 1 || from === 2 || from === 3 || from === 4) {
         // Checked and copied before the migration's transaction starts; a failed
         // copy fails the open and the store stays as it was.
         if (opts.migrate === false) throw new StoreMigrationRequiredError(dbPath, from);
         if (from === 1) assertMigratable(conn);
-        backupDatabase(conn, dbPath, from === 1 ? 'pre-v2' : from === 2 ? 'pre-v3' : 'pre-v4');
+        backupDatabase(
+          conn,
+          dbPath,
+          `pre-v${from + 1}` as 'pre-v2' | 'pre-v3' | 'pre-v4' | 'pre-v5',
+        );
       }
-      // Every migration from version 3 or older, and a stale version 4 index, rebuilds the lexical
-      // index (applySchema says so): wait as long as another process holds the lock rather than
-      // fail and repeat the migration later.
+      // Every migration from version 3 or older, a stale lexical index and a binary index to
+      // build rebuild something (applySchema says so): wait as long as another process holds the
+      // lock rather than fail and repeat the migration later.
       const rebuilds =
         opts.migrate !== false &&
         from !== undefined &&
-        (from < SCHEMA_VERSION ||
-          (from === SCHEMA_VERSION && lexicalIndexState(conn, icu) === 'rebuild'));
+        (from < 4 ||
+          ((from === 4 || from === SCHEMA_VERSION) &&
+            (lexicalIndexState(conn, icu) === 'rebuild' ||
+              binaryIndexPlan(conn, vectorIndex, opts.binaryAutoThreshold) === 'build')));
       if (rebuilds) {
         conn.pragma(`busy_timeout = ${Math.max(busyTimeoutMs, MIGRATION_BUSY_TIMEOUT_MS)}`);
       }
-      applySchema(conn, dimension, { migrate: opts.migrate !== false, log, icu });
+      applySchema(conn, dimension, {
+        migrate: opts.migrate !== false,
+        log,
+        icu,
+        vectorIndex,
+        ...(opts.binaryAutoThreshold !== undefined && {
+          binaryAutoThreshold: opts.binaryAutoThreshold,
+        }),
+      });
       if (rebuilds) conn.pragma(`busy_timeout = ${busyTimeoutMs}`);
       return conn;
     } catch (e) {
@@ -664,6 +739,115 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        ORDER BY knn.distance, m.updated_at DESC, m.id`,
     );
 
+  /**
+   * The binary index's statements, or undefined while the store has none. Checked on every use:
+   * another process may build or drop the index while this one is open (`vectorIndex`).
+   */
+  const bitTableExists = db.prepare<[string], { x: number }>(
+    "SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?",
+  );
+  let bitStatements:
+    | {
+        remove: Statement<[string]>;
+        insert: Statement<[string, Buffer, string, string, string, Buffer]>;
+        vecRow: Statement<
+          [string],
+          {
+            embedding: Buffer;
+            node_key: string;
+            project_key: string;
+            author_key: string;
+            tier: Tier;
+          }
+        >;
+      }
+    | undefined;
+  function bit(): typeof bitStatements {
+    if (bitTableExists.get(BIT_TABLE) === undefined) {
+      bitStatements = undefined;
+      return undefined;
+    }
+    bitStatements ??= {
+      remove: db.prepare(`DELETE FROM ${BIT_TABLE} WHERE id = ?`),
+      insert: db.prepare(
+        `INSERT INTO ${BIT_TABLE} (id, embedding, node_key, project_key, author_key, rescore)
+         VALUES (?, vec_bit(?), ?, ?, ?, ?)`,
+      ),
+      vecRow: db.prepare(
+        `SELECT embedding, node_key, project_key, author_key, tier FROM memories_vec WHERE id = ?`,
+      ),
+    };
+    return bitStatements;
+  }
+
+  /**
+   * Makes the binary index's row for `id` match its int8 row: present, with the same vector and
+   * partition, while the memory has a vector and is not cold; absent otherwise. Call inside the
+   * transaction that changed the int8 row.
+   */
+  function syncBinary(id: string): void {
+    const b = bit();
+    if (b === undefined) return;
+    b.remove.run(id);
+    const row = b.vecRow.get(id);
+    if (row === undefined || row.tier === 'cold') return;
+    const e = row.embedding;
+    const v = new Int8Array(e.buffer, e.byteOffset, e.byteLength);
+    b.insert.run(id, binaryCode(v), row.node_key, row.project_key, row.author_key, e);
+  }
+
+  /**
+   * KNN for one pattern over the binary index: the `BINARY_OVERSAMPLE` × k nearest codes by
+   * Hamming distance (filtered inside vec0 exactly as `densePattern` is), each rescored with its
+   * int8 vector, then the k best by int8 cosine distance. The rescoring vectors are read only for
+   * the candidates, one row lookup each.
+   */
+  const binaryPattern = (allProjects: boolean, byAuthor: boolean) =>
+    cached<[Params], { id: string; distance: number; tier: Tier; updated_at: string }>(
+      `binary:${allProjects}:${byAuthor}`,
+      () => `WITH knn AS MATERIALIZED (
+         SELECT id, rescore FROM ${BIT_TABLE}
+         WHERE embedding MATCH vec_bit(@code) AND k = @candidates AND node_key = @nodeKey
+           ${allProjects ? '' : 'AND project_key IN (SELECT value FROM json_each(@projectKeys))'}
+           ${byAuthor ? 'AND author_key = @author' : ''}
+       ), scored AS MATERIALIZED (
+         SELECT id, vec_distance_cosine(vec_int8(rescore), vec_int8(@v)) AS distance FROM knn
+       )
+       SELECT scored.id AS id, scored.distance AS distance, m.tier AS tier,
+              m.updated_at AS updated_at
+       FROM scored CROSS JOIN memories m ON m.id = scored.id
+       WHERE m.tier != 'cold' AND ${grantSql(1)}
+       ORDER BY scored.distance, m.updated_at DESC, m.id
+       LIMIT @k`,
+    );
+
+  /** One dense query per pattern, over the binary index when there is one and it is wanted. */
+  const denseRuns = db.transaction((patterns: NodePattern[], v: Int8Array, kk: number) => {
+    const binary = vectorIndex !== 'int8' && bit() !== undefined;
+    const code = binary ? binaryCode(v) : undefined;
+    return patterns.map((p) => {
+      const all = p.projectIds === 'all';
+      const params = {
+        ...patternParams(p, 0),
+        v: toBytes(v),
+        k: kk,
+        nodeKey: nodeKey(p.node),
+        ...(!all && {
+          projectKeys: JSON.stringify((p.projectIds as (string | null)[]).map(projectKey)),
+        }),
+        ...(p.authorAgentId !== undefined && { author: p.authorAgentId }),
+      };
+      const byAuthor = p.authorAgentId !== undefined;
+      return code === undefined
+        ? densePattern(all, byAuthor).all(params)
+        : binaryPattern(all, byAuthor).all({
+            ...params,
+            code,
+            candidates: Math.min(kk * BINARY_OVERSAMPLE, MAX_KNN),
+          });
+    });
+  });
+
   let closed = false;
 
   function open(): void {
@@ -714,15 +898,16 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     if (row === undefined) throw new Error(`upsert ${m.id}: no row returned`);
     writeFts(row.rid, m.tier, m.text, m.stub, m.entities);
     q.vecDelete.run(m.id);
+    const b = bit();
+    b?.remove.run(m.id);
     if (m.embedding !== undefined) {
-      q.vecInsert.run(
-        m.id,
-        toBytes(m.embedding),
-        nodeKey(nodeOf(address)),
-        projectKey(address.projectId),
-        author.agentId,
-        m.tier,
-      );
+      const bytes = toBytes(m.embedding);
+      const node = nodeKey(nodeOf(address));
+      const project = projectKey(address.projectId);
+      q.vecInsert.run(m.id, bytes, node, project, author.agentId, m.tier);
+      if (b !== undefined && m.tier !== 'cold') {
+        b.insert.run(m.id, binaryCode(m.embedding), node, project, author.agentId, bytes);
+      }
     }
     if (m.tier === 'cold') return [];
     const dropped = q.coldDelete.get(m.id);
@@ -765,6 +950,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     const row = q.deleteRow.get(id);
     if (row !== undefined) q.ftsDelete.run(row.rid);
     q.vecDelete.run(id);
+    bit()?.remove.run(id);
     return q.coldDelete.get(id)?.path;
   });
 
@@ -784,6 +970,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     row: Pick<MemoryRow, 'rid' | 'text' | 'stub' | 'entities'>,
   ): void {
     q.vecSetTier.run(tier, id);
+    syncBinary(id);
     writeFts(row.rid, tier, row.text, row.stub, JSON.parse(row.entities) as string[]);
   }
 
@@ -848,6 +1035,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         }
         writeFts(row.rid, 'cold', row.text, row.stub, JSON.parse(row.entities) as string[]);
         q.vecDelete.run(m.id);
+        bit()?.remove.run(m.id);
         const old = q.coldPath.get(m.id)?.path;
         if (old !== undefined) previous.push(old);
         q.coldInsert.run(m.id, files[i] as string);
@@ -926,8 +1114,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     },
 
     /**
-     * One KNN per read pattern (see `densePattern`), merged best first when a
-     * grant has several; `score` is cosine similarity.
+     * One KNN per read pattern (see `densePattern` and `binaryPattern`), merged best first when a
+     * grant has several; `score` is the int8 cosine similarity, whichever index found it.
      */
     async dense(grant, v, k) {
       open();
@@ -936,19 +1124,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       const patterns = live(grant.readNodes);
       if (k <= 0 || patterns.length === 0) return [];
       const kk = Math.min(Math.floor(k), MAX_KNN);
-      const runs = patterns.map((p) => {
-        const all = p.projectIds === 'all';
-        return densePattern(all, p.authorAgentId !== undefined).all({
-          ...patternParams(p, 0),
-          v: toBytes(v),
-          k: kk,
-          nodeKey: nodeKey(p.node),
-          ...(!all && {
-            projectKeys: JSON.stringify((p.projectIds as (string | null)[]).map(projectKey)),
-          }),
-          ...(p.authorAgentId !== undefined && { author: p.authorAgentId }),
-        });
-      });
+      const runs = denseRuns(patterns, v, kk);
       let rows = runs[0] ?? [];
       if (runs.length > 1) {
         // Patterns may overlap: one row per id, in the order a single query would give.

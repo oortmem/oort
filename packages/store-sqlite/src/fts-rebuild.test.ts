@@ -14,6 +14,7 @@ import { localGrant, tokenizeLexicalV1 } from '@oortmem/core';
 import {
   FTS_TOKENIZE,
   openSqliteStore,
+  SCHEMA_VERSION,
   sqliteSchemaVersion,
   StoreMigrationRequiredError,
 } from './index.js';
@@ -142,7 +143,7 @@ describe('lexical index rebuild (schema version 4)', () => {
     const before = ftsStats(s.dbPath);
     expect(before.rows).toBeGreaterThan(before.memories * 50);
     await (await openSqliteStore(optsFor(s))).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     const after = ftsStats(s.dbPath);
     // BM25's row count is the live rows: no history carried over, nothing to grow with it.
     expect(after.rows).toBe(after.memories);
@@ -235,7 +236,7 @@ describe('rebuild cost (CON-110 review)', () => {
     const store = await openSqliteStore({ ...optsFor(s), busyTimeoutMs: 100 });
     await store.close();
     await lock.done;
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
   });
 
   it('fts-rebuild.icu-rebuild-only-for-a-new-major-with-segmented-text', async () => {

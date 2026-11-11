@@ -27,6 +27,7 @@ import {
   SCHEMA_VERSION,
   sqliteSchemaVersion,
   StoreMigrationRequiredError,
+  WRITER_GUARD,
 } from './index.js';
 
 /**
@@ -403,6 +404,7 @@ describe('schema migration 1 to 2', () => {
     const s = copyFixture();
     await (await openSqliteStore(optsFor(s))).close();
     const db = raw(s.dbPath);
+    db.function(WRITER_GUARD, () => 1); // a version 5 writer: past the guard, at the CHECK
     try {
       const body = `'semantic', 't', 's', '[]', 0.5, 0, 'warm', '{}', '2026-01-01', NULL, NULL, NULL,
         NULL, NULL, NULL, '{}', '2026-01-01', '2026-01-01'`;
@@ -701,7 +703,7 @@ describe('schema migration 3 to 4', () => {
     expect(before.meta).toEqual({});
     const blobs = hashDir(s.coldDir);
     const { out, list } = await lexical(s, ENGLISH);
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     // Every record, the judgment and the cold memory included, reads back as version 3 wrote it.
     expect(portable(list)).toEqual(portable(expected3.list));
     // English queries find the same memories in the same order. Their scores move a little here
@@ -824,14 +826,14 @@ describe('schema migration 3 to 4', () => {
       db.close();
     }
     expect(portable((await lexical(s, [...ENGLISH, '认证 端口'])).out)).toEqual(portable(at4.out));
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
   });
 
   it('migrate.new-store-starts-at-v4-with-tokeniser-v2', async () => {
     const dir = fs.mkdtempSync(path.join(root, 'store4-'));
     const s = { dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
     await (await openSqliteStore(optsFor(s))).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     const fresh = inspect(s.dbPath);
     expect(fresh.sql).toContain(`categories 'L* N* Co M*'`);
     expect(fresh.meta).toEqual({ lexical_version: '2', lexical_icu: ICU_MAJOR });
