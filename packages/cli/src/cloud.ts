@@ -192,7 +192,7 @@ function messageFor(kind: CloudErrorKind, status: number, apiRaw?: string): stri
     case 'end-user-limit':
       return `Oort Cloud refused a new end user (HTTP 402)${api !== undefined ? `: ${api}` : '.'}`;
     case 'end-users-unsupported':
-      return END_USERS_UNSUPPORTED;
+      return status === 404 ? END_USERS_NOT_OFFERED : END_USERS_UNSUPPORTED;
     case 'refused':
       return `Oort Cloud refused this (HTTP ${status})${api !== undefined ? `: ${api}` : '.'}`;
     case 'network':
@@ -207,6 +207,14 @@ function messageFor(kind: CloudErrorKind, status: number, apiRaw?: string): stri
  */
 export const END_USERS_UNSUPPORTED =
   'Per-user memory needs Oort Cloud with server keys: whoami does not list the end-users capability for this Oort key (an Oort Cloud without per-user memory, or a key made without "Acts for end users"), so nothing was sent for this end user. Make a server key on https://oortcloud.dev/account.';
+
+/**
+ * An account's end-user route (count, erase) answered 404: an Oort Cloud from before CON-132. These
+ * routes ask no whoami first, since whoami is refused while Pro has lapsed or the account is blocked
+ * and an end user's deletion must still go through.
+ */
+export const END_USERS_NOT_OFFERED =
+  'Per-user memory needs Oort Cloud with server keys: this Oort Cloud has no end-user routes (HTTP 404), so nothing was done for this end user. Make a server key on https://oortcloud.dev/account.';
 
 /** The key capability that lets a server key act for its account's end users (CON-132). */
 export const END_USERS_CAPABILITY = 'end-users';
@@ -626,9 +634,13 @@ export interface CloudClient {
    * account's own Planet. whoami itself is sent without the header.
    */
   forEndUser(id: string): CloudClient;
-  /** How many end users the account has (a server key; the same capability check). */
+  /**
+   * How many end users the account has (a server key). The account's end-user routes ask no
+   * whoami first: Oort Cloud refuses other keys itself, and an older one answers 404
+   * (`end-users-unsupported`).
+   */
   endUsersCount(): Promise<CloudEndUserCount>;
-  /** Erases end user `id` completely (a server key; the same capability check). */
+  /** Erases end user `id` completely (a server key; open whatever the plan's state). */
   eraseEndUser(id: string): Promise<CloudEndUserErasure>;
   /**
    * End user `id`'s memories as export JSON Lines, the manifest first (CON-137; a server key; the
@@ -707,6 +719,17 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       });
     }
     return endUsers;
+  };
+  /** An account's end-user route: a 404 is an Oort Cloud without them (`end-users-unsupported`). */
+  const endUserRoute = async <T>(p: Promise<T>): Promise<T> => {
+    try {
+      return await p;
+    } catch (e) {
+      if (e instanceof OortCloudError && e.kind === 'not-found') {
+        throw new OortCloudError('end-users-unsupported', 404);
+      }
+      throw e;
+    }
   };
   const pooled =
     opts.fetch === undefined && (opts.keepAlive === true || opts.serverTiming === true);
@@ -827,20 +850,20 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
           `/v1/whoami${agent === undefined ? '' : `?agent=${encodeURIComponent(agent)}`}`,
         ),
       forEndUser: (id) => build(id),
-      endUsersCount: async () => {
-        await requireEndUsers();
-        return accountJson('GET', '/v1/end-users/count');
-      },
-      exportEndUser: async (id) => {
-        await requireEndUsers();
-        const route = `/v1/end-users/${encodeURIComponent(id)}/export`;
-        return (await timedCall('GET', route, undefined, undefined)).res.text();
-      },
+      // No whoami first (security review, L-b): whoami is refused while Pro has lapsed or the
+      // account is blocked, yet Oort Cloud keeps end-user erasure open then. It refuses a key that
+      // is not a server key itself (403 end_users_not_allowed); an older one answers 404.
+      endUsersCount: () => endUserRoute(accountJson('GET', '/v1/end-users/count')),
+      exportEndUser: (id) =>
+        endUserRoute(
+          timedCall('GET', `/v1/end-users/${encodeURIComponent(id)}/export`, undefined, undefined),
+        ).then((r) => r.res.text()),
       eraseEndUser: async (id) => {
-        await requireEndUsers();
-        const r = await accountJson<{
-          erased?: Partial<Record<keyof CloudEndUserErasure, unknown>>;
-        }>('DELETE', `/v1/end-users/${encodeURIComponent(id)}`);
+        const r = await endUserRoute(
+          accountJson<{
+            erased?: Partial<Record<keyof CloudEndUserErasure, unknown>>;
+          }>('DELETE', `/v1/end-users/${encodeURIComponent(id)}`),
+        );
         const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
         return {
           memories: n(r.erased?.memories),

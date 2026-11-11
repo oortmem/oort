@@ -925,7 +925,7 @@ class CloudEndUsers(unittest.TestCase):
 
     def test_an_older_cloud_is_refused_and_nothing_names_the_user(self) -> None:
         from oortmem import OortRefusedError
-        from oortmem.errors import END_USERS_UNSUPPORTED
+        from oortmem.errors import END_USERS_NOT_OFFERED, END_USERS_UNSUPPORTED
 
         # Before CON-132: whoami lists no capabilities, and the header would be ignored.
         self.rec.answers["GET /v1/whoami"] = (200, {"account": "acct", "plan": "pro", "via": "key"})
@@ -940,15 +940,49 @@ class CloudEndUsers(unittest.TestCase):
             lambda: ada.forget("11111111"),
             lambda: ada.pin("11111111"),
             lambda: ada.explain("11111111"),
-            lambda: o.end_users.count(),
-            lambda: o.end_users.erase("ada"),
         ):
             with self.assertRaises(OortRefusedError) as e:
                 call()
             self.assertEqual((e.exception.reason, e.exception.retryable, e.exception.fix), ("end-users-unsupported", False, None))
             self.assertEqual(e.exception.message, END_USERS_UNSUPPORTED)
         self.assertEqual({(m, p) for m, p, _ in self.sent()}, {("GET", "/v1/whoami")})
-        self.assertTrue(all(u is None for _, _, u in self.sent()))
+        # The account's end-user routes ask no whoami (security review, L-b): the older cloud has
+        # no such route, and its 404 is the same refusal.
+        self.rec.seen.clear()
+        for call in (lambda: o.end_users.count(), lambda: o.end_users.erase("ada")):
+            with self.assertRaises(OortRefusedError) as e:
+                call()
+            self.assertEqual((e.exception.reason, e.exception.status, e.exception.retryable), ("end-users-unsupported", 404, False))
+            self.assertEqual(e.exception.message, END_USERS_NOT_OFFERED)
+        self.assertEqual(self.sent(), [("GET", "/v1/end-users/count", None), ("DELETE", "/v1/end-users/ada", None)])
+
+    def test_erase_and_count_hold_while_the_account_is_blocked_or_lapsed(self) -> None:
+        from oortmem import OortRefusedError
+
+        # Oort Cloud keeps end-user erasure open while Pro has lapsed or the account is blocked;
+        # whoami is a Pro route there, so it is never asked before these.
+        for status, code in ((402, "payment_required"), (403, "cloud_blocked")):
+            self.rec.seen.clear()
+            self.rec.answers["GET /v1/whoami"] = (status, {"error": {"code": code, "message": "m"}})
+            self.rec.answers["GET /v1/end-users/count"] = (200, {"endUsers": 1, "limit": 100})
+            self.rec.answers["DELETE /v1/end-users/*"] = (200, {"erased": {"memories": 2, "coldCopies": 0, "turnRefs": 0, "cursors": 0}})
+            o = self.oort()
+            self.assertEqual(o.end_users.erase("ada").memories, 2)
+            if status == 402:  # count is open while lapsed; while blocked only erasure (and export) are
+                self.assertEqual(o.end_users.count().end_users, 1)
+            self.assertNotIn("/v1/whoami", [p for _, p, _ in self.sent()])
+            # An end user's own memory calls still ask whoami first, and are refused.
+            with self.assertRaises(OortRefusedError) as e:
+                o.scoped(user="ada").recall("tea")
+            self.assertEqual(e.exception.status, status)
+
+    def test_a_key_without_the_capability_is_refused_by_the_cloud(self) -> None:
+        from oortmem import OortRefusedError
+
+        self.rec.answers["DELETE /v1/end-users/*"] = (403, {"error": {"code": "end_users_not_allowed", "message": "Only a server key can do this."}})
+        with self.assertRaises(OortRefusedError) as e:
+            self.oort().end_users.erase("ada")
+        self.assertEqual((e.exception.reason, e.exception.status), ("end-users-not-allowed", 403))
 
     def test_the_capability_is_checked_once_per_root_and_again_after_a_refusal(self) -> None:
         from oortmem import OortRefusedError
@@ -975,7 +1009,7 @@ class CloudEndUsers(unittest.TestCase):
         self.assertEqual((e.erased, e.memories, e.cold_copies, e.turn_refs, e.cursors), ("ada:1", 2, 1, 4, 1))
         self.assertEqual(
             self.sent(),
-            [("GET", "/v1/whoami", None), ("GET", "/v1/end-users/count", None), ("DELETE", "/v1/end-users/ada%3A1", None)],
+            [("GET", "/v1/end-users/count", None), ("DELETE", "/v1/end-users/ada%3A1", None)],
         )
 
     def test_export(self) -> None:

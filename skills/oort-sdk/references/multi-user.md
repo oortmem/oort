@@ -78,8 +78,9 @@ await oort.close();
 
 ## Per-user memory in Oort Cloud
 
-> **Requires a server key on Oort Pro** and `oortmem` 0.8.0 or newer. An account without
-> per-user memory refuses every end-user call with `end-users-unsupported`, and nothing is sent.
+> **Requires a server key on Oort Pro** and `oortmem` 0.8.0 or newer. Without per-user memory,
+> an end user's handle is refused with `end-users-unsupported` before anything is sent, and the
+> account's `endUsers` calls with `end-users-not-allowed` or `end-users-unsupported`.
 
 The same `scoped({ user })` against Oort Cloud, with a **server key**: an Oort key made on
 oortcloud.dev/account with "Acts for end users". Each end user gets a Planet of their own inside
@@ -134,7 +135,8 @@ await oort.close();
   format (an access or portability request; an unknown or erased id exports empty, the same
   either way). All three are cloud only, from server code, never from a handle scoped to an end
   user. Python: `oort.end_users.erase(id)`, `oort.end_users.count()` and
-  `oort.end_users.export(id)`.
+  `oort.end_users.export(id)`. Erasure and export work while Pro has lapsed or the account is
+  blocked.
 - To correct a wrong fact (a rectification request), `remember` the correction on their handle:
   the wrong one gets an end date and stays as history. `forget(id)` deletes a memory outright;
   it does not end it. See docs/sdk.md, "An end user's data requests".

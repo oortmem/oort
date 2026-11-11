@@ -4,7 +4,12 @@ import { describe, expect, it } from 'vitest';
 import { tmpdir } from '../../test/helpers.js';
 import { fakeCloud, type FakeCloud } from '../../test/helpers/fake-cloud.js';
 import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
-import { END_USERS_UNSUPPORTED, OortCloudError, cloudErrorKind } from '../cloud.js';
+import {
+  END_USERS_NOT_OFFERED,
+  END_USERS_UNSUPPORTED,
+  OortCloudError,
+  cloudErrorKind,
+} from '../cloud.js';
 import { createOortWith } from './create.js';
 import { toOortError } from './errors.js';
 import type { OortOptions } from './types.js';
@@ -18,11 +23,14 @@ import type { OortOptions } from './types.js';
 
 const KEY = ['oort', 'sk', 'endusers'.padEnd(43, 'E')].join('_');
 
-async function cloud(setup: (c: FakeCloud) => void = () => {}, over: OortOptions = {}) {
+async function cloud(
+  setup: (c: FakeCloud) => void = () => {},
+  over: OortOptions = {},
+  c: FakeCloud = fakeCloud(KEY),
+) {
   const root = tmpdir('oort-sdk-endusers-');
   const cwd = path.join(root, 'project');
   fs.mkdirSync(cwd);
-  const c = fakeCloud(KEY);
   setup(c);
   const env = { HOME: root, OORT_HOME: path.join(root, 'home'), OORT_NO_KEYCHAIN: '1' };
   const oort = await createOortWith(
@@ -100,8 +108,6 @@ describe('cloud end users (CON-132)', () => {
       () => ada.forget('11111111'),
       () => ada.pin('11111111'),
       () => ada.explain('11111111'),
-      () => oort.endUsers.count(),
-      () => oort.endUsers.erase('ada'),
     ]) {
       await expect(call()).rejects.toMatchObject({
         name: 'OortRefusedError',
@@ -114,9 +120,53 @@ describe('cloud end users (CON-132)', () => {
     }
     // Only whoami went out (a refusal is asked again, never kept), and nothing was written.
     expect(new Set(c.seen)).toEqual(new Set(['GET /v1/whoami']));
+    // The account's end-user routes ask no whoami (security review, L-b): the older cloud has no
+    // such route, and its 404 is the same refusal.
+    c.seen.length = 0;
+    for (const call of [() => oort.endUsers.count(), () => oort.endUsers.erase('ada')]) {
+      await expect(call()).rejects.toMatchObject({
+        name: 'OortRefusedError',
+        code: 'refused',
+        reason: 'end-users-unsupported',
+        status: 404,
+        retryable: false,
+        message: END_USERS_NOT_OFFERED,
+      });
+    }
+    expect(c.seen).toEqual(['GET /v1/end-users/count', 'DELETE /v1/end-users/ada']);
     expect(c.endUsers.headers.every((h) => h === null)).toBe(true);
     expect(c.memories.size).toBe(0);
     await oort.close();
+  });
+
+  it('sdk.end-users-erase-and-count-hold-while-the-account-is-blocked-or-lapsed', async () => {
+    // Oort Cloud keeps end-user erasure (and export) open when Pro has lapsed or the account is
+    // blocked, so a deletion request can always be honoured; whoami is a Pro route there.
+    for (const state of ['lapsed', 'blocked'] as const) {
+      const { oort: seeding, c } = await cloud((c) => (c.endUsers.serverKey = true));
+      await seeding.scoped({ user: 'ada' }).remember(['Ada likes tea.', 'Ada lives in Lund.']);
+      await seeding.close();
+      const { oort } = await cloud(
+        (c) => {
+          c.seen.length = 0;
+          if (state === 'lapsed') c.lapsed = true;
+          else c.fail = { 'GET /v1/whoami': { status: 403, code: 'cloud_blocked' } };
+        },
+        {},
+        c,
+      );
+      if (state === 'lapsed') {
+        expect(await oort.endUsers.count()).toEqual({ endUsers: 1, limit: 100 });
+      }
+      expect(await oort.endUsers.erase('ada')).toMatchObject({ erased: 'ada', memories: 2 });
+      expect(c.seen.filter((r) => r === 'GET /v1/whoami')).toEqual([]);
+      // An end user's own memory calls still check whoami first, and so are refused.
+      await expect(oort.scoped({ user: 'ada' }).recall('tea')).rejects.toMatchObject({
+        code: 'refused',
+        status: state === 'lapsed' ? 402 : 403,
+      });
+      await oort.close();
+    }
   });
 
   it('sdk.end-users-refused-for-a-key-without-the-capability', async () => {
@@ -125,6 +175,12 @@ describe('cloud end users (CON-132)', () => {
       reason: 'end-users-unsupported',
     });
     expect(c.seen).toEqual(['GET /v1/whoami']);
+    // The account's routes go out, and Oort Cloud refuses a key that is not a server key.
+    await expect(oort.endUsers.erase('ada')).rejects.toMatchObject({
+      code: 'refused',
+      reason: 'end-users-not-allowed',
+      status: 403,
+    });
     await oort.close();
   });
 
