@@ -633,7 +633,7 @@ describe('oort import <file> (CON-137)', () => {
     // and inspect, recall, explain and revalidate printed them raw. ESC, a C1 CSI and a bidi
     // override are shown escaped instead.
     const h = await onSqlite();
-    const bad = 'deploy\u001b]52;c;Zm9v\u0007 \u009b31m ‮';
+    const bad = 'deploy\u001b]52;c;Zm9v\u0007 \u009b31m \u202e';
     const f = craftedFile(h, 'escapes.jsonl', [
       craftedLine('esc-one', {
         text: `The deploy runbook says ${bad} first.`,
@@ -663,7 +663,7 @@ describe('oort import <file> (CON-137)', () => {
     ]) {
       const r = await h.run(args);
       expect(r.code, `${args.join(' ')}: ${r.io.stderr}`).toBe(0);
-      expect(r.io.stdout, args.join(' ')).not.toMatch(/[\u001b\u0007\u009b‮]/);
+      expect(r.io.stdout, args.join(' ')).not.toMatch(/[\u001b\u0007\u009b\u202e]/);
     }
     expect((await h.run(['inspect', 'esc-one'])).io.stdout).toContain('\\u{1b}');
   });
