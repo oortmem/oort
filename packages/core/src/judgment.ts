@@ -418,9 +418,6 @@ async function indexJudgments(store: MemoryStore, grant: Grant, now: Date): Prom
   return index;
 }
 
-/** An imported judgment that came ended and that no person here has ended since. */
-const arrivedEnded = (j: Judgment): boolean => j.pack !== undefined && j.tombstone === undefined;
-
 /** One write a record or an import will make, before embedding. */
 interface Planned {
   memory: Memory & { judgment: Judgment };
@@ -746,10 +743,9 @@ export async function withdrawJudgment(
   by: string,
   now = new Date(),
 ): Promise<boolean> {
-  if (m.type !== 'judgment' || m.judgment === undefined) return false;
-  // Withdrawn already, unless it arrived so (imported, no tombstone of a person here): then this
-  // withdrawal is a person's, and writes the tombstone that keeps the decision out (CON-137).
-  if (m.judgment.withdrawn !== undefined && !arrivedEnded(m.judgment)) return false;
+  if (m.type !== 'judgment' || m.judgment === undefined || m.judgment.withdrawn !== undefined) {
+    return false;
+  }
   const iso = now.toISOString();
   const full = (await store.get(grant, m.id)) ?? m;
   const j = full.judgment ?? m.judgment;
@@ -804,9 +800,9 @@ export async function purgeJudgment(
   by: string,
   now = new Date(),
 ): Promise<boolean> {
-  if (m.type !== 'judgment' || m.judgment === undefined) return false;
-  // Purged already, unless it arrived so: as for withdrawing (CON-137).
-  if (m.judgment.purged !== undefined && !arrivedEnded(m.judgment)) return false;
+  if (m.type !== 'judgment' || m.judgment === undefined || m.judgment.purged !== undefined) {
+    return false;
+  }
   const iso = now.toISOString();
   const full = (await store.get(grant, m.id)) ?? m;
   const j = full.judgment ?? m.judgment;
@@ -1334,46 +1330,26 @@ export function fileOrigin(o: {
   };
 }
 
-/** A withdrawal or purge as a file states it: exactly `{ at, by }`, a time and plain text. */
-function endMark(field: string, v: unknown): { at: string; by: string } | undefined {
-  if (v === undefined) return undefined;
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
-    throw new JudgmentPackError(`${field} must be { at, by }`);
-  }
-  const o = v as Record<string, unknown>;
-  if (Object.keys(o).sort().join(',') !== 'at,by') {
-    throw new JudgmentPackError(`${field} must have exactly at and by`);
-  }
-  return {
-    at: packTime(`${field}.at`, o['at']),
-    by: packText(`${field}.by`, o['by'], PACK_LIMITS.exportedBy),
-  };
-}
-
 /**
  * A judgment read from an Oort export file, as this store keeps it (CON-137): the decision
  * normalised and redacted as a pack's is, imported (`via: 'pack'` from `origin`), never confirmed
- * and with no tombstone of its own. A withdrawal or purge the line states is kept, checked, so an
- * ended decision stays ended. Throws `JudgmentInputError` or `JudgmentPackError` otherwise.
+ * and with no tombstone of its own. A decision the file says was withdrawn or purged is refused
+ * (re-review N1): stored, it would be pinned and shown as current, and only a person here may
+ * end one. Throws `JudgmentInputError` or `JudgmentPackError` otherwise.
  */
 export function importedJudgment(raw: unknown, origin: JudgmentPackOrigin): Judgment {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new JudgmentPackError('judgment must be an object');
   }
   const j = raw as Record<string, unknown>;
+  if ((j['withdrawn'] ?? null) !== null || (j['purged'] ?? null) !== null) {
+    throw new JudgmentPackError('an ended decision is not imported');
+  }
   if (typeof j['decidedAt'] !== 'string') throw new JudgmentPackError('decidedAt is missing');
   const { judgment: core } = redactJudgment(
     normaliseJudgment(packInput(j as unknown as JudgmentPackLine['judgment']), new Date(0)),
   );
-  const withdrawn = endMark('withdrawn', j['withdrawn']);
-  const purged = endMark('purged', j['purged']);
-  return {
-    ...core,
-    via: 'pack',
-    pack: origin,
-    ...(withdrawn !== undefined && { withdrawn }),
-    ...(purged !== undefined && { purged }),
-  };
+  return { ...core, via: 'pack', pack: origin };
 }
 
 /** A line's claimed earlier origin: exactly the six fields, each plain text. */

@@ -321,11 +321,12 @@ describe('M2: tombstones', () => {
       now: NOW,
     });
     const withdrawn = { at: NOW.toISOString(), by: 'mallory' };
-    // As `oort import <file>` stores them: through importedJudgment, which drops `tombstone`.
+    // As an imported record that is somehow ended: through importedJudgment (which drops
+    // `tombstone` and refuses an ended decision), then marked withdrawn by hand.
     const planted = (m: Memory, id: string, extra: Record<string, unknown>): Memory => ({
       ...m,
       id,
-      judgment: importedJudgment({ ...m.judgment!, ...extra, withdrawn }, origin),
+      judgment: { ...importedJudgment({ ...m.judgment!, ...extra }, origin), withdrawn },
     });
     await store.upsertMany(grant, [
       planted(other.memory, 'planted-key', { tombstone: tombstoneKey(real.memory.judgment!) }),
@@ -408,16 +409,9 @@ describe('M2: tombstones', () => {
     }
   });
 
-  it('review.a-person-can-withdraw-or-purge-a-record-that-arrived-ended', async () => {
-    // Re-review Low 4: a record that arrived withdrawn or purged leaves no tombstone, so a person
-    // here must still be able to withdraw or purge it, which writes one and blocks the decision.
-    const from = createMemoryStore({ now: () => NOW });
-    const real = await recordJudgment(base({ ref: undefined }), { ...deps(from), via: 'cli' });
-    const text = formatJudgmentPack(await from.list(grant), {
-      name: 'ada',
-      exportedBy: 'x',
-      exportedAt: NOW,
-    });
+  it('review.a-judgment-from-a-file-that-ended-is-refused', () => {
+    // Re-review N1: a decision that arrives withdrawn or purged would be stored open and pinned,
+    // so SessionStart and recall would show it. A file's ended decision is not imported at all.
     const origin = fileOrigin({
       digest: 'd'.repeat(64),
       name: 'ended.jsonl',
@@ -425,32 +419,29 @@ describe('M2: tombstones', () => {
       originalId: 'e1',
       now: NOW,
     });
+    const raw = {
+      ...base(),
+      subject: { summary: 'S' },
+      verdicts: ['approved', 'rejected'],
+      verdict: 'rejected',
+      criteria: [],
+    };
     const mark = { at: NOW.toISOString(), by: 'someone' };
-    for (const [how, act] of [
-      ['withdraw', withdrawJudgment],
-      ['purge', purgeJudgment],
-    ] as const) {
-      const store = createMemoryStore({ now: () => NOW });
-      const arrived = {
-        ...real.memory,
-        id: `arrived-${how}`,
-        judgment: importedJudgment(
-          { ...real.memory.judgment!, withdrawn: mark, ...(how === 'purge' && { purged: mark }) },
-          origin,
-        ),
-      };
-      await store.upsert(grant, arrived);
-      expect(await act(store, grant, arrived, 'marcus', NOW), how).toBe(true);
-      const after = (await store.get(grant, arrived.id))!.judgment!;
-      expect(after.tombstone, how).toBe(tombstoneKey(real.memory.judgment!));
-      // Done once: a second time changes nothing.
-      expect(await act(store, grant, (await store.get(grant, arrived.id))!, 'marcus', NOW)).toBe(
-        false,
+    for (const ended of [
+      { withdrawn: mark },
+      { purged: mark },
+      { withdrawn: mark, purged: mark },
+      { withdrawn: 'yes' },
+      { purged: {} },
+    ]) {
+      expect(() => importedJudgment({ ...raw, ...ended }, origin), JSON.stringify(ended)).toThrow(
+        /ended decision/,
       );
-      const r = await importJudgmentPack(parseJudgmentPack(text), deps(store));
-      expect(r.added, how).toEqual([]);
-      expect(r.tombstoned, how).toHaveLength(1);
     }
+    // Absent or null is not ended.
+    expect(importedJudgment({ ...raw, withdrawn: null, purged: null }, origin)).not.toHaveProperty(
+      'withdrawn',
+    );
   });
 
   it('review.pack-times-are-stored-as-iso', () => {
@@ -467,19 +458,6 @@ describe('M2: tombstones', () => {
         now: NOW,
       });
       expect(o.exportedAt).toBe(want);
-      expect(
-        importedJudgment(
-          {
-            ...base(),
-            subject: { summary: 'S' },
-            verdicts: ['approved', 'rejected'],
-            verdict: 'rejected',
-            criteria: [],
-            withdrawn: { at: given, by: 'm' },
-          },
-          o,
-        ).withdrawn,
-      ).toEqual({ at: want, by: 'm' });
     }
   });
 
@@ -512,7 +490,6 @@ describe('M2: tombstones', () => {
       decidedAt: '2026-10-01T00:00:00.000Z',
       via: 'cli',
       confirmed: { at: NOW.toISOString(), by: 'marcus' },
-      withdrawn: { at: NOW.toISOString(), by: 'marcus' },
       tombstone: 'b'.repeat(64),
       evil: 1,
     };
@@ -521,17 +498,7 @@ describe('M2: tombstones', () => {
     expect(j.pack).toEqual(origin);
     expect(j.reason).not.toContain(key);
     expect(j.criteria).toEqual(['tests']);
-    expect(j.withdrawn).toEqual(raw.withdrawn);
     for (const k of ['confirmed', 'tombstone', 'evil']) expect(j).not.toHaveProperty(k);
-    // A withdrawal or purge that is not { at: time, by: text } is refused.
-    for (const bad of [
-      { withdrawn: { at: 'x', by: 'marcus' } },
-      { withdrawn: { at: NOW.toISOString() } },
-      { purged: { at: NOW.toISOString(), by: 'marcus', extra: 1 } },
-      { withdrawn: 'yes' },
-    ]) {
-      expect(() => importedJudgment({ ...raw, withdrawn: undefined, ...bad }, origin)).toThrow();
-    }
     expect(() => importedJudgment({ ...raw, verdict: 'maybe' }, origin)).toThrow();
   });
 
