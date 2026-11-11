@@ -1,6 +1,6 @@
 {
   "name": "oort-dev",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "description": "Build with Oort: the oort-sdk skill teaches Codex to add Oort memory to your own apps and agents with the oortmem TypeScript SDK, the native Python client (from oortmem import Oort) and the oort CLI. No hooks and no MCP server; install the oort plugin for memory in your own sessions.",
   "author": {
     "name": "Oort",

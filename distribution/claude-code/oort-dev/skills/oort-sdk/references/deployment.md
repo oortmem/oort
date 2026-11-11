@@ -86,7 +86,7 @@ async function answerWith(memory: string, question: string): Promise<string> {
 
 | Need                                                     | Mode                                                                                          |
 | -------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Several end users per tenant (`scoped({ user })`)        | `local` (cloud mode takes no `user` in 0.7.3)                                                 |
+| Several end users per tenant (`scoped({ user })`)        | `local`, or `cloud` with a server key on Oort Pro (0.8.0 or newer)                            |
 | Serverless, no disk, no native build                     | `cloud`                                                                                       |
 | The store on your own hardware                           | `local` (saving still sends each turn to TypeSafe and Anthropic, with your keys or the relay) |
 | One person's memory shared with their CLI, hooks and MCP | `auto` on their machine                                                                       |
