@@ -128,7 +128,7 @@ await oort.close();
   write the account's own Planet. Never work around this refusal by dropping `user`.
 - A server key never acts as the account: its handle without `user` gets `user-missing`. Keep a
   normal key for the account's own memory.
-- `oort.endUsers.erase(id)` erases one end user completely (a deletion request) and returns
+- `oort.endUsers.erase(id)` erases one end user (a deletion request) and returns
   counts; `oort.endUsers.count()` returns `{ endUsers, limit }`; `oort.endUsers.export(id)`
   returns `{ exported, memories, jsonl }`, every memory of that end user in the Oort export
   format (an access or portability request; an unknown or erased id exports empty, the same
@@ -141,3 +141,49 @@ await oort.close();
 - Refusals to handle: `end-user-limit` (the plan's end users are all taken; erase ones you no
   longer serve), `end-user-erased` (a write lost the race with an erasure; do not retry),
   `end-users-not-allowed` (not a server key).
+
+### An end user's data requests
+
+<!-- example: examples/src/cloud-data-requests.ts -->
+
+```ts
+import { writeFile } from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { createOort } from 'oortmem';
+
+// Answering an end user's data requests (GDPR access, portability, rectification, erasure) from
+// your server, with a server key in OORT_API_KEY. The person asks you; you answer with this.
+const oort = await createOort({
+  mode: 'cloud',
+  org: 'acme',
+  project: null,
+  projectConfig: false,
+  keySources: ['env'],
+});
+const ada = oort.scoped({ user: 'user-ada' });
+await ada.remember('I live in Oslo.');
+
+// Access and portability: every memory Oort holds for them, in every state, as one file in the
+// Oort export format. Hand it over as it is; `oort import <file>` reads it into any Oort.
+const copy = await oort.endUsers.export('user-ada');
+const file = path.join(os.tmpdir(), 'user-ada-memories.jsonl');
+await writeFile(file, copy.jsonl, { mode: 0o600 });
+console.log(`exported ${copy.memories} memories`);
+
+// Rectification: save the corrected fact as them. Oort ends the wrong one (kept as history with
+// an end date, never rewritten), and recall answers with the correction.
+const [wrong] = (await ada.recall('where do I live?')).memories;
+await ada.remember('Correction: I live in Bergen, not Oslo.');
+// A wrong fact Oort did not end, or one they want gone even as history: forgetting deletes it.
+if (wrong !== undefined && (await ada.explain(wrong.id)).memory.status === 'current') {
+  await ada.forget(wrong.id);
+  console.log('forgot the wrong fact');
+}
+
+// Erasure: everything of theirs at once. Their export is then empty, as for an id you never had.
+const erased = await oort.endUsers.erase('user-ada');
+console.log(`erased ${erased.memories} memories`);
+console.log(`left ${(await oort.endUsers.export('user-ada')).memories}`);
+await oort.close();
+```
