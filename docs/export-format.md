@@ -124,7 +124,10 @@ store are skipped. The embeddings in the file are not reused: each memory is
 embedded again by the store's embedder. The importer trusts nothing a line
 claims: a line whose id, type, tier, salience (0 to 1), pin or judgment no
 store would write is left out and counted, and a judgment becomes an imported
-one (`via: "pack"` with the file as its origin, never `confirmed`).
+one (`via: "pack"` with the file as its origin, normalised and redacted as a
+pack's, never `confirmed`, with no `tombstone`). A withdrawal or purge a line
+states is kept but leaves no tombstone: an imported record cannot keep a
+decision out of a later import; only one withdrawn here can.
 
 ## Limitations
 
