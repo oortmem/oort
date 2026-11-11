@@ -70,6 +70,8 @@ async function call(oort: Oort, step: Step, args: Record<string, unknown>): Prom
       return oort.scoped(args);
     case 'endUsers.erase':
       return oort.endUsers.erase(args['user'] as string);
+    case 'endUsers.export':
+      return oort.endUsers.export(args['user'] as string);
     case 'endUsers.count':
       return oort.endUsers.count();
     case 'judge.record':

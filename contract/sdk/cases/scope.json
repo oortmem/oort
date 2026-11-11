@@ -870,6 +870,18 @@
         }
       },
       {
+        "call": "endUsers.export",
+        "args": {
+          "user": "u1"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "end-users-unsupported"
+          }
+        }
+      },
+      {
         "call": "recall",
         "args": {
           "query": "garden Kyoto"
@@ -947,6 +959,18 @@
         }
       },
       {
+        "call": "endUsers.export",
+        "args": {
+          "user": "u1"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "end-users-unsupported"
+          }
+        }
+      },
+      {
         "call": "recall",
         "args": {
           "query": "garden Kyoto"
@@ -981,7 +1005,7 @@
   },
   {
     "id": "scope.cloud-two-end-users-never-see-each-other",
-    "description": "A server key: each end user reads and writes their own Planet in the account (CON-132), the account's own memory is out of reach, and erasure removes one end user only.",
+    "description": "A server key: each end user reads and writes their own Planet in the account (CON-132), the account's own memory is out of reach, an export holds one end user's memories only (CON-137), and erasure removes one end user only.",
     "transports": ["cloud"],
     "cloud": {
       "endUsers": "server-key"
@@ -1207,6 +1231,73 @@
         }
       },
       {
+        "call": "endUsers.export",
+        "args": {
+          "user": "u1"
+        },
+        "expect": {
+          "result": {
+            "exported": "u1",
+            "memories": 1,
+            "jsonl": {
+              "$regex": "^(?![\\s\\S]*Lund)\\{\"oort\":\"export\"[\\s\\S]*Kyoto"
+            }
+          }
+        }
+      },
+      {
+        "call": "endUsers.export",
+        "args": {
+          "user": "u2"
+        },
+        "expect": {
+          "result": {
+            "exported": "u2",
+            "memories": 1,
+            "jsonl": {
+              "$regex": "^(?![\\s\\S]*Kyoto)[\\s\\S]*Lund"
+            }
+          }
+        }
+      },
+      {
+        "call": "endUsers.export",
+        "on": "u1",
+        "args": {
+          "user": "u1"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "user-not-supported"
+          }
+        }
+      },
+      {
+        "call": "endUsers.export",
+        "args": {
+          "user": "self"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "self-not-derivable"
+          }
+        }
+      },
+      {
+        "call": "endUsers.export",
+        "args": {
+          "user": "alice\n"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "bad-user"
+          }
+        }
+      },
+      {
         "call": "endUsers.erase",
         "args": {
           "user": "u1"
@@ -1218,6 +1309,33 @@
             "coldCopies": 0,
             "turnRefs": 0,
             "cursors": 0
+          }
+        }
+      },
+      {
+        "call": "endUsers.export",
+        "args": {
+          "user": "u1"
+        },
+        "expect": {
+          "result": {
+            "exported": "u1",
+            "memories": 0,
+            "jsonl": {
+              "$regex": "^(?![\\s\\S]*Kyoto)"
+            }
+          }
+        }
+      },
+      {
+        "call": "endUsers.export",
+        "args": {
+          "user": "u9"
+        },
+        "expect": {
+          "result": {
+            "exported": "u9",
+            "memories": 0
           }
         }
       },
@@ -1262,7 +1380,7 @@
   },
   {
     "id": "scope.end-users-is-cloud-only",
-    "description": "endUsers erases and counts Oort Cloud end users; a local store has none of its own.",
+    "description": "endUsers erases, exports and counts Oort Cloud end users; a local store has none of its own.",
     "transports": ["local"],
     "options": {
       "org": "acme"
@@ -1279,6 +1397,18 @@
       },
       {
         "call": "endUsers.erase",
+        "args": {
+          "user": "u1"
+        },
+        "expect": {
+          "error": {
+            "code": "cloud-only",
+            "reason": "end-users"
+          }
+        }
+      },
+      {
+        "call": "endUsers.export",
         "args": {
           "user": "u1"
         },

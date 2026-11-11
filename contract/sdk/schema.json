@@ -100,6 +100,7 @@
             "consolidate",
             "scoped",
             "endUsers.erase",
+            "endUsers.export",
             "endUsers.count",
             "judge.record",
             "judge.apply",
