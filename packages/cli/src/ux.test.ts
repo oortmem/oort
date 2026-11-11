@@ -507,7 +507,7 @@ describe('human output (CON-107)', () => {
     const h = harness();
     const unknown = await h.run(['import', 'cursor']);
     expect(unknown.io.stderr).toBe(
-      'oort: Unknown harness "cursor"; import supports claude-code.\n',
+      'oort: Unknown source "cursor": import reads claude-code transcripts or an Oort export file, and no file is at that path.\n',
     );
     const privacy = await h.run(['project', 'privacy', 'maybe']);
     expect(privacy.io.stderr).toBe('oort: Project privacy takes public or private.\n');
