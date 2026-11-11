@@ -42,20 +42,27 @@ __all__ = ["__version__", *_CLIENT, *_ERRORS, "types", "errors"]
 
 
 def __getattr__(name):
+    # Each name is looked up once, then kept in this module's globals, so later imports never
+    # come back here. On Python 3.10 importlib.import_module takes the module's import lock even
+    # when it is already loaded, and threads importing at once could hit a spurious _DeadlockError.
     if name in _CLIENT or name == "types":
         if _sys.version_info < (3, 10):
             raise ImportError(f"oortmem.{name} needs Python 3.10 or newer (this is {_sys.version.split()[0]})")
         import importlib
 
         if name == "types":
-            return importlib.import_module(".types", __name__)
-        return getattr(importlib.import_module(f".{_CLIENT[name]}", __name__), name)
-    if name in _ERRORS or name == "errors":
+            value = importlib.import_module(".types", __name__)
+        else:
+            value = getattr(importlib.import_module(f".{_CLIENT[name]}", __name__), name)
+    elif name in _ERRORS or name == "errors":
         import importlib
 
         mod = importlib.import_module(".errors", __name__)
-        return mod if name == "errors" else getattr(mod, name)
-    raise AttributeError(f"module 'oortmem' has no attribute {name!r}")
+        value = mod if name == "errors" else getattr(mod, name)
+    else:
+        raise AttributeError(f"module 'oortmem' has no attribute {name!r}")
+    globals()[name] = value
+    return value
 
 
 def __dir__():
