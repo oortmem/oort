@@ -247,6 +247,8 @@ function fromClause(toks, k, isExport) {
       for (k++; k < toks.length && toks[k].v !== '}'; k++) {
         if (first && toks[k].t === 'id') {
           names++;
+          // `{ type A }` counts as type-only because the packages don't set verbatimModuleSyntax.
+          // If they ever do, this form keeps a side-effect import at run time.
           if (toks[k].v === 'type' && toks[k + 1]?.t === 'id' && toks[k + 1].v !== 'as') {
             typeNames++;
           }
@@ -379,7 +381,9 @@ export function checkSeams({ root = ROOT, seams = SEAMS, exceptions = EXCEPTIONS
   return problems;
 }
 
-if (import.meta.main) {
+// Not `import.meta.main`: it needs Node 22.18+, and engines allow 22.15, where the check would
+// silently pass without running.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const at = process.argv.indexOf('--root');
   const root = at === -1 ? ROOT : path.resolve(process.argv[at + 1]);
   const problems = checkSeams({ root });
