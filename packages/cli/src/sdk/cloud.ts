@@ -12,10 +12,11 @@ import { cloudRememberRequest } from '../remember.js';
 import { starInCloudMessage } from '../util.js';
 import { privacyStatement } from '../wire.js';
 import type { Ctx } from './context.js';
-import { OortRefusedError, OortUsageError } from './errors.js';
+import { OortInternalError, OortRefusedError, OortUsageError } from './errors.js';
 import type {
   EndUserCount,
   EndUserErasure,
+  EndUserExport,
   Explanation,
   ForgetResult,
   MemoryType,
@@ -350,6 +351,26 @@ export async function whoami(ctx: Ctx): Promise<Whoami> {
 export async function eraseEndUser(ctx: Ctx, user: string): Promise<EndUserErasure> {
   const r = await accountClient(ctx).eraseEndUser(user);
   return { erased: user, ...r };
+}
+
+/**
+ * Exports end user `user` (CON-137): the account's route, sent without `Oort-User`. The count is
+ * the manifest's, checked against the lines that follow it.
+ */
+export async function exportEndUser(ctx: Ctx, user: string): Promise<EndUserExport> {
+  const jsonl = await accountClient(ctx).exportEndUser(user);
+  const lines = jsonl.split('\n').filter((l) => l.trim() !== '');
+  let head: unknown;
+  try {
+    head = JSON.parse(lines[0] ?? '');
+  } catch {
+    head = undefined;
+  }
+  const h = head as { oort?: unknown; memories?: unknown } | undefined;
+  if (h?.oort !== 'export' || h.memories !== lines.length - 1) {
+    throw new OortInternalError('Oort Cloud sent an export this SDK cannot read.');
+  }
+  return { exported: user, memories: lines.length - 1, jsonl };
 }
 
 /** How many end users the account has, and its plan's limit (CON-132). */

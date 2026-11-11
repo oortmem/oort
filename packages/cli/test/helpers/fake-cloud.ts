@@ -398,6 +398,23 @@ export function fakeCloud(key: string): FakeCloud {
       if (url.pathname === '/v1/end-users/count') {
         return Response.json({ endUsers: eu.users.size, limit: eu.limit });
       }
+      // CON-137: an end user's memories as an export; an erased or unknown one's is empty.
+      const exported = /^\/v1\/end-users\/([^/]+)\/export$/.exec(url.pathname);
+      if (exported !== null && req.method === 'GET') {
+        const id = decodeURIComponent(exported[1] ?? '');
+        const bad = endUserRefusal(id);
+        if (bad !== null) return bad;
+        const store = eu.users.get(id);
+        if (store !== undefined) {
+          return store.fetch(`${url.origin}/v1/export`, {
+            headers: { authorization: `Bearer ${c.key}` },
+          });
+        }
+        return new Response(
+          `${JSON.stringify({ oort: 'export', version: 1, memories: 0, scopes: [] })}\n`,
+          { headers: { 'content-type': 'application/x-ndjson' } },
+        );
+      }
       const erase = /^\/v1\/end-users\/([^/]+)$/.exec(url.pathname);
       if (erase !== null && req.method === 'DELETE') {
         const id = decodeURIComponent(erase[1] ?? '');

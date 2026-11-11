@@ -191,6 +191,76 @@ describe('cloud end users (CON-132)', () => {
     await oort.close();
   });
 
+  it('sdk.end-users-export', async () => {
+    // CON-137: an access or portability request answered with one end user's memories.
+    const { oort, c } = await cloud((c) => (c.endUsers.serverKey = true));
+    await oort.scoped({ user: 'ada' }).remember(['Ada likes tea.', 'Ada lives in Lund.']);
+    await oort.scoped({ user: 'bob' }).remember('Bob likes coffee.');
+    const ada = await oort.endUsers.export('ada');
+    expect(ada).toMatchObject({ exported: 'ada', memories: 2 });
+    expect(ada.jsonl.endsWith('\n')).toBe(true);
+    const [head, ...lines] = ada.jsonl.trimEnd().split('\n');
+    expect(JSON.parse(head!)).toMatchObject({ oort: 'export', memories: 2 });
+    const texts = lines.map((l) => (JSON.parse(l) as { text: string }).text).sort();
+    expect(texts).toEqual([expect.stringContaining('tea'), expect.stringContaining('Lund')]);
+    expect(ada.jsonl).not.toContain('coffee');
+    // Erased, or never there: an empty export, not an error, and the same either way.
+    await oort.endUsers.erase('ada');
+    const erased = await oort.endUsers.export('ada');
+    const never = await oort.endUsers.export('carol');
+    expect(erased).toMatchObject({ exported: 'ada', memories: 0 });
+    expect(never).toMatchObject({ exported: 'carol', memories: 0 });
+    expect(erased.jsonl).toBe(never.jsonl);
+    // The account's route, never with Oort-User; the id URL-encoded.
+    await oort.endUsers.export('a1:b_c.d-e@f');
+    expect(sent(c).filter(([r]) => r.endsWith('/export'))).toEqual([
+      ['GET /v1/end-users/ada/export', null],
+      ['GET /v1/end-users/ada/export', null],
+      ['GET /v1/end-users/carol/export', null],
+      ['GET /v1/end-users/a1%3Ab_c.d-e%40f/export', null],
+    ]);
+    // The same id rules as erase: refused before anything is sent.
+    const before = c.seen.length;
+    for (const [id, reason] of [
+      ['self', 'self-not-derivable'],
+      ['', 'user-missing'],
+      ['alice\n', 'bad-user'],
+      ['Root', 'bad-user'],
+      ['a b', 'bad-user'],
+    ] as const) {
+      await expect(oort.endUsers.export(id), id).rejects.toMatchObject({ code: 'usage', reason });
+    }
+    expect(c.seen.length).toBe(before);
+    // From an end user's own handle: refused, as erase and count are.
+    await expect(oort.scoped({ user: 'bob' }).endUsers.export('bob')).rejects.toMatchObject({
+      code: 'usage',
+      reason: 'user-not-supported',
+    });
+    await oort.close();
+  });
+
+  it('sdk.end-users-export-needs-a-server-key-and-a-readable-export', async () => {
+    // A key without the capability: refused before the route is called.
+    const { oort, c } = await cloud();
+    await expect(oort.endUsers.export('ada')).rejects.toMatchObject({
+      code: 'refused',
+      reason: 'end-users-unsupported',
+    });
+    expect(c.seen).toEqual(['GET /v1/whoami']);
+    await oort.close();
+    // The API's own refusal maps like erase's.
+    const { oort: o2, c: c2 } = await cloud((c) => (c.endUsers.serverKey = true));
+    c2.fail = { 'GET /v1/end-users/:id/export': { status: 403, code: 'end_users_not_allowed' } };
+    await expect(o2.endUsers.export('ada')).rejects.toMatchObject({
+      code: 'refused',
+      reason: 'end-users-not-allowed',
+    });
+    // An answer that is not an export is never handed on as one.
+    c2.fail = { 'GET /v1/end-users/:id/export': 'garbage' };
+    await expect(o2.endUsers.export('ada')).rejects.toMatchObject({ code: 'internal' });
+    await o2.close();
+  });
+
   it('sdk.end-users-the-same-client-side-rules-as-local', async () => {
     const { oort, c } = await cloud((c) => (c.endUsers.serverKey = true));
     expect(() => oort.scoped({ user: 'self' })).toThrow(
@@ -309,6 +379,10 @@ describe('cloud end users (CON-132)', () => {
       reason: 'end-users',
     });
     await expect(oort.endUsers.erase('ada')).rejects.toMatchObject({ code: 'cloud-only' });
+    await expect(oort.endUsers.export('ada')).rejects.toMatchObject({
+      code: 'cloud-only',
+      reason: 'end-users',
+    });
     await oort.close();
   });
 });

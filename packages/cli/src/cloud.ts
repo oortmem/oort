@@ -630,6 +630,11 @@ export interface CloudClient {
   endUsersCount(): Promise<CloudEndUserCount>;
   /** Erases end user `id` completely (a server key; the same capability check). */
   eraseEndUser(id: string): Promise<CloudEndUserErasure>;
+  /**
+   * End user `id`'s memories as export JSON Lines, the manifest first (CON-137; a server key; the
+   * same capability check). An erased or unknown end user's export is the manifest alone.
+   */
+  exportEndUser(id: string): Promise<string>;
 }
 
 export interface CloudClientOptions {
@@ -825,6 +830,11 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       endUsersCount: async () => {
         await requireEndUsers();
         return accountJson('GET', '/v1/end-users/count');
+      },
+      exportEndUser: async (id) => {
+        await requireEndUsers();
+        const route = `/v1/end-users/${encodeURIComponent(id)}/export`;
+        return (await timedCall('GET', route, undefined, undefined)).res.text();
       },
       eraseEndUser: async (id) => {
         await requireEndUsers();
