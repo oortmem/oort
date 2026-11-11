@@ -298,7 +298,16 @@ function sourceFiles(dir) {
   return out.sort();
 }
 
-/** Every seam problem under `root`, as `file:line: message` strings; empty when clean. */
+/**
+ * @typedef {{ uses?: string[], lazy?: string[], network?: boolean, fetch?: boolean }} Seam
+ * @typedef {{ file: string, specifier: string, why: string }} Exception
+ */
+
+/**
+ * Every seam problem under `root`, as `file:line: message` strings; empty when clean.
+ * @param {{ root?: string, seams?: Record<string, Seam>, exceptions?: Exception[] }} [options]
+ * @returns {string[]}
+ */
 export function checkSeams({ root = ROOT, seams = SEAMS, exceptions = EXCEPTIONS } = {}) {
   const problems = [];
   const pkgsDir = path.join(root, 'packages');
