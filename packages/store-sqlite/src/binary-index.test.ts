@@ -74,6 +74,11 @@ function copy4(): Paths {
   return { dir, dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
 }
 
+/** The copies an open or a downgrade left beside the store (`oort.sqlite.pre-*`). */
+function copies(s: Paths): string[] {
+  return fs.readdirSync(s.dir).filter((f) => f.startsWith('oort.sqlite.pre-'));
+}
+
 function fresh(): Paths {
   const dir = fs.mkdtempSync(path.join(root, 'fresh-'));
   return { dir, dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
@@ -200,17 +205,14 @@ describe('schema migration 4 to 5', () => {
     expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'int8', vectors: 33 });
   });
 
-  it('migrate.v4-copies-the-store-first-and-migrates-once', async () => {
+  it('migrate.v4-takes-no-copy-and-migrates-once', async () => {
+    // Additive (triggers and an optional index) and reversible without loss (downgrade to 4):
+    // no plaintext copy of every memory that forget would never reach.
     const s = copy4();
     await (await openSqliteStore(optsFor(s))).close();
-    const backups = listBackups(s.dbPath, 'pre-v5');
-    expect(backups).toHaveLength(1);
-    expect(path.basename(backups[0]!)).toMatch(/^oort\.sqlite\.pre-v5\.\d{8}T\d{9}Z$/);
-    if (process.platform !== 'win32') expect(fs.statSync(backups[0]!).mode & 0o777).toBe(0o600);
-    expect(sqliteSchemaVersion(backups[0]!)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
     await (await openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).close();
-    // Building the index later is not a schema migration: no second copy.
-    expect(listBackups(s.dbPath, 'pre-v5')).toEqual(backups);
+    expect(copies(s)).toEqual([]);
   });
 
   it('migrate.v4-open-that-may-not-migrate-changes-nothing', async () => {
@@ -222,7 +224,18 @@ describe('schema migration 4 to 5', () => {
     expect(err).toBeInstanceOf(StoreMigrationRequiredError);
     expect((err as StoreMigrationRequiredError).from).toBe(4);
     expect(hashFile(s.dbPath)).toBe(before);
-    expect(listBackups(s.dbPath, 'pre-v5')).toEqual([]);
+    expect(copies(s)).toEqual([]);
+  });
+
+  it('migrate.an-open-that-may-not-migrate-never-builds-or-drops-the-index', async () => {
+    // The hooks open this way: an index wanted by config waits for the next oort command.
+    const s = copy4();
+    await (await openSqliteStore(optsFor(s))).close();
+    await (await openSqliteStore(optsFor(s, { migrate: false, vectorIndex: 'binary' }))).close();
+    expect(vectors(s.dbPath).bit).toBeUndefined();
+    await (await openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).close();
+    await (await openSqliteStore(optsFor(s, { migrate: false, vectorIndex: 'int8' }))).close();
+    expect(vectors(s.dbPath).bit).toHaveLength(33);
   });
 
   it('migrate.binary-index-built-from-the-int8-vectors', async () => {
@@ -274,7 +287,7 @@ describe('schema migration 4 to 5', () => {
     expect(after.bit).toBeUndefined();
     expect(after.triggers).toEqual([]);
     expect(after.int8).toEqual(before.int8);
-    expect(listBackups(s.dbPath, 'pre-v5')).toHaveLength(1);
+    expect(copies(s)).toEqual([]);
     // The next open migrates as if nothing had happened.
     expect((await readBack(s, { vectorIndex: 'binary' })).dense).toEqual(expected4.dense);
     expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
@@ -322,7 +335,12 @@ describe('schema migration 4 to 5', () => {
     expect(vectors(s.dbPath).bit).toHaveLength(33);
     downgradeSqliteStore({ path: s.dbPath, to: 4 });
     expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
-    expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
+    const downCopies = listBackups(s.dbPath, 'pre-downgrade');
+    expect(downCopies).toHaveLength(1);
+    // The copy is the version 5 store as it was, binary index included; it is the only copy.
+    expect(sqliteSchemaVersion(downCopies[0]!)).toBe(5);
+    expect(vectors(downCopies[0]!).bit).toHaveLength(33);
+    expect(copies(s)).toEqual([path.basename(downCopies[0]!)]);
     const down = vectors(s.dbPath);
     expect(down.bit).toBeUndefined();
     expect(down.triggers).toEqual([]);
@@ -537,5 +555,38 @@ describe('binary index', () => {
       )[0]?.id,
     ).toBe('r1');
     await again.close();
+  });
+
+  it('binary.an-index-built-during-a-reembed-gets-the-new-vectors', async () => {
+    // Another process (an MCP server) builds the index between two of reembed's batches: the
+    // batches after it must write the new model's vectors into it too.
+    const s = fresh();
+    const next = rng(29);
+    const store = await openSqliteStore(optsD(s, { vectorIndex: 'int8' }));
+    const ids = ['b1', 'b2', 'b3', 'b4'];
+    await store.upsertMany(
+      TG,
+      ids.map((id) => makeMemory({ id, text: id, embedding: randomVec(next) })),
+    );
+    await store.close();
+    const newer = Object.fromEntries(ids.map((id) => [id, randomVec(next)]));
+    let built = false;
+    await reembedSqliteStore({
+      path: s.dbPath,
+      coldDir: s.coldDir,
+      dimension: D,
+      model: 'test/model',
+      batchSize: 2,
+      embed: async (texts) => {
+        if (texts[0] === 'b3' && !built) {
+          built = true;
+          await (await openSqliteStore(optsD(s, { vectorIndex: 'binary' }))).close();
+        }
+        return texts.map((t) => newer[t]!);
+      },
+      log: () => {},
+    });
+    expect(built).toBe(true);
+    expect(indexed(s)).toEqual(Object.fromEntries(ids.map((id) => [id, entry(newer[id]!)])));
   });
 });

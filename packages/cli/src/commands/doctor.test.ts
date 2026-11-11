@@ -199,14 +199,29 @@ describe('oort doctor', () => {
     await s.upsert(TG, memory({ embedding: undefined }));
     await s.close();
     downgradeSqliteStore({ path: db, to: 4 });
+    // As after the version 4 upgrade: a hook never migrates (nor builds an index); it skips the
+    // turn with one line until an oort command has migrated the store.
+    fs.writeFileSync(
+      path.join(h.home, 'config.json'),
+      JSON.stringify({ store: { vectorIndex: 'binary' } }),
+    );
+    const hook = await h.run(['hook', 'UserPromptSubmit'], {
+      stdin: JSON.stringify({ session_id: 's', cwd: h.cwd, prompt: 'which port?' }),
+    });
+    expect(hook.code).toBe(0);
+    expect(hook.io.hookStdout).toBe('');
+    expect(hook.io.stderr).toBe(MIGRATION_PENDING_NOTE);
+    expect(sqliteSchemaVersion(db)).toBe(4);
+    fs.rmSync(path.join(h.home, 'config.json'));
     const d = await doctor(h);
     expect(d.human.io.stdout).toContain(
       `migrated the store from schema version 4 to ${SCHEMA_VERSION}`,
     );
     // An Oort started before the upgrade can no longer write: it must be restarted.
     expect(d.human.io.stdout).toContain('restart any Oort MCP server started before the upgrade');
-    expect(listBackups(db, 'pre-v5')).toHaveLength(1);
-    expect(d.check('store', 'backup')?.detail).toContain('oort.sqlite.pre-v5.');
+    // Version 5 only adds: no copy is taken, so doctor names none.
+    expect(fs.readdirSync(h.home).filter((f) => f.startsWith('oort.sqlite.pre-v'))).toEqual([]);
+    expect(d.check('store', 'backup')).toBeUndefined();
     expect(d.check('store', 'vector-index')).toMatchObject({
       status: 'info',
       detail: 'int8, exact (0 searchable vectors; store.vectorIndex is auto: binary from 100000)',

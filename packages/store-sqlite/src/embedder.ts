@@ -152,15 +152,24 @@ export async function reembedSqliteStore(opts: ReembedOptions): Promise<ReembedR
        VALUES (?, vec_int8(?), ${others.map(() => '?').join(', ')})`,
     );
     // The binary index (schema version 5) follows each searchable vector: same code as `upsert`.
-    const binary = hasBinaryIndex(db)
-      ? {
-          remove: db.prepare<[string]>(`DELETE FROM ${BIT_TABLE} WHERE id = ?`),
-          insert: db.prepare<[string, Buffer, unknown, unknown, unknown, Buffer]>(
-            `INSERT INTO ${BIT_TABLE} (id, embedding, node_key, project_key, author_key, rescore)
-             VALUES (?, vec_bit(?), ?, ?, ?, ?)`,
-          ),
+    // Looked up in each batch's transaction: another process (an MCP server, an `oort` command)
+    // may build or drop it while this runs, and a batch must write into the index as it is then.
+    let binary:
+      | {
+          remove: Database.Statement<[string]>;
+          insert: Database.Statement<[string, Buffer, unknown, unknown, unknown, Buffer]>;
         }
-      : undefined;
+      | undefined;
+    const binaryNow = (): typeof binary => {
+      if (!hasBinaryIndex(db)) return undefined;
+      return {
+        remove: db.prepare<[string]>(`DELETE FROM ${BIT_TABLE} WHERE id = ?`),
+        insert: db.prepare<[string, Buffer, unknown, unknown, unknown, Buffer]>(
+          `INSERT INTO ${BIT_TABLE} (id, embedding, node_key, project_key, author_key, rescore)
+           VALUES (?, vec_bit(?), ?, ?, ?, ?)`,
+        ),
+      };
+    };
     const setVector = (bytes: Buffer, id: string): void => {
       const row = readRow.get(id);
       if (row === undefined) return;
@@ -184,6 +193,7 @@ export async function reembedSqliteStore(opts: ReembedOptions): Promise<ReembedR
       const vs = await opts.embed(chunk.map((r) => r.text));
       check(vs, chunk.length);
       db.transaction(() => {
+        binary = binaryNow();
         chunk.forEach((r, j) => setVector(toBytes(vs[j]!), r.id));
       }).immediate();
       done += chunk.length;

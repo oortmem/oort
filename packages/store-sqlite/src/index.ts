@@ -121,7 +121,8 @@ export interface SqliteStoreOptions {
    * latency-bound callers (hooks), which must not hold the store for a
    * migration. Default true: an older store is copied to
    * `<path>.pre-v<version>.<UTC time>` (see `listBackups`) and then migrated in
-   * one transaction; if the copy fails, the open fails and nothing changes.
+   * one transaction; if the copy fails, the open fails and nothing changes. A
+   * version 4 store is migrated without a copy (version 5 only adds).
    */
   migrate?: boolean;
   /**
@@ -562,11 +563,11 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         // copy fails the open and the store stays as it was.
         if (opts.migrate === false) throw new StoreMigrationRequiredError(dbPath, from);
         if (from === 1) assertMigratable(conn);
-        backupDatabase(
-          conn,
-          dbPath,
-          `pre-v${from + 1}` as 'pre-v2' | 'pre-v3' | 'pre-v4' | 'pre-v5',
-        );
+        // Version 4 to 5 is additive (triggers, and an index built from the int8 vectors) and
+        // goes back down without loss: no copy of every memory, which `forget` would never reach.
+        if (from !== 4) {
+          backupDatabase(conn, dbPath, `pre-v${from + 1}` as 'pre-v2' | 'pre-v3' | 'pre-v4');
+        }
       }
       // Every migration from version 3 or older, a stale lexical index and a binary index to
       // build rebuild something (applySchema says so): wait as long as another process holds the
