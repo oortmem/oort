@@ -14,6 +14,7 @@ import {
 } from '@oortmem/core';
 import { makeMemory, seedCold, TG, vec } from '@oortmem/core/store-conformance';
 import { runRecall, type RecallTarget } from './engine/recall.js';
+import { wire } from './wire.js';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-cli-stop-'));
 const base = resolveConfig(dir, { OORT_HOME: path.join(dir, 'home') }, { projectConfig: false });
@@ -79,6 +80,35 @@ describe('recall wiring: adaptive stop', () => {
       );
       expect(decide.asked, speed).toEqual([]);
       expect(r.adaptiveStop, speed).toEqual({ stopped: true, by: 'rule', cold: 1 });
+    }
+  });
+});
+
+describe('a repository cannot change the adaptive stop or the store (CON-17)', () => {
+  it('stop.project-config-is-ignored-with-a-warning', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-cli-stop-cfg-'));
+    const home = path.join(root, 'home');
+    const cwd = path.join(root, 'repo');
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(cwd);
+    fs.writeFileSync(
+      path.join(cwd, 'oort.config.json'),
+      JSON.stringify({
+        recall: { adaptiveStop: 'decide', sufficientAt: 0, budgetChars: 100 },
+        store: { vectorIndex: 'binary' },
+      }),
+    );
+    const env = { HOME: root, OORT_HOME: home, OORT_NO_KEYCHAIN: '1' };
+    const w = await wire(cwd, { env, keychain: async () => undefined });
+    try {
+      expect(w.config.recall).toMatchObject({ adaptiveStop: 'rule', sufficientAt: 0.7 });
+      expect(w.config.recall.budgetChars).toBe(100);
+      expect(w.config.store.vectorIndex).toBe('auto');
+      const codes = w.warnings.map((x) => x.code);
+      expect(codes).toContain('recall-stop-ignored');
+      expect(codes).toContain('store-ignored');
+    } finally {
+      await w.close();
     }
   });
 });

@@ -180,7 +180,7 @@ const updates = z
  * The local SQLite store (CON-17, 0.9.0 or newer). Read from the home config only: a home has one
  * store, so a repository cannot change how it is indexed.
  * - `vectorIndex`: `auto` (default) scans int8 vectors exactly until the store holds
- *   `binaryAutoThreshold` searchable vectors, then builds the binary index (1-bit codes, 4x
+ *   `binaryAutoThreshold` searchable vectors, then builds the binary index (1-bit codes, 10x
  *   oversampling, int8 rescoring) on the next `oort` command and keeps it; `binary` builds it
  *   now; `int8` never uses one (and drops one already built).
  */
@@ -214,7 +214,8 @@ export type ResolvedConfig = OortConfig & {
   /**
    * Keys a project's `oort.config.json` set that only the home config may set (`serve`: a
    * repository must not start processes on this machine; `judge`: nor name experts; `updates`:
-   * the update check is your preference; `store`: one store per home). Ignored;
+   * the update check is your preference; `store`: one store per home; `recall.adaptiveStop` and
+   * `recall.sufficientAt`: a model call on your recalled text). Ignored;
    * absent when there are none.
    */
   ignoredProjectKeys?: string[];
@@ -222,6 +223,16 @@ export type ResolvedConfig = OortConfig & {
 
 /** Keys read from the home config only; a project file's value is ignored (and reported). */
 const HOME_ONLY_KEYS: ReadonlySet<string> = new Set(['serve', 'judge', 'updates', 'store']);
+
+/**
+ * Keys inside a section that only the home config may set, though the rest of the section may
+ * come from a project (CON-17): `recall.adaptiveStop` can turn on a model call that sends recalled
+ * text to the decision vendor, and with `sufficientAt` hide cold matches. A project file's value
+ * is ignored (and reported as `recall.adaptiveStop`); the home config's, or the default, stands.
+ */
+const HOME_ONLY_SUBKEYS: Readonly<Record<string, readonly string[]>> = {
+  recall: ['adaptiveStop', 'sufficientAt'],
+};
 
 const CONFIG_KEYS = Object.keys(OortConfig.shape);
 
@@ -312,6 +323,22 @@ export function resolveConfig(
     if (key in projectRaw && !HOME_ONLY_KEYS.has(key)) {
       merged[key] = projectRaw[key];
       sources[key] = 'project';
+      const sub = HOME_ONLY_SUBKEYS[key];
+      const section = projectRaw[key];
+      if (sub !== undefined && typeof section === 'object' && section !== null) {
+        const own = { ...(section as Record<string, unknown>) };
+        const fromHome = homeRaw[key];
+        for (const k of sub) {
+          if (k in own) {
+            ignored.push(`${key}.${k}`);
+            delete own[k];
+          }
+          if (typeof fromHome === 'object' && fromHome !== null && k in fromHome) {
+            own[k] = (fromHome as Record<string, unknown>)[k];
+          }
+        }
+        merged[key] = own;
+      }
     } else if (key in homeRaw) {
       merged[key] = homeRaw[key];
       sources[key] = 'home';

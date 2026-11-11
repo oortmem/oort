@@ -182,6 +182,32 @@ describe('config', () => {
     expect(() => resolveConfig(home, { OORT_HOME: home })).toThrow(/vectorIndex/);
   });
 
+  it('config.adaptive-stop-is-read-from-the-home-config-only (CON-17)', () => {
+    const home = tmp();
+    const cwd = tmp();
+    // A repository must not turn on a model call that sends recalled text, nor hide cold matches.
+    fs.writeFileSync(
+      path.join(cwd, 'oort.config.json'),
+      '{"recall":{"adaptiveStop":"decide","sufficientAt":0,"budgetChars":100}}',
+    );
+    const fromRepo = resolveConfig(cwd, { OORT_HOME: home });
+    expect(fromRepo.recall.adaptiveStop).toBe('rule');
+    expect(fromRepo.recall.sufficientAt).toBe(0.7);
+    expect(fromRepo.recall.budgetChars).toBe(100); // the rest of recall still applies
+    expect(fromRepo.ignoredProjectKeys).toEqual(['recall.adaptiveStop', 'recall.sufficientAt']);
+    // The home config's choice stands, also when the repository sets other recall keys.
+    fs.writeFileSync(
+      path.join(home, 'config.json'),
+      '{"recall":{"adaptiveStop":"off","sufficientAt":0.9}}',
+    );
+    const both = resolveConfig(cwd, { OORT_HOME: home });
+    expect(both.recall).toMatchObject({ adaptiveStop: 'off', sufficientAt: 0.9, budgetChars: 100 });
+    fs.writeFileSync(path.join(cwd, 'oort.config.json'), '{"recall":{"budgetChars":100}}');
+    const plain = resolveConfig(cwd, { OORT_HOME: home });
+    expect(plain.recall).toMatchObject({ adaptiveStop: 'off', sufficientAt: 0.9 });
+    expect(plain.ignoredProjectKeys).toBeUndefined();
+  });
+
   it('config.updates-check-defaults-on-and-is-read-from-the-home-config-only (CON-114)', () => {
     const home = tmp();
     const cwd = tmp();
