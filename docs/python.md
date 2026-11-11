@@ -213,9 +213,10 @@ oort.close()
 
 ### End users in Oort Cloud
 
-> **Requires a server key on Oort Pro** and `oortmem` 0.8.0 or newer. An account without
-> per-user memory refuses every end-user call below with `end-users-unsupported`, and nothing
-> is sent.
+> **Requires a server key on Oort Pro** and `oortmem` 0.8.0 or newer. Without per-user memory,
+> an end user's handle is refused with `end-users-unsupported` before anything is sent, and the
+> account's end-user calls with `end-users-not-allowed` (a key that is not a server key) or
+> `end-users-unsupported` (an Oort Cloud without per-user memory).
 
 With a **server key** (an Oort key made on [oortcloud.dev/account](https://oortcloud.dev/account)
 with "Acts for end users"), the same `scoped(user=...)` works in cloud mode: each end user gets a
@@ -264,7 +265,9 @@ The behaviour is the TypeScript SDK's ([docs/sdk.md](sdk.md#per-user-memory-in-o
   `turn_refs`, `cursors`); `end_users.count()` returns `EndUserCount` (`end_users`, `limit`).
   `AsyncOort` has both as `async def`. Refusals: `end-user-limit` (the plan's end users are all
   taken), `end-user-erased` (a write lost the race with an erasure; not retried),
-  `end-users-not-allowed` (not a server key), all `refused` and none retryable.
+  `end-users-not-allowed` (not a server key), all `refused` and none retryable. `end_users`
+  asks no `whoami` first: Oort Cloud keeps erasure open while Pro has lapsed or the account is
+  blocked, when `whoami` itself is refused.
 
 ## asyncio
 

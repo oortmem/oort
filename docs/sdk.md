@@ -326,9 +326,10 @@ needs it.
 
 ### Per-user memory in Oort Cloud
 
-> **Requires a server key on Oort Pro** and `oortmem` 0.8.0 or newer. An account without
-> per-user memory refuses every end-user call below with `end-users-unsupported`, and nothing
-> is sent.
+> **Requires a server key on Oort Pro** and `oortmem` 0.8.0 or newer. Without per-user memory,
+> an end user's handle is refused with `end-users-unsupported` before anything is sent, and the
+> account's end-user calls with `end-users-not-allowed` (a key that is not a server key) or
+> `end-users-unsupported` (an Oort Cloud without per-user memory).
 
 The same `scoped({ user })` works against Oort Cloud with a **server key**: an Oort key made on
 [oortcloud.dev/account](https://oortcloud.dev/account) with "Acts for end users". Each end user
@@ -392,7 +393,10 @@ await oort.close();
   many end users the account has and its plan's `limit` (Pro includes 100; a new one past it is
   `end-user-limit`, and the ones there keep working). Both are cloud only (`cloud-only`,
   `end-users` in local mode, where an end user lives under your `org` in your own store) and
-  refused on a handle scoped to an end user (`user-not-supported`).
+  refused on a handle scoped to an end user (`user-not-supported`). They ask no `whoami` first:
+  Oort Cloud keeps erasure open while Pro has lapsed or the account is blocked (and the count
+  while Pro has lapsed), when `whoami` itself is refused, so a deletion request can always be
+  honoured.
 
 ## Errors
 
