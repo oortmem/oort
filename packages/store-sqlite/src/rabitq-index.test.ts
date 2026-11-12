@@ -235,6 +235,43 @@ describe('rabitq index', () => {
     await rq.close();
   });
 
+  for (const engine of ['native', 'typescript'] as const) {
+    it.runIf(engine === 'typescript' || HAS_NATIVE)(
+      `rabitq.zero-vectors-never-take-over-dense-results (${engine})`,
+      async () => {
+        // A zero vector has no direction: its cosine is undefined (NULL in SQL), never 1.
+        for (const zeros of [1, 10]) {
+          const s = fresh();
+          const next = rng(29 + zeros);
+          const ms = Array.from({ length: 500 }, (_, i) =>
+            makeMemory({ id: `m${i}`, embedding: randomVec(next) }),
+          );
+          const zs = Array.from({ length: zeros }, (_, i) =>
+            makeMemory({ id: `zero${i}`, embedding: new Int8Array(D) }),
+          );
+          // Some written before the build, some after it.
+          const before = await openSqliteStore(optsD(s));
+          await before.upsertMany(TG, [...ms, ...zs.slice(0, Math.ceil(zeros / 2))]);
+          await before.close();
+          const store = await openSqliteStore(
+            optsD(s, { vectorIndex: 'rabitq', rabitqEngine: engine }),
+          );
+          await store.upsertMany(TG, zs.slice(Math.ceil(zeros / 2)));
+          const hits = await store.dense(TG, ms[7]!.embedding!, 10);
+          expect(hits[0]?.id).toBe('m7');
+          expect(hits).toHaveLength(10);
+          expect(hits.filter((h) => h.id.startsWith('zero'))).toEqual([]);
+          // Not indexed at all: no code, so no bound to win with.
+          expect(Object.keys(indexed(s)).filter((id) => id.startsWith('zero'))).toEqual([]);
+          // A zero query has no neighbours.
+          expect(await store.dense(TG, new Int8Array(D), 10)).toEqual([]);
+          await store.close();
+        }
+      },
+      60_000,
+    );
+  }
+
   it.runIf(HAS_NATIVE)('rabitq.the-typescript-engine-returns-the-native-hits', async () => {
     const s = fresh();
     const next = rng(17);

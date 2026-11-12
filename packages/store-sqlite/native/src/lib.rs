@@ -64,6 +64,19 @@ pub struct Filter<'a> {
     pub allow: Option<&'a [u32]>,
 }
 
+/// Makes room for `extra` more values. When that needs a new allocation, the values are copied
+/// into it and the old allocation is zeroed before it is freed, so no code or factor is left
+/// behind in freed memory (`Vec`'s own growth would leave the old copy as it was).
+fn grow_zeroing<T: Copy + Default>(v: &mut Vec<T>, extra: usize) {
+    if v.len() + extra <= v.capacity() {
+        return;
+    }
+    let mut bigger = Vec::with_capacity((v.len() + extra).max(v.capacity() * 2).max(64));
+    bigger.extend_from_slice(v);
+    v.fill(T::default());
+    *v = bigger;
+}
+
 /// The in-memory index: one slot per vector, removed by swapping the last slot in.
 pub struct Index {
     width: usize,
@@ -139,6 +152,12 @@ impl Index {
             ));
         }
         for i in 0..n {
+            // A zero vector has no direction and so no estimate (its error factor is infinite):
+            // it is never held, and a vector rewritten as zero leaves the index.
+            if !factors[i * 3..i * 3 + 3].iter().all(|f| f.is_finite()) {
+                self.remove(&rids[i..i + 1]);
+                continue;
+            }
             let slot = match self.slot_of.get(&rids[i]) {
                 Some(&s) => s as usize,
                 None => {
@@ -148,6 +167,8 @@ impl Index {
                     self.nodes.push(0);
                     self.projects.push(0);
                     self.authors.push(0);
+                    grow_zeroing(&mut self.codes, self.words);
+                    grow_zeroing(&mut self.factors, 3);
                     self.codes.resize(self.codes.len() + self.words, 0);
                     self.factors.resize(self.factors.len() + 3, 0.0);
                     s
@@ -349,22 +370,22 @@ mod node {
 
     #[napi]
     impl RabitqIndex {
-        #[napi(constructor)]
+        #[napi(constructor, catch_unwind)]
         pub fn new(width: u32) -> Result<Self> {
             Ok(RabitqIndex { inner: Index::new(width as usize).map_err(err)? })
         }
 
-        #[napi(getter)]
+        #[napi(getter, catch_unwind)]
         pub fn size(&self) -> u32 {
             self.inner.len() as u32
         }
 
-        #[napi]
+        #[napi(catch_unwind)]
         pub fn heap_bytes(&self) -> f64 {
             self.inner.heap_bytes() as f64
         }
 
-        #[napi]
+        #[napi(catch_unwind)]
         pub fn upsert(
             &mut self,
             rids: Uint32Array,
@@ -377,17 +398,17 @@ mod node {
             self.inner.upsert(&rids, &nodes, &projects, &authors, &codes, &factors).map_err(err)
         }
 
-        #[napi]
+        #[napi(catch_unwind)]
         pub fn remove(&mut self, rids: Uint32Array) {
             self.inner.remove(&rids);
         }
 
-        #[napi]
+        #[napi(catch_unwind)]
         pub fn clear(&mut self) {
             self.inner.clear();
         }
 
-        #[napi]
+        #[napi(catch_unwind)]
         #[allow(clippy::too_many_arguments)]
         pub fn search(
             &self,
@@ -416,6 +437,25 @@ mod node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_zero_vector_is_never_held() {
+        let mut ix = Index::new(64).unwrap();
+        let code = [0xffu8; 8];
+        ix.upsert(&[1, 2], &[0, 0], &[0, 0], &[0, 0], &[code, code].concat(), &[1.0, 1.0, 0.1, 0.0, 0.0, f32::INFINITY]).unwrap();
+        assert_eq!(ix.len(), 1);
+        ix.upsert(&[1], &[0], &[0], &[0], &code, &[0.0, 0.0, f32::INFINITY]).unwrap();
+        assert_eq!(ix.len(), 0);
+    }
+
+    #[test]
+    fn growth_zeroes_the_old_allocation() {
+        let mut v: Vec<u64> = Vec::with_capacity(2);
+        v.extend_from_slice(&[7, 9]);
+        grow_zeroing(&mut v, 1);
+        assert!(v.capacity() >= 3);
+        assert_eq!(v, vec![7, 9]);
+    }
 
     fn lcg(seed: &mut u64) -> f64 {
         *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);

@@ -102,9 +102,9 @@ export function rotatedCentroid(
  *   `<rc, q> b + a <code, q>` in expectation (the code read as +-1 / sqrt(W));
  * - `e = (|r| / |v|) sqrt((1 - f^2) / f^2) / sqrt(W - 1)`, the estimate's standard error;
  *
- * with `f = sum |r_i| / (sqrt(W) |r|)`, RaBitQ's `<o_bar, o>`. A zero vector gets an infinite
- * error (it is always rescored, so its exact score decides); a vector equal to the centroid gets
- * `a = 0` and no error (its estimate is exact).
+ * with `f = sum |r_i| / (sqrt(W) |r|)`, RaBitQ's `<o_bar, o>`. A zero vector has no direction:
+ * it gets an infinite error, and no engine holds it (nor does the store index it); a vector equal
+ * to the centroid gets `a = 0` and no error (its estimate is exact).
  */
 export function rabitqEncode(v: Int8Array, rc: Float64Array): RabitqCode {
   const w = bitWidth(v.length);
@@ -199,6 +199,7 @@ export class TsRabitqIndex implements RabitqEngine {
     const grown = <T extends Uint32Array | Float32Array>(a: T, per: number): T => {
       const b = new (a.constructor as new (n: number) => T)(cap * per);
       b.set(a);
+      a.fill(0); // the old array held codes: zero it before it is dropped
       return b;
     };
     this.codes = grown(this.codes, this.words);
@@ -229,6 +230,16 @@ export class TsRabitqIndex implements RabitqEngine {
     }
     for (let i = 0; i < n; i++) {
       const rid = rids[i] as number;
+      // A zero vector has no direction and so no estimate (its error factor is infinite): it is
+      // never held, and a vector rewritten as zero leaves the index.
+      if (
+        !Number.isFinite(factors[i * 3] as number) ||
+        !Number.isFinite(factors[i * 3 + 1] as number) ||
+        !Number.isFinite(factors[i * 3 + 2] as number)
+      ) {
+        this.remove(rids.subarray(i, i + 1));
+        continue;
+      }
       let slot = this.slotOf.get(rid);
       if (slot === undefined) {
         slot = this.n++;

@@ -25,4 +25,4 @@ napi-build = "=2.6.0"
 lto = true
 codegen-units = 1
 strip = "symbols"
-panic = "abort"
+panic = "unwind" # a panic becomes a JS error (catch_unwind on every method), not the end of the process

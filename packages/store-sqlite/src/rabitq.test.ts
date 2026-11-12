@@ -121,37 +121,49 @@ describe('rabitq encoding', () => {
     SLOW,
   );
 
-  it('rabitq.zero-vectors-are-always-candidates-and-the-centroid-is-exact', () => {
+  it('rabitq.engines-never-hold-a-zero-vector-and-the-centroid-is-exact', () => {
     const dim = 64;
     const rc = rotatedCentroid(
       Float64Array.from({ length: dim }, (_, i) => (i % 7) - 3),
       dim,
     );
     const zero = rabitqEncode(new Int8Array(dim), rc);
+    // No direction, so no estimate: the factors say so, and no engine keeps such a vector.
     expect(zero.factors[2]).toBe(Infinity);
     const centre = Int8Array.from({ length: dim }, (_, i) => (i % 7) - 3);
     const atCentre = rabitqEncode(centre, rc);
     expect(atCentre.factors[0]).toBe(0);
     expect(atCentre.factors[2]).toBe(0);
-    const ix = new TsRabitqIndex(bitWidth(dim));
-    const z = new Uint32Array([1, 2]);
-    ix.upsert(
-      z,
-      new Uint32Array(2),
-      new Uint32Array(2),
-      new Uint32Array(2),
-      Buffer.concat([zero.code, atCentre.code]),
-      Float32Array.from([...zero.factors, ...atCentre.factors]),
+    const other = rabitqEncode(
+      Int8Array.from({ length: dim }, (_, i) => (i % 3) - 1),
+      rc,
     );
-    const q = Int8Array.from({ length: dim }, (_, i) => (i % 5) - 2);
-    const { query, cq } = rabitqQuery(q, rc);
-    const got = ix.search(query, cq, 1, RABITQ_EPSILON, 0);
-    // The zero vector's bound is infinite: it is first, whatever its exact score.
-    expect([...got.rids]).toContain(1);
-    // The centroid's estimate is its exact cosine (no error): bounds collapse onto it.
-    const exact = ix.search(query, cq, 2, 0, 0);
-    const i = [...exact.rids].indexOf(2);
-    expect(exact.upper[i]).toBeCloseTo(cosine(centre, q), 5);
+    const engines: RabitqEngine[] = [new TsRabitqIndex(bitWidth(dim))];
+    if (HAS_NATIVE) engines.push(createRabitqEngine(bitWidth(dim), 'native').engine);
+    for (const ix of engines) {
+      const load = (rid: number, e: { code: Buffer; factors: Float32Array }) =>
+        ix.upsert(
+          new Uint32Array([rid]),
+          new Uint32Array(1),
+          new Uint32Array(1),
+          new Uint32Array(1),
+          e.code,
+          e.factors,
+        );
+      load(1, zero);
+      load(2, atCentre);
+      load(3, other);
+      expect(ix.size).toBe(2);
+      // A vector rewritten as zero leaves the engine.
+      load(3, zero);
+      expect(ix.size).toBe(1);
+      const q = Int8Array.from({ length: dim }, (_, i) => (i % 5) - 2);
+      const { query, cq } = rabitqQuery(q, rc);
+      expect([...ix.search(query, cq, 5, RABITQ_EPSILON, 0).rids]).toEqual([2]);
+      // The centroid's estimate is its exact cosine (no error): bounds collapse onto it.
+      const exact = ix.search(query, cq, 2, 0, 0);
+      expect(exact.upper[0]).toBeCloseTo(cosine(centre, q), 5);
+    }
   });
 });
 

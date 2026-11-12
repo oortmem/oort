@@ -100,6 +100,16 @@ function createTables(db: Database): void {
 }
 
 const toInt8 = (b: Buffer): Int8Array => new Int8Array(b.buffer, b.byteOffset, b.byteLength);
+
+/**
+ * Whether an int8 vector is all zeros. A zero vector has no direction, so no cosine with
+ * anything (SQL's `vec_distance_cosine` gives NULL): the index never holds one, and a zero query
+ * has no neighbours.
+ */
+export function isZeroVector(v: ArrayLike<number>): boolean {
+  for (let i = 0; i < v.length; i++) if (v[i] !== 0) return false;
+  return true;
+}
 const factorBytes = (f: Float32Array): Buffer => Buffer.from(f.buffer, f.byteOffset, f.byteLength);
 
 /** The rows a build reads: every hot and warm memory's int8 vector and keys, by rid. */
@@ -132,10 +142,11 @@ export function buildRabitqIndex(
     const rows = page.all(after);
     if (rows.length === 0) break;
     for (const r of rows) {
+      after = r.rid;
       const v = toInt8(r.embedding);
+      if (isZeroVector(v)) continue;
       for (let i = 0; i < dimension; i++) sum[i] = (sum[i] as number) + (v[i] as number);
       n++;
-      after = r.rid;
     }
   }
   createTables(db);
@@ -163,11 +174,12 @@ export function buildRabitqIndex(
     const rows = page.all(after);
     if (rows.length === 0) break;
     for (const r of rows) {
+      after = r.rid;
+      if (isZeroVector(toInt8(r.embedding))) continue;
       const { code, factors } = rabitqEncode(toInt8(r.embedding), rc);
       put.run(r.rid, r.node_key, r.project_key, r.author_key, code, factorBytes(factors));
       putVec.run(r.rid, r.embedding);
       done++;
-      after = r.rid;
     }
   }
   return done;
@@ -296,7 +308,7 @@ export function rabitqWriter(db: Database, dimension: number) {
     ): void {
       const s = statements();
       if (s === undefined) return;
-      if (embedding === undefined || !searchable) {
+      if (embedding === undefined || !searchable || isZeroVector(toInt8(embedding))) {
         remove(s, rid);
         return;
       }
@@ -546,6 +558,10 @@ export class RabitqReader {
   ): RescoredRow[] {
     const engine = this.engine;
     if (engine === undefined || k <= 0) return [];
+    if (isZeroVector(v)) {
+      stats?.({ candidates: 0, reads: 0, capped: false });
+      return [];
+    }
     const [nodes, projectKeys, authors] = this.keys as [
       Map<string, number>,
       Map<string, number>,
@@ -584,7 +600,12 @@ export class RabitqReader {
         i++;
       }
       reads += batch.length;
-      top = [...top, ...rescore(batch)].sort(order).slice(0, k);
+      // A row whose stored vector has no direction scores NULL: it is no neighbour (and must not
+      // read as distance 0, a perfect match).
+      const scored = rescore(batch).filter(
+        (r) => typeof r.distance === 'number' && Number.isFinite(r.distance),
+      );
+      top = [...top, ...scored].sort(order).slice(0, k);
     }
     stats?.({
       candidates: c.rids.length,
