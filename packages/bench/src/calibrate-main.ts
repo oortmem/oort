@@ -73,7 +73,11 @@ async function main(): Promise<number> {
     };
     const rowsFile =
       values.eval ?? fileURLToPath(new URL('../eval/fixture.jsonl', import.meta.url));
-    const { rows } = loadEvalRows(fs.readFileSync(rowsFile, 'utf8'));
+    // Multi-hop rows (CON-146) answer with memories the question's words never reach, and their
+    // memories are not in the generated store: the gate is calibrated on the other rows.
+    const rows = loadEvalRows(fs.readFileSync(rowsFile, 'utf8')).rows.filter(
+      (r) => r.category !== 'multi-hop',
+    );
     const rerank = voyageReranker({ apiKey, model: config.rerank.model });
     const embed = real
       ? voyageEmbedder({ apiKey, model: config.embed.model, dimension: config.embed.dimension })

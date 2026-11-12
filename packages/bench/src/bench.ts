@@ -166,7 +166,7 @@ export function estimateReal(plan: Plan, rerankK: number): RealEstimate {
 }
 
 /** `recall` records accesses; latency runs stub that write so the store does not drift under them. */
-function frozen(store: MemoryStore): MemoryStore {
+export function frozen(store: MemoryStore): MemoryStore {
   return { ...store, recordAccess: async () => {} };
 }
 

@@ -1784,7 +1784,8 @@ on the bench eval on 2026-11-06 (CON-96):
   almost every candidate passed it.
 
 Recall on the bench eval: `pnpm eval --demo`'s 1,500 synthetic memories and 23-row fixture, with
-the relevance gate on.
+the relevance gate on. (Measured before the fixture gained 6 multi-hop rows for the links eval,
+CON-146; the other 23 rows are unchanged.)
 
 | Setup | recall@3 | recall@5 | recall@10 | MRR@10 | Abstention rows answered |
 | --- | --- | --- | --- | --- | --- |

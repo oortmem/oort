@@ -24,9 +24,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const recorded = JSON.parse(
   fs.readFileSync(path.join(here, '../eval/minilm-logits.json'), 'utf8'),
 ) as { model: string; sha256: string; logits: LogitTable };
+// The replay was recorded before the multi-hop rows existed (CON-146); it covers the others.
 const rows: EvalRow[] = loadEvalRows(
   fs.readFileSync(path.join(here, '../eval/fixture.jsonl'), 'utf8'),
-).rows;
+).rows.filter((r) => r.category !== 'multi-hop');
 
 /**
  * The fitted calibration's result on this replay, recorded on 2026-11-06 (docs/cli.md, "Reranker

@@ -1,0 +1,15 @@
+{"question":"hey, what about redaction keeps second","expectedMemoryIds":["m7-1316"],"category":"single-fact"}
+{"question":"quick q: tsup infra terraform","expectedMemoryIds":["m7-1428"],"category":"single-fact"}
+{"question":"remind me: pnpm notify-relay dependencies","expectedMemoryIds":["m7-234"],"category":"single-fact"}
+{"question":"and the prisma core packages","expectedMemoryIds":["m7-850"],"category":"single-fact"}
+{"question":"remind me what db the frankfurt staging project uses","expectedMemoryIds":["mh-1-target"],"category":"multi-hop"}
+{"question":"where does the kotlin rewrite app send its errors","expectedMemoryIds":["mh-2-target"],"category":"multi-hop"}
+{"question":"who owns that nightly analytics export again","expectedMemoryIds":["mh-3-target"],"category":"multi-hop"}
+{"question":"what else did we change with the queue depth alert","expectedMemoryIds":["mh-4-target"],"category":"multi-hop"}
+{"question":"what happened after we bumped the postgres driver","expectedMemoryIds":["mh-5-target"],"category":"multi-hop"}
+{"question":"why was that checkout test flaky with priya","expectedMemoryIds":["mh-6-target"],"category":"multi-hop"}
+{"question":"thanks, that works","expectedMemoryIds":[],"category":"abstention"}
+{"question":"ok run the tests again","expectedMemoryIds":[],"category":"abstention"}
+{"question":"lgtm, push it","expectedMemoryIds":[],"category":"abstention"}
+{"question":"can you make the deploy script quieter","expectedMemoryIds":[],"category":"abstention"}
+{"question":"what does this error mean","expectedMemoryIds":[],"category":"abstention"}

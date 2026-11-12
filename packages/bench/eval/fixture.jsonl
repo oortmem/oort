@@ -21,3 +21,9 @@
 {"question":"who approved the quarterly budget for the search gateway","expectedMemoryIds":[],"category":"abstention"}
 {"question":"the incident escalation policy for the notify relay","expectedMemoryIds":[],"category":"abstention"}
 {"question":"media proxy vendor contract renewal for the legal team","expectedMemoryIds":[],"category":"abstention"}
+{"question":"which database does the project that moved staging to Frankfurt use","expectedMemoryIds":["mh-1-target"],"category":"multi-hop"}
+{"question":"which error tracker does the app that was rewritten in Kotlin send to","expectedMemoryIds":["mh-2-target"],"category":"multi-hop"}
+{"question":"who owns the nightly analytics export","expectedMemoryIds":["mh-3-target"],"category":"multi-hop"}
+{"question":"what else changed alongside the queue depth alert","expectedMemoryIds":["mh-4-target"],"category":"multi-hop"}
+{"question":"what followed the postgres driver upgrade","expectedMemoryIds":["mh-5-target"],"category":"multi-hop"}
+{"question":"why was the checkout test flaky when pairing with priya","expectedMemoryIds":["mh-6-target"],"category":"multi-hop"}
