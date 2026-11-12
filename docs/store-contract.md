@@ -311,8 +311,13 @@ index, and moves the writer guard on.
   three float32 factors, and the change number of its last write), `memories_rq_vec` (the int8
   vector again, read to rescore), `memories_rq_gone` (the row ids removed, with their change
   numbers, for the last 100,000 changes) and `memories_rq_meta` (the change counter, the build's
-  generation and centroid). A process that searches loads the codes into memory on its first
-  dense query and applies later changes from the change counter before each one. A dense query
+  generation, centroid and size, and while it is being built its state and progress). A process
+  that searches loads the codes into memory on its first dense query and applies later changes
+  from the change counter before each one, and every 30 seconds while loaded
+  (`rabitqRefreshMs`), so a memory forgotten by another process leaves its engine without a
+  search. A refresh that fails half-way empties the engine, and the next one loads it whole. A
+  vector with no direction (all zeros) is never indexed, and a dense query with no direction
+  returns nothing from this index. A dense query
   estimates each vector's cosine from a 4-bit copy of the query, with an error bound, keeps the
   vectors whose upper bound reaches the k-th best lower bound, and rescores them with their int8
   vectors, best upper bound first, until the next upper bound is below the k-th exact score or
@@ -320,12 +325,19 @@ index, and moves the writer guard on.
   its estimate was more than 1.9 standard errors too low, or when the `10 × k` budget ran out
   first. Grants, `project`, the author and a spatial filter apply before the candidates are
   chosen, and again in the rescoring query.
-- **When it exists.** `openSqliteStore({ vectorIndex: 'rabitq' })` builds it on an open that may
-  migrate, from the int8 vectors, in one transaction ("Building the RaBitQ vector index (N
-  vectors)…"; a process killed during it leaves the store as it was), and drops a binary index.
-  `binary` and `int8` drop it; `auto` keeps it and never builds it. Once the store holds four
-  times the vectors it was built from (and at least 1,000), the next migrating open rebuilds it
-  with a new centroid. Every write keeps it in step in the same transaction: `upsert`,
+- **When it exists.** `openSqliteStore({ vectorIndex: 'rabitq' })` starts it on an open that may
+  migrate, in the migration's transaction (the tables, and a centroid from a sample of up to
+  20,000 vectors), and drops a binary index. The same open then indexes the int8 vectors in
+  committed batches of 10,000 ("Building the RaBitQ vector index (N vectors)…"). Until the last
+  batch commits, dense search on every handle scans int8, and writes keep the partial index in
+  step; a process killed during the build keeps the migration and the batches done, and the next
+  open that may migrate goes on from there. `binary` and `int8` drop it; `auto` keeps it and never
+  builds or rebuilds it. No open rebuilds it: once the store holds four times the vectors it was
+  built from (and at least 1,000), `sqliteVectorIndex(path)` says `recentreDue`, and
+  `reindexSqliteStore` (`oort reindex`) rebuilds it with a new centroid, in the same batches.
+  `rabitqMaxLoad` keeps a handle from loading an index larger than that many vectors (it scans
+  int8 instead); the CLI's in-process hooks set 50,000. Every write keeps it in step in the same
+  transaction: `upsert`,
   `upsertMany`, `forget`, `coldPut`, `coldPutMany`, `setTier` and `reembedSqliteStore`.
   `forget` deletes the code, factors, keys and int8 copy, and leaves only the row id and a change
   number in `memories_rq_gone`.
@@ -339,8 +351,9 @@ index, and moves the writer guard on.
   function only this version defines (so an Oort that predates the index fails on its next write,
   changing nothing) and builds the index when asked; it takes no copy. Older stores go up through
   5 and 6 in the same transaction. `migrate: false` refuses a version 6 (or older) store with
-  `StoreMigrationRequiredError`, and never builds, rebuilds or drops the index.
-  `sqliteVectorIndex(path)` reports `rabitq` for such a store.
+  `StoreMigrationRequiredError`, and never builds, rebuilds or drops the index, nor goes on with
+  a build. `sqliteVectorIndex(path)` reports `rabitq` for such a store, with `building` while a
+  build is under way.
 
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the

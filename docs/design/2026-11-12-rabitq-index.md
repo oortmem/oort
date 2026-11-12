@@ -35,6 +35,14 @@ upper bound can still reach the top k. §11 has the measurements and §12 what w
 6. **Forget removes every trace in the same transaction** (§8): the code row, the rescore vector
    and the engine's slot (zeroed). What stays is the row id and a change number, for 100,000
    changes.
+7. **The build commits in batches and resumes; nothing rebuilds by itself** (§2, §5). The
+   migration only creates the tables and the centroid; the same open then indexes 10,000 vectors
+   per committed transaction, and a stopped build is finished by the next `oort` command.
+   Recentring a store that has outgrown its centroid is an explicit `oort reindex`, which `oort
+   doctor` suggests; no open, `auto` included, rebuilds the index.
+8. **A short-lived process does not load a large engine** (§9). The in-process hooks load at most
+   50,000 vectors; above that they scan int8 exactly, and `oort doctor` suggests `oort serve
+   --detach`, whose engine stays loaded.
 
 ## 1. What RaBitQ adds
 
@@ -71,14 +79,20 @@ CREATE INDEX memories_rq_by_seq ON memories_rq (seq);
 CREATE TABLE memories_rq_vec (rid INTEGER PRIMARY KEY, embedding BLOB NOT NULL); -- int8, rescoring
 CREATE TABLE memories_rq_gone (seq INTEGER PRIMARY KEY, rid INTEGER NOT NULL);   -- removals
 CREATE TABLE memories_rq_meta (key TEXT PRIMARY KEY, value);
-  -- generation (random per build), seq, floor, width, built_from, centroid (float64 blob)
+  -- generation (random per build), seq, floor, width, built_from, centroid (float64 blob),
+  -- and while a build runs: state ('building') and cursor (the last memories.rid indexed)
 ```
 
 - **Which rows.** Every hot and warm memory with a vector, as the binary index. A cold memory has
-  no row.
+  no row, and neither does a vector with no direction (all zeros): its factors divide by its
+  length, so its bounds would be infinite and it would be rescored first for every query, where
+  `vec_distance_cosine` returns NULL. A query with no direction gets no neighbours from this
+  index, and a rescored row whose distance is not a number is dropped.
 - **Migration from version 6.** One `IMMEDIATE` transaction swaps the writer guard's triggers
-  from `oort_writer_v6()` to `oort_writer_v7()`, and builds the index when `store.vectorIndex` is
-  `rabitq`. No copy is taken: version 7 only adds, and the downgrade loses nothing (CON-17's
+  from `oort_writer_v6()` to `oort_writer_v7()`, and starts the index when `store.vectorIndex` is
+  `rabitq`: the tables, and the centroid from a sample of up to 20,000 vectors spread over the
+  row ids (`RABITQ_CENTROID_SAMPLE`; any centroid gives correct bounds, and a sample this size
+  bounds as tightly as the full mean). No copy is taken: version 7 only adds, and the downgrade loses nothing (CON-17's
   reasoning, its §2). Older stores go up through 5 and 6 in the same transaction, with only
   version 5's `pre-v5` copy. `migrate: false` (the hooks) refuses a version 6 store with
   `StoreMigrationRequiredError`, changing nothing.
@@ -86,9 +100,21 @@ CREATE TABLE memories_rq_meta (key TEXT PRIMARY KEY, value);
   upgrade, on version 6) would write memories the index never hears of. The triggers now call
   `oort_writer_v7()`, which only this version defines, so its next write fails, changing nothing.
   `oort doctor` already says to restart such processes after a migration.
-- **Interrupted.** The build runs inside the migration's transaction. Tested: a child process
-  killed with `SIGKILL` at the build's first log line leaves the version 6 store as it was, and
-  the next open migrates again.
+- **The build, in batches.** After the migration commits, the same open indexes the hot and warm
+  vectors in row id order, 10,000 per `IMMEDIATE` transaction (`RABITQ_BUILD_BATCH`), recording
+  the last row id done (`cursor`). Other writers wait one batch at most, not the whole build.
+  While `state` is `building`, every handle's dense search scans int8 exactly, and writes keep
+  the partial index in step as usual (`INSERT OR IGNORE`, so a row a writer indexed first, with a
+  newer change number, is kept). The last transaction records `built_from` and a new
+  `generation`, and removes `state` and `cursor`, so every process's engine loads the finished
+  index whole. Two processes running the build at once each check `state` inside their
+  transaction, so the second does nothing more once the first finishes.
+- **Interrupted.** Tested: a child process killed with `SIGKILL` at the build's first log line
+  leaves a version 7 store with the index started and no vectors indexed; a `migrate: false` open
+  reads it exactly as the version 6 copy (dense search scans int8), and the next open that may
+  migrate finishes the build. A test that commits one batch of 100, then opens with `migrate:
+  false` (int8 search; its write is indexed), then with a migrating open (finished, the RaBitQ
+  index answers) covers the resume.
 - **Downgrade.** `downgradeSqliteStore({ path, to: 6 })` drops the four tables and puts version
   6's guard back; `to: 5` also drops the binary index and the guard, as before. Both take the
   usual `pre-downgrade` copy. An older Oort refuses a version 7 store without changing it.
@@ -192,7 +218,11 @@ the same transaction:
 | `expireMany` | through `forget` | | |
 
 **Other processes.** A second process (the MCP server beside an `oort` command, the hooks) sees
-the change on its next dense query, through the change counter (§3). A test writes, forgets and
+the change on its next dense query, through the change counter (§3), and every 30 seconds while
+its engine is loaded (`rabitqRefreshMs`, an unreferenced timer stopped on close), so a memory
+forgotten elsewhere leaves a long-lived server's memory without waiting for a search. A refresh
+that fails half-way (a row that does not fit, say) clears the engine and forgets its position, so
+the next refresh loads the index whole rather than build on a partial copy. A test writes, forgets and
 rebuilds through one handle and searches through another, which must agree with a fresh handle.
 
 **Reembedding.** The new model's vectors are encoded against the old centroid. Any centroid gives
@@ -204,10 +234,17 @@ another process builds during a long reembed gets the new model's vectors. Switc
 **Recentring.** A store created empty with `vectorIndex: 'rabitq'` would keep a zero centroid for
 good, and grow into looser bounds. The index records how many vectors it was built from
 (`built_from`); once the store holds 4 times as many and at least 1,000 (`RABITQ_RECENTRE_GROWTH`,
-`RABITQ_RECENTRE_FROM`), the next open that may migrate rebuilds it with a new centroid. The
-growth is geometric, so a store that grows to n vectors pays for about n / 3 extra encodings in
-all. Measured on the multilingual eval (§11): built on the empty stores, 93.0 reads a query;
-built after seeding, 60.0.
+`RABITQ_RECENTRE_FROM`), the centroid is due to be renewed. Measured on the multilingual eval
+(§11): built on the empty stores, 93.0 reads a query; built after seeding, 60.0.
+
+No open does it. A rebuild reads every vector (minutes at a million), and an open that may
+migrate is any `oort` command, the MCP server or the SDK: doing it there would stall whichever
+of them happened to open the store first. Instead `sqliteVectorIndex` reports `recentreDue`,
+`oort doctor` shows it as a note with the fix `oort reindex`, and `oort reindex`
+(`reindexSqliteStore`) starts the build again with a new centroid and runs it in the same
+committed batches; searches scan int8 until it finishes, and a stopped run is finished by the next
+`oort` command. Done each time it is due, the growth is geometric, so a store that grows to n
+vectors pays for about n / 3 extra encodings in all.
 
 ## 6. The bound's confidence
 
@@ -250,12 +287,22 @@ Linux, Windows and Intel macOS have no binary). When it is missing, fails to loa
 
 Results are the same either way; only the scan's speed differs (§11).
 
+**Panics.** The release profile unwinds (`panic = "unwind"`) and every exported method is
+`#[napi(catch_unwind)]`, so a panic in the engine becomes a JavaScript error on that call rather
+than aborting the process (an MCP server or the daemon). Growing the code and factor arrays
+copies them into a new allocation and zeroes the old one first, in both engines, so a moved code
+is not left behind in freed memory.
+
 **Packaging.** The binaries ship inside `@oortmem/store-sqlite` (`files` includes
 `native/oort-rabitq.*.node`), so there is no new npm package and no install script. The release
 workflow builds one per platform on a runner of that platform (`macos-14`, `ubuntu-22.04`,
 `ubuntu-22.04-arm`, so glibc 2.35 or newer), from source with the pinned toolchain
-(`rust-toolchain.toml`) and `cargo build --locked`, uploads them as artifacts, and the publish job
-downloads all three before packing and refuses to pack without them. CI runs the Rust tests,
+(`rust-toolchain.toml`) and `cargo build --locked`. Each platform's job then loads the binary it
+built and runs the engine and index test files with `OORT_REQUIRE_NATIVE=1` (the store's RaBitQ
+conformance included), writes a SHA-256 beside it, and attests its build provenance
+(`actions/attest-build-provenance`, pinned by commit; `id-token: write` and `attestations: write`
+on that job only). The publish job downloads all three, checks each against its SHA-256, and
+refuses to pack without them. CI runs the Rust tests,
 builds the Linux x64 binary and runs `pnpm verify` with `OORT_REQUIRE_NATIVE=1`, so a binary that
 does not build or load fails CI instead of falling back silently.
 
@@ -281,8 +328,19 @@ drops the tables.
 (`openSqliteStore({ vectorIndex: 'rabitq' })` for the store itself). It is read from the home
 config only, as for CON-17: a repository's `oort.config.json` cannot set it. The build happens in
 an open that may migrate (an `oort` command, the MCP server, the daemon, the SDK), prints
-"Building the RaBitQ vector index (N vectors)…", and is safe to interrupt. Hooks never build or
-drop it. `rabitqEngine: 'native' | 'typescript'` on `openSqliteStore` forces an engine (tests and
+"Building the RaBitQ vector index (N vectors)…", commits in batches and is safe to interrupt.
+Hooks never build, go on with a build, rebuild or drop it. `oort reindex` renews the centroid
+when `oort doctor` says it is due (§5).
+
+**Hooks and large indexes.** A hook runs in its own process once per prompt; loading the engine
+costs about 5.8 µs a vector natively and 13.7 µs in TypeScript, plus the transient RSS (§11: 5.8 s
+and 289 MB at a million). `rabitqMaxLoad` caps what a handle loads; the CLI's in-process hooks
+pass `HOOK_RABITQ_MAX_LOAD`, 50,000, which costs about 0.3 s natively and 0.7 s in TypeScript,
+on the order of a hook's other work. Above it the hook's dense search scans int8 exactly (a store
+with a RaBitQ index has no binary one), which at 50,000 is tens of milliseconds and grows
+linearly. Hooks that go through `oort serve` use the daemon's engine, loaded once. `oort doctor`
+warns (`vector-index-hooks`) when the index holds more than 50,000 vectors and the daemon is not
+running, with the fix `oort serve --detach`. `rabitqEngine: 'native' | 'typescript'` on `openSqliteStore` forces an engine (tests and
 benchmarks); `onDenseStats` reports each dense query's index, candidates, reads and whether the
 budget stopped it.
 
@@ -355,7 +413,10 @@ the RaBitQ index is built on the file after the binary one is measured, which dr
   two passes over `memories_vec` and writes 690 MB in one transaction; at 100,000 vectors it took
   5.9 s and at 400,000 25 s (binary: 7.0 s and 17.9 s), so the one-million figure is mostly the
   machine running out of page cache for a 1.9 GB file inside one transaction, not the encoding
-  (15 µs a vector). It holds the write lock throughout (§12).
+  (15 µs a vector). This was the first, single-transaction build; the build now commits in
+  batches of 10,000 and reads `memories_vec` once plus a 20,000-vector sample (§2). It has not
+  been re-timed at one million (the machine was too loaded during the review fixes for a timing
+  to mean anything).
 
 At 20,000 vectors in 2,000 clusters of 10 (`OORT_BENCH_RAM_N=20000`), the flat-tail case of §4,
 the bound alone read 1,406 vectors a query on average; this run predates the budget, which now
@@ -378,11 +439,14 @@ stops those queries at 500.
   without all three. Only the macOS arm64 binary has been built and tested so far (locally); the
   Linux ones are first built by CI on the pull request (x64) and by the next release (both).
 - **The TypeScript path: kept,** with the same results, as the fallback and the reference.
-- **Build time.** 658 s at one million in one transaction that holds the write lock: other
-  writers (the hooks, the MCP server) wait up to their busy timeout and then fail their write for
-  that turn. The binary index has the same shape at 134 s. It runs only when someone sets
-  `vectorIndex: rabitq` (or on a recentre, at most a few times over a store's growth). Building
-  in batches of committed transactions, resumable, is a follow-up.
+- **Build time.** 658 s at one million, measured with the first, single-transaction build. The
+  build now commits every 10,000 vectors, so other writers wait one batch, not the build, and it
+  resumes after a stop; its total time at one million has not been re-measured. It runs only when
+  someone sets `vectorIndex: rabitq`, or runs `oort reindex`.
+- **Hooks above 50,000 vectors** scan int8 exactly instead of loading the engine (§9), unless
+  `oort serve` runs. Their dense search is then as slow as `int8` (757 ms at a million).
+- **Zero vectors** are not indexed (§2). A memory whose vector is all zeros has no direction and
+  no cosine with anything; the int8 and binary paths have the same bug, fixed separately (CON-141).
 - **RAM per process.** Each process that runs dense queries holds its own engine (111.8 MB at
   one million). Two processes (an MCP server and an `oort` command) hold two copies; the page
   cache the binary index uses is shared. Memory-mapping a shared copy would need a sidecar file,
