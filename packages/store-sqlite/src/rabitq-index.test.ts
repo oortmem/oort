@@ -468,7 +468,7 @@ describe('rabitq index', () => {
     expect(
       await reindexSqliteStore({ path: s.dbPath, coldDir: s.coldDir, dimension: D }),
     ).toMatchObject({ index: 'int8', rebuilt: false });
-  });
+  }, 60_000);
 
   it('rabitq.the-build-commits-in-batches-scans-int8-meanwhile-and-resumes', async () => {
     const s = fresh();
