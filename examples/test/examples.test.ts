@@ -170,6 +170,15 @@ describe('SDK examples (run)', () => {
     });
   });
 
+  it('rabitq-index: builds the RaBitQ index and recalls through it (0.9.0 or newer)', async () => {
+    const { out } = await runExample('rabitq-index.ts');
+    expect(out).toEqual(['The billing service deploys on Fridays after the change freeze.']);
+    expect(sqliteVectorIndex(path.join(h.home, 'oort.sqlite'))).toEqual({
+      index: 'rabitq',
+      vectors: 1,
+    });
+  });
+
   it('judgments: records as an expert, confirms an agent record, applies', async () => {
     const { out } = await runExample('judgments.ts');
     expect(out[0]).toBe('agent-recorded');

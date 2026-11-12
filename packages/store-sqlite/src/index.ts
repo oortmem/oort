@@ -1058,7 +1058,11 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       const stats = opts.onDenseStats;
       if (vectorIndex !== 'int8' && rqRefresh()) {
         const allow =
-          f === undefined ? undefined : spatialRids(f).all(spatialParams(f)).map((r) => r.rid);
+          f === undefined
+            ? undefined
+            : spatialRids(f)
+                .all(spatialParams(f))
+                .map((r) => r.rid);
         return patterns.map((p) => {
           const params = { ...patternParams(p, 0), ...(f !== undefined && spatialParams(f)) };
           const bytes = toBytes(v);

@@ -1011,9 +1011,10 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     // At most one of them is kept: the one `vectorIndex` asks for (`auto` keeps either).
     if (opts.migrate !== false) {
       const want = opts.vectorIndex ?? 'auto';
+      // Both plans first: a RaBitQ index dropped to be rebuilt must not look absent to `auto`.
       const rq = rabitqIndexPlan(db, want);
-      if (rq === 'drop' || rq === 'rebuild') dropRabitqIndex(db);
       const plan = binaryIndexPlan(db, want, opts.binaryAutoThreshold);
+      if (rq === 'drop' || rq === 'rebuild') dropRabitqIndex(db);
       if (plan === 'build') buildBinaryIndex(db, dimension, opts.log);
       else if (plan === 'drop') dropBinaryIndex(db);
       if (rq === 'build' || rq === 'rebuild') buildRabitqIndex(db, dimension, opts.log);

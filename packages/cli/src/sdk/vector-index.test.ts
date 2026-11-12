@@ -51,9 +51,9 @@ describe('store.vectorIndex', () => {
       1 + more.results.filter((r) => r.id !== undefined).length,
     );
     await third.forget(id);
-    expect((await third.recall('when do we deploy billing?')).memories.map((m) => m.id)).not.toContain(
-      id,
-    );
+    expect(
+      (await third.recall('when do we deploy billing?')).memories.map((m) => m.id),
+    ).not.toContain(id);
     await third.close();
   });
 });

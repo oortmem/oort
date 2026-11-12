@@ -424,7 +424,12 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
             const crossRows = remap(rowsFor(set, lang, 'cross'), (id) =>
               memoryId('en', factOf(id)),
             );
-            result(lang, 'cross', crossRows, await recallRows(english, crossRows, config, opts, tally));
+            result(
+              lang,
+              'cross',
+              crossRows,
+              await recallRows(english, crossRows, config, opts, tally),
+            );
           }
         }
       } finally {

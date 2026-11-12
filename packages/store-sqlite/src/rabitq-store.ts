@@ -66,13 +66,7 @@ export const RABITQ_RECENTRE_GROWTH = 4;
 
 /** Whether the index has outgrown its centroid (see `RABITQ_RECENTRE_GROWTH`). */
 export function rabitqNeedsRecentre(db: Database): boolean {
-  const built = Number(
-    db
-      .prepare<[], { value: number }>(
-        `SELECT value FROM ${RQ_META_TABLE} WHERE key = 'built_from'`,
-      )
-      .get()?.value ?? 0,
-  );
+  const built = metaNumber(db, 'built_from');
   const due = Math.max(RABITQ_RECENTRE_FROM, RABITQ_RECENTRE_GROWTH * built);
   // `max(rid)` bounds the count from above in one lookup; most opens stop there.
   const top = db.prepare<[], { n: number | null }>(`SELECT max(rid) AS n FROM ${RQ_TABLE}`).get();
@@ -134,7 +128,7 @@ export function buildRabitqIndex(
   const page = pageOfVectors(db);
   const sum = new Float64Array(dimension);
   let n = 0;
-  for (let after = -Infinity; ; ) {
+  for (let after = -Infinity; ;) {
     const rows = page.all(after);
     if (rows.length === 0) break;
     for (const r of rows) {
@@ -165,7 +159,7 @@ export function buildRabitqIndex(
     `INSERT INTO ${RQ_VEC_TABLE} (rid, embedding) VALUES (?, ?)`,
   );
   let done = 0;
-  for (let after = -Infinity; ; ) {
+  for (let after = -Infinity; ;) {
     const rows = page.all(after);
     if (rows.length === 0) break;
     for (const r of rows) {
@@ -218,7 +212,13 @@ export function rabitqWriter(db: Database, dimension: number) {
         floor: Statement<[number]>;
         vecRow: Statement<
           [string],
-          { embedding: Buffer; node_key: string; project_key: string; author_key: string; tier: string }
+          {
+            embedding: Buffer;
+            node_key: string;
+            project_key: string;
+            author_key: string;
+            tier: string;
+          }
         >;
       }
     | undefined;
@@ -249,9 +249,7 @@ export function rabitqWriter(db: Database, dimension: number) {
       delVec: db.prepare(`DELETE FROM ${RQ_VEC_TABLE} WHERE rid = ?`),
       gone: db.prepare(`INSERT INTO ${RQ_GONE_TABLE} (seq, rid) VALUES (?, ?)`),
       prune: db.prepare(`DELETE FROM ${RQ_GONE_TABLE} WHERE seq <= ?`),
-      floor: db.prepare(
-        `UPDATE ${RQ_META_TABLE} SET value = max(value, ?) WHERE key = 'floor'`,
-      ),
+      floor: db.prepare(`UPDATE ${RQ_META_TABLE} SET value = max(value, ?) WHERE key = 'floor'`),
       vecRow: db.prepare(
         `SELECT embedding, node_key, project_key, author_key, tier FROM memories_vec WHERE id = ?`,
       ),
@@ -390,7 +388,11 @@ export class RabitqReader {
   private generation = '';
   private seq = -1;
   private rc: Float64Array = new Float64Array(0);
-  private readonly keys = [new Map<string, number>(), new Map<string, number>(), new Map<string, number>()];
+  private readonly keys = [
+    new Map<string, number>(),
+    new Map<string, number>(),
+    new Map<string, number>(),
+  ];
   private stmts:
     | {
         meta: Statement<[], { key: string; value: unknown }>;

@@ -970,7 +970,8 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
     const vi = sqliteVectorIndex(db);
     if (vi !== undefined) {
       const want = storeConfig;
-      const native = vi.index === 'rabitq' || want.vectorIndex === 'rabitq' ? loadNativeRabitq() : undefined;
+      const native =
+        vi.index === 'rabitq' || want.vectorIndex === 'rabitq' ? loadNativeRabitq() : undefined;
       const fallback = native !== undefined && 'error' in native ? native.error : undefined;
       const kind =
         vi.index === 'rabitq'

@@ -1293,14 +1293,31 @@ and is safe to interrupt. Hooks never build or drop it. Only the home config is 
 a repository's `oort.config.json` cannot change it (the key is ignored there, with a warning).
 `oort doctor` shows which index the store searches.
 
+**The RaBitQ index (opt-in).** `{ "store": { "vectorIndex": "rabitq" } }` builds a different
+index instead of the binary one: the same 1-bit codes, but compared with a 4-bit copy of the
+query, with an error bound per memory. Only the memories whose bound can still reach the top k are
+rescored with their int8 vectors, best first, until none can; at most 10 × k, as the binary index
+reads. On the bench's corpora that was about half the binary index's reads, with the same
+results as the exact scan (see [the design note](design/2026-11-12-rabitq-index.md#11-measurements)).
+The codes live in the store file; each process that searches holds them in memory (about 100
+bytes a memory, 100 MB at a million). The scan runs in a native engine on macOS (Apple silicon)
+and Linux x64 and arm64 (glibc 2.35 or newer), shipped with Oort; elsewhere the same index runs in
+TypeScript, with the same results but a slower scan, and `oort doctor` warns and says why
+(`OORT_RABITQ_NATIVE=0` turns the native engine off). The build prints `Building the RaBitQ vector
+index (N vectors)…`; `binary` or `int8` drop the index again, and `auto` keeps it once built. A
+store that grows to four times the size it was built at is rebuilt once on the next `oort`
+command, to recentre the codes.
+
 **Upgrading to 0.9.0.** The first `oort` command (or MCP server, or daemon) after the upgrade
-moves the store to schema version 6. Version 5 adds the place columns of
+moves the store to schema version 7. Version 5 adds the place columns of
 [spatial memory](#places-spatial-memory), after a `pre-v5` copy of the store; version 6
 adds the binary index's guard and takes no copy (it only adds; going back to 5 loses nothing), and
-builds the binary index only when `store.vectorIndex` asks for it. Until then
+builds the binary index only when `store.vectorIndex` asks for it. Version 7 replaces that guard
+with one an Oort without the RaBitQ index cannot pass, and adds the RaBitQ index's tables only
+when `store.vectorIndex` is `rabitq`; it takes no copy either. Until then
 the hooks skip recall and saving for the turn, as after the upgrade to schema version 4, and print one line:
 "Oort is upgrading its store; run `oort doctor` once, then restart any Oort MCP server started
-before the upgrade". Do that: Oort 0.8 or older refuses to open a version 6 store, and a process
+before the upgrade". Do that: Oort 0.8 or older refuses to open a version 7 store, and a process
 that already had it open (an MCP server or daemon started before the upgrade) can keep reading,
 but its next write fails, changing nothing. To go back to 0.8 or older, see
 `downgradeSqliteStore` in [the store contract](store-contract.md#sqlite-schema-versions) (`to: 4`).
@@ -2211,7 +2228,7 @@ Pro, with no key and a 3 second timeout.
 | `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, and the binary they run. Hooks that run the managed `~/.oort/cli` while you run a copy from `PATH` are fine: the `claude-code bin` row names both, each with its own version. A managed copy that is there but not safe to run (`managed copy`) is a fail, and its fix always removes and reinstalls it (`rm -r <prefix> && oort setup`, with `chmod go-w` on `OORT_HOME` after the `rm` when only `OORT_HOME` itself is too open): Oort never repairs a copy like this in place. | Missing, or a command that is not executable: `oort install claude-code`. Doctor never runs a hook's binary: versions come from the package's files. The managed copy (when it checks out and is safe) and the copy you ran are ok at this version or newer. Any other copy that stays put and is yours, such as your own build written with `--this-copy`, is an info line naming it ("the hooks run another copy at X (oort V)", try: `oort install claude-code` to use the managed copy, or keep it if you built it). A copy in a temp directory or package cache, or one someone else could change, is a fail. A hook binary that is older than the oort you run, or whose files do not say a version, is a warning naming both versions and the path: `oort update` (or `oort install claude-code` from the oort you want). When the oort you run lives somewhere temporary or under a Node version manager (the npx or pnpm dlx cache, a temp directory, `fnm_multishells`, `.nvm/`, `node-versions/`, `.volta/`, `.asdf/`), the fix never points the hooks at it: it names the managed copy instead, `~/.oort/cli/bin/oort install claude-code` (with `npm i -g --prefix ~/.oort/cli oortmem &&` first when there is none). Hooks that run a copy that does not stay put (under a version manager, in `fnm_multishells`, or in the npx or pnpm dlx cache) get an info line (`claude-code node`) naming the fix: with no managed copy, `oort setup, or npm i -g --prefix ~/.oort/cli oortmem and then oort install claude-code`; with one, `~/.oort/cli/bin/oort install claude-code`. Unparseable settings: fix the JSON, then the same fix. |
 | `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. Whether the hooks skip the daemon after a timeout or refusal, and until when. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
 | `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. Entries are judged against the binary `oort connect` would write now: the managed copy when it checks out, else the copy you ran. The binary an entry runs follows the hooks' rules, also for an entry that is exactly what `oort connect` writes: the managed or the running copy is ok, another copy of yours that stays put and is this version or newer (one written with `--this-copy`) is an info line naming it, and one in a temp directory or someone else's is a fail. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
-| `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; the dense index it searches (`vector-index`, 0.9.0 or newer: `int8, exact` or `binary, 1-bit codes rescored in int8`, with the number of searchable vectors and the `store.vectorIndex` setting); `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
+| `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; the dense index it searches (`vector-index`, 0.9.0 or newer: `int8, exact`, `binary, 1-bit codes rescored in int8` or `rabitq, ...` with its engine, with the number of searchable vectors and the `store.vectorIndex` setting; a warning when the RaBitQ index runs without its native engine); `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. RaBitQ without its native engine: reinstall on a supported platform, or set `store.vectorIndex` to `binary`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
 | `updates` | From the [update check](#the-update-notice)'s file only (doctor makes no request for it): a newer release, or that this one is the latest. Shown to people only, never in `--json`, and not when the check is off. | A newer release (information): `oort update`. |
 

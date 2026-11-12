@@ -60,7 +60,8 @@ function corpus(dim: number, n: number, clusters: number) {
   );
   const vectors = Array.from({ length: n }, () => near(centres[Math.floor(uniform() * clusters)]!));
   const mean = new Float64Array(dim);
-  for (const v of vectors) for (let i = 0; i < dim; i++) mean[i] = (mean[i] as number) + (v[i] as number) / n;
+  for (const v of vectors)
+    for (let i = 0; i < dim; i++) mean[i] = (mean[i] as number) + (v[i] as number) / n;
   const rc = rotatedCentroid(mean, dim);
   const w = bitWidth(dim);
   const codes = Buffer.alloc((n * w) / 8);
@@ -115,7 +116,10 @@ describe('rabitq encoding', () => {
 
   it('rabitq.zero-vectors-are-always-candidates-and-the-centroid-is-exact', () => {
     const dim = 64;
-    const rc = rotatedCentroid(Float64Array.from({ length: dim }, (_, i) => (i % 7) - 3), dim);
+    const rc = rotatedCentroid(
+      Float64Array.from({ length: dim }, (_, i) => (i % 7) - 3),
+      dim,
+    );
     const zero = rabitqEncode(new Int8Array(dim), rc);
     expect(zero.factors[2]).toBe(Infinity);
     const centre = Int8Array.from({ length: dim }, (_, i) => (i % 7) - 3);
@@ -222,9 +226,7 @@ describe('rabitq engines', () => {
           ] as const;
           for (const a of args) {
             const x = (ts.search as (...x: unknown[]) => ReturnType<RabitqEngine['search']>)(...a);
-            const y = (nat.search as (...x: unknown[]) => ReturnType<RabitqEngine['search']>)(
-              ...a,
-            );
+            const y = (nat.search as (...x: unknown[]) => ReturnType<RabitqEngine['search']>)(...a);
             expect([...y.rids], `dim ${dim}`).toEqual([...x.rids]);
             expect([...y.upper]).toEqual([...x.upper]);
           }

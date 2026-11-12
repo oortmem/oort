@@ -83,7 +83,10 @@ export interface RabitqCode {
 }
 
 /** The rotated centroid of a stored centroid (or zeros): what `rabitqEncode` subtracts. */
-export function rotatedCentroid(centroid: Float64Array | undefined, dimension: number): Float64Array {
+export function rotatedCentroid(
+  centroid: Float64Array | undefined,
+  dimension: number,
+): Float64Array {
   const w = bitWidth(dimension);
   if (centroid === undefined) return new Float64Array(w);
   const r = rotate64(centroid);
@@ -450,7 +453,8 @@ export function createRabitqEngine(
     if ('module' in loaded) {
       return { engine: new loaded.module.RabitqIndex(width), kind: 'native' };
     }
-    if (choice === 'native') throw new Error(`rabitq: the native engine is unavailable: ${loaded.error}`);
+    if (choice === 'native')
+      throw new Error(`rabitq: the native engine is unavailable: ${loaded.error}`);
     return { engine: new TsRabitqIndex(width), kind: 'typescript', fallback: loaded.error };
   }
   return { engine: new TsRabitqIndex(width), kind: 'typescript' };

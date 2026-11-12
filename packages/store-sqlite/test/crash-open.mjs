@@ -6,7 +6,10 @@ import { writeSync } from 'node:fs';
 import { openSqliteStore } from '../dist/index.js';
 
 const [dbPath, coldDir, dimension, vectorIndex = 'binary'] = process.argv.slice(2);
-const building = vectorIndex === 'rabitq' ? 'Building the RaBitQ vector index' : 'Building the binary vector index';
+const building =
+  vectorIndex === 'rabitq'
+    ? 'Building the RaBitQ vector index'
+    : 'Building the binary vector index';
 await openSqliteStore({
   path: dbPath,
   coldDir,

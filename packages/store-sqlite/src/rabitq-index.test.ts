@@ -146,9 +146,8 @@ describe('rabitq index', () => {
     const db = raw(s.dbPath);
     let centroid: Float64Array | undefined;
     try {
-      const row = db
-        .prepare(`SELECT value FROM ${RQ_META_TABLE} WHERE key = 'centroid'`)
-        .get() as { value: Buffer } | undefined;
+      const row = db.prepare(`SELECT value FROM ${RQ_META_TABLE} WHERE key = 'centroid'`).get() as
+        { value: Buffer } | undefined;
       if (row !== undefined) {
         const b = Buffer.from(row.value);
         centroid = new Float64Array(b.buffer, b.byteOffset, b.byteLength / 8);
@@ -295,9 +294,11 @@ describe('rabitq index', () => {
     const reader = new RabitqReader(db, D, 'auto', () => {});
     db.transaction(() => reader.refresh())();
     expect(reader.stats().vectors).toBe(5);
-    const ridOf = (db.prepare("SELECT rid FROM memories WHERE id = 'secret-2'").get() as {
-      rid: number;
-    }).rid;
+    const ridOf = (
+      db.prepare("SELECT rid FROM memories WHERE id = 'secret-2'").get() as {
+        rid: number;
+      }
+    ).rid;
     await store.forget(TG, 'secret-2');
     for (const t of [RQ_TABLE, RQ_VEC_TABLE]) {
       expect(db.prepare(`SELECT count(*) AS n FROM ${t} WHERE rid = ?`).get(ridOf)).toEqual({
@@ -305,9 +306,11 @@ describe('rabitq index', () => {
       });
     }
     // What remains of it is its row number in the removal log: no id, no code, no text.
-    const cols = (db.prepare(`SELECT name FROM pragma_table_info('${RQ_GONE_TABLE}')`).all() as {
-      name: string;
-    }[]).map((c) => c.name);
+    const cols = (
+      db.prepare(`SELECT name FROM pragma_table_info('${RQ_GONE_TABLE}')`).all() as {
+        name: string;
+      }[]
+    ).map((c) => c.name);
     expect(cols).toEqual(['seq', 'rid']);
     expect(db.prepare(`SELECT rid FROM ${RQ_GONE_TABLE}`).all()).toEqual([{ rid: ridOf }]);
     db.transaction(() => reader.refresh())();
@@ -382,7 +385,9 @@ describe('rabitq index', () => {
     expect(empty['centroid']).toBeUndefined(); // built empty: no centroid yet
     await store.upsertMany(
       TG,
-      Array.from({ length: 999 }, (_, i) => makeMemory({ id: `g${i}`, embedding: randomVec(next) })),
+      Array.from({ length: 999 }, (_, i) =>
+        makeMemory({ id: `g${i}`, embedding: randomVec(next) }),
+      ),
     );
     await store.close();
     await (await openSqliteStore(optsD(s, { vectorIndex: 'rabitq' }))).close();
@@ -391,8 +396,13 @@ describe('rabitq index', () => {
     const last = randomVec(next);
     await more.upsert(TG, makeMemory({ id: 'g999', embedding: last }));
     await more.close();
-    // 1,000 vectors, four times nothing: the next open that may migrate rebuilds it, centred.
-    await (await openSqliteStore(optsD(s, { vectorIndex: 'auto' }))).close();
+    // 1,000 vectors, four times nothing: the next open that may migrate rebuilds it, centred,
+    // and `auto` (here from 500 vectors) does not take the rebuild for a store with no index.
+    await (
+      await openSqliteStore(optsD(s, { vectorIndex: 'auto', binaryAutoThreshold: 500 }))
+    ).close();
+    expect(sqliteVectorIndex(s.dbPath)?.index).toBe('rabitq');
+    expect(tables(s.dbPath)).not.toContain(BIT_TABLE);
     const rebuilt = meta();
     expect(rebuilt['generation']).not.toBe(empty['generation']);
     expect(rebuilt['built_from']).toBe(1000);
@@ -492,10 +502,7 @@ describe('rabitq index', () => {
       makeMemory({ id: 'm1', embedding: randomVec(next), scope: mine }),
       makeMemory({ id: 'm2', embedding: randomVec(next), scope: mine }),
     ]);
-    expect((await store.dense(grantFor(mine), q, 2)).map((h) => h.id).sort()).toEqual([
-      'm1',
-      'm2',
-    ]);
+    expect((await store.dense(grantFor(mine), q, 2)).map((h) => h.id).sort()).toEqual(['m1', 'm2']);
     expect((await store.dense(grantFor(other), q, 100)).map((h) => h.id)).toHaveLength(80);
     await store.close();
   });
@@ -566,9 +573,9 @@ describe('schema migration 6 to 7', () => {
     const db = raw(dbPath);
     try {
       return (
-        db
-          .prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name")
-          .all() as { sql: string }[]
+        db.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all() as {
+          sql: string;
+        }[]
       ).map((t) => /SELECT (oort_writer_v\d+)\(\)/.exec(t.sql)?.[1] ?? '?');
     } finally {
       db.close();

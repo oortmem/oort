@@ -52,7 +52,13 @@ execFileSync(
 const lib = { darwin: 'liboort_rabitq.dylib', linux: 'liboort_rabitq.so' }[
   triple.includes('apple') ? 'darwin' : 'linux'
 ];
-const built = path.join(native, 'target', ...(target !== undefined ? [target] : []), 'release', lib);
+const built = path.join(
+  native,
+  'target',
+  ...(target !== undefined ? [target] : []),
+  'release',
+  lib,
+);
 const out = path.join(native, `oort-rabitq.${tagOf(triple)}.node`);
 // Copy, then rename over the old file: a process that has the old one loaded keeps its inode
 // (on macOS, rewriting a loaded binary in place gets that process killed).
