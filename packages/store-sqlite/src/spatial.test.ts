@@ -156,6 +156,43 @@ describe('sqlite spatial seam', () => {
     await s2.close();
   });
 
+  it('spatial.a-tampered-place-with-its-index-row-left-breaks-no-recall', async () => {
+    // The R*Tree row stays, so `near` reaches the stored JSON: a place that parses but does not
+    // check (a null pose or extent) is near nothing, on the lexical and the dense path alike, and
+    // reads back without its place, so nothing returns a place an import would refuse.
+    const o = fresh();
+    const s = await openSqliteStore(o);
+    await s.upsert(TG, toolbox('good', { mapId: 'hq', pose: { x: 0.5, y: 0 } }));
+    await s.upsert(TG, toolbox('null-pose', { mapId: 'hq', pose: { x: 0, y: 0 } }));
+    await s.upsert(
+      TG,
+      toolbox('null-extent', { mapId: 'hq', pose: { x: 0, y: 0 }, extent: { radius: 1 } }),
+    );
+    await s.close();
+    rawExec(
+      o.path,
+      [
+        `UPDATE memories SET place = '{"mapId":"hq","pose":null}' WHERE id = 'null-pose';`,
+        `UPDATE memories SET place = '{"mapId":"hq","pose":{"x":0,"y":0},"extent":null}'
+           WHERE id = 'null-extent';`,
+      ].join('\n'),
+    );
+    const s2 = await openSqliteStore(o);
+    expect(await both(s2, near(0, 0, 1))).toEqual([['good'], ['good']]);
+    for (const id of ['null-pose', 'null-extent']) {
+      const m = await s2.get(TG, id);
+      expect(m).not.toBeNull();
+      expect(m!.place).toBeUndefined();
+    }
+    const listed = await s2.list(TG);
+    expect(listed.find((m) => m.id === 'null-pose')?.place).toBeUndefined();
+    expect(listed.find((m) => m.id === 'good')?.place).toEqual({
+      mapId: 'hq',
+      pose: { x: 0.5, y: 0 },
+    });
+    await s2.close();
+  });
+
   it('spatial.a-missing-spatial-index-is-rebuilt-from-the-stored-places', async () => {
     const o = fresh();
     const s = await openSqliteStore(o);
@@ -163,12 +200,53 @@ describe('sqlite spatial seam', () => {
     await s.upsert(TG, toolbox('path-only', { nodeId: 'room:B' }));
     await s.close();
     rawExec(o.path, 'DROP TABLE memories_place');
-    const s2 = await openSqliteStore(o);
+    const logs: string[] = [];
+    const s2 = await openSqliteStore({ ...o, log: (m) => logs.push(m) });
+    expect(logs.filter((l) => l.includes('place check'))).toEqual([]);
     expect(await both(s2, near(0, 0, 1))).toEqual([['a'], ['a']]);
     expect(await both(s2, { within: 'room:B' })).toEqual([
       ['a', 'path-only'],
       ['a', 'path-only'],
     ]);
     await s2.close();
+  });
+
+  it('spatial.a-rebuilt-spatial-index-skips-stored-places-that-do-not-check', async () => {
+    // A crafted or damaged database (say, a restored copy) whose index is missing: places that
+    // parse but would never pass `checkPlace` are left out of the rebuild, as unparseable ones
+    // are, instead of failing the open on an R*Tree constraint (a negative size gives min > max).
+    const o = fresh();
+    const s = await openSqliteStore(o);
+    await s.upsert(TG, toolbox('good', { mapId: 'hq', pose: { x: 0, y: 0 } }));
+    for (const id of ['negative-dx', 'odom', 'string-x', 'no-map', 'nan', 'unknown-field']) {
+      await s.upsert(TG, toolbox(id, { mapId: 'hq', pose: { x: 0.5, y: 0 } }));
+    }
+    await s.close();
+    const set = (id: string, place: string) =>
+      `UPDATE memories SET place = '${place}' WHERE id = '${id}';`;
+    rawExec(
+      o.path,
+      [
+        set('negative-dx', '{"mapId":"hq","pose":{"x":0.5,"y":0},"extent":{"dx":-4,"dy":1}}'),
+        set('odom', '{"mapId":"hq","frame":"odom","pose":{"x":0.5,"y":0}}'),
+        set('string-x', '{"mapId":"hq","pose":{"x":"0.5","y":0}}'),
+        set('no-map', '{"pose":{"x":0.5,"y":0}}'),
+        set('nan', '{"mapId":"hq","pose":{"x":1e999,"y":0}}'),
+        set('unknown-field', '{"mapId":"hq","pose":{"x":0.5,"y":0},"evil":1}'),
+        'DROP TABLE memories_place;',
+      ].join('\n'),
+    );
+    const logs: string[] = [];
+    const s2 = await openSqliteStore({ ...o, log: (m) => logs.push(m) });
+    expect(await both(s2, near(0, 0, 1))).toEqual([['good'], ['good']]);
+    await s2.close();
+    expect(logs).toContain(
+      'sqlite store: 6 stored places failed the place check and are not searchable by near',
+    );
+    const db = new Database(o.path, { readonly: true });
+    expect((db.prepare('SELECT COUNT(*) AS n FROM memories_place').get() as { n: number }).n).toBe(
+      1,
+    );
+    db.close();
   });
 });

@@ -155,6 +155,16 @@
       },
       {
         "call": "recall",
+        "args": { "query": "q", "within": "room:B\ufe0f" },
+        "expect": { "error": { "code": "usage", "message": { "$regex": "within" } } }
+      },
+      {
+        "call": "remember",
+        "args": { "facts": "x", "place": { "nodeId": "site:hq/room:B\u034f" } },
+        "expect": { "error": { "code": "usage", "message": { "$regex": "place\\.nodeId" } } }
+      },
+      {
+        "call": "recall",
         "args": {
           "query": "q",
           "near": { "mapId": "hq", "pose": { "x": 0, "y": 0 }, "radius": 0 }
