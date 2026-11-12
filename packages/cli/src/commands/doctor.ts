@@ -21,9 +21,11 @@ import {
   listBackups,
   readEmbedderBinding,
   SCHEMA_VERSION,
+  sqliteEraseState,
   sqliteSchemaVersion,
   sqliteVectorIndex,
   loadNativeRabitq,
+  vacuumSqliteStore,
 } from '@oortmem/store-sqlite';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
 import {
@@ -512,10 +514,11 @@ async function hookBinaryChecks(
 ): Promise<Check[]> {
   // Another version: `oort update` brings every copy (the hooks' included) to the latest; or
   // point the hooks at the copy you want.
+  const update = updateCommand(ctx);
   const reinstall =
     fixHooks.fix === HOOK_FIX
-      ? `oort update, or ${HOOK_FIX} from the oort you want the hooks to use`
-      : `oort update, or ${fixHooks.fix}`;
+      ? `${update}, or ${HOOK_FIX} from the oort you want the hooks to use`
+      : `${update}, or ${fixHooks.fix}`;
   const seen = new Set<string>();
   const checks: Check[] = [];
   const home = ctx.io.env['HOME'] ?? '';
@@ -545,7 +548,7 @@ async function hookBinaryChecks(
           status: 'warn',
           detail: `the hooks run oort ${j.version} (${show}), but this is oort ${VERSION}`,
           fix: reinstall,
-          fixCommand: 'oort update',
+          fixCommand: update,
         });
       } else {
         checks.push({
@@ -570,7 +573,7 @@ async function hookBinaryChecks(
         status: 'warn',
         detail: `the hooks run oort ${shown(j.version)} (${show}), but this is oort ${VERSION}`,
         fix: reinstall,
-        fixCommand: 'oort update',
+        fixCommand: update,
       });
     } else {
       checks.push({
@@ -867,7 +870,7 @@ function mcpChecks(ctx: Ctx, cmd: string | undefined): Check[] {
 }
 
 /** The local store: present, private, and readable. It is never created here. */
-async function storeChecks(ctx: Ctx): Promise<Check[]> {
+async function storeChecks(ctx: Ctx, vacuum = false): Promise<Check[]> {
   const home = resolveHome(ctx.io.env);
   const userHome = ctx.io.env['HOME'] ?? '';
   const show = tilde(home, userHome);
@@ -1033,24 +1036,46 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
     }
     // Oort Cloud consolidates itself; locally the hook drain does, when due (CON-48).
     if (!cloudMode) checks.push(consolidationCheck(home));
-    // The newest copy taken before a migration (the names sort by time within each kind).
-    const backup = (['pre-v2', 'pre-v3', 'pre-v4', 'pre-v5'] as const)
-      .map((kind) => listBackups(db, kind).at(-1))
-      .filter((f): f is string => f !== undefined)
+    // Every copy the store took before a migration or a downgrade (CON-140): each holds the
+    // memories as they were then, and `oort forget` never reaches them.
+    const backups = (['pre-v2', 'pre-v3', 'pre-v4', 'pre-v5', 'pre-downgrade'] as const)
+      .flatMap((kind) => listBackups(db, kind))
       .sort((a, b) => {
         const at = (f: string) => f.slice(f.lastIndexOf('.') + 1);
         return at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : 0;
-      })
-      .at(-1);
-    if (backup !== undefined) {
+      });
+    if (backups.length > 0) {
+      const files = backups.map((f) => shown(tilde(f, userHome)));
       checks.push({
         group: 'store',
         name: 'backup',
         status: 'info',
-        detail: `the copy taken before the last schema migration is at ${tilde(backup, userHome)}`,
-        fix: `delete it once Oort works as before`,
+        detail: `${backups.length === 1 ? 'a copy' : `${backups.length} copies`} of the store taken before a schema migration, holding your memories as they were then (oort forget does not reach ${backups.length === 1 ? 'it' : 'them'}): ${files.join(', ')}`,
+        fix: `delete ${backups.length === 1 ? 'it' : 'them'} once Oort works as before: rm ${backups.map((f) => shown(sh(tilde(f, userHome)))).join(' ')}`,
       });
     }
+    // Text deleted by 0.9.0 or older (CON-140): opens erase it once on a small store; a bigger
+    // one waits for --vacuum.
+    if (vacuum && vacuumNeeded(sqliteEraseState(db))) {
+      checks.push(
+        vacuumSqliteStore({ path: db })
+          ? {
+              group: 'store',
+              name: 'vacuum',
+              status: 'ok',
+              detail:
+                'rewrote the store: text deleted by Oort 0.9.0 or older and all-zero vectors are gone from the file',
+            }
+          : {
+              group: 'store',
+              name: 'vacuum',
+              status: 'warn',
+              detail: 'another Oort process has the store open, so it was not rewritten',
+              fix: 'quit Claude Code and any other Oort process, then run oort doctor --vacuum',
+            },
+      );
+    }
+    checks.push(...eraseChecks(sqliteEraseState(db)));
   } catch (e) {
     checks.push({
       group: 'store',
@@ -1076,6 +1101,42 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
 }
 
 /** When the hooks last consolidated the local store, and when they will next. */
+/** `--vacuum` has work: the one-time erase is pending, or all-zero vectors are stored. */
+export function vacuumNeeded(state: { erased: boolean; zeroVectors: number } | undefined): boolean {
+  return state !== undefined && (!state.erased || state.zeroVectors > 0);
+}
+
+/**
+ * What the store still holds of deleted memories (CON-140, CON-141): text deleted by Oort 0.9.0
+ * or older, until the one-time erase, and all-zero vectors an older version stored.
+ */
+export function eraseChecks(
+  state: { erased: boolean; bytes: number; zeroVectors: number } | undefined,
+): Check[] {
+  if (state === undefined) return [];
+  const out: Check[] = [];
+  if (!state.erased) {
+    out.push({
+      group: 'store',
+      name: 'erase',
+      status: 'warn',
+      detail: `text deleted by Oort 0.9.0 or older may remain in the file (memories forgotten or rewritten then): a store this size (${Math.ceil(state.bytes / 1024 / 1024)} MB) is rewritten once only on request, which takes a while`,
+      fix: 'oort doctor --vacuum',
+    });
+  }
+  if (state.zeroVectors > 0) {
+    const one = state.zeroVectors === 1;
+    out.push({
+      group: 'store',
+      name: 'zero-vectors',
+      status: 'warn',
+      detail: `${state.zeroVectors} stored ${one ? 'vector is' : 'vectors are'} all zeros and ${one ? 'matches' : 'match'} nothing (recall finds ${one ? 'that memory' : 'those memories'} by ${one ? 'its' : 'their'} words)`,
+      fix: 'oort doctor --vacuum',
+    });
+  }
+  return out;
+}
+
 export function consolidationCheck(home: string, now = new Date()): Check {
   const s = readConsolidationState(home);
   const due = consolidationDue(s, now);
@@ -1323,7 +1384,10 @@ const withCommand = (c: string | undefined): { fixCommand?: string } =>
   c === undefined ? {} : { fixCommand: c };
 
 /** `oort doctor [--json]`: every check, with a one-line fix per problem. Exits 1 if one fails. */
-export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise<number> {
+export async function doctorCommand(
+  opts: { json?: boolean; vacuum?: boolean },
+  ctx: Ctx,
+): Promise<number> {
   const home = ctx.io.env['HOME'] ?? '';
   let cmd: string | undefined;
   try {
@@ -1349,7 +1413,7 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
     // `oort connect` writes the managed copy when it checks out (CON-114): entries are judged
     // against that, else against this bin.
     ...mcpChecks(ctx, currentManaged(ctx)?.main ?? cmd ?? running),
-    ...(await storeChecks(ctx)),
+    ...(await storeChecks(ctx, opts.vacuum === true)),
     ...(await relayChecks(ctx, keys.relayed)),
     ...(await cloudChecks(ctx)),
   ];
@@ -1418,6 +1482,15 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
 }
 
 /**
+ * The update command doctor suggests. `oort update` asks before it changes anything, and refuses
+ * where no one can answer (stdin not a terminal, as in Claude Code's `!` prompt, or a tool reading
+ * `--json`): there it is `oort update --yes`, so the fix runs as printed.
+ */
+function updateCommand(ctx: Ctx): string {
+  return ctx.io.stdinIsTTY && !jsonMode(ctx) ? 'oort update' : 'oort update --yes';
+}
+
+/**
  * Doctor's update line, from the cache: a newer release (with `oort update`), or this one is the
  * latest. Nothing when the check is off or has not run yet.
  */
@@ -1442,7 +1515,7 @@ export function updateRow(ctx: Ctx, now = Date.now()): Check | undefined {
       name: 'version',
       status: 'info',
       detail: noticeText(latest, VERSION).replace(/: oort update$/, ''),
-      fix: 'oort update',
+      fix: updateCommand(ctx),
     };
   }
   if (cache.latest === undefined || cache.checkedAt === undefined) return undefined;

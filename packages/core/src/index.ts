@@ -1,4 +1,4 @@
-export const VERSION = '0.9.0';
+export const VERSION = '0.10.0';
 export * from './model.js';
 export * from './place.js';
 export * from './address.js';
@@ -17,6 +17,7 @@ export * from './tokenize.js';
 export * from './gate.js';
 export * from './recall.js';
 export * from './relevance.js';
+export * from './forget.js';
 export * from './observe.js';
 export * from './temporal.js';
 export { chronoLoaded, mayHaveDateCue, preloadChrono } from './date-cue.js';

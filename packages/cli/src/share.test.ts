@@ -572,6 +572,7 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
       unreachable: [],
       stillShared: [{ constellation: CHECKOUT, name: 'checkout', member: true }],
       constellations: [{ constellation: CHECKOUT, name: 'checkout', member: true }],
+      // Rewriting the memories that restated it is the local store's (CON-144).
     });
     expect(JSON.parse(r.io.stdout).warnings).toEqual([
       {
@@ -582,6 +583,74 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     // The copy stays: it is the team's memory now.
     expect(e.cloud.hive.shared.size).toBe(1);
     expect(e.cloud.memories.has(ID)).toBe(false);
+  });
+
+  it('forget.names-a-later-memory-that-restates-it-and-where-it-is-shared (CON-144)', async () => {
+    const e = setup();
+    withTeams(e);
+    const later = '44444444-5555-4666-8777-888888888888';
+    const unrelated = '55555555-6666-4777-8888-999999999999';
+    e.cloud.memories.set(
+      ID,
+      fakeMemory({
+        id: ID,
+        text: 'The dev server runs on port 3000.',
+        entities: ['dev server'],
+        supersededBy: later,
+      }),
+    );
+    e.cloud.memories.set(
+      later,
+      fakeMemory({
+        id: later,
+        text: 'The dev server port changed from 3000 to 8080.',
+        entities: ['dev server'],
+        supersedes: ID,
+        supersededBy: unrelated,
+      }),
+    );
+    // Later still, restating nothing of it: not named.
+    e.cloud.memories.set(
+      unrelated,
+      fakeMemory({
+        id: unrelated,
+        text: 'The dev server port is 8081.',
+        entities: ['dev server'],
+        supersedes: later,
+      }),
+    );
+    copyIn(e, CHECKOUT, later);
+    const r = await e.run(['forget', ID, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(3);
+    const d = data(r.io.stdout, 'forget');
+    // Oort Cloud does not rewrite: the local-only fields are left out, never an empty claim.
+    expect(d).not.toHaveProperty('rewritten');
+    expect(d).not.toHaveProperty('notRewritten');
+    expect(JSON.parse(r.io.stdout).warnings).toEqual([
+      {
+        code: 'not-rewritten',
+        message: `44444444 may still restate it: Oort Cloud does not rewrite later memories yet; it is also shared to checkout. Check it with \`oort inspect ${later}\`, or forget it too: \`oort forget ${later} --everywhere\`.`,
+      },
+    ]);
+  });
+
+  it('forget.a-later-memory-it-could-not-read-is-a-warning-and-exit-3 (CON-144)', async () => {
+    const e = setup();
+    const later = '44444444-5555-4666-8777-888888888888';
+    e.cloud.memories.set(
+      ID,
+      fakeMemory({ id: ID, text: 'The port is 3000.', entities: [], supersededBy: later }),
+    );
+    e.cloud.fail = { [`GET /v1/memories/${later}`]: 503 };
+    const r = await e.run(['forget', ID, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(3);
+    expect(e.cloud.memories.has(ID)).toBe(false);
+    expect(JSON.parse(r.io.stdout).warnings).toEqual([
+      {
+        code: 'successors-unknown',
+        message: `Could not read ${later.slice(0, 8)}, a later memory of it, so it and any after it may still restate it. Check it with \`oort inspect ${later}\`.`,
+      },
+    ]);
   });
 
   it('forget.outside-the-hive-beta-forgets-without-a-shares-warning', async () => {

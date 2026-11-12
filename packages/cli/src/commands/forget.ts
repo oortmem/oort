@@ -1,4 +1,5 @@
 import { filterFor } from '@oortmem/claude-code';
+import { forgetMemory, MAX_CHAIN, restatedValues, type ForgetOutcome } from '@oortmem/core';
 import {
   copiesLabel,
   everywhereTarget,
@@ -7,6 +8,7 @@ import {
   namedOutcome,
   sharesOf,
   type CloudClient,
+  type CloudMemory,
   type SharedCopy,
 } from '../cloud.js';
 import { emit, jsonMode } from '../output.js';
@@ -41,13 +43,50 @@ interface ForgetData {
   stillShared: SharedCopy[];
   /** Every Constellation named above, with its name. */
   constellations: SharedCopy[];
+  /** Local only: later memories that restated it, rewritten to their current fact (CON-144). */
+  rewritten?: string[];
+  /** Local only: later memories that restate it and were left as they were. */
+  notRewritten?: string[];
+}
+
+const WHY: Record<ForgetOutcome['notRewritten'][number]['reason'], string> = {
+  'no-writer': 'no memory writer is set up (oort doctor says why)',
+  failed: 'the memory writer failed',
+  rejected: 'the rewrite added words or kept a value of it, so it was not used',
+  unchanged: 'the memory writer left it as it was',
+  changed: 'it changed while this command ran',
+  'not-writable': 'it is outside what this agent may change',
+  'chain-too-long': `it lies past the first ${MAX_CHAIN} later memories of the chain, the most one forget rewrites`,
+};
+
+/**
+ * What a local forget did to the later memories that restated it (CON-144): one line per memory
+ * rewritten, and one per memory left as it was, with the command that forgets it too.
+ * True when every one was rewritten.
+ */
+export function reportSuccessors(ctx: Ctx, r: ForgetOutcome): boolean {
+  for (const m of r.rewritten) {
+    ctx.io.out(`Rewrote ${short(m.id)} to its current fact: "${shown(clip(m.text, 80))}"\n`);
+  }
+  for (const m of r.notRewritten) {
+    const what =
+      m.reason === 'chain-too-long'
+        ? 'is a later memory of its chain and may restate it'
+        : 'may still restate it';
+    const msg = `${short(m.id)} ${what}, because ${WHY[m.reason]}. Check it with \`oort inspect ${m.id}\`, or forget it too: \`oort forget ${m.id}\`.`;
+    ctx.io.out(`${msg}\n`);
+    noteWarning(ctx, 'not-rewritten', msg);
+  }
+  return r.notRewritten.length === 0;
 }
 
 const ids = (copies: readonly SharedCopy[]): string[] => copies.map((c) => c.constellation);
 
 /**
  * `oort forget <id> [--yes] [--everywhere]`: deletes a memory everywhere (main record and cold
- * copy). In Oort Cloud a copy shared to a Constellation is the team's memory and stays: the
+ * copy). Locally, the later memories of its chain that restate it are rewritten to their current
+ * fact (CON-144); any left as they were are named, with exit 3, as in Oort Cloud, which does not
+ * rewrite yet. In Oort Cloud a copy shared to a Constellation is the team's memory and stays: the
  * question (and `--json`'s warnings) say where, and `--everywhere` withdraws the copies only you
  * contributed to, filing a removal request with the maintainers where others contributed (CON-67).
  */
@@ -90,9 +129,28 @@ export async function forgetCommand(
       ctx.io.out('Kept.\n');
       return 0;
     }
-    if (cloud !== undefined) await cloud.forget(m.id);
-    else await w.store.forget(writeGrantFor(w, m), m.id);
+    let local: ForgetOutcome | undefined;
+    let restating: CloudSuccessors = { restating: [] };
+    if (cloud !== undefined) {
+      // Oort Cloud does not rewrite yet: find the later memories that restate it, to name them.
+      restating = await laterRestating(cloud, m);
+      await cloud.forget(m.id);
+    } else {
+      local = await forgetMemory(
+        {
+          store: w.store,
+          ...(w.write !== undefined && { write: w.write }),
+          ...(w.embed !== undefined && { embed: w.embed }),
+        },
+        writeGrantFor(w, m),
+        m.id,
+      );
+    }
     ctx.io.out(`Forgot ${m.id}.\n`);
+    const complete =
+      local !== undefined
+        ? reportSuccessors(ctx, local)
+        : await reportCloudSuccessors(cloud, restating, ctx);
     if (live.length > 0) {
       ctx.io.out(
         `Still shared to ${copiesLabel(live)}: that copy is the team's now. \`oort forget ${m.id} --everywhere\` withdraws it.\n`,
@@ -112,10 +170,70 @@ export async function forgetCommand(
         unreachable: [],
         stillShared: live,
         constellations: live,
+        ...(local !== undefined && {
+          rewritten: local.rewritten.map((x) => x.id),
+          notRewritten: local.notRewritten.map((x) => x.id),
+        }),
       });
     }
-    return 0;
+    // A memory that may still repeat it is a partial success (exit 3, as `--everywhere`).
+    return complete ? 0 : 3;
   });
+}
+
+/** The later memories of a memory in Oort Cloud that restate it, and the first one unread. */
+interface CloudSuccessors {
+  restating: CloudMemory[];
+  /** A later memory the walk could not read: it and any after it were not checked. */
+  unread?: string;
+}
+
+/**
+ * The later memories of `m`'s chain in Oort Cloud that restate one of its values (CON-144),
+ * following `supersededBy`. A lookup that fails ends the walk, and is reported.
+ */
+async function laterRestating(cloud: CloudClient, m: CloudMemory): Promise<CloudSuccessors> {
+  const restating: CloudMemory[] = [];
+  const seen = new Set([m.id]);
+  let next = m.supersededBy;
+  while (next !== null && next !== undefined && !seen.has(next)) {
+    seen.add(next);
+    let s: CloudMemory;
+    try {
+      s = await cloud.get(next);
+    } catch {
+      return { restating, unread: next };
+    }
+    if (restatedValues(s, m).length > 0) restating.push(s);
+    next = s.supersededBy;
+  }
+  return { restating };
+}
+
+/**
+ * Names each later memory that may still restate the forgotten one in Oort Cloud, which does not
+ * rewrite them, and the Constellations it is shared to, and one the walk could not read. True
+ * when there is none of either.
+ */
+async function reportCloudSuccessors(
+  cloud: CloudClient | undefined,
+  found: CloudSuccessors,
+  ctx: Ctx,
+): Promise<boolean> {
+  if (cloud === undefined) return true;
+  for (const s of found.restating) {
+    const shared = liveCopies((await sharesOf(cloud, s.id)) ?? []);
+    const where = shared.length > 0 ? `; it is also shared to ${copiesLabel(shared)}` : '';
+    const msg = `${short(s.id)} may still restate it: Oort Cloud does not rewrite later memories yet${where}. Check it with \`oort inspect ${s.id}\`, or forget it too: \`oort forget ${s.id}${shared.length > 0 ? ' --everywhere' : ''}\`.`;
+    ctx.io.out(`${msg}\n`);
+    noteWarning(ctx, 'not-rewritten', msg);
+  }
+  if (found.unread !== undefined) {
+    const msg = `Could not read ${short(found.unread)}, a later memory of it, so it and any after it may still restate it. Check it with \`oort inspect ${found.unread}\`.`;
+    ctx.io.out(`${msg}\n`);
+    noteWarning(ctx, 'successors-unknown', msg);
+  }
+  return found.restating.length === 0 && found.unread === undefined;
 }
 
 /** `forget --everywhere` in Oort Cloud: the source, then each shared copy (CON-67). */
@@ -147,6 +265,8 @@ async function forgetEverywhere(
     ctx.io.out('Kept.\n');
     return 0;
   }
+  const restating: CloudSuccessors =
+    t.memory === null ? { restating: [] } : await laterRestating(cloud, t.memory);
   const r = namedOutcome(await cloud.forgetEverywhere(t.id), t.edges);
   ctx.io.out(t.memory === null ? `${t.id} was already forgotten.\n` : `Forgot ${t.id}.\n`);
   if (r.withdrawn.length > 0) ctx.io.out(`Withdrawn from ${copiesLabel(r.withdrawn)}.\n`);
@@ -163,6 +283,7 @@ async function forgetEverywhere(
   if (r.withdrawn.length + r.requested.length + r.unreachable.length === 0) {
     ctx.io.out('It was not shared to any Constellation.\n');
   }
+  const complete = await reportCloudSuccessors(cloud, restating, ctx);
   if (jsonMode(ctx)) {
     const stillShared = [...r.requested, ...r.unreachable].filter(
       (c, i, all) => all.findIndex((x) => x.constellation === c.constellation) === i,
@@ -182,6 +303,6 @@ async function forgetEverywhere(
       ],
     });
   }
-  // A copy not reached is a partial success (exit 3, as `import`): run it again later.
-  return r.unreachable.length > 0 ? 3 : 0;
+  // A copy not reached, or a later memory that may restate it, is a partial success (exit 3).
+  return r.unreachable.length > 0 || !complete ? 3 : 0;
 }

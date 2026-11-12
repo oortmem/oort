@@ -18,6 +18,7 @@ import {
   grantReads,
   grantWrites,
   isCurrent,
+  isZeroVector,
   nodeKey,
   nodeOf,
   resolveAddressing,
@@ -67,6 +68,14 @@ import {
   type RescoredRow,
 } from './rabitq-store.js';
 import {
+  ERASE_AUTO_MAX_BYTES,
+  eraseOldText,
+  markOldTextErased,
+  oldTextErased,
+  storeBytes,
+  zeroVectorCount,
+} from './erase.js';
+import {
   applySchema,
   assertMigratable,
   binaryIndexPlan,
@@ -111,6 +120,7 @@ export {
 } from './rabitq.js';
 export { RQ_TABLE, RQ_VEC_TABLE, RQ_GONE_TABLE, RQ_META_TABLE } from './rabitq-store.js';
 export { BINARY_AUTO_THRESHOLD, BINARY_OVERSAMPLE } from './binary.js';
+export { ERASE_AUTO_MAX_BYTES } from './erase.js';
 export { BACKUPS_KEPT, listBackups, type BackupKind } from './backup.js';
 export {
   readEmbedderBinding,
@@ -196,6 +206,12 @@ export interface SqliteStoreOptions {
   vectorIndex?: VectorIndex;
   /** `vectorIndex: 'auto'` builds the binary index at this many searchable vectors (default 100,000). */
   binaryAutoThreshold?: number;
+  /**
+   * The one-time erase of text deleted by Oort 0.9.0 or older (CON-140; `erase.ts`): `auto` (default) runs
+   * it on an open that may migrate when the file is at most `ERASE_AUTO_MAX_BYTES`; `now` runs it
+   * whatever the size (`oort doctor --vacuum`). An open with `migrate: false` never runs it.
+   */
+  eraseOldText?: 'auto' | 'now';
   /**
    * Which engine searches a RaBitQ index: `auto` (default) the native one when its prebuilt
    * binary loads on this platform, else the TypeScript one (same results, slower; logged once);
@@ -626,6 +642,58 @@ export function sqliteVectorIndex(dbPath: string):
 }
 
 /**
+ * Whether the store at `dbPath` has had the one-time erase of text deleted by Oort 0.9.0 or older
+ * (CON-140), its size, and how many all-zero vectors it holds (CON-141), read without changing
+ * it: undefined when there is no store yet.
+ */
+export function sqliteEraseState(
+  dbPath: string,
+): { erased: boolean; bytes: number; zeroVectors: number } | undefined {
+  if (!fs.existsSync(dbPath)) return undefined;
+  const db = new Database(path.resolve(dbPath), { readonly: true, fileMustExist: true });
+  try {
+    if (schemaVersionOf(db) === undefined) return undefined;
+    sqliteVec.load(db);
+    const dim = db
+      .prepare<[], { value: string }>("SELECT value FROM meta WHERE key = 'dimension'")
+      .get();
+    return {
+      erased: oldTextErased(db),
+      bytes: storeBytes(path.resolve(dbPath)),
+      zeroVectors: dim === undefined ? 0 : zeroVectorCount(db, Number(dim.value)),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Runs the one-time erase of text deleted by Oort 0.9.0 or older on the store at `dbPath` now, whatever
+ * its size (`oort doctor --vacuum`; CON-140). The store must be at the current schema version
+ * (open it once first). False when another process holds it and `VACUUM` cannot run.
+ */
+export function vacuumSqliteStore(opts: { path: string; now?: Date }): boolean {
+  const dbPath = path.resolve(opts.path);
+  const db = withPrivateUmask(() => new Database(dbPath, { fileMustExist: true }));
+  try {
+    db.pragma('busy_timeout = 5000');
+    db.pragma('secure_delete = ON');
+    db.pragma('journal_size_limit = 0');
+    sqliteVec.load(db);
+    defineWriterGuard(db);
+    if (schemaVersionOf(db) !== SCHEMA_VERSION) {
+      throw new StoreMigrationRequiredError(dbPath, schemaVersionOf(db) ?? 0);
+    }
+    const dim = db
+      .prepare<[], { value: string }>("SELECT value FROM meta WHERE key = 'dimension'")
+      .get();
+    return eraseOldText(db, Number(dim?.value ?? 0), opts.now ?? new Date());
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * Rebuilds the store's RaBitQ index from its int8 vectors with a new centroid (`oort reindex`):
  * for a store that has outgrown the centroid it was built with (`sqliteVectorIndex` says
  * `recentreDue`), whose looser bounds mean more rescoring reads. No open does this by itself: it
@@ -815,15 +883,21 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const blobs = openBlobDir(coldDir, log);
   if (!fs.existsSync(dbPath)) fs.closeSync(fs.openSync(dbPath, 'a', 0o600));
 
+  let created = false;
   const db = withPrivateUmask(() => {
     const conn = new Database(dbPath);
     try {
       conn.pragma(`busy_timeout = ${busyTimeoutMs}`);
       enableWal(conn, busyTimeoutMs);
       conn.pragma('foreign_keys = ON');
+      // A deleted or rewritten row is overwritten with zeros, not left in a free page (CON-140).
+      conn.pragma('secure_delete = ON');
+      // A WAL reset by a checkpoint is cut to nothing, not left holding old frames (CON-140).
+      conn.pragma('journal_size_limit = 0');
       sqliteVec.load(conn);
       defineWriterGuard(conn);
       const from = schemaVersionOf(conn);
+      created = from === undefined;
       if (from !== undefined && from >= 1 && from < SCHEMA_VERSION) {
         // Checked and copied before the migration's transaction starts; a failed
         // copy fails the open and the store stays as it was.
@@ -875,6 +949,19 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     }
   });
   try {
+    // CON-140: a store this version created never held text deleted without `secure_delete`.
+    if (!oldTextErased(db)) {
+      if (created) markOldTextErased(db, clock());
+      else if (
+        opts.migrate !== false &&
+        (opts.eraseOldText === 'now' || storeBytes(dbPath) <= ERASE_AUTO_MAX_BYTES) &&
+        !eraseOldText(db, dimension, clock())
+      ) {
+        log(
+          'oort store: another process has the store open, so text deleted by Oort 0.9.0 or older stays until the next open',
+        );
+      }
+    }
     if (process.platform !== 'win32') {
       for (const suffix of ['', '-wal', '-shm']) chmodIfExists(`${dbPath}${suffix}`, 0o600);
     }
@@ -955,6 +1042,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ),
     ftsDelete: db.prepare<[number]>(`DELETE FROM ${FTS_TABLE} WHERE rowid = ?`),
+    ftsOptimize: db.prepare(`INSERT INTO ${FTS_TABLE} (${FTS_TABLE}) VALUES ('optimize')`),
     ftsInsert: db.prepare<[number, string, string, string]>(
       `INSERT INTO ${FTS_TABLE} (rowid, text, stub, entities) VALUES (?, ?, ?, ?)`,
     ),
@@ -1043,7 +1131,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        )
        SELECT knn.id AS id, knn.distance AS distance, m.tier AS tier, m.updated_at AS updated_at
        FROM knn CROSS JOIN memories m ON m.id = knn.id
-       WHERE m.tier != 'cold' AND ${grantSql(1)}
+       WHERE m.tier != 'cold' AND knn.distance IS NOT NULL AND ${grantSql(1)}
        ORDER BY knn.distance, m.updated_at DESC, m.id`,
     );
 
@@ -1129,7 +1217,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        SELECT scored.id AS id, scored.distance AS distance, m.tier AS tier,
               m.updated_at AS updated_at, (SELECT count(*) FROM knn) AS rescored
        FROM scored CROSS JOIN memories m ON m.id = scored.id
-       WHERE m.tier != 'cold' AND ${grantSql(1)}
+       WHERE m.tier != 'cold' AND scored.distance IS NOT NULL AND ${grantSql(1)}
        ORDER BY scored.distance, m.updated_at DESC, m.id
        LIMIT @k`,
     );
@@ -1345,11 +1433,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       project: projectKey(address.projectId),
       author: author.agentId,
     };
-    const bytes = m.embedding === undefined ? undefined : toBytes(m.embedding);
-    if (m.embedding !== undefined && bytes !== undefined) {
+    // A zero vector has no direction (cosine is NaN): it is not kept (CON-141).
+    const kept = m.embedding !== undefined && !isZeroVector(m.embedding) ? m.embedding : undefined;
+    const bytes = kept === undefined ? undefined : toBytes(kept);
+    if (kept !== undefined && bytes !== undefined) {
       q.vecInsert.run(m.id, bytes, keys.node, keys.project, keys.author, m.tier);
       if (b !== undefined && m.tier !== 'cold') {
-        b.insert.run(m.id, binaryCode(m.embedding), keys.node, keys.project, keys.author, bytes);
+        b.insert.run(m.id, binaryCode(kept), keys.node, keys.project, keys.author, bytes);
       }
     }
     rq.put(row.rid, bytes, keys, m.tier !== 'cold');
@@ -1376,6 +1466,29 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     ms.flatMap((m) => writeMemory(grant, m)),
   );
 
+  /** `writeAll` for the writes whose row still matches its snapshot; the rest are skipped. */
+  const writeIfUnchanged = db.transaction(
+    (grant: Grant, writes: { next: Memory; was: Pick<Memory, 'id' | 'updatedAt' | 'tier'> }[]) => {
+      const skipped: string[] = [];
+      const files: string[] = [];
+      for (const { next, was } of writes) {
+        // Out of the grant reads as missing: skipped, never a GrantError.
+        const row = scopedRow(grant.writeNodes, was.id);
+        if (
+          row === undefined ||
+          next.id !== was.id ||
+          row.updated_at !== was.updatedAt ||
+          row.tier !== was.tier
+        ) {
+          skipped.push(was.id);
+          continue;
+        }
+        files.push(...writeMemory(grant, next));
+      }
+      return { skipped, files };
+    },
+  );
+
   function upsertMany(grant: Grant, ms: Memory[]): void {
     // The rows are gone once the transaction commits; only then unlink exactly
     // the blob each one named (unique per coldPut, so never another write's).
@@ -1397,11 +1510,38 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       q.ftsDelete.run(row.rid);
       q.placeDelete.run(row.rid);
       rq.remove(row.rid);
+      // A contentless FTS5 delete only marks the row deleted: its terms stay in the index's
+      // segments until they merge. Merging them all drops them now (CON-140); with
+      // `secure_delete` the pages they leave are zeroed. Rows rewritten earlier (`upsert`) are
+      // purged here too.
+      q.ftsOptimize.run();
     }
     q.vecDelete.run(id);
     bit()?.remove.run(id);
     return q.coldDelete.get(id)?.path;
   });
+
+  /**
+   * Copies the WAL into the database and truncates it (CON-140): the WAL still holds the pages
+   * as they were before a forget, until a later write happens to overwrite them. Never waits: a
+   * reader in another process (the MCP server, a hook) keeps it from finishing, and then this
+   * says so (`log`) and a later checkpoint resets it. True when the WAL is empty.
+   */
+  function truncateWal(): boolean {
+    db.pragma('busy_timeout = 0');
+    try {
+      const r = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number }[];
+      if (r[0]?.busy === 0) return true;
+    } catch {
+      // Busy or locked: as below.
+    } finally {
+      db.pragma(`busy_timeout = ${busyTimeoutMs}`);
+    }
+    log(
+      'oort store: another process is reading the store, so its write-ahead log keeps the old pages until the next checkpoint',
+    );
+    return false;
+  }
 
   const recordAccessTx = db.transaction((grant: Grant, ids: string[], at: Date) => {
     for (const id of ids) {
@@ -1541,6 +1681,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       upsertMany(grant, ms);
     },
 
+    async upsertManyIfUnchanged(grant, writes) {
+      open();
+      assertGrant(grant);
+      const r = writeIfUnchanged.immediate(grant, writes);
+      removeAfterCommit(r.files);
+      rqAfterWrite();
+      return { skipped: r.skipped };
+    },
+
     async get(grant, id) {
       open();
       assertGrant(grant);
@@ -1555,6 +1704,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       // The engine drops the forgotten vector's code now, not at the next search.
       rqAfterWrite();
       if (file !== undefined) blobs.remove(file);
+      truncateWal();
     },
 
     /** BM25 over normalised tokens, any-token match; `score` is -bm25 (higher is better). */
@@ -1585,7 +1735,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       assertGrant(grant);
       checkDimension(v, 'dense');
       const patterns = live(grant.readNodes);
-      if (k <= 0 || patterns.length === 0) return [];
+      // A zero query has no direction: it matches nothing (CON-141).
+      if (k <= 0 || patterns.length === 0 || isZeroVector(v)) return [];
       const kk = Math.min(Math.floor(k), MAX_KNN);
       const sp = searchOpts?.spatial;
       const runs = denseRuns(patterns, v, kk, hasSpatialFilter(sp) ? sp : undefined);

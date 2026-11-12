@@ -76,9 +76,15 @@ export interface MemoryBackend {
    * backend that can tell lists those Constellations in `stillShared` and says in `note` how the
    * person withdraws them. The model never withdraws them itself (CON-67).
    */
-  forget(input: {
-    id: string;
-  }): Promise<{ forgotten: string; stillShared?: string[]; note?: string }>;
+  forget(input: { id: string }): Promise<{
+    forgotten: string;
+    stillShared?: string[];
+    /** Later memories that restated it, rewritten to their current fact (CON-144). */
+    rewritten?: string[];
+    /** Later memories that restate it, left as they were; `note` says what to do. */
+    notRewritten?: string[];
+    note?: string;
+  }>;
   pin(input: ToolInput<'pin'>): Promise<{ id: string; pinned: boolean; changed: boolean }>;
   explain(input: ToolInput<'explain'>): Promise<Record<string, unknown>>;
   listRecent(input: ToolInput<'list_recent'>): Promise<{ memories: Record<string, unknown>[] }>;
