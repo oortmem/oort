@@ -71,10 +71,11 @@ Every command except `oort hook`, `oort mcp` and a foreground `oort serve` takes
 `OORT_OUTPUT=json`) and prints one `oort.v1` envelope on stdout. That is the contract for
 Python today and for any other language. See [cli-and-python.md](cli-and-python.md).
 
-## Not in 0.8.0
+## Not in 0.9.0
 
 - A TypeScript `remote` mode. `oort serve --listen` (service mode) and the Python client's
   `mode="remote"` ship in 0.7.0; the TypeScript SDK has `local` and `cloud` only.
 - Per-user agent memory (a Star per end user) comes with CON-92.
-- Spatial memory (`place`, `near`, `within`) is 0.9.0 or newer and local mode only; in 0.8.0
-  passing them is a usage error, and Oort Cloud refuses them (`local-only`) until it holds places.
+- Spatial memory (`place`, `near`, `within`) in Oort Cloud. It is local mode only: cloud mode
+  refuses them (`local-only`) until Oort Cloud holds places. In 0.8.0 or older, passing them is a
+  usage error.
