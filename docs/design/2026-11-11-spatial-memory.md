@@ -71,17 +71,26 @@ reported by field name:
   composed one. Invisible characters are refused: every Unicode Default_Ignorable_Code_Point, such
   as the variation selectors (U+FE00 to U+FE0F) and the combining grapheme joiner (U+034F), since
   `room:B` followed by one looks exactly like `room:B` but would never match it. The exception is
-  the joiners a word needs: ZWNJ or ZWJ between two letters or marks (Persian `خانه` + ZWNJ +
-  `ی`, Devanagari `क्` + ZWJ + `ष`), and a ZWJ after a mark that ends a word before a digit or
-  symbol (Malayalam `ന്` + ZWJ + `:1`, the older chillu spelling). A joiner that leads or ends a
-  segment, or sits next to another joiner, is refused. The trade-off:
-  Mongolian free variation selectors (U+180B to U+180F), ideographic variation sequences (U+E0100
-  to U+E01EF) and Khmer's inherent vowels (U+17B4, U+17B5) cannot appear in a place name; write
-  the name without them. `kind:name` is the convention (`room:B`), not a rule. Comparison is
-  otherwise exact and case-sensitive.
+  the joiners IDNA's ContextJ rules allow (RFC 5892, Appendix A.1 and A.2):
+  - ZWJ (U+200D) only right after a virama, a character with Canonical_Combining_Class 9
+    (Devanagari `क्` + ZWJ + `ष`, Sinhala `ශ්` + ZWJ + `රී`). It may end a segment, as Malayalam's
+    older chillu spelling does (`ന്` + ZWJ).
+  - ZWNJ (U+200C) right after a virama, or between two letters of a joining script (Arabic,
+    Syriac, N'Ko, Mandaic, Mongolian, Adlam, Hanifi Rohingya, Manichaean, Psalter Pahlavi), with
+    only nonspacing marks around it (Persian `خانه` + ZWNJ + `ی`).
+
+  Any other joiner (`room:B` + ZWJ + `X`, one at the start of a segment, two in a row) is refused.
+  The trade-off: Mongolian free variation selectors (U+180B to U+180F), ideographic variation
+  sequences (U+E0100 to U+E01EF) and Khmer's inherent vowels (U+17B4, U+17B5) cannot appear in a
+  place name; write the name without them. `kind:name` is the convention (`room:B`), not a rule.
+  Comparison is otherwise exact and case-sensitive. Joiners are not folded out: a Persian name
+  typed with and without its ZWNJ is two different places to `within`. Text search treats
+  joiners its own way (it drops a ZWJ inside a word and splits words at a ZWNJ); place paths do
+  not.
 - **Before 0.9.0:** stores written by unreleased builds of `main` may hold place paths with
-  characters refused since. Those places read back as none and should be tagged again. Spatial
-  memory was never released, so there is no migration.
+  characters refused since. Those places read back as none and should be tagged again. A memory
+  whose stored place now fails the check loses that place, pose included, the next time the
+  memory is rewritten. Spatial memory was never released, so there is no migration.
 - **`mapId`, `frame`:** one word of 1 to 128 characters (letters, digits, `. _ : @ / -`). `frame`
   `odom` is refused, in any case: odometry drifts, so its coordinates mean nothing a day later.
 - **Numbers** are finite. Coordinates are within ±10,000 km of the origin, `radius`, `dx`, `dy`,

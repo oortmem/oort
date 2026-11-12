@@ -248,30 +248,43 @@ describe('place', () => {
     expect(checkPlacePath('ห้อง:B/कमरा')).toBe('ห้อง:B/कमरा');
   });
 
-  it('place.paths-keep-joiners-inside-words', () => {
-    // Persian needs ZWNJ between letters; Devanagari and Sinhala conjuncts take a ZWJ after the
-    // virama; Malayalam's older chillu spelling ends a word with virama + ZWJ.
+  it('place.paths-keep-joiners-only-where-idna-contextj-allows-them', () => {
+    // RFC 5892 Appendix A.1 and A.2: ZWJ only right after a virama; ZWNJ after a virama or
+    // between letters of a joining script (Persian). Anything else would be an invisible
+    // look-alike of a path without it.
     for (const p of [
       'خانه\u200cی:B', // Persian: خانه + ZWNJ + ی
+      '\u0628\u064e\u200c\u06cc:1', // Arabic letter + fatha + ZWNJ + letter: marks may sit between
       '\u0915\u094d\u200d\u0937:1', // Devanagari: क् + ZWJ + ष
-      '\u0d28\u0d4d\u200d:1', // Malayalam chillu: ന് + ZWJ
+      '\u0915\u094d\u200c\u0937:1', // Devanagari: क् + ZWNJ + ष (no conjunct)
+      '\u0d28\u0d4d\u200d:1', // Malayalam chillu: ന് + ZWJ, before a symbol
+      'room:\u0d05\u0d35\u0d28\u0d4d\u200d', // room:അവന് + ZWJ, ending the path
+      '\u0d28\u0d4d\u200d/x', // ന് + ZWJ, ending a segment
       'site:hq/\u0dc1\u0dca\u200d\u0dbb\u0dd3', // Sinhala: ශ් + ZWJ + රී
     ]) {
-      expect(checkPlacePath(p)).toBe(p.normalize('NFC'));
+      expect(checkPlacePath(p), JSON.stringify(p)).toBe(p.normalize('NFC'));
       expect(checkSpatialFilter({ within: p })).toEqual({ within: p.normalize('NFC') });
     }
-    // Anywhere else a joiner is an invisible character.
     for (const p of [
-      '\u200cخانه:B', // leading
+      // Look-alikes in scripts that never need a joiner there.
+      'room:B\u200dX',
+      'site:h\u200cq',
+      '\u6771\u200d\u4eac', // 東 + ZWJ + 京
+      '\u0412\u200dB', // Cyrillic В + ZWJ + B
+      'x\u0301\u200d1', // a mark, not a virama, before the ZWJ
+      'B\u20dd\u200d:1',
+      'a\u200d\u0301',
+      // Leading, trailing (but after a virama), doubled, and next to a digit or symbol.
+      '\u200cخانه:B',
       '\u200dक्ष:1',
-      'خانه\u200c', // trailing
-      'خانه\u200c/x', // trailing, before the next segment
-      '\u0915\u094d\u200d', // trailing after the virama
-      'خانه\u200c\u200cی:B', // doubled
+      'خانه\u200c',
+      'خانه\u200c/x',
+      'خانه\u200c\u200cی:B',
       '\u0915\u094d\u200d\u200d\u0937:1',
-      'room:B\u200c\u200d1', // between a letter and a digit, via another joiner
-      'room\u200d:B', // after a letter, before a symbol
-      '1\u200c2', // between digits
+      'room:B\u200c\u200d1',
+      'room\u200d:B',
+      '1\u200c2',
+      'خانه\u200c1', // ZWNJ after a joining letter but before a digit
     ]) {
       expect(() => checkPlacePath(p), JSON.stringify(p)).toThrow(/^place\.nodeId .*invisible/);
     }

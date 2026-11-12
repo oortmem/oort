@@ -82,7 +82,7 @@ export const ALL_Z = 1e30;
 
 /**
  * A segment starts with a letter, digit or symbol, then may carry marks (Devanagari, Thai vowel
- * signs) and the joiners ZWNJ and ZWJ (where `JOINER_IN_WORD` allows them).
+ * signs) and the joiners ZWNJ and ZWJ (where `CONTEXT_J` allows them).
  */
 const SEGMENT = /^[\p{L}\p{N}._:@-][\p{L}\p{M}\p{N}._:@\u200c\u200d-]{0,63}$/u;
 /**
@@ -90,18 +90,37 @@ const SEGMENT = /^[\p{L}\p{N}._:@-][\p{L}\p{M}\p{N}._:@\u200c\u200d-]{0,63}$/u;
  * the variation selectors (U+FE00 to U+FE0F, U+E0100 to U+E01EF), the combining grapheme joiner
  * (U+034F), Mongolian free variation selectors, Khmer's inherent vowels (U+17B4, U+17B5) and the
  * Hangul fillers. `room:B` followed by one looks exactly like `room:B` but never matches it. The
- * one exception is `JOINER_IN_WORD`.
+ * one exception is `CONTEXT_J`.
  */
 const INVISIBLE = /\p{Default_Ignorable_Code_Point}/u;
 /**
- * The joiners a word needs, which `INVISIBLE` then does not see: ZWNJ or ZWJ between two letters
- * or marks (Persian `خانه` + ZWNJ + `ی`, Devanagari `क्` + ZWJ + `ष`), and a ZWJ after a mark
- * that ends a word before a digit or symbol of the same segment (Malayalam's older chillu
- * spelling, `ന്` + ZWJ + `:1`). A joiner that leads or ends a segment, or sits next to another
- * joiner, stays invisible and is refused.
+ * Every virama: the code points with Canonical_Combining_Class 9 (Virama) in Unicode 17.0.0
+ * (UnicodeData.txt field 3). JavaScript has no property for it.
  */
-const JOINER_IN_WORD =
-  /(?<=[\p{L}\p{M}])[\u200c\u200d](?=[\p{L}\p{M}])|(?<=\p{M})\u200d(?=[\p{N}._:@-])/gu;
+const VIRAMA =
+  '\u094d\u09cd\u0a4d\u0acd\u0b4d\u0bcd\u0c4d\u0ccd\u0d3b-\u0d3c\u0d4d\u0dca\u0e3a' +
+  '\u0eba\u0f84\u1039-\u103a\u1714-\u1715\u1734\u17d2\u1a60\u1b44\u1baa-\u1bab' +
+  '\u1bf2-\u1bf3\u2d7f\ua806\ua82c\ua8c4\ua953\ua9c0\uaaf6\uabed\u{10a3f}\u{11046}' +
+  '\u{11070}\u{1107f}\u{110b9}\u{11133}-\u{11134}\u{111c0}\u{11235}\u{112ea}\u{1134d}' +
+  '\u{113ce}-\u{113d0}\u{11442}\u{114c2}\u{115bf}\u{1163f}\u{116b6}\u{1172b}\u{11839}' +
+  '\u{1193d}-\u{1193e}\u{119e0}\u{11a34}\u{11a47}\u{11a99}\u{11c3f}\u{11d44}-\u{11d45}' +
+  '\u{11d97}\u{11f41}-\u{11f42}\u{1612f}';
+/** A letter of a script whose letters join (IDNA's joining-letter case, in practical form). */
+const JOINING_LETTER =
+  '(?=\\p{L})[\\p{sc=Arabic}\\p{sc=Syriac}\\p{sc=Nko}\\p{sc=Mandaic}\\p{sc=Mongolian}' +
+  '\\p{sc=Adlam}\\p{sc=Hanifi_Rohingya}\\p{sc=Manichaean}\\p{sc=Psalter_Pahlavi}]';
+/**
+ * The joiners IDNA's ContextJ rules allow (RFC 5892, Appendix A.1 and A.2), which `INVISIBLE`
+ * then does not see. ZWJ only right after a virama (Devanagari `क्` + ZWJ + `ष`, Sinhala `ශ්` + ZWJ
+ * + `රී`, and Malayalam's older chillu `ന്` + ZWJ, which may end a segment). ZWNJ after a virama,
+ * or between two letters of a joining script with only nonspacing marks around it (Persian
+ * `خانه` + ZWNJ + `ی`). Anywhere else a joiner is an invisible look-alike and is refused.
+ */
+const CONTEXT_J = new RegExp(
+  `(?<=[${VIRAMA}])[\\u200c\\u200d]` +
+    `|(?<=${JOINING_LETTER}\\p{Mn}*)\\u200c(?=\\p{Mn}*${JOINING_LETTER})`,
+  'gu',
+);
 const WORD = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/;
 const MAX_SEGMENTS = 16;
 const MAX_PATH = 256;
@@ -147,7 +166,7 @@ function frame(v: unknown, at: string): string {
 /**
  * A place path, checked and in Unicode NFC (so a decomposed `é` is stored and filtered as the
  * composed one): 1 to 16 segments of 1 to 64 letters (with their combining marks), digits and
- * `. _ : @ -`, with no invisible (default-ignorable) characters but the joiners inside a word.
+ * `. _ : @ -`, with no invisible (default-ignorable) characters but the joiners IDNA's ContextJ rules allow.
  */
 export function checkPlacePath(raw: unknown, at = 'place.nodeId'): string {
   const v = typeof raw === 'string' ? raw.normalize('NFC') : raw;
@@ -156,7 +175,7 @@ export function checkPlacePath(raw: unknown, at = 'place.nodeId'): string {
   }
   const segments = v.split('/');
   // Before the segment pattern, so a soft hyphen or a stray joiner is named for what it is.
-  if (segments.some((s) => INVISIBLE.test(s.replace(JOINER_IN_WORD, '')))) {
+  if (segments.some((s) => INVISIBLE.test(s.replace(CONTEXT_J, '')))) {
     fail(
       at,
       'cannot hold invisible characters such as variation selectors, or a joiner outside a word',
