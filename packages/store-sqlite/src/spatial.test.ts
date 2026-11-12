@@ -17,6 +17,7 @@ import {
 } from '@oortmem/core';
 import { CONFORMANCE_DIMENSION, makeMemory, TG, vec } from '@oortmem/core/store-conformance';
 import { openSqliteStore } from './index.js';
+import { defineWriterGuard } from './schema.js';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-sqlite-spatial-'));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -52,6 +53,7 @@ const near = (x: number, y: number, radius: number): SpatialFilter => ({
 function rawExec(file: string, sql: string): void {
   const db = new Database(file);
   try {
+    defineWriterGuard(db); // a connection that writes `memories` passes the version 6 guard
     db.exec(sql);
   } finally {
     db.close();

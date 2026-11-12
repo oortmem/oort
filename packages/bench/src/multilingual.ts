@@ -27,7 +27,7 @@ import {
   type Reranker,
   type ResolvedConfig,
 } from '@oortmem/core';
-import { openSqliteStore } from '@oortmem/store-sqlite';
+import { openSqliteStore, type VectorIndex } from '@oortmem/store-sqlite';
 import {
   cell,
   computeMetrics,
@@ -225,6 +225,8 @@ export interface MultilingualOptions {
   distractors?: number;
   /** Progress lines (default: none). */
   log?: (message: string) => void;
+  /** The stores' dense index (CON-17; default `auto`, so int8 at this size). */
+  vectorIndex?: VectorIndex;
 }
 
 export interface LatencyStats {
@@ -258,12 +260,17 @@ function quantile(xs: number[], q: number): number {
   return s[Math.min(s.length - 1, Math.floor(q * s.length))] as number;
 }
 
-async function seeded(dir: string, memories: Memory[]): Promise<MemoryStore> {
+async function seeded(
+  dir: string,
+  memories: Memory[],
+  vectorIndex?: VectorIndex,
+): Promise<MemoryStore> {
   fs.mkdirSync(dir, { recursive: true });
   const store = await openSqliteStore({
     path: path.join(dir, 'oort.sqlite'),
     coldDir: path.join(dir, 'cold'),
     dimension: EMBEDDING_DIMENSION,
+    ...(vectorIndex !== undefined && { vectorIndex }),
     log: () => {},
   });
   await seedStore(store, memories);
@@ -355,7 +362,11 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
   };
   try {
     if (conditions.includes('mono') || conditions.includes('cross')) {
-      const english = await seeded(path.join(tmp, 'en'), await vectors(memoriesFor(set, 'en')));
+      const english = await seeded(
+        path.join(tmp, 'en'),
+        await vectors(memoriesFor(set, 'en')),
+        opts.vectorIndex,
+      );
       try {
         for (const lang of languages) {
           if (conditions.includes('mono')) {
@@ -363,7 +374,11 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
             if (lang === 'en') {
               result(lang, 'mono', rows, await recallRows(english, rows, config, opts));
             } else {
-              const own = await seeded(path.join(tmp, lang), await vectors(memoriesFor(set, lang)));
+              const own = await seeded(
+                path.join(tmp, lang),
+                await vectors(memoriesFor(set, lang)),
+                opts.vectorIndex,
+              );
               try {
                 result(lang, 'mono', rows, await recallRows(own, rows, config, opts));
               } finally {
@@ -385,7 +400,11 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
     if (conditions.includes('mixed')) {
       const all = LANGUAGES.flatMap((lang) => memoriesFor(set, lang));
       const noise = generateMemories(opts.distractors ?? FIXTURE_COUNT, FIXTURE_SEED);
-      const mixed = await seeded(path.join(tmp, 'mixed'), await vectors([...all, ...noise]));
+      const mixed = await seeded(
+        path.join(tmp, 'mixed'),
+        await vectors([...all, ...noise]),
+        opts.vectorIndex,
+      );
       try {
         for (const lang of languages) {
           const rows = rowsFor(set, lang, 'mixed');

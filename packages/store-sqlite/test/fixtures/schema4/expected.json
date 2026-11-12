@@ -1,0 +1,1737 @@
+{
+  "list": [
+    {
+      "id": "v4-00",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-00: queue shard 0 drains nightly.",
+      "stub": "v4 fact v4-00",
+      "entities": ["shard-0"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "hot",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-127, -86, -45, -4, 37, 78, 119, -94]
+    },
+    {
+      "id": "v4-01",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-01: queue shard 1 drains nightly.",
+      "stub": "v4 fact v4-01",
+      "entities": ["shard-1"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-110, -69, -28, 13, 54, 95, -118, -77]
+    },
+    {
+      "id": "v4-02",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-02: queue shard 2 drains nightly.",
+      "stub": "v4 fact v4-02",
+      "entities": ["shard-2"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-93, -52, -11, 30, 71, 112, -101, -60]
+    },
+    {
+      "id": "v4-03",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-03: queue shard 3 drains nightly.",
+      "stub": "v4 fact v4-03",
+      "entities": ["shard-3"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-76, -35, 6, 47, 88, -125, -84, -43]
+    },
+    {
+      "id": "v4-04",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-04: queue shard 4 drains nightly.",
+      "stub": "v4 fact v4-04",
+      "entities": ["shard-4"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-59, -18, 23, 64, 105, -108, -67, -26]
+    },
+    {
+      "id": "v4-05",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-05: queue shard 5 drains nightly.",
+      "stub": "v4 fact v4-05",
+      "entities": ["shard-5"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "hot",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-42, -1, 40, 81, 122, -91, -50, -9]
+    },
+    {
+      "id": "v4-06",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-06: queue shard 6 drains nightly.",
+      "stub": "v4 fact v4-06",
+      "entities": ["shard-6"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-25, 16, 57, 98, -115, -74, -33, 8]
+    },
+    {
+      "id": "v4-07",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-07: queue shard 7 drains nightly.",
+      "stub": "v4 fact v4-07",
+      "entities": ["shard-7"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-8, 33, 74, 115, -98, -57, -16, 25]
+    },
+    {
+      "id": "v4-08",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-08: queue shard 8 drains nightly.",
+      "stub": "v4 fact v4-08",
+      "entities": ["shard-8"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [9, 50, 91, -122, -81, -40, 1, 42]
+    },
+    {
+      "id": "v4-09",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-09: queue shard 9 drains nightly.",
+      "stub": "v4 fact v4-09",
+      "entities": ["shard-9"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [26, 67, 108, -105, -64, -23, 18, 59]
+    },
+    {
+      "id": "v4-10",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-10: queue shard 10 drains nightly.",
+      "stub": "v4 fact v4-10",
+      "entities": ["shard-10"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "hot",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [43, 84, 125, -88, -47, -6, 35, 76]
+    },
+    {
+      "id": "v4-11",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-11: queue shard 11 drains nightly.",
+      "stub": "v4 fact v4-11",
+      "entities": ["shard-11"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [60, 101, -112, -71, -30, 11, 52, 93]
+    },
+    {
+      "id": "v4-12",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-12: queue shard 12 drains nightly.",
+      "stub": "v4 fact v4-12",
+      "entities": ["shard-12"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [77, 118, -95, -54, -13, 28, 69, 110]
+    },
+    {
+      "id": "v4-13",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-13: queue shard 13 drains nightly.",
+      "stub": "v4 fact v4-13",
+      "entities": ["shard-13"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [94, -119, -78, -37, 4, 45, 86, -127]
+    },
+    {
+      "id": "v4-14",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-14: queue shard 14 drains nightly.",
+      "stub": "v4 fact v4-14",
+      "entities": ["shard-14"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [111, -102, -61, -20, 21, 62, 103, -110]
+    },
+    {
+      "id": "v4-15",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-15: queue shard 15 drains nightly.",
+      "stub": "v4 fact v4-15",
+      "entities": ["shard-15"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "hot",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-126, -85, -44, -3, 38, 79, 120, -93]
+    },
+    {
+      "id": "v4-16",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-16: queue shard 16 drains nightly.",
+      "stub": "v4 fact v4-16",
+      "entities": ["shard-16"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-109, -68, -27, 14, 55, 96, -117, -76]
+    },
+    {
+      "id": "v4-17",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-17: queue shard 17 drains nightly.",
+      "stub": "v4 fact v4-17",
+      "entities": ["shard-17"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-92, -51, -10, 31, 72, 113, -100, -59]
+    },
+    {
+      "id": "v4-18",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-18: queue shard 18 drains nightly.",
+      "stub": "v4 fact v4-18",
+      "entities": ["shard-18"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-75, -34, 7, 48, 89, -124, -83, -42]
+    },
+    {
+      "id": "v4-19",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-19: queue shard 19 drains nightly.",
+      "stub": "v4 fact v4-19",
+      "entities": ["shard-19"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-58, -17, 24, 65, 106, -107, -66, -25]
+    },
+    {
+      "id": "v4-20",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-20: queue shard 20 drains nightly.",
+      "stub": "v4 fact v4-20",
+      "entities": ["shard-20"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "hot",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-41, 0, 41, 82, 123, -90, -49, -8]
+    },
+    {
+      "id": "v4-21",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-21: queue shard 21 drains nightly.",
+      "stub": "v4 fact v4-21",
+      "entities": ["shard-21"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-24, 17, 58, 99, -114, -73, -32, 9]
+    },
+    {
+      "id": "v4-22",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-22: queue shard 22 drains nightly.",
+      "stub": "v4 fact v4-22",
+      "entities": ["shard-22"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "cold",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-7, 34, 75, 116, -97, -56, -15, 26]
+    },
+    {
+      "id": "v4-23",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-23: queue shard 23 drains nightly.",
+      "stub": "v4 fact v4-23",
+      "entities": ["shard-23"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "cold",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": null
+    },
+    {
+      "id": "v4-proj",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code",
+        "projectId": "oort-1a2b3c4d"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-proj: queue shard 30 drains nightly.",
+      "stub": "v4 fact v4-proj",
+      "entities": ["shard-30"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-125, -84, -43, -2, 39, 80, 121, -92]
+    },
+    {
+      "id": "v4-star",
+      "scope": {
+        "orgId": "local",
+        "customerId": "",
+        "agentId": "claude-code"
+      },
+      "address": {
+        "level": "agent",
+        "orgId": "local",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-star: queue shard 31 drains nightly.",
+      "stub": "v4 fact v4-star",
+      "entities": ["shard-31"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": [-108, -67, -26, 15, 56, 97, -116, -75]
+    },
+    {
+      "id": "v4-noembed",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "v4 fact v4-noembed: queue shard 32 drains nightly.",
+      "stub": "v4 fact v4-noembed",
+      "entities": ["shard-32"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-15T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "updatedAt": "2026-10-15T00:00:00.000Z",
+      "embedding": null
+    },
+    {
+      "id": "en-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "auth-service listens on port 8080 in staging.",
+      "stub": "auth-service listens on port 8080 in staging.",
+      "entities": ["auth-service"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-87, -58, -29, 0, 29, 58, 87, -84]
+    },
+    {
+      "id": "en-2",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "The billing worker retries webhooks three times before giving up.",
+      "stub": "The billing worker retries webhooks three times before givin",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-74, -45, -16, 13, 42, 71, -100, -71]
+    },
+    {
+      "id": "zh-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "认证服务使用端口8080",
+      "stub": "认证服务使用端口8080",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-61, -32, -3, 26, 55, 84, -87, -58]
+    },
+    {
+      "id": "ja-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "認証サービスはポート8080を使います",
+      "stub": "認証サービスはポート8080を使います",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-48, -19, 10, 39, 68, 97, -74, -45]
+    },
+    {
+      "id": "ko-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "인증 서비스는 포트 8080을 사용합니다",
+      "stub": "인증 서비스는 포트 8080을 사용합니다",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-35, -6, 23, 52, 81, -90, -61, -32]
+    },
+    {
+      "id": "th-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "บริการยืนยันตัวตนใช้พอร์ต 8080",
+      "stub": "บริการยืนยันตัวตนใช้พอร์ต 8080",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-22, 7, 36, 65, 94, -77, -48, -19]
+    },
+    {
+      "id": "hi-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "प्रमाणीकरण सेवा पोर्ट 8080 का उपयोग करती है",
+      "stub": "प्रमाणीकरण सेवा पोर्ट 8080 का उपयोग करती है",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [-9, 20, 49, 78, -93, -64, -35, -6]
+    },
+    {
+      "id": "es-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "El servicio de autenticación usa el puerto 8443 en producción.",
+      "stub": "El servicio de autenticación usa el puerto 8443 en producció",
+      "entities": [],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": [4, 33, 62, 91, -80, -51, -22, 7]
+    },
+    {
+      "id": "ja-cold",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "semantic",
+      "text": "請求サービスは毎週金曜日にデプロイする。",
+      "stub": "請求サービスのデプロイは金曜日",
+      "entities": ["billing-service"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "cold",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "embedding": null
+    },
+    {
+      "id": "j-1",
+      "scope": {
+        "orgId": "local",
+        "customerId": "self",
+        "agentId": "claude-code"
+      },
+      "type": "judgment",
+      "text": "Judgment by ada (content): rejected \"Post claims a cure\". Reason: No cited source.",
+      "stub": "rejected: Post claims a cure",
+      "entities": ["content", "no-source"],
+      "salience": 0.5,
+      "pinned": false,
+      "tier": "warm",
+      "accessLog": {
+        "count": 0,
+        "recent": [],
+        "compactedSum": 0,
+        "compactedAt": null
+      },
+      "validFrom": "2026-10-01T00:00:00.000Z",
+      "validTo": null,
+      "expiredAt": null,
+      "endReason": null,
+      "lastConfirmedAt": null,
+      "supersedes": null,
+      "supersededBy": null,
+      "source": {
+        "harness": "test",
+        "decisions": []
+      },
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "updatedAt": "2026-10-01T00:00:00.000Z",
+      "judgment": {
+        "subject": {
+          "summary": "Post claims a cure"
+        },
+        "verdict": "rejected",
+        "verdicts": ["approved", "rejected"],
+        "reason": "No cited source.",
+        "criteria": ["no-source"],
+        "domain": "content",
+        "by": "ada",
+        "decidedAt": "2026-10-01T00:00:00.000Z",
+        "via": "cli"
+      },
+      "embedding": [30, 59, 88, -83, -54, -25, 4, 33]
+    }
+  ],
+  "dense": [
+    {
+      "v": [49, 90, -123, -82, -41, 0, 41, 82],
+      "hits": [
+        {
+          "id": "v4-11",
+          "score": 0.988886252976954,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-12",
+          "score": 0.9347000122070312,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-09",
+          "score": 0.2759835720062256,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-08",
+          "score": 0.27135026454925537,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-10",
+          "score": 0.26447516679763794,
+          "tier": "hot"
+        },
+        {
+          "id": "j-1",
+          "score": 0.24760150909423828,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-14",
+          "score": -0.005355477333068848,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-13",
+          "score": -0.01082909107208252,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-00",
+          "score": -0.2552618980407715,
+          "tier": "hot"
+        },
+        {
+          "id": "v4-15",
+          "score": -0.2554725408554077,
+          "tier": "hot"
+        }
+      ]
+    },
+    {
+      "v": [-86, -45, -4, 37, 78, 119, -94, -53],
+      "hits": [
+        {
+          "id": "v4-17",
+          "score": 0.9967111051082611,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-02",
+          "score": 0.9955412959679961,
+          "tier": "warm"
+        },
+        {
+          "id": "zh-1",
+          "score": 0.9879950108006597,
+          "tier": "warm"
+        },
+        {
+          "id": "ja-1",
+          "score": 0.9810686055570841,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-star",
+          "score": 0.9596857167780399,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-16",
+          "score": 0.9562701880931854,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-01",
+          "score": 0.952753022313118,
+          "tier": "warm"
+        },
+        {
+          "id": "en-2",
+          "score": 0.948640551418066,
+          "tier": "warm"
+        },
+        {
+          "id": "en-1",
+          "score": 0.4328332543373108,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-00",
+          "score": 0.4250725507736206,
+          "tier": "hot"
+        }
+      ]
+    },
+    {
+      "v": [33, 74, 115, -98, -57, -16, 25, 66],
+      "hits": [
+        {
+          "id": "v4-09",
+          "score": 0.9949448253028095,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-10",
+          "score": 0.9909663163125515,
+          "tier": "hot"
+        },
+        {
+          "id": "j-1",
+          "score": 0.980917401611805,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-08",
+          "score": 0.9377730898559093,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-12",
+          "score": 0.34413570165634155,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-11",
+          "score": 0.3071180582046509,
+          "tier": "warm"
+        },
+        {
+          "id": "es-1",
+          "score": 0.206845223903656,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-07",
+          "score": 0.2008998990058899,
+          "tier": "warm"
+        },
+        {
+          "id": "hi-1",
+          "score": 0.14332783222198486,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-21",
+          "score": 0.13746625185012817,
+          "tier": "warm"
+        }
+      ]
+    },
+    {
+      "v": [-102, -61, -20, 21, 62, 103, -110, -69],
+      "hits": [
+        {
+          "id": "v4-star",
+          "score": 0.9972857104148716,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-16",
+          "score": 0.9963380987755954,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-01",
+          "score": 0.9952600565738976,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-02",
+          "score": 0.9931922601535916,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-17",
+          "score": 0.9915498308837414,
+          "tier": "warm"
+        },
+        {
+          "id": "en-2",
+          "score": 0.9887558147311211,
+          "tier": "warm"
+        },
+        {
+          "id": "zh-1",
+          "score": 0.9837277103215456,
+          "tier": "warm"
+        },
+        {
+          "id": "ja-1",
+          "score": 0.9293554723262787,
+          "tier": "warm"
+        },
+        {
+          "id": "en-1",
+          "score": 0.45144784450531006,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-00",
+          "score": 0.44661957025527954,
+          "tier": "hot"
+        }
+      ]
+    },
+    {
+      "v": [17, 58, 99, -114, -73, -32, 9, 50],
+      "hits": [
+        {
+          "id": "v4-08",
+          "score": 0.9928025705739856,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-09",
+          "score": 0.9910364542156458,
+          "tier": "warm"
+        },
+        {
+          "id": "j-1",
+          "score": 0.986170083284378,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-10",
+          "score": 0.932651974260807,
+          "tier": "hot"
+        },
+        {
+          "id": "v4-11",
+          "score": 0.2754781246185303,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-12",
+          "score": 0.264412522315979,
+          "tier": "warm"
+        },
+        {
+          "id": "es-1",
+          "score": 0.18921107053756714,
+          "tier": "warm"
+        },
+        {
+          "id": "hi-1",
+          "score": 0.18196886777877808,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-07",
+          "score": 0.17630523443222046,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-21",
+          "score": 0.1701321005821228,
+          "tier": "warm"
+        }
+      ]
+    },
+    {
+      "v": [-118, -77, -36, 5, 46, 87, -126, -85],
+      "hits": [
+        {
+          "id": "v4-01",
+          "score": 0.9959360584616661,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-16",
+          "score": 0.9948042198084295,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-star",
+          "score": 0.9935212023556232,
+          "tier": "warm"
+        },
+        {
+          "id": "en-2",
+          "score": 0.9875469654798508,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-02",
+          "score": 0.9540448673069477,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-17",
+          "score": 0.9499621689319611,
+          "tier": "warm"
+        },
+        {
+          "id": "zh-1",
+          "score": 0.9432271160185337,
+          "tier": "warm"
+        },
+        {
+          "id": "ja-1",
+          "score": 0.8486794084310532,
+          "tier": "warm"
+        },
+        {
+          "id": "en-1",
+          "score": 0.45116162300109863,
+          "tier": "warm"
+        },
+        {
+          "id": "v4-00",
+          "score": 0.44912189245224,
+          "tier": "hot"
+        }
+      ]
+    }
+  ],
+  "lexical": [
+    {
+      "id": "v4-00",
+      "score": 0.0000031210097868837467,
+      "tier": "hot"
+    },
+    {
+      "id": "v4-01",
+      "score": 0.0000031210097868837467,
+      "tier": "warm"
+    },
+    {
+      "id": "v4-02",
+      "score": 0.0000031210097868837467,
+      "tier": "warm"
+    },
+    {
+      "id": "v4-03",
+      "score": 0.0000031210097868837467,
+      "tier": "warm"
+    },
+    {
+      "id": "v4-04",
+      "score": 0.0000031210097868837467,
+      "tier": "warm"
+    },
+    {
+      "id": "v4-05",
+      "score": 0.0000031210097868837467,
+      "tier": "hot"
+    },
+    {
+      "id": "v4-06",
+      "score": 0.0000031210097868837467,
+      "tier": "warm"
+    },
+    {
+      "id": "v4-07",
+      "score": 0.0000031210097868837467,
+      "tier": "warm"
+    },
+    {
+      "id": "v4-08",
+      "score": 0.0000031210097868837467,
+      "tier": "warm"
+    },
+    {
+      "id": "v4-09",
+      "score": 0.0000031210097868837467,
+      "tier": "warm"
+    }
+  ],
+  "cold": {
+    "id": "v4-23",
+    "scope": {
+      "orgId": "local",
+      "customerId": "self",
+      "agentId": "claude-code"
+    },
+    "type": "semantic",
+    "text": "v4 fact v4-23: queue shard 23 drains nightly.",
+    "stub": "v4 fact v4-23",
+    "entities": ["shard-23"],
+    "salience": 0.5,
+    "pinned": false,
+    "tier": "warm",
+    "accessLog": {
+      "count": 0,
+      "recent": [],
+      "compactedSum": 0,
+      "compactedAt": null
+    },
+    "validFrom": "2026-10-15T00:00:00.000Z",
+    "validTo": null,
+    "expiredAt": null,
+    "endReason": null,
+    "lastConfirmedAt": null,
+    "supersedes": null,
+    "supersededBy": null,
+    "source": {
+      "harness": "test",
+      "decisions": []
+    },
+    "createdAt": "2026-10-15T00:00:00.000Z",
+    "updatedAt": "2026-10-15T00:00:00.000Z",
+    "embedding": [10, 51, 92, -121, -80, -39, 2, 43]
+  }
+}

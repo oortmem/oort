@@ -22,6 +22,7 @@ import {
   readEmbedderBinding,
   SCHEMA_VERSION,
   sqliteSchemaVersion,
+  sqliteVectorIndex,
 } from '@oortmem/store-sqlite';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
 import {
@@ -864,28 +865,32 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
   try {
     // Opening migrates an older store (after copying it): doctor is where the hooks send you.
     let cloudMode = false;
-    const { count, planet, star, agent, stars, embedder } = await withWired(ctx, async (w) => {
-      cloudMode = w.mode === 'cloud';
-      const all = await w.store.list(localGrant(filterFor(w.scope)), { validOnly: false });
-      // Your Planet (shared by your agents) and this agent's own Star, every project (CON-62).
-      const { orgId, customerId, agentId } = w.scope;
-      const mine = await w.store.list(principalGrant({ orgId, customerId, agentId }), {
-        validOnly: false,
-        embeddings: false,
-      });
-      const atStar = mine.filter((m) => addressOf(m).level === 'agent').length;
-      const configured = Object.entries(readAgents(w.config.home))
-        .filter(([, a]) => a.star)
-        .map(([id]) => id);
-      return {
-        count: all.length,
-        planet: mine.length - atStar,
-        star: atStar,
-        agent: w.agent,
-        stars: configured,
-        embedder: w.embedder,
-      };
-    });
+    const { count, planet, star, agent, stars, embedder, storeConfig } = await withWired(
+      ctx,
+      async (w) => {
+        cloudMode = w.mode === 'cloud';
+        const all = await w.store.list(localGrant(filterFor(w.scope)), { validOnly: false });
+        // Your Planet (shared by your agents) and this agent's own Star, every project (CON-62).
+        const { orgId, customerId, agentId } = w.scope;
+        const mine = await w.store.list(principalGrant({ orgId, customerId, agentId }), {
+          validOnly: false,
+          embeddings: false,
+        });
+        const atStar = mine.filter((m) => addressOf(m).level === 'agent').length;
+        const configured = Object.entries(readAgents(w.config.home))
+          .filter(([, a]) => a.star)
+          .map(([id]) => id);
+        return {
+          count: all.length,
+          planet: mine.length - atStar,
+          star: atStar,
+          agent: w.agent,
+          stars: configured,
+          embedder: w.embedder,
+          storeConfig: w.config.store,
+        };
+      },
+    );
     checks.push({
       group: 'store',
       name: 'store',
@@ -905,12 +910,12 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
             ? 'your memories now live in your Planet'
             : before === 2
               ? 'it can now hold judgments (oort judge)'
-              : 'lexical search now finds Chinese, Japanese, Korean, Thai and Indic words'
-        }${
-          before <= 3
-            ? '. Then restart any Oort MCP server started before the upgrade (quit and reopen Claude Code, Claude Desktop or Cursor): an older Oort cannot write to the new search index'
-            : ''
-        }`,
+              : before === 3
+                ? 'lexical search now finds Chinese, Japanese, Korean, Thai and Indic words'
+                : before === 4
+                  ? 'it can now hold places (near, within) and keep a binary vector index (store.vectorIndex)'
+                  : 'it can now keep a binary vector index (store.vectorIndex)'
+        }. Then restart any Oort MCP server started before the upgrade (quit and reopen Claude Code, Claude Desktop or Cursor): an older Oort cannot write to the new search index`,
       });
     }
     const bound = readEmbedderBinding(db);
@@ -957,6 +962,17 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
           ? `no agent named: reads and writes your Planet only, no Star (name one with --agent or OORT_AGENT)${keeping}`
           : `acting as ${agent.id} (from ${agent.source === 'flag' ? '--agent' : 'OORT_AGENT'}): reads your Planet and its own Star; new memories go to ${agent.home === 'star' ? `Star ${agent.id}` : 'your Planet'}${agent.home === 'star' ? ', and it never changes your Planet' : ''}${keeping}`,
     });
+    // The dense index the store searches (CON-17): exact int8, or binary codes rescored in int8.
+    const vi = sqliteVectorIndex(db);
+    if (vi !== undefined) {
+      const want = storeConfig;
+      checks.push({
+        group: 'store',
+        name: 'vector-index',
+        status: 'info',
+        detail: `${vi.index === 'binary' ? 'binary, 1-bit codes rescored in int8' : 'int8, exact'} (${vi.vectors} searchable ${vi.vectors === 1 ? 'vector' : 'vectors'}; store.vectorIndex is ${want.vectorIndex}${want.vectorIndex === 'auto' ? `: binary from ${want.binaryAutoThreshold}` : ''})`,
+      });
+    }
     // Oort Cloud consolidates itself; locally the hook drain does, when due (CON-48).
     if (!cloudMode) checks.push(consolidationCheck(home));
     // The newest copy taken before a migration (the names sort by time within each kind).

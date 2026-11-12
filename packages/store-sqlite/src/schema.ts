@@ -9,6 +9,7 @@ import {
   tokenizerForVersion,
   type NodeRef,
 } from '@oortmem/core';
+import { BINARY_AUTO_THRESHOLD, binaryCode, bitWidth } from './binary.js';
 
 /**
  * 1: the Phase 1 store, one (org, customer, agent) scope per memory.
@@ -25,8 +26,152 @@ import {
  * 5: spatial memory (CON-84). Two nullable columns, `place` (a memory's place as JSON) and
  *    `place_node` (its `nodeId`), and the R*Tree `memories_place` (`PLACE_TABLE`): one row per
  *    memory with coordinates, keyed by `rid`. Additive: no row, index or vector is rewritten.
+ * 6: binary vector index (CON-17). Three triggers on `memories` call `oort_writer_v6()`
+ *    (`WRITER_GUARD`), which only this version's connections define, so a writer that predates
+ *    it fails loudly instead of leaving the index behind. The binary index itself,
+ *    `memories_vec_bit` (`BIT_TABLE`), is built from the int8 vectors when the store asks for it
+ *    (`vectorIndex`) and dropped again by `vectorIndex: 'int8'`. Additive: no row, vector or
+ *    index of version 5 is rewritten.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
+
+/**
+ * The binary index (schema version 6): one row per searchable (hot or warm) vector, with its
+ * 1-bit code (`binaryCode`), its int8 vector for rescoring as an auxiliary column, and the int8
+ * index's partition and filter columns. A dense query scans only the codes; it reads `rescore`
+ * for its oversampled candidates alone, one row lookup each (design §3).
+ */
+export const BIT_TABLE = 'memories_vec_bit';
+
+/**
+ * The SQL function every write to `memories` calls through the guard triggers. A connection
+ * defines it with `defineWriterGuard`; one that does not (an Oort that predates version 6) gets
+ * `no such function: oort_writer_v6` and writes nothing.
+ */
+export const WRITER_GUARD = 'oort_writer_v6';
+
+const GUARD_TRIGGERS = ['insert', 'update', 'delete'] as const;
+
+/** Defines `WRITER_GUARD` on a connection, so its writes pass the guard triggers. */
+export function defineWriterGuard(db: Database): void {
+  db.function(WRITER_GUARD, { deterministic: true }, () => 1);
+}
+
+/** Creates the guard triggers on `memories` (idempotent). */
+function createWriterGuard(db: Database): void {
+  for (const op of GUARD_TRIGGERS) {
+    db.exec(`CREATE TRIGGER IF NOT EXISTS memories_writer_guard_${op}
+      BEFORE ${op.toUpperCase()} ON memories BEGIN SELECT ${WRITER_GUARD}(); END`);
+  }
+}
+
+function dropWriterGuard(db: Database): void {
+  for (const op of GUARD_TRIGGERS) db.exec(`DROP TRIGGER IF EXISTS memories_writer_guard_${op}`);
+}
+
+function bitTable(dimension: number): string {
+  return `CREATE VIRTUAL TABLE ${BIT_TABLE} USING vec0(
+        id TEXT PRIMARY KEY,
+        embedding bit[${bitWidth(dimension)}],
+        node_key TEXT PARTITION KEY,
+        project_key TEXT,
+        author_key TEXT,
+        +rescore BLOB
+      )`;
+}
+
+/** Whether the store has the binary index. */
+export function hasBinaryIndex(db: Database): boolean {
+  return exists(db, BIT_TABLE);
+}
+
+/** How many vectors a dense query searches: those of hot and warm memories. */
+export function searchableVectors(db: Database): number {
+  return (
+    db
+      .prepare<[], { n: number }>(
+        `SELECT count(*) AS n FROM memories m
+         WHERE m.tier != 'cold' AND EXISTS (SELECT 1 FROM memories_vec_rowids r WHERE r.id = m.id)`,
+      )
+      .get()?.n ?? 0
+  );
+}
+
+/**
+ * Creates the binary index and fills it from the int8 vectors of every hot and warm memory,
+ * inside the caller's transaction. Paged by rid: better-sqlite3 cannot write while a statement
+ * iterates. Says how many vectors it indexes first, as the lexical rebuild does.
+ */
+export function buildBinaryIndex(
+  db: Database,
+  dimension: number,
+  log?: (message: string) => void,
+): number {
+  const n = searchableVectors(db);
+  db.exec(bitTable(dimension));
+  if (n > 0) log?.(`Building the binary vector index (${n} ${n === 1 ? 'vector' : 'vectors'})…`);
+  const page = db.prepare<
+    [number],
+    {
+      rid: number;
+      id: string;
+      embedding: Buffer;
+      node_key: string;
+      project_key: string;
+      author_key: string;
+    }
+  >(
+    `SELECT m.rid AS rid, v.id AS id, v.embedding AS embedding, v.node_key AS node_key,
+            v.project_key AS project_key, v.author_key AS author_key
+     FROM memories m CROSS JOIN memories_vec v ON v.id = m.id
+     WHERE m.rid > ? AND m.tier != 'cold' ORDER BY m.rid LIMIT 1000`,
+  );
+  const insert = db.prepare<[string, Buffer, string, string, string, Buffer]>(
+    `INSERT INTO ${BIT_TABLE} (id, embedding, node_key, project_key, author_key, rescore)
+     VALUES (?, vec_bit(?), ?, ?, ?, ?)`,
+  );
+  let done = 0;
+  let after = -Infinity;
+  for (;;) {
+    const rows = page.all(after);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const v = new Int8Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength);
+      insert.run(r.id, binaryCode(v), r.node_key, r.project_key, r.author_key, r.embedding);
+      done++;
+      after = r.rid;
+    }
+  }
+  return done;
+}
+
+/** Drops the binary index; the int8 index alone answers dense queries again. */
+export function dropBinaryIndex(db: Database): void {
+  db.exec(`DROP TABLE IF EXISTS ${BIT_TABLE}`);
+}
+
+/** Which dense index a store uses: `auto` builds the binary one at `BINARY_AUTO_THRESHOLD`. */
+export type VectorIndex = 'auto' | 'int8' | 'binary';
+
+/**
+ * What a migrating open does to the binary index for `want`: build it (`binary`, or `auto` with
+ * at least `threshold` searchable vectors), drop it (`int8`), or nothing. `auto` never drops an
+ * index it built: a store that shrinks below the threshold keeps it.
+ */
+export function binaryIndexPlan(
+  db: Database,
+  want: VectorIndex,
+  threshold = BINARY_AUTO_THRESHOLD,
+): 'build' | 'drop' | 'keep' {
+  const has = hasBinaryIndex(db);
+  if (want === 'int8') return has ? 'drop' : 'keep';
+  if (has) return 'keep';
+  if (want === 'binary') return 'build';
+  // `max(rid)` bounds the count from above in one index lookup; most stores stop there.
+  const rows = db.prepare<[], { n: number | null }>('SELECT max(rid) AS n FROM memories').get();
+  if ((rows?.n ?? 0) < threshold) return 'keep';
+  return searchableVectors(db) >= threshold ? 'build' : 'keep';
+}
 
 /**
  * The spatial index (schema version 5): the box each memory with coordinates covers, keyed by the
@@ -512,6 +657,23 @@ export function migrateV5toV4(db: Database): void {
 }
 
 /**
+ * Version 5 to 6, inside the caller's transaction: the writer guard. Nothing is rewritten; the
+ * binary index is built afterwards only when the store asks for it (`binaryIndexPlan`).
+ */
+export function migrateV5toV6(db: Database): void {
+  createWriterGuard(db);
+}
+
+/**
+ * Version 6 back to 5, inside the caller's transaction: drops the binary index and the writer
+ * guard. Version 5 has everything else: the int8 vectors were never moved.
+ */
+export function migrateV6toV5(db: Database): void {
+  dropBinaryIndex(db);
+  dropWriterGuard(db);
+}
+
+/**
  * Version 2 to 3, inside the caller's transaction: adds the nullable `judgment` column. Every
  * existing row keeps its rid, FTS row and vector; nothing is rewritten.
  */
@@ -668,6 +830,10 @@ export interface ApplySchemaOptions {
   log?: (message: string) => void;
   /** The runtime's ICU version, for the drift guard (default `lexicalIcuVersion()`). */
   icu?: string;
+  /** Which dense index the store should have (default `auto`); see `binaryIndexPlan`. */
+  vectorIndex?: VectorIndex;
+  /** `vectorIndex: 'auto'` builds the binary index at this many vectors (default 100,000). */
+  binaryAutoThreshold?: number;
 }
 
 /**
@@ -718,22 +884,27 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV2toV3(db);
       migrateV3toV4(db);
       migrateV4toV5(db);
+      migrateV5toV6(db);
     } else if (version === '2') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 2);
       rebuilding();
       migrateV2toV3(db);
       migrateV3toV4(db);
       migrateV4toV5(db);
+      migrateV5toV6(db);
     } else if (version === '3') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 3);
       rebuilding();
       migrateV3toV4(db);
       migrateV4toV5(db);
-    } else if (version === '4' || version === String(SCHEMA_VERSION)) {
-      // Version 4 to 5 adds columns and an empty index: no rebuild, and no notice.
-      if (version === '4') {
-        if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 4);
-        migrateV4toV5(db);
+      migrateV5toV6(db);
+    } else if (version === '4' || version === '5' || version === String(SCHEMA_VERSION)) {
+      // Version 4 to 5 adds columns and an empty index, 5 to 6 the writer guard: no rebuild,
+      // and no notice.
+      if (version === '4' || version === '5') {
+        if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, Number(version));
+        if (version === '4') migrateV4toV5(db);
+        migrateV5toV6(db);
       }
       // An index to repair is a migration: an open that may not migrate (a hook) refuses, changing
       // nothing, rather than create an empty index that would then look current.
@@ -770,28 +941,40 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     }
     if (!exists(db, 'memories_vec')) db.exec(vecV2(dimension));
     if (!exists(db, PLACE_TABLE)) rebuildPlaceIndex(db, opts.log);
+    createWriterGuard(db);
+    // The binary index is a write: an open that may not migrate (a hook) uses what is there.
+    if (opts.migrate !== false) {
+      const plan = binaryIndexPlan(db, opts.vectorIndex ?? 'auto', opts.binaryAutoThreshold);
+      if (plan === 'build') buildBinaryIndex(db, dimension, opts.log);
+      else if (plan === 'drop') dropBinaryIndex(db);
+    }
   }).immediate();
 }
 
 /**
  * Takes a store's database back to schema version `to`: 1 for running Oort 0.2.x against it
  * again (the default), 2 for Oort 0.3 to 0.5, 3 for Oort before tokeniser v2, 4 for Oort before
- * spatial memory (0.8). Refuses, changing nothing, when the store holds anything that version
- * cannot represent (see `migrateV2toV1`, `migrateV3toV2` and `migrateV5toV4`). Leaving version 4
- * rebuilds the lexical index with tokeniser v1. No other connection may have the store open.
- * Opening a store never does this: migrations only roll forward.
+ * spatial memory (0.8), 5 for Oort before the binary vector index. Refuses, changing nothing,
+ * when the store holds anything that version cannot represent (see `migrateV2toV1`,
+ * `migrateV3toV2` and `migrateV5toV4`). Leaving version 6 drops the binary index and the writer
+ * guard; leaving version 4 rebuilds the lexical index with tokeniser v1. No other connection may
+ * have the store open. Opening a store never does this: migrations only roll forward.
  */
-export function downgradeSchema(db: Database, to: 1 | 2 | 3 | 4 = 1): void {
+export function downgradeSchema(db: Database, to: 1 | 2 | 3 | 4 | 5 = 1): void {
   db.transaction(() => {
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     let version = Number(get.get('schema_version')?.value);
     if (version <= to && version >= 1) return;
-    if (version !== 2 && version !== 3 && version !== 4 && version !== 5) {
+    if (version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) {
       throw new Error(
         `sqlite store: cannot downgrade schema version ${Number.isNaN(version) ? 'unknown' : version}`,
       );
     }
-    if (version === 5) {
+    if (version === 6) {
+      migrateV6toV5(db);
+      version = 5;
+    }
+    if (version === 5 && to < 5) {
       migrateV5toV4(db);
       version = 4;
     }

@@ -1,8 +1,10 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import {
+  localGrant,
   recall,
   resolveConfig,
   type Embedder,
@@ -11,7 +13,7 @@ import {
   type ResolvedConfig,
   type ScopeFilter,
 } from '@oortmem/core';
-import { openSqliteStore } from '@oortmem/store-sqlite';
+import { openSqliteStore, sqliteVectorIndex, type VectorIndex } from '@oortmem/store-sqlite';
 
 export const CATEGORIES = [
   'single-fact',
@@ -130,6 +132,14 @@ export interface EvalReport {
   ks: number[];
   skippedEmpty: number;
   groups: Record<string, GroupMetrics>;
+  /** The dense index the copy searched (CON-17): exact int8, or binary codes rescored in int8. */
+  vectorIndex?: { index: 'int8' | 'binary'; vectors: number };
+  /**
+   * What the rows read beyond the live set (CON-17): `hydrated`, the cold memories returned (each
+   * one a cold read and a write); `asked`, the rows where the adaptive stop was asked (cold
+   * matches beside live ones); `stopped`, the rows where it left the cold matches out.
+   */
+  reads?: { hydrated: number; asked: number; stopped: number };
 }
 
 export interface RowOutcome {
@@ -229,6 +239,14 @@ export interface RunEvalOptions {
   recall?: Partial<ResolvedConfig['recall']>;
   /** Rerank with this reranker (default: none). */
   rerank?: Reranker;
+  /** The copy's dense index (CON-17; default `auto`, as a store opens). */
+  vectorIndex?: VectorIndex;
+  /**
+   * Archive this share of the copy's hot and warm memories before the rows run (0 to 1, default
+   * 0): the same memories every run (chosen by a hash of the id), so the cold path is exercised
+   * on a corpus that has none. For the adaptive stop's measurement (CON-17).
+   */
+  coldShare?: number;
   scope?: ScopeFilter;
   /** Receives one-line warnings (counts only); defaults to stderr. */
   warn?: (message: string) => void;
@@ -358,6 +376,7 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
     path: copy.dbPath,
     coldDir: copy.coldDir,
     dimension: opts.dimension ?? 512,
+    ...(opts.vectorIndex !== undefined && { vectorIndex: opts.vectorIndex }),
     log: () => {},
   });
   try {
@@ -375,8 +394,25 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
     // Rows must not influence each other: recall's access records would raise the
     // activation of everything an earlier row returned. The copy is discarded
     // either way, so reads of it simply skip that write.
-    const evalStore: MemoryStore = { ...store, recordAccess: async () => {} };
+    // Hydration (a cold memory written back warm) is skipped for the same reason: each row sees
+    // the tiers the store had.
+    const evalStore: MemoryStore = {
+      ...store,
+      recordAccess: async () => {},
+      upsert: async () => {},
+    };
     const scope = opts.scope ?? discoverScope(copy.dbPath);
+    const share = opts.coldShare ?? 0;
+    if (share > 0) {
+      const grant = localGrant(scope);
+      const live = (await store.list(grant, { validOnly: false })).filter((m) => m.tier !== 'cold');
+      const pick = live.filter(
+        (m) => createHash('sha256').update(m.id).digest().readUInt32BE(0) / 2 ** 32 < share,
+      );
+      if (pick.length > 0) await store.coldPutMany(grant, pick);
+    }
+    const vectorIndex = sqliteVectorIndex(copy.dbPath);
+    const reads = { hydrated: 0, asked: 0, stopped: 0 };
     const outcomes: RowOutcome[] = [];
     for (const row of opts.rows) {
       const r = await recall(
@@ -389,6 +425,9 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
           ...(opts.now !== undefined ? { now: opts.now } : {}),
         },
       );
+      reads.hydrated += r.memories.filter((m) => m.explanation.hydrated === true).length;
+      if (r.adaptiveStop !== undefined) reads.asked++;
+      if (r.adaptiveStop?.stopped === true) reads.stopped++;
       outcomes.push({
         ids: r.memories.map((m) => m.id),
         aboveThreshold: r.memories.filter(
@@ -396,7 +435,11 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
         ).length,
       });
     }
-    return computeMetrics(opts.rows, outcomes, ks, opts.skippedEmpty ?? 0);
+    return {
+      ...computeMetrics(opts.rows, outcomes, ks, opts.skippedEmpty ?? 0),
+      ...(vectorIndex !== undefined && { vectorIndex }),
+      reads,
+    };
   } finally {
     await store.close();
     fs.rmSync(copy.dir, { recursive: true, force: true });
@@ -424,6 +467,14 @@ export function renderReport(r: EvalReport): string {
   }
   if (r.skippedEmpty > 0) {
     lines.push('', `Skipped ${r.skippedEmpty} row(s) with an empty question.`);
+  }
+  if (r.vectorIndex !== undefined) {
+    lines.push('', `Vector index: ${r.vectorIndex.index} (${r.vectorIndex.vectors} vectors).`);
+  }
+  if (r.reads !== undefined) {
+    lines.push(
+      `Cold hydrations: ${r.reads.hydrated}; adaptive stop asked on ${r.reads.asked} row(s), stopped on ${r.reads.stopped}.`,
+    );
   }
   return lines.join('\n');
 }

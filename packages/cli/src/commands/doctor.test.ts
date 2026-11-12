@@ -184,6 +184,61 @@ describe('oort doctor', () => {
     expect(listBackups(db, 'pre-v4')).toHaveLength(1);
   });
 
+  it('doctor.migrates-a-v5-store-and-names-its-vector-index (CON-17)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      log: () => {},
+    });
+    await s.upsert(TG, memory({ embedding: undefined }));
+    await s.close();
+    downgradeSqliteStore({ path: db, to: 5 });
+    for (const f of fs.readdirSync(h.home)) {
+      if (f.startsWith('oort.sqlite.pre-')) fs.rmSync(path.join(h.home, f)); // the downgrade's copy
+    }
+    // As after the version 6 upgrade: a hook never migrates (nor builds an index); it skips the
+    // turn with one line until an oort command has migrated the store.
+    fs.writeFileSync(
+      path.join(h.home, 'config.json'),
+      JSON.stringify({ store: { vectorIndex: 'binary' } }),
+    );
+    const hook = await h.run(['hook', 'UserPromptSubmit'], {
+      stdin: JSON.stringify({ session_id: 's', cwd: h.cwd, prompt: 'which port?' }),
+    });
+    expect(hook.code).toBe(0);
+    expect(hook.io.hookStdout).toBe('');
+    expect(hook.io.stderr).toBe(MIGRATION_PENDING_NOTE);
+    expect(sqliteSchemaVersion(db)).toBe(5);
+    fs.rmSync(path.join(h.home, 'config.json'));
+    const d = await doctor(h);
+    expect(d.human.io.stdout).toContain(
+      `migrated the store from schema version 5 to ${SCHEMA_VERSION}; it can now keep a binary vector index`,
+    );
+    // An Oort started before the upgrade can no longer write: it must be restarted.
+    expect(d.human.io.stdout).toContain('restart any Oort MCP server started before the upgrade');
+    // Version 6 only adds: no copy is taken, so doctor names none.
+    expect(fs.readdirSync(h.home).filter((f) => f.startsWith('oort.sqlite.pre-v'))).toEqual([]);
+    expect(d.check('store', 'backup')).toBeUndefined();
+    expect(d.check('store', 'vector-index')).toMatchObject({
+      status: 'info',
+      detail: 'int8, exact (0 searchable vectors; store.vectorIndex is auto: binary from 100000)',
+    });
+    fs.writeFileSync(
+      path.join(h.home, 'config.json'),
+      JSON.stringify({ store: { vectorIndex: 'binary' } }),
+    );
+    const again = await doctor(h);
+    expect(again.check('store', 'vector-index')?.detail).toBe(
+      'binary, 1-bit codes rescored in int8 (0 searchable vectors; store.vectorIndex is binary)',
+    );
+  });
+
   it('doctor.a-hook-first-leaves-a-pre-rename-index-for-the-cli-to-repair (CON-110)', async () => {
     const h = harness();
     h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });

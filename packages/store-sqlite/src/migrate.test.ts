@@ -27,6 +27,7 @@ import {
   SCHEMA_VERSION,
   sqliteSchemaVersion,
   StoreMigrationRequiredError,
+  WRITER_GUARD,
 } from './index.js';
 
 /**
@@ -403,6 +404,7 @@ describe('schema migration 1 to 2', () => {
     const s = copyFixture();
     await (await openSqliteStore(optsFor(s))).close();
     const db = raw(s.dbPath);
+    db.function(WRITER_GUARD, () => 1); // a version 5 writer: past the guard, at the CHECK
     try {
       const body = `'semantic', 't', 's', '[]', 0.5, 0, 'warm', '{}', '2026-01-01', NULL, NULL, NULL,
         NULL, NULL, NULL, '{}', '2026-01-01', '2026-01-01'`;
@@ -905,8 +907,8 @@ describe('schema migration 4 to 5', () => {
   it('migrate.new-store-starts-at-v5-with-the-spatial-index', async () => {
     const s = fresh();
     await (await openSqliteStore(optsFor(s))).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
-    expect(SCHEMA_VERSION).toBe(5);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+    expect(SCHEMA_VERSION).toBe(6);
     expect(columns(s.dbPath)).toEqual(['place', 'place_node']);
     expect(hasPlaceTable(s.dbPath)).toBe(true);
   });
@@ -918,7 +920,8 @@ describe('schema migration 4 to 5', () => {
     expect(hasPlaceTable(s.dbPath)).toBe(false);
     const store = await openSqliteStore(optsFor(s));
     try {
-      expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
+      // Through 5 (spatial) to 6 (the binary index's writer guard) in one open, one copy.
+      expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
       expect(listBackups(s.dbPath, 'pre-v5')).toHaveLength(1);
       expect(sqliteSchemaVersion(listBackups(s.dbPath, 'pre-v5')[0]!)).toBe(4);
       const list = await store.list(g, { validOnly: false });
@@ -968,7 +971,7 @@ describe('schema migration 4 to 5', () => {
     await store.close();
     expect(() => downgradeSqliteStore({ path: s.dbPath, to: 4 })).toThrow(/1 memory has a place/);
     expect(() => downgradeSqliteStore({ path: s.dbPath, to: 3 })).toThrow(/has a place/);
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
     expect(listBackups(s.dbPath, 'pre-downgrade')).toEqual([]);
     const again = await openSqliteStore(optsFor(s));
     await again.forget(g, 'p');
