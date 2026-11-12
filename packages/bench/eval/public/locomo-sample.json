@@ -1,0 +1,90 @@
+[
+  {
+    "sample_id": "sample-1",
+    "conversation": {
+      "speaker_a": "Ana",
+      "speaker_b": "Ben",
+      "session_1_date_time": "9:15 am on 3 March, 2024",
+      "session_1": [
+        {
+          "speaker": "Ana",
+          "dia_id": "D1:1",
+          "text": "I adopted a grey cat called Pixel last weekend."
+        },
+        {
+          "speaker": "Ben",
+          "dia_id": "D1:2",
+          "text": "Lovely! I am training for the Lisbon half marathon in May."
+        },
+        {
+          "speaker": "Ana",
+          "dia_id": "D1:3",
+          "text": "Pixel already sleeps on my keyboard.",
+          "img_url": ["https://example.invalid/pixel.jpg"],
+          "blip_caption": "a grey cat lying on a laptop keyboard"
+        },
+        {
+          "speaker": "Ben",
+          "dia_id": "D1:4",
+          "text": "My coach wants me running four times a week."
+        }
+      ],
+      "session_2_date_time": "6:40 pm on 20 May, 2024",
+      "session_2": [
+        {
+          "speaker": "Ben",
+          "dia_id": "D2:1",
+          "text": "I finished the Lisbon race in one hour fifty-two."
+        },
+        {
+          "speaker": "Ana",
+          "dia_id": "D2:2",
+          "text": "Congratulations! Pixel knocked a plant off the shelf today."
+        },
+        {
+          "speaker": "Ben",
+          "dia_id": "D2:3",
+          "text": "Next I want to try a trail race in the mountains."
+        }
+      ]
+    },
+    "qa": [
+      {
+        "question": "What is the name of Ana's cat?",
+        "answer": "Pixel",
+        "evidence": ["D1:1"],
+        "category": 4
+      },
+      {
+        "question": "How long did Ben take to finish the race he trained four times a week for?",
+        "answer": "1:52",
+        "evidence": ["D1:4; D2:1"],
+        "category": 1
+      },
+      {
+        "question": "When did Ben run the Lisbon half marathon?",
+        "answer": "May 2024",
+        "evidence": ["D:2:1"],
+        "category": 2
+      },
+      {
+        "question": "What does Pixel like to sleep on?",
+        "answer": "the keyboard",
+        "evidence": ["D1:3"],
+        "category": 4
+      },
+      {
+        "question": "What kind of race does Ana want to try next?",
+        "adversarial_answer": "a trail race",
+        "evidence": ["D2:3"],
+        "category": 5
+      },
+      {
+        "question": "Which city did Ana move to?",
+        "answer": "unknown",
+        "evidence": ["D9:9"],
+        "category": 3
+      }
+    ]
+  }
+]

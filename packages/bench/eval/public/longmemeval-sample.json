@@ -1,0 +1,118 @@
+[
+  {
+    "question_id": "sample-ms",
+    "question_type": "multi-session",
+    "question": "How many pottery classes have I signed up for in total?",
+    "question_date": "2024/04/10 (Wed) 10:00",
+    "answer": "3",
+    "answer_session_ids": ["s-a", "s-b"],
+    "haystack_dates": [
+      "2024/03/01 (Fri) 09:00",
+      "2024/03/15 (Fri) 18:30",
+      "2024/03/20 (Wed) 12:00"
+    ],
+    "haystack_session_ids": ["s-a", "noise-1", "s-b"],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "I just signed up for two pottery classes at the community studio.",
+          "has_answer": true
+        },
+        {
+          "role": "assistant",
+          "content": "That sounds fun! Wheel throwing or hand building?"
+        },
+        {
+          "role": "user",
+          "content": "Wheel throwing, on Tuesdays."
+        },
+        {
+          "role": "assistant",
+          "content": "Great choice."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "Can you suggest a pasta recipe with spinach?"
+        },
+        {
+          "role": "assistant",
+          "content": "Try spinach and ricotta penne."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "I added one more pottery class, a glazing workshop.",
+          "has_answer": true
+        },
+        {
+          "role": "assistant",
+          "content": "Nice, glazing is where pieces come alive."
+        }
+      ]
+    ]
+  },
+  {
+    "question_id": "sample-ku",
+    "question_type": "knowledge-update",
+    "question": "Which gym am I a member of now?",
+    "question_date": "2024/06/01 (Sat) 08:00",
+    "answer": "Harbor Fitness",
+    "answer_session_ids": ["k-old", "k-new"],
+    "haystack_dates": ["2024/01/05 (Fri) 07:00", "2024/05/02 (Thu) 19:00"],
+    "haystack_session_ids": ["k-old", "k-new"],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "I joined Summit Gym near my office this week.",
+          "has_answer": true
+        },
+        {
+          "role": "assistant",
+          "content": "Good luck with the new routine!"
+        }
+      ],
+      [
+        {
+          "role": "assistant",
+          "content": "Welcome back. How can I help?"
+        },
+        {
+          "role": "user",
+          "content": "I cancelled Summit and joined Harbor Fitness instead.",
+          "has_answer": true
+        },
+        {
+          "role": "assistant",
+          "content": "Harbor Fitness has a pool, enjoy it."
+        }
+      ]
+    ]
+  },
+  {
+    "question_id": "sample-ku_abs",
+    "question_type": "knowledge-update",
+    "question": "Which tennis club am I a member of now?",
+    "question_date": "2024/06/01 (Sat) 08:00",
+    "answer": "You did not mention a tennis club.",
+    "answer_session_ids": ["k-new"],
+    "haystack_dates": ["2024/05/02 (Thu) 19:00"],
+    "haystack_session_ids": ["k-new"],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "I cancelled Summit and joined Harbor Fitness instead."
+        },
+        {
+          "role": "assistant",
+          "content": "Harbor Fitness has a pool, enjoy it."
+        }
+      ]
+    ]
+  }
+]

@@ -15,6 +15,7 @@ import { voyageReranker } from '@oortmem/rerank-voyage';
 import { openSqliteStore, VECTOR_INDEXES, type VectorIndex } from '@oortmem/store-sqlite';
 import { cell, loadEvalRows, renderRun, runEval, type EvalRun } from './eval.js';
 import { parseLinkModes } from './links.js';
+import { publicMain } from './public-main.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { demoMemories } from './fixture.js';
 import {
@@ -39,6 +40,10 @@ const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>]
                  [--rerank none|local[:model]|voyage[:model]] [--home <dir>]
                  [--lang en,ja,...] [--condition mono,cross,mixed] [--json] [--out <file>]
                  [--vector-index auto|int8|binary|rabitq]
+       pnpm eval --set locomo|longmemeval [<file.json>] [--fetch] [--plan] [--yes]
+                 [--embed none|fake|local[:model]|voyage[:model]] [--rerank none|local|voyage]
+                 [--limit <haystacks>] [--links <modes>] [--no-gate] [--k 5,10] [--json] [--out <file>]
+                 (eval/public/README.md: never bundled; paid models print a plan and need --yes)
 
 Runs recall for each row against a temp copy of the store (the live store is never written).`;
 
@@ -74,12 +79,41 @@ async function main(): Promise<number> {
       lang: { type: 'string' },
       condition: { type: 'string' },
       out: { type: 'string' },
+      fetch: { type: 'boolean', default: false },
+      plan: { type: 'boolean', default: false },
+      yes: { type: 'boolean', default: false },
+      limit: { type: 'string' },
+      tokenizer: { type: 'string' },
+      'cache-dir': { type: 'string' },
       help: { type: 'boolean', default: false },
     },
   });
   if (values.help) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
+  }
+  if (values.set === 'locomo' || values.set === 'longmemeval') {
+    return publicMain(
+      {
+        set: values.set,
+        ...(positionals[0] !== undefined && { file: fromUser(positionals[0]) }),
+        fetch: values.fetch,
+        plan: values.plan,
+        yes: values.yes,
+        embed: values.embed,
+        rerank: values.rerank,
+        ...(values.limit !== undefined && { limit: values.limit }),
+        links: values.links,
+        noGate: values['no-gate'],
+        k: values.k,
+        json: values.json,
+        ...(values.out !== undefined && { out: fromUser(values.out) }),
+        ...(values.home !== undefined && { home: fromUser(values.home) }),
+        ...(values.tokenizer !== undefined && { tokenizer: fromUser(values.tokenizer) }),
+        ...(values['cache-dir'] !== undefined && { cacheDir: fromUser(values['cache-dir']) }),
+      },
+      (m) => process.stderr.write(`eval: ${m}\n`),
+    );
   }
   if (values.set !== undefined) {
     if (values.set !== 'multilingual') throw new Error(`unknown --set "${values.set}"`);

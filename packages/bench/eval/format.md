@@ -73,6 +73,7 @@ pnpm eval --demo [--dense] [--warm-up packages/bench/eval/warm-up.jsonl]
                         # a synthetic 1,512-memory store and the bundled 29-row eval/fixture.jsonl
 pnpm eval --demo --hook --dense   # the 15-row hook-shaped set, no reranker (the prompt hook's `fast`)
 pnpm eval --set multilingual [--embed …] [--rerank …]   # 13 languages, three conditions (multilingual/README.md)
+pnpm eval --set locomo|longmemeval [--fetch] [--plan] [--embed …] [--rerank …]   # public sets (public/README.md)
 ```
 
 - The bundled demo is a smoke test of the eval pipeline, not a quality benchmark. Its 1,500
