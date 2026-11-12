@@ -1,6 +1,6 @@
 import { createOort } from 'oortmem';
 
-// The RaBitQ index (0.9.0 or newer, opt-in). Each memory gets a 1-bit code with an error bound;
+// The RaBitQ index (0.10.0 or newer, opt-in). Each memory gets a 1-bit code with an error bound;
 // a recall rescores, with their int8 vectors, only the memories whose bound can still reach the
 // top k. A native engine ships for macOS arm64 and Linux x64 and arm64; elsewhere the same index
 // runs in TypeScript, and `oort doctor` says which one this machine uses.

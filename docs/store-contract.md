@@ -302,7 +302,7 @@ of the database, such as a negative size or a null pose) is handled the same way
   logs one line: "sqlite store: N stored places failed the place check and are not searchable by
   near".
 
-Schema version 7 (the RaBitQ index, CON-25; Oort 0.9.0 or newer) adds a third, optional dense
+Schema version 7 (the RaBitQ index, CON-25; Oort 0.10.0 or newer) adds a third, optional dense
 index, and moves the writer guard on.
 
 - **The RaBitQ index.** Four ordinary tables, present only while the store has the index:

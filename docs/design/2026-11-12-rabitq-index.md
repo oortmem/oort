@@ -1,6 +1,6 @@
 # The RaBitQ index: 1-bit codes with error bounds, bounded int8 rescoring
 
-Date: 2026-11-12. Status: built (CON-25), ships in **0.9.0 or newer** beside the binary index of
+Date: 2026-11-12. Status: built (CON-25), ships in **0.10.0 or newer** beside the binary index of
 [CON-17](2026-11-11-binary-quantization.md). Opt-in: `store.vectorIndex: rabitq`.
 
 The binary index (CON-17) takes the 10 × k nearest 1-bit codes by Hamming distance and rescores
@@ -286,9 +286,11 @@ drop it. `rabitqEngine: 'native' | 'typescript'` on `openSqliteStore` forces an 
 benchmarks); `onDenseStats` reports each dense query's index, candidates, reads and whether the
 budget stopped it.
 
-`auto` does not choose RaBitQ, for now: the TypeScript fallback is slower to scan than sqlite-vec
-on platforms without a binary, and the index is new. Making it the `auto` choice above the
-threshold, where a binary exists, is a follow-up once it has run in the field.
+`auto` does not choose RaBitQ, for now. The index is new; it holds about 110 MB per process at
+one million where the binary index shares the page cache; its build takes longer (§11); and on a
+platform without a binary its TypeScript scan is only about as fast as the binary index. Making it
+the `auto` choice above the threshold, where a binary exists, is a follow-up once it has run in
+the field.
 
 ## 10. The seam
 

@@ -159,8 +159,8 @@ function popcount(x: number): number {
 /**
  * The reference engine in TypeScript: the same arithmetic as the native one (`native/src/lib.rs`),
  * in the same order and in doubles, so both return the same candidates. Used when the native
- * binary does not load (another platform, or `rabitqEngine: 'typescript'`); about ten times
- * slower to scan (design §7).
+ * binary does not load (another platform, or `rabitqEngine: 'typescript'`); about seven times
+ * slower to scan at one million vectors (design §11).
  */
 export class TsRabitqIndex implements RabitqEngine {
   private readonly words: number; // 32-bit words per code

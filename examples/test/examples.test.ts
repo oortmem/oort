@@ -170,7 +170,7 @@ describe('SDK examples (run)', () => {
     });
   });
 
-  it('rabitq-index: builds the RaBitQ index and recalls through it (0.9.0 or newer)', async () => {
+  it('rabitq-index: builds the RaBitQ index and recalls through it (0.10.0 or newer)', async () => {
     const { out } = await runExample('rabitq-index.ts');
     expect(out).toEqual(['The billing service deploys on Fridays after the change freeze.']);
     expect(sqliteVectorIndex(path.join(h.home, 'oort.sqlite'))).toEqual({

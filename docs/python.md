@@ -85,7 +85,7 @@ Inject memory into a prompt only through it.
 **Local mode takes no model keys and no config overlay**, unlike TypeScript's: the engine runs in
 `oort serve`, which reads its own keys (`oort keys set`, or the daemon's environment) and the
 home config. A key in code would never reach it. The same goes for the local store's settings
-(0.9.0 or newer): `store.vectorIndex` (`auto`, `int8`, `binary` or `rabitq`), `recall.adaptiveStop` and `recall.sufficientAt` are read
+(0.9.0 or newer): `store.vectorIndex` (`auto`, `int8`, `binary`, or `rabitq` from 0.10.0), `recall.adaptiveStop` and `recall.sufficientAt` are read
 from `~/.oort/config.json` only (a repository's `oort.config.json` cannot set them),
 as described in [the CLI docs](cli.md#large-stores-the-binary-vector-index-090-or-newer).
 

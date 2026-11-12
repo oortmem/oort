@@ -986,7 +986,7 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
         detail: `${kind} (${vi.vectors} searchable ${vi.vectors === 1 ? 'vector' : 'vectors'}; store.vectorIndex is ${want.vectorIndex}${want.vectorIndex === 'auto' ? `: binary from ${want.binaryAutoThreshold}` : ''})${
           fallback === undefined
             ? ''
-            : `; the native RaBitQ engine is unavailable (${fallback}), so dense search runs the same index in TypeScript, about ten times slower to scan`
+            : `; the native RaBitQ engine is unavailable (${fallback}), so dense search runs the same index in TypeScript, with the same results and a slower scan`
         }`,
         ...(fallback !== undefined && {
           fix: 'reinstall Oort on macOS arm64 or Linux x64/arm64 (glibc), or set store.vectorIndex to binary in ~/.oort/config.json',

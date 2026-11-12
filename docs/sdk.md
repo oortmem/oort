@@ -223,7 +223,7 @@ console.log(memories.map((m) => m.text).join('\n'));
   the codes rank outside the candidates can be missed;
   [the design note](design/2026-11-11-binary-quantization.md#9-measurements) has the measured
   recall and memory.
-- **`store.vectorIndex: 'rabitq'`** (opt-in): a RaBitQ index instead of the binary one. Each
+- **`store.vectorIndex: 'rabitq'`** (0.10.0 or newer, opt-in): a RaBitQ index instead of the binary one. Each
   vector's 1-bit code is compared with a 4-bit copy of the query, with an error bound, and only
   the memories whose bound can still reach the top k are rescored (at most 10 × k). On the bench's
   corpora it read about half as many int8 vectors as the binary index, with the exact scan's
@@ -242,7 +242,7 @@ console.log(memories.map((m) => m.text).join('\n'));
 ```ts
 import { createOort } from 'oortmem';
 
-// The RaBitQ index (0.9.0 or newer, opt-in). Each memory gets a 1-bit code with an error bound;
+// The RaBitQ index (0.10.0 or newer, opt-in). Each memory gets a 1-bit code with an error bound;
 // a recall rescores, with their int8 vectors, only the memories whose bound can still reach the
 // top k. A native engine ships for macOS arm64 and Linux x64 and arm64; elsewhere the same index
 // runs in TypeScript, and `oort doctor` says which one this machine uses.
