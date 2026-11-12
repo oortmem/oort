@@ -250,7 +250,11 @@ each placed memory's region with its map and frame as an auxiliary column. `near
 the R*Tree, then an exact distance check (`oort_place_distance`, a deterministic SQL function the
 store registers). A version 4 store gains the columns and the empty R*Tree in one transaction,
 after a `pre-v5` copy (`listBackups(path, 'pre-v5')`); nothing is rewritten and the lexical index
-is not rebuilt. Older versions go up through 4 to 5 in the same transaction.
+is not rebuilt. Older versions go up through 4 to 5 in the same transaction. A version 5 store
+whose R*Tree is missing gets it back on open, rebuilt from the stored places. Each place is
+checked with core's `checkPlace`, as a write is; one that does not parse or does not check (from a
+crafted or damaged copy, such as a negative size) is left out, so `near` never finds it, and the
+open does not fail.
 
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the

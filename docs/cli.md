@@ -1342,7 +1342,9 @@ oort recall "toolbox" --near 13,3 --radius 1.5 --map hq
 
 - **A place path** (`--place`) names where, root first: `site:hq/floor:2/room:B/shelf:B3`. 1 to
   16 segments of 1 to 64 letters (any script, with its combining marks), digits and `. _ : @ -`,
-  normalised to Unicode NFC.
+  normalised to Unicode NFC. Invisible characters, such as variation selectors and joiners (any
+  Unicode default-ignorable code point), are refused: `room:B` with one looks like `room:B` but
+  would never match it.
 - **Map coordinates** (`--pose x,y[,z]`, in metres, with `--map`) say where on a map. `--radius`
   gives the place a size, `--frame` a coordinate frame other than `map`. `odom` is refused:
   odometry drifts, so a fact pinned to it would end up in the wrong place.

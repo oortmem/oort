@@ -169,4 +169,39 @@ describe('sqlite spatial seam', () => {
     ]);
     await s2.close();
   });
+
+  it('spatial.a-rebuilt-spatial-index-skips-stored-places-that-do-not-check', async () => {
+    // A crafted or damaged database (say, a restored copy) whose index is missing: places that
+    // parse but would never pass `checkPlace` are left out of the rebuild, as unparseable ones
+    // are, instead of failing the open on an R*Tree constraint (a negative size gives min > max).
+    const o = fresh();
+    const s = await openSqliteStore(o);
+    await s.upsert(TG, toolbox('good', { mapId: 'hq', pose: { x: 0, y: 0 } }));
+    for (const id of ['negative-dx', 'odom', 'string-x', 'no-map', 'nan', 'unknown-field']) {
+      await s.upsert(TG, toolbox(id, { mapId: 'hq', pose: { x: 0.5, y: 0 } }));
+    }
+    await s.close();
+    const set = (id: string, place: string) =>
+      `UPDATE memories SET place = '${place}' WHERE id = '${id}';`;
+    rawExec(
+      o.path,
+      [
+        set('negative-dx', '{"mapId":"hq","pose":{"x":0.5,"y":0},"extent":{"dx":-4,"dy":1}}'),
+        set('odom', '{"mapId":"hq","frame":"odom","pose":{"x":0.5,"y":0}}'),
+        set('string-x', '{"mapId":"hq","pose":{"x":"0.5","y":0}}'),
+        set('no-map', '{"pose":{"x":0.5,"y":0}}'),
+        set('nan', '{"mapId":"hq","pose":{"x":1e999,"y":0}}'),
+        set('unknown-field', '{"mapId":"hq","pose":{"x":0.5,"y":0},"evil":1}'),
+        'DROP TABLE memories_place;',
+      ].join('\n'),
+    );
+    const s2 = await openSqliteStore(o);
+    expect(await both(s2, near(0, 0, 1))).toEqual([['good'], ['good']]);
+    await s2.close();
+    const db = new Database(o.path, { readonly: true });
+    expect((db.prepare('SELECT COUNT(*) AS n FROM memories_place').get() as { n: number }).n).toBe(
+      1,
+    );
+    db.close();
+  });
 });

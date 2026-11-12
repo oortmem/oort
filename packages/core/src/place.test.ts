@@ -217,4 +217,27 @@ describe('place', () => {
     expect(() => checkPlacePath('\u0301')).toThrow(RangeError);
     expect(() => checkPlacePath('a/\u0301b')).toThrow(RangeError);
   });
+
+  it('place.paths-refuse-invisible-default-ignorable-code-points', () => {
+    // `room:B` plus a variation selector looks exactly like `room:B` but never matches it, so
+    // `within` would quietly find less. Every Default_Ignorable_Code_Point is refused.
+    for (const c of [
+      '\ufe0f', // VARIATION SELECTOR-16
+      '\ufe00', // VARIATION SELECTOR-1
+      '\u034f', // COMBINING GRAPHEME JOINER
+      '\u{e0100}', // VARIATION SELECTOR-17 (ideographic variation sequences)
+      '\u180b', // MONGOLIAN FREE VARIATION SELECTOR ONE
+      '\u3164', // HANGUL FILLER (a letter, and invisible)
+      '\u200d', // ZERO WIDTH JOINER
+      '\u00ad', // SOFT HYPHEN
+    ]) {
+      expect(() => checkPlacePath(`room:B${c}`), `U+${c.codePointAt(0)!.toString(16)}`).toThrow(
+        'place.nodeId',
+      );
+      expect(() => checkPlace({ nodeId: `site:hq/room:B${c}/shelf:1` })).toThrow('place.nodeId');
+      expect(() => checkSpatialFilter({ within: `room:B${c}` })).toThrow('within');
+    }
+    // Visible marks that only look like the refused ones still work.
+    expect(checkPlacePath('ห้อง:B/कमरा')).toBe('ห้อง:B/कमरा');
+  });
 });
