@@ -15,7 +15,8 @@
     "fixture": "tsc -p tsconfig.json && node dist/make-fixture.js",
     "calibrate": "tsc -p tsconfig.json && node dist/calibrate-main.js",
     "bench:serve": "tsc -p tsconfig.json && node dist/serve-bench.js",
-    "calibrate:local": "tsc -p tsconfig.json && node dist/calibrate-local-main.js"
+    "calibrate:local": "tsc -p tsconfig.json && node dist/calibrate-local-main.js",
+    "calibrate:gate-miss": "tsc -p tsconfig.json && node dist/calibrate-gate-miss-main.js"
   },
   "dependencies": {
     "@oortmem/core": "workspace:*",

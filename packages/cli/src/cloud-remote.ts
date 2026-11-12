@@ -77,6 +77,11 @@ export function cloudRemote(
    * mode, which never embeds. An older API ignores it.
    */
   lexicalFirst?: boolean,
+  /**
+   * `recall.promptGateMissRerank` (CON-131): in `fast` mode, ask for a rerank only when the
+   * relevance gate would drop every candidate, instead of never. Needs an API that knows it.
+   */
+  gateMissRerank?: boolean,
 ): RemoteMemory {
   // Calls about the project this process runs in state its privacy when its own config file sets
   // it, so the cloud knows whether that project's memories may be shared. A default states
@@ -107,6 +112,7 @@ export function cloudRemote(
         ...(agent !== undefined && { agent }),
         k: 10,
         ...PROMPT_MODE[promptMode],
+        ...(promptMode === 'fast' && gateMissRerank === true && { rerank: 'gate-miss' as const }),
         ...(lexicalFirst !== undefined && promptMode !== 'lexical' && { lexicalFirst }),
       }),
     sessionMemories: async ({ projectId }) => {

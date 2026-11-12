@@ -273,6 +273,36 @@ describe('the prompt hook recall in cloud mode (CON-101)', () => {
     for (const b of bodies) expect(bytes(b['text'] as string)).toBeLessThanOrEqual(2048);
   });
 
+  it('cloud.gate-miss-rerank-is-asked-for-only-in-fast-mode-and-only-when-on', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const client = {
+      recall: async (q: Record<string, unknown>) => {
+        bodies.push(q);
+        return { memories: [], timings: {} };
+      },
+    } as unknown as CloudClient;
+    const cases = [
+      ['fast', true],
+      ['fast', false],
+      ['fast', undefined],
+      ['full', true],
+      ['lexical', true],
+    ] as const;
+    for (const [mode, gateMiss] of cases) {
+      await cloudRemote(client, undefined, undefined, undefined, mode, undefined, gateMiss).recall({
+        text: 'qué puerto usa el servicio de cobros',
+      });
+    }
+    expect(bodies.map((b) => ('rerank' in b ? b['rerank'] : 'absent'))).toEqual([
+      'gate-miss',
+      false,
+      false,
+      // `full` reranks anyway; `lexical` has no dense match to make a miss plausible.
+      'absent',
+      false,
+    ]);
+  });
+
   it('cloud.lexical-first-is-sent-as-configured-except-where-nothing-embeds', async () => {
     const bodies: Record<string, unknown>[] = [];
     const client = {

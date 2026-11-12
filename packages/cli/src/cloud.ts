@@ -506,8 +506,11 @@ export interface CloudClient {
     projectPrivate?: boolean;
     /** The agent asking: it reads only the Constellations it is attached to (CON-64). */
     agent?: string;
-    /** false: rank without the reranker (CON-101). An older API ignores it. */
-    rerank?: boolean;
+    /**
+     * false: rank without the reranker (CON-101). `'gate-miss'`: rerank only when the relevance
+     * gate would drop every candidate (CON-131); an API from before it answers 400.
+     */
+    rerank?: boolean | 'gate-miss';
     /** false: no query embedding, lexical recall only (CON-101). An older API ignores it. */
     embed?: boolean;
     /**

@@ -119,7 +119,7 @@ Three settings under `recall` cut them:
 | --- | --- | --- |
 | `lexicalFirst` | true | Run the lexical search first. When its top result holds every informative word of the prompt (at least two of them), is current, and the runner-up holds clearly fewer, the prompt is not embedded at all. In cloud mode the prompt hook sends this setting to Oort Cloud, which does the same. |
 | `rerankBudgetMs` | 2000 | The longest wait for the reranker in `oort recall`, `oort mcp` and the SDK. Past it, recall uses the fused order, logs `rerank-timeout`, and the relevance gate falls back to word coverage and dense similarity. 0 waits as long as the reranker takes. |
-| `promptRerankBudgetMs` | 400 | The same wait for the prompt hook, which runs before every prompt. It applies only when `promptMode` is `full`: `fast` and `lexical` skip the reranker. Before 0.7.3, `rerankBudgetMs` set this wait too: a value you set there no longer reaches the prompt hook. |
+| `promptRerankBudgetMs` | 400 | The same wait for the prompt hook, which runs before every prompt. It applies when `promptMode` is `full`, and to the gate-miss rerank below: otherwise `fast` and `lexical` skip the reranker. Before 0.7.3, `rerankBudgetMs` set this wait too: a value you set there no longer reaches the prompt hook. |
 | `queryCacheTtlSec` | 600 | How long a prompt's embedding is reused. The cache is in memory and on disk under `~/.oort/cache/query-embed` (files are named by a SHA-256 hash; no prompt text is stored). 0 turns it off. |
 
 Lexical first is conservative: it skips the embedding only when one memory clearly holds the
@@ -161,6 +161,39 @@ embedding about 267 ms, and the floor for any cloud request (network, Worker, D1
 fewer unrelated memories than `full`. Set `"recall": { "promptMode": "full" }` in
 `~/.oort/config.json` for the reranked order, or `"lexical"` when speed matters most. `oort recall`,
 the MCP `recall` tool and `SessionStart` always recall in full.
+
+### Questions in another language: the gate-miss rerank
+
+`fast` has a known gap. Its relevance gate keeps a candidate when it shares enough informative words
+with the prompt or has a strong dense match (`minDenseScore`, 0.6). A question in one language
+about a memory written in another shares few words, and its dense match is often just under 0.6,
+so the gate drops it and nothing is injected. With rerank, recall finds those memories.
+
+`recall.promptGateMissRerank` (default `false`) closes most of that gap without paying for a rerank
+on every prompt. With it on and `promptMode` `fast`, the prompt hook reranks only when the gate drops
+every candidate and the best dense match still reaches `recall.gateMissDenseFloor`. It then keeps
+what scores at least `recall.gateMissRerankFloor` on the reranker. No language is detected. It needs
+a hosted reranker (the local cross-encoder is English-only) and never applies to `lexical` or
+`full`. In cloud mode the hook asks Oort Cloud for the same (`rerank: "gate-miss"`); an API that
+does not know it answers 400 and the hook injects nothing for that prompt, so turn it on only
+against an API that supports it.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `promptGateMissRerank` | false | Rerank a `fast` prompt recall's gate miss, as above. |
+| `rerankWhen` | `always` | For the SDK: `gate-miss` makes any recall with a reranker behave this way. The prompt hook sets it itself. |
+| `gateMissDenseFloor` | 0.51 | The best dense score a miss needs before it is worth a rerank call. Lower finds a little more and reranks more often. |
+| `gateMissRerankFloor` | 0.76 | The rerank score a memory needs to be injected after the escalation. Lower injects more unrelated memories. |
+
+The floors were calibrated on the multilingual eval with voyage-3.5-lite and rerank-3-lite (see
+`packages/bench/eval/multilingual/README.md`, "Gate-miss rerank"). With them, cross-language
+recall@10 averaged 0.90 over the six gating languages, against 0.75 without the escalation, with no
+more abstention or unrelated-prompt false positives. The cost is latency on the prompts it fires
+for: one rerank call, about 275 ms at p50 and 490 ms at p95 measured from Europe. It fired for 49%
+of unrelated developer prompts in that eval and 9% of English questions. Its rerank waits up to
+`promptRerankBudgetMs`; past it, nothing is injected (`rerank-timeout`). The floors suit those
+Voyage models only: with other models, recalibrate (`pnpm --filter @oortmem/bench run
+calibrate:gate-miss`).
 
 ### Cloud mode
 

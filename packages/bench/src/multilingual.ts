@@ -20,6 +20,7 @@ import {
   localScope,
   recall,
   resolveConfig,
+  type RecallResult,
   type Embedder,
   type Memory,
   type MemoryStore,
@@ -227,6 +228,25 @@ export interface MultilingualOptions {
   log?: (message: string) => void;
   /** The stores' dense index (CON-17; default `auto`, so int8 at this size). */
   vectorIndex?: VectorIndex;
+  /**
+   * Called with every row's full recall result (CON-131's calibration reads the gate and the
+   * scores from it). Cross rows arrive with their ids mapped to English, mixed rows unmapped.
+   */
+  onRow?: (seen: RowSeen) => void;
+  /**
+   * Rows recalled after each (language, condition)'s own, in the same store, reported only to
+   * `onRow` (with `extra: true`) and never in the metrics: `unrelatedRows()`, for example.
+   */
+  extraRows?: ReadonlyMap<Language, readonly EvalRow[]>;
+}
+
+/** One recalled row, as `MultilingualOptions.onRow` sees it. */
+export interface RowSeen {
+  lang: Language;
+  condition: Condition;
+  row: EvalRow;
+  result: RecallResult;
+  extra: boolean;
 }
 
 export interface LatencyStats {
@@ -283,6 +303,7 @@ async function recallRows(
   rows: EvalRow[],
   config: ResolvedConfig,
   opts: MultilingualOptions,
+  at: { lang: Language; condition: Condition },
 ): Promise<{ ids: string[][]; ms: number[] }> {
   // Rows must not influence each other through access records.
   const evalStore: MemoryStore = { ...store, recordAccess: async () => {} };
@@ -301,8 +322,43 @@ async function recallRows(
     );
     ids.push(r.memories.map((m) => m.id));
     ms.push(r.timings['totalMs'] ?? 0);
+    opts.onRow?.({ ...at, row, result: r, extra: false });
+  }
+  for (const row of opts.onRow === undefined ? [] : (opts.extraRows?.get(at.lang) ?? [])) {
+    const r = await recall(
+      { text: row.question, scope: ALL_SCOPE },
+      {
+        store: evalStore,
+        config,
+        now: opts.now ?? GENERATOR_NOW,
+        ...(opts.embed !== undefined && { embed: opts.embed }),
+        ...(opts.rerank !== undefined && { rerank: opts.rerank }),
+      },
+    );
+    opts.onRow?.({ ...at, row, result: r, extra: true });
   }
   return { ids, ms };
+}
+
+/**
+ * Prompts a developer types that no memory in the set answers ("why does this test fail on
+ * CI?"), three per language (`eval/multilingual/unrelated.jsonl`). A prompt hook sees mostly
+ * these, so anything recalled for them is a false injection (CON-131).
+ */
+export function unrelatedRows(dir = MULTILINGUAL_DIR): Map<Language, EvalRow[]> {
+  const out = new Map<Language, EvalRow[]>();
+  for (const r of jsonl(path.join(dir, 'unrelated.jsonl'))) {
+    const lang = r['lang'] as Language;
+    const question = r['question'];
+    if (!(LANGUAGES as readonly string[]).includes(lang) || typeof question !== 'string') {
+      throw new Error(`unrelated.jsonl: bad row ${JSON.stringify(r)}`);
+    }
+    out.set(lang, [
+      ...(out.get(lang) ?? []),
+      { question, expectedMemoryIds: [], category: 'abstention', lang },
+    ]);
+  }
+  return out;
 }
 
 /** The rows that run in `condition`: those not pinned to another one. */
@@ -372,7 +428,12 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
           if (conditions.includes('mono')) {
             const rows = rowsFor(set, lang, 'mono');
             if (lang === 'en') {
-              result(lang, 'mono', rows, await recallRows(english, rows, config, opts));
+              result(
+                lang,
+                'mono',
+                rows,
+                await recallRows(english, rows, config, opts, { lang, condition: 'mono' }),
+              );
             } else {
               const own = await seeded(
                 path.join(tmp, lang),
@@ -380,7 +441,12 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
                 opts.vectorIndex,
               );
               try {
-                result(lang, 'mono', rows, await recallRows(own, rows, config, opts));
+                result(
+                  lang,
+                  'mono',
+                  rows,
+                  await recallRows(own, rows, config, opts, { lang, condition: 'mono' }),
+                );
               } finally {
                 await own.close();
               }
@@ -390,7 +456,12 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
             const crossRows = remap(rowsFor(set, lang, 'cross'), (id) =>
               memoryId('en', factOf(id)),
             );
-            result(lang, 'cross', crossRows, await recallRows(english, crossRows, config, opts));
+            result(
+              lang,
+              'cross',
+              crossRows,
+              await recallRows(english, crossRows, config, opts, { lang, condition: 'cross' }),
+            );
           }
         }
       } finally {
@@ -408,7 +479,7 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
       try {
         for (const lang of languages) {
           const rows = rowsFor(set, lang, 'mixed');
-          const run = await recallRows(mixed, rows, config, opts);
+          const run = await recallRows(mixed, rows, config, opts, { lang, condition: 'mixed' });
           // Any language's copy of the expected fact is a hit.
           let found = 0;
           let same = 0;
