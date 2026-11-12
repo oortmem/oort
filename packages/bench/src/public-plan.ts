@@ -149,6 +149,8 @@ export function planPublicSet(
 }
 
 const n = (x: number): string => x.toLocaleString('en-US');
+/** Dollars: cents for a dollar or more, four places below (these runs cost fractions of a cent). */
+const usd = (x: number): string => x.toFixed(x >= 1 ? 2 : 4);
 
 export function renderPlan(p: PublicPlan): string {
   const tok = p.tokensExact ? 'tokens' : 'tokens (estimated at 4 chars each: no tokenizer)';
@@ -161,13 +163,13 @@ export function renderPlan(p: PublicPlan): string {
     lines.push(
       `Embed (${p.embed.model}): ${n(d.texts)} distinct turn texts, ${n(d.cached)} already cached; ${n(d.requests)} requests of up to 128, ${n(d.chars)} chars, ${n(d.tokens)} ${tok}.`,
       `  Queries, at most: ${n(p.embed.queries.requests)} requests, ${n(p.embed.queries.tokens)} ${tok}.`,
-      `  Cost at list price, at most: $${p.embed.usd.toFixed(2)}.`,
+      `  Cost at list price, at most: $${usd(p.embed.usd)}.`,
     );
   }
   if (p.rerank !== undefined) {
     lines.push(
       `Rerank (${p.rerank.model}), at most: ${n(p.rerank.calls)} calls of up to ${p.rerank.documentsPerCall} documents, ${n(p.rerank.tokens)} ${tok} (query tokens x documents + document tokens).`,
-      `  Cost at list price, at most: $${p.rerank.usd.toFixed(2)}.`,
+      `  Cost at list price, at most: $${usd(p.rerank.usd)}.`,
     );
   }
   if (p.embed === undefined && p.rerank === undefined) {

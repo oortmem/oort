@@ -73,7 +73,7 @@ off so questions do not influence each other, and the returned memories are mapp
   a second per turn (the file has no zone: UTC); `turnRef` is the dialogue id (`D3:7`). Evidence
   ids are cleaned of the file's few typos (`D8:6; D9:17`, `D:11:26`); references that name no turn
   are dropped and counted, and a question left with none is left out and counted. Categories
-  follow the mapping most published retrieval results use, which the question counts confirm: 1
+  follow the mapping most published retrieval results use, which the question counts in the file confirm: 1
   multi-hop (282), 2 temporal (321), 3 open-domain (96), 4 single-hop (841), 5 adversarial (446).
   Recall's "now" is a day after the last session.
 - **LongMemEval_S**: one haystack per question (500, about 50 sessions each). A memory is one round
