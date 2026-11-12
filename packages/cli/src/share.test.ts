@@ -572,6 +572,9 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
       unreachable: [],
       stillShared: [{ constellation: CHECKOUT, name: 'checkout', member: true }],
       constellations: [{ constellation: CHECKOUT, name: 'checkout', member: true }],
+      // Rewriting the memories that restated it is the local store's (CON-144).
+      rewritten: [],
+      notRewritten: [],
     });
     expect(JSON.parse(r.io.stdout).warnings).toEqual([
       {
@@ -664,6 +667,8 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
       unreachable: [DESIGN],
       stillShared: [checkout, design],
       constellations: [core, checkout, design],
+      rewritten: [],
+      notRewritten: [],
     });
     expect((JSON.parse(r.io.stdout).warnings as { code: string }[]).map((w) => w.code)).toEqual([
       'removal-requested',
