@@ -94,6 +94,18 @@ const recall = z
      * recall`, MCP and SessionStart always recall in full.
      */
     promptMode: z.enum(['full', 'fast', 'lexical']).default('fast'),
+    /**
+     * The adaptive stop (CON-17): when the reranked hot and warm memories already answer the
+     * query, the cold memories that also matched are not returned, so none is hydrated.
+     * - `rule` (default): decided in code, no model call: the top memory is live, holds every
+     *   informative query word, and each cold match holds clearly fewer.
+     * - `decide`: a full recall asks the decision model (`DecisionController.sufficient`, one call
+     *   per recall that has cold matches beside live ones; `sufficientAt`); the rule otherwise.
+     * - `off`: always widen into the cold matches.
+     */
+    adaptiveStop: z.enum(['rule', 'decide', 'off']).default('rule'),
+    /** The decision model's probability at or above which the reranked set counts as enough. */
+    sufficientAt: z.number().min(0).max(1).default(0.7),
   })
   .default({
     lexicalK: 50,
@@ -112,6 +124,8 @@ const recall = z
     staleAfterDays: 30,
     specificityPrior: 0,
     promptMode: 'fast',
+    adaptiveStop: 'rule',
+    sufficientAt: 0.7,
   });
 
 const project = z
@@ -162,6 +176,21 @@ const updates = z
   })
   .default({ check: true });
 
+/**
+ * The local SQLite store (CON-17, 0.9.0 or newer). Read from the home config only: a home has one
+ * store, so a repository cannot change how it is indexed.
+ * - `vectorIndex`: `auto` (default) scans int8 vectors exactly until the store holds
+ *   `binaryAutoThreshold` searchable vectors, then builds the binary index (1-bit codes, 10x
+ *   oversampling, int8 rescoring) on the next `oort` command and keeps it; `binary` builds it
+ *   now; `int8` never uses one (and drops one already built).
+ */
+const store = z
+  .strictObject({
+    vectorIndex: z.enum(['auto', 'int8', 'binary']).default('auto'),
+    binaryAutoThreshold: z.number().int().min(0).default(100_000),
+  })
+  .default({ vectorIndex: 'auto', binaryAutoThreshold: 100_000 });
+
 export const OortConfig = z.strictObject({
   embed,
   rerank,
@@ -173,6 +202,7 @@ export const OortConfig = z.strictObject({
   serve,
   judge,
   updates,
+  store,
 });
 export type OortConfig = z.infer<typeof OortConfig>;
 
@@ -184,14 +214,25 @@ export type ResolvedConfig = OortConfig & {
   /**
    * Keys a project's `oort.config.json` set that only the home config may set (`serve`: a
    * repository must not start processes on this machine; `judge`: nor name experts; `updates`:
-   * the update check is your preference). Ignored;
+   * the update check is your preference; `store`: one store per home; `recall.adaptiveStop` and
+   * `recall.sufficientAt`: a model call on your recalled text). Ignored;
    * absent when there are none.
    */
   ignoredProjectKeys?: string[];
 };
 
 /** Keys read from the home config only; a project file's value is ignored (and reported). */
-const HOME_ONLY_KEYS: ReadonlySet<string> = new Set(['serve', 'judge', 'updates']);
+const HOME_ONLY_KEYS: ReadonlySet<string> = new Set(['serve', 'judge', 'updates', 'store']);
+
+/**
+ * Keys inside a section that only the home config may set, though the rest of the section may
+ * come from a project (CON-17): `recall.adaptiveStop` can turn on a model call that sends recalled
+ * text to the decision vendor, and with `sufficientAt` hide cold matches. A project file's value
+ * is ignored (and reported as `recall.adaptiveStop`); the home config's, or the default, stands.
+ */
+const HOME_ONLY_SUBKEYS: Readonly<Record<string, readonly string[]>> = {
+  recall: ['adaptiveStop', 'sufficientAt'],
+};
 
 const CONFIG_KEYS = Object.keys(OortConfig.shape);
 
@@ -282,6 +323,22 @@ export function resolveConfig(
     if (key in projectRaw && !HOME_ONLY_KEYS.has(key)) {
       merged[key] = projectRaw[key];
       sources[key] = 'project';
+      const sub = HOME_ONLY_SUBKEYS[key];
+      const section = projectRaw[key];
+      if (sub !== undefined && typeof section === 'object' && section !== null) {
+        const own = { ...(section as Record<string, unknown>) };
+        const fromHome = homeRaw[key];
+        for (const k of sub) {
+          if (k in own) {
+            ignored.push(`${key}.${k}`);
+            delete own[k];
+          }
+          if (typeof fromHome === 'object' && fromHome !== null && k in fromHome) {
+            own[k] = (fromHome as Record<string, unknown>)[k];
+          }
+        }
+        merged[key] = own;
+      }
     } else if (key in homeRaw) {
       merged[key] = homeRaw[key];
       sources[key] = 'home';

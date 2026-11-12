@@ -160,7 +160,9 @@ export interface WireWarning {
     | 'keychain-unreadable'
     | 'cloud-unavailable'
     | 'serve-ignored'
-    | 'judge-ignored';
+    | 'judge-ignored'
+    | 'store-ignored'
+    | 'recall-stop-ignored';
   /** One line for stderr; holds config values only. */
   message: string;
 }
@@ -493,6 +495,21 @@ function prepare(opts: EngineOptions, env: Env): Prepared {
       message: 'project config judge ignored; judgment memory reads the home config only.',
     });
   }
+  // One store per home: a repository cannot change how it is indexed (CON-17).
+  if (config.ignoredProjectKeys?.includes('store') === true) {
+    warnings.push({
+      code: 'store-ignored',
+      message: 'project config store ignored; the store reads the home config only.',
+    });
+  }
+  // A model call on recalled text, and hiding cold matches, are the person's call (CON-17).
+  const stop = config.ignoredProjectKeys?.filter((k) => k.startsWith('recall.')) ?? [];
+  if (stop.length > 0) {
+    warnings.push({
+      code: 'recall-stop-ignored',
+      message: `project config ${stop.join(', ')} ignored; the adaptive stop reads the home config only.`,
+    });
+  }
   const project = resolveProject(cwd, config.home);
   // A repository file cannot choose a scope without the user's trust binding.
   if (
@@ -532,6 +549,8 @@ async function open(p: Prepared, opts: EngineOptions, env: Env): Promise<Engine>
     coldDir: path.join(config.home, 'cold'),
     dimension: config.embed.dimension,
     d: config.activation.d,
+    vectorIndex: config.store.vectorIndex,
+    binaryAutoThreshold: config.store.binaryAutoThreshold,
     ...(opts.busyTimeoutMs !== undefined && { busyTimeoutMs: opts.busyTimeoutMs }),
     ...(opts.migrate === false && { migrate: false }),
   });

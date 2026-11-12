@@ -250,7 +250,42 @@ each placed memory's region with its map and frame as an auxiliary column. `near
 the R*Tree, then an exact distance check (`oort_place_distance`, a deterministic SQL function the
 store registers). A version 4 store gains the columns and the empty R*Tree in one transaction,
 after a `pre-v5` copy (`listBackups(path, 'pre-v5')`); nothing is rewritten and the lexical index
-is not rebuilt. Older versions go up through 4 to 5 in the same transaction.
+is not rebuilt. Older versions go up through 4 to 5 in the same transaction, and on to 6.
+
+Schema version 6 (the binary vector index, CON-17; Oort 0.9.0 or newer) adds a second, optional
+dense index beside the int8 vectors, and a guard that stops an older Oort from writing.
+
+- **The binary index.** `memories_vec_bit` is a sqlite-vec `vec0` table holding, for every hot and
+  warm memory with a vector, a 1-bit code of the vector (`bit[W]`, W the dimension rounded up to a
+  power of two: 512 for 512, 512 for 384, 1024 for 1024), partitioned by node with project and
+  author as filter columns like `memories_vec`, and the memory's int8 vector again as an auxiliary
+  column for rescoring. The code is the sign of each value after a fixed randomized Hadamard
+  rotation (the rotation RaBitQ uses), so Hamming distance estimates the angle between vectors. A
+  dense query takes the `10 × k` nearest codes by Hamming distance (at most 4096) and rescores them
+  with the exact int8 cosine. `dense` returns the same scores either way (the int8 cosine); with the
+  binary index, a memory the codes rank outside the `10 × k` candidates can be missed. A spatial
+  filter (`near`, `within`) applies inside the binary KNN as inside the int8 one, so the candidates
+  are drawn from the matching memories only.
+- **When it exists.** `openSqliteStore({ vectorIndex })`: `auto` (the default) builds it when an
+  open that may migrate finds at least `binaryAutoThreshold` (100,000) searchable vectors and keeps
+  it from then on; `binary` builds it now; `int8` drops it. The build reads the int8 vectors (no
+  vendor is called, nothing else changes), prints "Building the binary vector index (N vectors)…"
+  and runs in one transaction, waiting up to 60 seconds for another connection's write lock. A
+  process killed during it leaves the store as it was. Every write after that keeps it in step:
+  `upsert`, `forget`, `coldPut`, `setTier` and `reembedSqliteStore`. A cold memory has no code.
+- **The writer guard.** Version 6 adds triggers on `memories` that call a function only Oort 0.9.0
+  or newer defines, so an Oort that started before the upgrade (an MCP server, a daemon) fails on
+  its next write, changing nothing, instead of writing memories the binary index would not hold. A
+  connection it already has can still read. Restart it after the upgrade.
+- **Migration.** Opening a version 5 store adds the guard in one transaction; nothing else is
+  rewritten, and the binary index follows the rules above. It takes no copy first, unlike the
+  earlier migrations: version 6 only adds (triggers and an index built from the int8 vectors) and
+  `downgradeSqliteStore({ to: 5 })` goes back without loss, so a plaintext copy of every memory,
+  which `forget` would never reach, is not worth keeping. A version 4 store goes up through 5 to 6 in
+  one transaction with only version 5's `pre-v5` copy. `migrate: false` refuses a version 5 (or older) store with
+  `StoreMigrationRequiredError` and never builds or drops the index. An Oort older than 0.9.0
+  refuses a version 6 store without changing it, as every version refuses a newer schema.
+  `sqliteVectorIndex(path)` says which index a store searches and how many vectors, read-only.
 
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the
@@ -277,8 +312,9 @@ vector table is rebuilt from the stored embeddings.
 `downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x,
 `downgradeSqliteStore({ path, to: 2 })` to version 2 for Oort 0.3 to 0.5, and `{ path, to: 3 }` to
 version 3 for Oort before tokeniser v2 (the lexical index is rebuilt with tokeniser v1, as
-`memories_fts` again), and `{ path, to: 4 }` to version 4 for Oort 0.6.1 to 0.8 (the place columns
-and the R*Tree are dropped). Opening a store never goes down: migrations only roll forward. It first
+`memories_fts` again), `{ path, to: 4 }` to version 4 for Oort 0.6.1 to 0.8 (the place columns
+and the R*Tree are dropped), and `{ path, to: 5 }` to version 5 (the binary index and the writer
+guard are dropped; the int8 vectors were never moved). Opening a store never goes down: migrations only roll forward. It first
 copies the database to `<path>.pre-downgrade.<UTC time>` (the three newest are kept), and refuses
 while the store holds anything the target version cannot represent (for version 4 and below, any
 memory with a place; for version 2, also any judgment; for

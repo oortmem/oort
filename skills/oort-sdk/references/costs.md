@@ -20,6 +20,8 @@ Ways to spend less:
 - `remember(facts)` costs one observe per fact: batch the facts of one decision into one call (at
   most five), and do not use it to replay a transcript.
 - `recall(query, { speed: 'fast' })` skips the rerank; `speed: 'lexical'` makes no model call.
+- `recall.adaptiveStop: 'decide'` (0.9.0 or newer) adds one TypeSafe call to a `full` recall that
+  finds archived matches; the default, `rule`, decides in code.
 - `oort models pull` (with `@oortmem/local-models` installed) runs embed and rerank on the CPU
   with no key; deciding and writing still need TypeSafe and Anthropic keys, or Oort Pro.
 - `keySources: ['explicit']` turns off every implicit source, the relay included unless you pass

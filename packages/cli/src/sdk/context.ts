@@ -38,6 +38,7 @@ export function target(ctx: Ctx): RecallTarget {
     ...(e.store !== undefined && { store: e.store }),
     ...(e.embed !== undefined && { embed: e.embed }),
     ...(e.rerank !== undefined && { rerank: e.rerank }),
+    ...(e.decide !== undefined && { decide: e.decide }),
     ...(ctx.statedPrivacy !== undefined && { statedPrivacy: ctx.statedPrivacy }),
     scope: ctx.principal.scope,
     agent: ctx.principal.agent,

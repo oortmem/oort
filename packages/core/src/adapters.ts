@@ -271,6 +271,29 @@ export interface DecisionController {
    * controller without it leaves judging at precedents only.
    */
   judge?(req: JudgeRequest): Promise<JudgeChoice>;
+  /**
+   * The read path's adaptive stop (CON-17, 0.9.0 or newer): the probability that the reranked
+   * live memories already answer `req.query`, so recall need not widen into the cold memories
+   * whose stubs also matched (and hydrate them). Optional; without it recall decides with a rule
+   * in code (see `RecallResult.adaptiveStop`).
+   */
+  sufficient?(req: SufficiencyRequest): Promise<SufficiencyDecision>;
+}
+
+/** What `DecisionController.sufficient` is asked. */
+export interface SufficiencyRequest {
+  /** The query as recall searched for it (scrubbed, temporal words removed). */
+  query: string;
+  /** The reranked hot and warm memories recall would return, best first. Never empty. */
+  memories: { id: string; text: string; score?: number }[];
+  /** The cold memories that also passed the relevance gate: their stubs only. Never empty. */
+  cold: { id: string; stub: string }[];
+}
+
+/** The controller's answer: how likely `memories` alone answer the query. */
+export interface SufficiencyDecision {
+  probability: number;
+  decisions: Decision[];
 }
 
 /** One past decision as the controller sees it: the expert's reason verbatim. */

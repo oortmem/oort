@@ -12,6 +12,7 @@ private workspace package: never published.
 | [`cloud-data-requests.ts`](src/cloud-data-requests.ts) | An end user's data requests: export, correct, erase               | typecheck, run (fake Oort Cloud)       |
 | [`judgments.ts`](src/judgments.ts)                     | Judgments: record, confirm in the expert role, apply              | typecheck, run                         |
 | [`spatial.ts`](src/spatial.ts)                         | Spatial memory (0.9.0 or newer, local): `place`, `within`, `near` | typecheck, run                         |
+| [`large-store.ts`](src/large-store.ts)                 | A large local store: the binary index, the adaptive stop          | typecheck, run                         |
 | [`errors.ts`](src/errors.ts)                           | Errors: `OortError.code`, `retryable`, `retryAfter`               | typecheck, run (fake Oort Cloud)       |
 | [`serverless.ts`](src/serverless.ts)                   | Serverless: cloud mode, a handler and `await using`               | typecheck, run (fake Oort Cloud)       |
 | [`ai-sdk.ts`](src/ai-sdk.ts)                           | Vercel AI SDK through `oortmem/ai-sdk`                            | typecheck, run (`MockLanguageModelV4`) |

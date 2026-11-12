@@ -45,6 +45,8 @@ describe('config', () => {
       queryCacheTtlSec: 600,
       staleAfterDays: 30,
       promptMode: 'fast',
+      adaptiveStop: 'rule',
+      sufficientAt: 0.7,
     });
     expect(c.project).toEqual({ private: false });
     expect(c.sources['embed']).toBe('default');
@@ -160,6 +162,50 @@ describe('config', () => {
     expect(c.ignoredProjectKeys).toEqual(['serve']);
     expect(c.recall.budgetChars).toBe(100); // other project keys still apply
     expect(resolveConfig(home, { OORT_HOME: home }).ignoredProjectKeys).toBeUndefined();
+  });
+
+  it('config.store-vector-index-defaults-to-auto-and-is-read-from-the-home-config-only (CON-17)', () => {
+    const home = tmp();
+    const cwd = tmp();
+    expect(resolveConfig(cwd, { OORT_HOME: home }).store).toEqual({
+      vectorIndex: 'auto',
+      binaryAutoThreshold: 100_000,
+    });
+    // One store per home: a repository cannot change how it is indexed.
+    fs.writeFileSync(path.join(cwd, 'oort.config.json'), '{"store":{"vectorIndex":"int8"}}');
+    const fromRepo = resolveConfig(cwd, { OORT_HOME: home });
+    expect(fromRepo.store.vectorIndex).toBe('auto');
+    expect(fromRepo.ignoredProjectKeys).toEqual(['store']);
+    fs.writeFileSync(path.join(home, 'config.json'), '{"store":{"vectorIndex":"binary"}}');
+    expect(resolveConfig(cwd, { OORT_HOME: home }).store.vectorIndex).toBe('binary');
+    fs.writeFileSync(path.join(home, 'config.json'), '{"store":{"vectorIndex":"float"}}');
+    expect(() => resolveConfig(home, { OORT_HOME: home })).toThrow(/vectorIndex/);
+  });
+
+  it('config.adaptive-stop-is-read-from-the-home-config-only (CON-17)', () => {
+    const home = tmp();
+    const cwd = tmp();
+    // A repository must not turn on a model call that sends recalled text, nor hide cold matches.
+    fs.writeFileSync(
+      path.join(cwd, 'oort.config.json'),
+      '{"recall":{"adaptiveStop":"decide","sufficientAt":0,"budgetChars":100}}',
+    );
+    const fromRepo = resolveConfig(cwd, { OORT_HOME: home });
+    expect(fromRepo.recall.adaptiveStop).toBe('rule');
+    expect(fromRepo.recall.sufficientAt).toBe(0.7);
+    expect(fromRepo.recall.budgetChars).toBe(100); // the rest of recall still applies
+    expect(fromRepo.ignoredProjectKeys).toEqual(['recall.adaptiveStop', 'recall.sufficientAt']);
+    // The home config's choice stands, also when the repository sets other recall keys.
+    fs.writeFileSync(
+      path.join(home, 'config.json'),
+      '{"recall":{"adaptiveStop":"off","sufficientAt":0.9}}',
+    );
+    const both = resolveConfig(cwd, { OORT_HOME: home });
+    expect(both.recall).toMatchObject({ adaptiveStop: 'off', sufficientAt: 0.9, budgetChars: 100 });
+    fs.writeFileSync(path.join(cwd, 'oort.config.json'), '{"recall":{"budgetChars":100}}');
+    const plain = resolveConfig(cwd, { OORT_HOME: home });
+    expect(plain.recall).toMatchObject({ adaptiveStop: 'off', sufficientAt: 0.9 });
+    expect(plain.ignoredProjectKeys).toBeUndefined();
   });
 
   it('config.updates-check-defaults-on-and-is-read-from-the-home-config-only (CON-114)', () => {

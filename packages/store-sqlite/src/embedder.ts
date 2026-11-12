@@ -2,8 +2,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
+import { binaryCode } from './binary.js';
 import { openBlobDir, withCleanupFailures } from './blobs.js';
 import { createColdCodec } from './cold.js';
+import { BIT_TABLE, hasBinaryIndex } from './schema.js';
 
 /**
  * Which embedding model a store's vectors come from. Vectors from two models live in unrelated
@@ -149,17 +151,49 @@ export async function reembedSqliteStore(opts: ReembedOptions): Promise<ReembedR
       `INSERT INTO memories_vec (id, embedding, ${others.join(', ')})
        VALUES (?, vec_int8(?), ${others.map(() => '?').join(', ')})`,
     );
+    // The binary index (schema version 6) follows each searchable vector: same code as `upsert`.
+    // Looked up in each batch's transaction: another process (an MCP server, an `oort` command)
+    // may build or drop it while this runs, and a batch must write into the index as it is then.
+    let binary:
+      | {
+          remove: Database.Statement<[string]>;
+          insert: Database.Statement<[string, Buffer, unknown, unknown, unknown, Buffer]>;
+        }
+      | undefined;
+    const binaryNow = (): typeof binary => {
+      if (!hasBinaryIndex(db)) return undefined;
+      return {
+        remove: db.prepare<[string]>(`DELETE FROM ${BIT_TABLE} WHERE id = ?`),
+        insert: db.prepare<[string, Buffer, unknown, unknown, unknown, Buffer]>(
+          `INSERT INTO ${BIT_TABLE} (id, embedding, node_key, project_key, author_key, rescore)
+           VALUES (?, vec_bit(?), ?, ?, ?, ?)`,
+        ),
+      };
+    };
     const setVector = (bytes: Buffer, id: string): void => {
       const row = readRow.get(id);
       if (row === undefined) return;
       deleteRow.run(id);
       insertRow.run(id, bytes, ...others.map((c) => row[c]));
+      if (binary === undefined) return;
+      binary.remove.run(id);
+      if (row['tier'] === 'cold') return;
+      const v = new Int8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      binary.insert.run(
+        id,
+        binaryCode(v),
+        row['node_key'],
+        row['project_key'],
+        row['author_key'],
+        bytes,
+      );
     };
     for (let i = 0; i < live.length; i += batchSize) {
       const chunk = live.slice(i, i + batchSize);
       const vs = await opts.embed(chunk.map((r) => r.text));
       check(vs, chunk.length);
       db.transaction(() => {
+        binary = binaryNow();
         chunk.forEach((r, j) => setVector(toBytes(vs[j]!), r.id));
       }).immediate();
       done += chunk.length;

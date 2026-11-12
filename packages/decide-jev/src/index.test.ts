@@ -688,3 +688,51 @@ describe('jevDecider.judge hardening (CON-71 review)', () => {
     ).rejects.toMatchObject({ kind: 'bad-response' });
   });
 });
+
+describe('jevDecider.sufficient (CON-17)', () => {
+  const req = {
+    query: 'auth-service port 8080',
+    memories: [
+      { id: 'w1', text: 'auth-service listens on port 8080 in staging', score: 0.91 },
+      { id: 'w2', text: 'x'.repeat(5000) },
+    ],
+    cold: [{ id: 'c1', stub: 'auth-service on-call runbook' }],
+  };
+
+  it('sufficient.one-noul-with-the-reranked-set-and-cold-stubs-as-state', async () => {
+    const s = stub(() => ({ sufficient: noulA(0.83) }));
+    const d = await jevDecider({ client: s.client }).sufficient!(req);
+    expect(d).toEqual({
+      probability: 0.83,
+      decisions: [{ stage: 'recall', question: 'sufficient', answer: 'yes', probability: 0.83 }],
+    });
+    expect(s.calls).toHaveLength(1);
+    const call = s.calls[0]!;
+    expect(Object.keys(call.questions)).toEqual(['sufficient']);
+    const state = call.state as {
+      query: string;
+      memories: { text: string; score?: number }[];
+      cold: { stub: string }[];
+    };
+    expect(state.query).toBe('auth-service port 8080');
+    expect(state.memories[0]).toEqual({
+      text: 'auth-service listens on port 8080 in staging',
+      score: 0.91,
+    });
+    // Each text is cut to size; ids are not sent.
+    expect(new TextEncoder().encode(state.memories[1]!.text).byteLength).toBeLessThanOrEqual(1024);
+    expect(state.cold).toEqual([{ stub: 'auth-service on-call runbook' }]);
+    expect(JSON.stringify(call.state)).not.toContain('w1');
+  });
+
+  it('sufficient.a-low-answer-is-no-and-a-bad-one-is-an-error', async () => {
+    const low = stub(() => ({ sufficient: noulA(0.2) }));
+    expect((await jevDecider({ client: low.client }).sufficient!(req)).decisions[0]?.answer).toBe(
+      'no',
+    );
+    const bad = stub(() => ({}));
+    await expect(jevDecider({ client: bad.client }).sufficient!(req)).rejects.toMatchObject({
+      kind: 'bad-response',
+    });
+  });
+});
