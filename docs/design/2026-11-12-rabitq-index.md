@@ -298,7 +298,7 @@ is not left behind in freed memory.
 
 **Packaging.** The binaries ship inside `@oortmem/store-sqlite` (`files` includes
 `native/oort-rabitq.*.node`), so there is no new npm package and no install script. The release
-workflow builds one per platform on a runner of that platform (`macos-14`, `ubuntu-22.04`,
+workflow builds one per platform on a runner of that platform (`macos-15`, `ubuntu-22.04`,
 `ubuntu-22.04-arm`, so glibc 2.35 or newer), from source with the pinned toolchain
 (`rust-toolchain.toml`) and `cargo build --locked`. Each platform's job then loads the binary it
 built and runs the engine and index test files with `OORT_REQUIRE_NATIVE=1` (the store's RaBitQ
