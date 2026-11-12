@@ -917,6 +917,8 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
           storeConfig: w.config.store,
         };
       },
+      // A diagnosis stays quick: a RaBitQ build under way is reported below, not run here.
+      { rabitqBuildBatches: 0 },
     );
     checks.push({
       group: 'store',
@@ -1001,7 +1003,7 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
       const fallback = native !== undefined && 'error' in native ? native.error : undefined;
       const kind =
         vi.index === 'rabitq'
-          ? `rabitq, 1-bit codes with error bounds rescored in int8, ${fallback === undefined ? 'native engine' : 'TypeScript engine'}${vi.building === true ? '; being built (dense search scans int8 until it is done; the next oort command goes on with it)' : ''}`
+          ? `rabitq, 1-bit codes with error bounds rescored in int8, ${fallback === undefined ? 'native engine' : 'TypeScript engine'}${vi.building === true ? '; build unfinished (an MCP server or app builds two batches when it starts; dense search scans int8 until any oort command, or oort reindex, finishes it)' : ''}`
           : vi.index === 'binary'
             ? 'binary, 1-bit codes rescored in int8'
             : 'int8, exact';
@@ -1017,6 +1019,7 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
         ...(fallback !== undefined && {
           fix: 'reinstall Oort on macOS arm64 or Linux x64/arm64 (glibc), or set store.vectorIndex to binary in ~/.oort/config.json',
         }),
+        ...(fallback === undefined && vi.building === true && { fix: 'oort reindex' }),
       });
       if (vi.recentreDue === true) {
         checks.push({

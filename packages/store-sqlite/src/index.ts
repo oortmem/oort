@@ -220,6 +220,13 @@ export interface SqliteStoreOptions {
    * (default 30,000 ms).
    */
   rabitqRefreshMs?: number;
+  /**
+   * The most RaBitQ build batches (`RABITQ_BUILD_BATCH` vectors each) this open commits when it
+   * finds a build under way, before it returns. Long-lived processes that a host starts with a
+   * deadline (the MCP server, the SDK) pass a small number, and the rest is left to the next
+   * `oort` command or `oort reindex`; dense search scans int8 meanwhile. Default: finish it.
+   */
+  rabitqBuildBatches?: number;
   /** Called after each refresh of a loaded RaBitQ engine with its size. For tests and monitoring. */
   onRabitqRefresh?: (stats: { vectors: number }) => void;
 }
@@ -636,6 +643,9 @@ export async function reindexSqliteStore(opts: {
   log?: (message: string) => void;
   onProgress?: (p: { done: number; total: number }) => void;
 }): Promise<{ index: 'int8' | 'binary' | 'rabitq'; vectors: number; rebuilt: boolean }> {
+  // A build that was stopped (or left to the CLI by an MCP server) is finished by the open
+  // below, with the centroid it started with: that is the rebuild, not a reason for another.
+  const stopped = fs.existsSync(opts.path) && sqliteVectorIndex(opts.path)?.building === true;
   await (
     await openSqliteStore({
       path: opts.path,
@@ -651,7 +661,9 @@ export async function reindexSqliteStore(opts: {
     db.pragma(`busy_timeout = ${MIGRATION_BUSY_TIMEOUT_MS}`);
     sqliteVec.load(db);
     defineWriterGuard(db);
-    if (hasRabitqIndex(db)) {
+    if (stopped && hasRabitqIndex(db)) {
+      rebuilt = true;
+    } else if (hasRabitqIndex(db)) {
       db.transaction(() => startRabitqBuild(db, opts.dimension)).immediate();
       continueRabitqBuild(db, opts.dimension, {
         ...(opts.log !== undefined && { log: opts.log }),
@@ -740,6 +752,28 @@ export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 | 4 | 
  * transactions).
  * Every method is async per the contract; the work underneath is synchronous.
  */
+/** Each open handle's RaBitQ refresh, keyed weakly by the handle (`weakInterval`). */
+const TICKS = new WeakMap<object, () => void>();
+
+/** Releases a handle's RaBitQ engine once the handle has been collected without `close()`. */
+const DROPPED = new FinalizationRegistry<() => void>((release) => release());
+
+/**
+ * Runs `target`'s refresh (`TICKS`) every `ms`, holding `target` only weakly, and stops once it
+ * has been collected: an SDK handle dropped without `close()` is not kept alive, with its engine,
+ * by its own timer. Module-level, so the callback closes over nothing of the store's.
+ */
+function weakInterval(target: object, ms: number): ReturnType<typeof setInterval> {
+  const ref = new WeakRef(target);
+  const timer = setInterval(() => {
+    const t = ref.deref();
+    if (t === undefined) clearInterval(timer);
+    else TICKS.get(t)?.();
+  }, ms);
+  timer.unref();
+  return timer;
+}
+
 export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryStore> {
   const { dimension } = opts;
   if (!Number.isInteger(dimension) || dimension <= 0) {
@@ -828,7 +862,10 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       // one committed batch at a time, so other writers wait one batch at most and a stopped
       // build keeps its progress. Hooks (`migrate: false`) leave it to the next `oort` command.
       if (opts.migrate !== false && rabitqBuilding(conn)) {
-        continueRabitqBuild(conn, dimension, { log });
+        continueRabitqBuild(conn, dimension, {
+          log,
+          ...(opts.rabitqBuildBatches !== undefined && { maxBatches: opts.rabitqBuildBatches }),
+        });
       }
       if (rebuilds) conn.pragma(`busy_timeout = ${busyTimeoutMs}`);
       return conn;
@@ -1131,6 +1168,12 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     );
 
   const rabitqMaxLoad = opts.rabitqMaxLoad;
+  /**
+   * The handle this function returns, held weakly. No closure here names the handle itself:
+   * closures of one scope share their captured variables, so one that did would let the timer's
+   * refresh keep a dropped handle alive.
+   */
+  let selfRef: WeakRef<MemoryStore> | undefined;
   /** Whether this handle stays off the RaBitQ engine (`rabitqMaxLoad`), decided once. */
   let rqTooBig: boolean | undefined;
   let rqTimer: ReturnType<typeof setInterval> | undefined;
@@ -1157,13 +1200,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     rqReader.refresh();
     opts.onRabitqRefresh?.({ vectors: rqReader.stats().vectors });
     // Loaded: other processes' forgets reach it on a timer too, not only on the next search.
-    rqTimer ??= setInterval(() => {
-      try {
-        rqRefresh();
-      } catch {
-        // Busy or closing: the next tick, or the next search, tries again.
-      }
-    }, opts.rabitqRefreshMs ?? 30_000).unref();
+    // It holds the handle weakly: a handle dropped without close() is still collected.
+    const self = selfRef?.deref();
+    if (self !== undefined) rqTimer ??= weakInterval(self, opts.rabitqRefreshMs ?? 30_000);
     return true;
   });
 
@@ -1487,7 +1526,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     return { skipped };
   }
 
-  return {
+  const handle: MemoryStore = {
     spatial: true,
 
     async upsert(grant, m) {
@@ -1653,4 +1692,18 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       db.close();
     },
   };
+  TICKS.set(handle, () => {
+    try {
+      rqRefresh();
+    } catch {
+      // Busy or closing: the next tick, or the next search, tries again.
+    }
+  });
+  selfRef = new WeakRef(handle);
+  // Dropped without close(): its engine (about 110 bytes a vector) is zeroed and freed.
+  DROPPED.register(handle, () => {
+    stopRqTimer();
+    rqReader.release();
+  });
+  return handle;
 }

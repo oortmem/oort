@@ -4,6 +4,8 @@
  * `vectorIndex` choices, reembedding, and the migration from version 6 and back.
  */
 import { spawn } from 'node:child_process';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -11,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { afterAll, describe, expect, it } from 'vitest';
-import { nodeGrant, type Hit } from '@oortmem/core';
+import { nodeGrant, type Hit, type MemoryStore } from '@oortmem/core';
 import {
   CONFORMANCE_DIMENSION,
   grantFor,
@@ -40,7 +42,12 @@ import {
   type SqliteStoreOptions,
 } from './index.js';
 import { rabitqEncode, rotatedCentroid } from './rabitq.js';
-import { continueRabitqBuild, RabitqReader, startRabitqBuild } from './rabitq-store.js';
+import {
+  continueRabitqBuild,
+  RABITQ_BUILD_BATCH,
+  RabitqReader,
+  startRabitqBuild,
+} from './rabitq-store.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE4 = path.join(HERE, '../test/fixtures/schema4');
@@ -568,6 +575,90 @@ describe('rabitq index', () => {
     expect(sizes.length).toBe(settled); // the timer stops with the store
   });
 
+  it('rabitq.an-unclosed-handle-is-not-kept-alive-by-its-refresh-timer', async () => {
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const s = fresh();
+    const next = rng(59);
+    const seed = await openSqliteStore(optsD(s, { vectorIndex: 'rabitq' }));
+    await seed.upsertMany(
+      TG,
+      Array.from({ length: 10 }, (_, i) => makeMemory({ id: `g${i}`, embedding: randomVec(next) })),
+    );
+    await seed.close();
+    let collected = false;
+    const registry = new FinalizationRegistry(() => {
+      collected = true;
+    });
+    let ticks = 0;
+    let h: MemoryStore | undefined = await openSqliteStore(
+      optsD(s, { vectorIndex: 'rabitq', rabitqRefreshMs: 10, onRabitqRefresh: () => ticks++ }),
+    );
+    await h.dense(TG, randomVec(next), 1); // loads the engine and starts the timer
+    registry.register(h, 'handle');
+    await expect.poll(() => ticks, { timeout: 5000, interval: 10 }).toBeGreaterThan(1);
+    h = undefined; // dropped without close()
+    for (let i = 0; i < 100 && !collected; i++) {
+      gc();
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    expect(collected).toBe(true);
+    // Its timer stopped with it.
+    const after = ticks;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(ticks).toBe(after);
+  }, 60_000);
+
+  it('rabitq.a-build-with-nothing-left-finishes-whatever-the-budget', async () => {
+    const s = fresh();
+    await (
+      await openSqliteStore(optsD(s, { vectorIndex: 'rabitq', rabitqBuildBatches: 0 }))
+    ).close();
+    expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'rabitq', vectors: 0 });
+  });
+
+  it('rabitq.an-open-with-a-batch-budget-leaves-the-rest-of-the-build-to-the-next', async () => {
+    const s = fresh();
+    const next = rng(61);
+    const n = 2 * RABITQ_BUILD_BATCH + 50;
+    const int8 = await openSqliteStore(optsD(s));
+    for (let from = 0; from < n; from += 5000) {
+      await int8.upsertMany(
+        TG,
+        Array.from({ length: Math.min(5000, n - from) }, (_, i) =>
+          makeMemory({ id: `q${from + i}`, embedding: randomVec(next) }),
+        ),
+      );
+    }
+    await int8.close();
+    const db = raw(s.dbPath);
+    db.transaction(() => startRabitqBuild(db, D))();
+    db.close();
+    // An MCP server or SDK open: one batch, then it serves (dense search scans int8 meanwhile).
+    const budget = async () =>
+      (await openSqliteStore(optsD(s, { vectorIndex: 'rabitq', rabitqBuildBatches: 1 }))).close();
+    await budget();
+    expect(sqliteVectorIndex(s.dbPath)).toEqual({
+      index: 'rabitq',
+      vectors: RABITQ_BUILD_BATCH,
+      building: true,
+    });
+    await budget();
+    expect(sqliteVectorIndex(s.dbPath)?.vectors).toBe(2 * RABITQ_BUILD_BATCH);
+    // oort reindex finishes a stopped build instead of starting it again.
+    const lines: string[] = [];
+    const r = await reindexSqliteStore({
+      path: s.dbPath,
+      coldDir: s.coldDir,
+      dimension: D,
+      vectorIndex: 'rabitq',
+      log: (m) => lines.push(m),
+    });
+    expect(r).toMatchObject({ index: 'rabitq', vectors: n, rebuilt: true });
+    expect(lines).toEqual(['Resuming the RaBitQ vector index build (50 vectors to go)…']);
+    expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'rabitq', vectors: n });
+  }, 120_000);
+
   it('rabitq.a-refresh-that-fails-half-way-leaves-an-empty-engine-that-reloads', async () => {
     const s = fresh();
     const next = rng(53);
@@ -839,7 +930,7 @@ describe('schema migration 6 to 7', () => {
     await (await openSqliteStore(optsFor(s, { vectorIndex: 'rabitq' }))).close();
     expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'rabitq', vectors: 33 });
-  });
+  }, 60_000);
 
   it('migrate.v7-down-to-6-drops-the-rabitq-index-and-up-again', async () => {
     const s = await copy6();

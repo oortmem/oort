@@ -32,8 +32,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write # build provenance attestation
-      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,9 +57,6 @@ jobs:
       - name: Checksum
         working-directory: packages/store-sqlite/native
         run: shasum -a 256 "oort-rabitq.${{ matrix.tag }}.node" | tee "oort-rabitq.${{ matrix.tag }}.node.sha256"
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: packages/store-sqlite/native/oort-rabitq.${{ matrix.tag }}.node
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-${{ matrix.tag }}
@@ -70,14 +65,44 @@ jobs:
             packages/store-sqlite/native/oort-rabitq.${{ matrix.tag }}.node.sha256
           if-no-files-found: error
 
-  publish:
+  # Attests the three binaries' build provenance. Its own job, so the job that ran the build (and
+  # the dependencies' build scripts) never holds the OIDC token that signs: this one checks out
+  # nothing and runs no project code, only the hash check and the attest action.
+  attest:
     needs: native
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write # signs the provenance through Sigstore
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: native-*
+          path: native
+          merge-multiple: true
+      - name: Each binary is the one its build job hashed
+        working-directory: native
+        run: |
+          for tag in darwin-arm64 linux-x64-gnu linux-arm64-gnu; do
+            shasum -a 256 -c "oort-rabitq.$tag.node.sha256"
+          done
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            native/oort-rabitq.darwin-arm64.node
+            native/oort-rabitq.linux-x64-gnu.node
+            native/oort-rabitq.linux-arm64-gnu.node
+
+  publish:
+    needs: [native, attest]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: npm
     permissions:
       contents: read
       id-token: write # npm trusted publishing and provenance
+      attestations: read # gh attestation verify
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -103,6 +128,20 @@ jobs:
             shasum -a 256 -c "oort-rabitq.$tag.node.sha256"
           done
           ls -l *.node
+      # The hash only proves the file was not changed in transit between jobs; the attestation
+      # proves this workflow, in this repository, at this tag, built it.
+      - name: Every native binary carries this release's build provenance
+        working-directory: packages/store-sqlite/native
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for tag in darwin-arm64 linux-x64-gnu linux-arm64-gnu; do
+            gh attestation verify "oort-rabitq.$tag.node" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "$GITHUB_REF" \
+              --deny-self-hosted-runners
+          done
       - name: Tag matches every package version
         run: node scripts/release-check.mjs "${GITHUB_REF_NAME#v}"
       - run: pnpm verify

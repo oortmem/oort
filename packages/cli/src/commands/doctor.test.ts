@@ -327,6 +327,14 @@ describe('oort doctor', () => {
       status: 'warn',
       fix: 'oort serve --detach',
     });
+    // A build an MCP server left unfinished: said so, with what finishes it.
+    const mid = new Database(db);
+    mid.prepare("INSERT INTO memories_rq_meta (key, value) VALUES ('state', 'building')").run();
+    mid.close();
+    const building = await doctor(h);
+    expect(building.check('store', 'vector-index')).toMatchObject({ fix: 'oort reindex' });
+    expect(building.check('store', 'vector-index')?.detail).toContain('build unfinished');
+    expect(building.check('store', 'vector-index-centre')).toBeUndefined();
   });
 
   it('doctor.a-hook-first-leaves-a-pre-rename-index-for-the-cli-to-repair (CON-110)', async () => {

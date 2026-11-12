@@ -315,7 +315,8 @@ index, and moves the writer guard on.
   that searches loads the codes into memory on its first dense query and applies later changes
   from the change counter before each one, and every 30 seconds while loaded
   (`rabitqRefreshMs`), so a memory forgotten by another process leaves its engine without a
-  search. A refresh that fails half-way empties the engine, and the next one loads it whole. A
+  search. The timer holds the handle weakly: a handle dropped without `close()` is collected, and
+  its engine zeroed. A refresh that fails half-way empties the engine, and the next one loads it whole. A
   vector with no direction (all zeros) is never indexed, and a dense query with no direction
   returns nothing from this index. A dense query
   estimates each vector's cosine from a 4-bit copy of the query, with an error bound, keeps the
@@ -331,7 +332,9 @@ index, and moves the writer guard on.
   committed batches of 10,000 ("Building the RaBitQ vector index (N vectors)…"). Until the last
   batch commits, dense search on every handle scans int8, and writes keep the partial index in
   step; a process killed during the build keeps the migration and the batches done, and the next
-  open that may migrate goes on from there. `binary` and `int8` drop it; `auto` keeps it and never
+  open that may migrate goes on from there. `rabitqBuildBatches` caps how many batches an open
+  commits before it returns (the CLI passes 2 for the MCP server and the SDK, 0 for `oort doctor`);
+  a build with nothing left is marked done whatever the cap. `binary` and `int8` drop it; `auto` keeps it and never
   builds or rebuilds it. No open rebuilds it: once the store holds four times the vectors it was
   built from (and at least 1,000), `sqliteVectorIndex(path)` says `recentreDue`, and
   `reindexSqliteStore` (`oort reindex`) rebuilds it with a new centroid, in the same batches.

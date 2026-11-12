@@ -1308,7 +1308,9 @@ TypeScript, with the same results but a slower scan, and `oort doctor` warns and
 (`OORT_RABITQ_NATIVE=0` turns the native engine off). The next `oort` command builds it and
 prints `Building the RaBitQ vector index (N vectors)…`. The build commits in batches of 10,000:
 the hooks and an MCP server keep working meanwhile (their dense search scans int8 until it is
-done), and a build that is stopped is finished by the next `oort` command. `binary` or `int8` drop
+done), and a build that is stopped is finished by the next `oort` command. An MCP server or an
+app using the SDK builds at most 20,000 vectors when it starts and leaves the rest to the CLI;
+`oort doctor` builds none, and says when a build is unfinished (fix: `oort reindex`). `binary` or `int8` drop
 the index again, and `auto` keeps it once built but never builds or rebuilds one. Memories with
 no direction (an all-zero vector) are never indexed, and a query with no direction finds no
 dense neighbours.

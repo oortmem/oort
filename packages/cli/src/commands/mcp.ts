@@ -5,6 +5,7 @@ import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { closeCloudPool } from '../cloud-http.js';
 import { cloudSpaces, createOortServer, localSpaces } from '../mcp.js';
 import { Refusal, echo, withWired, type Ctx } from '../util.js';
+import { HOST_RABITQ_BUILD_BATCHES } from '../wire.js';
 
 /** Serves `factory` on this process's stdin/stdout until the host closes stdin. */
 export type ServeFn = (factory: () => McpServer, onError: (e: Error) => void) => Promise<void>;
@@ -65,6 +66,7 @@ export async function mcpCommand(
       await closeCloudPool();
       return 0;
     },
-    { cloudKeepAlive: true },
+    // A host starts it with a deadline: a stopped RaBitQ build is left to the CLI (CON-25).
+    { cloudKeepAlive: true, rabitqBuildBatches: HOST_RABITQ_BUILD_BATCHES },
   );
 }

@@ -3,11 +3,12 @@
  * RaBitQ index (CON-25) when asked.
  */
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { sqliteVectorIndex } from '@oortmem/store-sqlite';
 import { tmpdir } from '../../test/helpers.js';
 import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
 import { createOortWith } from './create.js';
+import * as wire from '../wire.js';
 
 const NOW = new Date('2026-11-06T12:00:00.000Z');
 
@@ -55,5 +56,26 @@ describe('store.vectorIndex', () => {
       (await third.recall('when do we deploy billing?')).memories.map((m) => m.id),
     ).not.toContain(id);
     await third.close();
+  });
+
+  it('sdk.finishes-at-most-two-rabitq-build-batches-before-it-returns (CON-25)', async () => {
+    const root = tmpdir('oort-sdk-vec-');
+    const spy = vi.spyOn(wire, 'wireEngine');
+    try {
+      const oort = await createOortWith(
+        {
+          mode: 'local',
+          home: path.join(root, 'home'),
+          env: { HOME: root, OORT_NO_KEYCHAIN: '1' },
+          project: null,
+        },
+        { adapters: fakeAdapters(), now: () => NOW },
+      );
+      await oort.close();
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0]?.[0].rabitqBuildBatches).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

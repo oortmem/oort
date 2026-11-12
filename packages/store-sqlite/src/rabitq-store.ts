@@ -259,7 +259,10 @@ export function continueRabitqBuild(
   let done = 0;
   let batches = 0;
   for (;;) {
-    if (opts.maxBatches !== undefined && batches >= opts.maxBatches) break;
+    // The budget counts batches of vectors; marking a build with nothing left done is free.
+    if (opts.maxBatches !== undefined && batches >= opts.maxBatches && left(cursorOf()) > 0) {
+      break;
+    }
     const n = step.immediate();
     if (n === undefined) break;
     done += n;

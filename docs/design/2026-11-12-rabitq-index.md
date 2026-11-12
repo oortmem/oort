@@ -220,7 +220,10 @@ the same transaction:
 **Other processes.** A second process (the MCP server beside an `oort` command, the hooks) sees
 the change on its next dense query, through the change counter (§3), and every 30 seconds while
 its engine is loaded (`rabitqRefreshMs`, an unreferenced timer stopped on close), so a memory
-forgotten elsewhere leaves a long-lived server's memory without waiting for a search. A refresh
+forgotten elsewhere leaves a long-lived server's memory without waiting for a search. The timer
+holds the handle only through a `WeakRef` and stops once the handle is gone, so an SDK handle
+dropped without `close()` is still collected; its engine is then zeroed and freed (tested with a
+forced garbage collection). A refresh
 that fails half-way (a row that does not fit, say) clears the engine and forgets its position, so
 the next refresh loads the index whole rather than build on a partial copy. A test writes, forgets and
 rebuilds through one handle and searches through another, which must agree with a fresh handle.
@@ -299,10 +302,13 @@ workflow builds one per platform on a runner of that platform (`macos-14`, `ubun
 `ubuntu-22.04-arm`, so glibc 2.35 or newer), from source with the pinned toolchain
 (`rust-toolchain.toml`) and `cargo build --locked`. Each platform's job then loads the binary it
 built and runs the engine and index test files with `OORT_REQUIRE_NATIVE=1` (the store's RaBitQ
-conformance included), writes a SHA-256 beside it, and attests its build provenance
-(`actions/attest-build-provenance`, pinned by commit; `id-token: write` and `attestations: write`
-on that job only). The publish job downloads all three, checks each against its SHA-256, and
-refuses to pack without them. CI runs the Rust tests,
+conformance included), and writes a SHA-256 beside it. A separate job, which checks out nothing and runs no project
+code, downloads the three, checks their hashes and attests their build provenance
+(`actions/attest-build-provenance`, pinned by commit); only it holds `id-token: write` and
+`attestations: write`, so the build jobs, which run the dependencies' build scripts, never hold
+the token that signs. The publish job downloads all three, checks each hash (transit integrity)
+and runs `gh attestation verify` on each against this repository, this workflow and the tag's ref
+(provenance), and refuses to pack without them. CI runs the Rust tests,
 builds the Linux x64 binary and runs `pnpm verify` with `OORT_REQUIRE_NATIVE=1`, so a binary that
 does not build or load fails CI instead of falling back silently.
 
@@ -327,10 +333,22 @@ drops the tables.
 `store.vectorIndex` in `~/.oort/config.json` takes `rabitq` beside `auto`, `int8` and `binary`
 (`openSqliteStore({ vectorIndex: 'rabitq' })` for the store itself). It is read from the home
 config only, as for CON-17: a repository's `oort.config.json` cannot set it. The build happens in
-an open that may migrate (an `oort` command, the MCP server, the daemon, the SDK), prints
-"Building the RaBitQ vector index (N vectors)…", commits in batches and is safe to interrupt.
-Hooks never build, go on with a build, rebuild or drop it. `oort reindex` renews the centroid
-when `oort doctor` says it is due (§5).
+an open that may migrate (an `oort` command, the MCP server, the SDK), prints "Building the
+RaBitQ vector index (N vectors)…", commits in batches and is safe to interrupt. How much of it an
+open runs before it returns (`rabitqBuildBatches`):
+
+- **`oort` commands** finish it, `oort reindex` included.
+- **The MCP server and the SDK** commit at most two batches (`HOST_RABITQ_BUILD_BATCHES`, 20,000
+  vectors), then serve, scanning int8 until the build is done. A host starts an MCP server with a
+  deadline, and finishing a million-vector build there would fail its startup, and the retry,
+  each time.
+- **`oort doctor`** commits none: it says the build is unfinished, with the fix `oort reindex`.
+- **The hooks and `oort serve`** open with `migrate: false`, and never build, go on with a build,
+  rebuild or drop it.
+
+A build with nothing left to index is marked done whatever the budget. `oort reindex` also renews
+the centroid when `oort doctor` says it is due (§5); run on a build that was left unfinished, it
+finishes that build rather than start another.
 
 **Hooks and large indexes.** A hook runs in its own process once per prompt; loading the engine
 costs about 5.8 µs a vector natively and 13.7 µs in TypeScript, plus the transient RSS (§11: 5.8 s
