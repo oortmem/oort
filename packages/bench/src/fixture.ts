@@ -1,8 +1,13 @@
-import { tokenizeLexical, type Memory } from '@oortmem/core';
+import { localScope, tokenizeLexical, type Memory, type MemoryType } from '@oortmem/core';
 import type { EvalRow } from './eval.js';
+import { fakeEmbedding } from './fake-embed.js';
+import { EMBEDDING_DIMENSION, GENERATOR_NOW, generateMemories } from './generate.js';
 import { createRng } from './prng.js';
 
-/** The demo store: `generateMemories(FIXTURE_COUNT, FIXTURE_SEED)`. */
+/**
+ * The demo store: `generateMemories(FIXTURE_COUNT, FIXTURE_SEED)` plus the multi-hop memories
+ * (`demoMemories()`).
+ */
 export const FIXTURE_SEED = 7;
 export const FIXTURE_COUNT = 1500;
 
@@ -291,4 +296,272 @@ export function buildFixtureRows(memories: Memory[]): EvalRow[] {
   for (const q of ABSTAIN)
     rows.push({ question: q, expectedMemoryIds: [], category: 'abstention' });
   return rows;
+}
+
+/**
+ * One multi-hop set (CON-146, design section 11): a bridge memory the question's words reach, and
+ * a target memory they do not, linked to the bridge by a shared specific entity (`about`) or by
+ * being the next turn of the same session (`episode`). The target is the expected answer.
+ */
+interface MultiHopSet {
+  link: 'about' | 'episode';
+  bridge: { text: string; entities: string[] };
+  target: { text: string; entities: string[] };
+  /** The eval question: the bridge's words, none of the target's. */
+  question: string;
+  /** The same need as a prompt-hook message: short and conversational. */
+  hook: string;
+  /**
+   * A warm-up question with words of both (half each), so one recall returns them together and a
+   * learned `recalledWith` pair can form.
+   */
+  warmUp: string;
+}
+
+const MULTI_HOP: MultiHopSet[] = [
+  {
+    link: 'about',
+    bridge: {
+      text: 'Project Kestrel moved its staging cluster to the Frankfurt region.',
+      entities: ['kestrel'],
+    },
+    target: {
+      text: 'Kestrel keeps invoices inside CockroachDB, cluster ledger-east.',
+      entities: ['kestrel'],
+    },
+    question: 'which database does the project that moved staging to Frankfurt use',
+    hook: 'remind me what db the frankfurt staging project uses',
+    warmUp: 'kestrel frankfurt staging invoices cockroachdb',
+  },
+  {
+    link: 'about',
+    bridge: {
+      text: 'The Heron mobile app was rewritten in Kotlin over the summer.',
+      entities: ['heron'],
+    },
+    target: { text: 'Heron crash reports: Sentry, project mobile-7.', entities: ['heron'] },
+    question: 'which error tracker does the app that was rewritten in Kotlin send to',
+    hook: 'where does the kotlin rewrite app send its errors',
+    warmUp: 'heron kotlin rewritten crash sentry',
+  },
+  {
+    link: 'about',
+    bridge: {
+      text: 'Osprey analytics export runs nightly from the reporting replica.',
+      entities: ['osprey'],
+    },
+    target: { text: 'Osprey owner: Dana Whitfield, data platform group.', entities: ['osprey'] },
+    question: 'who owns the nightly analytics export',
+    hook: 'who owns that nightly analytics export again',
+    warmUp: 'osprey analytics nightly owner whitfield',
+  },
+  {
+    link: 'episode',
+    bridge: {
+      text: 'Switched the Grafana alert for queue depth to page after five minutes.',
+      entities: ['grafana'],
+    },
+    target: { text: 'Runbook link added: wiki/ops/qd-paging.', entities: ['wiki/ops/qd-paging'] },
+    question: 'what else changed alongside the queue depth alert',
+    hook: 'what else did we change with the queue depth alert',
+    warmUp: 'queue depth alert runbook paging wiki',
+  },
+  {
+    link: 'episode',
+    bridge: {
+      text: 'Upgraded the Postgres driver to version 3 for the reporting service.',
+      entities: ['postgres'],
+    },
+    target: { text: 'Afterwards, nightly vacuum moved to 02:30 UTC.', entities: [] },
+    question: 'what followed the postgres driver upgrade',
+    hook: 'what happened after we bumped the postgres driver',
+    warmUp: 'postgres driver vacuum utc',
+  },
+  {
+    link: 'episode',
+    bridge: {
+      text: 'Paired with Priya on the flaky checkout test in the payments repo.',
+      entities: ['priya', 'payments'],
+    },
+    target: {
+      text: 'Root cause: shared Redis keys between parallel workers; fixed via per-worker prefixes.',
+      entities: ['redis'],
+    },
+    question: 'why was the checkout test flaky when pairing with priya',
+    hook: 'why was that checkout test flaky with priya',
+    warmUp: 'checkout flaky redis prefixes',
+  },
+];
+
+/** Multi-hop memory ids start with this, so the base fixture rows can leave them out. */
+export const MULTI_HOP_PREFIX = 'mh-';
+
+const DAY = 86_400_000;
+
+function fixtureMemory(
+  id: string,
+  text: string,
+  entities: string[],
+  at: Date,
+  source: { sessionId: string; turnRef: string },
+  type: MemoryType,
+): Memory {
+  const iso = at.toISOString();
+  return {
+    id,
+    scope: localScope(undefined),
+    type,
+    text,
+    stub: text.length <= 80 ? text : `${text.slice(0, 77).trimEnd()}...`,
+    entities,
+    salience: 0.5,
+    pinned: false,
+    tier: 'warm',
+    accessLog: { count: 1, recent: [iso], compactedSum: 0, compactedAt: null },
+    validFrom: iso,
+    validTo: null,
+    expiredAt: null,
+    endReason: null,
+    lastConfirmedAt: null,
+    supersedes: null,
+    supersededBy: null,
+    source: { harness: 'synthetic', ...source, decisions: [] },
+    embedding: fakeEmbedding(text, EMBEDDING_DIMENSION),
+    createdAt: iso,
+    updatedAt: iso,
+  };
+}
+
+/**
+ * The multi-hop sets as memories: `mh-<n>-bridge` and `mh-<n>-target`. An `about` pair shares an
+ * entity and sits in two sessions weeks apart; an `episode` pair shares no entity and is turns 1
+ * and 2 of one session, two minutes apart.
+ */
+export function multiHopMemories(now = GENERATOR_NOW): Memory[] {
+  return MULTI_HOP.flatMap((set, i) => {
+    const start = new Date(now.getTime() - (30 + i * 11) * DAY);
+    const id = `${MULTI_HOP_PREFIX}${i + 1}`;
+    const bridge = fixtureMemory(
+      `${id}-bridge`,
+      set.bridge.text,
+      set.bridge.entities,
+      start,
+      { sessionId: `session-${id}-a`, turnRef: 't1' },
+      'episodic',
+    );
+    const target =
+      set.link === 'episode'
+        ? fixtureMemory(
+            `${id}-target`,
+            set.target.text,
+            set.target.entities,
+            new Date(start.getTime() + 120_000),
+            { sessionId: `session-${id}-a`, turnRef: 't2' },
+            'episodic',
+          )
+        : fixtureMemory(
+            `${id}-target`,
+            set.target.text,
+            set.target.entities,
+            new Date(start.getTime() + 20 * DAY),
+            { sessionId: `session-${id}-b`, turnRef: 't1' },
+            'semantic',
+          );
+    return [bridge, target];
+  });
+}
+
+/** Every memory the demo store holds: the generated 1,500 and the multi-hop sets. */
+export function demoMemories(): Memory[] {
+  return [...generateMemories(FIXTURE_COUNT, FIXTURE_SEED), ...multiHopMemories()];
+}
+
+const isMultiHop = (m: Memory): boolean => m.id.startsWith(MULTI_HOP_PREFIX);
+
+/** The multi-hop rows: the target expected, present in `memories` or the row is left out. */
+function multiHopRows(memories: Memory[], question: (s: MultiHopSet) => string): EvalRow[] {
+  const ids = new Set(memories.map((m) => m.id));
+  return MULTI_HOP.flatMap((set, i) => {
+    const target = `${MULTI_HOP_PREFIX}${i + 1}-target`;
+    return ids.has(target)
+      ? [{ question: question(set), expectedMemoryIds: [target], category: 'multi-hop' as const }]
+      : [];
+  });
+}
+
+/**
+ * The bundled `eval/fixture.jsonl`: `buildFixtureRows` over the generated memories, then one
+ * multi-hop row per set (29 rows over `demoMemories()`).
+ */
+export function buildDemoRows(memories: Memory[]): EvalRow[] {
+  return [
+    ...buildFixtureRows(memories.filter((m) => !isMultiHop(m))),
+    ...multiHopRows(memories, (s) => s.question),
+  ];
+}
+
+/**
+ * Prompts a person types that carry no memory need. A hook-shaped set must not answer them; their
+ * ordinary words ("tests", "deploy") match many memories, as real chit-chat does.
+ */
+const HOOK_CHATTER = [
+  'thanks, that works',
+  'ok run the tests again',
+  'lgtm, push it',
+  'can you make the deploy script quieter',
+  'what does this error mean',
+];
+
+/** Casual wrappers for a single-fact need, the way a prompt asks in passing. */
+const HOOK_WRAP = ['hey, what about', 'quick q:', 'remind me:', 'and the'];
+
+/**
+ * The hook-shaped query set (`eval/hook.jsonl`, design decision 3): short conversational prompts,
+ * run without a reranker (`fast`), for the no-rerank bar. Four single-fact prompts (three rare
+ * plain words of one memory, which no other memory holds all of, in a casual wrapper), the six
+ * multi-hop needs as a person would type them, and five prompts with no memory need. Synthetic: the real hook queries from imported transcripts stay
+ * outside the repo (`eval/format.md`).
+ */
+export function buildHookRows(memories: Memory[]): EvalRow[] {
+  const base = memories.filter((m) => !isMultiHop(m));
+  const df = new Map<string, number>();
+  const tokens = base.map((m) => new Set(tokenizeLexical(m.text)));
+  for (const ts of tokens) for (const t of ts) df.set(t, (df.get(t) ?? 0) + 1);
+  // The three rarest plain words of the answer's first sentence (no numbers, dates or paths), as
+  // a person would say them; kept only when no other memory holds all three.
+  const words = (m: Memory): string[] =>
+    [...new Set(tokenizeLexical(m.text.split('. ')[0] ?? ''))]
+      .filter((t) => /^[a-z][a-z-]{3,}$/.test(t))
+      .sort((a, b) => (df.get(a) ?? 0) - (df.get(b) ?? 0) || (a < b ? -1 : 1))
+      .slice(0, 3);
+  const unique = (ws: string[]): boolean =>
+    ws.length === 3 && tokens.filter((ts) => ws.every((w) => ts.has(w))).length === 1;
+  const rng = createRng(FIXTURE_SEED + 1);
+  const pool = rng.shuffle(
+    base.filter((m) => m.type === 'semantic' && m.supersedes === null && m.supersededBy === null),
+  );
+  const rows: EvalRow[] = [];
+  for (const m of pool) {
+    if (rows.length === HOOK_WRAP.length) break;
+    const ws = words(m);
+    if (!unique(ws)) continue;
+    rows.push({
+      question: `${HOOK_WRAP[rows.length]} ${ws.join(' ')}`,
+      expectedMemoryIds: [m.id],
+      category: 'single-fact',
+    });
+  }
+  rows.push(...multiHopRows(memories, (s) => s.hook));
+  for (const q of HOOK_CHATTER)
+    rows.push({ question: q, expectedMemoryIds: [], category: 'abstention' });
+  return rows;
+}
+
+/**
+ * The demo warm-up set (`eval/warm-up.jsonl`, `--warm-up`): one question per multi-hop set that
+ * names both memories, so a recall returns them together, as an earlier conversation would have.
+ * Disjoint from `fixture.jsonl` and `hook.jsonl`. It has no expected ids: it is run, not scored.
+ */
+export function buildWarmUpRows(): EvalRow[] {
+  return MULTI_HOP.map((s) => ({ question: s.warmUp, expectedMemoryIds: [] }));
 }

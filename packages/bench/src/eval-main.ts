@@ -13,9 +13,10 @@ import {
 } from '@oortmem/local-models';
 import { voyageReranker } from '@oortmem/rerank-voyage';
 import { openSqliteStore, VECTOR_INDEXES, type VectorIndex } from '@oortmem/store-sqlite';
-import { cell, loadEvalRows, renderReport, runEval } from './eval.js';
+import { cell, loadEvalRows, renderRun, runEval, type EvalRun } from './eval.js';
+import { parseLinkModes } from './links.js';
 import { fakeEmbedder } from './fake-embed.js';
-import { FIXTURE_COUNT, FIXTURE_SEED } from './fixture.js';
+import { demoMemories } from './fixture.js';
 import {
   CONDITIONS,
   LANGUAGES,
@@ -24,14 +25,16 @@ import {
   type Condition,
   type Language,
 } from './multilingual.js';
-import { EMBEDDING_DIMENSION, GENERATOR_NOW, generateMemories } from './generate.js';
+import { EMBEDDING_DIMENSION, GENERATOR_NOW } from './generate.js';
 import { seedStore } from './seed.js';
 
 const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>] [--k 5,10]
                  [--min-recall10 <0..1>] [--dimension <n>] [--dense] [--now <iso>]
                  [--abstain-threshold <n>] [--no-gate] [--json]
                  [--vector-index auto|int8|binary|rabitq] [--cold-share <0..1>] [--no-adaptive-stop]
-       pnpm eval --demo [--json]    synthetic 1500-memory store + the bundled 23-row fixture
+                 [--warm-up <file.jsonl>] [--links off|user|<kind>|all|grid]
+       pnpm eval --demo [--hook] [--json]    synthetic 1512-memory store + the bundled 29-row
+                 fixture (--hook: the 15-row hook-shaped set instead)
        pnpm eval --set multilingual [--embed none|fake|local[:model]|voyage[:model]]
                  [--rerank none|local[:model]|voyage[:model]] [--home <dir>]
                  [--lang en,ja,...] [--condition mono,cross,mixed] [--json] [--out <file>]
@@ -61,6 +64,9 @@ async function main(): Promise<number> {
       'no-adaptive-stop': { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
       demo: { type: 'boolean', default: false },
+      hook: { type: 'boolean', default: false },
+      'warm-up': { type: 'string' },
+      links: { type: 'string', default: 'off' },
       set: { type: 'string' },
       embed: { type: 'string', default: 'none' },
       rerank: { type: 'string', default: 'none' },
@@ -90,6 +96,9 @@ async function main(): Promise<number> {
     throw new Error(`--vector-index must be auto, int8, binary or rabitq, got "${vectorIndex}"`);
   const coldShare = Number(values['cold-share']);
   if (!(coldShare >= 0 && coldShare <= 1)) throw new Error('--cold-share must be between 0 and 1');
+  const linkModes = parseLinkModes(values.links);
+  if (values.hook && !values.demo)
+    throw new Error('--hook goes with --demo; pass a file otherwise');
   const minRecall10 = Number(values['min-recall10']);
   if (!(minRecall10 >= 0 && minRecall10 <= 1))
     throw new Error('--min-recall10 must be between 0 and 1');
@@ -112,9 +121,11 @@ async function main(): Promise<number> {
         dimension: EMBEDDING_DIMENSION,
         log: () => {},
       });
-      await seedStore(store, generateMemories(FIXTURE_COUNT, FIXTURE_SEED));
+      await seedStore(store, demoMemories());
       await store.close();
-      rowsFile = fileURLToPath(new URL('../eval/fixture.jsonl', import.meta.url));
+      rowsFile = fileURLToPath(
+        new URL(`../eval/${values.hook ? 'hook' : 'fixture'}.jsonl`, import.meta.url),
+      );
       now ??= GENERATOR_NOW;
       dimension = EMBEDDING_DIMENSION;
     } else {
@@ -133,27 +144,41 @@ async function main(): Promise<number> {
     if (now !== undefined && Number.isNaN(now.getTime()))
       throw new Error('--now must be an ISO timestamp');
     const loaded = loadEvalRows(fs.readFileSync(rowsFile, 'utf8'));
-    const report = await runEval({
-      rows: loaded.rows,
-      skippedEmpty: loaded.skippedEmpty,
-      storePath,
-      coldDir,
-      dimension,
-      ks,
-      ...(now !== undefined ? { now } : {}),
-      ...(dense ? { embed: fakeEmbedder(dimension) } : {}),
-      ...(values['no-gate'] && { gate: false }),
-      ...(vectorIndex !== undefined && { vectorIndex: vectorIndex as VectorIndex }),
-      ...(coldShare > 0 && { coldShare }),
-      ...(values['no-adaptive-stop'] && { recall: { adaptiveStop: 'off' as const } }),
-      ...(values['abstain-threshold'] !== undefined
-        ? { abstainThreshold: Number(values['abstain-threshold']) }
-        : {}),
-    });
+    const warmUp =
+      values['warm-up'] !== undefined
+        ? loadEvalRows(fs.readFileSync(fromUser(values['warm-up']), 'utf8')).rows
+        : undefined;
+    const runs: EvalRun[] = [];
+    for (const links of linkModes) {
+      runs.push(
+        await runEval({
+          rows: loaded.rows,
+          skippedEmpty: loaded.skippedEmpty,
+          storePath,
+          coldDir,
+          dimension,
+          ks,
+          links,
+          ...(warmUp !== undefined && { warmUp }),
+          ...(now !== undefined ? { now } : {}),
+          ...(dense ? { embed: fakeEmbedder(dimension) } : {}),
+          ...(values['no-gate'] && { gate: false }),
+          ...(vectorIndex !== undefined && { vectorIndex: vectorIndex as VectorIndex }),
+          ...(coldShare > 0 && { coldShare }),
+          ...(values['no-adaptive-stop'] && { recall: { adaptiveStop: 'off' as const } }),
+          ...(values['abstain-threshold'] !== undefined
+            ? { abstainThreshold: Number(values['abstain-threshold']) }
+            : {}),
+        }),
+      );
+    }
+    const single = runs.length === 1 ? runs[0] : undefined;
     process.stdout.write(
-      values.json ? `${JSON.stringify(report, null, 2)}\n` : `${renderReport(report)}\n`,
+      values.json
+        ? `${JSON.stringify(single ?? runs, null, 2)}\n`
+        : `${runs.map(renderRun).join('\n\n')}\n`,
     );
-    const r10 = report.groups['overall']?.recallAt[10];
+    const r10 = runs[0]?.groups['overall']?.recallAt[10];
     if (minRecall10 > 0 && (r10 === null || r10 === undefined || r10 < minRecall10)) {
       process.stderr.write(`eval: recall@10 ${cell(r10)} is below --min-recall10 ${minRecall10}\n`);
       return 1;

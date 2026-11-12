@@ -22,3 +22,6 @@ packages/mcp/src/widgets.generated.ts
 # The native RaBitQ engine: cargo output and the built addons (CI builds them for releases)
 packages/store-sqlite/native/target/
 packages/store-sqlite/native/*.node
+
+# Bench caches: link-shaped latency stores and downloaded eval datasets (CON-146, CON-147)
+packages/bench/.cache/

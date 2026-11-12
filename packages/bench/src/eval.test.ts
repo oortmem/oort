@@ -8,8 +8,23 @@ import { localScope, tokenizeLexical, type Memory } from '@oortmem/core';
 import { makeMemory, seedCold, vec } from '@oortmem/core/store-conformance';
 import Database from 'better-sqlite3';
 import { openSqliteStore } from '@oortmem/store-sqlite';
-import { loadEvalRows, runEval, type EvalRow } from './eval.js';
-import { buildFixtureRows, FIXTURE_COUNT, FIXTURE_SEED } from './fixture.js';
+import {
+  computeMetrics,
+  loadEvalRows,
+  renderReport,
+  renderRun,
+  runEval,
+  type EvalRow,
+} from './eval.js';
+import {
+  buildDemoRows,
+  buildFixtureRows,
+  buildHookRows,
+  buildWarmUpRows,
+  demoMemories,
+  FIXTURE_COUNT,
+  FIXTURE_SEED,
+} from './fixture.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { GENERATOR_NOW, generateMemories } from './generate.js';
 import { seedStore } from './seed.js';
@@ -272,7 +287,7 @@ describe('eval', () => {
     const dbPath = path.join(dir, 'oort.sqlite');
     const coldDir = path.join(dir, 'cold');
     const store = await openSqliteStore({ path: dbPath, coldDir, dimension: 512, log: () => {} });
-    await seedStore(store, generateMemories(FIXTURE_COUNT, FIXTURE_SEED));
+    await seedStore(store, demoMemories());
     await store.close();
     const { rows } = loadEvalRows(
       fs.readFileSync(fileURLToPath(new URL('../eval/fixture.jsonl', import.meta.url)), 'utf8'),
@@ -370,9 +385,119 @@ describe('eval', () => {
   });
 
   it('eval.fixture-in-sync', () => {
-    const file = new URL('../eval/fixture.jsonl', import.meta.url);
-    const expected = buildFixtureRows(generateMemories(FIXTURE_COUNT, FIXTURE_SEED));
-    expect(expected).toHaveLength(23);
-    expect(loadEvalRows(fs.readFileSync(file, 'utf8')).rows).toEqual(expected);
+    const read = (name: string): EvalRow[] =>
+      loadEvalRows(fs.readFileSync(new URL(`../eval/${name}`, import.meta.url), 'utf8')).rows;
+    const memories = demoMemories();
+    const expected = buildDemoRows(memories);
+    expect(expected).toHaveLength(29);
+    // The 23 rows from before the multi-hop rows (CON-146) are unchanged.
+    expect(expected.slice(0, 23)).toEqual(
+      buildFixtureRows(generateMemories(FIXTURE_COUNT, FIXTURE_SEED)),
+    );
+    expect(read('fixture.jsonl')).toEqual(expected);
+    expect(read('hook.jsonl')).toEqual(buildHookRows(memories));
+    expect(read('warm-up.jsonl')).toEqual(buildWarmUpRows());
+  });
+
+  it('eval.link-precision', () => {
+    const rows: EvalRow[] = [
+      { question: 'a', expectedMemoryIds: ['x', 'y'], category: 'multi-hop' },
+      { question: 'b', expectedMemoryIds: ['z'], category: 'single-fact' },
+      { question: 'c', expectedMemoryIds: [], category: 'abstention' },
+    ];
+    const none = computeMetrics(
+      rows,
+      rows.map(() => ({ ids: ['x', 'z'], aboveThreshold: 2 })),
+      [10],
+    );
+    expect(none.groups['overall']?.linkPrecision).toBeNull();
+    expect(renderReport(none)).toMatch(/\| overall \| 3 \|.* \| - \|$/m);
+    const report = computeMetrics(
+      rows,
+      [
+        // Two linked memories in the top 10, one expected; one linked past rank 10 is not counted.
+        {
+          ids: ['x', 'y', ...Array.from({ length: 9 }, (_, i) => `f${i}`), 'late'],
+          aboveThreshold: 12,
+          linked: ['y', 'f0', 'late'],
+        },
+        { ids: ['q'], aboveThreshold: 1, linked: [] },
+        { ids: ['w'], aboveThreshold: 1, linked: ['w'] },
+      ],
+      [10],
+    );
+    expect(report.groups['overall']?.linkPrecision).toBeCloseTo(1 / 3);
+    expect(report.groups['multi-hop']?.linkPrecision).toBeCloseTo(1 / 2);
+    expect(report.groups['single-fact']?.linkPrecision).toBeNull();
+    expect(report.groups['abstention']?.linkPrecision).toBe(0);
+  });
+
+  it('eval.multi-hop-category-parses', () => {
+    const { rows } = loadEvalRows(
+      '{"question":"q","expectedMemoryIds":["a"],"category":"multi-hop"}\n',
+    );
+    expect(rows[0]?.category).toBe('multi-hop');
+  });
+
+  it('eval.warm-up-records-on-the-copy-only', async () => {
+    const { dbPath, coldDir } = await handBuiltStore();
+    // The database and its WAL's content. A reader may leave an empty WAL file and touch the -shm
+    // index (shared memory every reader maps); neither is a write.
+    const digest = (): string =>
+      ['', '-wal']
+        .map((x) => {
+          const f = dbPath + x;
+          if (!fs.existsSync(f) || fs.statSync(f).size === 0) return '-';
+          return createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+        })
+        .join(':');
+    const before = digest();
+    const warmUp: EvalRow[] = [
+      { question: 'billing worker pnpm', expectedMemoryIds: [] },
+      { question: 'database migrations', expectedMemoryIds: [] },
+    ];
+    const report = await runEval({
+      rows: ROWS,
+      warmUp,
+      storePath: dbPath,
+      coldDir,
+      dimension: DIM,
+      now: new Date(NOW),
+    });
+    expect(digest()).toBe(before);
+    expect(report.warmUp).toEqual({ rows: 2, accessCalls: 2, accessIds: 2 });
+    expect(report.warm?.groups['overall']?.rows).toBe(8);
+    expect(report.groups['overall']?.recallAt[10]).toBeCloseTo(0.75);
+    expect(renderRun(report)).toContain('Warm (after 2 warm-up question(s)');
+    // Without a warm-up the run has one report and records nothing.
+    const plain = await runEval({
+      rows: ROWS,
+      storePath: dbPath,
+      coldDir,
+      dimension: DIM,
+      now: new Date(NOW),
+    });
+    expect(plain.warm).toBeUndefined();
+    expect(plain.links).toBe('off');
+  });
+
+  it('eval.warm-up-must-be-disjoint', async () => {
+    const { dbPath, coldDir } = await handBuiltStore();
+    await expect(
+      runEval({
+        rows: ROWS,
+        warmUp: [{ question: ' Pnpm  installs', expectedMemoryIds: [] }],
+        storePath: dbPath,
+        coldDir,
+        dimension: DIM,
+      }),
+    ).rejects.toThrow(/disjoint/);
+  });
+
+  it('eval.links-on-is-refused-until-links-exist', async () => {
+    const { dbPath, coldDir } = await handBuiltStore();
+    await expect(
+      runEval({ rows: ROWS, links: 'about', storePath: dbPath, coldDir, dimension: DIM }),
+    ).rejects.toThrow(/CON-149/);
   });
 });

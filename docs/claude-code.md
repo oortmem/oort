@@ -144,8 +144,9 @@ from before CON-101 ignores the request and recalls in full.
 | `fast` (default) | Embeds the prompt; fusion and the relevance gate rank, with no reranker. | embed |
 | `lexical` | Lexical search only: no query embedding and no reranker. | none |
 
-On the bench eval (`pnpm eval --demo`'s 1,500-memory store and 23-row fixture, with the cloud's
-own models: voyage-3.5-lite embeddings and rerank-3-lite, measured 2026-11-05), recall@3, @5 and
+On the bench eval (`pnpm eval --demo`'s 1,500-memory store and 23-row fixture, before CON-146 added
+6 multi-hop rows; with the cloud's own models: voyage-3.5-lite embeddings and rerank-3-lite,
+measured 2026-11-05), recall@3, @5 and
 @10 were 1.000 in all three modes. MRR@10 was 1.000 for `full` and `lexical` and 0.947 for `fast`
 (one multi-session question ranked its answer second). The abstention rows returned something for
 4 of 4 questions with `full`, 1 of 4 with `fast` and none with `lexical`. The fixture's questions

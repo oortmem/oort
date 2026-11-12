@@ -14,12 +14,14 @@ import {
   type ScopeFilter,
 } from '@oortmem/core';
 import { openSqliteStore, sqliteVectorIndex, type VectorIndex } from '@oortmem/store-sqlite';
+import { linksOverride, viaOf, type LinksMode } from './links.js';
 
 export const CATEGORIES = [
   'single-fact',
   'knowledge-update',
   'temporal',
   'multi-session',
+  'multi-hop',
   'abstention',
 ] as const;
 export type EvalCategory = (typeof CATEGORIES)[number];
@@ -126,6 +128,11 @@ export interface GroupMetrics {
   staleLeak: number | null;
   /** Fraction of abstention rows that returned a memory (above the threshold); null when none. */
   abstainFp: number | null;
+  /**
+   * Of the link-admitted memories (`explanation.via`) in the top 10 of every row, the share that
+   * were expected; null when no row returned one (always, until links exist).
+   */
+  linkPrecision: number | null;
 }
 
 export interface EvalReport {
@@ -155,6 +162,8 @@ export interface RowOutcome {
   ids: string[];
   /** How many returned memories counted as above the abstention threshold. */
   aboveThreshold: number;
+  /** The returned ids a link brought in (`explanation.via`); absent or empty without links. */
+  linked?: string[];
 }
 
 const mean = (xs: number[]): number | null =>
@@ -167,6 +176,8 @@ function paired(rows: EvalRow[], outcomes: RowOutcome[]): { r: EvalRow; o: RowOu
 
 /** MRR is taken over the top results only: fixed at 10, whatever `--k` asks for. */
 const MRR_WINDOW = 10;
+/** Link precision looks at the same top 10 the links bar is set on (design section 11). */
+const LINK_WINDOW = 10;
 
 function groupMetrics(rows: EvalRow[], outcomes: RowOutcome[], ks: number[]): GroupMetrics {
   const all = paired(rows, outcomes);
@@ -198,7 +209,20 @@ function groupMetrics(rows: EvalRow[], outcomes: RowOutcome[], ks: number[]): Gr
   const abstainFp = mean(
     all.filter((x) => x.r.category === 'abstention').map(({ o }) => (o.aboveThreshold > 0 ? 1 : 0)),
   );
-  return { rows: rows.length, recallAt, mrr, staleLeak, abstainFp };
+  // Pooled over the rows, not averaged per row: most rows bring in no linked memory at all.
+  let linked = 0;
+  let linkedExpected = 0;
+  for (const { r, o } of all) {
+    const top = new Set(o.ids.slice(0, LINK_WINDOW));
+    const want = new Set(r.expectedMemoryIds);
+    for (const id of o.linked ?? []) {
+      if (!top.has(id)) continue;
+      linked++;
+      if (want.has(id)) linkedExpected++;
+    }
+  }
+  const linkPrecision = linked === 0 ? null : linkedExpected / linked;
+  return { rows: rows.length, recallAt, mrr, staleLeak, abstainFp, linkPrecision };
 }
 
 /** Pure scoring: `outcomes[i]` is what recall returned for `rows[i]`. */
@@ -256,6 +280,14 @@ export interface RunEvalOptions {
    */
   coldShare?: number;
   scope?: ScopeFilter;
+  /**
+   * A question set to run first with access recording live on the copy (`--warm-up`), so learned
+   * links have history. Must not share a question with `rows`. The rows then run twice: cold
+   * (before the warm-up) and warm (after it).
+   */
+  warmUp?: EvalRow[];
+  /** Which links recall follows (`links.ts`); default `off`, today's recall. */
+  links?: LinksMode;
   /** Receives one-line warnings (counts only); defaults to stderr. */
   warn?: (message: string) => void;
 }
@@ -372,10 +404,42 @@ export function discoverScope(dbPath: string): ScopeFilter {
   }
 }
 
-export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
+/** What the warm-up pass did (`--warm-up`). */
+export interface WarmUpStats {
+  rows: number;
+  /** `recordAccess` calls the warm-up's recalls made on the copy. */
+  accessCalls: number;
+  /** Memory ids those calls recorded, summed. */
+  accessIds: number;
+}
+
+export interface EvalRun extends EvalReport {
+  /** With `warmUp`: the same rows again, after the warm-up pass. The top level is the cold run. */
+  warm?: EvalReport;
+  warmUp?: WarmUpStats;
+  /** The links mode the run used (`off` is today's recall). */
+  links?: LinksMode;
+}
+
+/** Questions compared for the warm-up's disjointness check: case and spacing do not count. */
+const normalised = (q: string): string => q.trim().toLowerCase().replace(/\s+/g, ' ');
+
+/** Throws when a warm-up question is also an eval question: the two sets must be disjoint. */
+export function assertDisjoint(rows: EvalRow[], warmUp: EvalRow[]): void {
+  const asked = new Set(rows.map((r) => normalised(r.question)));
+  const shared = warmUp.filter((r) => asked.has(normalised(r.question))).length;
+  if (shared > 0) {
+    throw new Error(
+      `--warm-up: ${shared} question(s) also appear in the eval rows; use a disjoint set`,
+    );
+  }
+}
+
+export async function runEval(opts: RunEvalOptions): Promise<EvalRun> {
   const rescoring = { denseQueries: 0, reads: 0 };
   const ks = [...new Set([...(opts.ks ?? [5, 10]), 10])].sort((a, b) => a - b);
   const maxK = Math.max(...ks);
+  if (opts.warmUp !== undefined) assertDisjoint(opts.rows, opts.warmUp);
   const copy = await copyStore(
     opts.storePath,
     opts.coldDir,
@@ -391,6 +455,7 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
   });
   try {
     const base = resolveConfig(copy.dir, { OORT_HOME: copy.dir }, { projectConfig: false });
+    const links = opts.links ?? 'off';
     const config = {
       ...base,
       recall: {
@@ -398,9 +463,10 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
         returnK: maxK,
         rerankK: Math.max(base.recall.rerankK, maxK),
         ...(opts.gate === false && { minRerankScore: 0, minCoverage: 0, minDenseScore: 0 }),
+        ...linksOverride(links, base),
         ...opts.recall,
       },
-    };
+    } as ResolvedConfig;
     // Rows must not influence each other: recall's access records would raise the
     // activation of everything an earlier row returned. The copy is discarded
     // either way, so reads of it simply skip that write.
@@ -426,44 +492,71 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
       if (pick.length > 0) await store.coldPutMany(grant, pick);
     }
     const vectorIndex = sqliteVectorIndex(copy.dbPath);
-    const reads = { hydrated: 0, asked: 0, stopped: 0 };
-    const outcomes: RowOutcome[] = [];
-    for (const row of opts.rows) {
-      const r = await recall(
+    const recallRow = (row: EvalRow, s: MemoryStore) =>
+      recall(
         { text: row.question, scope, ...(row.asOf !== undefined ? { asOf: row.asOf } : {}) },
         {
-          store: evalStore,
+          store: s,
           config,
           ...(opts.embed !== undefined ? { embed: opts.embed } : {}),
           ...(opts.rerank !== undefined ? { rerank: opts.rerank } : {}),
           ...(opts.now !== undefined ? { now: opts.now } : {}),
         },
       );
-      reads.hydrated += r.memories.filter((m) => m.explanation.hydrated === true).length;
-      if (r.adaptiveStop !== undefined) reads.asked++;
-      if (r.adaptiveStop?.stopped === true) reads.stopped++;
-      outcomes.push({
-        ids: r.memories.map((m) => m.id),
-        aboveThreshold: r.memories.filter(
-          (m) => opts.abstainThreshold === undefined || m.explanation.fused > opts.abstainThreshold,
-        ).length,
-      });
-    }
-    return {
-      ...computeMetrics(opts.rows, outcomes, ks, opts.skippedEmpty ?? 0),
-      ...(vectorIndex !== undefined && { vectorIndex }),
-      ...(vectorIndex !== undefined &&
-        vectorIndex.index !== 'int8' && {
-          rescoring: {
-            ...rescoring,
-            perQuery:
-              rescoring.denseQueries === 0
-                ? 0
-                : Math.round((rescoring.reads / rescoring.denseQueries) * 10) / 10,
-          },
-        }),
-      reads,
+    const runRows = async (): Promise<EvalReport> => {
+      const reads = { hydrated: 0, asked: 0, stopped: 0 };
+      // Each pass reports its own rescoring (the warm-up's recalls also read vectors).
+      rescoring.denseQueries = 0;
+      rescoring.reads = 0;
+      const outcomes: RowOutcome[] = [];
+      for (const row of opts.rows) {
+        const r = await recallRow(row, evalStore);
+        reads.hydrated += r.memories.filter((m) => m.explanation.hydrated === true).length;
+        if (r.adaptiveStop !== undefined) reads.asked++;
+        if (r.adaptiveStop?.stopped === true) reads.stopped++;
+        outcomes.push({
+          ids: r.memories.map((m) => m.id),
+          aboveThreshold: r.memories.filter(
+            (m) =>
+              opts.abstainThreshold === undefined || m.explanation.fused > opts.abstainThreshold,
+          ).length,
+          linked: r.memories.filter((m) => viaOf(m) !== undefined).map((m) => m.id),
+        });
+      }
+      return {
+        ...computeMetrics(opts.rows, outcomes, ks, opts.skippedEmpty ?? 0),
+        ...(vectorIndex !== undefined && { vectorIndex }),
+        ...(vectorIndex !== undefined &&
+          vectorIndex.index !== 'int8' && {
+            rescoring: {
+              ...rescoring,
+              perQuery:
+                rescoring.denseQueries === 0
+                  ? 0
+                  : Math.round((rescoring.reads / rescoring.denseQueries) * 10) / 10,
+            },
+          }),
+        reads,
+      };
     };
+    const cold = await runRows();
+    if (opts.warmUp === undefined) return { ...cold, links };
+    // The warm-up pass: a disjoint question set whose recalls record accesses on the copy (and,
+    // once links exist, learn recalledWith pairs there), so the second pass sees that history.
+    // Only the copy is written; hydration stays off, so tiers do not move under the rows.
+    const warmUp: WarmUpStats = { rows: opts.warmUp.length, accessCalls: 0, accessIds: 0 };
+    const recording: MemoryStore = {
+      ...store,
+      upsert: async () => {},
+      recordAccess: async (...args: Parameters<MemoryStore['recordAccess']>) => {
+        warmUp.accessCalls++;
+        warmUp.accessIds += args[1].length;
+        return store.recordAccess(...args);
+      },
+    };
+    for (const row of opts.warmUp) await recallRow(row, recording);
+    const warm = await runRows();
+    return { ...cold, warm, warmUp, links };
   } finally {
     await store.close();
     fs.rmSync(copy.dir, { recursive: true, force: true });
@@ -482,11 +575,12 @@ export function renderReport(r: EvalReport): string {
     'MRR@10',
     'Stale-leak',
     'Abstain FP',
+    'Link precision',
   ];
   const lines = [`| ${head.join(' | ')} |`, `| ${head.map(() => '---').join(' | ')} |`];
   for (const [name, g] of Object.entries(r.groups)) {
     lines.push(
-      `| ${[name, String(g.rows), ...r.ks.map((k) => cell(g.recallAt[k])), cell(g.mrr), cell(g.staleLeak), cell(g.abstainFp)].join(' | ')} |`,
+      `| ${[name, String(g.rows), ...r.ks.map((k) => cell(g.recallAt[k])), cell(g.mrr), cell(g.staleLeak), cell(g.abstainFp), cell(g.linkPrecision)].join(' | ')} |`,
     );
   }
   if (r.skippedEmpty > 0) {
@@ -506,4 +600,24 @@ export function renderReport(r: EvalReport): string {
     );
   }
   return lines.join('\n');
+}
+
+/** A run's report: the links mode, then the cold table, then (with a warm-up) the warm one. */
+export function renderRun(r: EvalRun): string {
+  const parts = [
+    `Links: ${r.links ?? 'off'}${r.links === undefined || r.links === 'off' ? " (today's recall)" : ''}.`,
+    '',
+  ];
+  if (r.warm === undefined) return [...parts, renderReport(r)].join('\n');
+  const w = r.warmUp;
+  return [
+    ...parts,
+    'Cold (before the warm-up):',
+    '',
+    renderReport(r),
+    '',
+    `Warm (after ${w?.rows ?? 0} warm-up question(s), ${w?.accessCalls ?? 0} access record(s) of ${w?.accessIds ?? 0} memories on the copy):`,
+    '',
+    renderReport(r.warm),
+  ].join('\n');
 }
