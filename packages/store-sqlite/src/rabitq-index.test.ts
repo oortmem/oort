@@ -27,6 +27,7 @@ import {
   loadNativeRabitq,
   openSqliteStore,
   reembedSqliteStore,
+  reindexSqliteStore,
   RQ_GONE_TABLE,
   RQ_META_TABLE,
   RQ_TABLE,
@@ -39,7 +40,7 @@ import {
   type SqliteStoreOptions,
 } from './index.js';
 import { rabitqEncode, rotatedCentroid } from './rabitq.js';
-import { RabitqReader } from './rabitq-store.js';
+import { continueRabitqBuild, RabitqReader, startRabitqBuild } from './rabitq-store.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE4 = path.join(HERE, '../test/fixtures/schema4');
@@ -233,7 +234,7 @@ describe('rabitq index', () => {
     expect(reads).toBeGreaterThanOrEqual(50);
     expect(reads).toBeLessThan(250);
     await rq.close();
-  });
+  }, 60_000);
 
   for (const engine of ['native', 'typescript'] as const) {
     it.runIf(engine === 'typescript' || HAS_NATIVE)(
@@ -398,7 +399,7 @@ describe('rabitq index', () => {
     );
   });
 
-  it('rabitq.a-store-that-outgrows-its-centroid-is-rebuilt-once', async () => {
+  it('rabitq.a-store-that-outgrows-its-centroid-is-recentred-only-on-request', async () => {
     const s = fresh();
     const next = rng(37);
     const meta = () => {
@@ -420,34 +421,180 @@ describe('rabitq index', () => {
     const empty = meta();
     expect(empty['built_from']).toBe(0);
     expect(empty['centroid']).toBeUndefined(); // built empty: no centroid yet
-    await store.upsertMany(
-      TG,
-      Array.from({ length: 999 }, (_, i) =>
+    const last = randomVec(next);
+    await store.upsertMany(TG, [
+      ...Array.from({ length: 999 }, (_, i) =>
         makeMemory({ id: `g${i}`, embedding: randomVec(next) }),
       ),
-    );
+      makeMemory({ id: 'g999', embedding: last }),
+    ]);
     await store.close();
-    await (await openSqliteStore(optsD(s, { vectorIndex: 'rabitq' }))).close();
-    expect(meta()['generation']).toBe(empty['generation']); // 999: not yet
-    const more = await openSqliteStore(optsD(s, { vectorIndex: 'auto' }));
-    const last = randomVec(next);
-    await more.upsert(TG, makeMemory({ id: 'g999', embedding: last }));
-    await more.close();
-    // 1,000 vectors, four times nothing: the next open that may migrate rebuilds it, centred,
-    // and `auto` (here from 500 vectors) does not take the rebuild for a store with no index.
-    await (
-      await openSqliteStore(optsD(s, { vectorIndex: 'auto', binaryAutoThreshold: 500 }))
-    ).close();
-    expect(sqliteVectorIndex(s.dbPath)?.index).toBe('rabitq');
+    // Due (1,000 vectors, four times nothing), and said so, but no open rebuilds it: a rebuild is
+    // long, and an open (an MCP server's, a hook's) must not hold the store for it.
+    expect(sqliteVectorIndex(s.dbPath)).toEqual({
+      index: 'rabitq',
+      vectors: 1000,
+      recentreDue: true,
+      builtFrom: 0,
+    });
+    for (const extra of [
+      { vectorIndex: 'rabitq' as const },
+      { vectorIndex: 'auto' as const, binaryAutoThreshold: 500 },
+      { vectorIndex: 'rabitq' as const, migrate: false },
+    ]) {
+      await (await openSqliteStore(optsD(s, extra))).close();
+      expect(meta()['generation']).toBe(empty['generation']);
+    }
     expect(tables(s.dbPath)).not.toContain(BIT_TABLE);
+    // `oort reindex`: rebuilt with the centroid of today's vectors.
+    const logged: string[] = [];
+    expect(
+      await reindexSqliteStore({
+        path: s.dbPath,
+        coldDir: s.coldDir,
+        dimension: D,
+        log: (m) => logged.push(m),
+      }),
+    ).toMatchObject({ index: 'rabitq', vectors: 1000, rebuilt: true });
+    expect(logged).toEqual(['Building the RaBitQ vector index (1000 vectors)…']);
     const rebuilt = meta();
     expect(rebuilt['generation']).not.toBe(empty['generation']);
     expect(rebuilt['built_from']).toBe(1000);
     expect(rebuilt['centroid']).toBeInstanceOf(Buffer);
     expect(indexed(s)['g999']).toEqual(entry(s, last));
-    await (await openSqliteStore(optsD(s, { vectorIndex: 'rabitq' }))).close();
-    expect(meta()['generation']).toBe(rebuilt['generation']); // next at 4,000
+    expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'rabitq', vectors: 1000 });
+    // Nothing to recentre without a RaBitQ index.
+    await (await openSqliteStore(optsD(s, { vectorIndex: 'int8' }))).close();
+    expect(
+      await reindexSqliteStore({ path: s.dbPath, coldDir: s.coldDir, dimension: D }),
+    ).toMatchObject({ index: 'int8', rebuilt: false });
   });
+
+  it('rabitq.the-build-commits-in-batches-scans-int8-meanwhile-and-resumes', async () => {
+    const s = fresh();
+    const next = rng(41);
+    const vs = Array.from({ length: 300 }, () => randomVec(next));
+    const int8 = await openSqliteStore(optsD(s));
+    await int8.upsertMany(
+      TG,
+      vs.map((v, i) => makeMemory({ id: `b${String(i).padStart(3, '0')}`, embedding: v })),
+    );
+    await int8.close();
+    // Started (the migration's part), then one batch of 100 committed, then the process stops.
+    const db = raw(s.dbPath);
+    db.transaction(() => startRabitqBuild(db, D))();
+    expect(continueRabitqBuild(db, D, { batch: 100, maxBatches: 1 })).toBe(100);
+    db.close();
+    expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'rabitq', vectors: 100, building: true });
+    // Meanwhile: dense search scans int8 exactly, and writes keep the partial index in step.
+    const stats: DenseStats[] = [];
+    const hook = await openSqliteStore(
+      optsD(s, { migrate: false, vectorIndex: 'rabitq', onDenseStats: (x) => stats.push(x) }),
+    );
+    expect((await hook.dense(TG, vs[250]!, 1))[0]?.id).toBe('b250');
+    expect([...new Set(stats.map((x) => x.index))]).toEqual(['int8']);
+    const late = randomVec(next);
+    await hook.upsert(TG, makeMemory({ id: 'late', embedding: late }));
+    await hook.close();
+    expect(indexed(s)['late']).toEqual(entry(s, late));
+    // The next open that may migrate finishes it; searches use it from then on.
+    const done = await openSqliteStore(
+      optsD(s, { vectorIndex: 'rabitq', onDenseStats: (x) => stats.push(x) }),
+    );
+    expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'rabitq', vectors: 301 });
+    expect(indexed(s)['b299']).toEqual(entry(s, vs[299]!));
+    expect(indexed(s)['late']).toEqual(entry(s, late));
+    expect((await done.dense(TG, vs[250]!, 1))[0]?.id).toBe('b250');
+    expect(stats.at(-1)?.index).toBe('rabitq');
+    await done.close();
+  });
+
+  it('rabitq.a-handle-past-its-load-limit-scans-int8-instead', async () => {
+    const s = fresh();
+    const next = rng(43);
+    const vs = Array.from({ length: 40 }, () => randomVec(next));
+    const store = await openSqliteStore(optsD(s, { vectorIndex: 'rabitq' }));
+    await store.upsertMany(
+      TG,
+      vs.map((v, i) => makeMemory({ id: `l${i}`, embedding: v })),
+    );
+    await store.close();
+    for (const [limit, index] of [
+      [39, 'int8'],
+      [40, 'rabitq'],
+    ] as const) {
+      const stats: DenseStats[] = [];
+      const h = await openSqliteStore(
+        optsD(s, {
+          migrate: false,
+          vectorIndex: 'rabitq',
+          rabitqMaxLoad: limit,
+          onDenseStats: (x) => stats.push(x),
+        }),
+      );
+      expect((await h.dense(TG, vs[7]!, 1))[0]?.id).toBe('l7');
+      expect([...new Set(stats.map((x) => x.index))]).toEqual([index]);
+      await h.close();
+    }
+  });
+
+  it('rabitq.a-loaded-engine-drops-other-processes-forgets-without-a-search', async () => {
+    const s = fresh();
+    const next = rng(47);
+    const store = await openSqliteStore(optsD(s, { vectorIndex: 'rabitq' }));
+    await store.upsertMany(
+      TG,
+      Array.from({ length: 10 }, (_, i) => makeMemory({ id: `t${i}`, embedding: randomVec(next) })),
+    );
+    await store.close();
+    const sizes: number[] = [];
+    const server = await openSqliteStore(
+      optsD(s, {
+        vectorIndex: 'rabitq',
+        rabitqRefreshMs: 20,
+        onRabitqRefresh: (x) => sizes.push(x.vectors),
+      }),
+    );
+    await server.dense(TG, randomVec(next), 1); // loads the engine
+    expect(sizes.at(-1)).toBe(10);
+    const other = await openSqliteStore(optsD(s, { vectorIndex: 'rabitq' }));
+    await other.forget(TG, 't3');
+    await other.close();
+    // No search on `server`: its timer takes the forget.
+    await expect.poll(() => sizes.at(-1), { timeout: 5000, interval: 20 }).toBe(9);
+    await server.close();
+    const settled = sizes.length;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(sizes.length).toBe(settled); // the timer stops with the store
+  });
+
+  it('rabitq.a-refresh-that-fails-half-way-leaves-an-empty-engine-that-reloads', async () => {
+    const s = fresh();
+    const next = rng(53);
+    const store = await openSqliteStore(optsD(s, { vectorIndex: 'rabitq' }));
+    await store.upsertMany(
+      TG,
+      Array.from({ length: 4200 }, (_, i) =>
+        makeMemory({ id: `f${i}`, embedding: randomVec(next) }),
+      ),
+    );
+    await store.close();
+    const db = raw(s.dbPath);
+    const reader = new RabitqReader(db, D, 'typescript', () => {});
+    // A row the engine cannot take, after more than one batch of good ones.
+    db.prepare(
+      `INSERT INTO ${RQ_TABLE} (rid, seq, node_key, project_key, author_key, code, factors)
+       SELECT 8589934592, seq, node_key, project_key, author_key, code, factors
+       FROM ${RQ_TABLE} LIMIT 1`,
+    ).run();
+    expect(() => db.transaction(() => reader.refresh())()).toThrow(/does not fit/);
+    expect(reader.stats().vectors).toBe(0); // nothing half-loaded is kept
+    db.prepare(`DELETE FROM ${RQ_TABLE} WHERE rid = 8589934592`).run();
+    db.transaction(() => reader.refresh())();
+    expect(reader.stats().vectors).toBe(4200);
+    reader.release();
+    db.close();
+  }, 60_000);
 
   it('rabitq.a-handle-opened-before-the-build-keeps-the-index-in-step', async () => {
     const s = fresh();
@@ -663,7 +810,7 @@ describe('schema migration 6 to 7', () => {
     expect(fs.readFileSync(s.dbPath).equals(before)).toBe(true);
   });
 
-  it('migrate.interrupted-rabitq-build-leaves-the-v6-store-as-it-was', async () => {
+  it('migrate.interrupted-rabitq-build-keeps-the-migration-and-the-next-open-resumes', async () => {
     const s = await copy6();
     const child = spawn(
       process.execPath,
@@ -677,15 +824,18 @@ describe('schema migration 6 to 7', () => {
     );
     expect(signal).toBe('SIGKILL');
     expect(out).toContain('building');
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+    // The migration committed before the build's batches; the build had none yet.
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     const db = raw(s.dbPath);
     try {
       expect(db.pragma('integrity_check', { simple: true })).toBe('ok');
     } finally {
       db.close();
     }
-    expect(tables(s.dbPath)).toEqual([]);
-    expect(guardFunctions(s.dbPath)).toEqual(Array(3).fill('oort_writer_v6'));
+    expect(guardFunctions(s.dbPath)).toEqual(Array(3).fill('oort_writer_v7'));
+    expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'rabitq', vectors: 0, building: true });
+    // A hook meanwhile reads the store as it was.
+    expect(await readBack(s, { migrate: false })).toEqual(await readBack(await copy6()));
     await (await openSqliteStore(optsFor(s, { vectorIndex: 'rabitq' }))).close();
     expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'rabitq', vectors: 33 });

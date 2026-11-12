@@ -75,6 +75,7 @@ import {
 import { tempDirs, trustedPath, untrustedText } from '../trust.js';
 import { SKIP_FILE, callDaemon, clearSkip, readSkip } from '../serve-client.js';
 import { socketPathFor } from '../serve-protocol.js';
+import { HOOK_RABITQ_MAX_LOAD } from './hook.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info' | 'unknown';
 
@@ -743,6 +744,31 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
   }
 }
 
+/**
+ * A RaBitQ index too large for the in-process hooks to load (CON-25), with no `oort serve` to
+ * hold it: each prompt's hook then scans the int8 vectors exactly instead, which is slower at
+ * this size than the daemon's loaded engine.
+ */
+function rabitqHooksCheck(ctx: Ctx, checks: Check[]): Check | undefined {
+  if (checks.some((c) => c.group === 'serve' && c.name === 'daemon' && c.status === 'ok')) {
+    return undefined;
+  }
+  let vi: ReturnType<typeof sqliteVectorIndex>;
+  try {
+    vi = sqliteVectorIndex(path.join(resolveHome(ctx.io.env), 'oort.sqlite'));
+  } catch {
+    return undefined; // the store check reports an unreadable store
+  }
+  if (vi?.index !== 'rabitq' || vi.vectors <= HOOK_RABITQ_MAX_LOAD) return undefined;
+  return {
+    group: 'store',
+    name: 'vector-index-hooks',
+    status: 'warn',
+    detail: `the RaBitQ index holds ${vi.vectors} vectors, more than a hook loads for one prompt (${HOOK_RABITQ_MAX_LOAD}: loading takes seconds and hundreds of MB at a million), so the hooks scan the int8 vectors exactly instead. oort serve keeps the index loaded for them`,
+    fix: 'oort serve --detach',
+  };
+}
+
 function isExecutable(file: string): boolean {
   try {
     fs.accessSync(file, fs.constants.X_OK);
@@ -975,7 +1001,7 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
       const fallback = native !== undefined && 'error' in native ? native.error : undefined;
       const kind =
         vi.index === 'rabitq'
-          ? `rabitq, 1-bit codes with error bounds rescored in int8, ${fallback === undefined ? 'native engine' : 'TypeScript engine'}`
+          ? `rabitq, 1-bit codes with error bounds rescored in int8, ${fallback === undefined ? 'native engine' : 'TypeScript engine'}${vi.building === true ? '; being built (dense search scans int8 until it is done; the next oort command goes on with it)' : ''}`
           : vi.index === 'binary'
             ? 'binary, 1-bit codes rescored in int8'
             : 'int8, exact';
@@ -992,6 +1018,15 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
           fix: 'reinstall Oort on macOS arm64 or Linux x64/arm64 (glibc), or set store.vectorIndex to binary in ~/.oort/config.json',
         }),
       });
+      if (vi.recentreDue === true) {
+        checks.push({
+          group: 'store',
+          name: 'vector-index-centre',
+          status: 'info',
+          detail: `the RaBitQ index was built from ${vi.builtFrom ?? 0} ${vi.builtFrom === 1 ? 'vector' : 'vectors'}; the store now holds ${vi.vectors}, so its centre is out of date and dense queries read more vectors than they need. Rebuilding reads every vector (minutes at a million) in batches; Oort keeps working meanwhile`,
+          fix: 'oort reindex',
+        });
+      }
     }
     // Oort Cloud consolidates itself; locally the hook drain does, when due (CON-48).
     if (!cloudMode) checks.push(consolidationCheck(home));
@@ -1315,6 +1350,11 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
     ...(await relayChecks(ctx, keys.relayed)),
     ...(await cloudChecks(ctx)),
   ];
+  const hooks = rabitqHooksCheck(ctx, checks);
+  if (hooks !== undefined) {
+    const lastStore = checks.map((c) => c.group).lastIndexOf('store');
+    checks.splice(lastStore + 1, 0, hooks);
+  }
   const exit = doctorExit(checks);
   if (jsonMode(ctx)) {
     const problems = checks.filter((c) => c.status === 'warn' || c.status === 'fail').length;

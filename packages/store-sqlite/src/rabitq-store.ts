@@ -55,14 +55,20 @@ export function rabitqVectors(db: Database): number {
 }
 
 /**
- * The index's centroid is the mean of the vectors it was built from. A store that has grown
- * `RABITQ_RECENTRE_GROWTH` times since (and holds at least `RABITQ_RECENTRE_FROM` vectors) has
- * it rebuilt, with a new centroid, by the next open that may migrate: a store created empty with
- * `vectorIndex: 'rabitq'` would otherwise keep the zero centroid, and looser bounds, for good.
- * Geometric, so the rebuilds of a growing store cost a constant number of passes per vector.
+ * The index's centroid is the mean of (a sample of) the vectors it was built from. A store that
+ * has grown `RABITQ_RECENTRE_GROWTH` times since (and holds at least `RABITQ_RECENTRE_FROM`
+ * vectors) is due a rebuild with a new centroid: a store created empty with `vectorIndex:
+ * 'rabitq'` would otherwise keep the zero centroid, and looser bounds, for good. No open rebuilds
+ * it (it reads every vector); `oort doctor` says it is due and `oort reindex` does it. Geometric,
+ * so the rebuilds of a growing store cost a constant number of passes per vector.
  */
 export const RABITQ_RECENTRE_FROM = 1_000;
 export const RABITQ_RECENTRE_GROWTH = 4;
+
+/** How many vectors the index was built from (0 while it is being built). */
+export function rabitqBuiltFrom(db: Database): number {
+  return metaNumber(db, 'built_from');
+}
 
 /** Whether the index has outgrown its centroid (see `RABITQ_RECENTRE_GROWTH`). */
 export function rabitqNeedsRecentre(db: Database): boolean {
@@ -112,75 +118,153 @@ export function isZeroVector(v: ArrayLike<number>): boolean {
 }
 const factorBytes = (f: Float32Array): Buffer => Buffer.from(f.buffer, f.byteOffset, f.byteLength);
 
-/** The rows a build reads: every hot and warm memory's int8 vector and keys, by rid. */
-function pageOfVectors(db: Database) {
-  return db.prepare<
-    [number],
-    { rid: number; embedding: Buffer; node_key: string; project_key: string; author_key: string }
-  >(
-    `SELECT m.rid AS rid, v.embedding AS embedding, v.node_key AS node_key,
-            v.project_key AS project_key, v.author_key AS author_key
-     FROM memories m CROSS JOIN memories_vec v ON v.id = m.id
-     WHERE m.rid > ? AND m.tier != 'cold' ORDER BY m.rid LIMIT 1000`,
+/**
+ * Vectors per build transaction. A build commits after each batch, so other writers (the hooks,
+ * an MCP server) wait at most one batch for the lock, and a build that is stopped keeps what it
+ * did: the next open that may migrate goes on from there.
+ */
+export const RABITQ_BUILD_BATCH = 10_000;
+
+/**
+ * Vectors the centroid is the mean of, spread evenly over the store by row id. Any centroid
+ * gives correct bounds; a sample this size is as good as all of them, and reads a fraction.
+ */
+export const RABITQ_CENTROID_SAMPLE = 20_000;
+
+/** Whether a build of the index was started and has not finished. */
+export function rabitqBuilding(db: Database): boolean {
+  return (
+    hasRabitqIndex(db) &&
+    db
+      .prepare<[], { value: string }>(`SELECT value FROM ${RQ_META_TABLE} WHERE key = 'state'`)
+      .get()?.value === 'building'
   );
 }
 
 /**
- * Creates the RaBitQ index and fills it from the int8 vectors of every hot and warm memory,
- * inside the caller's transaction (a migration's). Two passes over the vectors: the first for
- * the centroid (their mean), the second to encode them. Says how many it indexes first.
+ * Starts a build of the RaBitQ index, inside the caller's transaction (a migration's, or `oort
+ * reindex`'s): drops the index if there is one, creates the tables, and records the centroid
+ * (the mean of a sample of the hot and warm vectors) and the build's state. Writes keep the
+ * partial index in step from now on; searches ignore it until `continueRabitqBuild` finishes.
  */
-export function buildRabitqIndex(
-  db: Database,
-  dimension: number,
-  log?: (message: string) => void,
-): number {
-  const page = pageOfVectors(db);
+export function startRabitqBuild(db: Database, dimension: number): void {
+  dropRabitqIndex(db);
+  const top =
+    db.prepare<[], { n: number | null }>('SELECT max(rid) AS n FROM memories').get()?.n ?? 0;
+  const step = Math.max(1, Math.ceil(top / RABITQ_CENTROID_SAMPLE));
+  const sample = db.prepare<[number], { embedding: Buffer }>(
+    `SELECT v.embedding AS embedding
+     FROM memories m CROSS JOIN memories_vec v ON v.id = m.id
+     WHERE m.tier != 'cold' AND m.rid % ? = 0`,
+  );
   const sum = new Float64Array(dimension);
   let n = 0;
-  for (let after = -Infinity; ;) {
-    const rows = page.all(after);
-    if (rows.length === 0) break;
-    for (const r of rows) {
-      after = r.rid;
-      const v = toInt8(r.embedding);
-      if (isZeroVector(v)) continue;
-      for (let i = 0; i < dimension; i++) sum[i] = (sum[i] as number) + (v[i] as number);
-      n++;
-    }
+  for (const r of sample.iterate(step)) {
+    const v = toInt8(r.embedding);
+    if (isZeroVector(v)) continue;
+    for (let i = 0; i < dimension; i++) sum[i] = (sum[i] as number) + (v[i] as number);
+    n++;
   }
   createTables(db);
-  if (n > 0) log?.(`Building the RaBitQ vector index (${n} ${n === 1 ? 'vector' : 'vectors'})…`);
   const centroid = n === 0 ? undefined : sum.map((x) => x / n);
   const meta = db.prepare(`INSERT INTO ${RQ_META_TABLE} (key, value) VALUES (?, ?)`);
   meta.run('generation', randomBytes(8).toString('hex'));
   meta.run('seq', 0);
   meta.run('floor', 0);
   meta.run('width', bitWidth(dimension));
-  meta.run('built_from', n);
+  meta.run('built_from', 0);
+  meta.run('state', 'building');
+  meta.run('cursor', -1);
   if (centroid !== undefined) {
     meta.run('centroid', Buffer.from(centroid.buffer, centroid.byteOffset, centroid.byteLength));
   }
-  const rc = rotatedCentroid(centroid, dimension);
+}
+
+/**
+ * Goes on with a started build, one `IMMEDIATE` transaction per `batch` vectors (default
+ * `RABITQ_BUILD_BATCH`), until every hot and warm vector is indexed (or `maxBatches` have
+ * committed). The last transaction marks the index ready under a new generation, so every
+ * process's engine loads it whole. Says once how many vectors are left. Returns how many it
+ * indexed. Safe to stop at any point and to run from two processes at once.
+ */
+export function continueRabitqBuild(
+  db: Database,
+  dimension: number,
+  opts: {
+    log?: (message: string) => void;
+    onProgress?: (p: { done: number; total: number }) => void;
+    batch?: number;
+    maxBatches?: number;
+  } = {},
+): number {
+  const batch = opts.batch ?? RABITQ_BUILD_BATCH;
+  if (!rabitqBuilding(db)) return 0;
+  const cursorOf = () => metaNumber(db, 'cursor');
+  const left = (cursor: number) =>
+    db
+      .prepare<[number], { n: number }>(
+        `SELECT count(*) AS n FROM memories WHERE rid > ? AND tier != 'cold'`,
+      )
+      .get(cursor)?.n ?? 0;
+  const first = cursorOf();
+  const total = left(first);
+  if (total > 0) {
+    opts.log?.(
+      first < 0
+        ? `Building the RaBitQ vector index (${total} ${total === 1 ? 'vector' : 'vectors'})…`
+        : `Resuming the RaBitQ vector index build (${total} ${total === 1 ? 'vector' : 'vectors'} to go)…`,
+    );
+  }
+  const page = db.prepare<
+    [number, number],
+    { rid: number; embedding: Buffer; node_key: string; project_key: string; author_key: string }
+  >(
+    `SELECT m.rid AS rid, v.embedding AS embedding, v.node_key AS node_key,
+            v.project_key AS project_key, v.author_key AS author_key
+     FROM memories m CROSS JOIN memories_vec v ON v.id = m.id
+     WHERE m.rid > ? AND m.tier != 'cold' ORDER BY m.rid LIMIT ?`,
+  );
+  // A writer may have indexed a row first (with a newer change number): it is kept.
   const put = db.prepare<[number, string, string, string, Buffer, Buffer]>(
-    `INSERT INTO ${RQ_TABLE} (rid, seq, node_key, project_key, author_key, code, factors)
+    `INSERT OR IGNORE INTO ${RQ_TABLE} (rid, seq, node_key, project_key, author_key, code, factors)
      VALUES (?, 0, ?, ?, ?, ?, ?)`,
   );
   const putVec = db.prepare<[number, Buffer]>(
-    `INSERT INTO ${RQ_VEC_TABLE} (rid, embedding) VALUES (?, ?)`,
+    `INSERT OR IGNORE INTO ${RQ_VEC_TABLE} (rid, embedding) VALUES (?, ?)`,
   );
-  let done = 0;
-  for (let after = -Infinity; ;) {
-    const rows = page.all(after);
-    if (rows.length === 0) break;
+  const setMeta = db.prepare<[unknown, string]>(
+    `UPDATE ${RQ_META_TABLE} SET value = ? WHERE key = ?`,
+  );
+  const step = db.transaction((): number | undefined => {
+    if (!rabitqBuilding(db)) return undefined; // finished, or dropped, by another process
+    const rc = rotatedCentroid(readCentroid(db), dimension);
+    const rows = page.all(cursorOf(), batch);
+    if (rows.length === 0) {
+      setMeta.run(rabitqVectors(db), 'built_from');
+      setMeta.run(randomBytes(8).toString('hex'), 'generation');
+      db.prepare(`DELETE FROM ${RQ_META_TABLE} WHERE key IN ('state', 'cursor')`).run();
+      return undefined;
+    }
+    let n = 0;
     for (const r of rows) {
-      after = r.rid;
       if (isZeroVector(toInt8(r.embedding))) continue;
       const { code, factors } = rabitqEncode(toInt8(r.embedding), rc);
       put.run(r.rid, r.node_key, r.project_key, r.author_key, code, factorBytes(factors));
       putVec.run(r.rid, r.embedding);
-      done++;
+      n++;
     }
+    setMeta.run((rows.at(-1) as { rid: number }).rid, 'cursor');
+    return n;
+  });
+  let done = 0;
+  let batches = 0;
+  for (;;) {
+    if (opts.maxBatches !== undefined && batches >= opts.maxBatches) break;
+    const n = step.immediate();
+    if (n === undefined) break;
+    done += n;
+    batches++;
+    opts.onProgress?.({ done: Math.min(done, total), total });
   }
   return done;
 }
@@ -291,9 +375,14 @@ export function rabitqWriter(db: Database, dimension: number) {
   }
 
   return {
-    /** Whether the store has the index (checked on every call). */
+    /** Whether the store has the index, finished or being built (checked on every call). */
     present(): boolean {
       return statements() !== undefined;
+    },
+
+    /** Whether the store has a finished index, which searches may use. */
+    ready(): boolean {
+      return statements() !== undefined && !rabitqBuilding(db);
     },
 
     /**
@@ -509,23 +598,37 @@ export class RabitqReader {
         );
       }
     }
-    if (generation !== this.generation || this.seq < floor || seq < this.seq) {
+    try {
+      if (generation !== this.generation || this.seq < floor || seq < this.seq) {
+        this.engine.clear();
+        this.rc = rotatedCentroid(readCentroid(this.db), this.dimension);
+        this.feed(this.st.all.iterate());
+      } else {
+        const gone = this.st.gone.all(this.seq).map((r) => r.rid);
+        if (gone.length > 0) this.engine.remove(Uint32Array.from(gone));
+        this.feed(this.st.since.iterate(this.seq));
+      }
+    } catch (e) {
+      // Half fed: drop it all, so the next refresh loads the index whole.
       this.engine.clear();
-      this.rc = rotatedCentroid(readCentroid(this.db), this.dimension);
-      this.feed(this.st.all.iterate());
-    } else {
-      const gone = this.st.gone.all(this.seq).map((r) => r.rid);
-      if (gone.length > 0) this.engine.remove(Uint32Array.from(gone));
-      this.feed(this.st.since.iterate(this.seq));
+      this.generation = '';
+      this.seq = -1;
+      throw e;
     }
     this.generation = generation;
     this.seq = seq;
+  }
+
+  /** Whether the engine is loaded. */
+  get loaded(): boolean {
+    return this.engine !== undefined;
   }
 
   /** Drops the in-memory copy, zeroing it (the index was dropped, or the store closes). */
   release(): void {
     this.engine?.clear();
     this.engine = undefined;
+    this.kind = undefined;
     this.generation = '';
     this.seq = -1;
     for (const m of this.keys) m.clear();

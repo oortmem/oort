@@ -176,6 +176,11 @@ export interface WireOptions {
    * `StoreMigrationRequiredError` (the hooks). Default true (every command).
    */
   migrate?: boolean;
+  /**
+   * The most vectors this process loads into a RaBitQ engine (CON-25); past it, its dense search
+   * scans the int8 vectors exactly. The in-process hooks set it: they run once per prompt.
+   */
+  rabitqMaxLoad?: number;
   /** false: read no `oort.config.json` at all, only the home config (the drain). */
   projectConfig?: boolean;
   /**
@@ -553,6 +558,7 @@ async function open(p: Prepared, opts: EngineOptions, env: Env): Promise<Engine>
     binaryAutoThreshold: config.store.binaryAutoThreshold,
     ...(opts.busyTimeoutMs !== undefined && { busyTimeoutMs: opts.busyTimeoutMs }),
     ...(opts.migrate === false && { migrate: false }),
+    ...(opts.rabitqMaxLoad !== undefined && { rabitqMaxLoad: opts.rabitqMaxLoad }),
   });
   const sources = new Set<KeySource>(opts.keySources ?? ['explicit', 'env', 'keychain']);
   // Env first (set and non-empty), then the keychain, each item read at most once.

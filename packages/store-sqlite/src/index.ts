@@ -54,9 +54,14 @@ import { backupDatabase, sweepStaleCopies } from './backup.js';
 import { BINARY_OVERSAMPLE, binaryCode } from './binary.js';
 import type { RabitqEngineChoice } from './rabitq.js';
 import {
+  continueRabitqBuild,
   RabitqReader,
+  rabitqBuilding,
+  rabitqBuiltFrom,
+  rabitqNeedsRecentre,
   rabitqVectors,
   rabitqWriter,
+  startRabitqBuild,
   RQ_VEC_TABLE,
   hasRabitqIndex,
   type RescoredRow,
@@ -202,6 +207,21 @@ export interface SqliteStoreOptions {
    * RaBitQ indexes, how many int8 vectors were read to rescore candidates. For benchmarks.
    */
   onDenseStats?: (stats: DenseStats) => void;
+  /**
+   * The most vectors this handle loads into a RaBitQ engine. Past it, the handle's dense search
+   * scans the int8 vectors exactly instead (a store with a RaBitQ index has no binary one). For
+   * short-lived processes, the in-process hooks: loading a million codes takes seconds and a few
+   * hundred MB, which a long-lived process pays once. Default: no limit.
+   */
+  rabitqMaxLoad?: number;
+  /**
+   * How often a handle whose RaBitQ engine is loaded brings it up to date with other processes'
+   * writes without waiting for a dense query, so a forget elsewhere leaves its memory too
+   * (default 30,000 ms).
+   */
+  rabitqRefreshMs?: number;
+  /** Called after each refresh of a loaded RaBitQ engine with its size. For tests and monitoring. */
+  onRabitqRefresh?: (stats: { vectors: number }) => void;
 }
 
 /** What one dense query pattern cost (`onDenseStats`). */
@@ -561,20 +581,89 @@ function live(patterns: readonly NodePattern[]): NodePattern[] {
  * Which dense index the store at `dbPath` searches with, and how many vectors it searches (the
  * hot and warm memories' vectors), read without changing it: undefined when there is no store yet.
  */
-export function sqliteVectorIndex(
-  dbPath: string,
-): { index: 'int8' | 'binary' | 'rabitq'; vectors: number } | undefined {
+export function sqliteVectorIndex(dbPath: string):
+  | {
+      index: 'int8' | 'binary' | 'rabitq';
+      vectors: number;
+      /** RaBitQ: a build is under way (the next `oort` command goes on with it). */
+      building?: true;
+      /** RaBitQ: the store has outgrown the centroid (`oort reindex` recentres it). */
+      recentreDue?: true;
+      /** With `recentreDue`: how many vectors the index was built from. */
+      builtFrom?: number;
+    }
+  | undefined {
   if (!fs.existsSync(dbPath)) return undefined;
   const db = new Database(path.resolve(dbPath), { readonly: true, fileMustExist: true });
   try {
     if (schemaVersionOf(db) === undefined) return undefined;
-    if (hasRabitqIndex(db)) return { index: 'rabitq', vectors: rabitqVectors(db) };
+    if (hasRabitqIndex(db)) {
+      const building = rabitqBuilding(db);
+      return {
+        index: 'rabitq',
+        vectors: rabitqVectors(db),
+        ...(building && { building: true as const }),
+        ...(!building &&
+          rabitqNeedsRecentre(db) && {
+            recentreDue: true as const,
+            builtFrom: rabitqBuiltFrom(db),
+          }),
+      };
+    }
     if (!hasBinaryIndex(db)) return { index: 'int8', vectors: searchableVectors(db) };
     const n = db.prepare<[], { n: number }>(`SELECT count(*) AS n FROM ${BIT_TABLE}_rowids`).get();
     return { index: 'binary', vectors: n?.n ?? 0 };
   } finally {
     db.close();
   }
+}
+
+/**
+ * Rebuilds the store's RaBitQ index from its int8 vectors with a new centroid (`oort reindex`):
+ * for a store that has outgrown the centroid it was built with (`sqliteVectorIndex` says
+ * `recentreDue`), whose looser bounds mean more rescoring reads. No open does this by itself: it
+ * reads every vector. It first opens the store as any `oort` command does (migrating it, and
+ * finishing a build under way), then starts the build again and runs it in committed batches;
+ * other processes keep working meanwhile (their dense search scans int8 until it is done), and a
+ * stopped run is finished by the next `oort` command. A store without a RaBitQ index is left as
+ * it is (`rebuilt: false`).
+ */
+export async function reindexSqliteStore(opts: {
+  path: string;
+  coldDir: string;
+  dimension: number;
+  vectorIndex?: VectorIndex;
+  log?: (message: string) => void;
+  onProgress?: (p: { done: number; total: number }) => void;
+}): Promise<{ index: 'int8' | 'binary' | 'rabitq'; vectors: number; rebuilt: boolean }> {
+  await (
+    await openSqliteStore({
+      path: opts.path,
+      coldDir: opts.coldDir,
+      dimension: opts.dimension,
+      ...(opts.vectorIndex !== undefined && { vectorIndex: opts.vectorIndex }),
+      ...(opts.log !== undefined && { log: opts.log }),
+    })
+  ).close();
+  const db = new Database(path.resolve(opts.path), { fileMustExist: true });
+  let rebuilt = false;
+  try {
+    db.pragma(`busy_timeout = ${MIGRATION_BUSY_TIMEOUT_MS}`);
+    sqliteVec.load(db);
+    defineWriterGuard(db);
+    if (hasRabitqIndex(db)) {
+      db.transaction(() => startRabitqBuild(db, opts.dimension)).immediate();
+      continueRabitqBuild(db, opts.dimension, {
+        ...(opts.log !== undefined && { log: opts.log }),
+        ...(opts.onProgress !== undefined && { onProgress: opts.onProgress }),
+      });
+      rebuilt = true;
+    }
+  } finally {
+    db.close();
+  }
+  const v = sqliteVectorIndex(opts.path) ?? { index: 'int8' as const, vectors: 0 };
+  return { index: v.index, vectors: v.vectors, rebuilt };
 }
 
 /**
@@ -721,7 +810,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           (from <= SCHEMA_VERSION &&
             (lexicalIndexState(conn, icu) === 'rebuild' ||
               binaryIndexPlan(conn, vectorIndex, opts.binaryAutoThreshold) === 'build' ||
-              ['build', 'rebuild'].includes(rabitqIndexPlan(conn, vectorIndex)))));
+              rabitqIndexPlan(conn, vectorIndex) === 'build' ||
+              (from === SCHEMA_VERSION && rabitqBuilding(conn)))));
       if (rebuilds) {
         conn.pragma(`busy_timeout = ${Math.max(busyTimeoutMs, MIGRATION_BUSY_TIMEOUT_MS)}`);
       }
@@ -734,6 +824,12 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           binaryAutoThreshold: opts.binaryAutoThreshold,
         }),
       });
+      // A RaBitQ index being built (started just now, or by an open that stopped): go on with it,
+      // one committed batch at a time, so other writers wait one batch at most and a stopped
+      // build keeps its progress. Hooks (`migrate: false`) leave it to the next `oort` command.
+      if (opts.migrate !== false && rabitqBuilding(conn)) {
+        continueRabitqBuild(conn, dimension, { log });
+      }
       if (rebuilds) conn.pragma(`busy_timeout = ${busyTimeoutMs}`);
       return conn;
     } catch (e) {
@@ -1034,19 +1130,46 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       () => `SELECT m.rid AS rid FROM memories m WHERE ${spatialSql(f, 'm')}`,
     );
 
-  /** Brings this process's RaBitQ engine up to date, or drops it when the index is gone. */
+  const rabitqMaxLoad = opts.rabitqMaxLoad;
+  /** Whether this handle stays off the RaBitQ engine (`rabitqMaxLoad`), decided once. */
+  let rqTooBig: boolean | undefined;
+  let rqTimer: ReturnType<typeof setInterval> | undefined;
+  const stopRqTimer = () => {
+    if (rqTimer !== undefined) clearInterval(rqTimer);
+    rqTimer = undefined;
+  };
+
+  /**
+   * Brings this process's RaBitQ engine up to date and says whether searches may use it: false
+   * (and the engine dropped) when the index is gone or still being built, or when it holds more
+   * vectors than this handle may load.
+   */
   const rqRefresh = db.transaction((): boolean => {
-    if (!rq.present()) {
+    if (!rq.ready()) {
       rqReader.release();
+      stopRqTimer();
       return false;
     }
+    if (!rqReader.loaded && rabitqMaxLoad !== undefined) {
+      rqTooBig ??= rabitqVectors(db) > rabitqMaxLoad;
+      if (rqTooBig) return false;
+    }
     rqReader.refresh();
+    opts.onRabitqRefresh?.({ vectors: rqReader.stats().vectors });
+    // Loaded: other processes' forgets reach it on a timer too, not only on the next search.
+    rqTimer ??= setInterval(() => {
+      try {
+        rqRefresh();
+      } catch {
+        // Busy or closing: the next tick, or the next search, tries again.
+      }
+    }, opts.rabitqRefreshMs ?? 30_000).unref();
     return true;
   });
 
   /** After a committed write: the engine, if loaded, takes this process's changes at once. */
   function rqAfterWrite(): void {
-    if (rqReader.kind !== undefined) rqRefresh();
+    if (rqReader.loaded) rqRefresh();
   }
 
   /**
@@ -1525,6 +1648,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     async close() {
       if (closed) return;
       closed = true;
+      stopRqTimer();
       rqReader.release();
       db.close();
     },

@@ -10,12 +10,7 @@ import {
   type NodeRef,
 } from '@oortmem/core';
 import { BINARY_AUTO_THRESHOLD, binaryCode, bitWidth } from './binary.js';
-import {
-  buildRabitqIndex,
-  dropRabitqIndex,
-  hasRabitqIndex,
-  rabitqNeedsRecentre,
-} from './rabitq-store.js';
+import { startRabitqBuild, dropRabitqIndex, hasRabitqIndex } from './rabitq-store.js';
 
 /**
  * 1: the Phase 1 store, one (org, customer, agent) scope per memory.
@@ -195,18 +190,15 @@ export function binaryIndexPlan(
 }
 
 /**
- * What a migrating open does to the RaBitQ index for `want`: build it (`rabitq`), drop it (`int8`,
- * `binary`), rebuild it with a new centroid once the store has outgrown the old one
- * (`rabitqNeedsRecentre`), or nothing (`auto` keeps one that exists and never builds one).
+ * What a migrating open does to the RaBitQ index for `want`: start building it (`rabitq`; the
+ * open goes on with the build after the migration, in batches), drop it (`int8`, `binary`), or
+ * nothing (`auto` keeps one that exists and never builds one). No open rebuilds it: recentring a
+ * store that has outgrown its centroid is `oort reindex` (`reindexSqliteStore`).
  */
-export function rabitqIndexPlan(
-  db: Database,
-  want: VectorIndex,
-): 'build' | 'rebuild' | 'drop' | 'keep' {
+export function rabitqIndexPlan(db: Database, want: VectorIndex): 'build' | 'drop' | 'keep' {
   const has = hasRabitqIndex(db);
   if (want === 'int8' || want === 'binary') return has ? 'drop' : 'keep';
-  if (!has) return want === 'rabitq' ? 'build' : 'keep';
-  return rabitqNeedsRecentre(db) ? 'rebuild' : 'keep';
+  return !has && want === 'rabitq' ? 'build' : 'keep';
 }
 
 /**
@@ -1011,13 +1003,12 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     // At most one of them is kept: the one `vectorIndex` asks for (`auto` keeps either).
     if (opts.migrate !== false) {
       const want = opts.vectorIndex ?? 'auto';
-      // Both plans first: a RaBitQ index dropped to be rebuilt must not look absent to `auto`.
       const rq = rabitqIndexPlan(db, want);
       const plan = binaryIndexPlan(db, want, opts.binaryAutoThreshold);
-      if (rq === 'drop' || rq === 'rebuild') dropRabitqIndex(db);
+      if (rq === 'drop') dropRabitqIndex(db);
       if (plan === 'build') buildBinaryIndex(db, dimension, opts.log);
       else if (plan === 'drop') dropBinaryIndex(db);
-      if (rq === 'build' || rq === 'rebuild') buildRabitqIndex(db, dimension, opts.log);
+      if (rq === 'build') startRabitqBuild(db, dimension);
     }
   }).immediate();
 }

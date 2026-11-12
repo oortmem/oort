@@ -26,7 +26,7 @@ import {
   SCHEMA_VERSION,
 } from '@oortmem/store-sqlite';
 import { wire as realWire } from '../wire.js';
-import { MIGRATION_PENDING_NOTE } from './hook.js';
+import { HOOK_RABITQ_MAX_LOAD, MIGRATION_PENDING_NOTE } from './hook.js';
 import { consolidationCheck, unstableCopy } from './doctor.js';
 import { writeUpdateCache } from '../update-check.js';
 
@@ -279,6 +279,54 @@ describe('oort doctor', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it('doctor.says-when-the-rabitq-index-wants-oort-reindex-or-oort-serve (CON-25)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(h.home, 'config.json'),
+      JSON.stringify({ store: { vectorIndex: 'rabitq' } }),
+    );
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      vectorIndex: 'rabitq',
+      log: () => {},
+    });
+    await s.upsert(TG, memory({ embedding: undefined }));
+    await s.close();
+    // Small and freshly built: neither.
+    const first = await doctor(h);
+    expect(first.check('store', 'vector-index-centre')).toBeUndefined();
+    expect(first.check('store', 'vector-index-hooks')).toBeUndefined();
+    // As if the store had grown past what the index was built from, and past what an
+    // in-process hook loads (codes are only counted here, never searched).
+    const raw = new Database(db);
+    raw.transaction(() => {
+      const put = raw.prepare(
+        `INSERT INTO memories_rq (rid, seq, node_key, project_key, author_key, code, factors)
+         VALUES (?, 0, 'n', 'p', 'a', x'00', x'00')`,
+      );
+      for (let i = 0; i <= HOOK_RABITQ_MAX_LOAD; i++) put.run(1_000_000 + i);
+    })();
+    raw.close();
+    const grown = await doctor(h);
+    expect(grown.check('store', 'vector-index-centre')).toMatchObject({
+      status: 'info',
+      fix: 'oort reindex',
+    });
+    expect(grown.check('store', 'vector-index-centre')?.detail).toContain(
+      `built from 0 vectors; the store now holds ${HOOK_RABITQ_MAX_LOAD + 1}`,
+    );
+    expect(grown.check('store', 'vector-index-hooks')).toMatchObject({
+      status: 'warn',
+      fix: 'oort serve --detach',
+    });
   });
 
   it('doctor.a-hook-first-leaves-a-pre-rename-index-for-the-cli-to-repair (CON-110)', async () => {

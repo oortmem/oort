@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { localScope, parseExport, type Embedder, type Memory } from '@oortmem/core';
 import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
-import { MIGRATION_PENDING_NOTE } from './commands/hook.js';
+import { HOOK_RABITQ_MAX_LOAD, MIGRATION_PENDING_NOTE } from './commands/hook.js';
 import {
   AWS_KEY,
   fakeIo,
@@ -805,6 +805,21 @@ describe('oort hook (in process)', () => {
     await h.run(['recall', 'port']);
     // Hooks wait at most 250 ms for the lock; the detached drain and commands keep the default.
     expect(seen).toEqual([250, 250, 250, undefined, undefined]);
+  });
+
+  it('cli.in-process-hooks-load-no-large-rabitq-engine (CON-25)', async () => {
+    const h = harness();
+    const seen: (number | undefined)[] = [];
+    const inner = h.wire;
+    h.wire = async (cwd, o) => {
+      seen.push(o?.rabitqMaxLoad);
+      return inner(cwd, o);
+    };
+    await h.run(['hook', 'UserPromptSubmit'], { stdin: prompt(h.cwd) });
+    await h.run(['hook', 'drain']);
+    await h.run(['recall', 'port']);
+    // Every in-process hook (the drain too) caps the engine it loads; commands do not.
+    expect(seen).toEqual([HOOK_RABITQ_MAX_LOAD, HOOK_RABITQ_MAX_LOAD, undefined]);
   });
 
   it('cli.hook-busy-store-logs-degraded', async () => {
