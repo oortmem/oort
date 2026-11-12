@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { localScope, parseExport, type Embedder, type Memory } from '@oortmem/core';
 import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
-import { MIGRATION_PENDING_NOTE } from './commands/hook.js';
+import { HOOK_RABITQ_MAX_LOAD, MIGRATION_PENDING_NOTE } from './commands/hook.js';
+import { HOST_RABITQ_BUILD_BATCHES } from './wire.js';
 import {
   AWS_KEY,
   fakeIo,
@@ -805,6 +806,37 @@ describe('oort hook (in process)', () => {
     await h.run(['recall', 'port']);
     // Hooks wait at most 250 ms for the lock; the detached drain and commands keep the default.
     expect(seen).toEqual([250, 250, 250, undefined, undefined]);
+  });
+
+  it('cli.in-process-hooks-load-no-large-rabitq-engine (CON-25)', async () => {
+    const h = harness();
+    const seen: (number | undefined)[] = [];
+    const inner = h.wire;
+    h.wire = async (cwd, o) => {
+      seen.push(o?.rabitqMaxLoad);
+      return inner(cwd, o);
+    };
+    await h.run(['hook', 'UserPromptSubmit'], { stdin: prompt(h.cwd) });
+    await h.run(['hook', 'drain']);
+    await h.run(['recall', 'port']);
+    // Every in-process hook (the drain too) caps the engine it loads; commands do not.
+    expect(seen).toEqual([HOOK_RABITQ_MAX_LOAD, HOOK_RABITQ_MAX_LOAD, undefined]);
+  });
+
+  it('cli.mcp-finishes-at-most-two-rabitq-build-batches-before-serving (CON-25)', async () => {
+    const h = harness();
+    const seen: (number | undefined)[] = [];
+    const inner = h.wire;
+    h.wire = async (cwd, o) => {
+      seen.push(o?.rabitqBuildBatches);
+      if (seen.length === 1) throw new Error('stop before serving');
+      return inner(cwd, o);
+    };
+    await h.run(['mcp']);
+    await h.run(['recall', 'port']);
+    // The MCP server leaves the rest of a stopped build to the CLI; commands finish it.
+    expect(HOST_RABITQ_BUILD_BATCHES).toBe(2);
+    expect(seen).toEqual([HOST_RABITQ_BUILD_BATCHES, undefined]);
   });
 
   it('cli.hook-busy-store-logs-degraded', async () => {

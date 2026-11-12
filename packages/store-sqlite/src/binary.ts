@@ -66,13 +66,22 @@ function hadamard(a: Float64Array): void {
  * the Walsh-Hadamard transform. Orthogonal up to scale.
  */
 export function rotate(v: Int8Array): Float32Array {
+  return Float32Array.from(rotate64(v));
+}
+
+/**
+ * `rotate` in double precision: `v` (any numbers) padded to `bitWidth(v.length)` and rotated.
+ * The result is `bitWidth(v.length)` times an orthonormal rotation of `v` (each unnormalised
+ * Hadamard round scales by its square root). The RaBitQ index (CON-25) divides by that.
+ */
+export function rotate64(v: ArrayLike<number>): Float64Array {
   const a = new Float64Array(bitWidth(v.length));
   for (let i = 0; i < v.length; i++) a[i] = v[i] as number;
   for (const s of signsFor(a.length)) {
     for (let i = 0; i < a.length; i++) a[i] = (a[i] as number) * (s[i] as number);
     hadamard(a);
   }
-  return Float32Array.from(a);
+  return a;
 }
 
 /** The binary code of `v`: `bitWidth(v.length) / 8` bytes, the signs of `rotate(v)`. */

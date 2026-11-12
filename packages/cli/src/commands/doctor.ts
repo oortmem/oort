@@ -23,6 +23,7 @@ import {
   SCHEMA_VERSION,
   sqliteSchemaVersion,
   sqliteVectorIndex,
+  loadNativeRabitq,
 } from '@oortmem/store-sqlite';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
 import {
@@ -74,6 +75,7 @@ import {
 import { tempDirs, trustedPath, untrustedText } from '../trust.js';
 import { SKIP_FILE, callDaemon, clearSkip, readSkip } from '../serve-client.js';
 import { socketPathFor } from '../serve-protocol.js';
+import { HOOK_RABITQ_MAX_LOAD } from './hook.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info' | 'unknown';
 
@@ -742,6 +744,31 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
   }
 }
 
+/**
+ * A RaBitQ index too large for the in-process hooks to load (CON-25), with no `oort serve` to
+ * hold it: each prompt's hook then scans the int8 vectors exactly instead, which is slower at
+ * this size than the daemon's loaded engine.
+ */
+function rabitqHooksCheck(ctx: Ctx, checks: Check[]): Check | undefined {
+  if (checks.some((c) => c.group === 'serve' && c.name === 'daemon' && c.status === 'ok')) {
+    return undefined;
+  }
+  let vi: ReturnType<typeof sqliteVectorIndex>;
+  try {
+    vi = sqliteVectorIndex(path.join(resolveHome(ctx.io.env), 'oort.sqlite'));
+  } catch {
+    return undefined; // the store check reports an unreadable store
+  }
+  if (vi?.index !== 'rabitq' || vi.vectors <= HOOK_RABITQ_MAX_LOAD) return undefined;
+  return {
+    group: 'store',
+    name: 'vector-index-hooks',
+    status: 'warn',
+    detail: `the RaBitQ index holds ${vi.vectors} vectors, more than a hook loads for one prompt (${HOOK_RABITQ_MAX_LOAD}: loading takes seconds and hundreds of MB at a million), so the hooks scan the int8 vectors exactly instead. oort serve keeps the index loaded for them`,
+    fix: 'oort serve --detach',
+  };
+}
+
 function isExecutable(file: string): boolean {
   try {
     fs.accessSync(file, fs.constants.X_OK);
@@ -890,6 +917,8 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
           storeConfig: w.config.store,
         };
       },
+      // A diagnosis stays quick: a RaBitQ build under way is reported below, not run here.
+      { rabitqBuildBatches: 0 },
     );
     checks.push({
       group: 'store',
@@ -913,8 +942,10 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
               : before === 3
                 ? 'lexical search now finds Chinese, Japanese, Korean, Thai and Indic words'
                 : before === 4
-                  ? 'it can now hold places (near, within) and keep a binary vector index (store.vectorIndex)'
-                  : 'it can now keep a binary vector index (store.vectorIndex)'
+                  ? 'it can now hold places (near, within) and keep a binary or RaBitQ vector index (store.vectorIndex)'
+                  : before === 5
+                    ? 'it can now keep a binary or RaBitQ vector index (store.vectorIndex)'
+                    : 'it can now keep a RaBitQ vector index (store.vectorIndex: rabitq)'
         }. Then restart any Oort MCP server started before the upgrade (quit and reopen Claude Code, Claude Desktop or Cursor): an older Oort cannot write to the new search index`,
       });
     }
@@ -962,16 +993,43 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
           ? `no agent named: reads and writes your Planet only, no Star (name one with --agent or OORT_AGENT)${keeping}`
           : `acting as ${agent.id} (from ${agent.source === 'flag' ? '--agent' : 'OORT_AGENT'}): reads your Planet and its own Star; new memories go to ${agent.home === 'star' ? `Star ${agent.id}` : 'your Planet'}${agent.home === 'star' ? ', and it never changes your Planet' : ''}${keeping}`,
     });
-    // The dense index the store searches (CON-17): exact int8, or binary codes rescored in int8.
+    // The dense index the store searches: exact int8, binary codes rescored in int8 (CON-17), or
+    // the RaBitQ index (CON-25), whose native engine may be missing on this platform.
     const vi = sqliteVectorIndex(db);
     if (vi !== undefined) {
       const want = storeConfig;
+      const native =
+        vi.index === 'rabitq' || want.vectorIndex === 'rabitq' ? loadNativeRabitq() : undefined;
+      const fallback = native !== undefined && 'error' in native ? native.error : undefined;
+      const kind =
+        vi.index === 'rabitq'
+          ? `rabitq, 1-bit codes with error bounds rescored in int8, ${fallback === undefined ? 'native engine' : 'TypeScript engine'}${vi.building === true ? '; build unfinished (an MCP server or app builds two batches when it starts; dense search scans int8 until any oort command, or oort reindex, finishes it)' : ''}`
+          : vi.index === 'binary'
+            ? 'binary, 1-bit codes rescored in int8'
+            : 'int8, exact';
       checks.push({
         group: 'store',
         name: 'vector-index',
-        status: 'info',
-        detail: `${vi.index === 'binary' ? 'binary, 1-bit codes rescored in int8' : 'int8, exact'} (${vi.vectors} searchable ${vi.vectors === 1 ? 'vector' : 'vectors'}; store.vectorIndex is ${want.vectorIndex}${want.vectorIndex === 'auto' ? `: binary from ${want.binaryAutoThreshold}` : ''})`,
+        status: fallback === undefined ? 'info' : 'warn',
+        detail: `${kind} (${vi.vectors} searchable ${vi.vectors === 1 ? 'vector' : 'vectors'}; store.vectorIndex is ${want.vectorIndex}${want.vectorIndex === 'auto' ? `: binary from ${want.binaryAutoThreshold}` : ''})${
+          fallback === undefined
+            ? ''
+            : `; the native RaBitQ engine is unavailable (${fallback}), so dense search runs the same index in TypeScript, with the same results and a slower scan`
+        }`,
+        ...(fallback !== undefined && {
+          fix: 'reinstall Oort on macOS arm64 or Linux x64/arm64 (glibc), or set store.vectorIndex to binary in ~/.oort/config.json',
+        }),
+        ...(fallback === undefined && vi.building === true && { fix: 'oort reindex' }),
       });
+      if (vi.recentreDue === true) {
+        checks.push({
+          group: 'store',
+          name: 'vector-index-centre',
+          status: 'info',
+          detail: `the RaBitQ index was built from ${vi.builtFrom ?? 0} ${vi.builtFrom === 1 ? 'vector' : 'vectors'}; the store now holds ${vi.vectors}, so its centre is out of date and dense queries read more vectors than they need. Rebuilding reads every vector (minutes at a million) in batches; Oort keeps working meanwhile`,
+          fix: 'oort reindex',
+        });
+      }
     }
     // Oort Cloud consolidates itself; locally the hook drain does, when due (CON-48).
     if (!cloudMode) checks.push(consolidationCheck(home));
@@ -1295,6 +1353,11 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
     ...(await relayChecks(ctx, keys.relayed)),
     ...(await cloudChecks(ctx)),
   ];
+  const hooks = rabitqHooksCheck(ctx, checks);
+  if (hooks !== undefined) {
+    const lastStore = checks.map((c) => c.group).lastIndexOf('store');
+    checks.splice(lastStore + 1, 0, hooks);
+  }
   const exit = doctorExit(checks);
   if (jsonMode(ctx)) {
     const problems = checks.filter((c) => c.status === 'warn' || c.status === 'fail').length;

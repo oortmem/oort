@@ -52,7 +52,7 @@ describe('oort --help: grouped, with examples (CON-107 step 3)', () => {
       expect.arrayContaining(['login', 'cloud', 'share', 'constellation', 'galaxy']),
     );
     expect(names(g.get('Maintenance:')!)).toEqual(
-      expect.arrayContaining(['doctor', 'update', 'models', 'keys', 'reembed']),
+      expect.arrayContaining(['doctor', 'update', 'models', 'keys', 'reembed', 'reindex']),
     );
   });
 

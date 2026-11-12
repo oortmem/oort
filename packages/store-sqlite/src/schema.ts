@@ -10,6 +10,7 @@ import {
   type NodeRef,
 } from '@oortmem/core';
 import { BINARY_AUTO_THRESHOLD, binaryCode, bitWidth } from './binary.js';
+import { startRabitqBuild, dropRabitqIndex, hasRabitqIndex } from './rabitq-store.js';
 
 /**
  * 1: the Phase 1 store, one (org, customer, agent) scope per memory.
@@ -32,8 +33,13 @@ import { BINARY_AUTO_THRESHOLD, binaryCode, bitWidth } from './binary.js';
  *    `memories_vec_bit` (`BIT_TABLE`), is built from the int8 vectors when the store asks for it
  *    (`vectorIndex`) and dropped again by `vectorIndex: 'int8'`. Additive: no row, vector or
  *    index of version 5 is rewritten.
+ * 7: RaBitQ vector index (CON-25). The guard triggers call `oort_writer_v7()` instead, so a
+ *    writer that predates it (which would not keep the index in step) fails loudly. The index
+ *    itself, `memories_rq` and its three companion tables (`rabitq-store.ts`), is built from the
+ *    int8 vectors when the store asks for it (`vectorIndex: 'rabitq'`) and dropped again by
+ *    `int8` or `binary`. Additive: no row, vector or index of version 6 is rewritten.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /**
  * The binary index (schema version 6): one row per searchable (hot or warm) vector, with its
@@ -45,10 +51,13 @@ export const BIT_TABLE = 'memories_vec_bit';
 
 /**
  * The SQL function every write to `memories` calls through the guard triggers. A connection
- * defines it with `defineWriterGuard`; one that does not (an Oort that predates version 6) gets
- * `no such function: oort_writer_v6` and writes nothing.
+ * defines it with `defineWriterGuard`; one that does not (an Oort that predates version 7) gets
+ * `no such function: oort_writer_v7` and writes nothing.
  */
-export const WRITER_GUARD = 'oort_writer_v6';
+export const WRITER_GUARD = 'oort_writer_v7';
+
+/** The version 6 guard's function, which a downgrade to version 6 puts back. */
+const WRITER_GUARD_V6 = 'oort_writer_v6';
 
 const GUARD_TRIGGERS = ['insert', 'update', 'delete'] as const;
 
@@ -57,11 +66,11 @@ export function defineWriterGuard(db: Database): void {
   db.function(WRITER_GUARD, { deterministic: true }, () => 1);
 }
 
-/** Creates the guard triggers on `memories` (idempotent). */
-function createWriterGuard(db: Database): void {
+/** Creates the guard triggers on `memories` (idempotent), calling `fn`. */
+function createWriterGuard(db: Database, fn = WRITER_GUARD): void {
   for (const op of GUARD_TRIGGERS) {
     db.exec(`CREATE TRIGGER IF NOT EXISTS memories_writer_guard_${op}
-      BEFORE ${op.toUpperCase()} ON memories BEGIN SELECT ${WRITER_GUARD}(); END`);
+      BEFORE ${op.toUpperCase()} ON memories BEGIN SELECT ${fn}(); END`);
   }
 }
 
@@ -150,13 +159,19 @@ export function dropBinaryIndex(db: Database): void {
   db.exec(`DROP TABLE IF EXISTS ${BIT_TABLE}`);
 }
 
-/** Which dense index a store uses: `auto` builds the binary one at `BINARY_AUTO_THRESHOLD`. */
-export type VectorIndex = 'auto' | 'int8' | 'binary';
+/**
+ * Which dense index a store uses: `auto` builds the binary one at `BINARY_AUTO_THRESHOLD`;
+ * `rabitq` the RaBitQ one (CON-25).
+ */
+export type VectorIndex = 'auto' | 'int8' | 'binary' | 'rabitq';
+
+/** The values `vectorIndex` takes. */
+export const VECTOR_INDEXES: readonly VectorIndex[] = ['auto', 'int8', 'binary', 'rabitq'];
 
 /**
  * What a migrating open does to the binary index for `want`: build it (`binary`, or `auto` with
- * at least `threshold` searchable vectors), drop it (`int8`), or nothing. `auto` never drops an
- * index it built: a store that shrinks below the threshold keeps it.
+ * at least `threshold` searchable vectors and no RaBitQ index), drop it (`int8`, `rabitq`), or
+ * nothing. `auto` never drops an index it built: a store that shrinks below the threshold keeps it.
  */
 export function binaryIndexPlan(
   db: Database,
@@ -164,13 +179,26 @@ export function binaryIndexPlan(
   threshold = BINARY_AUTO_THRESHOLD,
 ): 'build' | 'drop' | 'keep' {
   const has = hasBinaryIndex(db);
-  if (want === 'int8') return has ? 'drop' : 'keep';
+  if (want === 'int8' || want === 'rabitq') return has ? 'drop' : 'keep';
   if (has) return 'keep';
   if (want === 'binary') return 'build';
+  if (hasRabitqIndex(db)) return 'keep';
   // `max(rid)` bounds the count from above in one index lookup; most stores stop there.
   const rows = db.prepare<[], { n: number | null }>('SELECT max(rid) AS n FROM memories').get();
   if ((rows?.n ?? 0) < threshold) return 'keep';
   return searchableVectors(db) >= threshold ? 'build' : 'keep';
+}
+
+/**
+ * What a migrating open does to the RaBitQ index for `want`: start building it (`rabitq`; the
+ * open goes on with the build after the migration, in batches), drop it (`int8`, `binary`), or
+ * nothing (`auto` keeps one that exists and never builds one). No open rebuilds it: recentring a
+ * store that has outgrown its centroid is `oort reindex` (`reindexSqliteStore`).
+ */
+export function rabitqIndexPlan(db: Database, want: VectorIndex): 'build' | 'drop' | 'keep' {
+  const has = hasRabitqIndex(db);
+  if (want === 'int8' || want === 'binary') return has ? 'drop' : 'keep';
+  return !has && want === 'rabitq' ? 'build' : 'keep';
 }
 
 /**
@@ -674,6 +702,26 @@ export function migrateV6toV5(db: Database): void {
 }
 
 /**
+ * Version 6 to 7, inside the caller's transaction: the guard triggers call `oort_writer_v7`.
+ * Nothing is rewritten; the RaBitQ index is built afterwards only when the store asks for it
+ * (`rabitqIndexPlan`).
+ */
+export function migrateV6toV7(db: Database): void {
+  dropWriterGuard(db);
+  createWriterGuard(db);
+}
+
+/**
+ * Version 7 back to 6, inside the caller's transaction: drops the RaBitQ index and puts the
+ * version 6 guard back. The int8 vectors and a binary index are untouched.
+ */
+export function migrateV7toV6(db: Database): void {
+  dropRabitqIndex(db);
+  dropWriterGuard(db);
+  createWriterGuard(db, WRITER_GUARD_V6);
+}
+
+/**
  * Version 2 to 3, inside the caller's transaction: adds the nullable `judgment` column. Every
  * existing row keeps its rid, FTS row and vector; nothing is rewritten.
  */
@@ -885,6 +933,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV3toV4(db);
       migrateV4toV5(db);
       migrateV5toV6(db);
+      migrateV6toV7(db);
     } else if (version === '2') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 2);
       rebuilding();
@@ -892,19 +941,27 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV3toV4(db);
       migrateV4toV5(db);
       migrateV5toV6(db);
+      migrateV6toV7(db);
     } else if (version === '3') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 3);
       rebuilding();
       migrateV3toV4(db);
       migrateV4toV5(db);
       migrateV5toV6(db);
-    } else if (version === '4' || version === '5' || version === String(SCHEMA_VERSION)) {
-      // Version 4 to 5 adds columns and an empty index, 5 to 6 the writer guard: no rebuild,
-      // and no notice.
-      if (version === '4' || version === '5') {
+      migrateV6toV7(db);
+    } else if (
+      version === '4' ||
+      version === '5' ||
+      version === '6' ||
+      version === String(SCHEMA_VERSION)
+    ) {
+      // Version 4 to 5 adds columns and an empty index, 5 to 6 and 6 to 7 the writer guard: no
+      // rebuild, and no notice.
+      if (version === '4' || version === '5' || version === '6') {
         if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, Number(version));
         if (version === '4') migrateV4toV5(db);
-        migrateV5toV6(db);
+        if (version !== '6') migrateV5toV6(db);
+        migrateV6toV7(db);
       }
       // An index to repair is a migration: an open that may not migrate (a hook) refuses, changing
       // nothing, rather than create an empty index that would then look current.
@@ -942,11 +999,16 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     if (!exists(db, 'memories_vec')) db.exec(vecV2(dimension));
     if (!exists(db, PLACE_TABLE)) rebuildPlaceIndex(db, opts.log);
     createWriterGuard(db);
-    // The binary index is a write: an open that may not migrate (a hook) uses what is there.
+    // The vector indexes are writes: an open that may not migrate (a hook) uses what is there.
+    // At most one of them is kept: the one `vectorIndex` asks for (`auto` keeps either).
     if (opts.migrate !== false) {
-      const plan = binaryIndexPlan(db, opts.vectorIndex ?? 'auto', opts.binaryAutoThreshold);
+      const want = opts.vectorIndex ?? 'auto';
+      const rq = rabitqIndexPlan(db, want);
+      const plan = binaryIndexPlan(db, want, opts.binaryAutoThreshold);
+      if (rq === 'drop') dropRabitqIndex(db);
       if (plan === 'build') buildBinaryIndex(db, dimension, opts.log);
       else if (plan === 'drop') dropBinaryIndex(db);
+      if (rq === 'build') startRabitqBuild(db, dimension);
     }
   }).immediate();
 }
@@ -954,23 +1016,28 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
 /**
  * Takes a store's database back to schema version `to`: 1 for running Oort 0.2.x against it
  * again (the default), 2 for Oort 0.3 to 0.5, 3 for Oort before tokeniser v2, 4 for Oort before
- * spatial memory (0.8), 5 for Oort before the binary vector index. Refuses, changing nothing,
+ * spatial memory (0.8), 5 for Oort before the binary vector index, 6 for Oort before the RaBitQ
+ * index (the RaBitQ index is dropped, a binary index kept). Refuses, changing nothing,
  * when the store holds anything that version cannot represent (see `migrateV2toV1`,
  * `migrateV3toV2` and `migrateV5toV4`). Leaving version 6 drops the binary index and the writer
  * guard; leaving version 4 rebuilds the lexical index with tokeniser v1. No other connection may
  * have the store open. Opening a store never does this: migrations only roll forward.
  */
-export function downgradeSchema(db: Database, to: 1 | 2 | 3 | 4 | 5 = 1): void {
+export function downgradeSchema(db: Database, to: 1 | 2 | 3 | 4 | 5 | 6 = 1): void {
   db.transaction(() => {
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     let version = Number(get.get('schema_version')?.value);
     if (version <= to && version >= 1) return;
-    if (version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) {
+    if (![2, 3, 4, 5, 6, 7].includes(version)) {
       throw new Error(
         `sqlite store: cannot downgrade schema version ${Number.isNaN(version) ? 'unknown' : version}`,
       );
     }
-    if (version === 6) {
+    if (version === 7) {
+      migrateV7toV6(db);
+      version = 6;
+    }
+    if (version === 6 && to < 6) {
       migrateV6toV5(db);
       version = 5;
     }

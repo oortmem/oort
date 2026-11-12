@@ -26,6 +26,15 @@ const DEADLINE_MARGIN_MS = 1000;
  */
 export const HOOK_BUSY_TIMEOUT_MS = 250;
 
+/**
+ * The most RaBitQ vectors an in-process hook loads (CON-25). Loading takes about 6 µs a vector
+ * natively and 14 µs in TypeScript, plus memory (5.8 s and 289 MB at a million), paid on every
+ * prompt by a hook that runs in its own process: past this many (about 0.3 s natively), the hook
+ * scans the int8 vectors exactly instead, and `oort doctor` suggests `oort serve --detach`, whose
+ * long-lived engine pays the load once.
+ */
+export const HOOK_RABITQ_MAX_LOAD = 50_000;
+
 /** The one stderr line a hook prints when the store still needs its schema migration. */
 export const MIGRATION_PENDING_NOTE =
   'Oort is upgrading its store; run `oort doctor` once, then restart any Oort MCP server started before the upgrade\n';
@@ -307,7 +316,11 @@ export async function hookCommand(
         event === 'drain' ? '' : (opts.stdin ?? (await io.readStdin(HOOK_STDIN_CAP_MS)));
       input = stdin;
       const wireStart = performance.now();
-      w = await ctx.wire(inputCwd(stdin) ?? io.cwd, hookWireOptions(event, io.env));
+      // In-process (not `oort serve`): a large RaBitQ index is not loaded for one prompt.
+      w = await ctx.wire(inputCwd(stdin) ?? io.cwd, {
+        ...hookWireOptions(event, io.env),
+        rabitqMaxLoad: HOOK_RABITQ_MAX_LOAD,
+      });
       // Config, store open and key lookup (env, then the keychain): the hook log records it (CON-57).
       const wireMs = performance.now() - wireStart;
       const out = await runWiredHook(event, stdin, w, {

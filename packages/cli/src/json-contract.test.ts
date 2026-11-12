@@ -117,6 +117,7 @@ const CONTRACT = [
   'models verify',
   'models rm',
   'reembed',
+  'reindex',
   'import',
   'export',
 ];
@@ -777,14 +778,14 @@ describe('oort.v1: judgment memory', () => {
   });
 });
 
-describe('oort.v1: local models and reembed', () => {
+describe('oort.v1: local models, reembed and reindex', () => {
   let unregister: () => void;
   beforeAll(() => {
     unregister = registerTinyModels();
   });
   afterAll(() => unregister());
 
-  it('models list, pull, verify, rm; reembed', async () => {
+  it('models list, pull, verify, rm; reembed; reindex', async () => {
     const m = modelsEnv();
     expect(
       ok(await m.run(['models', 'list', '--json']), 'models list').models.length,
@@ -808,8 +809,11 @@ describe('oort.v1: local models and reembed', () => {
       'tiny-embed',
       'tiny-rerank',
     ]);
+    // No RaBitQ index in this store: reindex says so and changes nothing (CON-25).
+    expect(ok(await m.run(['reindex', '--json']), 'reindex')).toMatchObject({ rebuilt: false });
     const cloud = cloudEnv();
     bad(await cloud.run(['reembed', '--json']), 'reembed', 'refused');
+    bad(await cloud.run(['reindex', '--json']), 'reindex', 'refused');
   });
 });
 

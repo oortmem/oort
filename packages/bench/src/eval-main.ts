@@ -12,7 +12,7 @@ import {
   localReranker,
 } from '@oortmem/local-models';
 import { voyageReranker } from '@oortmem/rerank-voyage';
-import { openSqliteStore } from '@oortmem/store-sqlite';
+import { openSqliteStore, VECTOR_INDEXES, type VectorIndex } from '@oortmem/store-sqlite';
 import { cell, loadEvalRows, renderReport, runEval } from './eval.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { FIXTURE_COUNT, FIXTURE_SEED } from './fixture.js';
@@ -30,12 +30,12 @@ import { seedStore } from './seed.js';
 const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>] [--k 5,10]
                  [--min-recall10 <0..1>] [--dimension <n>] [--dense] [--now <iso>]
                  [--abstain-threshold <n>] [--no-gate] [--json]
-                 [--vector-index auto|int8|binary] [--cold-share <0..1>] [--no-adaptive-stop]
+                 [--vector-index auto|int8|binary|rabitq] [--cold-share <0..1>] [--no-adaptive-stop]
        pnpm eval --demo [--json]    synthetic 1500-memory store + the bundled 23-row fixture
        pnpm eval --set multilingual [--embed none|fake|local[:model]|voyage[:model]]
                  [--rerank none|local[:model]|voyage[:model]] [--home <dir>]
                  [--lang en,ja,...] [--condition mono,cross,mixed] [--json] [--out <file>]
-                 [--vector-index auto|int8|binary]
+                 [--vector-index auto|int8|binary|rabitq]
 
 Runs recall for each row against a temp copy of the store (the live store is never written).`;
 
@@ -78,16 +78,16 @@ async function main(): Promise<number> {
   if (values.set !== undefined) {
     if (values.set !== 'multilingual') throw new Error(`unknown --set "${values.set}"`);
     const vi = values['vector-index'];
-    if (vi !== undefined && !['auto', 'int8', 'binary'].includes(vi))
-      throw new Error(`--vector-index must be auto, int8 or binary, got "${vi}"`);
+    if (vi !== undefined && !VECTOR_INDEXES.includes(vi as VectorIndex))
+      throw new Error(`--vector-index must be auto, int8, binary or rabitq, got "${vi}"`);
     return multilingual(values);
   }
   const ks = values.k.split(',').map((s) => Number(s.trim()));
   if (ks.some((k) => !Number.isInteger(k) || k <= 0))
     throw new Error(`--k must be positive integers, got "${values.k}"`);
   const vectorIndex = values['vector-index'];
-  if (vectorIndex !== undefined && !['auto', 'int8', 'binary'].includes(vectorIndex))
-    throw new Error(`--vector-index must be auto, int8 or binary, got "${vectorIndex}"`);
+  if (vectorIndex !== undefined && !VECTOR_INDEXES.includes(vectorIndex as VectorIndex))
+    throw new Error(`--vector-index must be auto, int8, binary or rabitq, got "${vectorIndex}"`);
   const coldShare = Number(values['cold-share']);
   if (!(coldShare >= 0 && coldShare <= 1)) throw new Error('--cold-share must be between 0 and 1');
   const minRecall10 = Number(values['min-recall10']);
@@ -143,7 +143,7 @@ async function main(): Promise<number> {
       ...(now !== undefined ? { now } : {}),
       ...(dense ? { embed: fakeEmbedder(dimension) } : {}),
       ...(values['no-gate'] && { gate: false }),
-      ...(vectorIndex !== undefined && { vectorIndex: vectorIndex as 'auto' | 'int8' | 'binary' }),
+      ...(vectorIndex !== undefined && { vectorIndex: vectorIndex as VectorIndex }),
       ...(coldShare > 0 && { coldShare }),
       ...(values['no-adaptive-stop'] && { recall: { adaptiveStop: 'off' as const } }),
       ...(values['abstain-threshold'] !== undefined
@@ -218,7 +218,7 @@ async function multilingual(values: {
     ...(embed !== undefined && { embed }),
     ...(rerank !== undefined && { rerank }),
     ...(values['vector-index'] !== undefined && {
-      vectorIndex: values['vector-index'] as 'auto' | 'int8' | 'binary',
+      vectorIndex: values['vector-index'] as VectorIndex,
     }),
     log: (m) => process.stderr.write(`${m}\n`),
   });

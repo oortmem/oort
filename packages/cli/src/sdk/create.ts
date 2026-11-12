@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { closeCloudPool } from '../cloud-http.js';
-import { wireEngine, type Engine } from '../wire.js';
+import { HOST_RABITQ_BUILD_BATCHES, wireEngine, type Engine } from '../wire.js';
 import * as cloud from './cloud.js';
 import { Aborted, abortable, type Ctx } from './context.js';
 import {
@@ -420,6 +420,8 @@ export async function createOortWith(options: OortOptions, internals: Internals)
         mode: o.mode ?? 'auto',
         projectWarning: o.project === undefined,
         cloudKeepAlive: o.fetch === undefined,
+        // An app's startup does not wait out a stopped RaBitQ build; the CLI finishes it.
+        rabitqBuildBatches: HOST_RABITQ_BUILD_BATCHES,
         ...(o.projectConfig !== undefined && { projectConfig: o.projectConfig }),
         ...(o.migrate !== undefined && { migrate: o.migrate }),
         ...(o.timeoutMs !== undefined && { cloudTimeoutMs: o.timeoutMs }),
