@@ -156,10 +156,10 @@ pnpm bench --suite links [--count 100000,1000000] [--queries 200] [--repeats 3]
   interrupted build), a different generator version, count or seed rebuilds it, and `--rebuild`
   forces it. The 1M store takes about 2 GB of disk and long to build on a busy machine.
 - **Warm-up**: `pnpm bench` measures on a `frozen()` store whose `recordAccess` does nothing, so a
-  learned pair could never form during measurement. The build therefore runs 500 recalls (`--warm-up
-<n>` with `--build-only`) on the
-  unwrapped store first, with access recording live and, once `recall.links` exists, links on, from
-  a query sample disjoint from the measured one; only then is the store frozen. When the store
+  learned pair could never form during measurement. The build therefore first runs 500 recalls
+  (`--warm-up <n>` with `--build-only`) on the unwrapped store, with access recording live and,
+  once `recall.links` exists, links on, from a query sample disjoint from the measured one; only
+  then is the store frozen. When the store
   schema version or the links capability changes (a newer build opens the cached store), only the
   warm-up runs again.
 - **Paths**: `lexical`, `fast` (fake embedder, no reranker) and `full` (fake embedder and a
