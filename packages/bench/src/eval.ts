@@ -421,6 +421,30 @@ export interface EvalRun extends EvalReport {
   links?: LinksMode;
 }
 
+/**
+ * `--min-recall10`: every run that falls under the bar, cold and warm, for every links mode (an
+ * empty list passes). A bar of 0 checks nothing.
+ */
+export function belowMinRecall10(runs: EvalRun[], min: number): string[] {
+  if (!(min > 0)) return [];
+  const out: string[] = [];
+  for (const run of runs) {
+    const label = `links ${run.links ?? 'off'}`;
+    const passes: [string, EvalReport | undefined][] = [
+      [label, run],
+      [`${label} (warm)`, run.warm],
+    ];
+    for (const [name, r] of passes) {
+      if (r === undefined) continue;
+      const r10 = r.groups['overall']?.recallAt[10];
+      if (r10 === null || r10 === undefined || r10 < min) {
+        out.push(`${name}: recall@10 ${cell(r10)}`);
+      }
+    }
+  }
+  return out;
+}
+
 /** Questions compared for the warm-up's disjointness check: case and spacing do not count. */
 const normalised = (q: string): string => q.trim().toLowerCase().replace(/\s+/g, ' ');
 

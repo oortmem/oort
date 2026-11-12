@@ -13,7 +13,7 @@ import {
 } from '@oortmem/local-models';
 import { voyageReranker } from '@oortmem/rerank-voyage';
 import { openSqliteStore, VECTOR_INDEXES, type VectorIndex } from '@oortmem/store-sqlite';
-import { cell, loadEvalRows, renderRun, runEval, type EvalRun } from './eval.js';
+import { belowMinRecall10, loadEvalRows, renderRun, runEval, type EvalRun } from './eval.js';
 import { parseLinkModes } from './links.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { demoMemories } from './fixture.js';
@@ -178,9 +178,9 @@ async function main(): Promise<number> {
         ? `${JSON.stringify(single ?? runs, null, 2)}\n`
         : `${runs.map(renderRun).join('\n\n')}\n`,
     );
-    const r10 = runs[0]?.groups['overall']?.recallAt[10];
-    if (minRecall10 > 0 && (r10 === null || r10 === undefined || r10 < minRecall10)) {
-      process.stderr.write(`eval: recall@10 ${cell(r10)} is below --min-recall10 ${minRecall10}\n`);
+    const below = belowMinRecall10(runs, minRecall10);
+    if (below.length > 0) {
+      process.stderr.write(`eval: below --min-recall10 ${minRecall10}: ${below.join('; ')}\n`);
       return 1;
     }
     return 0;

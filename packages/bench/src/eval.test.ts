@@ -9,6 +9,7 @@ import { makeMemory, seedCold, vec } from '@oortmem/core/store-conformance';
 import Database from 'better-sqlite3';
 import { openSqliteStore } from '@oortmem/store-sqlite';
 import {
+  belowMinRecall10,
   computeMetrics,
   loadEvalRows,
   renderReport,
@@ -430,6 +431,21 @@ describe('eval', () => {
     expect(report.groups['multi-hop']?.linkPrecision).toBeCloseTo(1 / 2);
     expect(report.groups['single-fact']?.linkPrecision).toBeNull();
     expect(report.groups['abstention']?.linkPrecision).toBe(0);
+  });
+
+  it('eval.min-recall10-checks-every-links-mode-and-warm-pass', () => {
+    const rows: EvalRow[] = [{ question: 'a', expectedMemoryIds: ['x'] }];
+    const at = (hit: boolean) =>
+      computeMetrics(rows, [{ ids: hit ? ['x'] : ['n'], aboveThreshold: 1 }], [10]);
+    const off = { ...at(true), links: 'off' as const };
+    const all = { ...at(false), links: 'all' as const };
+    expect(belowMinRecall10([off], 0.5)).toEqual([]);
+    // A later mode under the bar fails the run, not only the first.
+    expect(belowMinRecall10([off, all], 0.5)).toEqual(['links all: recall@10 0.000']);
+    // So does a warm pass under the bar.
+    const warm = { ...at(true), links: 'off' as const, warm: at(false) };
+    expect(belowMinRecall10([warm], 0.5)).toEqual(['links off (warm): recall@10 0.000']);
+    expect(belowMinRecall10([off, all], 0)).toEqual([]);
   });
 
   it('eval.multi-hop-category-parses', () => {
