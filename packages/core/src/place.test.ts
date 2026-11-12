@@ -220,24 +220,60 @@ describe('place', () => {
 
   it('place.paths-refuse-invisible-default-ignorable-code-points', () => {
     // `room:B` plus a variation selector looks exactly like `room:B` but never matches it, so
-    // `within` would quietly find less. Every Default_Ignorable_Code_Point is refused.
+    // `within` would quietly find less. Every Default_Ignorable_Code_Point is refused, by its own
+    // check (`invisible`), before the segment pattern would refuse the format characters among them.
     for (const c of [
       '\ufe0f', // VARIATION SELECTOR-16
       '\ufe00', // VARIATION SELECTOR-1
       '\u034f', // COMBINING GRAPHEME JOINER
       '\u{e0100}', // VARIATION SELECTOR-17 (ideographic variation sequences)
       '\u180b', // MONGOLIAN FREE VARIATION SELECTOR ONE
+      '\u17b4', // KHMER VOWEL INHERENT AQ
       '\u3164', // HANGUL FILLER (a letter, and invisible)
-      '\u200d', // ZERO WIDTH JOINER
+      '\u200d', // ZERO WIDTH JOINER, here at the end of a segment
+      '\u200c', // ZERO WIDTH NON-JOINER, likewise
       '\u00ad', // SOFT HYPHEN
+      '\u2060', // WORD JOINER
     ]) {
-      expect(() => checkPlacePath(`room:B${c}`), `U+${c.codePointAt(0)!.toString(16)}`).toThrow(
-        'place.nodeId',
+      const hex = `U+${c.codePointAt(0)!.toString(16)}`;
+      expect(() => checkPlacePath(`room:B${c}`), hex).toThrow(/^place\.nodeId .*invisible/);
+      expect(() => checkPlace({ nodeId: `site:hq/room:B${c}/shelf:1` }), hex).toThrow(
+        /^place\.nodeId .*invisible/,
       );
-      expect(() => checkPlace({ nodeId: `site:hq/room:B${c}/shelf:1` })).toThrow('place.nodeId');
-      expect(() => checkSpatialFilter({ within: `room:B${c}` })).toThrow('within');
+      expect(() => checkSpatialFilter({ within: `room:B${c}` }), hex).toThrow(
+        /^within .*invisible/,
+      );
     }
     // Visible marks that only look like the refused ones still work.
     expect(checkPlacePath('ห้อง:B/कमरा')).toBe('ห้อง:B/कमरा');
+  });
+
+  it('place.paths-keep-joiners-inside-words', () => {
+    // Persian needs ZWNJ between letters; Devanagari and Sinhala conjuncts take a ZWJ after the
+    // virama; Malayalam's older chillu spelling ends a word with virama + ZWJ.
+    for (const p of [
+      'خانه\u200cی:B', // Persian: خانه + ZWNJ + ی
+      '\u0915\u094d\u200d\u0937:1', // Devanagari: क् + ZWJ + ष
+      '\u0d28\u0d4d\u200d:1', // Malayalam chillu: ന് + ZWJ
+      'site:hq/\u0dc1\u0dca\u200d\u0dbb\u0dd3', // Sinhala: ශ් + ZWJ + රී
+    ]) {
+      expect(checkPlacePath(p)).toBe(p.normalize('NFC'));
+      expect(checkSpatialFilter({ within: p })).toEqual({ within: p.normalize('NFC') });
+    }
+    // Anywhere else a joiner is an invisible character.
+    for (const p of [
+      '\u200cخانه:B', // leading
+      '\u200dक्ष:1',
+      'خانه\u200c', // trailing
+      'خانه\u200c/x', // trailing, before the next segment
+      '\u0915\u094d\u200d', // trailing after the virama
+      'خانه\u200c\u200cی:B', // doubled
+      '\u0915\u094d\u200d\u200d\u0937:1',
+      'room:B\u200c\u200d1', // between a letter and a digit, via another joiner
+      'room\u200d:B', // after a letter, before a symbol
+      '1\u200c2', // between digits
+    ]) {
+      expect(() => checkPlacePath(p), JSON.stringify(p)).toThrow(/^place\.nodeId .*invisible/);
+    }
   });
 });

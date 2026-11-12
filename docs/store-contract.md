@@ -250,11 +250,22 @@ each placed memory's region with its map and frame as an auxiliary column. `near
 the R*Tree, then an exact distance check (`oort_place_distance`, a deterministic SQL function the
 store registers). A version 4 store gains the columns and the empty R*Tree in one transaction,
 after a `pre-v5` copy (`listBackups(path, 'pre-v5')`); nothing is rewritten and the lexical index
-is not rebuilt. Older versions go up through 4 to 5 in the same transaction. A version 5 store
-whose R*Tree is missing gets it back on open, rebuilt from the stored places. Each place is
-checked with core's `checkPlace`, as a write is; one that does not parse or does not check (from a
-crafted or damaged copy, such as a negative size) is left out, so `near` never finds it, and the
-open does not fail.
+is not rebuilt. Older versions go up through 4 to 5 in the same transaction.
+
+A stored place that does not parse or does not pass `checkPlace` (from a crafted or damaged copy
+of the database, such as a negative size or a null pose) is handled the same way everywhere:
+
+- **`near`** never returns it. The exact distance check checks the place first, and a place that
+  fails has no distance, so the recall goes on without it.
+- **Reads** (`get`, `list`, recall hits, and so exports) return the memory without its place, so
+  nothing hands back a place that an import would refuse.
+- **`within`** matches the separately stored path column (`place_node`), not the JSON place. A
+  memory whose place fails the check can still be found by `within` if that column holds a
+  matching path; it is returned without its place.
+- **A missing R\*Tree** is rebuilt on open from the stored places, each checked with `checkPlace`
+  as a write is. Places that fail are left out of the index, the open does not fail, and the store
+  logs one line: "sqlite store: N stored places failed the place check and are not searchable by
+  near".
 
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the

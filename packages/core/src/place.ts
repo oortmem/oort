@@ -80,16 +80,28 @@ export const MAX_METRES = 1e7;
 /** How R*Tree rows and queries span "all of z". */
 export const ALL_Z = 1e30;
 
-/** A segment starts with a letter, digit or symbol, then may carry marks (Devanagari, Thai vowel signs). */
-const SEGMENT = /^[\p{L}\p{N}._:@-][\p{L}\p{M}\p{N}._:@-]{0,63}$/u;
+/**
+ * A segment starts with a letter, digit or symbol, then may carry marks (Devanagari, Thai vowel
+ * signs) and the joiners ZWNJ and ZWJ (where `JOINER_IN_WORD` allows them).
+ */
+const SEGMENT = /^[\p{L}\p{N}._:@-][\p{L}\p{M}\p{N}._:@\u200c\u200d-]{0,63}$/u;
 /**
  * Invisible characters a segment may not hold: every Unicode Default_Ignorable_Code_Point, such as
  * the variation selectors (U+FE00 to U+FE0F, U+E0100 to U+E01EF), the combining grapheme joiner
- * (U+034F), Mongolian free variation selectors and the Hangul fillers. Most are marks or letters
- * that `SEGMENT` would let through, and `room:B` followed by one looks exactly like `room:B` but
- * never matches it.
+ * (U+034F), Mongolian free variation selectors, Khmer's inherent vowels (U+17B4, U+17B5) and the
+ * Hangul fillers. `room:B` followed by one looks exactly like `room:B` but never matches it. The
+ * one exception is `JOINER_IN_WORD`.
  */
 const INVISIBLE = /\p{Default_Ignorable_Code_Point}/u;
+/**
+ * The joiners a word needs, which `INVISIBLE` then does not see: ZWNJ or ZWJ between two letters
+ * or marks (Persian `خانه` + ZWNJ + `ی`, Devanagari `क्` + ZWJ + `ष`), and a ZWJ after a mark
+ * that ends a word before a digit or symbol of the same segment (Malayalam's older chillu
+ * spelling, `ന്` + ZWJ + `:1`). A joiner that leads or ends a segment, or sits next to another
+ * joiner, stays invisible and is refused.
+ */
+const JOINER_IN_WORD =
+  /(?<=[\p{L}\p{M}])[\u200c\u200d](?=[\p{L}\p{M}])|(?<=\p{M})\u200d(?=[\p{N}._:@-])/gu;
 const WORD = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/;
 const MAX_SEGMENTS = 16;
 const MAX_PATH = 256;
@@ -135,7 +147,7 @@ function frame(v: unknown, at: string): string {
 /**
  * A place path, checked and in Unicode NFC (so a decomposed `é` is stored and filtered as the
  * composed one): 1 to 16 segments of 1 to 64 letters (with their combining marks), digits and
- * `. _ : @ -`, with no invisible (default-ignorable) characters.
+ * `. _ : @ -`, with no invisible (default-ignorable) characters but the joiners inside a word.
  */
 export function checkPlacePath(raw: unknown, at = 'place.nodeId'): string {
   const v = typeof raw === 'string' ? raw.normalize('NFC') : raw;
@@ -143,14 +155,18 @@ export function checkPlacePath(raw: unknown, at = 'place.nodeId'): string {
     fail(at, `must be a place path of at most ${MAX_PATH} characters`);
   }
   const segments = v.split('/');
+  // Before the segment pattern, so a soft hyphen or a stray joiner is named for what it is.
+  if (segments.some((s) => INVISIBLE.test(s.replace(JOINER_IN_WORD, '')))) {
+    fail(
+      at,
+      'cannot hold invisible characters such as variation selectors, or a joiner outside a word',
+    );
+  }
   if (segments.length > MAX_SEGMENTS || !segments.every((s) => SEGMENT.test(s))) {
     fail(
       at,
       `must be 1 to ${MAX_SEGMENTS} segments joined by /, each 1 to 64 letters, digits and . _ : @ -`,
     );
-  }
-  if (INVISIBLE.test(v)) {
-    fail(at, 'cannot hold invisible characters such as variation selectors or joiners');
   }
   return v;
 }

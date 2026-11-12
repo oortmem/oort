@@ -70,8 +70,18 @@ reported by field name:
   are normalised to Unicode NFC when checked, so a decomposed `é` is stored and filtered as the
   composed one. Invisible characters are refused: every Unicode Default_Ignorable_Code_Point, such
   as the variation selectors (U+FE00 to U+FE0F) and the combining grapheme joiner (U+034F), since
-  `room:B` followed by one looks exactly like `room:B` but would never match it. `kind:name` is
-  the convention (`room:B`), not a rule. Comparison is otherwise exact and case-sensitive.
+  `room:B` followed by one looks exactly like `room:B` but would never match it. The exception is
+  the joiners a word needs: ZWNJ or ZWJ between two letters or marks (Persian `خانه` + ZWNJ +
+  `ی`, Devanagari `क्` + ZWJ + `ष`), and a ZWJ after a mark that ends a word before a digit or
+  symbol (Malayalam `ന്` + ZWJ + `:1`, the older chillu spelling). A joiner that leads or ends a
+  segment, or sits next to another joiner, is refused. The trade-off:
+  Mongolian free variation selectors (U+180B to U+180F), ideographic variation sequences (U+E0100
+  to U+E01EF) and Khmer's inherent vowels (U+17B4, U+17B5) cannot appear in a place name; write
+  the name without them. `kind:name` is the convention (`room:B`), not a rule. Comparison is
+  otherwise exact and case-sensitive.
+- **Before 0.9.0:** stores written by unreleased builds of `main` may hold place paths with
+  characters refused since. Those places read back as none and should be tagged again. Spatial
+  memory was never released, so there is no migration.
 - **`mapId`, `frame`:** one word of 1 to 128 characters (letters, digits, `. _ : @ / -`). `frame`
   `odom` is refused, in any case: odometry drifts, so its coordinates mean nothing a day later.
 - **Numbers** are finite. Coordinates are within ±10,000 km of the origin, `radius`, `dx`, `dy`,
@@ -167,9 +177,11 @@ passes it.
 - Lexical: the predicate joins the FTS query. Dense: vec0's KNN takes `id IN (<spatial
   subquery>)`, so k is taken after the filter, inside sqlite-vec.
 - Place-less queries use the same statements as before: no new cost when no filter is given.
-- A version 5 store whose R\*Tree is missing gets it back on open, filled from the stored
-  places. Each is checked with `checkPlace`, as a write is, and one that does not parse or does
-  not check (a crafted or damaged copy) is left out of the index instead of failing the open.
+- A stored place that does not parse or does not pass `checkPlace` (a crafted or damaged copy)
+  is never returned by `near` (the exact check checks it first and gives it no distance) and
+  reads back as no place. `within` reads the `place_node` column, not the JSON, so it can still
+  return such a memory when that column matches, without its place. A missing R\*Tree is rebuilt
+  on open from the checked places; those that fail are left out and counted in one log line.
 - **Migration 4 → 5:** two `ALTER TABLE … ADD COLUMN`s and the empty R\*Tree, after the usual
   `pre-v5` backup. No rebuild. **Downgrade 5 → 4** (`downgradeSqliteStore({ to: 4 })`) drops them,
   and refuses while any memory has a place. An older Oort refuses a version 5 store, as before.

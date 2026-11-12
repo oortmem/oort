@@ -47,9 +47,9 @@ function placeTable(): string {
  * went missing gets back every memory with coordinates, not an empty index that `near` would
  * read as "nothing here". Each place is checked with core's `checkPlace`, as a write is: one that
  * does not parse or does not check (a crafted or damaged copy, say a negative size) is left out,
- * so `near` never finds it, instead of failing the open.
+ * so `near` never finds it, instead of failing the open. Their number is logged.
  */
-function rebuildPlaceIndex(db: Database): void {
+function rebuildPlaceIndex(db: Database, log: ((message: string) => void) | undefined): void {
   db.exec(placeTable());
   const insert = db.prepare(
     `INSERT INTO ${PLACE_TABLE} (rid, min_x, max_x, min_y, max_y, min_z, max_z, map_key)
@@ -60,16 +60,23 @@ function rebuildPlaceIndex(db: Database): void {
       'SELECT rid, place FROM memories WHERE place IS NOT NULL',
     )
     .all(); // read first: better-sqlite3 cannot write while a statement iterates
+  let skipped = 0;
   for (const { rid, place } of rows) {
     let b: ReturnType<typeof placeBox>;
     try {
       b = placeBox(checkPlace(JSON.parse(place)));
     } catch {
+      skipped++;
       continue;
     }
     if (b !== undefined) {
       insert.run(rid, b.minX, b.maxX, b.minY, b.maxY, b.minZ, b.maxZ, b.mapKey);
     }
+  }
+  if (skipped > 0) {
+    log?.(
+      `sqlite store: ${skipped} stored ${skipped === 1 ? 'place' : 'places'} failed the place check and ${skipped === 1 ? 'is' : 'are'} not searchable by near`,
+    );
   }
 }
 
@@ -762,7 +769,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       recordLexical(db, opts.icu ?? lexicalIcuVersion());
     }
     if (!exists(db, 'memories_vec')) db.exec(vecV2(dimension));
-    if (!exists(db, PLACE_TABLE)) rebuildPlaceIndex(db);
+    if (!exists(db, PLACE_TABLE)) rebuildPlaceIndex(db, opts.log);
   }).immediate();
 }
 
