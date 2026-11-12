@@ -24,8 +24,8 @@ import { bitWidth, rotate64 } from './binary.js';
 /**
  * How many standard errors the bounds allow (RaBitQ's epsilon0, the paper's 1.9). The estimate's
  * error is close to normal: 1.9 leaves about 3% of vectors outside their bound on one side, and a
- * missed vector must also be one of the k best, so the measured recall@10 against the exact scan
- * was 1.000 (design §6).
+ * missed vector must also be one of the k best: measured, recall@10 against the exact scan was
+ * 0.999 at one million synthetic vectors and identical on the eval corpora (design §6, §11).
  */
 export const RABITQ_EPSILON = 1.9;
 

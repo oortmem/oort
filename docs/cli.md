@@ -1298,9 +1298,11 @@ index instead of the binary one: the same 1-bit codes, but compared with a 4-bit
 query, with an error bound per memory. Only the memories whose bound can still reach the top k are
 rescored with their int8 vectors, best first, until none can; at most 10 × k, as the binary index
 reads. On the bench's corpora that was about half the binary index's reads, with the same
-results as the exact scan (see [the design note](design/2026-11-12-rabitq-index.md#11-measurements)).
-The codes live in the store file; each process that searches holds them in memory (about 100
-bytes a memory, 100 MB at a million). The scan runs in a native engine on macOS (Apple silicon)
+results as the exact scan; at a million memories, 199 reads a query against 500, and a dense
+query took 103 ms against 766 ms with everything cached (see
+[the design note](design/2026-11-12-rabitq-index.md#11-measurements)).
+The codes live in the store file; each process that searches holds them in memory (about 110
+bytes a memory, 112 MB at a million). The scan runs in a native engine on macOS (Apple silicon)
 and Linux x64 and arm64 (glibc 2.35 or newer), shipped with Oort; elsewhere the same index runs in
 TypeScript, with the same results but a slower scan, and `oort doctor` warns and says why
 (`OORT_RABITQ_NATIVE=0` turns the native engine off). The build prints `Building the RaBitQ vector

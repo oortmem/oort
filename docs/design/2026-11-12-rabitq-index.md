@@ -62,12 +62,12 @@ CREATE TABLE memories_rq (           -- one row per hot or warm memory with a ve
   rid INTEGER PRIMARY KEY,           -- memories.rid
   seq INTEGER NOT NULL,              -- the change number of its last write
   node_key TEXT NOT NULL,            -- as memories_vec: the node, project and author keys
-  project_key TEXT,
-  author_key TEXT,
+  project_key TEXT NOT NULL,
+  author_key TEXT NOT NULL,
   code BLOB NOT NULL,                -- W / 8 bytes (W the dimension rounded up to a power of two)
   factors BLOB NOT NULL              -- three float32: a, b, e (§4)
 );
-CREATE INDEX memories_rq_seq ON memories_rq (seq);
+CREATE INDEX memories_rq_by_seq ON memories_rq (seq);
 CREATE TABLE memories_rq_vec (rid INTEGER PRIMARY KEY, embedding BLOB NOT NULL); -- int8, rescoring
 CREATE TABLE memories_rq_gone (seq INTEGER PRIMARY KEY, rid INTEGER NOT NULL);   -- removals
 CREATE TABLE memories_rq_meta (key TEXT PRIMARY KEY, value);
@@ -106,7 +106,7 @@ locking, crash recovery, backup and erasure story, for a read path that is alrea
 
 **In memory, per process, to search.** Scanning a million codes through SQLite's row machinery
 would cost more than the scan itself. A process loads every row into an engine on its first dense
-query (about 100 bytes a vector: the code, the factors, the row id and three small keys) and
+query (about 110 bytes a vector at 512 dimensions: the code, the factors, the row id and three small keys) and
 then, at the start of each dense query, applies only what changed since:
 
 - `memories_rq.seq` is a change counter, bumped by every write in the writing transaction;
@@ -217,7 +217,8 @@ error, is close to a standard normal: on 3,000 clustered 384-dimension vectors a
 standard errors on either side and under 0.6% beyond 3. A miss needs a true top-k vector whose
 estimate is too low by more than 1.9 standard errors (about 3%, one side) and whose upper bound
 then also falls below the k-th exact score, which most such vectors still reach. Measured on the
-synthetic and eval corpora, recall@10 against the exact scan was 1.000 (§11).
+eval corpora the results were the exact scan's, and at one million synthetic vectors recall@10
+was 0.999 (§11).
 
 A lower epsilon reads fewer vectors and misses more. Measured on 100,000 synthetic vectors in
 2,000 clusters during the design (`k` = 10, without the budget): epsilon 1.9 read 402 vectors a
@@ -267,7 +268,7 @@ slot with the last one and zeroes the vacated slot, and `clear` (index dropped, 
 zeroes the whole engine. `memories_rq_gone` keeps the removed row id and a change number, two
 integers, for the last 100,000 changes: no text, vector, code, key or memory id. A test reads
 every table after a forget and finds nothing but those two integers
-(`rabitq.forget-leaves-no-residue`).
+(`rabitq.forget-leaves-no-code-vector-or-id-and-the-engine-drops-it`).
 
 As for every other table of the store, SQLite reuses the freed pages rather than overwriting them
 at once; the store does not set `secure_delete` today for any table, so this index neither adds
@@ -299,7 +300,7 @@ conformance suites run against a store with `vectorIndex: 'rabitq'` twice, once 
 
 ## 11. Measurements
 
-Machine: the development MacBook (Apple silicon), Node 24, sqlite-vec 0.1.9, release build of the
+Machine: the development MacBook (Apple silicon), Node 26, sqlite-vec 0.1.9, release build of the
 native engine. "Reads" are int8 vectors read to rescore, per dense query.
 
 **Recall@10 and rescoring reads, end to end (`pnpm eval`).**
@@ -319,8 +320,70 @@ so half the calls read nothing for either index: the binary index's 250 is 500 (
 every vector (60, under its 500) and the bound has little left to skip; the two corpora whose
 stores are larger than 10 × k are the first two rows, and there the target is met.
 
-**At one million memories (`OORT_BENCH_RAM=1`).** RAM1M_TABLE
+**At one million memories (`OORT_BENCH_RAM=1`).** 1,000,000 warm memories, 512-dimension clustered synthetic vectors (2,000 clusters), 200 queries of
+`k` = 50, the same file and queries for every index (`packages/store-sqlite/src/ram-bench.test.ts`;
+the RaBitQ index is built on the file after the binary one is measured, which drops it).
+
+| | int8 (exact) | binary, 10 × | rabitq, native | rabitq, TypeScript |
+| --- | --- | --- | --- | --- |
+| recall@10 against the exact int8 top 10 | 1 | 1.000 | **0.999** | 0.999 (same ids as native) |
+| rescoring reads per query: mean / p50 / p95 / max | | 500 | **199 / 304 / 443 / 482** | same |
+| queries stopped by the read budget | | | 0 of 200 | |
+| dense query p50 / p95, warm | 757 / 1275 ms | 766 / 2043 ms | **103 / 295 ms** | 725 / 2171 ms |
+| memory the query scans | 544.4 MB of pages | 101.2 MB of pages (149.9 MB with the id map) | **111.8 MB resident engine** | same |
+| loading the engine (first dense query of a process) | | | 5.8 s, RSS +289 MB while loading | 13.7 s |
+| on disk | | 61.5 MB codes, 559.4 MB rescore column | 132.2 MB codes and keys, 559.4 MB `memories_rq_vec` | |
+| build from the int8 vectors | | 134 s | 658 s | |
+
+- **Reads: 60% fewer** than the binary index at one million (199 against 500 a query on average),
+  and never more: the budget never had to stop a query. The mean is under the median: a large share of
+  queries stop well under 200 reads, where the bounds separate the top 50 early, and the rest
+  need 300 to 480.
+- **Latency.** The native scan of a million codes plus about 200 point reads took 103 ms at the
+  median, against 766 ms for the binary index and 757 ms for the exact scan, with everything in
+  the page cache. The machine was not idle (the int8 timings were 694 ms in CON-17's run and 757
+  ms here), so read these as a comparison within one run. The TypeScript engine is about as fast
+  as the binary index (725 ms).
+- **RAM.** The engine keeps 111.8 MB resident (codes 64 bytes, factors 12, row id and three keys
+  16, the row id map and spare capacity the rest), about what the binary index's query scans from
+  the page cache (101.2 MB), and it is held once per process that searches rather than shared
+  through the page cache. Loading it reads every `memories_rq` row once; the process's RSS rose
+  289 MB during the load, a transient of reading the rows on top of the engine itself.
+- **Build.** 658 s at one million in this run, against 134 s for the binary index. The build is
+  two passes over `memories_vec` and writes 690 MB in one transaction; at 100,000 vectors it took
+  5.9 s and at 400,000 25 s (binary: 7.0 s and 17.9 s), so the one-million figure is mostly the
+  machine running out of page cache for a 1.9 GB file inside one transaction, not the encoding
+  (15 µs a vector). It holds the write lock throughout (§12).
+
+At 20,000 vectors in 2,000 clusters of 10 (`OORT_BENCH_RAM_N=20000`), the flat-tail case of §4,
+the bound alone read 1,406 vectors a query on average; this run predates the budget, which now
+stops those queries at 500.
 
 ## 12. Not met, and limits
 
-NOT_MET
+- **Recall: met.** 99.5% of the reference's recall@10 was the target. On both eval corpora the
+  RaBitQ index returned exactly the int8 scan's results (100%, all 38 multilingual conditions and
+  the demo); at one million synthetic vectors 0.999 of the exact top 10. The reference is the
+  exact int8 scan: the store keeps int8 vectors only, so there is no float32 path to compare with,
+  and CON-17 measured against the same reference.
+- **Reads, more than 50% fewer than the binary index: met where the binary index reads its full
+  10 × k.** 53.8% fewer on the demo corpus, 52.2% on the multilingual mixed store, 60.2% at one
+  million. Over all 38 multilingual conditions it is 43.0%: most of those stores hold 60 memories,
+  fewer than 10 × k, so the binary index reads the whole store and neither index can skip much.
+  The target is not relaxed; that row is reported as it is.
+- **Prebuilt binaries: built in the release workflow, not yet published.** The workflow builds
+  macOS arm64, Linux x64 and Linux arm64 from source on their own runners and refuses to pack
+  without all three. Only the macOS arm64 binary has been built and tested so far (locally); the
+  Linux ones are first built by CI on the pull request (x64) and by the next release (both).
+- **The TypeScript path: kept,** with the same results, as the fallback and the reference.
+- **Build time.** 658 s at one million in one transaction that holds the write lock: other
+  writers (the hooks, the MCP server) wait up to their busy timeout and then fail their write for
+  that turn. The binary index has the same shape at 134 s. It runs only when someone sets
+  `vectorIndex: rabitq` (or on a recentre, at most a few times over a store's growth). Building
+  in batches of committed transactions, resumable, is a follow-up.
+- **RAM per process.** Each process that runs dense queries holds its own engine (111.8 MB at
+  one million). Two processes (an MCP server and an `oort` command) hold two copies; the page
+  cache the binary index uses is shared. Memory-mapping a shared copy would need a sidecar file,
+  which this design avoids (§3).
+- **Erasure inside SQLite's free pages** is as for the rest of the store (§8).
+- **`auto` does not pick it** (§9).
