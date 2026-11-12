@@ -17,12 +17,14 @@ Recall quality in 12 languages against English (CON-110; design: `docs/design/20
 
 ## Files
 
-| File                     | What                                                                                                     |
-| ------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `facts.jsonl`            | 60 facts' language-neutral metadata: type, entities, `validFrom`, and `supersedes` for knowledge updates |
-| `<lang>.corpus.jsonl`    | `{"fact", "text"}`: each fact as a memory in that language                                               |
-| `<lang>.questions.jsonl` | Eval rows (`eval/format.md`) with `lang`; ids are `<lang>-<fact>`, such as `pt-BR-u03a`                  |
-| `baseline-lexical.json`  | The lexical-only result, checked by `src/multilingual.test.ts` on every run                              |
+| File                         | What                                                                                                     |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `facts.jsonl`                | 60 facts' language-neutral metadata: type, entities, `validFrom`, and `supersedes` for knowledge updates |
+| `<lang>.corpus.jsonl`        | `{"fact", "text"}`: each fact as a memory in that language                                               |
+| `<lang>.questions.jsonl`     | Eval rows (`eval/format.md`) with `lang`; ids are `<lang>-<fact>`, such as `pt-BR-u03a`                  |
+| `baseline-lexical.json`      | The lexical-only result, checked by `src/multilingual.test.ts` on every run                              |
+| `unrelated.jsonl`            | 65 developer prompts no memory answers, five per language, each written in it (gate-miss rerank)         |
+| `unrelated-translated.jsonl` | The earlier 3 unrelated prompts, translated into all 13 languages; read after `unrelated.jsonl`          |
 
 The 60 facts are 40 single facts (services, ports, owners, procedures, decisions and preferences of a
 fictional product team) and 10 knowledge updates, each an older and a newer version. The service
@@ -202,7 +204,38 @@ Three changes after review, and the numbers again from the same recorded scores 
   dense 0.48 to 0.52 and rerank 0.76 to 0.77: the choice is stable.
 - **Unrelated prompts are now 65 distinct developer tasks,** five per language, each written in
   its language rather than translated (`unrelated.jsonl`). The 3-prompt numbers above stay as they
-  were measured; rerunning with the 65 prompts needs their embeddings and up to 380 rerank calls.
+  were measured; the rerun with the 65 is below.
+
+### The 65 written prompts, both sets, and a larger store, 2026-11-12
+
+One more live run with Voyage (377 rerank calls, 67 embedding requests, about US$0.03), then
+replays from its recorded scores (no calls).
+
+**The 65 written prompts alone choose dense 0.49, rerank 0.70.** Held out: cross recall@10 0.911
+(in-sample 0.939), unrelated prompts injected 2 → 2 of 190 rows, abstention questions answered
+23 → 23, every bar met; the folds chose rerank 0.70 to 0.71. But 0.70 is the lowest rerank floor
+that passes on them (0.68 injects 1 more prompt and answers 2 more questions), and replayed on the
+earlier 3 translated prompts it injects 14 of their 114 rows against 6 without the escalation:
+it fails the bar there. 0.74 is the lowest floor that passes on both.
+
+**Both sets together (104 prompts) choose dense 0.49, rerank 0.76: the floors that ship.** The
+translated set now sits beside the written one (`unrelated-translated.jsonl`), and the
+calibration reads both, so a rerun chooses on both.
+
+| Unrelated set | Floors      | Cross R@10, without | In-sample | Held-out | Unrelated injected | Abstention answered | Rerank rate, rows / unrelated |
+| ------------- | ----------- | ------------------- | --------- | -------- | ------------------ | ------------------- | ----------------------------- |
+| 65 written    | 0.49 / 0.70 | 0.750               | 0.939     | 0.911    | 2 → 2 of 190       | 23 → 23             | 17% / 21%                     |
+| Both, 104     | 0.49 / 0.76 | 0.750               | 0.900     | 0.883    | 8 → 8 of 304       | 23 → 23             | 20% / 33%                     |
+
+- **With both sets held out,** cross recall@10 is 0.883 (es 0.900, pt-BR 0.967, de 0.867, fr
+  0.867, ja 0.833, zh-Hans 0.867), every bar met, English mono unchanged (0.933). On the 65
+  written prompts alone, the shipped pair injects nothing more either (2 → 2, 23 → 23).
+- **It fires often.** At dense 0.49 the escalation reranks 23% of the written unrelated prompts
+  (59% of the translated ones), 13% of answerable questions and 9% of English mono questions: well
+  above 10% of prompts.
+- **Store size barely moves it.** On the mixed store with 10,000 synthetic distractors in place
+  of 1,500, it reranks 16.0% of rows (15.6% before), 41.5% of the unrelated prompts (38.5%) and
+  6.9% of answerable questions (6.9%). The dense floor decides; this pass made no rerank calls.
 
 ## Baseline, tokeniser v1 (2026-11-06)
 

@@ -346,6 +346,27 @@ describe('the prompt hook recall in cloud mode (CON-101)', () => {
     );
   });
 
+  it('cloud.gate-miss-back-off-ignores-a-refusal-dated-in-the-future', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-gm-'));
+    const url = 'https://api-future.example.test';
+    // A cache file written by a clock running ahead (or edited): it must not keep the back-off
+    // on past a day.
+    const file = path.join(home, 'cache', 'cloud-gate-miss.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify({ [url]: Date.now() + 30 * 24 * 3600_000 })}\n`);
+    expect(gateMissSupport(home, url).refused()).toBe(false);
+    // The same in this process: a refusal remembered at a time after now does not count.
+    const ahead = gateMissSupport(home, `${url}/p`, () => Date.now() + 48 * 3600_000);
+    ahead.remember();
+    expect(gateMissSupport(home, `${url}/p`).refused()).toBe(false);
+    // Inside the day it still holds.
+    const now = gateMissSupport(home, `${url}/q`);
+    now.remember();
+    expect(gateMissSupport(home, `${url}/q`, () => Date.now() + 23 * 3600_000).refused()).toBe(
+      true,
+    );
+  });
+
   it('cloud.only-a-refusal-of-rerank-turns-gate-miss-off', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-gm-'));
     let calls = 0;

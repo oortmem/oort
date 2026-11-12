@@ -342,22 +342,33 @@ async function recallRows(
 
 /**
  * Prompts a developer types that no memory in the set answers ("why does this test fail on
- * CI?"), five per language, 65 distinct tasks (`eval/multilingual/unrelated.jsonl`), each
- * written in its language rather than translated. A prompt hook sees mostly
- * these, so anything recalled for them is a false injection (CON-131).
+ * CI?"), so anything recalled for them is a false injection (CON-131). A prompt hook sees mostly
+ * these. Per language: five written in it, 65 distinct tasks (`unrelated.jsonl`), then the
+ * earlier three, translated into every language (`unrelated-translated.jsonl`, when `dir` has
+ * it and `translated` is not false). The floors are chosen on both: the written ones alone pick
+ * a rerank floor that injects more of the translated ones than the plain gate does.
  */
-export function unrelatedRows(dir = MULTILINGUAL_DIR): Map<Language, EvalRow[]> {
+export function unrelatedRows(
+  dir = MULTILINGUAL_DIR,
+  opts: { translated?: boolean } = {},
+): Map<Language, EvalRow[]> {
   const out = new Map<Language, EvalRow[]>();
-  for (const r of jsonl(path.join(dir, 'unrelated.jsonl'))) {
-    const lang = r['lang'] as Language;
-    const question = r['question'];
-    if (!(LANGUAGES as readonly string[]).includes(lang) || typeof question !== 'string') {
-      throw new Error(`unrelated.jsonl: bad row ${JSON.stringify(r)}`);
+  const files = ['unrelated.jsonl'];
+  if (opts.translated !== false && fs.existsSync(path.join(dir, 'unrelated-translated.jsonl'))) {
+    files.push('unrelated-translated.jsonl');
+  }
+  for (const file of files) {
+    for (const r of jsonl(path.join(dir, file))) {
+      const lang = r['lang'] as Language;
+      const question = r['question'];
+      if (!(LANGUAGES as readonly string[]).includes(lang) || typeof question !== 'string') {
+        throw new Error(`${file}: bad row ${JSON.stringify(r)}`);
+      }
+      out.set(lang, [
+        ...(out.get(lang) ?? []),
+        { question, expectedMemoryIds: [], category: 'abstention', lang },
+      ]);
     }
-    out.set(lang, [
-      ...(out.get(lang) ?? []),
-      { question, expectedMemoryIds: [], category: 'abstention', lang },
-    ]);
   }
   return out;
 }

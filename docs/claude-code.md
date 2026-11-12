@@ -189,11 +189,13 @@ cache file, `~/.oort/cache/cloud-gate-miss.json`, for the hooks after it). The h
 | `gateMissRerankFloor` | 0.76 | The rerank score a memory needs to be injected after the escalation. Lower injects more unrelated memories. |
 
 The floors were calibrated on the multilingual eval with voyage-3.5-lite and rerank-3-lite (see
-`packages/bench/eval/multilingual/README.md`, "Gate-miss rerank"). With them, cross-language
-recall@10 averaged 0.90 over the six gating languages, against 0.75 without the escalation, with no
-more abstention or unrelated-prompt false positives. The cost is latency on the prompts it fires
-for: one rerank call, about 275 ms at p50 and 490 ms at p95 measured from Europe. It fired for 49%
-of unrelated developer prompts in that eval and 9% of English questions. Its rerank waits up to
+`packages/bench/eval/multilingual/README.md`, "Gate-miss rerank"). Held out (each part of the eval
+judged at floors chosen without it), cross-language recall@10 averaged 0.88 over the six gating
+languages, against 0.75 without the escalation, with no more abstention or unrelated-prompt false
+positives. The cost is latency on the prompts it fires for: one rerank call, about 270 ms at p50
+and 470 ms at p95 measured from Europe. It fired for 23% of unrelated developer prompts written in
+the eval's languages (42% on a 10,000-memory store), 13% of answerable questions and 9% of
+English questions. Its rerank waits up to
 `promptRerankBudgetMs`; past it, nothing is injected (`rerank-timeout`). The floors suit those
 Voyage models only: with other models, recalibrate (`pnpm --filter @oortmem/bench run
 calibrate:gate-miss`).

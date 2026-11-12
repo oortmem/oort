@@ -89,6 +89,18 @@ describe('gate-miss rerank (CON-131)', () => {
     expect(() => OortConfig.parse({ recall: { rerankWhen: 'sometimes' } })).toThrow();
   });
 
+  it('config: the floors are the choice with both unrelated sets, judged held out', () => {
+    // packages/bench/eval/multilingual/README.md, "Gate-miss rerank": voyage-3.5-lite@512 and
+    // rerank-3-lite, chosen by bench `gate-miss.ts` over the 65 written unrelated prompts and the
+    // earlier 39 translated ones, and judged 5-fold held out. The 65 alone pick a rerank floor of
+    // 0.70, which injects 8 more of the translated prompts than the plain gate does.
+    const r = OortConfig.parse({}).recall;
+    expect({ dense: r.gateMissDenseFloor, rerank: r.gateMissRerankFloor }).toEqual({
+      dense: 0.49,
+      rerank: 0.76,
+    });
+  });
+
   it('a gate miss with a plausible dense match is reranked and gated on the rerank floor', async () => {
     const store = await storeOf([SPANISH, FAR]);
     const rerank = reranker({ es: 0.8, far: 0.1 });

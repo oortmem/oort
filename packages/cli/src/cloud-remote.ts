@@ -77,7 +77,13 @@ export function gateMissSupport(
   now: () => number = Date.now,
 ): GateMissSupport {
   const file = path.join(home, 'cache', 'cloud-gate-miss.json');
-  const fresh = (at: number | undefined) => at !== undefined && now() - at < GATE_MISS_RETRY_MS;
+  // A refusal counts for a day after it, never before: a time ahead of the clock (a clock that
+  // ran fast, or an edited file) would otherwise keep the back-off on for good.
+  const fresh = (at: number | undefined) => {
+    if (at === undefined) return false;
+    const age = now() - at;
+    return age >= 0 && age < GATE_MISS_RETRY_MS;
+  };
   return {
     refused() {
       if (fresh(refusedInProcess.get(apiUrl))) return true;

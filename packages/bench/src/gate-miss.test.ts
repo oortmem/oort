@@ -191,9 +191,9 @@ describe('gate-miss calibration (CON-131)', () => {
       rerank,
       extraRows: unrelated,
     });
-    // 34 rows per language and condition, plus 5 unrelated prompts each (no English cross).
-    expect(records.length).toBe((34 + 5) * 3);
-    expect(records.filter((r) => r.unrelated).length).toBe(15);
+    // 34 rows per language and condition, plus 8 unrelated prompts each (no English cross).
+    expect(records.length).toBe((34 + 8) * 3);
+    expect(records.filter((r) => r.unrelated).length).toBe(24);
     const misses = records.filter((r) => r.gateMiss?.scored.length);
     expect(misses.length).toBe(calls.length);
     for (const m of misses) for (const s of m.gateMiss?.scored ?? []) expect(s.score).toBe(0.5);
@@ -204,7 +204,7 @@ describe('gate-miss calibration (CON-131)', () => {
       set.add(`${r.lang}/${r.condition}`);
       items.set(r.item as string, set);
     }
-    expect(items.size).toBe(34 + 5 * 2);
+    expect(items.size).toBe(34 + 8 * 2);
     // A question in en/mono, de/mono, de/cross; a prompt in its own language's conditions.
     for (const [item, where] of items) {
       expect(where.size).toBe(item.startsWith('q:') ? 3 : item.startsWith('u:en:') ? 1 : 2);
@@ -214,10 +214,23 @@ describe('gate-miss calibration (CON-131)', () => {
     expect(off?.rerankRate).toBe(0);
   });
 
-  it('has five unrelated prompts in every language, none a translation of another', () => {
-    const u = unrelatedRows();
+  it('has five written unrelated prompts in every language, none a translation of another', () => {
+    const u = unrelatedRows(undefined, { translated: false });
     for (const lang of LANGUAGES) expect(u.get(lang)?.length).toBe(5);
     const all = [...u.values()].flat().map((r) => r.question);
     expect(new Set(all).size).toBe(65);
+  });
+
+  it('adds the earlier three translated prompts per language after the written five', () => {
+    // The floors are chosen on both sets: the written ones alone pick a rerank floor that
+    // injects more of the translated ones than the plain gate does (README, "Gate-miss rerank").
+    const written = unrelatedRows(undefined, { translated: false });
+    const u = unrelatedRows();
+    for (const lang of LANGUAGES) {
+      expect(u.get(lang)?.length).toBe(8);
+      expect(u.get(lang)?.slice(0, 5)).toEqual(written.get(lang));
+    }
+    const translated = [...u.values()].flatMap((rows) => rows.slice(5).map((r) => r.question));
+    expect(new Set(translated).size).toBe(39);
   });
 });
