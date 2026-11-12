@@ -27,6 +27,7 @@ const { values } = parseArgs({
     'cache-dir': { type: 'string' },
     rebuild: { type: 'boolean', default: false },
     'build-only': { type: 'boolean', default: false },
+    'warm-up': { type: 'string' },
   },
 });
 
@@ -72,6 +73,9 @@ async function links(): Promise<void> {
         log,
         ...(cacheDir !== undefined && { cacheDir }),
         ...(values.rebuild && { rebuild: true }),
+        ...(values['warm-up'] !== undefined && {
+          warmUp: positive(values['warm-up'], '--warm-up'),
+        }),
       });
       log(`${count}: ${s.built ? 'built' : 'cached'} at ${s.dir}`);
       await s.close();

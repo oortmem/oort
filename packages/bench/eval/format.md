@@ -142,7 +142,7 @@ the gather step's own p99 reported. The default `pnpm bench` store (10,000 memor
 gives a gather step nothing to gather, so this suite builds link-shaped stores:
 
 ```sh
-pnpm bench --suite links --build-only               # build (or reuse) the 100k and 1M stores
+pnpm bench --suite links --build-only [--warm-up 500]  # build (or reuse) the 100k and 1M stores
 pnpm bench --suite links [--count 100000,1000000] [--queries 200] [--repeats 3]
                          [--paths lexical,fast,full] [--links off|on|both] [--rebuild] [--json]
 ```
@@ -156,7 +156,8 @@ pnpm bench --suite links [--count 100000,1000000] [--queries 200] [--repeats 3]
   interrupted build), a different generator version, count or seed rebuilds it, and `--rebuild`
   forces it. The 1M store takes about 2 GB of disk and long to build on a busy machine.
 - **Warm-up**: `pnpm bench` measures on a `frozen()` store whose `recordAccess` does nothing, so a
-  learned pair could never form during measurement. The build therefore runs 500 recalls on the
+  learned pair could never form during measurement. The build therefore runs 500 recalls (`--warm-up
+<n>` with `--build-only`) on the
   unwrapped store first, with access recording live and, once `recall.links` exists, links on, from
   a query sample disjoint from the measured one; only then is the store frozen. When the store
   schema version or the links capability changes (a newer build opens the cached store), only the
