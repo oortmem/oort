@@ -1,4 +1,5 @@
 import { filterFor } from '@oortmem/claude-code';
+import { forgetMemory, type ForgetOutcome } from '@oortmem/core';
 import {
   copiesLabel,
   everywhereTarget,
@@ -41,13 +42,41 @@ interface ForgetData {
   stillShared: SharedCopy[];
   /** Every Constellation named above, with its name. */
   constellations: SharedCopy[];
+  /** Local: later memories that restated it, rewritten without it (CON-144). */
+  rewritten: string[];
+  /** Local: later memories written from it that were left as they were; they may still repeat it. */
+  notRewritten: string[];
+}
+
+const WHY: Record<ForgetOutcome['notRewritten'][number]['reason'], string> = {
+  'no-writer': 'no memory writer is set up (oort doctor says why)',
+  failed: 'the memory writer failed',
+  'not-writable': 'it is outside what this agent may change',
+};
+
+/**
+ * What a local forget did to the memories written from it (CON-144): one line per memory
+ * rewritten, and one per memory left as it was, with the command that forgets it too.
+ * True when every one was rewritten.
+ */
+export function reportSuccessors(ctx: Ctx, r: ForgetOutcome): boolean {
+  for (const m of r.rewritten) {
+    ctx.io.out(`Rewrote ${short(m.id)} without it: "${shown(clip(m.text, 80))}"\n`);
+  }
+  for (const m of r.notRewritten) {
+    const msg = `${short(m.id)} was written from it and may still repeat it, because ${WHY[m.reason]}. Check it with \`oort inspect ${m.id}\`, or forget it too: \`oort forget ${m.id}\`.`;
+    ctx.io.out(`${msg}\n`);
+    noteWarning(ctx, 'not-rewritten', msg);
+  }
+  return r.notRewritten.length === 0;
 }
 
 const ids = (copies: readonly SharedCopy[]): string[] => copies.map((c) => c.constellation);
 
 /**
  * `oort forget <id> [--yes] [--everywhere]`: deletes a memory everywhere (main record and cold
- * copy). In Oort Cloud a copy shared to a Constellation is the team's memory and stays: the
+ * copy). Locally, the later memories of its chain that restated it are rewritten without it
+ * (CON-144), and any that could not be are named, with exit 3. In Oort Cloud a copy shared to a Constellation is the team's memory and stays: the
  * question (and `--json`'s warnings) say where, and `--everywhere` withdraws the copies only you
  * contributed to, filing a removal request with the maintainers where others contributed (CON-67).
  */
@@ -90,9 +119,21 @@ export async function forgetCommand(
       ctx.io.out('Kept.\n');
       return 0;
     }
+    let local: ForgetOutcome | undefined;
     if (cloud !== undefined) await cloud.forget(m.id);
-    else await w.store.forget(writeGrantFor(w, m), m.id);
+    else {
+      local = await forgetMemory(
+        {
+          store: w.store,
+          ...(w.write !== undefined && { write: w.write }),
+          ...(w.embed !== undefined && { embed: w.embed }),
+        },
+        writeGrantFor(w, m),
+        m.id,
+      );
+    }
     ctx.io.out(`Forgot ${m.id}.\n`);
+    const complete = local === undefined || reportSuccessors(ctx, local);
     if (live.length > 0) {
       ctx.io.out(
         `Still shared to ${copiesLabel(live)}: that copy is the team's now. \`oort forget ${m.id} --everywhere\` withdraws it.\n`,
@@ -112,9 +153,12 @@ export async function forgetCommand(
         unreachable: [],
         stillShared: live,
         constellations: live,
+        rewritten: local?.rewritten.map((x) => x.id) ?? [],
+        notRewritten: local?.notRewritten.map((x) => x.id) ?? [],
       });
     }
-    return 0;
+    // A memory that may still repeat it is a partial success (exit 3, as `--everywhere`).
+    return complete ? 0 : 3;
   });
 }
 
@@ -180,6 +224,8 @@ async function forgetEverywhere(
           [...r.withdrawn, ...r.requested, ...r.unreachable].map((c) => [c.constellation, c]),
         ).values(),
       ],
+      rewritten: [],
+      notRewritten: [],
     });
   }
   // A copy not reached is a partial success (exit 3, as `import`): run it again later.

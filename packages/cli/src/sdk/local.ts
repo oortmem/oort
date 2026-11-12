@@ -3,6 +3,7 @@ import {
   VERSION,
   activation,
   consolidateGrant,
+  forgetMemory,
   grantWrites,
   observe as coreObserve,
   type Memory,
@@ -263,8 +264,23 @@ export async function forget(ctx: Ctx, id: string, everywhere: boolean): Promise
   }
   const m = await findLocal(ctx, id);
   writable(ctx, m);
-  await storeOf(ctx).forget(ctx.principal.grant, m.id);
-  return { forgotten: m.id };
+  const e = ctx.engine;
+  // The later memories that restated it are rewritten without it (CON-144).
+  const r = await forgetMemory(
+    {
+      store: storeOf(ctx),
+      ...(e.write !== undefined && { write: e.write }),
+      ...(e.embed !== undefined && { embed: e.embed }),
+      now: ctx.now(),
+    },
+    ctx.principal.grant,
+    m.id,
+  );
+  return {
+    forgotten: m.id,
+    ...(r.rewritten.length > 0 && { rewritten: r.rewritten.map((x) => x.id) }),
+    ...(r.notRewritten.length > 0 && { notRewritten: r.notRewritten.map((x) => x.id) }),
+  };
 }
 
 export async function pin(ctx: Ctx, id: string, pinned: boolean): Promise<PinResult> {

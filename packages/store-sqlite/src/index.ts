@@ -18,6 +18,7 @@ import {
   grantReads,
   grantWrites,
   isCurrent,
+  isZeroVector,
   nodeKey,
   nodeOf,
   resolveAddressing,
@@ -640,6 +641,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       conn.pragma(`busy_timeout = ${busyTimeoutMs}`);
       enableWal(conn, busyTimeoutMs);
       conn.pragma('foreign_keys = ON');
+      // A deleted or rewritten row is overwritten with zeros, not left in a free page (CON-140).
+      conn.pragma('secure_delete = ON');
       sqliteVec.load(conn);
       defineWriterGuard(conn);
       const from = schemaVersionOf(conn);
@@ -762,6 +765,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ),
     ftsDelete: db.prepare<[number]>(`DELETE FROM ${FTS_TABLE} WHERE rowid = ?`),
+    ftsOptimize: db.prepare(`INSERT INTO ${FTS_TABLE} (${FTS_TABLE}) VALUES ('optimize')`),
     ftsInsert: db.prepare<[number, string, string, string]>(
       `INSERT INTO ${FTS_TABLE} (rowid, text, stub, entities) VALUES (?, ?, ?, ?)`,
     ),
@@ -850,7 +854,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        )
        SELECT knn.id AS id, knn.distance AS distance, m.tier AS tier, m.updated_at AS updated_at
        FROM knn CROSS JOIN memories m ON m.id = knn.id
-       WHERE m.tier != 'cold' AND ${grantSql(1)}
+       WHERE m.tier != 'cold' AND knn.distance IS NOT NULL AND ${grantSql(1)}
        ORDER BY knn.distance, m.updated_at DESC, m.id`,
     );
 
@@ -933,7 +937,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        SELECT scored.id AS id, scored.distance AS distance, m.tier AS tier,
               m.updated_at AS updated_at
        FROM scored CROSS JOIN memories m ON m.id = scored.id
-       WHERE m.tier != 'cold' AND ${grantSql(1)}
+       WHERE m.tier != 'cold' AND scored.distance IS NOT NULL AND ${grantSql(1)}
        ORDER BY scored.distance, m.updated_at DESC, m.id
        LIMIT @k`,
     );
@@ -1036,7 +1040,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     q.vecDelete.run(m.id);
     const b = bit();
     b?.remove.run(m.id);
-    if (m.embedding !== undefined) {
+    // A zero vector has no direction (cosine is NaN): it is not kept (CON-141).
+    if (m.embedding !== undefined && !isZeroVector(m.embedding)) {
       const bytes = toBytes(m.embedding);
       const node = nodeKey(nodeOf(address));
       const project = projectKey(address.projectId);
@@ -1087,11 +1092,33 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     if (row !== undefined) {
       q.ftsDelete.run(row.rid);
       q.placeDelete.run(row.rid);
+      // A contentless FTS5 delete only marks the row deleted: its terms stay in the index's
+      // segments until they merge. Merging them all drops them now (CON-140); with
+      // `secure_delete` the pages they leave are zeroed. Rows rewritten earlier (`upsert`) are
+      // purged here too.
+      q.ftsOptimize.run();
     }
     q.vecDelete.run(id);
     bit()?.remove.run(id);
     return q.coldDelete.get(id)?.path;
   });
+
+  /**
+   * Copies the WAL into the database and truncates it (CON-140): the WAL still holds the pages
+   * as they were before a forget, until a later write happens to overwrite them. Best effort and
+   * never waiting: a reader in another process (the MCP server, a hook) keeps it from finishing,
+   * and then the WAL is reset by a later checkpoint instead.
+   */
+  function truncateWal(): void {
+    db.pragma('busy_timeout = 0');
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch {
+      // Busy or locked: a later checkpoint copies and resets it.
+    } finally {
+      db.pragma(`busy_timeout = ${busyTimeoutMs}`);
+    }
+  }
 
   const recordAccessTx = db.transaction((grant: Grant, ids: string[], at: Date) => {
     for (const id of ids) {
@@ -1240,6 +1267,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       assertGrant(grant);
       const file = forgetTx.immediate(grant, id);
       if (file !== undefined) blobs.remove(file);
+      truncateWal();
     },
 
     /** BM25 over normalised tokens, any-token match; `score` is -bm25 (higher is better). */
@@ -1270,7 +1298,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       assertGrant(grant);
       checkDimension(v, 'dense');
       const patterns = live(grant.readNodes);
-      if (k <= 0 || patterns.length === 0) return [];
+      // A zero query has no direction: it matches nothing (CON-141).
+      if (k <= 0 || patterns.length === 0 || isZeroVector(v)) return [];
       const kk = Math.min(Math.floor(k), MAX_KNN);
       const sp = searchOpts?.spatial;
       const runs = denseRuns(patterns, v, kk, hasSpatialFilter(sp) ? sp : undefined);

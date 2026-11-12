@@ -148,6 +148,38 @@ describe('oort doctor', () => {
     expect(d.check('store', 'backup')?.detail).toContain('oort.sqlite.pre-v2.');
   });
 
+  it('doctor.lists-every-copy-forget-cannot-reach (CON-140)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      log: () => {},
+    });
+    await s.close();
+    // Two migrations' copies and a downgrade's, as older versions left them.
+    const copies = [
+      'oort.sqlite.pre-v3.20261001T000000000Z',
+      'oort.sqlite.pre-v4.20261002T000000000Z',
+      'oort.sqlite.pre-downgrade.20261003T000000000Z',
+    ];
+    for (const c of copies) fs.copyFileSync(db, path.join(h.home, c));
+    const row = (await doctor(h)).check('store', 'backup');
+    expect(row).toMatchObject({ status: 'info' });
+    expect(row?.detail).toContain('3 copies of the store taken before a schema migration');
+    expect(row?.detail).toContain('oort forget does not reach them');
+    for (const c of copies) expect(row?.detail).toContain(`~/oort-home/${c}`);
+    expect(row?.fix).toBe(
+      `delete them once Oort works as before: rm ${copies.map((c) => `~/oort-home/${c}`).join(' ')}`,
+    );
+    // Deleting is the person's call: never a command doctor offers to run.
+    expect(row?.fixCommand).toBeUndefined();
+  });
+
   it('doctor.says-it-is-rebuilding-the-search-index (CON-110)', async () => {
     const h = harness();
     h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
@@ -324,8 +356,25 @@ describe('oort doctor', () => {
     expect(c?.fix).toContain('oort install claude-code');
     // One warning for one cause: the generic "another path" row is not added on top.
     expect(d.check('hooks', 'claude-code')?.status).not.toBe('warn');
-    expect(d.human.io.stdout).toContain('fix: oort update, or oort install claude-code');
-    expect(c?.fixCommand).toBe('oort update');
+    // Run where no one can answer `oort update`'s question (Claude Code's `!` prompt, a script):
+    // the fix says --yes, so it runs as printed.
+    expect(d.human.io.stdout).toContain('fix: oort update --yes, or oort install claude-code');
+    expect(c?.fixCommand).toBe('oort update --yes');
+  });
+
+  it('doctor.suggests-plain-oort-update-on-a-terminal', async () => {
+    const h = harness({ trusted: true });
+    installHooks(path.join(h.root, '.claude', 'settings.json'), fakeBin(h, '0.1.0', 'old'));
+    const io = { env: { HOME: h.root, OORT_HOME: h.home }, tty: true, stdoutTTY: true };
+    const deps = { fetch: fakeRelay().fetchFn };
+    const kc = memoryKeychain().kc;
+    const human = await h.run(['doctor'], io, kc, deps);
+    expect(human.io.stdout).toContain('fix: oort update, or oort install claude-code');
+    // --json is read by tools, which never answer a question.
+    const json = await h.run(['doctor', '--json'], io, kc, deps);
+    const report = data(json.io.stdout, 'doctor') as { checks: Check[] };
+    const bin = report.checks.find((c) => c.group === 'hooks' && c.name === 'claude-code bin');
+    expect(bin?.fixCommand).toBe('oort update --yes');
   });
 
   it('doctor.hook-binary-that-is-gone-fails-and-is-never-run', async () => {
@@ -973,10 +1022,12 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
     const m = machine('0.1.0');
     const d = await doctor(m.h, {}, undefined, undefined, m.running);
     const bin = d.check('hooks', 'claude-code bin');
-    expect(bin).toMatchObject({ status: 'warn', fixCommand: 'oort update' });
+    expect(bin).toMatchObject({ status: 'warn', fixCommand: 'oort update --yes' });
     expect(bin?.detail).toContain('0.1.0');
     expect(bin?.detail).toContain(VERSION);
-    expect(bin?.fix).toContain('oort update, or ~/oort-home/cli/bin/oort install claude-code');
+    expect(bin?.fix).toContain(
+      'oort update --yes, or ~/oort-home/cli/bin/oort install claude-code',
+    );
     expect(d.check('hooks', 'claude-code copy')).toBeUndefined();
   });
 
@@ -1015,7 +1066,7 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
     writeUpdateCache(h.home, { checkedAt: Date.now(), latest: '99.0.0' });
     const d = await doctor(h);
     expect(d.human.io.stdout).toContain(`Oort 99.0.0 is available (you have ${VERSION})`);
-    expect(d.human.io.stdout).toContain('try: oort update');
+    expect(d.human.io.stdout).toContain('try: oort update --yes');
     expect(d.json.io.stdout).not.toContain('99.0.0');
     // Off: no line at all.
     const off = await doctor(h, { OORT_NO_UPDATE_CHECK: '1' });

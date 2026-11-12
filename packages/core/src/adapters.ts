@@ -141,6 +141,8 @@ export interface MemoryStore {
   /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
    * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).
+   * An all-zero `m.embedding` has no direction and is not kept: the memory is
+   * stored without one, so only lexical search finds it (CON-141).
    * Rejects with `GrantError`, writing nothing, when `m.scope` is outside
    * `grant.write` or a record with `m.id` already exists at another address.
    */
@@ -173,6 +175,7 @@ export interface MemoryStore {
    * Every implementation rejects with a `RangeError` whose message names both
    * dimensions when `v.length` differs from the store's dimension (a store
    * without a fixed dimension compares against its stored embeddings).
+   * An all-zero `v` matches nothing: it resolves to `[]` (CON-141).
    * With `opts.spatial`, only memories that pass it (see `SearchOptions`).
    */
   dense(grant: Grant, v: Int8Array, k: number, opts?: SearchOptions): Promise<Hit[]>;
@@ -345,4 +348,11 @@ export interface MemoryWriter {
    * when present, observe writes first and reconciles each memory on its own (CON-56).
    */
   writeMany?(obs: Observation, max: number): Promise<WrittenMemory[]>;
+  /**
+   * `memory` rewritten so it no longer states anything that only `forgotten` said, such as the
+   * old value in "changed from 3000 to 8080" (CON-144). Everything else stays as written, in the
+   * memory's language; a memory with nothing to take out comes back unchanged. Optional; without
+   * it, `forgetMemory` reports the memories it could not rewrite.
+   */
+  rewriteWithout?(memory: Memory, forgotten: Memory): Promise<WrittenMemory>;
 }

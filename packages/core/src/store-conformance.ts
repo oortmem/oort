@@ -428,6 +428,15 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
       expect(hits[0]?.tier).toBe('warm');
     });
 
+    it('dense-zero-vector-matches-nothing (CON-141)', async () => {
+      await store.upsert(TG, makeMemory({ id: 'x', embedding: vec(100, 0, 0, 0) }));
+      await store.upsert(TG, makeMemory({ id: 'zero', embedding: vec(0, 0, 0, 0) }));
+      // Not kept: the memory is stored without a vector.
+      expect((await store.get(TG, 'zero'))?.embedding).toBeUndefined();
+      expect(ids(await store.dense(localGrant(LOCAL), vec(0, 100, 0, 0), 10))).toEqual(['x']);
+      expect(await store.dense(localGrant(LOCAL), vec(0, 0, 0, 0), 10)).toEqual([]);
+    });
+
     it('scope-excludes-other-org-customer-agent', async () => {
       const text = 'Deploys go through auth-service-8080';
       const embedding = vec(1, 1, 1, 1);

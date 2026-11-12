@@ -172,6 +172,20 @@ rejects it, and every store rejects it at run time with a `TypeError`.
   them is a `GrantError`.
 - **Cursors belong to the principal.** All projects of one principal share them; other principals
   never see them.
+- **A zero vector matches nothing** (CON-141). An all-zero vector has no direction,
+  so cosine similarity is undefined for it. `upsert` keeps no all-zero `embedding` (the memory is
+  stored without one, and only lexical search finds it), and `dense` with an all-zero query
+  resolves to `[]`, so recall answers from lexical search alone. The SQLite store applies the
+  query check in `dense` itself, before it chooses an index, so every index it has goes through
+  it; a zero vector an older version stored is never returned either.
+- **`forget` leaves no copy in the SQLite file** (CON-140). The store runs with
+  `PRAGMA secure_delete`, so a deleted or rewritten row is overwritten with zeros instead of
+  staying in a free page. `forget` also merges the lexical index, which drops the terms of deleted
+  rows (FTS5 otherwise keeps them until its segments merge on their own), and truncates the WAL
+  when no other connection is reading. The text an edit replaced stays in the lexical index's
+  segments until that next merge, though no search finds it. Copies of the file the store made
+  before a migration (`oort.sqlite.pre-v*`), the cold blob files the filesystem has freed, and any
+  backup you took are out of its reach: `oort doctor` lists the migration copies.
 
 ## Places (spatial memory)
 

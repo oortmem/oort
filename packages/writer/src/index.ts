@@ -18,15 +18,19 @@ import {
   type WrittenMemory,
 } from '@oortmem/core';
 import {
+  REWRITE_SYSTEM_PROMPT,
   WRITER_MANY_SYSTEM_PROMPT,
   WRITER_SYSTEM_PROMPT,
+  buildRewritePrompt,
   buildWriterManyPrompt,
   buildWriterPrompt,
 } from './prompt.js';
 
 export {
+  REWRITE_SYSTEM_PROMPT,
   WRITER_MANY_SYSTEM_PROMPT,
   WRITER_SYSTEM_PROMPT,
+  buildRewritePrompt,
   buildWriterManyPrompt,
   buildWriterPrompt,
 };
@@ -263,8 +267,32 @@ export function aiSdkWriter(opts: {
 }): MemoryWriter {
   const maxOutputTokens = opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
-  async function attempt(messages: { role: 'user'; content: string }[]): Promise<WriterOutput> {
-    return generate(messages, WRITER_SYSTEM_PROMPT, outputSchema);
+  async function attempt(
+    messages: { role: 'user'; content: string }[],
+    system = WRITER_SYSTEM_PROMPT,
+  ): Promise<WriterOutput> {
+    return generate(messages, system, outputSchema);
+  }
+
+  /** One memory from `content` under `system`, with one corrective retry for a schema failure. */
+  async function one(content: string, system: string): Promise<WrittenMemory> {
+    const user = { role: 'user' as const, content };
+    let first: unknown;
+    try {
+      return scrubbed(await attempt([user], system));
+    } catch (e) {
+      if (!isSchemaFailure(e)) throw wrap(e, opts.relay === true);
+      throwIfUnusable(e);
+      first = e;
+    }
+    const fields = failingFields(first);
+    try {
+      return scrubbed(await attempt([user, { role: 'user', content: correction(fields) }], system));
+    } catch (e) {
+      if (!isSchemaFailure(e)) throw wrap(e, opts.relay === true);
+      throwIfUnusable(e);
+      throw new WriterOutputError(failingFields(e));
+    }
   }
 
   async function generate<T>(
@@ -290,23 +318,13 @@ export function aiSdkWriter(opts: {
       if (action !== 'ADD' && prior === undefined) {
         throw new TypeError(`MemoryWriter.write: ${action} requires a prior memory`);
       }
-      const user = { role: 'user' as const, content: buildWriterPrompt(obs, action, prior) };
-      let first: unknown;
-      try {
-        return scrubbed(await attempt([user]));
-      } catch (e) {
-        if (!isSchemaFailure(e)) throw wrap(e, opts.relay === true);
-        throwIfUnusable(e);
-        first = e;
-      }
-      const fields = failingFields(first);
-      try {
-        return scrubbed(await attempt([user, { role: 'user', content: correction(fields) }]));
-      } catch (e) {
-        if (!isSchemaFailure(e)) throw wrap(e, opts.relay === true);
-        throwIfUnusable(e);
-        throw new WriterOutputError(failingFields(e));
-      }
+      return one(buildWriterPrompt(obs, action, prior), WRITER_SYSTEM_PROMPT);
+    },
+
+    async rewriteWithout(memory, forgotten) {
+      const w = await one(buildRewritePrompt(memory, forgotten), REWRITE_SYSTEM_PROMPT);
+      // The memory keeps its own type (a judgment's too, which the writer's schema cannot name).
+      return { ...w, type: memory.type };
     },
 
     async writeMany(obs, max): Promise<WrittenMemory[]> {

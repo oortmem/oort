@@ -270,6 +270,10 @@ class RememberResult:
 @dataclass(**_FROZEN)
 class ForgetResult:
     forgotten: str
+    #: Local: later memories that restated it, rewritten without it.
+    rewritten: Optional[List[str]] = None
+    #: Local: later memories written from it, left as they were; they may still repeat it.
+    not_rewritten: Optional[List[str]] = None
     #: Cloud ``everywhere``: Constellations whose copy only you contributed to, withdrawn.
     withdrawn: Optional[List[str]] = None
     #: Cloud ``everywhere``: Constellations where others contributed too (a removal request).

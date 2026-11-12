@@ -108,7 +108,7 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 | `recall(query, opts?)`                         | `RecallResult`                             | yes   | yes                       |
 | `observe(turn, { signal? })`                   | `ObserveResult`                            | yes   | yes                       |
 | `remember(facts, { type?, place? })`           | `RememberResult`                           | yes   | yes (`place`: `refused`)  |
-| `forget(id, { everywhere? })`                  | `{ forgotten, withdrawn?, requested?, unreachable? }` | yes | yes (`everywhere`: cloud only) |
+| `forget(id, { everywhere? })`                  | `{ forgotten, rewritten?, notRewritten?, withdrawn?, requested?, unreachable? }` | yes | yes (`everywhere`: cloud only) |
 | `pin(id)` / `unpin(id)`                        | `{ id, pinned, changed }`                  | yes   | yes (`changed: null`)     |
 | `recent({ since?, limit? })`                   | `{ memories, warnings }`                   | yes   | yes                       |
 | `explain(id)`                                  | `Explanation`                              | yes   | yes                       |
@@ -132,6 +132,12 @@ for `formatForPrompt`), `includeWithdrawn`, `speed` (`full`: embed and rerank; `
 `lexical`: no model call), `inferTime` (default true: "on 2 April" picks as-of, as the CLI does),
 `within` and `near` (spatial memory, 0.9.0 or newer, local mode only: see
 [Spatial memory](#spatial-memory)) and `signal`.
+
+**`forget` locally** also rewrites the later memories of the forgotten one's supersede chain that
+restated it ("changed from 3000 to 8080"), with the memory writer, before it returns: `rewritten`
+lists them. Any it could not rewrite (no writer, a failed call) are left as they were and listed in
+`notRewritten`; they may still repeat it, so check or forget them too. See
+[Memories that restated it](cli.md#memories-that-restated-it).
 
 **`forget` with `everywhere`** (Oort Cloud) does what `oort forget --everywhere` does: it forgets
 the memory, then withdraws your copies in Constellations. The result lists Constellation ids:
@@ -606,7 +612,8 @@ your Oort account); `whoami().routes` says which applies to each role.
 | `remember` | One observe per fact | as above | One metered observe per fact |
 | `judge.record` | One Voyage embed | none | `refused` |
 | `judge.apply` | One Voyage embed and one TypeSafe judge call | TypeSafe judge only | `refused` |
-| `forget`, `pin`, `unpin`, `explain`, `recent`, `judge.list`, `judge.confirm`, `consolidate`, `whoami` | none | none | No model call |
+| `forget` | None, unless later memories of its chain restated it: then one Anthropic writer call and one Voyage embed for each (CON-144) | The writer call still needs a key; the embed is local | No model call |
+| `pin`, `unpin`, `explain`, `recent`, `judge.list`, `judge.confirm`, `consolidate`, `whoami` | none | none | No model call |
 
 `keySources: ['explicit']` turns off every implicit source, the relay included unless you pass
 `keys.oort`.

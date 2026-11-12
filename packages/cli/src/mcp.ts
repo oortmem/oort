@@ -13,6 +13,7 @@ import {
   checkNear,
   checkPlace,
   checkPlacePath,
+  forgetMemory,
   isAgentVia,
   isCurrent,
   judge,
@@ -271,8 +272,26 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
 
     async forget({ id }) {
       const m = await findMemory(w.store, filter, id);
-      await w.store.forget(writeGrantFor(w, m), m.id);
-      return { forgotten: m.id };
+      // The later memories that restated it are rewritten without it (CON-144).
+      const r = await forgetMemory(
+        {
+          store: w.store,
+          ...(w.write !== undefined && { write: w.write }),
+          ...(w.embed !== undefined && { embed: w.embed }),
+          now: now(),
+        },
+        writeGrantFor(w, m),
+        m.id,
+      );
+      const left = r.notRewritten.map((x) => x.id);
+      return {
+        forgotten: m.id,
+        ...(r.rewritten.length > 0 && { rewritten: r.rewritten.map((x) => x.id) }),
+        ...(left.length > 0 && {
+          notRewritten: left,
+          note: `Later memories written from it were left as they were and may still repeat it (${left.join(', ')}). Tell the person; they can check each with \`oort inspect <id>\` or forget it too.`,
+        }),
+      };
     },
 
     async pin({ id, pinned }) {
