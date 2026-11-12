@@ -11,7 +11,7 @@ never imports it.
 ...     oort.observe(user="We deploy on Fridays now.", assistant="Noted.")
 """
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 import sys as _sys
 

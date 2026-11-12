@@ -1,6 +1,6 @@
 {
   "name": "@oortmem/store-sqlite",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Oort store on SQLite: FTS5 keyword search, sqlite-vec vectors, a RaBitQ vector index and zstd cold blobs.",
   "keywords": [
     "oort",
