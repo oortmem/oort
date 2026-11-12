@@ -665,7 +665,7 @@ describe('oort forget, pin', () => {
         ...w,
         write: {
           ...fakeWriter,
-          rewriteWithout: async (m) => ({
+          rewriteCurrent: async (m) => ({
             text: 'The dev server port is 8080.',
             stub: 'dev server port 8080',
             entities: m.entities.filter((e) => e !== '3000'),
@@ -677,7 +677,7 @@ describe('oort forget, pin', () => {
     const r = await h.run(['forget', a.id, '--yes']);
     expect(r.code).toBe(0);
     expect(r.io.stdout).toBe(
-      `Forgot ${a.id}.\nRewrote ${b.id.slice(0, 8)} without it: "The dev server port is 8080."\n`,
+      `Forgot ${a.id}.\nRewrote ${b.id.slice(0, 8)} to its current fact: "The dev server port is 8080."\n`,
     );
     expect(await h.store.get(TG, a.id)).toBeNull();
     expect((await h.store.get(TG, b.id))?.supersedes).toBeNull();
@@ -698,12 +698,12 @@ describe('oort forget, pin', () => {
   it('cli.forget-names-a-successor-it-could-not-rewrite-and-exits-3 (CON-144)', async () => {
     const h = harness();
     const { a, b } = await restated(h);
-    // The harness writer has no rewriteWithout, as an older writer would not.
+    // The harness writer has no rewriteCurrent, as an older writer would not.
     const r = await h.run(['forget', a.id, '--yes']);
     expect(r.code).toBe(3);
     expect(r.io.stdout).toContain(`Forgot ${a.id}.\n`);
     expect(r.io.stdout).toContain(
-      `${b.id.slice(0, 8)} was written from it and may still repeat it, because no memory writer is set up (oort doctor says why). Check it with \`oort inspect ${b.id}\`, or forget it too: \`oort forget ${b.id}\`.`,
+      `${b.id.slice(0, 8)} may still restate it, because no memory writer is set up (oort doctor says why). Check it with \`oort inspect ${b.id}\`, or forget it too: \`oort forget ${b.id}\`.`,
     );
     expect(await h.store.get(TG, a.id)).toBeNull();
     expect((await h.store.get(TG, b.id))?.text).toBe(b.text);
@@ -714,6 +714,22 @@ describe('oort forget, pin', () => {
     const env = JSON.parse(json.io.stdout) as { data: unknown; warnings: { code: string }[] };
     expect(env.data).toMatchObject({ rewritten: [], notRewritten: [again.b.id] });
     expect(env.warnings.map((w) => w.code)).toContain('not-rewritten');
+  });
+
+  it('cli.forget-leaves-a-later-memory-that-restates-nothing-alone (CON-144)', async () => {
+    const h = harness();
+    const { a, b } = await restated(h);
+    await h.store.upsert(TG, {
+      ...b,
+      text: 'The dev server port is 8080.',
+      stub: 'dev server port 8080',
+      entities: ['dev server', '8080'],
+    });
+    // No writer, and nothing to rewrite: a plain success, the chain re-linked.
+    const r = await h.run(['forget', a.id, '--yes']);
+    expect(r.code).toBe(0);
+    expect(r.io.stdout).toBe(`Forgot ${a.id}.\n`);
+    expect((await h.store.get(TG, b.id))?.supersedes).toBeNull();
   });
 
   it('cli.pin-unpin', async () => {

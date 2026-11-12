@@ -54,6 +54,14 @@ import { ColdBlobCorruptError, createColdCodec } from './cold.js';
 import { backupDatabase, sweepStaleCopies } from './backup.js';
 import { BINARY_OVERSAMPLE, binaryCode } from './binary.js';
 import {
+  ERASE_AUTO_MAX_BYTES,
+  eraseOldText,
+  markOldTextErased,
+  oldTextErased,
+  storeBytes,
+  zeroVectorCount,
+} from './erase.js';
+import {
   applySchema,
   assertMigratable,
   binaryIndexPlan,
@@ -85,6 +93,7 @@ export {
   type VectorIndex,
 } from './schema.js';
 export { BINARY_AUTO_THRESHOLD, BINARY_OVERSAMPLE } from './binary.js';
+export { ERASE_AUTO_MAX_BYTES } from './erase.js';
 export { BACKUPS_KEPT, listBackups, type BackupKind } from './backup.js';
 export {
   readEmbedderBinding,
@@ -164,6 +173,12 @@ export interface SqliteStoreOptions {
   vectorIndex?: VectorIndex;
   /** `vectorIndex: 'auto'` builds the binary index at this many searchable vectors (default 100,000). */
   binaryAutoThreshold?: number;
+  /**
+   * The one-time erase of text deleted by Oort 0.9.0 or older (CON-140; `erase.ts`): `auto` (default) runs
+   * it on an open that may migrate when the file is at most `ERASE_AUTO_MAX_BYTES`; `now` runs it
+   * whatever the size (`oort doctor --vacuum`). An open with `migrate: false` never runs it.
+   */
+  eraseOldText?: 'auto' | 'now';
 }
 
 /**
@@ -528,6 +543,58 @@ export function sqliteVectorIndex(
 }
 
 /**
+ * Whether the store at `dbPath` has had the one-time erase of text deleted by Oort 0.9.0 or older
+ * (CON-140), its size, and how many all-zero vectors it holds (CON-141), read without changing
+ * it: undefined when there is no store yet.
+ */
+export function sqliteEraseState(
+  dbPath: string,
+): { erased: boolean; bytes: number; zeroVectors: number } | undefined {
+  if (!fs.existsSync(dbPath)) return undefined;
+  const db = new Database(path.resolve(dbPath), { readonly: true, fileMustExist: true });
+  try {
+    if (schemaVersionOf(db) === undefined) return undefined;
+    sqliteVec.load(db);
+    const dim = db
+      .prepare<[], { value: string }>("SELECT value FROM meta WHERE key = 'dimension'")
+      .get();
+    return {
+      erased: oldTextErased(db),
+      bytes: storeBytes(path.resolve(dbPath)),
+      zeroVectors: dim === undefined ? 0 : zeroVectorCount(db, Number(dim.value)),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Runs the one-time erase of text deleted by Oort 0.9.0 or older on the store at `dbPath` now, whatever
+ * its size (`oort doctor --vacuum`; CON-140). The store must be at the current schema version
+ * (open it once first). False when another process holds it and `VACUUM` cannot run.
+ */
+export function vacuumSqliteStore(opts: { path: string; now?: Date }): boolean {
+  const dbPath = path.resolve(opts.path);
+  const db = withPrivateUmask(() => new Database(dbPath, { fileMustExist: true }));
+  try {
+    db.pragma('busy_timeout = 5000');
+    db.pragma('secure_delete = ON');
+    db.pragma('journal_size_limit = 0');
+    sqliteVec.load(db);
+    defineWriterGuard(db);
+    if (schemaVersionOf(db) !== SCHEMA_VERSION) {
+      throw new StoreMigrationRequiredError(dbPath, schemaVersionOf(db) ?? 0);
+    }
+    const dim = db
+      .prepare<[], { value: string }>("SELECT value FROM meta WHERE key = 'dimension'")
+      .get();
+    return eraseOldText(db, Number(dim?.value ?? 0), opts.now ?? new Date());
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * The schema version of the store at `dbPath`, read without changing it:
  * undefined when there is no store (or an empty one) yet.
  */
@@ -635,6 +702,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const blobs = openBlobDir(coldDir, log);
   if (!fs.existsSync(dbPath)) fs.closeSync(fs.openSync(dbPath, 'a', 0o600));
 
+  let created = false;
   const db = withPrivateUmask(() => {
     const conn = new Database(dbPath);
     try {
@@ -643,9 +711,12 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       conn.pragma('foreign_keys = ON');
       // A deleted or rewritten row is overwritten with zeros, not left in a free page (CON-140).
       conn.pragma('secure_delete = ON');
+      // A WAL reset by a checkpoint is cut to nothing, not left holding old frames (CON-140).
+      conn.pragma('journal_size_limit = 0');
       sqliteVec.load(conn);
       defineWriterGuard(conn);
       const from = schemaVersionOf(conn);
+      created = from === undefined;
       if (from === 1 || from === 2 || from === 3 || from === 4 || from === 5) {
         // Checked and copied before the migration's transaction starts; a failed
         // copy fails the open and the store stays as it was.
@@ -685,6 +756,19 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     }
   });
   try {
+    // CON-140: a store this version created never held text deleted without `secure_delete`.
+    if (!oldTextErased(db)) {
+      if (created) markOldTextErased(db, clock());
+      else if (
+        opts.migrate !== false &&
+        (opts.eraseOldText === 'now' || storeBytes(dbPath) <= ERASE_AUTO_MAX_BYTES) &&
+        !eraseOldText(db, dimension, clock())
+      ) {
+        log(
+          'oort store: another process has the store open, so text deleted by Oort 0.9.0 or older stays until the next open',
+        );
+      }
+    }
     if (process.platform !== 'win32') {
       for (const suffix of ['', '-wal', '-shm']) chmodIfExists(`${dbPath}${suffix}`, 0o600);
     }
@@ -1073,6 +1157,29 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     ms.flatMap((m) => writeMemory(grant, m)),
   );
 
+  /** `writeAll` for the writes whose row still matches its snapshot; the rest are skipped. */
+  const writeIfUnchanged = db.transaction(
+    (grant: Grant, writes: { next: Memory; was: Pick<Memory, 'id' | 'updatedAt' | 'tier'> }[]) => {
+      const skipped: string[] = [];
+      const files: string[] = [];
+      for (const { next, was } of writes) {
+        // Out of the grant reads as missing: skipped, never a GrantError.
+        const row = scopedRow(grant.writeNodes, was.id);
+        if (
+          row === undefined ||
+          next.id !== was.id ||
+          row.updated_at !== was.updatedAt ||
+          row.tier !== was.tier
+        ) {
+          skipped.push(was.id);
+          continue;
+        }
+        files.push(...writeMemory(grant, next));
+      }
+      return { skipped, files };
+    },
+  );
+
   function upsertMany(grant: Grant, ms: Memory[]): void {
     // The rows are gone once the transaction commits; only then unlink exactly
     // the blob each one named (unique per coldPut, so never another write's).
@@ -1105,19 +1212,24 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
 
   /**
    * Copies the WAL into the database and truncates it (CON-140): the WAL still holds the pages
-   * as they were before a forget, until a later write happens to overwrite them. Best effort and
-   * never waiting: a reader in another process (the MCP server, a hook) keeps it from finishing,
-   * and then the WAL is reset by a later checkpoint instead.
+   * as they were before a forget, until a later write happens to overwrite them. Never waits: a
+   * reader in another process (the MCP server, a hook) keeps it from finishing, and then this
+   * says so (`log`) and a later checkpoint resets it. True when the WAL is empty.
    */
-  function truncateWal(): void {
+  function truncateWal(): boolean {
     db.pragma('busy_timeout = 0');
     try {
-      db.pragma('wal_checkpoint(TRUNCATE)');
+      const r = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number }[];
+      if (r[0]?.busy === 0) return true;
     } catch {
-      // Busy or locked: a later checkpoint copies and resets it.
+      // Busy or locked: as below.
     } finally {
       db.pragma(`busy_timeout = ${busyTimeoutMs}`);
     }
+    log(
+      'oort store: another process is reading the store, so its write-ahead log keeps the old pages until the next checkpoint',
+    );
+    return false;
   }
 
   const recordAccessTx = db.transaction((grant: Grant, ids: string[], at: Date) => {
@@ -1253,6 +1365,14 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       open();
       assertGrant(grant);
       upsertMany(grant, ms);
+    },
+
+    async upsertManyIfUnchanged(grant, writes) {
+      open();
+      assertGrant(grant);
+      const r = writeIfUnchanged.immediate(grant, writes);
+      removeAfterCommit(r.files);
+      return { skipped: r.skipped };
     },
 
     async get(grant, id) {

@@ -265,7 +265,7 @@ export async function forget(ctx: Ctx, id: string, everywhere: boolean): Promise
   const m = await findLocal(ctx, id);
   writable(ctx, m);
   const e = ctx.engine;
-  // The later memories that restated it are rewritten without it (CON-144).
+  // The later memories that restate it are rewritten to their current fact (CON-144).
   const r = await forgetMemory(
     {
       store: storeOf(ctx),

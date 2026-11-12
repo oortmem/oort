@@ -901,7 +901,11 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
       'check keys, hooks, MCP connectors, the store and the relay, with a fix per problem',
     )
     .option('--json', 'print every check as JSON')
-    .action(run((o: { json?: boolean }) => doctorCommand(o, ctx)));
+    .option(
+      '--vacuum',
+      'rewrite the store once, so text deleted by Oort 0.9.0 or older is gone from the file',
+    )
+    .action(run((o: { json?: boolean; vacuum?: boolean }) => doctorCommand(o, ctx)));
 
   p.command('login')
     .description(

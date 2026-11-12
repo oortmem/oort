@@ -272,7 +272,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
 
     async forget({ id }) {
       const m = await findMemory(w.store, filter, id);
-      // The later memories that restated it are rewritten without it (CON-144).
+      // The later memories that restate it are rewritten to their current fact (CON-144).
       const r = await forgetMemory(
         {
           store: w.store,
@@ -289,7 +289,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
         ...(r.rewritten.length > 0 && { rewritten: r.rewritten.map((x) => x.id) }),
         ...(left.length > 0 && {
           notRewritten: left,
-          note: `Later memories written from it were left as they were and may still repeat it (${left.join(', ')}). Tell the person; they can check each with \`oort inspect <id>\` or forget it too.`,
+          note: `Later memories that restate it were left as they were (${left.join(', ')}). Tell the person; they can check each with \`oort inspect <id>\` or forget it too.`,
         }),
       };
     },

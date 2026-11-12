@@ -79,9 +79,9 @@ export interface MemoryBackend {
   forget(input: { id: string }): Promise<{
     forgotten: string;
     stillShared?: string[];
-    /** Later memories that restated it, rewritten without it (CON-144). */
+    /** Later memories that restated it, rewritten to their current fact (CON-144). */
     rewritten?: string[];
-    /** Later memories written from it that were left as they were; `note` says what to do. */
+    /** Later memories that restate it, left as they were; `note` says what to do. */
     notRewritten?: string[];
     note?: string;
   }>;

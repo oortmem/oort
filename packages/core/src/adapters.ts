@@ -216,6 +216,16 @@ export interface MemoryStore {
    */
   coldPutMany(grant: Grant, snapshots: Memory[]): Promise<GuardedWriteResult>;
   /**
+   * `upsert` for each `next`, applied only while the record still matches `was` (the snapshot it
+   * was computed from: same `updatedAt` and `tier`, see `GuardedWriteResult`); one that does
+   * not, or is gone, is skipped and listed. The writes that apply land in one transaction.
+   * Optional; `forgetMemory` uses it so a rewrite never overwrites a change made meanwhile.
+   */
+  upsertManyIfUnchanged?(
+    grant: Grant,
+    writes: { next: Memory; was: Pick<Memory, 'id' | 'updatedAt' | 'tier'> }[],
+  ): Promise<GuardedWriteResult>;
+  /**
    * The cold copy written by `coldPut` (a snapshot, embedding included), or
    * null, including for a record outside `grant.read`. Fields that changed
    * after `coldPut` (e.g. the access log) are not reflected; hydration should
@@ -349,10 +359,12 @@ export interface MemoryWriter {
    */
   writeMany?(obs: Observation, max: number): Promise<WrittenMemory[]>;
   /**
-   * `memory` rewritten so it no longer states anything that only `forgotten` said, such as the
-   * old value in "changed from 3000 to 8080" (CON-144). Everything else stays as written, in the
-   * memory's language; a memory with nothing to take out comes back unchanged. Optional; without
-   * it, `forgetMemory` reports the memories it could not rewrite.
+   * `memory` restated as its current fact only, without history or earlier values ("The port
+   * changed from 3000 to 8080" becomes "The port is 8080"), in its own words and language; a
+   * memory with no history comes back unchanged. It is given this memory alone (CON-144):
+   * `forgetMemory` calls it for the later memories that restate a forgotten one, never sends the
+   * forgotten one, and keeps the answer only when it adds no word. Optional; without it,
+   * `forgetMemory` reports those memories.
    */
-  rewriteWithout?(memory: Memory, forgotten: Memory): Promise<WrittenMemory>;
+  rewriteCurrent?(memory: Memory): Promise<WrittenMemory>;
 }

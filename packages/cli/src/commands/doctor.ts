@@ -21,8 +21,10 @@ import {
   listBackups,
   readEmbedderBinding,
   SCHEMA_VERSION,
+  sqliteEraseState,
   sqliteSchemaVersion,
   sqliteVectorIndex,
+  vacuumSqliteStore,
 } from '@oortmem/store-sqlite';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
 import {
@@ -841,7 +843,7 @@ function mcpChecks(ctx: Ctx, cmd: string | undefined): Check[] {
 }
 
 /** The local store: present, private, and readable. It is never created here. */
-async function storeChecks(ctx: Ctx): Promise<Check[]> {
+async function storeChecks(ctx: Ctx, vacuum = false): Promise<Check[]> {
   const home = resolveHome(ctx.io.env);
   const userHome = ctx.io.env['HOME'] ?? '';
   const show = tilde(home, userHome);
@@ -994,6 +996,28 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
         fix: `delete ${backups.length === 1 ? 'it' : 'them'} once Oort works as before: rm ${backups.map((f) => shown(sh(tilde(f, userHome)))).join(' ')}`,
       });
     }
+    // Text deleted by 0.9.0 or older (CON-140): opens erase it once on a small store; a bigger
+    // one waits for --vacuum.
+    if (vacuum && sqliteEraseState(db)?.erased === false) {
+      checks.push(
+        vacuumSqliteStore({ path: db })
+          ? {
+              group: 'store',
+              name: 'vacuum',
+              status: 'ok',
+              detail:
+                'rewrote the store once: text deleted by Oort 0.9.0 or older is gone from the file',
+            }
+          : {
+              group: 'store',
+              name: 'vacuum',
+              status: 'warn',
+              detail: 'another Oort process has the store open, so it was not rewritten',
+              fix: 'quit Claude Code and any other Oort process, then run oort doctor --vacuum',
+            },
+      );
+    }
+    checks.push(...eraseChecks(sqliteEraseState(db)));
   } catch (e) {
     checks.push({
       group: 'store',
@@ -1019,6 +1043,37 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
 }
 
 /** When the hooks last consolidated the local store, and when they will next. */
+/**
+ * What the store still holds of deleted memories (CON-140, CON-141): text deleted by Oort 0.9.0
+ * or older, until the one-time erase, and all-zero vectors an older version stored.
+ */
+export function eraseChecks(
+  state: { erased: boolean; bytes: number; zeroVectors: number } | undefined,
+): Check[] {
+  if (state === undefined) return [];
+  const out: Check[] = [];
+  if (!state.erased) {
+    out.push({
+      group: 'store',
+      name: 'erase',
+      status: 'warn',
+      detail: `text deleted by Oort 0.9.0 or older may remain in the file (memories forgotten or rewritten then): a store this size (${Math.ceil(state.bytes / 1024 / 1024)} MB) is rewritten once only on request, which takes a while`,
+      fix: 'oort doctor --vacuum',
+    });
+  }
+  if (state.zeroVectors > 0) {
+    const one = state.zeroVectors === 1;
+    out.push({
+      group: 'store',
+      name: 'zero-vectors',
+      status: 'warn',
+      detail: `${state.zeroVectors} stored ${one ? 'vector is' : 'vectors are'} all zeros and ${one ? 'matches' : 'match'} nothing (recall finds ${one ? 'that memory' : 'those memories'} by ${one ? 'its' : 'their'} words)`,
+      fix: 'oort doctor --vacuum',
+    });
+  }
+  return out;
+}
+
 export function consolidationCheck(home: string, now = new Date()): Check {
   const s = readConsolidationState(home);
   const due = consolidationDue(s, now);
@@ -1266,7 +1321,10 @@ const withCommand = (c: string | undefined): { fixCommand?: string } =>
   c === undefined ? {} : { fixCommand: c };
 
 /** `oort doctor [--json]`: every check, with a one-line fix per problem. Exits 1 if one fails. */
-export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise<number> {
+export async function doctorCommand(
+  opts: { json?: boolean; vacuum?: boolean },
+  ctx: Ctx,
+): Promise<number> {
   const home = ctx.io.env['HOME'] ?? '';
   let cmd: string | undefined;
   try {
@@ -1292,7 +1350,7 @@ export async function doctorCommand(opts: { json?: boolean }, ctx: Ctx): Promise
     // `oort connect` writes the managed copy when it checks out (CON-114): entries are judged
     // against that, else against this bin.
     ...mcpChecks(ctx, currentManaged(ctx)?.main ?? cmd ?? running),
-    ...(await storeChecks(ctx)),
+    ...(await storeChecks(ctx, opts.vacuum === true)),
     ...(await relayChecks(ctx, keys.relayed)),
     ...(await cloudChecks(ctx)),
   ];

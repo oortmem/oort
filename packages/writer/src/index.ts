@@ -321,8 +321,8 @@ export function aiSdkWriter(opts: {
       return one(buildWriterPrompt(obs, action, prior), WRITER_SYSTEM_PROMPT);
     },
 
-    async rewriteWithout(memory, forgotten) {
-      const w = await one(buildRewritePrompt(memory, forgotten), REWRITE_SYSTEM_PROMPT);
+    async rewriteCurrent(memory) {
+      const w = await one(buildRewritePrompt(memory), REWRITE_SYSTEM_PROMPT);
       // The memory keeps its own type (a judgment's too, which the writer's schema cannot name).
       return { ...w, type: memory.type };
     },

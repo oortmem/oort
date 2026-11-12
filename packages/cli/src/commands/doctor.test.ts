@@ -19,6 +19,7 @@ import { TG } from '@oortmem/core/store-conformance';
 import { VERSION, resolveConfig } from '@oortmem/core';
 import {
   downgradeSqliteStore,
+  ERASE_AUTO_MAX_BYTES,
   listBackups,
   openSqliteStore,
   sqliteSchemaVersion,
@@ -26,7 +27,7 @@ import {
 } from '@oortmem/store-sqlite';
 import { wire as realWire } from '../wire.js';
 import { MIGRATION_PENDING_NOTE } from './hook.js';
-import { consolidationCheck, unstableCopy } from './doctor.js';
+import { consolidationCheck, eraseChecks, unstableCopy } from './doctor.js';
 import { writeUpdateCache } from '../update-check.js';
 
 interface Check {
@@ -178,6 +179,54 @@ describe('oort doctor', () => {
     );
     // Deleting is the person's call: never a command doctor offers to run.
     expect(row?.fixCommand).toBeUndefined();
+  });
+
+  it('doctor.says-old-deleted-text-may-remain-until-vacuum (CON-140, CON-141)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      log: () => {},
+    });
+    await s.upsert(TG, memory({ embedding: undefined }));
+    await s.close();
+    // As 0.9.0 left a store too big to rewrite on open: no record of the erase.
+    const raw = new Database(db);
+    raw.prepare("DELETE FROM meta WHERE key = 'old_text_erased'").run();
+    raw.exec('CREATE TABLE pad (x BLOB)');
+    raw.prepare('INSERT INTO pad VALUES (zeroblob(?))').run(ERASE_AUTO_MAX_BYTES + 1024);
+    raw.close();
+
+    const before = await doctor(h);
+    const row = before.check('store', 'erase');
+    expect(row).toMatchObject({ status: 'warn', fixCommand: 'oort doctor --vacuum' });
+    expect(row?.detail).toContain('text deleted by Oort 0.9.0 or older may remain in the file');
+
+    const fixed = await h.run(['doctor', '--vacuum'], { env: { HOME: h.root, OORT_HOME: h.home } });
+    expect(fixed.io.stdout).toContain('rewrote the store once');
+    const after = await doctor(h);
+    expect(after.check('store', 'erase')).toBeUndefined();
+    // A 32 MB rewrite and three doctor runs: more than the default budget on a slow machine.
+  }, 60_000);
+
+  it('doctor.counts-zero-vectors-an-older-version-stored (CON-141)', () => {
+    const rows = eraseChecks({ erased: true, bytes: 1, zeroVectors: 2 });
+    expect(rows).toEqual([
+      {
+        group: 'store',
+        name: 'zero-vectors',
+        status: 'warn',
+        detail:
+          '2 stored vectors are all zeros and match nothing (recall finds those memories by their words)',
+        fix: 'oort doctor --vacuum',
+      },
+    ]);
+    expect(eraseChecks({ erased: true, bytes: 1, zeroVectors: 0 })).toEqual([]);
   });
 
   it('doctor.says-it-is-rebuilding-the-search-index (CON-110)', async () => {

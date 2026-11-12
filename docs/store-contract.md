@@ -180,12 +180,27 @@ rejects it, and every store rejects it at run time with a `TypeError`.
   it; a zero vector an older version stored is never returned either.
 - **`forget` leaves no copy in the SQLite file** (CON-140). The store runs with
   `PRAGMA secure_delete`, so a deleted or rewritten row is overwritten with zeros instead of
-  staying in a free page. `forget` also merges the lexical index, which drops the terms of deleted
-  rows (FTS5 otherwise keeps them until its segments merge on their own), and truncates the WAL
-  when no other connection is reading. The text an edit replaced stays in the lexical index's
-  segments until that next merge, though no search finds it. Copies of the file the store made
-  before a migration (`oort.sqlite.pre-v*`), the cold blob files the filesystem has freed, and any
-  backup you took are out of its reach: `oort doctor` lists the migration copies.
+  staying in a free page. The lexical index is a contentless FTS5 table with `contentless_delete`,
+  which records a deleted row as a tombstone (it cannot know the row's terms), so FTS5's own
+  `secure-delete` option does not apply to it: `forget` merges the index (`optimize`), which drops
+  the terms of every deleted row. That costs time in proportion to the index: a median of about
+  10 ms at 1,500 memories, about 0.2 s at 20,000 and 1 to 2 s at 100,000, holding the write lock.
+  `forget` then truncates the WAL (`journal_size_limit = 0`) and logs a notice when another
+  connection's read keeps it from doing so. The text an edit replaced stays in the lexical
+  index's segments until the next merge, though no search finds it.
+- **A store from 0.9.0 or older is rewritten once** (CON-140). It ran without `secure_delete`, so
+  its free pages can still hold text deleted then. The first open that may migrate, on a file of
+  at most `ERASE_AUTO_MAX_BYTES` (32 MiB), deletes stored zero vectors, merges the lexical index,
+  runs `VACUUM`, truncates the WAL and records `old_text_erased` in `meta`; a bigger store waits
+  for `vacuumSqliteStore` (`oort doctor --vacuum`), and `sqliteEraseState` says which. An open
+  with `migrate: false` never runs it. A store this version creates is recorded at once.
+- Copies of the file the store made before a migration (`oort.sqlite.pre-v*`), the cold blob files
+  the filesystem has freed, and any backup you took are out of its reach: `oort doctor` lists the
+  migration copies.
+- **`upsertManyIfUnchanged`** (optional, CON-144): `upsert` for each write whose record still
+  has the `updatedAt` and `tier` of the snapshot it was computed from, in one transaction; the
+  others (changed, gone, or outside the grant) are skipped and listed. `forgetMemory` uses it so a
+  rewrite never overwrites a change made while the writer answered.
 
 ## Places (spatial memory)
 

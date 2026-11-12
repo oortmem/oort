@@ -191,6 +191,30 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       for (const c of checked) put(c);
     },
 
+    /** Atomic trivially: checks and clones every applying record before writing any. */
+    async upsertManyIfUnchanged(grant, writes) {
+      open();
+      assertGrant(grant);
+      const skipped: string[] = [];
+      const checked: Memory[] = [];
+      for (const { next, was } of writes) {
+        const live = main.get(was.id);
+        // Out of the grant reads as missing: skipped, never a GrantError.
+        if (
+          live === undefined ||
+          !grantWrites(grant, live) ||
+          next.id !== was.id ||
+          !unchanged(live, was)
+        ) {
+          skipped.push(was.id);
+          continue;
+        }
+        checked.push(checkWrite(grant, structuredClone(next), live));
+      }
+      for (const c of checked) put(c);
+      return { skipped };
+    },
+
     async get(grant, id) {
       open();
       assertGrant(grant);

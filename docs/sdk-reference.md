@@ -672,13 +672,13 @@ export interface RememberResult {
 export interface ForgetResult {
   forgotten: string;
   /**
-   * Local: later memories of its chain that restated it, rewritten without it (CON-144). Absent
+   * Local: later memories of its chain that restated it, rewritten to their current fact (CON-144). Absent
    * when there were none.
    */
   rewritten?: string[];
   /**
-   * Local: later memories written from it that were left as they were (no memory writer, or it
-   * failed): they may still repeat it. Absent when there were none.
+   * Local: later memories that restate it and were left as they were (see `ForgetOutcome` for why, such as no memory writer or a rewrite
+   * that added words). Absent when there were none.
    */
   notRewritten?: string[];
   /** Cloud `everywhere`: the Constellations (ids) whose copy only you contributed to, withdrawn. */
