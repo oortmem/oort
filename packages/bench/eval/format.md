@@ -94,7 +94,8 @@ pnpm eval --set locomo|longmemeval [--fetch] [--plan] [--embed â€¦] [--rerank â€
 - Recall is lexical-only unless `--dense` is given, which uses the deterministic fake embedder; it
   only makes sense for stores seeded by the bench generator. Use `--now <iso>` to pin the read path's
   clock (the demo does).
-- Exit code 1 when overall recall@10 is below `--min-recall10` (default 0, off); 2 on a usage error.
+- Exit code 1 when overall recall@10 is below `--min-recall10` (default 0, off) in any run: every
+  `--links` mode, and the warm pass too with `--warm-up`; 2 on a usage error.
 - `eval/fixture.jsonl`, `eval/hook.jsonl` and `eval/warm-up.jsonl` are generated:
   `pnpm --filter @oortmem/bench run fixture`. A test checks they are in sync with the generator,
   and that the fixture's first 23 rows are the ones it had before the multi-hop rows.
