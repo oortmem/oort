@@ -5,6 +5,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { binaryCode } from './binary.js';
 import { openBlobDir, withCleanupFailures } from './blobs.js';
 import { createColdCodec } from './cold.js';
+import { rabitqWriter } from './rabitq-store.js';
 import { BIT_TABLE, hasBinaryIndex } from './schema.js';
 
 /**
@@ -116,8 +117,8 @@ export async function reembedSqliteStore(opts: ReembedOptions): Promise<ReembedR
     };
 
     const live = db
-      .prepare<[], { id: string; text: string }>(
-        `SELECT m.id AS id, m.text AS text FROM memories m
+      .prepare<[], { rid: number; id: string; text: string }>(
+        `SELECT m.rid AS rid, m.id AS id, m.text AS text FROM memories m
          WHERE m.tier != 'cold' AND EXISTS (SELECT 1 FROM memories_vec v WHERE v.id = m.id)
          ORDER BY m.rid`,
       )
@@ -170,11 +171,25 @@ export async function reembedSqliteStore(opts: ReembedOptions): Promise<ReembedR
         ),
       };
     };
-    const setVector = (bytes: Buffer, id: string): void => {
+    // The RaBitQ index (schema version 7) likewise; its writer looks for the index on each call.
+    // The codes keep the centroid the index was built with: any centroid gives correct bounds,
+    // and switching `vectorIndex` away and back rebuilds it for the new model (design §5).
+    const rq = rabitqWriter(db, dimension);
+    const setVector = (bytes: Buffer, id: string, rid: number): void => {
       const row = readRow.get(id);
       if (row === undefined) return;
       deleteRow.run(id);
       insertRow.run(id, bytes, ...others.map((c) => row[c]));
+      rq.put(
+        rid,
+        bytes,
+        {
+          node: String(row['node_key']),
+          project: String(row['project_key']),
+          author: String(row['author_key']),
+        },
+        row['tier'] !== 'cold',
+      );
       if (binary === undefined) return;
       binary.remove.run(id);
       if (row['tier'] === 'cold') return;
@@ -194,7 +209,7 @@ export async function reembedSqliteStore(opts: ReembedOptions): Promise<ReembedR
       check(vs, chunk.length);
       db.transaction(() => {
         binary = binaryNow();
-        chunk.forEach((r, j) => setVector(toBytes(vs[j]!), r.id));
+        chunk.forEach((r, j) => setVector(toBytes(vs[j]!), r.id, r.rid));
       }).immediate();
       done += chunk.length;
       opts.onProgress?.({ done, total });

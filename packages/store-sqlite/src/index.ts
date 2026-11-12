@@ -52,6 +52,15 @@ import {
 import { ColdBlobCorruptError, createColdCodec } from './cold.js';
 import { backupDatabase, sweepStaleCopies } from './backup.js';
 import { BINARY_OVERSAMPLE, binaryCode } from './binary.js';
+import type { RabitqEngineChoice } from './rabitq.js';
+import {
+  RabitqReader,
+  rabitqVectors,
+  rabitqWriter,
+  RQ_VEC_TABLE,
+  hasRabitqIndex,
+  type RescoredRow,
+} from './rabitq-store.js';
 import {
   applySchema,
   assertMigratable,
@@ -66,10 +75,12 @@ import {
   migrationBlockers,
   PLACE_TABLE,
   placeCount,
+  rabitqIndexPlan,
   schemaVersionOf,
   searchableVectors,
   SCHEMA_VERSION,
   StoreMigrationRequiredError,
+  VECTOR_INDEXES,
   type VectorIndex,
 } from './schema.js';
 
@@ -81,8 +92,19 @@ export {
   SCHEMA_VERSION,
   StoreMigrationRequiredError,
   WRITER_GUARD,
+  VECTOR_INDEXES,
   type VectorIndex,
 } from './schema.js';
+export {
+  RABITQ_EPSILON,
+  RABITQ_QUERY_BITS,
+  loadNativeRabitq,
+  nativePlatformTag,
+  TsRabitqIndex,
+  type RabitqEngine,
+  type RabitqEngineChoice,
+} from './rabitq.js';
+export { RQ_TABLE, RQ_VEC_TABLE, RQ_GONE_TABLE, RQ_META_TABLE } from './rabitq-store.js';
 export { BINARY_AUTO_THRESHOLD, BINARY_OVERSAMPLE } from './binary.js';
 export { BACKUPS_KEPT, listBackups, type BackupKind } from './backup.js';
 export {
@@ -155,14 +177,40 @@ export interface SqliteStoreOptions {
    *   once and keeps.
    * - `binary`: the binary index from the start: 1-bit codes are scanned, and the
    *   `BINARY_OVERSAMPLE` × k nearest are rescored with their int8 vectors.
-   * - `int8`: always the exact int8 scan; an open that may migrate drops a binary index.
+   * - `rabitq` (CON-25, design `docs/design/2026-11-12-rabitq-index.md`): the RaBitQ index from
+   *   the start: 1-bit codes with per-vector error bounds, scanned in memory against a 4-bit
+   *   query (natively when the prebuilt binary loads, else in TypeScript), and only the
+   *   candidates whose bound reaches the k-th exact score are rescored with their int8 vectors.
+   * - `int8`: always the exact int8 scan; an open that may migrate drops either index.
    *
-   * Scores are int8 cosine similarities either way. An open with `migrate: false` never builds or
-   * drops the index; it searches with whatever the store has.
+   * An open that may migrate keeps one index at most: `binary` drops a RaBitQ index and `rabitq`
+   * a binary one; `auto` keeps a RaBitQ index and never builds one. Scores are int8 cosine
+   * similarities whichever answers. An open with `migrate: false` never builds or drops an index;
+   * it searches with whatever the store has.
    */
   vectorIndex?: VectorIndex;
   /** `vectorIndex: 'auto'` builds the binary index at this many searchable vectors (default 100,000). */
   binaryAutoThreshold?: number;
+  /**
+   * Which engine searches a RaBitQ index: `auto` (default) the native one when its prebuilt
+   * binary loads on this platform, else the TypeScript one (same results, slower; logged once);
+   * `native` fails the first dense search without it; `typescript` never loads it.
+   */
+  rabitqEngine?: RabitqEngineChoice;
+  /**
+   * Called once per dense query pattern with which index answered and, for the binary and
+   * RaBitQ indexes, how many int8 vectors were read to rescore candidates. For benchmarks.
+   */
+  onDenseStats?: (stats: DenseStats) => void;
+}
+
+/** What one dense query pattern cost (`onDenseStats`). */
+export interface DenseStats {
+  index: 'int8' | 'binary' | 'rabitq';
+  /** RaBitQ: candidates whose bound reached the k-th; binary: the oversampled KNN's k. */
+  candidates: number;
+  /** int8 vectors read to rescore (0 for the exact scan). */
+  reads: number;
 }
 
 /**
@@ -506,11 +554,12 @@ function live(patterns: readonly NodePattern[]): NodePattern[] {
  */
 export function sqliteVectorIndex(
   dbPath: string,
-): { index: 'int8' | 'binary'; vectors: number } | undefined {
+): { index: 'int8' | 'binary' | 'rabitq'; vectors: number } | undefined {
   if (!fs.existsSync(dbPath)) return undefined;
   const db = new Database(path.resolve(dbPath), { readonly: true, fileMustExist: true });
   try {
     if (schemaVersionOf(db) === undefined) return undefined;
+    if (hasRabitqIndex(db)) return { index: 'rabitq', vectors: rabitqVectors(db) };
     if (!hasBinaryIndex(db)) return { index: 'int8', vectors: searchableVectors(db) };
     const n = db.prepare<[], { n: number }>(`SELECT count(*) AS n FROM ${BIT_TABLE}_rowids`).get();
     return { index: 'binary', vectors: n?.n ?? 0 };
@@ -536,16 +585,17 @@ export function sqliteSchemaVersion(dbPath: string): number | undefined {
 /**
  * Takes the store at `path` back to schema version `to`: 1 (the default) so Oort 0.2.x can open
  * it again, 2 for Oort 0.3 to 0.5, 3 for Oort before tokeniser v2 (CON-110; the lexical index
- * is rebuilt with tokeniser v1), 4 for Oort before spatial memory (0.8.x), or 5 for Oort before
+ * is rebuilt with tokeniser v1), 4 for Oort before spatial memory (0.8.x), 5 for Oort before
  * the binary vector index (the binary index and the writer guard are dropped; the int8 vectors
- * were never moved). First copies it to `<path>.pre-downgrade.<UTC time>` (the three newest such
+ * were never moved), or 6 for Oort before the RaBitQ index (it is dropped, and the version 6
+ * writer guard put back). First copies it to `<path>.pre-downgrade.<UTC time>` (the three newest such
  * copies are kept). Refuses, changing nothing, when it holds memories that version cannot
  * represent: for 1, any level but Planet, an author with an account, provenance or a judgment;
  * for 2, a judgment; below 5, a place. No other Oort process (hooks, the MCP server, a drain) may
  * have the store open while it runs: one would migrate it straight back, or fail on the changed
  * schema.
  */
-export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 | 4 | 5 }): void {
+export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 | 4 | 5 | 6 }): void {
   const to = opts.to ?? 1;
   const dbPath = path.resolve(opts.path);
   const db = withPrivateUmask(() => new Database(dbPath, { fileMustExist: true }));
@@ -608,9 +658,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const log = opts.log ?? ((message: string) => process.stderr.write(`${message}\n`));
   const icu = opts.icu ?? lexicalIcuVersion();
   const vectorIndex: VectorIndex = opts.vectorIndex ?? 'auto';
-  if (!['auto', 'int8', 'binary'].includes(vectorIndex)) {
+  if (!VECTOR_INDEXES.includes(vectorIndex)) {
     throw new RangeError(
-      `sqlite store: vectorIndex must be auto, int8 or binary, got ${String(vectorIndex)}`,
+      `sqlite store: vectorIndex must be auto, int8, binary or rabitq, got ${String(vectorIndex)}`,
+    );
+  }
+  const rabitqEngine = opts.rabitqEngine ?? 'auto';
+  if (!['auto', 'native', 'typescript'].includes(rabitqEngine)) {
+    throw new RangeError(
+      `sqlite store: rabitqEngine must be auto, native or typescript, got ${String(rabitqEngine)}`,
     );
   }
   const threshold = opts.binaryAutoThreshold;
@@ -636,14 +692,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       sqliteVec.load(conn);
       defineWriterGuard(conn);
       const from = schemaVersionOf(conn);
-      if (from === 1 || from === 2 || from === 3 || from === 4 || from === 5) {
+      if (from !== undefined && from >= 1 && from < SCHEMA_VERSION) {
         // Checked and copied before the migration's transaction starts; a failed
         // copy fails the open and the store stays as it was.
         if (opts.migrate === false) throw new StoreMigrationRequiredError(dbPath, from);
         if (from === 1) assertMigratable(conn);
-        // Version 5 to 6 is additive (triggers, and an index built from the int8 vectors) and
-        // goes back down without loss: no copy of every memory, which `forget` would never reach.
-        if (from !== 5) backupDatabase(conn, dbPath, BACKUP_BEFORE[from]);
+        // Versions 5 to 6 and 6 to 7 are additive (triggers, and an index built from the int8
+        // vectors) and go back down without loss: no copy of every memory, which `forget` would
+        // never reach.
+        if (from <= 4) backupDatabase(conn, dbPath, BACKUP_BEFORE[from as 1 | 2 | 3 | 4]);
       }
       // Every migration from version 3 or older, a stale lexical index and a binary index to
       // build rebuild something (applySchema says so): wait as long as another process holds the
@@ -654,7 +711,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         (from < 4 ||
           (from <= SCHEMA_VERSION &&
             (lexicalIndexState(conn, icu) === 'rebuild' ||
-              binaryIndexPlan(conn, vectorIndex, opts.binaryAutoThreshold) === 'build')));
+              binaryIndexPlan(conn, vectorIndex, opts.binaryAutoThreshold) === 'build' ||
+              rabitqIndexPlan(conn, vectorIndex) === 'build')));
       if (rebuilds) {
         conn.pragma(`busy_timeout = ${Math.max(busyTimeoutMs, MIGRATION_BUSY_TIMEOUT_MS)}`);
       }
@@ -912,7 +970,10 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
    * the candidates, one row lookup each.
    */
   const binaryPattern = (allProjects: boolean, byAuthor: boolean, f?: SpatialFilter) =>
-    cached<[Params], { id: string; distance: number; tier: Tier; updated_at: string }>(
+    cached<
+      [Params],
+      { id: string; distance: number; tier: Tier; updated_at: string; rescored: number }
+    >(
       `binary:${allProjects}:${byAuthor}${spatialShape(f)}`,
       () => `WITH knn AS MATERIALIZED (
          SELECT id, rescore FROM ${BIT_TABLE}
@@ -924,16 +985,82 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
          SELECT id, vec_distance_cosine(vec_int8(rescore), vec_int8(@v)) AS distance FROM knn
        )
        SELECT scored.id AS id, scored.distance AS distance, m.tier AS tier,
-              m.updated_at AS updated_at
+              m.updated_at AS updated_at, (SELECT count(*) FROM knn) AS rescored
        FROM scored CROSS JOIN memories m ON m.id = scored.id
        WHERE m.tier != 'cold' AND ${grantSql(1)}
        ORDER BY scored.distance, m.updated_at DESC, m.id
        LIMIT @k`,
     );
 
-  /** One dense query per pattern, over the binary index when there is one and it is wanted. */
+  /** The RaBitQ index's writes (CON-25), and this process's in-memory copy of it. */
+  const rq = rabitqWriter(db, dimension);
+  const rqReader = new RabitqReader(db, dimension, rabitqEngine, log);
+
+  /**
+   * Rescores RaBitQ candidates for one pattern: each candidate's int8 vector (one primary-key
+   * read each) against the query, keeping only rows that pass every filter the int8 path applies
+   * (tier, the grant pattern, the spatial filter).
+   */
+  const rabitqRescore = (f?: SpatialFilter) =>
+    cached<[Params], RescoredRow>(
+      `rabitq:${spatialShape(f)}`,
+      () => `SELECT m.id AS id, vec_distance_cosine(vec_int8(r.embedding), vec_int8(@v)) AS distance,
+              m.tier AS tier, m.updated_at AS updated_at
+       FROM json_each(@rids) j CROSS JOIN ${RQ_VEC_TABLE} r ON r.rid = j.value
+         CROSS JOIN memories m ON m.rid = r.rid
+       WHERE m.tier != 'cold' AND ${grantSql(1)}${f === undefined ? '' : ` AND ${spatialSql(f, 'm')}`}`,
+    );
+  /** The memories a spatial filter admits (CON-84), for the RaBitQ engine's allowlist. */
+  const spatialRids = (f: SpatialFilter) =>
+    cached<[Params], { rid: number }>(
+      `spatial-rids${spatialShape(f)}`,
+      () => `SELECT m.rid AS rid FROM memories m WHERE ${spatialSql(f, 'm')}`,
+    );
+
+  /** Brings this process's RaBitQ engine up to date, or drops it when the index is gone. */
+  const rqRefresh = db.transaction((): boolean => {
+    if (!rq.present()) {
+      rqReader.release();
+      return false;
+    }
+    rqReader.refresh();
+    return true;
+  });
+
+  /** After a committed write: the engine, if loaded, takes this process's changes at once. */
+  function rqAfterWrite(): void {
+    if (rqReader.kind !== undefined) rqRefresh();
+  }
+
+  /**
+   * One dense query per pattern: over the RaBitQ index when there is one and it is wanted, else
+   * over the binary index when there is one and it is wanted, else the exact int8 scan.
+   */
   const denseRuns = db.transaction(
     (patterns: NodePattern[], v: Int8Array, kk: number, f: SpatialFilter | undefined) => {
+      const stats = opts.onDenseStats;
+      if (vectorIndex !== 'int8' && rqRefresh()) {
+        const allow =
+          f === undefined ? undefined : spatialRids(f).all(spatialParams(f)).map((r) => r.rid);
+        return patterns.map((p) => {
+          const params = { ...patternParams(p, 0), ...(f !== undefined && spatialParams(f)) };
+          const bytes = toBytes(v);
+          return rqReader.search(
+            v,
+            kk,
+            {
+              node: nodeKey(p.node),
+              ...(p.projectIds !== 'all' && {
+                projects: (p.projectIds as (string | null)[]).map(projectKey),
+              }),
+              ...(p.authorAgentId !== undefined && { author: p.authorAgentId }),
+              ...(allow !== undefined && { allow }),
+            },
+            (rids) => rabitqRescore(f).all({ ...params, v: bytes, rids: JSON.stringify(rids) }),
+            stats && ((s) => stats({ index: 'rabitq', ...s })),
+          ) as { id: string; distance: number; tier: Tier; updated_at: string }[];
+        });
+      }
       const binary = vectorIndex !== 'int8' && bit() !== undefined;
       const code = binary ? binaryCode(v) : undefined;
       return patterns.map((p) => {
@@ -950,13 +1077,14 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           ...(p.authorAgentId !== undefined && { author: p.authorAgentId }),
         };
         const byAuthor = p.authorAgentId !== undefined;
-        return code === undefined
-          ? densePattern(all, byAuthor, f).all(params)
-          : binaryPattern(all, byAuthor, f).all({
-              ...params,
-              code,
-              candidates: Math.min(kk * BINARY_OVERSAMPLE, MAX_KNN),
-            });
+        if (code === undefined) {
+          stats?.({ index: 'int8', candidates: 0, reads: 0 });
+          return densePattern(all, byAuthor, f).all(params);
+        }
+        const candidates = Math.min(kk * BINARY_OVERSAMPLE, MAX_KNN);
+        const rows = binaryPattern(all, byAuthor, f).all({ ...params, code, candidates });
+        stats?.({ index: 'binary', candidates, reads: rows[0]?.rescored ?? 0 });
+        return rows;
       });
     },
   );
@@ -1029,15 +1157,19 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     q.vecDelete.run(m.id);
     const b = bit();
     b?.remove.run(m.id);
-    if (m.embedding !== undefined) {
-      const bytes = toBytes(m.embedding);
-      const node = nodeKey(nodeOf(address));
-      const project = projectKey(address.projectId);
-      q.vecInsert.run(m.id, bytes, node, project, author.agentId, m.tier);
+    const keys = {
+      node: nodeKey(nodeOf(address)),
+      project: projectKey(address.projectId),
+      author: author.agentId,
+    };
+    const bytes = m.embedding === undefined ? undefined : toBytes(m.embedding);
+    if (m.embedding !== undefined && bytes !== undefined) {
+      q.vecInsert.run(m.id, bytes, keys.node, keys.project, keys.author, m.tier);
       if (b !== undefined && m.tier !== 'cold') {
-        b.insert.run(m.id, binaryCode(m.embedding), node, project, author.agentId, bytes);
+        b.insert.run(m.id, binaryCode(m.embedding), keys.node, keys.project, keys.author, bytes);
       }
     }
+    rq.put(row.rid, bytes, keys, m.tier !== 'cold');
     if (m.tier === 'cold') return [];
     const dropped = q.coldDelete.get(m.id);
     return dropped === undefined ? [] : [dropped.path];
@@ -1065,6 +1197,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     // The rows are gone once the transaction commits; only then unlink exactly
     // the blob each one named (unique per coldPut, so never another write's).
     removeAfterCommit(writeAll.immediate(grant, ms));
+    rqAfterWrite();
   }
 
   /** The row for `id` if a pattern of `side` covers it; unknown and out-of-grant read the same. */
@@ -1080,6 +1213,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     if (row !== undefined) {
       q.ftsDelete.run(row.rid);
       q.placeDelete.run(row.rid);
+      rq.remove(row.rid);
     }
     q.vecDelete.run(id);
     bit()?.remove.run(id);
@@ -1103,6 +1237,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   ): void {
     q.vecSetTier.run(tier, id);
     syncBinary(id);
+    rq.sync(row.rid, id);
     writeFts(row.rid, tier, row.text, row.stub, JSON.parse(row.entities) as string[]);
   }
 
@@ -1168,6 +1303,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         writeFts(row.rid, 'cold', row.text, row.stub, JSON.parse(row.entities) as string[]);
         q.vecDelete.run(m.id);
         bit()?.remove.run(m.id);
+        rq.remove(row.rid);
         const old = q.coldPath.get(m.id)?.path;
         if (old !== undefined) previous.push(old);
         q.coldInsert.run(m.id, files[i] as string);
@@ -1201,6 +1337,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     } catch (e) {
       throw withCleanupFailures(e, blobs.removeAll(files));
     }
+    rqAfterWrite();
     for (const i of tx.skipped) skipped.push((ms[i] as Memory).id);
     removeAfterCommit([...tx.skipped.map((k) => files[k] as string), ...tx.previous]);
     return { skipped };
@@ -1232,6 +1369,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       open();
       assertGrant(grant);
       const file = forgetTx.immediate(grant, id);
+      // The engine drops the forgotten vector's code now, not at the next search.
+      rqAfterWrite();
       if (file !== undefined) blobs.remove(file);
     },
 
@@ -1345,7 +1484,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     async setTier(grant, id, tier, snapshot) {
       open();
       assertGrant(grant);
-      return setTierTx.immediate(grant, id, tier, snapshot);
+      const changed = setTierTx.immediate(grant, id, tier, snapshot);
+      rqAfterWrite();
+      return changed;
     },
 
     async getCursor(grant, key) {
@@ -1363,6 +1504,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     async close() {
       if (closed) return;
       closed = true;
+      rqReader.release();
       db.close();
     },
   };
