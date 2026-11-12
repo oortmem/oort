@@ -51,6 +51,8 @@ export interface Question {
   stale?: string[];
   /** Sessions holding the answer (LongMemEval), for session-level recall. */
   answerSessions?: string[];
+  /** Sessions holding an outdated answer, for session-level stale-leak. */
+  staleSessions?: string[];
   abstention?: boolean;
 }
 
@@ -117,7 +119,7 @@ export interface PublicReport {
   links: LinksMode;
   /** Evidence recall over turns. */
   turn: EvalReport;
-  /** Recall over answer sessions (a session counts when any of its turns is returned). */
+  /** Recall over answer sessions: @k counts the sessions of the top k returned turns. */
   session?: EvalReport;
   ms: number;
 }
@@ -127,6 +129,18 @@ async function prefetch(set: PublicSet, embed: RunPublicOptions['embed']): Promi
   if (embed?.prefetch === undefined) return;
   const texts = set.haystacks.flatMap((h) => h.turns.flatMap((t) => embedTextOf(t) ?? []));
   await embed.prefetch(texts, 'document');
+}
+
+/**
+ * The session of each returned round, in rank order and repeated, so session recall@k reads
+ * the sessions of the top k rounds (not the top k distinct sessions, which would reach past
+ * rank k).
+ */
+export function sessionsOfRounds(ids: string[], sessionOf: Map<string, string>): string[] {
+  return ids.flatMap((id) => {
+    const s = sessionOf.get(id);
+    return s === undefined ? [] : [s];
+  });
 }
 
 export async function runPublicSet(opts: RunPublicOptions): Promise<PublicReport> {
@@ -167,7 +181,7 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicReport
             ...linksOverride(links, base),
           },
         } as ResolvedConfig;
-        const turnOf = new Map<string, Turn>();
+        const sessionOf = new Map<string, string>();
         const idOf = new Map<string, string>();
         for (const t of h.turns) {
           const r = await observe(observationOf(t), localScope(), {
@@ -184,7 +198,7 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicReport
             continue;
           }
           turns++;
-          turnOf.set(r.memoryId, t);
+          sessionOf.set(r.memoryId, t.sessionId);
           idOf.set(t.turnRef, r.memoryId);
         }
         // Questions must not influence each other: no access records, no hydration.
@@ -223,10 +237,12 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicReport
           });
           groups.push(q.group);
           if (q.answerSessions !== undefined && q.abstention !== true) {
-            const sessions = [...new Set(ids.map((id) => turnOf.get(id)?.sessionId ?? ''))].filter(
-              (s) => s !== '',
-            );
-            sessionRows.push({ question: q.question, expectedMemoryIds: q.answerSessions });
+            const sessions = sessionsOfRounds(ids, sessionOf);
+            sessionRows.push({
+              question: q.question,
+              expectedMemoryIds: q.answerSessions,
+              ...(q.staleSessions !== undefined && { notExpectedMemoryIds: q.staleSessions }),
+            });
             sessionOutcomes.push({ ids: sessions, aboveThreshold: sessions.length });
             sessionGroups.push(q.group);
           }

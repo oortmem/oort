@@ -41,6 +41,8 @@ export interface PublicArgs {
   set: DatasetName;
   file?: string;
   fetch: boolean;
+  /** Run a file that is not the pinned revision, or one given by path (recorded as unpinned). */
+  unpinned: boolean;
   plan: boolean;
   yes: boolean;
   embed: string;
@@ -160,6 +162,19 @@ export function renderPublic(r: PublicReport, header: string[]): string {
 export async function publicMain(a: PublicArgs, log: (m: string) => void): Promise<number> {
   const cacheDir = a.cacheDir ?? CACHE_DIR;
   const src = DATASETS[a.set];
+  const ks = a.k.split(',').map((x) => Number(x.trim()));
+  if (ks.some((k) => !Number.isInteger(k) || k <= 0))
+    throw new Error(`--k must be positive integers`);
+  const limit = a.limit !== undefined ? Number(a.limit) : undefined;
+  if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) {
+    throw new Error('--limit must be a positive integer');
+  }
+  if (a.file !== undefined && !a.unpinned) {
+    log(
+      `refusing ${a.file}: a file given by path runs only with --unpinned (its numbers are then recorded as unpinned). Use --fetch for the pinned revision.`,
+    );
+    return 1;
+  }
   let file = a.file ?? datasetPath(a.set, cacheDir);
   if (a.fetch) file = await fetchDataset(a.set, { cacheDir, log });
   if (!fs.existsSync(file)) {
@@ -167,13 +182,17 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
       `${src.name} is not in the cache (${file}). It is never bundled: fetch it with --fetch (${src.licence}, ${src.url}) or pass a path.`,
     );
   }
+  // Checked before the file is parsed: a file that is not the pinned revision is never read
+  // unless asked for.
   const check = checkDataset(a.set, file);
   if (!check.pinned) {
+    if (!a.unpinned) {
+      log(
+        `refusing ${file}: SHA-256 ${check.sha256} is not the recorded ${src.sha256} (${src.revision}). Re-fetch with --fetch, or pass --unpinned to run it anyway.`,
+      );
+      return 1;
+    }
     log(`warning: ${file} has SHA-256 ${check.sha256}, not the recorded ${src.sha256}`);
-  }
-  const limit = a.limit !== undefined ? Number(a.limit) : undefined;
-  if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) {
-    throw new Error('--limit must be a positive integer');
   }
   const set = loadSet(a.set, file, limit);
   const m = models(a, cacheDir);
@@ -181,7 +200,6 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
   if (a.plan || (paid && !a.yes)) {
     const tokens = await counter(a, cacheDir);
     const defaults = resolveConfig(cacheDir, { OORT_HOME: cacheDir }, { projectConfig: false });
-    const ks = a.k.split(',').map(Number);
     const plan = planPublicSet(set, {
       ...(m.paid.embed !== undefined && { embedModel: m.paid.embed }),
       ...(m.paid.rerank !== undefined && { rerankModel: m.paid.rerank }),
@@ -199,9 +217,6 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
     }
     return 0;
   }
-  const ks = a.k.split(',').map((s) => Number(s.trim()));
-  if (ks.some((k) => !Number.isInteger(k) || k <= 0))
-    throw new Error(`--k must be positive integers`);
   const reports: PublicReport[] = [];
   try {
     for (const links of parseLinkModes(a.links)) {

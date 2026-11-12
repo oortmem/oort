@@ -9,6 +9,11 @@ turns that hold each question's evidence.
 Neither dataset is bundled. Tests use only the two hand-made samples in this directory
 (`locomo-sample.json`, `longmemeval-sample.json`), which are written in each set's format.
 
+**LongMemEval_S is the public set; LoCoMo is local only.** LoCoMo's licence is non-commercial
+(CC BY-NC 4.0), so Oort publishes no LoCoMo numbers: not in this repository, its baselines, PRs,
+docs or the website. The adapter stays so anyone can run it on their own machine for their own
+comparison.
+
 ## Sources
 
 | Set           | File                         | Pinned revision                                                                                                                                                                      | SHA-256                                                            | Size   | Licence      |
@@ -20,22 +25,26 @@ Neither dataset is bundled. Tests use only the two hand-made samples in this dir
   2024 (arXiv:2402.17753). Its licence is
   [CC BY-NC 4.0](https://github.com/snap-research/locomo/blob/3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376/LICENSE.txt):
   non-commercial use, with attribution. It is downloaded to the machine that runs the eval and
-  never copied into this repository.
+  never copied into this repository. Run it locally only, and publish no numbers from it.
 - LongMemEval: Wu et al., "LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive
   Memory", ICLR 2025 (arXiv:2410.10813). The cleaned release on Hugging Face is MIT.
 
-`--fetch` downloads the pinned revision into `packages/bench/.cache/datasets/` (gitignored) and
-refuses a download whose SHA-256 differs. Every run checks the hash again and prints it; a file
-that is not the pinned revision runs with a warning.
+`--fetch` downloads the pinned revision into `packages/bench/.cache/datasets/` (gitignored),
+streaming it and stopping if it runs past the recorded size, and keeps it only when its SHA-256
+matches. Every run checks the hash again, before the file is read, and prints it. A file that is
+not the pinned revision is refused (exit 1), and so is a file given by path, unless the run says
+`--unpinned`; such a run is recorded with `"pinned": false`.
 
 ## Running
 
 ```sh
-pnpm eval --set locomo --fetch                    # download once, then run lexical-only
-pnpm eval --set locomo --embed local --rerank local --home <oort home with pulled models>
-pnpm eval --set longmemeval [--limit 100]          # --limit spreads N haystacks through the file
+pnpm eval --set longmemeval --fetch               # download once, then run lexical-only
+pnpm eval --set longmemeval --embed local --home <oort home with pulled models>
+pnpm eval --set longmemeval --limit 50             # --limit spreads N haystacks through the file
 pnpm eval --set longmemeval --embed voyage --rerank voyage --plan   # counts and cost, sends nothing
-pnpm eval --set locomo --links grid                # the ablation grid, once recall.links exists (CON-149)
+pnpm eval --set longmemeval --links grid           # the ablation grid, once recall.links exists (CON-149)
+pnpm eval --set locomo --fetch                     # local only: publish no LoCoMo numbers
+pnpm eval --set longmemeval ./other.json --unpinned  # a file by path, recorded as unpinned
 ```
 
 Options: `--embed none|fake|local[:model]|voyage[:model]`, `--rerank none|local[:model]|voyage[:model]`,
@@ -71,18 +80,19 @@ off so questions do not influence each other, and the returned memories are mapp
 - **LoCoMo**: one haystack per conversation (10). A turn is one utterance: the speaker's name and
   text, plus `[shares an image: <caption>]` when they shared one; `at` is the session's date plus
   a second per turn (the file has no zone: UTC); `turnRef` is the dialogue id (`D3:7`). Evidence
-  ids are cleaned of the file's few typos (`D8:6; D9:17`, `D:11:26`); references that name no turn
-  are dropped and counted, and a question left with none is left out and counted. Categories
-  follow the mapping most published retrieval results use, which the question counts in the file confirm: 1
-  multi-hop (282), 2 temporal (321), 3 open-domain (96), 4 single-hop (841), 5 adversarial (446).
-  Recall's "now" is a day after the last session.
+  ids are cleaned of the file's few typos (`D8:6; D9:17`, `D:11:26`, `D30:05`); references that
+  name no turn are dropped and counted, and a question left with none is left out and counted.
+  Categories follow the mapping most published retrieval results use, which the question counts
+  in the file confirm: 1 multi-hop (282), 2 temporal (321), 3 open-domain (96), 4 single-hop
+  (841), 5 adversarial (446). Recall's "now" is a day after the last session.
 - **LongMemEval_S**: one haystack per question (500, about 50 sessions each). A memory is one round
   (a user message and the assistant reply after it), the retrieval granularity the LongMemEval
   authors found best; `turnRef` is `<session id>#<round>`, `at` the session's date plus a second
   per round, and recall's "now" the question's date. A round is evidence when either message has
-  `has_answer`. Two scores: turn recall@k (rounds) and session recall@k (the sessions of the
-  returned rounds against `answer_session_ids`). For `knowledge-update`, the rounds of the latest
-  answer session are expected and those of earlier answer sessions count toward stale-leak. The
+  `has_answer`. Two scores: turn recall@k (rounds) and session recall@k (the sessions of the top
+  k returned rounds against `answer_session_ids`). For `knowledge-update`, the latest answer
+  session and its rounds are expected, and earlier answer sessions and their rounds count toward
+  stale-leak, at both levels. The
   30 abstention questions (`_abs` ids) are their own group.
 
 Limits worth knowing:

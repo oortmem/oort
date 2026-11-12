@@ -70,9 +70,14 @@ export function checkDataset(name: DatasetName, file: string): { sha256: string;
   return { sha256, pinned: sha256 === DATASETS[name].sha256 };
 }
 
+/** Slack over the recorded size before a download is cut off (the hash must match anyway). */
+const DOWNLOAD_MARGIN = 64 * 1024;
+
 /**
  * Downloads the pinned revision into the cache, unless a file with the recorded hash is already
- * there. A download whose hash differs is deleted and rejected.
+ * there. The body is streamed to a temporary file and hashed on the way; a download that runs
+ * past the recorded size (plus a small margin) is aborted, and one whose hash differs is
+ * deleted. Only a verified file is renamed into place.
  */
 export async function fetchDataset(
   name: DatasetName,
@@ -84,15 +89,49 @@ export async function fetchDataset(
   opts.log?.(
     `downloading ${src.name} (${(src.bytes / 1e6).toFixed(1)} MB, ${src.licence}) from ${src.url}`,
   );
-  const res = await (opts.fetch ?? fetch)(src.url);
+  const cap = src.bytes + DOWNLOAD_MARGIN;
+  const abort = new AbortController();
+  const res = await (opts.fetch ?? fetch)(src.url, { signal: abort.signal });
   if (!res.ok) throw new Error(`download failed: HTTP ${res.status} for ${src.url}`);
-  const body = Buffer.from(await res.arrayBuffer());
-  const got = createHash('sha256').update(body).digest('hex');
-  if (got !== src.sha256) {
-    throw new Error(`${src.name}: SHA-256 ${got} is not the recorded ${src.sha256}; not saved`);
+  const tooBig = (n: number) =>
+    new Error(
+      `${src.name}: download is more than the recorded ${src.bytes} bytes (${n}); not saved`,
+    );
+  const declared = Number(res.headers.get('content-length') ?? Number.NaN);
+  if (declared > cap) {
+    abort.abort();
+    throw tooBig(declared);
   }
+  if (res.body === null) throw new Error(`download failed: empty body from ${src.url}`);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.writeFileSync(`${dest}.tmp`, body);
-  fs.renameSync(`${dest}.tmp`, dest);
+  const tmp = `${dest}.tmp`;
+  const fd = fs.openSync(tmp, 'w');
+  const hash = createHash('sha256');
+  let got = 0;
+  let ok = false;
+  try {
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      got += value.byteLength;
+      if (got > cap) {
+        abort.abort();
+        await reader.cancel().catch(() => {});
+        throw tooBig(got);
+      }
+      hash.update(value);
+      fs.writeSync(fd, value);
+    }
+    const sha = hash.digest('hex');
+    if (sha !== src.sha256) {
+      throw new Error(`${src.name}: SHA-256 ${sha} is not the recorded ${src.sha256}; not saved`);
+    }
+    ok = true;
+  } finally {
+    fs.closeSync(fd);
+    if (!ok) fs.rmSync(tmp, { force: true });
+  }
+  fs.renameSync(tmp, dest);
   return dest;
 }

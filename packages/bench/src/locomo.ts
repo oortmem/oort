@@ -44,16 +44,24 @@ export function parseLocomoDate(s: string): string {
   return new Date(Date.UTC(Number(m[6]), month, Number(m[4]), hour, Number(m[2]))).toISOString();
 }
 
+/** A dialogue id in one spelling: `D30:05` and `D30:5` name the same turn. */
+export function diaId(id: string): string {
+  const m = /^D(\d+):(\d+)$/.exec(id);
+  return m === null ? id : `D${Number(m[1])}:${Number(m[2])}`;
+}
+
 /**
  * Evidence ids as written, cleaned of the file's few typos: several ids in one string
- * (`D8:6; D9:17`), a stray colon (`D:11:26`). Anything else unreadable is dropped.
+ * (`D8:6; D9:17`), a stray colon (`D:11:26`), a leading zero (`D30:05`). Anything else
+ * unreadable is dropped.
  */
 export function evidenceIds(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .flatMap((e) => (typeof e === 'string' ? e.split(/[;,\s]+/) : []))
     .map((e) => e.replace(/^D:(\d+:\d+)$/, 'D$1'))
-    .filter((e) => /^D\d+:\d+$/.test(e));
+    .filter((e) => /^D\d+:\d+$/.test(e))
+    .map(diaId);
 }
 
 interface RawTurn {
@@ -84,7 +92,7 @@ export function loadLocomo(json: unknown): PublicSet {
         const at = start + i * 1000;
         last = Math.max(last, at);
         turns.push({
-          turnRef: t.dia_id,
+          turnRef: diaId(t.dia_id),
           sessionId: `${id}:session_${s}`,
           at: new Date(at).toISOString(),
           userText: turnWords(t),

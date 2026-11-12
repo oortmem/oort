@@ -7,8 +7,9 @@
  * `has_answer: true`.
  *
  * Scored twice: turn recall@k (rounds against `has_answer`) and session recall@k (the sessions of
- * the returned rounds against `answer_session_ids`). For `knowledge-update`, the rounds of the
- * latest answer session are expected and those of earlier answer sessions count as stale. The
+ * the top k rounds against `answer_session_ids`). For `knowledge-update`, the latest answer
+ * session (and its rounds) is expected and earlier answer sessions (and their rounds) count as
+ * stale. The
  * 30 abstention questions (`_abs` ids) are their own group. Verbatim storage never supersedes, so
  * stale-leak here is a baseline to compare links against, not a measure of Oort's updates.
  */
@@ -92,15 +93,20 @@ export function loadLongMemEval(json: unknown): PublicSet {
     const abstention = qid.endsWith('_abs');
     const type = String(raw['question_type']);
     let evidence = [...evidenceBySession.values()].flat();
+    let expectedSessions = answerSessions;
     let stale: string[] | undefined;
+    let staleSessions: string[] | undefined;
     if (type === 'knowledge-update' && !abstention) {
       const answered = answerSessions
         .filter((s) => evidenceBySession.has(s))
         .sort((a, b) => (dateOf.get(a) ?? 0) - (dateOf.get(b) ?? 0));
       const latest = answered[answered.length - 1];
       if (latest !== undefined && answered.length > 1) {
+        // The latest answer is expected; earlier ones are outdated, for rounds and sessions alike.
         evidence = evidenceBySession.get(latest) ?? [];
         stale = answered.slice(0, -1).flatMap((s) => evidenceBySession.get(s) ?? []);
+        expectedSessions = [latest];
+        staleSessions = answered.slice(0, -1);
       }
     }
     const question: Question = {
@@ -108,8 +114,9 @@ export function loadLongMemEval(json: unknown): PublicSet {
       question: String(raw['question']),
       group: abstention ? 'abstention' : type,
       evidence,
-      answerSessions,
+      answerSessions: expectedSessions,
       ...(stale !== undefined && { stale }),
+      ...(staleSessions !== undefined && { staleSessions }),
       ...(abstention && { abstention: true }),
     };
     haystacks.push({

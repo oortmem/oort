@@ -7,17 +7,54 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { DATASETS, fetchDataset, datasetPath } from './datasets.js';
 import { cachingEmbedder } from './embed-cache.js';
 import { fakeEmbedder } from './fake-embed.js';
-import { evidenceIds, loadLocomo, parseLocomoDate } from './locomo.js';
+import { diaId, evidenceIds, loadLocomo, parseLocomoDate } from './locomo.js';
 import { loadLongMemEval, parseLongMemEvalDate, roundsOf } from './longmemeval.js';
 import { estimateTokens, planPublicSet, renderPlan } from './public-plan.js';
-import { publicMain, spread } from './public-main.js';
-import { embedTextOf, runPublicSet } from './public-sets.js';
+import { publicMain, spread, type PublicArgs } from './public-main.js';
+import { embedTextOf, runPublicSet, sessionsOfRounds } from './public-sets.js';
+import { computeMetrics } from './eval.js';
 
 const sample = (name: string): unknown =>
   JSON.parse(fs.readFileSync(new URL(`../eval/public/${name}`, import.meta.url), 'utf8'));
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-public-test-'));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
+const SAMPLE_LME = fileURLToPath(
+  new URL('../eval/public/longmemeval-sample.json', import.meta.url),
+);
+const args = (over: Partial<PublicArgs>): PublicArgs => ({
+  set: 'longmemeval',
+  fetch: false,
+  plan: false,
+  yes: false,
+  unpinned: false,
+  embed: 'none',
+  rerank: 'none',
+  links: 'off',
+  noGate: false,
+  k: '5,10',
+  json: false,
+  cacheDir: root,
+  ...over,
+});
+/** A fetch that fails the test if anything calls it. */
+const noNetwork = () => {
+  const f = vi.fn(() => {
+    throw new Error('the network was called');
+  });
+  vi.stubGlobal('fetch', f);
+  return f;
+};
+const quiet = () => {
+  const out: string[] = [];
+  vi.spyOn(process.stdout, 'write').mockImplementation((s) => (out.push(String(s)), true));
+  return out;
+};
 
 describe('datasets (CON-147)', () => {
   it('datasets.pinned-revisions', () => {
@@ -41,6 +78,72 @@ describe('datasets (CON-147)', () => {
   });
 });
 
+describe('pinning (CON-147 review)', () => {
+  it('datasets.download-stops-past-the-recorded-size', async () => {
+    let signal: AbortSignal | undefined;
+    let sent = 0;
+    const chunk = new Uint8Array(64 * 1024);
+    const endless = new ReadableStream<Uint8Array>({
+      pull(c) {
+        sent += chunk.length;
+        if (sent > 50 * DATASETS.locomo.bytes) c.close();
+        else c.enqueue(chunk);
+      },
+    });
+    const fake = (async (_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Response(endless);
+    }) as unknown as typeof fetch;
+    const cacheDir = path.join(root, 'cap');
+    await expect(fetchDataset('locomo', { cacheDir, fetch: fake })).rejects.toThrow(
+      /more than the recorded/,
+    );
+    expect(signal?.aborted).toBe(true);
+    // It stopped near the cap, not at the end of the stream.
+    expect(sent).toBeLessThan(DATASETS.locomo.bytes * 2);
+    const dir = path.dirname(datasetPath('locomo', cacheDir));
+    expect(fs.existsSync(dir) ? fs.readdirSync(dir) : []).toEqual([]);
+  });
+
+  it('public.a-file-by-path-needs---unpinned', async () => {
+    noNetwork();
+    const out = quiet();
+    const log: string[] = [];
+    const code = await publicMain(args({ file: SAMPLE_LME }), (m) => log.push(m));
+    expect(code).toBe(1);
+    expect(log.join('\n')).toMatch(/--unpinned/);
+    expect(out.join('')).toBe('');
+  });
+
+  it('public.a-hash-mismatch-is-refused-before-parsing', async () => {
+    noNetwork();
+    const cacheDir = path.join(root, 'mismatch');
+    const file = datasetPath('longmemeval', cacheDir);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Not JSON: parsing it would throw, so a clean exit 1 shows it was never parsed.
+    fs.writeFileSync(file, 'not json');
+    const log: string[] = [];
+    const code = await publicMain(args({ cacheDir }), (m) => log.push(m));
+    expect(code).toBe(1);
+    expect(log.join('\n')).toMatch(/SHA-256 .* is not the recorded/);
+  });
+
+  it('public.---unpinned-runs-and-records-pinned-false', async () => {
+    noNetwork();
+    quiet();
+    const outFile = path.join(root, 'unpinned.json');
+    const code = await publicMain(
+      args({ file: SAMPLE_LME, unpinned: true, out: outFile }),
+      () => {},
+    );
+    expect(code).toBe(0);
+    const report = JSON.parse(fs.readFileSync(outFile, 'utf8')) as {
+      dataset: { pinned: boolean };
+    };
+    expect(report.dataset.pinned).toBe(false);
+  });
+});
+
 describe('LoCoMo adapter (CON-147)', () => {
   const set = loadLocomo(sample('locomo-sample.json'));
   const h = set.haystacks[0]!;
@@ -56,6 +159,24 @@ describe('LoCoMo adapter (CON-147)', () => {
       'D9:1',
       'D4:4',
     ]);
+  });
+
+  it('locomo.ids-without-leading-zeros', () => {
+    expect(diaId('D30:05')).toBe('D30:5');
+    expect(diaId('D03:007')).toBe('D3:7');
+    expect(evidenceIds(['D30:05', 'D:01:2'])).toEqual(['D30:5', 'D1:2']);
+    const padded = loadLocomo([
+      {
+        sample_id: 'z',
+        conversation: {
+          session_1_date_time: '9:15 am on 3 March, 2024',
+          session_1: [{ speaker: 'A', dia_id: 'D01:01', text: 'hello there' }],
+        },
+        qa: [{ question: 'hi?', answer: 'x', evidence: ['D1:01'], category: 4 }],
+      },
+    ]);
+    expect(padded.haystacks[0]?.turns[0]?.turnRef).toBe('D1:1');
+    expect(padded.haystacks[0]?.questions[0]?.evidence).toEqual(['D1:1']);
   });
 
   it('locomo.turns-in-order-with-session-dates', () => {
@@ -137,8 +258,28 @@ describe('LongMemEval adapter (CON-147)', () => {
       group: 'knowledge-update',
       evidence: ['k-new#1'],
       stale: ['k-old#0'],
+      // Sessions follow the rounds: only the latest answer session is expected.
+      answerSessions: ['k-new'],
+      staleSessions: ['k-old'],
     });
     expect(abs?.questions[0]).toMatchObject({ group: 'abstention', abstention: true });
+  });
+
+  it('longmemeval.session-recall-at-k-reads-the-top-k-rounds', () => {
+    const sessionOf = new Map([
+      ['a0', 'a'],
+      ['a1', 'a'],
+      ['b0', 'b'],
+    ]);
+    const ids = sessionsOfRounds(['a0', 'a1', 'b0'], sessionOf);
+    expect(ids).toEqual(['a', 'a', 'b']);
+    const r = computeMetrics(
+      [{ question: 'q', expectedMemoryIds: ['a', 'b'] }],
+      [{ ids, aboveThreshold: ids.length }],
+      [1, 2, 3],
+    );
+    // The top 2 rounds are both in session a: one of two answer sessions.
+    expect(r.groups['overall']?.recallAt).toEqual({ 1: 0.5, 2: 0.5, 3: 1 });
   });
 
   it('longmemeval.run-reports-turns-and-sessions', async () => {
@@ -147,6 +288,7 @@ describe('LongMemEval adapter (CON-147)', () => {
     expect(r.turns).toBe(8);
     expect(r.turn.groups['abstention']?.abstainFp).not.toBeNull();
     expect(r.turn.groups['knowledge-update']?.staleLeak).not.toBeNull();
+    expect(r.session?.groups['knowledge-update']?.staleLeak).not.toBeNull();
     expect(Object.keys(r.session?.groups ?? {})).toEqual([
       'overall',
       'multi-session',
@@ -197,29 +339,24 @@ describe('plan and paid models (CON-147)', () => {
   });
 
   it('plan.paid-models-without---yes-send-nothing', async () => {
-    vi.stubEnv('VOYAGE_API_KEY', '');
-    const out: string[] = [];
-    vi.spyOn(process.stdout, 'write').mockImplementation((s) => (out.push(String(s)), true));
+    vi.stubEnv('VOYAGE_API_KEY', 'not-a-key');
+    const net = noNetwork();
+    const out = quiet();
     const code = await publicMain(
-      {
-        set: 'longmemeval',
-        file: fileURLToPath(new URL('../eval/public/longmemeval-sample.json', import.meta.url)),
-        fetch: false,
-        plan: false,
-        yes: false,
-        embed: 'voyage',
-        rerank: 'voyage',
-        links: 'off',
-        noGate: false,
-        k: '5,10',
-        json: false,
-        cacheDir: root,
-      },
+      args({ file: SAMPLE_LME, unpinned: true, embed: 'voyage', rerank: 'voyage' }),
       () => {},
     );
     expect(code).toBe(2);
     expect(out.join('')).toContain('Nothing was sent');
-    vi.unstubAllEnvs();
+    expect(net).not.toHaveBeenCalled();
+  });
+
+  it('plan.checks---k', async () => {
+    noNetwork();
+    quiet();
+    await expect(
+      publicMain(args({ file: SAMPLE_LME, unpinned: true, plan: true, k: '0' }), () => {}),
+    ).rejects.toThrow(/--k/);
   });
 
   it('embed-cache.prefetches-in-batches-and-persists', async () => {

@@ -40,7 +40,7 @@ const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>]
                  [--rerank none|local[:model]|voyage[:model]] [--home <dir>]
                  [--lang en,ja,...] [--condition mono,cross,mixed] [--json] [--out <file>]
                  [--vector-index auto|int8|binary|rabitq]
-       pnpm eval --set locomo|longmemeval [<file.json>] [--fetch] [--plan] [--yes]
+       pnpm eval --set locomo|longmemeval [--fetch] [--plan] [--yes] [<file.json> --unpinned]
                  [--embed none|fake|local[:model]|voyage[:model]] [--rerank none|local|voyage]
                  [--limit <haystacks>] [--links <modes>] [--no-gate] [--k 5,10] [--json] [--out <file>]
                  (eval/public/README.md: never bundled; paid models print a plan and need --yes)
@@ -80,6 +80,7 @@ async function main(): Promise<number> {
       condition: { type: 'string' },
       out: { type: 'string' },
       fetch: { type: 'boolean', default: false },
+      unpinned: { type: 'boolean', default: false },
       plan: { type: 'boolean', default: false },
       yes: { type: 'boolean', default: false },
       limit: { type: 'string' },
@@ -98,6 +99,7 @@ async function main(): Promise<number> {
         set: values.set,
         ...(positionals[0] !== undefined && { file: fromUser(positionals[0]) }),
         fetch: values.fetch,
+        unpinned: values.unpinned,
         plan: values.plan,
         yes: values.yes,
         embed: values.embed,
