@@ -1,7 +1,8 @@
 // Builds the native RaBitQ engine (native/, Rust through napi-rs) for this machine, or for
 // `--target <rust triple>`, and copies it to native/oort-rabitq.<platform tag>.node, where
 // src/rabitq.ts looks for it. Needs cargo; without it, prints why and exits 0 unless --require,
-// since the store falls back to the TypeScript engine.
+// since the store falls back to the TypeScript engine. `--zig` builds through cargo-zigbuild (zig
+// links), which is how the release workflow cross-compiles aarch64-apple-darwin on Linux.
 import { execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -11,6 +12,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const native = path.join(here, '..', 'native');
 const args = process.argv.slice(2);
 const require = args.includes('--require');
+const zig = args.includes('--zig');
 const ti = args.indexOf('--target');
 const target = ti >= 0 ? args[ti + 1] : undefined;
 
@@ -38,7 +40,7 @@ const triple = target ?? host;
 execFileSync(
   'cargo',
   [
-    'build',
+    zig ? 'zigbuild' : 'build',
     '--release',
     '--locked',
     '--features',

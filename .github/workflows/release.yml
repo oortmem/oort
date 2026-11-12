@@ -16,16 +16,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The native RaBitQ engine (CON-25), one binary per platform, built from source on a runner of
-  # that platform. They ship inside @oortmem/store-sqlite (native/oort-rabitq.<tag>.node); any
-  # other platform runs the TypeScript engine. Linux builds on Ubuntu 22.04 (glibc 2.35), so the
-  # binaries load on that glibc or newer.
+  # The native RaBitQ engine (CON-25), one binary per platform, built from source. They ship
+  # inside @oortmem/store-sqlite (native/oort-rabitq.<tag>.node); any other platform runs the
+  # TypeScript engine. Linux builds on a runner of that platform, Ubuntu 22.04 (glibc 2.35), so
+  # the binaries load on that glibc or newer. darwin-arm64 is cross-compiled on Ubuntu with
+  # cargo-zigbuild (zig as the linker, with its own macOS libSystem stubs; the crate links no
+  # Apple framework), so a release does not wait for a hosted macOS arm64 runner. That binary is
+  # loaded and tested on macOS afterwards, by native-darwin-check below.
   native:
     strategy:
       fail-fast: true
       matrix:
         include:
-          - { os: macos-15, tag: darwin-arm64 }
+          - { os: ubuntu-22.04, tag: darwin-arm64, cross: aarch64-apple-darwin }
           - { os: ubuntu-22.04, tag: linux-x64-gnu }
           - { os: ubuntu-22.04-arm, tag: linux-arm64-gnu }
     runs-on: ${{ matrix.os }}
@@ -42,13 +45,53 @@ jobs:
           node-version: 24
       - run: pnpm install --frozen-lockfile
       - name: Rust tests, then the release binary
+        if: matrix.cross == ''
         run: |
           cargo test --locked --manifest-path packages/store-sqlite/native/Cargo.toml
           node packages/store-sqlite/scripts/build-native.mjs --require
           test -f "packages/store-sqlite/native/oort-rabitq.${{ matrix.tag }}.node"
+      # zig and cargo-zigbuild for the cross build, each pinned by version and SHA-256 (zig's from
+      # ziglang.org/download/index.json, cargo-zigbuild's from its release's .sha256 file).
+      - name: Install zig and cargo-zigbuild
+        if: matrix.cross != ''
+        env:
+          ZIG_VERSION: 0.17.0
+          ZIG_SHA256: 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026
+          ZIGBUILD_VERSION: 0.24.0
+          ZIGBUILD_SHA256: 52be2cb85ad3875682564a29bac1832b2ab3db68b1c504765c92d5249cc9b96f
+        run: |
+          mkdir -p "$RUNNER_TEMP/cross" && cd "$RUNNER_TEMP/cross"
+          curl -sSfL --retry 3 -o zig.tar.xz \
+            "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz"
+          echo "$ZIG_SHA256  zig.tar.xz" | sha256sum -c -
+          curl -sSfL --retry 3 -o cargo-zigbuild.tar.xz \
+            "https://github.com/rust-cross/cargo-zigbuild/releases/download/v$ZIGBUILD_VERSION/cargo-zigbuild-x86_64-unknown-linux-musl.tar.xz"
+          echo "$ZIGBUILD_SHA256  cargo-zigbuild.tar.xz" | sha256sum -c -
+          tar -xJf zig.tar.xz && tar -xJf cargo-zigbuild.tar.xz
+          echo "$RUNNER_TEMP/cross/zig-x86_64-linux-$ZIG_VERSION" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/cross/cargo-zigbuild-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+      # Run inside native/ so rustup applies rust-toolchain.toml and adds the target to that
+      # toolchain. MACOSX_DEPLOYMENT_TARGET is rustc's own default for aarch64-apple-darwin (11.0);
+      # without it zig would link for its newer default. The Rust tests ran on the Linux legs.
+      - name: Cross-compile the release binary
+        if: matrix.cross != ''
+        working-directory: packages/store-sqlite/native
+        env:
+          TARGET: ${{ matrix.cross }}
+          TAG: ${{ matrix.tag }}
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+        run: |
+          zig version && cargo-zigbuild --version
+          rustup toolchain install
+          rustup target add "$TARGET"
+          node ../scripts/build-native.mjs --require --zig --target "$TARGET"
+          desc="$(file -b "oort-rabitq.$TAG.node")" && echo "$desc"
+          [[ "$desc" == *Mach-O* && "$desc" == *arm64* ]]
       # The binary as it will ship, loaded by Node on its own platform: the engine tests and the
-      # store's RaBitQ suites (conformance included) fail here rather than fall back.
+      # store's RaBitQ suites (conformance included) fail here rather than fall back. The
+      # cross-built darwin binary cannot load on Linux; native-darwin-check tests it on macOS.
       - name: Load and test the binary on this platform
+        if: matrix.cross == ''
         env:
           OORT_REQUIRE_NATIVE: '1'
         run: |
@@ -64,6 +107,47 @@ jobs:
             packages/store-sqlite/native/oort-rabitq.${{ matrix.tag }}.node
             packages/store-sqlite/native/oort-rabitq.${{ matrix.tag }}.node.sha256
           if-no-files-found: error
+
+  # The cross-built darwin-arm64 binary, loaded and tested on macOS: the same suites as the Linux
+  # legs, with OORT_REQUIRE_NATIVE=1, on the exact file the build job hashed. It is left out of
+  # attest's and publish's needs on purpose, so a release never waits on macOS runner capacity.
+  # It does not use continue-on-error: a failure here turns the run red (the binary that
+  # shipped did not load or failed its tests on macOS) without having blocked publish, which is
+  # the signal to follow up with a patch release. Until then, a binary that does not load on macOS
+  # leaves the store on the TypeScript engine (same results, slower scan). While it waits for a runner the run stays in
+  # progress and holds the `release` concurrency group; once publish has finished, cancelling
+  # the run is safe.
+  native-darwin-check:
+    needs: native
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0 (reads packageManager)
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: native-darwin-arm64
+          path: packages/store-sqlite/native
+      - name: The binary is the one the build job hashed, and is signed and exports its entry point
+        working-directory: packages/store-sqlite/native
+        run: |
+          shasum -a 256 -c oort-rabitq.darwin-arm64.node.sha256
+          codesign --verify --verbose oort-rabitq.darwin-arm64.node
+          nm -gU oort-rabitq.darwin-arm64.node | grep -w _napi_register_module_v1
+      - name: Load and test the binary on macOS
+        env:
+          OORT_REQUIRE_NATIVE: '1'
+        run: |
+          pnpm --filter '@oortmem/store-sqlite...' build
+          pnpm vitest run packages/store-sqlite/src/rabitq.test.ts packages/store-sqlite/src/rabitq-index.test.ts
 
   # Attests the three binaries' build provenance. Its own job, so the job that ran the build (and
   # the dependencies' build scripts) never holds the OIDC token that signs: this one checks out
