@@ -10,7 +10,12 @@ import {
   type Place,
 } from '@oortmem/core';
 import { BINARY_AUTO_THRESHOLD, binaryCode, bitWidth } from './binary.js';
-import { buildRabitqIndex, dropRabitqIndex, hasRabitqIndex } from './rabitq-store.js';
+import {
+  buildRabitqIndex,
+  dropRabitqIndex,
+  hasRabitqIndex,
+  rabitqNeedsRecentre,
+} from './rabitq-store.js';
 
 /**
  * 1: the Phase 1 store, one (org, customer, agent) scope per memory.
@@ -191,13 +196,17 @@ export function binaryIndexPlan(
 
 /**
  * What a migrating open does to the RaBitQ index for `want`: build it (`rabitq`), drop it (`int8`,
- * `binary`), or nothing (`auto` keeps one that exists and never builds one).
+ * `binary`), rebuild it with a new centroid once the store has outgrown the old one
+ * (`rabitqNeedsRecentre`), or nothing (`auto` keeps one that exists and never builds one).
  */
-export function rabitqIndexPlan(db: Database, want: VectorIndex): 'build' | 'drop' | 'keep' {
+export function rabitqIndexPlan(
+  db: Database,
+  want: VectorIndex,
+): 'build' | 'rebuild' | 'drop' | 'keep' {
   const has = hasRabitqIndex(db);
-  if (want === 'rabitq') return has ? 'keep' : 'build';
   if (want === 'int8' || want === 'binary') return has ? 'drop' : 'keep';
-  return 'keep';
+  if (!has) return want === 'rabitq' ? 'build' : 'keep';
+  return rabitqNeedsRecentre(db) ? 'rebuild' : 'keep';
 }
 
 /**
@@ -995,11 +1004,11 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     if (opts.migrate !== false) {
       const want = opts.vectorIndex ?? 'auto';
       const rq = rabitqIndexPlan(db, want);
-      if (rq === 'drop') dropRabitqIndex(db);
+      if (rq === 'drop' || rq === 'rebuild') dropRabitqIndex(db);
       const plan = binaryIndexPlan(db, want, opts.binaryAutoThreshold);
       if (plan === 'build') buildBinaryIndex(db, dimension, opts.log);
       else if (plan === 'drop') dropBinaryIndex(db);
-      if (rq === 'build') buildRabitqIndex(db, dimension, opts.log);
+      if (rq === 'build' || rq === 'rebuild') buildRabitqIndex(db, dimension, opts.log);
     }
   }).immediate();
 }

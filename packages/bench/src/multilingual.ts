@@ -250,6 +250,17 @@ export interface ConditionResult {
 export interface MultilingualReport {
   ks: number[];
   results: ConditionResult[];
+  /**
+   * The int8 vectors read to rescore dense candidates (binary and RaBitQ indexes), over every
+   * condition: `denseQueries` searches, `reads` in all, `perQuery` on average.
+   */
+  rescoring?: { denseQueries: number; reads: number; perQuery: number };
+}
+
+/** Counts dense searches and their rescoring reads across the stores of one run. */
+interface Tally {
+  denseQueries: number;
+  reads: number;
 }
 
 const KS = [5, 10];
@@ -264,17 +275,29 @@ async function seeded(
   dir: string,
   memories: Memory[],
   vectorIndex?: VectorIndex,
+  tally?: Tally,
 ): Promise<MemoryStore> {
   fs.mkdirSync(dir, { recursive: true });
-  const store = await openSqliteStore({
-    path: path.join(dir, 'oort.sqlite'),
-    coldDir: path.join(dir, 'cold'),
-    dimension: EMBEDDING_DIMENSION,
-    ...(vectorIndex !== undefined && { vectorIndex }),
-    log: () => {},
-  });
-  await seedStore(store, memories);
-  return store;
+  const open = (vi?: VectorIndex) =>
+    openSqliteStore({
+      path: path.join(dir, 'oort.sqlite'),
+      coldDir: path.join(dir, 'cold'),
+      dimension: EMBEDDING_DIMENSION,
+      ...(vi !== undefined && { vectorIndex: vi }),
+      ...(tally !== undefined && { onDenseStats: (x) => (tally.reads += x.reads) }),
+      log: () => {},
+    });
+  if (vectorIndex === undefined || vectorIndex === 'auto' || vectorIndex === 'int8') {
+    const store = await open(vectorIndex);
+    await seedStore(store, memories);
+    return store;
+  }
+  // A dense index is built from the stored vectors, as the upgrade or the next `oort` command
+  // builds it on a store that already holds memories (the RaBitQ index takes its centroid then).
+  const plain = await open('int8');
+  await seedStore(plain, memories);
+  await plain.close();
+  return open(vectorIndex);
 }
 
 /** Recalls every row in order; returns the ranked ids and each row's `totalMs`. */
@@ -283,9 +306,17 @@ async function recallRows(
   rows: EvalRow[],
   config: ResolvedConfig,
   opts: MultilingualOptions,
+  tally?: Tally,
 ): Promise<{ ids: string[][]; ms: number[] }> {
   // Rows must not influence each other through access records.
-  const evalStore: MemoryStore = { ...store, recordAccess: async () => {} };
+  const evalStore: MemoryStore = {
+    ...store,
+    recordAccess: async () => {},
+    dense: (...args) => {
+      if (tally !== undefined) tally.denseQueries++;
+      return store.dense(...args);
+    },
+  };
   const ids: string[][] = [];
   const ms: number[] = [];
   for (const row of rows) {
@@ -344,6 +375,7 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
   const vectors = async (ms: Memory[]): Promise<Memory[]> =>
     opts.embed === undefined ? ms : embedMemories(ms, opts.embed);
   const results: ConditionResult[] = [];
+  const tally: Tally = { denseQueries: 0, reads: 0 };
   const result = (
     lang: Language,
     condition: Condition,
@@ -366,21 +398,23 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
         path.join(tmp, 'en'),
         await vectors(memoriesFor(set, 'en')),
         opts.vectorIndex,
+        tally,
       );
       try {
         for (const lang of languages) {
           if (conditions.includes('mono')) {
             const rows = rowsFor(set, lang, 'mono');
             if (lang === 'en') {
-              result(lang, 'mono', rows, await recallRows(english, rows, config, opts));
+              result(lang, 'mono', rows, await recallRows(english, rows, config, opts, tally));
             } else {
               const own = await seeded(
                 path.join(tmp, lang),
                 await vectors(memoriesFor(set, lang)),
                 opts.vectorIndex,
+                tally,
               );
               try {
-                result(lang, 'mono', rows, await recallRows(own, rows, config, opts));
+                result(lang, 'mono', rows, await recallRows(own, rows, config, opts, tally));
               } finally {
                 await own.close();
               }
@@ -390,7 +424,7 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
             const crossRows = remap(rowsFor(set, lang, 'cross'), (id) =>
               memoryId('en', factOf(id)),
             );
-            result(lang, 'cross', crossRows, await recallRows(english, crossRows, config, opts));
+            result(lang, 'cross', crossRows, await recallRows(english, crossRows, config, opts, tally));
           }
         }
       } finally {
@@ -404,11 +438,12 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
         path.join(tmp, 'mixed'),
         await vectors([...all, ...noise]),
         opts.vectorIndex,
+        tally,
       );
       try {
         for (const lang of languages) {
           const rows = rowsFor(set, lang, 'mixed');
-          const run = await recallRows(mixed, rows, config, opts);
+          const run = await recallRows(mixed, rows, config, opts, tally);
           // Any language's copy of the expected fact is a hit.
           let found = 0;
           let same = 0;
@@ -435,7 +470,16 @@ export async function runMultilingual(opts: MultilingualOptions = {}): Promise<M
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
-  return { ks: KS, results };
+  return {
+    ks: KS,
+    results,
+    ...(tally.reads > 0 && {
+      rescoring: {
+        ...tally,
+        perQuery: Math.round((tally.reads / Math.max(1, tally.denseQueries)) * 10) / 10,
+      },
+    }),
+  };
 }
 
 const r10 = (r: ConditionResult | undefined): number | null | undefined =>
@@ -491,6 +535,12 @@ export function renderMultilingual(report: MultilingualReport): string {
       '',
       'Mixed store, share of found facts whose first copy is in the question language: ' +
         mixed.map((r) => `${r.lang} ${cell(r.sameLanguageFirst)}`).join(', '),
+    );
+  }
+  if (report.rescoring !== undefined) {
+    lines.push(
+      '',
+      `Rescoring reads: ${report.rescoring.perQuery} int8 vectors per dense query (${report.rescoring.reads} over ${report.rescoring.denseQueries} queries).`,
     );
   }
   return lines.join('\n');

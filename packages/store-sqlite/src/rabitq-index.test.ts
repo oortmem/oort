@@ -358,6 +358,50 @@ describe('rabitq index', () => {
     );
   });
 
+  it('rabitq.a-store-that-outgrows-its-centroid-is-rebuilt-once', async () => {
+    const s = fresh();
+    const next = rng(37);
+    const meta = () => {
+      const db = raw(s.dbPath);
+      try {
+        return Object.fromEntries(
+          (
+            db.prepare(`SELECT key, value FROM ${RQ_META_TABLE}`).all() as {
+              key: string;
+              value: unknown;
+            }[]
+          ).map((r) => [r.key, r.value]),
+        );
+      } finally {
+        db.close();
+      }
+    };
+    const store = await openSqliteStore(optsD(s, { vectorIndex: 'rabitq' }));
+    const empty = meta();
+    expect(empty['built_from']).toBe(0);
+    expect(empty['centroid']).toBeUndefined(); // built empty: no centroid yet
+    await store.upsertMany(
+      TG,
+      Array.from({ length: 999 }, (_, i) => makeMemory({ id: `g${i}`, embedding: randomVec(next) })),
+    );
+    await store.close();
+    await (await openSqliteStore(optsD(s, { vectorIndex: 'rabitq' }))).close();
+    expect(meta()['generation']).toBe(empty['generation']); // 999: not yet
+    const more = await openSqliteStore(optsD(s, { vectorIndex: 'auto' }));
+    const last = randomVec(next);
+    await more.upsert(TG, makeMemory({ id: 'g999', embedding: last }));
+    await more.close();
+    // 1,000 vectors, four times nothing: the next open that may migrate rebuilds it, centred.
+    await (await openSqliteStore(optsD(s, { vectorIndex: 'auto' }))).close();
+    const rebuilt = meta();
+    expect(rebuilt['generation']).not.toBe(empty['generation']);
+    expect(rebuilt['built_from']).toBe(1000);
+    expect(rebuilt['centroid']).toBeInstanceOf(Buffer);
+    expect(indexed(s)['g999']).toEqual(entry(s, last));
+    await (await openSqliteStore(optsD(s, { vectorIndex: 'rabitq' }))).close();
+    expect(meta()['generation']).toBe(rebuilt['generation']); // next at 4,000
+  });
+
   it('rabitq.a-handle-opened-before-the-build-keeps-the-index-in-step', async () => {
     const s = fresh();
     const next = rng(9);

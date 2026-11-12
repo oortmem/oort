@@ -407,10 +407,15 @@ let nativeLoad: { module: NativeModule } | { error: string } | undefined;
 
 /**
  * The native engine's constructor, or why it did not load: no binary for this platform
- * (`oort-rabitq.<tag>.node` in `dir`, default `nativeDir()`), or one that fails to load. Loaded
- * once per process from the default directory. Never throws.
+ * (`oort-rabitq.<tag>.node` in `dir`, default `nativeDir()`), one that fails to load, or
+ * `OORT_RABITQ_NATIVE=0` in the environment. Loaded once per process from the default
+ * directory. Never throws.
  */
 export function loadNativeRabitq(dir?: string): { module: NativeModule } | { error: string } {
+  // The off switch, for a native engine that misbehaves somewhere: the TypeScript engine answers.
+  if (process.env['OORT_RABITQ_NATIVE'] === '0') {
+    return { error: 'turned off by OORT_RABITQ_NATIVE=0' };
+  }
   if (dir === undefined && nativeLoad !== undefined) return nativeLoad;
   const tag = nativePlatformTag();
   const file = path.join(dir ?? nativeDir(), `oort-rabitq.${tag}.node`);

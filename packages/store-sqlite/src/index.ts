@@ -211,6 +211,8 @@ export interface DenseStats {
   candidates: number;
   /** int8 vectors read to rescore (0 for the exact scan). */
   reads: number;
+  /** RaBitQ only: the read budget stopped the rescoring before the error bound did. */
+  capped?: boolean;
 }
 
 /**
@@ -712,7 +714,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           (from <= SCHEMA_VERSION &&
             (lexicalIndexState(conn, icu) === 'rebuild' ||
               binaryIndexPlan(conn, vectorIndex, opts.binaryAutoThreshold) === 'build' ||
-              rabitqIndexPlan(conn, vectorIndex) === 'build')));
+              ['build', 'rebuild'].includes(rabitqIndexPlan(conn, vectorIndex)))));
       if (rebuilds) {
         conn.pragma(`busy_timeout = ${Math.max(busyTimeoutMs, MIGRATION_BUSY_TIMEOUT_MS)}`);
       }
@@ -994,7 +996,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
 
   /** The RaBitQ index's writes (CON-25), and this process's in-memory copy of it. */
   const rq = rabitqWriter(db, dimension);
-  const rqReader = new RabitqReader(db, dimension, rabitqEngine, log);
+  // A missing native engine is said once per process, by opens that may migrate (`oort`
+  // commands, the MCP server, the SDK): the hooks run once per prompt and stay quiet; `oort
+  // doctor` says it there.
+  const rqReader = new RabitqReader(
+    db,
+    dimension,
+    rabitqEngine,
+    opts.migrate === false ? () => {} : log,
+  );
 
   /**
    * Rescores RaBitQ candidates for one pattern: each candidate's int8 vector (one primary-key

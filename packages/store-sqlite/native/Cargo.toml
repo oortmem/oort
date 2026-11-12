@@ -1,6 +1,6 @@
 [package]
 name = "oort-rabitq"
-version = "0.8.0"
+version = "0.0.0" # not published: it ships inside @oortmem/store-sqlite
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"

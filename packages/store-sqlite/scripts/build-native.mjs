@@ -54,5 +54,8 @@ const lib = { darwin: 'liboort_rabitq.dylib', linux: 'liboort_rabitq.so' }[
 ];
 const built = path.join(native, 'target', ...(target !== undefined ? [target] : []), 'release', lib);
 const out = path.join(native, `oort-rabitq.${tagOf(triple)}.node`);
-fs.copyFileSync(built, out);
+// Copy, then rename over the old file: a process that has the old one loaded keeps its inode
+// (on macOS, rewriting a loaded binary in place gets that process killed).
+fs.copyFileSync(built, `${out}.tmp`);
+fs.renameSync(`${out}.tmp`, out);
 console.log(`build-native: ${path.relative(process.cwd(), out)}`);

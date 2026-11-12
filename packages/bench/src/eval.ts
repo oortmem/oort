@@ -132,8 +132,16 @@ export interface EvalReport {
   ks: number[];
   skippedEmpty: number;
   groups: Record<string, GroupMetrics>;
-  /** The dense index the copy searched (CON-17): exact int8, or binary codes rescored in int8. */
-  vectorIndex?: { index: 'int8' | 'binary'; vectors: number };
+  /**
+   * The dense index the copy searched: exact int8, binary codes rescored in int8 (CON-17), or the
+   * RaBitQ index (CON-25).
+   */
+  vectorIndex?: { index: 'int8' | 'binary' | 'rabitq'; vectors: number };
+  /**
+   * The int8 vectors read to rescore candidates (binary and RaBitQ indexes): `denseQueries`
+   * dense searches, `reads` in all, `perQuery` on average.
+   */
+  rescoring?: { denseQueries: number; reads: number; perQuery: number };
   /**
    * What the rows read beyond the live set (CON-17): `hydrated`, the cold memories returned (each
    * one a cold read and a write); `asked`, the rows where the adaptive stop was asked (cold
@@ -365,6 +373,7 @@ export function discoverScope(dbPath: string): ScopeFilter {
 }
 
 export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
+  const rescoring = { denseQueries: 0, reads: 0 };
   const ks = [...new Set([...(opts.ks ?? [5, 10]), 10])].sort((a, b) => a - b);
   const maxK = Math.max(...ks);
   const copy = await copyStore(
@@ -377,6 +386,7 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
     coldDir: copy.coldDir,
     dimension: opts.dimension ?? 512,
     ...(opts.vectorIndex !== undefined && { vectorIndex: opts.vectorIndex }),
+    onDenseStats: (x) => (rescoring.reads += x.reads),
     log: () => {},
   });
   try {
@@ -400,6 +410,10 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
       ...store,
       recordAccess: async () => {},
       upsert: async () => {},
+      dense: (...args) => {
+        rescoring.denseQueries++;
+        return store.dense(...args);
+      },
     };
     const scope = opts.scope ?? discoverScope(copy.dbPath);
     const share = opts.coldShare ?? 0;
@@ -438,6 +452,16 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalReport> {
     return {
       ...computeMetrics(opts.rows, outcomes, ks, opts.skippedEmpty ?? 0),
       ...(vectorIndex !== undefined && { vectorIndex }),
+      ...(vectorIndex !== undefined &&
+        vectorIndex.index !== 'int8' && {
+          rescoring: {
+            ...rescoring,
+            perQuery:
+              rescoring.denseQueries === 0
+                ? 0
+                : Math.round((rescoring.reads / rescoring.denseQueries) * 10) / 10,
+          },
+        }),
       reads,
     };
   } finally {
@@ -470,6 +494,11 @@ export function renderReport(r: EvalReport): string {
   }
   if (r.vectorIndex !== undefined) {
     lines.push('', `Vector index: ${r.vectorIndex.index} (${r.vectorIndex.vectors} vectors).`);
+  }
+  if (r.rescoring !== undefined) {
+    lines.push(
+      `Rescoring reads: ${r.rescoring.perQuery} int8 vectors per dense query (${r.rescoring.reads} over ${r.rescoring.denseQueries} queries).`,
+    );
   }
   if (r.reads !== undefined) {
     lines.push(

@@ -23,6 +23,7 @@ import {
   SCHEMA_VERSION,
   sqliteSchemaVersion,
   sqliteVectorIndex,
+  loadNativeRabitq,
 } from '@oortmem/store-sqlite';
 import { HOSTS, HOST_LABEL, detectHosts, inspectHost, type HostStatus } from '../connectors.js';
 import {
@@ -913,8 +914,10 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
               : before === 3
                 ? 'lexical search now finds Chinese, Japanese, Korean, Thai and Indic words'
                 : before === 4
-                  ? 'it can now hold places (near, within) and keep a binary vector index (store.vectorIndex)'
-                  : 'it can now keep a binary vector index (store.vectorIndex)'
+                  ? 'it can now hold places (near, within) and keep a binary or RaBitQ vector index (store.vectorIndex)'
+                  : before === 5
+                    ? 'it can now keep a binary or RaBitQ vector index (store.vectorIndex)'
+                    : 'it can now keep a RaBitQ vector index (store.vectorIndex: rabitq)'
         }. Then restart any Oort MCP server started before the upgrade (quit and reopen Claude Code, Claude Desktop or Cursor): an older Oort cannot write to the new search index`,
       });
     }
@@ -962,15 +965,31 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
           ? `no agent named: reads and writes your Planet only, no Star (name one with --agent or OORT_AGENT)${keeping}`
           : `acting as ${agent.id} (from ${agent.source === 'flag' ? '--agent' : 'OORT_AGENT'}): reads your Planet and its own Star; new memories go to ${agent.home === 'star' ? `Star ${agent.id}` : 'your Planet'}${agent.home === 'star' ? ', and it never changes your Planet' : ''}${keeping}`,
     });
-    // The dense index the store searches (CON-17): exact int8, or binary codes rescored in int8.
+    // The dense index the store searches: exact int8, binary codes rescored in int8 (CON-17), or
+    // the RaBitQ index (CON-25), whose native engine may be missing on this platform.
     const vi = sqliteVectorIndex(db);
     if (vi !== undefined) {
       const want = storeConfig;
+      const native = vi.index === 'rabitq' || want.vectorIndex === 'rabitq' ? loadNativeRabitq() : undefined;
+      const fallback = native !== undefined && 'error' in native ? native.error : undefined;
+      const kind =
+        vi.index === 'rabitq'
+          ? `rabitq, 1-bit codes with error bounds rescored in int8, ${fallback === undefined ? 'native engine' : 'TypeScript engine'}`
+          : vi.index === 'binary'
+            ? 'binary, 1-bit codes rescored in int8'
+            : 'int8, exact';
       checks.push({
         group: 'store',
         name: 'vector-index',
-        status: 'info',
-        detail: `${vi.index === 'binary' ? 'binary, 1-bit codes rescored in int8' : 'int8, exact'} (${vi.vectors} searchable ${vi.vectors === 1 ? 'vector' : 'vectors'}; store.vectorIndex is ${want.vectorIndex}${want.vectorIndex === 'auto' ? `: binary from ${want.binaryAutoThreshold}` : ''})`,
+        status: fallback === undefined ? 'info' : 'warn',
+        detail: `${kind} (${vi.vectors} searchable ${vi.vectors === 1 ? 'vector' : 'vectors'}; store.vectorIndex is ${want.vectorIndex}${want.vectorIndex === 'auto' ? `: binary from ${want.binaryAutoThreshold}` : ''})${
+          fallback === undefined
+            ? ''
+            : `; the native RaBitQ engine is unavailable (${fallback}), so dense search runs the same index in TypeScript, about ten times slower to scan`
+        }`,
+        ...(fallback !== undefined && {
+          fix: 'reinstall Oort on macOS arm64 or Linux x64/arm64 (glibc), or set store.vectorIndex to binary in ~/.oort/config.json',
+        }),
       });
     }
     // Oort Cloud consolidates itself; locally the hook drain does, when due (CON-48).

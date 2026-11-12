@@ -17,7 +17,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import type { Database, Statement } from 'better-sqlite3';
-import { bitWidth } from './binary.js';
+import { BINARY_OVERSAMPLE, bitWidth } from './binary.js';
 import {
   createRabitqEngine,
   rabitqEncode,
@@ -52,6 +52,32 @@ export function hasRabitqIndex(db: Database): boolean {
 /** How many vectors the RaBitQ index holds. */
 export function rabitqVectors(db: Database): number {
   return db.prepare<[], { n: number }>(`SELECT count(*) AS n FROM ${RQ_TABLE}`).get()?.n ?? 0;
+}
+
+/**
+ * The index's centroid is the mean of the vectors it was built from. A store that has grown
+ * `RABITQ_RECENTRE_GROWTH` times since (and holds at least `RABITQ_RECENTRE_FROM` vectors) has
+ * it rebuilt, with a new centroid, by the next open that may migrate: a store created empty with
+ * `vectorIndex: 'rabitq'` would otherwise keep the zero centroid, and looser bounds, for good.
+ * Geometric, so the rebuilds of a growing store cost a constant number of passes per vector.
+ */
+export const RABITQ_RECENTRE_FROM = 1_000;
+export const RABITQ_RECENTRE_GROWTH = 4;
+
+/** Whether the index has outgrown its centroid (see `RABITQ_RECENTRE_GROWTH`). */
+export function rabitqNeedsRecentre(db: Database): boolean {
+  const built = Number(
+    db
+      .prepare<[], { value: number }>(
+        `SELECT value FROM ${RQ_META_TABLE} WHERE key = 'built_from'`,
+      )
+      .get()?.value ?? 0,
+  );
+  const due = Math.max(RABITQ_RECENTRE_FROM, RABITQ_RECENTRE_GROWTH * built);
+  // `max(rid)` bounds the count from above in one lookup; most opens stop there.
+  const top = db.prepare<[], { n: number | null }>(`SELECT max(rid) AS n FROM ${RQ_TABLE}`).get();
+  if ((top?.n ?? 0) < due) return false;
+  return rabitqVectors(db) >= due;
 }
 
 /** Drops the RaBitQ index's tables (inside the caller's transaction). */
@@ -126,6 +152,7 @@ export function buildRabitqIndex(
   meta.run('seq', 0);
   meta.run('floor', 0);
   meta.run('width', bitWidth(dimension));
+  meta.run('built_from', n);
   if (centroid !== undefined) {
     meta.run('centroid', Buffer.from(centroid.buffer, centroid.byteOffset, centroid.byteLength));
   }
@@ -319,7 +346,18 @@ export interface RescoredRow {
 export interface RabitqSearchStats {
   candidates: number;
   reads: number;
+  /** The read budget (`RABITQ_MAX_READS_PER_K` x k) stopped the rescoring before the bound did. */
+  capped: boolean;
 }
+
+/**
+ * At most this many rescoring reads per result: the binary index's oversampling, so the RaBitQ
+ * index never reads more than it does. The bound alone needs more only where the k-th score sits
+ * in a flat stretch of near-equal scores (measured: 20,000 vectors in 2,000 small clusters, where
+ * the 50th hit is any of thousands of unrelated vectors); there the candidates are taken in
+ * order of their upper bound, which still holds the top of the list (design §4).
+ */
+export const RABITQ_MAX_READS_PER_K = BINARY_OVERSAMPLE;
 
 /**
  * Batches of candidates rescored after the first `k`: small, so few more are read than the
@@ -328,6 +366,10 @@ export interface RabitqSearchStats {
 const RESCORE_BATCH = 16;
 /** Float32 distances against float64 bounds: a candidate this close to the k-th is rescored. */
 const SLACK = 1e-6;
+
+/** The k-th exact cosine so far, less the slack (minus infinity before k rows). */
+const kthNow = (top: RescoredRow[], k: number): number =>
+  top.length >= k ? 1 - (top[k - 1] as RescoredRow).distance - SLACK : -Infinity;
 
 const order = (x: RescoredRow, y: RescoredRow): number =>
   x.distance - y.distance ||
@@ -519,7 +561,7 @@ export class RabitqReader {
             }),
           );
     if (node === undefined || author === undefined || projects?.length === 0) {
-      stats?.({ candidates: 0, reads: 0 });
+      stats?.({ candidates: 0, reads: 0, capped: false });
       return [];
     }
     const { query, cq } = rabitqQuery(v, this.rc);
@@ -528,11 +570,12 @@ export class RabitqReader {
     let top: RescoredRow[] = [];
     let reads = 0;
     let i = 0;
-    while (i < c.rids.length) {
+    const budget = Math.max(k, RABITQ_MAX_READS_PER_K * k);
+    while (i < c.rids.length && reads < budget) {
       const full = top.length >= k;
-      const kth = full ? 1 - (top[k - 1] as RescoredRow).distance - SLACK : -Infinity;
+      const kth = kthNow(top, k);
       if ((c.upper[i] as number) < kth) break;
-      const size = full ? RESCORE_BATCH : k - top.length;
+      const size = Math.min(full ? RESCORE_BATCH : k - top.length, budget - reads);
       const batch: number[] = [];
       while (i < c.rids.length && batch.length < size && (c.upper[i] as number) >= kth) {
         batch.push(c.rids[i] as number);
@@ -541,7 +584,11 @@ export class RabitqReader {
       reads += batch.length;
       top = [...top, ...rescore(batch)].sort(order).slice(0, k);
     }
-    stats?.({ candidates: c.rids.length, reads });
+    stats?.({
+      candidates: c.rids.length,
+      reads,
+      capped: reads >= budget && i < c.rids.length && (c.upper[i] as number) >= kthNow(top, k),
+    });
     return top;
   }
 }

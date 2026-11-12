@@ -182,11 +182,14 @@ const updates = z
  * - `vectorIndex`: `auto` (default) scans int8 vectors exactly until the store holds
  *   `binaryAutoThreshold` searchable vectors, then builds the binary index (1-bit codes, 10x
  *   oversampling, int8 rescoring) on the next `oort` command and keeps it; `binary` builds it
- *   now; `int8` never uses one (and drops one already built).
+ *   now; `rabitq` (CON-25) builds the RaBitQ index instead (1-bit codes with error bounds, a 4-bit
+ *   query, bounded int8 rescoring; native engine where a prebuilt binary exists, TypeScript
+ *   otherwise); `int8` never uses one (and drops one already built). `auto` keeps a RaBitQ
+ *   index once built.
  */
 const store = z
   .strictObject({
-    vectorIndex: z.enum(['auto', 'int8', 'binary']).default('auto'),
+    vectorIndex: z.enum(['auto', 'int8', 'binary', 'rabitq']).default('auto'),
     binaryAutoThreshold: z.number().int().min(0).default(100_000),
   })
   .default({ vectorIndex: 'auto', binaryAutoThreshold: 100_000 });

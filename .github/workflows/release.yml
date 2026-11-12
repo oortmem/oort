@@ -16,7 +16,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The native RaBitQ engine (CON-25), one binary per platform, built from source on a runner of
+  # that platform. They ship inside @oortmem/store-sqlite (native/oort-rabitq.<tag>.node); any
+  # other platform runs the TypeScript engine. Linux builds on Ubuntu 22.04 (glibc 2.35), so the
+  # binaries load on that glibc or newer.
+  native:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: macos-14, tag: darwin-arm64 }
+          - { os: ubuntu-22.04, tag: linux-x64-gnu }
+          - { os: ubuntu-22.04-arm, tag: linux-arm64-gnu }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Rust tests, then the release binary
+        run: |
+          cargo test --locked --manifest-path packages/store-sqlite/native/Cargo.toml
+          node packages/store-sqlite/scripts/build-native.mjs --require
+          test -f "packages/store-sqlite/native/oort-rabitq.${{ matrix.tag }}.node"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-${{ matrix.tag }}
+          path: packages/store-sqlite/native/oort-rabitq.${{ matrix.tag }}.node
+          if-no-files-found: error
+
   publish:
+    needs: native
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: npm
@@ -35,9 +70,22 @@ jobs:
       # Trusted publishing needs npm 11.5.1 or later.
       - run: npm install -g npm@11.20.0 && npm --version
       - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: native-*
+          path: packages/store-sqlite/native
+          merge-multiple: true
+      - name: Every native binary is there (the pack ships all three)
+        run: |
+          for tag in darwin-arm64 linux-x64-gnu linux-arm64-gnu; do
+            test -f "packages/store-sqlite/native/oort-rabitq.$tag.node" || { echo "missing $tag"; exit 1; }
+          done
+          ls -l packages/store-sqlite/native/*.node
       - name: Tag matches every package version
         run: node scripts/release-check.mjs "${GITHUB_REF_NAME#v}"
       - run: pnpm verify
+        env:
+          OORT_REQUIRE_NATIVE: '1' # the linux-x64-gnu binary from the native job
       - name: Pack (pnpm resolves workspace:* to the release version)
         run: |
           mkdir -p "$RUNNER_TEMP/pack"

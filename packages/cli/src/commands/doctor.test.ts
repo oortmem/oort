@@ -20,6 +20,7 @@ import { VERSION, resolveConfig } from '@oortmem/core';
 import {
   downgradeSqliteStore,
   listBackups,
+  loadNativeRabitq,
   openSqliteStore,
   sqliteSchemaVersion,
   SCHEMA_VERSION,
@@ -218,11 +219,11 @@ describe('oort doctor', () => {
     fs.rmSync(path.join(h.home, 'config.json'));
     const d = await doctor(h);
     expect(d.human.io.stdout).toContain(
-      `migrated the store from schema version 5 to ${SCHEMA_VERSION}; it can now keep a binary vector index`,
+      `migrated the store from schema version 5 to ${SCHEMA_VERSION}; it can now keep a binary or RaBitQ vector index`,
     );
     // An Oort started before the upgrade can no longer write: it must be restarted.
     expect(d.human.io.stdout).toContain('restart any Oort MCP server started before the upgrade');
-    // Version 6 only adds: no copy is taken, so doctor names none.
+    // Versions 6 and 7 only add: no copy is taken, so doctor names none.
     expect(fs.readdirSync(h.home).filter((f) => f.startsWith('oort.sqlite.pre-v'))).toEqual([]);
     expect(d.check('store', 'backup')).toBeUndefined();
     expect(d.check('store', 'vector-index')).toMatchObject({
@@ -237,6 +238,47 @@ describe('oort doctor', () => {
     expect(again.check('store', 'vector-index')?.detail).toBe(
       'binary, 1-bit codes rescored in int8 (0 searchable vectors; store.vectorIndex is binary)',
     );
+  });
+
+  it('doctor.names-the-rabitq-index-and-its-engine (CON-25)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    await (
+      await openSqliteStore({
+        path: path.join(h.home, 'oort.sqlite'),
+        coldDir: path.join(h.home, 'cold'),
+        dimension: embed.dimension,
+        log: () => {},
+      })
+    ).close();
+    fs.writeFileSync(
+      path.join(h.home, 'config.json'),
+      JSON.stringify({ store: { vectorIndex: 'rabitq' } }),
+    );
+    const native = 'module' in loadNativeRabitq();
+    const d = await doctor(h);
+    const check = d.check('store', 'vector-index');
+    expect(check?.detail).toMatch(
+      /^rabitq, 1-bit codes with error bounds rescored in int8, (native|TypeScript) engine \(0 searchable vectors; store\.vectorIndex is rabitq\)/,
+    );
+    expect(check?.status).toBe(native ? 'info' : 'warn');
+    // Without the native engine (here switched off), the same index runs in TypeScript: a warning
+    // that says why and what to do, never a failure.
+    vi.stubEnv('OORT_RABITQ_NATIVE', '0');
+    try {
+      const off = (await doctor(h)).check('store', 'vector-index');
+      expect(off).toMatchObject({
+        status: 'warn',
+        fix: expect.stringContaining('store.vectorIndex to binary'),
+      });
+      expect(off?.detail).toContain(
+        'TypeScript engine (0 searchable vectors; store.vectorIndex is rabitq); the native RaBitQ engine is unavailable (turned off by OORT_RABITQ_NATIVE=0)',
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('doctor.a-hook-first-leaves-a-pre-rename-index-for-the-cli-to-repair (CON-110)', async () => {
