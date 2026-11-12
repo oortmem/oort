@@ -25,7 +25,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { os: macos-14, tag: darwin-arm64 }
+          - { os: macos-15, tag: darwin-arm64 }
           - { os: ubuntu-22.04, tag: linux-x64-gnu }
           - { os: ubuntu-22.04-arm, tag: linux-arm64-gnu }
     runs-on: ${{ matrix.os }}
