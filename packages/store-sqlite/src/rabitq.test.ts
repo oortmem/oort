@@ -82,37 +82,44 @@ function corpus(dim: number, n: number, clusters: number) {
   return { centres, vectors, rc, w, load, nodes, projects, authors };
 }
 
+/** The scans here are TypeScript over thousands of vectors: seconds under a loaded test run. */
+const SLOW = 60_000;
+
 describe('rabitq encoding', () => {
-  it('rabitq.estimate-error-matches-its-standard-error', () => {
-    // The bound is only as good as the standard error: the normalised error must look normal
-    // (about 6% beyond 1.9 standard errors in all, 0.3% beyond 3).
-    const dim = 384;
-    const c = corpus(dim, 3000, 30);
-    const ts = c.load(new TsRabitqIndex(c.w));
-    let beyond19 = 0;
-    let beyond3 = 0;
-    let count = 0;
-    for (let qn = 0; qn < 20; qn++) {
-      const qv = near(c.centres[qn % c.centres.length]!);
-      const { query, cq } = rabitqQuery(qv, c.rc);
-      // eps 0 and k = n: every vector is a candidate and `upper` is its estimate.
-      const est = ts.search(query, cq, 3000, 0, 0);
-      const sd = ts.search(query, cq, 3000, 1, 0);
-      const sdOf = new Map<number, number>();
-      sd.rids.forEach((rid, i) => sdOf.set(rid, sd.upper[i] as number));
-      est.rids.forEach((rid, i) => {
-        const e = est.upper[i] as number;
-        const s = (sdOf.get(rid) as number) - e;
-        const z = Math.abs(e - cosine(c.vectors[rid - 1]!, qv)) / s;
-        count++;
-        if (z > RABITQ_EPSILON) beyond19++;
-        if (z > 3) beyond3++;
-      });
-    }
-    expect(count).toBe(20 * 1000); // node 0 holds every third vector
-    expect(beyond19 / count).toBeLessThan(0.08);
-    expect(beyond3 / count).toBeLessThan(0.006);
-  });
+  it(
+    'rabitq.estimate-error-matches-its-standard-error',
+    () => {
+      // The bound is only as good as the standard error: the normalised error must look normal
+      // (about 6% beyond 1.9 standard errors in all, 0.3% beyond 3).
+      const dim = 384;
+      const c = corpus(dim, 3000, 30);
+      const ts = c.load(new TsRabitqIndex(c.w));
+      let beyond19 = 0;
+      let beyond3 = 0;
+      let count = 0;
+      for (let qn = 0; qn < 20; qn++) {
+        const qv = near(c.centres[qn % c.centres.length]!);
+        const { query, cq } = rabitqQuery(qv, c.rc);
+        // eps 0 and k = n: every vector is a candidate and `upper` is its estimate.
+        const est = ts.search(query, cq, 3000, 0, 0);
+        const sd = ts.search(query, cq, 3000, 1, 0);
+        const sdOf = new Map<number, number>();
+        sd.rids.forEach((rid, i) => sdOf.set(rid, sd.upper[i] as number));
+        est.rids.forEach((rid, i) => {
+          const e = est.upper[i] as number;
+          const s = (sdOf.get(rid) as number) - e;
+          const z = Math.abs(e - cosine(c.vectors[rid - 1]!, qv)) / s;
+          count++;
+          if (z > RABITQ_EPSILON) beyond19++;
+          if (z > 3) beyond3++;
+        });
+      }
+      expect(count).toBe(20 * 1000); // node 0 holds every third vector
+      expect(beyond19 / count).toBeLessThan(0.08);
+      expect(beyond3 / count).toBeLessThan(0.006);
+    },
+    SLOW,
+  );
 
   it('rabitq.zero-vectors-are-always-candidates-and-the-centroid-is-exact', () => {
     const dim = 64;
@@ -149,28 +156,32 @@ describe('rabitq encoding', () => {
 });
 
 describe('rabitq engines', () => {
-  it('rabitq.candidates-hold-the-exact-top-k', () => {
-    const c = corpus(512, 4000, 40);
-    const ts = c.load(new TsRabitqIndex(c.w));
-    let missed = 0;
-    let candidates = 0;
-    for (let qn = 0; qn < 30; qn++) {
-      const qv = near(c.centres[qn % 40]!);
-      const { query, cq } = rabitqQuery(qv, c.rc);
-      const got = ts.search(query, cq, 10, 3, 1);
-      candidates += got.rids.length;
-      const exact = c.vectors
-        .map((v, i) => ({ rid: i + 1, s: cosine(v, qv) }))
-        .filter((x) => c.nodes[x.rid - 1] === 1)
-        .sort((a, b) => b.s - a.s)
-        .slice(0, 10);
-      const have = new Set(got.rids);
-      missed += exact.filter((x) => !have.has(x.rid)).length;
-    }
-    expect(missed).toBe(0);
-    // ...and far fewer than all 1,333 vectors of the node.
-    expect(candidates / 30).toBeLessThan(400);
-  });
+  it(
+    'rabitq.candidates-hold-the-exact-top-k',
+    () => {
+      const c = corpus(512, 4000, 40);
+      const ts = c.load(new TsRabitqIndex(c.w));
+      let missed = 0;
+      let candidates = 0;
+      for (let qn = 0; qn < 30; qn++) {
+        const qv = near(c.centres[qn % 40]!);
+        const { query, cq } = rabitqQuery(qv, c.rc);
+        const got = ts.search(query, cq, 10, 3, 1);
+        candidates += got.rids.length;
+        const exact = c.vectors
+          .map((v, i) => ({ rid: i + 1, s: cosine(v, qv) }))
+          .filter((x) => c.nodes[x.rid - 1] === 1)
+          .sort((a, b) => b.s - a.s)
+          .slice(0, 10);
+        const have = new Set(got.rids);
+        missed += exact.filter((x) => !have.has(x.rid)).length;
+      }
+      expect(missed).toBe(0);
+      // ...and far fewer than all 1,333 vectors of the node.
+      expect(candidates / 30).toBeLessThan(400);
+    },
+    SLOW,
+  );
 
   it('rabitq.filters-and-the-allowlist-apply-before-k', () => {
     const c = corpus(64, 600, 6);
@@ -233,6 +244,7 @@ describe('rabitq engines', () => {
         }
       }
     },
+    SLOW,
   );
 
   it('rabitq.the-loader-says-why-the-native-engine-is-missing', () => {
