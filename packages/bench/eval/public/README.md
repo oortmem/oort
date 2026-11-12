@@ -60,8 +60,7 @@ documents) per question. Tokens are counted with Voyage's published tokenizer wh
 `packages/bench/.cache/tokenizers/voyage-3.5-lite/` (`tokenizer.json` and `tokenizer_config.json`
 from [MongoDB/voyage-3.5-lite@3331232](https://huggingface.co/MongoDB/voyage-3.5-lite); the
 rerank-3-lite tokenizer file is identical), else estimated at 4 characters a token and labelled
-so. Prices are Voyage's list prices ($0.02 per million tokens for both, 2026-11-12); a free
-allowance on the account lowers the real cost.
+so. Prices are Voyage's list prices ($0.02 per million tokens for both, 2026-11-12).
 
 **Embedding cache.** Local and Voyage embeddings are kept in
 `packages/bench/.cache/embeddings/<model>-512.sqlite`, keyed by model, kind and text, so a second

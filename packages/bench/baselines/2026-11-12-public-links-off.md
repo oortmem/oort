@@ -57,7 +57,7 @@ measures retrieval over raw rounds, not Oort's update handling.
 ## 50 questions spread through the file, lexical and bge-small
 
 `pnpm eval --set longmemeval --limit 50` takes every tenth question, so every category appears.
-The local embedder over all 124,358 rounds did not fit this session's machine time. Per-category
+The local embedder was not run over all 124,358 rounds. Per-category
 rows of 3 to 12 questions are noisy.
 
 | Path            | turn r@10 | session r@10 | multi-session turn r@10 (12) | temporal turn r@10 (12) | KU turn stale-leak (7) | abstain FP (4) |
@@ -129,4 +129,4 @@ rerank calls. Nothing was sent.
 | 96,077 / 751 / 39,592,704        | 9,027                         | 500 / 11,379,442                 | $0.7920 embed + $0.2276 rerank |
 
 Prices are $0.02 per million tokens for voyage-3.5-lite and rerank-3-lite (Voyage list prices,
-2026-11-12); an account's free allowance lowers the real cost.
+2026-11-12).
