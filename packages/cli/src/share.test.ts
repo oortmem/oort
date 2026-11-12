@@ -634,6 +634,25 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     ]);
   });
 
+  it('forget.a-later-memory-it-could-not-read-is-a-warning-and-exit-3 (CON-144)', async () => {
+    const e = setup();
+    const later = '44444444-5555-4666-8777-888888888888';
+    e.cloud.memories.set(
+      ID,
+      fakeMemory({ id: ID, text: 'The port is 3000.', entities: [], supersededBy: later }),
+    );
+    e.cloud.fail = { [`GET /v1/memories/${later}`]: 503 };
+    const r = await e.run(['forget', ID, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(3);
+    expect(e.cloud.memories.has(ID)).toBe(false);
+    expect(JSON.parse(r.io.stdout).warnings).toEqual([
+      {
+        code: 'successors-unknown',
+        message: `Could not read ${later.slice(0, 8)}, a later memory of it, so it and any after it may still restate it. Check it with \`oort inspect ${later}\`.`,
+      },
+    ]);
+  });
+
   it('forget.outside-the-hive-beta-forgets-without-a-shares-warning', async () => {
     const e = setup();
     e.cloud.memories.set(ID, fakeMemory({ id: ID, text: 'Plain.' }));

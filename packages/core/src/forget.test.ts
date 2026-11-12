@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapters.js';
-import { distinctiveTokens, forgetMemory, MAX_CHAIN } from './forget.js';
+import { forgetMemory, forgottenValues, MAX_CHAIN } from './forget.js';
 import { createMemoryStore } from './memory-store.js';
 import type { Memory } from './model.js';
 import { makeMemory, TG, vec } from './store-conformance.js';
@@ -106,22 +106,49 @@ async function chain(): Promise<{ store: MemoryStore; p: Memory; a: Memory; b: M
   return { store, p, a, b };
 }
 
-describe('distinctiveTokens (CON-144)', () => {
-  it('forget.values-are-numbers-identifiers-paths-urls-and-names', () => {
-    const t = distinctiveTokens({
-      text: 'The dev server runs on port 3000. It moved from MySQL to Postgres at /srv/app/data, see https://api.example.com/v1 and auth-service or foo_bar.',
-      stub: 'dev server',
-      entities: [],
-    });
-    for (const v of ['3000', 'mysql', 'postgres', 'srv', 'app', 'api.example.com', 'v1']) {
-      expect(t, v).toContain(v);
+describe('forgottenValues (CON-144)', () => {
+  const none = { text: '', stub: '', entities: [] as string[] };
+  it('forget.values-are-whole-numbers-identifiers-paths-and-urls', () => {
+    const t = forgottenValues(
+      {
+        text: 'The dev server runs on port 3000 at /srv/app/data, see https://api.example.com/v1 and auth-service or foo_bar.',
+        stub: 'dev server',
+        entities: [],
+      },
+      none,
+    );
+    expect([...t].sort()).toEqual(
+      ['/srv/app/data', '3000', 'auth-service', 'foo_bar', 'https://api.example.com/v1'].sort(),
+    );
+  });
+
+  it('forget.a-capitalised-word-is-a-value-only-when-a-names-it-and-b-does-not', () => {
+    const a = { text: 'The API uses MySQL.', stub: 'api', entities: ['API', 'MySQL'] };
+    expect([...forgottenValues(a, { ...none, entities: ['API', 'Postgres'] })]).toEqual(['mysql']);
+    expect([...forgottenValues({ ...a, entities: [] }, none)]).toEqual([]);
+  });
+
+  it('forget.a-plain-word-is-a-value-when-b-says-it-was-the-old-one', () => {
+    const a = { text: 'The project uses postgres for storage.', stub: 'storage', entities: [] };
+    for (const text of [
+      'The project switched from postgres to sqlite.',
+      'Storage is sqlite instead of postgres.',
+      'Storage was postgres; now sqlite.',
+      'Storage no longer postgres.',
+    ]) {
+      expect([...forgottenValues(a, { ...none, text })], text).toEqual(['postgres']);
     }
-    expect(t).toContain('auth-service');
-    expect(t).toContain('foo_bar');
-    // The words for what it is about, and a capital that only starts a sentence, are not values.
-    for (const w of ['the', 'dev', 'server', 'runs', 'port', 'it', 'moved']) {
-      expect(t, w).not.toContain(w);
-    }
+    // A label before a number is not the value: the number is.
+    expect([
+      ...forgottenValues(
+        { text: 'Deploys ran on port 3000.', stub: '', entities: [] },
+        { ...none, text: 'Deploys moved from port 3000 to 8080.' },
+      ),
+    ]).toEqual(['3000']);
+    // Without a word that marks it as the old one, a shared plain word is what both are about.
+    expect([
+      ...forgottenValues(a, { ...none, text: 'The project uses sqlite for storage.' }),
+    ]).toEqual([]);
   });
 });
 
@@ -239,6 +266,136 @@ describe('forgetMemory (CON-144)', () => {
       notRewritten: [],
     });
     expect((await store.get(TG, 'c'))?.text).toBe(c.text);
+  });
+
+  /** A, then B written from it, with the writer answering `answer`. */
+  async function pair(
+    a: Partial<Memory>,
+    b: Partial<Memory>,
+    answer: (m: Memory) => Omit<WrittenMemory, 'type'>,
+  ) {
+    const store = createMemoryStore();
+    await store.upsertMany(TG, [
+      makeMemory({ id: 'a', createdAt: at(1), supersededBy: 'b', ...a }),
+      makeMemory({ id: 'b', createdAt: at(2), supersedes: 'a', ...b }),
+    ]);
+    const w = current([], (m) => ({ ...answer(m), type: m.type }));
+    const r = await forgetMemory({ store, write: w }, TG, 'a');
+    return { r, b: await store.get(TG, 'b') };
+  }
+
+  const primary = {
+    text: 'The database host is db-primary.',
+    stub: 'database host db-primary',
+    entities: ['db-primary'],
+  };
+  const replica = {
+    text: 'The database host changed from db-primary to db-replica.',
+    stub: 'database host db-primary db-replica',
+    entities: ['db-primary', 'db-replica'],
+  };
+
+  it('forget.a-shared-entity-b-replaced-is-a-value-a-rewrite-may-not-keep (re-review 1a)', async () => {
+    const { r, b } = await pair(primary, replica, () => ({
+      text: 'The database host is db-replica, db-primary.',
+      stub: 'database host db-replica',
+      entities: ['db-primary', 'db-replica'],
+    }));
+    expect(r.notRewritten).toEqual([{ id: 'b', reason: 'rejected' }]);
+    expect(b?.text).toBe(replica.text);
+    const ok = await pair(primary, replica, () => ({
+      text: 'The database host is db-replica.',
+      stub: 'database host db-replica',
+      entities: ['db-replica'],
+    }));
+    expect(ok.r.rewritten).toEqual([{ id: 'b', text: 'The database host is db-replica.' }]);
+  });
+
+  it('forget.an-unchanged-b-that-still-holds-a-value-is-reported (re-review 1b)', async () => {
+    const { r } = await pair(primary, replica, (m) => ({
+      text: m.text,
+      stub: m.stub,
+      entities: m.entities,
+    }));
+    expect(r.notRewritten).toEqual([{ id: 'b', reason: 'unchanged' }]);
+  });
+
+  it('forget.a-url-change-is-rewritten (re-review 3)', async () => {
+    const { r } = await pair(
+      { text: 'Staging is at https://old.example.com.', stub: 'staging', entities: [] },
+      {
+        text: 'Staging moved from https://old.example.com to https://new.example.com.',
+        stub: 'staging',
+        entities: [],
+      },
+      () => ({ text: 'Staging is at https://new.example.com.', stub: 'staging', entities: [] }),
+    );
+    expect(r).toMatchObject({
+      rewritten: [{ id: 'b', text: 'Staging is at https://new.example.com.' }],
+      notRewritten: [],
+    });
+  });
+
+  it('forget.a-port-change-of-the-api-is-rewritten (re-review 3)', async () => {
+    for (const entities of [['API'], []]) {
+      const { r } = await pair(
+        {
+          text: 'The API runs on port 8080.',
+          stub: 'api port 8080',
+          entities: [...entities, '8080'],
+        },
+        {
+          text: 'The API port changed from 8080 to 9090.',
+          stub: 'api port 9090',
+          entities: [...entities, '9090'],
+        },
+        () => ({
+          text: 'The API port is 9090.',
+          stub: 'api port 9090',
+          entities: [...entities, '9090'],
+        }),
+      );
+      expect(r.rewritten, JSON.stringify(entities)).toEqual([
+        { id: 'b', text: 'The API port is 9090.' },
+      ]);
+    }
+  });
+
+  it('forget.paths-that-share-directories-are-rewritten (re-review 3)', async () => {
+    const { r } = await pair(
+      { text: 'Logs go to /srv/app/v1/logs.', stub: 'logs', entities: [] },
+      {
+        text: 'Logs moved from /srv/app/v1/logs to /srv/app/v2/logs.',
+        stub: 'logs',
+        entities: [],
+      },
+      () => ({ text: 'Logs are in /srv/app/v2/logs.', stub: 'logs', entities: [] }),
+    );
+    expect(r.rewritten).toEqual([{ id: 'b', text: 'Logs are in /srv/app/v2/logs.' }]);
+  });
+
+  it('forget.a-lower-case-value-b-calls-the-old-one-is-found (re-review 4)', async () => {
+    const a = { text: 'The project uses postgres for storage.', stub: 'storage', entities: [] };
+    const b = {
+      text: 'The project switched from postgres to sqlite for storage.',
+      stub: 'storage',
+      entities: [],
+    };
+    const { r } = await pair(a, b, () => ({
+      text: 'The project uses sqlite for storage.',
+      stub: 'storage',
+      entities: [],
+    }));
+    expect(r.rewritten).toEqual([{ id: 'b', text: 'The project uses sqlite for storage.' }]);
+    // Without a writer it is named, never left silently.
+    const store = createMemoryStore();
+    await store.upsertMany(TG, [
+      makeMemory({ id: 'a', createdAt: at(1), supersededBy: 'b', ...a }),
+      makeMemory({ id: 'b', createdAt: at(2), supersedes: 'a', ...b }),
+    ]);
+    expect((await forgetMemory({ store }, TG, 'a')).notRewritten).toEqual([
+      { id: 'b', reason: 'no-writer' },
+    ]);
   });
 
   it('forget.a-failed-rewrite-still-forgets-and-says-so', async () => {
@@ -362,32 +519,43 @@ describe('forgetMemory (CON-144)', () => {
     }
   });
 
-  it('forget.reports-what-lies-past-the-chain-cap-and-reads-odd-creation-times-as-later', async () => {
-    const { store, b } = await chain();
+  it('forget.names-every-later-memory-past-the-chain-cap-that-restates-it', async () => {
+    const { store, p, b } = await chain();
     const later: Memory[] = [];
     let prev = 'b';
-    for (let i = 0; i < MAX_CHAIN + 2; i++) {
+    const n = MAX_CHAIN + 4;
+    for (let i = 0; i < n; i++) {
       const id = `c${String(i).padStart(3, '0')}`;
       later.push(
         makeMemory({
           id,
-          text: 'The dev server port is 8080.',
+          // The first two and the last three restate A; the rest do not.
+          text: i < 2 || i >= n - 3 ? 'The port was 3000 once.' : 'The dev server port is 8080.',
           // A creation time that does not parse, and one equal to A's: both count as later.
           createdAt: i === 0 ? 'not a date' : i === 1 ? at(2) : at(10),
           supersedes: prev,
-          supersededBy: `c${String(i + 1).padStart(3, '0')}`,
+          supersededBy: i + 1 < n ? `c${String(i + 1).padStart(3, '0')}` : null,
         }),
       );
       prev = id;
     }
-    later[0] = { ...later[0]!, text: 'The port was 3000 once.' };
-    later[1] = { ...later[1]!, text: 'Port 3000 is gone.' };
-    await store.upsertMany(TG, [{ ...b, supersededBy: 'c000' }, ...later]);
+    // An older memory before P: never one written from A, never reported.
+    const older = makeMemory({ id: 'o', createdAt: at(0), supersededBy: 'p' });
+    await store.upsertMany(TG, [
+      older,
+      { ...p, supersedes: 'o' },
+      { ...b, supersededBy: 'c000' },
+      ...later,
+    ]);
     const r = await forgetMemory({ store }, TG, 'a');
-    const reasons = new Map(r.notRewritten.map((x) => [x.id, x.reason]));
-    expect(reasons.get('c000')).toBe('no-writer');
-    expect(reasons.get('c001')).toBe('no-writer');
-    expect([...reasons.values()].filter((x) => x === 'chain-too-long').length).toBeGreaterThan(0);
+    const reasons = Object.fromEntries(r.notRewritten.map((x) => [x.id, x.reason]));
+    const tail = later.slice(-3).map((m) => m.id);
+    expect(reasons).toEqual({
+      b: 'no-writer',
+      c000: 'no-writer',
+      c001: 'no-writer',
+      ...Object.fromEntries(tail.map((id) => [id, 'chain-too-long'])),
+    });
   });
 
   it('forget.without-an-embedder-drops-the-old-vector', async () => {

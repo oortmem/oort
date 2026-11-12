@@ -49,8 +49,9 @@ export function zeroVectorCount(db: Database.Database, dimension: number): numbe
 
 /**
  * Runs the pass: deletes zero vectors, merges the lexical index, `VACUUM`s, truncates the WAL
- * and records it. False, changing nothing that matters, when another connection holds the
- * database (`VACUUM` cannot run then); the next open that may migrate tries again.
+ * and records it. False, recording nothing, when another connection holds the database (`VACUUM`
+ * cannot run) or is mid-read (the checkpoint cannot finish); the next open that may migrate
+ * tries again.
  */
 export function eraseOldText(db: Database.Database, dimension: number, at: Date): boolean {
   db.transaction(() => {
@@ -74,7 +75,11 @@ export function eraseOldText(db: Database.Database, dimension: number, at: Date)
   } catch {
     return false;
   }
-  db.pragma('wal_checkpoint(TRUNCATE)');
+  // The rewrite is in the WAL until a checkpoint copies it back; a reader mid-read keeps that
+  // from finishing, and the main file still holds the old pages. Pending then: the next open
+  // retries.
+  const r = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number }[];
+  if (r[0]?.busy !== 0) return false;
   markOldTextErased(db, at);
   return true;
 }

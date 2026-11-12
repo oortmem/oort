@@ -27,7 +27,7 @@ import {
 } from '@oortmem/store-sqlite';
 import { wire as realWire } from '../wire.js';
 import { MIGRATION_PENDING_NOTE } from './hook.js';
-import { consolidationCheck, eraseChecks, unstableCopy } from './doctor.js';
+import { consolidationCheck, eraseChecks, unstableCopy, vacuumNeeded } from './doctor.js';
 import { writeUpdateCache } from '../update-check.js';
 
 interface Check {
@@ -208,7 +208,7 @@ describe('oort doctor', () => {
     expect(row?.detail).toContain('text deleted by Oort 0.9.0 or older may remain in the file');
 
     const fixed = await h.run(['doctor', '--vacuum'], { env: { HOME: h.root, OORT_HOME: h.home } });
-    expect(fixed.io.stdout).toContain('rewrote the store once');
+    expect(fixed.io.stdout).toContain('rewrote the store: text deleted by Oort 0.9.0 or older');
     const after = await doctor(h);
     expect(after.check('store', 'erase')).toBeUndefined();
     // A 32 MB rewrite and three doctor runs: more than the default budget on a slow machine.
@@ -227,6 +227,11 @@ describe('oort doctor', () => {
       },
     ]);
     expect(eraseChecks({ erased: true, bytes: 1, zeroVectors: 0 })).toEqual([]);
+    // --vacuum runs whenever either row shows (re-review 6).
+    expect(vacuumNeeded({ erased: true, zeroVectors: 2 })).toBe(true);
+    expect(vacuumNeeded({ erased: false, zeroVectors: 0 })).toBe(true);
+    expect(vacuumNeeded({ erased: true, zeroVectors: 0 })).toBe(false);
+    expect(vacuumNeeded(undefined)).toBe(false);
   });
 
   it('doctor.says-it-is-rebuilding-the-search-index (CON-110)', async () => {

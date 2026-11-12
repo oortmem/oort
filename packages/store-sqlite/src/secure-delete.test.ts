@@ -264,11 +264,62 @@ describe('a store upgraded from 0.9.0 (CON-140)', () => {
     await store.close();
   });
 
+  it('secure-delete.a-reader-mid-read-leaves-the-erase-pending (re-review 2)', async () => {
+    const dbPath = await asOld('int8');
+    // Another process in the middle of a read: the checkpoint cannot copy the rewrite back.
+    const reader = new Database(dbPath, { readonly: true });
+    reader.exec('BEGIN');
+    reader.prepare('SELECT count(*) FROM memories').get();
+    const logged: string[] = [];
+    const store = await openSqliteStore({
+      path: dbPath,
+      coldDir: path.join(path.dirname(dbPath), 'cold'),
+      dimension: DIM,
+      vectorIndex: 'int8',
+      busyTimeoutMs: 50,
+      log: (m) => logged.push(m),
+    });
+    await store.close();
+    expect(sqliteEraseState(dbPath)?.erased).toBe(false);
+    expect(logged.join('\n')).toContain('stays until the next open');
+    reader.exec('COMMIT');
+    reader.close();
+    // The next open finishes it.
+    const again = await reopen(dbPath);
+    await again.close();
+    expect(sqliteEraseState(dbPath)?.erased).toBe(true);
+    expect(bytesOf(dbPath).includes(MARKER)).toBe(false);
+  });
+
   it('secure-delete.vacuum-runs-the-erase-on-request', async () => {
     const dbPath = await asOld('int8');
     expect(vacuumSqliteStore({ path: dbPath })).toBe(true);
     expect(bytesOf(dbPath).includes(MARKER)).toBe(false);
     expect(sqliteEraseState(dbPath)?.erased).toBe(true);
+  });
+
+  it('secure-delete.vacuum-also-removes-zero-vectors-stored-after-the-erase (re-review 6)', async () => {
+    const dbPath = await asOld('int8');
+    const store = await reopen(dbPath);
+    await store.close();
+    expect(sqliteEraseState(dbPath)).toMatchObject({ erased: true, zeroVectors: 0 });
+    // An older oort still running elsewhere stores another one.
+    const raw = new Database(dbPath);
+    sqliteVec.load(raw);
+    const row = raw
+      .prepare("SELECT node_key, project_key, author_key, tier FROM memories_vec WHERE id = 'n1'")
+      .get() as Record<string, string>;
+    raw.prepare("DELETE FROM memories_vec WHERE id = 'n1'").run();
+    raw
+      .prepare(
+        `INSERT INTO memories_vec (id, embedding, node_key, project_key, author_key, tier)
+         VALUES ('n1', vec_int8(?), ?, ?, ?, ?)`,
+      )
+      .run(Buffer.alloc(DIM), row['node_key'], row['project_key'], row['author_key'], row['tier']);
+    raw.close();
+    expect(sqliteEraseState(dbPath)?.zeroVectors).toBe(1);
+    expect(vacuumSqliteStore({ path: dbPath })).toBe(true);
+    expect(sqliteEraseState(dbPath)?.zeroVectors).toBe(0);
   });
 
   it('secure-delete.a-new-store-needs-no-erase', async () => {

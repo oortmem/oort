@@ -20,7 +20,7 @@ export interface ForgetDeps {
  * - `unchanged`: the writer returned it as it was, still holding such a value;
  * - `changed`: another write changed it while this one ran;
  * - `not-writable`: it is outside the grant's `write`;
- * - `chain-too-long`: it lies past the first `MAX_CHAIN` memories of the chain, unread.
+ * - `chain-too-long`: it lies past the first `MAX_CHAIN` later memories of the chain.
  */
 export type NotRewrittenReason =
   'no-writer' | 'failed' | 'rejected' | 'unchanged' | 'changed' | 'not-writable' | 'chain-too-long';
@@ -34,7 +34,7 @@ export interface ForgetOutcome {
   notRewritten: { id: string; reason: NotRewrittenReason }[];
 }
 
-/** How many memories of the chain are read, either way; supersede chains are short. */
+/** How many later memories of the chain are rewritten at most; supersede chains are short. */
 export const MAX_CHAIN = 64;
 /** How many writer calls run at once. */
 const PARALLEL_REWRITES = 4;
@@ -76,108 +76,166 @@ const CONNECTORS = new Set(
   ),
 );
 
-/**
- * The tokens of `m` that name a value rather than the thing it is about (CON-144): numbers,
- * versions, identifiers (`auth-service`, `foo_bar`, `api.example.com`), the pieces of a path or a
- * URL, and names written with a capital other than at the start of a sentence (`MySQL`,
- * `Postgres`). Lower-cased, in `tokenizeLexical`'s form so they compare with any memory's tokens.
- * Plain lower-case words are left out: a memory and the one that superseded it share the words
- * for what they are about, so those cannot tell a restated value from the subject.
- */
-export function distinctiveTokens(m: Pick<Memory, 'text' | 'stub' | 'entities'>): Set<string> {
-  const out = new Set<string>();
-  const add = (s: string) => {
-    for (const t of tokenizeLexical(s)) if (!STOPWORDS.has(t)) out.add(t);
-  };
-  for (const field of [m.text, m.stub, ...m.entities]) {
-    const words = field.split(/\s+/).filter((w) => w !== '');
-    words.forEach((raw, i) => {
-      const w = raw.replace(/^[^\p{L}\p{N}/~]+|[^\p{L}\p{N}]+$/gu, '');
-      if (w === '') return;
-      const sentenceStart = i === 0 || /[.!?:]["')\]]*$/.test(words[i - 1] ?? '');
-      if (
-        /\p{N}/u.test(w) ||
-        /[\p{L}\p{N}][._\-@#:/\\][\p{L}\p{N}]/u.test(w) ||
-        /^[/~]/.test(w) ||
-        /\p{Ll}\p{Lu}/u.test(w) ||
-        /^\p{Lu}{2,}$/u.test(w) ||
-        (!sentenceStart && /^\p{Lu}/u.test(w))
-      ) {
-        add(w);
-      }
-    });
+type Text = Pick<Memory, 'text' | 'stub' | 'entities'>;
+
+/** The words of `s`, lower-cased, a URL, path or identifier kept whole (no trailing punctuation). */
+function wordsIn(s: string): string[] {
+  const out: string[] = [];
+  for (const m of s.matchAll(
+    /(?:[a-z][a-z0-9+.-]*:\/\/|[/~])?[\p{L}\p{N}][^\s,;!?()[\]{}"'<>`]*/giu,
+  )) {
+    const w = m[0].replace(/[.:]+$/u, '').toLowerCase();
+    if (w !== '') out.push(w);
   }
   return out;
 }
 
-/** Every token of `m`'s text, stub and entities. */
-function tokensOf(m: Pick<Memory, 'text' | 'stub' | 'entities'>): Set<string> {
+/** Every word of a memory's text, stub and entities, and each entity whole. */
+function wordsOf(m: Text): Set<string> {
+  return new Set([
+    ...wordsIn(`${m.text} ${m.stub} ${m.entities.join(' ')}`),
+    ...m.entities.map((e) => e.toLowerCase()),
+  ]);
+}
+
+/** A number or version, an identifier (`db-primary`, `foo_bar`), a path or a URL. */
+const STRONG = (w: string): boolean =>
+  /\p{N}/u.test(w) || /[\p{L}\p{N}][._\-@#:/\\][\p{L}\p{N}]/u.test(w) || /^[/~]/.test(w);
+
+/** Never a value: the scheme or host prefix of a URL written apart. */
+const URL_PARTS = new Set(['http', 'https', 'www']);
+
+/**
+ * Words that mark the next one as the old value: "from X", "was X", "instead of X", … (not when
+ * a number or identifier follows X: "from port 3000" names 3000).
+ */
+const OLD_MARKERS = [
+  ['from'],
+  ['was'],
+  ['previously'],
+  ['replaced'],
+  ['instead', 'of'],
+  ['no', 'longer'],
+];
+
+/**
+ * The values of `forgotten` that `later`, written from it, could restate (CON-144), lower-cased
+ * and whole: a URL, path or identifier is one value, never its pieces.
+ * - A number or version, an identifier, a path or a URL (`STRONG`).
+ * - A word with a capital (`MySQL`, `API`) only when `forgotten` lists it as an entity and
+ *   `later` does not: a name both list is what they are about.
+ * - Any other word of `forgotten` (not a stopword) that `later` writes right after "from",
+ *   "was", "instead of", "previously", "replaced" or "no longer": "switched from postgres".
+ */
+export function forgottenValues(forgotten: Text, later: Text): Set<string> {
+  const out = new Set<string>();
+  const aEntities = new Set(forgotten.entities.map((e) => e.toLowerCase()));
+  const bEntities = new Set(later.entities.map((e) => e.toLowerCase()));
+  const raw = [...`${forgotten.text} ${forgotten.stub}`.split(/\s+/), ...forgotten.entities];
+  for (const r of raw) {
+    for (const w of wordsIn(r)) {
+      if (URL_PARTS.has(w) || STOPWORDS.has(w)) continue;
+      if (STRONG(w)) out.add(w);
+      else if (/\p{Lu}/u.test(r) && aEntities.has(w) && !bEntities.has(w)) out.add(w);
+    }
+  }
+  for (const e of forgotten.entities) {
+    const w = e.toLowerCase();
+    if (STRONG(w) && !URL_PARTS.has(w)) out.add(w);
+    else if (/\p{Lu}/u.test(e) && !bEntities.has(w)) out.add(w);
+  }
+  const aWords = new Set(wordsIn(`${forgotten.text} ${forgotten.stub}`));
+  const b = wordsIn(later.text);
+  for (let i = 0; i < b.length; i++) {
+    for (const marker of OLD_MARKERS) {
+      if (!marker.every((m, k) => b[i + k] === m)) continue;
+      let k = i + marker.length;
+      while (b[k] === 'the' || b[k] === 'a' || b[k] === 'an') k++;
+      const w = b[k];
+      // "from port 3000": the number is the value, the word before it a label.
+      const label = b[k + 1] !== undefined && STRONG(b[k + 1] as string);
+      if (w !== undefined && !label && aWords.has(w) && !STOPWORDS.has(w) && !URL_PARTS.has(w)) {
+        out.add(w);
+      }
+    }
+  }
+  return out;
+}
+
+/** Every token of `m`'s text, stub and entities, as the lexical index splits them. */
+function tokensOf(m: Text): Set<string> {
   return new Set(tokenizeLexical([m.text, m.stub, ...m.entities].join(' ')));
 }
 
+/** `m` with the wordings it keeps of its old text (a refine's previous text, dates read). */
+function withKept(m: Pick<Memory, 'text' | 'stub' | 'entities' | 'source'>): Text {
+  const kept = m.source.decisions.filter(describesOldWording).map((d) => d.answer);
+  return { text: [m.text, ...kept].join(' '), stub: m.stub, entities: m.entities };
+}
+
 /**
- * The values of `forgotten` (`distinctiveTokens`) that `m` restates, in its text, stub, entities
- * or a wording it keeps; empty when it restates none. For callers that cannot rewrite (Oort
- * Cloud) and still must name what may repeat a forgotten memory.
+ * What a forgotten memory and a later one are about, as opposed to a value: the names without
+ * a digit or a slash that both list as entities, and that `rewrite` (when given) still lists.
+ * None when the later memory lists a name of its own without a digit: then the shared one is
+ * the value it replaced ("db-primary" beside a new "db-replica").
+ */
+function subjectOf(forgotten: Text, later: Text, rewrite?: Text): Set<string> {
+  const a = new Set(forgotten.entities.map((e) => e.toLowerCase()));
+  const b = later.entities.map((e) => e.toLowerCase());
+  if (b.some((e) => !a.has(e) && !/\p{N}/u.test(e))) return new Set();
+  const w =
+    rewrite === undefined ? undefined : new Set(rewrite.entities.map((e) => e.toLowerCase()));
+  return new Set(
+    b.filter((e) => a.has(e) && !/[\p{N}/\\]/u.test(e) && (w === undefined || w.has(e))),
+  );
+}
+
+/** The values of `forgotten` that `m` (with the wordings it keeps) holds, but its subject. */
+function restated(
+  forgotten: Text,
+  m: Pick<Memory, 'text' | 'stub' | 'entities' | 'source'>,
+): string[] {
+  const values = forgottenValues(forgotten, m);
+  const subject = subjectOf(forgotten, m);
+  const words = wordsOf(withKept(m));
+  return [...values].filter((v) => words.has(v) && !subject.has(v));
+}
+
+/**
+ * The values of `forgotten` that `m` restates, in its text, stub, entities or a wording it keeps;
+ * empty when it restates none. For callers that cannot rewrite (Oort Cloud) and still must name
+ * what may repeat a forgotten memory.
  */
 export function restatedValues(
   m: Pick<Memory, 'text' | 'stub' | 'entities' | 'source'>,
-  forgotten: Pick<Memory, 'text' | 'stub' | 'entities'>,
+  forgotten: Text,
 ): string[] {
-  return restated(m, distinctiveTokens(forgotten));
-}
-
-/** The distinctive tokens of `forgotten` that `m` (with the wordings it keeps) still holds. */
-function restated(
-  m: Pick<Memory, 'text' | 'stub' | 'entities' | 'source'>,
-  values: Set<string>,
-): string[] {
-  const kept = m.source.decisions.filter(describesOldWording).map((d) => d.answer);
-  const tokens = tokensOf({ ...m, entities: [...m.entities, ...kept] });
-  return [...values].filter((t) => tokens.has(t));
-}
-
-/**
- * What the memories are about, as opposed to a value: the names without a digit that the
- * forgotten memory, the later one and its rewrite all list as entities (`auth-service` in
- * "auth-service listens on 5582" and "auth-service port changed from 5582 to 6000"). The current
- * fact keeps them. A number, version, path or URL is never one.
- */
-function subjectTokens(...ms: Pick<Memory, 'entities'>[]): Set<string> {
-  const [first, ...rest] = ms.map((m) => new Set(m.entities.map((e) => e.toLowerCase())));
-  const out = new Set<string>();
-  for (const e of first ?? []) {
-    if (/\p{N}/u.test(e) || /[/\\]/.test(e) || !rest.every((r) => r.has(e))) continue;
-    for (const t of tokenizeLexical(e)) out.add(t);
-  }
-  return out;
+  return restated(forgotten, m);
 }
 
 /**
  * Accepts a rewrite only when it can hold nothing new (CON-144): every word of its text and stub
  * is in the old memory or is a connector, its entities are old ones, it is no longer than before,
- * and it holds none of the forgotten memory's values but the shared subject (`subjectTokens`).
- * The writer never sees the forgotten memory, and this check keeps a model from adding anything
- * to the store on the way.
+ * and it holds none of the forgotten memory's values but the shared subject (`subjectOf`). The
+ * writer never sees the forgotten memory, and this check keeps a model from adding anything to
+ * the store on the way. A rewrite reuses the old words but can still change what they say ("do
+ * not" dropped): the caller prints it for the person to read.
  */
-function acceptable(
-  forgotten: Memory,
-  old: Memory,
-  w: WrittenMemory,
-  values: Set<string>,
-): boolean {
+function acceptable(forgotten: Text, old: Memory, w: WrittenMemory): boolean {
   const before = tokensOf(old);
   const added = tokenizeLexical(`${w.text} ${w.stub}`).filter(
     (t) => !before.has(t) && !CONNECTORS.has(t),
   );
   const oldEntities = new Set(old.entities.map((e) => e.toLowerCase()));
-  const subject = subjectTokens(forgotten, old, w);
+  const values = forgottenValues(forgotten, old);
+  const subject = subjectOf(forgotten, old, w);
+  const words = wordsOf(w);
   return (
     added.length === 0 &&
     w.entities.every((e) => oldEntities.has(e.toLowerCase())) &&
     w.text.length <= old.text.length &&
     w.stub.length <= Math.max(old.stub.length, 1) &&
-    [...tokensOf(w)].every((t) => !values.has(t) || subject.has(t))
+    [...values].every((v) => !words.has(v) || subject.has(v))
   );
 }
 
@@ -200,14 +258,15 @@ async function pooled<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>)
  * (CON-144). A memory that superseded or corrected it was written with it as the prior, so its
  * text can restate it ("changed from 3000 to 8080").
  *
- * 1. The forgotten memory's values (`distinctiveTokens`) are found locally. Only a later memory
- *    (created after it, or with a creation time that cannot be compared) that holds one of them,
- *    in its text, stub, entities or a wording it keeps, is rewritten; the rest are left alone.
+ * 1. The forgotten memory's values (`forgottenValues`) are found locally, for each later memory
+ *    (created after it, or with a creation time that cannot be compared). Only one that holds a
+ *    value, in its text, stub, entities or a wording it keeps, and not as the subject both are
+ *    about (`subjectOf`), is rewritten; the rest are left alone. Past the first `MAX_CHAIN`, each
+ *    one that holds a value is named instead.
  * 2. The writer (`MemoryWriter.rewriteCurrent`) gets that memory alone, never the forgotten one,
  *    and states its current fact without history. A rewrite is kept only when `acceptable`: no
- *    new words, no longer, none of the values left but the subject both name as an entity
- *    (`subjectTokens`). Re-embedded, it loses the wordings that described its old text. One the
- *    writer leaves as it was, sharing only that subject, restated nothing and is not reported.
+ *    new words, no longer, none of the values left. Re-embedded, it loses the wordings that
+ *    described its old text. One the writer leaves as it was is reported as `unchanged`.
  * 3. The chain is re-linked over the gap, and the rewrites and links land in one guarded write
  *    (`upsertManyIfUnchanged` where the store has it): a memory changed meanwhile is reported
  *    as `changed`. Then the memory is forgotten.
@@ -226,33 +285,37 @@ export async function forgetMemory(
     return { forgotten: null, rewritten: [], notRewritten: [] };
   }
   const forgotten = (target.tier === 'cold' && (await store.coldGet(grant, id))) || target;
-  const values = distinctiveTokens(forgotten);
   const iso = (deps.now ?? new Date()).toISOString();
   const outcome: ForgetOutcome = { forgotten: id, rewritten: [], notRewritten: [] };
 
-  // The chain both ways, as far as the grant reads. Ids past the cap are reported, never dropped.
+  // The memory it superseded, to re-link; it was written before it, so it restates nothing.
   const chain = new Map<string, Memory>();
-  const queue = [target.supersedes, target.supersededBy];
-  const seen = new Set<string>([id]);
-  while (queue.length > 0) {
-    const next = queue.shift();
-    if (next === null || next === undefined || seen.has(next)) continue;
-    seen.add(next);
-    if (chain.size >= MAX_CHAIN) {
-      outcome.notRewritten.push({ id: next, reason: 'chain-too-long' });
-      continue;
-    }
-    const m = await store.get(grant, next);
-    if (m === null) continue;
-    chain.set(next, m);
-    queue.push(m.supersedes, m.supersededBy);
-  }
+  const prior = target.supersedes === null ? null : await store.get(grant, target.supersedes);
+  if (prior !== null) chain.set(prior.id, prior);
 
+  // The later memories, newest last: the first MAX_CHAIN are handled, and every one past them
+  // that restates a value is named, never dropped.
   // Only a memory written before it cannot have been written from it. A creation time that is
   // equal, or that does not parse, counts as later.
   const born = Date.parse(target.createdAt);
-  const later = (m: Memory) => !(Date.parse(m.createdAt) < born);
-  const candidates = [...chain.values()].filter((m) => later(m) && restated(m, values).length > 0);
+  const isLater = (m: Memory) => !(Date.parse(m.createdAt) < born);
+  const candidates: Memory[] = [];
+  const seen = new Set<string>([id]);
+  let walked = 0;
+  for (let next = target.supersededBy; next !== null && !seen.has(next);) {
+    seen.add(next);
+    const m = await store.get(grant, next);
+    if (m === null) break;
+    const restates = isLater(m) && restated(forgotten, m).length > 0;
+    if (walked < MAX_CHAIN) {
+      chain.set(m.id, m);
+      if (restates) candidates.push(m);
+    } else if (restates) {
+      outcome.notRewritten.push({ id: m.id, reason: 'chain-too-long' });
+    }
+    walked++;
+    next = m.supersededBy;
+  }
 
   const rewrite = deps.write?.rewriteCurrent?.bind(deps.write);
   const results = await pooled(candidates, PARALLEL_REWRITES, async (m) => {
@@ -265,14 +328,9 @@ export async function forgetMemory(
         w.text === full.text &&
         w.stub === full.stub &&
         JSON.stringify(w.entities) === JSON.stringify(full.entities);
-      if (same) {
-        // Left as it was, it restates nothing when all it shares is what both are about.
-        const subject = subjectTokens(forgotten, full);
-        if (restated(full, values).every((t) => subject.has(t)))
-          return { m, reason: 'none' as const };
-        return { m, reason: 'unchanged' as const };
-      }
-      if (!acceptable(forgotten, full, w, values)) return { m, reason: 'rejected' as const };
+      // Left as it was, it still holds a value (it was selected for that): reported.
+      if (same) return { m, reason: 'unchanged' as const };
+      if (!acceptable(forgotten, full, w)) return { m, reason: 'rejected' as const };
       const embedding =
         deps.embed === undefined ? undefined : (await deps.embed.embed([w.text], 'document'))[0];
       const next: Memory = {
@@ -299,9 +357,7 @@ export async function forgetMemory(
   const changed = new Map<string, { next: Memory; was: Memory }>();
   for (const r of results) {
     if ('next' in r && r.next !== undefined) changed.set(r.m.id, { next: r.next, was: r.m });
-    else if ('reason' in r && r.reason !== 'none') {
-      outcome.notRewritten.push({ id: r.m.id, reason: r.reason });
-    }
+    else if ('reason' in r) outcome.notRewritten.push({ id: r.m.id, reason: r.reason });
   }
 
   // Re-link the neighbours over the gap. One the grant cannot change keeps its link to the

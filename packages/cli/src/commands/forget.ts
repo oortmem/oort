@@ -56,7 +56,7 @@ const WHY: Record<ForgetOutcome['notRewritten'][number]['reason'], string> = {
   unchanged: 'the memory writer left it as it was',
   changed: 'it changed while this command ran',
   'not-writable': 'it is outside what this agent may change',
-  'chain-too-long': `it lies past the first ${MAX_CHAIN} memories of the chain`,
+  'chain-too-long': `it lies past the first ${MAX_CHAIN} later memories of the chain, the most one forget rewrites`,
 };
 
 /**
@@ -130,7 +130,7 @@ export async function forgetCommand(
       return 0;
     }
     let local: ForgetOutcome | undefined;
-    let restating: CloudMemory[] = [];
+    let restating: CloudSuccessors = { restating: [] };
     if (cloud !== undefined) {
       // Oort Cloud does not rewrite yet: find the later memories that restate it, to name them.
       restating = await laterRestating(cloud, m);
@@ -181,46 +181,59 @@ export async function forgetCommand(
   });
 }
 
+/** The later memories of a memory in Oort Cloud that restate it, and the first one unread. */
+interface CloudSuccessors {
+  restating: CloudMemory[];
+  /** A later memory the walk could not read: it and any after it were not checked. */
+  unread?: string;
+}
+
 /**
  * The later memories of `m`'s chain in Oort Cloud that restate one of its values (CON-144),
- * following `supersededBy` up to `MAX_CHAIN` memories. A lookup that fails ends the walk.
+ * following `supersededBy`. A lookup that fails ends the walk, and is reported.
  */
-async function laterRestating(cloud: CloudClient, m: CloudMemory): Promise<CloudMemory[]> {
-  const out: CloudMemory[] = [];
+async function laterRestating(cloud: CloudClient, m: CloudMemory): Promise<CloudSuccessors> {
+  const restating: CloudMemory[] = [];
   const seen = new Set([m.id]);
   let next = m.supersededBy;
-  while (next !== null && next !== undefined && !seen.has(next) && seen.size <= MAX_CHAIN) {
+  while (next !== null && next !== undefined && !seen.has(next)) {
     seen.add(next);
     let s: CloudMemory;
     try {
       s = await cloud.get(next);
     } catch {
-      break;
+      return { restating, unread: next };
     }
-    if (restatedValues(s, m).length > 0) out.push(s);
+    if (restatedValues(s, m).length > 0) restating.push(s);
     next = s.supersededBy;
   }
-  return out;
+  return { restating };
 }
 
 /**
  * Names each later memory that may still restate the forgotten one in Oort Cloud, which does not
- * rewrite them, and the Constellations it is shared to. True when there is none.
+ * rewrite them, and the Constellations it is shared to, and one the walk could not read. True
+ * when there is none of either.
  */
 async function reportCloudSuccessors(
   cloud: CloudClient | undefined,
-  restating: readonly CloudMemory[],
+  found: CloudSuccessors,
   ctx: Ctx,
 ): Promise<boolean> {
   if (cloud === undefined) return true;
-  for (const s of restating) {
+  for (const s of found.restating) {
     const shared = liveCopies((await sharesOf(cloud, s.id)) ?? []);
     const where = shared.length > 0 ? `; it is also shared to ${copiesLabel(shared)}` : '';
     const msg = `${short(s.id)} may still restate it: Oort Cloud does not rewrite later memories yet${where}. Check it with \`oort inspect ${s.id}\`, or forget it too: \`oort forget ${s.id}${shared.length > 0 ? ' --everywhere' : ''}\`.`;
     ctx.io.out(`${msg}\n`);
     noteWarning(ctx, 'not-rewritten', msg);
   }
-  return restating.length === 0;
+  if (found.unread !== undefined) {
+    const msg = `Could not read ${short(found.unread)}, a later memory of it, so it and any after it may still restate it. Check it with \`oort inspect ${found.unread}\`.`;
+    ctx.io.out(`${msg}\n`);
+    noteWarning(ctx, 'successors-unknown', msg);
+  }
+  return found.restating.length === 0 && found.unread === undefined;
 }
 
 /** `forget --everywhere` in Oort Cloud: the source, then each shared copy (CON-67). */
@@ -252,7 +265,8 @@ async function forgetEverywhere(
     ctx.io.out('Kept.\n');
     return 0;
   }
-  const restating = t.memory === null ? [] : await laterRestating(cloud, t.memory);
+  const restating: CloudSuccessors =
+    t.memory === null ? { restating: [] } : await laterRestating(cloud, t.memory);
   const r = namedOutcome(await cloud.forgetEverywhere(t.id), t.edges);
   ctx.io.out(t.memory === null ? `${t.id} was already forgotten.\n` : `Forgot ${t.id}.\n`);
   if (r.withdrawn.length > 0) ctx.io.out(`Withdrawn from ${copiesLabel(r.withdrawn)}.\n`);

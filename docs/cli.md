@@ -1965,10 +1965,13 @@ records the change: "The dev server port changed from 3000 to 8080." Forgetting 
 alone would leave its value in the new one. So a local `oort forget` (and the MCP `forget` tool,
 and the SDK's `forget`) also checks the later memories of the forgotten one's supersede chain:
 
-1. On your machine, with no model call, it takes the forgotten memory's values: numbers and
-   versions, identifiers such as `auth-service` or `foo_bar`, paths, URLs, and capitalised names
-   such as `MySQL`. Plain lower-case words are not values, so a value written that way is not
-   found.
+1. On your machine, with no model call, it takes the forgotten memory's values for each later
+   memory: numbers and versions, identifiers such as `db-primary` or `foo_bar`, paths and URLs
+   (each whole, never its pieces); a capitalised name such as `MySQL` when the forgotten memory
+   lists it as an entity and the later one does not; and a plain word the later memory writes
+   right after "from", "was", "instead of", "previously", "replaced" or "no longer" ("switched
+   from postgres to sqlite"). Any other plain word is not a value, so a value written that way
+   elsewhere is not found.
 2. A later memory that holds one of those values (in its text, summary, entities, or a wording a
    refine kept) goes to the memory writer (Anthropic, your key or Oort Pro). The writer gets that
    memory alone, never the forgotten one, and is asked to state only its current fact and drop any
@@ -1976,12 +1979,16 @@ and the SDK's `forget`) also checks the later memories of the forgotten one's su
    values is left alone, with no model call.
 3. The rewrite is kept only when it adds no word the memory did not have (small connecting words
    such as "is" or "now" aside), is no longer than before, and holds none of the forgotten values.
-   A name that the forgotten memory, the later one and the rewrite all list as an entity is the
-   thing they are about, not a value, and may stay. A kept rewrite gets a new vector, and loses
+   A name that both memories list as an entity is the thing they are about, not a value, and may
+   stay, unless the later memory lists a name of its own beside it ("changed from db-primary to
+   db-replica": then `db-primary` is the old value). A kept rewrite gets a new vector, and loses
    the earlier wordings a refine kept and the dates the writer read from the old text. It keeps
    its validity dates: they say when it became true, not what the forgotten memory said.
+   A rewrite only reuses the memory's own words, but it can still change what they say (drop a
+   "not", or join two parts the wrong way), so read the line `oort forget` prints for it.
 4. The chain is re-linked over the gap, and the rewrites land only if no other write changed those
-   memories meanwhile.
+   memories meanwhile. One command rewrites at most 64 later memories; any later still that holds
+   a value is named.
 
 All of this happens before the command returns: Oort does not keep the forgotten text for a later
 step, since keeping it would keep what you asked to forget.
@@ -1995,8 +2002,8 @@ Rewrote 5f6a7b8c to its current fact: "The dev server port is 8080."
 A later memory that holds a forgotten value and was not rewritten is left as it was, named with the
 reason, and the command exits 3. The reasons: no memory writer is set up; the writer failed; the
 rewrite added words or kept a value, so it was not used; the writer left it as it was; it changed
-while the command ran; it belongs to another agent; or it lies past the first 64 memories of the
-chain.
+while the command ran; it belongs to another agent; or it lies past the first 64 later memories of
+the chain.
 
 ```
 $ oort forget 1b2c3d4e --yes
@@ -2010,11 +2017,14 @@ memory of a chain changes nothing else: its predecessor stays ended.
 
 In Oort Cloud nothing is rewritten yet. `oort forget` still finds the later memories that hold a
 forgotten value, names each one in a `not-rewritten` warning (with the Constellations it is shared
-to, if any), and exits 3; `--json` has no `rewritten` or `notRewritten` there.
+to, if any), and exits 3; a later memory it could not read is a `successors-unknown` warning, also
+exit 3. `--json` has no `rewritten` or `notRewritten` there.
 
 What stays on disk: the store overwrites deleted rows with zeros and purges them from its search
 index when you forget, so nothing you forget with this version stays in `oort.sqlite` (see the
-store contract). A store from Oort 0.9.0 or older can still hold text deleted then in its free
+store contract). Clearing the keyword index rewrites all of it, so a forget takes about 2 to 3
+seconds at 100,000 memories (well under a second for a few thousand), and other Oort processes wait
+for it meanwhile; CON-159 tracks making it cheaper. A store from Oort 0.9.0 or older can still hold text deleted then in its free
 space. The first open that may migrate rewrites such a store once (`VACUUM`) when it is at most
 32 MB; a bigger one waits for `oort doctor --vacuum`, and until then `oort doctor` warns that older
 deleted text may remain. Forget cannot reach copies taken before a schema migration
@@ -2265,10 +2275,11 @@ oort doctor [--json] [--vacuum]
 
 `oort doctor` checks everything Oort depends on and prints a fix for each
 problem. It reads only: it never creates the store or writes a config.
-`--vacuum` is the exception: it rewrites an existing store once (`VACUUM`), so
+`--vacuum` is the exception: it rewrites an existing store (`VACUUM`), so
 text deleted by Oort 0.9.0 or older is gone from the file, and removes the
-all-zero vectors an older version stored. Opens do this by themselves on a
-store up to 32 MB; on a bigger one it takes a while, and no other Oort process
+all-zero vectors an older version stored (also ones an older Oort still
+running stored later; the `zero-vectors` row says when). Opens do the first by
+themselves on a store up to 32 MB; on a bigger one it takes a while, and no other Oort process
 (Claude Code's hooks, an MCP server) should hold the store meanwhile. Its one
 network call is `GET <relay>/health`, made only when a role goes through Oort
 Pro, with no key and a 3 second timeout.

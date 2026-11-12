@@ -998,7 +998,7 @@ async function storeChecks(ctx: Ctx, vacuum = false): Promise<Check[]> {
     }
     // Text deleted by 0.9.0 or older (CON-140): opens erase it once on a small store; a bigger
     // one waits for --vacuum.
-    if (vacuum && sqliteEraseState(db)?.erased === false) {
+    if (vacuum && vacuumNeeded(sqliteEraseState(db))) {
       checks.push(
         vacuumSqliteStore({ path: db })
           ? {
@@ -1006,7 +1006,7 @@ async function storeChecks(ctx: Ctx, vacuum = false): Promise<Check[]> {
               name: 'vacuum',
               status: 'ok',
               detail:
-                'rewrote the store once: text deleted by Oort 0.9.0 or older is gone from the file',
+                'rewrote the store: text deleted by Oort 0.9.0 or older and all-zero vectors are gone from the file',
             }
           : {
               group: 'store',
@@ -1043,6 +1043,11 @@ async function storeChecks(ctx: Ctx, vacuum = false): Promise<Check[]> {
 }
 
 /** When the hooks last consolidated the local store, and when they will next. */
+/** `--vacuum` has work: the one-time erase is pending, or all-zero vectors are stored. */
+export function vacuumNeeded(state: { erased: boolean; zeroVectors: number } | undefined): boolean {
+  return state !== undefined && (!state.erased || state.zeroVectors > 0);
+}
+
 /**
  * What the store still holds of deleted memories (CON-140, CON-141): text deleted by Oort 0.9.0
  * or older, until the one-time erase, and all-zero vectors an older version stored.
