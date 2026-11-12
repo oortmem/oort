@@ -1,4 +1,4 @@
-// Child for migrate.interrupted-build-leaves-the-v4-store-as-it-was: opens a schema version 4
+// Child for migrate.interrupted-build-leaves-the-v5-store-as-it-was: opens a schema version 5
 // store with the binary index and is killed (SIGKILL) inside the migration's transaction, as the
 // index build starts. Imports the built package, so run `pnpm build` first (pnpm verify does).
 import { writeSync } from 'node:fs';

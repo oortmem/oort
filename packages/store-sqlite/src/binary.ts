@@ -1,5 +1,5 @@
 /**
- * Binary quantization of the store's int8 vectors (CON-17, schema version 5). A memory's binary
+ * Binary quantization of the store's int8 vectors (CON-17, schema version 6). A memory's binary
  * code is one bit per dimension of its vector after a fixed random rotation: the sign of each
  * rotated value (positive is 1), packed as sqlite-vec's `vec_quantize_binary` packs a float
  * vector (element i is bit i % 8 of byte i / 8).

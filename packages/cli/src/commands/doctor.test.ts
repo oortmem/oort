@@ -184,7 +184,7 @@ describe('oort doctor', () => {
     expect(listBackups(db, 'pre-v4')).toHaveLength(1);
   });
 
-  it('doctor.migrates-a-v4-store-and-names-its-vector-index (CON-17)', async () => {
+  it('doctor.migrates-a-v5-store-and-names-its-vector-index (CON-17)', async () => {
     const h = harness();
     h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
     fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
@@ -198,8 +198,11 @@ describe('oort doctor', () => {
     });
     await s.upsert(TG, memory({ embedding: undefined }));
     await s.close();
-    downgradeSqliteStore({ path: db, to: 4 });
-    // As after the version 4 upgrade: a hook never migrates (nor builds an index); it skips the
+    downgradeSqliteStore({ path: db, to: 5 });
+    for (const f of fs.readdirSync(h.home)) {
+      if (f.startsWith('oort.sqlite.pre-')) fs.rmSync(path.join(h.home, f)); // the downgrade's copy
+    }
+    // As after the version 6 upgrade: a hook never migrates (nor builds an index); it skips the
     // turn with one line until an oort command has migrated the store.
     fs.writeFileSync(
       path.join(h.home, 'config.json'),
@@ -211,15 +214,15 @@ describe('oort doctor', () => {
     expect(hook.code).toBe(0);
     expect(hook.io.hookStdout).toBe('');
     expect(hook.io.stderr).toBe(MIGRATION_PENDING_NOTE);
-    expect(sqliteSchemaVersion(db)).toBe(4);
+    expect(sqliteSchemaVersion(db)).toBe(5);
     fs.rmSync(path.join(h.home, 'config.json'));
     const d = await doctor(h);
     expect(d.human.io.stdout).toContain(
-      `migrated the store from schema version 4 to ${SCHEMA_VERSION}`,
+      `migrated the store from schema version 5 to ${SCHEMA_VERSION}; it can now keep a binary vector index`,
     );
     // An Oort started before the upgrade can no longer write: it must be restarted.
     expect(d.human.io.stdout).toContain('restart any Oort MCP server started before the upgrade');
-    // Version 5 only adds: no copy is taken, so doctor names none.
+    // Version 6 only adds: no copy is taken, so doctor names none.
     expect(fs.readdirSync(h.home).filter((f) => f.startsWith('oort.sqlite.pre-v'))).toEqual([]);
     expect(d.check('store', 'backup')).toBeUndefined();
     expect(d.check('store', 'vector-index')).toMatchObject({

@@ -16,6 +16,7 @@ import { localGrant, nodeGrant, type Hit, type Memory } from '@oortmem/core';
 import {
   CONFORMANCE_DIMENSION,
   makeMemory,
+  spatialConformance,
   storeConformance,
   TG,
 } from '@oortmem/core/store-conformance';
@@ -179,15 +180,62 @@ async function readBack(s: Paths, extra: Partial<SqliteStoreOptions> = {}) {
   }
 }
 
-describe('schema migration 4 to 5', () => {
-  it('migrate.v4-store-reads-back-identically-at-v5', async () => {
+/**
+ * A copy of the fixture as Oort 0.9 before the binary index leaves it: schema version 5 (spatial
+ * memory), with no copies beside it. `placed` adds one memory with a place, as a store that uses
+ * spatial memory has.
+ */
+async function copy5(placed = false): Promise<Paths> {
+  const s = copy4();
+  const store = await openSqliteStore(optsFor(s));
+  if (placed) {
+    await store.upsert(
+      g4,
+      makeMemory({
+        id: 'placed',
+        text: 'the toolbox is on shelf B3',
+        stub: 'toolbox on B3',
+        embedding: Int8Array.from([5, 5, 5, 5, 5, 5, 5, 5]),
+        place: { nodeId: 'site:hq/room:B/shelf:B3', mapId: 'hq', pose: { x: 1, y: 2 } },
+      }),
+    );
+  }
+  await store.close();
+  downgradeSqliteStore({ path: s.dbPath, to: 5 });
+  for (const f of copies(s)) fs.rmSync(path.join(s.dir, f));
+  expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
+  return s;
+}
+
+/** The place columns `memories` has (version 5 and later have both). */
+function placeColumns(dbPath: string): string[] {
+  const db = raw(dbPath);
+  try {
+    return (
+      db.prepare("SELECT name FROM pragma_table_info('memories')").all() as { name: string }[]
+    )
+      .map((c) => c.name)
+      .filter((n) => n.startsWith('place'));
+  } finally {
+    db.close();
+  }
+}
+
+const GUARD_TRIGGERS = [
+  'memories_writer_guard_delete',
+  'memories_writer_guard_insert',
+  'memories_writer_guard_update',
+];
+
+describe('schema migration 5 to 6', () => {
+  it('migrate.v4-store-reads-back-identically-at-v6', async () => {
     const s = copy4();
     expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
     const before = vectors(s.dbPath);
     expect(before.bit).toBeUndefined();
     const blobs = hashDir(s.coldDir);
     const got = await readBack(s);
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
     expect(got.list).toEqual(expected4.list);
     expect(got.dense).toEqual(expected4.dense);
     expect(got.lexical).toEqual(expected4.lexical.map((h) => h.id));
@@ -196,23 +244,61 @@ describe('schema migration 4 to 5', () => {
     expect(after.int8, 'int8 vectors are untouched').toEqual(before.int8);
     // A small store under `auto` gets no binary index: nothing to build, nothing to scan twice.
     expect(after.bit).toBeUndefined();
-    expect(after.triggers).toEqual([
-      'memories_writer_guard_delete',
-      'memories_writer_guard_insert',
-      'memories_writer_guard_update',
-    ]);
+    expect(after.triggers).toEqual(GUARD_TRIGGERS);
+    expect(placeColumns(s.dbPath)).toEqual(['place', 'place_node']);
     expect(hashDir(s.coldDir), 'cold blobs are untouched').toBe(blobs);
     expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'int8', vectors: 33 });
   });
 
-  it('migrate.v4-takes-no-copy-and-migrates-once', async () => {
-    // Additive (triggers and an optional index) and reversible without loss (downgrade to 4):
-    // no plaintext copy of every memory that forget would never reach.
+  it('migrate.v4-takes-only-the-spatial-copy', async () => {
+    // Version 4 goes up through 5 to 6 in one transaction: the one copy is spatial memory's
+    // `pre-v5`, of the version 4 store. Version 6 adds none.
     const s = copy4();
     await (await openSqliteStore(optsFor(s))).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+    const pre5 = listBackups(s.dbPath, 'pre-v5');
+    expect(pre5).toHaveLength(1);
+    expect(sqliteSchemaVersion(pre5[0]!)).toBe(4);
+    expect(copies(s)).toEqual([path.basename(pre5[0]!)]);
+  });
+
+  it('migrate.v5-takes-no-copy-and-migrates-once', async () => {
+    // Additive (triggers and an optional index) and reversible without loss (downgrade to 5):
+    // no plaintext copy of every memory that forget would never reach.
+    const s = await copy5(true);
+    expect(vectors(s.dbPath).triggers).toEqual([]);
+    await (await openSqliteStore(optsFor(s))).close();
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+    expect(vectors(s.dbPath).triggers).toEqual(GUARD_TRIGGERS);
     await (await openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).close();
+    expect(vectors(s.dbPath).bit).toHaveLength(34);
     expect(copies(s)).toEqual([]);
+  });
+
+  it('migrate.v5-spatial-store-keeps-its-places-at-v6', async () => {
+    const s = await copy5(true);
+    const store = await openSqliteStore(optsFor(s, { vectorIndex: 'binary' }));
+    try {
+      expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+      expect((await store.get(g4, 'placed'))?.place).toEqual({
+        nodeId: 'site:hq/room:B/shelf:B3',
+        mapId: 'hq',
+        pose: { x: 1, y: 2 },
+      });
+      const v = Int8Array.from([5, 5, 5, 5, 5, 5, 5, 5]);
+      const near = { near: { mapId: 'hq', pose: { x: 1, y: 2 }, radius: 0.5 } };
+      expect((await store.dense(g4, v, 10, { spatial: near })).map((h) => h.id)).toEqual([
+        'placed',
+      ]);
+      expect(
+        (await store.dense(g4, v, 10, { spatial: { within: 'room:B' } })).map((h) => h.id),
+      ).toEqual(['placed']);
+      expect((await store.lexical(g4, 'toolbox', 10, { spatial: near })).map((h) => h.id)).toEqual([
+        'placed',
+      ]);
+    } finally {
+      await store.close();
+    }
   });
 
   it('migrate.v4-open-that-may-not-migrate-changes-nothing', async () => {
@@ -223,6 +309,18 @@ describe('schema migration 4 to 5', () => {
     );
     expect(err).toBeInstanceOf(StoreMigrationRequiredError);
     expect((err as StoreMigrationRequiredError).from).toBe(4);
+    expect(hashFile(s.dbPath)).toBe(before);
+    expect(copies(s)).toEqual([]);
+  });
+
+  it('migrate.v5-open-that-may-not-migrate-changes-nothing', async () => {
+    const s = await copy5(true);
+    const before = hashFile(s.dbPath);
+    const err = await openSqliteStore(optsFor(s, { migrate: false, vectorIndex: 'binary' })).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(StoreMigrationRequiredError);
+    expect((err as StoreMigrationRequiredError).from).toBe(5);
     expect(hashFile(s.dbPath)).toBe(before);
     expect(copies(s)).toEqual([]);
   });
@@ -259,8 +357,8 @@ describe('schema migration 4 to 5', () => {
     expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'binary', vectors: 33 });
   });
 
-  it('migrate.interrupted-build-leaves-the-v4-store-as-it-was', async () => {
-    const s = copy4();
+  it('migrate.interrupted-build-leaves-the-v5-store-as-it-was', async () => {
+    const s = await copy5(true);
     const before = vectors(s.dbPath);
     // A child process opens the store and is killed (SIGKILL) inside the migration's
     // transaction, as the binary index build starts: a crash, not a clean failure.
@@ -276,7 +374,7 @@ describe('schema migration 4 to 5', () => {
     );
     expect(signal).toBe('SIGKILL');
     expect(out).toContain('building');
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
     const db = raw(s.dbPath);
     try {
       expect(db.pragma('integrity_check', { simple: true })).toBe('ok');
@@ -287,10 +385,13 @@ describe('schema migration 4 to 5', () => {
     expect(after.bit).toBeUndefined();
     expect(after.triggers).toEqual([]);
     expect(after.int8).toEqual(before.int8);
+    expect(placeColumns(s.dbPath)).toEqual(['place', 'place_node']);
     expect(copies(s)).toEqual([]);
     // The next open migrates as if nothing had happened.
-    expect((await readBack(s, { vectorIndex: 'binary' })).dense).toEqual(expected4.dense);
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
+    await (await openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).close();
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+    expect(vectors(s.dbPath).bit).toHaveLength(34);
+    expect(copies(s)).toEqual([]);
   });
 
   it('migrate.newer-schema-is-refused-unchanged', async () => {
@@ -298,16 +399,16 @@ describe('schema migration 4 to 5', () => {
     await (await openSqliteStore(optsFor(s))).close();
     const db = raw(s.dbPath);
     db.function(WRITER_GUARD, () => 1);
-    db.prepare("UPDATE meta SET value = '6' WHERE key = 'schema_version'").run();
+    db.prepare("UPDATE meta SET value = '7' WHERE key = 'schema_version'").run();
     db.close();
     const before = hashFile(s.dbPath);
     await expect(openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).rejects.toThrow(
-      /schema version 6 is not supported \(expected 5\)/,
+      /schema version 7 is not supported \(expected 6\)/,
     );
     expect(hashFile(s.dbPath)).toBe(before);
   });
 
-  it('migrate.writers-that-predate-v5-fail-loudly', async () => {
+  it('migrate.writers-that-predate-v6-fail-loudly', async () => {
     // An Oort process started before the upgrade (an MCP server) keeps its connection: its next
     // write must fail, not leave the binary index without the row it wrote.
     const s = copy4();
@@ -317,9 +418,9 @@ describe('schema migration 4 to 5', () => {
     try {
       expect(() =>
         db.prepare("UPDATE memories SET salience = 0.9 WHERE id = 'v4-01'").run(),
-      ).toThrow(/no such function: oort_writer_v5/);
+      ).toThrow(/no such function: oort_writer_v6/);
       expect(() => db.prepare("DELETE FROM memories WHERE id = 'v4-01'").run()).toThrow(
-        /no such function: oort_writer_v5/,
+        /no such function: oort_writer_v6/,
       );
       // Reads still work: an older reader sees the same int8 vectors.
       expect(db.prepare('SELECT count(*) AS n FROM memories').get()).toEqual({ n: 37 });
@@ -329,46 +430,80 @@ describe('schema migration 4 to 5', () => {
     expect(vectors(s.dbPath)).toEqual(before);
   });
 
-  it('migrate.v5-down-to-4-and-up-again', async () => {
-    const s = copy4();
+  it('migrate.v6-down-to-5-and-up-again', async () => {
+    const s = await copy5(true);
     await (await openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).close();
-    expect(vectors(s.dbPath).bit).toHaveLength(33);
-    downgradeSqliteStore({ path: s.dbPath, to: 4 });
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(vectors(s.dbPath).bit).toHaveLength(34);
+    // Places are kept: version 5 holds them.
+    downgradeSqliteStore({ path: s.dbPath, to: 5 });
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
     const downCopies = listBackups(s.dbPath, 'pre-downgrade');
     expect(downCopies).toHaveLength(1);
-    // The copy is the version 5 store as it was, binary index included; it is the only copy.
-    expect(sqliteSchemaVersion(downCopies[0]!)).toBe(5);
-    expect(vectors(downCopies[0]!).bit).toHaveLength(33);
+    // The copy is the version 6 store as it was, binary index included; it is the only copy.
+    expect(sqliteSchemaVersion(downCopies[0]!)).toBe(6);
+    expect(vectors(downCopies[0]!).bit).toHaveLength(34);
     expect(copies(s)).toEqual([path.basename(downCopies[0]!)]);
     const down = vectors(s.dbPath);
     expect(down.bit).toBeUndefined();
     expect(down.triggers).toEqual([]);
-    // What 0.8.0 reads: raw writes work again, as they did at version 4.
+    expect(placeColumns(s.dbPath)).toEqual(['place', 'place_node']);
+    // What a version 5 build reads and writes: raw writes work again.
     const db = raw(s.dbPath);
     try {
       db.prepare("UPDATE memories SET salience = salience WHERE id = 'v4-01'").run();
+      expect(db.prepare("SELECT place_node FROM memories WHERE id = 'placed'").get()).toEqual({
+        place_node: 'site:hq/room:B/shelf:B3',
+      });
     } finally {
       db.close();
     }
-    downgradeSqliteStore({ path: s.dbPath, to: 4 }); // already version 4: nothing to do
+    downgradeSqliteStore({ path: s.dbPath, to: 5 }); // already version 5: nothing to do
     expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
+    const store = await openSqliteStore(optsFor(s));
+    try {
+      expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+      expect((await store.get(g4, 'placed'))?.place?.nodeId).toBe('site:hq/room:B/shelf:B3');
+    } finally {
+      await store.close();
+    }
+    expect(copies(s)).toEqual([path.basename(downCopies[0]!)]);
+  });
+
+  it('migrate.v6-down-to-4-drops-the-guard-the-index-and-the-places', async () => {
+    const s = copy4();
+    await (await openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).close();
+    downgradeSqliteStore({ path: s.dbPath, to: 4 });
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    const down = vectors(s.dbPath);
+    expect(down.bit).toBeUndefined();
+    expect(down.triggers).toEqual([]);
+    expect(placeColumns(s.dbPath)).toEqual([]);
     const again = await readBack(s);
     expect(again.dense).toEqual(expected4.dense);
     expect(again.list).toEqual(expected4.list);
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
   });
 
-  it('migrate.new-store-starts-at-v5', async () => {
+  it('migrate.new-store-starts-at-v6', async () => {
     const s = fresh();
     await (await openSqliteStore(optsFor(s))).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
-    expect(vectors(s.dbPath).triggers).toHaveLength(3);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+    expect(vectors(s.dbPath).triggers).toEqual(GUARD_TRIGGERS);
     expect(vectors(s.dbPath).bit).toBeUndefined();
+    expect(placeColumns(s.dbPath)).toEqual(['place', 'place_node']);
   });
 });
 
 storeConformance('sqlite (binary index)', () => {
+  const s = fresh();
+  return openSqliteStore({
+    path: s.dbPath,
+    coldDir: s.coldDir,
+    dimension: CONFORMANCE_DIMENSION,
+    vectorIndex: 'binary',
+  });
+});
+
+spatialConformance('sqlite (binary index)', () => {
   const s = fresh();
   return openSqliteStore({
     path: s.dbPath,
@@ -515,6 +650,65 @@ describe('binary index', () => {
     expect((await first.dense(TG, v, 1))[0]?.id).toBe('new');
     await first.upsert(TG, makeMemory({ id: 'after', embedding: randomVec(next) }));
     await first.close();
+  });
+
+  it('binary.near-and-within-exclude-out-of-area-rows-before-k', async () => {
+    // 60 memories elsewhere hold the query's own vector; the 3 in the area are farther from it.
+    // The binary path takes its 10 × k candidates after the spatial filter, as the int8 path
+    // takes k: filtered afterwards, every candidate would be out of area and nothing found.
+    const next = rng(11);
+    const q = randomVec(next);
+    const here = [randomVec(next), randomVec(next), randomVec(next)];
+    const area = { nodeId: 'site:hq/room:A', mapId: 'hq', pose: { x: 0, y: 0 } };
+    const elsewhere = { nodeId: 'site:hq/room:Z', mapId: 'hq', pose: { x: 100, y: 0 } };
+    const ms = [
+      ...here.map((v, i) =>
+        makeMemory({ id: `in-${i}`, embedding: v, place: { ...area, pose: { x: i * 0.1, y: 0 } } }),
+      ),
+      ...Array.from({ length: 60 }, (_, i) =>
+        makeMemory({ id: `out-${i}`, embedding: q, place: elsewhere }),
+      ),
+      ...Array.from({ length: 5 }, (_, i) => makeMemory({ id: `bare-${i}`, embedding: q })),
+    ];
+    const results = async (vectorIndex: 'binary' | 'int8') => {
+      const s = fresh();
+      const store = await openSqliteStore(optsD(s, { vectorIndex }));
+      try {
+        await store.upsertMany(TG, ms);
+        await store.close();
+        const again = await openSqliteStore(optsD(s, { vectorIndex }));
+        try {
+          expect(sqliteVectorIndex(s.dbPath)?.index).toBe(vectorIndex);
+          const near = { near: { mapId: 'hq', pose: { x: 0, y: 0 }, radius: 1 } };
+          const within = { within: 'room:A' };
+          return {
+            near: await again.dense(TG, q, 2, { spatial: near }),
+            within: await again.dense(TG, q, 2, { spatial: within }),
+            both: await again.dense(TG, q, 50, { spatial: { ...near, ...within } }),
+            unfiltered: (await again.dense(TG, q, 2)).map((h) => h.id),
+          };
+        } finally {
+          await again.close();
+        }
+      } finally {
+        await store.close().catch(() => {});
+      }
+    };
+    const binary = await results('binary');
+    for (const hits of [binary.near, binary.within, binary.both]) {
+      expect(hits.length).toBeGreaterThan(0);
+      expect(hits.every((h) => h.id.startsWith('in-'))).toBe(true);
+    }
+    expect(binary.near).toHaveLength(2);
+    expect(binary.within).toHaveLength(2);
+    expect(binary.both.map((h) => h.id).sort()).toEqual(['in-0', 'in-1', 'in-2']);
+    // Without a filter the crowd wins, so the filter is what keeps it out.
+    expect(binary.unfiltered.every((id) => !id.startsWith('in-'))).toBe(true);
+    // Few enough rows that every candidate is rescored: the int8 path's hits and scores exactly.
+    const int8 = await results('int8');
+    expect(binary.near).toEqual(int8.near);
+    expect(binary.within).toEqual(int8.within);
+    expect(binary.both).toEqual(int8.both);
   });
 
   it('binary.reembed-rewrites-the-index', async () => {

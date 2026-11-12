@@ -12,7 +12,7 @@ already has answer the query. §9 has the measurements; §10 says what was not m
 ## 0. Decisions in brief
 
 1. **A binary index beside the int8 vectors, not instead of them.** `memories_vec` stays as it
-   is; schema version 5 adds `memories_vec_bit`, a `vec0` table of 1-bit codes with the int8
+   is; schema version 6 adds `memories_vec_bit`, a `vec0` table of 1-bit codes with the int8
    vector as an auxiliary column for rescoring (§2). The migration is additive and the index can be
    dropped and rebuilt from the int8 vectors at any time.
 2. **Codes are the signs of a randomized Hadamard rotation of the vector** (the rotation RaBitQ
@@ -56,7 +56,7 @@ and source, checked against this version:
   work on `vec0` tables, and a point read into the vector chunks is expensive (chunks are large
   overflow blobs), which is why the rescore vector is an auxiliary column (§2).
 
-## 2. Storage and schema version 5
+## 2. Storage and schema version 6
 
 ```sql
 CREATE VIRTUAL TABLE memories_vec_bit USING vec0(
@@ -73,33 +73,39 @@ CREATE VIRTUAL TABLE memories_vec_bit USING vec0(
   memories are never dense candidates). Every write keeps it in step in the same transaction:
   `upsert`, `upsertMany`, `forget`, `coldPut(Many)`, `setTier` (a hydrated memory gets its code
   back) and `reembedSqliteStore`.
-- **Migration from version 4.** Additive. In one `IMMEDIATE` transaction the open adds the writer
+- **Migration from version 5.** Additive. In one `IMMEDIATE` transaction the open adds the writer
   guard and, when `store.vectorIndex` asks for it, builds the index from `memories_vec` in pages
-  of rows. Unlike the earlier migrations it takes no `pre-v5` copy: nothing is rewritten, the
-  downgrade to 4 loses nothing, and a full plaintext copy that `forget` never reaches and the
+  of rows. Unlike the earlier migrations it takes no `pre-v6` copy: nothing is rewritten, the
+  downgrade to 5 loses nothing, and a full plaintext copy that `forget` never reaches and the
   pruning keeps would cost more than it protects. `downgradeSqliteStore` still copies the store
-  first (`pre-downgrade`). `migrate: false` (the hooks) refuses a version 4 store with
+  first (`pre-downgrade`). A version 4 store (0.8) goes up through 5 (spatial memory, CON-84) to 6
+  in the same transaction, after spatial memory's `pre-v5` copy of the version 4 store; version 6
+  adds no second copy. `migrate: false` (the hooks) refuses a version 4 or 5 store with
   `StoreMigrationRequiredError`, as for the version 4 upgrade: the hooks skip the turn with one
   line until an `oort` command has migrated. An open with `migrate: false` never builds or drops
   the index.
 - **Reembedding.** `reembedSqliteStore` looks for the index in each batch's transaction, so an
   index another process builds during a long reembed gets the new model's vectors.
 - **Interrupted.** The build runs inside the migration's transaction. A process killed during it
-  (tested with `SIGKILL` in a child process at the build's first line) leaves the version 4 store
-  as it was; the next open migrates again.
-- **The writer guard.** Version 5 creates `BEFORE INSERT / UPDATE / DELETE` triggers on `memories`
-  that call `oort_writer_v5()`, a function only 0.9.0 or newer defines on its connections. An Oort
+  (tested with `SIGKILL` in a child process at the build's first line) leaves the version 5 store
+  as it was (tested with a store holding a place); the next open migrates again.
+- **The writer guard.** Version 6 creates `BEFORE INSERT / UPDATE / DELETE` triggers on `memories`
+  that call `oort_writer_v6()`, a function only 0.9.0 or newer defines on its connections. An Oort
   that was already running before the upgrade (an MCP server, a daemon) can still read through
   the connection it has, but its next write fails, changing nothing, instead of writing a memory the binary index would miss. As
   in the version 4 migration, `oort doctor` tells you to restart such processes.
 - **An older Oort opening the new store.** Every version refuses a schema newer than its own.
-  Checked by hand: the 0.8.0 build (`main` at `d9b67e3`) opening a version 5 store fails with
-  "schema version 5 is not supported (expected 4)", and the files' SHA-256 are unchanged.
-- **Downgrade.** `downgradeSqliteStore({ path, to: 4 })` drops the binary index and the guard;
-  the int8 vectors were never moved. It takes the usual `pre-downgrade` copy first.
-- **Coordination with #102.** Spatial memory (CON-84, PR #102, open) also claims schema version
-  5. Whichever merges second renumbers its migration to 6; the two are independent (#102 adds
-  columns to `memories`, this adds a table and triggers).
+  Checked by hand: the 0.8.0 build (`main` at `d9b67e3`) opening a version 6 store fails with
+  "schema version 6 is not supported (expected 4)", and the file's SHA-256 is unchanged.
+- **Downgrade.** `downgradeSqliteStore({ path, to: 5 })` drops the binary index and the guard
+  and keeps places; the int8 vectors were never moved. `to: 4` also drops the place columns (and
+  refuses while a memory has a place). Both take the usual `pre-downgrade` copy first.
+- **Spatial memory.** Spatial memory (CON-84, #102) took schema version 5 first, so this is
+  version 6. A dense query with `near` or `within` takes the same filter inside the binary KNN as
+  inside the int8 one (`id IN` the memories that pass it), so the `10 × k` candidates are drawn
+  from the area only and out-of-area rows never crowd them out. Tested: the spatial conformance
+  suite with `vectorIndex: 'binary'`, and 60 out-of-area memories holding the query's own vector
+  against 3 in the area (both filters return only the 3, with the int8 path's scores).
 
 ## 3. The codes
 

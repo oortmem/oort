@@ -151,7 +151,7 @@ export async function reembedSqliteStore(opts: ReembedOptions): Promise<ReembedR
       `INSERT INTO memories_vec (id, embedding, ${others.join(', ')})
        VALUES (?, vec_int8(?), ${others.map(() => '?').join(', ')})`,
     );
-    // The binary index (schema version 5) follows each searchable vector: same code as `upsert`.
+    // The binary index (schema version 6) follows each searchable vector: same code as `upsert`.
     // Looked up in each batch's transaction: another process (an MCP server, an `oort` command)
     // may build or drop it while this runs, and a batch must write into the index as it is then.
     let binary:

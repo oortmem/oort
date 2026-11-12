@@ -912,12 +912,10 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
               ? 'it can now hold judgments (oort judge)'
               : before === 3
                 ? 'lexical search now finds Chinese, Japanese, Korean, Thai and Indic words'
-                : 'it can now keep a binary vector index (store.vectorIndex)'
-        }${
-          before <= 4
-            ? '. Then restart any Oort MCP server started before the upgrade (quit and reopen Claude Code, Claude Desktop or Cursor): an older Oort cannot write to the new search index'
-            : ''
-        }`,
+                : before === 4
+                  ? 'it can now hold places (near, within) and keep a binary vector index (store.vectorIndex)'
+                  : 'it can now keep a binary vector index (store.vectorIndex)'
+        }. Then restart any Oort MCP server started before the upgrade (quit and reopen Claude Code, Claude Desktop or Cursor): an older Oort cannot write to the new search index`,
       });
     }
     const bound = readEmbedderBinding(db);

@@ -1294,11 +1294,13 @@ a repository's `oort.config.json` cannot change it (the key is ignored there, wi
 `oort doctor` shows which index the store searches.
 
 **Upgrading to 0.9.0.** The first `oort` command (or MCP server, or daemon) after the upgrade
-moves the store to schema version 5. It only adds (no copy of the store is taken; going back
-loses nothing), and builds the binary index only when `store.vectorIndex` asks for it. Until then
+moves the store to schema version 6. Version 5 adds the place columns of
+[spatial memory](#places-spatial-memory), after a `pre-v5` copy of the store; version 6
+adds the binary index's guard and takes no copy (it only adds; going back to 5 loses nothing), and
+builds the binary index only when `store.vectorIndex` asks for it. Until then
 the hooks skip recall and saving for the turn, as after the upgrade to schema version 4, and print one line:
 "Oort is upgrading its store; run `oort doctor` once, then restart any Oort MCP server started
-before the upgrade". Do that: Oort 0.8 or older refuses to open a version 5 store, and a process
+before the upgrade". Do that: Oort 0.8 or older refuses to open a version 6 store, and a process
 that already had it open (an MCP server or daemon started before the upgrade) can keep reading,
 but its next write fails, changing nothing. To go back to 0.8 or older, see
 `downgradeSqliteStore` in [the store contract](store-contract.md#sqlite-schema-versions) (`to: 4`).
@@ -1424,7 +1426,7 @@ apart than their combined `sigma` (a matching path where only one side has a pos
 place). Deciding that a thing moved, and replacing the old place, is
 later work.
 
-Places are kept by the local store (schema version 5; opening an older store adds the columns and
+Places are kept by the local store (schema version 5 and newer; opening an older store adds the columns and
 a spatial index, after a `pre-v5` backup). Oort Cloud does not hold them yet: in cloud mode the
 flags are refused (`refused`, `local-only`, fix `oort cloud use --local`), and `oort cloud
 import` sends memories without their place and says how many it left out.
