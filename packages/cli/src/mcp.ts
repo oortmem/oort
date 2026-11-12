@@ -10,6 +10,9 @@ import {
   JudgmentInputError,
   VERSION,
   activation,
+  checkNear,
+  checkPlace,
+  checkPlacePath,
   isAgentVia,
   isCurrent,
   judge,
@@ -18,6 +21,8 @@ import {
   scrub,
   type JudgeResult,
   type Memory,
+  type NearQuery,
+  type Place,
   localGrant,
 } from '@oortmem/core';
 import { supersedeChain } from './engine/chain.js';
@@ -144,15 +149,64 @@ export async function cloudSpaces(w: Wired, client: CloudClient): Promise<ToolSp
   }
 }
 
+/** `recall.near` as the model sends it (snake_case) in core's shape. */
+function nearOf(n: {
+  map_id: string;
+  frame?: string | undefined;
+  pose: { x: number; y: number; z?: number | undefined };
+  radius: number;
+}): NearQuery {
+  return {
+    mapId: n.map_id,
+    ...(n.frame !== undefined && { frame: n.frame }),
+    pose: { x: n.pose.x, y: n.pose.y, ...(n.pose.z !== undefined && { z: n.pose.z }) },
+    radius: n.radius,
+  };
+}
+
+/** `remember.place` as the model sends it (snake_case) in core's shape; `radius` is its extent. */
+function placeOf(p: {
+  node_id?: string | undefined;
+  map_id?: string | undefined;
+  map_version?: number | undefined;
+  frame?: string | undefined;
+  pose?: { x: number; y: number; z?: number | undefined } | undefined;
+  radius?: number | undefined;
+}): Place {
+  return {
+    ...(p.node_id !== undefined && { nodeId: p.node_id }),
+    ...(p.map_id !== undefined && { mapId: p.map_id }),
+    ...(p.map_version !== undefined && { mapVersion: p.map_version }),
+    ...(p.frame !== undefined && { frame: p.frame }),
+    ...(p.pose !== undefined && {
+      pose: { x: p.pose.x, y: p.pose.y, ...(p.pose.z !== undefined && { z: p.pose.z }) },
+    }),
+    ...(p.radius !== undefined && { extent: { radius: p.radius } }),
+  };
+}
+
 /** The local store as an MCP memory backend. */
 export function localBackend(deps: OortServerDeps): MemoryBackend {
   const w = deps.wired;
   const now = deps.now ?? (() => new Date());
   const filter = filterFor(w.scope);
+  // Places live in the local store only (CON-84): Oort Cloud holds none until CON-87.
+  const spatial = w.mode !== 'cloud';
   return {
-    async recall({ query, as_of, known_at, mode, limit, include }) {
+    ...(spatial && { spatial: true as const }),
+
+    async recall({ query, as_of, known_at, mode, limit, include, within, near }) {
       const view = viewOf(mode, as_of, known_at);
-      const result = await runRecall(w, query, view, now(), include);
+      const filter =
+        within !== undefined || near !== undefined
+          ? {
+              ...(within !== undefined && { within: checkPlacePath(within, 'within') }),
+              ...(near !== undefined && { near: checkNear(nearOf(near)) }),
+            }
+          : undefined;
+      const result = await runRecall(w, query, view, now(), include, false, {
+        ...(filter !== undefined && { spatial: filter }),
+      });
       const ignored = viewIgnored(view, result);
       if (result.abstained === true) {
         // Candidates were found, but none answers the question: say so rather than hand over noise.
@@ -183,6 +237,8 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           ...(m.origin?.overriddenBy !== undefined && {
             overridden_by: m.origin.overriddenBy.id,
           }),
+          ...(m.place?.nodeId !== undefined && { place: m.place.nodeId }),
+          ...(e.distanceM !== undefined && { distance_m: Number(e.distanceM.toFixed(3)) }),
         };
       });
       const lexicalOnly = w.mode !== 'cloud' && (w.embed === undefined || w.rerank === undefined);
@@ -203,11 +259,12 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
       };
     },
 
-    async remember({ facts, type }) {
+    async remember({ facts, type, place }) {
       const results = await rememberFacts(w, facts, {
         harness: 'mcp',
         now: now(),
         ...(type !== undefined && { type }),
+        ...(place !== undefined && { place: checkPlace(placeOf(place)) }),
       });
       return { results };
     },

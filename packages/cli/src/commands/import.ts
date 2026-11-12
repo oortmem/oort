@@ -429,6 +429,8 @@ function rebuilt(
     source: fileSource(x['source']),
     createdAt: iso(created),
     updatedAt: iso(updated),
+    // Checked by parseExport, as a write checks it (CON-84).
+    ...(m.place !== undefined && { place: m.place }),
   };
   if (type === 'judgment') {
     // Ended in the file: only a person here may end a decision (re-review N1).

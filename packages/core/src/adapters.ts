@@ -1,5 +1,6 @@
 import type { Grant } from './grant.js';
 import type { Decision, Memory, MemoryType, Scope, Tier } from './model.js';
+import type { Place, SpatialFilter } from './place.js';
 
 /**
  * The adapter seam. Every pluggable piece of Oort (stores, embedders, rerankers,
@@ -18,6 +19,11 @@ export interface Observation {
   projectId?: string;
   /** ISO timestamp of the turn. */
   at: string;
+  /**
+   * Where the turn's facts are (CON-84): every memory the turn writes carries it, and a REFINE
+   * gives it to the memory it rewrites. Checked with `checkPlace` before anything is written.
+   */
+  place?: Place;
 }
 
 /** Stage A: should this turn be stored, how salient is it, what type(s). */
@@ -115,7 +121,23 @@ export interface ListOptions {
   embeddings?: boolean;
 }
 
+/** Options of `MemoryStore.lexical` and `dense`. */
+export interface SearchOptions {
+  /**
+   * Keep only memories that pass this filter (CON-84), applied inside the search before `k` is
+   * taken, like the grant. Only a store with `spatial: true` takes it; recall never passes one to
+   * another store.
+   */
+  spatial?: SpatialFilter;
+}
+
 export interface MemoryStore {
+  /**
+   * True when the store keeps `Memory.place` and applies `SearchOptions.spatial` (spatial memory,
+   * CON-84; `spatialConformance` proves it). Absent: places are not stored and recall refuses a
+   * spatial query (`SpatialUnsupportedError`) rather than return unfiltered rows.
+   */
+  readonly spatial?: true;
   /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
    * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).
@@ -140,9 +162,9 @@ export interface MemoryStore {
    * Lexical search over text + stub + entities within `grant.read`. Returns
    * hot, warm and cold hits; cold memories are only guaranteed to match on stub
    * and entities. Does not filter by temporal validity (fusion does), so as-of
-   * queries work.
+   * queries work. With `opts.spatial`, only memories that pass it (see `SearchOptions`).
    */
-  lexical(grant: Grant, q: string, k: number): Promise<Hit[]>;
+  lexical(grant: Grant, q: string, k: number, opts?: SearchOptions): Promise<Hit[]>;
   /**
    * Nearest neighbours of `v` among memories with an embedding within
    * `grant.read`, best first. Never returns cold memories. Does not filter by
@@ -151,8 +173,9 @@ export interface MemoryStore {
    * Every implementation rejects with a `RangeError` whose message names both
    * dimensions when `v.length` differs from the store's dimension (a store
    * without a fixed dimension compares against its stored embeddings).
+   * With `opts.spatial`, only memories that pass it (see `SearchOptions`).
    */
-  dense(grant: Grant, v: Int8Array, k: number): Promise<Hit[]>;
+  dense(grant: Grant, v: Int8Array, k: number, opts?: SearchOptions): Promise<Hit[]>;
   /**
    * Appends an access at `at` to each listed memory's access log; unknown ids
    * and ids outside `grant.read` are ignored.

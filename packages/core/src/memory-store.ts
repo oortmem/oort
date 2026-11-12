@@ -11,6 +11,7 @@ import {
   type Grant,
 } from './grant.js';
 import { isCurrent, type Memory, type Tier } from './model.js';
+import { checkPlace, hasSpatialFilter, matchesSpatial, type SpatialFilter } from './place.js';
 import { tokenizeLexical as tokens } from './tokenize.js';
 
 export interface MemoryStoreOptions {
@@ -74,8 +75,12 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     if (m.tier !== 'cold') cold.delete(m.id);
   }
 
-  function scoped(grant: Grant): Memory[] {
-    return [...main.values()].filter((m) => grantReads(grant, m));
+  /** What `grant` reads, and with a spatial filter only what passes it (CON-84). */
+  function scoped(grant: Grant, spatial?: SpatialFilter): Memory[] {
+    const f = hasSpatialFilter(spatial) ? spatial : undefined;
+    return [...main.values()].filter(
+      (m) => grantReads(grant, m) && (f === undefined || matchesSpatial(m, f)),
+    );
   }
 
   /** The live record if `grant` may read it; `undefined` for unknown and out-of-grant alike. */
@@ -98,6 +103,8 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
    */
   function checkWrite(grant: Grant, m: Memory, existing: Memory | undefined): Memory {
     const c = canonicalMemory(m);
+    if (c.place !== undefined) c.place = checkPlace(c.place);
+    else delete c.place;
     if (!grantWrites(grant, c)) throw new GrantError();
     if (existing !== undefined && !sameRecordAddress(existing, c)) throw new GrantError();
     return c;
@@ -157,6 +164,8 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   }
 
   return {
+    spatial: true,
+
     async upsert(grant, m) {
       open();
       assertGrant(grant);
@@ -201,13 +210,13 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
      * match) in text + stub + entities, or in stub + entities only for cold
      * memories, mirroring a store that keeps only those indexed when cold.
      */
-    async lexical(grant, q, k) {
+    async lexical(grant, q, k, searchOpts) {
       open();
       assertGrant(grant);
       const query = new Set(tokens(q));
       if (query.size === 0) return [];
       const scored: { m: Memory; score: number }[] = [];
-      for (const m of scoped(grant)) {
+      for (const m of scoped(grant, searchOpts?.spatial)) {
         const fields =
           m.tier === 'cold' ? [m.stub, ...m.entities] : [m.text, m.stub, ...m.entities];
         const doc = new Set(tokens(fields.join(' ')));
@@ -218,11 +227,11 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       return rank(scored, k);
     },
 
-    async dense(grant, v, k) {
+    async dense(grant, v, k, searchOpts) {
       open();
       assertGrant(grant);
       const scored: { m: Memory; score: number }[] = [];
-      for (const m of scoped(grant)) {
+      for (const m of scoped(grant, searchOpts?.spatial)) {
         if (m.tier === 'cold' || m.embedding === undefined) continue;
         if (m.embedding.length !== v.length) {
           throw new RangeError(

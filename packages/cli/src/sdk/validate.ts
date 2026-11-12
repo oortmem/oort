@@ -1,12 +1,11 @@
 import { z } from 'zod';
-import { utf8Bytes } from '@oortmem/core';
+import { checkNear, checkPlace, checkPlacePath, utf8Bytes } from '@oortmem/core';
 import { OortUsageError } from './errors.js';
 
 /**
  * Strict runtime schemas for every input (CON-108 §4.1, §4.5): an unknown key is a usage error,
- * never silently dropped, which is what keeps the reserved spatial names (`place`, `near`,
- * `within`) safe before they exist. Errors name the field, never its value, and are raised before
- * any I/O.
+ * never silently dropped. Errors name the field, never its value, and are raised before any I/O.
+ * Places and spatial filters (`place`, `near`, `within`, CON-84) are checked by core's own rules.
  */
 
 export const LIMITS = Object.freeze({
@@ -49,6 +48,27 @@ const isoDate = z.union([
 export const NAME = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/;
 
 const signal = z.custom<AbortSignal>((v) => v instanceof AbortSignal);
+
+/**
+ * A value checked by one of core's place checks: its RangeError names the field (`place.pose.x
+ * must be …`), which becomes the issue's path below the key; the value is never echoed.
+ */
+function corePlaceCheck<T>(fn: (v: unknown) => T) {
+  return z.unknown().transform((v, ctx): T | undefined => {
+    if (v === undefined) return undefined;
+    try {
+      return fn(v);
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+      const field = e.message.split(' ')[0] ?? '';
+      ctx.addIssue({ code: 'custom', message: 'invalid', path: field.split('.').slice(1) });
+      return z.NEVER;
+    }
+  });
+}
+const place = corePlaceCheck((v) => checkPlace(v));
+const near = corePlaceCheck((v) => checkNear(v));
+const within = corePlaceCheck((v) => checkPlacePath(v, 'within'));
 const level = z.enum(['self', 'planet', 'star', 'constellation', 'galaxy']);
 
 export const OptionsSchema = z.strictObject({
@@ -93,6 +113,8 @@ export const RecallOptionsSchema = z.strictObject({
   includeWithdrawn: z.boolean().optional(),
   speed: z.enum(['full', 'fast', 'lexical']).optional(),
   inferTime: z.boolean().optional(),
+  within: within.optional(),
+  near: near.optional(),
   signal: signal.optional(),
 });
 
@@ -109,6 +131,7 @@ export const TurnSchema = z
     at: isoDate.optional(),
     sessionId: z.string().min(1).max(256).optional(),
     turnRef: z.string().min(1).max(LIMITS.turnRef).optional(),
+    place: place.optional(),
   })
   .refine(
     (t) =>
@@ -128,6 +151,7 @@ export const FactsSchema = z
 
 export const RememberOptionsSchema = z.strictObject({
   type: z.enum(['semantic', 'episodic', 'procedural', 'preference']).optional(),
+  place: place.optional(),
 });
 
 export const IdSchema = z

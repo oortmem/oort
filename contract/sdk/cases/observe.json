@@ -97,27 +97,6 @@
     ]
   },
   {
-    "id": "observe.place-is-refused-until-spatial-memory",
-    "transports": ["local", "cloud"],
-    "steps": [
-      {
-        "call": "observe",
-        "args": {
-          "user": "The wrench is on shelf B3.",
-          "assistant": "Noted.",
-          "place": { "nodeId": "shelf:B3" }
-        },
-        "expect": {
-          "error": {
-            "code": "usage",
-            "reason": "invalid-argument",
-            "message": { "$regex": "place" }
-          }
-        }
-      }
-    ]
-  },
-  {
     "id": "observe.a-turn-over-128-kib-is-refused",
     "transports": ["local", "cloud"],
     "steps": [

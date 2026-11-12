@@ -76,4 +76,5 @@ Python today and for any other language. See [cli-and-python.md](cli-and-python.
 - A TypeScript `remote` mode. `oort serve --listen` (service mode) and the Python client's
   `mode="remote"` ship in 0.7.0; the TypeScript SDK has `local` and `cloud` only.
 - Per-user agent memory (a Star per end user) comes with CON-92.
-- `place`, `near` and `within` are reserved for spatial memory: passing them is a usage error.
+- Spatial memory (`place`, `near`, `within`) is 0.9.0 or newer and local mode only; in 0.8.0
+  passing them is a usage error, and Oort Cloud refuses them (`local-only`) until it holds places.

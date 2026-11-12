@@ -909,8 +909,8 @@ Tools:
 
 | Tool | Input | Annotations | Returns |
 | --- | --- | --- | --- |
-| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10, default 5) | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`), `from` (`from your Planet` or `from this agent's Star`), `overridden_by` (the id of a narrower memory in the result that contradicts it); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
-| `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`) | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
+| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10, default 5); on a local store (0.9.0 or newer), also `within?` (a place path) and `near?` (`map_id`, `frame?`, `pose` `{x, y, z?}`, `radius` in metres): see [Places](#places-spatial-memory). Elsewhere (Oort Cloud) they are not offered, and one sent anyway is a tool error (`local-only`), never dropped | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`), `from` (`from your Planet` or `from this agent's Star`), `overridden_by` (the id of a narrower memory in the result that contradicts it), `place` (its place path) and `distance_m` (with `near`); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
+| `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`); on a local store (0.9.0 or newer), also `place?` (`node_id`, `map_id`, `map_version`, `frame`, `pose`, `radius`); elsewhere a `place` is a tool error (`local-only`) and nothing is saved | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
 | `forget` | `id` (required) | destructive, idempotent | `{ forgotten: id }`; in Oort Cloud, when copies were shared to Constellations (they stay), also `stillShared` (their names) and a `note` with the command that withdraws them: `oort forget <id> --everywhere`, which you run and confirm yourself. The model can't withdraw them: a call with `everywhere` is refused before anything is forgotten, with that command |
 | `pin` | `id`, `pinned` (boolean) | write, not destructive, idempotent | `{ id, pinned, changed }` |
 | `explain` | `id` | read-only, idempotent | the memory, its stored decisions, and its supersede chain |
@@ -1195,9 +1195,9 @@ For a container sidecar, or a backend that is not you. The same protocol on TCP,
 
 | Command | What it does | Flags |
 | --- | --- | --- |
-| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)), `--limit <n>`, `--speed <speed>`, `--budget-chars <n>` (see below) |
-| `oort remember <fact>` | Saves a fact you state, as the MCP `remember` tool and the SDK's `remember()` do: one turn framed as your statement (`Remember this: <fact>`, answered `Noted: <fact>`), through the write path (scrub, gate, reconcile, writer), as the acting agent on the cwd's project. The fact is scrubbed on your machine before it leaves, in local and cloud mode; one that is mostly a secret is `skipped (secret)` and never sent. Words without quotes are joined into one fact; a fact is one line of at most 500 characters (no line or paragraph separators). The header says what happened (`added 1b2c3d4e`, `superseded 1b2c3d4e (replaces 9f8e7d6c)`, `skipped (not durable)`; an outcome Oort does not know is `unknown`). In Oort Cloud it saves in your account, as `observe` does, with a `turnRef` built from the project, the type and the fact and the UTC day, so a retry after a lost answer is not saved twice. | `--type <type>` (a hint: `semantic`, `episodic`, `procedural` or `preference`; the write path decides), `--dry-run` (reports scrubbing only; touches nothing), `--json` (`data.results`, the SDK's `RememberResult`) |
-| `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation, hydrated, and where it came from (`your Planet`, `this agent's Star`, with `(overridden)` when a narrower memory contradicts it). The header names the agent, the nodes read (`reads: your Planet, Star cursor`) and the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (agent; read; rank, id, type, tier, validFrom, text, explanation, origin; temporal; timings; degraded), `--include <levels>`, `--as-of`, `--known-at`, `--history` |
+| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)), `--within <path>`, `--near <x,y[,z]>` with `--radius <m>`, `--map <id>` and `--frame <id>` (see [Places](#places-spatial-memory)), `--limit <n>`, `--speed <speed>`, `--budget-chars <n>` (see below) |
+| `oort remember <fact>` | Saves a fact you state, as the MCP `remember` tool and the SDK's `remember()` do: one turn framed as your statement (`Remember this: <fact>`, answered `Noted: <fact>`), through the write path (scrub, gate, reconcile, writer), as the acting agent on the cwd's project. The fact is scrubbed on your machine before it leaves, in local and cloud mode; one that is mostly a secret is `skipped (secret)` and never sent. Words without quotes are joined into one fact; a fact is one line of at most 500 characters (no line or paragraph separators). The header says what happened (`added 1b2c3d4e`, `superseded 1b2c3d4e (replaces 9f8e7d6c)`, `skipped (not durable)`; an outcome Oort does not know is `unknown`). In Oort Cloud it saves in your account, as `observe` does, with a `turnRef` built from the project, the type and the fact and the UTC day, so a retry after a lost answer is not saved twice. | `--type <type>` (a hint: `semantic`, `episodic`, `procedural` or `preference`; the write path decides), `--place <path>` and `--pose <x,y[,z]>` with `--map <id>`, `--radius <m>` and `--frame <id>` (where the fact is; local only, see [Places](#places-spatial-memory)), `--dry-run` (reports scrubbing only; touches nothing), `--json` (`data.results`, the SDK's `RememberResult`) |
+| `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation, hydrated, and where it came from (`your Planet`, `this agent's Star`, with `(overridden)` when a narrower memory contradicts it). The header names the agent, the nodes read (`reads: your Planet, Star cursor`) and the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (agent; read; rank, id, type, tier, validFrom, text, explanation, origin, place; temporal; spatial; timings; degraded), `--include <levels>`, `--as-of`, `--known-at`, `--history`, `--within`, `--near` (with `--radius`, `--map`, `--frame`): with one, a `place` and `dist m` column and a `place:` header line |
 | `oort revalidate` | Lists volatile facts (a status, a current version, an owner) that nobody confirmed within `recall.staleAfterDays`, oldest first. | `--json` (`data.memories`: id, type, text, lastConfirmed; `data.staleAfterDays`) |
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
 | `oort stats` | Counts per tier and validity, store and cold sizes, the hook queue, when the store was last consolidated (and when it is next due), and memory use. | `--json` |
@@ -1389,6 +1389,45 @@ no stated end or start, so "hasta el viernes" does not end the fact by itself. N
 the mode explicitly. The writer still turns a relative date in any language into an absolute
 `YYYY-MM-DD` in the fact's text. Reading dates in Spanish, Brazilian Portuguese, German, French,
 Japanese and Chinese is planned (CON-110).
+
+### Places: spatial memory
+
+In 0.9.0 or newer, a memory can carry where it is: a robot, a phone or anything else that knows
+its place. `oort remember` takes one, and `oort recall` and `oort explain` filter by one:
+
+```sh
+oort remember "The torque wrench is in drawer 4." --place site:hq/room:B/drawer:4 --pose 12,3 --map hq
+oort recall "torque wrench" --within room:B
+oort recall "toolbox" --near 13,3 --radius 1.5 --map hq
+```
+
+- **A place path** (`--place`) names where, root first: `site:hq/floor:2/room:B/shelf:B3`. 1 to
+  16 segments of 1 to 64 letters (any script, with its combining marks), digits and `. _ : @ -`,
+  normalised to Unicode NFC.
+- **Map coordinates** (`--pose x,y[,z]`, in metres, with `--map`) say where on a map. `--radius`
+  gives the place a size, `--frame` a coordinate frame other than `map`. `odom` is refused:
+  odometry drifts, so a fact pinned to it would end up in the wrong place.
+- **`--within room:B`** keeps memories whose place path contains `room:B` as whole segments, at
+  any depth: `room:B/shelf:B3` matches, `room:B2` never does.
+- **`--near x,y[,z] --radius m --map id`** keeps memories within that many metres of the point,
+  measured to the edge of the memory's place (0 inside it). Another map or frame never matches.
+
+The filters run in the store before ranking and `--limit`, together (both must hold) and with
+every [time mode](#time-recall-modes): `--within shelf:B3 --as-of 2026-11-03` is what was on that
+shelf then, and `--history` shows where a moved fact went. A memory without a place never matches
+a filter, and a recall without one is unchanged. `--json` adds each memory's `place`,
+`explanation.placePath` and `explanation.distanceM`, and the filter under `spatial`.
+
+A turn seen somewhere else than a memory it would reinforce adds a memory instead (decision
+`place` / `elsewhere`): the two places differ when their paths differ, or their poses are further
+apart than their combined `sigma` (a matching path where only one side has a pose is the same
+place). Deciding that a thing moved, and replacing the old place, is
+later work.
+
+Places are kept by the local store (schema version 5; opening an older store adds the columns and
+a spatial index, after a `pre-v5` backup). Oort Cloud does not hold them yet: in cloud mode the
+flags are refused (`refused`, `local-only`, fix `oort cloud use --local`), and `oort cloud
+import` sends memories without their place and says how many it left out.
 
 **Volatile facts.** The write gate marks facts likely to change within weeks (a status, a current
 version, an owner, a deadline). One not confirmed within `recall.staleAfterDays` (default 30; 0

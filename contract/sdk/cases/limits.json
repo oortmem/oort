@@ -55,8 +55,8 @@
     "steps": [
       {
         "call": "recall",
-        "args": { "query": "q", "near": { "radius": 2 } },
-        "expect": { "error": { "code": "usage", "message": { "$regex": "near" } } }
+        "args": { "query": "q", "nearby": { "radius": 2 } },
+        "expect": { "error": { "code": "usage", "message": { "$regex": "nearby" } } }
       },
       {
         "call": "recall",

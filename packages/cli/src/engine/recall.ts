@@ -1,6 +1,8 @@
 import { filterFor } from '@oortmem/claude-code';
 import {
   ScopeDeniedError,
+  checkPlace,
+  checkSpatialFilter,
   isIncludeLevel,
   readableNodes,
   recall,
@@ -9,11 +11,13 @@ import {
   type Grant,
   type IncludeLevel,
   type MemoryStore,
+  type Place,
   type RecallMode,
   type RecallResult,
   type Reranker,
   type ResolvedConfig,
   type Scope,
+  type SpatialFilter,
 } from '@oortmem/core';
 import { Refusal, cloudOf, echo } from '../util.js';
 import { privacyStatement, type Wired, type WiredAgent } from '../wire.js';
@@ -37,6 +41,110 @@ export function includeLevels(raw: string | undefined): IncludeLevel[] | undefin
     );
   }
   return names as IncludeLevel[];
+}
+
+/** The spatial flags `recall` and `explain` share (CON-84). */
+export interface SpatialFlags {
+  /** `--within <path>`: a place path, whole segments. */
+  within?: string;
+  /** `--near x,y[,z]`, with `--radius` and `--map` (and optionally `--frame`). */
+  near?: string;
+  radius?: string;
+  map?: string;
+  frame?: string;
+}
+
+/** The place flags of `remember` (CON-84). */
+export interface PlaceFlags {
+  /** `--place <path>`. */
+  place?: string;
+  /** `--pose x,y[,z]`, with `--map` (and optionally `--radius`, `--frame`). */
+  pose?: string;
+  radius?: string;
+  map?: string;
+  frame?: string;
+}
+
+/** Core's field names as the flags that set them, longest first. */
+const FLAG_OF: readonly [string, string][] = [
+  ['near.pose', '--near'],
+  ['near.radius', '--radius'],
+  ['near.mapId', '--map'],
+  ['near.frame', '--frame'],
+  ['place.nodeId', '--place'],
+  ['place.pose', '--pose'],
+  ['place.extent', '--radius'],
+  ['place.mapId', '--map'],
+  ['place.frame', '--frame'],
+  ['within', '--within'],
+  ['place', '--place'],
+];
+
+/** Runs a core place check, its RangeError a refusal naming the flag (never the value). */
+function asFlags<T>(check: () => T): T {
+  try {
+    return check();
+  } catch (e) {
+    if (!(e instanceof RangeError)) throw e;
+    const [field = '', ...why] = e.message.split(' ');
+    const flag = FLAG_OF.find(([k]) => field === k || field.startsWith(`${k}.`))?.[1] ?? field;
+    throw new Refusal(`${flag} ${why.join(' ')}.`);
+  }
+}
+
+/** `x,y` or `x,y,z` in metres. */
+function coords(raw: string, flag: string): { x: number; y: number; z?: number } {
+  const parts = raw.split(',').map((s) => s.trim());
+  const n = parts.map((s) => (s === '' ? NaN : Number(s)));
+  if ((n.length !== 2 && n.length !== 3) || !n.every(Number.isFinite)) {
+    throw new Refusal(`${flag} takes x,y or x,y,z in metres.`);
+  }
+  return { x: n[0]!, y: n[1]!, ...(n[2] !== undefined && { z: n[2] }) };
+}
+
+/** The spatial filter from the flags, checked; undefined without one. */
+export function spatialFilter(f: SpatialFlags): SpatialFilter | undefined {
+  const withNear = [f.radius, f.map, f.frame].some((x) => x !== undefined);
+  if (f.within === undefined && f.near === undefined && !withNear) return undefined;
+  if (f.near === undefined && withNear) {
+    throw new Refusal('--radius, --map and --frame go with --near.');
+  }
+  if (f.near !== undefined && (f.radius === undefined || f.map === undefined)) {
+    throw new Refusal('--near needs --radius (metres) and --map.');
+  }
+  const near = f.near;
+  return asFlags(() =>
+    checkSpatialFilter({
+      ...(f.within !== undefined && { within: f.within }),
+      ...(near !== undefined && {
+        near: {
+          mapId: f.map,
+          ...(f.frame !== undefined && { frame: f.frame }),
+          pose: coords(near, '--near'),
+          radius: Number(f.radius),
+        },
+      }),
+    }),
+  );
+}
+
+/** The place `remember` tags its facts with, from the flags, checked; undefined without one. */
+export function placeOfFlags(f: PlaceFlags): Place | undefined {
+  const withPose = [f.radius, f.map, f.frame].some((x) => x !== undefined);
+  if (f.place === undefined && f.pose === undefined && !withPose) return undefined;
+  if (f.pose === undefined && withPose) {
+    throw new Refusal('--map, --radius and --frame go with --pose.');
+  }
+  const pose = f.pose;
+  return asFlags(() =>
+    checkPlace({
+      ...(f.place !== undefined && { nodeId: f.place }),
+      ...(f.map !== undefined && { mapId: f.map }),
+      ...(f.frame !== undefined && { frame: f.frame }),
+      ...(pose !== undefined && { pose: coords(pose, '--pose') }),
+      ...(f.radius !== undefined && { extent: { radius: Number(f.radius) } }),
+    }),
+  );
 }
 
 /** The temporal flags `recall` and `explain` share (CON-34). One view at a time. */
@@ -143,10 +251,18 @@ export async function runRecall(
   now: Date,
   include?: IncludeLevel[],
   includeWithdrawn = false,
-  opts: { k?: number; speed?: RecallSpeed } = {},
+  opts: { k?: number; speed?: RecallSpeed; spatial?: SpatialFilter } = {},
 ): Promise<RecallResult> {
   const speed = opts.speed ?? 'full';
   const cloud = cloudOf(w);
+  const spatial = opts.spatial;
+  if (cloud !== undefined && spatial !== undefined) {
+    // Oort Cloud holds no places yet (CON-87): refused before anything is sent.
+    throw new Refusal(
+      'near and within are local-only for now: Oort Cloud does not hold places yet. Run `oort cloud use --local` to use them.',
+      { code: 'refused' },
+    );
+  }
   if (cloud !== undefined) {
     // Oort Cloud reads the account's Planet and, in the hive beta, its Constellations; `include`
     // narrows that, and a level the account cannot read is the API's own scope_denied.
@@ -181,6 +297,8 @@ export async function runRecall(
         ...(include !== undefined && { include }),
         ...view,
         ...(includeWithdrawn && { includeWithdrawn: true }),
+        ...(spatial?.within !== undefined && { within: spatial.within }),
+        ...(spatial?.near !== undefined && { near: spatial.near }),
       },
       {
         store: w.store,

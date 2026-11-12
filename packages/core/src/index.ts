@@ -1,5 +1,6 @@
 export const VERSION = '0.8.0';
 export * from './model.js';
+export * from './place.js';
 export * from './address.js';
 export * from './export-format.js';
 export * from './scope.js';

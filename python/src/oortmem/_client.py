@@ -32,6 +32,7 @@ from ._validate import (
     check_turn,
     check_type,
     check_user,
+    place_wire,
     turn_wire,
     view_of,
     wire_date,
@@ -459,11 +460,15 @@ class Oort:
         include_withdrawn: bool = False,
         speed: str = "full",
         infer_time: bool = True,
+        within: Optional[str] = None,
+        near: Any = None,
     ) -> RecallResult:
         """Recall memories for ``query``: the person's Planet (and this agent's Star) for the
         project and global memories. ``mode`` picks a temporal view (``as-of`` with ``as_of``,
         ``known-at`` with ``known_at``, ``history``); with neither date nor mode, a date in the
-        query ("on 2 April") picks one unless ``infer_time=False``."""
+        query ("on 2 April") picks one unless ``infer_time=False``. ``within`` (a place path,
+        whole segments) and ``near`` (a ``NearQuery`` or mapping) keep only memories there
+        (0.9.0 or newer; local mode only)."""
         opts: Dict[str, Any] = {
             "limit": limit,
             "mode": mode,
@@ -474,6 +479,8 @@ class Oort:
             "includeWithdrawn": include_withdrawn,
             "speed": speed,
             "inferTime": infer_time,
+            "within": within,
+            "near": None if near is None else place_wire(near),
         }
         opts = {k: v for k, v in opts.items() if v is not None}
 
@@ -482,6 +489,9 @@ class Oort:
             return _recall_result(data, budget_chars)
 
         def cloud(c: CloudOps, p: CloudPrincipal) -> RecallResult:
+            # Oort Cloud holds no places yet: refused before anything is sent.
+            if within is not None or near is not None:
+                raise local_only("Spatial recall (near, within)")
             q = check_query(query)
             check_recall(opts)
             return _recall_result(c.recall(p, q, opts, view_of(opts)), budget_chars)
@@ -497,20 +507,33 @@ class Oort:
         t = turn_wire(turn if turn is not None else fields)
 
         def cloud(c: CloudOps, p: CloudPrincipal) -> ObserveResult:
+            if t.get("place") is not None:
+                raise local_only("A place")
             check_turn(t)
             return from_wire(ObserveResult, c.observe(p, t))
 
         return self._run(lambda d, h: from_wire(ObserveResult, d.call("POST", "/v1/observe", h, t)), cloud)
 
-    def remember(self, facts: Union[str, Sequence[str]], *, type: Optional[str] = None) -> RememberResult:  # noqa: A002
+    def remember(
+        self,
+        facts: Union[str, Sequence[str]],
+        *,
+        type: Optional[str] = None,  # noqa: A002
+        place: Any = None,
+    ) -> RememberResult:
         """Save up to 5 facts (500 characters each) through the write path, each framed as
-        something the user said."""
+        something the user said. ``place`` (a ``Place`` or mapping) tags every fact (0.9.0 or
+        newer; local mode only)."""
         lst = [facts] if isinstance(facts, str) else facts
         body: Dict[str, Any] = {"facts": list(lst) if isinstance(lst, (list, tuple)) else lst}
         if type is not None:
             body["type"] = type
+        if place is not None:
+            body["place"] = place_wire(place)
 
         def cloud(c: CloudOps, p: CloudPrincipal) -> RememberResult:
+            if place is not None:
+                raise local_only("A place")
             fs = check_facts(facts)
             check_type(type)
             return from_wire(RememberResult, c.remember(p, fs, type))

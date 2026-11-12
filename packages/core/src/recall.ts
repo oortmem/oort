@@ -31,6 +31,14 @@ import {
 } from './levels.js';
 import { scrub } from './scrub.js';
 import { isCurrent, type Memory } from './model.js';
+import {
+  checkSpatialFilter,
+  hasSpatialFilter,
+  placeDistance,
+  SpatialUnsupportedError,
+  type NearQuery,
+  type SpatialFilter,
+} from './place.js';
 import { temporalIntent, type RecallMode } from './temporal.js';
 import { isStale, lastConfirmed } from './volatile.js';
 import {
@@ -69,6 +77,17 @@ export interface RecallQuery {
   mode?: RecallMode;
   /** Also return withdrawn judgments (CON-71), in any mode. Default false. */
   includeWithdrawn?: boolean;
+  /**
+   * Only memories whose place path contains this path, as whole segments (CON-84): `room:B`
+   * keeps `site:hq/room:B/shelf:B3`, never `room:B2`. Filters inside the store, before k.
+   */
+  within?: string;
+  /**
+   * Only memories within `radius` metres of `pose` on the same map and frame (CON-84). Distance is
+   * to the memory's region (0 inside it). Filters inside the store, before k. With `within`, both
+   * must hold. Either needs a store with `spatial: true`, or recall rejects.
+   */
+  near?: NearQuery;
 }
 
 /** The temporal view a recall used, and whether it was read from the query. */
@@ -98,6 +117,10 @@ export interface RecalledMemory extends Memory {
     chain?: true;
     /** A volatile fact nobody confirmed within `recall.staleAfterDays`. */
     stale?: true;
+    /** With a spatial filter (CON-84): the memory's place path, when it has one. */
+    placePath?: string;
+    /** With `near` (CON-84): metres from the query point to the memory's region. */
+    distanceM?: number;
   };
   /** Where it came from: level, node, author, and whether a narrower memory overrides it. */
   origin?: MemoryOrigin;
@@ -144,6 +167,8 @@ export interface RecallResult {
    * hydrated. `by`: the decision model (`probability` is its answer) or the rule in code.
    */
   adaptiveStop?: { stopped: boolean; by: 'decide' | 'rule'; cold: number; probability?: number };
+  /** The spatial filter this recall applied (CON-84), when it had one. */
+  spatial?: SpatialFilter;
   timings: Record<string, number>;
 }
 
@@ -169,6 +194,19 @@ const clock = (): number => performance.now();
  */
 export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallResult> {
   const { store, config } = deps;
+  // Checked before anything is read: a bad filter is the caller's error, and a store that cannot
+  // filter would silently return every place (CON-84).
+  const spatialQ =
+    q.within === undefined && q.near === undefined
+      ? undefined
+      : checkSpatialFilter({
+          ...(q.within !== undefined && { within: q.within }),
+          ...(q.near !== undefined && { near: q.near }),
+        });
+  const spatial = hasSpatialFilter(spatialQ) ? spatialQ : undefined;
+  if (spatial !== undefined && store.spatial !== true) throw new SpatialUnsupportedError();
+  // Passed only with a filter, so a store from before spatial memory sees the calls it knows.
+  const searchOpts = spatial === undefined ? [] : ([{ spatial }] as const);
   const full = grantOf(q);
   // The nodes to read: the grant intersected with `include` (a level it lacks rejects here,
   // before anything is read). Recall reads and hydrates only inside them; the store enforces it.
@@ -215,7 +253,9 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   };
 
   const lexicalP = timed('lexicalMs', () =>
-    Promise.all(legs.map((l) => store.lexical(l.grant, text, config.recall.lexicalK))),
+    Promise.all(
+      legs.map((l) => store.lexical(l.grant, text, config.recall.lexicalK, ...searchOpts)),
+    ),
   );
   // A failed embed must not leave the lexical promise unobserved.
   lexicalP.catch(() => {});
@@ -253,7 +293,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
       : timed('denseMs', () =>
           Promise.all(
             legs.map((l) =>
-              store.dense(l.grant, v, config.recall.denseK).catch((): Hit[] => {
+              store.dense(l.grant, v, config.recall.denseK, ...searchOpts).catch((): Hit[] => {
                 denseFailed = true;
                 return [];
               }),
@@ -430,6 +470,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     if (isCurrent(m, now) && isStale(m, now, config.recall.staleAfterDays)) {
       m.explanation.stale = true;
     }
+    if (spatial !== undefined) explainPlace(m, spatial);
   }
   // With a budget, return only what the injection block holds, so nothing cut is touched below.
   if (q.budgetChars !== undefined) result = fitForInjection(result, q.budgetChars, now).kept;
@@ -500,6 +541,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     ...(adaptiveStop !== undefined ? { adaptiveStop } : {}),
     temporal,
     read: nodes.map((n) => nodeLabel(n, full)),
+    ...(spatial !== undefined && { spatial }),
     timings,
   };
 }
@@ -610,6 +652,13 @@ function viewFor(
     search = i.text ?? text;
   }
   return { view, temporal: { ...view, inferred }, text: search };
+}
+
+/** Why a memory passed the spatial filter: its place path and, with `near`, its distance. */
+function explainPlace(m: RecalledMemory, f: SpatialFilter): void {
+  if (m.place?.nodeId !== undefined) m.explanation.placePath = m.place.nodeId;
+  const d = f.near === undefined ? undefined : placeDistance(m.place, f.near);
+  if (d !== undefined) m.explanation.distanceM = d;
 }
 
 /** Longest stretch of a supersede chain walked in each direction. */

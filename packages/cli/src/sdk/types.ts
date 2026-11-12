@@ -116,6 +116,46 @@ export interface JudgmentView {
   pack?: { id: string; name: string };
 }
 
+/** A position in metres on a map: x forward, y left, z up; yaw in radians. */
+export interface Pose {
+  x: number;
+  y: number;
+  z?: number;
+  yaw?: number;
+}
+
+/**
+ * Where a memory is (spatial memory, 0.9.0 or newer). Local mode only until Oort Cloud holds
+ * places: in cloud mode a place is refused (`OortRefusedError`, reason `local-only`).
+ */
+export interface Place {
+  /** A place path, root first, whole segments: `site:hq/floor:2/room:B/shelf:B3`. */
+  nodeId?: string;
+  /** The map the coordinates are in. Required with `pose`. */
+  mapId?: string;
+  /** Recorded, not filtered on. */
+  mapVersion?: number;
+  /** Default `map`. `odom` is refused: it drifts. */
+  frame?: string;
+  pose?: Pose;
+  /** The region around `pose`: a box (full sizes, centred) or a sphere. Default: the point. */
+  extent?: { dx: number; dy: number; dz?: number } | { radius: number };
+  /** WGS84; stored and returned, not searchable yet. */
+  geo?: { lat: number; lon: number; alt?: number };
+  /** Pose uncertainty in metres (1 sigma). */
+  sigma?: number;
+}
+
+/** `recall({ near })`: within `radius` metres of `pose` on the same map and frame. */
+export interface NearQuery {
+  mapId: string;
+  /** Default `map`. */
+  frame?: string;
+  pose: { x: number; y: number; z?: number };
+  /** Metres, more than 0. */
+  radius: number;
+}
+
 export interface MemoryView {
   id: string;
   /** Scrubbed again on read. */
@@ -132,6 +172,8 @@ export interface MemoryView {
   entities: string[];
   origin?: { level: IncludeLevel; space: string; author?: string; overriddenBy?: string };
   judgment?: JudgmentView & { id: string };
+  /** Where it is (0.9.0 or newer), when it was remembered with a place. */
+  place?: Place;
 }
 
 export interface RecalledMemory extends MemoryView {
@@ -147,6 +189,10 @@ export interface RecalledMemory extends MemoryView {
     dense?: number;
     activation: number;
     chain?: true;
+    /** With `near` or `within`: the memory's place path. */
+    placePath?: string;
+    /** With `near`: metres from the query point to the memory's region (0 inside it). */
+    distanceM?: number;
   };
 }
 
@@ -316,6 +362,13 @@ export interface RecallOptions {
   speed?: 'full' | 'fast' | 'lexical';
   /** Default true: "on 2 April" picks as-of, as the CLI and MCP do. */
   inferTime?: boolean;
+  /**
+   * Only memories whose place path contains this path as whole segments (`room:B` keeps
+   * `site:hq/room:B/shelf:B3`, never `room:B2`). 0.9.0 or newer; local mode only.
+   */
+  within?: string;
+  /** Only memories within a radius on the same map and frame. 0.9.0 or newer; local mode only. */
+  near?: NearQuery;
   signal?: AbortSignal;
 }
 
@@ -329,6 +382,8 @@ export interface Turn {
   sessionId?: string;
   /** At most 128 characters; deduplicated by Oort Cloud only. */
   turnRef?: string;
+  /** Where this turn happened: the memories it writes carry it. 0.9.0 or newer; local mode only. */
+  place?: Place;
 }
 
 export interface JudgmentInput {
@@ -444,7 +499,7 @@ export interface Oort {
   observe(turn: Turn, opts?: { signal?: AbortSignal }): Promise<ObserveResult>;
   remember(
     facts: string | readonly string[],
-    opts?: { type?: MemoryType },
+    opts?: { type?: MemoryType; place?: Place },
   ): Promise<RememberResult>;
   forget(id: string, opts?: { everywhere?: boolean }): Promise<ForgetResult>;
   pin(id: string): Promise<PinResult>;

@@ -6,11 +6,12 @@ import Database from 'better-sqlite3';
 /**
  * The copies a store takes of its database before changing its schema:
  * `pre-v2` before migrating a version 1 store, `pre-v3` before migrating a
- * version 2 store, `pre-v4` before migrating a version 3 store, `pre-downgrade` before taking a
- * store back to an older version. Migrating a version 4 store takes no copy: version 5 only adds
- * (triggers and an optional index) and goes back down without loss.
+ * version 2 store, `pre-v4` before migrating a version 3 store, `pre-v5` before migrating a
+ * version 4 store, `pre-downgrade` before taking a store back to an older version. Migrating a
+ * version 5 store takes no copy: version 6 only adds (triggers and an optional index) and goes
+ * back down without loss.
  */
-export type BackupKind = 'pre-v2' | 'pre-v3' | 'pre-v4' | 'pre-downgrade';
+export type BackupKind = 'pre-v2' | 'pre-v3' | 'pre-v4' | 'pre-v5' | 'pre-downgrade';
 
 /** How many of the newest copies of each kind are kept. */
 export const BACKUPS_KEPT = 3;

@@ -95,9 +95,9 @@ The TypeScript methods, in snake_case. `AsyncOort` has the same ones as `async d
 
 | Python                                                                                                                                                  | Returns              |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| `recall(query, *, limit=10, mode=None, as_of=None, known_at=None, include=None, budget_chars=None, include_withdrawn=False, speed="full", infer_time=True)` | `RecallResult`       |
-| `observe(turn)` or `observe(user=..., assistant=..., tools=None, at=None, session_id=None, turn_ref=None)`                                              | `ObserveResult`      |
-| `remember(facts, *, type=None)`                                                                                                                         | `RememberResult`     |
+| `recall(query, *, limit=10, mode=None, as_of=None, known_at=None, include=None, budget_chars=None, include_withdrawn=False, speed="full", infer_time=True, within=None, near=None)` | `RecallResult`       |
+| `observe(turn)` or `observe(user=..., assistant=..., tools=None, at=None, session_id=None, turn_ref=None, place=None)`                                  | `ObserveResult`      |
+| `remember(facts, *, type=None, place=None)`                                                                                                             | `RememberResult`     |
 | `forget(id, *, everywhere=False)` (`everywhere` is cloud only)                                                                                          | `ForgetResult`       |
 | `pin(id)`, `unpin(id)` (`changed` is `None` in cloud mode)                                                                                              | `PinResult`          |
 | `recent(*, since=None, limit=20)`                                                                                                                       | `RecentResult`       |
@@ -126,9 +126,47 @@ fields (`valid_from`, `recorded_at`, `agent_recorded`). An optional field TypeSc
 `oortmem.types.to_wire(result)` gives the camelCase JSON shape back. Ignore fields you do not
 know: a minor release may add some.
 
-An unknown keyword argument (`place=`, say, before spatial memory exists) is Python's own
-`TypeError`, raised before any I/O; an unknown key in a turn mapping is an `OortUsageError`.
-Neither is ever dropped silently.
+An unknown keyword argument is Python's own `TypeError`, raised before any I/O; an unknown key in
+a turn mapping is an `OortUsageError`. Neither is ever dropped silently.
+
+### Spatial memory
+
+In 0.9.0 or newer, `remember(..., place=...)` and `observe(..., place=...)` tag memories with where
+they are, and `recall(..., within=...)` / `recall(..., near=...)` keep only the memories there.
+A place is an `oortmem.types.Place` (`node_id`, `map_id`, `map_version`, `frame`, `pose`, `extent`,
+`geo`, `sigma`) or a mapping with those keys, snake_case or camelCase; `near` is a `NearQuery`
+(`map_id`, `pose`, `radius`, `frame`) or a mapping. The rules are the TypeScript SDK's
+([Spatial memory](sdk.md#spatial-memory)): `within` matches whole path segments, `near` measures
+to the memory's region on the same map and frame only, and recalled memories carry `place`,
+`why.place_path` and `why.distance_m`. Local mode only: in cloud mode each is an
+`OortRefusedError` (`local-only`) before any request.
+
+<!-- example: examples/python/spatial.py -->
+
+```python
+from oortmem import Oort
+from oortmem.types import NearQuery, Place, Pose
+
+# A robot's memory of a site: each fact is remembered with where it was seen. Places are kept by
+# the local engine (0.9.0 or newer); Oort Cloud refuses them until it holds places too.
+with Oort(mode="local") as oort:
+    seen = [
+        ("The red toolbox is on shelf A1.", Place(node_id="site:hq/room:A/shelf:A1", map_id="hq", pose=Pose(x=1, y=1))),
+        ("The blue toolbox is on shelf B3.", Place(node_id="site:hq/room:B/shelf:B3", map_id="hq", pose=Pose(x=11, y=1))),
+        ("The green toolbox sits under the window.", Place(node_id="site:hq/room:B", map_id="hq", pose=Pose(x=13, y=4))),
+    ]
+    for fact, place in seen:
+        oort.remember(fact, place=place)
+
+    # Which toolboxes are in room B? `within` matches whole path segments: room:B, never room:B2.
+    for m in oort.recall("toolbox", within="room:B").memories:
+        print(m.why.place_path, "|", m.text)
+
+    # What is within 1.5 m of the robot? Distance is measured on the same map and frame only.
+    here = NearQuery(map_id="hq", pose=Pose(x=13, y=3), radius=1.5)
+    for m in oort.recall("toolbox", near=here).memories:
+        print(f"{m.why.distance_m:.2f}", "|", m.text)
+```
 
 ## Errors
 

@@ -38,6 +38,7 @@ import type {
   OortJudge,
   OortOptions,
   PinResult,
+  Place,
   RecallOptions,
   RecallResult,
   RememberResult,
@@ -138,7 +139,13 @@ class OortHandle implements Oort {
     return this.#run(async (ctx) => {
       const q = check(QuerySchema, query, 'query');
       const o = check(RecallOptionsSchema, opts, 'recall options');
-      if (this.#cloud()) cloud.checkUserInclude(ctx, o.include);
+      if (this.#cloud()) {
+        // Oort Cloud holds no places yet (CON-87): refused before anything is sent.
+        if (o.near !== undefined || o.within !== undefined) {
+          throw cloud.localOnly('Spatial recall (near, within)');
+        }
+        cloud.checkUserInclude(ctx, o.include);
+      }
       return abortable(o.signal, () => local.recall(ctx, q, o));
     });
   }
@@ -147,6 +154,7 @@ class OortHandle implements Oort {
     return this.#run(async (ctx) => {
       const t = check(TurnSchema, turn, 'turn');
       const { signal } = check(SignalOnlySchema, opts, 'observe options');
+      if (this.#cloud() && t.place !== undefined) throw cloud.localOnly('A place');
       return abortable(signal, () =>
         this.#cloud() ? cloud.observe(ctx, t) : local.observe(ctx, t),
       );
@@ -155,12 +163,16 @@ class OortHandle implements Oort {
 
   remember(
     facts: string | readonly string[],
-    opts: { type?: MemoryType } = {},
+    opts: { type?: MemoryType; place?: Place } = {},
   ): Promise<RememberResult> {
     return this.#run(async (ctx) => {
       const list = check(FactsSchema, typeof facts === 'string' ? [facts] : facts, 'facts');
-      const { type } = check(RememberOptionsSchema, opts, 'remember options');
-      return this.#cloud() ? cloud.remember(ctx, list, type) : local.remember(ctx, list, type);
+      const { type, place } = check(RememberOptionsSchema, opts, 'remember options');
+      if (this.#cloud()) {
+        if (place !== undefined) throw cloud.localOnly('A place');
+        return cloud.remember(ctx, list, type);
+      }
+      return local.remember(ctx, list, type, place);
     });
   }
 

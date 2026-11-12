@@ -186,6 +186,29 @@ describe('SDK examples (run)', () => {
     await oort.close();
   });
 
+  it('spatial: remembers ten things in three rooms, recalls within a room and near a point', async () => {
+    const { out } = await runExample('spatial.ts');
+    const rows = out.map((l) => l.split(' | '));
+    const inB = rows.filter(([at]) => at!.startsWith('site:'));
+    const near = rows.filter(([at]) => !at!.startsWith('site:'));
+    // Only room B and what is below it; both of its toolboxes; nothing from rooms A or C.
+    for (const [at] of inB) expect(`${at}/`).toMatch(/^site:hq\/room:B\//);
+    expect(inB.map(([, text]) => text)).toEqual(
+      expect.arrayContaining([
+        'The blue toolbox is on shelf B3.',
+        'The green toolbox sits under the window.',
+      ]),
+    );
+    // Within 1.5 m of (13, 3): the green toolbox, 1 m away.
+    for (const [d] of near) expect(Number(d)).toBeLessThanOrEqual(1.5);
+    expect(near).toContainEqual(['1.00', 'The green toolbox sits under the window.']);
+    const oort = await open({ mode: 'local' });
+    const { memories } = await oort.recent({ limit: 20 });
+    expect(memories).toHaveLength(10);
+    expect(memories.every((m) => m.place?.mapId === 'hq')).toBe(true);
+    await oort.close();
+  });
+
   describe('errors', () => {
     it('retries a rate limit after Retry-After, then saves', async () => {
       h.cloud.fail = { 'POST /v1/observe': { status: 429, code: 'rate_limit', retryAfter: '1' } };

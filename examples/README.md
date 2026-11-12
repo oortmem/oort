@@ -3,20 +3,21 @@
 One small, runnable file per scenario, each shown in full in [docs/sdk.md](../docs/sdk.md). A
 private workspace package: never published.
 
-| File                                                   | Scenario                                                   | In CI                                  |
-| ------------------------------------------------------ | ---------------------------------------------------------- | -------------------------------------- |
-| [`local-quick-start.ts`](src/local-quick-start.ts)     | Local quick start                                          | typecheck, run                         |
-| [`cloud-quick-start.ts`](src/cloud-quick-start.ts)     | Cloud quick start (`OORT_API_KEY`)                         | typecheck, run (fake Oort Cloud)       |
-| [`multi-user.ts`](src/multi-user.ts)                   | A multi-user app: `scoped({ user })` and an explicit `org` | typecheck, run                         |
-| [`cloud-multi-user.ts`](src/cloud-multi-user.ts)       | Per-user memory in Oort Cloud: a server key, `endUsers`    | typecheck, run (fake Oort Cloud)       |
-| [`cloud-data-requests.ts`](src/cloud-data-requests.ts) | An end user's data requests: export, correct, erase        | typecheck, run (fake Oort Cloud)       |
-| [`judgments.ts`](src/judgments.ts)                     | Judgments: record, confirm in the expert role, apply       | typecheck, run                         |
-| [`large-store.ts`](src/large-store.ts)                 | A large local store: the binary index, the adaptive stop   | typecheck, run                         |
-| [`errors.ts`](src/errors.ts)                           | Errors: `OortError.code`, `retryable`, `retryAfter`        | typecheck, run (fake Oort Cloud)       |
-| [`serverless.ts`](src/serverless.ts)                   | Serverless: cloud mode, a handler and `await using`        | typecheck, run (fake Oort Cloud)       |
-| [`ai-sdk.ts`](src/ai-sdk.ts)                           | Vercel AI SDK through `oortmem/ai-sdk`                     | typecheck, run (`MockLanguageModelV4`) |
-| [`langgraph.ts`](src/langgraph.ts)                     | LangGraph.js: an Oort `BaseStore` and a node               | typecheck, run (`FakeListChatModel`)   |
-| [`openai-agents.ts`](src/openai-agents.ts)             | OpenAI Agents SDK: an observing `Session`                  | typecheck, run (`ScriptedModel`)       |
+| File                                                   | Scenario                                                          | In CI                                  |
+| ------------------------------------------------------ | ----------------------------------------------------------------- | -------------------------------------- |
+| [`local-quick-start.ts`](src/local-quick-start.ts)     | Local quick start                                                 | typecheck, run                         |
+| [`cloud-quick-start.ts`](src/cloud-quick-start.ts)     | Cloud quick start (`OORT_API_KEY`)                                | typecheck, run (fake Oort Cloud)       |
+| [`multi-user.ts`](src/multi-user.ts)                   | A multi-user app: `scoped({ user })` and an explicit `org`        | typecheck, run                         |
+| [`cloud-multi-user.ts`](src/cloud-multi-user.ts)       | Per-user memory in Oort Cloud: a server key, `endUsers`           | typecheck, run (fake Oort Cloud)       |
+| [`cloud-data-requests.ts`](src/cloud-data-requests.ts) | An end user's data requests: export, correct, erase               | typecheck, run (fake Oort Cloud)       |
+| [`judgments.ts`](src/judgments.ts)                     | Judgments: record, confirm in the expert role, apply              | typecheck, run                         |
+| [`spatial.ts`](src/spatial.ts)                         | Spatial memory (0.9.0 or newer, local): `place`, `within`, `near` | typecheck, run                         |
+| [`large-store.ts`](src/large-store.ts)                 | A large local store: the binary index, the adaptive stop          | typecheck, run                         |
+| [`errors.ts`](src/errors.ts)                           | Errors: `OortError.code`, `retryable`, `retryAfter`               | typecheck, run (fake Oort Cloud)       |
+| [`serverless.ts`](src/serverless.ts)                   | Serverless: cloud mode, a handler and `await using`               | typecheck, run (fake Oort Cloud)       |
+| [`ai-sdk.ts`](src/ai-sdk.ts)                           | Vercel AI SDK through `oortmem/ai-sdk`                            | typecheck, run (`MockLanguageModelV4`) |
+| [`langgraph.ts`](src/langgraph.ts)                     | LangGraph.js: an Oort `BaseStore` and a node                      | typecheck, run (`FakeListChatModel`)   |
+| [`openai-agents.ts`](src/openai-agents.ts)             | OpenAI Agents SDK: an observing `Session`                         | typecheck, run (`ScriptedModel`)       |
 
 `pnpm verify` typechecks every file against the built `oortmem` and the pinned framework versions
 (`package.json`), and [test/examples.test.ts](test/examples.test.ts) runs each one: local mode on

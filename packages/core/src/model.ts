@@ -1,5 +1,6 @@
 import type { Address, Author, Provenance } from './address.js';
 import type { Judgment } from './judgment.js';
+import type { Place } from './place.js';
 
 /**
  * `judgment` (CON-71) is an expert's recorded decision: written only through the explicit
@@ -92,6 +93,11 @@ export interface Memory {
    * `text` is a rendering of it for recall; this record is what judging reads.
    */
   judgment?: Judgment;
+  /**
+   * Where the fact is (CON-84): a place path and optionally coordinates in a named map. Absent on
+   * every memory without one. Stores that set `MemoryStore.spatial` keep it and filter by it.
+   */
+  place?: Place;
   embedding?: Int8Array;
   createdAt: string;
   updatedAt: string;

@@ -1051,3 +1051,156 @@ describe('observe: dates and the REFINE / SUPERSEDE / CORRECT split (CON-34, CON
     });
   });
 });
+
+describe('observe: places (CON-84)', () => {
+  const B3 = { nodeId: 'site:hq/room:B/shelf:B3', mapId: 'hq', pose: { x: 4, y: 1 } };
+  const BENCH = { nodeId: 'site:hq/room:C/bench', mapId: 'hq', pose: { x: 20, y: 3 } };
+  const placed = (text: string, place: unknown, at?: string): Observation =>
+    ({ ...obs(text, at), place }) as Observation;
+
+  it('observe.add-carries-the-place', async () => {
+    const { store, deps } = setup(gate(0.9), [rec(null, 'ADD')]);
+    const res = await observe(placed('toolbox on the shelf', B3), localScope(), deps);
+    expect((await store.get(TG, res.memoryId!))?.place).toEqual(B3);
+    const bare = await observe(obs('auth moved'), localScope(), deps);
+    expect((await store.get(TG, bare.memoryId!))?.place).toBeUndefined();
+  });
+
+  it('observe.a-bad-place-is-refused-before-any-adapter', async () => {
+    const { store, deps, spy } = setup(gate(0.9), [rec(null, 'ADD')]);
+    const bad = placed('toolbox', { nodeId: 'room B' });
+    await expect(observe(bad, localScope(), deps)).rejects.toThrow('place.nodeId');
+    await expect(
+      observe(placed('toolbox', { mapId: 'hq', pose: { x: 1 } }), localScope(), deps),
+    ).rejects.toThrow(RangeError);
+    expect(spy.embed).toBe(0);
+    expect(await store.list(localGrant(FILTER))).toEqual([]);
+  });
+
+  it('observe.supersede-takes-the-new-place-only', async () => {
+    let next: ReconcileDecision[] = [rec(null, 'ADD')];
+    const { store, deps } = setup(gate(0.9), () => next);
+    const a = await observe(
+      placed('toolbox on shelf B3', B3, '2026-01-01T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    next = [rec(a.memoryId!, 'SUPERSEDE')];
+    const b = await observe(obs('toolbox was lent out', '2026-01-02T00:00:00.000Z'), localScope(), {
+      ...deps,
+      now: new Date('2026-01-02T00:00:00.000Z'),
+    });
+    expect(b.outcome).toBe('superseded');
+    // Nothing is inherited: a fact about something that moved must not keep the old place.
+    expect((await store.get(TG, b.memoryId!))?.place).toBeUndefined();
+    expect((await store.get(TG, a.memoryId!))?.place).toEqual(B3);
+  });
+
+  it('observe.correct-takes-the-new-place-only', async () => {
+    let next: ReconcileDecision[] = [rec(null, 'ADD')];
+    const { store, deps } = setup(gate(0.9), () => next);
+    const a = await observe(
+      placed('toolbox on shelf B3', B3, '2026-01-01T00:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    next = [rec(a.memoryId!, 'CORRECT')];
+    const b = await observe(
+      obs('no, the toolbox was never there', '2026-01-02T00:00:00.000Z'),
+      localScope(),
+      { ...deps, now: new Date('2026-01-02T00:00:00.000Z') },
+    );
+    expect(b.outcome).toBe('corrected');
+    expect((await store.get(TG, b.memoryId!))?.place).toBeUndefined();
+  });
+
+  it('observe.refine-keeps-its-place-unless-the-turn-gives-one', async () => {
+    let next: ReconcileDecision[] = [rec(null, 'ADD')];
+    const { store, deps } = setup(gate(0.9), () => next);
+    const a = await observe(placed('toolbox on shelf B3', B3), localScope(), deps);
+    next = [rec(a.memoryId!, 'REFINE')];
+    await observe(obs('toolbox on shelf B3 is red'), localScope(), deps);
+    expect((await store.get(TG, a.memoryId!))?.place).toEqual(B3);
+    const B3top = { ...B3, pose: { x: 4, y: 1, z: 1.8 } };
+    await observe(placed('toolbox on top of shelf B3', B3top), localScope(), deps);
+    expect((await store.get(TG, a.memoryId!))?.place).toEqual(B3top);
+  });
+
+  it('observe.reinforce-in-the-same-place-reinforces', async () => {
+    const { store, deps } = setup(gate(0.9), [rec('X', 'REINFORCE')]);
+    await store.upsert(
+      TG,
+      makeMemory({ id: 'X', text: 'the toolbox', place: { ...B3, sigma: 0.3 } }),
+    );
+    // Within the two places' combined uncertainty, or with no place said, it is the same sighting.
+    const jitter = { ...B3, pose: { x: 4.2, y: 1.1 } };
+    for (const o of [placed('the toolbox', jitter), obs('the toolbox')]) {
+      expect(await observe(o, localScope(), deps)).toMatchObject({
+        outcome: 'reinforced',
+        memoryId: 'X',
+      });
+    }
+    expect(await store.list(localGrant(FILTER))).toHaveLength(1);
+  });
+
+  it('observe.reinforce-elsewhere-adds-a-memory', async () => {
+    const { store, deps } = setup(gate(0.9), [rec('X', 'REINFORCE')]);
+    await store.upsert(TG, makeMemory({ id: 'X', text: 'the toolbox', place: B3 }));
+    const cases: unknown[] = [
+      BENCH,
+      { nodeId: 'site:hq/room:B/shelf:B4' },
+      { ...B3, pose: { x: 9, y: 1 } },
+      { ...B3, mapId: 'lab' },
+    ];
+    for (const place of cases) {
+      const res = await observe(placed('the toolbox', place), localScope(), deps);
+      expect(res.outcome).toBe('added');
+      const m = await store.get(TG, res.memoryId!);
+      expect(m?.place).toEqual(place);
+      expect(m?.source.decisions).toContainEqual({
+        stage: 'place',
+        question: 'elsewhere',
+        answer: 'add-instead',
+        probability: 1,
+      });
+    }
+    // The memory it would have reinforced is untouched.
+    const x = await store.get(TG, 'X');
+    expect(x?.place).toEqual(B3);
+    expect(x?.accessLog.count).toBe(0);
+  });
+
+  it('observe.a-matching-path-reinforces-when-only-one-side-has-coordinates', async () => {
+    // A missing pose is no evidence of being elsewhere: the same path is the same place.
+    for (const [known, seen] of [
+      [{ nodeId: B3.nodeId }, B3],
+      [B3, { nodeId: B3.nodeId }],
+    ]) {
+      const { store, deps } = setup(gate(0.9), [rec('X', 'REINFORCE')]);
+      await store.upsert(TG, makeMemory({ id: 'X', text: 'the toolbox', place: known }));
+      expect(await observe(placed('the toolbox', seen), localScope(), deps)).toMatchObject({
+        outcome: 'reinforced',
+        memoryId: 'X',
+      });
+    }
+  });
+
+  it('observe.a-low-gate-turn-never-reinforces-a-memory-seen-elsewhere', async () => {
+    const text = 'the red toolbox sits on the shelf';
+    const { store, deps } = setup(gate(0), [rec('X', 'REINFORCE')]);
+    await store.upsert(TG, makeMemory({ id: 'X', text, stub: text, place: B3 }));
+    const away = await observe(placed(text, BENCH), localScope(), deps);
+    expect(away.outcome).toBe('skipped');
+    expect((await store.get(TG, 'X'))?.accessLog.count).toBe(0);
+    const here = await observe(placed(text, B3), localScope(), deps);
+    expect(here).toMatchObject({ outcome: 'reinforced', memoryId: 'X' });
+  });
+
+  it('observe.a-place-for-a-placeless-memory-adds-a-memory', async () => {
+    const { store, deps } = setup(gate(0.9), [rec('X', 'REINFORCE')]);
+    await store.upsert(TG, makeMemory({ id: 'X', text: 'the toolbox' }));
+    const res = await observe(placed('the toolbox', B3), localScope(), deps);
+    expect(res.outcome).toBe('added');
+    expect((await store.get(TG, res.memoryId!))?.place).toEqual(B3);
+  });
+});

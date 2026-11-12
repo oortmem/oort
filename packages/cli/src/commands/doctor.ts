@@ -978,7 +978,7 @@ async function storeChecks(ctx: Ctx): Promise<Check[]> {
     // Oort Cloud consolidates itself; locally the hook drain does, when due (CON-48).
     if (!cloudMode) checks.push(consolidationCheck(home));
     // The newest copy taken before a migration (the names sort by time within each kind).
-    const backup = (['pre-v2', 'pre-v3', 'pre-v4'] as const)
+    const backup = (['pre-v2', 'pre-v3', 'pre-v4', 'pre-v5'] as const)
       .map((kind) => listBackups(db, kind).at(-1))
       .filter((f): f is string => f !== undefined)
       .sort((a, b) => {

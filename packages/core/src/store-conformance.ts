@@ -26,6 +26,7 @@ import {
 import type { MemoryStore, ScopeFilter } from './adapters.js';
 import { GrantError, localGrant, nodeGrant, principalGrant, type Grant } from './grant.js';
 import type { Memory, Scope } from './model.js';
+import type { NearQuery, Place, SpatialFilter } from './place.js';
 import { localScope } from './scope.js';
 import { isolationViolations, nonInterference } from './isolation.js';
 
@@ -1110,6 +1111,224 @@ function levelConformance(name: string, make: () => Promise<MemoryStore>): void 
       );
       await store.upsert(hive.g, hiveP2);
       expect(await store.get(g, 'hive-p2')).toBeNull();
+    });
+  });
+}
+
+/**
+ * Spatial memory (CON-84): the suite a store with `spatial: true` must pass, on top of
+ * `storeConformance`. A place round-trips exactly and is checked on write; `within` and `near`
+ * apply inside `lexical` and `dense` before k is taken, inside the grant; memories without a place
+ * are unaffected; coordinates from another map or frame are never compared.
+ */
+export function spatialConformance(name: string, make: () => Promise<MemoryStore>): void {
+  describe(`store spatial: ${name}`, () => {
+    let store: MemoryStore;
+
+    beforeEach(async () => {
+      store = await make();
+    });
+
+    afterEach(async () => {
+      await store.close();
+    });
+
+    const G = () => localGrant(LOCAL);
+    const text = 'the red toolbox is here';
+    const embedding = vec(10, 10, 10, 10);
+    const at = (id: string, place: Place | undefined, extra: Partial<Memory> = {}): Memory =>
+      makeMemory({ id, text, stub: `toolbox ${id}`, embedding, ...(place && { place }), ...extra });
+    const near = (x: number, y: number, radius: number, extra: Partial<NearQuery> = {}) => ({
+      near: { mapId: 'hq', pose: { x, y }, radius, ...extra },
+    });
+    const both = async (f: SpatialFilter, k = 50): Promise<[string[], string[]]> => [
+      ids(await store.lexical(G(), 'toolbox', k, { spatial: f })).sort(),
+      ids(await store.dense(G(), embedding, k, { spatial: f })).sort(),
+    ];
+
+    it('spatial.store-says-it-filters', () => {
+      expect(store.spatial).toBe(true);
+    });
+
+    it('spatial.place-roundtrips-exactly', async () => {
+      const place: Place = {
+        nodeId: 'site:hq/floor:2/room:B/shelf:B3',
+        mapId: 'hq',
+        mapVersion: 7,
+        frame: 'map',
+        pose: { x: 4.25, y: -1.5, z: 0.9, yaw: 1.57 },
+        extent: { dx: 1.2, dy: 0.4, dz: 0.3 },
+        geo: { lat: 59.33, lon: 18.06, alt: 12 },
+        sigma: 0.05,
+      };
+      const m = at('p', place);
+      await store.upsert(TG, m);
+      expect(await store.get(TG, 'p')).toEqual(m);
+      expect((await store.list(TG))[0]?.place).toEqual(place);
+      // Rewritten without a place, it has none, and no filter finds it.
+      await store.upsert(TG, at('p', undefined));
+      expect((await store.get(TG, 'p'))?.place).toBeUndefined();
+      expect(await both({ within: 'room:B' })).toEqual([[], []]);
+      expect(await both(near(4, -1, 5))).toEqual([[], []]);
+    });
+
+    it('spatial.place-is-checked-on-write', async () => {
+      const bad = {
+        ...at('bad', undefined),
+        place: { mapId: 'hq', pose: { x: Number.NaN, y: 1 } },
+      };
+      await expect(store.upsert(TG, bad as Memory)).rejects.toThrow(RangeError);
+      await expect(
+        store.upsertMany(TG, [at('ok', { nodeId: 'a' }), bad as Memory]),
+      ).rejects.toThrow(RangeError);
+      expect(await store.get(TG, 'bad')).toBeNull();
+      expect(await store.get(TG, 'ok')).toBeNull();
+    });
+
+    it('spatial.within-keeps-whole-segments-and-what-is-below', async () => {
+      await store.upsert(TG, at('a', { nodeId: 'site:hq/room:A' }));
+      await store.upsert(TG, at('b', { nodeId: 'site:hq/room:B' }));
+      await store.upsert(TG, at('b3', { nodeId: 'site:hq/room:B/shelf:B3' }));
+      await store.upsert(TG, at('b2', { nodeId: 'site:hq/room:B2' }));
+      await store.upsert(TG, at('bare', undefined));
+      expect(await both({ within: 'room:B' })).toEqual([
+        ['b', 'b3'],
+        ['b', 'b3'],
+      ]);
+      expect(await both({ within: 'room:B/shelf:B3' })).toEqual([['b3'], ['b3']]);
+      expect(await both({ within: 'site:hq' })).toEqual([
+        ['a', 'b', 'b2', 'b3'],
+        ['a', 'b', 'b2', 'b3'],
+      ]);
+      expect(await both({ within: 'room:C' })).toEqual([[], []]);
+      // Nothing that looks like a pattern is one.
+      expect(await both({ within: 'room:%' })).toEqual([[], []]);
+      expect(await both({ within: 'room:_' })).toEqual([[], []]);
+    });
+
+    it('spatial.near-keeps-the-radius-on-the-same-map-and-frame', async () => {
+      await store.upsert(TG, at('origin', { mapId: 'hq', pose: { x: 0, y: 0 } }));
+      await store.upsert(TG, at('three', { mapId: 'hq', pose: { x: 3, y: 0 } }));
+      await store.upsert(TG, at('ten', { mapId: 'hq', pose: { x: 10, y: 0 } }));
+      await store.upsert(
+        TG,
+        at('room', { mapId: 'hq', pose: { x: 20, y: 0 }, extent: { dx: 8, dy: 8 } }),
+      );
+      await store.upsert(TG, at('lab', { mapId: 'lab', pose: { x: 0, y: 0 } }));
+      await store.upsert(TG, at('utm', { mapId: 'hq', frame: 'utm', pose: { x: 0, y: 0 } }));
+      await store.upsert(TG, at('named', { nodeId: 'room:B' }));
+      await store.upsert(TG, at('bare', undefined));
+      expect(await both(near(0, 0, 1))).toEqual([['origin'], ['origin']]);
+      expect(await both(near(0, 0, 3))).toEqual([
+        ['origin', 'three'],
+        ['origin', 'three'],
+      ]);
+      // The region counts, not its centre: 15 is 1 m from a box spanning 16 to 24.
+      expect(await both(near(15, 0, 1.5))).toEqual([['room'], ['room']]);
+      expect(await both(near(0, 0, 1, { mapId: 'lab' }))).toEqual([['lab'], ['lab']]);
+      expect(await both(near(0, 0, 1, { frame: 'utm' }))).toEqual([['utm'], ['utm']]);
+      expect(await both(near(0, 0, 1000, { mapId: 'elsewhere' }))).toEqual([[], []]);
+    });
+
+    it('spatial.z-counts-when-both-have-it', async () => {
+      await store.upsert(TG, at('floor', { mapId: 'hq', pose: { x: 0, y: 0, z: 0 } }));
+      await store.upsert(TG, at('shelf', { mapId: 'hq', pose: { x: 0, y: 0, z: 2 } }));
+      await store.upsert(TG, at('flat', { mapId: 'hq', pose: { x: 0, y: 0 } }));
+      expect(await both(near(0, 0, 0.5, { pose: { x: 0, y: 0, z: 2 } }))).toEqual([
+        ['flat', 'shelf'],
+        ['flat', 'shelf'],
+      ]);
+      expect(await both(near(0, 0, 0.5))).toEqual([
+        ['flat', 'floor', 'shelf'],
+        ['flat', 'floor', 'shelf'],
+      ]);
+    });
+
+    it('spatial.both-filters-must-hold', async () => {
+      await store.upsert(TG, at('bnear', { nodeId: 'room:B', mapId: 'hq', pose: { x: 1, y: 0 } }));
+      await store.upsert(TG, at('bfar', { nodeId: 'room:B', mapId: 'hq', pose: { x: 9, y: 0 } }));
+      await store.upsert(TG, at('anear', { nodeId: 'room:A', mapId: 'hq', pose: { x: 1, y: 1 } }));
+      expect(await both({ within: 'room:B', ...near(0, 0, 2) })).toEqual([['bnear'], ['bnear']]);
+    });
+
+    it('spatial.memories-without-a-place-are-unaffected', async () => {
+      await store.upsert(TG, at('placed', { nodeId: 'room:B', mapId: 'hq', pose: { x: 0, y: 0 } }));
+      await store.upsert(TG, at('bare', undefined));
+      const all = [
+        ids(await store.lexical(G(), 'toolbox', 10)).sort(),
+        ids(await store.dense(G(), embedding, 10)).sort(),
+      ];
+      expect(all).toEqual([
+        ['bare', 'placed'],
+        ['bare', 'placed'],
+      ]);
+      expect(await both({})).toEqual(all);
+    });
+
+    it('spatial.k-is-taken-after-the-filter', async () => {
+      // Twenty better matches outside the region must not crowd out the one inside it.
+      for (let i = 0; i < 20; i++) {
+        await store.upsert(
+          TG,
+          makeMemory({
+            id: `out${i}`,
+            text: 'toolbox toolbox toolbox',
+            stub: 'toolbox',
+            entities: ['toolbox'],
+            embedding,
+            place: { nodeId: 'room:A', mapId: 'hq', pose: { x: 50 + i, y: 0 } },
+          }),
+        );
+      }
+      await store.upsert(
+        TG,
+        makeMemory({
+          id: 'inside',
+          text: 'a toolbox among many other unrelated words in a long sentence',
+          stub: 'shelf',
+          embedding: vec(10, -10, 10, -10),
+          place: { nodeId: 'room:B', mapId: 'hq', pose: { x: 0, y: 0 } },
+        }),
+      );
+      expect(await both({ within: 'room:B' }, 3)).toEqual([['inside'], ['inside']]);
+      expect(await both(near(0, 0, 1), 3)).toEqual([['inside'], ['inside']]);
+    });
+
+    it('spatial.the-filter-stays-inside-the-grant', async () => {
+      const place: Place = { nodeId: 'room:B', mapId: 'hq', pose: { x: 0, y: 0 } };
+      await store.upsert(TG, at('mine', place));
+      await store.upsert(TG, at('p2', place, { scope: localScope('p2') }));
+      const star: NodeRef = { level: 'agent', orgId: 'local', agentId: 'another-agent' };
+      await store.upsert(
+        nodesGrant(star),
+        memoryAt(
+          'theirs',
+          star as Address,
+          { agentId: 'another-agent' },
+          { text, embedding, place },
+        ),
+      );
+      expect(await both({ within: 'room:B' })).toEqual([['mine'], ['mine']]);
+      expect(await both(near(0, 0, 1))).toEqual([['mine'], ['mine']]);
+    });
+
+    it('spatial.cold-memories-match-by-stub-only-lexically', async () => {
+      await seedCold(store, at('cold', { nodeId: 'room:B', mapId: 'hq', pose: { x: 0, y: 0 } }));
+      expect(await both({ within: 'room:B' })).toEqual([['cold'], []]);
+      expect(await both(near(0, 0, 1))).toEqual([['cold'], []]);
+      expect((await store.get(TG, 'cold'))?.place?.nodeId).toBe('room:B');
+    });
+
+    it('spatial.a-move-or-a-forget-updates-the-index', async () => {
+      await store.upsert(TG, at('box', { nodeId: 'room:A', mapId: 'hq', pose: { x: 0, y: 0 } }));
+      await store.upsert(TG, at('box', { nodeId: 'room:B', mapId: 'hq', pose: { x: 30, y: 0 } }));
+      expect(await both(near(0, 0, 1))).toEqual([[], []]);
+      expect(await both({ within: 'room:A' })).toEqual([[], []]);
+      expect(await both(near(30, 0, 1))).toEqual([['box'], ['box']]);
+      await store.forget(TG, 'box');
+      expect(await both(near(30, 0, 1))).toEqual([[], []]);
+      await store.upsert(TG, at('new', undefined));
+      expect(await both(near(30, 0, 1))).toEqual([[], []]);
     });
   });
 }

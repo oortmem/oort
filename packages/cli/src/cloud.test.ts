@@ -420,6 +420,31 @@ describe('oort cloud commands (CON-76)', () => {
     expect(e.cloud.memories.size).toBe(10_000);
   }, 120_000);
 
+  it('cloud.import-sends-memories-without-their-place-and-says-so', async () => {
+    const e = setup('local');
+    const w = await realWire(e.cwd, {
+      env: { HOME: e.root, OORT_HOME: e.home, OORT_NO_KEYCHAIN: '1' },
+      keychain: async () => undefined,
+    });
+    const grant = localGrant({ ...localScope(undefined), projectIds: [null] });
+    await w.store.upsertMany(grant, [
+      memory({
+        id: '00000000-0000-4000-8000-00000000000a',
+        text: 'The toolbox is on shelf B3.',
+        embedding: undefined,
+        place: { nodeId: 'site:hq/room:B/shelf:B3', mapId: 'hq', pose: { x: 1, y: 2 } },
+      }),
+      memory({ id: '00000000-0000-4000-8000-00000000000b', embedding: undefined }),
+    ]);
+    await w.close();
+    const r = await e.run(['cloud', 'import', '--yes'], { withKey: true });
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toContain('1 memory goes up without its place');
+    expect(e.cloud.memories.size).toBe(2);
+    expect(JSON.stringify([...e.cloud.memories.values()])).not.toContain('shelf:B3"');
+    expect(JSON.stringify([...e.cloud.memories.values()])).not.toContain('nodeId');
+  });
+
   it('cloud.import-refuses-without-a-terminal-or-yes', async () => {
     const e = setup('local');
     await seed(e, 'local');
