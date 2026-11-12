@@ -11,9 +11,9 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: release
-  cancel-in-progress: false
+# No workflow-level concurrency: publish has its own group (below). A run-wide group would be
+# held by native-darwin-check while it waits for a macOS runner (timeout-minutes does not count
+# queue time, and a job can queue for up to 24 hours), and a later tag's run would wait behind it.
 
 jobs:
   # The native RaBitQ engine (CON-25), one binary per platform, built from source. They ship
@@ -64,8 +64,9 @@ jobs:
           curl -sSfL --retry 3 -o zig.tar.xz \
             "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz"
           echo "$ZIG_SHA256  zig.tar.xz" | sha256sum -c -
+          zigbuild_url="https://github.com/rust-cross/cargo-zigbuild/releases/download/v$ZIGBUILD_VERSION"
           curl -sSfL --retry 3 -o cargo-zigbuild.tar.xz \
-            "https://github.com/rust-cross/cargo-zigbuild/releases/download/v$ZIGBUILD_VERSION/cargo-zigbuild-x86_64-unknown-linux-musl.tar.xz"
+            "$zigbuild_url/cargo-zigbuild-x86_64-unknown-linux-musl.tar.xz"
           echo "$ZIGBUILD_SHA256  cargo-zigbuild.tar.xz" | sha256sum -c -
           tar -xJf zig.tar.xz && tar -xJf cargo-zigbuild.tar.xz
           echo "$RUNNER_TEMP/cross/zig-x86_64-linux-$ZIG_VERSION" >> "$GITHUB_PATH"
@@ -85,8 +86,23 @@ jobs:
           rustup toolchain install
           rustup target add "$TARGET"
           node ../scripts/build-native.mjs --require --zig --target "$TARGET"
-          desc="$(file -b "oort-rabitq.$TAG.node")" && echo "$desc"
-          [[ "$desc" == *Mach-O* && "$desc" == *arm64* ]]
+      # What can be checked without macOS, before upload, so a failure here stops the release: an
+      # arm64 Mach-O whose page hashes match its code signature (macOS refuses to map an arm64
+      # binary otherwise) and that exports the entry point Node calls. llvm-nm comes from the
+      # llvm-tools component of the toolchain rust-toolchain.toml pins.
+      - name: Check the cross-built binary's signature and entry point
+        if: matrix.cross != ''
+        working-directory: packages/store-sqlite/native
+        env:
+          TAG: ${{ matrix.tag }}
+        run: |
+          file -b "oort-rabitq.$TAG.node"
+          node ../scripts/check-macho-signature.mjs "oort-rabitq.$TAG.node"
+          rustup component add llvm-tools
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          llvm_nm="$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-nm"
+          "$llvm_nm" --extern-only --defined-only "oort-rabitq.$TAG.node" \
+            | grep -w _napi_register_module_v1
       # The binary as it will ship, loaded by Node on its own platform: the engine tests and the
       # store's RaBitQ suites (conformance included) fail here rather than fall back. The
       # cross-built darwin binary cannot load on Linux; native-darwin-check tests it on macOS.
@@ -113,10 +129,9 @@ jobs:
   # attest's and publish's needs on purpose, so a release never waits on macOS runner capacity.
   # It does not use continue-on-error: a failure here turns the run red (the binary that
   # shipped did not load or failed its tests on macOS) without having blocked publish, which is
-  # the signal to follow up with a patch release. Until then, a binary that does not load on macOS
-  # leaves the store on the TypeScript engine (same results, slower scan). While it waits for a runner the run stays in
-  # progress and holds the `release` concurrency group; once publish has finished, cancelling
-  # the run is safe.
+  # the signal to follow up with a patch release. Until then, a binary that does not load on
+  # macOS leaves the store on the TypeScript engine (same results, slower scan). While this job
+  # waits for a runner it holds no concurrency group, so later tags still release.
   native-darwin-check:
     needs: native
     runs-on: macos-15
@@ -178,8 +193,13 @@ jobs:
             native/oort-rabitq.linux-x64-gnu.node
             native/oort-rabitq.linux-arm64-gnu.node
 
+  # One publish at a time, across runs: only this job is in the `release` group, so a run whose
+  # native-darwin-check is still queued does not hold it.
   publish:
     needs: [native, attest]
+    concurrency:
+      group: release
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: npm

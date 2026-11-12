@@ -302,9 +302,11 @@ workflow builds one per platform from source with the pinned toolchain (`rust-to
 and `--locked`: Linux on a runner of that platform (`ubuntu-22.04`, `ubuntu-22.04-arm`, so glibc
 2.35 or newer), macOS arm64 cross-compiled on `ubuntu-22.04` with cargo-zigbuild. Each Linux job
 loads the binary it built and runs the engine and index test files with `OORT_REQUIRE_NATIVE=1`
-(the store's RaBitQ conformance included); every build job writes a SHA-256 beside its binary. A
-`macos-15` job runs the same test files on the cross-built macOS binary after the build, but
-publishing does not wait for it, so a release never waits for a hosted macOS runner. A separate
+(the store's RaBitQ conformance included); every build job writes a SHA-256 beside its binary.
+The macOS job checks, before upload, that the binary's page hashes match its code signature
+(`scripts/check-macho-signature.mjs`) and that it exports `napi_register_module_v1`. A `macos-15`
+job runs the same test files on the cross-built macOS binary after the build, but publishing
+does not wait for it, so a release never waits for a hosted macOS runner. A separate
 job, which checks out nothing and runs no project code, downloads the three, checks their
 hashes and attests their build provenance
 (`actions/attest-build-provenance`, pinned by commit); only it holds `id-token: write` and
