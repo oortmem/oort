@@ -4,6 +4,8 @@ import { fakeEmbedder } from './fake-embed.js';
 import {
   chooseCheaper,
   chooseFloors,
+  foldOf,
+  heldOut,
   judge,
   measure,
   OFF,
@@ -95,6 +97,15 @@ describe('gate-miss calibration (CON-131)', () => {
     expect(judge(RECORDS, OFF, BARS).failures.join('\n')).toMatch(/es cross recall@10 0.000/);
   });
 
+  it('fails floors that newly answer an abstention question, whatever the FP slack', () => {
+    // A slack this loose lets any abstention FP through: the count must still not rise.
+    const lax = { ...BARS, abstainSlack: 1 };
+    const v = judge(RECORDS, { dense: 0.4, rerank: 0.5 }, lax);
+    expect(v.passes).toBe(false);
+    expect(v.failures.join('\n')).toMatch(/abstention questions answered 0 → 1/);
+    expect(judge(RECORDS, { dense: 0.4, rerank: 0.6 }, lax).passes).toBe(true);
+  });
+
   it('chooses the best cross recall that meets the bars, then the stricter floors', () => {
     const v = chooseFloors(RECORDS, [0.3, 0.4, 0.5], [0.5, 0.6, 0.7], BARS);
     // 0.6 keeps es (0.8) and de (0.6) and drops the es abstention (0.55); 0.7 would lose de.
@@ -133,6 +144,36 @@ describe('gate-miss calibration (CON-131)', () => {
     });
   });
 
+  it('holds out whole questions: each fold is judged at floors chosen without it', () => {
+    // Two questions, each asked in two languages: a fold never sees its own question's translations.
+    const recs: GateMissRecord[] = [
+      { ...crossMiss('es', 0.55, 0.8), item: 'q1' },
+      { ...crossMiss('de', 0.55, 0.8), item: 'q1' },
+      { ...crossMiss('es', 0.45, 0.7), item: 'q2' },
+      { ...crossMiss('de', 0.45, 0.7), item: 'q2' },
+    ];
+    const seen: string[][] = [];
+    const h = heldOut(recs, 2, (train) => {
+      seen.push([...new Set(train.map((r) => r.item as string))]);
+      // Floors that answer exactly the training fold's question.
+      return train[0]?.item === 'q1' ? { dense: 0.5, rerank: 0.75 } : { dense: 0.4, rerank: 0.65 };
+    });
+    expect(seen.map((s) => s.length)).toEqual([1, 1]);
+    expect(seen.flat().sort()).toEqual(['q1', 'q2']);
+    // q2 judged at q1's floors (dense 0.5 > 0.45: missed); q1 at q2's (0.4, 0.65: answered).
+    const es = h.cells.find((c) => c.lang === 'es' && c.condition === 'cross');
+    expect(es?.recall10).toBeCloseTo(0.5);
+    expect(h.folds).toHaveLength(2);
+    expect(h.folds.map((f) => f.items).sort()).toEqual([1, 1]);
+  });
+
+  it('splits by item deterministically, and keeps an item in one fold', () => {
+    const items = Array.from({ length: 40 }, (_, i) => `q${i}`);
+    const folds = items.map((i) => foldOf(i, 5));
+    expect(items.map((i) => foldOf(i, 5))).toEqual(folds);
+    for (let f = 0; f < 5; f++) expect(folds.filter((x) => x === f).length).toBeGreaterThan(2);
+  });
+
   it('records a real run: rows the gate answers are untouched, misses carry scores', async () => {
     const calls: number[] = [];
     // Scores every candidate 0.5, so the recording keeps them all.
@@ -150,19 +191,33 @@ describe('gate-miss calibration (CON-131)', () => {
       rerank,
       extraRows: unrelated,
     });
-    // 34 rows per language and condition, plus 3 unrelated prompts each (no English cross).
-    expect(records.length).toBe((34 + 3) * 3);
-    expect(records.filter((r) => r.unrelated).length).toBe(9);
+    // 34 rows per language and condition, plus 5 unrelated prompts each (no English cross).
+    expect(records.length).toBe((34 + 5) * 3);
+    expect(records.filter((r) => r.unrelated).length).toBe(15);
     const misses = records.filter((r) => r.gateMiss?.scored.length);
     expect(misses.length).toBe(calls.length);
     for (const m of misses) for (const s of m.gateMiss?.scored ?? []) expect(s.score).toBe(0.5);
+    // Every question is one held-out item across languages and conditions; prompts are their own.
+    const items = new Map<string, Set<string>>();
+    for (const r of records) {
+      const set = items.get(r.item as string) ?? new Set<string>();
+      set.add(`${r.lang}/${r.condition}`);
+      items.set(r.item as string, set);
+    }
+    expect(items.size).toBe(34 + 5 * 2);
+    // A question in en/mono, de/mono, de/cross; a prompt in its own language's conditions.
+    for (const [item, where] of items) {
+      expect(where.size).toBe(item.startsWith('q:') ? 3 : item.startsWith('u:en:') ? 1 : 2);
+    }
     // Without the escalation the recording replays the plain fast-mode result.
     const off = measure(records, OFF).find((m) => m.lang === 'de' && m.condition === 'cross');
     expect(off?.rerankRate).toBe(0);
   });
 
-  it('has three unrelated prompts in every language', () => {
+  it('has five unrelated prompts in every language, none a translation of another', () => {
     const u = unrelatedRows();
-    for (const lang of LANGUAGES) expect(u.get(lang)?.length).toBe(3);
+    for (const lang of LANGUAGES) expect(u.get(lang)?.length).toBe(5);
+    const all = [...u.values()].flat().map((r) => r.question);
+    expect(new Set(all).size).toBe(65);
   });
 });

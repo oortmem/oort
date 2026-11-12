@@ -1,39 +1,65 @@
-{"lang":"en","question":"Refactor this function to use async/await instead of callbacks."}
-{"lang":"en","question":"Why does this test pass locally but fail on CI?"}
-{"lang":"en","question":"Add a dark mode toggle to the settings page and keep the choice after reload."}
-{"lang":"es","question":"Refactoriza esta función para usar async/await en vez de callbacks."}
-{"lang":"es","question":"¿Por qué este test pasa en local pero falla en CI?"}
-{"lang":"es","question":"Añade un interruptor de modo oscuro en la página de ajustes y que se guarde al recargar."}
-{"lang":"pt-BR","question":"Refatora essa função pra usar async/await em vez de callbacks."}
-{"lang":"pt-BR","question":"Por que esse teste passa local mas falha no CI?"}
-{"lang":"pt-BR","question":"Adiciona um botão de modo escuro na página de configurações e mantém a escolha depois de recarregar."}
-{"lang":"de","question":"Bau diese Funktion auf async/await statt Callbacks um."}
-{"lang":"de","question":"Warum läuft dieser Test lokal durch, aber schlägt im CI fehl?"}
-{"lang":"de","question":"Füg auf der Einstellungsseite einen Dark-Mode-Schalter hinzu, der nach dem Neuladen erhalten bleibt."}
-{"lang":"fr","question":"Réécris cette fonction avec async/await au lieu de callbacks."}
-{"lang":"fr","question":"Pourquoi ce test passe en local mais échoue sur la CI ?"}
-{"lang":"fr","question":"Ajoute un bouton de mode sombre sur la page des paramètres et garde le choix après un rechargement."}
-{"lang":"ja","question":"この関数をコールバックではなくasync/awaitを使うようにリファクタリングして。"}
-{"lang":"ja","question":"このテスト、ローカルでは通るのにCIで落ちるのはなぜ？"}
-{"lang":"ja","question":"設定ページにダークモードの切り替えを追加して、リロード後も選択を保持して。"}
-{"lang":"zh-Hans","question":"把这个函数改成用 async/await，不要用回调。"}
-{"lang":"zh-Hans","question":"为什么这个测试在本地能过，在 CI 上却失败？"}
-{"lang":"zh-Hans","question":"在设置页面加一个深色模式开关，刷新后也要保留选择。"}
-{"lang":"ko","question":"이 함수를 콜백 대신 async/await를 쓰도록 리팩터링해 줘."}
-{"lang":"ko","question":"이 테스트가 로컬에서는 통과하는데 CI에서는 왜 실패해요?"}
-{"lang":"ko","question":"설정 페이지에 다크 모드 토글을 추가하고 새로고침 후에도 선택이 유지되게 해 줘."}
-{"lang":"hi","question":"इस function को callbacks की जगह async/await इस्तेमाल करने के लिए refactor करो।"}
-{"lang":"hi","question":"यह test local पर pass होता है लेकिन CI पर fail क्यों होता है?"}
-{"lang":"hi","question":"settings page पर dark mode का toggle जोड़ो और reload के बाद भी चुनाव बना रहे।"}
-{"lang":"ar","question":"أعد كتابة هذه الدالة لتستخدم async/await بدلًا من callbacks."}
-{"lang":"ar","question":"لماذا ينجح هذا الاختبار محليًا لكنه يفشل على CI؟"}
-{"lang":"ar","question":"أضف مفتاح الوضع الداكن إلى صفحة الإعدادات واحفظ الاختيار بعد إعادة التحميل."}
-{"lang":"th","question":"ช่วย refactor ฟังก์ชันนี้ให้ใช้ async/await แทน callback หน่อย"}
-{"lang":"th","question":"ทำไมเทสต์นี้ผ่านบนเครื่องแต่ไปพังบน CI"}
-{"lang":"th","question":"เพิ่มปุ่มสลับโหมดมืดในหน้าตั้งค่า และให้จำค่าที่เลือกไว้หลังรีโหลด"}
-{"lang":"ru","question":"Перепиши эту функцию на async/await вместо колбэков."}
-{"lang":"ru","question":"Почему этот тест проходит локально, но падает в CI?"}
-{"lang":"ru","question":"Добавь переключатель тёмной темы на страницу настроек и сохраняй выбор после перезагрузки."}
-{"lang":"id","question":"Refactor fungsi ini supaya pakai async/await, bukan callback."}
-{"lang":"id","question":"Kenapa tes ini lolos di lokal tapi gagal di CI?"}
-{"lang":"id","question":"Tambahkan toggle mode gelap di halaman pengaturan dan simpan pilihannya setelah reload."}
+{"lang": "en", "question": "Write a regex that matches IPv6 addresses, including the compressed forms."}
+{"lang": "en", "question": "Why is my React component rendering twice in development?"}
+{"lang": "en", "question": "Turn this list comprehension into a generator so it does not load everything into memory."}
+{"lang": "en", "question": "How do I undo the last git commit but keep the changes staged?"}
+{"lang": "en", "question": "Explain the difference between a mutex and a semaphore with an example in Go."}
+{"lang": "es", "question": "¿Cómo centro verticalmente un div dentro de un contenedor flex?"}
+{"lang": "es", "question": "Escribe un script de bash que renombre todos los .jpeg de una carpeta a .jpg."}
+{"lang": "es", "question": "¿Por qué mi consulta con LIKE '%texto%' no usa el índice?"}
+{"lang": "es", "question": "Añade un debounce de 300 ms al campo de búsqueda de este componente."}
+{"lang": "es", "question": "Explícame qué hace el operador de coalescencia nula en JavaScript."}
+{"lang": "pt-BR", "question": "Como faço para ler um arquivo CSV grande em Python sem estourar a memória?"}
+{"lang": "pt-BR", "question": "Esse useEffect está entrando em loop infinito, o que estou fazendo de errado?"}
+{"lang": "pt-BR", "question": "Gera um Dockerfile multi-stage para uma API em Go."}
+{"lang": "pt-BR", "question": "Qual a diferença entre interface e type no TypeScript?"}
+{"lang": "pt-BR", "question": "Me ajuda a escrever um teste unitário para essa função que valida CPF."}
+{"lang": "de", "question": "Wie wandle ich in Rust einen String in eine Zahl um und behandle Fehler sauber?"}
+{"lang": "de", "question": "Schreib mir eine SQL-Abfrage, die pro Kunde nur die letzte Bestellung zurückgibt."}
+{"lang": "de", "question": "Warum ist mein Docker-Image 2 GB groß, und wie bekomme ich es kleiner?"}
+{"lang": "de", "question": "Erklär mir den Unterschied zwischen merge und rebase in Git."}
+{"lang": "de", "question": "Füge eine Tastenkombination Strg+K hinzu, die die Befehlspalette öffnet."}
+{"lang": "fr", "question": "Comment écrire une fonction récursive qui aplatit un tableau imbriqué en JavaScript ?"}
+{"lang": "fr", "question": "Pourquoi ma grille CSS déborde-t-elle horizontalement sur mobile ?"}
+{"lang": "fr", "question": "Écris un Makefile avec les cibles build, test et clean pour un projet en C."}
+{"lang": "fr", "question": "Comment profiler une fonction Python lente avec cProfile ?"}
+{"lang": "fr", "question": "Transforme cette classe en composant fonctionnel React avec des hooks."}
+{"lang": "ja", "question": "Pythonで辞書をキーではなく値でソートする方法を教えて。"}
+{"lang": "ja", "question": "このクエリのN+1問題を解消してください。"}
+{"lang": "ja", "question": "CSSで画像の縦横比を保ったままレスポンシブにしたい。"}
+{"lang": "ja", "question": "Gitで特定のファイルだけを前のコミットの状態に戻すには？"}
+{"lang": "ja", "question": "JavaScriptのPromise.allとPromise.allSettledの違いは何ですか？"}
+{"lang": "zh-Hans", "question": "怎么用正则表达式校验邮箱地址？"}
+{"lang": "zh-Hans", "question": "帮我写一个快速排序的 Python 实现，并说明时间复杂度。"}
+{"lang": "zh-Hans", "question": "Nginx 怎么开启 gzip 压缩？"}
+{"lang": "zh-Hans", "question": "为什么我的 Go 程序里 goroutine 越来越多，怎么排查泄漏？"}
+{"lang": "zh-Hans", "question": "解释一下 HTTP 缓存里 ETag 和 Last-Modified 的区别。"}
+{"lang": "ko", "question": "파이썬에서 두 리스트의 교집합을 구하는 가장 빠른 방법은?"}
+{"lang": "ko", "question": "이 자바스크립트 코드에서 this가 undefined가 되는 이유를 설명해 줘."}
+{"lang": "ko", "question": "리눅스에서 디스크를 가장 많이 차지하는 디렉터리를 찾는 명령어 알려줘."}
+{"lang": "ko", "question": "웹소켓 연결이 자꾸 끊기는데 재연결 로직을 어떻게 짜야 할까?"}
+{"lang": "ko", "question": "타입스크립트 제네릭으로 배열의 첫 번째 요소 타입을 추론하는 함수를 만들어 줘."}
+{"lang": "hi", "question": "Python में किसी फ़ाइल की सभी पंक्तियों को उल्टे क्रम में कैसे पढ़ें?"}
+{"lang": "hi", "question": "मेरे Node.js ऐप में मेमोरी लीक का पता कैसे लगाऊँ?"}
+{"lang": "hi", "question": "बाइनरी सर्च का ऐसा कोड लिखो जो डुप्लिकेट मानों में पहला इंडेक्स लौटाए।"}
+{"lang": "hi", "question": "CSS में sticky हेडर स्क्रॉल करते समय काम क्यों नहीं कर रहा?"}
+{"lang": "hi", "question": "REST और gRPC में क्या अंतर है, और कब कौन सा चुनें?"}
+{"lang": "ar", "question": "كيف أكتب دالة في جافاسكربت تتحقق مما إذا كانت الكلمة متناظرة؟"}
+{"lang": "ar", "question": "ما الفرق بين let و const و var؟"}
+{"lang": "ar", "question": "اكتب لي استعلام SQL يحسب متوسط الرواتب لكل قسم."}
+{"lang": "ar", "question": "لماذا يظهر خطأ CORS عند استدعاء الواجهة البرمجية من المتصفح فقط؟"}
+{"lang": "ar", "question": "كيف أنشئ بيئة افتراضية في بايثون وأثبّت فيها الحزم من ملف requirements.txt؟"}
+{"lang": "th", "question": "เขียนฟังก์ชัน Python นับจำนวนคำในข้อความให้หน่อย"}
+{"lang": "th", "question": "ทำไม git push ถึงถูกปฏิเสธว่า non-fast-forward"}
+{"lang": "th", "question": "ช่วยอธิบาย closure ใน JavaScript พร้อมตัวอย่าง"}
+{"lang": "th", "question": "จะจัดปุ่มนี้ให้อยู่กึ่งกลางหน้าจอด้วย CSS ได้อย่างไร"}
+{"lang": "th", "question": "ช่วยเขียน unit test ด้วย Jest สำหรับฟังก์ชันบวกเลขนี้"}
+{"lang": "ru", "question": "Как в Python объединить два словаря так, чтобы значения из второго перезаписали первые?"}
+{"lang": "ru", "question": "Почему мой под в Kubernetes постоянно уходит в CrashLoopBackOff?"}
+{"lang": "ru", "question": "Напиши функцию на Go, которая читает JSON из файла в структуру."}
+{"lang": "ru", "question": "Как отменить уже отправленный HTTP-запрос через AbortController?"}
+{"lang": "ru", "question": "Как настроить автодополнение в zsh для своих скриптов?"}
+{"lang": "id", "question": "Bagaimana cara menghapus elemen duplikat dari array di JavaScript?"}
+{"lang": "id", "question": "Kenapa npm install saya gagal dengan error EACCES?"}
+{"lang": "id", "question": "Tolong buatkan skrip Python untuk mengunduh semua gambar dari sebuah halaman web."}
+{"lang": "id", "question": "Apa bedanya proses dan thread?"}
+{"lang": "id", "question": "Bantu saya menulis query MongoDB untuk mencari dokumen dari 7 hari terakhir."}

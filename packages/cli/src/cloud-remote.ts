@@ -2,6 +2,8 @@ import type { RemoteMemory } from '@oortmem/claude-code';
 import { scrubForCloud } from './cloud-scrub.js';
 import type { Memory } from '@oortmem/core';
 import { createHash } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { OortCloudError, type CloudClient } from './cloud.js';
 
 /** The API's turnRef cap; a longer ref is replaced by its hash (still stable across retries). */
@@ -55,6 +57,59 @@ const PROMPT_MODE: Record<PromptMode, { rerank?: false; embed?: false }> = {
 
 export type PromptMode = 'full' | 'fast' | 'lexical';
 
+/**
+ * Whether this API refused `rerank: "gate-miss"` lately (CON-131). An API from before it answers
+ * 400; the prompt hook then recalls as plain `fast` and stops asking, in this process (`oort
+ * serve`) and in the hooks that start after it (a file in the cache, by API URL). It asks again
+ * a day later, or against another API, so a deploy that adds it is picked up.
+ */
+export interface GateMissSupport {
+  refused(): boolean;
+  remember(): void;
+}
+
+const GATE_MISS_RETRY_MS = 24 * 3600_000;
+const refusedInProcess = new Map<string, number>();
+
+export function gateMissSupport(
+  home: string,
+  apiUrl: string,
+  now: () => number = Date.now,
+): GateMissSupport {
+  const file = path.join(home, 'cache', 'cloud-gate-miss.json');
+  const fresh = (at: number | undefined) => at !== undefined && now() - at < GATE_MISS_RETRY_MS;
+  return {
+    refused() {
+      if (fresh(refusedInProcess.get(apiUrl))) return true;
+      try {
+        const v = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+        const at = v[apiUrl];
+        return typeof at === 'number' && fresh(at);
+      } catch {
+        return false;
+      }
+    },
+    remember() {
+      const at = now();
+      refusedInProcess.set(apiUrl, at);
+      // Best effort: a hook that cannot write still recalls, and asks again next time.
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(file, `${JSON.stringify({ [apiUrl]: at })}\n`, { mode: 0o600 });
+      } catch {
+        // ignore
+      }
+    },
+  };
+}
+
+/** A 400 from an API that does not know `rerank: "gate-miss"`: it names the field. */
+const refusesGateMiss = (e: unknown): boolean =>
+  e instanceof OortCloudError &&
+  e.kind === 'bad-request' &&
+  e.status === 400 &&
+  /\brerank\b/.test(e.message);
+
 /** Pinned and hot memories SessionStart injects: at most this many of each from the API. */
 const SESSION_LIMIT = 100;
 
@@ -79,9 +134,11 @@ export function cloudRemote(
   lexicalFirst?: boolean,
   /**
    * `recall.promptGateMissRerank` (CON-131): in `fast` mode, ask for a rerank only when the
-   * relevance gate would drop every candidate, instead of never. Needs an API that knows it.
+   * relevance gate would drop every candidate, instead of never. An API without it answers 400:
+   * the recall is sent again as plain `fast`, and `gateMiss` remembers not to ask that API.
    */
   gateMissRerank?: boolean,
+  gateMiss?: GateMissSupport,
 ): RemoteMemory {
   // Calls about the project this process runs in state its privacy when its own config file sets
   // it, so the cloud knows whether that project's memories may be shared. A default states
@@ -104,17 +161,26 @@ export function cloudRemote(
   }
   return {
     // Only the prompt hook recalls through here.
-    recall: ({ text, projectId }) =>
-      client.recall({
+    recall: async ({ text, projectId }) => {
+      const q = {
         text: clipRecallText(text),
         ...(projectId !== undefined && { project: projectId }),
         ...privacy(projectId),
         ...(agent !== undefined && { agent }),
         k: 10,
         ...PROMPT_MODE[promptMode],
-        ...(promptMode === 'fast' && gateMissRerank === true && { rerank: 'gate-miss' as const }),
         ...(lexicalFirst !== undefined && promptMode !== 'lexical' && { lexicalFirst }),
-      }),
+      };
+      const ask = promptMode === 'fast' && gateMissRerank === true && gateMiss?.refused() !== true;
+      if (!ask) return client.recall(q);
+      try {
+        return await client.recall({ ...q, rerank: 'gate-miss' });
+      } catch (e) {
+        if (!refusesGateMiss(e)) throw e;
+        gateMiss?.remember();
+        return client.recall(q);
+      }
+    },
     sessionMemories: async ({ projectId }) => {
       const project = projectId !== undefined && { project: projectId };
       // Pinned first (any tier), then the hot tier; a memory in both appears once.

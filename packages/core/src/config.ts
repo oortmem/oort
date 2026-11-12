@@ -42,9 +42,10 @@ const activation = z
 
 /**
  * The gate-miss rerank's floors (CON-131), from the multilingual eval with voyage-3.5-lite and
- * rerank-3-lite (`packages/bench/eval/multilingual/README.md`, "Gate-miss rerank").
+ * rerank-3-lite (`packages/bench/eval/multilingual/README.md`, "Gate-miss rerank", held out by
+ * question). The dense score is the best among the candidates recall could return.
  */
-export const GATE_MISS_DENSE_FLOOR = 0.51;
+export const GATE_MISS_DENSE_FLOOR = 0.49;
 export const GATE_MISS_RERANK_FLOOR = 0.76;
 
 const recall = z

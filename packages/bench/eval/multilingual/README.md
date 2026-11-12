@@ -120,6 +120,10 @@ language means one row moves abstention FP by 0.25: read these as directions, no
 
 ## Gate-miss rerank, 2026-11-12
 
+The first calibration below chose and scored its floors on the same rows (in-sample), with 3
+unrelated prompts translated into 13 languages. Its numbers flatter the floors. The held-out
+evaluation after it is the one to quote.
+
 `recall.rerankWhen: 'gate-miss'` (CON-131): a recall without the reranker that drops every candidate
 reranks once when its best dense score reaches `gateMissDenseFloor`, and keeps what scores at least
 `gateMissRerankFloor`. The prompt hook turns it on with `recall.promptGateMissRerank`. The floors
@@ -128,9 +132,9 @@ were calibrated here with `voyage-3.5-lite` (512 dimensions, int8) and `rerank-3
 **Method.** One recording run with both floors at 0 keeps, for every row the gate drops, the best
 dense score and the rerank score of each candidate. Every pair of floors is then replayed from that
 record (`src/gate-miss.ts`), so the grid (dense 0.30 to 0.70, rerank 0.30 to 0.95, steps of 0.01)
-costs no more calls. `unrelated.jsonl` adds 3 developer prompts per language that no memory
-answers ("refactor this to async/await"), recalled in each condition's store, to count false
-injections on ordinary prompts. A pair passes when, for the six gating languages, cross recall@10
+costs no more calls. `unrelated.jsonl` then held 3 developer prompts, each translated into every
+language, that no memory answers ("refactor this to async/await"), recalled in each condition's
+store, to count false injections on ordinary prompts. A pair passes when, for the six gating languages, cross recall@10
 is at least 0.75 × English mono recall@10 and abstention FP is at most English's (without the
 escalation) + 0.1, and no unrelated prompt or abstention question gets an answer it does not get
 without the escalation. Of the passing pairs, the best mean cross recall@10 over the gating
@@ -138,8 +142,8 @@ languages, then the highest dense floor within 0.02 of it, since every escalatio
 call on the prompt's critical path. The run cost 657 rerank calls and 22 embedding requests (about
 US$0.03). Reproduce it with `VOYAGE_API_KEY=… pnpm --filter @oortmem/bench run calibrate:gate-miss`.
 
-**Chosen: dense 0.51, rerank 0.76.** Recall@10 without / with the escalation, abstention FP (mono),
-and the share of rows that paid for a rerank (mono / cross):
+**Chosen then, in-sample: dense 0.51, rerank 0.76.** Recall@10 without / with the escalation,
+abstention FP (mono), and the share of rows that paid for a rerank (mono / cross):
 
 | Language | mono R@10     | cross R@10    | mixed R@10    | Abstain FP  | Reranked, mono / cross |
 | -------- | ------------- | ------------- | ------------- | ----------- | ---------------------- |
@@ -175,6 +179,30 @@ and the share of rows that paid for a rerank (mono / cross):
   275 ms at p50 and 487 ms at p95; the prompt hook's `promptRerankBudgetMs` (400) cuts off the slow
   ones, which then inject nothing. One global pair ships, since recall detects no language; what
   each language alone would choose is in the calibration output (`perLanguage`).
+
+### Held-out evaluation, 2026-11-12 (review)
+
+Three changes after review, and the numbers again from the same recorded scores (no new calls):
+
+- **The best dense score counts only what recall could return:** the fused candidates in view, not
+  a superseded or out-of-view memory's dense hit. Scores are a little lower, and the same method
+  now chooses **dense 0.49, rerank 0.76**.
+- **The bars now also fail floors that answer an abstention question** not answered without the
+  escalation, as the method above already said (before, only the FP slack checked them).
+- **5-fold held-out by question** (`heldOut` in `src/gate-miss.ts`): a question, with its
+  translations in every language and condition, sits in exactly one fold, and each fold is judged
+  at the floors chosen from the other four.
+
+| Space (3 unrelated prompts × 13 languages) | Cross R@10, without | In-sample | Held-out | Unrelated injected | Abstention answered | Rerank rate, rows / unrelated |
+| ------------------------------------------ | ------------------- | --------- | -------- | ------------------ | ------------------- | ----------------------------- |
+| Voyage `voyage-3.5-lite@512`               | 0.750               | 0.900     | 0.883    | 6 → 6 of 114       | 23 → 23             | 20% / 56%                     |
+
+- **Voyage holds up:** held-out cross recall@10 is 0.883 (es 0.900, pt-BR 0.967, de 0.867, fr
+  0.867, ja 0.833, zh-Hans 0.867), every bar met, English mono unchanged (0.933). The folds chose
+  dense 0.48 to 0.52 and rerank 0.76 to 0.77: the choice is stable.
+- **Unrelated prompts are now 65 distinct developer tasks,** five per language, each written in
+  its language rather than translated (`unrelated.jsonl`). The 3-prompt numbers above stay as they
+  were measured; rerunning with the 65 prompts needs their embeddings and up to 380 rerank calls.
 
 ## Baseline, tokeniser v1 (2026-11-06)
 

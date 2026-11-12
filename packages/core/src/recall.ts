@@ -157,11 +157,12 @@ export interface RecallResult {
   rerankSkipped?: 'confident';
   /**
    * `rerankWhen: 'gate-miss'` (CON-131), when the relevance gate would have dropped every
-   * candidate. `reranked`: the best dense match (`topDense`, absent without one) reached
-   * `gateMissDenseFloor`, so the reranker was asked. `kept`: memories that then passed
-   * `gateMissRerankFloor`.
+   * candidate. `topDense`: the best dense score among the candidates the reranker would see
+   * (absent without one). When it reached `gateMissDenseFloor` the reranker was asked:
+   * `reranked` when it answered, `failed` when it did not (an error, the budget, or no usable
+   * ids; `degraded` says which). `kept`: memories that then passed `gateMissRerankFloor`.
    */
-  gateMiss?: { reranked: boolean; topDense?: number; kept: number };
+  gateMiss?: { reranked: boolean; failed?: true; topDense?: number; kept: number };
   /** The query was not embedded, because the lexical search already had a clear answer. */
   embedSkipped?: 'lexical-confident';
   /** The temporal view this recall read. Always set by `recall`. */
@@ -412,16 +413,25 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   // language is detected: the evidence is that nothing passed and something came close.
   let gateMiss: RecallResult['gateMiss'];
   if (onGateMiss && deps.rerank && kept.length === 0 && candidates.length > 0) {
-    const topDense = dense.length === 0 ? undefined : Math.max(...dense.map((h) => h.score));
+    // Only what the reranker would see and could return: fusion has already left out
+    // superseded and out-of-view memories, which may be the closest raw dense hits.
+    const scores = ordered.flatMap((f) => {
+      const d = denseScore.get(f.id);
+      return d === undefined ? [] : [d];
+    });
+    const topDense = scores.length === 0 ? undefined : Math.max(...scores);
     const plausible = topDense !== undefined && topDense >= config.recall.gateMissDenseFloor;
+    let answered = false;
     if (plausible) {
       await rerankOrdered(deps.rerank);
+      answered = rerankScores.size > 0;
       minRerankScore = config.recall.gateMissRerankFloor;
       candidates = ordered.slice(0, config.recall.returnK);
       kept = candidates.filter((f) => relevant(f.id));
     }
     gateMiss = {
-      reranked: plausible,
+      reranked: answered,
+      ...(plausible && !answered && { failed: true }),
       ...(topDense !== undefined && { topDense }),
       kept: kept.length,
     };

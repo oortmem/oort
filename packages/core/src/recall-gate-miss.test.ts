@@ -205,7 +205,13 @@ describe('gate-miss rerank (CON-131)', () => {
     expect(r.memories).toEqual([]);
     expect(r.abstained).toBe(true);
     expect(r.degraded).toContain('rerank-failed');
-    expect(r.gateMiss).toEqual({ reranked: true, topDense: expect.closeTo(0.5, 2), kept: 0 });
+    // Asked, but no answer: `reranked` means asked and answered.
+    expect(r.gateMiss).toEqual({
+      reranked: false,
+      failed: true,
+      topDense: expect.closeTo(0.5, 2),
+      kept: 0,
+    });
   });
 
   it('the escalation keeps to the rerank budget', async () => {
@@ -222,6 +228,26 @@ describe('gate-miss rerank (CON-131)', () => {
     );
     expect(r.abstained).toBe(true);
     expect(r.degraded).toContain('rerank-timeout');
+    expect(r.gateMiss).toMatchObject({ reranked: false, failed: true });
+  });
+
+  it('a superseded memory close to the query does not make a miss plausible', async () => {
+    // The old version scores 0.98 dense but can never be returned; the current one scores 0.2.
+    const old = makeMemory({
+      id: 'old',
+      text: 'el servicio de cobros escuchaba en el puerto 6060',
+      embedding: vec(98, 20, 0, 0),
+      validTo: '2026-02-01T00:00:00.000Z',
+      supersededBy: 'far',
+    });
+    const store = await storeOf([old, FAR]);
+    const rerank = reranker({ far: 0.9, old: 0.9 });
+    const r = await recall(
+      { text: QUERY, scope: SCOPE },
+      { store, embed: embedder(), rerank, config: GATE_MISS },
+    );
+    expect(rerank.calls).toBe(0);
+    expect(r.gateMiss).toEqual({ reranked: false, topDense: expect.closeTo(0.2, 1), kept: 0 });
   });
 
   it('reranks the fused candidates, up to rerankK', async () => {

@@ -1,7 +1,7 @@
 import { HOOK_TIMEOUTS, createHookLogger, runHook, type HookEvent } from '@oortmem/claude-code';
 import { VERSION, resolveHome, type MemoryStore } from '@oortmem/core';
 import { StoreMigrationRequiredError } from '@oortmem/store-sqlite';
-import { cloudRemote } from '../cloud-remote.js';
+import { cloudRemote, gateMissSupport } from '../cloud-remote.js';
 import { LOCAL_PROVIDER } from '../local-models.js';
 import { HOOK_STDIN_CAP_MS, type Env } from '../io.js';
 import { timingLine } from '../timing-line.js';
@@ -259,6 +259,7 @@ export async function runWiredHook(
         promptMode,
         w.config.recall.lexicalFirst,
         w.config.recall.promptGateMissRerank,
+        w.cloud === undefined ? undefined : gateMissSupport(home, w.cloud.url),
       ),
     }),
   });

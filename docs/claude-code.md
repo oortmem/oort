@@ -174,15 +174,18 @@ on every prompt. With it on and `promptMode` `fast`, the prompt hook reranks onl
 every candidate and the best dense match still reaches `recall.gateMissDenseFloor`. It then keeps
 what scores at least `recall.gateMissRerankFloor` on the reranker. No language is detected. It needs
 a hosted reranker (the local cross-encoder is English-only) and never applies to `lexical` or
-`full`. In cloud mode the hook asks Oort Cloud for the same (`rerank: "gate-miss"`); an API that
-does not know it answers 400 and the hook injects nothing for that prompt, so turn it on only
-against an API that supports it.
+`full`. In cloud mode the hook asks Oort Cloud for the same (`rerank: "gate-miss"`). An Oort
+Cloud release without it answers 400: the hook then sends the same recall as plain `fast`, so the
+prompt still gets its memories, and stops asking that API for a day (in `oort serve`, and in a
+cache file, `~/.oort/cache/cloud-gate-miss.json`, for the hooks after it). The hook log counts
+`gateMiss` when the gate dropped everything, `gateMissReranked` when the rerank answered and
+`gateMissFailed` when it was asked and did not (an error or `promptRerankBudgetMs`).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `promptGateMissRerank` | false | Rerank a `fast` prompt recall's gate miss, as above. |
 | `rerankWhen` | `always` | For the SDK: `gate-miss` makes any recall with a reranker behave this way. The prompt hook sets it itself. |
-| `gateMissDenseFloor` | 0.51 | The best dense score a miss needs before it is worth a rerank call. Lower finds a little more and reranks more often. |
+| `gateMissDenseFloor` | 0.49 | The best dense score a miss needs before it is worth a rerank call. Lower finds a little more and reranks more often. |
 | `gateMissRerankFloor` | 0.76 | The rerank score a memory needs to be injected after the escalation. Lower injects more unrelated memories. |
 
 The floors were calibrated on the multilingual eval with voyage-3.5-lite and rerank-3-lite (see

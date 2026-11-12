@@ -14,8 +14,16 @@ import {
   timedFetch,
   warmCloud,
 } from './cloud-http.js';
-import { RECALL_TEXT_MAX_BYTES, clipRecallText, cloudRemote } from './cloud-remote.js';
-import { createCloudClient, withCloudTimings, type CloudClient } from './cloud.js';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import {
+  RECALL_TEXT_MAX_BYTES,
+  clipRecallText,
+  cloudRemote,
+  gateMissSupport,
+} from './cloud-remote.js';
+import { OortCloudError, createCloudClient, withCloudTimings, type CloudClient } from './cloud.js';
 import { KeepWarm } from './serve-daemon.js';
 import type { Wired } from './wire.js';
 
@@ -301,6 +309,61 @@ describe('the prompt hook recall in cloud mode (CON-101)', () => {
       'absent',
       false,
     ]);
+  });
+
+  it('cloud.gate-miss-refused-by-an-older-api-falls-back-to-fast-and-is-remembered', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-gm-'));
+    const bodies: Record<string, unknown>[] = [];
+    // An API from before CON-131: `rerank` must be a boolean.
+    const client = {
+      url: 'https://api.example.test',
+      recall: async (q: Record<string, unknown>) => {
+        bodies.push(q);
+        if (typeof q['rerank'] !== 'boolean') {
+          throw new OortCloudError(
+            'bad-request',
+            400,
+            'rerank must be true or false.',
+            'bad_request',
+          );
+        }
+        return { memories: [], timings: {} };
+      },
+    } as unknown as CloudClient;
+    const remote = (support = gateMissSupport(home, client.url)) =>
+      cloudRemote(client, undefined, undefined, undefined, 'fast', undefined, true, support);
+    // The first prompt still recalls: asked, refused, retried as plain fast.
+    const r = await remote().recall({ text: 'qué puerto usa el servicio de cobros' });
+    expect(r.memories).toEqual([]);
+    expect(bodies.map((b) => b['rerank'])).toEqual(['gate-miss', false]);
+    // The next prompt, in this process or a new one (a fresh hook), does not ask again.
+    await remote().recall({ text: 'otra pregunta' });
+    expect(bodies.slice(2).map((b) => b['rerank'])).toEqual([false]);
+    // Another API (a new deploy elsewhere) and a day later are asked again.
+    expect(gateMissSupport(home, 'https://other.example.test').refused()).toBe(false);
+    expect(gateMissSupport(home, client.url, () => Date.now() + 25 * 3600_000).refused()).toBe(
+      false,
+    );
+  });
+
+  it('cloud.only-a-refusal-of-rerank-turns-gate-miss-off', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-gm-'));
+    let calls = 0;
+    const client = {
+      url: 'https://api-two.example.test',
+      recall: async () => {
+        calls++;
+        throw new OortCloudError('bad-request', 400, 'text is required.', 'bad_request');
+      },
+    } as unknown as CloudClient;
+    const support = gateMissSupport(home, client.url);
+    await expect(
+      cloudRemote(client, undefined, undefined, undefined, 'fast', undefined, true, support).recall(
+        { text: 'x' },
+      ),
+    ).rejects.toThrow(/text is required/);
+    expect(calls).toBe(1);
+    expect(support.refused()).toBe(false);
   });
 
   it('cloud.lexical-first-is-sent-as-configured-except-where-nothing-embeds', async () => {

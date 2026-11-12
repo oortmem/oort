@@ -217,9 +217,11 @@ export async function handleUserPromptSubmit(
       ...(result.gate !== undefined && { gateDropped: result.gate.dropped }),
       ...(result.rerankSkipped !== undefined && { rerankSkipped: 1 }),
       ...(result.embedSkipped !== undefined && { embedSkipped: 1 }),
-      // CON-131: the gate dropped everything; `gateMissReranked` when it was worth a rerank.
+      // CON-131: the gate dropped everything; `gateMissReranked` when the rerank it was worth
+      // answered, `gateMissFailed` when it was asked and did not.
       ...(result.gateMiss !== undefined && { gateMiss: 1 }),
       ...(result.gateMiss?.reranked === true && { gateMissReranked: 1 }),
+      ...(result.gateMiss?.failed === true && { gateMissFailed: 1 }),
     };
     // Abstained: candidates were found but none was relevant enough, so nothing is injected.
     entry.outcome =

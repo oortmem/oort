@@ -342,7 +342,8 @@ async function recallRows(
 
 /**
  * Prompts a developer types that no memory in the set answers ("why does this test fail on
- * CI?"), three per language (`eval/multilingual/unrelated.jsonl`). A prompt hook sees mostly
+ * CI?"), five per language, 65 distinct tasks (`eval/multilingual/unrelated.jsonl`), each
+ * written in its language rather than translated. A prompt hook sees mostly
  * these, so anything recalled for them is a false injection (CON-131).
  */
 export function unrelatedRows(dir = MULTILINGUAL_DIR): Map<Language, EvalRow[]> {

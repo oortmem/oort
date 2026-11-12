@@ -20,6 +20,7 @@ import { EMBEDDING_DIMENSION } from './generate.js';
 import {
   chooseCheaper,
   grid,
+  heldOut,
   judge,
   measure,
   OFF,
@@ -65,8 +66,10 @@ async function main(): Promise<number> {
   };
   const result = {
     models: { embed: `${config.embed.model}@${EMBEDDING_DIMENSION}`, rerank: config.rerank.model },
+    // In-sample: chosen and scored on the same rows. `heldOut` is the number to quote.
     best: choice?.best ?? null,
     chosen: choice?.chosen ?? null,
+    heldOut: heldOut(records, 5),
     off: judge(records, OFF),
     cells: { off: measure(records, OFF), chosen: measure(records, floors) },
     perLanguage: perLanguage(records),
