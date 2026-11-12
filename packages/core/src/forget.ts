@@ -92,11 +92,35 @@ function wordsIn(s: string): string[] {
 
 /** Every word of a memory's text, stub and entities, and each entity whole. */
 function wordsOf(m: Text): Set<string> {
-  return new Set([
+  const words = [
     ...wordsIn(`${m.text} ${m.stub} ${m.entities.join(' ')}`),
     ...m.entities.map((e) => e.toLowerCase()),
-  ]);
+  ];
+  return new Set([...words, ...words.map(canonical)]);
 }
+
+const SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+/** A URL or path as compared: lower-cased, without its scheme and without a trailing slash. */
+function canonical(w: string): string {
+  const c = w.toLowerCase().replace(SCHEME, '').replace(/\/+$/, '');
+  return c === '' ? w.toLowerCase() : c;
+}
+
+/**
+ * The forms a value can be restated in (final check of #108): a URL without its scheme or
+ * trailing slash, or as its host alone (`old.example.com` for `https://old.example.com/v1`).
+ */
+function formsOf(v: string): string[] {
+  const c = canonical(v);
+  if (!SCHEME.test(v)) return [c];
+  const host = c.split(/[/?#]/)[0] ?? '';
+  return host !== '' && host !== c ? [c, host] : [c];
+}
+
+/** Whether `words` (from `wordsOf`) holds value `v` in any of its forms. */
+const holds = (words: Set<string>, v: string): boolean =>
+  words.has(v) || formsOf(v).some((f) => words.has(f));
 
 /** A number or version, an identifier (`db-primary`, `foo_bar`), a path or a URL. */
 const STRONG = (w: string): boolean =>
@@ -121,7 +145,8 @@ const OLD_MARKERS = [
 /**
  * The values of `forgotten` that `later`, written from it, could restate (CON-144), lower-cased
  * and whole: a URL, path or identifier is one value, never its pieces.
- * - A number or version, an identifier, a path or a URL (`STRONG`).
+ * - A number or version, an identifier, a path or a URL (`STRONG`). A URL also matches without
+ *   its scheme or trailing slash, and as its host alone (`formsOf`).
  * - A word with a capital (`MySQL`, `API`) only when `forgotten` lists it as an entity and
  *   `later` does not: a name both list is what they are about.
  * - Any other word of `forgotten` (not a stopword) that `later` writes right after "from",
@@ -198,7 +223,7 @@ function restated(
   const values = forgottenValues(forgotten, m);
   const subject = subjectOf(forgotten, m);
   const words = wordsOf(withKept(m));
-  return [...values].filter((v) => words.has(v) && !subject.has(v));
+  return [...values].filter((v) => holds(words, v) && !subject.has(v));
 }
 
 /**
@@ -224,7 +249,7 @@ export function restatedValues(
 function acceptable(forgotten: Text, old: Memory, w: WrittenMemory): boolean {
   const before = tokensOf(old);
   const added = tokenizeLexical(`${w.text} ${w.stub}`).filter(
-    (t) => !before.has(t) && !CONNECTORS.has(t),
+    (t) => !before.has(t) && !CONNECTORS.has(t) && !URL_PARTS.has(t),
   );
   const oldEntities = new Set(old.entities.map((e) => e.toLowerCase()));
   const values = forgottenValues(forgotten, old);
@@ -235,7 +260,7 @@ function acceptable(forgotten: Text, old: Memory, w: WrittenMemory): boolean {
     w.entities.every((e) => oldEntities.has(e.toLowerCase())) &&
     w.text.length <= old.text.length &&
     w.stub.length <= Math.max(old.stub.length, 1) &&
-    [...values].every((v) => !words.has(v) || subject.has(v))
+    [...values].every((v) => !holds(words, v) || subject.has(v))
   );
 }
 

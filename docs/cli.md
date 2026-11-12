@@ -2008,11 +2008,12 @@ and the SDK's `forget`) also checks the later memories of the forgotten one's su
 
 1. On your machine, with no model call, it takes the forgotten memory's values for each later
    memory: numbers and versions, identifiers such as `db-primary` or `foo_bar`, paths and URLs
-   (each whole, never its pieces); a capitalised name such as `MySQL` when the forgotten memory
+   (each whole, never its pieces; a URL also matches without its scheme or trailing slash, and as
+   its host alone, ignoring case); a capitalised name such as `MySQL` when the forgotten memory
    lists it as an entity and the later one does not; and a plain word the later memory writes
    right after "from", "was", "instead of", "previously", "replaced" or "no longer" ("switched
    from postgres to sqlite"). Any other plain word is not a value, so a value written that way
-   elsewhere is not found.
+   elsewhere is not found ("postgres was replaced by sqlite" names no marker before it).
 2. A later memory that holds one of those values (in its text, summary, entities, or a wording a
    refine kept) goes to the memory writer (Anthropic, your key or Oort Pro). The writer gets that
    memory alone, never the forgotten one, and is asked to state only its current fact and drop any

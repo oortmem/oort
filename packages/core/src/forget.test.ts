@@ -336,6 +336,54 @@ describe('forgetMemory (CON-144)', () => {
     });
   });
 
+  describe('a url restated in another form (final check 1)', () => {
+    const a = { text: 'endpoint is https://old.example.com/v1', stub: '', entities: [] };
+    const b = {
+      text: 'endpoint changed from https://old.example.com/v1 to https://new.example.com/v2',
+      stub: '',
+      entities: [],
+    };
+    const to = (text: string) => () => ({ text, stub: '', entities: [] });
+
+    it('forget.a-rewrite-keeping-the-old-url-without-its-scheme-or-as-its-host-is-rejected', async () => {
+      for (const text of [
+        'endpoint changed from old.example.com/v1 to https://new.example.com/v2',
+        'endpoint is old.example.com',
+        'endpoint is Old.Example.COM/v1/',
+      ]) {
+        const { r } = await pair(a, b, to(text));
+        expect(r.notRewritten, text).toEqual([{ id: 'b', reason: 'rejected' }]);
+      }
+    });
+
+    it('forget.a-later-memory-restating-the-url-in-another-form-is-selected', async () => {
+      for (const text of [
+        'endpoint changed from old.example.com/v1 to new.example.com/v2',
+        'endpoint changed from https://old.example.com/v1/ to https://new.example.com/v2',
+        'endpoint moved off old.example.com to https://new.example.com/v2',
+        'endpoint changed from HTTPS://OLD.example.com/v1 to https://new.example.com/v2',
+      ]) {
+        const { r } = await pair(a, { ...b, text }, to('endpoint is https://new.example.com/v2'));
+        expect(r, text).toMatchObject({
+          rewritten: [{ id: 'b', text: 'endpoint is https://new.example.com/v2' }],
+          notRewritten: [],
+        });
+      }
+    });
+
+    it('forget.a-new-url-on-the-same-host-is-not-the-old-value', async () => {
+      const { r } = await pair(
+        a,
+        {
+          ...b,
+          text: 'endpoint changed from https://old.example.com/v1 to https://old.example.com/v2',
+        },
+        to('endpoint is https://old.example.com/v2'),
+      );
+      expect(r.rewritten).toEqual([{ id: 'b', text: 'endpoint is https://old.example.com/v2' }]);
+    });
+  });
+
   it('forget.a-port-change-of-the-api-is-rewritten (re-review 3)', async () => {
     for (const entities of [['API'], []]) {
       const { r } = await pair(

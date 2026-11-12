@@ -48,7 +48,9 @@ function bytesOf(dbPath: string): Buffer {
   );
 }
 
-async function openAt(index: 'int8' | 'binary'): Promise<{ store: MemoryStore; dbPath: string }> {
+async function openAt(
+  index: 'int8' | 'binary' | 'rabitq',
+): Promise<{ store: MemoryStore; dbPath: string }> {
   const dir = fs.mkdtempSync(path.join(root, `${index}-`));
   const dbPath = path.join(dir, 'oort.sqlite');
   const store = await openSqliteStore({
@@ -76,7 +78,7 @@ function checkpoint(dbPath: string): void {
   raw.close();
 }
 
-for (const index of ['int8', 'binary'] as const) {
+for (const index of ['int8', 'binary', 'rabitq'] as const) {
   describe(`forget leaves no copy in the file, ${index} index (CON-140)`, () => {
     it('secure-delete.forget-erases-text-and-vector-bytes', async () => {
       const { store, dbPath } = await openAt(index);
