@@ -1,0 +1,4 @@
+# CI and release builds (rustup) use this toolchain; a toolchain without rustup ignores the file.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"

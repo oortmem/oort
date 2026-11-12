@@ -18,3 +18,7 @@ __pycache__/
 packages/mcp/src/widgets.generated.ts
 .venv/
 .test-homes/
+
+# The native RaBitQ engine: cargo output and the built addons (CI builds them for releases)
+packages/store-sqlite/native/target/
+packages/store-sqlite/native/*.node

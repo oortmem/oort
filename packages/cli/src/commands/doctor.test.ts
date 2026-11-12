@@ -21,12 +21,13 @@ import {
   downgradeSqliteStore,
   ERASE_AUTO_MAX_BYTES,
   listBackups,
+  loadNativeRabitq,
   openSqliteStore,
   sqliteSchemaVersion,
   SCHEMA_VERSION,
 } from '@oortmem/store-sqlite';
 import { wire as realWire } from '../wire.js';
-import { MIGRATION_PENDING_NOTE } from './hook.js';
+import { HOOK_RABITQ_MAX_LOAD, MIGRATION_PENDING_NOTE } from './hook.js';
 import { consolidationCheck, eraseChecks, unstableCopy, vacuumNeeded } from './doctor.js';
 import { writeUpdateCache } from '../update-check.js';
 
@@ -304,11 +305,11 @@ describe('oort doctor', () => {
     fs.rmSync(path.join(h.home, 'config.json'));
     const d = await doctor(h);
     expect(d.human.io.stdout).toContain(
-      `migrated the store from schema version 5 to ${SCHEMA_VERSION}; it can now keep a binary vector index`,
+      `migrated the store from schema version 5 to ${SCHEMA_VERSION}; it can now keep a binary or RaBitQ vector index`,
     );
     // An Oort started before the upgrade can no longer write: it must be restarted.
     expect(d.human.io.stdout).toContain('restart any Oort MCP server started before the upgrade');
-    // Version 6 only adds: no copy is taken, so doctor names none.
+    // Versions 6 and 7 only add: no copy is taken, so doctor names none.
     expect(fs.readdirSync(h.home).filter((f) => f.startsWith('oort.sqlite.pre-v'))).toEqual([]);
     expect(d.check('store', 'backup')).toBeUndefined();
     expect(d.check('store', 'vector-index')).toMatchObject({
@@ -323,6 +324,103 @@ describe('oort doctor', () => {
     expect(again.check('store', 'vector-index')?.detail).toBe(
       'binary, 1-bit codes rescored in int8 (0 searchable vectors; store.vectorIndex is binary)',
     );
+  });
+
+  it('doctor.names-the-rabitq-index-and-its-engine (CON-25)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    await (
+      await openSqliteStore({
+        path: path.join(h.home, 'oort.sqlite'),
+        coldDir: path.join(h.home, 'cold'),
+        dimension: embed.dimension,
+        log: () => {},
+      })
+    ).close();
+    fs.writeFileSync(
+      path.join(h.home, 'config.json'),
+      JSON.stringify({ store: { vectorIndex: 'rabitq' } }),
+    );
+    const native = 'module' in loadNativeRabitq();
+    const d = await doctor(h);
+    const check = d.check('store', 'vector-index');
+    expect(check?.detail).toMatch(
+      /^rabitq, 1-bit codes with error bounds rescored in int8, (native|TypeScript) engine \(0 searchable vectors; store\.vectorIndex is rabitq\)/,
+    );
+    expect(check?.status).toBe(native ? 'info' : 'warn');
+    // Without the native engine (here switched off), the same index runs in TypeScript: a warning
+    // that says why and what to do, never a failure.
+    vi.stubEnv('OORT_RABITQ_NATIVE', '0');
+    try {
+      const off = (await doctor(h)).check('store', 'vector-index');
+      expect(off).toMatchObject({
+        status: 'warn',
+        fix: expect.stringContaining('store.vectorIndex to binary'),
+      });
+      expect(off?.detail).toContain(
+        'TypeScript engine (0 searchable vectors; store.vectorIndex is rabitq); the native RaBitQ engine is unavailable (turned off by OORT_RABITQ_NATIVE=0)',
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('doctor.says-when-the-rabitq-index-wants-oort-reindex-or-oort-serve (CON-25)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(h.home, 'config.json'),
+      JSON.stringify({ store: { vectorIndex: 'rabitq' } }),
+    );
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      vectorIndex: 'rabitq',
+      log: () => {},
+    });
+    await s.upsert(TG, memory({ embedding: undefined }));
+    await s.close();
+    // Small and freshly built: neither.
+    const first = await doctor(h);
+    expect(first.check('store', 'vector-index-centre')).toBeUndefined();
+    expect(first.check('store', 'vector-index-hooks')).toBeUndefined();
+    // As if the store had grown past what the index was built from, and past what an
+    // in-process hook loads (codes are only counted here, never searched).
+    const raw = new Database(db);
+    raw.transaction(() => {
+      const put = raw.prepare(
+        `INSERT INTO memories_rq (rid, seq, node_key, project_key, author_key, code, factors)
+         VALUES (?, 0, 'n', 'p', 'a', x'00', x'00')`,
+      );
+      for (let i = 0; i <= HOOK_RABITQ_MAX_LOAD; i++) put.run(1_000_000 + i);
+    })();
+    raw.close();
+    const grown = await doctor(h);
+    expect(grown.check('store', 'vector-index-centre')).toMatchObject({
+      status: 'info',
+      fix: 'oort reindex',
+    });
+    expect(grown.check('store', 'vector-index-centre')?.detail).toContain(
+      `built from 0 vectors; the store now holds ${HOOK_RABITQ_MAX_LOAD + 1}`,
+    );
+    expect(grown.check('store', 'vector-index-hooks')).toMatchObject({
+      status: 'warn',
+      fix: 'oort serve --detach',
+    });
+    // A build an MCP server left unfinished: said so, with what finishes it.
+    const mid = new Database(db);
+    mid.prepare("INSERT INTO memories_rq_meta (key, value) VALUES ('state', 'building')").run();
+    mid.close();
+    const building = await doctor(h);
+    expect(building.check('store', 'vector-index')).toMatchObject({ fix: 'oort reindex' });
+    expect(building.check('store', 'vector-index')?.detail).toContain('build unfinished');
+    expect(building.check('store', 'vector-index-centre')).toBeUndefined();
   });
 
   it('doctor.a-hook-first-leaves-a-pre-rename-index-for-the-cli-to-repair (CON-110)', async () => {

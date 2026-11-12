@@ -1,0 +1,28 @@
+[package]
+name = "oort-rabitq"
+version = "0.0.0" # not published: it ships inside @oortmem/store-sqlite
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "Oort's RaBitQ-style quantized dense index (1-bit codes, 4-bit queries, error bounds) for Node through napi-rs"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { version = "=3.15.0", default-features = false, features = ["napi4"], optional = true }
+napi-derive = { version = "=3.6.13", default-features = false, optional = true }
+
+[features]
+# The Node binding. Off for `cargo test`, which links no Node.
+node = ["dep:napi", "dep:napi-derive"]
+
+[build-dependencies]
+napi-build = "=2.6.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
+panic = "unwind" # a panic becomes a JS error (catch_unwind on every method), not the end of the process

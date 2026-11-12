@@ -208,13 +208,14 @@ export function cloudOf(
 export async function withWired<T>(
   ctx: Ctx,
   fn: (w: Wired) => Promise<T>,
-  opts: { agent?: string; cloudKeepAlive?: boolean } = {},
+  opts: { agent?: string; cloudKeepAlive?: boolean; rabitqBuildBatches?: number } = {},
 ): Promise<T> {
   const agent = opts.agent ?? ctx.agent;
   const w = await ctx.wire(ctx.io.cwd, {
     env: ctx.io.env,
     ...(agent !== undefined && { agent }),
     ...(opts.cloudKeepAlive === true && { cloudKeepAlive: true }),
+    ...(opts.rabitqBuildBatches !== undefined && { rabitqBuildBatches: opts.rabitqBuildBatches }),
   });
   for (const warning of w.warnings) warn(ctx, warning.code, warning.message);
   try {

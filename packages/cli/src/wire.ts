@@ -167,6 +167,15 @@ export interface WireWarning {
   message: string;
 }
 
+/**
+ * RaBitQ build batches (10,000 vectors each) an MCP server or SDK open commits when it finds a
+ * build under way (CON-25), before it serves: a host that starts the server with a deadline must
+ * not wait out a build of a million vectors on every attempt. Dense search scans int8 until the
+ * build is done; any `oort` command, or `oort reindex`, finishes it, and `oort doctor` says it is
+ * unfinished.
+ */
+export const HOST_RABITQ_BUILD_BATCHES = 2;
+
 export interface WireOptions {
   env?: Env;
   /** How long a store write may wait for another connection's lock (the store's default: 5000). */
@@ -176,6 +185,13 @@ export interface WireOptions {
    * `StoreMigrationRequiredError` (the hooks). Default true (every command).
    */
   migrate?: boolean;
+  /**
+   * The most vectors this process loads into a RaBitQ engine (CON-25); past it, its dense search
+   * scans the int8 vectors exactly. The in-process hooks set it: they run once per prompt.
+   */
+  rabitqMaxLoad?: number;
+  /** At most this many RaBitQ build batches before the store is returned (MCP and the SDK). */
+  rabitqBuildBatches?: number;
   /** false: read no `oort.config.json` at all, only the home config (the drain). */
   projectConfig?: boolean;
   /**
@@ -553,6 +569,8 @@ async function open(p: Prepared, opts: EngineOptions, env: Env): Promise<Engine>
     binaryAutoThreshold: config.store.binaryAutoThreshold,
     ...(opts.busyTimeoutMs !== undefined && { busyTimeoutMs: opts.busyTimeoutMs }),
     ...(opts.migrate === false && { migrate: false }),
+    ...(opts.rabitqMaxLoad !== undefined && { rabitqMaxLoad: opts.rabitqMaxLoad }),
+    ...(opts.rabitqBuildBatches !== undefined && { rabitqBuildBatches: opts.rabitqBuildBatches }),
   });
   const sources = new Set<KeySource>(opts.keySources ?? ['explicit', 'env', 'keychain']);
   // Env first (set and non-empty), then the keychain, each item read at most once.

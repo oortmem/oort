@@ -178,6 +178,11 @@ describe('config', () => {
     expect(fromRepo.ignoredProjectKeys).toEqual(['store']);
     fs.writeFileSync(path.join(home, 'config.json'), '{"store":{"vectorIndex":"binary"}}');
     expect(resolveConfig(cwd, { OORT_HOME: home }).store.vectorIndex).toBe('binary');
+    // The RaBitQ index (CON-25), likewise home-only.
+    fs.writeFileSync(path.join(cwd, 'oort.config.json'), '{"store":{"vectorIndex":"rabitq"}}');
+    expect(resolveConfig(cwd, { OORT_HOME: home }).store.vectorIndex).toBe('binary');
+    fs.writeFileSync(path.join(home, 'config.json'), '{"store":{"vectorIndex":"rabitq"}}');
+    expect(resolveConfig(cwd, { OORT_HOME: home }).store.vectorIndex).toBe('rabitq');
     fs.writeFileSync(path.join(home, 'config.json'), '{"store":{"vectorIndex":"float"}}');
     expect(() => resolveConfig(home, { OORT_HOME: home })).toThrow(/vectorIndex/);
   });

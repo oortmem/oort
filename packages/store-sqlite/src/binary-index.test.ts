@@ -27,6 +27,7 @@ import {
   listBackups,
   openSqliteStore,
   reembedSqliteStore,
+  SCHEMA_VERSION,
   sqliteSchemaVersion,
   sqliteVectorIndex,
   StoreMigrationRequiredError,
@@ -228,14 +229,14 @@ const GUARD_TRIGGERS = [
 ];
 
 describe('schema migration 5 to 6', () => {
-  it('migrate.v4-store-reads-back-identically-at-v6', async () => {
+  it('migrate.v4-store-reads-back-identically-at-the-current-version', async () => {
     const s = copy4();
     expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
     const before = vectors(s.dbPath);
     expect(before.bit).toBeUndefined();
     const blobs = hashDir(s.coldDir);
     const got = await readBack(s);
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(got.list).toEqual(expected4.list);
     expect(got.dense).toEqual(expected4.dense);
     expect(got.lexical).toEqual(expected4.lexical.map((h) => h.id));
@@ -255,7 +256,7 @@ describe('schema migration 5 to 6', () => {
     // `pre-v5`, of the version 4 store. Version 6 adds none.
     const s = copy4();
     await (await openSqliteStore(optsFor(s))).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     const pre5 = listBackups(s.dbPath, 'pre-v5');
     expect(pre5).toHaveLength(1);
     expect(sqliteSchemaVersion(pre5[0]!)).toBe(4);
@@ -268,18 +269,18 @@ describe('schema migration 5 to 6', () => {
     const s = await copy5(true);
     expect(vectors(s.dbPath).triggers).toEqual([]);
     await (await openSqliteStore(optsFor(s))).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(vectors(s.dbPath).triggers).toEqual(GUARD_TRIGGERS);
     await (await openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).close();
     expect(vectors(s.dbPath).bit).toHaveLength(34);
     expect(copies(s)).toEqual([]);
   });
 
-  it('migrate.v5-spatial-store-keeps-its-places-at-v6', async () => {
+  it('migrate.v5-spatial-store-keeps-its-places-at-the-current-version', async () => {
     const s = await copy5(true);
     const store = await openSqliteStore(optsFor(s, { vectorIndex: 'binary' }));
     try {
-      expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+      expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
       expect((await store.get(g4, 'placed'))?.place).toEqual({
         nodeId: 'site:hq/room:B/shelf:B3',
         mapId: 'hq',
@@ -389,7 +390,7 @@ describe('schema migration 5 to 6', () => {
     expect(copies(s)).toEqual([]);
     // The next open migrates as if nothing had happened.
     await (await openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(vectors(s.dbPath).bit).toHaveLength(34);
     expect(copies(s)).toEqual([]);
   });
@@ -399,11 +400,11 @@ describe('schema migration 5 to 6', () => {
     await (await openSqliteStore(optsFor(s))).close();
     const db = raw(s.dbPath);
     db.function(WRITER_GUARD, () => 1);
-    db.prepare("UPDATE meta SET value = '7' WHERE key = 'schema_version'").run();
+    db.prepare("UPDATE meta SET value = '8' WHERE key = 'schema_version'").run();
     db.close();
     const before = hashFile(s.dbPath);
     await expect(openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).rejects.toThrow(
-      /schema version 7 is not supported \(expected 6\)/,
+      /schema version 8 is not supported \(expected 7\)/,
     );
     expect(hashFile(s.dbPath)).toBe(before);
   });
@@ -418,9 +419,9 @@ describe('schema migration 5 to 6', () => {
     try {
       expect(() =>
         db.prepare("UPDATE memories SET salience = 0.9 WHERE id = 'v4-01'").run(),
-      ).toThrow(/no such function: oort_writer_v6/);
+      ).toThrow(/no such function: oort_writer_v7/);
       expect(() => db.prepare("DELETE FROM memories WHERE id = 'v4-01'").run()).toThrow(
-        /no such function: oort_writer_v6/,
+        /no such function: oort_writer_v7/,
       );
       // Reads still work: an older reader sees the same int8 vectors.
       expect(db.prepare('SELECT count(*) AS n FROM memories').get()).toEqual({ n: 37 });
@@ -439,8 +440,8 @@ describe('schema migration 5 to 6', () => {
     expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
     const downCopies = listBackups(s.dbPath, 'pre-downgrade');
     expect(downCopies).toHaveLength(1);
-    // The copy is the version 6 store as it was, binary index included; it is the only copy.
-    expect(sqliteSchemaVersion(downCopies[0]!)).toBe(6);
+    // The copy is the store as it was, binary index included; it is the only copy.
+    expect(sqliteSchemaVersion(downCopies[0]!)).toBe(SCHEMA_VERSION);
     expect(vectors(downCopies[0]!).bit).toHaveLength(34);
     expect(copies(s)).toEqual([path.basename(downCopies[0]!)]);
     const down = vectors(s.dbPath);
@@ -461,7 +462,7 @@ describe('schema migration 5 to 6', () => {
     expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
     const store = await openSqliteStore(optsFor(s));
     try {
-      expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+      expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
       expect((await store.get(g4, 'placed'))?.place?.nodeId).toBe('site:hq/room:B/shelf:B3');
     } finally {
       await store.close();
@@ -483,10 +484,10 @@ describe('schema migration 5 to 6', () => {
     expect(again.list).toEqual(expected4.list);
   });
 
-  it('migrate.new-store-starts-at-v6', async () => {
+  it('migrate.new-store-starts-at-the-current-version', async () => {
     const s = fresh();
     await (await openSqliteStore(optsFor(s))).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(6);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(vectors(s.dbPath).triggers).toEqual(GUARD_TRIGGERS);
     expect(vectors(s.dbPath).bit).toBeUndefined();
     expect(placeColumns(s.dbPath)).toEqual(['place', 'place_node']);

@@ -76,6 +76,7 @@ import {
 import { recallCommand, type RecallOptions } from './commands/recall.js';
 import { rememberCommand, type RememberOptions } from './commands/remember.js';
 import { reembedCommand } from './commands/reembed.js';
+import { reindexCommand } from './commands/reindex.js';
 import { revalidateCommand } from './commands/revalidate.js';
 import { serveCommand, type ServeOptions } from './commands/serve.js';
 import { setupCommand, type SetupOptions } from './commands/setup.js';
@@ -1012,6 +1013,11 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--json', 'print oort.v1 JSON')
     .action(run((o: { force?: boolean; yes?: boolean }) => reembedCommand(o, ctx)));
 
+  p.command('reindex')
+    .description("rebuild the RaBitQ vector index around today's vectors (oort doctor says when)")
+    .option('--json', 'print oort.v1 JSON')
+    .action(run(() => reindexCommand(ctx)));
+
   p.command('import')
     .description('import Claude Code transcripts, or an Oort export file (JSON Lines); asks first')
     .argument('<source>', 'claude-code, or an export file (oort export, oort cloud export)')
@@ -1102,7 +1108,10 @@ export const HELP_GROUPS: readonly (readonly [string, readonly string[]])[] = [
     'Cloud and sharing:',
     ['login', 'logout', 'open', 'cloud', 'share', 'constellation', 'galaxy', 'project'],
   ],
-  ['Maintenance:', ['doctor', 'update', 'stats', 'consolidate', 'reembed', 'models', 'keys']],
+  [
+    'Maintenance:',
+    ['doctor', 'update', 'stats', 'consolidate', 'reembed', 'reindex', 'models', 'keys'],
+  ],
 ];
 
 /** The examples under `oort --help`: the common commands, one line each. */

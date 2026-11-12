@@ -1,5 +1,5 @@
 /**
- * The binary vector index at scale (CON-17): opt-in, never in CI. Run it with
+ * The binary (CON-17) and RaBitQ (CON-25) vector indexes at scale: opt-in, never in CI. Run it with
  *
  *   OORT_BENCH_RAM=1 pnpm vitest run packages/store-sqlite/src/ram-bench.test.ts
  *
@@ -10,7 +10,10 @@
  *   filter columns), against the int8 chunks an exact query scans; read from `dbstat`;
  * - the rescoring reads per query (10 × k int8 vectors) and their bytes;
  * - recall@10 of the binary path against the exact int8 path, and both latencies;
- * - the time the build took.
+ * - the time the build took;
+ * then the same for the RaBitQ index (built on the same file, which drops the binary one): the
+ * engine's resident bytes, the rescoring reads it needed per query, its recall@10 and latency
+ * (native, and the TypeScript fallback), and the time the first query took to load the engine.
  * The numbers are written to `$OORT_BENCH_RAM_OUT` when set (JSON) and printed.
  */
 import * as fs from 'node:fs';
@@ -21,8 +24,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { afterAll, describe, expect, it } from 'vitest';
 import { localGrant } from '@oortmem/core';
 import { makeMemory } from '@oortmem/core/store-conformance';
-import { BINARY_OVERSAMPLE } from './binary.js';
-import { openSqliteStore } from './index.js';
+import { openSqliteStore, type DenseStats } from './index.js';
 
 const RUN = process.env['OORT_BENCH_RAM'] === '1';
 const N = Number(process.env['OORT_BENCH_RAM_N'] ?? 1_000_000);
@@ -134,6 +136,7 @@ describe.runIf(RUN)('binary index at scale (opt-in: OORT_BENCH_RAM=1)', () => {
       db.close();
 
       const queries = Array.from({ length: QUERIES }, point);
+      let stats: DenseStats[] = [];
       const timeIt = async (s: typeof binary) => {
         const ms: number[] = [];
         const ids: string[][] = [];
@@ -148,15 +151,76 @@ describe.runIf(RUN)('binary index at scale (opt-in: OORT_BENCH_RAM=1)', () => {
       await timeIt(exact); // warm the page cache for both, so the timings compare scans
       const e = await timeIt(exact);
       const rssBefore = process.memoryUsage().rss;
+      stats = [];
       const b = await timeIt(binary);
+      const binaryReads = stats.map((x) => x.reads);
       const rssAfter = process.memoryUsage().rss;
-      let found = 0;
-      for (let i = 0; i < QUERIES; i++) {
-        const want = new Set(e.ids[i]!.slice(0, 10));
-        found += b.ids[i]!.slice(0, 10).filter((id) => want.has(id)).length;
-      }
+      const recallOf = (got: string[][]) => {
+        let found = 0;
+        for (let i = 0; i < QUERIES; i++) {
+          const want = new Set(e.ids[i]!.slice(0, 10));
+          found += got[i]!.slice(0, 10).filter((id) => want.has(id)).length;
+        }
+        return found / (QUERIES * 10);
+      };
       await binary.close();
+
+      // The RaBitQ index on the same file (the open drops the binary index and builds it).
+      const rqBuildStart = performance.now();
+      await (await openSqliteStore({ ...opts, vectorIndex: 'rabitq' })).close();
+      const rqBuildMs = performance.now() - rqBuildStart;
+      const rqDb = new Database(dbPath, { readonly: true });
+      const rqTable = (name: string) =>
+        rqDb
+          .prepare<[string], { b: number | null }>(
+            `SELECT sum(pgsize) AS b FROM dbstat WHERE name = ?`,
+          )
+          .get(name)?.b ?? 0;
+      const rqDisk = {
+        codesMB: mb(rqTable('memories_rq') + rqTable('memories_rq_by_seq')),
+        rescoreMB: mb(rqTable('memories_rq_vec')),
+      };
+      const rqFileMB = mb(fs.statSync(dbPath).size);
+      rqDb.close();
+      const rqRun = async (engine: 'native' | 'typescript') => {
+        const rssStart = process.memoryUsage().rss;
+        const s = await openSqliteStore({
+          ...opts,
+          vectorIndex: 'rabitq',
+          rabitqEngine: engine,
+          migrate: false,
+          onDenseStats: (x) => stats.push(x),
+        });
+        const loadStart = performance.now();
+        await s.dense(grant, queries[0]!, K); // loads the engine
+        const loadMs = performance.now() - loadStart;
+        const rssLoaded = process.memoryUsage().rss;
+        stats = [];
+        const r = await timeIt(s);
+        const reads = stats.map((x) => x.reads);
+        const capped = stats.filter((x) => x.capped === true).length / stats.length;
+        await s.close();
+        return {
+          loadSeconds: Math.round(loadMs / 100) / 10,
+          rssGrowthMB: mb(rssLoaded - rssStart),
+          r,
+          reads,
+          capped,
+        };
+      };
+      const nat = await rqRun('native');
+      const ts = await rqRun('typescript');
+      // The engine's own arrays, measured on a fresh native engine (heapBytes).
+      const { RabitqReader } = await import('./rabitq-store.js');
+      const hdb = new Database(dbPath, { readonly: true });
+      sqliteVec.load(hdb);
+      const reader = new RabitqReader(hdb, DIM, 'auto', () => {});
+      hdb.transaction(() => reader.refresh())();
+      const engineHeap = reader.stats().heapBytes;
+      reader.release();
+      hdb.close();
       await exact.close();
+      const mean = (xs: number[]) => Math.round(xs.reduce((a, x) => a + x, 0) / xs.length);
 
       const result = {
         memories: N,
@@ -171,20 +235,48 @@ describe.runIf(RUN)('binary index at scale (opt-in: OORT_BENCH_RAM=1)', () => {
         int8MB: { scanned: mb(int8Scanned), chunks: mb(int8Chunks) },
         rescoreColumnMB: mb(rescoreColumn),
         fileMB: mb(file),
-        rescoreReadsPerQuery: Math.min(4096, BINARY_OVERSAMPLE * K),
-        rescoreBytesPerQuery: Math.min(4096, BINARY_OVERSAMPLE * K) * DIM,
-        recallAt10VsInt8: found / (QUERIES * 10),
+        rescoreReadsPerQuery: mean(binaryReads),
+        rescoreBytesPerQuery: mean(binaryReads) * DIM,
+        recallAt10VsInt8: recallOf(b.ids),
         latencyMs: {
           int8: { p50: pct(e.ms, 0.5), p95: pct(e.ms, 0.95) },
           binary: { p50: pct(b.ms, 0.5), p95: pct(b.ms, 0.95) },
         },
         rssGrowthDuringBinaryQueriesMB: mb(rssAfter - rssBefore),
+        rabitq: {
+          buildSeconds: Math.round(rqBuildMs / 100) / 10,
+          engineResidentMB: mb(engineHeap),
+          disk: rqDisk,
+          fileMB: rqFileMB,
+          rescoreReadsPerQuery: {
+            mean: mean(nat.reads),
+            p50: pct(nat.reads, 0.5),
+            p95: pct(nat.reads, 0.95),
+            max: Math.max(...nat.reads),
+            cappedShare: nat.capped,
+          },
+          recallAt10VsInt8: recallOf(nat.r.ids),
+          typescriptSameIds: ts.r.ids.every((ids, i) => ids.join() === nat.r.ids[i]!.join()),
+          native: {
+            p50: pct(nat.r.ms, 0.5),
+            p95: pct(nat.r.ms, 0.95),
+            loadSeconds: nat.loadSeconds,
+            rssGrowthOnLoadMB: nat.rssGrowthMB,
+          },
+          typescript: {
+            p50: pct(ts.r.ms, 0.5),
+            p95: pct(ts.r.ms, 0.95),
+            loadSeconds: ts.loadSeconds,
+            rssGrowthOnLoadMB: ts.rssGrowthMB,
+          },
+        },
       };
       const json = JSON.stringify(result, null, 2);
       process.stdout.write(`${json}\n`);
       const out = process.env['OORT_BENCH_RAM_OUT'];
       if (out !== undefined && out !== '') fs.writeFileSync(out, `${json}\n`);
       expect(result.recallAt10VsInt8).toBeGreaterThanOrEqual(0.99);
+      expect(result.rabitq.recallAt10VsInt8).toBeGreaterThanOrEqual(0.995);
       if (N >= 1_000_000) expect(result.vectorRamMB.binaryScanned).toBeLessThan(150);
     },
     4 * 60 * 60 * 1000,

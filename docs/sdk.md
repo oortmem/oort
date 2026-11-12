@@ -230,12 +230,38 @@ console.log(memories.map((m) => m.text).join('\n'));
   the codes rank outside the candidates can be missed;
   [the design note](design/2026-11-11-binary-quantization.md#9-measurements) has the measured
   recall and memory.
+- **`store.vectorIndex: 'rabitq'`** (0.10.0 or newer, opt-in): a RaBitQ index instead of the binary one. Each
+  vector's 1-bit code is compared with a 4-bit copy of the query, with an error bound, and only
+  the memories whose bound can still reach the top k are rescored (at most 10 × k). On the bench's
+  corpora it read about half as many int8 vectors as the binary index, with the exact scan's
+  results; [the design note](design/2026-11-12-rabitq-index.md#11-measurements) has the
+  measurements. The scan runs in a native engine on macOS arm64 and Linux x64 and arm64 (glibc),
+  and in TypeScript elsewhere (same results, slower scan). See the example below.
 - **`recall.adaptiveStop`**: whether a recall that finds cold (archived) matches beside hot and
   warm ones returns them, which reads each one back and makes it warm again. `rule` leaves them
   out when the top hot or warm memory holds every informative word of the query and no cold match
   comes close; `decide` asks the decision model instead on a `full` recall (one call per such
   recall, see the table below; `recall.sufficientAt`, default 0.7); `off` always returns them. See
   [the CLI's description](cli.md#large-stores-the-binary-vector-index-090-or-newer).
+
+<!-- example: examples/src/rabitq-index.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+// The RaBitQ index (0.10.0 or newer, opt-in). Each memory gets a 1-bit code with an error bound;
+// a recall rescores, with their int8 vectors, only the memories whose bound can still reach the
+// top k. A native engine ships for macOS arm64 and Linux x64 and arm64; elsewhere the same index
+// runs in TypeScript, and `oort doctor` says which one this machine uses.
+await using oort = await createOort({
+  mode: 'local',
+  config: { store: { vectorIndex: 'rabitq' } },
+});
+
+await oort.remember('The billing service deploys on Fridays after the change freeze.');
+const { memories } = await oort.recall('when does the billing service deploy?');
+console.log(memories.map((m) => m.text).join('\n'));
+```
 
 A repository's `oort.config.json` cannot set `store`, `recall.adaptiveStop` or
 `recall.sufficientAt` (they are ignored there, with a warning): a home has one store, and asking

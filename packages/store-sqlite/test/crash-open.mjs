@@ -1,17 +1,22 @@
-// Child for migrate.interrupted-build-leaves-the-v5-store-as-it-was: opens a schema version 5
-// store with the binary index and is killed (SIGKILL) inside the migration's transaction, as the
-// index build starts. Imports the built package, so run `pnpm build` first (pnpm verify does).
+// Child for the interrupted-build tests: opens an older store with a vector index to build
+// (`binary` by default, or the fourth argument) and is killed (SIGKILL) inside the migration's
+// transaction, as the index build starts. Imports the built package, so run `pnpm build` first
+// (pnpm verify does).
 import { writeSync } from 'node:fs';
 import { openSqliteStore } from '../dist/index.js';
 
-const [dbPath, coldDir, dimension] = process.argv.slice(2);
+const [dbPath, coldDir, dimension, vectorIndex = 'binary'] = process.argv.slice(2);
+const building =
+  vectorIndex === 'rabitq'
+    ? 'Building the RaBitQ vector index'
+    : 'Building the binary vector index';
 await openSqliteStore({
   path: dbPath,
   coldDir,
   dimension: Number(dimension),
-  vectorIndex: 'binary',
+  vectorIndex,
   log: (message) => {
-    if (message.startsWith('Building the binary vector index')) {
+    if (message.startsWith(building)) {
       writeSync(1, 'building\n');
       process.kill(process.pid, 'SIGKILL');
     }

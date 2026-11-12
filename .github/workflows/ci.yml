@@ -34,9 +34,17 @@ jobs:
             3.13
             3.10
       - run: pnpm install --frozen-lockfile
+      # The native RaBitQ engine (CON-25): its Rust tests, then the Node binary the store tests load.
+      # With OORT_REQUIRE_NATIVE, a binary that fails to build or load fails the run instead of
+      # leaving the tests on the TypeScript engine.
+      - name: Native RaBitQ engine (Rust tests and build)
+        run: |
+          cargo test --locked --manifest-path packages/store-sqlite/native/Cargo.toml
+          pnpm --filter @oortmem/store-sqlite run build:native --require
       - run: pnpm verify
         env:
           OORT_PYTHON: python3.10
+          OORT_REQUIRE_NATIVE: '1'
       - name: Python tests on 3.13 (client) and 3.9 (launcher only)
         run: |
           python3.13 -m unittest discover -s python/tests -v

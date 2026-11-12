@@ -335,6 +335,62 @@ of the database, such as a negative size or a null pose) is handled the same way
   logs one line: "sqlite store: N stored places failed the place check and are not searchable by
   near".
 
+Schema version 7 (the RaBitQ index, CON-25; Oort 0.10.0 or newer) adds a third, optional dense
+index, and moves the writer guard on.
+
+- **The RaBitQ index.** Four ordinary tables, present only while the store has the index:
+  `memories_rq` (per hot or warm memory with a vector, keyed by `memories.rid`: the node, project
+  and author keys, a 1-bit code of the vector's rotated residual against the index's centroid,
+  three float32 factors, and the change number of its last write), `memories_rq_vec` (the int8
+  vector again, read to rescore), `memories_rq_gone` (the row ids removed, with their change
+  numbers, for the last 100,000 changes) and `memories_rq_meta` (the change counter, the build's
+  generation, centroid and size, and while it is being built its state and progress). A process
+  that searches loads the codes into memory on its first dense query and applies later changes
+  from the change counter before each one, and every 30 seconds while loaded
+  (`rabitqRefreshMs`), so a memory forgotten by another process leaves its engine without a
+  search. The timer holds the handle weakly: a handle dropped without `close()` is collected, and
+  its engine zeroed. A refresh that fails half-way empties the engine, and the next one loads it whole. A
+  vector with no direction (all zeros) is never indexed, and a dense query with no direction
+  returns nothing from this index. A dense query
+  estimates each vector's cosine from a 4-bit copy of the query, with an error bound, keeps the
+  vectors whose upper bound reaches the k-th best lower bound, and rescores them with their int8
+  vectors, best upper bound first, until the next upper bound is below the k-th exact score or
+  `10 × k` have been read. `dense` returns the int8 cosine either way; a memory can be missed when
+  its estimate was more than 1.9 standard errors too low, or when the `10 × k` budget ran out
+  first. Grants, `project`, the author and a spatial filter apply before the candidates are
+  chosen, and again in the rescoring query.
+- **When it exists.** `openSqliteStore({ vectorIndex: 'rabitq' })` starts it on an open that may
+  migrate, in the migration's transaction (the tables, and a centroid from a sample of up to
+  20,000 vectors), and drops a binary index. The same open then indexes the int8 vectors in
+  committed batches of 10,000 ("Building the RaBitQ vector index (N vectors)…"). Until the last
+  batch commits, dense search on every handle scans int8, and writes keep the partial index in
+  step; a process killed during the build keeps the migration and the batches done, and the next
+  open that may migrate goes on from there. `rabitqBuildBatches` caps how many batches an open
+  commits before it returns (the CLI passes 2 for the MCP server and the SDK, 0 for `oort doctor`);
+  a build with nothing left is marked done whatever the cap. `binary` and `int8` drop it; `auto` keeps it and never
+  builds or rebuilds it. No open rebuilds it: once the store holds four times the vectors it was
+  built from (and at least 1,000), `sqliteVectorIndex(path)` says `recentreDue`, and
+  `reindexSqliteStore` (`oort reindex`) rebuilds it with a new centroid, in the same batches.
+  `rabitqMaxLoad` keeps a handle from loading an index larger than that many vectors (it scans
+  int8 instead); the CLI's in-process hooks set 50,000. Every write keeps it in step in the same
+  transaction: `upsert`,
+  `upsertMany`, `forget`, `coldPut`, `coldPutMany`, `setTier` and `reembedSqliteStore`.
+  `forget` deletes the code, factors, keys and int8 copy, and leaves only the row id and a change
+  number in `memories_rq_gone`.
+- **The engine.** A native engine (Rust, through napi-rs) ships in the package for macOS arm64 and
+  Linux x64 and arm64 (glibc); elsewhere, when it does not load, or with `OORT_RABITQ_NATIVE=0`,
+  the same index runs in TypeScript with the same results. `rabitqEngine: 'native' |
+  'typescript'` forces one; `loadNativeRabitq()` says why the native one is missing.
+  `onDenseStats` reports each dense query's index, candidates, reads, and whether the budget
+  stopped it.
+- **Migration and the guard.** Opening a version 6 store swaps the writer guard's triggers to a
+  function only this version defines (so an Oort that predates the index fails on its next write,
+  changing nothing) and builds the index when asked; it takes no copy. Older stores go up through
+  5 and 6 in the same transaction. `migrate: false` refuses a version 6 (or older) store with
+  `StoreMigrationRequiredError`, and never builds, rebuilds or drops the index, nor goes on with
+  a build. `sqliteVectorIndex(path)` reports `rabitq` for such a store, with `building` while a
+  build is under way.
+
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the
 vector table is rebuilt from the stored embeddings.
@@ -361,8 +417,9 @@ vector table is rebuilt from the stored embeddings.
 `downgradeSqliteStore({ path, to: 2 })` to version 2 for Oort 0.3 to 0.5, and `{ path, to: 3 }` to
 version 3 for Oort before tokeniser v2 (the lexical index is rebuilt with tokeniser v1, as
 `memories_fts` again), `{ path, to: 4 }` to version 4 for Oort 0.6.1 to 0.8 (the place columns
-and the R*Tree are dropped), and `{ path, to: 5 }` to version 5 (the binary index and the writer
-guard are dropped; the int8 vectors were never moved). Opening a store never goes down: migrations only roll forward. It first
+and the R*Tree are dropped), `{ path, to: 5 }` to version 5 (the binary index and the writer
+guard are dropped; the int8 vectors were never moved), and `{ path, to: 6 }` to version 6 (the
+RaBitQ index is dropped and version 6's guard restored). Opening a store never goes down: migrations only roll forward. It first
 copies the database to `<path>.pre-downgrade.<UTC time>` (the three newest are kept), and refuses
 while the store holds anything the target version cannot represent (for version 4 and below, any
 memory with a place; for version 2, also any judgment; for
