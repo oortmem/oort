@@ -10,7 +10,7 @@ import {
   sameRecordAddress,
   type Grant,
 } from './grant.js';
-import { isCurrent, type Memory, type Tier } from './model.js';
+import { isCurrent, isZeroVector, type Memory, type Tier } from './model.js';
 import { checkPlace, hasSpatialFilter, matchesSpatial, type SpatialFilter } from './place.js';
 import { tokenizeLexical as tokens } from './tokenize.js';
 
@@ -69,8 +69,9 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     if (closed) throw new Error('memory store is closed');
   }
 
-  /** Stores `m` (already cloned); a non-cold write drops the cold copy. */
+  /** Stores `m` (already cloned); a non-cold write drops the cold copy. A zero embedding is not kept. */
   function put(m: Memory): void {
+    if (m.embedding !== undefined && isZeroVector(m.embedding)) delete m.embedding;
     main.set(m.id, m);
     if (m.tier !== 'cold') cold.delete(m.id);
   }
@@ -190,6 +191,30 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       for (const c of checked) put(c);
     },
 
+    /** Atomic trivially: checks and clones every applying record before writing any. */
+    async upsertManyIfUnchanged(grant, writes) {
+      open();
+      assertGrant(grant);
+      const skipped: string[] = [];
+      const checked: Memory[] = [];
+      for (const { next, was } of writes) {
+        const live = main.get(was.id);
+        // Out of the grant reads as missing: skipped, never a GrantError.
+        if (
+          live === undefined ||
+          !grantWrites(grant, live) ||
+          next.id !== was.id ||
+          !unchanged(live, was)
+        ) {
+          skipped.push(was.id);
+          continue;
+        }
+        checked.push(checkWrite(grant, structuredClone(next), live));
+      }
+      for (const c of checked) put(c);
+      return { skipped };
+    },
+
     async get(grant, id) {
       open();
       assertGrant(grant);
@@ -240,7 +265,8 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         }
         scored.push({ m, score: cosine(v, m.embedding) });
       }
-      return rank(scored, k);
+      // A zero query has no direction: it matches nothing (CON-141).
+      return isZeroVector(v) ? [] : rank(scored, k);
     },
 
     async recordAccess(grant, ids, at) {

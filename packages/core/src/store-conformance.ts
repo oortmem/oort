@@ -428,6 +428,40 @@ export function storeConformance(name: string, make: () => Promise<MemoryStore>)
       expect(hits[0]?.tier).toBe('warm');
     });
 
+    it('upsert-many-if-unchanged-skips-a-changed-record (CON-144)', async () => {
+      if (store.upsertManyIfUnchanged === undefined) return;
+      const a = makeMemory({ id: 'a', text: 'old a', updatedAt: '2026-01-01T00:00:00.000Z' });
+      const b = makeMemory({ id: 'b', text: 'old b', updatedAt: '2026-01-01T00:00:00.000Z' });
+      await store.upsertMany(TG, [a, b]);
+      // Another writer changes b after the snapshot was taken.
+      await store.upsert(TG, { ...b, text: 'changed b', updatedAt: '2026-01-02T00:00:00.000Z' });
+      const r = await store.upsertManyIfUnchanged(TG, [
+        { next: { ...a, text: 'new a' }, was: a },
+        { next: { ...b, text: 'new b' }, was: b },
+        { next: makeMemory({ id: 'gone' }), was: makeMemory({ id: 'gone' }) },
+      ]);
+      expect(r.skipped.sort()).toEqual(['b', 'gone']);
+      expect((await store.get(TG, 'a'))?.text).toBe('new a');
+      expect((await store.get(TG, 'b'))?.text).toBe('changed b');
+      expect(await store.get(TG, 'gone')).toBeNull();
+      // Outside the grant reads as missing: skipped, never a GrantError.
+      const none = localGrant({ ...LOCAL, projectIds: [] });
+      const out = await store.upsertManyIfUnchanged(none, [
+        { next: { ...a, text: 'hijack' }, was: a },
+      ]);
+      expect(out.skipped).toEqual(['a']);
+      expect((await store.get(TG, 'a'))?.text).toBe('new a');
+    });
+
+    it('dense-zero-vector-matches-nothing (CON-141)', async () => {
+      await store.upsert(TG, makeMemory({ id: 'x', embedding: vec(100, 0, 0, 0) }));
+      await store.upsert(TG, makeMemory({ id: 'zero', embedding: vec(0, 0, 0, 0) }));
+      // Not kept: the memory is stored without a vector.
+      expect((await store.get(TG, 'zero'))?.embedding).toBeUndefined();
+      expect(ids(await store.dense(localGrant(LOCAL), vec(0, 100, 0, 0), 10))).toEqual(['x']);
+      expect(await store.dense(localGrant(LOCAL), vec(0, 0, 0, 0), 10)).toEqual([]);
+    });
+
     it('scope-excludes-other-org-customer-agent', async () => {
       const text = 'Deploys go through auth-service-8080';
       const embedding = vec(1, 1, 1, 1);

@@ -141,6 +141,8 @@ export interface MemoryStore {
   /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
    * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).
+   * An all-zero `m.embedding` has no direction and is not kept: the memory is
+   * stored without one, so only lexical search finds it (CON-141).
    * Rejects with `GrantError`, writing nothing, when `m.scope` is outside
    * `grant.write` or a record with `m.id` already exists at another address.
    */
@@ -173,6 +175,7 @@ export interface MemoryStore {
    * Every implementation rejects with a `RangeError` whose message names both
    * dimensions when `v.length` differs from the store's dimension (a store
    * without a fixed dimension compares against its stored embeddings).
+   * An all-zero `v` matches nothing: it resolves to `[]` (CON-141).
    * With `opts.spatial`, only memories that pass it (see `SearchOptions`).
    */
   dense(grant: Grant, v: Int8Array, k: number, opts?: SearchOptions): Promise<Hit[]>;
@@ -212,6 +215,16 @@ export interface MemoryStore {
    * a no-op.
    */
   coldPutMany(grant: Grant, snapshots: Memory[]): Promise<GuardedWriteResult>;
+  /**
+   * `upsert` for each `next`, applied only while the record still matches `was` (the snapshot it
+   * was computed from: same `updatedAt` and `tier`, see `GuardedWriteResult`); one that does
+   * not, or is gone, is skipped and listed. The writes that apply land in one transaction.
+   * Optional; `forgetMemory` uses it so a rewrite never overwrites a change made meanwhile.
+   */
+  upsertManyIfUnchanged?(
+    grant: Grant,
+    writes: { next: Memory; was: Pick<Memory, 'id' | 'updatedAt' | 'tier'> }[],
+  ): Promise<GuardedWriteResult>;
   /**
    * The cold copy written by `coldPut` (a snapshot, embedding included), or
    * null, including for a record outside `grant.read`. Fields that changed
@@ -345,4 +358,13 @@ export interface MemoryWriter {
    * when present, observe writes first and reconciles each memory on its own (CON-56).
    */
   writeMany?(obs: Observation, max: number): Promise<WrittenMemory[]>;
+  /**
+   * `memory` restated as its current fact only, without history or earlier values ("The port
+   * changed from 3000 to 8080" becomes "The port is 8080"), in its own words and language; a
+   * memory with no history comes back unchanged. It is given this memory alone (CON-144):
+   * `forgetMemory` calls it for the later memories that restate a forgotten one, never sends the
+   * forgotten one, and keeps the answer only when it adds no word. Optional; without it,
+   * `forgetMemory` reports those memories.
+   */
+  rewriteCurrent?(memory: Memory): Promise<WrittenMemory>;
 }

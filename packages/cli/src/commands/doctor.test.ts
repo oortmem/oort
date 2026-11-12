@@ -19,6 +19,7 @@ import { TG } from '@oortmem/core/store-conformance';
 import { VERSION, resolveConfig } from '@oortmem/core';
 import {
   downgradeSqliteStore,
+  ERASE_AUTO_MAX_BYTES,
   listBackups,
   loadNativeRabitq,
   openSqliteStore,
@@ -27,7 +28,7 @@ import {
 } from '@oortmem/store-sqlite';
 import { wire as realWire } from '../wire.js';
 import { HOOK_RABITQ_MAX_LOAD, MIGRATION_PENDING_NOTE } from './hook.js';
-import { consolidationCheck, unstableCopy } from './doctor.js';
+import { consolidationCheck, eraseChecks, unstableCopy, vacuumNeeded } from './doctor.js';
 import { writeUpdateCache } from '../update-check.js';
 
 interface Check {
@@ -147,6 +148,91 @@ describe('oort doctor', () => {
     expect(listBackups(db, 'pre-v2')).toHaveLength(1);
     expect(d.check('store', 'spaces')?.detail).toBe('Planet: 1 memory (every project)');
     expect(d.check('store', 'backup')?.detail).toContain('oort.sqlite.pre-v2.');
+  });
+
+  it('doctor.lists-every-copy-forget-cannot-reach (CON-140)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      log: () => {},
+    });
+    await s.close();
+    // Two migrations' copies and a downgrade's, as older versions left them.
+    const copies = [
+      'oort.sqlite.pre-v3.20261001T000000000Z',
+      'oort.sqlite.pre-v4.20261002T000000000Z',
+      'oort.sqlite.pre-downgrade.20261003T000000000Z',
+    ];
+    for (const c of copies) fs.copyFileSync(db, path.join(h.home, c));
+    const row = (await doctor(h)).check('store', 'backup');
+    expect(row).toMatchObject({ status: 'info' });
+    expect(row?.detail).toContain('3 copies of the store taken before a schema migration');
+    expect(row?.detail).toContain('oort forget does not reach them');
+    for (const c of copies) expect(row?.detail).toContain(`~/oort-home/${c}`);
+    expect(row?.fix).toBe(
+      `delete them once Oort works as before: rm ${copies.map((c) => `~/oort-home/${c}`).join(' ')}`,
+    );
+    // Deleting is the person's call: never a command doctor offers to run.
+    expect(row?.fixCommand).toBeUndefined();
+  });
+
+  it('doctor.says-old-deleted-text-may-remain-until-vacuum (CON-140, CON-141)', async () => {
+    const h = harness();
+    h.wire = (cwd, o) => realWire(cwd, { keychain: async () => undefined, ...o });
+    fs.mkdirSync(h.home, { recursive: true, mode: 0o700 });
+    const db = path.join(h.home, 'oort.sqlite');
+    const { embed } = resolveConfig(h.cwd, { OORT_HOME: h.home }, { projectConfig: false });
+    const s = await openSqliteStore({
+      path: db,
+      coldDir: path.join(h.home, 'cold'),
+      dimension: embed.dimension,
+      log: () => {},
+    });
+    await s.upsert(TG, memory({ embedding: undefined }));
+    await s.close();
+    // As 0.9.0 left a store too big to rewrite on open: no record of the erase.
+    const raw = new Database(db);
+    raw.prepare("DELETE FROM meta WHERE key = 'old_text_erased'").run();
+    raw.exec('CREATE TABLE pad (x BLOB)');
+    raw.prepare('INSERT INTO pad VALUES (zeroblob(?))').run(ERASE_AUTO_MAX_BYTES + 1024);
+    raw.close();
+
+    const before = await doctor(h);
+    const row = before.check('store', 'erase');
+    expect(row).toMatchObject({ status: 'warn', fixCommand: 'oort doctor --vacuum' });
+    expect(row?.detail).toContain('text deleted by Oort 0.9.0 or older may remain in the file');
+
+    const fixed = await h.run(['doctor', '--vacuum'], { env: { HOME: h.root, OORT_HOME: h.home } });
+    expect(fixed.io.stdout).toContain('rewrote the store: text deleted by Oort 0.9.0 or older');
+    const after = await doctor(h);
+    expect(after.check('store', 'erase')).toBeUndefined();
+    // A 32 MB rewrite and three doctor runs: more than the default budget on a slow machine.
+  }, 60_000);
+
+  it('doctor.counts-zero-vectors-an-older-version-stored (CON-141)', () => {
+    const rows = eraseChecks({ erased: true, bytes: 1, zeroVectors: 2 });
+    expect(rows).toEqual([
+      {
+        group: 'store',
+        name: 'zero-vectors',
+        status: 'warn',
+        detail:
+          '2 stored vectors are all zeros and match nothing (recall finds those memories by their words)',
+        fix: 'oort doctor --vacuum',
+      },
+    ]);
+    expect(eraseChecks({ erased: true, bytes: 1, zeroVectors: 0 })).toEqual([]);
+    // --vacuum runs whenever either row shows (re-review 6).
+    expect(vacuumNeeded({ erased: true, zeroVectors: 2 })).toBe(true);
+    expect(vacuumNeeded({ erased: false, zeroVectors: 0 })).toBe(true);
+    expect(vacuumNeeded({ erased: true, zeroVectors: 0 })).toBe(false);
+    expect(vacuumNeeded(undefined)).toBe(false);
   });
 
   it('doctor.says-it-is-rebuilding-the-search-index (CON-110)', async () => {
@@ -422,8 +508,25 @@ describe('oort doctor', () => {
     expect(c?.fix).toContain('oort install claude-code');
     // One warning for one cause: the generic "another path" row is not added on top.
     expect(d.check('hooks', 'claude-code')?.status).not.toBe('warn');
-    expect(d.human.io.stdout).toContain('fix: oort update, or oort install claude-code');
-    expect(c?.fixCommand).toBe('oort update');
+    // Run where no one can answer `oort update`'s question (Claude Code's `!` prompt, a script):
+    // the fix says --yes, so it runs as printed.
+    expect(d.human.io.stdout).toContain('fix: oort update --yes, or oort install claude-code');
+    expect(c?.fixCommand).toBe('oort update --yes');
+  });
+
+  it('doctor.suggests-plain-oort-update-on-a-terminal', async () => {
+    const h = harness({ trusted: true });
+    installHooks(path.join(h.root, '.claude', 'settings.json'), fakeBin(h, '0.1.0', 'old'));
+    const io = { env: { HOME: h.root, OORT_HOME: h.home }, tty: true, stdoutTTY: true };
+    const deps = { fetch: fakeRelay().fetchFn };
+    const kc = memoryKeychain().kc;
+    const human = await h.run(['doctor'], io, kc, deps);
+    expect(human.io.stdout).toContain('fix: oort update, or oort install claude-code');
+    // --json is read by tools, which never answer a question.
+    const json = await h.run(['doctor', '--json'], io, kc, deps);
+    const report = data(json.io.stdout, 'doctor') as { checks: Check[] };
+    const bin = report.checks.find((c) => c.group === 'hooks' && c.name === 'claude-code bin');
+    expect(bin?.fixCommand).toBe('oort update --yes');
   });
 
   it('doctor.hook-binary-that-is-gone-fails-and-is-never-run', async () => {
@@ -1071,10 +1174,12 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
     const m = machine('0.1.0');
     const d = await doctor(m.h, {}, undefined, undefined, m.running);
     const bin = d.check('hooks', 'claude-code bin');
-    expect(bin).toMatchObject({ status: 'warn', fixCommand: 'oort update' });
+    expect(bin).toMatchObject({ status: 'warn', fixCommand: 'oort update --yes' });
     expect(bin?.detail).toContain('0.1.0');
     expect(bin?.detail).toContain(VERSION);
-    expect(bin?.fix).toContain('oort update, or ~/oort-home/cli/bin/oort install claude-code');
+    expect(bin?.fix).toContain(
+      'oort update --yes, or ~/oort-home/cli/bin/oort install claude-code',
+    );
     expect(d.check('hooks', 'claude-code copy')).toBeUndefined();
   });
 
@@ -1113,7 +1218,7 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
     writeUpdateCache(h.home, { checkedAt: Date.now(), latest: '99.0.0' });
     const d = await doctor(h);
     expect(d.human.io.stdout).toContain(`Oort 99.0.0 is available (you have ${VERSION})`);
-    expect(d.human.io.stdout).toContain('try: oort update');
+    expect(d.human.io.stdout).toContain('try: oort update --yes');
     expect(d.json.io.stdout).not.toContain('99.0.0');
     // Off: no line at all.
     const off = await doctor(h, { OORT_NO_UPDATE_CHECK: '1' });

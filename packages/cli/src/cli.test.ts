@@ -9,6 +9,7 @@ import { HOST_RABITQ_BUILD_BATCHES } from './wire.js';
 import {
   AWS_KEY,
   fakeIo,
+  fakeWriter,
   harness,
   memory,
   tmpdir,
@@ -631,6 +632,105 @@ describe('oort forget, pin', () => {
     const yes = await h.run(['forget', m.id.slice(0, 8), '--yes']);
     expect(yes.code).toBe(0);
     expect(await h.store.get(TG, m.id)).toBeNull();
+  });
+
+  /** A (port 3000), superseded by B, which restates it: "changed from 3000 to 8080". */
+  async function restated(h: ReturnType<typeof harness>): Promise<{ a: Memory; b: Memory }> {
+    const a = memory({
+      text: 'The dev server runs on port 3000.',
+      stub: 'dev server port 3000',
+      createdAt: '2026-10-01T00:00:00.000Z',
+      expiredAt: '2026-10-02T00:00:00.000Z',
+      validTo: '2026-10-02T00:00:00.000Z',
+      endReason: 'superseded',
+    });
+    const b = memory({
+      text: 'The dev server port changed from 3000 to 8080.',
+      stub: 'dev server port 3000 to 8080',
+      entities: ['dev server', '3000', '8080'],
+      createdAt: '2026-10-02T00:00:00.000Z',
+      supersedes: a.id,
+      embedding: Int8Array.from([1, 2, 3, 4]),
+    });
+    await h.store.upsertMany(TG, [{ ...a, supersededBy: b.id }, b]);
+    return { a, b };
+  }
+
+  it('cli.forget-rewrites-the-memory-that-restated-it (CON-144)', async () => {
+    const h = harness();
+    const { a, b } = await restated(h);
+    const base = h.wire;
+    h.wire = async (dir, o) => {
+      const w = await base(dir, o);
+      return {
+        ...w,
+        write: {
+          ...fakeWriter,
+          rewriteCurrent: async (m) => ({
+            text: 'The dev server port is 8080.',
+            stub: 'dev server port 8080',
+            entities: m.entities.filter((e) => e !== '3000'),
+            type: m.type,
+          }),
+        },
+      };
+    };
+    const r = await h.run(['forget', a.id, '--yes']);
+    expect(r.code).toBe(0);
+    expect(r.io.stdout).toBe(
+      `Forgot ${a.id}.\nRewrote ${b.id.slice(0, 8)} to its current fact: "The dev server port is 8080."\n`,
+    );
+    expect(await h.store.get(TG, a.id)).toBeNull();
+    expect((await h.store.get(TG, b.id))?.supersedes).toBeNull();
+    // Nothing a person can read back still says it: recall, list, export.
+    const exported = await h.run(['export']);
+    expect(exported.io.stdout).not.toContain('3000');
+    expect(await h.store.lexical(TG, '3000', 10)).toEqual([]);
+
+    const again = await restated(h);
+    const json = await h.run(['forget', again.a.id, '--yes', '--json']);
+    expect(data(json.io.stdout, 'forget')).toMatchObject({
+      id: again.a.id,
+      rewritten: [again.b.id],
+      notRewritten: [],
+    });
+  });
+
+  it('cli.forget-names-a-successor-it-could-not-rewrite-and-exits-3 (CON-144)', async () => {
+    const h = harness();
+    const { a, b } = await restated(h);
+    // The harness writer has no rewriteCurrent, as an older writer would not.
+    const r = await h.run(['forget', a.id, '--yes']);
+    expect(r.code).toBe(3);
+    expect(r.io.stdout).toContain(`Forgot ${a.id}.\n`);
+    expect(r.io.stdout).toContain(
+      `${b.id.slice(0, 8)} may still restate it, because no memory writer is set up (oort doctor says why). Check it with \`oort inspect ${b.id}\`, or forget it too: \`oort forget ${b.id}\`.`,
+    );
+    expect(await h.store.get(TG, a.id)).toBeNull();
+    expect((await h.store.get(TG, b.id))?.text).toBe(b.text);
+
+    const again = await restated(h);
+    const json = await h.run(['forget', again.a.id, '--yes', '--json']);
+    expect(json.code).toBe(3);
+    const env = JSON.parse(json.io.stdout) as { data: unknown; warnings: { code: string }[] };
+    expect(env.data).toMatchObject({ rewritten: [], notRewritten: [again.b.id] });
+    expect(env.warnings.map((w) => w.code)).toContain('not-rewritten');
+  });
+
+  it('cli.forget-leaves-a-later-memory-that-restates-nothing-alone (CON-144)', async () => {
+    const h = harness();
+    const { a, b } = await restated(h);
+    await h.store.upsert(TG, {
+      ...b,
+      text: 'The dev server port is 8080.',
+      stub: 'dev server port 8080',
+      entities: ['dev server', '8080'],
+    });
+    // No writer, and nothing to rewrite: a plain success, the chain re-linked.
+    const r = await h.run(['forget', a.id, '--yes']);
+    expect(r.code).toBe(0);
+    expect(r.io.stdout).toBe(`Forgot ${a.id}.\n`);
+    expect((await h.store.get(TG, b.id))?.supersedes).toBeNull();
   });
 
   it('cli.pin-unpin', async () => {

@@ -345,7 +345,7 @@ to stdout (see `docs/export-format.md`).
 | `0` | Success, including a declined confirmation. |
 | `1` | Unexpected error. Only the message is printed; add `--debug` for the stack. |
 | `2` | Refusal or usage problem, such as a bad flag, missing keys, a file Oort will not edit, or a confirmation that cannot be asked (see below). |
-| `3` | Partial success: `oort import claude-code` imported what it could, but some sessions stopped at a failed observation, or `oort forget --everywhere` forgot the memory but did not reach every Constellation holding a copy. Run it again to retry them. |
+| `3` | Partial success: `oort import claude-code` imported what it could, but some sessions stopped at a failed observation, or `oort forget --everywhere` forgot the memory but did not reach every Constellation holding a copy. Run it again to retry them. `oort forget` exits 3 when a later memory still holds a value of the forgotten one and was not rewritten: it names each one (see [Memories that restated it](#memories-that-restated-it)). |
 | `130` | `oort import claude-code` stopped by Ctrl-C (128 + SIGINT, as a shell reports it). What was imported stays; run it again to import the rest. |
 
 `oort doctor` exits 1 when one of its checks fails; warnings alone exit 0 (a
@@ -553,7 +553,7 @@ every error that exits 1.
 oort recall "auth port" --json | jq '.data.memories[0].text'
 oort inspect --json | jq '.data.memories | length'
 oort remember "We deploy on Fridays." --json # { "results": [{ "fact": 0, "outcome", "id", "supersedes"?, "reason"? }] }
-oort forget 1b2c3d4e --yes --json            # { "id", "forgotten": true, "everywhere", "withdrawnFrom", "removalRequested", "unreachable", "stillShared", "constellations" }
+oort forget 1b2c3d4e --yes --json            # { "id", "forgotten": true, "everywhere", "withdrawnFrom", "removalRequested", "unreachable", "stillShared", "constellations", "rewritten", "notRewritten" } (the last two local only)
 oort consolidate --json                      # { "promoted": [ids], "demoted", "evicted", "expired", "counts": {…}, "complete" }
 oort import claude-code --since 14d --yes --json   # { "outcome", "estimate": {…}, "imported": { "observations", "outcomes", "failedSessions", "notAttempted"? } }
 oort open memory 1b2c3d4e --json             # { "target": "memory", "url": "https://oortcloud.dev/dashboard/memories/…", "opened": false }
@@ -1202,7 +1202,7 @@ For a container sidecar, or a backend that is not you. The same protocol on TCP,
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
 | `oort stats` | Counts per tier and validity, store and cold sizes, the hook queue, when the store was last consolidated (and when it is next due), and memory use. | `--json` |
 | `oort observe` | Runs the write path on one turn, from JSON on stdin or from `--user` with `--assistant`. It prints its result as JSON; with `--json`, inside the envelope. | `--dry-run` (reports scrubbing only), `--json` |
-| `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. In Oort Cloud, a copy shared to a Constellation stays (it is the team's memory now): the question says where (`also shared to oort-core; add --everywhere to withdraw your copies`), and so does a `still-shared` warning with `--json`. See [Forgetting a shared memory](#forgetting-a-shared-memory). | `--yes`, `--everywhere` (Oort Cloud: also withdraw your shared copies; a removal request where others contributed) |
+| `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. Locally, a later memory that restates one of its values (such as "changed from 3000 to 8080") is rewritten to its current fact, and the output names each one; see [Memories that restated it](#memories-that-restated-it). It does not reach copies of the store taken before a migration (`oort.sqlite.pre-v*`); `oort doctor` lists them. In Oort Cloud, a copy shared to a Constellation stays (it is the team's memory now): the question says where (`also shared to oort-core; add --everywhere to withdraw your copies`), and so does a `still-shared` warning with `--json`. See [Forgetting a shared memory](#forgetting-a-shared-memory). | `--yes`, `--everywhere` (Oort Cloud: also withdraw your shared copies; a removal request where others contributed) |
 | `oort pin <id>` / `oort unpin <id>` | A pinned memory is never sent to cold storage. | |
 | `oort consolidate` | Expires, re-tiers and evicts memories, every project and the global ones: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each node, and inside it each project and the global memories, is re-tiered on its own. The hooks also run it about daily (see `docs/claude-code.md`); a manual run counts as that day's. | |
 | `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. Withdrawn judgments are left out. | `--out <file>` (0600), `--force`, `--format 1\|2`, `--include-withdrawn` |
@@ -1999,6 +1999,80 @@ save moves there by itself: `oort share` copies one memory, on purpose.
 - `oort constellation list` shows the Constellations you belong to, your role, and how many
   members each has. Members never see each other's own memories.
 
+### Memories that restated it
+
+When a fact changes, Oort writes a new memory that supersedes the old one, and the writer often
+records the change: "The dev server port changed from 3000 to 8080." Forgetting the old memory
+alone would leave its value in the new one. So a local `oort forget` (and the MCP `forget` tool,
+and the SDK's `forget`) also checks the later memories of the forgotten one's supersede chain:
+
+1. On your machine, with no model call, it takes the forgotten memory's values for each later
+   memory: numbers and versions, identifiers such as `db-primary` or `foo_bar`, paths and URLs
+   (each whole, never its pieces; a URL also matches without its scheme, a leading `www.`, a default
+   port or a trailing slash, and as its host alone, ignoring case and full-width letters); a capitalised name such as `MySQL` when the forgotten memory
+   lists it as an entity and the later one does not; and a plain word the later memory writes
+   right after "from", "was", "instead of", "previously", "replaced" or "no longer" ("switched
+   from postgres to sqlite"). Any other plain word is not a value, so a value written that way
+   elsewhere is not found ("postgres was replaced by sqlite" names no marker before it).
+2. A later memory that holds one of those values (in its text, summary, entities, or a wording a
+   refine kept) goes to the memory writer (Anthropic, your key or Oort Pro). The writer gets that
+   memory alone, never the forgotten one, and is asked to state only its current fact and drop any
+   history or earlier values: "The dev server port is 8080." A later memory that holds none of the
+   values is left alone, with no model call.
+3. The rewrite is kept only when it adds no word the memory did not have (small connecting words
+   such as "is" or "now" aside), is no longer than before, and holds none of the forgotten values.
+   A name that both memories list as an entity is the thing they are about, not a value, and may
+   stay, unless the later memory lists a name of its own beside it ("changed from db-primary to
+   db-replica": then `db-primary` is the old value). A kept rewrite gets a new vector, and loses
+   the earlier wordings a refine kept and the dates the writer read from the old text. It keeps
+   its validity dates: they say when it became true, not what the forgotten memory said.
+   A rewrite only reuses the memory's own words, but it can still change what they say (drop a
+   "not", or join two parts the wrong way), so read the line `oort forget` prints for it.
+4. The chain is re-linked over the gap, and the rewrites land only if no other write changed those
+   memories meanwhile. One command rewrites at most 64 later memories; any later still that holds
+   a value is named.
+
+All of this happens before the command returns: Oort does not keep the forgotten text for a later
+step, since keeping it would keep what you asked to forget.
+
+```
+$ oort forget 1b2c3d4e --yes
+Forgot 1b2c3d4e-….
+Rewrote 5f6a7b8c to its current fact: "The dev server port is 8080."
+```
+
+A later memory that holds a forgotten value and was not rewritten is left as it was, named with the
+reason, and the command exits 3. The reasons: no memory writer is set up; the writer failed; the
+rewrite added words or kept a value, so it was not used; the writer left it as it was; it changed
+while the command ran; it belongs to another agent; or it lies past the first 64 later memories of
+the chain.
+
+```
+$ oort forget 1b2c3d4e --yes
+Forgot 1b2c3d4e-….
+5f6a7b8c may still restate it, because no memory writer is set up (oort doctor says why). Check it with `oort inspect 5f6a7b8c-…`, or forget it too: `oort forget 5f6a7b8c-…`.
+```
+
+With `--json`, `rewritten` and `notRewritten` list their ids (local mode only), and each one left
+as it was is a `not-rewritten` warning. Up to four writer calls run at once. Forgetting the newest
+memory of a chain changes nothing else: its predecessor stays ended.
+
+In Oort Cloud nothing is rewritten yet. `oort forget` still finds the later memories that hold a
+forgotten value, names each one in a `not-rewritten` warning (with the Constellations it is shared
+to, if any), and exits 3; a later memory it could not read is a `successors-unknown` warning, also
+exit 3. `--json` has no `rewritten` or `notRewritten` there.
+
+What stays on disk: the store overwrites deleted rows with zeros and purges them from its search
+index when you forget, so nothing you forget with this version stays in `oort.sqlite` (see the
+store contract). Clearing the keyword index rewrites all of it, so a forget takes about 2 to 3
+seconds at 100,000 memories (well under a second for a few thousand), and other Oort processes wait
+for it meanwhile; CON-159 tracks making it cheaper. A store from Oort 0.9.0 or older can still hold text deleted then in its free
+space. The first open that may migrate rewrites such a store once (`VACUUM`) when it is at most
+32 MB; a bigger one waits for `oort doctor --vacuum`, and until then `oort doctor` warns that older
+deleted text may remain. Forget cannot reach copies taken before a schema migration
+(`~/.oort/oort.sqlite.pre-v*`, listed by `oort doctor`), an export you wrote, or backups of your
+disk. Delete those yourself.
+
 ### Forgetting a shared memory
 
 ```sh
@@ -2238,11 +2312,17 @@ spaces in its `cloud` group, and the MCP `whoami` tool returns them too.
 ## `oort doctor`
 
 ```sh
-oort doctor [--json]
+oort doctor [--json] [--vacuum]
 ```
 
 `oort doctor` checks everything Oort depends on and prints a fix for each
-problem. It reads only: it never creates the store or writes a config. Its one
+problem. It reads only: it never creates the store or writes a config.
+`--vacuum` is the exception: it rewrites an existing store (`VACUUM`), so
+text deleted by Oort 0.9.0 or older is gone from the file, and removes the
+all-zero vectors an older version stored (also ones an older Oort still
+running stored later; the `zero-vectors` row says when). Opens do the first by
+themselves on a store up to 32 MB; on a bigger one it takes a while, and no other Oort process
+(Claude Code's hooks, an MCP server) should hold the store meanwhile. Its one
 network call is `GET <relay>/health`, made only when a role goes through Oort
 Pro, with no key and a 3 second timeout.
 
@@ -2252,9 +2332,13 @@ Pro, with no key and a 3 second timeout.
 | `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, and the binary they run. Hooks that run the managed `~/.oort/cli` while you run a copy from `PATH` are fine: the `claude-code bin` row names both, each with its own version. A managed copy that is there but not safe to run (`managed copy`) is a fail, and its fix always removes and reinstalls it (`rm -r <prefix> && oort setup`, with `chmod go-w` on `OORT_HOME` after the `rm` when only `OORT_HOME` itself is too open): Oort never repairs a copy like this in place. | Missing, or a command that is not executable: `oort install claude-code`. Doctor never runs a hook's binary: versions come from the package's files. The managed copy (when it checks out and is safe) and the copy you ran are ok at this version or newer. Any other copy that stays put and is yours, such as your own build written with `--this-copy`, is an info line naming it ("the hooks run another copy at X (oort V)", try: `oort install claude-code` to use the managed copy, or keep it if you built it). A copy in a temp directory or package cache, or one someone else could change, is a fail. A hook binary that is older than the oort you run, or whose files do not say a version, is a warning naming both versions and the path: `oort update` (or `oort install claude-code` from the oort you want). When the oort you run lives somewhere temporary or under a Node version manager (the npx or pnpm dlx cache, a temp directory, `fnm_multishells`, `.nvm/`, `node-versions/`, `.volta/`, `.asdf/`), the fix never points the hooks at it: it names the managed copy instead, `~/.oort/cli/bin/oort install claude-code` (with `npm i -g --prefix ~/.oort/cli oortmem &&` first when there is none). Hooks that run a copy that does not stay put (under a version manager, in `fnm_multishells`, or in the npx or pnpm dlx cache) get an info line (`claude-code node`) naming the fix: with no managed copy, `oort setup, or npm i -g --prefix ~/.oort/cli oortmem and then oort install claude-code`; with one, `~/.oort/cli/bin/oort install claude-code`. Unparseable settings: fix the JSON, then the same fix. |
 | `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. Whether the hooks skip the daemon after a timeout or refusal, and until when. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
 | `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. Entries are judged against the binary `oort connect` would write now: the managed copy when it checks out, else the copy you ran. The binary an entry runs follows the hooks' rules, also for an entry that is exactly what `oort connect` writes: the managed or the running copy is ok, another copy of yours that stays put and is this version or newer (one written with `--this-copy`) is an info line naming it, and one in a temp directory or someone else's is a fail. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
-| `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; the dense index it searches (`vector-index`, 0.9.0 or newer: `int8, exact`, `binary, 1-bit codes rescored in int8` or, from 0.10.0, `rabitq, ...` with its engine, with the number of searchable vectors and the `store.vectorIndex` setting; a warning when the RaBitQ index runs without its native engine, a note when it is being built or is due a new centre (`vector-index-centre`), and a warning when it is too large for the hooks to load and `oort serve` is not running (`vector-index-hooks`)); `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. RaBitQ without its native engine: reinstall on a supported platform, or set `store.vectorIndex` to `binary`. Due a new centre: `oort reindex`. Too large for the hooks: `oort serve --detach`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. |
+| `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; the dense index it searches (`vector-index`, 0.9.0 or newer: `int8, exact`, `binary, 1-bit codes rescored in int8` or, from 0.10.0, `rabitq, ...` with its engine, with the number of searchable vectors and the `store.vectorIndex` setting; a warning when the RaBitQ index runs without its native engine, a note when it is being built or is due a new centre (`vector-index-centre`), and a warning when it is too large for the hooks to load and `oort serve` is not running (`vector-index-hooks`)); `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. RaBitQ without its native engine: reinstall on a supported platform, or set `store.vectorIndex` to `binary`. Due a new centre: `oort reindex`. Too large for the hooks: `oort serve --detach`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. Copies taken before a schema migration (`backups`, information): each `oort.sqlite.pre-v*` and `pre-downgrade` file, which holds memories as they were then and which `oort forget` does not reach; delete them once Oort works as before (`rm <files>`). Text deleted by Oort 0.9.0 or older may remain in the file (`erase`, a store over 32 MB that has not been rewritten once yet): `oort doctor --vacuum`. Vectors that are all zeros (`zero-vectors`, stored by an older version; they match nothing): `oort doctor --vacuum`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
 | `updates` | From the [update check](#the-update-notice)'s file only (doctor makes no request for it): a newer release, or that this one is the latest. Shown to people only, never in `--json`, and not when the check is off. | A newer release (information): `oort update`. |
+
+Where doctor suggests `oort update`, it says `oort update --yes` when it runs without a terminal
+to answer on (Claude Code's `!` prompt, a script) or with `--json`, since `oort update` asks before
+it changes anything and refuses where no one can answer.
 
 Each check has a status: `✓` ok, `!` warn, `✗` fail, `•` info and `?`
 unknown. A relay that does not answer `/health` is a warning, not a failure:

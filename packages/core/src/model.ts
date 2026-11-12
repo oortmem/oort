@@ -116,3 +116,13 @@ export function isCurrent(m: Memory, at: Date): boolean {
     (m.validTo === null || t < Date.parse(m.validTo))
   );
 }
+
+/**
+ * True when every component of `v` is 0 (CON-141). Such a vector has no direction, so cosine
+ * similarity is undefined for it: stores keep no zero embedding, and a zero query vector matches
+ * nothing.
+ */
+export function isZeroVector(v: Int8Array): boolean {
+  for (const x of v) if (x !== 0) return false;
+  return true;
+}
