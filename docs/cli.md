@@ -2008,8 +2008,8 @@ and the SDK's `forget`) also checks the later memories of the forgotten one's su
 
 1. On your machine, with no model call, it takes the forgotten memory's values for each later
    memory: numbers and versions, identifiers such as `db-primary` or `foo_bar`, paths and URLs
-   (each whole, never its pieces; a URL also matches without its scheme or trailing slash, and as
-   its host alone, ignoring case); a capitalised name such as `MySQL` when the forgotten memory
+   (each whole, never its pieces; a URL also matches without its scheme, a leading `www.`, a default
+   port or a trailing slash, and as its host alone, ignoring case and full-width letters); a capitalised name such as `MySQL` when the forgotten memory
    lists it as an entity and the later one does not; and a plain word the later memory writes
    right after "from", "was", "instead of", "previously", "replaced" or "no longer" ("switched
    from postgres to sqlite"). Any other plain word is not a value, so a value written that way

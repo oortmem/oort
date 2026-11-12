@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapters.js';
-import { forgetMemory, forgottenValues, MAX_CHAIN } from './forget.js';
+import { forgetMemory, forgottenValues, MAX_CHAIN, restatedValues } from './forget.js';
 import { createMemoryStore } from './memory-store.js';
 import type { Memory } from './model.js';
 import { makeMemory, TG, vec } from './store-conformance.js';
@@ -368,6 +368,32 @@ describe('forgetMemory (CON-144)', () => {
           rewritten: [{ id: 'b', text: 'endpoint is https://new.example.com/v2' }],
           notRewritten: [],
         });
+      }
+    });
+
+    it('forget.www-a-default-port-and-full-width-letters-are-the-same-url (security review)', async () => {
+      for (const text of [
+        'endpoint is www.old.example.com',
+        'endpoint is \uff4f\uff4c\uff44.example.com',
+        'endpoint is old.example.com:443/v1',
+        'endpoint is http://old.example.com:80/v1/',
+      ]) {
+        expect(
+          restatedValues({ ...b, text, source: { harness: 't', decisions: [] } }, a),
+          text,
+        ).toEqual(['https://old.example.com/v1']);
+      }
+      // A www. or port form of the forgotten URL in A matches the plain form in B, too.
+      expect(
+        restatedValues(
+          { ...b, text: 'endpoint is old.example.com', source: { harness: 't', decisions: [] } },
+          { ...a, text: 'endpoint is https://WWW.old.example.com:443/v1' },
+        ),
+      ).toEqual(['https://www.old.example.com:443/v1']);
+      // And a rewrite that keeps it in any of those forms is rejected.
+      for (const text of ['endpoint is www.old.example.com', 'endpoint is old.example.com:443']) {
+        const { r } = await pair(a, b, to(text));
+        expect(r.notRewritten, text).toEqual([{ id: 'b', reason: 'rejected' }]);
       }
     });
 

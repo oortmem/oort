@@ -81,9 +81,9 @@ type Text = Pick<Memory, 'text' | 'stub' | 'entities'>;
 /** The words of `s`, lower-cased, a URL, path or identifier kept whole (no trailing punctuation). */
 function wordsIn(s: string): string[] {
   const out: string[] = [];
-  for (const m of s.matchAll(
-    /(?:[a-z][a-z0-9+.-]*:\/\/|[/~])?[\p{L}\p{N}][^\s,;!?()[\]{}"'<>`]*/giu,
-  )) {
+  for (const m of s
+    .normalize('NFKC')
+    .matchAll(/(?:[a-z][a-z0-9+.-]*:\/\/|[/~])?[\p{L}\p{N}][^\s,;!?()[\]{}"'<>`]*/giu)) {
     const w = m[0].replace(/[.:]+$/u, '').toLowerCase();
     if (w !== '') out.push(w);
   }
@@ -101,10 +101,18 @@ function wordsOf(m: Text): Set<string> {
 
 const SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 
-/** A URL or path as compared: lower-cased, without its scheme and without a trailing slash. */
+/**
+ * A URL or path as compared: NFKC (full-width letters are the plain ones), lower-cased, without
+ * its scheme, a leading `www.`, a default port (`:80`, `:443`) or a trailing slash.
+ */
 function canonical(w: string): string {
-  const c = w.toLowerCase().replace(SCHEME, '').replace(/\/+$/, '');
-  return c === '' ? w.toLowerCase() : c;
+  const n = w.normalize('NFKC').toLowerCase();
+  const c = n
+    .replace(SCHEME, '')
+    .replace(/^www\./, '')
+    .replace(/^([^/?#]*?):(?:80|443)(?=[/?#]|$)/, '$1')
+    .replace(/\/+$/, '');
+  return c === '' ? n : c;
 }
 
 /**
@@ -113,7 +121,7 @@ function canonical(w: string): string {
  */
 function formsOf(v: string): string[] {
   const c = canonical(v);
-  if (!SCHEME.test(v)) return [c];
+  if (!SCHEME.test(v.normalize('NFKC'))) return [c];
   const host = c.split(/[/?#]/)[0] ?? '';
   return host !== '' && host !== c ? [c, host] : [c];
 }
