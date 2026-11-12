@@ -18,6 +18,7 @@ export {
   type ToolDefinition,
   type ToolInput,
   type ToolName,
+  type ToolSchemaOptions,
   type ToolSpaces,
 } from './tools.js';
 export {

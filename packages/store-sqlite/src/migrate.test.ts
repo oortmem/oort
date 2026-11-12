@@ -701,7 +701,7 @@ describe('schema migration 3 to 4', () => {
     expect(before.meta).toEqual({});
     const blobs = hashDir(s.coldDir);
     const { out, list } = await lexical(s, ENGLISH);
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     // Every record, the judgment and the cold memory included, reads back as version 3 wrote it.
     expect(portable(list)).toEqual(portable(expected3.list));
     // English queries find the same memories in the same order. Their scores move a little here
@@ -824,16 +824,188 @@ describe('schema migration 3 to 4', () => {
       db.close();
     }
     expect(portable((await lexical(s, [...ENGLISH, '认证 端口'])).out)).toEqual(portable(at4.out));
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
   });
 
   it('migrate.new-store-starts-at-v4-with-tokeniser-v2', async () => {
     const dir = fs.mkdtempSync(path.join(root, 'store4-'));
     const s = { dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
     await (await openSqliteStore(optsFor(s))).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     const fresh = inspect(s.dbPath);
     expect(fresh.sql).toContain(`categories 'L* N* Co M*'`);
     expect(fresh.meta).toEqual({ lexical_version: '2', lexical_icu: ICU_MAJOR });
+  });
+});
+
+describe('schema migration 4 to 5', () => {
+  const g = nodeGrant({
+    principal: { orgId: 'local', customerId: 'self', agentId: 'claude-code' },
+    read: [{ node: { level: 'user', orgId: 'local', customerId: 'self' }, projectIds: 'all' }],
+  });
+  const planet = { level: 'user', orgId: 'local', customerId: 'self' } as const;
+  const author = { agentId: 'claude-code' };
+  const v = (...xs: number[]) => Int8Array.from([...xs, 0, 0, 0, 0, 0, 0, 0, 0].slice(0, DIM));
+
+  function fresh(): { dbPath: string; coldDir: string } {
+    const dir = fs.mkdtempSync(path.join(root, 'store5-'));
+    return { dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
+  }
+
+  /** A version 4 store with two memories, as 0.8 leaves it: no place columns, no spatial index. */
+  async function v4(): Promise<{ dbPath: string; coldDir: string }> {
+    const s = fresh();
+    const store = await openSqliteStore(optsFor(s));
+    await store.upsert(
+      g,
+      memoryAt('a', planet, author, {
+        text: 'the toolbox is blue',
+        embedding: v(1, 2),
+        updatedAt: '2026-11-01T00:00:00.000Z',
+      }),
+    );
+    // Its own update time: list() orders by it, and two writes can share a millisecond.
+    await store.upsert(
+      g,
+      memoryAt('b', planet, author, {
+        text: 'the bench is tidy',
+        embedding: v(2, 1),
+        updatedAt: '2026-11-02T00:00:00.000Z',
+      }),
+    );
+    await store.close();
+    downgradeSqliteStore({ path: s.dbPath, to: 4 });
+    return s;
+  }
+
+  function columns(dbPath: string): string[] {
+    const db = raw(dbPath);
+    try {
+      return (
+        db.prepare("SELECT name FROM pragma_table_info('memories')").all() as { name: string }[]
+      )
+        .map((c) => c.name)
+        .filter((n) => n.startsWith('place'));
+    } finally {
+      db.close();
+    }
+  }
+
+  const hasPlaceTable = (dbPath: string): boolean => {
+    const db = raw(dbPath);
+    try {
+      return (
+        db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'memories_place'").get() !== undefined
+      );
+    } finally {
+      db.close();
+    }
+  };
+
+  it('migrate.new-store-starts-at-v5-with-the-spatial-index', async () => {
+    const s = fresh();
+    await (await openSqliteStore(optsFor(s))).close();
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
+    expect(SCHEMA_VERSION).toBe(5);
+    expect(columns(s.dbPath)).toEqual(['place', 'place_node']);
+    expect(hasPlaceTable(s.dbPath)).toBe(true);
+  });
+
+  it('migrate.v4-store-reads-back-identically-at-v5-after-a-copy', async () => {
+    const s = await v4();
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(columns(s.dbPath)).toEqual([]);
+    expect(hasPlaceTable(s.dbPath)).toBe(false);
+    const store = await openSqliteStore(optsFor(s));
+    try {
+      expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
+      expect(listBackups(s.dbPath, 'pre-v5')).toHaveLength(1);
+      expect(sqliteSchemaVersion(listBackups(s.dbPath, 'pre-v5')[0]!)).toBe(4);
+      const list = await store.list(g, { validOnly: false });
+      expect(list.map((m) => [m.id, m.text, m.place])).toEqual([
+        ['b', 'the bench is tidy', undefined],
+        ['a', 'the toolbox is blue', undefined],
+      ]);
+      expect((await store.lexical(g, 'toolbox', 5)).map((h) => h.id)).toEqual(['a']);
+      // Memories written before places exist are found as before, and never by a spatial filter.
+      expect(await store.lexical(g, 'toolbox', 5, { spatial: { within: 'room:B' } })).toEqual([]);
+      await store.upsert(
+        g,
+        memoryAt('c', planet, author, {
+          text: 'the toolbox is on shelf B3',
+          embedding: v(1, 1),
+          place: { nodeId: 'site:hq/room:B/shelf:B3', mapId: 'hq', pose: { x: 1, y: 2 } },
+        }),
+      );
+      expect(
+        (await store.lexical(g, 'toolbox', 5, { spatial: { within: 'room:B' } })).map((h) => h.id),
+      ).toEqual(['c']);
+      expect(
+        (
+          await store.dense(g, v(1, 1), 5, {
+            spatial: { near: { mapId: 'hq', pose: { x: 1, y: 2 }, radius: 0.1 } },
+          })
+        ).map((h) => h.id),
+      ).toEqual(['c']);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('migrate.v4-open-that-may-not-migrate-changes-nothing', async () => {
+    const s = await v4();
+    const before = fs.readFileSync(s.dbPath);
+    const err = await openSqliteStore({ ...optsFor(s), migrate: false }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StoreMigrationRequiredError);
+    expect((err as StoreMigrationRequiredError).from).toBe(4);
+    expect(fs.readFileSync(s.dbPath).equals(before)).toBe(true);
+  });
+
+  it('migrate.v5-refuses-to-go-down-with-a-place-and-goes-down-without', async () => {
+    const s = fresh();
+    const store = await openSqliteStore(optsFor(s));
+    await store.upsert(g, memoryAt('p', planet, author, { place: { nodeId: 'room:B' } }));
+    await store.close();
+    expect(() => downgradeSqliteStore({ path: s.dbPath, to: 4 })).toThrow(/1 memory has a place/);
+    expect(() => downgradeSqliteStore({ path: s.dbPath, to: 3 })).toThrow(/has a place/);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(5);
+    expect(listBackups(s.dbPath, 'pre-downgrade')).toEqual([]);
+    const again = await openSqliteStore(optsFor(s));
+    await again.forget(g, 'p');
+    await again.close();
+    downgradeSqliteStore({ path: s.dbPath, to: 4 });
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(4);
+    expect(columns(s.dbPath)).toEqual([]);
+    expect(hasPlaceTable(s.dbPath)).toBe(false);
+  });
+
+  it('migrate.an-orphan-spatial-row-never-matches', async () => {
+    // An older Oort still running against a migrated store deletes a memory without its spatial
+    // row, and its rid may be reused: the exact check reads the memory's own place, so it never
+    // matches.
+    const s = fresh();
+    const store = await openSqliteStore(optsFor(s));
+    await store.upsert(g, memoryAt('bare', planet, author, { text: 'a toolbox', embedding: v(1) }));
+    await store.close();
+    const db = raw(s.dbPath);
+    try {
+      const rid = (
+        db.prepare("SELECT rid FROM memories WHERE id = 'bare'").get() as { rid: number }
+      ).rid;
+      db.prepare(
+        `INSERT INTO memories_place (rid, min_x, max_x, min_y, max_y, min_z, max_z, map_key)
+         VALUES (?, -1, 1, -1, 1, -1e30, 1e30, '["hq","map"]')`,
+      ).run(rid);
+    } finally {
+      db.close();
+    }
+    const again = await openSqliteStore(optsFor(s));
+    try {
+      const spatial = { near: { mapId: 'hq', pose: { x: 0, y: 0 }, radius: 5 } };
+      expect(await again.lexical(g, 'toolbox', 5, { spatial })).toEqual([]);
+      expect(await again.dense(g, v(1), 5, { spatial })).toEqual([]);
+    } finally {
+      await again.close();
+    }
   });
 });

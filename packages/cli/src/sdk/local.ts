@@ -38,6 +38,7 @@ import type {
   ObserveResult,
   Outcome,
   PinResult,
+  Place,
   RecallOptions,
   RecallResult,
   RememberResult,
@@ -147,6 +148,12 @@ export async function recall(ctx: Ctx, query: string, o: RecallOptions): Promise
   const r = await runRecall(target(ctx), query, view, now, o.include, o.includeWithdrawn === true, {
     k: o.limit ?? 10,
     speed,
+    ...((o.within !== undefined || o.near !== undefined) && {
+      spatial: {
+        ...(o.within !== undefined && { within: o.within }),
+        ...(o.near !== undefined && { near: o.near }),
+      },
+    }),
   });
   const degraded = chosen(r.degraded ?? [], speed);
   const ignored = viewIgnored(view, r) ? viewIgnoredWarning(view) : undefined;
@@ -177,6 +184,7 @@ export function observation(turn: Turn, now: Date): Observation {
     at: turn.at === undefined ? now.toISOString() : iso(turn.at),
     ...(turn.sessionId !== undefined && { sessionId: turn.sessionId }),
     ...(turn.turnRef !== undefined && { turnRef: turn.turnRef }),
+    ...(turn.place !== undefined && { place: turn.place }),
   };
 }
 
@@ -218,6 +226,7 @@ export async function remember(
   ctx: Ctx,
   facts: readonly string[],
   type: MemoryType | undefined,
+  place?: Place,
 ): Promise<RememberResult> {
   writePathOf(ctx, 'remember');
   const e = ctx.engine;
@@ -239,6 +248,7 @@ export async function remember(
       now: ctx.now(),
       grant: ctx.principal.grant,
       ...(type !== undefined && { type }),
+      ...(place !== undefined && { place }),
     },
   );
   return { results, warnings: [...ctx.warnings] };

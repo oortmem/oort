@@ -8,7 +8,9 @@ import {
   temporalView,
   viewIgnored,
   viewIgnoredWarning,
+  spatialFilter,
   type RecallSpeed,
+  type SpatialFlags,
   type TemporalFlags,
   type TemporalView,
 } from '../engine/recall.js';
@@ -40,7 +42,7 @@ export {
   type TemporalView,
 } from '../engine/recall.js';
 
-export interface RecallOptions extends TemporalFlags {
+export interface RecallOptions extends TemporalFlags, SpatialFlags {
   json?: boolean;
   /** `--include planet,star`: the levels to read (comma list). */
   include?: string;
@@ -120,11 +122,13 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
   const view = temporalView(opts);
   const include = includeLevels(opts.include);
   const tuning = recallTuning(opts);
+  const spatial = spatialFilter(opts);
   return withWired(ctx, async (w) => {
     const now = new Date();
     const raw = await runRecall(w, text, view, now, include, opts.includeWithdrawn === true, {
       ...(tuning.k !== undefined && { k: tuning.k }),
       speed: tuning.speed,
+      ...(spatial !== undefined && { spatial }),
     });
     // A stage `--speed` turned off is the caller's choice, not a degradation (as the SDK).
     const result: RecallResult =

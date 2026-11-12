@@ -200,6 +200,60 @@ class LocalMode(unittest.TestCase):
         self.assertEqual(req["body"]["limit"], 5)
         self.assertEqual(req["body"]["asOf"], "2026-04-01")
 
+    def test_places_go_to_the_daemon_in_wire_names_and_come_back_typed(self) -> None:
+        from oortmem.types import NearQuery, Place, Pose
+
+        placed = {
+            **RECALL["memories"][0],
+            "place": {"nodeId": "site:hq/room:B", "mapId": "hq", "pose": {"x": 1.5, "y": 2}, "extent": {"radius": 0.5}},
+            "why": {"coverage": 1, "activation": 0.1, "placePath": "site:hq/room:B", "distanceM": 0.25},
+        }
+        self.rec.answers["POST /v1/recall"] = (200, envelope({**RECALL, "memories": [placed]}))
+        self.rec.answers["POST /v1/remember"] = (200, envelope({"results": [], "warnings": []}))
+        self.rec.answers["POST /v1/observe"] = (200, envelope({"outcome": "added", "memories": [], "counts": {}, "warnings": []}))
+        with self.oort() as o:
+            r = o.recall("toolbox", within="room:B", near=NearQuery(map_id="hq", pose=Pose(x=1, y=2), radius=1))
+            body = self.rec.seen[-1]["body"]
+            self.assertEqual(body["within"], "room:B")
+            self.assertEqual(body["near"], {"mapId": "hq", "pose": {"x": 1, "y": 2}, "radius": 1})
+            o.recall("toolbox", near={"map_id": "hq", "pose": {"x": 1, "y": 2}, "radius": 1})
+            self.assertEqual(self.rec.seen[-1]["body"]["near"], {"mapId": "hq", "pose": {"x": 1, "y": 2}, "radius": 1})
+            o.remember("The toolbox is on shelf B3.", place={"node_id": "site:hq/room:B/shelf:B3", "map_version": 3})
+            self.assertEqual(self.rec.seen[-1]["body"]["place"], {"nodeId": "site:hq/room:B/shelf:B3", "mapVersion": 3})
+            o.observe(user="u", assistant="a", place=Place(node_id="room:B", map_id="hq", pose=Pose(x=1, y=2, z=0.5)))
+            self.assertEqual(self.rec.seen[-1]["body"]["place"], {"nodeId": "room:B", "mapId": "hq", "pose": {"x": 1, "y": 2, "z": 0.5}})
+        m = r.memories[0]
+        self.assertEqual(m.place, Place(node_id="site:hq/room:B", map_id="hq", pose=Pose(x=1.5, y=2), extent={"radius": 0.5}))
+        self.assertEqual((m.why.place_path, m.why.distance_m), ("site:hq/room:B", 0.25))
+        # Without a place, the fields are absent, as before.
+        self.rec.answers["POST /v1/recall"] = (200, envelope(RECALL))
+        with self.oort() as o:
+            plain = o.recall("deploy").memories[0]
+        self.assertEqual((plain.place, plain.why.place_path, plain.why.distance_m), (None, None, None))
+
+    def test_the_documented_spatial_example_runs(self) -> None:
+        import contextlib
+        import io
+        import runpy
+        from unittest import mock
+
+        def at(text: str, path: str, why: dict) -> dict:
+            return {**RECALL["memories"][0], "text": text, "place": {"nodeId": path, "mapId": "hq", "pose": {"x": 13, "y": 4}}, "why": {"coverage": 1, "activation": 0.1, **why}}
+
+        within = [at("The blue toolbox is on shelf B3.", "site:hq/room:B/shelf:B3", {"placePath": "site:hq/room:B/shelf:B3"})]
+        near = [at("The green toolbox sits under the window.", "site:hq/room:B", {"placePath": "site:hq/room:B", "distanceM": 1})]
+        self.rec.answers["POST /v1/remember"] = (200, envelope({"results": [], "warnings": []}))
+        self.rec.answers["POST /v1/recall"] = [(200, envelope({**RECALL, "memories": within})), (200, envelope({**RECALL, "memories": near}))]
+        example = os.path.join(os.path.dirname(HERE), "..", "examples", "python", "spatial.py")
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, self.box.env, clear=True), contextlib.redirect_stdout(out):
+            runpy.run_path(example, run_name="__main__")
+        self.assertEqual(out.getvalue().splitlines(), ["site:hq/room:B/shelf:B3 | The blue toolbox is on shelf B3.", "1.00 | The green toolbox sits under the window."])
+        sent = [r["body"] for r in self.rec.seen if r["path"] in ("/v1/remember", "/v1/recall")]
+        self.assertEqual(sent[0]["place"], {"nodeId": "site:hq/room:A/shelf:A1", "mapId": "hq", "pose": {"x": 1, "y": 1}})
+        self.assertEqual(sent[-2]["within"], "room:B")
+        self.assertEqual(sent[-1]["near"], {"mapId": "hq", "pose": {"x": 13, "y": 3}, "radius": 1.5})
+
     def test_end_users_judge_roles_and_derived_handles(self) -> None:
         self.rec.answers["GET /v1/whoami"] = (200, envelope({"mode": "local", "account": None, "agent": None, "project": None, "user": "u1", "reads": [], "writesTo": "Planet u1", "version": "0.7.0", "routes": {}}))
         with self.oort(org="acme", judge_role="expert", operator="ada") as root:
@@ -780,7 +834,7 @@ class CloudMode(unittest.TestCase):
             lambda: o.remember("f" * 501),
             lambda: o.observe(user="x" * (128 * 1024), assistant="y"),
             lambda: o.observe(user="u", assistant="a", turn_ref="r" * 129),
-            lambda: o.observe({"user": "u", "assistant": "a", "place": {}}),
+            lambda: o.observe({"user": "u", "assistant": "a", "nearby": {}}),
             lambda: o.explain("1234"),
             lambda: o.recent(limit=101),
         ):
@@ -796,6 +850,22 @@ class CloudMode(unittest.TestCase):
             with self.assertRaises(OortRefusedError) as e:
                 call()
             self.assertEqual(e.exception.reason, "local-only")
+
+    def test_spatial_memory_is_local_only_and_nothing_is_sent(self) -> None:
+        from oortmem import OortRefusedError
+        from oortmem.types import NearQuery, Pose
+
+        o = self.oort()
+        for call in (
+            lambda: o.recall("toolbox", within="room:B"),
+            lambda: o.recall("toolbox", near=NearQuery(map_id="hq", pose=Pose(x=0, y=0), radius=1)),
+            lambda: o.remember("The toolbox is on shelf B3.", place={"node_id": "shelf:B3"}),
+            lambda: o.observe(user="The toolbox is on shelf B3.", assistant="Noted.", place={"node_id": "shelf:B3"}),
+        ):
+            with self.assertRaises(OortRefusedError) as e:
+                call()
+            self.assertEqual((e.exception.reason, e.exception.fix), ("local-only", "oort cloud use --local"))
+        self.assertEqual(self.rec.seen, [])
 
     def test_cloud_mode_refuses_local_only_options(self) -> None:
         from oortmem import Oort, OortUsageError

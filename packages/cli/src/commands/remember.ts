@@ -1,6 +1,7 @@
 import { FACT_MAX_CHARS, MEMORY_TYPES } from '@oortmem/mcp';
 import { resolveHome, scrubObservation, type MemoryType } from '@oortmem/core';
 import { turnObservation } from '../engine/observe.js';
+import { placeOfFlags, type PlaceFlags } from '../engine/recall.js';
 import { emit, jsonMode } from '../output.js';
 import {
   rememberFacts,
@@ -22,7 +23,7 @@ import {
 } from '../util.js';
 import { privacyStatement, resolveAgent } from '../wire.js';
 
-export interface RememberOptions {
+export interface RememberOptions extends PlaceFlags {
   /** `--type`: a hint for the kind of fact; the write path decides the final type. */
   type?: string;
   /** `--dry-run`: only report what the scrubber would redact; touches nothing. */
@@ -86,6 +87,7 @@ export async function rememberCommand(
 ): Promise<number> {
   const fact = checkedFact(words);
   const type = checkedType(opts.type);
+  const place = placeOfFlags(opts);
   const ui = uiFor(ctx.io);
   if (opts.dryRun === true) {
     // The agent id is checked as a real run checks it, without wiring anything.
@@ -105,6 +107,13 @@ export async function rememberCommand(
     const cloud = cloudOf(w);
     let results: CloudRememberResult[];
     if (cloud !== undefined) {
+      if (place !== undefined) {
+        // Oort Cloud holds no places yet (CON-87): refused before anything is sent.
+        throw new Refusal(
+          'A place is local-only for now: Oort Cloud does not hold places yet. Run `oort cloud use --local` to use it.',
+          { code: 'refused' },
+        );
+      }
       refuseStarInCloud(w);
       const project = w.scope.projectId;
       results = await rememberFactsInCloud(cloud, [fact], {
@@ -115,6 +124,7 @@ export async function rememberCommand(
       results = await rememberFacts(w, [fact], {
         harness: 'cli',
         ...(type !== undefined && { type }),
+        ...(place !== undefined && { place }),
       });
     }
     ctx.io.out(ui.header('remember', ...results.map(said), scopeLabel(w), agentLabel(w)));

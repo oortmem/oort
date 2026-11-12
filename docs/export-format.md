@@ -88,12 +88,15 @@ per dimension, two's complement), and is absent when the memory has none.
 | `supersededByHidden` | `true`, optional: `supersededBy` was nulled (see Limitations) |
 | `source`          | `{ harness, sessionId?, turnRef?, decisions: { stage, question, answer, probability }[] }` |
 | `judgment`        | object, `judgment` memories only (version 2): the expert's decision, see `docs/cli.md` |
+| `place`           | object, optional (version 2, Oort 0.9.0 or newer): where the memory is, `{ nodeId?, mapId?, mapVersion?, frame?, pose?, extent?, geo?, sigma? }`, see Places in `docs/cli.md` |
 | `embedding`       | base64 string, optional                                    |
 | `createdAt`       | ISO 8601                                                   |
 | `updatedAt`       | ISO 8601                                                   |
 
-No other fields appear. The two `…Hidden` flags appear only when set, and `judgment` only on a
-`judgment` memory (version 1 cannot hold judgments). Decoding an embedding in Node:
+No other fields appear. The two `…Hidden` flags appear only when set, `judgment` only on a
+`judgment` memory, and `place` only on a memory that has one (version 1 holds neither, so
+`--format 1` refuses such a memory). A reader that predates `place` ignores it, so the format
+version stays 2. Decoding an embedding in Node:
 
 ```js
 const vector = Int8Array.from(Buffer.from(line.embedding, 'base64'));
@@ -110,7 +113,9 @@ hold only Planet memories. A reader maps a version 1 line to the Planet its
 `scope` names, with `scope.agentId` as the author; an import into another
 account moves it to that account's Planet. `oort cloud import` uploads
 version 1, which Oort Cloud reads, and `oort cloud export` returns what Oort
-Cloud writes.
+Cloud writes. Oort Cloud does not hold places yet, so `oort cloud import`
+sends each memory without its `place` and reports how many it left out
+(`placesLeftOut` in `--json`).
 
 Oort Cloud also writes version 1 for one end user of an account
 (`GET /v1/end-users/:id/export`, `oort.endUsers.export(id)` in the SDK): every
@@ -123,8 +128,11 @@ and counted; ids already in the store are skipped. A file is not trusted, so
 each memory is rebuilt from its content alone:
 
 - **Kept:** `id`, `type`, `text`, `stub`, `entities`, `salience` (0 to 1),
-  `pinned`, the project and author, and `source` when it has the shape a
-  store writes (otherwise `{ "harness": "oort import", "decisions": [] }`).
+  `pinned`, the project and author, `place`, and `source` when it has the
+  shape a store writes (otherwise `{ "harness": "oort import", "decisions": [] }`).
+  A `place` is checked as a new one is (a place path, a known frame, finite
+  coordinates, no unknown fields); one that does not check makes the file
+  unreadable, naming its line, and nothing is imported.
 - **Reset, as for a new memory:** `tier` is `warm` (consolidation moves it
   later), `accessLog` is empty, `lastConfirmedAt` is `null`, `provenance` is
   dropped, and the embedding is computed again by this store's embedder.

@@ -7,7 +7,13 @@ import {
   appendAccess,
   assertGrant,
   canonicalMemory,
+  checkPlace,
   cursorKey,
+  frameOf,
+  hasSpatialFilter,
+  nearBox,
+  placeBox,
+  placeDistance,
   GrantError,
   grantReads,
   grantWrites,
@@ -31,7 +37,9 @@ import {
   type MemorySource,
   type MemoryStore,
   type NodePattern,
+  type Place,
   type Provenance,
+  type SpatialFilter,
   type Tier,
 } from '@oortmem/core';
 import {
@@ -51,6 +59,8 @@ import {
   lexicalIndexState,
   judgmentCount,
   migrationBlockers,
+  PLACE_TABLE,
+  placeCount,
   schemaVersionOf,
   SCHEMA_VERSION,
   StoreMigrationRequiredError,
@@ -163,6 +173,9 @@ function enableWal(conn: Database.Database, timeoutMs: number): void {
   }
 }
 
+/** The copy taken before migrating a store from each older schema version. */
+const BACKUP_BEFORE = { 1: 'pre-v2', 2: 'pre-v3', 3: 'pre-v4', 4: 'pre-v5' } as const;
+
 /** sqlite-vec's upper bound on `k` in a KNN query. */
 const MAX_KNN = 4096;
 
@@ -200,6 +213,10 @@ interface MemoryRow {
   updated_at: string;
   /** The `judgment` record as JSON (schema version 3, CON-71); NULL for every other memory. */
   judgment: string | null;
+  /** The memory's place as JSON (schema version 5, CON-84); NULL when it has none. */
+  place: string | null;
+  /** The place's `nodeId`, for `within`; NULL when it has none. */
+  place_node: string | null;
 }
 
 type RowParams = Omit<MemoryRow, 'rid'>;
@@ -268,6 +285,8 @@ function toRow(m: Memory, address: Address, author: Author): RowParams {
     created_at: m.createdAt,
     updated_at: m.updatedAt,
     judgment: m.judgment === undefined ? null : JSON.stringify(m.judgment),
+    place: m.place === undefined ? null : JSON.stringify(m.place),
+    place_node: m.place?.nodeId ?? null,
   };
 }
 
@@ -318,6 +337,7 @@ function fromRow(r: MemoryRow, embedding: Int8Array | undefined): Memory {
     updatedAt: r.updated_at,
   };
   if (r.judgment !== null) m.judgment = JSON.parse(r.judgment) as Judgment;
+  if (r.place !== null) m.place = JSON.parse(r.place) as Place;
   if (embedding !== undefined) m.embedding = embedding;
   return m;
 }
@@ -354,7 +374,57 @@ const COLUMNS: (keyof RowParams)[] = [
   'created_at',
   'updated_at',
   'judgment',
+  'place',
+  'place_node',
 ];
+
+/**
+ * The spatial filter (CON-84) over `memories` aliased `a`, bound with `spatialParams`. `within`
+ * matches whole segments (`instr`, no wildcards); `near` takes the R*Tree's candidate boxes, then
+ * the exact distance from the stored place (`oort_place_distance`).
+ */
+function spatialSql(f: SpatialFilter, a: string): string {
+  const parts: string[] = [];
+  if (f.within !== undefined) {
+    parts.push(`instr('/' || ${a}.place_node || '/', '/' || @within || '/') > 0`);
+  }
+  if (f.near !== undefined) {
+    parts.push(`${a}.rid IN (SELECT rid FROM ${PLACE_TABLE}
+        WHERE max_x >= @minX AND min_x <= @maxX AND max_y >= @minY AND min_y <= @maxY
+          AND max_z >= @minZ AND min_z <= @maxZ AND map_key = @mapKey)
+      AND oort_place_distance(${a}.place, @nearMap, @nearFrame, @nearX, @nearY, @nearZ) <= @radius`);
+  }
+  return parts.join(' AND ');
+}
+
+/** The statement-cache key of a spatial filter's shape. */
+const spatialShape = (f: SpatialFilter | undefined): string =>
+  f === undefined ? '' : `:${f.within !== undefined ? 'w' : ''}${f.near !== undefined ? 'n' : ''}`;
+
+function spatialParams(f: SpatialFilter): Record<string, string | number | null> {
+  const out: Record<string, string | number | null> = {};
+  if (f.within !== undefined) out['within'] = f.within;
+  const n = f.near;
+  if (n !== undefined) {
+    const b = nearBox(n);
+    Object.assign(out, {
+      minX: b.minX,
+      maxX: b.maxX,
+      minY: b.minY,
+      maxY: b.maxY,
+      minZ: b.minZ,
+      maxZ: b.maxZ,
+      mapKey: b.mapKey,
+      nearMap: n.mapId,
+      nearFrame: frameOf(n),
+      nearX: n.pose.x,
+      nearY: n.pose.y,
+      nearZ: n.pose.z ?? null,
+      radius: n.radius,
+    });
+  }
+  return out;
+}
 
 /**
  * The predicate for pattern `i` of a grant side over `memories` aliased `m`:
@@ -417,14 +487,15 @@ export function sqliteSchemaVersion(dbPath: string): number | undefined {
 
 /**
  * Takes the store at `path` back to schema version `to`: 1 (the default) so Oort 0.2.x can open
- * it again, 2 for Oort 0.3 to 0.5, or 3 for Oort before tokeniser v2 (CON-110; the lexical index
- * is rebuilt with tokeniser v1). First copies it to `<path>.pre-downgrade.<UTC time>` (the
- * three newest such copies are kept). Refuses, changing nothing, when it holds memories that
- * version cannot represent: for 1, any level but Planet, an author with an account, provenance or
- * a judgment; for 2, a judgment. No other Oort process (hooks, the MCP server, a drain) may have
- * the store open while it runs: one would migrate it straight back, or fail on the changed schema.
+ * it again, 2 for Oort 0.3 to 0.5, 3 for Oort before tokeniser v2 (CON-110; the lexical index
+ * is rebuilt with tokeniser v1), or 4 for Oort before spatial memory (0.8.x). First copies it to
+ * `<path>.pre-downgrade.<UTC time>` (the three newest such copies are kept). Refuses, changing
+ * nothing, when it holds memories that version cannot represent: for 1, any level but Planet, an
+ * author with an account, provenance or a judgment; for 2, a judgment; below 5, a place. No other
+ * Oort process (hooks, the MCP server, a drain) may have the store open while it runs: one would
+ * migrate it straight back, or fail on the changed schema.
  */
-export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 }): void {
+export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 | 4 }): void {
   const to = opts.to ?? 1;
   const dbPath = path.resolve(opts.path);
   const db = withPrivateUmask(() => new Database(dbPath, { fileMustExist: true }));
@@ -434,6 +505,12 @@ export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 }): vo
     if (version === undefined || version <= to || version > SCHEMA_VERSION) {
       downgradeSchema(db, to); // at or below `to` already: nothing to do; anything else: refused
       return;
+    }
+    const places = placeCount(db);
+    if (places > 0) {
+      throw new Error(
+        `sqlite store: ${places} ${places === 1 ? 'memory has a place' : 'memories have a place'}; schema version ${to} cannot hold them`,
+      );
     }
     if (to === 1) {
       const blocked = migrationBlockers(db);
@@ -496,21 +573,20 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       conn.pragma('foreign_keys = ON');
       sqliteVec.load(conn);
       const from = schemaVersionOf(conn);
-      if (from === 1 || from === 2 || from === 3) {
+      if (from === 1 || from === 2 || from === 3 || from === 4) {
         // Checked and copied before the migration's transaction starts; a failed
         // copy fails the open and the store stays as it was.
         if (opts.migrate === false) throw new StoreMigrationRequiredError(dbPath, from);
         if (from === 1) assertMigratable(conn);
-        backupDatabase(conn, dbPath, from === 1 ? 'pre-v2' : from === 2 ? 'pre-v3' : 'pre-v4');
+        backupDatabase(conn, dbPath, BACKUP_BEFORE[from]);
       }
-      // Every migration from version 3 or older, and a stale version 4 index, rebuilds the lexical
-      // index (applySchema says so): wait as long as another process holds the lock rather than
-      // fail and repeat the migration later.
+      // Every migration from version 3 or older, and a stale version 4 or 5 index, rebuilds the
+      // lexical index (applySchema says so): wait as long as another process holds the lock rather
+      // than fail and repeat the migration later.
       const rebuilds =
         opts.migrate !== false &&
         from !== undefined &&
-        (from < SCHEMA_VERSION ||
-          (from === SCHEMA_VERSION && lexicalIndexState(conn, icu) === 'rebuild'));
+        (from < 4 || (from <= SCHEMA_VERSION && lexicalIndexState(conn, icu) === 'rebuild'));
       if (rebuilds) {
         conn.pragma(`busy_timeout = ${Math.max(busyTimeoutMs, MIGRATION_BUSY_TIMEOUT_MS)}`);
       }
@@ -540,6 +616,29 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   }
 
   const codec = createColdCodec({ dimension });
+
+  // The exact `near` check (CON-84): the distance from a query point to a stored place's region,
+  // or NULL when they cannot be compared (no coordinates, another map or frame).
+  db.function(
+    'oort_place_distance',
+    { deterministic: true },
+    (place: unknown, mapId: unknown, frame: unknown, x: unknown, y: unknown, z: unknown) => {
+      if (typeof place !== 'string') return null;
+      let stored: Place;
+      try {
+        stored = JSON.parse(place) as Place;
+      } catch {
+        return null; // a damaged place is near nothing; it never fails the recall
+      }
+      const d = placeDistance(stored, {
+        mapId: String(mapId),
+        frame: String(frame),
+        pose: { x: Number(x), y: Number(y), ...(typeof z === 'number' && { z }) },
+        radius: 0,
+      });
+      return d ?? null;
+    },
+  );
 
   const q = {
     upsertRow: db.prepare<[RowParams], { rid: number }>(
@@ -574,6 +673,11 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        RETURNING rid`,
     ),
     setAccess: db.prepare<[string, string]>('UPDATE memories SET access_log = ? WHERE id = ?'),
+    placeDelete: db.prepare<[number]>(`DELETE FROM ${PLACE_TABLE} WHERE rid = ?`),
+    placeInsert: db.prepare<[number, number, number, number, number, number, number, string]>(
+      `INSERT INTO ${PLACE_TABLE} (rid, min_x, max_x, min_y, max_y, min_z, max_z, map_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ),
     ftsDelete: db.prepare<[number]>(`DELETE FROM ${FTS_TABLE} WHERE rowid = ?`),
     ftsInsert: db.prepare<[number, string, string, string]>(
       `INSERT INTO ${FTS_TABLE} (rowid, text, stub, entities) VALUES (?, ?, ?, ?)`,
@@ -631,12 +735,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
          AND (@pinned IS NULL OR m.pinned = @pinned)
        ORDER BY m.rid`,
     );
-  const lexicalScoped = (n: number) =>
+  /** With a spatial filter (CON-84), its predicate joins the grant's; without one, as before. */
+  const lexicalScoped = (n: number, f?: SpatialFilter) =>
     cached<[Params], { id: string; tier: Tier; rank: number }>(
-      `lexical:${n}`,
+      `lexical:${n}${spatialShape(f)}`,
       () => `SELECT m.id AS id, m.tier AS tier, bm25(${FTS_TABLE}) AS rank
        FROM ${FTS_TABLE} CROSS JOIN memories m ON m.rid = ${FTS_TABLE}.rowid
-       WHERE ${FTS_TABLE} MATCH @match AND ${grantSql(n)}
+       WHERE ${FTS_TABLE} MATCH @match AND ${grantSql(n)}${f === undefined ? '' : ` AND ${spatialSql(f, 'm')}`}
        ORDER BY rank, m.updated_at DESC, m.id
        LIMIT @k`,
     );
@@ -646,17 +751,19 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
    * one) before k is taken, then by the pattern again on the joined row. The
    * KNN is materialised and joined first (`CROSS JOIN` fixes the order):
    * otherwise the planner may drive from the `memories` index and rerun the
-   * KNN once per row.
+   * KNN once per row. A spatial filter (CON-84) is one more constraint inside the KNN, so k is
+   * taken after it: `id IN` the memories that pass it.
    */
-  const densePattern = (allProjects: boolean, byAuthor: boolean) =>
+  const densePattern = (allProjects: boolean, byAuthor: boolean, f?: SpatialFilter) =>
     cached<[Params], { id: string; distance: number; tier: Tier; updated_at: string }>(
-      `dense:${allProjects}:${byAuthor}`,
+      `dense:${allProjects}:${byAuthor}${spatialShape(f)}`,
       () => `WITH knn AS MATERIALIZED (
          SELECT id, distance FROM memories_vec
          WHERE embedding MATCH vec_int8(@v) AND k = @k AND node_key = @nodeKey
            ${allProjects ? '' : 'AND project_key IN (SELECT value FROM json_each(@projectKeys))'}
            ${byAuthor ? 'AND author_key = @author' : ''}
            AND tier != 'cold'
+           ${f === undefined ? '' : `AND id IN (SELECT s.id FROM memories s WHERE ${spatialSql(f, 's')})`}
        )
        SELECT knn.id AS id, knn.distance AS distance, m.tier AS tier, m.updated_at AS updated_at
        FROM knn CROSS JOIN memories m ON m.id = knn.id
@@ -704,6 +811,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     if (input.embedding !== undefined) checkDimension(input.embedding, `upsert ${input.id}`);
     // Inside the transaction, so a rejection rolls back the whole batch.
     const m = canonicalMemory(input);
+    if (m.place !== undefined) m.place = checkPlace(m.place);
+    else delete m.place;
     const { address, author } = resolveAddressing(m);
     if (!grantWrites(grant, m)) throw new GrantError();
     const existing = q.getRow.get(m.id);
@@ -713,6 +822,20 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     const row = q.upsertRow.get(toRow(m, address, author));
     if (row === undefined) throw new Error(`upsert ${m.id}: no row returned`);
     writeFts(row.rid, m.tier, m.text, m.stub, m.entities);
+    q.placeDelete.run(row.rid);
+    const box = placeBox(m.place);
+    if (box !== undefined) {
+      q.placeInsert.run(
+        row.rid,
+        box.minX,
+        box.maxX,
+        box.minY,
+        box.maxY,
+        box.minZ,
+        box.maxZ,
+        box.mapKey,
+      );
+    }
     q.vecDelete.run(m.id);
     if (m.embedding !== undefined) {
       q.vecInsert.run(
@@ -763,7 +886,10 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const forgetTx = db.transaction((grant: Grant, id: string): string | undefined => {
     if (scopedRow(grant.writeNodes, id) === undefined) return undefined;
     const row = q.deleteRow.get(id);
-    if (row !== undefined) q.ftsDelete.run(row.rid);
+    if (row !== undefined) {
+      q.ftsDelete.run(row.rid);
+      q.placeDelete.run(row.rid);
+    }
     q.vecDelete.run(id);
     return q.coldDelete.get(id)?.path;
   });
@@ -887,6 +1013,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   }
 
   return {
+    spatial: true,
+
     async upsert(grant, m) {
       open();
       assertGrant(grant);
@@ -914,14 +1042,21 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     },
 
     /** BM25 over normalised tokens, any-token match; `score` is -bm25 (higher is better). */
-    async lexical(grant, text, k) {
+    async lexical(grant, text, k, searchOpts) {
       open();
       assertGrant(grant);
       const match = matchQuery(text);
       const patterns = live(grant.readNodes);
       if (match === null || k <= 0 || patterns.length === 0) return [];
-      return lexicalScoped(patterns.length)
-        .all({ ...grantParams(patterns), match, k: Math.floor(k) })
+      const sp = searchOpts?.spatial;
+      const f = hasSpatialFilter(sp) ? sp : undefined;
+      return lexicalScoped(patterns.length, f)
+        .all({
+          ...grantParams(patterns),
+          ...(f !== undefined && spatialParams(f)),
+          match,
+          k: Math.floor(k),
+        })
         .map((r): Hit => ({ id: r.id, score: -r.rank, tier: r.tier }));
     },
 
@@ -929,17 +1064,20 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
      * One KNN per read pattern (see `densePattern`), merged best first when a
      * grant has several; `score` is cosine similarity.
      */
-    async dense(grant, v, k) {
+    async dense(grant, v, k, searchOpts) {
       open();
       assertGrant(grant);
       checkDimension(v, 'dense');
       const patterns = live(grant.readNodes);
       if (k <= 0 || patterns.length === 0) return [];
       const kk = Math.min(Math.floor(k), MAX_KNN);
+      const sp = searchOpts?.spatial;
+      const f = hasSpatialFilter(sp) ? sp : undefined;
       const runs = patterns.map((p) => {
         const all = p.projectIds === 'all';
-        return densePattern(all, p.authorAgentId !== undefined).all({
+        return densePattern(all, p.authorAgentId !== undefined, f).all({
           ...patternParams(p, 0),
+          ...(f !== undefined && spatialParams(f)),
           v: toBytes(v),
           k: kk,
           nodeKey: nodeKey(p.node),

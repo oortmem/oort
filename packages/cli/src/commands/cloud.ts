@@ -60,7 +60,12 @@ export async function clientFor(ctx: Ctx): Promise<CloudClient> {
 async function localExport(
   w: Wired,
   ctx: Ctx,
-): Promise<{ manifest: ExportManifest; lines: string[]; withEmbedding: number }> {
+): Promise<{
+  manifest: ExportManifest;
+  lines: string[];
+  withEmbedding: number;
+  placesLeftOut: number;
+}> {
   const s = w.scope;
   // The Planet alone, whoever acts: the anonymous principal has no Star.
   const grant = principalGrant({
@@ -76,11 +81,15 @@ async function localExport(
   const lines: string[] = [];
   const scopes = new Map<string, Scope>();
   let withEmbedding = 0;
+  let placesLeftOut = 0;
   // Oort Cloud's vectors are Voyage's: a store embedded by a local model sends text only.
   const bound = readEmbedderBinding(path.join(w.config.home, 'oort.sqlite')).model;
   const voyageVectors = bound === null || bound.startsWith('voyage/');
   for (const m of all) {
-    const read: Memory = await shapeLinks(w.store, grant, await decoded(m, w.store, grant, ctx));
+    const shaped: Memory = await shapeLinks(w.store, grant, await decoded(m, w.store, grant, ctx));
+    // Oort Cloud holds no places yet (CON-87): the fact goes up without where it is.
+    const { place, ...read } = shaped;
+    if (place !== undefined) placesLeftOut++;
     const { embedding, ...rest } = read;
     const full: Memory = voyageVectors || embedding === undefined ? read : rest;
     if (full.embedding !== undefined && full.embedding.length === w.config.embed.dimension)
@@ -100,7 +109,7 @@ async function localExport(
     memories: lines.length,
     scopes: [...scopes.values()],
   };
-  return { manifest, lines, withEmbedding };
+  return { manifest, lines, withEmbedding, placesLeftOut };
 }
 
 /** Chunks of export lines, each within the line and byte caps. */
@@ -308,7 +317,7 @@ export async function cloudImportCommand(
 ): Promise<number> {
   return withWired(ctx, async (w) => {
     const ui = uiFor(ctx.io);
-    const { manifest, lines, withEmbedding } = await localExport(w, ctx);
+    const { manifest, lines, withEmbedding, placesLeftOut } = await localExport(w, ctx);
     const settings = readCloudSettings(w.config.home);
     const fingerprint = fingerprintOf(lines);
     const resume =
@@ -326,6 +335,14 @@ export async function cloudImportCommand(
           'embeddings',
           `${withEmbedding} reused; ${lines.length - withEmbedding} re-embedded in the cloud (counted toward your Pro embed use)`,
         ],
+        ...(placesLeftOut > 0
+          ? [
+              [
+                'places',
+                `${placesLeftOut} ${placesLeftOut === 1 ? 'memory goes' : 'memories go'} up without its place: Oort Cloud does not hold places yet (the local store keeps them)`,
+              ] as [string, string],
+            ]
+          : []),
       ]),
     );
     const upload = {
@@ -335,6 +352,7 @@ export async function cloudImportCommand(
       bytes,
       requests: plan.length,
       embeddingsReused: withEmbedding,
+      placesLeftOut,
     };
     if (opts.dryRun === true || lines.length === resume) {
       if (lines.length === resume && lines.length > 0) ctx.io.out('Already uploaded.\n');

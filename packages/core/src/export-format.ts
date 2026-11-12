@@ -16,6 +16,7 @@ import {
   type Author,
 } from './address.js';
 import type { Memory, Scope } from './model.js';
+import { checkPlace } from './place.js';
 
 /** The version `oort export` writes. */
 export const EXPORT_FORMAT_VERSION = 2;
@@ -62,14 +63,16 @@ const base64 = (v: Int8Array): string =>
   Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('base64');
 
 /**
- * True when version 1 can hold `m`: a Planet memory whose author is its scope's agent, and not a
- * judgment (CON-71; version 1 readers know four memory types and no `judgment` field).
+ * True when version 1 can hold `m`: a Planet memory whose author is its scope's agent, not a
+ * judgment (CON-71; version 1 readers know four memory types and no `judgment` field), and
+ * without a place (CON-84; version 1 readers know no `place` field).
  */
 export function fitsVersion1(m: Memory): boolean {
   const author = authorOf(m);
   return (
     m.type !== 'judgment' &&
     m.judgment === undefined &&
+    m.place === undefined &&
     addressOf(m).level === 'user' &&
     author.accountRef === undefined &&
     author.agentId === m.scope.agentId &&
@@ -90,7 +93,9 @@ export function exportLine(
   const tail = embedding === undefined ? {} : { embedding: base64(embedding) };
   if (version === 1) {
     if (!fitsVersion1(m)) {
-      throw new ExportFormatError(`memory ${id} is not a Planet memory; version 1 cannot hold it`);
+      throw new ExportFormatError(
+        `memory ${id} is outside the Planet, a judgment or has a place; version 1 cannot hold it`,
+      );
     }
     return { id, scope, ...rest, ...tail };
   }
@@ -221,6 +226,7 @@ function readLine(
     scope: rawScope,
     supersedesHidden: _sh,
     supersededByHidden: _bh,
+    place: rawPlace,
     ...rest
   } = raw;
   let address: Address;
@@ -243,6 +249,8 @@ function readLine(
     address,
     author,
     ...(provenance !== undefined && provenance !== null && { provenance }),
+    // An optional field of version 2 (CON-84), checked like a write: a bad one fails the line.
+    ...(rawPlace !== undefined && rawPlace !== null && { place: checkPlace(rawPlace) }),
     ...(typeof embedding === 'string' && {
       embedding: Int8Array.from(Buffer.from(embedding, 'base64')),
     }),

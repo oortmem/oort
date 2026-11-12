@@ -105,6 +105,7 @@ export function memoryView(
     entities: (m.entities ?? []).map(clean),
     ...(origin !== undefined && { origin }),
     ...(m.judgment !== undefined && { judgment: judgmentView(m.judgment, m as Memory, now) }),
+    ...(m.place !== undefined && { place: structuredClone(m.place) }),
   };
 }
 
@@ -122,6 +123,8 @@ function recalledView(m: CoreRecalled, now: Date): RecalledMemory {
       ...(e.dense !== undefined && { dense: e.dense }),
       activation: e.activation,
       ...(e.chain === true && { chain: true as const }),
+      ...(e.placePath !== undefined && { placePath: e.placePath }),
+      ...(e.distanceM !== undefined && { distanceM: e.distanceM }),
     },
   };
 }

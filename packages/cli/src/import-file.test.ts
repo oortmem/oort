@@ -191,7 +191,8 @@ describe('oort import <file> (CON-137)', () => {
       write: [{ node: planetNode({ orgId: 'local', customerId: 'self' }), projectIds: 'all' }],
     });
     const a = memory({ text: 'We deploy on Fridays.', pinned: true });
-    const b = memory({ text: 'The staging host is blue.' });
+    const place = { nodeId: 'site:hq/room:B', mapId: 'hq', pose: { x: 1, y: 2 } };
+    const b = memory({ text: 'The staging host is blue.', place });
     await from.sqlite.upsertMany(grant, [a, b]);
     const file = path.join(from.root, 'mine.jsonl');
     expect((await from.run(['export', '--out', file])).code).toBe(0);
@@ -205,6 +206,12 @@ describe('oort import <file> (CON-137)', () => {
       'We deploy on Fridays.',
     ]);
     expect(here.find((m) => m.id === a.id)?.pinned).toBe(true);
+    // A place travels in export format 2 (CON-84), and only format 2 holds it.
+    expect(here.find((m) => m.id === b.id)?.place).toEqual(place);
+    expect(here.find((m) => m.id === a.id)?.place).toBeUndefined();
+    const v1 = await from.run(['export', '--format', '1', '--out', `${file}.v1`]);
+    expect(v1.code).toBe(2);
+    expect(v1.io.stderr).toContain('memories with a place');
   });
 
   it('cli.import-file-asks-first-and-refuses-what-it-cannot-read', async () => {

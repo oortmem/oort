@@ -4,8 +4,10 @@ import {
   lexicalIcuVersion,
   LEXICAL_VERSION,
   nodeKey,
+  placeBox,
   tokenizerForVersion,
   type NodeRef,
+  type Place,
 } from '@oortmem/core';
 
 /**
@@ -20,8 +22,55 @@ import {
  *    version 2 tokens (CJK bigrams, Thai words, combining marks kept, Latin accents folded).
  *    `meta` records `lexical_version` and the ICU version the index was built with. The
  *    migration rebuilds the index from stored text; nothing else changes.
+ * 5: spatial memory (CON-84). Two nullable columns, `place` (a memory's place as JSON) and
+ *    `place_node` (its `nodeId`), and the R*Tree `memories_place` (`PLACE_TABLE`): one row per
+ *    memory with coordinates, keyed by `rid`. Additive: no row, index or vector is rewritten.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
+
+/**
+ * The spatial index (schema version 5): the box each memory with coordinates covers, keyed by the
+ * memory's `rid`, with `map_key` (`[mapId, frame]`) as an auxiliary column. A pose without z
+ * spans all of z. R*Tree stores 32-bit floats rounded outward, so a box query never misses a
+ * match; the store checks the exact distance afterwards.
+ */
+export const PLACE_TABLE = 'memories_place';
+
+function placeTable(): string {
+  return `CREATE VIRTUAL TABLE IF NOT EXISTS ${PLACE_TABLE} USING rtree(
+        rid, min_x, max_x, min_y, max_y, min_z, max_z, +map_key TEXT
+      )`;
+}
+
+/**
+ * Creates the spatial index and fills it from the stored places: a version 5 store whose index
+ * went missing gets back every memory with coordinates, not an empty index that `near` would
+ * read as "nothing here". A place that does not parse is left out, as `near` leaves it out.
+ */
+function rebuildPlaceIndex(db: Database): void {
+  db.exec(placeTable());
+  const insert = db.prepare(
+    `INSERT INTO ${PLACE_TABLE} (rid, min_x, max_x, min_y, max_y, min_z, max_z, map_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const rows = db
+    .prepare<[], { rid: number; place: string }>(
+      'SELECT rid, place FROM memories WHERE place IS NOT NULL',
+    )
+    .all(); // read first: better-sqlite3 cannot write while a statement iterates
+  for (const { rid, place } of rows) {
+    let p: Place;
+    try {
+      p = JSON.parse(place) as Place;
+    } catch {
+      continue;
+    }
+    const b = placeBox(p);
+    if (b !== undefined) {
+      insert.run(rid, b.minX, b.maxX, b.minY, b.maxY, b.minZ, b.maxZ, b.mapKey);
+    }
+  }
+}
 
 /**
  * FTS5 tokenizer. The store indexes pre-tokenised text (core's `tokenizeLexical` joined by
@@ -102,9 +151,10 @@ const BODY = [
 
 /**
  * Version 2 `memories`: one column per Memory field except embedding (in memories_vec). Version 3
- * is the same table plus `judgment` (`withJudgment`), which a new store gets directly.
+ * is the same table plus `judgment` (`withJudgment`), version 5 also `place` and `place_node`
+ * (`withPlace`); a new store gets both directly.
  */
-function memoriesV2(table: string, withJudgment = false): string {
+function memoriesV2(table: string, withJudgment = false, withPlace = false): string {
   return `CREATE TABLE ${table} (
         rid INTEGER PRIMARY KEY,
         id TEXT NOT NULL UNIQUE,
@@ -119,7 +169,7 @@ function memoriesV2(table: string, withJudgment = false): string {
         author_agent_id TEXT NOT NULL,
         author_account_ref TEXT,
         provenance TEXT,
-        ${BODY_COLUMNS},${withJudgment ? '\n        judgment TEXT,' : ''}
+        ${BODY_COLUMNS},${withJudgment ? '\n        judgment TEXT,' : ''}${withPlace ? '\n        place TEXT,\n        place_node TEXT,' : ''}
         ${LEVEL_CHECK}
       )`;
 }
@@ -418,6 +468,42 @@ export function lexicalIndexState(
 }
 
 /**
+ * Version 4 to 5, inside the caller's transaction: adds the nullable `place` and `place_node`
+ * columns and the empty spatial index. Nothing is rewritten.
+ */
+export function migrateV4toV5(db: Database): void {
+  db.exec('ALTER TABLE memories ADD COLUMN place TEXT');
+  db.exec('ALTER TABLE memories ADD COLUMN place_node TEXT');
+  db.exec(placeTable());
+}
+
+/** How many memories carry a place (schema version 5). */
+export function placeCount(db: Database): number {
+  if (!hasColumn(db, 'memories', 'place')) return 0;
+  return (
+    db
+      .prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM memories WHERE place IS NOT NULL')
+      .get()?.n ?? 0
+  );
+}
+
+/**
+ * Version 5 back to 4, inside the caller's transaction: drops the spatial index and the place
+ * columns. Refuses (throws) while any memory has a place: version 4 has nowhere to keep it.
+ */
+export function migrateV5toV4(db: Database): void {
+  const n = placeCount(db);
+  if (n > 0) {
+    throw new Error(
+      `sqlite store: ${n} ${n === 1 ? 'memory has a place' : 'memories have a place'}; schema version 4 cannot hold them`,
+    );
+  }
+  db.exec(`DROP TABLE IF EXISTS ${PLACE_TABLE}`);
+  db.exec('ALTER TABLE memories DROP COLUMN place_node');
+  db.exec('ALTER TABLE memories DROP COLUMN place');
+}
+
+/**
  * Version 2 to 3, inside the caller's transaction: adds the nullable `judgment` column. Every
  * existing row keeps its rid, FTS row and vector; nothing is rewritten.
  */
@@ -614,7 +700,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     };
     const fresh = version === undefined && !exists(db, 'memories');
     if (fresh) {
-      db.exec(memoriesV2('memories', true));
+      db.exec(memoriesV2('memories', true, true));
       db.exec(INDEXES_V2);
     } else if (version === '1') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 1);
@@ -623,16 +709,24 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV1toV2(db, dimension);
       migrateV2toV3(db);
       migrateV3toV4(db);
+      migrateV4toV5(db);
     } else if (version === '2') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 2);
       rebuilding();
       migrateV2toV3(db);
       migrateV3toV4(db);
+      migrateV4toV5(db);
     } else if (version === '3') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 3);
       rebuilding();
       migrateV3toV4(db);
-    } else if (version === String(SCHEMA_VERSION)) {
+      migrateV4toV5(db);
+    } else if (version === '4' || version === String(SCHEMA_VERSION)) {
+      // Version 4 to 5 adds columns and an empty index: no rebuild, and no notice.
+      if (version === '4') {
+        if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 4);
+        migrateV4toV5(db);
+      }
       // An index to repair is a migration: an open that may not migrate (a hook) refuses, changing
       // nothing, rather than create an empty index that would then look current.
       if (opts.migrate === false && indexNeedsRepair(db)) {
@@ -667,28 +761,33 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       recordLexical(db, opts.icu ?? lexicalIcuVersion());
     }
     if (!exists(db, 'memories_vec')) db.exec(vecV2(dimension));
+    if (!exists(db, PLACE_TABLE)) rebuildPlaceIndex(db);
   }).immediate();
 }
 
 /**
  * Takes a store's database back to schema version `to`: 1 for running Oort 0.2.x against it
- * again (the default), 2 for Oort 0.3 to 0.5, 3 for Oort before tokeniser v2. Refuses, changing
- * nothing, when the store holds anything that version cannot represent (see `migrateV2toV1` and
- * `migrateV3toV2`). Leaving version 4 rebuilds the lexical index with tokeniser v1. No other
- * connection may have the store open. Opening a store never does this: migrations only roll
- * forward.
+ * again (the default), 2 for Oort 0.3 to 0.5, 3 for Oort before tokeniser v2, 4 for Oort before
+ * spatial memory (0.8). Refuses, changing nothing, when the store holds anything that version
+ * cannot represent (see `migrateV2toV1`, `migrateV3toV2` and `migrateV5toV4`). Leaving version 4
+ * rebuilds the lexical index with tokeniser v1. No other connection may have the store open.
+ * Opening a store never does this: migrations only roll forward.
  */
-export function downgradeSchema(db: Database, to: 1 | 2 | 3 = 1): void {
+export function downgradeSchema(db: Database, to: 1 | 2 | 3 | 4 = 1): void {
   db.transaction(() => {
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     let version = Number(get.get('schema_version')?.value);
     if (version <= to && version >= 1) return;
-    if (version !== 2 && version !== 3 && version !== 4) {
+    if (version !== 2 && version !== 3 && version !== 4 && version !== 5) {
       throw new Error(
         `sqlite store: cannot downgrade schema version ${Number.isNaN(version) ? 'unknown' : version}`,
       );
     }
-    if (version === 4) {
+    if (version === 5) {
+      migrateV5toV4(db);
+      version = 4;
+    }
+    if (version === 4 && to < 4) {
       rebuildFts(db, 1);
       version = 3;
     }

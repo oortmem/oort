@@ -124,6 +124,50 @@ class JudgmentView:
 
 
 @dataclass(**_FROZEN)
+class Pose:
+    """A position in metres on a map: x forward, y left, z up; yaw in radians."""
+
+    x: float
+    y: float
+    z: Optional[float] = None
+    yaw: Optional[float] = None
+
+
+@dataclass(**_FROZEN)
+class Place:
+    """Where a memory is (spatial memory, 0.9.0 or newer; local mode only). ``remember``,
+    ``observe`` and ``recall(near=...)`` also take a mapping with these keys."""
+
+    #: A place path, root first, whole segments: ``site:hq/floor:2/room:B/shelf:B3``.
+    node_id: Optional[str] = None
+    #: The map the coordinates are in. Required with ``pose``.
+    map_id: Optional[str] = None
+    #: Recorded, not filtered on.
+    map_version: Optional[int] = None
+    #: Default ``map``. ``odom`` is refused: it drifts.
+    frame: Optional[str] = None
+    pose: Optional[Pose] = None
+    #: The region around ``pose``: ``{"dx", "dy", "dz"?}`` (full sizes, centred) or ``{"radius"}``.
+    extent: Optional[Dict[str, float]] = None
+    #: WGS84 ``{"lat", "lon", "alt"?}``; stored and returned, not searchable yet.
+    geo: Optional[Dict[str, float]] = None
+    #: Pose uncertainty in metres (1 sigma).
+    sigma: Optional[float] = None
+
+
+@dataclass(**_FROZEN)
+class NearQuery:
+    """``recall(near=...)``: within ``radius`` metres of ``pose`` on the same map and frame."""
+
+    map_id: str
+    pose: Pose
+    #: Metres, more than 0.
+    radius: float
+    #: Default ``map``.
+    frame: Optional[str] = None
+
+
+@dataclass(**_FROZEN)
 class MemoryView:
     id: str
     #: Scrubbed again on read.
@@ -140,6 +184,8 @@ class MemoryView:
     entities: List[str] = field(default_factory=list)
     origin: Optional[Origin] = None
     judgment: Optional[JudgmentView] = None
+    #: Where it is (0.9.0 or newer), when it was remembered with a place.
+    place: Optional[Place] = None
 
 
 @dataclass(**_FROZEN)
@@ -153,6 +199,10 @@ class RecallWhy:
     reranked: Optional[float] = None
     dense: Optional[float] = None
     chain: Optional[bool] = None
+    #: With ``near`` or ``within``: the memory's place path.
+    place_path: Optional[str] = None
+    #: With ``near``: metres from the query point to the memory's region (0 inside it).
+    distance_m: Optional[float] = None
 
 
 @dataclass(**_FROZEN)
@@ -410,6 +460,9 @@ class Turn:
     session_id: Optional[str] = None
     #: At most 128 characters; deduplicated by Oort Cloud only.
     turn_ref: Optional[str] = None
+    #: Where this turn happened (a ``Place`` or a mapping): the memories it writes carry it.
+    #: 0.9.0 or newer; local mode only.
+    place: Optional[Any] = None
 
 
 # --------------------------------------------------------------------------------------------
