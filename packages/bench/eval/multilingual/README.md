@@ -118,6 +118,64 @@ language means one row moves abstention FP by 0.25: read these as directions, no
 - **Latency:** recall p50 was about 280 ms without rerank and about 525 ms with it, measured from this
   machine, so the rerank adds about 240 ms. That is why the design reranks only on a gate miss.
 
+## Gate-miss rerank, 2026-11-12
+
+`recall.rerankWhen: 'gate-miss'` (CON-131): a recall without the reranker that drops every candidate
+reranks once when its best dense score reaches `gateMissDenseFloor`, and keeps what scores at least
+`gateMissRerankFloor`. The prompt hook turns it on with `recall.promptGateMissRerank`. The floors
+were calibrated here with `voyage-3.5-lite` (512 dimensions, int8) and `rerank-3-lite`.
+
+**Method.** One recording run with both floors at 0 keeps, for every row the gate drops, the best
+dense score and the rerank score of each candidate. Every pair of floors is then replayed from that
+record (`src/gate-miss.ts`), so the grid (dense 0.30 to 0.70, rerank 0.30 to 0.95, steps of 0.01)
+costs no more calls. `unrelated.jsonl` adds 3 developer prompts per language that no memory
+answers ("refactor this to async/await"), recalled in each condition's store, to count false
+injections on ordinary prompts. A pair passes when, for the six gating languages, cross recall@10
+is at least 0.75 × English mono recall@10 and abstention FP is at most English's (without the
+escalation) + 0.1, and no unrelated prompt or abstention question gets an answer it does not get
+without the escalation. Of the passing pairs, the best mean cross recall@10 over the gating
+languages, then the highest dense floor within 0.02 of it, since every escalation is a rerank
+call on the prompt's critical path. The run cost 657 rerank calls and 22 embedding requests (about
+US$0.03). Reproduce it with `VOYAGE_API_KEY=… pnpm --filter @oortmem/bench run calibrate:gate-miss`.
+
+**Chosen: dense 0.51, rerank 0.76.** Recall@10 without / with the escalation, abstention FP (mono),
+and the share of rows that paid for a rerank (mono / cross):
+
+| Language | mono R@10     | cross R@10    | mixed R@10    | Abstain FP  | Reranked, mono / cross |
+| -------- | ------------- | ------------- | ------------- | ----------- | ---------------------- |
+| en       | 0.933 / 0.933 | —             | 0.967 / 0.967 | 0.25 / 0.25 | 0.14 / —               |
+| es       | 0.933 / 0.933 | 0.733 / 0.900 | 0.933 / 0.933 | 0.25 / 0.25 | 0.11 / 0.32            |
+| pt-BR    | 0.967 / 0.967 | 0.900 / 0.967 | 0.967 / 0.967 | 0.25 / 0.25 | 0.11 / 0.16            |
+| de       | 0.933 / 0.967 | 0.600 / 0.867 | 0.967 / 0.967 | 0.00 / 0.00 | 0.16 / 0.35            |
+| fr       | 0.900 / 0.933 | 0.767 / 0.867 | 0.900 / 0.933 | 0.25 / 0.25 | 0.14 / 0.24            |
+| ja       | 0.833 / 0.933 | 0.700 / 0.867 | 0.867 / 0.967 | 0.00 / 0.00 | 0.14 / 0.16            |
+| zh-Hans  | 0.933 / 0.967 | 0.800 / 0.933 | 0.933 / 0.967 | 0.00 / 0.00 | 0.11 / 0.16            |
+| ko       | 0.833 / 0.933 | 0.433 / 0.767 | 0.867 / 0.933 | 0.00 / 0.00 | 0.14 / 0.35            |
+| hi       | 0.900 / 0.967 | 0.833 / 0.933 | 0.933 / 0.967 | 0.25 / 0.25 | 0.11 / 0.19            |
+| ar       | 0.933 / 0.967 | 0.767 / 0.967 | 0.933 / 0.967 | 0.00 / 0.00 | 0.11 / 0.22            |
+| th       | 0.733 / 0.900 | 0.433 / 0.800 | 0.767 / 0.933 | 0.00 / 0.00 | 0.22 / 0.43            |
+| ru       | 0.833 / 0.900 | 0.600 / 0.867 | 0.867 / 0.967 | 0.25 / 0.25 | 0.24 / 0.38            |
+| id       | 0.900 / 0.967 | 0.833 / 0.900 | 0.900 / 0.967 | 0.25 / 0.25 | 0.16 / 0.19            |
+
+- **Cross-lingual recall:** the gating languages' mean cross recall@10 goes from 0.750 to 0.900, and
+  every language, Korean and Thai included, now clears 0.75 × English mono (0.70). German, the one
+  gating language under the bar without the escalation (0.600), reaches 0.867.
+- **Abstention is unchanged:** no abstention FP moves in any cell, and the unrelated prompts get
+  exactly the answers they get without the escalation (6 of 114, all in mono and mixed stores).
+  English mono recall@10 is unchanged (0.933).
+- **The trade-off is the dense floor.** The best pair overall is dense 0.34 (mean cross recall@10
+  0.917), but it reranks 93% of the unrelated prompts. 0.51 gives up 0.017 of recall and reranks 49%
+  of them, 12% of answerable questions and 9% of English mono questions. At 0.55 recall falls to
+  0.867 (32% of unrelated prompts); at 0.60, the gate's own dense floor, the escalation fires for 2%
+  of rows and the cross bar fails again. The rerank floor is the abstention side: at dense 0.51,
+  0.74 is the lowest that adds no false injection (0.72 injects 3 more unrelated prompts, 0.70
+  injects 8 more), and 0.74 to 0.88 all pass, trading cross recall for margin. 0.74 and 0.76 tie
+  on recall, so the higher one ships.
+- **Latency:** each escalation is one rerank call. From this machine (Europe) the 657 calls took
+  275 ms at p50 and 487 ms at p95; the prompt hook's `promptRerankBudgetMs` (400) cuts off the slow
+  ones, which then inject nothing. One global pair ships, since recall detects no language; what
+  each language alone would choose is in the calibration output (`perLanguage`).
+
 ## Baseline, tokeniser v1 (2026-11-06)
 
 Before tokeniser v2 (commit `cd84e56`): the store at `70e1917`, Node 26.13, ICU 78.3. Local models from a throwaway

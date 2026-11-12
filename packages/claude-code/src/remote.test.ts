@@ -79,6 +79,30 @@ describe('hooks in cloud mode (CON-76)', () => {
     expect(readLog(t.home).at(-1)).toMatchObject({ outcome: 'injected', counts: { memories: 1 } });
   });
 
+  it('remote.prompt-logs-a-gate-miss-rerank (CON-131)', async () => {
+    const t = tempHome();
+    const remote = fakeRemote({
+      recall: async () => ({
+        ...result([CLOUD_MEMORY]),
+        gateMiss: { reranked: true, topDense: 0.52, kept: 1 },
+      }),
+    });
+    await handleUserPromptSubmit(ask(t.cwd), makeDeps(t, { remote }));
+    const quiet = fakeRemote({
+      recall: async () => ({
+        memories: [],
+        abstained: true,
+        gateMiss: { reranked: false, topDense: 0.3, kept: 0 },
+        timings: { totalMs: 3 },
+      }),
+    });
+    await handleUserPromptSubmit(ask(t.cwd), makeDeps(t, { remote: quiet }));
+    const [fired, below] = readLog(t.home).slice(-2);
+    expect(fired?.counts).toMatchObject({ memories: 1, gateMissReranked: 1 });
+    expect(below?.counts).toMatchObject({ abstained: 1, gateMiss: 1 });
+    expect(below?.counts['gateMissReranked']).toBeUndefined();
+  });
+
   it('remote.prompt-timeout-injects-nothing', async () => {
     const t = tempHome();
     const remote = fakeRemote({ recall: () => new Promise(() => {}) });

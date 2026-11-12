@@ -40,6 +40,13 @@ const activation = z
   })
   .default({ d: 0.5, ws: 1.0, hotTopN: 50, coldBelow: -2.0 });
 
+/**
+ * The gate-miss rerank's floors (CON-131), from the multilingual eval with voyage-3.5-lite and
+ * rerank-3-lite (`packages/bench/eval/multilingual/README.md`, "Gate-miss rerank").
+ */
+export const GATE_MISS_DENSE_FLOOR = 0.51;
+export const GATE_MISS_RERANK_FLOOR = 0.76;
+
 const recall = z
   .strictObject({
     lexicalK: z.number().int().positive().default(50),
@@ -59,6 +66,19 @@ const recall = z
     minCoverage: z.number().min(0).max(1).default(0.5),
     /** Dense (cosine) similarity that lets a memory through without shared words. Provisional. */
     minDenseScore: z.number().min(0).max(1).default(0.6),
+    /**
+     * When recall calls the reranker (CON-131). `always`, the default: every recall that has one,
+     * unless fusion is already confident. `gate-miss`: only when the relevance gate would drop
+     * every candidate and the best dense match scores at least `gateMissDenseFloor`. The reranked
+     * memories then need `gateMissRerankFloor`. A question in one language about a memory written
+     * in another shares no words with it, so this is how such a recall is rescued without paying
+     * for a rerank on every prompt.
+     */
+    rerankWhen: z.enum(['always', 'gate-miss']).default('always'),
+    /** `gate-miss`: the lowest dense score worth a rerank call. Calibrated for voyage-3.5-lite. */
+    gateMissDenseFloor: z.number().min(0).max(1).default(GATE_MISS_DENSE_FLOOR),
+    /** `gate-miss`: the rerank score an escalated memory needs. Calibrated for rerank-3-lite. */
+    gateMissRerankFloor: z.number().min(0).max(1).default(GATE_MISS_RERANK_FLOOR),
     /** Skip the rerank call when lexical and dense agree on a clear top result (CON-57). */
     skipRerankWhenConfident: z.boolean().default(true),
     /**
@@ -95,6 +115,13 @@ const recall = z
      */
     promptMode: z.enum(['full', 'fast', 'lexical']).default('fast'),
     /**
+     * `fast` mode only (CON-131): the prompt hook asks for a rerank when the relevance gate would
+     * otherwise drop everything (`rerankWhen: 'gate-miss'`), instead of never reranking. Off by
+     * default. In Oort Cloud it needs an API that accepts `rerank: 'gate-miss'`; locally it needs a
+     * hosted reranker (the local one is English-only and stays out of the hook).
+     */
+    promptGateMissRerank: z.boolean().default(false),
+    /**
      * The adaptive stop (CON-17): when the reranked hot and warm memories already answer the
      * query, the cold memories that also matched are not returned, so none is hydrated.
      * - `rule` (default): decided in code, no model call: the top memory is live, holds every
@@ -116,6 +143,9 @@ const recall = z
     minRerankScore: 0.35,
     minCoverage: 0.5,
     minDenseScore: 0.6,
+    rerankWhen: 'always',
+    gateMissDenseFloor: GATE_MISS_DENSE_FLOOR,
+    gateMissRerankFloor: GATE_MISS_RERANK_FLOOR,
     skipRerankWhenConfident: true,
     lexicalFirst: true,
     rerankBudgetMs: 2000,
@@ -124,6 +154,7 @@ const recall = z
     staleAfterDays: 30,
     specificityPrior: 0,
     promptMode: 'fast',
+    promptGateMissRerank: false,
     adaptiveStop: 'rule',
     sufficientAt: 0.7,
   });

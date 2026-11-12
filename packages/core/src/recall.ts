@@ -155,6 +155,13 @@ export interface RecallResult {
   gate?: { by: 'rerank' | 'coverage'; threshold: number; dropped: number };
   /** Rerank was available but not called, because fusion already had a clear answer. */
   rerankSkipped?: 'confident';
+  /**
+   * `rerankWhen: 'gate-miss'` (CON-131), when the relevance gate would have dropped every
+   * candidate. `reranked`: the best dense match (`topDense`, absent without one) reached
+   * `gateMissDenseFloor`, so the reranker was asked. `kept`: memories that then passed
+   * `gateMissRerankFloor`.
+   */
+  gateMiss?: { reranked: boolean; topDense?: number; kept: number };
   /** The query was not embedded, because the lexical search already had a clear answer. */
   embedSkipped?: 'lexical-confident';
   /** The temporal view this recall read. Always set by `recall`. */
@@ -341,19 +348,14 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   let ordered = fused.slice(0, config.recall.rerankK);
   const rerankScores = new Map<string, number>();
   let rerankSkipped: RecallResult['rerankSkipped'];
-  if (!deps.rerank) {
-    degraded.push('no-reranker');
-  } else if (
-    config.recall.skipRerankWhenConfident &&
-    isConfident(ordered, lexical, dense, coverage)
-  ) {
-    rerankSkipped = 'confident';
-  } else if (ordered.length > 0) {
+  // Reranks `ordered` within the budget: on an answer, `ordered` becomes the reranked list and
+  // `rerankScores` holds its scores; on a failure, the fused order stands and the reason is kept.
+  const rerankOrdered = async (reranker: Reranker): Promise<void> => {
     const tr = clock();
     try {
       const docs = ordered.map((f) => ({ id: f.id, text: memories.get(f.id)?.text ?? '' }));
       const reranked = await withBudget(
-        deps.rerank.rerank(text, docs, config.recall.returnK),
+        reranker.rerank(text, docs, config.recall.returnK),
         config.recall.rerankBudgetMs,
       );
       if (reranked === TIMED_OUT) throw RERANK_TIMEOUT;
@@ -377,13 +379,27 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
       rerankScores.clear();
     }
     timings['rerankMs'] = clock() - tr;
+  };
+  // `gate-miss` (CON-131): the reranker waits for the relevance gate, below.
+  const onGateMiss = config.recall.rerankWhen === 'gate-miss';
+  if (!deps.rerank) {
+    degraded.push('no-reranker');
+  } else if (onGateMiss) {
+    // Decided after the gate.
+  } else if (
+    config.recall.skipRerankWhenConfident &&
+    isConfident(ordered, lexical, dense, coverage)
+  ) {
+    rerankSkipped = 'confident';
+  } else if (ordered.length > 0) {
+    await rerankOrdered(deps.rerank);
   }
 
   // Relevance gate (CON-45): a reranker score when there is one, else query-word coverage or a
   // strong dense match. A threshold of 0 switches that test off.
-  const { minRerankScore, minCoverage, minDenseScore } = config.recall;
-  const candidates = ordered.slice(0, config.recall.returnK);
-  const byRerank = rerankScores.size > 0;
+  const { minCoverage, minDenseScore } = config.recall;
+  let minRerankScore = config.recall.minRerankScore;
+  let candidates = ordered.slice(0, config.recall.returnK);
   const relevant = (id: string): boolean => {
     const rs = rerankScores.get(id);
     if (rs !== undefined) return rs >= minRerankScore;
@@ -392,6 +408,25 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     return minDenseScore > 0 && (denseScore.get(id) ?? -1) >= minDenseScore;
   };
   let kept = candidates.filter((f) => relevant(f.id));
+  // Gate-miss rerank (CON-131): everything was dropped, but a dense match is plausible. No
+  // language is detected: the evidence is that nothing passed and something came close.
+  let gateMiss: RecallResult['gateMiss'];
+  if (onGateMiss && deps.rerank && kept.length === 0 && candidates.length > 0) {
+    const topDense = dense.length === 0 ? undefined : Math.max(...dense.map((h) => h.score));
+    const plausible = topDense !== undefined && topDense >= config.recall.gateMissDenseFloor;
+    if (plausible) {
+      await rerankOrdered(deps.rerank);
+      minRerankScore = config.recall.gateMissRerankFloor;
+      candidates = ordered.slice(0, config.recall.returnK);
+      kept = candidates.filter((f) => relevant(f.id));
+    }
+    gateMiss = {
+      reranked: plausible,
+      ...(topDense !== undefined && { topDense }),
+      kept: kept.length,
+    };
+  }
+  const byRerank = rerankScores.size > 0;
   const dropped = candidates.length - kept.length;
 
   // Adaptive stop (CON-17): with the live set enough, the cold matches are left out, unhydrated.
@@ -537,6 +572,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         }
       : {}),
     ...(rerankSkipped !== undefined ? { rerankSkipped } : {}),
+    ...(gateMiss !== undefined ? { gateMiss } : {}),
     ...(embedSkipped !== undefined ? { embedSkipped } : {}),
     ...(adaptiveStop !== undefined ? { adaptiveStop } : {}),
     temporal,

@@ -122,13 +122,41 @@ export interface WiredHookOptions {
  * The prompt hook keeps its own, shorter rerank wait (CON-136): it runs before every prompt, while
  * `oort recall`, `oort mcp` and the SDK wait up to `recall.rerankBudgetMs`.
  */
-export function promptRecallConfig<
-  C extends { recall: { rerankBudgetMs: number; promptRerankBudgetMs: number } },
->(config: C): C {
+export function promptRecallConfig<C extends PromptConfig>(config: C): C {
   return {
     ...config,
-    recall: { ...config.recall, rerankBudgetMs: config.recall.promptRerankBudgetMs },
+    recall: {
+      ...config.recall,
+      rerankBudgetMs: config.recall.promptRerankBudgetMs,
+      // CON-131: a kept reranker in `fast` mode runs only on a gate miss.
+      ...(config.recall.promptMode === 'fast' && promptReranker(config)
+        ? { rerankWhen: 'gate-miss' as const }
+        : {}),
+    },
   };
+}
+
+type PromptConfig = {
+  rerank: { provider: string };
+  recall: {
+    rerankBudgetMs: number;
+    promptRerankBudgetMs: number;
+    promptMode: 'full' | 'fast' | 'lexical';
+    promptGateMissRerank: boolean;
+    rerankWhen: 'always' | 'gate-miss';
+  };
+};
+
+/**
+ * Whether the prompt hook keeps the reranker. A local reranker would load in this short-lived
+ * process on every prompt: about 450 ms and 600 ms of CPU, often past the rerank budget anyway, and
+ * it is English-only, so the hook never uses it (CON-15). Otherwise `full` keeps it, `fast` keeps
+ * it only for the gate-miss rerank (`recall.promptGateMissRerank`, CON-131), and `lexical` never.
+ */
+export function promptReranker(config: PromptConfig): boolean {
+  if (config.rerank.provider === LOCAL_PROVIDER) return false;
+  const { promptMode, promptGateMissRerank } = config.recall;
+  return promptMode === 'full' || (promptMode === 'fast' && promptGateMissRerank);
 }
 
 /**
@@ -184,14 +212,12 @@ export async function runWiredHook(
   // and the relevance gate instead; `oort mcp` and `oort recall` keep it (CON-15). `oort serve`
   // follows the hook, so a prompt gets the same context whichever process answers it.
   // `recall.promptMode` (CON-101) trades more for speed on the prompt hook only: `fast` drops any
-  // reranker, `lexical` the query embedding too. In cloud mode the API is asked to do the same,
+  // reranker (unless `recall.promptGateMissRerank` keeps a hosted one for gate misses, CON-131),
+  // `lexical` the query embedding too. In cloud mode the API is asked to do the same,
   // and to follow `recall.lexicalFirst` (skip the embedding when the lexical answer is clear).
   const prompt = event === 'UserPromptSubmit';
   const promptMode = w.config.recall.promptMode;
-  const hookRerank =
-    prompt && (promptMode !== 'full' || w.config.rerank.provider === LOCAL_PROVIDER)
-      ? undefined
-      : rerank;
+  const hookRerank = prompt && !promptReranker(w.config) ? undefined : rerank;
   const hookEmbed = prompt && promptMode === 'lexical' ? undefined : engine.embed;
   const { embed: _embed, ...rest } = engine;
   let busy = false;
@@ -232,6 +258,7 @@ export async function runWiredHook(
         agent.source === 'none' ? undefined : agent.id,
         promptMode,
         w.config.recall.lexicalFirst,
+        w.config.recall.promptGateMissRerank,
       ),
     }),
   });

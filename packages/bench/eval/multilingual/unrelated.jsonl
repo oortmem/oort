@@ -1,0 +1,39 @@
+{"lang":"en","question":"Refactor this function to use async/await instead of callbacks."}
+{"lang":"en","question":"Why does this test pass locally but fail on CI?"}
+{"lang":"en","question":"Add a dark mode toggle to the settings page and keep the choice after reload."}
+{"lang":"es","question":"Refactoriza esta función para usar async/await en vez de callbacks."}
+{"lang":"es","question":"¿Por qué este test pasa en local pero falla en CI?"}
+{"lang":"es","question":"Añade un interruptor de modo oscuro en la página de ajustes y que se guarde al recargar."}
+{"lang":"pt-BR","question":"Refatora essa função pra usar async/await em vez de callbacks."}
+{"lang":"pt-BR","question":"Por que esse teste passa local mas falha no CI?"}
+{"lang":"pt-BR","question":"Adiciona um botão de modo escuro na página de configurações e mantém a escolha depois de recarregar."}
+{"lang":"de","question":"Bau diese Funktion auf async/await statt Callbacks um."}
+{"lang":"de","question":"Warum läuft dieser Test lokal durch, aber schlägt im CI fehl?"}
+{"lang":"de","question":"Füg auf der Einstellungsseite einen Dark-Mode-Schalter hinzu, der nach dem Neuladen erhalten bleibt."}
+{"lang":"fr","question":"Réécris cette fonction avec async/await au lieu de callbacks."}
+{"lang":"fr","question":"Pourquoi ce test passe en local mais échoue sur la CI ?"}
+{"lang":"fr","question":"Ajoute un bouton de mode sombre sur la page des paramètres et garde le choix après un rechargement."}
+{"lang":"ja","question":"この関数をコールバックではなくasync/awaitを使うようにリファクタリングして。"}
+{"lang":"ja","question":"このテスト、ローカルでは通るのにCIで落ちるのはなぜ？"}
+{"lang":"ja","question":"設定ページにダークモードの切り替えを追加して、リロード後も選択を保持して。"}
+{"lang":"zh-Hans","question":"把这个函数改成用 async/await，不要用回调。"}
+{"lang":"zh-Hans","question":"为什么这个测试在本地能过，在 CI 上却失败？"}
+{"lang":"zh-Hans","question":"在设置页面加一个深色模式开关，刷新后也要保留选择。"}
+{"lang":"ko","question":"이 함수를 콜백 대신 async/await를 쓰도록 리팩터링해 줘."}
+{"lang":"ko","question":"이 테스트가 로컬에서는 통과하는데 CI에서는 왜 실패해요?"}
+{"lang":"ko","question":"설정 페이지에 다크 모드 토글을 추가하고 새로고침 후에도 선택이 유지되게 해 줘."}
+{"lang":"hi","question":"इस function को callbacks की जगह async/await इस्तेमाल करने के लिए refactor करो।"}
+{"lang":"hi","question":"यह test local पर pass होता है लेकिन CI पर fail क्यों होता है?"}
+{"lang":"hi","question":"settings page पर dark mode का toggle जोड़ो और reload के बाद भी चुनाव बना रहे।"}
+{"lang":"ar","question":"أعد كتابة هذه الدالة لتستخدم async/await بدلًا من callbacks."}
+{"lang":"ar","question":"لماذا ينجح هذا الاختبار محليًا لكنه يفشل على CI؟"}
+{"lang":"ar","question":"أضف مفتاح الوضع الداكن إلى صفحة الإعدادات واحفظ الاختيار بعد إعادة التحميل."}
+{"lang":"th","question":"ช่วย refactor ฟังก์ชันนี้ให้ใช้ async/await แทน callback หน่อย"}
+{"lang":"th","question":"ทำไมเทสต์นี้ผ่านบนเครื่องแต่ไปพังบน CI"}
+{"lang":"th","question":"เพิ่มปุ่มสลับโหมดมืดในหน้าตั้งค่า และให้จำค่าที่เลือกไว้หลังรีโหลด"}
+{"lang":"ru","question":"Перепиши эту функцию на async/await вместо колбэков."}
+{"lang":"ru","question":"Почему этот тест проходит локально, но падает в CI?"}
+{"lang":"ru","question":"Добавь переключатель тёмной темы на страницу настроек и сохраняй выбор после перезагрузки."}
+{"lang":"id","question":"Refactor fungsi ini supaya pakai async/await, bukan callback."}
+{"lang":"id","question":"Kenapa tes ini lolos di lokal tapi gagal di CI?"}
+{"lang":"id","question":"Tambahkan toggle mode gelap di halaman pengaturan dan simpan pilihannya setelah reload."}

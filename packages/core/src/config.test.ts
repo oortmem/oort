@@ -2,7 +2,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveConfig, resolveHome } from './config.js';
+import {
+  GATE_MISS_DENSE_FLOOR,
+  GATE_MISS_RERANK_FLOOR,
+  resolveConfig,
+  resolveHome,
+} from './config.js';
 
 function tmp(): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'oort-cfg-')));
@@ -37,6 +42,9 @@ describe('config', () => {
       minRerankScore: 0.35,
       minCoverage: 0.5,
       minDenseScore: 0.6,
+      rerankWhen: 'always',
+      gateMissDenseFloor: GATE_MISS_DENSE_FLOOR,
+      gateMissRerankFloor: GATE_MISS_RERANK_FLOOR,
       skipRerankWhenConfident: true,
       specificityPrior: 0,
       lexicalFirst: true,
@@ -45,6 +53,7 @@ describe('config', () => {
       queryCacheTtlSec: 600,
       staleAfterDays: 30,
       promptMode: 'fast',
+      promptGateMissRerank: false,
       adaptiveStop: 'rule',
       sufficientAt: 0.7,
     });
