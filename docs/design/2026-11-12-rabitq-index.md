@@ -298,12 +298,17 @@ is not left behind in freed memory.
 
 **Packaging.** The binaries ship inside `@oortmem/store-sqlite` (`files` includes
 `native/oort-rabitq.*.node`), so there is no new npm package and no install script. The release
-workflow builds one per platform on a runner of that platform (`macos-15`, `ubuntu-22.04`,
-`ubuntu-22.04-arm`, so glibc 2.35 or newer), from source with the pinned toolchain
-(`rust-toolchain.toml`) and `cargo build --locked`. Each platform's job then loads the binary it
-built and runs the engine and index test files with `OORT_REQUIRE_NATIVE=1` (the store's RaBitQ
-conformance included), and writes a SHA-256 beside it. A separate job, which checks out nothing and runs no project
-code, downloads the three, checks their hashes and attests their build provenance
+workflow builds one per platform from source with the pinned toolchain (`rust-toolchain.toml`)
+and `--locked`: Linux on a runner of that platform (`ubuntu-22.04`, `ubuntu-22.04-arm`, so glibc
+2.35 or newer), macOS arm64 cross-compiled on `ubuntu-22.04` with cargo-zigbuild. Each Linux job
+loads the binary it built and runs the engine and index test files with `OORT_REQUIRE_NATIVE=1`
+(the store's RaBitQ conformance included); every build job writes a SHA-256 beside its binary.
+The macOS job checks, before upload, that the binary's page hashes match its code signature
+(`scripts/check-macho-signature.mjs`) and that it exports `napi_register_module_v1`. A `macos-15`
+job runs the same test files on the cross-built macOS binary after the build, but publishing
+does not wait for it, so a release never waits for a hosted macOS runner. A separate
+job, which checks out nothing and runs no project code, downloads the three, checks their
+hashes and attests their build provenance
 (`actions/attest-build-provenance`, pinned by commit); only it holds `id-token: write` and
 `attestations: write`, so the build jobs, which run the dependencies' build scripts, never hold
 the token that signs. The publish job downloads all three, checks each hash (transit integrity)
@@ -453,7 +458,7 @@ stops those queries at 500.
   fewer than 10 × k, so the binary index reads the whole store and neither index can skip much.
   The target is not relaxed; that row is reported as it is.
 - **Prebuilt binaries: built in the release workflow, not yet published.** The workflow builds
-  macOS arm64, Linux x64 and Linux arm64 from source on their own runners and refuses to pack
+  macOS arm64 (cross-compiled on Linux), Linux x64 and Linux arm64 from source and refuses to pack
   without all three. Only the macOS arm64 binary has been built and tested so far (locally); the
   Linux ones are first built by CI on the pull request (x64) and by the next release (both).
 - **The TypeScript path: kept,** with the same results, as the fallback and the reference.
