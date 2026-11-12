@@ -366,7 +366,14 @@ function fromRow(r: MemoryRow, embedding: Int8Array | undefined): Memory {
     updatedAt: r.updated_at,
   };
   if (r.judgment !== null) m.judgment = JSON.parse(r.judgment) as Judgment;
-  if (r.place !== null) m.place = JSON.parse(r.place) as Place;
+  if (r.place !== null) {
+    // Checked as a write is: a place from a crafted or damaged copy reads back as none.
+    try {
+      m.place = checkPlace(JSON.parse(r.place));
+    } catch {
+      /* dropped */
+    }
+  }
   if (embedding !== undefined) m.embedding = embedding;
   return m;
 }
@@ -702,9 +709,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       if (typeof place !== 'string') return null;
       let stored: Place;
       try {
-        stored = JSON.parse(place) as Place;
+        stored = checkPlace(JSON.parse(place));
       } catch {
-        return null; // a damaged place is near nothing; it never fails the recall
+        return null; // a damaged or unchecked place is near nothing; it never fails the recall
       }
       const d = placeDistance(stored, {
         mapId: String(mapId),

@@ -287,6 +287,21 @@ dense index beside the int8 vectors, and a guard that stops an older Oort from w
   refuses a version 6 store without changing it, as every version refuses a newer schema.
   `sqliteVectorIndex(path)` says which index a store searches and how many vectors, read-only.
 
+A stored place that does not parse or does not pass `checkPlace` (from a crafted or damaged copy
+of the database, such as a negative size or a null pose) is handled the same way everywhere:
+
+- **`near`** never returns it. The exact distance check checks the place first, and a place that
+  fails has no distance, so the recall goes on without it.
+- **Reads** (`get`, `list`, recall hits, and so exports) return the memory without its place, so
+  nothing hands back a place that an import would refuse.
+- **`within`** matches the separately stored path column (`place_node`), not the JSON place. A
+  memory whose place fails the check can still be found by `within` if that column holds a
+  matching path; it is returned without its place.
+- **A missing R\*Tree** is rebuilt on open from the stored places, each checked with `checkPlace`
+  as a write is. Places that fail are left out of the index, the open does not fail, and the store
+  logs one line: "sqlite store: N stored places failed the place check and are not searchable by
+  near".
+
 Opening a version 1 store migrates it in one transaction: every memory becomes its owner's Planet
 (`agent_id` moves to `author_agent_id`), row ids, FTS rows, cursors and cold blobs are kept, and the
 vector table is rebuilt from the stored embeddings.

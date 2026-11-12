@@ -971,7 +971,7 @@ for (const m of near.memories) console.log(m.why.distanceM?.toFixed(2), '|', m.t
 
 | Field        | Meaning                                                                                       |
 | ------------ | --------------------------------------------------------------------------------------------- |
-| `nodeId`     | A place path, root first: `site:hq/floor:2/room:B/shelf:B3`. 1 to 16 segments of 1 to 64 letters (any script, with combining marks), digits and `. _ : @ -`; normalised to NFC |
+| `nodeId`     | A place path, root first: `site:hq/floor:2/room:B/shelf:B3`. 1 to 16 segments of 1 to 64 letters (any script, with combining marks), digits and `. _ : @ -`; normalised to NFC; invisible characters (any default-ignorable code point, such as a variation selector) are refused, except the joiners IDNA's ContextJ rules allow (ZWJ after a virama; ZWNJ after a virama or between letters of a joining script such as Arabic). Compared exactly: a name with and without its ZWNJ is two places to `within` |
 | `mapId`      | The map the coordinates are in. Required with `pose`                                          |
 | `mapVersion` | Recorded, not filtered on                                                                     |
 | `frame`      | The coordinate frame, default `map`. `odom` is refused: odometry drifts                       |

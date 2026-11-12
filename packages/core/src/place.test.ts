@@ -217,4 +217,76 @@ describe('place', () => {
     expect(() => checkPlacePath('\u0301')).toThrow(RangeError);
     expect(() => checkPlacePath('a/\u0301b')).toThrow(RangeError);
   });
+
+  it('place.paths-refuse-invisible-default-ignorable-code-points', () => {
+    // `room:B` plus a variation selector looks exactly like `room:B` but never matches it, so
+    // `within` would quietly find less. Every Default_Ignorable_Code_Point is refused, by its own
+    // check (`invisible`), before the segment pattern would refuse the format characters among them.
+    for (const c of [
+      '\ufe0f', // VARIATION SELECTOR-16
+      '\ufe00', // VARIATION SELECTOR-1
+      '\u034f', // COMBINING GRAPHEME JOINER
+      '\u{e0100}', // VARIATION SELECTOR-17 (ideographic variation sequences)
+      '\u180b', // MONGOLIAN FREE VARIATION SELECTOR ONE
+      '\u17b4', // KHMER VOWEL INHERENT AQ
+      '\u3164', // HANGUL FILLER (a letter, and invisible)
+      '\u200d', // ZERO WIDTH JOINER, here at the end of a segment
+      '\u200c', // ZERO WIDTH NON-JOINER, likewise
+      '\u00ad', // SOFT HYPHEN
+      '\u2060', // WORD JOINER
+    ]) {
+      const hex = `U+${c.codePointAt(0)!.toString(16)}`;
+      expect(() => checkPlacePath(`room:B${c}`), hex).toThrow(/^place\.nodeId .*invisible/);
+      expect(() => checkPlace({ nodeId: `site:hq/room:B${c}/shelf:1` }), hex).toThrow(
+        /^place\.nodeId .*invisible/,
+      );
+      expect(() => checkSpatialFilter({ within: `room:B${c}` }), hex).toThrow(
+        /^within .*invisible/,
+      );
+    }
+    // Visible marks that only look like the refused ones still work.
+    expect(checkPlacePath('ห้อง:B/कमरा')).toBe('ห้อง:B/कमरा');
+  });
+
+  it('place.paths-keep-joiners-only-where-idna-contextj-allows-them', () => {
+    // RFC 5892 Appendix A.1 and A.2: ZWJ only right after a virama; ZWNJ after a virama or
+    // between letters of a joining script (Persian). Anything else would be an invisible
+    // look-alike of a path without it.
+    for (const p of [
+      'خانه\u200cی:B', // Persian: خانه + ZWNJ + ی
+      '\u0628\u064e\u200c\u06cc:1', // Arabic letter + fatha + ZWNJ + letter: marks may sit between
+      '\u0915\u094d\u200d\u0937:1', // Devanagari: क् + ZWJ + ष
+      '\u0915\u094d\u200c\u0937:1', // Devanagari: क् + ZWNJ + ष (no conjunct)
+      '\u0d28\u0d4d\u200d:1', // Malayalam chillu: ന് + ZWJ, before a symbol
+      'room:\u0d05\u0d35\u0d28\u0d4d\u200d', // room:അവന് + ZWJ, ending the path
+      '\u0d28\u0d4d\u200d/x', // ന് + ZWJ, ending a segment
+      'site:hq/\u0dc1\u0dca\u200d\u0dbb\u0dd3', // Sinhala: ශ් + ZWJ + රී
+    ]) {
+      expect(checkPlacePath(p), JSON.stringify(p)).toBe(p.normalize('NFC'));
+      expect(checkSpatialFilter({ within: p })).toEqual({ within: p.normalize('NFC') });
+    }
+    for (const p of [
+      // Look-alikes in scripts that never need a joiner there.
+      'room:B\u200dX',
+      'site:h\u200cq',
+      '\u6771\u200d\u4eac', // 東 + ZWJ + 京
+      '\u0412\u200dB', // Cyrillic В + ZWJ + B
+      'x\u0301\u200d1', // a mark, not a virama, before the ZWJ
+      'B\u20dd\u200d:1',
+      'a\u200d\u0301',
+      // Leading, trailing (but after a virama), doubled, and next to a digit or symbol.
+      '\u200cخانه:B',
+      '\u200dक्ष:1',
+      'خانه\u200c',
+      'خانه\u200c/x',
+      'خانه\u200c\u200cی:B',
+      '\u0915\u094d\u200d\u200d\u0937:1',
+      'room:B\u200c\u200d1',
+      'room\u200d:B',
+      '1\u200c2',
+      'خانه\u200c1', // ZWNJ after a joining letter but before a digit
+    ]) {
+      expect(() => checkPlacePath(p), JSON.stringify(p)).toThrow(/^place\.nodeId .*invisible/);
+    }
+  });
 });
