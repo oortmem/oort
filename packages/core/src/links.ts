@@ -8,6 +8,7 @@
  */
 import { addressOf } from './address.js';
 import type { Memory } from './model.js';
+import type { SpatialFilter } from './place.js';
 
 /** The link kinds a store keeps as rows. `about` and `episode` are indexes, never rows. */
 export type StoredLinkKind = 'explicit' | 'distilledFrom' | 'recalledWith';
@@ -88,6 +89,89 @@ export interface UnlinkResult {
    * call is asserted by `agent`: only a `user` unlink removes a `user` link.
    */
   refused?: 'asserted-by-user';
+}
+
+/**
+ * The kinds recall follows for one hop (CON-149): stored `explicit` links, and the two indexes,
+ * `episode` (the same session, a few turns apart) and `about` (a shared, specific entity).
+ */
+export type NeighbourKind = 'explicit' | 'episode' | 'about';
+
+/** The order a store gathers kinds in; the budget is checked before each. */
+export const NEIGHBOUR_KINDS: readonly NeighbourKind[] = ['explicit', 'episode', 'about'];
+
+/** Options of `MemoryStore.neighbours`. */
+export interface NeighbourOptions {
+  /** The kinds to gather. An empty list gathers nothing. */
+  kinds: readonly NeighbourKind[];
+  /** `user`: of the explicit links, only those asserted by `user`. Default: any. */
+  explicitBy?: 'user';
+  /** Only neighbours that are current in transaction time (not expired, not superseded). */
+  currentOnly?: boolean;
+  /** Only neighbours that pass this filter: a link never brings in a memory outside the place. */
+  spatial?: SpatialFilter;
+  /** `about`: an entity in this many readable memories, or more, relates nothing. Default 50. */
+  fMax?: number;
+  /**
+   * Milliseconds the gather may take. Checked before each kind and before each entity's scan;
+   * once it has passed the store returns what it has, with `skipped: true`. 0: no limit.
+   */
+  budgetMs?: number;
+  /** The clock the budget is measured with, in ms (tests); default `performance.now`. */
+  clock?: () => number;
+}
+
+/** One memory a link leads to from a seed. Ids only: no text, no entity. */
+export interface Neighbour {
+  id: string;
+  kind: NeighbourKind;
+  /** The seed it was reached from. */
+  from: string;
+  /** In (0, 1]: 1 for `explicit`; see `episodeWeight` and `aboutWeight`. */
+  weight: number;
+}
+
+/** What `MemoryStore.neighbours` returns. */
+export interface NeighboursResult {
+  neighbours: Neighbour[];
+  /** The budget passed before every kind and entity was read. */
+  skipped?: true;
+}
+
+/** `about`: the start value of `fMax`, and the caps of one gather (design section 10). */
+export const F_MAX_DEFAULT = 50;
+export const EXPLICIT_PER_SEED = 16;
+export const EPISODE_REACH = 3;
+export const EPISODE_PER_SEED = 6;
+export const ABOUT_PER_ENTITY = 20;
+
+/** How many index rows an `about` scan may read for one entity: past `4 × fMax`, it is a hub. */
+export const hubScanLimit = (fMax: number): number => 4 * fMax + 1;
+
+/**
+ * The weight of a shared entity that `fan` readable memories carry (the seed included):
+ * `1 − ln(fan) / ln(fMax)`, never below 0. An entity in `fMax` or more spreads nothing.
+ */
+export function aboutWeight(fan: number, fMax: number): number {
+  if (fan < 2 || fMax < 2 || fan >= fMax) return 0;
+  return Math.max(0, 1 - Math.log(fan) / Math.log(fMax));
+}
+
+/** Several shared entities combine as a noisy-or, so the result stays in [0, 1]. */
+export function combineWeights(ws: readonly number[]): number {
+  return 1 - ws.reduce((p, w) => p * (1 - w), 1);
+}
+
+/**
+ * The weight of an episode neighbour `delta` turns after the seed (negative: before it): 1 for
+ * another fact of the same turn, `exp(−|delta| / 3)` later, half that earlier, 0 past the reach.
+ */
+export function episodeWeight(delta: number): number {
+  const d = Math.abs(delta);
+  if (d === 0) return 1;
+  if (d > EPISODE_REACH) return 0;
+  const w = Math.exp(-d / EPISODE_REACH);
+  return delta > 0 ? w : w / 2;
 }
 
 /** Entity keys shorter than this, or longer than `ENTITY_KEY_MAX`, are not indexed. */

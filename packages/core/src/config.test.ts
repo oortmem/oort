@@ -47,6 +47,16 @@ describe('config', () => {
       promptMode: 'fast',
       adaptiveStop: 'rule',
       sufficientAt: 0.7,
+      links: {
+        enabled: false,
+        seeds: 3,
+        pool: 5,
+        admit: 2,
+        budgetMs: 8,
+        fMax: 50,
+        factors: { explicit: 1, episode: 0.5, about: 0.6 },
+      },
+      userLinks: true,
     });
     expect(c.project).toEqual({ private: false });
     expect(c.sources['embed']).toBe('default');
@@ -211,6 +221,33 @@ describe('config', () => {
     const plain = resolveConfig(cwd, { OORT_HOME: home });
     expect(plain.recall).toMatchObject({ adaptiveStop: 'off', sufficientAt: 0.9 });
     expect(plain.ignoredProjectKeys).toBeUndefined();
+  });
+
+  it('config.recall-links-are-read-from-the-home-config-only (CON-149)', () => {
+    const home = tmp();
+    const cwd = tmp();
+    // A repository must not decide which links bring memories into a prompt.
+    fs.writeFileSync(
+      path.join(cwd, 'oort.config.json'),
+      '{"recall":{"links":{"enabled":true,"admit":2},"userLinks":true,"budgetChars":100}}',
+    );
+    const fromRepo = resolveConfig(cwd, { OORT_HOME: home });
+    expect(fromRepo.recall.links.enabled).toBe(false);
+    expect(fromRepo.recall.budgetChars).toBe(100);
+    expect(fromRepo.ignoredProjectKeys).toEqual(['recall.links', 'recall.userLinks']);
+    // Nor undo a person turning a default off, by setting any other recall key.
+    fs.writeFileSync(
+      path.join(home, 'config.json'),
+      '{"recall":{"userLinks":false,"links":{"enabled":true,"fMax":20}}}',
+    );
+    const both = resolveConfig(cwd, { OORT_HOME: home });
+    expect(both.recall.userLinks).toBe(false);
+    expect(both.recall.links).toMatchObject({ enabled: true, fMax: 20, seeds: 3, admit: 2 });
+    fs.writeFileSync(path.join(cwd, 'oort.config.json'), '{"recall":{"budgetChars":100}}');
+    expect(resolveConfig(cwd, { OORT_HOME: home }).recall.userLinks).toBe(false);
+    // At most 2 linked memories per recall, whatever the config asks for.
+    fs.writeFileSync(path.join(home, 'config.json'), '{"recall":{"links":{"admit":3}}}');
+    expect(() => resolveConfig(home, { OORT_HOME: home })).toThrow(/admit/);
   });
 
   it('config.updates-check-defaults-on-and-is-read-from-the-home-config-only (CON-114)', () => {

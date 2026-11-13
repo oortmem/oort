@@ -9,8 +9,18 @@ import {
   canonicalMemory,
   checkPlace,
   cursorKey,
+  ABOUT_PER_ENTITY,
+  aboutWeight,
+  combineWeights,
   entityKeys,
+  EPISODE_PER_SEED,
+  EPISODE_REACH,
   episodeSession,
+  episodeWeight,
+  EXPLICIT_PER_SEED,
+  F_MAX_DEFAULT,
+  hubScanLimit,
+  NEIGHBOUR_KINDS,
   frameOf,
   hasSpatialFilter,
   nearBox,
@@ -40,6 +50,9 @@ import {
   type LinkOptions,
   type LinkResult,
   type LinksOf,
+  type Neighbour,
+  type NeighbourOptions,
+  type NeighboursResult,
   type StoredLink,
   type UnlinkResult,
   type Memory,
@@ -1909,6 +1922,173 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     return out;
   }
 
+  /** One candidate neighbour: its row id, node and whether the reader's grant and place admit it. */
+  interface NeighbourRow {
+    rid: number;
+    id: string;
+    level: string;
+    org_id: string;
+    customer_id: string | null;
+    agent_id: string | null;
+    hive_id: string | null;
+    run_id: string | null;
+    expired_at: string | null;
+    superseded_by: string | null;
+    episode_seq: number | null;
+    asserted_by?: 'user' | 'agent' | null;
+    readable: number;
+    inplace: number | null;
+  }
+  /** The columns of a `NeighbourRow`, over `memories` aliased `m` (the grant and place as flags). */
+  const neighbourCols = (n: number, f: SpatialFilter | undefined): string =>
+    `m.rid AS rid, m.id AS id, m.level AS level, m.org_id AS org_id,
+     m.customer_id AS customer_id, m.agent_id AS agent_id, m.hive_id AS hive_id,
+     m.run_id AS run_id, m.expired_at AS expired_at, m.superseded_by AS superseded_by,
+     m.episode_seq AS episode_seq, ${grantSql(n)} AS readable,
+     ${f === undefined ? '1' : `(${spatialSql(f, 'm')})`} AS inplace`;
+  /** How many raw rows one explicit or episode read may return before the grant is applied. */
+  const NEIGHBOUR_SCAN = 256;
+  /** The explicit links of the memory at `@rid`, newest other end first: two index ranges. */
+  const explicitEnds = (n: number, f: SpatialFilter | undefined) =>
+    cached<[Params], NeighbourRow>(
+      `nb-explicit:${n}${spatialShape(f)}`,
+      () => `SELECT ${neighbourCols(n, f)}, l.asserted_by AS asserted_by
+       FROM (SELECT b_rid AS other, asserted_by FROM ${LINK_TABLE}
+               WHERE kind = 'explicit' AND a_rid = @rid
+             UNION ALL
+             SELECT a_rid AS other, asserted_by FROM ${LINK_TABLE}
+               WHERE b_rid = @rid AND kind = 'explicit') l
+         CROSS JOIN memories m ON m.rid = l.other
+       ORDER BY l.other DESC LIMIT ${NEIGHBOUR_SCAN}`,
+    );
+  /** The memories of the seed's node and session within the reach: one index range. */
+  const episodeNear = (n: number, f: SpatialFilter | undefined) =>
+    cached<[Params], NeighbourRow>(
+      `nb-episode:${n}${spatialShape(f)}`,
+      () => `SELECT ${neighbourCols(n, f)} FROM memories m
+       WHERE m.session_id = @session AND m.episode_seq BETWEEN @lo AND @hi AND m.rid != @rid
+         AND m.level = @level AND m.org_id = @org AND m.customer_id IS @customer
+         AND m.agent_id IS @agent AND m.hive_id IS @hive AND m.run_id IS @run
+       ORDER BY m.rid DESC LIMIT ${NEIGHBOUR_SCAN}`,
+    );
+  /** At most `@cap` index rows of one entity in one node, newest first, with their memories. */
+  const entityFan = (n: number, f: SpatialFilter | undefined) =>
+    cached<[Params], NeighbourRow>(
+      `nb-about:${n}${spatialShape(f)}`,
+      () => `SELECT ${neighbourCols(n, f)}
+       FROM (SELECT memory_rid FROM ${ENTITY_TABLE}
+               WHERE node_id = @node AND entity_key = @key
+               ORDER BY memory_rid DESC LIMIT @cap) e
+         CROSS JOIN memories m ON m.rid = e.memory_rid
+       ORDER BY e.memory_rid DESC`,
+    );
+  const nodeIdRead = db.prepare<[string], { node_id: number }>(
+    `SELECT node_id FROM ${NODE_TABLE} WHERE node_key = ?`,
+  );
+
+  /**
+   * One hop from the seeds (CON-149), as ids. Every read is one bounded index range: per seed for
+   * `explicit` and `episode`, per seed entity for `about`. The same rules, bounds and order as
+   * core's in-memory store, which `linksConformance` holds both to.
+   */
+  function neighboursOf(grant: Grant, seedIds: string[], o: NeighbourOptions): NeighboursResult {
+    const patterns = live(grant.readNodes);
+    if (patterns.length === 0) return { neighbours: [] };
+    const fMax = o.fMax ?? F_MAX_DEFAULT;
+    const now = o.clock ?? (() => performance.now());
+    const start = now();
+    const budget = o.budgetMs ?? 0;
+    const late = () => budget > 0 && now() - start >= budget;
+    const f = hasSpatialFilter(o.spatial) ? o.spatial : undefined;
+    const n = patterns.length;
+    const bound = { ...grantParams(patterns), ...(f !== undefined && spatialParams(f)) };
+    const seeds = [...new Set(seedIds)]
+      .map((id) => scopedRow(grant.readNodes, id))
+      .filter((r): r is MemoryRow => r !== undefined && r.level !== 'hive')
+      .map((r) => ({ row: r, node: nodeKeyOfColumns(r) }));
+    /** What a link may bring in from `seed`: readable, in its node, in place, not blocked. */
+    const admits = (seed: (typeof seeds)[number], r: NeighbourRow): boolean => {
+      if (r.rid === seed.row.rid || r.readable === 0 || r.inplace !== 1) return false;
+      if (r.level === 'hive' || nodeKeyOfColumns(r) !== seed.node) return false;
+      if (o.currentOnly === true && (r.expired_at !== null || r.superseded_by !== null))
+        return false;
+      const [a, b] = seed.row.rid < r.rid ? [seed.row.rid, r.rid] : [r.rid, seed.row.rid];
+      return q.linkGet.get('blocked', a, b) === undefined;
+    };
+    const out: Neighbour[] = [];
+    let skipped = false;
+    gather: for (const kind of NEIGHBOUR_KINDS) {
+      if (!o.kinds.includes(kind)) continue;
+      if (late()) {
+        skipped = true;
+        break;
+      }
+      for (const seed of seeds) {
+        const { row } = seed;
+        if (kind === 'explicit') {
+          let kept = 0;
+          for (const r of explicitEnds(n, f).all({ ...bound, rid: row.rid })) {
+            if (o.explicitBy === 'user' && r.asserted_by !== 'user') continue;
+            if (!admits(seed, r)) continue;
+            out.push({ id: r.id, kind, from: row.id, weight: 1 });
+            if (++kept === EXPLICIT_PER_SEED) break;
+          }
+        } else if (kind === 'episode') {
+          const seq = row.episode_seq;
+          if (row.session_id == null || seq == null) continue;
+          const near = episodeNear(n, f)
+            .all({
+              ...bound,
+              rid: row.rid,
+              session: row.session_id,
+              lo: seq - EPISODE_REACH,
+              hi: seq + EPISODE_REACH,
+              level: row.level,
+              org: row.org_id,
+              customer: row.customer_id,
+              agent: row.agent_id,
+              hive: row.hive_id,
+              run: row.run_id,
+            })
+            .filter((r) => r.episode_seq !== null && admits(seed, r))
+            .map((r) => ({ r, delta: (r.episode_seq as number) - seq }))
+            .sort((x, y) => Math.abs(x.delta) - Math.abs(y.delta) || y.r.rid - x.r.rid);
+          for (const { r, delta } of near.slice(0, EPISODE_PER_SEED)) {
+            out.push({ id: r.id, kind, from: row.id, weight: episodeWeight(delta) });
+          }
+        } else {
+          // The entity index holds current memories only: an ended seed has no rows in it.
+          if (row.expired_at !== null || row.superseded_by !== null) continue;
+          const node = nodeIdRead.get(seed.node)?.node_id;
+          if (node === undefined) continue;
+          const weights = new Map<string, number[]>();
+          for (const key of entityKeys(JSON.parse(row.entities) as string[])) {
+            if (late()) {
+              skipped = true;
+              break;
+            }
+            const rows = entityFan(n, f).all({ ...bound, node, key, cap: hubScanLimit(fMax) });
+            if (rows.length > 4 * fMax) continue;
+            const w = aboutWeight(rows.filter((r) => r.readable !== 0).length, fMax);
+            if (w <= 0) continue;
+            let kept = 0;
+            for (const r of rows) {
+              if (!admits(seed, r)) continue;
+              weights.set(r.id, [...(weights.get(r.id) ?? []), w]);
+              if (++kept === ABOUT_PER_ENTITY) break;
+            }
+          }
+          for (const [id, ws] of weights) {
+            out.push({ id, kind, from: row.id, weight: combineWeights(ws) });
+          }
+          // What the scans before the budget passed found is kept.
+          if (skipped) break gather;
+        }
+      }
+    }
+    return { neighbours: out, ...(skipped && { skipped: true as const }) };
+  }
+
   /**
    * Demotes `ms[i]`'s row to cold with `files[i]` as its cold copy, for every i
    * whose row still matches its snapshot, all in one transaction. Only the
@@ -1997,6 +2177,12 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       open();
       assertGrant(grant);
       return linksOfRow(grant, id);
+    },
+
+    async neighbours(grant, seedIds, neighbourOpts) {
+      open();
+      assertGrant(grant);
+      return neighboursOf(grant, seedIds, neighbourOpts);
     },
 
     async upsert(grant, m) {

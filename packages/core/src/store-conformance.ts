@@ -29,7 +29,7 @@ import type { Memory, Scope } from './model.js';
 import type { NearQuery, Place, SpatialFilter } from './place.js';
 import { localScope } from './scope.js';
 import { isolationViolations, nonInterference } from './isolation.js';
-import type { LinksProbe } from './links.js';
+import type { LinksProbe, NeighbourOptions } from './links.js';
 
 export const CONFORMANCE_DIMENSION = 4;
 
@@ -1769,6 +1769,226 @@ export function linksConformance(
       ).rejects.toThrow();
       expect(await store.get(TG, 'd')).toBeNull();
       expect(await rows.links()).toHaveLength(1);
+    });
+
+    // One hop for recall (CON-149): `neighbours` returns ids, and only what the reader may reach.
+    const src = (sessionId: string, turnRef?: string) => ({
+      harness: 'test',
+      sessionId,
+      ...(turnRef !== undefined && { turnRef }),
+      decisions: [],
+    });
+    const ALL = ['explicit', 'episode', 'about'] as const;
+    const hop = async (
+      g: Grant,
+      seeds: string[],
+      o: Partial<NeighbourOptions> = {},
+    ): Promise<{ list: string[]; skipped: boolean }> => {
+      const r = await store.neighbours!(g, seeds, { kinds: ALL, ...o });
+      return {
+        list: r.neighbours.map((n) => `${n.from}>${n.id}:${n.kind}`).sort(),
+        skipped: r.skipped === true,
+      };
+    };
+    const reached = async (g: Grant, seeds: string[], o: Partial<NeighbourOptions> = {}) =>
+      (await hop(g, seeds, o)).list;
+
+    it('neighbours.explicit-links-lead-both-ways-by-who-asserted-them', async () => {
+      expect(typeof store.neighbours).toBe('function');
+      await seed(at('a'), at('b'), at('c'), at('d'));
+      await S().link(TG, 'a', 'b', USER);
+      await S().link(TG, 'c', 'a', AGENT);
+      expect(await reached(TG, ['a'])).toEqual(['a>b:explicit', 'a>c:explicit']);
+      expect(await reached(TG, ['b', 'c'])).toEqual(['b>a:explicit', 'c>a:explicit']);
+      expect(await reached(TG, ['a'], { explicitBy: 'user' })).toEqual(['a>b:explicit']);
+      expect(await reached(TG, ['c'], { explicitBy: 'user' })).toEqual([]);
+      expect(await reached(TG, ['a'], { kinds: ['about', 'episode'] })).toEqual([]);
+      expect(await reached(TG, ['a'], { kinds: [] })).toEqual([]);
+      expect(await reached(TG, ['d', 'nope'])).toEqual([]);
+      const r = await store.neighbours!(TG, ['a'], { kinds: ['explicit'] });
+      expect(r.neighbours.map((n) => n.weight)).toEqual([1, 1]);
+      // Ids, a kind, a seed and a weight: nothing of the memory itself.
+      expect(Object.keys(r.neighbours[0]!).sort()).toEqual(['from', 'id', 'kind', 'weight']);
+    });
+
+    it('neighbours.about-weighs-a-shared-entity-by-its-fan', async () => {
+      await seed(
+        at('a', { entities: ['auth-service', 'Postgres'] }),
+        at('b', { entities: ['Auth-Service'] }),
+        at('c', { entities: ['auth-service', 'postgres'] }),
+        at('d', { entities: ['redis'] }),
+      );
+      const r = await store.neighbours!(TG, ['a'], { kinds: ['about'], fMax: 50 });
+      const w = Object.fromEntries(r.neighbours.map((n) => [n.id, n.weight]));
+      const fan3 = 1 - Math.log(3) / Math.log(50);
+      const fan2 = 1 - Math.log(2) / Math.log(50);
+      expect(Object.keys(w).sort()).toEqual(['b', 'c']);
+      expect(w['b']).toBeCloseTo(fan3, 10);
+      // Two shared entities combine as a noisy-or.
+      expect(w['c']).toBeCloseTo(1 - (1 - fan3) * (1 - fan2), 10);
+      expect(await reached(TG, ['d'])).toEqual([]);
+    });
+
+    it('neighbours.a-hub-entity-relates-nothing', async () => {
+      // fMax 3: an entity in 3 or more readable memories spreads nothing, and one with more than
+      // 12 rows is not counted at all.
+      await seed(
+        at('a', { entities: ['repo', 'rare'] }),
+        at('b', { entities: ['repo', 'rare'] }),
+        at('c', { entities: ['repo'] }),
+      );
+      expect(await reached(TG, ['a'], { fMax: 3 })).toEqual(['a>b:about']);
+      const one = await store.neighbours!(TG, ['a'], { kinds: ['about'], fMax: 3 });
+      expect(one.neighbours[0]!.weight).toBeCloseTo(1 - Math.log(2) / Math.log(3), 10);
+      // The fan is counted inside the grant: with 10 more `rare` rows the reader cannot read (12 in
+      // all), the entity still relates a and b for that reader; a 13th makes it a hub for everyone.
+      for (let i = 0; i < 10; i++) await seed(at(`p${i}`, { entities: ['rare'] }, planet('p2')));
+      const global = localGrant({ ...LOCAL, projectIds: [null] });
+      expect(await reached(global, ['a'], { fMax: 3 })).toEqual(['a>b:about']);
+      expect(await reached(TG, ['a'], { fMax: 3 })).toEqual([]);
+      await seed(at('p10', { entities: ['rare'] }, planet('p2')));
+      expect(await reached(global, ['a'], { fMax: 3 })).toEqual([]);
+    });
+
+    it('neighbours.episode-reaches-three-turns-forward-weighted', async () => {
+      await seed(
+        ...['t1', 't2', 't3', 't4', 't5', 't6'].map((t) => at(t, { source: src('s1', t) })),
+        at('t3b', { source: src('s1', 't3') }),
+        at('other', { source: src('s2', 't3') }),
+      );
+      const r = await store.neighbours!(TG, ['t3'], { kinds: ['episode'] });
+      const w = Object.fromEntries(r.neighbours.map((n) => [n.id, n.weight]));
+      expect(Object.keys(w).sort()).toEqual(['t1', 't2', 't3b', 't4', 't5', 't6']);
+      expect(w['t3b']).toBe(1);
+      expect(w['t4']).toBeCloseTo(Math.exp(-1 / 3), 10);
+      expect(w['t2']).toBeCloseTo(Math.exp(-1 / 3) / 2, 10);
+      expect(w['t6']).toBeCloseTo(Math.exp(-1), 10);
+      expect(await reached(TG, ['t1'])).toEqual([
+        't1>t2:episode',
+        't1>t3:episode',
+        't1>t3b:episode',
+        't1>t4:episode',
+      ]);
+    });
+
+    it('neighbours.never-leave-the-grant-the-node-or-a-hive', async () => {
+      const star: Address = { level: 'agent', orgId: 'local', agentId: 'claude-code' };
+      const hive: Address = { level: 'hive', orgId: 'local', hiveId: 'team' };
+      const wide = nodesGrant(nodeOf(planet()), nodeOf(star), nodeOf(hive));
+      const shared = { entities: ['auth-service'], source: src('s1', 't1') };
+      await seed(at('a', shared, planet('p1')), at('b', shared, planet('p2')));
+      await seed(at('c', shared, planet('p1')));
+      await store.upsert(wide, at('s', shared, star));
+      await store.upsert(wide, at('h1', shared, hive));
+      await store.upsert(wide, at('h2', shared, hive));
+      await S().link(TG, 'a', 'b', USER);
+      await S().link(TG, 'a', 'c', USER);
+      const every = ['a>b:about', 'a>b:episode', 'a>b:explicit'];
+      const inP1 = ['a>c:about', 'a>c:episode', 'a>c:explicit'];
+      // The whole Planet, and the Star and the hive beside it: only the Planet's own memories.
+      expect(await reached(wide, ['a'])).toEqual([...every, ...inP1].sort());
+      // A reader of project p1 only: b is not reached by any kind, a person's link included.
+      const p1 = localGrant({ ...LOCAL, projectIds: ['p1'] });
+      expect(await reached(p1, ['a'])).toEqual(inP1);
+      expect(await reached(p1, ['a'], { explicitBy: 'user' })).toEqual(inP1);
+      // A seed it cannot read contributes nothing, as an unknown id does.
+      expect(await reached(p1, ['b'])).toEqual([]);
+      // Nothing is gathered from or inside a hive node.
+      expect(await reached(wide, ['h1', 'h2'])).toEqual([]);
+      expect(await reached(wide, ['s'])).toEqual([]);
+    });
+
+    it('neighbours.skip-blocked-pairs-and-ended-memories', async () => {
+      const shared = { entities: ['auth-service'], source: src('s1', 't1') };
+      await seed(at('a', shared), at('b', shared), at('old', shared), at('gone', shared));
+      await S().link(TG, 'a', 'old', USER);
+      await S().link(TG, 'a', 'gone', USER);
+      await S().unlink(TG, 'a', 'b', USER);
+      // b shares an entity and a session with a, but the pair is blocked.
+      expect((await reached(TG, ['a'])).filter((x) => x.startsWith('a>b'))).toEqual([]);
+      expect(await reached(TG, ['b'])).not.toContain('b>a:about');
+      const now = new Date().toISOString();
+      const old = (await store.get(TG, 'old'))!;
+      await store.upsertMany(TG, [
+        at('new', { supersedes: 'old' }),
+        { ...old, supersededBy: 'new', validTo: now, endReason: 'superseded', expiredAt: now },
+      ]);
+      await store.expireMany(TG, [(await store.get(TG, 'gone'))!], new Date());
+      expect(await reached(TG, ['a'], { currentOnly: true })).toEqual([]);
+      // Another view may still ask for them: the explicit link and the episode outlive the end.
+      expect(await reached(TG, ['a'], { kinds: ['explicit'] })).toEqual([
+        'a>gone:explicit',
+        'a>old:explicit',
+      ]);
+    });
+
+    it('neighbours.stay-inside-the-requested-place', async () => {
+      if (store.spatial !== true) return;
+      const shared = { entities: ['toolbox'] };
+      await seed(
+        at('a', { ...shared, place: { nodeId: 'site:hq/room:B' } }),
+        at('in', { ...shared, place: { nodeId: 'site:hq/room:B/shelf:3' } }),
+        at('out', { ...shared, place: { nodeId: 'site:hq/room:A' } }),
+        at('bare', shared),
+      );
+      await S().link(TG, 'a', 'out', USER);
+      expect(await reached(TG, ['a'], { spatial: { within: 'room:B' } })).toEqual(['a>in:about']);
+      expect(await reached(TG, ['a'])).toHaveLength(4);
+    });
+
+    it('neighbours.stop-at-the-budget-and-say-so', async () => {
+      await seed(
+        at('a', { entities: ['one', 'two'], source: src('s1', 't1') }),
+        at('b', { entities: ['one'], source: src('s1', 't2') }),
+        at('c', { entities: ['two'] }),
+        at('d'),
+      );
+      await S().link(TG, 'a', 'd', USER);
+      // A clock that advances 1 ms each time it is read: the checks are before each kind and each
+      // entity, so a budget of n ms allows a fixed number of them.
+      const ticking = () => {
+        let t = 0;
+        return () => t++;
+      };
+      expect(await hop(TG, ['a'], { budgetMs: 1, clock: ticking() })).toEqual({
+        list: [],
+        skipped: true,
+      });
+      expect(await hop(TG, ['a'], { budgetMs: 2, clock: ticking() })).toEqual({
+        list: ['a>d:explicit'],
+        skipped: true,
+      });
+      expect(await hop(TG, ['a'], { budgetMs: 4, clock: ticking() })).toEqual({
+        list: ['a>b:episode', 'a>d:explicit'],
+        skipped: true,
+      });
+      expect(await hop(TG, ['a'], { budgetMs: 5, clock: ticking() })).toEqual({
+        list: ['a>b:about', 'a>b:episode', 'a>d:explicit'],
+        skipped: true,
+      });
+      const whole = ['a>b:about', 'a>b:episode', 'a>c:about', 'a>d:explicit'];
+      expect(await hop(TG, ['a'], { budgetMs: 50, clock: ticking() })).toEqual({
+        list: whole,
+        skipped: false,
+      });
+      expect(await hop(TG, ['a'], { budgetMs: 0, clock: ticking() })).toEqual({
+        list: whole,
+        skipped: false,
+      });
+    });
+
+    it('neighbours.keep-each-read-bounded', async () => {
+      const many = Array.from({ length: 30 }, (_, i) => `m${String(i).padStart(2, '0')}`);
+      await seed(at('a', { entities: ['thing'] }));
+      for (const id of many) {
+        await seed(at(id, { entities: ['thing'] }));
+        await S().link(TG, 'a', id, AGENT);
+      }
+      const r = await store.neighbours!(TG, ['a'], { kinds: ALL, fMax: 50 });
+      const of = (kind: string) => r.neighbours.filter((n) => n.kind === kind).map((n) => n.id);
+      // The newest first: 16 explicit links and 20 memories per entity.
+      expect(of('explicit').sort()).toEqual(many.slice(-16));
+      expect(of('about').sort()).toEqual(many.slice(-20));
     });
   });
 }

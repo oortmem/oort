@@ -1,5 +1,12 @@
 import type { Grant } from './grant.js';
-import type { LinkOptions, LinkResult, LinksOf, UnlinkResult } from './links.js';
+import type {
+  LinkOptions,
+  LinkResult,
+  LinksOf,
+  NeighbourOptions,
+  NeighboursResult,
+  UnlinkResult,
+} from './links.js';
 import type { Decision, Memory, MemoryType, Scope, Tier } from './model.js';
 import type { Place, SpatialFilter } from './place.js';
 
@@ -165,6 +172,16 @@ export interface MemoryStore {
    * stored link rows lead to memories it cannot read. Null when `grant` does not read `id`.
    */
   linksOf?(grant: Grant, id: string): Promise<LinksOf | null>;
+  /**
+   * The memories one link away from `seedIds` (CON-149), as ids: per neighbour, the kind, the
+   * seed and a weight. One bounded read per seed and kind (and per entity for `about`); no memory
+   * text or vector is loaded. A neighbour is listed only when `grant` reads both it and its seed,
+   * the two are in one node that is not at level `hive`, the pair is not blocked, and it passes
+   * `opts.currentOnly` and `opts.spatial`. An entity past the hub bounds relates nothing. A seed
+   * the grant does not read contributes nothing, exactly as an unknown id. A store with `links`
+   * has it; recall takes no hop without it.
+   */
+  neighbours?(grant: Grant, seedIds: string[], opts: NeighbourOptions): Promise<NeighboursResult>;
   /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
    * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).
