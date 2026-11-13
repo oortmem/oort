@@ -66,7 +66,7 @@ describe('export format', () => {
           { kind: 'explicit', id: 'zz', assertedBy: 'user' },
           { kind: 'later', id: 'c' },
         ],
-      },
+      } as never,
       c,
     ]);
     expect(parseExport(odd).links).toEqual([]);

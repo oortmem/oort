@@ -111,7 +111,7 @@ describe('cached link-shaped store (CON-146)', () => {
     // The warm-up recorded accesses on the live store: the frozen() stub does not apply to it.
     expect(w.queries).toBe(40);
     expect(w.accessCalls).toBeGreaterThan(30);
-    expect(w.pairs).toBeNull(); // no link table before schema version 8 (CON-148)
+    expect(w.pairs).toBe(0); // the link table exists since schema version 8; nothing learns pairs yet
     expect(w.links).toBe(false);
     expect(first.manifest.stats.memories).toBe(1_500);
     await first.close();

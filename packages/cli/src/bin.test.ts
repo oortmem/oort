@@ -796,7 +796,7 @@ describe('oort bin', () => {
       await client.connect(transport);
       try {
         const { tools } = await client.listTools();
-        expect(tools).toHaveLength(9);
+        expect(tools).toHaveLength(10);
         const r = await client.callTool({ name: 'whoami', arguments: {} });
         const content = r.content as { text: string }[];
         const recall = await client.callTool({ name: 'recall', arguments: { query: 'anything' } });
