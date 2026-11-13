@@ -212,7 +212,8 @@ export function parseExport(text: string, opts: ParseExportOptions = {}): Parsed
     }
     try {
       const { links, ...memory } = raw;
-      for (const to of linkIds(links)) named.push([raw['id'], to]);
+      // Version 1 holds no links: the field is dropped unread.
+      if (version === 2) for (const to of linkIds(links)) named.push([raw['id'], to]);
       return readLine(memory, version, opts);
     } catch (e) {
       if (e instanceof RangeError || e instanceof TypeError) {

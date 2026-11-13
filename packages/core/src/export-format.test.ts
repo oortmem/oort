@@ -70,6 +70,15 @@ describe('export format', () => {
       c,
     ]);
     expect(parseExport(odd).links).toEqual([]);
+    // Version 1 holds no links: a `links` field in a version 1 file is not read.
+    const v1 = formatExport([a, b], 1)
+      .split('\n')
+      .map((l, i) =>
+        i === 1 ? JSON.stringify({ ...JSON.parse(l), links: [{ kind: 'explicit', id: 'b' }] }) : l,
+      )
+      .join('\n');
+    expect(parseExport(v1).links).toEqual([]);
+    expect('links' in parseExport(v1).memories[0]!).toBe(false);
     const bad = formatExport([{ ...a, links: 'b' } as never, b]);
     expect(() => parseExport(bad)).toThrow(/line 2/);
   });

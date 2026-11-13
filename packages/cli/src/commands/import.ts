@@ -654,17 +654,17 @@ export async function importFileCommand(
         ready.push({ ...m, ...(v !== undefined && { embedding: v }) });
       });
     }
-    await w.store.upsertMany(grant, ready);
-    // The file's explicit links between memories now in this Planet (CON-148), asserted by
-    // `agent`: a file never says a person asserted one. A pair the store cannot link is skipped.
+    // The file's explicit links between two memories this import writes (CON-148), asserted by
+    // `agent`: a file never says a person asserted one, and never links into a memory that was
+    // already here (a line reusing its id is skipped above; so is every link to it). Memories
+    // and links land in one transaction, so a crash cannot keep the memories without them.
+    const imported = new Set(ready.map((m) => m.id));
+    const pairs = explicit.filter(([a, b]) => imported.has(a) && imported.has(b));
     let linked = 0;
-    if (w.store.links === true) {
-      const imported = new Set(ready.map((m) => m.id));
-      for (const [a, b] of explicit) {
-        if (!imported.has(a) && !imported.has(b)) continue;
-        const r = await w.store.link!(grant, a, b, { assertedBy: 'agent' });
-        if (r?.linked === true) linked++;
-      }
+    if (w.store.upsertManyLinked !== undefined) {
+      ({ linked } = await w.store.upsertManyLinked(grant, ready, pairs, { assertedBy: 'agent' }));
+    } else {
+      await w.store.upsertMany(grant, ready);
     }
     ctx.io.out(
       `Imported ${ready.length} memories from ${fileShown}${already > 0 ? ` (${already} already here)` : ''}${linked > 0 ? `, and ${linked} ${linked === 1 ? 'link' : 'links'}` : ''}.\n`,
