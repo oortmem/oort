@@ -19,11 +19,23 @@ export const TOOL_NAMES = [
  * today), so the remote connector's tool set is unchanged until it does.
  */
 export const JUDGMENT_TOOL_NAMES = ['record_judgment', 'judge'] as const;
+/**
+ * Memory links (CON-148): offered only by a backend whose store keeps links (the local store
+ * today; Oort Cloud does not hold links yet).
+ */
+export const LINK_TOOL_NAMES = ['link'] as const;
 
-export type ToolName = (typeof TOOL_NAMES)[number] | (typeof JUDGMENT_TOOL_NAMES)[number];
+export type ToolName =
+  | (typeof TOOL_NAMES)[number]
+  | (typeof JUDGMENT_TOOL_NAMES)[number]
+  | (typeof LINK_TOOL_NAMES)[number];
 
 /** Every tool a server can offer, in registration order. */
-export const ALL_TOOL_NAMES: readonly ToolName[] = [...TOOL_NAMES, ...JUDGMENT_TOOL_NAMES];
+export const ALL_TOOL_NAMES: readonly ToolName[] = [
+  ...TOOL_NAMES,
+  ...JUDGMENT_TOOL_NAMES,
+  ...LINK_TOOL_NAMES,
+];
 
 /** `remember` takes at most this many facts per call: distilled facts, never a transcript. */
 export const REMEMBER_MAX_FACTS = 5;
@@ -265,6 +277,14 @@ export function inputSchemasFor(spaces: ToolSpaces, opts: ToolSchemaOptions = {}
         .default(false)
         .describe('Also use agent-recorded judgments nobody has confirmed'),
     }),
+    link: z.object({
+      from: Id,
+      to: Id.describe('The other memory: in the same Planet or Star, both yours to change'),
+      remove: z
+        .boolean()
+        .default(false)
+        .describe('Remove the link instead; a pair that was not linked is blocked from linking'),
+    }),
   } as const satisfies Record<ToolName, z.ZodType>;
 }
 
@@ -397,6 +417,20 @@ export const TOOLS: readonly ToolDefinition[] = [
       "Predict an expert's verdict on a new item from their judgments, with probability and cited precedents, or say it needs the expert. Sends the item and reasons to TypeSafe.",
     // Reads only, but sends the item and the precedents' reasons to TypeSafe for the prediction.
     annotations: { ...read("Apply an expert's judgments"), openWorldHint: true },
+  },
+  {
+    name: 'link',
+    title: 'Link two memories',
+    description:
+      'Link two memories that belong together, or remove a link (remove: true). Use it when the person says they relate; saved as asserted by the agent.',
+    annotations: {
+      title: 'Link two memories',
+      readOnlyHint: false,
+      // A link (or a block) changes what is recalled together, so hosts should ask first.
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
 ];
 

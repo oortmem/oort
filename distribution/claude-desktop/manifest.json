@@ -48,6 +48,10 @@
     {
       "name": "judge",
       "description": "Predict an expert's verdict on a new item from their judgments."
+    },
+    {
+      "name": "link",
+      "description": "Link two memories that belong together, or remove a link."
     }
   ],
   "user_config": {

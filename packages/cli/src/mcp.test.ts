@@ -63,6 +63,7 @@ const ANNOTATIONS: Record<string, Record<string, boolean>> = {
   whoami: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   record_judgment: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   judge: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  link: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
 };
 
 describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
@@ -319,6 +320,41 @@ describe('oort mcp tools', () => {
     expect(JSON.stringify(me)).not.toMatch(/@/);
   });
 
+  it('mcp.link-is-asserted-by-agent-and-explain-lists-it (CON-148)', async () => {
+    const { client, h } = await connect('legacy');
+    const a = memory({ text: 'The cache is redis.' });
+    const b = memory({ text: 'The queue is sqs.' });
+    await h.store.upsertMany(TG, [a, b]);
+    const linked = await client.callTool({ name: 'link', arguments: { from: a.id, to: b.id } });
+    expect(json(linked)).toEqual({ linked: true, unblocked: false, asserted_by: 'agent' });
+    const explained = json<{ links: unknown[] }>(
+      await client.callTool({ name: 'explain', arguments: { id: b.id } }),
+    );
+    expect(explained.links).toEqual([
+      {
+        kind: 'explicit',
+        id: a.id,
+        direction: 'both',
+        asserted_by: 'agent',
+        created_at: expect.any(String),
+      },
+    ]);
+    const removed = await client.callTool({
+      name: 'link',
+      arguments: { from: a.id, to: b.id, remove: true },
+    });
+    // The two share a session, so the episode index would relate them again: the pair is blocked.
+    expect(json(removed)).toEqual({ removed: true, blocked: true });
+    // A pair it cannot link reads exactly as a missing id.
+    const missing = await client.callTool({ name: 'explain', arguments: { id: 'nope' } });
+    const self = await client.callTool({ name: 'link', arguments: { from: a.id, to: a.id } });
+    const none = await client.callTool({ name: 'link', arguments: { from: a.id, to: 'nope' } });
+    expect([self.isError, none.isError]).toEqual([true, true]);
+    const shape = (t: string) => t.replace(/".*"/, '"X"');
+    expect(shape(text(self))).toBe(shape(text(missing)));
+    expect(shape(text(none))).toBe(shape(text(missing)));
+  });
+
   it('mcp.ids-from-another-scope-are-not-found', async () => {
     const { client, h } = await connect('legacy');
     const other = memory({
@@ -407,6 +443,8 @@ describe('oort mcp with places (CON-84)', () => {
     const w = await h.wire(h.cwd);
     const backend = localBackend({ wired: { ...w, mode: 'cloud', cloud: {} as CloudClient } });
     expect(backend.spatial).toBeUndefined();
+    // Oort Cloud holds no links yet (CON-153): the tool is not offered.
+    expect(backend.link).toBeUndefined();
     await w.store.close();
   });
 });

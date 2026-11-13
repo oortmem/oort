@@ -45,6 +45,7 @@ import {
 } from './cloud.js';
 import {
   Refusal,
+  echo,
   findMemory,
   fixed,
   remedySentence,
@@ -193,8 +194,28 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
   const filter = filterFor(w.scope);
   // Places live in the local store only (CON-84): Oort Cloud holds none until CON-87.
   const spatial = w.mode !== 'cloud';
+  // Links live in the local store only (CON-148): Oort Cloud holds none until CON-153.
+  const links = w.mode !== 'cloud' && w.store.links === true;
   return {
     ...(spatial && { spatial: true as const }),
+    ...(links && {
+      /** Asserted by `agent`; a pair the store cannot link is refused as a missing id. */
+      async link({ from, to, remove }: { from: string; to: string; remove: boolean }) {
+        const a = await findMemory(w.store, filter, from);
+        const b = await findMemory(w.store, filter, to);
+        const g = writeGrant(w);
+        const as = { assertedBy: 'agent' as const };
+        const r = remove
+          ? await w.store.unlink!(g, a.id, b.id, as)
+          : await w.store.link!(g, a.id, b.id, as);
+        if (r === null) {
+          throw new Refusal(`No such memory in this project: ${echo(to)}.`, { code: 'not-found' });
+        }
+        return 'removed' in r
+          ? { removed: r.removed, blocked: r.blocked }
+          : { linked: r.linked, unblocked: r.unblocked, asserted_by: r.assertedBy };
+      },
+    }),
 
     async recall({ query, as_of, known_at, mode, limit, include, within, near }) {
       const view = viewOf(mode, as_of, known_at);
@@ -307,6 +328,11 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
       const raw = await findMemory(w.store, filter, id);
       const m = await shapeLinks(w.store, filter, raw);
       const { links, hidden } = await supersedeChain(w.store, raw, filter);
+      const stored = (await w.store.linksOf?.(localGrant(filter), raw.id)) ?? {
+        links: [],
+        hidden: 0,
+      };
+      const hiddenLinks = hidden + stored.hidden;
       return {
         memory: {
           id: m.id,
@@ -330,7 +356,16 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           valid_to: l.validTo,
           end_reason: l.endReason,
         })),
-        ...(hidden > 0 && { hidden_links: hidden }),
+        ...(stored.links.length > 0 && {
+          links: stored.links.map((l) => ({
+            kind: l.kind,
+            id: l.id,
+            direction: l.direction,
+            ...(l.assertedBy !== undefined && { asserted_by: l.assertedBy }),
+            created_at: l.createdAt,
+          })),
+        }),
+        ...(hiddenLinks > 0 && { hidden_links: hiddenLinks }),
       };
     },
 
