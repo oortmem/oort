@@ -9,7 +9,7 @@ import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { afterAll, describe, expect, it } from 'vitest';
-import { type LinksProbe, type MemoryStore } from '@oortmem/core';
+import { forgetMemory, type LinksProbe, type MemoryStore } from '@oortmem/core';
 import {
   CONFORMANCE_DIMENSION,
   linksConformance,
@@ -369,6 +369,67 @@ describe('schema version 8: links', () => {
       expect(await p.links()).toEqual([]);
       expect(await p.entities()).toEqual([]);
       expect(await p.episodes()).toEqual([]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('links.forget-composes-with-the-successor-rewrite', async () => {
+    // Forgetting A rewrites B, which restated it (CON-144): B is rewritten in place and keeps its
+    // own links; every row of A goes with it, in the same transaction as its delete.
+    const s = fresh();
+    const store = await openSqliteStore(optsFor(s));
+    const day = (n: number) => `2026-11-0${n}T00:00:00.000Z`;
+    try {
+      await store.upsertMany(TG, [
+        memoryAt('a', planet, me, {
+          text: 'The dev server runs on port 3000.',
+          entities: ['dev server', '3000'],
+          createdAt: day(1),
+          validTo: day(2),
+          expiredAt: day(2),
+          endReason: 'superseded',
+          supersededBy: 'b',
+        }),
+        memoryAt('b', planet, me, {
+          text: 'The dev server port changed from 3000 to 8080.',
+          entities: ['dev server', '3000', '8080'],
+          createdAt: day(2),
+          supersedes: 'a',
+        }),
+        memoryAt('c', planet, me, { entities: ['dev server'] }),
+      ]);
+      await store.link!(TG, 'b', 'c', { assertedBy: 'user' });
+      await store.link!(TG, 'a', 'c', { assertedBy: 'agent' });
+      await store.unlink!(TG, 'a', 'b', { assertedBy: 'user' });
+      const r = await forgetMemory(
+        {
+          store,
+          write: {
+            write: async () => {
+              throw new Error('unused');
+            },
+            rewriteCurrent: async (m) => ({
+              text: 'The dev server runs on port 8080.',
+              stub: m.stub,
+              entities: ['dev server', '8080'],
+              type: m.type,
+            }),
+          },
+        },
+        TG,
+        'a',
+      );
+      expect(r.rewritten.map((x) => x.id)).toEqual(['b']);
+      const p = probeFile(s.dbPath);
+      expect(await p.links()).toEqual([{ kind: 'explicit', a: 'b', b: 'c', assertedBy: 'user' }]);
+      expect(await p.entities()).toEqual([
+        { id: 'b', entity: '8080' },
+        { id: 'b', entity: 'dev server' },
+        { id: 'c', entity: 'dev server' },
+      ]);
+      expect(await p.orphans()).toBe(0);
+      expect((await store.linksOf!(TG, 'b'))?.links.map((l) => l.id)).toEqual(['c']);
     } finally {
       await store.close();
     }
