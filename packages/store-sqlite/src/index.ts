@@ -9,6 +9,8 @@ import {
   canonicalMemory,
   checkPlace,
   cursorKey,
+  entityKeys,
+  episodeSession,
   frameOf,
   hasSpatialFilter,
   nearBox,
@@ -17,6 +19,7 @@ import {
   GrantError,
   grantReads,
   grantWrites,
+  inLinkIndexes,
   isCurrent,
   isZeroVector,
   nodeKey,
@@ -34,6 +37,11 @@ import {
   type Hit,
   type Judgment,
   type Level,
+  type LinkOptions,
+  type LinkResult,
+  type LinksOf,
+  type StoredLink,
+  type UnlinkResult,
   type Memory,
   type MemorySource,
   type MemoryStore,
@@ -82,7 +90,13 @@ import {
   BIT_TABLE,
   defineWriterGuard,
   downgradeSchema,
+  ENTITY_TABLE,
   FTS_TABLE,
+  LINK_TABLE,
+  linkRowsError,
+  linkRowsKept,
+  nodeIdOf,
+  nodeKeyOfColumns,
   hasBinaryIndex,
   lexicalIndexState,
   judgmentCount,
@@ -339,6 +353,10 @@ interface MemoryRow {
   place: string | null;
   /** The place's `nodeId`, for `within`; NULL when it has none. */
   place_node: string | null;
+  /** `source.sessionId` (schema version 8, CON-148); NULL without one, and at level `hive`. */
+  session_id?: string | null;
+  /** The memory's place in its session; NULL with no `session_id`. */
+  episode_seq?: number | null;
 }
 
 type RowParams = Omit<MemoryRow, 'rid'>;
@@ -765,15 +783,17 @@ export function sqliteSchemaVersion(dbPath: string): number | undefined {
  * it again, 2 for Oort 0.3 to 0.5, 3 for Oort before tokeniser v2 (CON-110; the lexical index
  * is rebuilt with tokeniser v1), 4 for Oort before spatial memory (0.8.x), 5 for Oort before
  * the binary vector index (the binary index and the writer guard are dropped; the int8 vectors
- * were never moved), or 6 for Oort before the RaBitQ index (it is dropped, and the version 6
- * writer guard put back). First copies it to `<path>.pre-downgrade.<UTC time>` (the three newest such
- * copies are kept). Refuses, changing nothing, when it holds memories that version cannot
- * represent: for 1, any level but Planet, an author with an account, provenance or a judgment;
- * for 2, a judgment; below 5, a place. No other Oort process (hooks, the MCP server, a drain) may
- * have the store open while it runs: one would migrate it straight back, or fail on the changed
- * schema.
+ * were never moved), 6 for Oort before the RaBitQ index (it is dropped, and the version 6
+ * writer guard put back), or 7 for Oort before memory links (the link schema is dropped, and the
+ * version 7 guard put back). First copies it to `<path>.pre-downgrade.<UTC time>` (the three
+ * newest such copies are kept). Refuses, changing nothing, when it holds memories that version
+ * cannot represent: for 1, any level but Planet, an author with an account, provenance or a
+ * judgment; for 2, a judgment; below 5, a place; below 8, an explicit, distilledFrom or blocked
+ * link (learned `recalledWith` links are dropped). No other Oort process (hooks, the MCP server,
+ * a drain) may have the store open while it runs: one would migrate it straight back, or fail on
+ * the changed schema.
  */
-export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 | 4 | 5 | 6 }): void {
+export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 | 4 | 5 | 6 | 7 }): void {
   const to = opts.to ?? 1;
   const dbPath = path.resolve(opts.path);
   const db = withPrivateUmask(() => new Database(dbPath, { fileMustExist: true }));
@@ -784,6 +804,8 @@ export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 | 4 | 
       downgradeSchema(db, to); // at or below `to` already: nothing to do; anything else: refused
       return;
     }
+    const links = linkRowsKept(db);
+    if (links > 0) throw linkRowsError(links, to);
     const places = to < 5 ? placeCount(db) : 0;
     if (places > 0) {
       throw new Error(
@@ -911,10 +933,11 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       // Every migration from version 3 or older, a stale lexical index and a binary index to
       // build rebuild something (applySchema says so): wait as long as another process holds the
       // lock rather than fail and repeat the migration later.
+      // Every migration now fills the link schema from the stored rows (version 8) too.
       const rebuilds =
         opts.migrate !== false &&
         from !== undefined &&
-        (from < 4 ||
+        (from < SCHEMA_VERSION ||
           (from <= SCHEMA_VERSION &&
             (lexicalIndexState(conn, icu) === 'rebuild' ||
               binaryIndexPlan(conn, vectorIndex, opts.binaryAutoThreshold) === 'build' ||
@@ -1003,6 +1026,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     },
   );
 
+  type Params = Record<string, unknown>;
+
   const q = {
     upsertRow: db.prepare<[RowParams], { rid: number }>(
       `INSERT INTO memories (${COLUMNS.join(', ')}) VALUES (${COLUMNS.map((c) => `@${c}`).join(', ')})
@@ -1068,6 +1093,69 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       `INSERT INTO cursors (key, value) VALUES (?, ?)
        ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
     ),
+    // Memory relationships (schema version 8, CON-148).
+    entityDelete: db.prepare<[number]>(`DELETE FROM ${ENTITY_TABLE} WHERE memory_rid = ?`),
+    entityInsert: db.prepare<[number, string, number]>(
+      `INSERT OR IGNORE INTO ${ENTITY_TABLE} (node_id, entity_key, memory_rid) VALUES (?, ?, ?)`,
+    ),
+    setEpisode: db.prepare<[string | null, number | null, number]>(
+      'UPDATE memories SET session_id = ?, episode_seq = ? WHERE rid = ?',
+    ),
+    /** The position of another fact of the same turn in the same node and session. */
+    turnSeq: db.prepare<[Params], { seq: number }>(
+      `SELECT episode_seq AS seq FROM memories
+       WHERE session_id = @session AND rid != @rid AND episode_seq IS NOT NULL
+         AND level = @level AND org_id = @org AND customer_id IS @customer AND agent_id IS @agent
+         AND hive_id IS @hive AND run_id IS @run
+         AND json_type(source, '$.turnRef') = 'text' AND json_extract(source, '$.turnRef') = @turn
+       LIMIT 1`,
+    ),
+    /** The next position in a node's session. */
+    nextSeq: db.prepare<[Params], { seq: number }>(
+      `SELECT coalesce(max(episode_seq), 0) + 1 AS seq FROM memories
+       WHERE session_id = @session AND rid != @rid
+         AND level = @level AND org_id = @org AND customer_id IS @customer AND agent_id IS @agent
+         AND hive_id IS @hive AND run_id IS @run`,
+    ),
+    linkGet: db.prepare<[string, number, number], { asserted_by: 'user' | 'agent' | null }>(
+      `SELECT asserted_by FROM ${LINK_TABLE} WHERE kind = ? AND a_rid = ? AND b_rid = ?`,
+    ),
+    linkDelete: db.prepare<[string, number, number]>(
+      `DELETE FROM ${LINK_TABLE} WHERE kind = ? AND a_rid = ? AND b_rid = ?`,
+    ),
+    linkInsert: db.prepare<
+      [
+        {
+          kind: string;
+          node: number;
+          a: number;
+          b: number;
+          by: 'user' | 'agent';
+          agent: string;
+          at: string;
+        },
+      ]
+    >(
+      `INSERT INTO ${LINK_TABLE} (kind, node_id, a_rid, b_rid, asserted_by, agent_id, created_at)
+       VALUES (@kind, @node, @a, @b, @by, @agent, @at)
+       ON CONFLICT (kind, a_rid, b_rid) DO NOTHING`,
+    ),
+    linkAssertUser: db.prepare<[string, number, number]>(
+      `UPDATE ${LINK_TABLE} SET asserted_by = 'user', agent_id = ?
+       WHERE kind = 'explicit' AND a_rid = ? AND b_rid = ?`,
+    ),
+    /** Whether two memories share an entity in the index (an `about` pair). */
+    sharesEntity: db.prepare<[number, number], { x: number }>(
+      `SELECT 1 AS x FROM ${ENTITY_TABLE} e
+       JOIN ${ENTITY_TABLE} f ON f.node_id = e.node_id AND f.entity_key = e.entity_key
+         AND f.memory_rid = ?
+       WHERE e.memory_rid = ? LIMIT 1`,
+    ),
+    /** Whether two memories (of one node) share a session (an `episode` pair). */
+    sharesSession: db.prepare<[number, number], { x: number }>(
+      `SELECT 1 AS x FROM memories a JOIN memories b ON b.rid = ?
+       WHERE a.rid = ? AND a.session_id IS NOT NULL AND a.session_id = b.session_id`,
+    ),
   };
 
   /**
@@ -1083,8 +1171,6 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     }
     return st as unknown as Statement<P, R>;
   }
-
-  type Params = Record<string, unknown>;
 
   /** The one way a by-id read or change finds its row: inside the grant or not at all. */
   const getScoped = (n: number) =>
@@ -1393,6 +1479,51 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   }
 
   /**
+   * The entity index rows and the episode position of the memory at `rid` (CON-148), after its
+   * row was written. Entity rows are rewritten on every write, and exist only while the memory is
+   * current (`inLinkIndexes`). The episode position is given once: a rewrite in the same session
+   * keeps it; a new memory gets its turn's (another fact with the same `turnRef`) or the next one.
+   */
+  function writeLinkIndexes(
+    rid: number,
+    m: Memory,
+    address: Address,
+    existing: MemoryRow | undefined,
+  ): void {
+    q.entityDelete.run(rid);
+    const cols = addressColumns(address);
+    if (inLinkIndexes(m)) {
+      const keys = entityKeys(m.entities);
+      if (keys.length > 0) {
+        const node = nodeIdOf(db, nodeKeyOfColumns(cols));
+        for (const k of keys) q.entityInsert.run(node, k, rid);
+      }
+    }
+    const session = episodeSession(m) ?? null;
+    if (session === null) {
+      if (existing?.session_id != null) q.setEpisode.run(null, null, rid);
+      return;
+    }
+    if (existing?.session_id === session && existing.episode_seq != null) return;
+    const where = {
+      session,
+      rid,
+      level: cols.level,
+      org: cols.org_id,
+      customer: cols.customer_id,
+      agent: cols.agent_id,
+      hive: cols.hive_id,
+      run: cols.run_id,
+    };
+    const turn = m.source.turnRef;
+    const seq =
+      (typeof turn === 'string' ? q.turnSeq.get({ ...where, turn })?.seq : undefined) ??
+      q.nextSeq.get(where)?.seq ??
+      1;
+    q.setEpisode.run(session, seq, rid);
+  }
+
+  /**
    * Writes one memory's row, FTS row and vec row. Call inside a transaction.
    * Returns the blob to unlink after commit when a non-cold write dropped the cold copy.
    */
@@ -1411,6 +1542,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     const row = q.upsertRow.get(toRow(m, address, author));
     if (row === undefined) throw new Error(`upsert ${m.id}: no row returned`);
     writeFts(row.rid, m.tier, m.text, m.stub, m.entities);
+    writeLinkIndexes(row.rid, m, address, existing);
     q.placeDelete.run(row.rid);
     const box = placeBox(m.place);
     if (box !== undefined) {
@@ -1587,16 +1719,139 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     },
   );
 
+  /** An expired memory leaves the entity index in the same transaction (CON-148). */
   const expireManyTx = db.transaction((grant: Grant, ms: Memory[], at: string): string[] =>
     ms
-      .filter(
-        (m) =>
-          scopedRow(grant.writeNodes, m.id) === undefined ||
-          q.expireIfUnchanged.get({ id: m.id, at, updatedAt: m.updatedAt, was: m.tier }) ===
-            undefined,
-      )
+      .filter((m) => {
+        if (scopedRow(grant.writeNodes, m.id) === undefined) return true;
+        const row = q.expireIfUnchanged.get({ id: m.id, at, updatedAt: m.updatedAt, was: m.tier });
+        if (row === undefined) return true;
+        q.entityDelete.run(row.rid);
+        return false;
+      })
       .map((m) => m.id),
   );
+
+  /**
+   * The rows `link` and `unlink` join: both inside `grant.write`, distinct, in one node that is
+   * not at level `hive`, ordered `a < b`. Undefined for anything else, as for a missing id.
+   */
+  function linkablePair(
+    grant: Grant,
+    x: string,
+    y: string,
+  ): { a: number; b: number; node: string } | undefined {
+    if (x === y) return undefined;
+    const rx = scopedRow(grant.writeNodes, x);
+    const ry = scopedRow(grant.writeNodes, y);
+    if (rx === undefined || ry === undefined) return undefined;
+    if (rx.level === 'hive' || ry.level === 'hive') return undefined;
+    const node = nodeKeyOfColumns(rx);
+    if (node !== nodeKeyOfColumns(ry)) return undefined;
+    const [a, b] = rx.rid < ry.rid ? [rx.rid, ry.rid] : [ry.rid, rx.rid];
+    return { a, b, node };
+  }
+
+  const linkTx = db.transaction(
+    (grant: Grant, x: string, y: string, o: LinkOptions): LinkResult | null => {
+      const p = linkablePair(grant, x, y);
+      if (p === undefined) return null;
+      const unblocked = q.linkDelete.run('blocked', p.a, p.b).changes > 0;
+      const was = q.linkGet.get('explicit', p.a, p.b);
+      if (was !== undefined) {
+        const stronger = o.assertedBy === 'user' && was.asserted_by !== 'user';
+        if (stronger) q.linkAssertUser.run(grant.principal.agentId, p.a, p.b);
+        return {
+          linked: stronger,
+          unblocked,
+          assertedBy: stronger ? 'user' : (was.asserted_by ?? 'agent'),
+        };
+      }
+      q.linkInsert.run({
+        kind: 'explicit',
+        node: nodeIdOf(db, p.node),
+        a: p.a,
+        b: p.b,
+        by: o.assertedBy,
+        agent: grant.principal.agentId,
+        at: (o.at ?? clock()).toISOString(),
+      });
+      return { linked: true, unblocked, assertedBy: o.assertedBy };
+    },
+  );
+
+  const unlinkTx = db.transaction(
+    (grant: Grant, x: string, y: string, o: LinkOptions): UnlinkResult | null => {
+      const p = linkablePair(grant, x, y);
+      if (p === undefined) return null;
+      const removed =
+        q.linkDelete.run('explicit', p.a, p.b).changes +
+          q.linkDelete.run('recalledWith', p.a, p.b).changes >
+        0;
+      const related =
+        q.sharesEntity.get(p.b, p.a) !== undefined || q.sharesSession.get(p.b, p.a) !== undefined;
+      if (removed && !related) return { removed, blocked: false };
+      q.linkInsert.run({
+        kind: 'blocked',
+        node: nodeIdOf(db, p.node),
+        a: p.a,
+        b: p.b,
+        by: o.assertedBy,
+        agent: grant.principal.agentId,
+        at: (o.at ?? clock()).toISOString(),
+      });
+      return { removed, blocked: true };
+    },
+  );
+
+  /**
+   * Every link and block row of the memory at `@rid`, with the other end's id and whether a
+   * pattern of the reader's grant covers it (`grantSql` over the other end, aliased `m`).
+   */
+  const linksScoped = (n: number) =>
+    cached<
+      [Params],
+      {
+        kind: StoredLink['kind'] | 'blocked';
+        a_rid: number;
+        asserted_by: 'user' | 'agent' | null;
+        created_at: string;
+        id: string;
+        readable: number;
+      }
+    >(
+      `links:${n}`,
+      () => `SELECT l.kind AS kind, l.a_rid AS a_rid, l.asserted_by AS asserted_by,
+              l.created_at AS created_at, m.id AS id, ${grantSql(n)} AS readable
+       FROM ${LINK_TABLE} l
+         CROSS JOIN memories m ON m.rid = (CASE WHEN l.a_rid = @rid THEN l.b_rid ELSE l.a_rid END)
+       WHERE l.a_rid = @rid OR l.b_rid = @rid
+       ORDER BY l.created_at, l.kind, m.rid`,
+    );
+
+  function linksOfRow(grant: Grant, id: string): LinksOf | null {
+    const row = scopedRow(grant.readNodes, id);
+    if (row === undefined) return null;
+    const patterns = live(grant.readNodes);
+    const out: LinksOf = { links: [], blocked: [], hidden: 0 };
+    for (const r of linksScoped(patterns.length).all({ ...grantParams(patterns), rid: row.rid })) {
+      const seen = r.readable !== 0;
+      if (r.kind === 'blocked') {
+        if (seen) out.blocked.push(r.id);
+      } else if (!seen) {
+        out.hidden++;
+      } else {
+        out.links.push({
+          kind: r.kind,
+          id: r.id,
+          direction: r.kind === 'distilledFrom' ? (r.a_rid === row.rid ? 'out' : 'in') : 'both',
+          ...(r.kind === 'explicit' && { assertedBy: r.asserted_by ?? 'agent' }),
+          createdAt: r.created_at,
+        });
+      }
+    }
+    return out;
+  }
 
   /**
    * Demotes `ms[i]`'s row to cold with `files[i]` as its cold copy, for every i
@@ -1668,6 +1923,25 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
 
   const handle: MemoryStore = {
     spatial: true,
+    links: true,
+
+    async link(grant, a, b, linkOpts) {
+      open();
+      assertGrant(grant);
+      return linkTx.immediate(grant, a, b, linkOpts);
+    },
+
+    async unlink(grant, a, b, linkOpts) {
+      open();
+      assertGrant(grant);
+      return unlinkTx.immediate(grant, a, b, linkOpts);
+    },
+
+    async linksOf(grant, id) {
+      open();
+      assertGrant(grant);
+      return linksOfRow(grant, id);
+    },
 
     async upsert(grant, m) {
       open();

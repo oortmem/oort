@@ -400,11 +400,11 @@ describe('schema migration 5 to 6', () => {
     await (await openSqliteStore(optsFor(s))).close();
     const db = raw(s.dbPath);
     db.function(WRITER_GUARD, () => 1);
-    db.prepare("UPDATE meta SET value = '8' WHERE key = 'schema_version'").run();
+    db.prepare("UPDATE meta SET value = '9' WHERE key = 'schema_version'").run();
     db.close();
     const before = hashFile(s.dbPath);
     await expect(openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).rejects.toThrow(
-      /schema version 8 is not supported \(expected 7\)/,
+      /schema version 9 is not supported \(expected 8\)/,
     );
     expect(hashFile(s.dbPath)).toBe(before);
   });
@@ -419,9 +419,9 @@ describe('schema migration 5 to 6', () => {
     try {
       expect(() =>
         db.prepare("UPDATE memories SET salience = 0.9 WHERE id = 'v4-01'").run(),
-      ).toThrow(/no such function: oort_writer_v7/);
+      ).toThrow(/no such function: oort_writer_v8/);
       expect(() => db.prepare("DELETE FROM memories WHERE id = 'v4-01'").run()).toThrow(
-        /no such function: oort_writer_v7/,
+        /no such function: oort_writer_v8/,
       );
       // Reads still work: an older reader sees the same int8 vectors.
       expect(db.prepare('SELECT count(*) AS n FROM memories').get()).toEqual({ n: 37 });

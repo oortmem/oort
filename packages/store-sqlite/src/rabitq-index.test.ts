@@ -875,7 +875,7 @@ describe('schema migration 6 to 7', () => {
     expect(await readBack(s)).toEqual(before); // `auto` keeps the binary index
     expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(copies(s)).toEqual([]);
-    expect(guardFunctions(s.dbPath)).toEqual(Array(3).fill('oort_writer_v7'));
+    expect(guardFunctions(s.dbPath)).toEqual(Array(3).fill('oort_writer_v8'));
     expect(tables(s.dbPath)).toEqual([BIT_TABLE]);
     // A version 6 writer still running fails loudly, changing nothing.
     const db = raw(s.dbPath);
@@ -883,7 +883,7 @@ describe('schema migration 6 to 7', () => {
     try {
       expect(() =>
         db.prepare("UPDATE memories SET salience = 0.9 WHERE id = 'v4-01'").run(),
-      ).toThrow(/no such function: oort_writer_v7/);
+      ).toThrow(/no such function: oort_writer_v8/);
     } finally {
       db.close();
     }
@@ -923,7 +923,7 @@ describe('schema migration 6 to 7', () => {
     } finally {
       db.close();
     }
-    expect(guardFunctions(s.dbPath)).toEqual(Array(3).fill('oort_writer_v7'));
+    expect(guardFunctions(s.dbPath)).toEqual(Array(3).fill('oort_writer_v8'));
     expect(sqliteVectorIndex(s.dbPath)).toEqual({ index: 'rabitq', vectors: 0, building: true });
     // A hook meanwhile reads the store as it was.
     expect(await readBack(s, { migrate: false })).toEqual(await readBack(await copy6()));
