@@ -8,7 +8,7 @@
 // native/rust-toolchain.toml pins, so rustup builds with that toolchain wherever this script is
 // started from. A cargo and rustc without rustup (Homebrew's, say) ignore both. The script prints
 // `rustc --version` before building; `--pinned-toolchain` makes a different version an error (CI and
-// release use it), and `--toolchain-only` stops after that check.
+// release use it) and implies --require, and `--toolchain-only` stops after that check.
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -46,9 +46,9 @@ export function buildNative(
   args,
   { nativeDir = path.join(here, '..', 'native'), spawn = spawnSync, log = console.log } = {},
 ) {
-  const require = args.includes('--require');
-  const zig = args.includes('--zig');
   const pinned = args.includes('--pinned-toolchain');
+  const require = pinned || args.includes('--require');
+  const zig = args.includes('--zig');
   const toolchainOnly = args.includes('--toolchain-only');
   const ti = args.indexOf('--target');
   const target = ti >= 0 ? args[ti + 1] : undefined;
@@ -65,7 +65,13 @@ export function buildNative(
   };
 
   if (spawn('cargo', ['--version'], { ...opts, stdio: 'ignore' }).status !== 0) {
-    const msg = 'build-native: cargo is not installed; the store will use the TypeScript engine';
+    // With rustup on PATH, cargo fails here because the pinned toolchain is not installed.
+    const rustup = spawn('rustup', ['--version'], { stdio: 'ignore' }).error === undefined;
+    const missing = rustup
+      ? `Rust ${channel} (from native/rust-toolchain.toml) is not installed; ` +
+        'run `rustup toolchain install` in native/'
+      : 'cargo is not installed';
+    const msg = `build-native: ${missing}; the store will use the TypeScript engine`;
     if (require) throw new Error(msg);
     log(msg);
     return null;
@@ -119,9 +125,11 @@ export function buildNative(
   return { out };
 }
 
+// Real paths on both sides: started through a symlink, argv[1] keeps the link while Node
+// resolves import.meta.url to the file it points at.
 if (
   process.argv[1] !== undefined &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))
 ) {
   buildNative(process.argv.slice(2));
 }

@@ -299,8 +299,9 @@ is not left behind in freed memory.
 **Packaging.** The binaries ship inside `@oortmem/store-sqlite` (`files` includes
 `native/oort-rabitq.*.node`), so there is no new npm package and no install script. The release
 workflow builds one per platform from source with the pinned toolchain (`rust-toolchain.toml`;
-each build job prints `rustc --version` and fails if it differs) and `--locked`: Linux on a runner of that platform (`ubuntu-22.04`, `ubuntu-22.04-arm`, so glibc
-2.35 or newer), macOS arm64 cross-compiled on `ubuntu-22.04` with cargo-zigbuild. Each Linux job
+each build job prints `rustc --version` and fails if it differs) and `--locked`: Linux on a
+runner of that platform (`ubuntu-22.04`, `ubuntu-22.04-arm`, so glibc 2.35 or newer), macOS arm64
+cross-compiled on `ubuntu-22.04` with cargo-zigbuild. Each Linux job
 loads the binary it built and runs the engine and index test files with `OORT_REQUIRE_NATIVE=1`
 (the store's RaBitQ conformance included); every build job writes a SHA-256 beside its binary.
 The macOS job checks, before upload, that the binary's page hashes match its code signature

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -9,18 +10,25 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * A stand-in for spawnSync that records each call and answers like rustup's cargo and rustc
- * would. `rustcVersion` is what `rustc --version` prints; `cargo` is false when cargo is missing.
+ * would. `rustcVersion` is what `rustc --version` prints; `cargo` is false when cargo is missing
+ * (or, with `rustup`, when rustup has not installed the pinned toolchain).
  */
 function fakeRust({
   rustcVersion = 'rustc 1.99.1 (0123456789 2026-10-29)',
   host = 'x86_64-unknown-linux-gnu',
   cargo = true,
+  rustup = false,
   buildStatus = 0,
 } = {}) {
   const calls = [];
   const spawn = (cmd, args, opts) => {
     calls.push({ cmd, args, cwd: opts?.cwd, toolchain: opts?.env?.RUSTUP_TOOLCHAIN });
-    if (cmd === 'cargo' && !cargo) return { status: null, error: new Error('ENOENT') };
+    if (cmd === 'rustup') {
+      return rustup ? { status: 0 } : { status: null, error: new Error('ENOENT') };
+    }
+    if (cmd === 'cargo' && !cargo) {
+      return rustup ? { status: 1 } : { status: null, error: new Error('ENOENT') };
+    }
     if (cmd === 'cargo' && args[0] === '--version') return { status: 0, stdout: 'cargo 1.99.1\n' };
     if (cmd === 'rustc' && args[0] === '--version')
       return { status: 0, stdout: `${rustcVersion}\n` };
@@ -166,5 +174,38 @@ describe('buildNative', () => {
     expect(() => buildNative(['--require'], { nativeDir: dir, spawn, log })).toThrow(
       /cargo is not installed/,
     );
+  });
+
+  it('--pinned-toolchain implies --require: without cargo, --toolchain-only fails', () => {
+    const { spawn } = fakeRust({ cargo: false });
+    expect(() =>
+      buildNative(['--pinned-toolchain', '--toolchain-only'], { nativeDir: dir, spawn, log }),
+    ).toThrow(/cargo is not installed/);
+  });
+
+  it('names the pinned toolchain when rustup is there but has not installed it', () => {
+    const { spawn } = fakeRust({ cargo: false, rustup: true });
+    const missing =
+      /Rust 1\.99\.1 \(from native\/rust-toolchain\.toml\) is not installed; run `rustup toolchain install`/;
+    expect(buildNative([], { nativeDir: dir, spawn, log })).toBeNull();
+    expect(logs.join('\n')).toMatch(missing);
+    expect(() => buildNative(['--pinned-toolchain'], { nativeDir: dir, spawn, log })).toThrow(
+      missing,
+    );
+  });
+});
+
+describe('build-native.mjs run as a command', () => {
+  it('runs when started through a symlinked path', () => {
+    const link = path.join(dir, 'store-sqlite');
+    fs.symlinkSync(path.join(here, '..'), link, 'dir');
+    // No PATH, so no cargo: with --require the script has to fail, which proves it ran.
+    const r = spawnSync(
+      process.execPath,
+      [path.join(link, 'scripts', 'build-native.mjs'), '--require'],
+      { cwd: dir, env: { PATH: '' }, encoding: 'utf8' },
+    );
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/cargo is not installed/);
   });
 });
