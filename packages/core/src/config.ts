@@ -40,6 +40,50 @@ const activation = z
   })
   .default({ d: 0.5, ws: 1.0, hotTopN: 50, coldBelow: -2.0 });
 
+/** The start values of `recall.links` (memory relationships, CON-149). */
+const LINKS_DEFAULT = {
+  enabled: false,
+  seeds: 3,
+  pool: 5,
+  admit: 2,
+  budgetMs: 8,
+  fMax: 50,
+  factors: { explicit: 1, episode: 0.5, about: 0.6 },
+};
+
+/**
+ * One hop along links at recall (CON-149). Read from the home config only: it decides whether
+ * links an agent wrote, and links formed from entities and sessions, bring memories into a prompt.
+ */
+const links = z
+  .strictObject({
+    /**
+     * Follow every kind: explicit links whoever asserted them, `episode` (the same session, a few
+     * turns apart) and `about` (a shared, specific entity), on every recall but the prompt hook's
+     * `fast` and `lexical` modes. Off (the default): only `recall.userLinks` applies.
+     */
+    enabled: z.boolean().default(false),
+    /** How many of the top memories of each node are followed from. */
+    seeds: z.number().int().min(1).max(5).default(3),
+    /** How many linked memories are loaded (and, with a reranker, join its one call). */
+    pool: z.number().int().min(1).max(10).default(5),
+    /** How many linked memories a recall may return, beside its `returnK` hits. At most 2. */
+    admit: z.number().int().min(0).max(2).default(2),
+    /** Longest the gather step may take, in ms; past it the result reports `links-skipped`. */
+    budgetMs: z.number().int().min(1).max(1000).default(8),
+    /** An entity in this many readable memories, or more, relates nothing (`about`). */
+    fMax: z.number().int().min(2).max(500).default(50),
+    /** How much each kind counts when linked memories are ranked; 0 turns a kind off. */
+    factors: z
+      .strictObject({
+        explicit: z.number().min(0).max(1).default(1),
+        episode: z.number().min(0).max(1).default(0.5),
+        about: z.number().min(0).max(1).default(0.6),
+      })
+      .default(LINKS_DEFAULT.factors),
+  })
+  .default(LINKS_DEFAULT);
+
 const recall = z
   .strictObject({
     lexicalK: z.number().int().positive().default(50),
@@ -106,6 +150,14 @@ const recall = z
     adaptiveStop: z.enum(['rule', 'decide', 'off']).default('rule'),
     /** The decision model's probability at or above which the reranked set counts as enough. */
     sufficientAt: z.number().min(0).max(1).default(0.7),
+    links,
+    /**
+     * Follow explicit links confirmed at a terminal (`oort link`, stored `assertedBy: 'user'`) on
+     * recalls that rerank, without `recall.links.enabled`. A linked memory is returned only when
+     * the reranker scores it, and the memory it was reached from, at or above `minRerankScore`.
+     * Home config only.
+     */
+    userLinks: z.boolean().default(true),
   })
   .default({
     lexicalK: 50,
@@ -126,6 +178,8 @@ const recall = z
     promptMode: 'fast',
     adaptiveStop: 'rule',
     sufficientAt: 0.7,
+    links: LINKS_DEFAULT,
+    userLinks: true,
   });
 
 const project = z
@@ -218,7 +272,8 @@ export type ResolvedConfig = OortConfig & {
    * Keys a project's `oort.config.json` set that only the home config may set (`serve`: a
    * repository must not start processes on this machine; `judge`: nor name experts; `updates`:
    * the update check is your preference; `store`: one store per home; `recall.adaptiveStop` and
-   * `recall.sufficientAt`: a model call on your recalled text). Ignored;
+   * `recall.sufficientAt`: a model call on your recalled text; `recall.links` and
+   * `recall.userLinks`: which links bring memories into a prompt). Ignored;
    * absent when there are none.
    */
   ignoredProjectKeys?: string[];
@@ -232,9 +287,11 @@ const HOME_ONLY_KEYS: ReadonlySet<string> = new Set(['serve', 'judge', 'updates'
  * come from a project (CON-17): `recall.adaptiveStop` can turn on a model call that sends recalled
  * text to the decision vendor, and with `sufficientAt` hide cold matches. A project file's value
  * is ignored (and reported as `recall.adaptiveStop`); the home config's, or the default, stands.
+ * `recall.links` and `recall.userLinks` (CON-149) decide which links bring memories into a
+ * prompt, so a repository can neither turn link-following on nor undo a person turning it off.
  */
 const HOME_ONLY_SUBKEYS: Readonly<Record<string, readonly string[]>> = {
-  recall: ['adaptiveStop', 'sufficientAt'],
+  recall: ['adaptiveStop', 'sufficientAt', 'links', 'userLinks'],
 };
 
 const CONFIG_KEYS = Object.keys(OortConfig.shape);

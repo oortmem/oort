@@ -8,7 +8,7 @@
  * fake reranker: the path a neighbour joins the rerank call on). Measured recalls run on a
  * `frozen()` store, after the store's own warm-up.
  */
-import { recall, type Embedder, type Reranker } from '@oortmem/core';
+import { recall, type Embedder, type Reranker, type ResolvedConfig } from '@oortmem/core';
 import { frozen } from './bench.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { fakeReranker } from './fake-rerank.js';
@@ -118,7 +118,7 @@ export async function runLinksLatency(opts: LinksLatencyOptions = {}): Promise<L
           const recallConfig = {
             ...config,
             recall: { ...config.recall, ...linksOverride(mode, config) },
-          };
+          } as ResolvedConfig;
           const runs: number[][] = [];
           const gather: number[] = [];
           for (let run = 0; run < repeats; run++) {

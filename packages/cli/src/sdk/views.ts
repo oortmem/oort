@@ -125,6 +125,7 @@ function recalledView(m: CoreRecalled, now: Date): RecalledMemory {
       ...(e.chain === true && { chain: true as const }),
       ...(e.placePath !== undefined && { placePath: e.placePath }),
       ...(e.distanceM !== undefined && { distanceM: e.distanceM }),
+      ...(e.via !== undefined && { via: { ...e.via } }),
     },
   };
 }
@@ -225,6 +226,7 @@ function fromView(m: RecalledMemory): CoreRecalled {
       activation: m.why.activation,
       hydrated: false,
       ...(m.stale === true && { stale: true as const }),
+      ...(m.why.via !== undefined && { via: { ...m.why.via } }),
     },
     ...(m.origin !== undefined && {
       origin: {

@@ -13,6 +13,8 @@ import {
 import { supersedeChain } from '../engine/chain.js';
 import {
   chosenDegradations,
+  LINKS_IGNORED_IN_CLOUD,
+  linksIgnoredInCloud,
   runRecall,
   viewIgnored,
   viewIgnoredWarning,
@@ -168,6 +170,9 @@ export async function recall(ctx: Ctx, query: string, o: RecallOptions): Promise
             ? [{ code: 'recall-degraded', message: `recall degraded (${degraded.join(', ')}).` }]
             : []),
           ...(ignored !== undefined ? [{ code: 'time-mode-unreported', message: ignored }] : []),
+          ...(linksIgnoredInCloud(ctx.engine)
+            ? [{ code: 'links-local-only', message: LINKS_IGNORED_IN_CLOUD }]
+            : []),
         ]
       : recallWarnings(ctx, speed, degraded, ignored);
   return recallView(r, now, {

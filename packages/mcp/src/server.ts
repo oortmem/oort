@@ -32,6 +32,11 @@ export interface RecalledFact {
   place?: string;
   /** With `near`: metres from the query point to its region. */
   distance_m?: number;
+  /**
+   * Set when the search did not find this fact and a link from another returned fact did
+   * (CON-149): the link's kind, the id it was reached from, and a weight from 0 to 1.
+   */
+  via?: { kind: string; from: string; weight: number };
 }
 
 export interface RecallOutput {

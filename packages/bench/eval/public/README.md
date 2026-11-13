@@ -42,7 +42,7 @@ pnpm eval --set longmemeval --fetch               # download once, then run lexi
 pnpm eval --set longmemeval --embed local --home <oort home with pulled models>
 pnpm eval --set longmemeval --limit 50             # --limit spreads N haystacks through the file
 pnpm eval --set longmemeval --embed voyage --rerank voyage --plan   # counts and cost, sends nothing
-pnpm eval --set longmemeval --links grid           # the ablation grid, once recall.links exists (CON-149)
+pnpm eval --set longmemeval --links grid           # the ablation grid, over the link kinds recall follows
 pnpm eval --set locomo --fetch                     # local only: publish no LoCoMo numbers
 pnpm eval --set longmemeval ./other.json --unpinned  # a file by path, recorded as unpinned
 ```

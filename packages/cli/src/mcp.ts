@@ -33,7 +33,14 @@ import {
   refundAgentJudgment,
   reserveAgentJudgment,
 } from './judge-cap.js';
-import { runRecall, timeMode, viewIgnored, type TemporalView } from './engine/recall.js';
+import {
+  LINKS_IGNORED_IN_CLOUD,
+  linksIgnoredInCloud,
+  runRecall,
+  timeMode,
+  viewIgnored,
+  type TemporalView,
+} from './engine/recall.js';
 import { rememberFacts, rememberFactsInCloud } from './remember.js';
 import {
   OortCloudError,
@@ -254,6 +261,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           e.lexicalRank !== undefined ? `lexical #${e.lexicalRank}` : undefined,
           e.denseRank !== undefined ? `dense #${e.denseRank}` : undefined,
           e.reranked !== undefined ? `rerank ${fixed(e.reranked)}` : undefined,
+          e.via !== undefined ? `linked (${e.via.kind})` : undefined,
           m.pinned ? 'pinned' : undefined,
         ].filter((x) => x !== undefined);
         return {
@@ -271,6 +279,10 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           }),
           ...(m.place?.nodeId !== undefined && { place: m.place.nodeId }),
           ...(e.distanceM !== undefined && { distance_m: Number(e.distanceM.toFixed(3)) }),
+          // Reached through a link from another returned memory, not found by the search.
+          ...(e.via !== undefined && {
+            via: { kind: e.via.kind, from: e.via.from, weight: Number(e.via.weight.toFixed(3)) },
+          }),
         };
       });
       const lexicalOnly = w.mode !== 'cloud' && (w.embed === undefined || w.rerank === undefined);
@@ -283,6 +295,11 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           : lexicalOnly && {
               note: `lexical-only recall: no embed or rerank model or key. ${remedySentence({ roles: ['embed', 'rerank'], keyStore: w.keyStore !== false })}.`,
             }),
+        // Oort Cloud follows no link (CON-153): said when the config asks for it and nothing more
+        // pressing is.
+        ...(refused === undefined &&
+          !lexicalOnly &&
+          linksIgnoredInCloud(w) && { note: LINKS_IGNORED_IN_CLOUD }),
         // Last, so a store that ignored the requested time mode is the note the agent reads.
         ...(ignored && {
           mode_unsupported: true as const,

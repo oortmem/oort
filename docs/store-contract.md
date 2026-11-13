@@ -245,7 +245,50 @@ The rules every such store keeps:
 - **Episode positions.** A memory with `source.sessionId` (not at level `hive`) has a position in
   its node's session: facts of one `turnRef` share a position, and a rewrite keeps it.
 
-Recall does not read links yet.
+Recall reads links through one more method (CON-149):
+
+- `neighbours(grant, seedIds, opts)` returns `{ neighbours, skipped? }`: the memories one link
+  away from the seeds, as `{ id, kind, from, weight }` (and, for `explicit`, `assertedBy`) and
+  nothing else. `opts.kinds` picks from
+  `explicit`, `episode` and `about`; `explicitBy: 'user'` keeps only explicit links asserted by
+  `user`; `currentOnly` drops expired and superseded memories; `spatial` drops memories outside
+  the place filter; `fMax` (50) and `budgetMs` bound the read.
+
+Its rules:
+
+- **Only what the reader may reach.** A neighbour is listed only when `grant.read` covers both it
+  and its seed, the two are at the same node, that node is not at level `hive`, and the pair is not
+  blocked. A seed outside the grant contributes nothing, exactly as an unknown id.
+- **Every bound is counted after the grant.** At most 16 explicit links and 6 episode neighbours
+  per seed, and 20 per entity, newest first, of the rows the grant reads. An entity that `fMax` or
+  more readable memories carry relates nothing; a rarer one weighs `1 − ln(fan) / ln(fMax)`, where
+  `fan` counts readable memories only. Below the work bound that follows, rows outside the grant
+  never change which neighbours a reader gets, or their weights.
+- **Weights.** `explicit` is 1. `episode` reaches 3 turns: 1 for a fact of the same turn,
+  `exp(−d / 3)` for a later turn and half that for an earlier one. Several shared entities
+  combine as `1 − Π(1 − w)`.
+- **A work bound that does not depend on the grant.** Before a read, the store counts the index
+  rows it would touch, up to a bound: `rawScanLimit(fMax)` (64 × `fMax`) rows of one entity in one
+  node, 512 explicit links of one seed asserted by `user` and 512 asserted by `agent` (counted
+  apart, so links an agent writes never use up a person's; the caps of 16 are apart too, a
+  person's first), 512 memories in the turns around one seed. Every count stays inside the
+  seed's own node. Past the bound
+  that read is not made: the entity (or that seed's links) contributes nothing to this call, and
+  the result has `skipped: true`. Nothing is returned from a cut-off read. This is the one way
+  rows outside a grant can show: a reader who already holds an entity can learn that its node has
+  more rows of it than the bound. Any work bound that does not depend on the grant reveals its own
+  threshold; it is set far above the hub cutoff so that it is rarely reached.
+- **Each read is one index range.** A store answers every one of these reads, and every count,
+  from an index that leads with the seed's node or the seed itself, so rows other nodes hold (a
+  session id is whatever its writer says) are never visited. The SQLite store's tests ask SQLite
+  for each statement's plan and fail on a scan.
+- **Nothing to follow, nothing read.** Asked only for explicit links asserted by `user`
+  (recall's default), a store that holds none answers from a cached check and reads nothing.
+- **The budget.** The clock is read between reads, not inside one: before each kind and before each entity's read. Once
+  `budgetMs` has passed, the store returns what it has with `skipped: true`.
+
+A store without `neighbours` gets no hop. Recall reads every neighbour again under the same
+grant before using it, so a store's mistake cannot bring in a memory the reader does not read.
 
 ## Places (spatial memory)
 
@@ -463,6 +506,13 @@ Schema version 8 (memory links, CON-148) adds three tables and two columns:
   kinds. No row holds text.
 - `memories.session_id` and `memories.episode_seq`: a memory's place in its session.
 
+Its indexes (`LINK_INDEXES`): `memories_episode` over the node's columns, then `session_id` and
+`episode_seq`, for memories with a session; `memory_links_a` and `memory_links_b` over one end,
+the kind and who asserted the link; `memory_links_by` over the kind and who asserted it. A store
+that an earlier build of version 8 created with other definitions has them replaced on its next
+open that may migrate (no row is rewritten); `migrate: false` refuses such a store with
+`StoreMigrationRequiredError` until then.
+
 Every row of the new tables references its memory with `ON DELETE CASCADE`. Opening a version 7
 store creates them and fills `nodes`, `memory_entities`, `session_id` and `episode_seq` from the
 stored rows in one transaction, without a copy (nothing existing is rewritten); a failure leaves
@@ -497,8 +547,10 @@ straight back up.
 A store with `links: true` also runs `linksConformance(name, make, probe)` from the same module.
 `probe(store)` returns a `LinksProbe` that reads the store's own entity, link and episode rows, so
 the suite can prove what is left behind. It covers the cascade on forget, upsert keeping links,
-superseded and expired memories leaving the entity index, the same-node and no-`hive` rules, and
-grant filtering of `linksOf`.
+superseded and expired memories leaving the entity index, the same-node and no-`hive` rules,
+grant filtering of `linksOf`, and `neighbours`: its kinds and weights, hubs, the grant, node and
+`hive` rules, blocks, ended memories, the place filter, the budget, the caps, and that rows outside
+a reader's grant change nothing for that reader.
 
 `@oortmem/core/store-conformance` exports `storeConformance(name, make)`. It runs the contract
 tests and the isolation suite:

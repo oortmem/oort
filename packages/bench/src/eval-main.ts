@@ -14,7 +14,7 @@ import {
 import { voyageReranker } from '@oortmem/rerank-voyage';
 import { openSqliteStore, VECTOR_INDEXES, type VectorIndex } from '@oortmem/store-sqlite';
 import { belowMinRecall10, loadEvalRows, renderRun, runEval, type EvalRun } from './eval.js';
-import { parseLinkModes } from './links.js';
+import { linkModesFor } from './links.js';
 import { publicMain } from './public-main.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { demoMemories } from './fixture.js';
@@ -132,7 +132,7 @@ async function main(): Promise<number> {
     throw new Error(`--vector-index must be auto, int8, binary or rabitq, got "${vectorIndex}"`);
   const coldShare = Number(values['cold-share']);
   if (!(coldShare >= 0 && coldShare <= 1)) throw new Error('--cold-share must be between 0 and 1');
-  const linkModes = parseLinkModes(values.links);
+  const linkModes = linkModesFor(values.links);
   if (values.hook && !values.demo)
     throw new Error('--hook goes with --demo; pass a file otherwise');
   const minRecall10 = Number(values['min-recall10']);

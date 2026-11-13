@@ -250,7 +250,11 @@ console.log(memories.map((m) => m.text).join('\n'));
 not linked. Both memories must be ones the handle writes, in the same Planet or Star: any other
 pair rejects with `OortNotFoundError`, like a missing id. From the SDK a link is always asserted
 by `agent`; `unlink` rejects (`refused`, `asserted-by-user`) for a link confirmed at a terminal
-with `oort link`. Recall does not use links yet. In cloud mode both reject (`refused`, `local-only`).
+with `oort link`. A `full` recall follows a link confirmed at a terminal for one hop;
+links your code writes are followed once the home config sets `recall.links.enabled`. A memory a
+link brought in has `why.via` (`{ kind, from, weight }`), passed the same relevance gate as a hit,
+and is labelled `linked` by `formatForPrompt`. In cloud mode both reject (`refused`, `local-only`)
+and recall follows no link.
 
 <!-- example: examples/src/links.ts -->
 

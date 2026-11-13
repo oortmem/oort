@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { resolveConfig, type RecalledMemory, type ResolvedConfig } from '@oortmem/core';
 import {
+  followedKinds,
   LINK_MODES,
   linksOverride,
   linksSupported,
   LinksUnavailableError,
   parseLinkModes,
+  runnableModes,
   START_FACTORS,
   viaOf,
   type RecallLinksConfig,
@@ -17,7 +19,11 @@ const today = resolveConfig(
   { projectConfig: false },
 );
 
-/** A config as CON-149 is designed to resolve it (design section 12). */
+/** A build from before `recall.links` (CON-149). */
+const { links: _links, userLinks: _userLinks, ...recallBefore } = today.recall;
+const before = { ...today, recall: recallBefore } as ResolvedConfig;
+
+/** A config with every designed kind built (design section 12). */
 const withLinks: ResolvedConfig = {
   ...today,
   recall: {
@@ -36,12 +42,41 @@ const withLinks: ResolvedConfig = {
 };
 
 describe('links switch', () => {
-  it('links.today-has-no-recall-links', () => {
-    expect(linksSupported(today)).toBe(false);
-    expect(linksOverride('off', today)).toEqual({});
+  it('links.a-build-without-recall-links-runs-only-off', () => {
+    expect(linksSupported(before)).toBe(false);
+    expect(linksOverride('off', before)).toEqual({});
     for (const mode of LINK_MODES.filter((m) => m !== 'off')) {
-      expect(() => linksOverride(mode, today)).toThrow(LinksUnavailableError);
+      expect(() => linksOverride(mode, before)).toThrow(LinksUnavailableError);
     }
+  });
+
+  it('links.this-build-follows-explicit-episode-and-about (CON-149)', () => {
+    expect(linksSupported(today)).toBe(true);
+    expect(followedKinds(today)).toEqual(['explicit', 'episode', 'about']);
+    expect(linksOverride('off', today)).toMatchObject({
+      links: { enabled: false },
+      userLinks: false,
+    });
+    expect(linksOverride('about', today)).toMatchObject({
+      links: { enabled: true, factors: { explicit: 0, episode: 0, about: 0.6 } },
+      userLinks: false,
+    });
+    expect(linksOverride('all', today)).toMatchObject({
+      links: { enabled: true, factors: { explicit: 1, episode: 0.5, about: 0.6 } },
+      userLinks: true,
+    });
+    // The kinds later slices build are refused by name, and `grid` leaves them out.
+    expect(() => linksOverride('recalledWith', today)).toThrow(/CON-150/);
+    expect(() => linksOverride('distilledFrom', today)).toThrow(/CON-152/);
+    expect(runnableModes(parseLinkModes('grid'), today)).toEqual([
+      'off',
+      'user',
+      'explicit',
+      'episode',
+      'about',
+      'all',
+    ]);
+    expect(runnableModes(['off'], before)).toEqual(['off']);
   });
 
   it('links.modes-map-onto-the-designed-config', () => {

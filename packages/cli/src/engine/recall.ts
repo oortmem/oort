@@ -221,6 +221,22 @@ export interface RecallTarget extends Pick<
   grant?: Grant;
 }
 
+/** Following links in Oort Cloud: refused, as spatial options are, until CON-153. */
+export const LINKS_LOCAL_ONLY =
+  'Following links is local-only for now: Oort Cloud does not hold links yet. Run `oort cloud use --local` to use --links.';
+
+/**
+ * Set when the config asks recall to follow links (`recall.links.enabled`) in cloud mode, where
+ * nothing is followed: the recall still runs, and the caller says so once.
+ */
+export function linksIgnoredInCloud(w: Pick<RecallTarget, 'config' | 'mode'>): boolean {
+  return w.mode === 'cloud' && w.config.recall.links.enabled;
+}
+
+/** The warning for `linksIgnoredInCloud`, for people and the `links-local-only` code. */
+export const LINKS_IGNORED_IN_CLOUD =
+  'recall.links is on, but Oort Cloud does not follow links yet: this recall followed none.';
+
 /** How much of the model pipeline a recall uses: everything, no rerank, or no model at all. */
 export type RecallSpeed = 'full' | 'fast' | 'lexical';
 
@@ -251,11 +267,15 @@ export async function runRecall(
   now: Date,
   include?: IncludeLevel[],
   includeWithdrawn = false,
-  opts: { k?: number; speed?: RecallSpeed; spatial?: SpatialFilter } = {},
+  opts: { k?: number; speed?: RecallSpeed; spatial?: SpatialFilter; links?: boolean } = {},
 ): Promise<RecallResult> {
   const speed = opts.speed ?? 'full';
   const cloud = cloudOf(w);
   const spatial = opts.spatial;
+  if (cloud !== undefined && opts.links === true) {
+    // Oort Cloud holds no links yet (CON-153): refused before anything is sent.
+    throw new Refusal(LINKS_LOCAL_ONLY, { code: 'refused' });
+  }
   if (cloud !== undefined && spatial !== undefined) {
     // Oort Cloud holds no places yet (CON-87): refused before anything is sent.
     throw new Refusal(
@@ -299,6 +319,10 @@ export async function runRecall(
         ...(includeWithdrawn && { includeWithdrawn: true }),
         ...(spatial?.within !== undefined && { within: spatial.within }),
         ...(spatial?.near !== undefined && { near: spatial.near }),
+        // `lexical` reads no vectors and calls no model: it follows no link either (CON-149).
+        ...(opts.links === false || speed === 'lexical'
+          ? { links: false }
+          : opts.links === true && { links: true }),
       },
       {
         store: w.store,

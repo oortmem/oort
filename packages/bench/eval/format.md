@@ -53,7 +53,7 @@ Computed overall and per category.
 - **abstention false-positive rate**: the fraction of `abstention` rows that returned a memory.
 - **link precision**: of the memories a link brought in (`explanation.via`) in the top 10 of every
   row, the share that were expected; pooled over the rows, not averaged per row. `-` when no row
-  returned a linked memory, which is every run until links exist (CON-149).
+  returned a linked memory in its top 10.
 
 A group shows `-` for a metric with no rows to compute it from.
 
@@ -112,8 +112,8 @@ one question per multi-hop pair, with words of both ends, so one recall returns 
 
 ### Links (`--links`)
 
-Memory relationships (design `docs/design/2026-11-12-memory-relationships.md`) are not built
-yet. `--links` picks what recall follows, from the design's ablation grid:
+`--links` picks which links recall follows (design
+`docs/design/2026-11-12-memory-relationships.md`), from the design's ablation grid:
 
 | Mode                                                            | Follows                                                             |
 | --------------------------------------------------------------- | ------------------------------------------------------------------- |
@@ -123,9 +123,22 @@ yet. `--links` picks what recall follows, from the design's ablation grid:
 | `all`                                                           | every kind                                                          |
 | `grid`                                                          | each of the above in turn, one table per mode                       |
 
-Until `recall.links` exists (CON-149), every mode but `off` is refused with a message naming it.
-The switch is `packages/bench/src/links.ts`: it detects `recall.links` in the resolved config and
-maps each mode onto the settings section 12 of the design specifies.
+Recall follows `explicit`, `episode` and `about` (CON-149). `recalledWith` (CON-150) and
+`distilledFrom` (CON-152) are not built yet: each is refused with a message naming its issue, and
+`grid` and `all` cover the kinds that are built. The switch is `packages/bench/src/links.ts`: it
+maps each mode onto `recall.links` and `recall.userLinks`.
+
+Two things to know when reading a links run:
+
+- **Without a reranker a linked memory is appended after the hits**, and it must pass the same
+  word-coverage or dense-similarity gate as a hit. `pnpm eval --demo` runs without a reranker, and
+  the multi-hop targets share no word with their questions, so they are gated out and the
+  multi-hop rows stay at 0 with links on. With `--no-gate` they are returned, after the hits: at
+  place 11 or 12 when the recall already has 10 hits, which recall@10 does not count.
+- **With a reranker** (`--set … --rerank …`) linked memories join the rerank call and are merged
+  by rerank score, so they can enter the top 10. That is the path the links bar is measured on.
+- `user` follows only explicit links stored as asserted by `user`. The demo store and the public
+  sets hold none, so `user` equals `off` there.
 
 ### Hook-shaped queries (`--hook`)
 
@@ -159,15 +172,14 @@ pnpm bench --suite links [--count 100000,1000000] [--queries 200] [--repeats 3]
   forces it. The 1M store takes about 2 GB of disk and long to build on a busy machine.
 - **Warm-up**: `pnpm bench` measures on a `frozen()` store whose `recordAccess` does nothing, so a
   learned pair could never form during measurement. The build therefore first runs 500 recalls
-  (`--warm-up <n>` with `--build-only`) on the unwrapped store, with access recording live and,
-  once `recall.links` exists, links on, from a query sample disjoint from the measured one; only
-  then is the store frozen. When the store
+  (`--warm-up <n>` with `--build-only`) on the unwrapped store, with access recording live and
+  links on, from a query sample disjoint from the measured one; only then is the store frozen. When the store
   schema version or the links capability changes (a newer build opens the cached store), only the
   warm-up runs again.
 - **Paths**: `lexical`, `fast` (fake embedder, no reranker) and `full` (fake embedder and a
   deterministic in-process reranker), so no run needs a model or a key.
 - **Report**: per store and path, recall p50 / p95 / p99 with links off and on, the p95 and p99
-  deltas, and the gather step's p50 / p99 (`timings.linksMs`, which CON-149's recall must report).
-  Until `recall.links` exists only links off runs and the other columns are `-`.
+  deltas, and the gather step's p50 / p99 (`timings.linksMs`, set on every recall that read
+  links). `--links off` or `on` measures one side only.
 
 Baselines are recorded in `packages/bench/baselines/`.

@@ -25,7 +25,7 @@ import { cachingEmbedder, type CachingEmbedder } from './embed-cache.js';
 import { cell, renderReport } from './eval.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { EMBEDDING_DIMENSION } from './generate.js';
-import { parseLinkModes } from './links.js';
+import { linkModesFor } from './links.js';
 import { loadLocomo } from './locomo.js';
 import { loadLongMemEval } from './longmemeval.js';
 import {
@@ -219,7 +219,7 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
   }
   const reports: PublicReport[] = [];
   try {
-    for (const links of parseLinkModes(a.links)) {
+    for (const links of linkModesFor(a.links)) {
       reports.push(
         await runPublicSet({
           set,

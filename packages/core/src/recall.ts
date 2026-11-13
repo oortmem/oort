@@ -31,9 +31,11 @@ import {
 } from './levels.js';
 import { scrub } from './scrub.js';
 import { isCurrent, type Memory } from './model.js';
+import type { NeighbourKind } from './links.js';
 import {
   checkSpatialFilter,
   hasSpatialFilter,
+  matchesSpatial,
   placeDistance,
   SpatialUnsupportedError,
   type NearQuery,
@@ -88,6 +90,21 @@ export interface RecallQuery {
    * must hold. Either needs a store with `spatial: true`, or recall rejects.
    */
   near?: NearQuery;
+  /**
+   * One hop along links (CON-149). `false`: take none, whatever the config says (the prompt
+   * hook's `fast` and `lexical` modes). `true`: follow every kind for this recall, as with
+   * `recall.links.enabled`. Default: the config (`recall.userLinks`, `recall.links`).
+   */
+  links?: boolean;
+}
+
+/** How a link brought a memory into a recall: the kind, the returned memory it came from. */
+export interface RecallVia {
+  kind: NeighbourKind;
+  /** The id of the returned memory the link was followed from. */
+  from: string;
+  /** How strongly the links pointed at it, from 0 to 1, counting only what the reader may read. */
+  weight: number;
 }
 
 /** The temporal view a recall used, and whether it was read from the query. */
@@ -121,6 +138,11 @@ export interface RecalledMemory extends Memory {
     placePath?: string;
     /** With `near` (CON-84): metres from the query point to the memory's region. */
     distanceM?: number;
+    /**
+     * Set when the search did not return this memory and a link from a returned one did
+     * (CON-149). It passed the same relevance gate as a hit; its text is no more trusted.
+     */
+    via?: RecallVia;
   };
   /** Where it came from: level, node, author, and whether a narrower memory overrides it. */
   origin?: MemoryOrigin;
@@ -142,7 +164,9 @@ export type Degradation =
   /** Recording the access failed: the results stand, but their activation was not bumped. */
   | 'access-failed'
   /** The adaptive stop's question failed: recall widened into the cold matches, as without it. */
-  | 'stop-failed';
+  | 'stop-failed'
+  /** Following links took longer than `recall.links.budgetMs` (or failed): some were not read. */
+  | 'links-skipped';
 
 export interface RecallResult {
   memories: RecalledMemory[];
@@ -187,7 +211,9 @@ const clock = (): number => performance.now();
 /**
  * Hybrid recall: lexical + dense first stage, activation-aware fusion, optional
  * rerank, relevance gate, then (only for what is returned, within `budgetChars`
- * when set) cold hydration and the access record. Adapter failures degrade,
+ * when set) cold hydration and the access record. One bounded hop along links
+ * (CON-149) may add at most `recall.links.admit` memories beside the hits, each
+ * through the same gate as a hit and marked `explanation.via`. Adapter failures degrade,
  * never throw; so do store failures in the dense search, in cold hydration and
  * in the access record (with the reason in `degraded`). The lexical search is
  * the floor: its failure rejects.
@@ -338,9 +364,129 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   }
   const denseScore = new Map(dense.map((h) => [h.id, h.score]));
 
+  // One hop along links (CON-149). `all`: every kind (`recall.links.enabled`, or `links: true`).
+  // `user`: only explicit links confirmed at a terminal, and only on a recall that reranks.
+  const linkCfg = config.recall.links;
+  const mayHop = q.links !== false && typeof store.neighbours === 'function' && linkCfg.admit > 0;
+  const followAll = mayHop && (q.links === true || linkCfg.enabled);
+  const followUser = mayHop && config.recall.userLinks;
+  const fusedById = new Map(fused.map((f) => [f.id, f]));
+  const legOf = (m: Memory): number => {
+    const key = nodeKey(nodeOfMemory(m));
+    return legs.findIndex((l) => nodeKey(l.node) === key);
+  };
+  let linksSkipped = false;
+  /**
+   * The memories one link away from the top `seeds` of `from` in each node, best `pool` by spread,
+   * loaded and checked. Ids come from the store under each node's own grant; each memory is then
+   * read under that same grant, so nothing outside it, in another node or in a hive can come back.
+   */
+  const gatherLinked = async (
+    from: readonly { id: string; score: number }[],
+    which: 'all' | 'user',
+    exclude: ReadonlySet<string>,
+  ): Promise<Linked[]> => {
+    const tl = clock();
+    try {
+      const kinds: NeighbourKind[] =
+        which === 'user'
+          ? ['explicit']
+          : (['explicit', 'episode', 'about'] as const).filter(
+              (k) => linkCfg.factors[k] > 0 || (k === 'explicit' && followUser),
+            );
+      // Explicit links an agent wrote count only with the kind's factor above 0.
+      const userOnly = which === 'user' || linkCfg.factors.explicit <= 0;
+      const factor = (k: NeighbourKind): number =>
+        k === 'explicit' && userOnly ? 1 : linkCfg.factors[k];
+      const found = new Map<string, Linked>();
+      const top = Math.max(0, ...from.map((f) => f.score));
+      for (const [i, leg] of legs.entries()) {
+        if (leg.node.level === 'hive') continue;
+        const seeds = from
+          .filter((f) => {
+            const m = memories.get(f.id);
+            return m !== undefined && legOf(m) === i;
+          })
+          .slice(0, linkCfg.seeds);
+        if (seeds.length === 0 || kinds.length === 0) continue;
+        const left = linkCfg.budgetMs - (clock() - tl);
+        if (left <= 0) {
+          linksSkipped = true;
+          break;
+        }
+        const r = await store.neighbours!(
+          leg.grant,
+          seeds.map((f) => f.id),
+          {
+            kinds,
+            ...(userOnly && { explicitBy: 'user' as const }),
+            currentOnly: view.mode === 'current',
+            ...(spatial !== undefined && { spatial }),
+            fMax: linkCfg.fMax,
+            budgetMs: left,
+          },
+        );
+        if (r.skipped === true) linksSkipped = true;
+        for (const seed of seeds) {
+          const rows = r.neighbours.filter(
+            (n) =>
+              n.from === seed.id &&
+              n.id !== seed.id &&
+              kinds.includes(n.kind) &&
+              Number.isFinite(n.weight) &&
+              n.weight > 0,
+          );
+          const fanout = new Set(rows.map((n) => n.id)).size;
+          const strength = top > 0 ? seed.score / top : 1;
+          for (const n of rows) {
+            const part = (strength * factor(n.kind) * Math.min(1, n.weight)) / fanout;
+            const l: Linked = found.get(n.id) ?? { id: n.id, leg: i, spread: 0, seeds: new Map() };
+            if (n.kind === 'explicit' && n.assertedBy === 'user') l.byUser = true;
+            if (l.leg !== i) continue;
+            l.spread += part;
+            const was = l.seeds.get(seed.id);
+            if (was === undefined || part > was.part) l.seeds.set(seed.id, { part, kind: n.kind });
+            found.set(n.id, l);
+          }
+        }
+      }
+      const best = [...found.values()]
+        .filter((l) => !exclude.has(l.id))
+        // At equal spread a link confirmed at a terminal goes first, so links an agent wrote on
+        // the same memory cannot keep it out of the pool.
+        .sort(
+          (x, y) =>
+            y.spread - x.spread ||
+            Number(y.byUser === true) - Number(x.byUser === true) ||
+            (x.id < y.id ? -1 : 1),
+        )
+        .slice(0, linkCfg.pool);
+      const loaded: Linked[] = [];
+      for (const l of best) {
+        const leg = legs[l.leg]!;
+        const m = await store.get(leg.grant, l.id);
+        if (m === null || !isVisible(m, now, view)) continue;
+        if (addressOf(m).level === 'hive' || legOf(m) !== l.leg) continue;
+        if (spatial !== undefined && !matchesSpatial(m, spatial)) continue;
+        memories.set(m.id, m);
+        coverage.set(m.id, queryCoverage(queryTokens, m));
+        loaded.push(l);
+      }
+      return loaded;
+    } catch {
+      // A store that cannot answer costs the linked memories, never the recall.
+      linksSkipped = true;
+      return [];
+    } finally {
+      timings['linksMs'] = (timings['linksMs'] ?? 0) + (clock() - tl);
+    }
+  };
+
   let ordered = fused.slice(0, config.recall.rerankK);
   const rerankScores = new Map<string, number>();
   let rerankSkipped: RecallResult['rerankSkipped'];
+  /** Linked memories that joined the rerank call; emptied when the rerank gives no answer. */
+  let linked: Linked[] = [];
   if (!deps.rerank) {
     degraded.push('no-reranker');
   } else if (
@@ -349,17 +495,38 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   ) {
     rerankSkipped = 'confident';
   } else if (ordered.length > 0) {
+    // The seeds are chosen before the rerank, so the linked memories join its one call.
+    if (followAll || followUser) {
+      linked = await gatherLinked(
+        ordered,
+        followAll ? 'all' : 'user',
+        new Set(ordered.map((f) => f.id)),
+      );
+    }
     const tr = clock();
     try {
-      const docs = ordered.map((f) => ({ id: f.id, text: memories.get(f.id)?.text ?? '' }));
+      const docs = [...ordered, ...linked].map((f) => ({
+        id: f.id,
+        text: memories.get(f.id)?.text ?? '',
+      }));
       const reranked = await withBudget(
-        deps.rerank.rerank(text, docs, config.recall.returnK),
+        deps.rerank.rerank(
+          text,
+          docs,
+          // Hits keep their `returnK` places: the linked memories are asked for on top.
+          linked.length > 0 ? config.recall.returnK + linkCfg.pool : config.recall.returnK,
+        ),
         config.recall.rerankBudgetMs,
       );
       if (reranked === TIMED_OUT) throw RERANK_TIMEOUT;
       const byId = new Map(ordered.map((f) => [f.id, f]));
+      const linkedIds = new Set(linked.map((l) => l.id));
       const next: typeof ordered = [];
       for (const r of reranked) {
+        if (linkedIds.delete(r.id)) {
+          rerankScores.set(r.id, r.score);
+          continue;
+        }
         const f = byId.get(r.id);
         if (f === undefined) continue;
         rerankScores.set(r.id, r.score);
@@ -369,12 +536,15 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
       if (next.length === 0) {
         // Nothing usable came back (an empty list, or only unknown ids): keep the fused order.
         degraded.push('rerank-empty');
+        rerankScores.clear();
+        linked = [];
       } else {
         ordered = next;
       }
     } catch (e) {
       degraded.push(e === RERANK_TIMEOUT ? 'rerank-timeout' : 'rerank-failed');
       rerankScores.clear();
+      linked = [];
     }
     timings['rerankMs'] = clock() - tr;
   }
@@ -393,6 +563,36 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   };
   let kept = candidates.filter((f) => relevant(f.id));
   const dropped = candidates.length - kept.length;
+
+  // Linked memories never take a hit's place: at most `admit` are added beside the hits, each
+  // through the gate a hit passes, and only from a hit that passed it too. They are chosen here
+  // and attached after the adaptive stop, which is asked about the hits alone.
+  const via = new Map<string, Linked>();
+  const entryOf = (l: Linked) => fusedById.get(l.id) ?? { id: l.id, score: 0, rrf: 0 };
+  let admitted: Linked[] = [];
+  if (byRerank) {
+    const passed = new Set(kept.map((f) => f.id));
+    admitted = linked
+      .filter((l) => relevant(l.id) && rerankScores.has(l.id))
+      .filter((l) => [...l.seeds.keys()].some((s) => passed.has(s)))
+      .sort((x, y) => rerankScores.get(y.id)! - rerankScores.get(x.id)!)
+      .slice(0, linkCfg.admit);
+  } else if (followAll && kept.length > 0) {
+    // Without a rerank score (only with `recall.links.enabled`): the seeds are the kept hits, and
+    // a linked memory needs the coverage or the dense similarity a hit needs. No embed call: the
+    // similarity comes from its stored vector and the query vector already in hand.
+    const found = await gatherLinked(kept, 'all', new Set(candidates.map((f) => f.id)));
+    for (const l of found) {
+      if (admitted.length >= linkCfg.admit) break;
+      const m = memories.get(l.id);
+      if (m === undefined) continue;
+      if (!denseScore.has(l.id) && v !== undefined && m.embedding?.length === v.length) {
+        denseScore.set(l.id, cosine(v, m.embedding));
+      }
+      if (relevant(l.id)) admitted.push(l);
+    }
+  }
+  if (linksSkipped) degraded.push('links-skipped');
 
   // Adaptive stop (CON-17): with the live set enough, the cold matches are left out, unhydrated.
   let adaptiveStop: RecallResult['adaptiveStop'];
@@ -435,6 +635,26 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
       if (stopped) kept = live;
     }
   }
+  // The stop has decided over the hits. A linked memory is attached only while a hit it was
+  // reached from is still returned, and a cold one goes when the stop left the cold matches out.
+  if (admitted.length > 0) {
+    const hits = new Set(kept.map((f) => f.id));
+    for (const l of admitted) {
+      for (const s of [...l.seeds.keys()]) if (!hits.has(s)) l.seeds.delete(s);
+      if (l.seeds.size === 0) continue;
+      if (adaptiveStop?.stopped === true && memories.get(l.id)?.tier === 'cold') continue;
+      via.set(l.id, l);
+      if (!byRerank) {
+        // Appended after every hit.
+        kept.push(entryOf(l));
+        continue;
+      }
+      // Merged by rerank score, after any memory that scored the same.
+      const score = rerankScores.get(l.id)!;
+      const at = kept.findIndex((f) => (rerankScores.get(f.id) ?? -Infinity) < score);
+      kept.splice(at < 0 ? kept.length : at, 0, entryOf(l));
+    }
+  }
 
   let out: RecalledMemory[] = [];
   for (const f of kept) {
@@ -456,6 +676,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         ...(ds !== undefined ? { dense: ds } : {}),
         activation: activation(m.accessLog, m.salience, now, config.activation),
         hydrated: false,
+        ...viaOf(via.get(f.id)),
       },
       origin: originOf(m, full),
     });
@@ -474,7 +695,6 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   }
   // With a budget, return only what the injection block holds, so nothing cut is touched below.
   if (q.budgetChars !== undefined) result = fitForInjection(result, q.budgetChars, now).kept;
-
   // Touch only what is returned: the search's own hits (not chain-only versions). Cold ones that
   // are current come back to warm; a version that is no longer current is shown from its live row,
   // since consolidate would only send it back to cold.
@@ -544,6 +764,43 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     ...(spatial !== undefined && { spatial }),
     timings,
   };
+}
+
+/** A memory a link leads to, before it is admitted: where it came from and how strongly. */
+interface Linked {
+  id: string;
+  /** The node leg its seeds are in (a link never leaves a node). */
+  leg: number;
+  /** Σ over seeds of seed strength × kind factor × link weight ÷ the seed's fan-out. */
+  spread: number;
+  /** Reached by an explicit link asserted by `user`. */
+  byUser?: true;
+  /** Per seed: its largest single contribution, and the kind that made it. */
+  seeds: Map<string, { part: number; kind: NeighbourKind }>;
+}
+
+/** `explanation.via` of an admitted linked memory: its largest contributor among what is returned. */
+function viaOf(l: Linked | undefined): { via?: RecallVia } {
+  if (l === undefined) return {};
+  let best: [string, { part: number; kind: NeighbourKind }] | undefined;
+  for (const e of l.seeds) if (best === undefined || e[1].part > best[1].part) best = e;
+  if (best === undefined) return {};
+  return { via: { kind: best[1].kind, from: best[0], weight: Math.min(1, l.spread) } };
+}
+
+/** Cosine similarity of two int8 vectors of one length: what a store's dense search scores by. */
+function cosine(a: Int8Array, b: Int8Array): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  }
+  return na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb);
 }
 
 /** The grant a query reads with: its own, or the local grant for its scope and home. */
@@ -839,8 +1096,9 @@ const INJECT_OPEN = '<oort-memory>\n';
 const INJECT_CLOSE = '\n</oort-memory>';
 
 /**
- * The memories `formatForInjection` renders within `budgetChars`, in order (a prefix: whole
- * lines only, stopping at the first that does not fit), with their lines.
+ * The memories `formatForInjection` renders within `budgetChars`, in order, with their lines:
+ * whole lines only. The search's hits are a prefix (stopping at the first that does not fit);
+ * linked memories use only what the hits leave, each beside the memory it was reached from.
  */
 export function fitForInjection<M extends RecalledMemory>(
   memories: M[],
@@ -849,29 +1107,46 @@ export function fitForInjection<M extends RecalledMemory>(
 ): { kept: M[]; lines: string[] } {
   let total = INJECT_OPEN.length + INJECT_CLOSE.length;
   let hive = 0;
-  const lines: string[] = [];
-  const kept: M[] = [];
   // Levels are named only when something comes from outside the reader's home node: a recall of
   // one node reads exactly as before levels existed.
   const labelled = memories.some((m) => m.origin !== undefined && !m.origin.home);
-  for (const m of memories) {
+  const lineOf = (m: M): string => {
     const note =
       m.explanation.stale === true
         ? ` (may be outdated; last confirmed ${age(lastConfirmed(m), now)})`
         : '';
-    const text = injectableText(m.text);
-    const line = `- [${labelFor(m, labelled, now)}] ${text}${note}`;
-    const cost = line.length + (lines.length > 0 ? 1 : 0);
-    // Hive memories (Constellation, Galaxy) take at most HIVE_QUOTA of the budget, so a large team
-    // cannot crowd out the person's own memory: one past it is skipped, not the end of the block.
+    return `- [${labelFor(m, labelled, now)}] ${injectableText(m.text)}${note}`;
+  };
+  const fitted = new Map<M, string>();
+  // Whether `line` fits now, and if so takes its place. A line after the first costs a newline.
+  // Hive memories (Constellation, Galaxy) take at most HIVE_QUOTA of the budget, so a large team
+  // cannot crowd out the person's own memory.
+  const take = (m: M, line: string): 'taken' | 'over-quota' | 'no-room' => {
+    const cost = line.length + (fitted.size > 0 ? 1 : 0);
     const fromHive = m.origin?.level === 'hive';
-    if (fromHive && hive + cost > HIVE_QUOTA * budgetChars) continue;
-    if (total + cost > budgetChars) break;
-    lines.push(line);
-    kept.push(m);
+    if (fromHive && hive + cost > HIVE_QUOTA * budgetChars) return 'over-quota';
+    if (total + cost > budgetChars) return 'no-room';
+    fitted.set(m, line);
     total += cost;
     if (fromHive) hive += cost;
+    return 'taken';
+  };
+  // The search's own hits first, in order, stopping at the first that does not fit (a hive
+  // memory past its quota is skipped, not the end of the block).
+  for (const m of memories) {
+    if (m.explanation.via !== undefined) continue;
+    if (take(m, lineOf(m)) === 'no-room') break;
   }
+  // Then memories a link brought in (CON-149), with what is left: one never takes a hit's place,
+  // and is never shown without the memory it was reached from.
+  const shown = new Set([...fitted.keys()].map((m) => m.id));
+  for (const m of memories) {
+    const from = m.explanation.via?.from;
+    if (from === undefined || !shown.has(from)) continue;
+    take(m, lineOf(m));
+  }
+  const kept = memories.filter((m) => fitted.has(m));
+  const lines = kept.map((m) => fitted.get(m) as string);
   return { kept, lines };
 }
 
@@ -900,13 +1175,15 @@ export const HIVE_QUOTA = 0.4;
 
 /**
  * A memory's label, built by code from structured fields only: `semantic, 2d ago`, or with levels
- * named `semantic, Star cursor, 5h ago`, and `, overridden by Star cursor` when a narrower memory
- * in the result contradicts it. Memory text never reaches it (and its brackets are escaped).
+ * named `semantic, Star cursor, 5h ago`, `, linked` when a link brought it in (CON-149), and
+ * `, overridden by Star cursor` when a narrower memory in the result contradicts it. Memory text never reaches it (and its brackets are escaped).
  */
 function labelFor(m: RecalledMemory, labelled: boolean, now: Date): string {
   const parts: string[] = [m.type];
   if (labelled && m.origin !== undefined) parts.push(m.origin.node);
   parts.push(when(m, now));
+  // Reached through a link, not by the search: said in the label, never with the entity's name.
+  if (m.explanation.via !== undefined) parts.push('linked');
   if (m.origin?.overriddenBy !== undefined)
     parts.push(`overridden by ${m.origin.overriddenBy.node}`);
   return parts.join(', ');

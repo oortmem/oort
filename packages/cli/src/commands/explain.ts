@@ -40,6 +40,19 @@ export function fromLabel(o: RecallResult['memories'][number]['origin']): string
   return o.overriddenBy === undefined ? where : `${where} (overridden)`;
 }
 
+/**
+ * How a link brought a memory in, for the table: the kind and the rank of the memory it was
+ * reached from (`about <- #2`). `-` for a memory the search found itself.
+ */
+export function viaLabel(
+  via: RecallResult['memories'][number]['explanation']['via'],
+  rankOf: ReadonlyMap<string, number>,
+): string {
+  if (via === undefined) return '-';
+  const rank = rankOf.get(via.from);
+  return `${via.kind} <- ${rank === undefined ? short(via.from) : `#${rank}`}`;
+}
+
 /** The spatial filter in a few words: `within room:B, within 2 m of 1,2 on hq`. */
 export function spatialLabel(f: SpatialFilter): string {
   const parts: string[] = [];
@@ -56,7 +69,12 @@ export function spatialLabel(f: SpatialFilter): string {
 /** `oort explain "<query>" [--json] [temporal flags]`: recall, with each stage's rank and score. */
 export async function explainCommand(
   query: string,
-  opts: { json?: boolean; include?: string; includeWithdrawn?: boolean } & TemporalFlags &
+  opts: {
+    json?: boolean;
+    include?: string;
+    includeWithdrawn?: boolean;
+    links?: boolean;
+  } & TemporalFlags &
     SpatialFlags,
   ctx: Ctx,
 ): Promise<number> {
@@ -67,7 +85,11 @@ export async function explainCommand(
     const now = new Date();
     const result = await runRecall(w, query, view, now, include, opts.includeWithdrawn === true, {
       ...(spatial !== undefined && { spatial }),
+      ...(opts.links !== undefined && { links: opts.links }),
     });
+    // The `via` column appears only when a link brought something in.
+    const linked = result.memories.some((m) => m.explanation.via !== undefined);
+    const rankOf = new Map(result.memories.map((m, i) => [m.id, i + 1]));
     recallWarnings(ctx, w, view, result);
     if (jsonMode(ctx)) {
       const memories = result.memories.map((m, i) => ({
@@ -110,6 +132,7 @@ export async function explainCommand(
         fixed(e.activation),
         e.hydrated ? 'yes' : 'no',
         fromLabel(m.origin),
+        ...(linked ? [viaLabel(e.via, rankOf)] : []),
         ...(spatial === undefined
           ? []
           : [
@@ -152,6 +175,7 @@ export async function explainCommand(
           'activation',
           'hydrated',
           'from',
+          ...(linked ? ['via'] : []),
           ...(spatial === undefined ? [] : ['place', 'dist m']),
           'text',
         ],

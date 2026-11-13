@@ -264,9 +264,10 @@ const { memories } = await oort.recall('when does the billing service deploy?');
 console.log(memories.map((m) => m.text).join('\n'));
 ```
 
-A repository's `oort.config.json` cannot set `store`, `recall.adaptiveStop` or
-`recall.sufficientAt` (they are ignored there, with a warning): a home has one store, and asking
-the decision model sends recalled text to its vendor. Your own code's `config`, or the home
+A repository's `oort.config.json` cannot set `store`, `recall.adaptiveStop`,
+`recall.sufficientAt`, `recall.links` or `recall.userLinks` (they are ignored there, with a
+warning): a home has one store, asking the decision model sends recalled text to its vendor, and
+which links bring memories into a prompt is yours to decide. Your own code's `config`, or the home
 config, can.
 
 ## Judgments
@@ -1044,7 +1045,10 @@ job.
 ## Memory links
 
 A link says that two memories belong together (local mode). It holds no text:
-two ids, who asserted it and when. Recall does not use links yet.
+two ids, who asserted it and when. A recall follows a link for one hop, under the rules in
+[Following links at recall](cli.md#following-links-at-recall): by default only links confirmed at
+a terminal with `oort link`, and only at `speed: 'full'`; links your code writes with `link()`
+are followed once `recall.links.enabled` is set in the home config.
 
 <!-- example: examples/src/links.ts -->
 
@@ -1088,9 +1092,16 @@ console.log(removed.removed); // true
 - `explain(id).links` lists `{ kind, id, direction, assertedBy?, createdAt }` for links whose other
   end the handle reads. `hiddenLinks` counts the others, together with supersede-chain neighbours
   it cannot read.
+- A recalled memory that a link brought in has `why.via` (`@experimental`, as `why` is):
+  `{ kind, from, weight }`, with `kind` one of `explicit`, `episode` or `about`, `from` the id of
+  the returned memory it was reached from, and `weight` from 0 to 1. `formatForPrompt` labels its
+  line `linked`. It passed the same relevance gate as a hit, and it is always a memory the handle
+  reads. `speed: 'lexical'` follows no link. A recall that ran out of its links time budget lists
+  `links-skipped` in `degraded`.
 - `forget(id)` removes every link and block of the memory.
-- In cloud mode `link` and `unlink` reject with `OortRefusedError` (`reason: 'local-only'`), and
-  `explain().links` is empty.
+- In cloud mode `link` and `unlink` reject with `OortRefusedError` (`reason: 'local-only'`),
+  `explain().links` is empty, and recall follows no link: `why.via` never appears, and a home
+  config with `recall.links.enabled` adds the warning `links-local-only` to each recall.
 
 ## Stability
 

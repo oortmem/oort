@@ -774,7 +774,6 @@ function createLinkSchema(db: Database): void {
   db.exec(`
     ALTER TABLE memories ADD COLUMN session_id TEXT;
     ALTER TABLE memories ADD COLUMN episode_seq INTEGER;
-    CREATE INDEX memories_episode ON memories (session_id, episode_seq);
     CREATE TABLE ${NODE_TABLE} (
       node_id  INTEGER PRIMARY KEY,
       node_key TEXT    NOT NULL UNIQUE
@@ -799,9 +798,65 @@ function createLinkSchema(db: Database): void {
       PRIMARY KEY (kind, a_rid, b_rid),
       CHECK (a_rid <> b_rid)
     ) WITHOUT ROWID;
-    CREATE INDEX memory_links_a ON ${LINK_TABLE} (a_rid);
-    CREATE INDEX memory_links_b ON ${LINK_TABLE} (b_rid, kind);
   `);
+  ensureLinkIndexes(db);
+}
+
+/**
+ * The indexes the link reads rely on (CON-149). Each read at recall is one range of one of
+ * these, which `link-plans.test.ts` holds the query planner to:
+ *
+ * - `memories_episode` leads with the node's columns, so a session's turns are found inside one
+ *   node and rows another node wrote under the same session id are never visited (the session id
+ *   comes from the writer). Only memories with a session are in it.
+ * - `memory_links_a` and `memory_links_b` find one memory's links of one kind and one asserter
+ *   from either end (each also holds the key's other columns), so explicit links asserted by
+ *   `user` and by `agent` are read, and bounded, apart. `memory_links_a` also serves the cascade
+ *   on `forget`.
+ * - `memory_links_by` answers "is any explicit link asserted by `user`" with one probe.
+ */
+export const LINK_INDEXES: readonly { name: string; sql: string }[] = [
+  {
+    name: 'memories_episode',
+    sql: `CREATE INDEX memories_episode ON memories (level, org_id, customer_id, agent_id, hive_id, run_id, session_id, episode_seq) WHERE session_id IS NOT NULL`,
+  },
+  {
+    name: 'memory_links_a',
+    sql: `CREATE INDEX memory_links_a ON ${LINK_TABLE} (a_rid, kind, asserted_by)`,
+  },
+  {
+    name: 'memory_links_b',
+    sql: `CREATE INDEX memory_links_b ON ${LINK_TABLE} (b_rid, kind, asserted_by)`,
+  },
+  {
+    name: 'memory_links_by',
+    sql: `CREATE INDEX memory_links_by ON ${LINK_TABLE} (kind, asserted_by)`,
+  },
+];
+
+const indexSql = (db: Database, name: string): string | undefined =>
+  db
+    .prepare<[string], { sql: string | null }>(
+      `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`,
+    )
+    .get(name)?.sql ?? undefined;
+
+/** True when a link index is missing or was created with another definition (an earlier build). */
+export function linkIndexesOutdated(db: Database): boolean {
+  if (!exists(db, LINK_TABLE)) return false;
+  return LINK_INDEXES.some((i) => indexSql(db, i.name) !== i.sql);
+}
+
+/**
+ * Creates each link index, replacing one an earlier build of schema version 8 created with
+ * another definition. Changes nothing when they are current, so it runs on every open that may
+ * migrate. No row is rewritten.
+ */
+export function ensureLinkIndexes(db: Database): void {
+  for (const i of LINK_INDEXES) {
+    if (indexSql(db, i.name) === i.sql) continue;
+    db.exec(`DROP INDEX IF EXISTS ${i.name}; ${i.sql};`);
+  }
 }
 
 /**
@@ -1203,10 +1258,13 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
         migrateV7toV8(db);
       }
       // An index to repair is a migration: an open that may not migrate (a hook) refuses, changing
-      // nothing, rather than create an empty index that would then look current.
-      if (opts.migrate === false && indexNeedsRepair(db)) {
+      // nothing, rather than create an empty index that would then look current. The same for a
+      // store whose link indexes an earlier build of this version created (CON-149): the next
+      // open that may migrate replaces them.
+      if (opts.migrate === false && (indexNeedsRepair(db) || linkIndexesOutdated(db))) {
         throw new StoreMigrationRequiredError(db.name, SCHEMA_VERSION);
       }
+      if (opts.migrate !== false) ensureLinkIndexes(db);
       // The drift guard needs a write; an open that may not migrate (a hook) leaves it to the next.
       if (opts.migrate !== false) {
         const icu = opts.icu ?? lexicalIcuVersion();

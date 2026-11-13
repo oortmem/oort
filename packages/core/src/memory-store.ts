@@ -12,13 +12,26 @@ import {
 } from './grant.js';
 import { isCurrent, isZeroVector, type Memory, type Tier } from './model.js';
 import {
+  ABOUT_PER_ENTITY,
+  aboutWeight,
+  combineWeights,
   entityKeys,
+  EPISODE_PER_SEED,
+  EPISODE_RAW_SCAN,
+  EPISODE_REACH,
   episodeSession,
+  episodeWeight,
+  EXPLICIT_PER_SEED,
+  EXPLICIT_RAW_SCAN,
+  F_MAX_DEFAULT,
   inLinkIndexes,
+  NEIGHBOUR_KINDS,
   orderedPair,
+  rawScanLimit,
   type AssertedBy,
   type LinkOptions,
   type LinksProbe,
+  type Neighbour,
   type StoredLink,
 } from './links.js';
 import { checkPlace, hasSpatialFilter, matchesSpatial, type SpatialFilter } from './place.js';
@@ -349,6 +362,133 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         });
       }
       return { links: out, blocked, hidden };
+    },
+
+    /** The reference for `neighbours`: the same bounds and order as a store with real indexes. */
+    async neighbours(grant, seedIds, o) {
+      open();
+      assertGrant(grant);
+      const fMax = o.fMax ?? F_MAX_DEFAULT;
+      const now = o.clock ?? (() => performance.now());
+      const start = now();
+      const budget = o.budgetMs ?? 0;
+      const late = () => budget > 0 && now() - start >= budget;
+      const f = hasSpatialFilter(o.spatial) ? o.spatial : undefined;
+      // Insertion order stands in for the row id: a later memory is newer.
+      const order = new Map([...main.keys()].map((id, i) => [id, i]));
+      const newestFirst = (x: Memory, y: Memory) => order.get(y.id)! - order.get(x.id)!;
+      const seeds = [...new Set(seedIds)]
+        .map((id) => readable(grant, id))
+        .filter((m): m is Memory => m !== undefined && addressOf(m).level !== 'hive');
+      /** What a link may bring in from `seed`: readable, in its node, in place, not blocked. */
+      const admits = (seed: Memory, m: Memory): boolean => {
+        if (m.id === seed.id || !grantReads(grant, m)) return false;
+        if (addressOf(m).level === 'hive' || nodeOfMemory(m) !== nodeOfMemory(seed)) return false;
+        if (o.currentOnly === true && (m.expiredAt !== null || m.supersededBy !== null))
+          return false;
+        if (f !== undefined && !matchesSpatial(m, f)) return false;
+        return !links.has(rowKey('blocked', ...orderedPair(seed.id, m.id)));
+      };
+      const out: Neighbour[] = [];
+      let skipped = false;
+      let budgetPassed = false;
+      gather: for (const kind of NEIGHBOUR_KINDS) {
+        if (!o.kinds.includes(kind)) continue;
+        if (late()) {
+          skipped = true;
+          break;
+        }
+        for (const seed of seeds) {
+          if (kind === 'explicit') {
+            // Links asserted by `user` and by `agent` are read and bounded apart, a person's
+            // first: however many links an agent writes on a memory, a person's are still read.
+            for (const by of o.explicitBy === 'user'
+              ? (['user'] as const)
+              : (['user', 'agent'] as const)) {
+              const mine = [...links.values()].filter(
+                (r) =>
+                  r.kind === 'explicit' &&
+                  (r.a === seed.id || r.b === seed.id) &&
+                  (r.assertedBy ?? 'agent') === by,
+              );
+              // The work bound, whoever asks: more links than it are skipped, never cut short.
+              if (mine.length > EXPLICIT_RAW_SCAN) {
+                skipped = true;
+                continue;
+              }
+              const ends: Memory[] = [];
+              for (const r of mine) {
+                const other = main.get(r.a === seed.id ? r.b : r.a);
+                if (other !== undefined && admits(seed, other)) ends.push(other);
+              }
+              for (const m of ends.sort(newestFirst).slice(0, EXPLICIT_PER_SEED)) {
+                out.push({ id: m.id, kind, from: seed.id, weight: 1, assertedBy: by });
+              }
+            }
+          } else if (kind === 'episode') {
+            const at = episodes.get(seed.id);
+            if (at === undefined) continue;
+            const near: { m: Memory; delta: number }[] = [];
+            let raw = 0;
+            for (const [id, e] of episodes) {
+              if (e.node !== at.node || e.session !== at.session) continue;
+              const delta = e.seq - at.seq;
+              if (Math.abs(delta) > EPISODE_REACH || id === seed.id) continue;
+              raw++;
+              const m = main.get(id);
+              if (m === undefined || !admits(seed, m)) continue;
+              near.push({ m, delta });
+            }
+            if (raw > EPISODE_RAW_SCAN) {
+              skipped = true;
+              continue;
+            }
+            near.sort((x, y) => Math.abs(x.delta) - Math.abs(y.delta) || newestFirst(x.m, y.m));
+            for (const { m, delta } of near.slice(0, EPISODE_PER_SEED)) {
+              out.push({ id: m.id, kind, from: seed.id, weight: episodeWeight(delta) });
+            }
+          } else {
+            if (!inLinkIndexes(seed)) continue;
+            const node = nodeOfMemory(seed);
+            const weights = new Map<string, number[]>();
+            for (const key of entityKeys(seed.entities)) {
+              if (late()) {
+                skipped = true;
+                budgetPassed = true;
+                break;
+              }
+              const all = [...main.values()].filter(
+                (m) =>
+                  inLinkIndexes(m) &&
+                  nodeOfMemory(m) === node &&
+                  entityKeys(m.entities).includes(key),
+              );
+              // The work bound, whoever asks: a larger entity is skipped, never cut short.
+              if (all.length > rawScanLimit(fMax)) {
+                skipped = true;
+                continue;
+              }
+              // Of those, only what the grant reads counts: a row outside the grant changes
+              // neither the fan nor which neighbours are kept.
+              const rows = all
+                .filter((m) => grantReads(grant, m))
+                .sort(newestFirst)
+                .slice(0, fMax);
+              const w = aboutWeight(rows.length, fMax);
+              if (w <= 0) continue;
+              for (const m of rows.filter((x) => admits(seed, x)).slice(0, ABOUT_PER_ENTITY)) {
+                weights.set(m.id, [...(weights.get(m.id) ?? []), w]);
+              }
+            }
+            for (const [id, ws] of weights) {
+              out.push({ id, kind, from: seed.id, weight: combineWeights(ws) });
+            }
+            // What the reads before the budget passed found is kept.
+            if (budgetPassed) break gather;
+          }
+        }
+      }
+      return { neighbours: out, ...(skipped && { skipped: true as const }) };
     },
 
     async upsert(grant, m) {
