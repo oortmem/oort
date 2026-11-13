@@ -201,6 +201,8 @@ def call(o: Oort, step: Dict[str, Any], args: Dict[str, Any], now: datetime) -> 
         return o.forget(i, **kwargs(a))
     if c in ("pin", "unpin", "explain"):
         return getattr(o, c)(a["id"])
+    if c in ("link", "unlink"):
+        return getattr(o, c)(a["from"], a["to"])
     if c == "recent":
         return o.recent(**kwargs(a))
     if c == "whoami":

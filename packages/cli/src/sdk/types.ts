@@ -277,7 +277,41 @@ export interface Explanation {
     validTo: string | null;
     endReason: 'superseded' | 'corrected' | 'expired' | null;
   }[];
+  /**
+   * Links of the memory (CON-148) whose other end this handle reads, oldest first. Cloud mode has
+   * none yet.
+   */
+  links: LinkView[];
+  /** Supersede-chain neighbours and stored links whose other end this handle cannot read. */
   hiddenLinks: number;
+}
+
+/** One stored link of a memory, as `explain` lists it. */
+export interface LinkView {
+  kind: 'explicit' | 'distilledFrom' | 'recalledWith';
+  /** The memory at the other end. */
+  id: string;
+  /** `both` for explicit and recalledWith; `out` from a distilled memory, `in` to its evidence. */
+  direction: 'both' | 'out' | 'in';
+  /** Explicit links only: `user` when a person confirmed it on a terminal, else `agent`. */
+  assertedBy?: 'user' | 'agent';
+  createdAt: string;
+}
+
+export interface LinkResult {
+  /** False when the two were already linked. */
+  linked: boolean;
+  /** An earlier unlink's block on the pair was removed. */
+  unblocked: boolean;
+  /** Who the link is asserted by: always `agent` from the SDK, unless a person linked it first. */
+  assertedBy: 'user' | 'agent';
+}
+
+export interface UnlinkResult {
+  /** A link between the two was removed. */
+  removed: boolean;
+  /** The pair is blocked: nothing links it again until someone links it explicitly. */
+  blocked: boolean;
 }
 
 export interface RecordJudgmentView {
@@ -519,6 +553,13 @@ export interface Oort {
     warnings: Warning[];
   }>;
   explain(id: string): Promise<Explanation>;
+  /**
+   * Links two memories (CON-148), asserted by `agent`. Both must be memories this handle writes,
+   * in the same Planet or Star; anything else is `not-found`, as for a missing id. Local only.
+   */
+  link(from: string, to: string): Promise<LinkResult>;
+  /** Removes a link, or blocks a pair that was not linked. Same rules as `link`. Local only. */
+  unlink(from: string, to: string): Promise<UnlinkResult>;
   whoami(): Promise<Whoami>;
   /** Local only. */
   consolidate(opts?: { budgetMs?: number; signal?: AbortSignal }): Promise<ConsolidateResult>;

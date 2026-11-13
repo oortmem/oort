@@ -25,6 +25,8 @@ import {
 import type {
   ConsolidateResult,
   Explanation,
+  LinkResult,
+  UnlinkResult,
   ForgetResult,
   JudgeItem,
   JudgeOptions,
@@ -215,6 +217,24 @@ class OortHandle implements Oort {
     return this.#run(async (ctx) => {
       const ref = check(IdSchema, id, 'id');
       return this.#cloud() ? cloud.explain(ctx, ref) : local.explain(ctx, ref);
+    });
+  }
+
+  link(from: string, to: string): Promise<LinkResult> {
+    return this.#run(async (ctx) => {
+      const a = check(IdSchema, from, 'from');
+      const b = check(IdSchema, to, 'to');
+      if (this.#cloud()) throw cloud.localOnly('Linking memories');
+      return local.link(ctx, a, b);
+    });
+  }
+
+  unlink(from: string, to: string): Promise<UnlinkResult> {
+    return this.#run(async (ctx) => {
+      const a = check(IdSchema, from, 'from');
+      const b = check(IdSchema, to, 'to');
+      if (this.#cloud()) throw cloud.localOnly('Linking memories');
+      return local.unlink(ctx, a, b);
     });
   }
 

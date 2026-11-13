@@ -1,0 +1,133 @@
+[
+  {
+    "id": "links.link-explain-unlink-and-block",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "link",
+        "args": {
+          "from": "11111111-0000-4000-8000-000000000001",
+          "to": "aaaaaaaa-0000-4000-8000-000000000001"
+        },
+        "expect": { "result": { "linked": true, "unblocked": false, "assertedBy": "agent" } }
+      },
+      {
+        "call": "link",
+        "args": {
+          "from": "aaaaaaaa-0000-4000-8000-000000000001",
+          "to": "11111111-0000-4000-8000-000000000001"
+        },
+        "expect": { "result": { "linked": false, "unblocked": false, "assertedBy": "agent" } }
+      },
+      {
+        "call": "explain",
+        "args": { "id": "aaaaaaaa-0000-4000-8000-000000000001" },
+        "expect": {
+          "result": {
+            "links": [
+              {
+                "kind": "explicit",
+                "id": "11111111-0000-4000-8000-000000000001",
+                "direction": "both",
+                "assertedBy": "agent",
+                "createdAt": { "$type": "string" }
+              }
+            ],
+            "hiddenLinks": 0
+          }
+        }
+      },
+      {
+        "call": "unlink",
+        "args": {
+          "from": "11111111-0000-4000-8000-000000000001",
+          "to": "aaaaaaaa-0000-4000-8000-000000000001"
+        },
+        "expect": { "result": { "removed": true, "blocked": false } }
+      },
+      {
+        "call": "explain",
+        "args": { "id": "aaaaaaaa-0000-4000-8000-000000000001" },
+        "expect": { "result": { "links": { "$len": 0 }, "hiddenLinks": 0 } }
+      },
+      {
+        "call": "unlink",
+        "args": {
+          "from": "11111111-0000-4000-8000-000000000001",
+          "to": "aaaaaaaa-0000-4000-8000-000000000001"
+        },
+        "expect": { "result": { "removed": false, "blocked": true } }
+      },
+      {
+        "call": "link",
+        "args": {
+          "from": "11111111-0000-4000-8000-000000000001",
+          "to": "aaaaaaaa-0000-4000-8000-000000000001"
+        },
+        "expect": { "result": { "linked": true, "unblocked": true, "assertedBy": "agent" } }
+      }
+    ]
+  },
+  {
+    "id": "links.refuses-a-pair-it-cannot-link-as-a-missing-id",
+    "transports": ["local"],
+    "seed": "basic",
+    "steps": [
+      {
+        "call": "link",
+        "args": {
+          "from": "11111111-0000-4000-8000-000000000001",
+          "to": "eeeeeeee-0000-4000-8000-000000000001"
+        },
+        "expect": { "error": { "code": "not-found" } }
+      },
+      {
+        "call": "link",
+        "args": {
+          "from": "11111111-0000-4000-8000-000000000001",
+          "to": "11111111-0000-4000-8000-000000000001"
+        },
+        "expect": { "error": { "code": "not-found" } }
+      },
+      {
+        "call": "link",
+        "args": {
+          "from": "11111111-0000-4000-8000-000000000001",
+          "to": "dddddddd-0000-4000-8000-000000000001"
+        },
+        "expect": { "error": { "code": "not-found" } }
+      },
+      {
+        "call": "unlink",
+        "args": {
+          "from": "11111111-0000-4000-8000-000000000001",
+          "to": "dddddddd-0000-4000-8000-000000000001"
+        },
+        "expect": { "error": { "code": "not-found" } }
+      }
+    ]
+  },
+  {
+    "id": "links.are-local-only-in-oort-cloud",
+    "transports": ["cloud"],
+    "steps": [
+      {
+        "call": "link",
+        "args": {
+          "from": "11111111-0000-4000-8000-000000000001",
+          "to": "aaaaaaaa-0000-4000-8000-000000000001"
+        },
+        "expect": { "error": { "code": "refused", "reason": "local-only" } }
+      },
+      {
+        "call": "unlink",
+        "args": {
+          "from": "11111111-0000-4000-8000-000000000001",
+          "to": "aaaaaaaa-0000-4000-8000-000000000001"
+        },
+        "expect": { "error": { "code": "refused", "reason": "local-only" } }
+      }
+    ]
+  }
+]

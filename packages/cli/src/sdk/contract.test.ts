@@ -62,6 +62,10 @@ async function call(oort: Oort, step: Step, args: Record<string, unknown>): Prom
       return oort.recent(args);
     case 'explain':
       return oort.explain(args['id'] as string);
+    case 'link':
+      return oort.link(args['from'] as string, args['to'] as string);
+    case 'unlink':
+      return oort.unlink(args['from'] as string, args['to'] as string);
     case 'whoami':
       return oort.whoami();
     case 'consolidate':

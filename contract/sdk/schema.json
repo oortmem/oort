@@ -96,6 +96,8 @@
             "unpin",
             "recent",
             "explain",
+            "link",
+            "unlink",
             "whoami",
             "consolidate",
             "scoped",

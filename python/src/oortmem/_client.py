@@ -57,6 +57,8 @@ from .types import (
     JudgmentList,
     ObserveResult,
     PinResult,
+    LinkResult,
+    UnlinkResult,
     RecallResult,
     RecentResult,
     RecordJudgmentView,
@@ -592,6 +594,35 @@ class Oort:
             lambda c, p: from_wire(Explanation, c.explain(p, check_id(id))),
         )
 
+    def link(self, from_id: str, to_id: str) -> LinkResult:
+        """Link two memories this handle writes, in one Planet or Star, asserted by ``agent``.
+        A pair it cannot link is ``not-found``, as for a missing id. Local only."""
+
+        def local(d: DaemonClient, h: Dict[str, str]) -> LinkResult:
+            body = {"from": check_id(from_id), "to": check_id(to_id)}
+            return from_wire(LinkResult, d.call("POST", "/v1/links", h, body))
+
+        def cloud(c: CloudOps, p: CloudPrincipal) -> LinkResult:
+            check_id(from_id)
+            check_id(to_id)
+            raise local_only("Linking memories")
+
+        return self._run(local, cloud)
+
+    def unlink(self, from_id: str, to_id: str) -> UnlinkResult:
+        """Remove a link, or block a pair that was not linked. Same rules as ``link``."""
+
+        def local(d: DaemonClient, h: Dict[str, str]) -> UnlinkResult:
+            q = f"from={quote_id(check_id(from_id))}&to={quote_id(check_id(to_id))}"
+            return from_wire(UnlinkResult, d.call("DELETE", f"/v1/links?{q}", h))
+
+        def cloud(c: CloudOps, p: CloudPrincipal) -> UnlinkResult:
+            check_id(from_id)
+            check_id(to_id)
+            raise local_only("Linking memories")
+
+        return self._run(local, cloud)
+
     def whoami(self) -> Whoami:
         """Which store, agent, user and spaces this handle reads and writes, and how each model
         role is served. Calls no model."""
@@ -955,6 +986,12 @@ class AsyncOort:
 
     async def explain(self, id: str) -> Explanation:  # noqa: A002
         return await self._call(self._sync.explain, id)
+
+    async def link(self, from_id: str, to_id: str) -> LinkResult:
+        return await self._call(self._sync.link, from_id, to_id)
+
+    async def unlink(self, from_id: str, to_id: str) -> UnlinkResult:
+        return await self._call(self._sync.unlink, from_id, to_id)
 
     async def whoami(self) -> Whoami:
         return await self._call(self._sync.whoami)

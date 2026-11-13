@@ -309,6 +309,7 @@ export async function explain(ctx: Ctx, id: string): Promise<Explanation> {
       probability: d.probability,
     })),
     chain,
+    links: [],
     hiddenLinks: hidden,
   };
 }
