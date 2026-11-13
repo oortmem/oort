@@ -1814,8 +1814,18 @@ export function linksConformance(
       expect(await reached(TG, ['d', 'nope'])).toEqual([]);
       const r = await store.neighbours!(TG, ['a'], { kinds: ['explicit'] });
       expect(r.neighbours.map((n) => n.weight)).toEqual([1, 1]);
-      // Ids, a kind, a seed and a weight: nothing of the memory itself.
-      expect(Object.keys(r.neighbours[0]!).sort()).toEqual(['from', 'id', 'kind', 'weight']);
+      // Ids, a kind, a seed, a weight and who asserted the link: nothing of the memory itself.
+      expect(Object.keys(r.neighbours[0]!).sort()).toEqual([
+        'assertedBy',
+        'from',
+        'id',
+        'kind',
+        'weight',
+      ]);
+      expect(r.neighbours.map((n) => [n.id, n.assertedBy])).toEqual([
+        ['b', 'user'],
+        ['c', 'agent'],
+      ]);
     });
 
     it('neighbours.about-weighs-a-shared-entity-by-its-fan', async () => {
@@ -1911,10 +1921,10 @@ export function linksConformance(
       expect(await about(narrow)).toEqual({ list: ['a>c:about'], skipped: true });
     });
 
-    it('neighbours.a-raw-scan-bound-skips-a-seed-with-too-many-explicit-links', async () => {
+    it('neighbours.a-raw-scan-bound-skips-too-many-explicit-links-of-one-asserter', async () => {
       await seed(at('a'), at('b'), at('c'), at('d'));
-      await S().link(TG, 'a', 'b', USER);
-      await S().link(TG, 'c', 'd', USER);
+      await S().link(TG, 'a', 'b', AGENT);
+      await S().link(TG, 'c', 'd', AGENT);
       const narrow = localGrant({ ...LOCAL, projectIds: [null] });
       const explicit = (g: Grant) => hop(g, ['a', 'c'], { kinds: ['explicit'] });
       const whole = { list: ['a>b:explicit', 'c>d:explicit'], skipped: false };
@@ -1931,10 +1941,48 @@ export function linksConformance(
       };
       await link(0, EXPLICIT_RAW_SCAN - 1);
       expect(await explicit(narrow)).toEqual(whole);
-      // One link more on `a`: that seed's links are skipped, never cut short; `c` is unaffected.
+      // One link more on `a`: its agent links are skipped, never cut short; `c` is unaffected.
       await link(EXPLICIT_RAW_SCAN - 1, EXPLICIT_RAW_SCAN);
       expect(await explicit(narrow)).toEqual({ list: ['c>d:explicit'], skipped: true });
       expect(await explicit(TG)).toEqual({ list: ['c>d:explicit'], skipped: true });
+    });
+
+    it("neighbours.an-agent's-links-never-suppress-a-person's", async () => {
+      // A memory with one link confirmed at a terminal, and then more agent-written links than
+      // the bound, all newer: the person's link is still read, by itself and beside the rest.
+      await seed(at('a'), at('mine'));
+      await S().link(TG, 'a', 'mine', USER);
+      const flood = async (n: number, tag: string) => {
+        const ms = Array.from({ length: n }, (_, i) => at(`${tag}${i}`));
+        await store.upsertManyLinked!(
+          TG,
+          ms,
+          ms.map((m) => ['a', m.id] as const),
+          AGENT,
+        );
+      };
+      // Under the bound: the caps are per asserter, so 30 newer agent links leave it its place.
+      await flood(30, 'x');
+      const some = await store.neighbours!(TG, ['a'], { kinds: ['explicit'] });
+      expect(some.skipped).toBeUndefined();
+      expect(some.neighbours[0]).toEqual({
+        id: 'mine',
+        kind: 'explicit',
+        from: 'a',
+        weight: 1,
+        assertedBy: 'user',
+      });
+      expect(some.neighbours.filter((n) => n.assertedBy === 'agent')).toHaveLength(16);
+      // Past the bound: the agent's links are skipped and reported; the person's are not.
+      await flood(EXPLICIT_RAW_SCAN, 'y');
+      expect(await hop(TG, ['a'], { kinds: ['explicit'] })).toEqual({
+        list: ['a>mine:explicit'],
+        skipped: true,
+      });
+      expect(await hop(TG, ['a'], { kinds: ['explicit'], explicitBy: 'user' })).toEqual({
+        list: ['a>mine:explicit'],
+        skipped: false,
+      });
     });
 
     it('neighbours.rows-in-another-node-never-count-toward-a-bound', async () => {

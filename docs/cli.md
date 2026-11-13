@@ -1081,7 +1081,13 @@ The rules a linked memory is held to:
   is not read at all for that recall, which then reports `links-skipped`: the work a recall does
   stays bounded.
 - **A time limit.** Reading links takes at most `recall.links.budgetMs` (8 ms). Past it recall
-  uses what it has and reports `links-skipped` in `degraded`.
+  uses what it has and reports `links-skipped` in `degraded`. The clock is read between reads;
+  each read is itself one bounded index range. A store with no link confirmed at a terminal, and
+  `recall.links.enabled` off, reads nothing at all.
+- **Hits come first.** The adaptive stop decides over the search's own hits. Under a character
+  budget (`recall.budgetChars`, `--budget-chars`) the hits are fitted first and a linked memory
+  uses only what they leave. A linked memory is never returned, printed or injected without the
+  memory it was reached from.
 - **Said in the output.** A linked memory's label in the `<oort-memory>` block ends with `linked`
   (`- [semantic, 2d ago, linked] ...`). Its text is memory text like any other: scrubbed, escaped,
   and to be treated as data, not instructions. `oort explain` adds a `via` column when a link

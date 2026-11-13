@@ -92,6 +92,39 @@ describe('oort recall and explain follow links (CON-149)', () => {
     expect(h.hops()).toBe(before);
   });
 
+  it('links.cli-recall-under-a-budget-never-prints-a-linked-line-without-its-seed', async () => {
+    const h = await linked('user');
+    // The linked memory outranks the hit it came from.
+    const plain = h.wire;
+    h.wire = async (dir, o) => ({
+      ...(await plain(dir, o)),
+      rerank: {
+        rerank: async (_q, docs, topK) =>
+          docs
+            .map((d) => ({
+              id: d.id,
+              score: d.text.includes('Postgres') ? 0.9 : d.text.includes('moved to') ? 0.6 : 0.1,
+            }))
+            .sort((x, y) => y.score - x.score)
+            .slice(0, topK),
+      },
+    });
+    const lines = async (...flags: string[]) =>
+      (await h.run(['recall', QUERY, ...flags])).io.stdout
+        .split('\n')
+        .filter((l) => l.startsWith('- ['));
+    const whole = await lines();
+    expect(whole.map((l) => l.includes('linked'))).toEqual([true, false]);
+    const [linkedLine, hitLine] = whole as [string, string];
+    // Room for one line: the hit is printed, not the linked memory that ranks above it.
+    expect(await lines('--budget-chars', String(29 + hitLine.length))).toEqual([hitLine]);
+    // Never the linked line by itself, at any budget too small for both.
+    for (let room = 30; room < 29 + hitLine.length + 1 + linkedLine.length; room += 7) {
+      const got = await lines('--budget-chars', String(room));
+      expect(got.some((l) => l.includes('linked'))).toBe(false);
+    }
+  });
+
   it('links.cli-an-agent-link-needs-the-flag-or-the-config', async () => {
     const h = await linked('agent');
     const ids = async (...flags: string[]) =>
@@ -191,7 +224,7 @@ describe('links in cloud mode are local-only (CON-153 follows)', () => {
       });
       return { code, io };
     };
-    return { cloud, run };
+    return { cloud, run, wire, cwd, root, home, key };
   };
 
   it('links.cloud-refuses-the-links-flag-before-anything-is-sent', async () => {
@@ -211,7 +244,9 @@ describe('links in cloud mode are local-only (CON-153 follows)', () => {
   });
 
   it('links.cloud-says-once-that-recall-links-is-not-followed', async () => {
-    const { cloud, run } = cloudHome('{"recall":{"links":{"enabled":true}}}');
+    const { cloud, run, wire, cwd, root, home, key } = cloudHome(
+      '{"recall":{"links":{"enabled":true}}}',
+    );
     const r = await run(['recall', 'deploy', '--json']);
     expect(r.code).toBe(0);
     expect(JSON.parse(r.io.stdout).warnings).toEqual([
@@ -219,6 +254,13 @@ describe('links in cloud mode are local-only (CON-153 follows)', () => {
     ]);
     expect(r.io.stderr).toMatch(/Oort Cloud does not follow links yet/);
     expect(cloud.recalls).toHaveLength(1);
+    // The MCP `recall` tool says the same in its note.
+    const w = await wire(cwd, {
+      env: { HOME: root, OORT_HOME: home, OORT_NO_KEYCHAIN: '1', OORT_API_KEY: key },
+    });
+    const out = await localBackend({ wired: w }).recall({ query: 'deploy', limit: 5 });
+    expect(out.note).toMatch(/Oort Cloud does not follow links yet/);
+    await w.close();
     // The default config says nothing.
     const quiet = cloudHome();
     const q = await quiet.run(['recall', 'deploy', '--json']);

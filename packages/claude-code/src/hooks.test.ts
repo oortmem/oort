@@ -203,6 +203,45 @@ describe('UserPromptSubmit', () => {
     expect(plain.calls).not.toContain('neighbours');
   });
 
+  it('hook.prompt-under-a-budget-fits-hits-first-and-never-a-linked-line-alone (CON-149)', async () => {
+    const t = tempHome();
+    const deps = await linkedDeps(t);
+    // The linked memory outranks the hit it came from.
+    const rerank: Reranker = {
+      rerank: async (_q, docs) =>
+        docs.map((d) => ({ id: d.id, score: d.id === 'm-db' ? 0.9 : 0.6 })),
+    };
+    const block = async (budgetChars: number) => {
+      const config = {
+        ...t.config,
+        recall: {
+          ...t.config.recall,
+          promptMode: 'full' as const,
+          skipRerankWhenConfident: false,
+          budgetChars,
+        },
+      };
+      const out = await handleUserPromptSubmit(prompt(t, 'which port does the auth service use?'), {
+        ...deps,
+        config,
+        rerank,
+      });
+      return out.stdout === '' ? '' : context(out.stdout, 'UserPromptSubmit');
+    };
+    const roomy = (await block(2000)).split('\n');
+    expect(roomy[1]).toMatch(/linked\] It runs on Postgres 16\./);
+    expect(roomy[2]).toContain('The auth service listens on port 4471.');
+    // Room for one line only: the hit, though the linked memory ranks first and is shorter.
+    const hit = roomy[2]!.length;
+    const tight = await block(29 + hit);
+    expect(tight).toContain('The auth service listens on port 4471.');
+    expect(tight).not.toContain('Postgres');
+    expect(tight).not.toContain('linked');
+    // Room for the linked line but not the hit: nothing, never the linked line by itself.
+    const none = await block(29 + roomy[1]!.length);
+    expect(none).not.toContain('Postgres');
+  });
+
   it('hook.prompt-skips-trivial-silently', async () => {
     const t = tempHome();
     const base = await withMemories(t, PORT_MEMORY);

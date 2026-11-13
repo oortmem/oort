@@ -474,6 +474,15 @@ hook's default `fast` mode takes no hop.
   learn that its node has more rows of it than the bound. This is accepted: any work bound that
   does not depend on the grant reveals its own threshold, and this one sits far above the hub
   cutoff.
+- **Agent links cannot suppress a person's.** Explicit links asserted by `user` and by `agent`
+  are read, capped and bounded apart, a person's first.
+- **Indexes lead with the node.** `memories_episode` is `(node columns, session_id, episode_seq)`
+  rather than section 4's `(session_id, episode_seq)`: a session id comes from the writer, so
+  another node could otherwise make this reader's episode read slow. The link indexes hold who
+  asserted each link. Tests hold every read to its query plan; `budgetMs` is checked between
+  reads, so the plans are what bound one read.
+- **Hits first.** The adaptive stop is asked about hits only, and under an injection budget hits
+  are fitted before linked memories.
 - **A linked memory needs a returned seed.** It is admitted only while a memory it was reached
   from is itself returned (after the gate, the adaptive stop and the injection budget), and
   `via.from` names that memory.

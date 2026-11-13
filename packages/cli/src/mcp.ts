@@ -33,7 +33,14 @@ import {
   refundAgentJudgment,
   reserveAgentJudgment,
 } from './judge-cap.js';
-import { runRecall, timeMode, viewIgnored, type TemporalView } from './engine/recall.js';
+import {
+  LINKS_IGNORED_IN_CLOUD,
+  linksIgnoredInCloud,
+  runRecall,
+  timeMode,
+  viewIgnored,
+  type TemporalView,
+} from './engine/recall.js';
 import { rememberFacts, rememberFactsInCloud } from './remember.js';
 import {
   OortCloudError,
@@ -288,6 +295,11 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           : lexicalOnly && {
               note: `lexical-only recall: no embed or rerank model or key. ${remedySentence({ roles: ['embed', 'rerank'], keyStore: w.keyStore !== false })}.`,
             }),
+        // Oort Cloud follows no link (CON-153): said when the config asks for it and nothing more
+        // pressing is.
+        ...(refused === undefined &&
+          !lexicalOnly &&
+          linksIgnoredInCloud(w) && { note: LINKS_IGNORED_IN_CLOUD }),
         // Last, so a store that ignored the requested time mode is the note the agent reads.
         ...(ignored && {
           mode_unsupported: true as const,

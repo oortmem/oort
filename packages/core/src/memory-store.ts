@@ -400,22 +400,30 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         }
         for (const seed of seeds) {
           if (kind === 'explicit') {
-            const ends: Memory[] = [];
-            const mine = [...links.values()].filter(
-              (r) => r.kind === 'explicit' && (r.a === seed.id || r.b === seed.id),
-            );
-            // The work bound, whoever asks: a seed with more links is skipped, never cut short.
-            if (mine.length > EXPLICIT_RAW_SCAN) {
-              skipped = true;
-              continue;
-            }
-            for (const r of mine) {
-              if (o.explicitBy === 'user' && r.assertedBy !== 'user') continue;
-              const other = main.get(r.a === seed.id ? r.b : r.a);
-              if (other !== undefined && admits(seed, other)) ends.push(other);
-            }
-            for (const m of ends.sort(newestFirst).slice(0, EXPLICIT_PER_SEED)) {
-              out.push({ id: m.id, kind, from: seed.id, weight: 1 });
+            // Links asserted by `user` and by `agent` are read and bounded apart, a person's
+            // first: however many links an agent writes on a memory, a person's are still read.
+            for (const by of o.explicitBy === 'user'
+              ? (['user'] as const)
+              : (['user', 'agent'] as const)) {
+              const mine = [...links.values()].filter(
+                (r) =>
+                  r.kind === 'explicit' &&
+                  (r.a === seed.id || r.b === seed.id) &&
+                  (r.assertedBy ?? 'agent') === by,
+              );
+              // The work bound, whoever asks: more links than it are skipped, never cut short.
+              if (mine.length > EXPLICIT_RAW_SCAN) {
+                skipped = true;
+                continue;
+              }
+              const ends: Memory[] = [];
+              for (const r of mine) {
+                const other = main.get(r.a === seed.id ? r.b : r.a);
+                if (other !== undefined && admits(seed, other)) ends.push(other);
+              }
+              for (const m of ends.sort(newestFirst).slice(0, EXPLICIT_PER_SEED)) {
+                out.push({ id: m.id, kind, from: seed.id, weight: 1, assertedBy: by });
+              }
             }
           } else if (kind === 'episode') {
             const at = episodes.get(seed.id);

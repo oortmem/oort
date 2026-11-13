@@ -253,6 +253,8 @@ export interface SqliteStoreOptions {
    * RaBitQ indexes, how many int8 vectors were read to rescore candidates. For benchmarks.
    */
   onDenseStats?: (stats: DenseStats) => void;
+  /** Called once per `neighbours` call with the statements it ran. For tests and benchmarks. */
+  onLinkStats?: (stats: LinkStats) => void;
   /**
    * The most vectors this handle loads into a RaBitQ engine. Past it, the handle's dense search
    * scans the int8 vectors exactly instead (a store with a RaBitQ index has no binary one). For
@@ -633,6 +635,102 @@ function grantParams(patterns: readonly NodePattern[]): Record<string, string | 
 function live(patterns: readonly NodePattern[]): NodePattern[] {
   return patterns.filter((p) => p.projectIds === 'all' || p.projectIds.length > 0);
 }
+
+/** One candidate neighbour: its row id, node and whether the reader's grant and place admit it. */
+interface NeighbourRow {
+  rid: number;
+  id: string;
+  level: string;
+  org_id: string;
+  customer_id: string | null;
+  agent_id: string | null;
+  hive_id: string | null;
+  run_id: string | null;
+  expired_at: string | null;
+  superseded_by: string | null;
+  episode_seq: number | null;
+  readable: number;
+  inplace: number | null;
+}
+
+/** What one `neighbours` call cost (`onLinkStats`). */
+export interface LinkStats {
+  /** Statements run against the link tables, the entity index, episodes and the seeds' rows. */
+  reads: number;
+  /** Times the "any link confirmed at a terminal" answer was looked up again (it is cached). */
+  checks: number;
+}
+
+/** The columns of a `NeighbourRow`, over `memories` aliased `m` (the grant and place as flags). */
+const neighbourCols = (n: number, f: SpatialFilter | undefined): string =>
+  `m.rid AS rid, m.id AS id, m.level AS level, m.org_id AS org_id,
+   m.customer_id AS customer_id, m.agent_id AS agent_id, m.hive_id AS hive_id,
+   m.run_id AS run_id, m.expired_at AS expired_at, m.superseded_by AS superseded_by,
+   m.episode_seq AS episode_seq, ${grantSql(n)} AS readable,
+   ${f === undefined ? '1' : `(${spatialSql(f, 'm')})`} AS inplace`;
+
+/** One node's memories, over `memories` aliased `a` (`''` for none): the episode index's lead. */
+const nodeIs = (a: string): string =>
+  `${a}level = @level AND ${a}org_id = @org AND ${a}customer_id IS @customer
+   AND ${a}agent_id IS @agent AND ${a}hive_id IS @hive AND ${a}run_id IS @run`;
+
+/**
+ * Every statement `neighbours` runs (CON-149), by name, for a grant of `n` read patterns. Kept
+ * here so a test can ask SQLite for each one's plan: each must be a range of the index it was
+ * written for (`LINK_INDEXES` in `schema.ts`), never a scan, whatever else the store holds.
+ *
+ * The `*Raw` statements are the work bounds: they count, on an index alone and up to `@cap`, the
+ * rows the read after them would touch. Each stays inside the seed's own node.
+ */
+export const LINK_READS = {
+  /** One probe: is any explicit link asserted by `user`. */
+  anyUserLink: (): string =>
+    `SELECT 1 AS x FROM ${LINK_TABLE} WHERE kind = 'explicit' AND asserted_by = 'user' LIMIT 1`,
+  /** How many explicit links asserted by `@by` the memory at `@rid` has, from both ends. */
+  explicitRaw: (): string =>
+    `SELECT (SELECT count(*) FROM (SELECT 1 FROM ${LINK_TABLE}
+               WHERE a_rid = @rid AND kind = 'explicit' AND asserted_by = @by LIMIT @cap))
+          + (SELECT count(*) FROM (SELECT 1 FROM ${LINK_TABLE}
+               WHERE b_rid = @rid AND kind = 'explicit' AND asserted_by = @by LIMIT @cap)) AS n`,
+  /** Those links' other ends that the grant reads, newest first. */
+  explicitEnds: (n: number, f?: SpatialFilter): string =>
+    `SELECT ${neighbourCols(n, f)}
+     FROM (SELECT b_rid AS other FROM ${LINK_TABLE}
+             WHERE a_rid = @rid AND kind = 'explicit' AND asserted_by = @by
+           UNION ALL
+           SELECT a_rid AS other FROM ${LINK_TABLE}
+             WHERE b_rid = @rid AND kind = 'explicit' AND asserted_by = @by) l
+       CROSS JOIN memories m ON m.rid = l.other
+     WHERE ${grantSql(n)}
+     ORDER BY l.other DESC`,
+  /** How many other memories of the seed's node and session are within the reach. */
+  episodeRaw: (): string =>
+    `SELECT count(*) AS n FROM (SELECT 1 FROM memories
+       WHERE ${nodeIs('')} AND session_id = @session AND episode_seq BETWEEN @lo AND @hi
+         AND rid != @rid
+       LIMIT @cap)`,
+  /** Those memories that the grant reads, nearest turn first. */
+  episodeNear: (n: number, f?: SpatialFilter): string =>
+    `SELECT ${neighbourCols(n, f)} FROM memories m
+     WHERE ${nodeIs('m.')}
+       AND m.session_id = @session AND m.episode_seq BETWEEN @lo AND @hi AND m.rid != @rid
+       AND ${grantSql(n)}
+     ORDER BY abs(m.episode_seq - @seq), m.rid DESC`,
+  /** How many index rows one entity has in one node. */
+  entityRaw: (): string =>
+    `SELECT count(*) AS n FROM (SELECT 1 FROM ${ENTITY_TABLE}
+       WHERE node_id = @node AND entity_key = @key LIMIT @cap)`,
+  /**
+   * The memories of one entity in one node that the grant reads, newest first, at most `@cap`
+   * (`fMax`: that many is a hub already). The grant is applied before the limit, so the fan and
+   * the neighbours depend only on rows the reader may read.
+   */
+  entityFan: (n: number, f?: SpatialFilter): string =>
+    `SELECT ${neighbourCols(n, f)}
+     FROM ${ENTITY_TABLE} e CROSS JOIN memories m ON m.rid = e.memory_rid
+     WHERE e.node_id = @node AND e.entity_key = @key AND ${grantSql(n)}
+     ORDER BY e.memory_rid DESC LIMIT @cap`,
+} as const;
 
 /**
  * Which dense index the store at `dbPath` searches with, and how many vectors it searches (the
@@ -1924,106 +2022,46 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     return out;
   }
 
-  /** One candidate neighbour: its row id, node and whether the reader's grant and place admit it. */
-  interface NeighbourRow {
-    rid: number;
-    id: string;
-    level: string;
-    org_id: string;
-    customer_id: string | null;
-    agent_id: string | null;
-    hive_id: string | null;
-    run_id: string | null;
-    expired_at: string | null;
-    superseded_by: string | null;
-    episode_seq: number | null;
-    asserted_by?: 'user' | 'agent' | null;
-    readable: number;
-    inplace: number | null;
+  /** Whether any explicit link asserted by `user` exists, as of `version` of the database. */
+  let userLinks: { version: unknown; any: boolean } | undefined;
+  const userLinkProbe = db.prepare<[], { x: number }>(LINK_READS.anyUserLink());
+  /**
+   * The cached answer to "does this store hold a link confirmed at a terminal". Without one, the
+   * default recall (a person's links only) has nothing to follow and reads nothing. The answer is
+   * kept until the database changes: `PRAGMA data_version` moves when another connection
+   * commits, and this handle's own link writes and forgets drop it.
+   */
+  function anyUserLinks(stats: LinkStats): boolean {
+    const version: unknown = db.pragma('data_version', { simple: true });
+    if (userLinks !== undefined && userLinks.version === version) return userLinks.any;
+    stats.checks++;
+    const any = userLinkProbe.get() !== undefined;
+    userLinks = { version, any };
+    return any;
   }
-  /** The columns of a `NeighbourRow`, over `memories` aliased `m` (the grant and place as flags). */
-  const neighbourCols = (n: number, f: SpatialFilter | undefined): string =>
-    `m.rid AS rid, m.id AS id, m.level AS level, m.org_id AS org_id,
-     m.customer_id AS customer_id, m.agent_id AS agent_id, m.hive_id AS hive_id,
-     m.run_id AS run_id, m.expired_at AS expired_at, m.superseded_by AS superseded_by,
-     m.episode_seq AS episode_seq, ${grantSql(n)} AS readable,
-     ${f === undefined ? '1' : `(${spatialSql(f, 'm')})`} AS inplace`;
-  /**
-   * The explicit links of the memory at `@rid` that the grant reads, newest other end first: two
-   * index ranges, read only when `explicitRaw` is within its bound.
-   */
-  const explicitEnds = (n: number, f: SpatialFilter | undefined) =>
-    cached<[Params], NeighbourRow>(
-      `nb-explicit:${n}${spatialShape(f)}`,
-      () => `SELECT ${neighbourCols(n, f)}, l.asserted_by AS asserted_by
-       FROM (SELECT b_rid AS other, asserted_by FROM ${LINK_TABLE}
-               WHERE kind = 'explicit' AND a_rid = @rid
-             UNION ALL
-             SELECT a_rid AS other, asserted_by FROM ${LINK_TABLE}
-               WHERE b_rid = @rid AND kind = 'explicit') l
-         CROSS JOIN memories m ON m.rid = l.other
-       WHERE ${grantSql(n)}
-       ORDER BY l.other DESC`,
-    );
-  /** The memories of the seed's node and session within the reach: one index range. */
-  const episodeNear = (n: number, f: SpatialFilter | undefined) =>
-    cached<[Params], NeighbourRow>(
-      `nb-episode:${n}${spatialShape(f)}`,
-      () => `SELECT ${neighbourCols(n, f)} FROM memories m
-       WHERE m.session_id = @session AND m.episode_seq BETWEEN @lo AND @hi AND m.rid != @rid
-         AND m.level = @level AND m.org_id = @org AND m.customer_id IS @customer
-         AND m.agent_id IS @agent AND m.hive_id IS @hive AND m.run_id IS @run
-         AND ${grantSql(n)}
-       ORDER BY abs(m.episode_seq - @seq), m.rid DESC`,
-    );
-  /**
-   * The memories of one entity in one node that the grant reads, newest first, at most `@cap`
-   * (`fMax`: that many is a hub already). The grant is applied before the limit, so the fan and
-   * the neighbours depend only on rows the reader may read.
-   */
-  const entityFan = (n: number, f: SpatialFilter | undefined) =>
-    cached<[Params], NeighbourRow>(
-      `nb-about:${n}${spatialShape(f)}`,
-      () => `SELECT ${neighbourCols(n, f)}
-       FROM ${ENTITY_TABLE} e CROSS JOIN memories m ON m.rid = e.memory_rid
-       WHERE e.node_id = @node AND e.entity_key = @key AND ${grantSql(n)}
-       ORDER BY e.memory_rid DESC LIMIT @cap`,
-    );
-  /**
-   * The work bounds, whatever the grant (core's `rawScanLimit`): how many rows a read would
-   * touch, counted up to `@cap`. A read past its bound is not made. Each count stays inside the
-   * seed's own node (a link row joins two memories of one node; the entity index is keyed by
-   * node; the episode count names the node's columns), so a row in another node never counts.
-   */
-  const explicitRaw = db.prepare<[Params], { n: number }>(
-    `SELECT (SELECT count(*) FROM (SELECT 1 FROM ${LINK_TABLE}
-               WHERE kind = 'explicit' AND a_rid = @rid LIMIT @cap))
-          + (SELECT count(*) FROM (SELECT 1 FROM ${LINK_TABLE}
-               WHERE b_rid = @rid AND kind = 'explicit' LIMIT @cap)) AS n`,
-  );
-  const episodeRaw = db.prepare<[Params], { n: number }>(
-    `SELECT count(*) AS n FROM (SELECT 1 FROM memories
-       WHERE session_id = @session AND episode_seq BETWEEN @lo AND @hi AND rid != @rid
-         AND level = @level AND org_id = @org AND customer_id IS @customer
-         AND agent_id IS @agent AND hive_id IS @hive AND run_id IS @run
-       LIMIT @cap)`,
-  );
-  const entityRaw = db.prepare<[Params], { n: number }>(
-    `SELECT count(*) AS n FROM (SELECT 1 FROM ${ENTITY_TABLE}
-       WHERE node_id = @node AND entity_key = @key LIMIT @cap)`,
-  );
   const nodeIdRead = db.prepare<[string], { node_id: number }>(
     `SELECT node_id FROM ${NODE_TABLE} WHERE node_key = ?`,
   );
 
   /**
-   * One hop from the seeds (CON-149), as ids. Every read is one bounded index range: per seed for
-   * `explicit` and `episode`, per seed entity for `about`. The same rules, bounds and order as
-   * core's in-memory store, which `linksConformance` holds both to.
+   * One hop from the seeds (CON-149), as ids. Every read is one bounded index range: per seed and
+   * asserter for `explicit`, per seed for `episode`, per seed entity for `about`. The same rules,
+   * bounds and order as core's in-memory store, which `linksConformance` holds both to.
    */
-  function neighboursOf(grant: Grant, seedIds: string[], o: NeighbourOptions): NeighboursResult {
+  function neighboursOf(
+    grant: Grant,
+    seedIds: string[],
+    o: NeighbourOptions,
+    stats: LinkStats,
+  ): NeighboursResult {
     const patterns = live(grant.readNodes);
-    if (patterns.length === 0) return { neighbours: [] };
+    const kinds = NEIGHBOUR_KINDS.filter((k) => o.kinds.includes(k));
+    if (patterns.length === 0 || kinds.length === 0) return { neighbours: [] };
+    // A person's links only, and the store holds none: nothing to read.
+    const userOnly = o.explicitBy === 'user';
+    if (userOnly && kinds.length === 1 && kinds[0] === 'explicit' && !anyUserLinks(stats)) {
+      return { neighbours: [] };
+    }
     const fMax = o.fMax ?? F_MAX_DEFAULT;
     const now = o.clock ?? (() => performance.now());
     const start = now();
@@ -2032,8 +2070,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     const f = hasSpatialFilter(o.spatial) ? o.spatial : undefined;
     const n = patterns.length;
     const bound = { ...grantParams(patterns), ...(f !== undefined && spatialParams(f)) };
+    const read = <R>(key: string, sql: () => string, p: Params): R[] => {
+      stats.reads++;
+      return cached<[Params], R>(key, sql).all(p);
+    };
     const seeds = [...new Set(seedIds)]
-      .map((id) => scopedRow(grant.readNodes, id))
+      .map((id) => {
+        stats.reads++;
+        return scopedRow(grant.readNodes, id);
+      })
       .filter((r): r is MemoryRow => r !== undefined && r.level !== 'hive')
       .map((r) => ({ row: r, node: nodeKeyOfColumns(r) }));
     /** What a link may bring in from `seed`: readable, in its node, in place, not blocked. */
@@ -2043,19 +2088,20 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       if (o.currentOnly === true && (r.expired_at !== null || r.superseded_by !== null))
         return false;
       const [a, b] = seed.row.rid < r.rid ? [seed.row.rid, r.rid] : [r.rid, seed.row.rid];
+      stats.reads++;
       return q.linkGet.get('blocked', a, b) === undefined;
     };
     const out: Neighbour[] = [];
     let skipped = false;
     let budgetPassed = false;
-    /** Whether a read would touch more than `bound` index rows: then it is skipped, and said. */
-    const tooLarge = (st: Statement<[Params], { n: number }>, p: Params, bound: number) => {
-      if ((st.get({ ...p, cap: bound + 1 })?.n ?? 0) <= bound) return false;
+    /** Whether a read would touch more than `limit` rows: then it is skipped, and said. */
+    const tooLarge = (key: string, sql: string, p: Params, limit: number): boolean => {
+      const got = read<{ n: number }>(key, () => sql, { ...p, cap: limit + 1 })[0]?.n ?? 0;
+      if (got <= limit) return false;
       skipped = true;
       return true;
     };
-    gather: for (const kind of NEIGHBOUR_KINDS) {
-      if (!o.kinds.includes(kind)) continue;
+    gather: for (const kind of kinds) {
       if (late()) {
         skipped = true;
         break;
@@ -2063,13 +2109,22 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       for (const seed of seeds) {
         const { row } = seed;
         if (kind === 'explicit') {
-          if (tooLarge(explicitRaw, { rid: row.rid }, EXPLICIT_RAW_SCAN)) continue;
-          let kept = 0;
-          for (const r of explicitEnds(n, f).all({ ...bound, rid: row.rid })) {
-            if (o.explicitBy === 'user' && r.asserted_by !== 'user') continue;
-            if (!admits(seed, r)) continue;
-            out.push({ id: r.id, kind, from: row.id, weight: 1 });
-            if (++kept === EXPLICIT_PER_SEED) break;
+          // Links asserted by `user` and by `agent` are read and bounded apart, a person's first:
+          // however many links an agent writes on a memory, a person's are still read.
+          for (const by of userOnly ? (['user'] as const) : (['user', 'agent'] as const)) {
+            const p = { rid: row.rid, by };
+            if (tooLarge('nb-explicit-raw', LINK_READS.explicitRaw(), p, EXPLICIT_RAW_SCAN))
+              continue;
+            let kept = 0;
+            for (const r of read<NeighbourRow>(
+              `nb-explicit:${n}${spatialShape(f)}`,
+              () => LINK_READS.explicitEnds(n, f),
+              { ...bound, ...p },
+            )) {
+              if (!admits(seed, r)) continue;
+              out.push({ id: r.id, kind, from: row.id, weight: 1, assertedBy: by });
+              if (++kept === EXPLICIT_PER_SEED) break;
+            }
           }
         } else if (kind === 'episode') {
           const seq = row.episode_seq;
@@ -2086,9 +2141,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
             hive: row.hive_id,
             run: row.run_id,
           };
-          if (tooLarge(episodeRaw, window, EPISODE_RAW_SCAN)) continue;
-          const near = episodeNear(n, f)
-            .all({ ...bound, ...window, seq })
+          if (tooLarge('nb-episode-raw', LINK_READS.episodeRaw(), window, EPISODE_RAW_SCAN))
+            continue;
+          const near = read<NeighbourRow>(
+            `nb-episode:${n}${spatialShape(f)}`,
+            () => LINK_READS.episodeNear(n, f),
+            { ...bound, ...window, seq },
+          )
             .filter((r) => r.episode_seq !== null && admits(seed, r))
             .map((r) => ({ r, delta: (r.episode_seq as number) - seq }))
             .sort((x, y) => Math.abs(x.delta) - Math.abs(y.delta) || y.r.rid - x.r.rid);
@@ -2098,6 +2157,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         } else {
           // The entity index holds current memories only: an ended seed has no rows in it.
           if (row.expired_at !== null || row.superseded_by !== null) continue;
+          stats.reads++;
           const node = nodeIdRead.get(seed.node)?.node_id;
           if (node === undefined) continue;
           const weights = new Map<string, number[]>();
@@ -2107,8 +2167,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
               budgetPassed = true;
               break;
             }
-            if (tooLarge(entityRaw, { node, key }, rawScanLimit(fMax))) continue;
-            const rows = entityFan(n, f).all({ ...bound, node, key, cap: fMax });
+            const p = { node, key };
+            if (tooLarge('nb-about-raw', LINK_READS.entityRaw(), p, rawScanLimit(fMax))) continue;
+            const rows = read<NeighbourRow>(
+              `nb-about:${n}${spatialShape(f)}`,
+              () => LINK_READS.entityFan(n, f),
+              { ...bound, ...p, cap: fMax },
+            );
             const w = aboutWeight(rows.length, fMax);
             if (w <= 0) continue;
             let kept = 0;
@@ -2204,12 +2269,14 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     async link(grant, a, b, linkOpts) {
       open();
       assertGrant(grant);
+      userLinks = undefined;
       return linkTx.immediate(grant, a, b, linkOpts);
     },
 
     async unlink(grant, a, b, linkOpts) {
       open();
       assertGrant(grant);
+      userLinks = undefined;
       return unlinkTx.immediate(grant, a, b, linkOpts);
     },
 
@@ -2222,7 +2289,12 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     async neighbours(grant, seedIds, neighbourOpts) {
       open();
       assertGrant(grant);
-      return neighboursOf(grant, seedIds, neighbourOpts);
+      const stats: LinkStats = { reads: 0, checks: 0 };
+      try {
+        return neighboursOf(grant, seedIds, neighbourOpts, stats);
+      } finally {
+        opts.onLinkStats?.(stats);
+      }
     },
 
     async upsert(grant, m) {
@@ -2240,6 +2312,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     async upsertManyLinked(grant, ms, pairs, linkOpts) {
       open();
       assertGrant(grant);
+      userLinks = undefined;
       const r = writeLinked.immediate(grant, ms, pairs, linkOpts);
       removeAfterCommit(r.files);
       rqAfterWrite();

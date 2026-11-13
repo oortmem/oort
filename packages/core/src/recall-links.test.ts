@@ -31,7 +31,8 @@ const cfg = (recallOverrides: Partial<Recall> = {}, links: Partial<Recall['links
     // Always call the reranker, so every test controls whether it runs.
     skipRerankWhenConfident: false,
     ...recallOverrides,
-    links: { ...base.recall.links, ...links },
+    // A wide time budget: these tests are about what is followed, on any machine.
+    links: { ...base.recall.links, budgetMs: 1000, ...links },
   },
 });
 const ON = { enabled: true };
@@ -199,7 +200,12 @@ describe('recall.links: about and episode behind the flag (CON-149)', () => {
     const embed: Embedder = { dimension: 4, embed: async (t) => t.map(() => vec(100, 0, 0, 0)) };
     const now = new Date();
     const strip = (r: RecallResult) => JSON.stringify({ ...r, timings: undefined });
-    for (const config of [cfg(), cfg({}, ON), base, cfg({ minCoverage: 0 }, ON)]) {
+    for (const config of [
+      cfg(),
+      cfg({}, ON),
+      cfg({ skipRerankWhenConfident: true }),
+      cfg({ minCoverage: 0 }, ON),
+    ]) {
       for (const deps of [{}, { embed }, { embed, ...scoring({ A: 0.9, C: 0.5, D: 0.4 }) }]) {
         const store = await setup(memories);
         const { neighbours: _n, ...before } = await setup(memories);
@@ -524,12 +530,53 @@ describe('what a link never brings in (CON-149)', () => {
     const store = await setup([
       makeMemory({ id: 'A', text: 'which port does auth-service use and what database' }),
     ]);
+    // A cold hit that holds one query word, and a cold memory only the link reaches.
+    await seedCold(
+      store,
+      makeMemory({ id: 'C', text: 'old port note', stub: 'port', embedding: vec(1, 2, 3, 4) }),
+    );
     await seedCold(store, B({ embedding: vec(1, 2, 3, 4) }));
     await store.link!(TG, 'A', 'B', USER);
-    const r = await ask(store, s())();
+    const r = await ask(store, s({ A: 0.9, B: 0.8, C: 0.7 }))();
+    // The stop is asked about the hits alone (one cold), and stops: the cold linked one goes too.
     expect(r.adaptiveStop).toMatchObject({ stopped: true, by: 'rule', cold: 1 });
     expect(ids(r)).toEqual(['A']);
     expect((await store.get(TG, 'B'))!.tier).toBe('cold');
+    // With the stop off both cold memories are returned and warmed.
+    const all = await ask(store, s({ A: 0.9, B: 0.8, C: 0.7 }), cfg({ adaptiveStop: 'off' }))();
+    expect(ids(all)).toEqual(['A', 'B', 'C']);
+  });
+
+  it('links.a-linked-memory-never-removes-hits-through-the-adaptive-stop', async () => {
+    // Every hit is cold and the linked memory is live. Were the stop asked about hits and linked
+    // memories together, the linked one would count as the live set, the cold hits would be
+    // dropped as unneeded, and the linked one would then lose the hit it came from: nothing left.
+    const store = await setup([B()]);
+    await seedCold(
+      store,
+      makeMemory({
+        id: 'A',
+        text: 'auth-service moved to port 8080',
+        stub: 'auth-service port',
+        embedding: vec(1, 2, 3, 4),
+      }),
+    );
+    await store.link!(TG, 'A', 'B', USER);
+    let asked = 0;
+    const decide = {
+      sufficient: async () => {
+        asked++;
+        return { probability: 1, decisions: [] };
+      },
+    } as unknown as NonNullable<Parameters<typeof recall>[1]['decide']>;
+    const r = await recall(
+      { text: PORT, scope: SCOPE },
+      { store, config: cfg({ adaptiveStop: 'decide' }), decide, ...scoring({ A: 0.9, B: 0.8 }) },
+    );
+    expect(ids(r)).toEqual(['A', 'B']);
+    expect(asked).toBe(0);
+    expect(r.adaptiveStop).toBeUndefined();
+    expect(r.memories[0]!.explanation.hydrated).toBe(true);
   });
 
   it('links.at-most-admit-and-none-with-admit-0', async () => {
@@ -561,7 +608,7 @@ describe('the links budget and the explanation (CON-149)', () => {
     expect(ids(r)).toEqual(['A', 'B']);
     expect(degraded(r)).toEqual(['links-skipped']);
     expect(asked).toBeGreaterThan(0);
-    expect(asked).toBeLessThanOrEqual(base.recall.links.budgetMs);
+    expect(asked).toBeLessThanOrEqual(1000);
     // The store's own clock decides: with a clock past the budget it reads nothing.
     const late: MemoryStore = {
       ...store,
@@ -600,14 +647,34 @@ describe('the links budget and the explanation (CON-149)', () => {
     expect(lines).toHaveLength(4);
   });
 
-  it('links.a-linked-memory-is-returned-only-beside-its-seed', async () => {
-    const store = await setup([A(), B()]);
+  it('links.under-a-budget-hits-are-fitted-first-and-a-linked-memory-never-stands-alone', async () => {
+    const store = await setup([
+      A(),
+      makeMemory({ id: 'C', text: 'the auth-service port was 3000 before the move' }),
+      B(),
+    ]);
     await store.link!(TG, 'A', 'B', USER);
-    // The linked memory outranks its seed; a budget that fits one line must not keep it alone.
-    const r = await ask(store, scoring({ A: 0.5, B: 0.9 }))({ budgetChars: 90 });
-    expect(ids(r)).toEqual([]);
-    const roomy = await ask(store, scoring({ A: 0.5, B: 0.9 }))({ budgetChars: 2000 });
-    expect(ids(roomy)).toEqual(['B', 'A']);
+    // The linked memory outranks both hits. Lines: A 51, C 67, B 49 characters, tags 29.
+    const scores = { B: 0.9, A: 0.8, C: 0.7 };
+    const at = async (budgetChars: number) =>
+      ids(await ask(store, scoring(scores))({ budgetChars }));
+    expect(await at(2000)).toEqual(['B', 'A', 'C']);
+    // Room for the two hits only: the linked memory does not take a hit's place.
+    expect(await at(29 + 51 + 1 + 67)).toEqual(['A', 'C']);
+    // Room for one line: the hit, never the linked memory without the memory it came from.
+    expect(await at(29 + 51)).toEqual(['A']);
+    expect(await at(29 + 49)).toEqual([]);
+    // The same holds for a block rendered from an unbudgeted result (`oort recall`).
+    const whole = await ask(store, scoring(scores))();
+    expect(ids(whole)).toEqual(['B', 'A', 'C']);
+    const lines = (budget: number) => formatForInjection(whole, budget).split('\n').slice(1, -1);
+    expect(lines(29 + 51 + 1 + 67).map((l) => l.includes('linked'))).toEqual([false, false]);
+    expect(lines(29 + 51)).toEqual(['- [semantic, today] auth-service moved to port 8080']);
+    expect(lines(2000)[0]).toMatch(/linked\] it runs on Postgres 16/);
+    // A seed cut by the budget takes its linked memory with it, even when that one would fit.
+    await store.link!(TG, 'C', 'B', USER);
+    await store.unlink!(TG, 'A', 'B', USER);
+    expect(await at(29 + 51 + 1 + 49)).toEqual(['A']);
   });
 
   it('links.the-weight-counts-only-what-the-reader-may-read', async () => {

@@ -133,6 +133,8 @@ export interface Neighbour {
   from: string;
   /** In (0, 1]: 1 for `explicit`; see `episodeWeight` and `aboutWeight`. */
   weight: number;
+  /** `explicit` only: who asserted the link. It ranks a person's link first, and nothing else. */
+  assertedBy?: AssertedBy;
 }
 
 /** What `MemoryStore.neighbours` returns. */
@@ -160,7 +162,10 @@ export const ABOUT_PER_ENTITY = 20;
  */
 export const RAW_SCAN_FACTOR = 64;
 export const rawScanLimit = (fMax: number): number => RAW_SCAN_FACTOR * fMax;
-/** The same bound for one seed's explicit links, and for the turns around it in its session. */
+/**
+ * The same bound for one seed's explicit links, counted apart for links asserted by `user` and by
+ * `agent` (so an agent's links never use up a person's), and for the turns around a seed.
+ */
 export const EXPLICIT_RAW_SCAN = 512;
 export const EPISODE_RAW_SCAN = 512;
 
