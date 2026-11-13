@@ -13,6 +13,7 @@ export * from './levels.js';
 export * from './agents.js';
 export * from './fusion.js';
 export * from './memory-store.js';
+export * from './links.js';
 export * from './tokenize.js';
 export * from './gate.js';
 export * from './recall.js';

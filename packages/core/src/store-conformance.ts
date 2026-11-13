@@ -29,6 +29,7 @@ import type { Memory, Scope } from './model.js';
 import type { NearQuery, Place, SpatialFilter } from './place.js';
 import { localScope } from './scope.js';
 import { isolationViolations, nonInterference } from './isolation.js';
+import type { LinksProbe } from './links.js';
 
 export const CONFORMANCE_DIMENSION = 4;
 
@@ -1363,6 +1364,345 @@ export function spatialConformance(name: string, make: () => Promise<MemoryStore
       expect(await both(near(30, 0, 1))).toEqual([[], []]);
       await store.upsert(TG, at('new', undefined));
       expect(await both(near(30, 0, 1))).toEqual([[], []]);
+    });
+  });
+}
+
+/**
+ * Memory relationships (CON-148, design `docs/design/2026-11-12-memory-relationships.md`): the
+ * suite a store with `links: true` must pass, on top of `storeConformance`. `probe` reads the
+ * store's own rows, so the suite can prove that nothing of a forgotten memory is left.
+ *
+ * It covers `link`, `unlink` and `linksOf` (who asserted each link, blocks, the write grant on both
+ * ends, the same-node and no-`hive` rules, the grant on every listed link), the cascade on
+ * `forget`, an upsert that keeps links and rewrites the entity index, superseded and expired
+ * memories leaving the entity index, and episode positions.
+ */
+export function linksConformance(
+  name: string,
+  make: () => Promise<MemoryStore>,
+  probe: (store: MemoryStore) => LinksProbe,
+): void {
+  describe(`store links: ${name}`, () => {
+    let store: MemoryStore;
+    let rows: LinksProbe;
+
+    beforeEach(async () => {
+      store = await make();
+      rows = probe(store);
+    });
+
+    afterEach(async () => {
+      await store.close();
+    });
+
+    const AGENT = { assertedBy: 'agent' } as const;
+    const USER = { assertedBy: 'user' } as const;
+    const planet = (projectId?: string): Address => ({
+      level: 'user',
+      orgId: 'local',
+      customerId: 'self',
+      ...(projectId !== undefined && { projectId }),
+    });
+    const me: Author = { agentId: 'claude-code' };
+    const at = (id: string, overrides: Partial<Memory> = {}, address = planet()) =>
+      memoryAt(id, address, me, overrides);
+    const seed = async (...ms: Memory[]) => {
+      for (const m of ms) await store.upsert(TG, m);
+    };
+    const S = (): Required<Pick<MemoryStore, 'link' | 'unlink' | 'linksOf'>> => {
+      const s = store as Required<MemoryStore>;
+      return {
+        link: s.link.bind(s),
+        unlink: s.unlink.bind(s),
+        linksOf: s.linksOf.bind(s),
+      };
+    };
+    const listed = async (g: Grant, id: string) => {
+      const l = await S().linksOf(g, id);
+      return l === null
+        ? null
+        : {
+            links: l.links.map((x) => [x.kind, x.id, x.direction, x.assertedBy ?? null]),
+            blocked: l.blocked,
+            hidden: l.hidden,
+          };
+    };
+    const entitiesOf = async (id: string) =>
+      (await rows.entities())
+        .filter((r) => r.id === id)
+        .map((r) => r.entity)
+        .sort();
+
+    it('links.store-says-it-links', () => {
+      expect(store.links).toBe(true);
+      expect(typeof store.link).toBe('function');
+      expect(typeof store.unlink).toBe('function');
+      expect(typeof store.linksOf).toBe('function');
+    });
+
+    it('links.link-lists-both-ends-with-who-asserted-it', async () => {
+      await seed(at('a'), at('b'));
+      expect(await S().link(TG, 'a', 'b', AGENT)).toEqual({
+        linked: true,
+        unblocked: false,
+        assertedBy: 'agent',
+      });
+      expect(await listed(TG, 'a')).toEqual({
+        links: [['explicit', 'b', 'both', 'agent']],
+        blocked: [],
+        hidden: 0,
+      });
+      expect(await listed(TG, 'b')).toEqual({
+        links: [['explicit', 'a', 'both', 'agent']],
+        blocked: [],
+        hidden: 0,
+      });
+      // Stored once, whichever way round it was asked.
+      expect((await S().link(TG, 'b', 'a', AGENT))?.linked).toBe(false);
+      expect(await rows.links()).toEqual([
+        { kind: 'explicit', a: 'a', b: 'b', assertedBy: 'agent' },
+      ]);
+      // A person's assertion replaces an agent's, and an agent never weakens it.
+      expect(await S().link(TG, 'a', 'b', USER)).toEqual({
+        linked: true,
+        unblocked: false,
+        assertedBy: 'user',
+      });
+      expect(await S().link(TG, 'b', 'a', AGENT)).toEqual({
+        linked: false,
+        unblocked: false,
+        assertedBy: 'user',
+      });
+      expect((await listed(TG, 'b'))?.links).toEqual([['explicit', 'a', 'both', 'user']]);
+      const [l] = (await S().linksOf(TG, 'a'))!.links;
+      expect(Number.isNaN(Date.parse(l!.createdAt))).toBe(false);
+    });
+
+    it('links.refuses-exactly-as-for-a-missing-id', async () => {
+      const star: Address = { level: 'agent', orgId: 'local', agentId: 'claude-code' };
+      const hive: Address = { level: 'hive', orgId: 'local', hiveId: 'team' };
+      await seed(at('a'), at('b'), at('p2', {}, planet('p2')));
+      const both = nodesGrant(nodeOf(planet()), nodeOf(star), nodeOf(hive));
+      await store.upsert(both, at('s', {}, star));
+      await store.upsert(both, at('h1', {}, hive));
+      await store.upsert(both, at('h2', {}, hive));
+      // Reads every project of the Planet, writes only global memories.
+      const narrow = nodeGrant({
+        principal: OWNER,
+        read: [{ node: nodeOf(planet()), projectIds: 'all' }],
+        write: [{ node: nodeOf(planet()), projectIds: [null] }],
+      });
+      const refused: [Grant, string, string][] = [
+        [TG, 'a', 'nope'],
+        [TG, 'nope', 'a'],
+        [TG, 'a', 'a'],
+        [narrow, 'a', 'p2'], // p2 is read, not written
+        [both, 'a', 's'], // two nodes: the Planet and a Star
+        [both, 'h1', 'h2'], // a hive node
+      ];
+      for (const [g, x, y] of refused) {
+        expect(await S().link(g, x, y, USER)).toBeNull();
+        expect(await S().unlink(g, x, y, USER)).toBeNull();
+      }
+      expect(await rows.links()).toEqual([]);
+      // The narrow grant can link the two it writes.
+      expect((await S().link(narrow, 'a', 'b', AGENT))?.linked).toBe(true);
+    });
+
+    it('links.unlink-removes-the-link', async () => {
+      await seed(at('a'), at('b'));
+      await S().link(TG, 'a', 'b', USER);
+      expect(await S().unlink(TG, 'b', 'a', AGENT)).toEqual({ removed: true, blocked: false });
+      expect(await listed(TG, 'a')).toEqual({ links: [], blocked: [], hidden: 0 });
+      expect(await rows.links()).toEqual([]);
+    });
+
+    it('links.unlinking-an-unlinked-pair-blocks-it-and-linking-it-unblocks', async () => {
+      await seed(at('a'), at('b'));
+      expect(await S().unlink(TG, 'a', 'b', USER)).toEqual({ removed: false, blocked: true });
+      expect(await listed(TG, 'a')).toEqual({ links: [], blocked: ['b'], hidden: 0 });
+      expect(await listed(TG, 'b')).toEqual({ links: [], blocked: ['a'], hidden: 0 });
+      expect(await rows.links()).toEqual([{ kind: 'blocked', a: 'a', b: 'b', assertedBy: 'user' }]);
+      // Again: still one block.
+      expect(await S().unlink(TG, 'b', 'a', AGENT)).toEqual({ removed: false, blocked: true });
+      expect(await rows.links()).toHaveLength(1);
+      expect(await S().link(TG, 'b', 'a', AGENT)).toEqual({
+        linked: true,
+        unblocked: true,
+        assertedBy: 'agent',
+      });
+      expect(await listed(TG, 'a')).toEqual({
+        links: [['explicit', 'b', 'both', 'agent']],
+        blocked: [],
+        hidden: 0,
+      });
+    });
+
+    it('links.unlink-blocks-a-pair-an-index-forms', async () => {
+      // A shared entity (`about`) or session (`episode`) would bring the pair back: blocked too.
+      await seed(
+        at('a', { entities: ['payments-db'] }),
+        at('b', { entities: ['Payments-DB'] }),
+        at('c', { source: { harness: 'test', sessionId: 's1', decisions: [] } }),
+        at('d', { source: { harness: 'test', sessionId: 's1', decisions: [] } }),
+      );
+      await S().link(TG, 'a', 'b', USER);
+      await S().link(TG, 'c', 'd', USER);
+      expect(await S().unlink(TG, 'a', 'b', USER)).toEqual({ removed: true, blocked: true });
+      expect(await S().unlink(TG, 'c', 'd', USER)).toEqual({ removed: true, blocked: true });
+      expect((await listed(TG, 'a'))?.blocked).toEqual(['b']);
+      expect((await listed(TG, 'd'))?.blocked).toEqual(['c']);
+    });
+
+    it('links.forget-leaves-no-row-of-the-memory', async () => {
+      await seed(
+        at('a', {
+          entities: ['payments-db', 'checkout'],
+          source: { harness: 'test', sessionId: 's1', decisions: [] },
+        }),
+        at('b', { entities: ['payments-db'] }),
+        at('c'),
+        at('d'),
+      );
+      await S().link(TG, 'a', 'b', USER);
+      await S().unlink(TG, 'c', 'a', AGENT); // a block
+      await S().link(TG, 'c', 'd', AGENT);
+      await store.forget(TG, 'a');
+      expect(await listed(TG, 'b')).toEqual({ links: [], blocked: [], hidden: 0 });
+      expect(await listed(TG, 'c')).toEqual({
+        links: [['explicit', 'd', 'both', 'agent']],
+        blocked: [],
+        hidden: 0,
+      });
+      expect(await rows.links()).toEqual([
+        { kind: 'explicit', a: 'c', b: 'd', assertedBy: 'agent' },
+      ]);
+      expect(await rows.entities()).toEqual([{ id: 'b', entity: 'payments-db' }]);
+      expect((await rows.episodes()).map((e) => e.id)).toEqual([]);
+      expect(await rows.orphans()).toBe(0);
+      expect(await S().linksOf(TG, 'a')).toBeNull();
+    });
+
+    it('links.upsert-keeps-links-and-rewrites-the-entity-index', async () => {
+      await seed(at('a', { entities: ['Postgres', 'port'] }), at('b'));
+      await S().link(TG, 'a', 'b', USER);
+      expect(await entitiesOf('a')).toEqual(['port', 'postgres']);
+      const m = (await store.get(TG, 'a'))!;
+      await store.upsert(TG, { ...m, text: 'the port is 8080', entities: ['port', '8080'] });
+      await store.upsertMany(TG, [{ ...m, text: 'the port is 9090', entities: ['port', '9090'] }]);
+      expect((await listed(TG, 'a'))?.links).toEqual([['explicit', 'b', 'both', 'user']]);
+      expect(await entitiesOf('a')).toEqual(['9090', 'port']);
+      // A cold memory that is still current keeps its links and its index rows.
+      await store.coldPut(TG, (await store.get(TG, 'a'))!);
+      expect((await store.get(TG, 'a'))?.tier).toBe('cold');
+      expect((await listed(TG, 'a'))?.links).toEqual([['explicit', 'b', 'both', 'user']]);
+      expect(await entitiesOf('a')).toEqual(['9090', 'port']);
+    });
+
+    it('links.superseded-and-expired-memories-leave-the-entity-index', async () => {
+      await seed(at('old', { entities: ['port'] }), at('gone', { entities: ['port'] }), at('b'));
+      await S().link(TG, 'old', 'b', USER);
+      const old = (await store.get(TG, 'old'))!;
+      const now = new Date().toISOString();
+      // A supersede: the new memory and the old one's end in one batch.
+      await store.upsertMany(TG, [
+        at('new', { entities: ['port'], supersedes: 'old' }),
+        { ...old, supersededBy: 'new', validTo: now, endReason: 'superseded', expiredAt: now },
+      ]);
+      expect(await entitiesOf('old')).toEqual([]);
+      expect(await entitiesOf('new')).toEqual(['port']);
+      const gone = (await store.get(TG, 'gone'))!;
+      expect((await store.expireMany(TG, [gone], new Date())).skipped).toEqual([]);
+      expect(await entitiesOf('gone')).toEqual([]);
+      // Ending a memory never ends its explicit links.
+      expect((await listed(TG, 'old'))?.links).toEqual([['explicit', 'b', 'both', 'user']]);
+      expect(await rows.entities()).toEqual([{ id: 'new', entity: 'port' }]);
+    });
+
+    it('links.entity-keys-are-normalised-and-bounded', async () => {
+      const many = Array.from({ length: 20 }, (_, i) => `entity ${String(i).padStart(2, '0')}`);
+      await seed(
+        at('a', { entities: ['  Payments \t DB ', 'payments db', 'X', 'ＡＰＩ', 'x'.repeat(129)] }),
+        at('b', { entities: many }),
+      );
+      expect(await entitiesOf('a')).toEqual(['api', 'payments db']);
+      expect(await entitiesOf('b')).toEqual(many.slice(0, 16));
+    });
+
+    it('links.hive-memories-get-no-index-rows', async () => {
+      const hive: Address = { level: 'hive', orgId: 'local', hiveId: 'team' };
+      const g = nodesGrant(nodeOf(hive));
+      await store.upsert(
+        g,
+        at(
+          'h',
+          {
+            entities: ['payments-db'],
+            source: { harness: 'test', sessionId: 's1', decisions: [] },
+          },
+          hive,
+        ),
+      );
+      expect(await rows.entities()).toEqual([]);
+      expect(await rows.episodes()).toEqual([]);
+    });
+
+    it('links.listed-links-follow-the-grant', async () => {
+      await seed(at('a', {}, planet('p1')), at('b', {}, planet('p2')), at('c', {}, planet('p1')));
+      await S().link(TG, 'a', 'b', USER);
+      await S().link(TG, 'a', 'c', AGENT);
+      await S().unlink(TG, 'c', 'b', USER);
+      const p1 = localGrant({ ...LOCAL, projectIds: ['p1'] });
+      expect(await listed(p1, 'a')).toEqual({
+        links: [['explicit', 'c', 'both', 'agent']],
+        blocked: [],
+        hidden: 1,
+      });
+      // A block's other end it cannot read is neither listed nor counted.
+      expect(await listed(p1, 'c')).toEqual({
+        links: [['explicit', 'a', 'both', 'agent']],
+        blocked: [],
+        hidden: 0,
+      });
+      expect(await S().linksOf(p1, 'b')).toBeNull();
+      expect(await listed(TG, 'b')).toEqual({
+        links: [['explicit', 'a', 'both', 'user']],
+        blocked: ['c'],
+        hidden: 0,
+      });
+      // It cannot link to a memory it cannot read either.
+      expect(await S().link(p1, 'c', 'b', USER)).toBeNull();
+    });
+
+    it('links.episode-positions-follow-the-session', async () => {
+      const src = (sessionId: string | undefined, turnRef?: string) => ({
+        harness: 'test',
+        ...(sessionId !== undefined && { sessionId }),
+        ...(turnRef !== undefined && { turnRef }),
+        decisions: [],
+      });
+      await seed(
+        at('t1a', { source: src('s1', 't1') }),
+        at('t1b', { source: src('s1', 't1') }), // another fact of the same turn
+        at('t2', { source: src('s1', 't2') }),
+        at('none', { source: src(undefined) }),
+        at('s2', { source: src('s2', 't1') }),
+        at('t3', { source: src('s1') }),
+      );
+      const seqs = async () =>
+        Object.fromEntries((await rows.episodes()).map((e) => [e.id, [e.session, e.seq]]));
+      expect(await seqs()).toEqual({
+        t1a: ['s1', 1],
+        t1b: ['s1', 1],
+        t2: ['s1', 2],
+        s2: ['s2', 1],
+        t3: ['s1', 3],
+      });
+      // A rewrite in place keeps its position.
+      const m = (await store.get(TG, 't1a'))!;
+      await store.upsert(TG, { ...m, text: 'refined' });
+      expect((await seqs())['t1a']).toEqual(['s1', 1]);
     });
   });
 }

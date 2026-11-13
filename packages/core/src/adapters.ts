@@ -1,4 +1,5 @@
 import type { Grant } from './grant.js';
+import type { LinkOptions, LinkResult, LinksOf, UnlinkResult } from './links.js';
 import type { Decision, Memory, MemoryType, Scope, Tier } from './model.js';
 import type { Place, SpatialFilter } from './place.js';
 
@@ -139,12 +140,40 @@ export interface MemoryStore {
    */
   readonly spatial?: true;
   /**
+   * True when the store keeps memory relationships (CON-148; `linksConformance` proves it) and
+   * has `link`, `unlink` and `linksOf`. Absent: none of the three exist, and every surface refuses
+   * `link` rather than pretend it held.
+   */
+  readonly links?: true;
+  /**
+   * Links `a` and `b` explicitly, asserted by `opts.assertedBy`, and removes any block on the
+   * pair. Needs `grant.write` on both, both in one node, and that node not at level `hive`;
+   * anything else (an unknown id, one outside the grant, two nodes, a hive node, `a === b`)
+   * resolves to null, changing nothing, exactly as for a missing id. Linking a linked pair again
+   * changes nothing, except that a person's assertion (`user`) replaces an agent's.
+   */
+  link?(grant: Grant, a: string, b: string, opts: LinkOptions): Promise<LinkResult | null>;
+  /**
+   * Removes the `explicit` and `recalledWith` links between `a` and `b`. When there was no
+   * explicit link, or the two share an entity or a session (a pair an index forms), it also
+   * writes a `blocked` row, so nothing forms the pair again until `link` removes the block. The
+   * same rules as `link`; null for anything it refuses.
+   */
+  unlink?(grant: Grant, a: string, b: string, opts: LinkOptions): Promise<UnlinkResult | null>;
+  /**
+   * The stored links of `id` whose other end `grant` reads, the blocks likewise, and how many
+   * stored link rows lead to memories it cannot read. Null when `grant` does not read `id`.
+   */
+  linksOf?(grant: Grant, id: string): Promise<LinksOf | null>;
+  /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
    * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).
    * An all-zero `m.embedding` has no direction and is not kept: the memory is
    * stored without one, so only lexical search finds it (CON-141).
    * Rejects with `GrantError`, writing nothing, when `m.scope` is outside
    * `grant.write` or a record with `m.id` already exists at another address.
+   * A store with `links` rewrites the memory in place, so it keeps its links, and rewrites its
+   * entity index rows (none once it is expired or superseded).
    */
   upsert(grant: Grant, m: Memory): Promise<void>;
   /**
@@ -157,7 +186,8 @@ export interface MemoryStore {
   get(grant: Grant, id: string): Promise<Memory | null>;
   /**
    * Removes the memory everywhere (main record and cold copy) when it is inside
-   * `grant.write`. Never throws for an unknown or out-of-grant id.
+   * `grant.write`. Never throws for an unknown or out-of-grant id. A store with `links` removes
+   * every link, block and entity index row of the memory in the same transaction.
    */
   forget(grant: Grant, id: string): Promise<void>;
   /**
