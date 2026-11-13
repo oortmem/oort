@@ -1,8 +1,10 @@
 import { filterFor } from '@oortmem/claude-code';
 import { fitForInjection, formatForInjection, type RecallResult } from '@oortmem/core';
 import {
+  LINKS_IGNORED_IN_CLOUD,
   RECALL_SPEEDS,
   chosenDegradations,
+  linksIgnoredInCloud,
   includeLevels,
   runRecall,
   temporalView,
@@ -54,6 +56,11 @@ export interface RecallOptions extends TemporalFlags, SpatialFlags {
   speed?: string;
   /** `--budget-chars <n>`: the printed block's size (the SDK's `budgetChars`). */
   budgetChars?: string;
+  /**
+   * `--links`: follow every kind of link for this recall, as with `recall.links.enabled`;
+   * `--no-links`: follow none, a person's explicit links included. Default: the config.
+   */
+  links?: boolean;
 }
 
 /** The SDK's recall options from the flags, checked before anything is wired. */
@@ -112,6 +119,7 @@ export function recallWarnings(
 ): void {
   degradedHint(ctx, w, result.degraded, speed);
   if (viewIgnored(view, result)) warn(ctx, 'time-mode-unreported', viewIgnoredWarning(view));
+  if (linksIgnoredInCloud(w)) warn(ctx, 'links-local-only', LINKS_IGNORED_IN_CLOUD);
 }
 
 /**
@@ -129,6 +137,7 @@ export async function recallCommand(text: string, opts: RecallOptions, ctx: Ctx)
       ...(tuning.k !== undefined && { k: tuning.k }),
       speed: tuning.speed,
       ...(spatial !== undefined && { spatial }),
+      ...(opts.links !== undefined && { links: opts.links }),
     });
     // A stage `--speed` turned off is the caller's choice, not a degradation (as the SDK).
     const result: RecallResult =

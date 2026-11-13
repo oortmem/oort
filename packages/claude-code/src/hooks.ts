@@ -153,6 +153,9 @@ export async function handleUserPromptSubmit(
       scope: filterFor(scope),
       budgetChars: budget,
       ...(deps.home !== undefined && { home: deps.home }),
+      // The `fast` and `lexical` prompt modes follow no link of any kind (CON-149): a linked
+      // memory enters a prompt only on a recall that reranks, until CON-155 says otherwise.
+      ...(config.recall.promptMode !== 'full' && { links: false }),
     };
     const now = deps.now?.() ?? new Date();
     const degraded: string[] = [];

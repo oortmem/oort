@@ -510,10 +510,20 @@ describe('eval', () => {
     ).rejects.toThrow(/disjoint/);
   });
 
-  it('eval.links-on-is-refused-until-links-exist', async () => {
+  it('eval.a-links-kind-that-is-not-built-is-refused-by-name', async () => {
     const { dbPath, coldDir } = await handBuiltStore();
     await expect(
-      runEval({ rows: ROWS, links: 'about', storePath: dbPath, coldDir, dimension: DIM }),
-    ).rejects.toThrow(/CON-149/);
+      runEval({ rows: ROWS, links: 'recalledWith', storePath: dbPath, coldDir, dimension: DIM }),
+    ).rejects.toThrow(/CON-150/);
+    // The kinds recall follows run, and report their mode.
+    const about = await runEval({
+      rows: ROWS,
+      links: 'about',
+      storePath: dbPath,
+      coldDir,
+      dimension: DIM,
+      now: new Date(NOW),
+    });
+    expect(about.links).toBe('about');
   });
 });

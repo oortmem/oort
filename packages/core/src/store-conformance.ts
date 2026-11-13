@@ -1830,8 +1830,7 @@ export function linksConformance(
     });
 
     it('neighbours.a-hub-entity-relates-nothing', async () => {
-      // fMax 3: an entity in 3 or more readable memories spreads nothing, and one with more than
-      // 12 rows is not counted at all.
+      // fMax 3: an entity in 3 or more readable memories spreads nothing.
       await seed(
         at('a', { entities: ['repo', 'rare'] }),
         at('b', { entities: ['repo', 'rare'] }),
@@ -1840,14 +1839,46 @@ export function linksConformance(
       expect(await reached(TG, ['a'], { fMax: 3 })).toEqual(['a>b:about']);
       const one = await store.neighbours!(TG, ['a'], { kinds: ['about'], fMax: 3 });
       expect(one.neighbours[0]!.weight).toBeCloseTo(1 - Math.log(2) / Math.log(3), 10);
-      // The fan is counted inside the grant: with 10 more `rare` rows the reader cannot read (12 in
-      // all), the entity still relates a and b for that reader; a 13th makes it a hub for everyone.
-      for (let i = 0; i < 10; i++) await seed(at(`p${i}`, { entities: ['rare'] }, planet('p2')));
-      const global = localGrant({ ...LOCAL, projectIds: [null] });
-      expect(await reached(global, ['a'], { fMax: 3 })).toEqual(['a>b:about']);
+      await seed(at('d', { entities: ['rare'] }));
       expect(await reached(TG, ['a'], { fMax: 3 })).toEqual([]);
-      await seed(at('p10', { entities: ['rare'] }, planet('p2')));
-      expect(await reached(global, ['a'], { fMax: 3 })).toEqual([]);
+      expect(await reached(TG, ['a'], { fMax: 4 })).toEqual([
+        'a>b:about',
+        'a>c:about',
+        'a>d:about',
+      ]);
+    });
+
+    it('neighbours.rows-outside-the-grant-change-nothing-for-the-reader', async () => {
+      // Two readers of one entity. Whatever the entity holds outside the first reader's grant,
+      // that reader gets the same neighbours with the same weights: otherwise a neighbour that
+      // appears or vanishes would tell it how much there is that it cannot read.
+      await seed(at('a', { entities: ['rare'] }), at('b', { entities: ['rare'] }));
+      const narrow = localGrant({ ...LOCAL, projectIds: [null] });
+      const about = async (g: Grant) =>
+        (await store.neighbours!(g, ['a'], { kinds: ['about'], fMax: 3 })).neighbours;
+      const before = await about(narrow);
+      expect(before).toEqual([
+        { id: 'b', kind: 'about', from: 'a', weight: 1 - Math.log(2) / Math.log(3) },
+      ]);
+      // Far past any scan bound (4 × fMax + 1 = 13 rows), and newer than every readable row.
+      for (let i = 0; i < 40; i++) {
+        await seed(at(`p${i}`, { entities: ['rare'] }, planet('p2')));
+        if (i === 0 || i === 11 || i === 12 || i === 39)
+          expect(await about(narrow)).toEqual(before);
+      }
+      // The reader who reads them all sees a hub; the narrow reader's answer never moved.
+      expect(await about(TG)).toEqual([]);
+      expect(await about(narrow)).toEqual(before);
+      // The same holds for the caps: unreadable links and turns do not use up a reader's places.
+      await seed(at('x'), at('y'));
+      await S().link(TG, 'x', 'y', USER);
+      for (let i = 0; i < 40; i++) await S().link(TG, 'x', `p${i}`, USER);
+      expect(await reached(narrow, ['x'], { kinds: ['explicit'] })).toEqual(['x>y:explicit']);
+      await seed(at('s1', { source: src('s9', 't1') }));
+      for (let i = 0; i < 40; i++)
+        await seed(at(`q${i}`, { source: src('s9', 't2') }, planet('p2')));
+      await seed(at('s2', { source: src('s9', 't2') }));
+      expect(await reached(narrow, ['s1'], { kinds: ['episode'] })).toEqual(['s1>s2:episode']);
     });
 
     it('neighbours.episode-reaches-three-turns-forward-weighted', async () => {

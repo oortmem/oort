@@ -22,7 +22,6 @@ import {
   episodeWeight,
   EXPLICIT_PER_SEED,
   F_MAX_DEFAULT,
-  hubScanLimit,
   inLinkIndexes,
   NEIGHBOUR_KINDS,
   orderedPair,
@@ -431,18 +430,19 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
                 skipped = true;
                 break;
               }
-              // Every current memory of the node with the entity, whoever may read it.
+              // The node's current memories with the entity that the grant reads, and only those:
+              // a row outside the grant changes neither the fan nor which neighbours are kept.
               const rows = [...main.values()]
                 .filter(
                   (m) =>
                     inLinkIndexes(m) &&
                     nodeOfMemory(m) === node &&
+                    grantReads(grant, m) &&
                     entityKeys(m.entities).includes(key),
                 )
                 .sort(newestFirst)
-                .slice(0, hubScanLimit(fMax));
-              if (rows.length > 4 * fMax) continue;
-              const w = aboutWeight(rows.filter((m) => grantReads(grant, m)).length, fMax);
+                .slice(0, fMax);
+              const w = aboutWeight(rows.length, fMax);
               if (w <= 0) continue;
               for (const m of rows.filter((x) => admits(seed, x)).slice(0, ABOUT_PER_ENTITY)) {
                 weights.set(m.id, [...(weights.get(m.id) ?? []), w]);

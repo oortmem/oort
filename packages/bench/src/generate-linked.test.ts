@@ -112,7 +112,7 @@ describe('cached link-shaped store (CON-146)', () => {
     expect(w.queries).toBe(40);
     expect(w.accessCalls).toBeGreaterThan(30);
     expect(w.pairs).toBe(0); // the link table exists since schema version 8; nothing learns pairs yet
-    expect(w.links).toBe(false);
+    expect(w.links).toBe(true); // recall follows links since CON-149
     expect(first.manifest.stats.memories).toBe(1_500);
     await first.close();
     const mtime = fs.statSync(path.join(first.dir, 'manifest.json')).mtimeMs;
@@ -132,7 +132,7 @@ describe('cached link-shaped store (CON-146)', () => {
     expect(DEFAULT_WARM_UP).toBe(500);
   });
 
-  it('links-latency.measures-on-a-frozen-store-and-reports-links-off', async () => {
+  it('links-latency.measures-on-a-frozen-store-with-links-off-and-on', async () => {
     const digest = (): string => {
       const db = path.join(cacheDir, storeDirName(1_500, 5), 'oort.sqlite');
       return `${fs.readFileSync(db).length}:${fs.existsSync(`${db}-wal`) ? fs.readFileSync(`${db}-wal`).length : 0}`;
@@ -157,19 +157,29 @@ describe('cached link-shaped store (CON-146)', () => {
     });
     // Measured recalls wrote nothing (recordAccess is stubbed; nothing is cold to hydrate).
     expect(digest()).toBe(before);
-    expect(r.linksAvailable).toBe(false);
+    expect(r.linksAvailable).toBe(true);
     expect(r.stores[0]?.paths.map((p) => p.path)).toEqual(['lexical', 'fast', 'full']);
     for (const p of r.stores[0]?.paths ?? []) {
       expect(p.off.samples).toBe(5);
-      expect(p.on).toBeUndefined();
-      expect(p.gather).toBeUndefined();
+      expect(p.on?.samples).toBe(5);
+      expect(typeof p.deltaP95Ms).toBe('number');
+      // Every recall with links on reports the gather step's own time.
+      expect(p.gather?.samples).toBe(5);
     }
     expect(again.stores[0]?.built).toBe(false);
     const md = renderLinksLatency(r);
-    expect(md).toContain('Links: off only');
-    expect(md).toMatch(/\| lexical \| [\d.]+ \/ [\d.]+ \/ [\d.]+ \| - \| - \| - \| - \|/);
-    await expect(
-      runLinksLatency({ counts: [1_500], seed: 5, cacheDir, queries: 1, repeats: 1, links: 'on' }),
-    ).rejects.toThrow(/CON-149/);
+    expect(md).toContain('Links: measured off and on');
+    const t = '[\\d.]+ \\/ [\\d.]+ \\/ [\\d.]+';
+    expect(md).toMatch(new RegExp(`\\| lexical \\| ${t} \\| ${t} \\| [+-][\\d.]+ \\|`));
+    const on = await runLinksLatency({
+      counts: [1_500],
+      seed: 5,
+      cacheDir,
+      queries: 2,
+      repeats: 1,
+      links: 'on',
+      paths: ['full'],
+    });
+    expect(on.stores[0]?.paths[0]?.gather?.samples).toBe(2);
   });
 });

@@ -110,7 +110,11 @@ export interface NeighbourOptions {
   currentOnly?: boolean;
   /** Only neighbours that pass this filter: a link never brings in a memory outside the place. */
   spatial?: SpatialFilter;
-  /** `about`: an entity in this many readable memories, or more, relates nothing. Default 50. */
+  /**
+   * `about`: an entity in this many readable memories, or more, relates nothing (a hub). Default
+   * 50. Only memories the grant reads are counted, so what a reader gets never depends on rows
+   * outside its grant.
+   */
   fMax?: number;
   /**
    * Milliseconds the gather may take. Checked before each kind and before each entity's scan;
@@ -144,9 +148,6 @@ export const EXPLICIT_PER_SEED = 16;
 export const EPISODE_REACH = 3;
 export const EPISODE_PER_SEED = 6;
 export const ABOUT_PER_ENTITY = 20;
-
-/** How many index rows an `about` scan may read for one entity: past `4 × fMax`, it is a hub. */
-export const hubScanLimit = (fMax: number): number => 4 * fMax + 1;
 
 /**
  * The weight of a shared entity that `fan` readable memories carry (the seed included):

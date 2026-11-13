@@ -19,7 +19,6 @@ import {
   episodeWeight,
   EXPLICIT_PER_SEED,
   F_MAX_DEFAULT,
-  hubScanLimit,
   NEIGHBOUR_KINDS,
   frameOf,
   hasSpatialFilter,
@@ -1946,7 +1945,11 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
      m.run_id AS run_id, m.expired_at AS expired_at, m.superseded_by AS superseded_by,
      m.episode_seq AS episode_seq, ${grantSql(n)} AS readable,
      ${f === undefined ? '1' : `(${spatialSql(f, 'm')})`} AS inplace`;
-  /** How many raw rows one explicit or episode read may return before the grant is applied. */
+  /**
+   * How many rows one explicit or episode read returns. Counted after the grant, like every
+   * bound here: rows a reader cannot read never use up its places, so they cannot change what it
+   * gets.
+   */
   const NEIGHBOUR_SCAN = 256;
   /** The explicit links of the memory at `@rid`, newest other end first: two index ranges. */
   const explicitEnds = (n: number, f: SpatialFilter | undefined) =>
@@ -1959,6 +1962,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
              SELECT a_rid AS other, asserted_by FROM ${LINK_TABLE}
                WHERE b_rid = @rid AND kind = 'explicit') l
          CROSS JOIN memories m ON m.rid = l.other
+       WHERE ${grantSql(n)}
        ORDER BY l.other DESC LIMIT ${NEIGHBOUR_SCAN}`,
     );
   /** The memories of the seed's node and session within the reach: one index range. */
@@ -1969,18 +1973,21 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        WHERE m.session_id = @session AND m.episode_seq BETWEEN @lo AND @hi AND m.rid != @rid
          AND m.level = @level AND m.org_id = @org AND m.customer_id IS @customer
          AND m.agent_id IS @agent AND m.hive_id IS @hive AND m.run_id IS @run
-       ORDER BY m.rid DESC LIMIT ${NEIGHBOUR_SCAN}`,
+         AND ${grantSql(n)}
+       ORDER BY abs(m.episode_seq - @seq), m.rid DESC LIMIT ${NEIGHBOUR_SCAN}`,
     );
-  /** At most `@cap` index rows of one entity in one node, newest first, with their memories. */
+  /**
+   * The memories of one entity in one node that the grant reads, newest first, at most `@cap`
+   * (`fMax`: that many is a hub already). The grant is applied before the limit, so the fan and
+   * the neighbours depend only on rows the reader may read.
+   */
   const entityFan = (n: number, f: SpatialFilter | undefined) =>
     cached<[Params], NeighbourRow>(
       `nb-about:${n}${spatialShape(f)}`,
       () => `SELECT ${neighbourCols(n, f)}
-       FROM (SELECT memory_rid FROM ${ENTITY_TABLE}
-               WHERE node_id = @node AND entity_key = @key
-               ORDER BY memory_rid DESC LIMIT @cap) e
-         CROSS JOIN memories m ON m.rid = e.memory_rid
-       ORDER BY e.memory_rid DESC`,
+       FROM ${ENTITY_TABLE} e CROSS JOIN memories m ON m.rid = e.memory_rid
+       WHERE e.node_id = @node AND e.entity_key = @key AND ${grantSql(n)}
+       ORDER BY e.memory_rid DESC LIMIT @cap`,
     );
   const nodeIdRead = db.prepare<[string], { node_id: number }>(
     `SELECT node_id FROM ${NODE_TABLE} WHERE node_key = ?`,
@@ -2041,6 +2048,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
               ...bound,
               rid: row.rid,
               session: row.session_id,
+              seq,
               lo: seq - EPISODE_REACH,
               hi: seq + EPISODE_REACH,
               level: row.level,
@@ -2067,9 +2075,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
               skipped = true;
               break;
             }
-            const rows = entityFan(n, f).all({ ...bound, node, key, cap: hubScanLimit(fMax) });
-            if (rows.length > 4 * fMax) continue;
-            const w = aboutWeight(rows.filter((r) => r.readable !== 0).length, fMax);
+            const rows = entityFan(n, f).all({ ...bound, node, key, cap: fMax });
+            const w = aboutWeight(rows.length, fMax);
             if (w <= 0) continue;
             let kept = 0;
             for (const r of rows) {

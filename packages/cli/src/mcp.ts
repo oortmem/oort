@@ -254,6 +254,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           e.lexicalRank !== undefined ? `lexical #${e.lexicalRank}` : undefined,
           e.denseRank !== undefined ? `dense #${e.denseRank}` : undefined,
           e.reranked !== undefined ? `rerank ${fixed(e.reranked)}` : undefined,
+          e.via !== undefined ? `linked (${e.via.kind})` : undefined,
           m.pinned ? 'pinned' : undefined,
         ].filter((x) => x !== undefined);
         return {
@@ -271,6 +272,10 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           }),
           ...(m.place?.nodeId !== undefined && { place: m.place.nodeId }),
           ...(e.distanceM !== undefined && { distance_m: Number(e.distanceM.toFixed(3)) }),
+          // Reached through a link from another returned memory, not found by the search.
+          ...(e.via !== undefined && {
+            via: { kind: e.via.kind, from: e.via.from, weight: Number(e.via.weight.toFixed(3)) },
+          }),
         };
       });
       const lexicalOnly = w.mode !== 'cloud' && (w.embed === undefined || w.rerank === undefined);

@@ -7,6 +7,7 @@ import {
   projectIdFor,
   type Embedder,
   type MemoryStore,
+  type Reranker,
 } from '@oortmem/core';
 import { makeMemory, vec } from '@oortmem/core/store-conformance';
 import {
@@ -44,6 +45,22 @@ async function withMemories(t: TempHome, ...ms: ReturnType<typeof makeMemory>[])
   for (const m of ms) await deps.store.upsert(TG, m);
   return deps;
 }
+
+/** The port memory with a person's link to a memory that holds no word of the prompt. */
+async function linkedDeps(t: TempHome) {
+  const deps = await withMemories(
+    t,
+    PORT_MEMORY,
+    makeMemory({ id: 'm-db', text: 'It runs on Postgres 16.', stub: 'storage engine' }),
+  );
+  await deps.store.link!(TG, 'm-port', 'm-db', { assertedBy: 'user' });
+  return deps;
+}
+
+/** Scores both memories above the relevance gate. */
+const LINK_RERANK: Reranker = {
+  rerank: async (_q, docs) => docs.map((d) => ({ id: d.id, score: d.id === 'm-port' ? 0.9 : 0.6 })),
+};
 
 function context(stdout: string, event: string): string {
   const parsed = JSON.parse(stdout) as {
@@ -123,6 +140,67 @@ describe('UserPromptSubmit', () => {
     expect((await deps.store.get(TG, 'm-port'))?.accessLog.count).toBe(1);
     expect((await deps.store.get(TG, 'm-port-2'))?.accessLog.count).toBe(0);
     expect(readLog(t.home)[0]?.counts['memories']).toBe(1);
+  });
+
+  it.each(['fast', 'lexical'] as const)(
+    'hook.prompt-in-%s-mode-takes-no-hop-along-links (CON-149)',
+    async (promptMode) => {
+      const t = tempHome();
+      const deps = await linkedDeps(t);
+      // Everything that could follow a link is on: the flag, a reranker, a person's link.
+      const config = {
+        ...t.config,
+        recall: {
+          ...t.config.recall,
+          promptMode,
+          skipRerankWhenConfident: false,
+          links: { ...t.config.recall.links, enabled: true },
+        },
+      };
+      const { store, calls } = counted(deps.store);
+      const out = await handleUserPromptSubmit(prompt(t, 'which port does the auth service use?'), {
+        ...deps,
+        store,
+        config,
+        rerank: LINK_RERANK,
+      });
+      const ctx = context(out.stdout, 'UserPromptSubmit');
+      expect(ctx).toContain('The auth service listens on port 4471.');
+      expect(ctx).not.toContain('Postgres');
+      expect(ctx).not.toContain('linked');
+      expect(calls).not.toContain('neighbours');
+      expect(readLog(t.home)[0]?.timings['linksMs']).toBeUndefined();
+    },
+  );
+
+  it("hook.prompt-in-full-mode-follows-a-person's-link-and-labels-it (CON-149)", async () => {
+    const t = tempHome();
+    const deps = await linkedDeps(t);
+    const config = {
+      ...t.config,
+      recall: { ...t.config.recall, promptMode: 'full' as const, skipRerankWhenConfident: false },
+    };
+    const { store, calls } = counted(deps.store);
+    const out = await handleUserPromptSubmit(prompt(t, 'which port does the auth service use?'), {
+      ...deps,
+      store,
+      config,
+      rerank: LINK_RERANK,
+    });
+    const ctx = context(out.stdout, 'UserPromptSubmit');
+    expect(ctx).toMatch(/- \[semantic, [^\]]*\] The auth service listens on port 4471\./);
+    expect(ctx).toMatch(/- \[semantic, [^\]]*, linked\] It runs on Postgres 16\./);
+    expect(calls.filter((c) => c === 'neighbours')).toHaveLength(1);
+    expect(typeof readLog(t.home)[0]?.timings['linksMs']).toBe('number');
+    // Without a reranker the same prompt follows nothing: the default needs a rerank.
+    const plain = counted(deps.store);
+    const none = await handleUserPromptSubmit(prompt(t, 'which port does the auth service use?'), {
+      ...deps,
+      store: plain.store,
+      config,
+    });
+    expect(context(none.stdout, 'UserPromptSubmit')).not.toContain('Postgres');
+    expect(plain.calls).not.toContain('neighbours');
   });
 
   it('hook.prompt-skips-trivial-silently', async () => {

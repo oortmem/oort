@@ -314,6 +314,8 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--radius <m>', 'with --near: how far, in metres')
     .option('--map <id>', 'with --near: the map the point is on')
     .option('--frame <id>', 'with --near: the coordinate frame (default map)')
+    .option('--links', 'follow every kind of link for this recall (as recall.links.enabled)')
+    .option('--no-links', "follow no link for this recall, a person's explicit links included")
     .action(run((t: string, o: RecallOptions) => recallCommand(t, o, ctx)));
 
   p.command('remember')
@@ -348,6 +350,8 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--radius <m>', 'with --near: how far, in metres')
     .option('--map <id>', 'with --near: the map the point is on')
     .option('--frame <id>', 'with --near: the coordinate frame (default map)')
+    .option('--links', 'follow every kind of link for this recall (as recall.links.enabled)')
+    .option('--no-links', "follow no link for this recall, a person's explicit links included")
     .action(run((q: string, o: RecallOptions) => explainCommand(q, o, ctx)));
 
   p.command('revalidate')
