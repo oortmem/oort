@@ -14,12 +14,15 @@ import {
   combineWeights,
   entityKeys,
   EPISODE_PER_SEED,
+  EPISODE_RAW_SCAN,
   EPISODE_REACH,
   episodeSession,
   episodeWeight,
   EXPLICIT_PER_SEED,
+  EXPLICIT_RAW_SCAN,
   F_MAX_DEFAULT,
   NEIGHBOUR_KINDS,
+  rawScanLimit,
   frameOf,
   hasSpatialFilter,
   nearBox,
@@ -1946,12 +1949,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
      m.episode_seq AS episode_seq, ${grantSql(n)} AS readable,
      ${f === undefined ? '1' : `(${spatialSql(f, 'm')})`} AS inplace`;
   /**
-   * How many rows one explicit or episode read returns. Counted after the grant, like every
-   * bound here: rows a reader cannot read never use up its places, so they cannot change what it
-   * gets.
+   * The explicit links of the memory at `@rid` that the grant reads, newest other end first: two
+   * index ranges, read only when `explicitRaw` is within its bound.
    */
-  const NEIGHBOUR_SCAN = 256;
-  /** The explicit links of the memory at `@rid`, newest other end first: two index ranges. */
   const explicitEnds = (n: number, f: SpatialFilter | undefined) =>
     cached<[Params], NeighbourRow>(
       `nb-explicit:${n}${spatialShape(f)}`,
@@ -1963,7 +1963,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
                WHERE b_rid = @rid AND kind = 'explicit') l
          CROSS JOIN memories m ON m.rid = l.other
        WHERE ${grantSql(n)}
-       ORDER BY l.other DESC LIMIT ${NEIGHBOUR_SCAN}`,
+       ORDER BY l.other DESC`,
     );
   /** The memories of the seed's node and session within the reach: one index range. */
   const episodeNear = (n: number, f: SpatialFilter | undefined) =>
@@ -1974,7 +1974,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
          AND m.level = @level AND m.org_id = @org AND m.customer_id IS @customer
          AND m.agent_id IS @agent AND m.hive_id IS @hive AND m.run_id IS @run
          AND ${grantSql(n)}
-       ORDER BY abs(m.episode_seq - @seq), m.rid DESC LIMIT ${NEIGHBOUR_SCAN}`,
+       ORDER BY abs(m.episode_seq - @seq), m.rid DESC`,
     );
   /**
    * The memories of one entity in one node that the grant reads, newest first, at most `@cap`
@@ -1989,6 +1989,24 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        WHERE e.node_id = @node AND e.entity_key = @key AND ${grantSql(n)}
        ORDER BY e.memory_rid DESC LIMIT @cap`,
     );
+  /**
+   * The work bounds, whatever the grant (core's `rawScanLimit`): how many index rows a read would
+   * touch, counted up to `@cap` on the index alone. A read past its bound is not made.
+   */
+  const explicitRaw = db.prepare<[Params], { n: number }>(
+    `SELECT (SELECT count(*) FROM (SELECT 1 FROM ${LINK_TABLE}
+               WHERE kind = 'explicit' AND a_rid = @rid LIMIT @cap))
+          + (SELECT count(*) FROM (SELECT 1 FROM ${LINK_TABLE}
+               WHERE b_rid = @rid AND kind = 'explicit' LIMIT @cap)) AS n`,
+  );
+  const episodeRaw = db.prepare<[Params], { n: number }>(
+    `SELECT count(*) AS n FROM (SELECT 1 FROM memories
+       WHERE session_id = @session AND episode_seq BETWEEN @lo AND @hi LIMIT @cap)`,
+  );
+  const entityRaw = db.prepare<[Params], { n: number }>(
+    `SELECT count(*) AS n FROM (SELECT 1 FROM ${ENTITY_TABLE}
+       WHERE node_id = @node AND entity_key = @key LIMIT @cap)`,
+  );
   const nodeIdRead = db.prepare<[string], { node_id: number }>(
     `SELECT node_id FROM ${NODE_TABLE} WHERE node_key = ?`,
   );
@@ -2024,6 +2042,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     };
     const out: Neighbour[] = [];
     let skipped = false;
+    let budgetPassed = false;
+    /** Whether a read would touch more than `bound` index rows: then it is skipped, and said. */
+    const tooLarge = (st: Statement<[Params], { n: number }>, p: Params, bound: number) => {
+      if ((st.get({ ...p, cap: bound + 1 })?.n ?? 0) <= bound) return false;
+      skipped = true;
+      return true;
+    };
     gather: for (const kind of NEIGHBOUR_KINDS) {
       if (!o.kinds.includes(kind)) continue;
       if (late()) {
@@ -2033,6 +2058,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       for (const seed of seeds) {
         const { row } = seed;
         if (kind === 'explicit') {
+          if (tooLarge(explicitRaw, { rid: row.rid }, EXPLICIT_RAW_SCAN)) continue;
           let kept = 0;
           for (const r of explicitEnds(n, f).all({ ...bound, rid: row.rid })) {
             if (o.explicitBy === 'user' && r.asserted_by !== 'user') continue;
@@ -2043,6 +2069,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         } else if (kind === 'episode') {
           const seq = row.episode_seq;
           if (row.session_id == null || seq == null) continue;
+          const window = {
+            session: row.session_id,
+            lo: seq - EPISODE_REACH,
+            hi: seq + EPISODE_REACH,
+          };
+          // The window holds the seed itself, which the reference does not count.
+          if (tooLarge(episodeRaw, window, EPISODE_RAW_SCAN + 1)) continue;
           const near = episodeNear(n, f)
             .all({
               ...bound,
@@ -2073,8 +2106,10 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           for (const key of entityKeys(JSON.parse(row.entities) as string[])) {
             if (late()) {
               skipped = true;
+              budgetPassed = true;
               break;
             }
+            if (tooLarge(entityRaw, { node, key }, rawScanLimit(fMax))) continue;
             const rows = entityFan(n, f).all({ ...bound, node, key, cap: fMax });
             const w = aboutWeight(rows.length, fMax);
             if (w <= 0) continue;
@@ -2088,8 +2123,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           for (const [id, ws] of weights) {
             out.push({ id, kind, from: row.id, weight: combineWeights(ws) });
           }
-          // What the scans before the budget passed found is kept.
-          if (skipped) break gather;
+          // What the reads before the budget passed found is kept.
+          if (budgetPassed) break gather;
         }
       }
     }

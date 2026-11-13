@@ -581,6 +581,16 @@ export interface RecalledMemory extends MemoryView {
     placePath?: string;
     /** With `near`: metres from the query point to the memory's region (0 inside it). */
     distanceM?: number;
+    /**
+     * Set when the search did not find this memory and a link from a returned one did (local
+     * mode only): the link's `kind` (`explicit`, `episode` or `about`), the id it was reached
+     * `from`, and a `weight` from 0 to 1. It passed the same relevance gate as a hit.
+     */
+    via?: {
+      kind: 'explicit' | 'episode' | 'about';
+      from: string;
+      weight: number;
+    };
   };
 }
 ```

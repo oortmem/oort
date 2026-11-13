@@ -456,6 +456,30 @@ embed call; the budget checked per kind and per entity.
 memories, with the gather step's own p99 reported. SessionStart does not recall, and the prompt
 hook's default `fast` mode takes no hop.
 
+**As built (CON-149).** Where the build differs from the text above, the build stands:
+
+- **This slice follows `explicit`, `episode` and `about`.** `recalledWith` (CON-150) and
+  `distilledFrom` (CON-152) join the gather step with their own slices; `recall.links.factors`
+  holds a factor only for a kind recall follows.
+- **The hub cutoff counts readable rows only.** Section 5 called an entity a hub when more than
+  `4 × F_max` index rows were scanned, readable or not. A reader could then see a neighbour
+  appear or vanish with rows outside its grant. An entity is a hub when `F_max` or more of the
+  memories the reader can read carry it, and every cap (16 explicit links, 6 episode neighbours,
+  20 per entity) takes readable rows only.
+- **A separate work bound, and one accepted leak.** So that a narrow grant over a very common
+  entity cannot make recall scan without limit, a read is not made when it would touch more than
+  `64 × F_max` index rows of one entity in one node (or 512 explicit links, or 512 memories in
+  the turns around a seed). That entity is skipped for the recall, which reports `links-skipped`;
+  nothing is returned from a cut-off read. A reader who already holds an entity can therefore
+  learn that its node has more rows of it than the bound. This is accepted: any work bound that
+  does not depend on the grant reveals its own threshold, and this one sits far above the hub
+  cutoff.
+- **A linked memory needs a returned seed.** It is admitted only while a memory it was reached
+  from is itself returned (after the gate, the adaptive stop and the injection budget), and
+  `via.from` names that memory.
+- **`recall.userLinks` is home-only too**, so a repository cannot undo a person turning it off.
+- **`oort explain` shows the `via` column only when a link brought something in.**
+
 ## 11. Eval and the ship bars
 
 The bench harness (`packages/bench`, `eval/format.md`) already reports recall@k, MRR@10,

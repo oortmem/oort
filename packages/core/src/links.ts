@@ -150,6 +150,21 @@ export const EPISODE_PER_SEED = 6;
 export const ABOUT_PER_ENTITY = 20;
 
 /**
+ * The work bound of one `about` read, whatever the grant: at most `RAW_SCAN_FACTOR × fMax` index
+ * rows of one entity in one node. An entity with more is skipped for the call, which reports
+ * `skipped`; nothing is returned from a cut-off read. The hub cutoff itself (`fMax`) counts
+ * readable rows only, so below this bound rows outside a reader's grant change nothing for it.
+ * The bound is the one thing they can change: a reader who already holds an entity can learn that
+ * its node has more rows of it than the bound. Any grant-independent work bound reveals its own
+ * threshold; this one is set far above the hub cutoff so that it is rarely reached.
+ */
+export const RAW_SCAN_FACTOR = 64;
+export const rawScanLimit = (fMax: number): number => RAW_SCAN_FACTOR * fMax;
+/** The same bound for one seed's explicit links, and for the turns around it in its session. */
+export const EXPLICIT_RAW_SCAN = 512;
+export const EPISODE_RAW_SCAN = 512;
+
+/**
  * The weight of a shared entity that `fan` readable memories carry (the seed included):
  * `1 − ln(fan) / ln(fMax)`, never below 0. An entity in `fMax` or more spreads nothing.
  */

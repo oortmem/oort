@@ -17,14 +17,17 @@ import {
   combineWeights,
   entityKeys,
   EPISODE_PER_SEED,
+  EPISODE_RAW_SCAN,
   EPISODE_REACH,
   episodeSession,
   episodeWeight,
   EXPLICIT_PER_SEED,
+  EXPLICIT_RAW_SCAN,
   F_MAX_DEFAULT,
   inLinkIndexes,
   NEIGHBOUR_KINDS,
   orderedPair,
+  rawScanLimit,
   type AssertedBy,
   type LinkOptions,
   type LinksProbe,
@@ -388,6 +391,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       };
       const out: Neighbour[] = [];
       let skipped = false;
+      let budgetPassed = false;
       gather: for (const kind of NEIGHBOUR_KINDS) {
         if (!o.kinds.includes(kind)) continue;
         if (late()) {
@@ -397,8 +401,15 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         for (const seed of seeds) {
           if (kind === 'explicit') {
             const ends: Memory[] = [];
-            for (const r of links.values()) {
-              if (r.kind !== 'explicit' || (r.a !== seed.id && r.b !== seed.id)) continue;
+            const mine = [...links.values()].filter(
+              (r) => r.kind === 'explicit' && (r.a === seed.id || r.b === seed.id),
+            );
+            // The work bound, whoever asks: a seed with more links is skipped, never cut short.
+            if (mine.length > EXPLICIT_RAW_SCAN) {
+              skipped = true;
+              continue;
+            }
+            for (const r of mine) {
               if (o.explicitBy === 'user' && r.assertedBy !== 'user') continue;
               const other = main.get(r.a === seed.id ? r.b : r.a);
               if (other !== undefined && admits(seed, other)) ends.push(other);
@@ -410,12 +421,19 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
             const at = episodes.get(seed.id);
             if (at === undefined) continue;
             const near: { m: Memory; delta: number }[] = [];
+            let raw = 0;
             for (const [id, e] of episodes) {
               if (e.node !== at.node || e.session !== at.session) continue;
               const delta = e.seq - at.seq;
+              if (Math.abs(delta) > EPISODE_REACH || id === seed.id) continue;
+              raw++;
               const m = main.get(id);
-              if (Math.abs(delta) > EPISODE_REACH || m === undefined || !admits(seed, m)) continue;
+              if (m === undefined || !admits(seed, m)) continue;
               near.push({ m, delta });
+            }
+            if (raw > EPISODE_RAW_SCAN) {
+              skipped = true;
+              continue;
             }
             near.sort((x, y) => Math.abs(x.delta) - Math.abs(y.delta) || newestFirst(x.m, y.m));
             for (const { m, delta } of near.slice(0, EPISODE_PER_SEED)) {
@@ -428,18 +446,24 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
             for (const key of entityKeys(seed.entities)) {
               if (late()) {
                 skipped = true;
+                budgetPassed = true;
                 break;
               }
-              // The node's current memories with the entity that the grant reads, and only those:
-              // a row outside the grant changes neither the fan nor which neighbours are kept.
-              const rows = [...main.values()]
-                .filter(
-                  (m) =>
-                    inLinkIndexes(m) &&
-                    nodeOfMemory(m) === node &&
-                    grantReads(grant, m) &&
-                    entityKeys(m.entities).includes(key),
-                )
+              const all = [...main.values()].filter(
+                (m) =>
+                  inLinkIndexes(m) &&
+                  nodeOfMemory(m) === node &&
+                  entityKeys(m.entities).includes(key),
+              );
+              // The work bound, whoever asks: a larger entity is skipped, never cut short.
+              if (all.length > rawScanLimit(fMax)) {
+                skipped = true;
+                continue;
+              }
+              // Of those, only what the grant reads counts: a row outside the grant changes
+              // neither the fan nor which neighbours are kept.
+              const rows = all
+                .filter((m) => grantReads(grant, m))
                 .sort(newestFirst)
                 .slice(0, fMax);
               const w = aboutWeight(rows.length, fMax);
@@ -451,8 +475,8 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
             for (const [id, ws] of weights) {
               out.push({ id, kind, from: seed.id, weight: combineWeights(ws) });
             }
-            // What the scans before the budget passed found is kept.
-            if (skipped) break gather;
+            // What the reads before the budget passed found is kept.
+            if (budgetPassed) break gather;
           }
         }
       }

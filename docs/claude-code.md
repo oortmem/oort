@@ -144,6 +144,13 @@ from before CON-101 ignores the request and recalls in full.
 | `fast` (default) | Embeds the prompt; fusion and the relevance gate rank, with no reranker. | embed |
 | `lexical` | Lexical search only: no query embedding and no reranker. | none |
 
+Memory links are followed only in `full` mode. There the hook brings in the other end of a link
+you confirmed with `oort link`, when the reranker scores it and the memory it was reached from at
+or above `minRerankScore`, and its line in the block is labelled `linked`
+(`- [semantic, 2d ago, linked] ...`). In `fast` and `lexical` mode the hook follows no link of any
+kind, whatever `recall.links` says. See
+[Following links at recall](cli.md#following-links-at-recall) for the rules and settings.
+
 On the bench eval (`pnpm eval --demo`'s 1,500-memory store and 23-row fixture, before CON-146 added
 6 multi-hop rows; with the cloud's own models: voyage-3.5-lite embeddings and rerank-3-lite,
 measured 2026-11-05), recall@3, @5 and

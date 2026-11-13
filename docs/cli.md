@@ -1002,7 +1002,7 @@ tools are available too.
 ## Memory links: `oort link`
 
 A link says that two memories belong together. It holds no text: two ids, who asserted it and
-when. Recall does not use links yet; this release stores them and shows them.
+when. Recall follows a link for one hop: see [Following links at recall](#following-links-at-recall).
 
 ```sh
 oort link 1b2c3d4e 5f6a7b8c      # asks first on a terminal
@@ -1039,6 +1039,81 @@ oort inspect 1b2c3d4e            # lists the memory's links and who asserted eac
 
 `--json` prints `{ from, to, linked, unblocked, assertedBy }` for `link` and
 `{ from, to, removed, blocked }` for `unlink`.
+
+### Following links at recall
+
+A recall can bring in a memory that the search did not find, when a link leads to it from one of
+the best memories it did find. It takes one hop, never two, and adds at most 2 memories beside the
+hits: a linked memory never takes a hit's place.
+
+What is followed:
+
+| Link | Followed |
+| --- | --- |
+| An explicit link confirmed at a terminal (`oort link`, `assertedBy: user`) | By default, on a recall that reranks: `oort recall`, the MCP `recall` tool, the SDK at `speed: 'full'`, and the prompt hook with `recall.promptMode: "full"`. Turn it off with `"recall": { "userLinks": false }`. |
+| An explicit link an agent wrote (MCP `link`, the SDK, `oort serve`, an import) | Only with `"recall": { "links": { "enabled": true } }` |
+| `episode`: written in the same session, at most 3 turns apart | Only with `recall.links.enabled` |
+| `about`: the two share a specific entity | Only with `recall.links.enabled` |
+
+`recall.links.enabled` is off by default. The prompt hook's `fast` (the default) and `lexical`
+modes follow no link of any kind, and neither does `--speed lexical`.
+
+The rules a linked memory is held to:
+
+- **The same relevance gate as a hit.** With a reranker, the linked memories join its one call
+  (which is asked for `returnK` plus `recall.links.pool` results), and one is returned only when
+  the reranker scores it at or above `recall.minRerankScore` and also scores the memory it was
+  reached from that high. When the rerank is skipped because the answer is already clear, fails,
+  times out or returns nothing, no linked memory is returned by default. With
+  `recall.links.enabled` and no rerank score, linked memories are appended after the hits, and
+  each needs the word coverage (`recall.minCoverage`) or the dense similarity
+  (`recall.minDenseScore`) a hit needs. A linked memory that shares no word and no meaning with
+  the query therefore needs a reranker to be returned.
+- **Never outside what you can read.** A link is followed under the reader's own grant. It never
+  reaches a memory in another project the reader does not read, in another Planet or Star, or in a
+  Constellation or Galaxy; nor a superseded or expired memory in a current recall, a blocked pair
+  (`oort unlink`), or a memory outside `--within` or `--near`. `assertedBy: user` changes only
+  whether a link is followed by default. It gives no more access than an agent's link.
+- **Common entities relate nothing.** An entity that `recall.links.fMax` (50) or more of the
+  memories you can read carry ("the repo", your own name) is not followed, and a rarer one counts
+  for less the more memories carry it. Only memories the reader can read are counted. An entity
+  with more than 64 × `fMax` memories in the Planet or Star (3,200 by default), readable or not,
+  is not read at all for that recall, which then reports `links-skipped`: the work a recall does
+  stays bounded.
+- **A time limit.** Reading links takes at most `recall.links.budgetMs` (8 ms). Past it recall
+  uses what it has and reports `links-skipped` in `degraded`.
+- **Said in the output.** A linked memory's label in the `<oort-memory>` block ends with `linked`
+  (`- [semantic, 2d ago, linked] ...`). Its text is memory text like any other: scrubbed, escaped,
+  and to be treated as data, not instructions. `oort explain` adds a `via` column when a link
+  brought something in (`about <- #2`: the kind, and the rank of the memory it was reached from),
+  and `--json` carries `explanation.via` (`{ kind, from, weight }`). A cold linked memory becomes
+  warm only when it is returned.
+
+`oort recall` and `oort explain` take `--links` (follow every kind for this one recall, as with
+`recall.links.enabled`) and `--no-links` (follow none), for comparing the two.
+
+```sh
+oort explain "which port does auth-service use and what database"
+oort explain "which port does auth-service use and what database" --no-links
+```
+
+The settings, under `recall` in `~/.oort/config.json`. They are read from the home config only: a
+repository's `oort.config.json` cannot decide which links bring memories into a prompt (its
+`recall.links` and `recall.userLinks` are ignored, with a warning).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `userLinks` | true | Follow explicit links confirmed at a terminal, on recalls that rerank. |
+| `links.enabled` | false | Also follow agent-written explicit links, `episode` and `about`, on every recall except the prompt hook's `fast` and `lexical` modes and `--speed lexical`. |
+| `links.seeds` | 3 | How many of the top memories of each Planet or Star are followed from (1 to 5). |
+| `links.pool` | 5 | How many linked memories are read and, with a reranker, join its call (1 to 10). |
+| `links.admit` | 2 | How many linked memories a recall may return (0 to 2; 0 follows nothing). |
+| `links.budgetMs` | 8 | The longest reading links may take, in ms. |
+| `links.fMax` | 50 | An entity in this many readable memories, or more, relates nothing. |
+| `links.factors` | `{ "explicit": 1, "episode": 0.5, "about": 0.6 }` | How much each kind counts when linked memories are ranked for the pool; 0 turns a kind off. |
+
+In cloud mode links are not followed: `--links` is refused (`refused`), and with
+`recall.links.enabled` set, a recall runs and warns once (`links-local-only`).
 
 ## The local daemon: `oort serve`
 
@@ -1238,9 +1313,9 @@ For a container sidecar, or a backend that is not you. The same protocol on TCP,
 
 | Command | What it does | Flags |
 | --- | --- | --- |
-| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)), `--within <path>`, `--near <x,y[,z]>` with `--radius <m>`, `--map <id>` and `--frame <id>` (see [Places](#places-spatial-memory)), `--limit <n>`, `--speed <speed>`, `--budget-chars <n>` (see below) |
+| `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)), `--within <path>`, `--near <x,y[,z]>` with `--radius <m>`, `--map <id>` and `--frame <id>` (see [Places](#places-spatial-memory)), `--limit <n>`, `--speed <speed>`, `--budget-chars <n>` (see below), `--links`, `--no-links` (see [Following links at recall](#following-links-at-recall)) |
 | `oort remember <fact>` | Saves a fact you state, as the MCP `remember` tool and the SDK's `remember()` do: one turn framed as your statement (`Remember this: <fact>`, answered `Noted: <fact>`), through the write path (scrub, gate, reconcile, writer), as the acting agent on the cwd's project. The fact is scrubbed on your machine before it leaves, in local and cloud mode; one that is mostly a secret is `skipped (secret)` and never sent. Words without quotes are joined into one fact; a fact is one line of at most 500 characters (no line or paragraph separators). The header says what happened (`added 1b2c3d4e`, `superseded 1b2c3d4e (replaces 9f8e7d6c)`, `skipped (not durable)`; an outcome Oort does not know is `unknown`). In Oort Cloud it saves in your account, as `observe` does, with a `turnRef` built from the project, the type and the fact and the UTC day, so a retry after a lost answer is not saved twice. | `--type <type>` (a hint: `semantic`, `episodic`, `procedural` or `preference`; the write path decides), `--place <path>` and `--pose <x,y[,z]>` with `--map <id>`, `--radius <m>` and `--frame <id>` (where the fact is; local only, see [Places](#places-spatial-memory)), `--dry-run` (reports scrubbing only; touches nothing), `--json` (`data.results`, the SDK's `RememberResult`) |
-| `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation, hydrated, and where it came from (`your Planet`, `this agent's Star`, with `(overridden)` when a narrower memory contradicts it). The header names the agent, the nodes read (`reads: your Planet, Star cursor`) and the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (agent; read; rank, id, type, tier, validFrom, text, explanation, origin, place; temporal; spatial; timings; degraded), `--include <levels>`, `--as-of`, `--known-at`, `--history`, `--within`, `--near` (with `--radius`, `--map`, `--frame`): with one, a `place` and `dist m` column and a `place:` header line |
+| `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation, hydrated, and where it came from (`your Planet`, `this agent's Star`, with `(overridden)` when a narrower memory contradicts it). The header names the agent, the nodes read (`reads: your Planet, Star cursor`) and the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (agent; read; rank, id, type, tier, validFrom, text, explanation, origin, place; temporal; spatial; timings; degraded), `--include <levels>`, `--as-of`, `--known-at`, `--history`, `--within`, `--near` (with `--radius`, `--map`, `--frame`): with one, a `place` and `dist m` column and a `place:` header line; `--links`, `--no-links`: a `via` column appears when a link brought a memory in |
 | `oort revalidate` | Lists volatile facts (a status, a current version, an owner) that nobody confirmed within `recall.staleAfterDays`, oldest first. | `--json` (`data.memories`: id, type, text, lastConfirmed; `data.staleAfterDays`) |
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
 | `oort stats` | Counts per tier and validity, store and cold sizes, the hook queue, when the store was last consolidated (and when it is next due), and memory use. | `--json` |

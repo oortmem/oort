@@ -245,7 +245,40 @@ The rules every such store keeps:
 - **Episode positions.** A memory with `source.sessionId` (not at level `hive`) has a position in
   its node's session: facts of one `turnRef` share a position, and a rewrite keeps it.
 
-Recall does not read links yet.
+Recall reads links through one more method (CON-149):
+
+- `neighbours(grant, seedIds, opts)` returns `{ neighbours, skipped? }`: the memories one link
+  away from the seeds, as `{ id, kind, from, weight }` and nothing else. `opts.kinds` picks from
+  `explicit`, `episode` and `about`; `explicitBy: 'user'` keeps only explicit links asserted by
+  `user`; `currentOnly` drops expired and superseded memories; `spatial` drops memories outside
+  the place filter; `fMax` (50) and `budgetMs` bound the read.
+
+Its rules:
+
+- **Only what the reader may reach.** A neighbour is listed only when `grant.read` covers both it
+  and its seed, the two are at the same node, that node is not at level `hive`, and the pair is not
+  blocked. A seed outside the grant contributes nothing, exactly as an unknown id.
+- **Every bound is counted after the grant.** At most 16 explicit links and 6 episode neighbours
+  per seed, and 20 per entity, newest first, of the rows the grant reads. An entity that `fMax` or
+  more readable memories carry relates nothing; a rarer one weighs `1 − ln(fan) / ln(fMax)`, where
+  `fan` counts readable memories only. Below the work bound that follows, rows outside the grant
+  never change which neighbours a reader gets, or their weights.
+- **Weights.** `explicit` is 1. `episode` reaches 3 turns: 1 for a fact of the same turn,
+  `exp(−d / 3)` for a later turn and half that for an earlier one. Several shared entities
+  combine as `1 − Π(1 − w)`.
+- **A work bound that does not depend on the grant.** Before a read, the store counts the index
+  rows it would touch, up to a bound: `rawScanLimit(fMax)` (64 × `fMax`) rows of one entity in one
+  node, 512 explicit links of one seed, 512 memories in the turns around one seed. Past the bound
+  that read is not made: the entity (or that seed's links) contributes nothing to this call, and
+  the result has `skipped: true`. Nothing is returned from a cut-off read. This is the one way
+  rows outside a grant can show: a reader who already holds an entity can learn that its node has
+  more rows of it than the bound. Any work bound that does not depend on the grant reveals its own
+  threshold; it is set far above the hub cutoff so that it is rarely reached.
+- **The budget.** The clock is read before each kind and before each entity's read. Once
+  `budgetMs` has passed, the store returns what it has with `skipped: true`.
+
+A store without `neighbours` gets no hop. Recall reads every neighbour again under the same
+grant before using it, so a store's mistake cannot bring in a memory the reader does not read.
 
 ## Places (spatial memory)
 
@@ -497,8 +530,10 @@ straight back up.
 A store with `links: true` also runs `linksConformance(name, make, probe)` from the same module.
 `probe(store)` returns a `LinksProbe` that reads the store's own entity, link and episode rows, so
 the suite can prove what is left behind. It covers the cascade on forget, upsert keeping links,
-superseded and expired memories leaving the entity index, the same-node and no-`hive` rules, and
-grant filtering of `linksOf`.
+superseded and expired memories leaving the entity index, the same-node and no-`hive` rules,
+grant filtering of `linksOf`, and `neighbours`: its kinds and weights, hubs, the grant, node and
+`hive` rules, blocks, ended memories, the place filter, the budget, the caps, and that rows outside
+a reader's grant change nothing for that reader.
 
 `@oortmem/core/store-conformance` exports `storeConformance(name, make)`. It runs the contract
 tests and the isolation suite:

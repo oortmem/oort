@@ -29,7 +29,13 @@ import type { Memory, Scope } from './model.js';
 import type { NearQuery, Place, SpatialFilter } from './place.js';
 import { localScope } from './scope.js';
 import { isolationViolations, nonInterference } from './isolation.js';
-import type { LinksProbe, NeighbourOptions } from './links.js';
+import {
+  EXPLICIT_RAW_SCAN,
+  RAW_SCAN_FACTOR,
+  rawScanLimit,
+  type LinksProbe,
+  type NeighbourOptions,
+} from './links.js';
 
 export const CONFORMANCE_DIMENSION = 4;
 
@@ -1860,7 +1866,7 @@ export function linksConformance(
       expect(before).toEqual([
         { id: 'b', kind: 'about', from: 'a', weight: 1 - Math.log(2) / Math.log(3) },
       ]);
-      // Far past any scan bound (4 × fMax + 1 = 13 rows), and newer than every readable row.
+      // Far past the hub cutoff (fMax 3), and newer than every readable row.
       for (let i = 0; i < 40; i++) {
         await seed(at(`p${i}`, { entities: ['rare'] }, planet('p2')));
         if (i === 0 || i === 11 || i === 12 || i === 39)
@@ -1879,6 +1885,55 @@ export function linksConformance(
         await seed(at(`q${i}`, { source: src('s9', 't2') }, planet('p2')));
       await seed(at('s2', { source: src('s9', 't2') }));
       expect(await reached(narrow, ['s1'], { kinds: ['episode'] })).toEqual(['s1>s2:episode']);
+    });
+
+    it('neighbours.a-raw-scan-bound-skips-the-entity-and-says-so', async () => {
+      // The work per entity is bounded whatever the grant: past RAW_SCAN_FACTOR × fMax rows of an
+      // entity in the node, the entity is skipped for this call and the result says so. Nothing
+      // is returned from a cut-off read.
+      await seed(at('a', { entities: ['huge', 'small'] }), at('b', { entities: ['huge'] }));
+      await seed(at('c', { entities: ['small'] }));
+      const narrow = localGrant({ ...LOCAL, projectIds: [null] });
+      const about = (g: Grant) => hop(g, ['a'], { kinds: ['about'], fMax: 3 });
+      const whole = { list: ['a>b:about', 'a>c:about'], skipped: false };
+      expect(await about(narrow)).toEqual(whole);
+      // Up to the bound, rows the reader cannot read change nothing for it.
+      const fill = async (from: number, to: number) => {
+        for (let i = from; i < to; i++)
+          await seed(at(`u${i}`, { entities: ['huge'] }, planet('p2')));
+      };
+      expect(rawScanLimit(3)).toBe(RAW_SCAN_FACTOR * 3);
+      await fill(0, rawScanLimit(3) - 2);
+      expect(await about(narrow)).toEqual(whole);
+      // One row more: `huge` is skipped and reported; `small` is still read in full.
+      await fill(rawScanLimit(3) - 2, rawScanLimit(3) - 1);
+      expect(await about(narrow)).toEqual({ list: ['a>c:about'], skipped: true });
+    });
+
+    it('neighbours.a-raw-scan-bound-skips-a-seed-with-too-many-explicit-links', async () => {
+      await seed(at('a'), at('b'), at('c'), at('d'));
+      await S().link(TG, 'a', 'b', USER);
+      await S().link(TG, 'c', 'd', USER);
+      const narrow = localGrant({ ...LOCAL, projectIds: [null] });
+      const explicit = (g: Grant) => hop(g, ['a', 'c'], { kinds: ['explicit'] });
+      const whole = { list: ['a>b:explicit', 'c>d:explicit'], skipped: false };
+      const link = async (from: number, to: number) => {
+        const ms = Array.from({ length: to - from }, (_, i) =>
+          at(`u${from + i}`, {}, planet('p2')),
+        );
+        await store.upsertManyLinked!(
+          TG,
+          ms,
+          ms.map((m) => ['a', m.id] as const),
+          AGENT,
+        );
+      };
+      await link(0, EXPLICIT_RAW_SCAN - 1);
+      expect(await explicit(narrow)).toEqual(whole);
+      // One link more on `a`: that seed's links are skipped, never cut short; `c` is unaffected.
+      await link(EXPLICIT_RAW_SCAN - 1, EXPLICIT_RAW_SCAN);
+      expect(await explicit(narrow)).toEqual({ list: ['c>d:explicit'], skipped: true });
+      expect(await explicit(TG)).toEqual({ list: ['c>d:explicit'], skipped: true });
     });
 
     it('neighbours.episode-reaches-three-turns-forward-weighted', async () => {
