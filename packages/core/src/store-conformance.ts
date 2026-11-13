@@ -30,6 +30,7 @@ import type { NearQuery, Place, SpatialFilter } from './place.js';
 import { localScope } from './scope.js';
 import { isolationViolations, nonInterference } from './isolation.js';
 import {
+  EPISODE_RAW_SCAN,
   EXPLICIT_RAW_SCAN,
   RAW_SCAN_FACTOR,
   rawScanLimit,
@@ -1934,6 +1935,45 @@ export function linksConformance(
       await link(EXPLICIT_RAW_SCAN - 1, EXPLICIT_RAW_SCAN);
       expect(await explicit(narrow)).toEqual({ list: ['c>d:explicit'], skipped: true });
       expect(await explicit(TG)).toEqual({ list: ['c>d:explicit'], skipped: true });
+    });
+
+    it('neighbours.rows-in-another-node-never-count-toward-a-bound', async () => {
+      // The work bounds are per node. Another node that shares the session id and the entity key
+      // (another agent's Star here) changes neither this reader's neighbours nor `skipped`.
+      const star: Address = { level: 'agent', orgId: 'local', agentId: 'claude-code' };
+      const wide = nodesGrant(nodeOf(planet()), nodeOf(star));
+      const shared = { entities: ['thing'] };
+      await seed(
+        at('a', { ...shared, source: src('s1', 't1') }),
+        at('b', { ...shared, source: src('s1', 't2') }),
+      );
+      const whole = { list: ['a>b:about', 'a>b:episode'], skipped: false };
+      const kinds = ['episode', 'about'] as const;
+      expect(await hop(TG, ['a'], { kinds, fMax: 3 })).toEqual(whole);
+      const many = Math.max(EPISODE_RAW_SCAN, rawScanLimit(3)) + 8;
+      await store.upsertMany(
+        wide,
+        Array.from({ length: many }, (_, i) =>
+          at(`s${i}`, { ...shared, source: src('s1', i % 2 === 0 ? 't1' : 't2') }, star),
+        ),
+      );
+      expect(await hop(TG, ['a'], { kinds, fMax: 3 })).toEqual(whole);
+      expect(await hop(wide, ['a'], { kinds, fMax: 3 })).toEqual(whole);
+      // In its own node the bound does apply: the seed's turns hold more than the bound.
+      expect(await hop(wide, ['s0'], { kinds: ['episode'] })).toEqual({ list: [], skipped: true });
+      // Exactly at the bound the read is made; one memory more and it is skipped.
+      for (let i = 0; i < EPISODE_RAW_SCAN - 1; i++)
+        await seed(at(`e${i}`, { source: src('s1', 't2') }, planet('p2')));
+      const narrow = localGrant({ ...LOCAL, projectIds: [null] });
+      expect(await hop(narrow, ['a'], { kinds: ['episode'] })).toEqual({
+        list: ['a>b:episode'],
+        skipped: false,
+      });
+      await seed(at('extra', { source: src('s1', 't2') }, planet('p2')));
+      expect(await hop(narrow, ['a'], { kinds: ['episode'] })).toEqual({
+        list: [],
+        skipped: true,
+      });
     });
 
     it('neighbours.episode-reaches-three-turns-forward-weighted', async () => {

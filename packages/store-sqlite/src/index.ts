@@ -1990,8 +1990,10 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        ORDER BY e.memory_rid DESC LIMIT @cap`,
     );
   /**
-   * The work bounds, whatever the grant (core's `rawScanLimit`): how many index rows a read would
-   * touch, counted up to `@cap` on the index alone. A read past its bound is not made.
+   * The work bounds, whatever the grant (core's `rawScanLimit`): how many rows a read would
+   * touch, counted up to `@cap`. A read past its bound is not made. Each count stays inside the
+   * seed's own node (a link row joins two memories of one node; the entity index is keyed by
+   * node; the episode count names the node's columns), so a row in another node never counts.
    */
   const explicitRaw = db.prepare<[Params], { n: number }>(
     `SELECT (SELECT count(*) FROM (SELECT 1 FROM ${LINK_TABLE}
@@ -2001,7 +2003,10 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   );
   const episodeRaw = db.prepare<[Params], { n: number }>(
     `SELECT count(*) AS n FROM (SELECT 1 FROM memories
-       WHERE session_id = @session AND episode_seq BETWEEN @lo AND @hi LIMIT @cap)`,
+       WHERE session_id = @session AND episode_seq BETWEEN @lo AND @hi AND rid != @rid
+         AND level = @level AND org_id = @org AND customer_id IS @customer
+         AND agent_id IS @agent AND hive_id IS @hive AND run_id IS @run
+       LIMIT @cap)`,
   );
   const entityRaw = db.prepare<[Params], { n: number }>(
     `SELECT count(*) AS n FROM (SELECT 1 FROM ${ENTITY_TABLE}
@@ -2070,27 +2075,20 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           const seq = row.episode_seq;
           if (row.session_id == null || seq == null) continue;
           const window = {
+            rid: row.rid,
             session: row.session_id,
             lo: seq - EPISODE_REACH,
             hi: seq + EPISODE_REACH,
+            level: row.level,
+            org: row.org_id,
+            customer: row.customer_id,
+            agent: row.agent_id,
+            hive: row.hive_id,
+            run: row.run_id,
           };
-          // The window holds the seed itself, which the reference does not count.
-          if (tooLarge(episodeRaw, window, EPISODE_RAW_SCAN + 1)) continue;
+          if (tooLarge(episodeRaw, window, EPISODE_RAW_SCAN)) continue;
           const near = episodeNear(n, f)
-            .all({
-              ...bound,
-              rid: row.rid,
-              session: row.session_id,
-              seq,
-              lo: seq - EPISODE_REACH,
-              hi: seq + EPISODE_REACH,
-              level: row.level,
-              org: row.org_id,
-              customer: row.customer_id,
-              agent: row.agent_id,
-              hive: row.hive_id,
-              run: row.run_id,
-            })
+            .all({ ...bound, ...window, seq })
             .filter((r) => r.episode_seq !== null && admits(seed, r))
             .map((r) => ({ r, delta: (r.episode_seq as number) - seq }))
             .sort((x, y) => Math.abs(x.delta) - Math.abs(y.delta) || y.r.rid - x.r.rid);
