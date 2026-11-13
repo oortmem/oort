@@ -471,6 +471,12 @@ describe('oort cloud commands (CON-76)', () => {
     const i = await e.run(['import', 'claude-code', '--yes']);
     expect(i.code).toBe(2);
     expect(i.io.stderr).toContain('cloud use --local');
+    for (const verb of ['link', 'unlink']) {
+      const l = await e.run([verb, 'aaaa1111', 'bbbb2222', '--yes', '--json']);
+      expect(l.code, verb).toBe(2);
+      expect(JSON.parse(l.io.stdout)).toMatchObject({ ok: false, error: { code: 'refused' } });
+      expect(l.io.stdout, verb).toContain('local-only');
+    }
   });
 
   it('cloud.doctor-checks-the-cloud-in-cloud-mode', async () => {

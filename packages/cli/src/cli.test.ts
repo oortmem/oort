@@ -743,6 +743,64 @@ describe('oort forget, pin', () => {
     expect((await h.store.get(TG, m.id))?.pinned).toBe(false);
   });
 
+  it('cli.link-asserts-user-only-on-a-terminal-after-a-confirmation (CON-148)', async () => {
+    const h = harness();
+    const a = memory({ text: 'The cache is redis.' });
+    const b = memory({ text: 'The queue is sqs.' });
+    await h.store.upsertMany(TG, [a, b]);
+    const by = async () => (await h.store.linksOf!(TG, a.id))?.links.map((l) => l.assertedBy);
+    // Declined on a terminal: nothing is written.
+    const no = await h.run(['link', a.id, b.id], { tty: true, answer: 'n' });
+    expect([no.code, no.io.asked.length]).toEqual([0, 1]);
+    expect(await by()).toEqual([]);
+    // Not a terminal: no question, asserted by agent.
+    const piped = await h.run(['link', a.id, b.id]);
+    expect([piped.code, piped.io.asked.length]).toEqual([0, 0]);
+    expect(await by()).toEqual(['agent']);
+    // --json and --yes never ask, and never assert as a person.
+    const j = await h.run(['link', a.id.slice(0, 8), b.id, '--json', '--yes'], { tty: true });
+    expect(JSON.parse(j.io.stdout)).toMatchObject({
+      ok: true,
+      data: { from: a.id, to: b.id, linked: false, assertedBy: 'agent' },
+    });
+    expect(await by()).toEqual(['agent']);
+    // Confirmed on a terminal: a person asserted it.
+    const yes = await h.run(['link', a.id, b.id], { tty: true, answer: 'y' });
+    expect([yes.code, yes.io.asked.length]).toEqual([0, 1]);
+    expect(yes.io.stdout).toContain('Linked');
+    expect(await by()).toEqual(['user']);
+    // inspect lists the link and who asserted it.
+    const shown = await h.run(['inspect', b.id, '--json']);
+    expect(JSON.parse(shown.io.stdout).data).toMatchObject({
+      links: [{ kind: 'explicit', id: a.id, assertedBy: 'user' }],
+      hiddenLinks: 0,
+    });
+    expect((await h.run(['inspect', b.id])).io.stdout).toMatch(/links[\s\S]*explicit[\s\S]*user/);
+    // unlink removes it; a second unlink blocks the pair.
+    const un = await h.run(['unlink', a.id, b.id, '--yes', '--json']);
+    expect(JSON.parse(un.io.stdout).data).toMatchObject({ removed: true });
+    const again = await h.run(['unlink', a.id, b.id, '--yes', '--json']);
+    expect(JSON.parse(again.io.stdout).data).toEqual({
+      from: a.id,
+      to: b.id,
+      removed: false,
+      blocked: true,
+    });
+    expect((await h.store.linksOf!(TG, a.id))?.blocked).toEqual([b.id]);
+  });
+
+  it('cli.link-refuses-a-pair-it-cannot-link-as-a-missing-id (CON-148)', async () => {
+    const h = harness();
+    const a = memory({ text: 'The cache is redis.' });
+    await h.store.upsert(TG, a);
+    const missing = await h.run(['link', a.id, 'ffffffff-0000-4000-8000-000000000000', '--yes']);
+    const self = await h.run(['link', a.id, a.id, '--yes']);
+    expect([missing.code, self.code]).toEqual([2, 2]);
+    const shape = (t: string) => t.replace(/".*"/, '"X"');
+    expect(shape(self.io.stderr)).toBe(shape(missing.io.stderr));
+    expect((await h.store.linksOf!(TG, a.id))?.links).toEqual([]);
+  });
+
   it('cli.consolidate-prints-skipped', async () => {
     const h = harness();
     await h.store.upsert(TG, memory({ validTo: '2026-10-02T00:00:00.000Z' }));
