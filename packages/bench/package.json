@@ -18,6 +18,7 @@
     "calibrate:local": "tsc -p tsconfig.json && node dist/calibrate-local-main.js"
   },
   "dependencies": {
+    "@huggingface/tokenizers": "0.2.0",
     "@oortmem/core": "workspace:*",
     "@oortmem/embed-voyage": "workspace:*",
     "@oortmem/local-models": "workspace:*",

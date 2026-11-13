@@ -225,18 +225,34 @@ function groupMetrics(rows: EvalRow[], outcomes: RowOutcome[], ks: number[]): Gr
   return { rows: rows.length, recallAt, mrr, staleLeak, abstainFp, linkPrecision };
 }
 
+/**
+ * How rows are grouped in a report: `of` names a row's group, `order` lists the groups in the
+ * order they are printed. Default: the row's category, in `CATEGORIES` order.
+ */
+export interface Grouping {
+  of(row: EvalRow, index: number): string;
+  order: readonly string[];
+}
+
+const BY_CATEGORY: Grouping = {
+  of: (r) => r.category ?? 'uncategorized',
+  order: [...CATEGORIES, 'uncategorized'],
+};
+
 /** Pure scoring: `outcomes[i]` is what recall returned for `rows[i]`. */
 export function computeMetrics(
   rows: EvalRow[],
   outcomes: RowOutcome[],
   ks: number[],
   skippedEmpty = 0,
+  grouping: Grouping = BY_CATEGORY,
 ): EvalReport {
   const groups: Record<string, GroupMetrics> = { overall: groupMetrics(rows, outcomes, ks) };
-  const names = new Set<string>(rows.map((r) => r.category ?? 'uncategorized'));
-  for (const name of [...CATEGORIES, 'uncategorized']) {
-    if (!names.has(name)) continue;
-    const idx = rows.flatMap((r, i) => ((r.category ?? 'uncategorized') === name ? [i] : []));
+  const names = rows.map((r, i) => grouping.of(r, i));
+  const present = new Set(names);
+  for (const name of grouping.order) {
+    if (!present.has(name)) continue;
+    const idx = names.flatMap((n, i) => (n === name ? [i] : []));
     groups[name] = groupMetrics(
       idx.map((i) => rows[i] as EvalRow),
       idx.map((i) => outcomes[i] as RowOutcome),
