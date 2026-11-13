@@ -214,6 +214,41 @@ describe('oort import <file> (CON-137)', () => {
     expect(v1.io.stderr).toContain('memories with a place');
   });
 
+  it('cli.import-file-round-trips-explicit-links-as-agent (CON-148)', async () => {
+    const from = await onSqlite();
+    const a = memory({ text: 'The cache is redis.' });
+    const b = memory({ text: 'The queue is sqs.' });
+    const c = memory({ text: 'The bus is kafka.' });
+    const planet = {
+      node: planetNode({ orgId: 'local', customerId: 'self' }),
+      projectIds: 'all' as const,
+    };
+    const rw = nodeGrant({
+      principal: { orgId: 'local', customerId: 'self', agentId: 'anonymous' },
+      read: [planet],
+      write: [planet],
+    });
+    await from.sqlite.upsertMany(rw, [a, b, c]);
+    await from.sqlite.link!(rw, a.id, b.id, { assertedBy: 'user' });
+    const file = path.join(from.root, 'linked.jsonl');
+    expect((await from.run(['export', '--out', file])).code).toBe(0);
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n').slice(1);
+    const rows = lines.map((l) => JSON.parse(l) as { id: string; links?: unknown });
+    const linksOf = (id: string) => rows.find((x) => x.id === id)?.links;
+    expect(linksOf(a.id)).toEqual([{ kind: 'explicit', id: b.id }]);
+    expect(linksOf(b.id)).toEqual([{ kind: 'explicit', id: a.id }]);
+    expect(linksOf(c.id)).toBeUndefined();
+
+    const to = await onSqlite();
+    const r = await to.run(['import', file, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(JSON.parse(r.io.stdout).data).toMatchObject({ imported: 3, links: 1 });
+    // A file never says a person asserted a link: it imports as asserted by an agent.
+    expect((await to.sqlite.linksOf!(PLANET, a.id))?.links).toMatchObject([
+      { kind: 'explicit', id: b.id, assertedBy: 'agent' },
+    ]);
+  });
+
   it('cli.import-file-asks-first-and-refuses-what-it-cannot-read', async () => {
     const h = await onSqlite();
     // No terminal and no --yes: it never writes.

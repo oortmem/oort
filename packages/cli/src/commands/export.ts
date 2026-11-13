@@ -14,6 +14,7 @@ import {
   type NodePattern,
   type ExportVersion,
   type Grant,
+  type ExportLink,
   type Memory,
   type MemoryStore,
   type Scope,
@@ -136,9 +137,18 @@ export async function exportCommand(
     listed.sort(
       (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.id < b.id ? -1 : 1),
     );
-    const memories: Memory[] = [];
+    const memories: (Memory & { links?: ExportLink[] })[] = [];
+    const exported = new Set(listed.map((m) => m.id));
     for (const m of listed) {
-      memories.push(await shapeLinks(w.store, grant, await decoded(m, w.store, grant, ctx)));
+      const shaped = await shapeLinks(w.store, grant, await decoded(m, w.store, grant, ctx));
+      // Explicit links to memories in this file (CON-148), on both lines; version 2 only.
+      const links =
+        version === 2
+          ? ((await w.store.linksOf?.(grant, m.id))?.links ?? [])
+              .filter((l) => l.kind === 'explicit' && exported.has(l.id))
+              .map((l) => ({ kind: 'explicit' as const, id: l.id }))
+          : [];
+      memories.push(links.length > 0 ? { ...shaped, links } : shaped);
     }
     if (version === 1 && !memories.every(fitsVersion1)) {
       throw new Refusal(
