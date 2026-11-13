@@ -1,6 +1,6 @@
 /**
- * Regression tests for the CON-71 security review (oort #52): one per finding, from the review's
- * own reproduction scripts.
+ * Security regression tests for judgment memory (CON-71): one per hardened path, each built
+ * from a reproduction of the attack.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -300,7 +300,7 @@ describe('M2: tombstones', () => {
   });
 
   it('review.an-imported-record-leaves-no-tombstone-or-fingerprint', async () => {
-    // CON-137 review: a record that arrived in an export file or pack cannot speak for a person.
+    // CON-137: a record that arrived in an export file or pack cannot speak for a person.
     // Planted withdrawn records (one naming the real decision's tombstone, one an exact copy of
     // it) must not keep the genuine decision out when its pack arrives later.
     const from = createMemoryStore({ now: () => NOW });
@@ -371,7 +371,7 @@ describe('M2: tombstones', () => {
   });
 
   it('review.an-inactive-imported-judgment-leaves-no-fingerprint', async () => {
-    // Re-review M2: an imported copy that is not active (ended in valid or transaction time, or
+    // An imported copy that is not active (ended in valid or transaction time, or
     // not yet valid) is no evidence the decision is here, so it never keeps the pack out.
     const from = createMemoryStore({ now: () => NOW });
     const real = await recordJudgment(base({ ref: undefined }), { ...deps(from), via: 'cli' });
@@ -410,7 +410,7 @@ describe('M2: tombstones', () => {
   });
 
   it('review.a-judgment-from-a-file-that-ended-is-refused', () => {
-    // Re-review N1: a decision that arrives withdrawn or purged would be stored open and pinned,
+    // A decision that arrives withdrawn or purged would be stored open and pinned,
     // so SessionStart and recall would show it. A file's ended decision is not imported at all.
     const origin = fileOrigin({
       digest: 'd'.repeat(64),
@@ -445,7 +445,7 @@ describe('M2: tombstones', () => {
   });
 
   it('review.pack-times-are-stored-as-iso', () => {
-    // Re-review info: Date.parse accepts words, so a checked time is stored normalised.
+    // Date.parse accepts words, so a checked time is stored normalised.
     for (const [given, want] of [
       ['2026-11-01T00:00:00Z', '2026-11-01T00:00:00.000Z'],
       ['Verified by Oort 2026', new Date('Verified by Oort 2026').toISOString()],
@@ -748,7 +748,7 @@ describe('L1: evaluation is leave-one-out', () => {
   });
 });
 
-describe('the review scripts as regressions', () => {
+describe('reproduction scripts as regressions', () => {
   it('review.t1-unchanged-only-for-the-same-kind-of-recorder', async () => {
     const store = createMemoryStore({ now: () => NOW });
     const a = await recordJudgment(base(), { ...deps(store), via: 'cli' });
@@ -800,7 +800,7 @@ describe('H1: who counts as an expert is the home config’s call', () => {
   });
 });
 
-describe('second review: what an agent can still touch', () => {
+describe('what an agent can still touch', () => {
   it('review.an-agent-cannot-retract-a-judgment-a-person-confirmed', async () => {
     const store = createMemoryStore({ now: () => NOW });
     const agent = await recordJudgment(base(), { ...deps(store), via: 'mcp' });

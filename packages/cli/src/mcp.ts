@@ -37,6 +37,7 @@ import {
   LINKS_IGNORED_IN_CLOUD,
   linksIgnoredInCloud,
   runRecall,
+  withSeeds,
   timeMode,
   viewIgnored,
   type TemporalView,
@@ -244,6 +245,8 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
             }
           : undefined;
       const result = await runRecall(w, query, view, now(), include, false, {
+        // The hits are cut to `limit` before linked memories join them, as in the SDK.
+        k: limit,
         ...(filter !== undefined && { spatial: filter }),
       });
       const ignored = viewIgnored(view, result);
@@ -255,7 +258,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           note: 'No relevant memories: nothing stored answers this. Answer without memory.',
         };
       }
-      const memories = result.memories.slice(0, limit).map((m) => {
+      const memories = withSeeds(result.memories).map((m) => {
         const e = m.explanation;
         const why = [
           e.lexicalRank !== undefined ? `lexical #${e.lexicalRank}` : undefined,

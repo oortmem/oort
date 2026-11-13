@@ -142,6 +142,11 @@ to the memory's region on the same map and frame only, and recalled memories car
 `why.place_path` and `why.distance_m`. Local mode only: in cloud mode each is an
 `OortRefusedError` (`local-only`) before any request.
 
+A recalled memory that a link brought in (local mode) has `why.via`, a `RecallVia` with `kind`,
+`from_` (the id of the returned memory it was reached from; `from` on the wire) and `weight`.
+`format_for_prompt` labels its line `linked`, fits the search's own hits first, and leaves a
+linked memory out when the memory it was reached from is not in the block.
+
 <!-- example: examples/python/spatial.py -->
 
 ```python

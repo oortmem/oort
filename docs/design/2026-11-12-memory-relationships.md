@@ -20,7 +20,7 @@ decisions in section 0. Each can be overruled on its own without changing the re
 
 ## 0. Decisions (2026-11-12)
 
-Decided on the design review, recorded on CON-145. These replace the open questions of the first
+Recorded on CON-145. These replace the open questions of the first
 draft.
 
 1. **The link kind is `distilledFrom`.** `Memory.provenance.derivedFrom` already means "where a

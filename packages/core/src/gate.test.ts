@@ -70,7 +70,7 @@ describe('gate, multilingual', () => {
   });
 });
 
-describe('gate, acknowledgements with punctuation (CON-110 review)', () => {
+describe('gate, acknowledgements with punctuation (CON-110)', () => {
   it('gate.acknowledgments-ignore-punctuation-and-spacing', () => {
     for (const ack of [
       'はい、お願いします',
@@ -94,7 +94,7 @@ describe('gate, acknowledgements with punctuation (CON-110 review)', () => {
   });
 });
 
-describe('gate, repeated acknowledgements (CON-110 re-review)', () => {
+describe('gate, repeated acknowledgements (CON-110)', () => {
   it('gate.repeated-acknowledgments', () => {
     for (const ack of [
       '嗯嗯嗯嗯嗯嗯…',

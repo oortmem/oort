@@ -78,7 +78,7 @@ describe('datasets (CON-147)', () => {
   });
 });
 
-describe('pinning (CON-147 review)', () => {
+describe('pinning (CON-147)', () => {
   it('datasets.download-stops-past-the-recorded-size', async () => {
     let signal: AbortSignal | undefined;
     let sent = 0;

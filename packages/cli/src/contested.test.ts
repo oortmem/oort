@@ -274,7 +274,7 @@ describe('oort constellation contested and resolve (CON-66)', () => {
   });
 });
 
-describe("--json never plants other members' control or bidi characters (CON-66 review)", () => {
+describe("--json never plants other members' control or bidi characters (CON-66)", () => {
   const hostile = DISPLAY_UNSAFE_SAMPLES.map((cp) => `x${String.fromCodePoint(cp)}`).join('');
   /** Any DISPLAY_UNSAFE character above C0 left raw (JSON escapes C0 itself). */
   const rawUnsafe = (s: string) =>

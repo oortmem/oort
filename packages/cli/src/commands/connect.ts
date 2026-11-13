@@ -149,7 +149,7 @@ export async function connectCommand(
     });
     cmd = bin.path;
     from = bin.from;
-    if (!dryRun) checkAgentPath(cmd, ctx); // the last check before any write (PR #78, I1)
+    if (!dryRun) checkAgentPath(cmd, ctx); // the last check before any write (PR #78)
   } else {
     try {
       cmd = managedCopy(ctx.io.env)?.main ?? hookCommandPath(ctx.io.entry);

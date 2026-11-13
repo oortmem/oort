@@ -427,6 +427,44 @@ const FORMAT_CASES: { name: string; result: Record<string, unknown>; budgetChars
     ]),
   },
   { name: 'nothing recalled', result: result([]) },
+  {
+    name: 'a linked memory is labelled, beside the memory it was reached from',
+    result: result([
+      view({ id: 'h1', text: 'auth-service moved to port 8080' }),
+      view({
+        id: 'l1',
+        text: 'It runs on Postgres 16.',
+        why: { coverage: 0, activation: 0, via: { kind: 'explicit', from: 'h1', weight: 1 } },
+      }),
+    ]),
+  },
+  {
+    name: 'a linked memory never takes the place of a hit the budget has room for',
+    budgetChars: 160,
+    result: result([
+      view({ id: 'h1', text: 'first hit, forty characters of text here' }),
+      view({
+        id: 'l1',
+        text: 'linked memory, forty characters of text.',
+        why: { coverage: 0, activation: 0, via: { kind: 'explicit', from: 'h2', weight: 1 } },
+      }),
+      view({ id: 'h2', text: 'second hit, forty characters of text too' }),
+    ]),
+  },
+  {
+    name: 'a linked memory is left out when its hit did not fit',
+    budgetChars: 200,
+    result: result([
+      view({ id: 'h1', text: 'first hit, forty characters of text here' }),
+      view({
+        id: 'l1',
+        text: 'linked, short.',
+        why: { coverage: 0, activation: 0, via: { kind: 'about', from: 'h3', weight: 0.5 } },
+      }),
+      view({ id: 'h2', text: 'second hit, forty characters of text too' }),
+      view({ id: 'h3', text: 'third hit, which the budget has no room for' }),
+    ]),
+  },
 ];
 
 describe('golden vectors (contract/sdk/vectors)', () => {

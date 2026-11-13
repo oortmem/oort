@@ -1102,7 +1102,7 @@ describe('oort.v1: install, connect, setup (the built bin, a throwaway HOME)', (
   });
 });
 
-describe('oort.v1: review fixes', () => {
+describe('oort.v1: hardening', () => {
   const sk = ['sk', 'ant', 'api03', 'A'.repeat(40)].join('-');
   const oortSk = ['oort', 'sk', 'B'.repeat(43)].join('_');
 

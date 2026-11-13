@@ -47,7 +47,7 @@ function fakeBin(h: Harness, version: string = VERSION, dir = 'lib'): string {
   const pkg = path.join(h.root, dir, 'node_modules', 'oortmem');
   const bin = path.join(pkg, 'dist', 'main.js');
   fs.mkdirSync(path.dirname(bin), { recursive: true });
-  // Doctor reads the version from the package's files, never from running it (PR #78, I3).
+  // Doctor reads the version from the package's files, never from running it (PR #78).
   fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'oortmem', version }));
   fs.writeFileSync(bin, `#!/bin/sh\necho "oort ${version}"\n`, { mode: 0o755 });
   return bin;
@@ -228,7 +228,7 @@ describe('oort doctor', () => {
       },
     ]);
     expect(eraseChecks({ erased: true, bytes: 1, zeroVectors: 0 })).toEqual([]);
-    // --vacuum runs whenever either row shows (re-review 6).
+    // --vacuum runs whenever either row shows.
     expect(vacuumNeeded({ erased: true, zeroVectors: 2 })).toBe(true);
     expect(vacuumNeeded({ erased: false, zeroVectors: 0 })).toBe(true);
     expect(vacuumNeeded({ erased: true, zeroVectors: 0 })).toBe(false);
@@ -577,7 +577,7 @@ describe('oort doctor', () => {
     });
   });
 
-  it('doctor.hooks-in-an-fnm-link-get-the-line-and-in-a-package-cache-fail (CON-114, PR #78 I3)', async () => {
+  it('doctor.hooks-in-an-fnm-link-get-the-line-and-in-a-package-cache-fail (CON-114, PR #78)', async () => {
     const fnm = harness({ trusted: true });
     const link = fakeBin(
       fnm,
@@ -600,7 +600,7 @@ describe('oort doctor', () => {
     expect(b.human.code).toBe(1);
   });
 
-  it('doctor.hooks-on-another-copy-of-yours-are-an-info-line-never-ok (--this-copy, PR #78 I3)', async () => {
+  it('doctor.hooks-on-another-copy-of-yours-are-an-info-line-never-ok (--this-copy, PR #78)', async () => {
     const h = harness({ trusted: true });
     const bin = fakeBin(h, '99.0.0', 'checkout');
     installHooks(path.join(h.root, '.claude', 'settings.json'), bin);
@@ -622,7 +622,7 @@ describe('oort doctor', () => {
     expect((await doctor(h2)).check('hooks', 'claude-code bin')?.status).toBe('warn');
   });
 
-  it('doctor.a-newer-managed-copy-is-ok-and-its-version-comes-from-its-files (PR #78 I3)', async () => {
+  it('doctor.a-newer-managed-copy-is-ok-and-its-version-comes-from-its-files (PR #78)', async () => {
     const h = harness({ trusted: true });
     const m = npmPrefixCopy(path.join(h.home, 'cli'), '99.0.0');
     // What the script prints is never asked: it claims another version.
@@ -635,8 +635,8 @@ describe('oort doctor', () => {
     );
   });
 
-  it('doctor.a-swapped-hook-script-in-a-temp-dir-fails (PR #78 I3, probe h6)', async () => {
-    // The reviewer's probe: a two-line script that prints a newer version, in a temp directory.
+  it('doctor.a-swapped-hook-script-in-a-temp-dir-fails', async () => {
+    // A two-line script that prints a newer version, in a temp directory.
     const h = harness();
     // At an oort-shaped path, so the hooks are recognised as Oort's.
     const evil = path.join(h.root, 'x', 'oortmem', 'dist', 'main.js');
@@ -650,7 +650,7 @@ describe('oort doctor', () => {
     expect(d.human.code).toBe(1);
   });
 
-  it('doctor.a-managed-copy-others-can-write-fails-with-the-fix (PR #78 I1, probe h5)', async () => {
+  it('doctor.a-managed-copy-others-can-write-fails-with-the-fix', async () => {
     const h = harness({ trusted: true });
     const m = npmPrefixCopy(path.join(h.home, 'cli'), '99.0.0');
     fs.chmodSync(path.dirname(m.main), 0o777);
@@ -669,7 +669,7 @@ describe('oort doctor', () => {
     expect(d.human.code).toBe(1);
   });
 
-  it('doctor.an-mcp-entry-on-another-copy-of-yours-is-an-info-line (--this-copy, PR #78 I3)', async () => {
+  it('doctor.an-mcp-entry-on-another-copy-of-yours-is-an-info-line (--this-copy, PR #78)', async () => {
     const h = harness({ trusted: true });
     fs.mkdirSync(path.join(h.root, '.cursor'));
     // A managed copy is there, but cursor runs another copy (`oort connect cursor --this-copy`).
@@ -690,8 +690,8 @@ describe('oort doctor', () => {
     });
   });
 
-  it('doctor.a-swapped-cursor-entry-with-a-fake-package-json-fails (PR #78 I3, probe h10)', async () => {
-    // The reviewer's probe: the entry's command swapped for a script beside a package.json that
+  it('doctor.a-swapped-cursor-entry-with-a-fake-package-json-fails', async () => {
+    // The entry's command swapped for a script beside a package.json that
     // says oortmem 50.0.0, in a temp directory.
     const h = harness();
     fs.mkdirSync(path.join(h.root, '.cursor'));
@@ -710,7 +710,7 @@ describe('oort doctor', () => {
     expect(d.check('mcp', 'cursor')?.detail).toContain('is in a temporary directory');
   });
 
-  it('doctor.a-connected-entry-on-an-unsafe-running-copy-is-not-ok (PR #78 review, N3)', async () => {
+  it('doctor.a-connected-entry-on-an-unsafe-running-copy-is-not-ok (PR #78)', async () => {
     // Exactly the entry `oort connect` writes for this copy, but this copy is in a temp dir.
     const h = harness();
     fs.mkdirSync(path.join(h.root, '.cursor'));
@@ -1089,7 +1089,7 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
   it('doctor.paths-in-the-copy-line-show-control-characters-never-send-them (M1)', async () => {
     const m = machine(VERSION, { shell: '1_\u001b]0;TITLE\u0007\u001b[31mRED' });
     const d = await doctor(m.h, m.env, undefined, undefined, m.running);
-    // One line for the hooks' copy and this one (PR #78 review, N5): the bin row.
+    // One line for the hooks' copy and this one (PR #78): the bin row.
     const info = d.check('hooks', 'claude-code bin');
     expect(info?.detail).toContain('\\u{1b}[31mRED');
     // String checks, not a regex: oxlint flags control characters in patterns, escaped or not.
@@ -1114,7 +1114,7 @@ describe('doctor: the hooks and another copy of oort (CON-113)', () => {
     const m = machine();
     const d = await doctor(m.h, {}, undefined, undefined, m.running);
     expect(d.check('hooks', 'claude-code')).toMatchObject({ status: 'ok' });
-    // One clear line (PR #78 review, N5): the bin row names the managed copy the hooks run, its
+    // One clear line (PR #78): the bin row names the managed copy the hooks run, its
     // version from its files, and the copy you ran. No separate info row.
     const info = d.check('hooks', 'claude-code bin');
     expect(info).toMatchObject({ status: 'ok' });

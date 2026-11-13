@@ -173,7 +173,7 @@ describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
     expect(both.isError).toBe(true);
   });
 
-  it('mcp.recall-mode-needs-its-own-date (review 12)', async () => {
+  it('mcp.recall-mode-needs-its-own-date', async () => {
     const { client } = await connect(era, { adapters: false });
     for (const args of [
       { mode: 'as-of' },
@@ -391,7 +391,7 @@ describe('oort mcp tools', () => {
   });
 });
 
-describe('oort mcp over a cloud that does not report the time mode (review 12)', () => {
+describe('oort mcp over a cloud that does not report the time mode', () => {
   it('mcp.recall-says-when-a-requested-mode-was-not-applied', async () => {
     const h = harness({ adapters: false });
     const w = await h.wire(h.cwd);

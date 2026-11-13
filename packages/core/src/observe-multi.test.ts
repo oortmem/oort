@@ -383,7 +383,7 @@ describe('observe with a multi-memory writer (CON-56)', () => {
     expect((await reinforced.store.get(TG, 'ci-red'))?.lastConfirmedAt).toBe(NOW.toISOString());
   });
 
-  it('observe.multi.turn-level-volatile-is-not-applied-to-each-fact (review 14)', async () => {
+  it('observe.multi.turn-level-volatile-is-not-applied-to-each-fact', async () => {
     const volatileGate: GateDecision = {
       ...gate,
       volatile: 0.9,

@@ -202,7 +202,7 @@ describe('agents: one Planet, a Star each', () => {
   });
 });
 
-describe('agents: review follow-ups', () => {
+describe('agents: follow-ups', () => {
   it('agents.no-agent-named-is-anonymous-planet-only', async () => {
     // An MCP entry from before agents (no --agent) must not act as claude-code.
     const h = harness();

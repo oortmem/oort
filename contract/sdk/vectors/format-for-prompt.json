@@ -659,5 +659,235 @@
     },
     "now": "2026-11-06T12:00:00.000Z",
     "expected": ""
+  },
+  {
+    "name": "a linked memory is labelled, beside the memory it was reached from",
+    "result": {
+      "memories": [
+        {
+          "id": "h1",
+          "text": "auth-service moved to port 8080",
+          "type": "semantic",
+          "tier": "warm",
+          "pinned": false,
+          "status": "current",
+          "validFrom": "2026-11-01T09:00:00.000Z",
+          "validTo": null,
+          "recordedAt": "2026-11-01T09:00:00.000Z",
+          "updatedAt": "2026-11-01T09:00:00.000Z",
+          "entities": [],
+          "score": 0.9,
+          "why": {
+            "coverage": 1,
+            "activation": 0
+          }
+        },
+        {
+          "id": "l1",
+          "text": "It runs on Postgres 16.",
+          "type": "semantic",
+          "tier": "warm",
+          "pinned": false,
+          "status": "current",
+          "validFrom": "2026-11-01T09:00:00.000Z",
+          "validTo": null,
+          "recordedAt": "2026-11-01T09:00:00.000Z",
+          "updatedAt": "2026-11-01T09:00:00.000Z",
+          "entities": [],
+          "score": 0.9,
+          "why": {
+            "coverage": 0,
+            "activation": 0,
+            "via": {
+              "kind": "explicit",
+              "from": "h1",
+              "weight": 1
+            }
+          }
+        }
+      ],
+      "abstained": false,
+      "temporal": {
+        "mode": "current",
+        "inferred": false
+      },
+      "read": ["your Planet"],
+      "degraded": [],
+      "warnings": []
+    },
+    "now": "2026-11-06T12:00:00.000Z",
+    "expected": "<oort-memory>\n- [semantic, 5d ago] auth-service moved to port 8080\n- [semantic, 5d ago, linked] It runs on Postgres 16.\n</oort-memory>"
+  },
+  {
+    "name": "a linked memory never takes the place of a hit the budget has room for",
+    "budgetChars": 160,
+    "result": {
+      "memories": [
+        {
+          "id": "h1",
+          "text": "first hit, forty characters of text here",
+          "type": "semantic",
+          "tier": "warm",
+          "pinned": false,
+          "status": "current",
+          "validFrom": "2026-11-01T09:00:00.000Z",
+          "validTo": null,
+          "recordedAt": "2026-11-01T09:00:00.000Z",
+          "updatedAt": "2026-11-01T09:00:00.000Z",
+          "entities": [],
+          "score": 0.9,
+          "why": {
+            "coverage": 1,
+            "activation": 0
+          }
+        },
+        {
+          "id": "l1",
+          "text": "linked memory, forty characters of text.",
+          "type": "semantic",
+          "tier": "warm",
+          "pinned": false,
+          "status": "current",
+          "validFrom": "2026-11-01T09:00:00.000Z",
+          "validTo": null,
+          "recordedAt": "2026-11-01T09:00:00.000Z",
+          "updatedAt": "2026-11-01T09:00:00.000Z",
+          "entities": [],
+          "score": 0.9,
+          "why": {
+            "coverage": 0,
+            "activation": 0,
+            "via": {
+              "kind": "explicit",
+              "from": "h2",
+              "weight": 1
+            }
+          }
+        },
+        {
+          "id": "h2",
+          "text": "second hit, forty characters of text too",
+          "type": "semantic",
+          "tier": "warm",
+          "pinned": false,
+          "status": "current",
+          "validFrom": "2026-11-01T09:00:00.000Z",
+          "validTo": null,
+          "recordedAt": "2026-11-01T09:00:00.000Z",
+          "updatedAt": "2026-11-01T09:00:00.000Z",
+          "entities": [],
+          "score": 0.9,
+          "why": {
+            "coverage": 1,
+            "activation": 0
+          }
+        }
+      ],
+      "abstained": false,
+      "temporal": {
+        "mode": "current",
+        "inferred": false
+      },
+      "read": ["your Planet"],
+      "degraded": [],
+      "warnings": []
+    },
+    "now": "2026-11-06T12:00:00.000Z",
+    "expected": "<oort-memory>\n- [semantic, 5d ago] first hit, forty characters of text here\n- [semantic, 5d ago] second hit, forty characters of text too\n</oort-memory>"
+  },
+  {
+    "name": "a linked memory is left out when its hit did not fit",
+    "budgetChars": 200,
+    "result": {
+      "memories": [
+        {
+          "id": "h1",
+          "text": "first hit, forty characters of text here",
+          "type": "semantic",
+          "tier": "warm",
+          "pinned": false,
+          "status": "current",
+          "validFrom": "2026-11-01T09:00:00.000Z",
+          "validTo": null,
+          "recordedAt": "2026-11-01T09:00:00.000Z",
+          "updatedAt": "2026-11-01T09:00:00.000Z",
+          "entities": [],
+          "score": 0.9,
+          "why": {
+            "coverage": 1,
+            "activation": 0
+          }
+        },
+        {
+          "id": "l1",
+          "text": "linked, short.",
+          "type": "semantic",
+          "tier": "warm",
+          "pinned": false,
+          "status": "current",
+          "validFrom": "2026-11-01T09:00:00.000Z",
+          "validTo": null,
+          "recordedAt": "2026-11-01T09:00:00.000Z",
+          "updatedAt": "2026-11-01T09:00:00.000Z",
+          "entities": [],
+          "score": 0.9,
+          "why": {
+            "coverage": 0,
+            "activation": 0,
+            "via": {
+              "kind": "about",
+              "from": "h3",
+              "weight": 0.5
+            }
+          }
+        },
+        {
+          "id": "h2",
+          "text": "second hit, forty characters of text too",
+          "type": "semantic",
+          "tier": "warm",
+          "pinned": false,
+          "status": "current",
+          "validFrom": "2026-11-01T09:00:00.000Z",
+          "validTo": null,
+          "recordedAt": "2026-11-01T09:00:00.000Z",
+          "updatedAt": "2026-11-01T09:00:00.000Z",
+          "entities": [],
+          "score": 0.9,
+          "why": {
+            "coverage": 1,
+            "activation": 0
+          }
+        },
+        {
+          "id": "h3",
+          "text": "third hit, which the budget has no room for",
+          "type": "semantic",
+          "tier": "warm",
+          "pinned": false,
+          "status": "current",
+          "validFrom": "2026-11-01T09:00:00.000Z",
+          "validTo": null,
+          "recordedAt": "2026-11-01T09:00:00.000Z",
+          "updatedAt": "2026-11-01T09:00:00.000Z",
+          "entities": [],
+          "score": 0.9,
+          "why": {
+            "coverage": 1,
+            "activation": 0
+          }
+        }
+      ],
+      "abstained": false,
+      "temporal": {
+        "mode": "current",
+        "inferred": false
+      },
+      "read": ["your Planet"],
+      "degraded": [],
+      "warnings": []
+    },
+    "now": "2026-11-06T12:00:00.000Z",
+    "expected": "<oort-memory>\n- [semantic, 5d ago] first hit, forty characters of text here\n- [semantic, 5d ago] second hit, forty characters of text too\n</oort-memory>"
   }
 ]

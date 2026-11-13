@@ -850,7 +850,7 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
           `/v1/whoami${agent === undefined ? '' : `?agent=${encodeURIComponent(agent)}`}`,
         ),
       forEndUser: (id) => build(id),
-      // No whoami first (security review, L-b): whoami is refused while Pro has lapsed or the
+      // No whoami first: whoami is refused while Pro has lapsed or the
       // account is blocked, yet Oort Cloud keeps end-user erasure open then. It refuses a key that
       // is not a server key itself (403 end_users_not_allowed); an older one answers 404.
       endUsersCount: () => endUserRoute(accountJson('GET', '/v1/end-users/count')),

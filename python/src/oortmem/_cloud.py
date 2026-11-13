@@ -559,8 +559,8 @@ class CloudOps:
             "routes": routes,
         }
 
-    # The account's end users (CON-132): sent as the account, with no whoami first (security
-    # review, L-b). whoami is refused while Pro has lapsed or the account is blocked, yet Oort Cloud
+    # The account's end users (CON-132): sent as the account, with no whoami first.
+    # whoami is refused while Pro has lapsed or the account is blocked, yet Oort Cloud
     # keeps end-user erasure open then; it refuses a key that is not a server key itself (403
     # end_users_not_allowed), and an Oort Cloud without these routes answers 404.
     def _end_user_route(self, method: str, route: str, text: bool = False) -> Any:

@@ -59,7 +59,7 @@ protects the expert's record from the model:
 
 ## Expert role
 
-`createOort({ judge: { role: 'expert', operator: 'marcus' } })` records anyone's judgments as a
+`createOort({ judge: { role: 'expert', operator: 'grace' } })` records anyone's judgments as a
 person's and may `confirm` an agent's record. Use it only for code paths where a person really
 decided: a review UI, an import job. `scoped({ judgeRole: 'agent' })` narrows a handle back to
 the agent role; nothing widens it. Framework tools (`oortmem/ai-sdk`) always run in the agent

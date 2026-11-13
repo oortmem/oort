@@ -5,7 +5,7 @@ import { tmpdir } from '../../test/helpers.js';
 import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
 import { createOort, createOortWith } from './create.js';
 
-/** Fixes from the independent security review of the SDK (CON-108). */
+/** Hardening of the SDK's inputs, errors and files (CON-108). */
 
 function home(): { home: string; env: Record<string, string>; root: string } {
   const root = tmpdir('oort-sdk-review-');

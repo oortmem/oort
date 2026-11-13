@@ -142,7 +142,7 @@ describe('scope', () => {
   });
 
   it('scope.forged-worktree-pointer-through-symlink-falls-back', () => {
-    // The re-review's layout: lexical `..` from the forged gitdir path lands on the victim,
+    // Lexical `..` from the forged gitdir path lands on the victim,
     // while the realpath lands on a fake main repo that passes both checks.
     const base = tmp();
     const victim = path.join(base, 'private');

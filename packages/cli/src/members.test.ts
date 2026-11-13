@@ -556,7 +556,7 @@ describe('oort mcp in cloud mode: forget and shared copies (CON-67)', () => {
   });
 });
 
-describe('server strings never reach the terminal raw (CON-64 review)', () => {
+describe('server strings never reach the terminal raw (CON-64)', () => {
   const ESC = '\u001b';
   const CSI = '\u009b';
   const raw = (s: string) => s.includes(ESC) || s.includes(CSI);

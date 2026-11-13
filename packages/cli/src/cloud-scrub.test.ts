@@ -13,7 +13,7 @@ import { AWS_KEY, data, fakeIo, memory, tmpdir } from '../test/helpers.js';
 import { fakeCloud, type FakeCloud } from '../test/helpers/fake-cloud.js';
 
 /**
- * Every write to Oort Cloud is scrubbed on this machine before it is sent (CON-107 review): a
+ * Every write to Oort Cloud is scrubbed on this machine before it is sent (CON-107): a
  * secret never leaves it, and a turn that is mostly secret is skipped without any request. One
  * case per cloud write path: `oort remember`, `oort observe`, the SDK's `observe()` and
  * `remember()`, the MCP server's cloud `remember`, the hooks' drain, `oort share --text` (in

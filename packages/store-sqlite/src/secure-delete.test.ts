@@ -266,7 +266,7 @@ describe('a store upgraded from 0.9.0 (CON-140)', () => {
     await store.close();
   });
 
-  it('secure-delete.a-reader-mid-read-leaves-the-erase-pending (re-review 2)', async () => {
+  it('secure-delete.a-reader-mid-read-leaves-the-erase-pending', async () => {
     const dbPath = await asOld('int8');
     // Another process in the middle of a read: the checkpoint cannot copy the rewrite back.
     const reader = new Database(dbPath, { readonly: true });
@@ -300,7 +300,7 @@ describe('a store upgraded from 0.9.0 (CON-140)', () => {
     expect(sqliteEraseState(dbPath)?.erased).toBe(true);
   });
 
-  it('secure-delete.vacuum-also-removes-zero-vectors-stored-after-the-erase (re-review 6)', async () => {
+  it('secure-delete.vacuum-also-removes-zero-vectors-stored-after-the-erase', async () => {
     const dbPath = await asOld('int8');
     const store = await reopen(dbPath);
     await store.close();

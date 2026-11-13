@@ -233,10 +233,10 @@ describe('the managed copy', () => {
 });
 
 /**
- * PR #78's security review: where a binary lives decides whether agents may run it. The probes'
- * HOMEs (scratchpad/probes/h*) are rebuilt here as throwaway roots.
+ * Where a binary lives decides whether agents may run it. Each layout is built here as a
+ * throwaway root.
  */
-describe('PR #78 review: trusting where a binary lives', () => {
+describe('trusting where a binary lives', () => {
   /** A copy of the fake package at `dir`, with `<dir>/dist/main.js`; the script's realpath. */
   function looseCopy(dir: string, version = VERSION): string {
     fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
@@ -245,7 +245,7 @@ describe('PR #78 review: trusting where a binary lives', () => {
     return fs.realpathSync(path.join(dir, 'dist', 'main.js'));
   }
 
-  it('I1.a-world-writable-oort-home-with-a-planted-copy-is-refused-everywhere (probe p1/h5)', async () => {
+  it('I1.a-world-writable-oort-home-with-a-planted-copy-is-refused-everywhere', async () => {
     const h = harness({ trusted: true });
     fs.mkdirSync(path.join(h.root, '.cursor'));
     const planted = npmPrefixCopy(path.join(h.home, 'cli'), '99.0.0');
@@ -417,7 +417,7 @@ describe('PR #78 review: trusting where a binary lives', () => {
     expect(shellPath("/Users/ab/it's", '/Users/ab')).toBe(`'/Users/ab/it'\\''s'`);
   });
 
-  it('M2.a-dangling-or-unwritable-oort-home-is-a-refusal-not-a-crash (probe p11/h11)', async () => {
+  it('M2.a-dangling-or-unwritable-oort-home-is-a-refusal-not-a-crash', async () => {
     const h = harness({ trusted: true });
     const npm = fakeNpm();
     const ctxFor = (oortHome: string) =>
@@ -470,7 +470,7 @@ describe('PR #78 review: trusting where a binary lives', () => {
 });
 
 /**
- * The managed copy's whole installed tree (PR #78 follow-up review): main.js loads the rest of
+ * The managed copy's whole installed tree (PR #78): main.js loads the rest of
  * dist/ and every dependency, so a writable file anywhere in it is as bad as a writable main.js.
  */
 describe('PR #78 follow-up: the whole managed tree', () => {
@@ -659,10 +659,10 @@ describe('PR #78 follow-up: the whole managed tree', () => {
 });
 
 /**
- * Group write (PR #78 review, N2): every macOS account's own group is `staff`, so group write
+ * Group write (PR #78): every macOS account's own group is `staff`, so group write
  * counts only from a group that can already become root, and never inside HOME.
  */
-describe('PR #78 review N2: group write', () => {
+describe('PR #78: group write', () => {
   const linux = (group: string, passwd = '', user = 'ann') =>
     ({ platform: 'linux', group, passwd, user }) as const;
 
@@ -715,7 +715,7 @@ describe('PR #78 review N2: group write', () => {
     });
   });
 
-  it('n2.a-group-writable-build-in-home-is-never-written-and-doctor-fails-it (probe run2/run3 f)', async () => {
+  it('n2.a-group-writable-build-in-home-is-never-written-and-doctor-fails-it', async () => {
     const h = harness({ trusted: true });
     const pkg = path.join(h.root, 'build', 'oortmem');
     fs.mkdirSync(path.join(pkg, 'dist'), { recursive: true });
@@ -747,8 +747,8 @@ describe('PR #78 review N2: group write', () => {
   });
 });
 
-/** Links in the managed copy are judged by where they really lead (PR #78 review, 7b18e5c). */
-describe('PR #78 review: links in the managed copy', () => {
+/** Links in the managed copy are judged by where they really lead (PR #78). */
+describe('links in the managed copy', () => {
   function copyIn(h: Harness): { prefix: string; nm: string } {
     const prefix = path.join(h.home, 'cli');
     npmPrefixCopy(prefix, VERSION);
@@ -847,8 +847,8 @@ describe('PR #78 review: links in the managed copy', () => {
 });
 
 /** The final check of 7b18e5c: kernel paths, a stale walk after npm, and your own builds. */
-describe('PR #78 review: kernel paths, the walk after an install, own builds', () => {
-  /** The reviewer's run5 escape, built under `root`: a link whose text stays inside. */
+describe('kernel paths, the walk after an install, own builds', () => {
+  /** An escape, built under `root`: a link whose text stays inside. */
   function escape(root: string, deep: string): { link: string; payload: string } {
     const depth = root.split('/').length - 1;
     const ups = Array(depth).fill('..').join('/');
@@ -906,7 +906,7 @@ describe('PR #78 review: kernel paths, the walk after an install, own builds', (
     );
   });
 
-  it('cache.the-walk-after-npm-is-fresh (probe run7/run7b)', async () => {
+  it('cache.the-walk-after-npm-is-fresh', async () => {
     const h = harness({ trusted: true });
     const prefix = path.join(h.home, 'cli');
     npmPrefixCopy(prefix, '0.0.1');
@@ -968,8 +968,8 @@ describe('PR #78 review: kernel paths, the walk after an install, own builds', (
   });
 });
 
-/** The review of 262ff3c: link text in the managed copy, and code loaded from outside the walk. */
-describe('PR #78 review: link text, closures, ancestor node_modules', () => {
+/** Link text in the managed copy, and code loaded from outside the walk. */
+describe('link text, closures, ancestor node_modules', () => {
   const pkgAt = (dir: string, json: Record<string, unknown> = {}): string => {
     fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
     fs.writeFileSync(
@@ -1105,7 +1105,7 @@ describe('PR #78 review: link text, closures, ancestor node_modules', () => {
     return inspectManaged({ HOME: h.root, OORT_HOME: h.home, PATH: '', ...extra });
   };
 
-  it('ancestors.what-is-inside-a-node_modules-above-the-copy-is-walked-and-capped (review a)', () => {
+  it('ancestors.what-is-inside-a-node_modules-above-the-copy-is-walked-and-capped', () => {
     const h = harness({ trusted: true });
     npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
     expect(managedWith(h).state).toBe('ok');
@@ -1141,7 +1141,7 @@ describe('PR #78 review: link text, closures, ancestor node_modules', () => {
     ).toBeUndefined();
   });
 
-  it('globals.a-relative-NODE_PATH-entry-is-refused-whatever-the-copy (review)', () => {
+  it('globals.a-relative-NODE_PATH-entry-is-refused-whatever-the-copy', () => {
     const h = harness({ trusted: true });
     npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
     expect(managedWith(h).state).toBe('ok');
@@ -1164,7 +1164,7 @@ describe('PR #78 review: link text, closures, ancestor node_modules', () => {
     expect(() => checkAgentPath(main, ctx)).toThrow('relative NODE_PATH entry');
   });
 
-  it('ancestors.a-link-to-a-directory-is-walked-under-the-same-rules-and-cap (review)', () => {
+  it('ancestors.a-link-to-a-directory-is-walked-under-the-same-rules-and-cap', () => {
     const h = harness({ trusted: true });
     npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
     const planted = path.join(h.root, 'node_modules');
@@ -1200,7 +1200,7 @@ describe('PR #78 review: link text, closures, ancestor node_modules', () => {
     );
   });
 
-  it("globals.node's-global-folders-are-checked-and-walked-like-an-ancestor-node_modules (review b)", () => {
+  it("globals.node's-global-folders-are-checked-and-walked-like-an-ancestor-node_modules", () => {
     const h = harness({ trusted: true });
     npmPrefixCopy(path.join(h.home, 'cli'), VERSION);
     // The list: NODE_PATH entries (absolute only), ~/.node_modules, ~/.node_libraries and
@@ -1254,7 +1254,7 @@ describe('PR #78 review: link text, closures, ancestor node_modules', () => {
     expect(() => checkAgentPath(main, ctx)).toThrow(`${found} can be written by others`);
   });
 
-  it('closure.a-linked-directory-gets-the-ancestor-check-and-its-dependencies-are-walked (review c)', () => {
+  it('closure.a-linked-directory-gets-the-ancestor-check-and-its-dependencies-are-walked', () => {
     const h = harness({ trusted: true });
     const pkg = path.join(h.root, 'build', 'oortmem');
     const main = pkgAt(pkg);

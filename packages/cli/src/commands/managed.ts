@@ -93,7 +93,7 @@ const exists = (p: string): boolean => {
 };
 
 /**
- * The managed copy, and whether it is safe to run (PR #78 review, I1). `OORT_HOME` must be a
+ * The managed copy, and whether it is safe to run (PR #78). `OORT_HOME` must be a
  * directory (not a link to nothing), and it, the prefix and every step down to `main.js` must be
  * this user's with no group or other write (`trustedPath`, strict). A copy in a temporary
  * directory, or one `unstableCopy` rejects, does not count. The layout must check out:
@@ -128,7 +128,7 @@ export function inspectManaged(env: Record<string, string | undefined>): Managed
   const prefix = managedPrefixFor(env);
   const hasPrefix = exists(prefix);
   // A copy that is there but not safe is never repaired in place: chmod or chown on it would
-  // adopt whatever someone else put in it. Remove it and install it again (PR #78 review, N1).
+  // adopt whatever someone else put in it. Remove it and install it again (PR #78).
   const again = `rm -r ${sh(prefix)} && oort setup`;
   const remove = (u: Untrusted): ManagedState => ({
     state: 'untrusted',
@@ -226,7 +226,7 @@ export const managedIsCurrent = (m: Managed | undefined): m is Managed =>
 
 /**
  * A path for a printed command: `~/…` when that needs no quotes (the shell expands it), else the
- * absolute path, quoted (`~` inside quotes is not expanded; PR #78 review, M1).
+ * absolute path, quoted (`~` inside quotes is not expanded; PR #78).
  */
 export function shellPath(p: string, home: string): string {
   const t = tilde(p, home);
@@ -332,7 +332,7 @@ export async function installManaged(ctx: Ctx, target = VERSION): Promise<Manage
     return { ok: false, reason: 'no-npm', command, detail: 'npm is not on PATH' };
   }
   const prefix = managedPrefixFor(env);
-  // Never into a managed copy, or an OORT_HOME, that someone else could change (PR #78, I1, M2).
+  // Never into a managed copy, or an OORT_HOME, that someone else could change (PR #78).
   const state = inspectManaged(env);
   if (state.state === 'untrusted') {
     throw new Refusal(untrustedManagedMessage(state.problem, env), { code: 'refused' });
@@ -404,7 +404,7 @@ const WRITABLE = 'a directory someone else can change';
  * Why the running copy is no place to point agents at, or undefined when it is one: what
  * `unstableCopy` rejects (a package cache, a temp directory, fnm's per-shell link, a Node version
  * manager), or a path whose walk from `/` fails `trustedPath` (a directory writable by others,
- * sticky or not, or owned by another user; PR #78 review, I2).
+ * sticky or not, or owned by another user; PR #78).
  */
 export function runningUnstable(ctx: Ctx): string | undefined {
   const entry = ctx.io.entry;
@@ -442,7 +442,7 @@ export function oortPackageRoot(real: string): string | undefined {
 /**
  * The whole package a copy outside the managed one belongs to (`--this-copy`, the fallback,
  * another copy doctor finds), walked as `trustedTree` walks the managed copy, but with the lenient
- * rules (PR #78 review): `main.js` loads all of it. Links out (a pnpm checkout's node_modules)
+ * rules (PR #78): `main.js` loads all of it. Links out (a pnpm checkout's node_modules)
  * are judged by the path to what they open, not walked into.
  */
 export function copyTree(
@@ -485,7 +485,7 @@ export const riskOf = (why: string): string =>
  * Agents are about to be pointed at `p` (any config write: hooks, MCP entries): refuses unless it
  * is the managed copy that checks out and is safe (`inspectManaged`), or a copy outside it that
  * stays put and that nobody else can change (`unstableCopy` with every temp directory, and
- * `trustedPath`, strict inside `OORT_HOME`). Run right before every write (PR #78 review, I1).
+ * `trustedPath`, strict inside `OORT_HOME`). Run right before every write (PR #78).
  */
 export function checkAgentPath(p: string, ctx: Ctx): void {
   const env = ctx.io.env;
@@ -525,7 +525,7 @@ export interface AgentBinary {
  * out, is safe to run and is this version or newer; else this copy, when it stays put and nobody
  * else can change it (`runningUnstable`). When this copy is not one of those, the managed copy is
  * installed first (`say` prints the line); if it cannot be, a refusal names the commands to run.
- * A managed copy that is there but not safe to run is refused outright, with its fix (PR #78, I1).
+ * A managed copy that is there but not safe to run is refused outright, with its fix (PR #78).
  * `dryRun` installs nothing: it returns where the managed copy would be. `thisCopy`
  * (`--this-copy`, for developers testing their own build) writes this copy even when a managed
  * copy is there, and installs nothing; an unstable or untrusted copy is still refused.

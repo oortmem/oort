@@ -2029,7 +2029,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
    * The cached answer to "does this store hold a link confirmed at a terminal". Without one, the
    * default recall (a person's links only) has nothing to follow and reads nothing. The answer is
    * kept until the database changes: `PRAGMA data_version` moves when another connection
-   * commits, and this handle's own link writes and forgets drop it.
+   * commits, and this handle's own link writes drop it. Its own `forget` does not: a forget only
+   * removes links, so the answer can stay `true` after the last one went, and the next recall
+   * then reads the link index and finds nothing.
    */
   function anyUserLinks(stats: LinkStats): boolean {
     const version: unknown = db.pragma('data_version', { simple: true });

@@ -295,7 +295,7 @@ describe('forgetMemory (CON-144)', () => {
     entities: ['db-primary', 'db-replica'],
   };
 
-  it('forget.a-shared-entity-b-replaced-is-a-value-a-rewrite-may-not-keep (re-review 1a)', async () => {
+  it('forget.a-shared-entity-b-replaced-is-a-value-a-rewrite-may-not-keep', async () => {
     const { r, b } = await pair(primary, replica, () => ({
       text: 'The database host is db-replica, db-primary.',
       stub: 'database host db-replica',
@@ -311,7 +311,7 @@ describe('forgetMemory (CON-144)', () => {
     expect(ok.r.rewritten).toEqual([{ id: 'b', text: 'The database host is db-replica.' }]);
   });
 
-  it('forget.an-unchanged-b-that-still-holds-a-value-is-reported (re-review 1b)', async () => {
+  it('forget.an-unchanged-b-that-still-holds-a-value-is-reported', async () => {
     const { r } = await pair(primary, replica, (m) => ({
       text: m.text,
       stub: m.stub,
@@ -320,7 +320,7 @@ describe('forgetMemory (CON-144)', () => {
     expect(r.notRewritten).toEqual([{ id: 'b', reason: 'unchanged' }]);
   });
 
-  it('forget.a-url-change-is-rewritten (re-review 3)', async () => {
+  it('forget.a-url-change-is-rewritten', async () => {
     const { r } = await pair(
       { text: 'Staging is at https://old.example.com.', stub: 'staging', entities: [] },
       {
@@ -371,7 +371,7 @@ describe('forgetMemory (CON-144)', () => {
       }
     });
 
-    it('forget.www-a-default-port-and-full-width-letters-are-the-same-url (security review)', async () => {
+    it('forget.www-a-default-port-and-full-width-letters-are-the-same-url', async () => {
       for (const text of [
         'endpoint is www.old.example.com',
         'endpoint is \uff4f\uff4c\uff44.example.com',
@@ -410,7 +410,7 @@ describe('forgetMemory (CON-144)', () => {
     });
   });
 
-  it('forget.a-port-change-of-the-api-is-rewritten (re-review 3)', async () => {
+  it('forget.a-port-change-of-the-api-is-rewritten', async () => {
     for (const entities of [['API'], []]) {
       const { r } = await pair(
         {
@@ -435,7 +435,7 @@ describe('forgetMemory (CON-144)', () => {
     }
   });
 
-  it('forget.paths-that-share-directories-are-rewritten (re-review 3)', async () => {
+  it('forget.paths-that-share-directories-are-rewritten', async () => {
     const { r } = await pair(
       { text: 'Logs go to /srv/app/v1/logs.', stub: 'logs', entities: [] },
       {
@@ -448,7 +448,7 @@ describe('forgetMemory (CON-144)', () => {
     expect(r.rewritten).toEqual([{ id: 'b', text: 'Logs are in /srv/app/v2/logs.' }]);
   });
 
-  it('forget.a-lower-case-value-b-calls-the-old-one-is-found (re-review 4)', async () => {
+  it('forget.a-lower-case-value-b-calls-the-old-one-is-found', async () => {
     const a = { text: 'The project uses postgres for storage.', stub: 'storage', entities: [] };
     const b = {
       text: 'The project switched from postgres to sqlite for storage.',

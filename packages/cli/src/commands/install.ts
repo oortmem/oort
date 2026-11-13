@@ -188,7 +188,7 @@ export async function installCommand(
     from = bin.from;
     version = bin.version;
     installed = bin.installed === true;
-    checkAgentPath(cmd, ctx); // the last check before the write (PR #78 review, I1)
+    checkAgentPath(cmd, ctx); // the last check before the write (PR #78)
     ({ changed } = installHooks(file, cmd));
     ctx.io.out(
       changed

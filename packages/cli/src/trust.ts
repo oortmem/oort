@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { shellWord as sh } from './util.js';
 
 /**
- * Whether a binary is safe for agents to run (PR #78 review, I1 and I2): who could change it
+ * Whether a binary is safe for agents to run (PR #78): who could change it
  * before the next hook runs it. Agents run whatever path `oort install` wrote, every prompt, so a
  * path that someone else can write, or one that a cleaner deletes, is no place for them.
  */
@@ -47,7 +47,7 @@ export interface Untrusted {
   command?: string;
 }
 
-// What the kernel opens, not Node's own resolution of link text (PR #78 review).
+// What the kernel opens, not Node's own resolution of link text (PR #78).
 const realpathOf = (p: string): string | undefined => {
   try {
     return fs.realpathSync.native(p);
@@ -95,7 +95,7 @@ function readSystemGroups(): SystemGroups {
 
 /**
  * Whether members of group `gid` can already become root, so letting them write changes nothing
- * (PR #78 review, N2). macOS: `wheel` (0) and `admin` (80), by number, with no lookup (every
+ * (PR #78). macOS: `wheel` (0) and `admin` (80), by number, with no lookup (every
  * account's own group there is `staff`, 20, which never counts). Elsewhere, from `/etc/group`:
  * `root`, `sudo`, `wheel` or `admin`, or this user's private group (named after the user, with no
  * other members and no other user's primary group). Read once per process; never spawns.
@@ -132,7 +132,7 @@ export function groupCanBecomeRoot(gid: number, sys?: SystemGroups): boolean {
  *   group or other write anywhere. Otherwise (a copy the user installed elsewhere): no other
  *   write, sticky or not (`/tmp`); no group write inside HOME; outside it, group write only from a
  *   group that can already become root (`groupCanBecomeRoot`: Homebrew's `/opt/homebrew/lib` is
- *   `admin`, `/usr/local/lib/node_modules` often `wheel`), never `staff` (PR #78 review, N2).
+ *   `admin`, `/usr/local/lib/node_modules` often `wheel`), never `staff` (PR #78).
  *
  * The fix it names never adopts what is not yours: `chmod` only for a directory of this user's,
  * never `chown` (that would make someone else's files yours). Undefined when it passes. A path
@@ -197,7 +197,7 @@ export function trustedPath(
         // Strict (OORT_HOME, the user's own): tightening it is the fix (when a managed copy is in
         // it, inspectManaged removes that first). Anywhere else, what is below may have been
         // changed already: tightening alone would adopt it, so the hint says to rebuild or
-        // reinstall too, and is never a command to run as it is (PR #78 review, N1).
+        // reinstall too, and is never a command to run as it is (PR #78).
         ...(!owned
           ? { fix: elsewhere }
           : opts.strict
@@ -246,7 +246,7 @@ export function clearTreeCache(): void {
 
 /**
  * Forgets what `trustedTree` found under `prefix`: an install has just rewritten it, so the
- * check after it walks it again (PR #78 review: a stale ok after npm ran).
+ * check after it walks it again (a stale ok after npm ran).
  */
 export function forgetTree(prefix: string): void {
   const root = realpathOf(prefix) ?? path.resolve(prefix);
@@ -271,7 +271,7 @@ export interface TreeOptions {
 /**
  * Walks everything under `prefix` (the managed copy: `bin/`, and `lib/node_modules` with oortmem,
  * its `dist/` and every dependency Node could resolve from there; or a copy's own package root),
- * with lstat and no symlink followed (PR #78 follow-up review). `main.js` loads all of it. A
+ * with lstat and no symlink followed (PR #78). `main.js` loads all of it. A
  * link's own owner counts, and where it leads is what the kernel opens (`realpathSync.native`),
  * never what its text says. Any other kind of entry (a FIFO, a socket, a device) does not belong.
  * Iterative, at most `cap` entries; past that it is not vouched for. The result is kept for the
@@ -325,7 +325,7 @@ function walk(
   const home = opts.home === undefined ? undefined : (realpathOf(opts.home) ?? opts.home);
   const groupOk = opts.groupOk ?? ((gid: number) => groupCanBecomeRoot(gid));
   // Never chmod or chown a tree like this: its files may not be what npm put there, and either
-  // would make them yours. Remove it and install it again (PR #78 review, N1). A copy of the
+  // would make them yours. Remove it and install it again (PR #78). A copy of the
   // user's own: rebuild or reinstall it, or use the managed copy.
   const again = opts.strict
     ? `rm -r ${sh(root)} && oort setup`
@@ -367,7 +367,7 @@ function walk(
     if (own !== undefined) return own;
     if (st.isSymbolicLink()) {
       // Judged by where the kernel takes it, not by its text: `x/../../y` through a link `x`
-      // resolves elsewhere than it reads (PR #78 review). In the managed copy, `..` only in npm's
+      // resolves elsewhere than it reads (PR #78). In the managed copy, `..` only in npm's
       // own link shapes, and only into the copy.
       let raw: string;
       try {
@@ -503,7 +503,7 @@ export function globalFolders(
 /**
  * A relative `NODE_PATH` entry: Node resolves it against the hook's working directory (a repo the
  * agent is working in), so it is whatever someone put there, and `globalFolders` leaves it out.
- * Refused, with the fix of making it absolute or removing it (PR #78 review).
+ * Refused, with the fix of making it absolute or removing it (PR #78).
  */
 export function relativeNodePath(env: Record<string, string | undefined>): Untrusted | undefined {
   const raw = env['NODE_PATH'] ?? '';
@@ -717,7 +717,7 @@ const closureCache = new Map<string, Untrusted | null>();
 
 /**
  * A copy of your own (`--this-copy`, the fallback), walked as far as Node will load from it (PR
- * #78 review): its package, then every package it needs at run time (`dependencies`, optional
+ * #78): its package, then every package it needs at run time (`dependencies`, optional
  * ones, installed peers), found the way Node finds them from each package's realpath, each walked
  * with the lenient rules, recursively, once each; and every `node_modules` Node would search above
  * them (`ancestorModules`). Dev dependencies are not walked: a pnpm checkout links them into

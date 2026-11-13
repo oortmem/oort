@@ -496,7 +496,7 @@ describe('oort cloud commands (CON-76)', () => {
   });
 });
 
-describe('cloud API follow-ups (CON-76, oortcloud PR #3)', () => {
+describe('cloud API follow-ups (CON-76)', () => {
   const stopThenQueue = async (e: Env): Promise<void> => {
     const transcript = writeTranscript(path.join(e.root, 'claude-projects'), e.cwd);
     await e.run(['hook', 'Stop'], {
@@ -662,7 +662,7 @@ describe('cloud API follow-ups (CON-76, oortcloud PR #3)', () => {
   });
 });
 
-describe('cloud mode, time modes (review 12)', () => {
+describe('cloud mode, time modes', () => {
   it('cloud.recall-warns-when-the-api-ignores-a-requested-mode', async () => {
     const e = setup('cloud');
     await seed(e, 'cloud');
@@ -677,7 +677,7 @@ describe('cloud mode, time modes (review 12)', () => {
   });
 });
 
-describe('Stars and Oort Cloud (CON-62 review)', () => {
+describe('Stars and Oort Cloud (CON-62)', () => {
   const stop = async (e: Env) => {
     const transcript = writeTranscript(path.join(e.root, 'claude-projects'), e.cwd);
     return e.run(['hook', 'Stop'], {

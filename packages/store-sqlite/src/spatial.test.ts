@@ -1,5 +1,5 @@
 /**
- * The SQLite store's spatial seam (CON-84, PR #102 review): filters reach SQL only as bound
+ * The SQLite store's spatial seam (CON-84, PR #102): filters reach SQL only as bound
  * values, `k` is taken after the filter, scope still applies, the R*Tree follows the rows (and is
  * rebuilt from them when missing), and a damaged stored place never breaks a recall.
  */

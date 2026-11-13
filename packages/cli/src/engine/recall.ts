@@ -255,6 +255,19 @@ export function chosenDegradations<T extends string>(
 }
 
 /**
+ * `memories` without any linked memory whose hit is not among them. Recall returns a linked
+ * memory only beside the hit it was reached from (`explanation.via.from`); a list cut or
+ * filtered afterwards goes through this, so the rule still holds.
+ */
+export function withSeeds<M extends RecallResult['memories'][number]>(memories: readonly M[]): M[] {
+  const hits = new Set(memories.filter((m) => m.explanation.via === undefined).map((m) => m.id));
+  return memories.filter((m) => {
+    const from = m.explanation.via?.from;
+    return from === undefined || hits.has(from);
+  });
+}
+
+/**
  * Recall for the scope's project plus global memories, as `w.agent`: the person's Planet and this
  * agent's own Star (`include` narrows it); lexical-only without a Voyage key. A level the agent
  * cannot read is a refusal (`scope_denied`), not an empty answer. `opts.k` caps the results

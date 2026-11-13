@@ -326,7 +326,7 @@ expert's record from the model, not from you:
 - `judge.confirm` is refused (`expert-only`).
 
 **Expert role** is one explicit option, for code paths where a person really decided (a review
-UI, an import job): `createOort({ judge: { role: 'expert', operator: 'marcus' } })`. It records
+UI, an import job): `createOort({ judge: { role: 'expert', operator: 'grace' } })`. It records
 anyone's judgments as `via: 'sdk'`, which counts as a person's, and may `confirm` an agent's
 record. `scoped({ judgeRole: 'agent' })` narrows a handle back to the agent role; nothing widens
 it. Framework tools always run in the agent role.
