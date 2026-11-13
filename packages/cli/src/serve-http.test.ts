@@ -124,7 +124,7 @@ describe('the memory protocol on the socket', () => {
       version: VERSION,
       protocol: 1,
       mode: 'local',
-      capabilities: ['judgments', 'consolidate'],
+      capabilities: ['judgments', 'consolidate', 'links'],
     });
     const ping = await callDaemon(daemon.socket, 'ping', {}, { budgetMs: 2000 });
     expect(ping.ok).toBe(true);
@@ -146,6 +146,43 @@ describe('the memory protocol on the socket', () => {
       cwd: path.join(root, 'a dir'),
     });
     expect(r.headers['access-control-allow-origin']).toBeUndefined();
+  });
+
+  it('links and unlinks two memories, asserted by agent (CON-148)', async () => {
+    // Its own org: the memories stay out of the other tests' recalls.
+    const cwd = { 'oort-org': 'links-test' };
+    const saved = await request(
+      'POST',
+      '/v1/remember',
+      cwd,
+      JSON.stringify({ facts: ['The cache is redis.', 'The queue is sqs.'] }),
+    );
+    const ids = (saved.body.data?.['results'] as { id: string }[]).map((r) => r.id);
+    expect(ids).toHaveLength(2);
+    const [a, b] = ids as [string, string];
+    const linked = await request('POST', '/v1/links', cwd, JSON.stringify({ from: a, to: b }));
+    expect(linked.body.data).toEqual({ linked: true, unblocked: false, assertedBy: 'agent' });
+    const ex = await request('GET', `/v1/memories/${a}/explain`, cwd);
+    expect(ex.body.data?.['links']).toMatchObject([
+      { kind: 'explicit', id: b, assertedBy: 'agent' },
+    ]);
+    const extra = await request(
+      'POST',
+      '/v1/links',
+      cwd,
+      JSON.stringify({ from: a, to: b, assertedBy: 'user' }),
+    );
+    expect([extra.status, extra.body.error?.['code']]).toEqual([400, 'usage']);
+    const gone = await request('DELETE', `/v1/links?from=${a}&to=${b}`, cwd);
+    expect(gone.body.data).toEqual({ removed: true, blocked: expect.any(Boolean) });
+    expect((await request('DELETE', `/v1/links?from=${a}&to=${b}&x=1`, cwd)).status).toBe(400);
+    const missing = await request(
+      'POST',
+      '/v1/links',
+      cwd,
+      JSON.stringify({ from: a, to: 'eeeeeeee-0000-4000-8000-000000000001' }),
+    );
+    expect(missing.body.error?.['code']).toBe('not-found');
   });
 
   it('keeps end users to their Planet and needs an org', async () => {

@@ -206,6 +206,47 @@ rejects it, and every store rejects it at run time with a `TypeError`.
   others (changed, gone, or outside the grant) are skipped and listed. `forgetMemory` uses it so a
   rewrite never overwrites a change made while the writer answered.
 
+## Links
+
+A store that sets `links: true` (CON-148) keeps relationships between memories and implements
+three more methods. A link holds no content: two ids, a kind, who asserted it and when.
+
+- `link(grant, a, b, { assertedBy, at? })` writes an `explicit` link, once per pair, and removes a
+  block on the pair. `assertedBy` is `user` or `agent`; linking again as `user` upgrades an
+  `agent` link, and an agent never downgrades a person's. Returns
+  `{ linked, unblocked, assertedBy }`.
+- `unlink(grant, a, b, { assertedBy, at? })` deletes the pair's `explicit` and `recalledWith`
+  rows. When none was deleted, or the pair is related by an index (a shared entity key, or the
+  same session in the same node), it writes a `blocked` row. Returns `{ removed, blocked }`.
+  Called as `agent` on a link asserted by `user`, it changes nothing and returns
+  `{ removed: false, blocked: false, refused: 'asserted-by-user' }`. `link` as `agent` on a pair
+  blocked by `user` likewise changes nothing and returns `refused: 'asserted-by-user'`.
+- `upsertManyLinked(grant, memories, pairs, { assertedBy })` is `upsertMany` followed by `link`
+  for each pair, in one transaction (an import). A pair `link` would refuse is skipped.
+- `linksOf(grant, id)` returns `{ links, blocked, hidden }` for a memory inside `grant.read`:
+  `links` and `blocked` hold only rows whose other end is inside `grant.read`; `hidden` counts
+  the stored link rows (not blocks) whose other end is not. `null` for a memory outside it.
+
+The rules every such store keeps:
+
+- **Both ends writable, one node, never `hive`.** `link` and `unlink` need both memories inside
+  `grant.write`, at the same node (project excluded), not at level `hive`, and distinct. For
+  anything else they return `null` and write nothing, exactly as for an id that does not exist.
+- **`user` is a record, not a right.** `assertedBy: 'user'` means the caller says the link was
+  confirmed at a terminal. A store never gives a `user` link more access than an `agent` link.
+- **Forget cascades.** `forget` removes every link, block and entity row of the memory in the
+  same transaction as the memory. Nothing of a forgotten memory is left in the link tables.
+- **Upsert keeps links.** A rewrite of a memory (including the successor rewrite `forgetMemory`
+  does) keeps its links and rewrites its entity rows.
+- **The entity index holds current memories only.** A memory has one row per normalised entity
+  (`entityKeys`: NFKC, lower case, whitespace collapsed, 2 to 128 characters, at most 16 per
+  memory) while it is not expired, not superseded and not at level `hive`. `expireMany` and a
+  superseding upsert remove its rows.
+- **Episode positions.** A memory with `source.sessionId` (not at level `hive`) has a position in
+  its node's session: facts of one `turnRef` share a position, and a rewrite keeps it.
+
+Recall does not read links yet.
+
 ## Places (spatial memory)
 
 A store that sets `spatial: true` (0.9.0 or newer, CON-84) keeps `Memory.place` as written and
@@ -413,6 +454,29 @@ vector table is rebuilt from the stored embeddings.
   the migration refuses, naming how many such rows there are, and changes nothing. Export or delete
   them with Oort 0.2.x, then open the store again.
 
+Schema version 8 (memory links, CON-148) adds three tables and two columns:
+
+- `nodes`: each node key as a small integer.
+- `memory_entities (node_id, entity_key, memory_rid)`: the entity index of current memories.
+- `memory_links (kind, node_id, a_rid, b_rid, access_log, asserted_by, agent_id, created_at)`:
+  `explicit`, `distilledFrom`, `recalledWith` and `blocked` rows, `a_rid < b_rid` for undirected
+  kinds. No row holds text.
+- `memories.session_id` and `memories.episode_seq`: a memory's place in its session.
+
+Every row of the new tables references its memory with `ON DELETE CASCADE`. Opening a version 7
+store creates them and fills `nodes`, `memory_entities`, `session_id` and `episode_seq` from the
+stored rows in one transaction, without a copy (nothing existing is rewritten); a failure leaves
+version 7 exactly. `migrate: false` refuses it with `StoreMigrationRequiredError`. The guard
+triggers now call `oort_writer_v8()`, so an Oort that predates version 8 fails on its next write
+(`no such function: oort_writer_v8`) instead of writing a memory without its index rows.
+`downgradeSqliteStore({ path, to: 7 })` drops the link schema and restores version 7's guard; it
+refuses, before taking its copy, while any `explicit`, `distilledFrom` or `blocked` row exists.
+`oort unlink` is not a way to clear them: unlinking a pair that shares an entity or a session
+leaves a block. `downgradeSqliteStore({ path, to: 7, dropLinks: true })` deletes every link and
+block on purpose and goes down; the `pre-downgrade` copy it takes first still holds them. Learned
+`recalledWith` rows are always dropped. Forgetting the last memory of a node deletes the node's
+row in `nodes`, which names an org, customer, agent or run.
+
 `downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x,
 `downgradeSqliteStore({ path, to: 2 })` to version 2 for Oort 0.3 to 0.5, and `{ path, to: 3 }` to
 version 3 for Oort before tokeniser v2 (the lexical index is rebuilt with tokeniser v1, as
@@ -429,6 +493,12 @@ Any of them would fail on the changed schema, and the next `oort` command migrat
 straight back up.
 
 ## Testing a store
+
+A store with `links: true` also runs `linksConformance(name, make, probe)` from the same module.
+`probe(store)` returns a `LinksProbe` that reads the store's own entity, link and episode rows, so
+the suite can prove what is left behind. It covers the cascade on forget, upsert keeping links,
+superseded and expired memories leaving the entity index, the same-node and no-`hive` rules, and
+grant filtering of `linksOf`.
 
 `@oortmem/core/store-conformance` exports `storeConformance(name, make)`. It runs the contract
 tests and the isolation suite:

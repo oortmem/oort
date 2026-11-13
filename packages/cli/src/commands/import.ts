@@ -508,10 +508,12 @@ export async function importFileCommand(
     }
     const { orgId, customerId, agentId } = w.scope;
     let memories: Memory[];
+    let explicit: [string, string][];
     let exportedAt: unknown;
     try {
       const parsed = parseExport(text, { planet: { orgId, customerId } });
       memories = parsed.memories;
+      explicit = parsed.links;
       exportedAt = parsed.manifest.exportedAt;
     } catch (e) {
       if (e instanceof ExportFormatError) {
@@ -590,10 +592,11 @@ export async function importFileCommand(
         ],
       ]),
     );
-    const result = (imported: number) => ({
+    const result = (imported: number, linked = 0) => ({
       file: full,
       memories: memories.length,
       imported,
+      links: linked,
       skipped: already,
       outside,
       invalid,
@@ -651,11 +654,22 @@ export async function importFileCommand(
         ready.push({ ...m, ...(v !== undefined && { embedding: v }) });
       });
     }
-    await w.store.upsertMany(grant, ready);
+    // The file's explicit links between two memories this import writes (CON-148), asserted by
+    // `agent`: a file never says a person asserted one, and never links into a memory that was
+    // already here (a line reusing its id is skipped above; so is every link to it). Memories
+    // and links land in one transaction, so a crash cannot keep the memories without them.
+    const imported = new Set(ready.map((m) => m.id));
+    const pairs = explicit.filter(([a, b]) => imported.has(a) && imported.has(b));
+    let linked = 0;
+    if (w.store.upsertManyLinked !== undefined) {
+      ({ linked } = await w.store.upsertManyLinked(grant, ready, pairs, { assertedBy: 'agent' }));
+    } else {
+      await w.store.upsertMany(grant, ready);
+    }
     ctx.io.out(
-      `Imported ${ready.length} memories from ${fileShown}${already > 0 ? ` (${already} already here)` : ''}.\n`,
+      `Imported ${ready.length} memories from ${fileShown}${already > 0 ? ` (${already} already here)` : ''}${linked > 0 ? `, and ${linked} ${linked === 1 ? 'link' : 'links'}` : ''}.\n`,
     );
-    if (json) emit(ctx, { outcome: 'imported', ...result(ready.length) });
+    if (json) emit(ctx, { outcome: 'imported', ...result(ready.length, linked) });
     return 0;
   });
 }

@@ -63,6 +63,7 @@ const ANNOTATIONS: Record<string, Record<string, boolean>> = {
   whoami: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   record_judgment: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   judge: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  link: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
 };
 
 describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
@@ -319,6 +320,60 @@ describe('oort mcp tools', () => {
     expect(JSON.stringify(me)).not.toMatch(/@/);
   });
 
+  it('mcp.link-is-asserted-by-agent-and-explain-lists-it (CON-148)', async () => {
+    const { client, h } = await connect('legacy');
+    const a = memory({ text: 'The cache is redis.' });
+    const b = memory({ text: 'The queue is sqs.' });
+    await h.store.upsertMany(TG, [a, b]);
+    const linked = await client.callTool({ name: 'link', arguments: { from: a.id, to: b.id } });
+    expect(json(linked)).toEqual({ linked: true, unblocked: false, asserted_by: 'agent' });
+    const explained = json<{ links: unknown[] }>(
+      await client.callTool({ name: 'explain', arguments: { id: b.id } }),
+    );
+    expect(explained.links).toEqual([
+      {
+        kind: 'explicit',
+        id: a.id,
+        direction: 'both',
+        asserted_by: 'agent',
+        created_at: expect.any(String),
+      },
+    ]);
+    const removed = await client.callTool({
+      name: 'link',
+      arguments: { from: a.id, to: b.id, remove: true },
+    });
+    // The two share a session, so the episode index would relate them again: the pair is blocked.
+    expect(json(removed)).toEqual({ removed: true, blocked: true });
+    // A link confirmed at a terminal: the tool cannot remove it.
+    await h.store.link!(TG, a.id, b.id, { assertedBy: 'user' });
+    const kept = await client.callTool({
+      name: 'link',
+      arguments: { from: a.id, to: b.id, remove: true },
+    });
+    expect(kept.isError).toBe(true);
+    expect(text(kept)).toContain('confirmed at a terminal');
+    expect((await h.store.linksOf!(TG, a.id))?.links).toMatchObject([{ assertedBy: 'user' }]);
+    // A pair unlinked at a terminal: the tool cannot link it again.
+    await h.store.unlink!(TG, a.id, b.id, { assertedBy: 'user' });
+    await h.store.unlink!(TG, a.id, b.id, { assertedBy: 'user' });
+    const blockedPair = await client.callTool({
+      name: 'link',
+      arguments: { from: a.id, to: b.id },
+    });
+    expect(blockedPair.isError).toBe(true);
+    expect(text(blockedPair)).toContain('unlinked at a terminal');
+    expect((await h.store.linksOf!(TG, a.id))?.blocked).toEqual([b.id]);
+    // A pair it cannot link is refused without naming either id.
+    const missing = await client.callTool({ name: 'explain', arguments: { id: 'nope' } });
+    const self = await client.callTool({ name: 'link', arguments: { from: a.id, to: a.id } });
+    const none = await client.callTool({ name: 'link', arguments: { from: a.id, to: 'nope' } });
+    expect([self.isError, none.isError]).toEqual([true, true]);
+    expect(text(self)).toContain('No such pair of memories');
+    expect(text(self)).not.toContain(a.id.slice(0, 8));
+    expect(text(none).replace(/".*"/, '')).toBe(text(missing).replace(/".*"/, ''));
+  });
+
   it('mcp.ids-from-another-scope-are-not-found', async () => {
     const { client, h } = await connect('legacy');
     const other = memory({
@@ -407,6 +462,8 @@ describe('oort mcp with places (CON-84)', () => {
     const w = await h.wire(h.cwd);
     const backend = localBackend({ wired: { ...w, mode: 'cloud', cloud: {} as CloudClient } });
     expect(backend.spatial).toBeUndefined();
+    // Oort Cloud holds no links yet (CON-153): the tool is not offered.
+    expect(backend.link).toBeUndefined();
     await w.store.close();
   });
 });

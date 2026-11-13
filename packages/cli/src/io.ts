@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as readline from 'node:readline/promises';
+import * as tty from 'node:tty';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { homeFrom } from './serve-protocol.js';
@@ -33,6 +34,12 @@ export interface Io {
   readStdin(capMs?: number): Promise<string>;
   /** Prints `question` on stderr (never stdout, which may be piped data) and reads one line from stdin. */
   ask(question: string): Promise<string>;
+  /**
+   * Asks on the controlling terminal itself (`/dev/tty`), never stdin: an answer piped in is not
+   * read. Undefined when the process has no controlling terminal. This narrows what counts as a
+   * confirmation at a terminal; a program that drives a pseudo-terminal can still answer.
+   */
+  askTerminal?(question: string): Promise<string | undefined>;
   /** Like `ask` (the question on stderr), with the typed input hidden on a terminal; a pipe supplies one line. Never echoed. */
   askSecret(question: string): Promise<string>;
   /** Starts a detached `oort hook drain` in `cwd` and does not wait for it. */
@@ -186,6 +193,34 @@ export function processIo(
         return await rl.question(question);
       } finally {
         rl.close();
+      }
+    },
+    async askTerminal(question) {
+      if (process.platform === 'win32') {
+        // No /dev/tty: the console, when stdin and stderr are both it.
+        if (!process.stdin.isTTY || !process.stderr.isTTY) return undefined;
+        const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+        try {
+          return await rl.question(question);
+        } finally {
+          rl.close();
+        }
+      }
+      let fd: number;
+      try {
+        fd = fs.openSync('/dev/tty', 'r+');
+      } catch {
+        return undefined;
+      }
+      const input = new tty.ReadStream(fd);
+      const output = new tty.WriteStream(fd);
+      const rl = readline.createInterface({ input, output });
+      try {
+        return await rl.question(question);
+      } finally {
+        rl.close();
+        input.destroy();
+        output.destroy();
       }
     },
     askSecret(question) {

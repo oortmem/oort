@@ -150,6 +150,8 @@ export function fakeIo(opts: {
   /** The script the CLI was started as (`process.argv[1]`). */
   entry?: string;
   answer?: string;
+  /** What `askTerminal` returns (the controlling terminal); absent means there is none. */
+  terminal?: string;
   /** What `askSecret` returns. */
   secret?: string;
 }): FakeIo {
@@ -180,6 +182,11 @@ export function fakeIo(opts: {
     async ask(q) {
       io.asked.push(q);
       return opts.answer ?? '';
+    },
+    async askTerminal(q) {
+      if (opts.terminal === undefined) return undefined;
+      io.asked.push(q);
+      return opts.terminal;
     },
     async askSecret(q) {
       io.asked.push(q);

@@ -66,6 +66,7 @@ import {
 } from './commands/models.js';
 import { observeCommand } from './commands/observe.js';
 import { OPEN_TARGETS, openCommand, type OpenDeps, type OpenTarget } from './commands/open.js';
+import { linkCommand } from './commands/link.js';
 import { pinCommand } from './commands/pin.js';
 import {
   projectConstellationCommand,
@@ -802,6 +803,22 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--json', 'print oort.v1 JSON')
     .action(run((id: string) => pinCommand(id, false, ctx)));
 
+  p.command('link')
+    .description('link two memories that belong together')
+    .argument('<a>', 'memory id or unique prefix')
+    .argument('<b>', 'memory id or unique prefix')
+    .option('--yes', 'do not ask (the link is then recorded as asserted by an agent)')
+    .option('--json', 'print oort.v1 JSON')
+    .action(run((a: string, b: string, o: { yes?: boolean }) => linkCommand(a, b, false, o, ctx)));
+
+  p.command('unlink')
+    .description('remove a link, or keep two memories from being linked')
+    .argument('<a>', 'memory id or unique prefix')
+    .argument('<b>', 'memory id or unique prefix')
+    .option('--yes', 'do not ask (the change is then recorded as made by an agent)')
+    .option('--json', 'print oort.v1 JSON')
+    .action(run((a: string, b: string, o: { yes?: boolean }) => linkCommand(a, b, true, o, ctx)));
+
   const project = p
     .command('project')
     .description('trust a project id for this repository (oort.config.json project.id)');
@@ -1097,6 +1114,8 @@ export const HELP_GROUPS: readonly (readonly [string, readonly string[]])[] = [
       'forget',
       'pin',
       'unpin',
+      'link',
+      'unlink',
       'revalidate',
       'import',
       'export',

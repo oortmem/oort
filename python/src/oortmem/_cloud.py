@@ -521,6 +521,7 @@ class CloudOps:
             ],
             "chain": chain,
             "hiddenLinks": hidden,
+            "links": [],
         }
 
     def whoami(self, p: "CloudPrincipal") -> Dict[str, Any]:

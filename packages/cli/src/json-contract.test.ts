@@ -95,6 +95,8 @@ const CONTRACT = [
   'constellation detach',
   'pin',
   'unpin',
+  'link',
+  'unlink',
   'project link',
   'project unlink',
   'project privacy',
@@ -419,6 +421,22 @@ describe('oort.v1: memories (local store)', () => {
       changed: true,
     });
     bad(await run(['unpin', 'ffff', '--json']), 'unpin', 'not-found');
+    const other = memory();
+    await h.store.upsert(TG, other);
+    expect(ok(await run(['link', m.id, other.id, '--json']), 'link')).toEqual({
+      from: m.id,
+      to: other.id,
+      linked: true,
+      unblocked: false,
+      assertedBy: 'agent',
+    });
+    bad(await run(['link', m.id, 'ffff', '--json']), 'link', 'not-found');
+    expect(ok(await run(['unlink', m.id, other.id, '--json']), 'unlink')).toMatchObject({
+      from: m.id,
+      to: other.id,
+      removed: true,
+    });
+    bad(await run(['unlink', m.id, m.id, '--json']), 'unlink', 'not-found');
     const refused = bad(await run(['forget', m.id, '--json']), 'forget', 'needs-confirmation');
     expect(refused.fix).toBe(`oort forget ${m.id} --json --yes`);
     expect(ok(await run(['forget', m.id, '--yes', '--json']), 'forget')).toMatchObject({

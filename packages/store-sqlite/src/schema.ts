@@ -1,6 +1,7 @@
 import type { Database } from 'better-sqlite3';
 import {
   checkPlace,
+  entityKeys,
   hasSegmentedScript,
   lexicalIcuVersion,
   LEXICAL_VERSION,
@@ -38,8 +39,15 @@ import { startRabitqBuild, dropRabitqIndex, hasRabitqIndex } from './rabitq-stor
  *    itself, `memories_rq` and its three companion tables (`rabitq-store.ts`), is built from the
  *    int8 vectors when the store asks for it (`vectorIndex: 'rabitq'`) and dropped again by
  *    `int8` or `binary`. Additive: no row, vector or index of version 6 is rewritten.
+ * 8: memory relationships (CON-148). `nodes` (a node key as a small integer), `memory_entities`
+ *    (the entity index of current memories: one row per memory and normalised entity),
+ *    `memory_links` (explicit, distilledFrom and recalledWith links, and blocks), and two columns
+ *    on `memories`, `session_id` and `episode_seq` (a memory's place in its session). Every row
+ *    of the new tables cascades with its memory. The guard triggers call `oort_writer_v8()`, so a
+ *    writer that predates it (which would write a memory without its index rows) fails loudly.
+ *    The migration fills them from the stored rows in one transaction; nothing is rewritten.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /**
  * The binary index (schema version 6): one row per searchable (hot or warm) vector, with its
@@ -51,13 +59,20 @@ export const BIT_TABLE = 'memories_vec_bit';
 
 /**
  * The SQL function every write to `memories` calls through the guard triggers. A connection
- * defines it with `defineWriterGuard`; one that does not (an Oort that predates version 7) gets
- * `no such function: oort_writer_v7` and writes nothing.
+ * defines it with `defineWriterGuard`; one that does not (an Oort that predates version 8) gets
+ * `no such function: oort_writer_v8` and writes nothing.
  */
-export const WRITER_GUARD = 'oort_writer_v7';
+export const WRITER_GUARD = 'oort_writer_v8';
 
+/** The version 7 guard's function, which a downgrade to version 7 puts back. */
+const WRITER_GUARD_V7 = 'oort_writer_v7';
 /** The version 6 guard's function, which a downgrade to version 6 puts back. */
 const WRITER_GUARD_V6 = 'oort_writer_v6';
+
+/** The link tables of schema version 8 (CON-148). */
+export const NODE_TABLE = 'nodes';
+export const ENTITY_TABLE = 'memory_entities';
+export const LINK_TABLE = 'memory_links';
 
 const GUARD_TRIGGERS = ['insert', 'update', 'delete'] as const;
 
@@ -712,6 +727,224 @@ export function migrateV6toV7(db: Database): void {
 }
 
 /**
+ * The node key of a `memories` row (core's `nodeKey` of its address without the project), from
+ * its address columns.
+ */
+export function nodeKeyOfColumns(r: {
+  level: string;
+  org_id: string;
+  customer_id: string | null;
+  agent_id: string | null;
+  hive_id: string | null;
+  run_id: string | null;
+}): string {
+  const n: Record<string, string> = { level: r.level, orgId: r.org_id };
+  if (r.customer_id !== null) n['customerId'] = r.customer_id;
+  if (r.agent_id !== null) n['agentId'] = r.agent_id;
+  if (r.hive_id !== null) n['hiveId'] = r.hive_id;
+  if (r.run_id !== null) n['runId'] = r.run_id;
+  return nodeKey(n as unknown as NodeRef);
+}
+
+/**
+ * The `node_id` of `key` in `nodes`, added when it is new. Node rows are never deleted while the
+ * store is at version 8.
+ */
+export function nodeIdOf(db: Database, key: string): number {
+  const found = db
+    .prepare<[string], { node_id: number }>(`SELECT node_id FROM ${NODE_TABLE} WHERE node_key = ?`)
+    .get(key);
+  if (found !== undefined) return found.node_id;
+  return Number(
+    db.prepare<[string]>(`INSERT INTO ${NODE_TABLE} (node_key) VALUES (?)`).run(key)
+      .lastInsertRowid,
+  );
+}
+
+/**
+ * The tables, columns and indexes of version 8 (design §4). Plain `CREATE`: a table already in
+ * the way fails the migration, which then changes nothing.
+ *
+ * - `memory_links` is keyed `(kind, a_rid, b_rid)`, `a_rid < b_rid` for undirected kinds; the
+ *   index on `a_rid` lets `forget` cascade without a scan (the key starts with `kind`).
+ * - `asserted_by` and `agent_id` are set on `explicit` and `blocked` rows only; `access_log` on
+ *   `recalledWith` rows only. No row holds text.
+ */
+function createLinkSchema(db: Database): void {
+  db.exec(`
+    ALTER TABLE memories ADD COLUMN session_id TEXT;
+    ALTER TABLE memories ADD COLUMN episode_seq INTEGER;
+    CREATE INDEX memories_episode ON memories (session_id, episode_seq);
+    CREATE TABLE ${NODE_TABLE} (
+      node_id  INTEGER PRIMARY KEY,
+      node_key TEXT    NOT NULL UNIQUE
+    );
+    CREATE TABLE ${ENTITY_TABLE} (
+      node_id    INTEGER NOT NULL REFERENCES ${NODE_TABLE}(node_id),
+      entity_key TEXT    NOT NULL,
+      memory_rid INTEGER NOT NULL REFERENCES memories(rid) ON DELETE CASCADE,
+      PRIMARY KEY (node_id, entity_key, memory_rid)
+    ) WITHOUT ROWID;
+    CREATE INDEX memory_entities_rid ON ${ENTITY_TABLE} (memory_rid);
+    CREATE TABLE ${LINK_TABLE} (
+      kind        TEXT    NOT NULL
+                  CHECK (kind IN ('recalledWith', 'distilledFrom', 'explicit', 'blocked')),
+      node_id     INTEGER NOT NULL REFERENCES ${NODE_TABLE}(node_id),
+      a_rid       INTEGER NOT NULL REFERENCES memories(rid) ON DELETE CASCADE,
+      b_rid       INTEGER NOT NULL REFERENCES memories(rid) ON DELETE CASCADE,
+      access_log  TEXT,
+      asserted_by TEXT CHECK (asserted_by IN ('user', 'agent')),
+      agent_id    TEXT,
+      created_at  TEXT    NOT NULL,
+      PRIMARY KEY (kind, a_rid, b_rid),
+      CHECK (a_rid <> b_rid)
+    ) WITHOUT ROWID;
+    CREATE INDEX memory_links_a ON ${LINK_TABLE} (a_rid);
+    CREATE INDEX memory_links_b ON ${LINK_TABLE} (b_rid, kind);
+  `);
+}
+
+/**
+ * Version 7 to 8, inside the caller's transaction (CON-148): the guard triggers call
+ * `oort_writer_v8`, the link schema is created, and it is filled from the stored rows only:
+ *
+ * - `nodes` from every non-hive memory's node;
+ * - `memory_entities` from each current memory's `entities` (not expired, not superseded, not at
+ *   level `hive`), normalised as core's `entityKeys`; a row whose JSON does not parse has none;
+ * - `session_id` from `source.sessionId` (a non-empty string, not at level `hive`), and
+ *   `episode_seq` by creation order within its node and session, the facts of one `turnRef`
+ *   sharing a number.
+ *
+ * No link row exists before version 8, so none is written. Nothing else changes.
+ */
+export function migrateV7toV8(db: Database): void {
+  dropWriterGuard(db);
+  createWriterGuard(db);
+  createLinkSchema(db);
+  const nodeIds = new Map<string, number>();
+  const nodeId = (key: string): number => {
+    let id = nodeIds.get(key);
+    if (id === undefined) {
+      id = nodeIdOf(db, key);
+      nodeIds.set(key, id);
+    }
+    return id;
+  };
+  const page = db.prepare<
+    [number],
+    {
+      rid: number;
+      level: string;
+      org_id: string;
+      customer_id: string | null;
+      agent_id: string | null;
+      hive_id: string | null;
+      run_id: string | null;
+      entities: string;
+    }
+  >(
+    `SELECT rid, level, org_id, customer_id, agent_id, hive_id, run_id, entities FROM memories
+     WHERE rid > ? AND level != 'hive' AND expired_at IS NULL AND superseded_by IS NULL
+     ORDER BY rid LIMIT 1000`,
+  );
+  const insert = db.prepare<[number, string, number]>(
+    `INSERT OR IGNORE INTO ${ENTITY_TABLE} (node_id, entity_key, memory_rid) VALUES (?, ?, ?)`,
+  );
+  // Paged by rid: better-sqlite3 cannot write while a statement iterates.
+  let after = -Infinity;
+  for (;;) {
+    const rows = page.all(after);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      after = r.rid;
+      let entities: unknown;
+      try {
+        entities = JSON.parse(r.entities);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(entities)) continue;
+      const keys = entityKeys(entities.filter((e): e is string => typeof e === 'string'));
+      if (keys.length === 0) continue;
+      const id = nodeId(nodeKeyOfColumns(r));
+      for (const k of keys) insert.run(id, k, r.rid);
+    }
+  }
+  db.exec(`
+    UPDATE memories SET session_id = json_extract(source, '$.sessionId')
+    WHERE level != 'hive' AND json_valid(source)
+      AND json_type(source, '$.sessionId') = 'text' AND json_extract(source, '$.sessionId') != '';
+    WITH g AS (
+      SELECT rid, level, org_id, customer_id, agent_id, hive_id, run_id, session_id, created_at,
+        CASE WHEN json_type(source, '$.turnRef') = 'text'
+          THEN 't:' || json_extract(source, '$.turnRef') ELSE 'r:' || rid END AS turn
+      FROM memories WHERE session_id IS NOT NULL
+    ), s AS (
+      SELECT g.*,
+        min(created_at) OVER w AS turn_at,
+        min(rid) OVER w AS turn_rid
+      FROM g
+      WINDOW w AS (PARTITION BY level, org_id, customer_id, agent_id, hive_id, run_id, session_id, turn)
+    ), r AS (
+      SELECT rid, dense_rank() OVER (
+        PARTITION BY level, org_id, customer_id, agent_id, hive_id, run_id, session_id
+        ORDER BY turn_at, turn_rid
+      ) AS seq FROM s
+    )
+    UPDATE memories SET episode_seq = r.seq FROM r WHERE memories.rid = r.rid;
+  `);
+  for (const r of db
+    .prepare<[], Parameters<typeof nodeKeyOfColumns>[0]>(
+      `SELECT DISTINCT level, org_id, customer_id, agent_id, hive_id, run_id FROM memories
+       WHERE level != 'hive'`,
+    )
+    .all()) {
+    nodeId(nodeKeyOfColumns(r));
+  }
+}
+
+/** How many link rows version 7 cannot hold, and nothing could rebuild: explicit, distilled, blocks. */
+export function linkRowsKept(db: Database): number {
+  if (!exists(db, LINK_TABLE)) return 0;
+  return (
+    db
+      .prepare<[], { n: number }>(
+        `SELECT count(*) AS n FROM ${LINK_TABLE} WHERE kind IN ('explicit', 'distilledFrom', 'blocked')`,
+      )
+      .get()?.n ?? 0
+  );
+}
+
+/** The refusal of a downgrade below version 8 while `n` such link rows exist. */
+export function linkRowsError(n: number, to: number): Error {
+  return new Error(
+    `sqlite store: ${n} ${n === 1 ? 'link' : 'links'} (explicit, distilledFrom or blocked); schema version ${to} cannot hold them. To delete every link and block and go down anyway, pass dropLinks: true to downgradeSqliteStore (its copy of the store, taken first, keeps them)`,
+  );
+}
+
+/**
+ * Version 8 back to 7, inside the caller's transaction: drops the link schema and puts the
+ * version 7 guard back. Refuses (throws) while any explicit, distilledFrom or blocked row exists:
+ * none can be rebuilt, and dropping a block would bring back a pair someone removed. Learned
+ * `recalledWith` rows are dropped (they are learned again). `dropLinks` says the caller means to
+ * lose every link and block: then nothing is refused.
+ */
+export function migrateV8toV7(db: Database, dropLinks = false): void {
+  const n = dropLinks ? 0 : linkRowsKept(db);
+  if (n > 0) throw linkRowsError(n, 7);
+  db.exec(`
+    DROP TABLE IF EXISTS ${LINK_TABLE};
+    DROP TABLE IF EXISTS ${ENTITY_TABLE};
+    DROP TABLE IF EXISTS ${NODE_TABLE};
+    DROP INDEX IF EXISTS memories_episode;
+    ALTER TABLE memories DROP COLUMN episode_seq;
+    ALTER TABLE memories DROP COLUMN session_id;
+  `);
+  dropWriterGuard(db);
+  createWriterGuard(db, WRITER_GUARD_V7);
+}
+
+/**
  * Version 7 back to 6, inside the caller's transaction: drops the RaBitQ index and puts the
  * version 6 guard back. The int8 vectors and a binary index are untouched.
  */
@@ -924,6 +1157,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     if (fresh) {
       db.exec(memoriesV2('memories', true, true));
       db.exec(INDEXES_V2);
+      migrateV7toV8(db);
     } else if (version === '1') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 1);
       assertMigratable(db);
@@ -934,6 +1168,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV4toV5(db);
       migrateV5toV6(db);
       migrateV6toV7(db);
+      migrateV7toV8(db);
     } else if (version === '2') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 2);
       rebuilding();
@@ -942,6 +1177,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV4toV5(db);
       migrateV5toV6(db);
       migrateV6toV7(db);
+      migrateV7toV8(db);
     } else if (version === '3') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 3);
       rebuilding();
@@ -949,19 +1185,22 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV4toV5(db);
       migrateV5toV6(db);
       migrateV6toV7(db);
+      migrateV7toV8(db);
     } else if (
       version === '4' ||
       version === '5' ||
       version === '6' ||
+      version === '7' ||
       version === String(SCHEMA_VERSION)
     ) {
-      // Version 4 to 5 adds columns and an empty index, 5 to 6 and 6 to 7 the writer guard: no
-      // rebuild, and no notice.
-      if (version === '4' || version === '5' || version === '6') {
+      // Version 4 to 5 adds columns and an empty index, 5 to 6 and 6 to 7 the writer guard, 7 to
+      // 8 the link schema filled from stored rows: no rebuild, and no notice.
+      if (version === '4' || version === '5' || version === '6' || version === '7') {
         if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, Number(version));
         if (version === '4') migrateV4toV5(db);
-        if (version !== '6') migrateV5toV6(db);
-        migrateV6toV7(db);
+        if (version === '4' || version === '5') migrateV5toV6(db);
+        if (version !== '7') migrateV6toV7(db);
+        migrateV7toV8(db);
       }
       // An index to repair is a migration: an open that may not migrate (a hook) refuses, changing
       // nothing, rather than create an empty index that would then look current.
@@ -1017,23 +1256,31 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
  * Takes a store's database back to schema version `to`: 1 for running Oort 0.2.x against it
  * again (the default), 2 for Oort 0.3 to 0.5, 3 for Oort before tokeniser v2, 4 for Oort before
  * spatial memory (0.8), 5 for Oort before the binary vector index, 6 for Oort before the RaBitQ
- * index (the RaBitQ index is dropped, a binary index kept). Refuses, changing nothing,
- * when the store holds anything that version cannot represent (see `migrateV2toV1`,
- * `migrateV3toV2` and `migrateV5toV4`). Leaving version 6 drops the binary index and the writer
+ * index (the RaBitQ index is dropped, a binary index kept), 7 for Oort before memory links (the
+ * link schema is dropped). Refuses, changing nothing, when the store holds anything that version
+ * cannot represent (see `migrateV2toV1`, `migrateV3toV2`, `migrateV5toV4` and `migrateV8toV7`). Leaving version 6 drops the binary index and the writer
  * guard; leaving version 4 rebuilds the lexical index with tokeniser v1. No other connection may
  * have the store open. Opening a store never does this: migrations only roll forward.
  */
-export function downgradeSchema(db: Database, to: 1 | 2 | 3 | 4 | 5 | 6 = 1): void {
+export function downgradeSchema(
+  db: Database,
+  to: 1 | 2 | 3 | 4 | 5 | 6 | 7 = 1,
+  opts: { dropLinks?: boolean } = {},
+): void {
   db.transaction(() => {
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     let version = Number(get.get('schema_version')?.value);
     if (version <= to && version >= 1) return;
-    if (![2, 3, 4, 5, 6, 7].includes(version)) {
+    if (![2, 3, 4, 5, 6, 7, 8].includes(version)) {
       throw new Error(
         `sqlite store: cannot downgrade schema version ${Number.isNaN(version) ? 'unknown' : version}`,
       );
     }
-    if (version === 7) {
+    if (version === 8) {
+      migrateV8toV7(db, opts.dropLinks === true);
+      version = 7;
+    }
+    if (version === 7 && to < 7) {
       migrateV7toV6(db);
       version = 6;
     }

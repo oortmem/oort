@@ -26,7 +26,7 @@ await oort.observe({ user: 'We deploy on Fridays now.', assistant: 'Noted.' });
 
 **Classes:** [`OortError`](#oortmem-oorterror), [`OortAmbiguousIdError`](#oortmem-oortambiguousiderror), [`OortCloudOnlyError`](#oortmem-oortcloudonlyerror), [`OortInternalError`](#oortmem-oortinternalerror), [`OortNeedsConfirmationError`](#oortmem-oortneedsconfirmationerror), [`OortNeedsKeyError`](#oortmem-oortneedskeyerror), [`OortNeedsLoginError`](#oortmem-oortneedsloginerror), [`OortNetworkError`](#oortmem-oortnetworkerror), [`OortNotFoundError`](#oortmem-oortnotfounderror), [`OortRefusedError`](#oortmem-oortrefusederror), [`OortUsageError`](#oortmem-oortusageerror)
 
-**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`Pose`](#oortmem-pose), [`Place`](#oortmem-place), [`NearQuery`](#oortmem-nearquery), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`EndUserCount`](#oortmem-endusercount), [`EndUserErasure`](#oortmem-endusererasure), [`EndUserExport`](#oortmem-enduserexport), [`OortEndUsers`](#oortmem-oortendusers), [`Oort`](#oortmem-oort)
+**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`Pose`](#oortmem-pose), [`Place`](#oortmem-place), [`NearQuery`](#oortmem-nearquery), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`LinkView`](#oortmem-linkview), [`LinkResult`](#oortmem-linkresult), [`UnlinkResult`](#oortmem-unlinkresult), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`EndUserCount`](#oortmem-endusercount), [`EndUserErasure`](#oortmem-endusererasure), [`EndUserExport`](#oortmem-enduserexport), [`OortEndUsers`](#oortmem-oortendusers), [`Oort`](#oortmem-oort)
 
 ### Functions
 
@@ -733,7 +733,60 @@ export interface Explanation {
     validTo: string | null;
     endReason: 'superseded' | 'corrected' | 'expired' | null;
   }[];
+  /**
+   * Links of the memory (CON-148) whose other end this handle reads, oldest first. Cloud mode has
+   * none yet.
+   */
+  links: LinkView[];
+  /** Supersede-chain neighbours and stored links whose other end this handle cannot read. */
   hiddenLinks: number;
+}
+```
+
+<a id="oortmem-linkview"></a>
+
+#### `LinkView`
+
+One stored link of a memory, as `explain` lists it.
+
+```ts
+export interface LinkView {
+  kind: 'explicit' | 'distilledFrom' | 'recalledWith';
+  /** The memory at the other end. */
+  id: string;
+  /** `both` for explicit and recalledWith; `out` from a distilled memory, `in` to its evidence. */
+  direction: 'both' | 'out' | 'in';
+  /** Explicit links only: `user` when a person confirmed it on a terminal, else `agent`. */
+  assertedBy?: 'user' | 'agent';
+  createdAt: string;
+}
+```
+
+<a id="oortmem-linkresult"></a>
+
+#### `LinkResult`
+
+```ts
+export interface LinkResult {
+  /** False when the two were already linked. */
+  linked: boolean;
+  /** An earlier unlink's block on the pair was removed. */
+  unblocked: boolean;
+  /** Who the link is asserted by: always `agent` from the SDK, unless a person linked it first. */
+  assertedBy: 'user' | 'agent';
+}
+```
+
+<a id="oortmem-unlinkresult"></a>
+
+#### `UnlinkResult`
+
+```ts
+export interface UnlinkResult {
+  /** A link between the two was removed. */
+  removed: boolean;
+  /** The pair is blocked: nothing links it again until someone links it explicitly. */
+  blocked: boolean;
 }
 ```
 
@@ -1106,6 +1159,13 @@ export interface Oort {
     warnings: Warning[];
   }>;
   explain(id: string): Promise<Explanation>;
+  /**
+   * Links two memories (CON-148), asserted by `agent`. Both must be memories this handle writes,
+   * in the same Planet or Star; anything else is `not-found`, as for a missing id. Local only.
+   */
+  link(from: string, to: string): Promise<LinkResult>;
+  /** Removes a link, or blocks a pair that was not linked. Same rules as `link`. Local only. */
+  unlink(from: string, to: string): Promise<UnlinkResult>;
   whoami(): Promise<Whoami>;
   /** Local only. */
   consolidate(opts?: {

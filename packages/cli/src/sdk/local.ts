@@ -33,6 +33,8 @@ import {
 import type {
   ConsolidateResult,
   Explanation,
+  LinkResult,
+  UnlinkResult,
   ForgetResult,
   MemoryType,
   MemoryView,
@@ -319,6 +321,7 @@ export async function explain(ctx: Ctx, id: string): Promise<Explanation> {
   // Shaped: a contradiction naming a memory this principal cannot read is dropped.
   const m = await shapeLinks(store, grant, raw);
   const { links, hidden } = await supersedeChain(store, raw, grant);
+  const stored = (await store.linksOf?.(grant, raw.id)) ?? { links: [], blocked: [], hidden: 0 };
   return {
     memory: {
       ...memoryView(m, now),
@@ -339,8 +342,51 @@ export async function explain(ctx: Ctx, id: string): Promise<Explanation> {
       validTo: l.validTo,
       endReason: l.endReason,
     })),
-    hiddenLinks: hidden,
+    links: stored.links.map((l) => ({
+      kind: l.kind,
+      id: l.id,
+      direction: l.direction,
+      ...(l.assertedBy !== undefined && { assertedBy: l.assertedBy }),
+      createdAt: l.createdAt,
+    })),
+    hiddenLinks: hidden + stored.hidden,
   };
+}
+
+/** The refusal of a pair the store cannot link: the same as for a missing id. */
+const NO_PAIR = 'No memory with that id in this scope.';
+
+/**
+ * Links (or unlinks) two memories, asserted by `agent` (CON-148). Ids resolve as `explain`'s do;
+ * the store refuses a pair it cannot link (not both written by this handle, not in one Planet or
+ * Star, a Constellation, or one memory twice) and that is `not-found`, as for a missing id.
+ */
+export async function link(ctx: Ctx, from: string, to: string): Promise<LinkResult> {
+  const store = storeOf(ctx);
+  const [a, b] = [await findLocal(ctx, from), await findLocal(ctx, to)];
+  const r = await store.link?.(ctx.principal.grant, a.id, b.id, { assertedBy: 'agent' });
+  if (r === undefined || r === null) throw new OortNotFoundError(NO_PAIR);
+  if (r.refused !== undefined) {
+    throw new OortRefusedError(
+      'That pair was unlinked at a terminal: only `oort link`, confirmed at a terminal, links it again.',
+      { reason: 'asserted-by-user', fix: 'oort link <a> <b>' },
+    );
+  }
+  return { linked: r.linked, unblocked: r.unblocked, assertedBy: r.assertedBy };
+}
+
+export async function unlink(ctx: Ctx, from: string, to: string): Promise<UnlinkResult> {
+  const store = storeOf(ctx);
+  const [a, b] = [await findLocal(ctx, from), await findLocal(ctx, to)];
+  const r = await store.unlink?.(ctx.principal.grant, a.id, b.id, { assertedBy: 'agent' });
+  if (r === undefined || r === null) throw new OortNotFoundError(NO_PAIR);
+  if (r.refused !== undefined) {
+    throw new OortRefusedError(
+      'That link was confirmed at a terminal: only `oort unlink`, confirmed at a terminal, removes it.',
+      { reason: 'asserted-by-user', fix: 'oort unlink <a> <b>' },
+    );
+  }
+  return { removed: r.removed, blocked: r.blocked };
 }
 
 /** Which key or model serves each role (never the key). */

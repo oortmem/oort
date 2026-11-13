@@ -43,6 +43,9 @@ __all__ = [
     "ExplainedMemory",
     "ChainLink",
     "Explanation",
+    "LinkView",
+    "LinkResult",
+    "UnlinkResult",
     "RecordJudgmentView",
     "Precedent",
     "Prediction",
@@ -321,11 +324,43 @@ class ChainLink:
 
 
 @dataclass(**_FROZEN)
+class LinkView:
+    """One stored link of a memory (``explain``): the memory at the other end and who asserted it."""
+
+    kind: Literal["explicit", "distilledFrom", "recalledWith"]
+    id: str
+    direction: Literal["both", "out", "in"]
+    created_at: str
+    #: Explicit links only: ``user`` when a person confirmed it on a terminal, else ``agent``.
+    asserted_by: Optional[Literal["user", "agent"]] = None
+
+
+@dataclass(**_FROZEN)
 class Explanation:
     memory: ExplainedMemory
     decisions: List[Decision]
     chain: List[ChainLink]
+    #: Supersede-chain neighbours and stored links whose other end this handle cannot read.
     hidden_links: int
+    #: Links whose other end this handle reads, oldest first. Cloud mode has none yet.
+    links: List[LinkView] = field(default_factory=list)
+
+
+@dataclass(**_FROZEN)
+class LinkResult:
+    #: False when the two were already linked.
+    linked: bool
+    #: An earlier unlink's block on the pair was removed.
+    unblocked: bool
+    asserted_by: Literal["user", "agent"]
+
+
+@dataclass(**_FROZEN)
+class UnlinkResult:
+    #: A link between the two was removed.
+    removed: bool
+    #: The pair is blocked: nothing links it again until someone links it explicitly.
+    blocked: bool
 
 
 @dataclass(**_FROZEN)

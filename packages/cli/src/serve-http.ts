@@ -43,7 +43,7 @@ const SERVICE_HEADERS_TIMEOUT_MS = 5_000;
 const CONNECTIONS_CHECK_MS = 1_000;
 const KEEP_ALIVE_MS = 5_000;
 /** What this daemon serves beyond the core routes (`GET /v1/health`). */
-export const CAPABILITIES = ['judgments', 'consolidate'] as const;
+export const CAPABILITIES = ['judgments', 'consolidate', 'links'] as const;
 /** A root handle is replaced once it is this old, so edited config and keys are picked up. */
 export const HANDLE_TTL_MS = 60_000;
 /** At most this many root handles (one per cwd, org and judge role) stay open. */
@@ -505,6 +505,24 @@ const ROUTES: Route[] = [
     name: 'POST /v1/memories/:id/unpin',
     match: new RegExp(`^/v1/memories/${ID}/unpin$`),
     call: (m) => (h) => h.unpin(idOf(m[1]!)),
+  },
+  {
+    method: 'POST',
+    name: 'POST /v1/links',
+    match: /^\/v1\/links$/,
+    call: () => (h, b) => {
+      const { from, to, ...rest } = b;
+      const extra = Object.keys(rest)[0];
+      if (extra !== undefined) throw usage(`Unknown field ${safe(extra)}.`);
+      return h.link(from as string, to as string);
+    },
+  },
+  {
+    method: 'DELETE',
+    name: 'DELETE /v1/links',
+    match: /^\/v1\/links$/,
+    query: ['from', 'to'],
+    call: (_m, q) => (h) => h.unlink(q.get('from') as string, q.get('to') as string),
   },
   {
     method: 'POST',

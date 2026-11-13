@@ -102,6 +102,12 @@ export interface MemoryBackend {
    */
   recordJudgment?(input: ToolInput<'record_judgment'>): Promise<Record<string, unknown>>;
   judge?(input: ToolInput<'judge'>): Promise<Record<string, unknown>>;
+  /**
+   * Memory links (CON-148). Optional: a server offers `link` only when the backend has it. The
+   * backend records the link as asserted by `agent`, and refuses a pair it cannot link exactly as
+   * it refuses a missing id.
+   */
+  link?(input: ToolInput<'link'>): Promise<Record<string, unknown>>;
 }
 
 /** What `share` returns. */
@@ -276,11 +282,16 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
       if (b.judge === undefined) throw new MemoryToolError('No judgment memory here.');
       return b.judge(i);
     },
+    link: (i) => {
+      if (b.link === undefined) throw new MemoryToolError('No memory links here.');
+      return b.link(i);
+    },
   };
   const offered = (name: ToolName): boolean => {
     if (name === 'share') return spaces.share.length > 0 && b.share !== undefined;
     if (name === 'record_judgment') return b.recordJudgment !== undefined;
     if (name === 'judge') return b.judge !== undefined;
+    if (name === 'link') return b.link !== undefined;
     return true;
   };
   const registered = new Map<ToolName, RegisteredTool>();

@@ -1,6 +1,6 @@
 import { appendAccess } from './activation.js';
 import type { GuardedWriteResult, Hit, MemoryStore } from './adapters.js';
-import { canonicalMemory } from './address.js';
+import { addressOf, canonicalMemory, nodeKey, nodeOf } from './address.js';
 import {
   assertGrant,
   cursorKey,
@@ -11,6 +11,16 @@ import {
   type Grant,
 } from './grant.js';
 import { isCurrent, isZeroVector, type Memory, type Tier } from './model.js';
+import {
+  entityKeys,
+  episodeSession,
+  inLinkIndexes,
+  orderedPair,
+  type AssertedBy,
+  type LinkOptions,
+  type LinksProbe,
+  type StoredLink,
+} from './links.js';
 import { checkPlace, hasSpatialFilter, matchesSpatial, type SpatialFilter } from './place.js';
 import { tokenizeLexical as tokens } from './tokenize.js';
 
@@ -52,10 +62,32 @@ function rank(scored: { m: Memory; score: number }[], k: number): Hit[] {
     .map(({ m, score }) => ({ id: m.id, score, tier: m.tier }));
 }
 
+/** One link or block row of the in-memory store. */
+interface LinkRow {
+  kind: StoredLink['kind'] | 'blocked';
+  a: string;
+  b: string;
+  assertedBy: AssertedBy | null;
+  createdAt: string;
+}
+
+/** The in-memory stores' rows, for `memoryStoreProbe`. */
+const PROBES = new WeakMap<MemoryStore, LinksProbe>();
+
+/**
+ * Reads an in-memory store's link, entity and episode rows, for `linksConformance` and tests.
+ * Throws for any other store.
+ */
+export function memoryStoreProbe(store: MemoryStore): LinksProbe {
+  const p = PROBES.get(store);
+  if (p === undefined) throw new TypeError('memoryStoreProbe: not an in-memory store');
+  return p;
+}
+
 /**
  * An in-memory `MemoryStore`: a test double and reference implementation of
  * the contract, not a production store. Records are cloned on the way in and
- * out so callers cannot mutate stored state.
+ * out so callers cannot mutate stored state. It keeps links (`links: true`).
  */
 export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   const d = opts.d ?? 0.5;
@@ -63,7 +95,69 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   const main = new Map<string, Memory>();
   const cold = new Map<string, Memory>();
   const cursors = new Map<string, string>();
+  /** Link and block rows, keyed `kind/a/b`, in the order they were first written. */
+  const links = new Map<string, LinkRow>();
+  /** Episode positions: assigned on insert, kept by a rewrite in the same session. */
+  const episodes = new Map<string, { node: string; session: string; seq: number }>();
   let closed = false;
+
+  const rowKey = (kind: LinkRow['kind'], a: string, b: string) => `${kind}\u0000${a}\u0000${b}`;
+  const nodeOfMemory = (m: Memory) => nodeKey(nodeOf(addressOf(m)));
+
+  /** Gives `m` its episode position (CON-148): the next in its session, or its turn's. */
+  function placeInEpisode(m: Memory): void {
+    const session = episodeSession(m);
+    if (session === undefined) {
+      episodes.delete(m.id);
+      return;
+    }
+    const node = nodeOfMemory(m);
+    const was = episodes.get(m.id);
+    if (was !== undefined && was.session === session && was.node === node) return;
+    let seq = 0;
+    let turn: number | undefined;
+    for (const [id, e] of episodes) {
+      if (e.node !== node || e.session !== session) continue;
+      seq = Math.max(seq, e.seq);
+      const other = main.get(id);
+      if (m.source.turnRef !== undefined && other?.source.turnRef === m.source.turnRef) {
+        turn = e.seq;
+      }
+    }
+    episodes.set(m.id, { node, session, seq: turn ?? seq + 1 });
+  }
+
+  function forgetLinks(id: string): void {
+    for (const [k, r] of links) if (r.a === id || r.b === id) links.delete(k);
+    episodes.delete(id);
+  }
+
+  /**
+   * The two memories `link` and `unlink` may join: both written by `grant`, distinct, in one
+   * node that is not a hive. Undefined for anything else, as for a missing id.
+   */
+  function linkable(grant: Grant, x: string, y: string): [string, string] | undefined {
+    if (x === y) return undefined;
+    const a = writable(grant, x);
+    const b = writable(grant, y);
+    if (a === undefined || b === undefined) return undefined;
+    if (addressOf(a).level === 'hive' || nodeOfMemory(a) !== nodeOfMemory(b)) return undefined;
+    return orderedPair(x, y);
+  }
+
+  /** Whether an index (a shared entity, or a session) relates the two. */
+  function indexRelated(x: string, y: string): boolean {
+    const a = main.get(x);
+    const b = main.get(y);
+    if (a === undefined || b === undefined) return false;
+    if (inLinkIndexes(a) && inLinkIndexes(b)) {
+      const keys = new Set(entityKeys(a.entities));
+      if (entityKeys(b.entities).some((k) => keys.has(k))) return true;
+    }
+    const ea = episodes.get(x);
+    const eb = episodes.get(y);
+    return ea !== undefined && eb !== undefined && ea.node === eb.node && ea.session === eb.session;
+  }
 
   function open(): void {
     if (closed) throw new Error('memory store is closed');
@@ -73,6 +167,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   function put(m: Memory): void {
     if (m.embedding !== undefined && isZeroVector(m.embedding)) delete m.embedding;
     main.set(m.id, m);
+    placeInEpisode(m);
     if (m.tier !== 'cold') cold.delete(m.id);
   }
 
@@ -164,8 +259,97 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     return { skipped };
   }
 
-  return {
+  const handle: MemoryStore = {
     spatial: true,
+    links: true,
+
+    async link(grant, x, y, linkOpts: LinkOptions) {
+      open();
+      assertGrant(grant);
+      const pair = linkable(grant, x, y);
+      if (pair === undefined) return null;
+      const [a, b] = pair;
+      if (
+        linkOpts.assertedBy !== 'user' &&
+        links.get(rowKey('blocked', a, b))?.assertedBy === 'user'
+      ) {
+        return {
+          linked: false,
+          unblocked: false,
+          assertedBy: 'agent' as const,
+          refused: 'asserted-by-user' as const,
+        };
+      }
+      const unblocked = links.delete(rowKey('blocked', a, b));
+      const k = rowKey('explicit', a, b);
+      const was = links.get(k);
+      if (was !== undefined) {
+        const stronger = linkOpts.assertedBy === 'user' && was.assertedBy !== 'user';
+        if (stronger) was.assertedBy = 'user';
+        return { linked: stronger, unblocked, assertedBy: was.assertedBy ?? 'agent' };
+      }
+      const createdAt = (linkOpts.at ?? new Date()).toISOString();
+      links.set(k, { kind: 'explicit', a, b, assertedBy: linkOpts.assertedBy, createdAt });
+      return { linked: true, unblocked, assertedBy: linkOpts.assertedBy };
+    },
+
+    async unlink(grant, x, y, linkOpts: LinkOptions) {
+      open();
+      assertGrant(grant);
+      const pair = linkable(grant, x, y);
+      if (pair === undefined) return null;
+      const [a, b] = pair;
+      const held = links.get(rowKey('explicit', a, b));
+      if (held?.assertedBy === 'user' && linkOpts.assertedBy !== 'user') {
+        return { removed: false, blocked: false, refused: 'asserted-by-user' as const };
+      }
+      const removed = [
+        links.delete(rowKey('explicit', a, b)),
+        links.delete(rowKey('recalledWith', a, b)),
+      ].some(Boolean);
+      if (removed && !indexRelated(a, b))
+        return { removed, blocked: links.has(rowKey('blocked', a, b)) };
+      if (!links.has(rowKey('blocked', a, b))) {
+        links.set(rowKey('blocked', a, b), {
+          kind: 'blocked',
+          a,
+          b,
+          assertedBy: linkOpts.assertedBy,
+          createdAt: (linkOpts.at ?? new Date()).toISOString(),
+        });
+      }
+      return { removed, blocked: true };
+    },
+
+    async linksOf(grant, id) {
+      open();
+      assertGrant(grant);
+      if (readable(grant, id) === undefined) return null;
+      const out: StoredLink[] = [];
+      const blocked: string[] = [];
+      let hidden = 0;
+      for (const r of links.values()) {
+        if (r.a !== id && r.b !== id) continue;
+        const other = r.a === id ? r.b : r.a;
+        const seen = readable(grant, other) !== undefined;
+        if (r.kind === 'blocked') {
+          if (seen) blocked.push(other);
+          continue;
+        }
+        if (!seen) {
+          hidden++;
+          continue;
+        }
+        out.push({
+          kind: r.kind,
+          id: other,
+          direction: r.kind === 'distilledFrom' ? (r.a === id ? 'out' : 'in') : 'both',
+          ...(r.kind === 'explicit' && { assertedBy: r.assertedBy ?? 'agent' }),
+          createdAt: r.createdAt,
+        });
+      }
+      return { links: out, blocked, hidden };
+    },
 
     async upsert(grant, m) {
       open();
@@ -189,6 +373,16 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         checked.push(ok);
       }
       for (const c of checked) put(c);
+    },
+
+    /** The memories are checked before any is written; the links follow in the same turn. */
+    async upsertManyLinked(grant, ms, pairs, linkOpts) {
+      await handle.upsertMany(grant, ms);
+      let linked = 0;
+      for (const [x, y] of pairs) {
+        if ((await handle.link!(grant, x, y, linkOpts))?.linked === true) linked++;
+      }
+      return { linked };
     },
 
     /** Atomic trivially: checks and clones every applying record before writing any. */
@@ -226,6 +420,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       open();
       assertGrant(grant);
       if (writable(grant, id) === undefined) return;
+      forgetLinks(id);
       main.delete(id);
       cold.delete(id);
     },
@@ -339,4 +534,26 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       closed = true;
     },
   };
+  PROBES.set(handle, {
+    async entities() {
+      return [...main.values()]
+        .filter(inLinkIndexes)
+        .flatMap((m) => entityKeys(m.entities).map((entity) => ({ id: m.id, entity })));
+    },
+    async links() {
+      return [...links.values()].map((r) => ({
+        kind: r.kind,
+        a: r.a,
+        b: r.b,
+        assertedBy: r.assertedBy,
+      }));
+    },
+    async episodes() {
+      return [...episodes].map(([id, e]) => ({ id, session: e.session, seq: e.seq }));
+    },
+    async orphans() {
+      return [...links.values()].filter((r) => !main.has(r.a) || !main.has(r.b)).length;
+    },
+  });
+  return handle;
 }

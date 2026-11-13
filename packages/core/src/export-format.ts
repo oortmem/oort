@@ -86,7 +86,7 @@ export function fitsVersion1(m: Memory): boolean {
  * (null when none), and `scope` for Planet memories only.
  */
 export function exportLine(
-  m: Memory & HiddenLinkFlags,
+  m: Memory & HiddenLinkFlags & { links?: ExportLink[] },
   version: ExportVersion,
 ): Record<string, unknown> {
   const { embedding, address: _a, author: _w, provenance, scope, id, ...rest } = m;
@@ -97,7 +97,8 @@ export function exportLine(
         `memory ${id} is outside the Planet, a judgment or has a place; version 1 cannot hold it`,
       );
     }
-    return { id, scope, ...rest, ...tail };
+    const { links: _links, ...v1 } = rest; // version 1 holds no links
+    return { id, scope, ...v1, ...tail };
   }
   const address = addressOf(m);
   return {
@@ -139,7 +140,7 @@ export function exportManifest(
 
 /** A whole export: the manifest line, then one line per memory, each ending in `\n`. */
 export function formatExport(
-  memories: (Memory & HiddenLinkFlags)[],
+  memories: (Memory & HiddenLinkFlags & { links?: ExportLink[] })[],
   version: ExportVersion = EXPORT_FORMAT_VERSION,
   exportedAt: Date = new Date(),
 ): string {
@@ -151,11 +152,26 @@ export function formatExport(
     .join('');
 }
 
+/**
+ * A memory's explicit links in a version 2 line (CON-148): the other end's id, written on both
+ * lines, and only when the other end is in the same file. Who asserted a link is never written:
+ * an imported link is asserted by `agent`.
+ */
+export interface ExportLink {
+  kind: 'explicit';
+  id: string;
+}
+
 export interface ParsedExport {
   version: ExportVersion;
   manifest: ExportManifest;
   /** In the shape stores return (see `canonicalMemory`), embeddings decoded. */
   memories: Memory[];
+  /**
+   * The explicit links between memories of the file, each pair once (`a < b`). A link naming a
+   * memory the file does not hold, or a kind this reader does not know, is dropped.
+   */
+  links: [string, string][];
 }
 
 export interface ParseExportOptions {
@@ -187,6 +203,7 @@ export function parseExport(text: string, opts: ParseExportOptions = {}): Parsed
       `the manifest counts ${String(head.memories)} memories, the file has ${lines.length - 1}`,
     );
   }
+  const named: [string, string][] = [];
   const memories = lines.slice(1).map((l, i) => {
     const n = i + 2;
     const raw = parseJson(l, n);
@@ -194,7 +211,10 @@ export function parseExport(text: string, opts: ParseExportOptions = {}): Parsed
       throw new ExportFormatError(`line ${n} is not a memory`);
     }
     try {
-      return readLine(raw, version, opts);
+      const { links, ...memory } = raw;
+      // Version 1 holds no links: the field is dropped unread.
+      if (version === 2) for (const to of linkIds(links)) named.push([raw['id'], to]);
+      return readLine(memory, version, opts);
     } catch (e) {
       if (e instanceof RangeError || e instanceof TypeError) {
         throw new ExportFormatError(`line ${n}: ${e.message}`);
@@ -202,7 +222,28 @@ export function parseExport(text: string, opts: ParseExportOptions = {}): Parsed
       throw e;
     }
   });
-  return { version, manifest: head as ExportManifest, memories };
+  const ids = new Set(memories.map((m) => m.id));
+  const pairs = new Map<string, [string, string]>();
+  for (const [x, y] of named) {
+    if (x === y || !ids.has(x) || !ids.has(y)) continue;
+    const pair: [string, string] = x < y ? [x, y] : [y, x];
+    pairs.set(JSON.stringify(pair), pair);
+  }
+  return { version, manifest: head as ExportManifest, memories, links: [...pairs.values()] };
+}
+
+/** The ids of a line's explicit links; other kinds are left for readers that know them. */
+function linkIds(raw: unknown): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new RangeError('links must be a list');
+  const out: string[] = [];
+  for (const l of raw as unknown[]) {
+    if (typeof l !== 'object' || l === null) throw new RangeError('a link must be an object');
+    const { kind, id } = l as Record<string, unknown>;
+    if (typeof id !== 'string') throw new RangeError('a link needs an id');
+    if (kind === 'explicit') out.push(id);
+  }
+  return out;
 }
 
 function parseJson(line: string | undefined, n: number): Record<string, unknown> | null {

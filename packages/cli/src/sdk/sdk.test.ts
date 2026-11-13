@@ -9,7 +9,7 @@ import {
   setAgentStar,
 } from '@oortmem/core';
 import { tmpdir } from '../../test/helpers.js';
-import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
+import { FAKE_DIMENSION, fakeAdapters } from '../../test/helpers/sdk-fakes.js';
 import { OortCloudError } from '../cloud.js';
 import { OortRelayError } from '../relay.js';
 import { Refusal } from '../util.js';
@@ -64,6 +64,37 @@ describe('createOort, local mode', () => {
     expect(await oort.forget(id)).toEqual({ forgotten: id });
     await expect(oort.explain(id)).rejects.toMatchObject({ code: 'not-found' });
     await oort.close();
+  });
+
+  it('unlink leaves a link confirmed at a terminal in place (CON-148)', async () => {
+    const { oort, home: dir, env } = await local();
+    const saved = await oort.remember(['The cache is redis.', 'The queue is sqs.']);
+    const [a, b] = saved.results.map((r) => r.id!) as [string, string];
+    await oort.link(a, b);
+    await oort.close();
+    // As `oort link` confirmed at a terminal records it.
+    const { openSqliteStore } = await import('@oortmem/store-sqlite');
+    const { localGrant } = await import('@oortmem/core');
+    const store = await openSqliteStore({
+      path: path.join(dir, 'oort.sqlite'),
+      coldDir: path.join(dir, 'cold'),
+      dimension: FAKE_DIMENSION,
+    });
+    const g = localGrant({ orgId: 'local', customerId: 'self', agentId: 'x', projectIds: [null] });
+    expect(await store.link!(g, a, b, { assertedBy: 'user' })).toMatchObject({
+      assertedBy: 'user',
+    });
+    await store.close();
+    const again = await createOortWith(
+      { mode: 'local', home: dir, env, project: null },
+      { adapters: fakeAdapters(), now: () => NOW },
+    );
+    await expect(again.unlink(a, b)).rejects.toMatchObject({
+      code: 'refused',
+      reason: 'asserted-by-user',
+    });
+    expect((await again.explain(a)).links).toMatchObject([{ id: b, assertedBy: 'user' }]);
+    await again.close();
   });
 
   it('observes a turn through the write path, harness sdk', async () => {

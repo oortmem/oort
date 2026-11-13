@@ -44,6 +44,45 @@ describe('export format', () => {
     expect(parsed.memories).toEqual(all.map((m) => canonicalMemory(m)));
   });
 
+  it('export.v2-carries-explicit-links-as-pairs-never-as-memory-fields (CON-148)', () => {
+    const a = makeMemory({ id: 'a' });
+    const b = makeMemory({ id: 'b' });
+    const c = makeMemory({ id: 'c' });
+    const text = formatExport([
+      { ...a, links: [{ kind: 'explicit', id: 'b' }] },
+      { ...b, links: [{ kind: 'explicit', id: 'a' }] },
+      c,
+    ]);
+    expect(JSON.parse(text.split('\n')[1]!).links).toEqual([{ kind: 'explicit', id: 'b' }]);
+    const parsed = parseExport(text);
+    expect(parsed.links).toEqual([['a', 'b']]);
+    expect(parsed.memories.map((m) => 'links' in m)).toEqual([false, false, false]);
+    // A link to a memory the file does not hold, or of a kind this reader does not know, is
+    // dropped; who asserted a link is never read from a file.
+    const odd = formatExport([
+      {
+        ...a,
+        links: [
+          { kind: 'explicit', id: 'zz', assertedBy: 'user' },
+          { kind: 'later', id: 'c' },
+        ],
+      } as never,
+      c,
+    ]);
+    expect(parseExport(odd).links).toEqual([]);
+    // Version 1 holds no links: a `links` field in a version 1 file is not read.
+    const v1 = formatExport([a, b], 1)
+      .split('\n')
+      .map((l, i) =>
+        i === 1 ? JSON.stringify({ ...JSON.parse(l), links: [{ kind: 'explicit', id: 'b' }] }) : l,
+      )
+      .join('\n');
+    expect(parseExport(v1).links).toEqual([]);
+    expect('links' in parseExport(v1).memories[0]!).toBe(false);
+    const bad = formatExport([{ ...a, links: 'b' } as never, b]);
+    expect(() => parseExport(bad)).toThrow(/line 2/);
+  });
+
   it('export.v1-still-reads-as-the-planet', () => {
     const { planet } = sample();
     const v1 = formatExport(planet, 1, AT);

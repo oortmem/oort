@@ -137,13 +137,19 @@ export async function inspectCommand(
       cloud !== undefined
         ? ((await findCloudMemory(cloud, id)) as Memory)
         : await findMemory(w.store, filter, id);
-    const { links: chain, hidden } =
+    const { links: chain, hidden: chainHidden } =
       cloud !== undefined ? await cloudChain(cloud, m) : await supersedeChain(w.store, m, filter);
+    // Stored links (CON-148): only those whose other end this agent reads; the rest are counted.
+    const stored =
+      cloud === undefined ? await w.store.linksOf?.(localGrant(filter), m.id) : undefined;
+    const links = stored?.links ?? [];
+    const blocked = stored?.blocked ?? [];
+    const hidden = chainHidden + (stored?.hidden ?? 0);
     if (jsonMode(ctx)) {
       const memory = withoutEmbedding(
         cloud !== undefined ? m : await shapeLinks(w.store, filter, m),
       );
-      emit(ctx, { memory, chain, hiddenLinks: hidden });
+      emit(ctx, { memory, chain, links, blocked, hiddenLinks: hidden });
       return 0;
     }
     const a = activation(m.accessLog, m.salience, now, w.config.activation);
@@ -202,6 +208,23 @@ export async function inspectCommand(
         ]),
       ),
     );
+    if (links.length > 0 || blocked.length > 0) {
+      ctx.io.out(`\n${ui.bold('links')}\n`);
+      ctx.io.out(
+        ui.table(
+          ['id', 'kind', 'asserted by', 'since'],
+          [
+            ...links.map((l) => [
+              shown(short(l.id)),
+              l.kind === 'distilledFrom' ? `distilledFrom (${l.direction})` : l.kind,
+              l.assertedBy ?? '-',
+              when(l.createdAt, now, { short: true }),
+            ]),
+            ...blocked.map((id) => [shown(short(id)), 'blocked', '-', '-']),
+          ],
+        ),
+      );
+    }
     if (hidden > 0) {
       ctx.io.out(
         `${hidden} linked ${hidden === 1 ? 'memory' : 'memories'} in another scope (not shown)\n`,

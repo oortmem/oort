@@ -111,7 +111,8 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 | `forget(id, { everywhere? })`                  | `{ forgotten, rewritten?, notRewritten?, withdrawn?, requested?, unreachable? }` | yes | yes (`everywhere`: cloud only) |
 | `pin(id)` / `unpin(id)`                        | `{ id, pinned, changed }`                  | yes   | yes (`changed: null`)     |
 | `recent({ since?, limit? })`                   | `{ memories, warnings }`                   | yes   | yes                       |
-| `explain(id)`                                  | `Explanation`                              | yes   | yes                       |
+| `explain(id)`                                  | `Explanation` (with `links` and `hiddenLinks`) | yes | yes (`links` is empty)   |
+| `link(from, to)` / `unlink(from, to)`          | `{ linked, unblocked, assertedBy }` / `{ removed, blocked }` | yes | `refused` (`local-only`) |
 | `whoami()`                                     | `Whoami` (mode, agent, project, user, reads, writesTo, routes) | yes | yes        |
 | `judge.record(input)`                          | `RecordJudgmentView`                       | yes   | `refused`                 |
 | `judge.apply(item, opts?)`                     | `JudgeResult`                              | yes   | `refused`                 |
@@ -640,7 +641,7 @@ your Oort account); `whoami().routes` says which applies to each role.
 | `judge.record` | One Voyage embed | none | `refused` |
 | `judge.apply` | One Voyage embed and one TypeSafe judge call | TypeSafe judge only | `refused` |
 | `forget` | None, unless later memories of its chain restate one of its values: then one Anthropic writer call (that memory's text only) and one Voyage embed for each (CON-144) | The writer call still needs a key; the embed is local | No model call |
-| `pin`, `unpin`, `explain`, `recent`, `judge.list`, `judge.confirm`, `consolidate`, `whoami` | none | none | No model call |
+| `pin`, `unpin`, `link`, `unlink`, `explain`, `recent`, `judge.list`, `judge.confirm`, `consolidate`, `whoami` | none | none | No model call |
 
 `keySources: ['explicit']` turns off every implicit source, the relay included unless you pass
 `keys.oort`.
@@ -1039,6 +1040,57 @@ only, never the old one's. A refinement keeps its place unless the turn gives on
 somewhere else than a memory it would reinforce adds a memory instead (decision `place` /
 `elsewhere`), within the two places' `sigma`; deciding that a thing moved is a later release's
 job.
+
+## Memory links
+
+A link says that two memories belong together (local mode). It holds no text:
+two ids, who asserted it and when. Recall does not use links yet.
+
+<!-- example: examples/src/links.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+await using oort = await createOort({ mode: 'local' });
+
+const saved = await oort.remember([
+  'The billing service deploys on Fridays.',
+  'Friday deploys wait for the change freeze to end.',
+]);
+const [deploys, freeze] = saved.results.map((r) => r.id!);
+
+// A link holds no text: two ids, who asserted it and when. From the SDK that is always `agent`.
+const linked = await oort.link(deploys!, freeze!);
+console.log(linked.linked, linked.assertedBy); // true agent
+
+// `explain` lists the links whose other end this handle can read; `hiddenLinks` counts the rest.
+const { links, hiddenLinks } = await oort.explain(deploys!);
+console.log(links.map((l) => `${l.kind} ${l.assertedBy}`).join(', '), hiddenLinks); // explicit agent 0
+
+// Unlinking removes the link. A pair that could be related again is blocked until it is linked.
+const removed = await oort.unlink(deploys!, freeze!);
+console.log(removed.removed); // true
+```
+
+- `link(from, to)` returns `{ linked, unblocked, assertedBy }`. From the SDK, `oort serve` and MCP
+  a link is always asserted by `agent`; only `oort link`, confirmed at a terminal, records
+  `user`. `user` is a record of how the link was made, not proof of who made it, and it gives no
+  more access than `agent`. A `user` link is never downgraded.
+- Both memories must be ones the handle writes, in the same Planet or the same Star. Any other pair
+  (a Constellation or Galaxy memory, two different nodes, one memory twice, a memory the handle
+  only reads) rejects with `OortNotFoundError`, the same as an id that does not exist.
+- `unlink(from, to)` returns `{ removed, blocked }`. When the two were not linked, or share an
+  entity or a session, it records a block: nothing links the pair again until `link` is called on
+  it, which removes the block (`unblocked: true`). A link asserted by `user` is left in place:
+  `unlink` rejects with `OortRefusedError` (`reason: 'asserted-by-user'`), and only `oort unlink`
+  confirmed at a terminal removes it. `link` rejects the same way for a pair unlinked at a
+  terminal.
+- `explain(id).links` lists `{ kind, id, direction, assertedBy?, createdAt }` for links whose other
+  end the handle reads. `hiddenLinks` counts the others, together with supersede-chain neighbours
+  it cannot read.
+- `forget(id)` removes every link and block of the memory.
+- In cloud mode `link` and `unlink` reject with `OortRefusedError` (`reason: 'local-only'`), and
+  `explain().links` is empty.
 
 ## Stability
 
