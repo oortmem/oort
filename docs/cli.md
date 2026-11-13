@@ -1010,15 +1010,19 @@ oort unlink 1b2c3d4e 5f6a7b8c
 oort inspect 1b2c3d4e            # lists the memory's links and who asserted each
 ```
 
-- **Who asserted it.** `oort link` records `assertedBy: user` only when it runs on a terminal and
-  you answer the question. Without a terminal, or with `--yes` or `--json`, it records `agent`,
-  because an agent can run the command too. The SDK, `oort serve` and the MCP `link` tool always
-  record `agent`. Linking a pair again as a person upgrades an agent's link; an agent never
-  downgrades yours.
+- **Who asserted it.** `oort link` records `assertedBy: user` only when it is confirmed at a
+  terminal: stdin and stdout are both a terminal, and you answer the question, which is read from
+  the terminal itself and never from stdin. Otherwise (a pipe, `--yes`, `--json`) it records
+  `agent`. The SDK, `oort serve` and the MCP `link` tool always record `agent`. `user` means
+  "confirmed at a terminal"; it is not proof that a person did it, because a program with a shell
+  can drive a terminal. A `user` link gives no more access than an `agent` link. Its one effect:
+  an agent cannot remove or weaken it. Linking a pair again at a terminal upgrades an agent's
+  link, and `oort unlink` without a terminal confirmation (and SDK `unlink`, `DELETE /v1/links`,
+  MCP `link` with `remove`) is refused for a `user` link.
 - **Which pairs.** Both memories must be ones the acting agent can change, in the same Planet or
   the same Star. A Constellation or Galaxy memory cannot be linked, and neither can a memory to
-  itself. Every such pair is refused with the same `not-found` as an id that does not exist, so a
-  refusal never tells whether a memory exists.
+  itself. Every such pair is refused as `not-found`, like an id that does not exist, and the
+  refusal names neither id.
 - **Unlinking.** `oort unlink` removes the link. When the two were not linked, or would be related
   again by a shared entity or session, it records a block instead: nothing links the pair again
   until someone runs `oort link` on it, which removes the block.
@@ -1027,7 +1031,8 @@ oort inspect 1b2c3d4e            # lists the memory's links and who asserted eac
   supersede-chain neighbours in another scope.
 - **Forgetting.** `oort forget` removes every link and block of the memory with it.
 - **Export.** `oort export` (format 2) writes explicit links between memories in the file;
-  `oort import <file>` restores them as asserted by `agent`.
+  `oort import <file>` restores a link as asserted by `agent`, and only between two memories that
+  import writes: never into a memory that was already here.
 - **Oort Cloud.** Links are local-only for now: in cloud mode both commands are refused
   (`refused`).
 

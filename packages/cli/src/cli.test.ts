@@ -749,25 +749,46 @@ describe('oort forget, pin', () => {
     const b = memory({ text: 'The queue is sqs.' });
     await h.store.upsertMany(TG, [a, b]);
     const by = async () => (await h.store.linksOf!(TG, a.id))?.links.map((l) => l.assertedBy);
-    // Declined on a terminal: nothing is written.
-    const no = await h.run(['link', a.id, b.id], { tty: true, answer: 'n' });
+    const term = { tty: true, stdoutTTY: true };
+    // Declined on the terminal: nothing is written.
+    const no = await h.run(['link', a.id, b.id], { ...term, terminal: 'n' });
     expect([no.code, no.io.asked.length]).toEqual([0, 1]);
     expect(await by()).toEqual([]);
     // Not a terminal: no question, asserted by agent.
     const piped = await h.run(['link', a.id, b.id]);
     expect([piped.code, piped.io.asked.length]).toEqual([0, 0]);
     expect(await by()).toEqual(['agent']);
+    // A "y" on stdin is never the confirmation, and stdout must be a terminal too: a wrapper
+    // that pipes an answer in, or captures the output, records agent.
+    for (const o of [
+      { tty: true, stdoutTTY: true, answer: 'y' },
+      { tty: true, stdoutTTY: false, answer: 'y', terminal: 'y' },
+      { tty: false, stdoutTTY: true, answer: 'y', terminal: 'y' },
+    ]) {
+      const r = await h.run(['link', a.id, b.id], o);
+      expect([r.code, r.io.asked.length]).toEqual([0, 0]);
+      expect(await by()).toEqual(['agent']);
+    }
     // --json and --yes never ask, and never assert as a person.
-    const j = await h.run(['link', a.id.slice(0, 8), b.id, '--json', '--yes'], { tty: true });
+    const j = await h.run(['link', a.id.slice(0, 8), b.id, '--json', '--yes'], {
+      ...term,
+      terminal: 'y',
+    });
     expect(JSON.parse(j.io.stdout)).toMatchObject({
       ok: true,
       data: { from: a.id, to: b.id, linked: false, assertedBy: 'agent' },
     });
     expect(await by()).toEqual(['agent']);
-    // Confirmed on a terminal: a person asserted it.
-    const yes = await h.run(['link', a.id, b.id], { tty: true, answer: 'y' });
+    // Confirmed on the controlling terminal: recorded as user.
+    const yes = await h.run(['link', a.id, b.id], { ...term, terminal: 'y' });
     expect([yes.code, yes.io.asked.length]).toEqual([0, 1]);
     expect(yes.io.stdout).toContain('Linked');
+    expect(await by()).toEqual(['user']);
+    // An agent (no terminal) cannot remove a link confirmed at a terminal.
+    const kept = await h.run(['unlink', a.id, b.id, '--yes', '--json']);
+    expect(kept.code).toBe(2);
+    expect(JSON.parse(kept.io.stdout)).toMatchObject({ ok: false, error: { code: 'refused' } });
+    expect(kept.io.stdout).toContain('confirmed at a terminal');
     expect(await by()).toEqual(['user']);
     // inspect lists the link and who asserted it.
     const shown = await h.run(['inspect', b.id, '--json']);
@@ -777,8 +798,9 @@ describe('oort forget, pin', () => {
     });
     expect((await h.run(['inspect', b.id])).io.stdout).toMatch(/links[\s\S]*explicit[\s\S]*user/);
     // unlink removes it; a second unlink blocks the pair.
-    const un = await h.run(['unlink', a.id, b.id, '--yes', '--json']);
-    expect(JSON.parse(un.io.stdout).data).toMatchObject({ removed: true });
+    const un = await h.run(['unlink', a.id, b.id], { ...term, terminal: 'y' });
+    expect(un.io.stdout).toContain('Unlinked');
+    expect(await by()).toEqual([]);
     const again = await h.run(['unlink', a.id, b.id, '--yes', '--json']);
     expect(JSON.parse(again.io.stdout).data).toEqual({
       from: a.id,
@@ -796,8 +818,10 @@ describe('oort forget, pin', () => {
     const missing = await h.run(['link', a.id, 'ffffffff-0000-4000-8000-000000000000', '--yes']);
     const self = await h.run(['link', a.id, a.id, '--yes']);
     expect([missing.code, self.code]).toEqual([2, 2]);
-    const shape = (t: string) => t.replace(/".*"/, '"X"');
-    expect(shape(self.io.stderr)).toBe(shape(missing.io.stderr));
+    // A pair that cannot be linked is refused without naming either id.
+    expect(self.io.stderr).toContain('No such pair of memories');
+    expect(self.io.stderr).not.toContain(a.id.slice(0, 8));
+    expect(missing.io.stderr).toContain('No such memory');
     expect((await h.store.linksOf!(TG, a.id))?.links).toEqual([]);
   });
 

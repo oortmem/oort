@@ -45,7 +45,6 @@ import {
 } from './cloud.js';
 import {
   Refusal,
-  echo,
   findMemory,
   fixed,
   remedySentence,
@@ -209,7 +208,16 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           ? await w.store.unlink!(g, a.id, b.id, as)
           : await w.store.link!(g, a.id, b.id, as);
         if (r === null) {
-          throw new Refusal(`No such memory in this project: ${echo(to)}.`, { code: 'not-found' });
+          // Names neither id: which of the two was refused would say something about it.
+          throw new Refusal('No such pair of memories to link in this project.', {
+            code: 'not-found',
+          });
+        }
+        if ('refused' in r && r.refused !== undefined) {
+          throw new Refusal(
+            'That link was confirmed at a terminal, so an agent cannot remove it. The person can run `oort unlink` in a terminal.',
+            { code: 'refused' },
+          );
         }
         return 'removed' in r
           ? { removed: r.removed, blocked: r.blocked }

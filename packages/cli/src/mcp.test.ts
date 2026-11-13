@@ -345,14 +345,23 @@ describe('oort mcp tools', () => {
     });
     // The two share a session, so the episode index would relate them again: the pair is blocked.
     expect(json(removed)).toEqual({ removed: true, blocked: true });
-    // A pair it cannot link reads exactly as a missing id.
+    // A link confirmed at a terminal: the tool cannot remove it.
+    await h.store.link!(TG, a.id, b.id, { assertedBy: 'user' });
+    const kept = await client.callTool({
+      name: 'link',
+      arguments: { from: a.id, to: b.id, remove: true },
+    });
+    expect(kept.isError).toBe(true);
+    expect(text(kept)).toContain('confirmed at a terminal');
+    expect((await h.store.linksOf!(TG, a.id))?.links).toMatchObject([{ assertedBy: 'user' }]);
+    // A pair it cannot link is refused without naming either id.
     const missing = await client.callTool({ name: 'explain', arguments: { id: 'nope' } });
     const self = await client.callTool({ name: 'link', arguments: { from: a.id, to: a.id } });
     const none = await client.callTool({ name: 'link', arguments: { from: a.id, to: 'nope' } });
     expect([self.isError, none.isError]).toEqual([true, true]);
-    const shape = (t: string) => t.replace(/".*"/, '"X"');
-    expect(shape(text(self))).toBe(shape(text(missing)));
-    expect(shape(text(none))).toBe(shape(text(missing)));
+    expect(text(self)).toContain('No such pair of memories');
+    expect(text(self)).not.toContain(a.id.slice(0, 8));
+    expect(text(none).replace(/".*"/, '')).toBe(text(missing).replace(/".*"/, ''));
   });
 
   it('mcp.ids-from-another-scope-are-not-found', async () => {

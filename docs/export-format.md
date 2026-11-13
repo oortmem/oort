@@ -114,9 +114,9 @@ file, written on both lines.
 "links": [{ "kind": "explicit", "id": "5f6a7b8c-…" }]
 ```
 
-Who asserted a link is not written. `oort import <file>` restores a link between two memories it
-holds in your Planet as asserted by `agent`, and skips a link to a memory the file does not hold
-or of a kind it does not know. Blocks and learned links are not exported. Version 1 holds no
+Who asserted a link is not written. `oort import <file>` restores a link as asserted by `agent`,
+and only between two memories that import writes. It skips a link to a memory the file does not
+hold, to a memory that was already in the store, or of a kind it does not know. Blocks and learned links are not exported. Version 1 holds no
 links.
 
 ## Version 1

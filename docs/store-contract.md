@@ -218,6 +218,10 @@ three more methods. A link holds no content: two ids, a kind, who asserted it an
 - `unlink(grant, a, b, { assertedBy, at? })` deletes the pair's `explicit` and `recalledWith`
   rows. When none was deleted, or the pair is related by an index (a shared entity key, or the
   same session in the same node), it writes a `blocked` row. Returns `{ removed, blocked }`.
+  Called as `agent` on a link asserted by `user`, it changes nothing and returns
+  `{ removed: false, blocked: false, refused: 'asserted-by-user' }`.
+- `upsertManyLinked(grant, memories, pairs, { assertedBy })` is `upsertMany` followed by `link`
+  for each pair, in one transaction (an import). A pair `link` would refuse is skipped.
 - `linksOf(grant, id)` returns `{ links, blocked, hidden }` for a memory inside `grant.read`:
   `links` and `blocked` hold only rows whose other end is inside `grant.read`; `hidden` counts
   the stored link rows (not blocks) whose other end is not. `null` for a memory outside it.
@@ -227,6 +231,8 @@ The rules every such store keeps:
 - **Both ends writable, one node, never `hive`.** `link` and `unlink` need both memories inside
   `grant.write`, at the same node (project excluded), not at level `hive`, and distinct. For
   anything else they return `null` and write nothing, exactly as for an id that does not exist.
+- **`user` is a record, not a right.** `assertedBy: 'user'` means the caller says the link was
+  confirmed at a terminal. A store never gives a `user` link more access than an `agent` link.
 - **Forget cascades.** `forget` removes every link, block and entity row of the memory in the
   same transaction as the memory. Nothing of a forgotten memory is left in the link tables.
 - **Upsert keeps links.** A rewrite of a memory (including the successor rewrite `forgetMemory`
@@ -463,8 +469,12 @@ version 7 exactly. `migrate: false` refuses it with `StoreMigrationRequiredError
 triggers now call `oort_writer_v8()`, so an Oort that predates version 8 fails on its next write
 (`no such function: oort_writer_v8`) instead of writing a memory without its index rows.
 `downgradeSqliteStore({ path, to: 7 })` drops the link schema and restores version 7's guard; it
-refuses, before taking its copy, while any `explicit`, `distilledFrom` or `blocked` row exists
-(remove them with `oort unlink`, or forget a memory). Learned `recalledWith` rows are dropped.
+refuses, before taking its copy, while any `explicit`, `distilledFrom` or `blocked` row exists.
+`oort unlink` is not a way to clear them: unlinking a pair that shares an entity or a session
+leaves a block. `downgradeSqliteStore({ path, to: 7, dropLinks: true })` deletes every link and
+block on purpose and goes down; the `pre-downgrade` copy it takes first still holds them. Learned
+`recalledWith` rows are always dropped. Forgetting the last memory of a node deletes the node's
+row in `nodes`, which names an org, customer, agent or run.
 
 `downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x,
 `downgradeSqliteStore({ path, to: 2 })` to version 2 for Oort 0.3 to 0.5, and `{ path, to: 3 }` to

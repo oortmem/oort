@@ -249,7 +249,8 @@ console.log(memories.map((m) => m.text).join('\n'));
 `link(from, to)` says two memories belong together; `unlink` removes it, or blocks a pair that was
 not linked. Both memories must be ones the handle writes, in the same Planet or Star: any other
 pair rejects with `OortNotFoundError`, like a missing id. From the SDK a link is always asserted
-by `agent`. Recall does not use links yet. In cloud mode both reject (`refused`, `local-only`).
+by `agent`; `unlink` rejects (`refused`, `asserted-by-user`) for a link confirmed at a terminal
+with `oort link`. Recall does not use links yet. In cloud mode both reject (`refused`, `local-only`).
 
 <!-- example: examples/src/links.ts -->
 

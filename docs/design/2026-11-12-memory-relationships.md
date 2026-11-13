@@ -352,10 +352,14 @@ never a memory in the same node.
 
 - `link(a, b)` needs the **write** grant on both memories, and both in one node that is not at
   level `hive`. Otherwise it is refused exactly as a missing id is.
-- **`assertedBy: 'user'`** only from `oort link` run on an interactive terminal, after a
-  confirmation prompt. **(my call: an agent with a shell can run `oort link` too; most agent
-  shells have no TTY, so without one `oort link` records `agent`. A known limit: an agent driving
-  a real terminal could pass as a person.)**
+- **`assertedBy: 'user'`** only from `oort link` confirmed at a terminal: stdin and stdout are
+  both a terminal, and the answer is read from the controlling terminal, never from stdin.
+  Without that, `oort link` records `agent`. **`user` means "confirmed at a terminal". It is not
+  proof that a person did it:** an agent with a shell can drive a pseudo-terminal, and nothing
+  here stops a determined one. So nothing may give a `user` link more access than an `agent`
+  link: a link never lets a reader reach a memory its grant does not read, whoever asserted it.
+  What `user` does is limited to ranking (decision 2) and to this: an `agent` call cannot remove
+  or weaken a `user` link (`unlink` as `agent` is refused with `asserted-by-user`).
 - **`assertedBy: 'agent'`** from MCP `link`, the SDK and `oort serve` **(my call: the SDK is
   often called with ids an agent chose)**. MCP `link` is annotated `destructiveHint: true`, as
   `record_judgment` is, so hosts ask the person before it runs.

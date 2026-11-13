@@ -1073,14 +1073,17 @@ console.log(removed.removed); // true
 ```
 
 - `link(from, to)` returns `{ linked, unblocked, assertedBy }`. From the SDK, `oort serve` and MCP
-  a link is always asserted by `agent`; only `oort link`, confirmed by a person on a terminal,
-  records `user`. A person's link is never downgraded.
+  a link is always asserted by `agent`; only `oort link`, confirmed at a terminal, records
+  `user`. `user` is a record of how the link was made, not proof of who made it, and it gives no
+  more access than `agent`. A `user` link is never downgraded.
 - Both memories must be ones the handle writes, in the same Planet or the same Star. Any other pair
   (a Constellation or Galaxy memory, two different nodes, one memory twice, a memory the handle
   only reads) rejects with `OortNotFoundError`, the same as an id that does not exist.
 - `unlink(from, to)` returns `{ removed, blocked }`. When the two were not linked, or share an
   entity or a session, it records a block: nothing links the pair again until `link` is called on
-  it, which removes the block (`unblocked: true`).
+  it, which removes the block (`unblocked: true`). A link asserted by `user` is left in place:
+  `unlink` rejects with `OortRefusedError` (`reason: 'asserted-by-user'`), and only `oort unlink`
+  confirmed at a terminal removes it.
 - `explain(id).links` lists `{ kind, id, direction, assertedBy?, createdAt }` for links whose other
   end the handle reads. `hiddenLinks` counts the others, together with supersede-chain neighbours
   it cannot read.

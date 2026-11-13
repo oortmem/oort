@@ -1,17 +1,7 @@
 import { filterFor } from '@oortmem/claude-code';
 import type { AssertedBy } from '@oortmem/core';
 import { emit, jsonMode } from '../output.js';
-import {
-  Refusal,
-  cloudOf,
-  confirm,
-  echo,
-  findMemory,
-  short,
-  withWired,
-  writeGrant,
-  type Ctx,
-} from '../util.js';
+import { Refusal, cloudOf, findMemory, short, withWired, writeGrant, type Ctx } from '../util.js';
 
 export interface LinkOptions {
   yes?: boolean;
@@ -46,21 +36,39 @@ export async function linkCommand(
     const a = await findMemory(store, filter, from);
     const b = await findMemory(store, filter, to);
     const json = jsonMode(ctx);
+    // `user` records that the change was confirmed at a terminal: stdin and stdout are both a
+    // terminal and the answer is read from the controlling terminal, never from stdin. It is
+    // not proof that a person did it (a program can drive a pseudo-terminal), and it grants
+    // nothing: its one effect is that an agent call cannot remove the link.
     let assertedBy: AssertedBy = 'agent';
-    if (ctx.io.stdinIsTTY && !json && opts.yes !== true) {
-      const question = `${remove ? 'Unlink' : 'Link'} ${short(a.id)} and ${short(b.id)}?`;
-      if (!(await confirm(ctx.io, question, false, remove ? 'unlink' : 'link', { json }))) {
-        ctx.io.out('Nothing changed.\n');
-        return 0;
+    const atTerminal =
+      ctx.io.stdinIsTTY && ctx.io.stdoutIsTTY === true && !json && opts.yes !== true;
+    if (atTerminal && ctx.io.askTerminal !== undefined) {
+      const question = `${remove ? 'Unlink' : 'Link'} ${short(a.id)} and ${short(b.id)}? [y/N] `;
+      const answer = await ctx.io.askTerminal(question);
+      if (answer !== undefined) {
+        if (!['y', 'yes'].includes(answer.trim().toLowerCase())) {
+          ctx.io.out('Nothing changed.\n');
+          return 0;
+        }
+        assertedBy = 'user';
       }
-      assertedBy = 'user';
     }
     const g = writeGrant(w);
     const r = remove
       ? await store.unlink!(g, a.id, b.id, { assertedBy })
       : await store.link!(g, a.id, b.id, { assertedBy });
     if (r === null) {
-      throw new Refusal(`No such memory in this project: ${echo(to)}.`, { code: 'not-found' });
+      // Names neither id: which of the two was refused would say something about it.
+      throw new Refusal('No such pair of memories to link in this project.', {
+        code: 'not-found',
+      });
+    }
+    if ('refused' in r && r.refused !== undefined) {
+      throw new Refusal(
+        'That link was confirmed at a terminal, so only `oort unlink` confirmed at a terminal removes it.',
+        { code: 'refused' },
+      );
     }
     if (json) {
       emit(ctx, { from: a.id, to: b.id, ...r });

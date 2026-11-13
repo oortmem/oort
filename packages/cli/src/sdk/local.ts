@@ -374,7 +374,13 @@ export async function unlink(ctx: Ctx, from: string, to: string): Promise<Unlink
   const [a, b] = [await findLocal(ctx, from), await findLocal(ctx, to)];
   const r = await store.unlink?.(ctx.principal.grant, a.id, b.id, { assertedBy: 'agent' });
   if (r === undefined || r === null) throw new OortNotFoundError(NO_PAIR);
-  return r;
+  if (r.refused !== undefined) {
+    throw new OortRefusedError(
+      'That link was confirmed at a terminal: only `oort unlink`, confirmed at a terminal, removes it.',
+      { reason: 'asserted-by-user', fix: 'oort unlink <a> <b>' },
+    );
+  }
+  return { removed: r.removed, blocked: r.blocked };
 }
 
 /** Which key or model serves each role (never the key). */
