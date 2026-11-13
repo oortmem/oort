@@ -1083,7 +1083,8 @@ console.log(removed.removed); // true
   entity or a session, it records a block: nothing links the pair again until `link` is called on
   it, which removes the block (`unblocked: true`). A link asserted by `user` is left in place:
   `unlink` rejects with `OortRefusedError` (`reason: 'asserted-by-user'`), and only `oort unlink`
-  confirmed at a terminal removes it.
+  confirmed at a terminal removes it. `link` rejects the same way for a pair unlinked at a
+  terminal.
 - `explain(id).links` lists `{ kind, id, direction, assertedBy?, createdAt }` for links whose other
   end the handle reads. `hiddenLinks` counts the others, together with supersede-chain neighbours
   it cannot read.

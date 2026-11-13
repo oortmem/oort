@@ -219,7 +219,8 @@ three more methods. A link holds no content: two ids, a kind, who asserted it an
   rows. When none was deleted, or the pair is related by an index (a shared entity key, or the
   same session in the same node), it writes a `blocked` row. Returns `{ removed, blocked }`.
   Called as `agent` on a link asserted by `user`, it changes nothing and returns
-  `{ removed: false, blocked: false, refused: 'asserted-by-user' }`.
+  `{ removed: false, blocked: false, refused: 'asserted-by-user' }`. `link` as `agent` on a pair
+  blocked by `user` likewise changes nothing and returns `refused: 'asserted-by-user'`.
 - `upsertManyLinked(grant, memories, pairs, { assertedBy })` is `upsertMany` followed by `link`
   for each pair, in one transaction (an import). A pair `link` would refuse is skipped.
 - `linksOf(grant, id)` returns `{ links, blocked, hidden }` for a memory inside `grant.read`:

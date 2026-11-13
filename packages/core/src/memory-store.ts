@@ -269,6 +269,17 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       const pair = linkable(grant, x, y);
       if (pair === undefined) return null;
       const [a, b] = pair;
+      if (
+        linkOpts.assertedBy !== 'user' &&
+        links.get(rowKey('blocked', a, b))?.assertedBy === 'user'
+      ) {
+        return {
+          linked: false,
+          unblocked: false,
+          assertedBy: 'agent' as const,
+          refused: 'asserted-by-user' as const,
+        };
+      }
       const unblocked = links.delete(rowKey('blocked', a, b));
       const k = rowKey('explicit', a, b);
       const was = links.get(k);

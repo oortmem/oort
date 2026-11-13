@@ -354,6 +354,16 @@ describe('oort mcp tools', () => {
     expect(kept.isError).toBe(true);
     expect(text(kept)).toContain('confirmed at a terminal');
     expect((await h.store.linksOf!(TG, a.id))?.links).toMatchObject([{ assertedBy: 'user' }]);
+    // A pair unlinked at a terminal: the tool cannot link it again.
+    await h.store.unlink!(TG, a.id, b.id, { assertedBy: 'user' });
+    await h.store.unlink!(TG, a.id, b.id, { assertedBy: 'user' });
+    const blockedPair = await client.callTool({
+      name: 'link',
+      arguments: { from: a.id, to: b.id },
+    });
+    expect(blockedPair.isError).toBe(true);
+    expect(text(blockedPair)).toContain('unlinked at a terminal');
+    expect((await h.store.linksOf!(TG, a.id))?.blocked).toEqual([b.id]);
     // A pair it cannot link is refused without naming either id.
     const missing = await client.callTool({ name: 'explain', arguments: { id: 'nope' } });
     const self = await client.callTool({ name: 'link', arguments: { from: a.id, to: a.id } });

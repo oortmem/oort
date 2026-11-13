@@ -215,7 +215,9 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
         }
         if ('refused' in r && r.refused !== undefined) {
           throw new Refusal(
-            'That link was confirmed at a terminal, so an agent cannot remove it. The person can run `oort unlink` in a terminal.',
+            remove
+              ? 'That link was confirmed at a terminal, so an agent cannot remove it. The person can run `oort unlink` in a terminal.'
+              : 'That pair was unlinked at a terminal, so an agent cannot link it again. The person can run `oort link` in a terminal.',
             { code: 'refused' },
           );
         }

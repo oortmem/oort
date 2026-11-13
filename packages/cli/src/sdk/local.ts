@@ -366,7 +366,13 @@ export async function link(ctx: Ctx, from: string, to: string): Promise<LinkResu
   const [a, b] = [await findLocal(ctx, from), await findLocal(ctx, to)];
   const r = await store.link?.(ctx.principal.grant, a.id, b.id, { assertedBy: 'agent' });
   if (r === undefined || r === null) throw new OortNotFoundError(NO_PAIR);
-  return r;
+  if (r.refused !== undefined) {
+    throw new OortRefusedError(
+      'That pair was unlinked at a terminal: only `oort link`, confirmed at a terminal, links it again.',
+      { reason: 'asserted-by-user', fix: 'oort link <a> <b>' },
+    );
+  }
+  return { linked: r.linked, unblocked: r.unblocked, assertedBy: r.assertedBy };
 }
 
 export async function unlink(ctx: Ctx, from: string, to: string): Promise<UnlinkResult> {

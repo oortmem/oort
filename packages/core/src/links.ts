@@ -70,6 +70,11 @@ export interface LinkResult {
   unblocked: boolean;
   /** Who the stored link is asserted by now (a person's assertion is never weakened). */
   assertedBy: AssertedBy;
+  /**
+   * Set when nothing was changed because the pair is blocked by a `user` unlink and this call is
+   * asserted by `agent`: only a `user` link removes a `user` block.
+   */
+  refused?: 'asserted-by-user';
 }
 
 /** What `MemoryStore.unlink` did. */

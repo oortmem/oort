@@ -1783,6 +1783,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     (grant: Grant, x: string, y: string, o: LinkOptions): LinkResult | null => {
       const p = linkablePair(grant, x, y);
       if (p === undefined) return null;
+      // Only a `user` link removes a block a `user` unlink wrote.
+      if (o.assertedBy !== 'user' && q.linkGet.get('blocked', p.a, p.b)?.asserted_by === 'user') {
+        return {
+          linked: false,
+          unblocked: false,
+          assertedBy: 'agent',
+          refused: 'asserted-by-user',
+        };
+      }
       const unblocked = q.linkDelete.run('blocked', p.a, p.b).changes > 0;
       const was = q.linkGet.get('explicit', p.a, p.b);
       if (was !== undefined) {

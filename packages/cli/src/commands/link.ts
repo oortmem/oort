@@ -66,7 +66,9 @@ export async function linkCommand(
     }
     if ('refused' in r && r.refused !== undefined) {
       throw new Refusal(
-        'That link was confirmed at a terminal, so only `oort unlink` confirmed at a terminal removes it.',
+        remove
+          ? 'That link was confirmed at a terminal, so only `oort unlink` confirmed at a terminal removes it.'
+          : 'That pair was unlinked at a terminal, so only `oort link` confirmed at a terminal links it again.',
         { code: 'refused' },
       );
     }

@@ -1018,7 +1018,8 @@ oort inspect 1b2c3d4e            # lists the memory's links and who asserted eac
   can drive a terminal. A `user` link gives no more access than an `agent` link. Its one effect:
   an agent cannot remove or weaken it. Linking a pair again at a terminal upgrades an agent's
   link, and `oort unlink` without a terminal confirmation (and SDK `unlink`, `DELETE /v1/links`,
-  MCP `link` with `remove`) is refused for a `user` link.
+  MCP `link` with `remove`) is refused for a `user` link. The same holds for a block: a pair
+  unlinked at a terminal is linked again only by `oort link` confirmed at a terminal.
 - **Which pairs.** Both memories must be ones the acting agent can change, in the same Planet or
   the same Star. A Constellation or Galaxy memory cannot be linked, and neither can a memory to
   itself. Every such pair is refused as `not-found`, like an id that does not exist, and the

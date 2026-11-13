@@ -1520,10 +1520,12 @@ export function linksConformance(
 
     it('links.unlinking-an-unlinked-pair-blocks-it-and-linking-it-unblocks', async () => {
       await seed(at('a'), at('b'));
-      expect(await S().unlink(TG, 'a', 'b', USER)).toEqual({ removed: false, blocked: true });
+      expect(await S().unlink(TG, 'a', 'b', AGENT)).toEqual({ removed: false, blocked: true });
       expect(await listed(TG, 'a')).toEqual({ links: [], blocked: ['b'], hidden: 0 });
       expect(await listed(TG, 'b')).toEqual({ links: [], blocked: ['a'], hidden: 0 });
-      expect(await rows.links()).toEqual([{ kind: 'blocked', a: 'a', b: 'b', assertedBy: 'user' }]);
+      expect(await rows.links()).toEqual([
+        { kind: 'blocked', a: 'a', b: 'b', assertedBy: 'agent' },
+      ]);
       // Again: still one block.
       expect(await S().unlink(TG, 'b', 'a', AGENT)).toEqual({ removed: false, blocked: true });
       expect(await rows.links()).toHaveLength(1);
@@ -1720,6 +1722,29 @@ export function linksConformance(
       expect(await S().link(TG, 'a', 'b', AGENT)).toMatchObject({ assertedBy: 'user' });
       expect(await S().unlink(TG, 'a', 'b', USER)).toMatchObject({ removed: true });
       expect((await rows.links()).filter((l) => l.kind === 'explicit')).toEqual([]);
+    });
+
+    it('links.an-agent-cannot-remove-a-block-a-person-asserted', async () => {
+      await seed(at('a'), at('b'));
+      expect(await S().unlink(TG, 'a', 'b', USER)).toEqual({ removed: false, blocked: true });
+      expect(await S().link(TG, 'a', 'b', AGENT)).toEqual({
+        linked: false,
+        unblocked: false,
+        assertedBy: 'agent',
+        refused: 'asserted-by-user',
+      });
+      expect(await rows.links()).toEqual([{ kind: 'blocked', a: 'a', b: 'b', assertedBy: 'user' }]);
+      // A person's link still removes it.
+      expect(await S().link(TG, 'a', 'b', USER)).toEqual({
+        linked: true,
+        unblocked: true,
+        assertedBy: 'user',
+      });
+      // And an agent's own block is an agent's to remove.
+      await S().unlink(TG, 'a', 'b', USER);
+      await seed(at('c'), at('d'));
+      await S().unlink(TG, 'c', 'd', AGENT);
+      expect(await S().link(TG, 'c', 'd', AGENT)).toMatchObject({ linked: true, unblocked: true });
     });
 
     it('links.upsert-many-linked-writes-memories-and-links-together', async () => {
