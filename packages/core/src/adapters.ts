@@ -182,6 +182,17 @@ export interface MemoryStore {
    * was). Used where several records must change together, e.g. a supersede.
    */
   upsertMany(grant: Grant, ms: Memory[]): Promise<void>;
+  /**
+   * `upsertMany`, then `link` for each pair, all in one transaction: a store with `links` has it,
+   * so an import never leaves memories without the links that came with them. A pair `link`
+   * would refuse is skipped. Returns how many links were written.
+   */
+  upsertManyLinked?(
+    grant: Grant,
+    ms: Memory[],
+    pairs: readonly (readonly [string, string])[],
+    opts: LinkOptions,
+  ): Promise<{ linked: number }>;
   /** The current record if it is inside `grant.read`, else null. */
   get(grant: Grant, id: string): Promise<Memory | null>;
   /**

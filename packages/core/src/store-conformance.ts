@@ -1512,7 +1512,7 @@ export function linksConformance(
 
     it('links.unlink-removes-the-link', async () => {
       await seed(at('a'), at('b'));
-      await S().link(TG, 'a', 'b', USER);
+      await S().link(TG, 'a', 'b', AGENT);
       expect(await S().unlink(TG, 'b', 'a', AGENT)).toEqual({ removed: true, blocked: false });
       expect(await listed(TG, 'a')).toEqual({ links: [], blocked: [], hidden: 0 });
       expect(await rows.links()).toEqual([]);
@@ -1703,6 +1703,47 @@ export function linksConformance(
       const m = (await store.get(TG, 't1a'))!;
       await store.upsert(TG, { ...m, text: 'refined' });
       expect((await seqs())['t1a']).toEqual(['s1', 1]);
+    });
+
+    it('links.an-agent-cannot-unlink-a-link-a-person-asserted', async () => {
+      // Otherwise two agent calls (unlink, then link) would turn a person's link into an agent's.
+      await seed(at('a'), at('b'));
+      await S().link(TG, 'a', 'b', USER);
+      expect(await S().unlink(TG, 'a', 'b', AGENT)).toEqual({
+        removed: false,
+        blocked: false,
+        refused: 'asserted-by-user',
+      });
+      expect(await rows.links()).toEqual([
+        { kind: 'explicit', a: 'a', b: 'b', assertedBy: 'user' },
+      ]);
+      expect(await S().link(TG, 'a', 'b', AGENT)).toMatchObject({ assertedBy: 'user' });
+      expect(await S().unlink(TG, 'a', 'b', USER)).toMatchObject({ removed: true });
+      expect((await rows.links()).filter((l) => l.kind === 'explicit')).toEqual([]);
+    });
+
+    it('links.upsert-many-linked-writes-memories-and-links-together', async () => {
+      const r = await store.upsertManyLinked!(
+        TG,
+        [at('a'), at('b'), at('c')],
+        [
+          ['a', 'b'],
+          ['a', 'nope'],
+          ['c', 'c'],
+        ],
+        AGENT,
+      );
+      expect(r).toEqual({ linked: 1 });
+      expect(await rows.links()).toEqual([
+        { kind: 'explicit', a: 'a', b: 'b', assertedBy: 'agent' },
+      ]);
+      // One memory outside the grant: nothing is written, memories or links.
+      const narrow = nodeGrant({ principal: OWNER, read: [], write: [] });
+      await expect(
+        store.upsertManyLinked!(narrow, [at('d'), at('e')], [['d', 'e']], AGENT),
+      ).rejects.toThrow();
+      expect(await store.get(TG, 'd')).toBeNull();
+      expect(await rows.links()).toHaveLength(1);
     });
   });
 }

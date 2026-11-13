@@ -92,6 +92,7 @@ import {
   downgradeSchema,
   ENTITY_TABLE,
   FTS_TABLE,
+  NODE_TABLE,
   LINK_TABLE,
   linkRowsError,
   linkRowsKept,
@@ -793,7 +794,15 @@ export function sqliteSchemaVersion(dbPath: string): number | undefined {
  * a drain) may have the store open while it runs: one would migrate it straight back, or fail on
  * the changed schema.
  */
-export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 | 4 | 5 | 6 | 7 }): void {
+export function downgradeSqliteStore(opts: {
+  path: string;
+  to?: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  /**
+   * Delete every memory link and block (schema version 8) instead of refusing while any
+   * explicit, distilledFrom or blocked row exists. The copy taken first still holds them.
+   */
+  dropLinks?: boolean;
+}): void {
   const to = opts.to ?? 1;
   const dbPath = path.resolve(opts.path);
   const db = withPrivateUmask(() => new Database(dbPath, { fileMustExist: true }));
@@ -804,7 +813,7 @@ export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 | 4 | 
       downgradeSchema(db, to); // at or below `to` already: nothing to do; anything else: refused
       return;
     }
-    const links = linkRowsKept(db);
+    const links = opts.dropLinks === true ? 0 : linkRowsKept(db);
     if (links > 0) throw linkRowsError(links, to);
     const places = to < 5 ? placeCount(db) : 0;
     if (places > 0) {
@@ -828,7 +837,7 @@ export function downgradeSqliteStore(opts: { path: string; to?: 1 | 2 | 3 | 4 | 
       }
     }
     withPrivateUmask(() => backupDatabase(db, dbPath, 'pre-downgrade'));
-    downgradeSchema(db, to);
+    downgradeSchema(db, to, { dropLinks: opts.dropLinks === true });
   } finally {
     db.close();
   }
@@ -1117,6 +1126,12 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
          AND level = @level AND org_id = @org AND customer_id IS @customer AND agent_id IS @agent
          AND hive_id IS @hive AND run_id IS @run`,
     ),
+    nodeHasMemory: db.prepare<[Params], { x: number }>(
+      `SELECT 1 AS x FROM memories
+       WHERE level = @level AND org_id = @org AND customer_id IS @customer AND agent_id IS @agent
+         AND hive_id IS @hive AND run_id IS @run LIMIT 1`,
+    ),
+    nodeDelete: db.prepare<[string]>(`DELETE FROM ${NODE_TABLE} WHERE node_key = ?`),
     linkGet: db.prepare<[string, number, number], { asserted_by: 'user' | 'agent' | null }>(
       `SELECT asserted_by FROM ${LINK_TABLE} WHERE kind = ? AND a_rid = ? AND b_rid = ?`,
     ),
@@ -1636,9 +1651,21 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   }
 
   const forgetTx = db.transaction((grant: Grant, id: string): string | undefined => {
-    if (scopedRow(grant.writeNodes, id) === undefined) return undefined;
+    const scoped = scopedRow(grant.writeNodes, id);
+    if (scoped === undefined) return undefined;
     const row = q.deleteRow.get(id);
     if (row !== undefined) {
+      // Its links, blocks and entity rows went with it (ON DELETE CASCADE). The node's own row
+      // names an org, customer, agent or run: it goes with the node's last memory (CON-148).
+      const left = q.nodeHasMemory.get({
+        level: scoped.level,
+        org: scoped.org_id,
+        customer: scoped.customer_id,
+        agent: scoped.agent_id,
+        hive: scoped.hive_id,
+        run: scoped.run_id,
+      });
+      if (left === undefined) q.nodeDelete.run(nodeKeyOfColumns(scoped));
       q.ftsDelete.run(row.rid);
       q.placeDelete.run(row.rid);
       rq.remove(row.rid);
@@ -1780,10 +1807,30 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     },
   );
 
+  /** The memories, then their links, in one transaction (an import). Nested calls are savepoints. */
+  const writeLinked = db.transaction(
+    (
+      grant: Grant,
+      ms: Memory[],
+      pairs: readonly (readonly [string, string])[],
+      o: LinkOptions,
+    ): { files: string[]; linked: number } => {
+      const files = ms.flatMap((m) => writeMemory(grant, m));
+      let linked = 0;
+      for (const [x, y] of pairs) if (linkTx(grant, x, y, o)?.linked === true) linked++;
+      return { files, linked };
+    },
+  );
+
   const unlinkTx = db.transaction(
     (grant: Grant, x: string, y: string, o: LinkOptions): UnlinkResult | null => {
       const p = linkablePair(grant, x, y);
       if (p === undefined) return null;
+      // Only a `user` unlink removes a `user` link: otherwise an agent could unlink it and link
+      // it again as its own.
+      if (o.assertedBy !== 'user' && q.linkGet.get('explicit', p.a, p.b)?.asserted_by === 'user') {
+        return { removed: false, blocked: false, refused: 'asserted-by-user' };
+      }
       const removed =
         q.linkDelete.run('explicit', p.a, p.b).changes +
           q.linkDelete.run('recalledWith', p.a, p.b).changes >
@@ -1953,6 +2000,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       open();
       assertGrant(grant);
       upsertMany(grant, ms);
+    },
+
+    async upsertManyLinked(grant, ms, pairs, linkOpts) {
+      open();
+      assertGrant(grant);
+      const r = writeLinked.immediate(grant, ms, pairs, linkOpts);
+      removeAfterCommit(r.files);
+      rqAfterWrite();
+      return { linked: r.linked };
     },
 
     async upsertManyIfUnchanged(grant, writes) {

@@ -288,6 +288,10 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       const pair = linkable(grant, x, y);
       if (pair === undefined) return null;
       const [a, b] = pair;
+      const held = links.get(rowKey('explicit', a, b));
+      if (held?.assertedBy === 'user' && linkOpts.assertedBy !== 'user') {
+        return { removed: false, blocked: false, refused: 'asserted-by-user' as const };
+      }
       const removed = [
         links.delete(rowKey('explicit', a, b)),
         links.delete(rowKey('recalledWith', a, b)),
@@ -358,6 +362,16 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         checked.push(ok);
       }
       for (const c of checked) put(c);
+    },
+
+    /** The memories are checked before any is written; the links follow in the same turn. */
+    async upsertManyLinked(grant, ms, pairs, linkOpts) {
+      await handle.upsertMany(grant, ms);
+      let linked = 0;
+      for (const [x, y] of pairs) {
+        if ((await handle.link!(grant, x, y, linkOpts))?.linked === true) linked++;
+      }
+      return { linked };
     },
 
     /** Atomic trivially: checks and clones every applying record before writing any. */

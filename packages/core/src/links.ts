@@ -20,9 +20,13 @@ export const STORED_LINK_KINDS: readonly StoredLinkKind[] = [
 ];
 
 /**
- * Who asserted an explicit link or a block: `user` only when a person confirmed it on a terminal
- * (`oort link`); `agent` for MCP, the SDK, `oort serve`, an import, and `oort link` without a
- * terminal or a confirmation.
+ * Who asserted an explicit link or a block. `user` means it was confirmed at a terminal
+ * (`oort link`, answered on the controlling terminal); `agent` is everything else: MCP, the SDK,
+ * `oort serve`, an import, and `oort link` without a terminal or a confirmation.
+ *
+ * `user` is a record of how the link was made, not proof that a person made it: a program with a
+ * shell can drive a terminal. Nothing may give a `user` link more access than an `agent` link.
+ * Its one effect is that an `agent` call cannot remove or weaken it.
  */
 export type AssertedBy = 'user' | 'agent';
 
@@ -74,6 +78,11 @@ export interface UnlinkResult {
   removed: boolean;
   /** A block on the pair exists now. */
   blocked: boolean;
+  /**
+   * Set when nothing was changed because the pair's explicit link is asserted by `user` and this
+   * call is asserted by `agent`: only a `user` unlink removes a `user` link.
+   */
+  refused?: 'asserted-by-user';
 }
 
 /** Entity keys shorter than this, or longer than `ENTITY_KEY_MAX`, are not indexed. */

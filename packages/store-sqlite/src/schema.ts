@@ -918,7 +918,7 @@ export function linkRowsKept(db: Database): number {
 /** The refusal of a downgrade below version 8 while `n` such link rows exist. */
 export function linkRowsError(n: number, to: number): Error {
   return new Error(
-    `sqlite store: ${n} ${n === 1 ? 'link' : 'links'} (explicit, distilledFrom or blocked); schema version ${to} cannot hold them. Remove them first (oort unlink, or forget a memory)`,
+    `sqlite store: ${n} ${n === 1 ? 'link' : 'links'} (explicit, distilledFrom or blocked); schema version ${to} cannot hold them. To delete every link and block and go down anyway, pass dropLinks: true to downgradeSqliteStore (its copy of the store, taken first, keeps them)`,
   );
 }
 
@@ -926,10 +926,11 @@ export function linkRowsError(n: number, to: number): Error {
  * Version 8 back to 7, inside the caller's transaction: drops the link schema and puts the
  * version 7 guard back. Refuses (throws) while any explicit, distilledFrom or blocked row exists:
  * none can be rebuilt, and dropping a block would bring back a pair someone removed. Learned
- * `recalledWith` rows are dropped (they are learned again).
+ * `recalledWith` rows are dropped (they are learned again). `dropLinks` says the caller means to
+ * lose every link and block: then nothing is refused.
  */
-export function migrateV8toV7(db: Database): void {
-  const n = linkRowsKept(db);
+export function migrateV8toV7(db: Database, dropLinks = false): void {
+  const n = dropLinks ? 0 : linkRowsKept(db);
   if (n > 0) throw linkRowsError(n, 7);
   db.exec(`
     DROP TABLE IF EXISTS ${LINK_TABLE};
@@ -1261,7 +1262,11 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
  * guard; leaving version 4 rebuilds the lexical index with tokeniser v1. No other connection may
  * have the store open. Opening a store never does this: migrations only roll forward.
  */
-export function downgradeSchema(db: Database, to: 1 | 2 | 3 | 4 | 5 | 6 | 7 = 1): void {
+export function downgradeSchema(
+  db: Database,
+  to: 1 | 2 | 3 | 4 | 5 | 6 | 7 = 1,
+  opts: { dropLinks?: boolean } = {},
+): void {
   db.transaction(() => {
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     let version = Number(get.get('schema_version')?.value);
@@ -1272,7 +1277,7 @@ export function downgradeSchema(db: Database, to: 1 | 2 | 3 | 4 | 5 | 6 | 7 = 1)
       );
     }
     if (version === 8) {
-      migrateV8toV7(db);
+      migrateV8toV7(db, opts.dropLinks === true);
       version = 7;
     }
     if (version === 7 && to < 7) {

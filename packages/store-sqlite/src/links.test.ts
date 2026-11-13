@@ -434,4 +434,98 @@ describe('schema version 8: links', () => {
       await store.close();
     }
   });
+
+  const count = (dbPath: string, sql: string): number => {
+    const db = raw(dbPath, true);
+    try {
+      return (db.prepare(sql).get() as { n: number }).n;
+    } finally {
+      db.close();
+    }
+  };
+
+  it('links.forget-deletes-the-link-rows-themselves', async () => {
+    // Counted on the tables, not through a join to memories: with foreign keys off the rows of a
+    // forgotten memory would stay, and a join would hide them.
+    const s = fresh();
+    const store = await openSqliteStore(optsFor(s));
+    try {
+      await store.upsertMany(TG, [
+        memoryAt('a', planet, me, { entities: ['port'] }),
+        memoryAt('b', planet, me, { entities: ['port'] }),
+        memoryAt('c', planet, me),
+      ]);
+      await store.link!(TG, 'a', 'b', { assertedBy: 'user' });
+      await store.unlink!(TG, 'a', 'c', { assertedBy: 'user' });
+      expect(count(s.dbPath, 'SELECT count(*) AS n FROM memory_links')).toBe(2);
+      expect(count(s.dbPath, 'SELECT count(*) AS n FROM memory_entities')).toBe(2);
+      await store.forget(TG, 'a');
+      expect(count(s.dbPath, 'SELECT count(*) AS n FROM memory_links')).toBe(0);
+      expect(count(s.dbPath, 'SELECT count(*) AS n FROM memory_entities')).toBe(1);
+      expect(await probeFile(s.dbPath).orphans()).toBe(0);
+      expect(count(s.dbPath, 'SELECT count(*) AS n FROM pragma_foreign_key_check')).toBe(0);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('links.forgetting-a-nodes-last-memory-deletes-its-node-row', async () => {
+    // A node key holds org, customer, agent and run ids: it goes with the last memory there.
+    const s = fresh();
+    const store = await openSqliteStore(optsFor(s));
+    const star = { level: 'agent', orgId: 'local', agentId: 'secret-agent-name' } as const;
+    const g = nodesGrant(planet, star);
+    const keys = () => {
+      const db = raw(s.dbPath, true);
+      try {
+        return (db.prepare('SELECT node_key FROM nodes').all() as { node_key: string }[]).map(
+          (r) => r.node_key,
+        );
+      } finally {
+        db.close();
+      }
+    };
+    try {
+      await store.upsertMany(g, [
+        memoryAt('p', planet, me, { entities: ['port'] }),
+        memoryAt('s1', star, { agentId: 'secret-agent-name' }, { entities: ['port'] }),
+        memoryAt('s2', star, { agentId: 'secret-agent-name' }, { entities: ['port'] }),
+      ]);
+      expect(keys().filter((k) => k.includes('secret-agent-name'))).toHaveLength(1);
+      await store.forget(g, 's1');
+      expect(keys().filter((k) => k.includes('secret-agent-name'))).toHaveLength(1);
+      await store.forget(g, 's2');
+      expect(keys().filter((k) => k.includes('secret-agent-name'))).toEqual([]);
+      expect(keys()).toHaveLength(1);
+      // Gone from the file's pages too, not only from the table.
+      await store.close();
+      expect(fs.readFileSync(s.dbPath).includes(Buffer.from('secret-agent-name'))).toBe(false);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('links.downgrade-with-dropLinks-deletes-links-and-blocks-on-purpose', async () => {
+    const s = await seeded();
+    const store = await openSqliteStore(optsFor(s));
+    await store.link!(TG, 'm1', 'm2', { assertedBy: 'user' });
+    await store.unlink!(TG, 'm3', 'm4', { assertedBy: 'agent' });
+    await store.close();
+    // The refusal names what does remove the rows: not `oort unlink`, which can leave a block.
+    const err = (() => {
+      try {
+        downgradeSqliteStore({ path: s.dbPath, to: 7 });
+      } catch (e) {
+        return (e as Error).message;
+      }
+      return '';
+    })();
+    expect(err).toContain('dropLinks');
+    expect(err).not.toMatch(/oort unlink/);
+    downgradeSqliteStore({ path: s.dbPath, to: 7, dropLinks: true });
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(7);
+    expect(tableNames(s.dbPath)).toEqual([]);
+    // The copy taken first still holds them.
+    expect(listBackups(s.dbPath, 'pre-downgrade')).toHaveLength(1);
+  });
 });
