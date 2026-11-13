@@ -105,6 +105,20 @@ const vector = Int8Array.from(Buffer.from(line.embedding, 'base64'));
 The export contains memory text, which may be sensitive. Secrets were scrubbed
 before storage, but treat the file like the store itself.
 
+### Links
+
+A version 2 line may carry `links`: the memory's explicit links to other memories in the same
+file, written on both lines.
+
+```json
+"links": [{ "kind": "explicit", "id": "5f6a7b8c-…" }]
+```
+
+Who asserted a link is not written. `oort import <file>` restores a link between two memories it
+holds in your Planet as asserted by `agent`, and skips a link to a memory the file does not hold
+or of a kind it does not know. Blocks and learned links are not exported. Version 1 holds no
+links.
+
 ## Version 1
 
 Version 1 is version 2 without `addresses` in the manifest and without

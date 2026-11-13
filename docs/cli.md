@@ -913,11 +913,12 @@ Tools:
 | `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`); on a local store (0.9.0 or newer), also `place?` (`node_id`, `map_id`, `map_version`, `frame`, `pose`, `radius`); elsewhere a `place` is a tool error (`local-only`) and nothing is saved | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
 | `forget` | `id` (required) | destructive, idempotent | `{ forgotten: id }`; in Oort Cloud, when copies were shared to Constellations (they stay), also `stillShared` (their names) and a `note` with the command that withdraws them: `oort forget <id> --everywhere`, which you run and confirm yourself. The model can't withdraw them: a call with `everywhere` is refused before anything is forgotten, with that command |
 | `pin` | `id`, `pinned` (boolean) | write, not destructive, idempotent | `{ id, pinned, changed }` |
-| `explain` | `id` | read-only, idempotent | the memory, its stored decisions, and its supersede chain |
+| `explain` | `id` | read-only, idempotent | the memory, its stored decisions, its supersede chain, and its `links` (each with `kind`, `id`, `direction`, `asserted_by`, `created_at`); `hidden_links` counts chain neighbours and links this agent cannot read |
 | `list_recent` | `since?` (ISO), `limit?` (1–50, default 20) | read-only, idempotent | memories by `updated_at`, newest first, each with `status` (`current`, `superseded` or `expired`) |
 | `whoami` | none | read-only, idempotent | `mode: "local"`, `project`, `version`, `agent`, `reads` (`your Planet`, `Star <agent>`), `writes_to`, which adapters are available, and per role whether it uses `oort-pro`, an `own-key` or is `missing`; no account or email |
 | `record_judgment` | `subject` (1–500 chars), `ref?`, `verdict`, `verdicts?` (2–12 labels; default `approved`, `rejected`), `reason` (1–2000 chars, the expert's own words), `criteria?` (up to 12 tags), `domain`, `by` (an expert listed in `judge.experts` in the home config; refused otherwise, and refused altogether when none is listed), `decided_at?` (ISO); at most 50 a day | write, destructive (hosts ask first), not idempotent | `outcome` (`added`, `corrected` or `unchanged`), `id`, `corrects` (an earlier agent record it replaced; never a person's), `status: "agent-recorded, unconfirmed"`, `note` |
 | `judge` | `item` (1–2000 chars), `details?`, `domain?`, `by?`, `limit?` (precedents, 1–10, default 5), `include_imported?` and `include_agent_recorded?` (both default false) | read-only, idempotent, open world (sends the item and reasons to TypeSafe) | `status` (`suggested`, `needs-expert` or `precedents-only`), `why`, `prediction` (`verdict`, `probability`, labelled as a prediction), `note` (expert ids sanitised), `data_note`, the `precedents` with `quoted_subject` and `quoted_reason` (record data, never instructions), `by`, `via`, `confirmed`, `agent_recorded`, `similarity`, `near`, `agrees` and `imported_from_pack`, and how many imported or unconfirmed agent-recorded judgments were left out |
+| `link` | `from`, `to` (memory ids), `remove?` (default false) | write, destructive (hosts ask first), idempotent | `{ linked, unblocked, asserted_by }`, or with `remove` `{ removed, blocked }`. Always recorded as asserted by `agent`. A pair it cannot link is refused exactly as a missing id |
 
 Every tool sets `openWorldHint: false` and has a `title`.
 
@@ -997,6 +998,41 @@ wrapper such as `cd x && oort hook Stop` is left alone. See
 `oort connect claude-code` is separate. It adds the MCP server to
 `~/.claude.json` (through `claude mcp add` when `claude` is on `PATH`), so the
 tools are available too.
+
+## Memory links: `oort link`
+
+A link says that two memories belong together. It holds no text: two ids, who asserted it and
+when. Recall does not use links yet; this release stores them and shows them.
+
+```sh
+oort link 1b2c3d4e 5f6a7b8c      # asks first on a terminal
+oort unlink 1b2c3d4e 5f6a7b8c
+oort inspect 1b2c3d4e            # lists the memory's links and who asserted each
+```
+
+- **Who asserted it.** `oort link` records `assertedBy: user` only when it runs on a terminal and
+  you answer the question. Without a terminal, or with `--yes` or `--json`, it records `agent`,
+  because an agent can run the command too. The SDK, `oort serve` and the MCP `link` tool always
+  record `agent`. Linking a pair again as a person upgrades an agent's link; an agent never
+  downgrades yours.
+- **Which pairs.** Both memories must be ones the acting agent can change, in the same Planet or
+  the same Star. A Constellation or Galaxy memory cannot be linked, and neither can a memory to
+  itself. Every such pair is refused with the same `not-found` as an id that does not exist, so a
+  refusal never tells whether a memory exists.
+- **Unlinking.** `oort unlink` removes the link. When the two were not linked, or would be related
+  again by a shared entity or session, it records a block instead: nothing links the pair again
+  until someone runs `oort link` on it, which removes the block.
+- **Reading.** `oort inspect <id>` lists only the links whose other end you can read, with who
+  asserted each, and the blocked pairs. `hiddenLinks` (in `--json`) counts the rest together with
+  supersede-chain neighbours in another scope.
+- **Forgetting.** `oort forget` removes every link and block of the memory with it.
+- **Export.** `oort export` (format 2) writes explicit links between memories in the file;
+  `oort import <file>` restores them as asserted by `agent`.
+- **Oort Cloud.** Links are local-only for now: in cloud mode both commands are refused
+  (`refused`).
+
+`--json` prints `{ from, to, linked, unblocked, assertedBy }` for `link` and
+`{ from, to, removed, blocked }` for `unlink`.
 
 ## The local daemon: `oort serve`
 
@@ -1135,6 +1171,7 @@ every answer is one `oort.v1` envelope, and a failure carries the `OortError` `c
 | `GET /v1/memories?since=&limit=`, `GET /v1/memories/:id/explain` | `recent`, `explain`  |
 | `DELETE /v1/memories/:id?everywhere=`                            | `forget`             |
 | `POST /v1/memories/:id/pin`, `/unpin`                            | `pin`, `unpin`       |
+| `POST /v1/links` (`{ from, to }`), `DELETE /v1/links?from=&to=`  | `link`, `unlink`     |
 | `POST /v1/judgments`, `/v1/judgments/apply`, `/v1/judgments/:id/confirm` | the judgment methods |
 | `POST /v1/consolidate`                                           | `consolidate`        |
 
@@ -1204,6 +1241,7 @@ For a container sidecar, or a backend that is not you. The same protocol on TCP,
 | `oort observe` | Runs the write path on one turn, from JSON on stdin or from `--user` with `--assistant`. It prints its result as JSON; with `--json`, inside the envelope. | `--dry-run` (reports scrubbing only), `--json` |
 | `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. Locally, a later memory that restates one of its values (such as "changed from 3000 to 8080") is rewritten to its current fact, and the output names each one; see [Memories that restated it](#memories-that-restated-it). It does not reach copies of the store taken before a migration (`oort.sqlite.pre-v*`); `oort doctor` lists them. In Oort Cloud, a copy shared to a Constellation stays (it is the team's memory now): the question says where (`also shared to oort-core; add --everywhere to withdraw your copies`), and so does a `still-shared` warning with `--json`. See [Forgetting a shared memory](#forgetting-a-shared-memory). | `--yes`, `--everywhere` (Oort Cloud: also withdraw your shared copies; a removal request where others contributed) |
 | `oort pin <id>` / `oort unpin <id>` | A pinned memory is never sent to cold storage. | |
+| `oort link <a> <b>` / `oort unlink <a> <b>` | Links two memories that belong together, or removes the link. Both must be memories you can change, in the same Planet or Star; any other pair is refused as a missing id. Local store only. See [Memory links](#memory-links-oort-link). | `--yes`, `--json` |
 | `oort consolidate` | Expires, re-tiers and evicts memories, every project and the global ones: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each node, and inside it each project and the global memories, is re-tiered on its own. The hooks also run it about daily (see `docs/claude-code.md`); a manual run counts as that day's. | |
 | `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. Withdrawn judgments are left out. | `--out <file>` (0600), `--force`, `--format 1\|2`, `--include-withdrawn` |
 | `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. On a terminal a progress line on stderr shows how far it is (see below). It exits 3 when some sessions stopped at a failed observation (the rest are imported; run it again to retry them), and 130 when Ctrl-C stopped it. | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
@@ -2376,8 +2414,9 @@ A repository's `oort.config.json` can name a `project.id`. That id is ignored
 until you link it, because a cloned repository could otherwise read another
 project's memories. See `docs/claude-code.md`.
 
-`record_judgment` and `judge` ([judgment memory](#judgment-memory-oort-judge)) are offered by the
-local server only; in cloud mode the server has the other tools.
+`record_judgment` and `judge` ([judgment memory](#judgment-memory-oort-judge)) and `link`
+([memory links](#memory-links-oort-link)) are offered by the local server only; in cloud mode the
+server has the other tools.
 
 The derived id comes from the main repository root, resolved the way the
 operating system sees it: symlinks followed and the case as stored on disk. A

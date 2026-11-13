@@ -102,6 +102,7 @@ The TypeScript methods, in snake_case. `AsyncOort` has the same ones as `async d
 | `pin(id)`, `unpin(id)` (`changed` is `None` in cloud mode)                                                                                              | `PinResult`          |
 | `recent(*, since=None, limit=20)`                                                                                                                       | `RecentResult`       |
 | `explain(id)`                                                                                                                                           | `Explanation`        |
+| `link(from_id, to_id)`, `unlink(from_id, to_id)` (local only; asserted by `agent`)                                                                      | `LinkResult`, `UnlinkResult` |
 | `whoami()`                                                                                                                                              | `Whoami`             |
 | `consolidate(*, budget_ms=None)` (local only)                                                                                                           | `ConsolidateResult`  |
 | `judge.record(*, subject, verdict, reason, domain, by, ref=None, verdicts=None, criteria=None, decided_at=None)` (local only)                           | `RecordJudgmentView` |

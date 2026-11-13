@@ -4,7 +4,7 @@
 
 For Python 3.10 or newer, use the native client: `pip install oortmem`, then
 `from oortmem import Oort` (sync) or the async class (async-prefixed Oort). It has no dependencies, mirrors the TypeScript
-SDK in snake_case (`recall`, `observe`, `remember`, `forget`, `pin`, `unpin`, `recent`,
+SDK in snake_case (`recall`, `observe`, `remember`, `forget`, `pin`, `unpin`, `link`, `unlink`, `recent`,
 `explain`, `whoami`, `consolidate`, the judgment methods, `scoped(user=...)`), returns typed
 results and raises typed errors with the `OortError` codes plus `retryable` and `retry_after`.
 Local mode talks to `oort serve` over its Unix socket and starts it on first use; cloud mode
@@ -119,15 +119,16 @@ inject; that human output is not a stable contract, so prefer `--json`.
 
 ## Other commands worth knowing
 
-| Command                                 | What it does                                                                                                   |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `oort recall "<text>" --json`           | Recall as the acting agent; `--as-of`, `--known-at`, `--history`, `--limit`, `--speed`, `--budget-chars`       |
-| `oort remember "<fact>" --json`         | Save a fact the user stated, framed as the MCP `remember` tool frames it; `--dry-run`                          |
-| `oort observe --json`                   | Run the write path on one turn (stdin JSON, or `--user` and `--assistant`); `--dry-run` reports scrubbing only |
-| `oort forget <id> --yes --json`         | Delete a memory everywhere                                                                                     |
-| `oort pin <id>` / `oort unpin <id>`     | Keep a memory out of cold storage, or release it                                                               |
-| `oort inspect [id] --json`              | List current memories, or one with its decisions                                                               |
-| `oort judge record`, `oort judge apply` | Judgment memory, as in [judgments.md](judgments.md)                                                            |
-| `oort whoami --json`                    | Which store, agent and spaces this runs against                                                                |
-| `oort doctor --json`                    | Check keys, store, hooks and MCP entries; prints a fix per problem                                             |
-| `oort open [target] --json`             | The oortcloud.dev URL (dashboard, star map, `memory <id>`, account, docs) without opening a browser            |
+| Command                                     | What it does                                                                                                   |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `oort recall "<text>" --json`               | Recall as the acting agent; `--as-of`, `--known-at`, `--history`, `--limit`, `--speed`, `--budget-chars`       |
+| `oort remember "<fact>" --json`             | Save a fact the user stated, framed as the MCP `remember` tool frames it; `--dry-run`                          |
+| `oort observe --json`                       | Run the write path on one turn (stdin JSON, or `--user` and `--assistant`); `--dry-run` reports scrubbing only |
+| `oort forget <id> --yes --json`             | Delete a memory everywhere                                                                                     |
+| `oort pin <id>` / `oort unpin <id>`         | Keep a memory out of cold storage, or release it                                                               |
+| `oort link <a> <b>` / `oort unlink <a> <b>` | Link two memories, or remove the link (local store only; `user` only when confirmed on a terminal)             |
+| `oort inspect [id] --json`                  | List current memories, or one with its decisions                                                               |
+| `oort judge record`, `oort judge apply`     | Judgment memory, as in [judgments.md](judgments.md)                                                            |
+| `oort whoami --json`                        | Which store, agent and spaces this runs against                                                                |
+| `oort doctor --json`                        | Check keys, store, hooks and MCP entries; prints a fix per problem                                             |
+| `oort open [target] --json`                 | The oortcloud.dev URL (dashboard, star map, `memory <id>`, account, docs) without opening a browser            |
