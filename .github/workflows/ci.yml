@@ -36,11 +36,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The native RaBitQ engine (CON-25): its Rust tests, then the Node binary the store tests load.
       # With OORT_REQUIRE_NATIVE, a binary that fails to build or load fails the run instead of
-      # leaving the tests on the TypeScript engine.
+      # leaving the tests on the TypeScript engine. Everything runs in native/, so rustup uses the
+      # toolchain rust-toolchain.toml pins; --pinned-toolchain prints `rustc --version` and fails
+      # the step if it is not that version.
       - name: Native RaBitQ engine (Rust tests and build)
+        working-directory: packages/store-sqlite/native
         run: |
-          cargo test --locked --manifest-path packages/store-sqlite/native/Cargo.toml
-          pnpm --filter @oortmem/store-sqlite run build:native --require
+          rustup toolchain install
+          node ../scripts/build-native.mjs --pinned-toolchain --toolchain-only
+          cargo test --locked
+          node ../scripts/build-native.mjs --require --pinned-toolchain
       - run: pnpm verify
         env:
           OORT_PYTHON: python3.10
