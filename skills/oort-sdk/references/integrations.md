@@ -79,8 +79,10 @@ Python today and for any other language. See [cli-and-python.md](cli-and-python.
 - Spatial memory (`place`, `near`, `within`) in Oort Cloud. It is local mode only: cloud mode
   refuses them (`local-only`) until Oort Cloud holds places. In 0.8.0 or older, passing them is a
   usage error.
-- Memory relationships (typed links between memories). There is a design note only; no method,
-  option or field links memories.
+- Memory links. `link`, `unlink`, `oort link`, `oort unlink`, the MCP `link` tool and recall
+  following a link for one hop come after 0.10.0, in local mode only (see
+  [sdk.md](sdk.md#memory-links-local-mode-after-0100)). In 0.10.0 no method, option or field
+  links memories.
 - Reporting Oort Cloud's `forget` rewrites. Locally (0.10.0 or newer), `forget(id)` rewrites the later
   memories of its chain that restate one of its values and lists them in `rewritten` and
   `notRewritten`. In cloud mode 0.10.0 has neither field, and the CLI's `oort forget` finds each
