@@ -206,12 +206,13 @@ describe('schema version 8: links', () => {
   it('links.new-store-starts-at-v8-with-the-link-tables', async () => {
     const s = fresh();
     await (await openSqliteStore(optsFor(s))).close();
-    expect(SCHEMA_VERSION).toBe(8);
-    expect(WRITER_GUARD).toBe('oort_writer_v8');
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(8);
+    // Version 9 (CON-159) keeps them as version 8 made them.
+    expect(SCHEMA_VERSION).toBe(9);
+    expect(WRITER_GUARD).toBe('oort_writer_v9');
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(tableNames(s.dbPath)).toEqual(['memory_entities', 'memory_links', 'nodes']);
     expect(episodeColumns(s.dbPath)).toEqual(['session_id', 'episode_seq']);
-    expect(guardFunctions(s.dbPath)).toEqual(Array(3).fill('oort_writer_v8'));
+    expect(guardFunctions(s.dbPath)).toEqual(Array(3).fill(WRITER_GUARD));
   });
 
   it('links.upsert-keeps-the-row-id', async () => {
@@ -266,10 +267,10 @@ describe('schema version 8: links', () => {
       if (f.includes('.pre-')) fs.rmSync(path.join(s.dir, f));
     }
     await (await openSqliteStore(optsFor(s))).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(8);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(await snapshot(s)).toEqual(want);
     expect(fs.readdirSync(s.dir).filter((f) => f.includes('.pre-'))).toEqual([]);
-    expect(guardFunctions(s.dbPath)).toEqual(Array(3).fill('oort_writer_v8'));
+    expect(guardFunctions(s.dbPath)).toEqual(Array(3).fill(WRITER_GUARD));
   });
 
   it('links.v7-to-v8-is-one-transaction', async () => {
@@ -302,10 +303,10 @@ describe('schema version 8: links', () => {
     db.function('oort_writer_v7', () => 1);
     try {
       expect(() => db.prepare("UPDATE memories SET salience = 0.9 WHERE id = 'm1'").run()).toThrow(
-        /no such function: oort_writer_v8/,
+        /no such function: oort_writer_v9/,
       );
       expect(() => db.prepare("DELETE FROM memories WHERE id = 'm1'").run()).toThrow(
-        /no such function: oort_writer_v8/,
+        /no such function: oort_writer_v9/,
       );
     } finally {
       db.close();
@@ -322,7 +323,7 @@ describe('schema version 8: links', () => {
       /2 links \(explicit, distilledFrom or blocked\)/,
     );
     expect(() => downgradeSqliteStore({ path: s.dbPath, to: 1 })).toThrow(/2 links/);
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(8);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(listBackups(s.dbPath, 'pre-downgrade')).toEqual([]);
     // A distilledFrom row (written by consolidation, CON-152) refuses too.
     const again = await openSqliteStore(optsFor(s));

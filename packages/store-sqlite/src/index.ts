@@ -107,6 +107,8 @@ import {
   downgradeSchema,
   ENTITY_TABLE,
   FTS_TABLE,
+  FTS_VALUES_TABLE,
+  LEXICAL_REBUILD_KEY,
   NODE_TABLE,
   LINK_TABLE,
   linkRowsError,
@@ -131,6 +133,7 @@ import {
 export {
   BIT_TABLE,
   FTS_TABLE,
+  FTS_VALUES_TABLE,
   FTS_TOKENIZE,
   FTS_TOKENIZE_V1,
   SCHEMA_VERSION,
@@ -389,6 +392,30 @@ function matchQuery(q: string): string | null {
 function indexed(text: string): string {
   return tokenizeLexical(text).join(' ');
 }
+
+/** What a memory's lexical index row holds (`FTS_VALUES_TABLE`). */
+interface IndexedStrings {
+  text: string;
+  stub: string;
+  entities: string;
+}
+
+/** The strings a memory is indexed with; cold rows index stub and entities only. */
+function indexedStrings(
+  tier: Tier,
+  text: string,
+  stub: string,
+  entities: readonly string[],
+): IndexedStrings {
+  return {
+    text: tier === 'cold' ? '' : indexed(text),
+    stub: indexed(stub),
+    entities: indexed(entities.join(' ')),
+  };
+}
+
+/** The columns of a stored row the lexical index is written from. */
+type IndexedColumns = Pick<MemoryRow, 'tier' | 'text' | 'stub' | 'entities'>;
 
 /** vec0 metadata cannot be NULL, so global (no project) gets its own key. */
 function projectKey(projectId: string | null | undefined): string {
@@ -898,9 +925,10 @@ export function sqliteSchemaVersion(dbPath: string): number | undefined {
  * is rebuilt with tokeniser v1), 4 for Oort before spatial memory (0.8.x), 5 for Oort before
  * the binary vector index (the binary index and the writer guard are dropped; the int8 vectors
  * were never moved), 6 for Oort before the RaBitQ index (it is dropped, and the version 6
- * writer guard put back), or 7 for Oort before memory links (the link schema is dropped, and the
- * version 7 guard put back). First copies it to `<path>.pre-downgrade.<UTC time>` (the three
- * newest such copies are kept). Refuses, changing nothing, when it holds memories that version
+ * writer guard put back), 7 for Oort before memory links (the link schema is dropped, and the
+ * version 7 guard put back), or 8 for Oort before the version 9 lexical index (CON-159; the
+ * lexical index is rebuilt as version 8's, and the version 8 guard put back). First copies it
+ * to `<path>.pre-downgrade.<UTC time>` (the three newest such copies are kept). Refuses, changing nothing, when it holds memories that version
  * cannot represent: for 1, any level but Planet, an author with an account, provenance or a
  * judgment; for 2, a judgment; below 5, a place; below 8, an explicit, distilledFrom or blocked
  * link (learned `recalledWith` links are dropped). No other Oort process (hooks, the MCP server,
@@ -909,7 +937,7 @@ export function sqliteSchemaVersion(dbPath: string): number | undefined {
  */
 export function downgradeSqliteStore(opts: {
   path: string;
-  to?: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  to?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
   /**
    * Delete every memory link and block (schema version 8) instead of refusing while any
    * explicit, distilledFrom or blocked row exists. The copy taken first still holds them.
@@ -1055,7 +1083,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       // Every migration from version 3 or older, a stale lexical index and a binary index to
       // build rebuild something (applySchema says so): wait as long as another process holds the
       // lock rather than fail and repeat the migration later.
-      // Every migration now fills the link schema from the stored rows (version 8) too.
+      // Every migration now fills the link schema from the stored rows (version 8) and rebuilds
+      // the lexical index (version 9) too.
       const rebuilds =
         opts.migrate !== false &&
         from !== undefined &&
@@ -1188,10 +1217,24 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       `INSERT INTO ${PLACE_TABLE} (rid, min_x, max_x, min_y, max_y, min_z, max_z, map_key)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ),
-    ftsDelete: db.prepare<[number]>(`DELETE FROM ${FTS_TABLE} WHERE rowid = ?`),
-    ftsOptimize: db.prepare(`INSERT INTO ${FTS_TABLE} (${FTS_TABLE}) VALUES ('optimize')`),
+    // A row leaves the index only by the strings it was indexed with (CON-159).
+    ftsDelete: db.prepare<[number, string, string, string]>(
+      `INSERT INTO ${FTS_TABLE} (${FTS_TABLE}, rowid, text, stub, entities)
+       VALUES ('delete', ?, ?, ?, ?)`,
+    ),
     ftsInsert: db.prepare<[number, string, string, string]>(
       `INSERT INTO ${FTS_TABLE} (rowid, text, stub, entities) VALUES (?, ?, ?, ?)`,
+    ),
+    indexedGet: db.prepare<[number], IndexedStrings>(
+      `SELECT text, stub, entities FROM ${FTS_VALUES_TABLE} WHERE rid = ?`,
+    ),
+    indexedDelete: db.prepare<[number]>(`DELETE FROM ${FTS_VALUES_TABLE} WHERE rid = ?`),
+    indexedInsert: db.prepare<[number, string, string, string]>(
+      `INSERT INTO ${FTS_VALUES_TABLE} (rid, text, stub, entities) VALUES (?, ?, ?, ?)`,
+    ),
+    markLexicalRebuild: db.prepare<[string]>(
+      `INSERT INTO meta (key, value) VALUES ('${LEXICAL_REBUILD_KEY}', ?)
+       ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
     ),
     vecGet: db.prepare<[string], { embedding: Buffer }>(
       'SELECT embedding FROM memories_vec WHERE id = ?',
@@ -1595,15 +1638,63 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     return Int8Array.from(new Int8Array(b.buffer, b.byteOffset, b.byteLength));
   }
 
-  /** The FTS row for a memory; cold rows index stub and entities only. */
-  function writeFts(rid: number, tier: Tier, text: string, stub: string, entities: string[]) {
-    q.ftsDelete.run(rid);
-    q.ftsInsert.run(
-      rid,
-      tier === 'cold' ? '' : indexed(text),
-      indexed(stub),
-      indexed(entities.join(' ')),
+  /**
+   * Takes the memory at `rid` out of the lexical index (CON-159): FTS5's `'delete'` with the
+   * strings it was indexed with, from `FTS_VALUES_TABLE`, so with `secure-delete` its terms leave
+   * the index's pages now, and the side row goes too. `was` is the stored row as it was before
+   * this write, or undefined for a memory that was not stored.
+   *
+   * A stored memory with no side row is a bug: its index row is removed by tokenising `was`
+   * again, which gives its old strings unless the tokeniser (or the ICU or Unicode data under
+   * it) changed since. So that never leaves terms behind for long, `LEXICAL_REBUILD_KEY` asks
+   * the next open that may migrate to rebuild the index.
+   */
+  function removeFts(rid: number, was: IndexedColumns | undefined, old = q.indexedGet.get(rid)) {
+    if (old !== undefined) {
+      q.ftsDelete.run(rid, old.text, old.stub, old.entities);
+      q.indexedDelete.run(rid);
+      return;
+    }
+    if (was === undefined) return;
+    const again = indexedStrings(
+      was.tier,
+      was.text,
+      was.stub,
+      JSON.parse(was.entities) as string[],
     );
+    q.ftsDelete.run(rid, again.text, again.stub, again.entities);
+    q.markLexicalRebuild.run(clock().toISOString());
+    log(
+      'oort store: a memory had no record of the words it was indexed with; they were removed by tokenising its text again, and the next oort command rebuilds the search index',
+    );
+  }
+
+  /**
+   * The lexical index row for a memory, and its strings in `FTS_VALUES_TABLE`. Nothing is
+   * written when the memory is indexed with these strings already (a tier change between hot and
+   * warm, or a rewrite of other fields). `was` as for `removeFts`.
+   */
+  function writeFts(
+    rid: number,
+    tier: Tier,
+    text: string,
+    stub: string,
+    entities: readonly string[],
+    was: IndexedColumns | undefined,
+  ) {
+    const next = indexedStrings(tier, text, stub, entities);
+    const old = q.indexedGet.get(rid);
+    if (
+      old !== undefined &&
+      old.text === next.text &&
+      old.stub === next.stub &&
+      old.entities === next.entities
+    ) {
+      return;
+    }
+    removeFts(rid, was, old);
+    q.ftsInsert.run(rid, next.text, next.stub, next.entities);
+    q.indexedInsert.run(rid, next.text, next.stub, next.entities);
   }
 
   /**
@@ -1669,7 +1760,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     }
     const row = q.upsertRow.get(toRow(m, address, author));
     if (row === undefined) throw new Error(`upsert ${m.id}: no row returned`);
-    writeFts(row.rid, m.tier, m.text, m.stub, m.entities);
+    writeFts(row.rid, m.tier, m.text, m.stub, m.entities, existing);
     writeLinkIndexes(row.rid, m, address, existing);
     q.placeDelete.run(row.rid);
     const box = placeBox(m.place);
@@ -1779,14 +1870,11 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         run: scoped.run_id,
       });
       if (left === undefined) q.nodeDelete.run(nodeKeyOfColumns(scoped));
-      q.ftsDelete.run(row.rid);
+      // Its terms leave the index's pages now, by the strings it was indexed with, and so does
+      // its side row (CON-159); `secure_delete` zeroes what they leave. No merge.
+      removeFts(row.rid, scoped);
       q.placeDelete.run(row.rid);
       rq.remove(row.rid);
-      // A contentless FTS5 delete only marks the row deleted: its terms stay in the index's
-      // segments until they merge. Merging them all drops them now (CON-140); with
-      // `secure_delete` the pages they leave are zeroed. Rows rewritten earlier (`upsert`) are
-      // purged here too.
-      q.ftsOptimize.run();
     }
     q.vecDelete.run(id);
     bit()?.remove.run(id);
@@ -1824,16 +1912,17 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     }
   });
 
-  /** Rewrites the derived rows (vec tier metadata, FTS) after a tier change. */
+  /** Rewrites the derived rows (vec tier metadata, FTS) after a tier change; `was` before it. */
   function afterTierChange(
     id: string,
     tier: Tier,
     row: Pick<MemoryRow, 'rid' | 'text' | 'stub' | 'entities'>,
+    was: IndexedColumns,
   ): void {
     q.vecSetTier.run(tier, id);
     syncBinary(id);
     rq.sync(row.rid, id);
-    writeFts(row.rid, tier, row.text, row.stub, JSON.parse(row.entities) as string[]);
+    writeFts(row.rid, tier, row.text, row.stub, JSON.parse(row.entities) as string[], was);
   }
 
   const setTierTx = db.transaction(
@@ -1843,7 +1932,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       tier: Tier,
       snapshot?: Pick<Memory, 'updatedAt' | 'tier'>,
     ): boolean => {
-      if (scopedRow(grant.writeNodes, id) === undefined) return false;
+      const was = scopedRow(grant.writeNodes, id);
+      if (was === undefined) return false;
       const row =
         snapshot === undefined
           ? q.setTierRow.get(tier, id)
@@ -1854,7 +1944,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
               was: snapshot.tier,
             });
       if (row === undefined) return false;
-      afterTierChange(id, tier, row);
+      afterTierChange(id, tier, row, was);
       return true;
     },
   );
@@ -2207,7 +2297,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       const skipped: number[] = [];
       const previous: string[] = [];
       for (const [i, m] of ms.entries()) {
-        if (scopedRow(grant.writeNodes, m.id) === undefined) {
+        const was = scopedRow(grant.writeNodes, m.id);
+        if (was === undefined) {
           skipped.push(i);
           continue;
         }
@@ -2221,7 +2312,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           skipped.push(i);
           continue;
         }
-        writeFts(row.rid, 'cold', row.text, row.stub, JSON.parse(row.entities) as string[]);
+        writeFts(row.rid, 'cold', row.text, row.stub, JSON.parse(row.entities) as string[], was);
         q.vecDelete.run(m.id);
         bit()?.remove.run(m.id);
         rq.remove(row.rid);
