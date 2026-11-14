@@ -3,6 +3,8 @@ import { forgetMemory, MAX_CHAIN, restatedValues, type ForgetOutcome } from '@oo
 import {
   copiesLabel,
   everywhereTarget,
+  type CloudNotRewrittenReason,
+  type CloudRewrites,
   findCloudMemory,
   liveCopies,
   namedOutcome,
@@ -43,13 +45,16 @@ interface ForgetData {
   stillShared: SharedCopy[];
   /** Every Constellation named above, with its name. */
   constellations: SharedCopy[];
-  /** Local only: later memories that restated it, rewritten to their current fact (CON-144). */
+  /**
+   * Later memories that restated it, rewritten to their current fact (CON-144; Oort Cloud's,
+   * CON-161). Absent from an Oort Cloud that does not rewrite them.
+   */
   rewritten?: string[];
-  /** Local only: later memories that restate it and were left as they were. */
+  /** Later memories that restate it and were left as they were. Absent as `rewritten`. */
   notRewritten?: string[];
 }
 
-const WHY: Record<ForgetOutcome['notRewritten'][number]['reason'], string> = {
+const WHY: Record<CloudNotRewrittenReason, string> = {
   'no-writer': 'no memory writer is set up (oort doctor says why)',
   failed: 'the memory writer failed',
   rejected: 'the rewrite added words or kept a value of it, so it was not used',
@@ -57,23 +62,49 @@ const WHY: Record<ForgetOutcome['notRewritten'][number]['reason'], string> = {
   changed: 'it changed while this command ran',
   'not-writable': 'it is outside what this agent may change',
   'chain-too-long': `it lies past the first ${MAX_CHAIN} later memories of the chain, the most one forget rewrites`,
+  // Oort Cloud's own (CON-161).
+  quota: 'the account is at a usage cap',
+  unpaid: 'the plan does not allow model calls now',
+  timeout: 'the rewrite did not finish in time',
 };
 
+/** Why a memory was left as it was, in words; a reason this version does not know is quoted. */
+function why(reason: string | undefined): string {
+  if (reason !== undefined && Object.hasOwn(WHY, reason)) {
+    return WHY[reason as CloudNotRewrittenReason];
+  }
+  return reason === undefined
+    ? 'Oort Cloud left it as it was'
+    : `Oort Cloud left it as it was (reason: ${shown(clip(reason, 40))})`;
+}
+
+/** What a forget did to the later memories that restated it: local (CON-144) or Oort Cloud's. */
+export interface Successors {
+  /** `text`: the rewrite, when it could be read. */
+  rewritten: readonly { id: string; text?: string }[];
+  /** `reason`: core's, Oort Cloud's own, one a newer cloud added, or none given. */
+  notRewritten: readonly { id: string; reason?: string }[];
+}
+
 /**
- * What a local forget did to the later memories that restated it (CON-144): one line per memory
- * rewritten, and one per memory left as it was, with the command that forgets it too.
- * True when every one was rewritten.
+ * What a forget did to the later memories that restated it (CON-144, in Oort Cloud CON-161): one
+ * line per memory rewritten, and one per memory left as it was, with the command that forgets it
+ * too. True when every one was rewritten.
  */
-export function reportSuccessors(ctx: Ctx, r: ForgetOutcome): boolean {
+export function reportSuccessors(ctx: Ctx, r: Successors): boolean {
   for (const m of r.rewritten) {
-    ctx.io.out(`Rewrote ${short(m.id)} to its current fact: "${shown(clip(m.text, 80))}"\n`);
+    ctx.io.out(
+      m.text === undefined
+        ? `Rewrote ${short(m.id)} to its current fact. Read it with \`oort inspect ${m.id}\`.\n`
+        : `Rewrote ${short(m.id)} to its current fact: "${shown(clip(m.text, 80))}"\n`,
+    );
   }
   for (const m of r.notRewritten) {
     const what =
       m.reason === 'chain-too-long'
         ? 'is a later memory of its chain and may restate it'
         : 'may still restate it';
-    const msg = `${short(m.id)} ${what}, because ${WHY[m.reason]}. Check it with \`oort inspect ${m.id}\`, or forget it too: \`oort forget ${m.id}\`.`;
+    const msg = `${short(m.id)} ${what}, because ${why(m.reason)}. Check it with \`oort inspect ${m.id}\`, or forget it too: \`oort forget ${m.id}\`.`;
     ctx.io.out(`${msg}\n`);
     noteWarning(ctx, 'not-rewritten', msg);
   }
@@ -82,13 +113,38 @@ export function reportSuccessors(ctx: Ctx, r: ForgetOutcome): boolean {
 
 const ids = (copies: readonly SharedCopy[]): string[] => copies.map((c) => c.constellation);
 
+/** `--json`'s `rewritten` and `notRewritten`: absent when nobody rewrote (an older Oort Cloud). */
+const lists = (r: Successors | undefined): Pick<ForgetData, 'rewritten' | 'notRewritten'> =>
+  r === undefined
+    ? {}
+    : { rewritten: r.rewritten.map((x) => x.id), notRewritten: r.notRewritten.map((x) => x.id) };
+
+/**
+ * The rewrites Oort Cloud reported, each with its new text when it can be read (best effort: a
+ * failed read only leaves the text out).
+ */
+async function withTexts(cloud: CloudClient, r: CloudRewrites): Promise<Successors> {
+  const rewritten = await Promise.all(
+    r.rewritten.map(async (id) => {
+      try {
+        return { id, text: (await cloud.get(id)).text };
+      } catch {
+        return { id };
+      }
+    }),
+  );
+  return { rewritten, notRewritten: r.notRewritten };
+}
+
 /**
  * `oort forget <id> [--yes] [--everywhere]`: deletes a memory everywhere (main record and cold
- * copy). Locally, the later memories of its chain that restate it are rewritten to their current
- * fact (CON-144); any left as they were are named, with exit 3, as in Oort Cloud, which does not
- * rewrite yet. In Oort Cloud a copy shared to a Constellation is the team's memory and stays: the
- * question (and `--json`'s warnings) say where, and `--everywhere` withdraws the copies only you
- * contributed to, filing a removal request with the maintainers where others contributed (CON-67).
+ * copy). The later memories of its chain that restate it are rewritten to their current fact,
+ * locally (CON-144) and by Oort Cloud (CON-161); any left as they were are named, with exit 3. An
+ * Oort Cloud that does not rewrite answers without the lists: then the CLI finds the later
+ * memories that restate it itself and names them, as before. In Oort Cloud a copy shared to a
+ * Constellation is the team's memory and stays: the question (and `--json`'s warnings) say where,
+ * and `--everywhere` withdraws the copies only you contributed to, filing a removal request with
+ * the maintainers where others contributed (CON-67).
  */
 export async function forgetCommand(
   id: string,
@@ -130,11 +186,14 @@ export async function forgetCommand(
       return 0;
     }
     let local: ForgetOutcome | undefined;
+    let rewrites: Successors | undefined;
     let restating: CloudSuccessors = { restating: [] };
     if (cloud !== undefined) {
-      // Oort Cloud does not rewrite yet: find the later memories that restate it, to name them.
-      restating = await laterRestating(cloud, m);
-      await cloud.forget(m.id);
+      const answer = await cloud.forget(m.id);
+      // An Oort Cloud that does not rewrite left the chain as it was: find the later memories
+      // that restate it, to name them.
+      if (answer === null) restating = await laterRestating(cloud, m);
+      else rewrites = await withTexts(cloud, answer);
     } else {
       local = await forgetMemory(
         {
@@ -147,9 +206,10 @@ export async function forgetCommand(
       );
     }
     ctx.io.out(`Forgot ${m.id}.\n`);
+    const reported = local ?? rewrites;
     const complete =
-      local !== undefined
-        ? reportSuccessors(ctx, local)
+      reported !== undefined
+        ? reportSuccessors(ctx, reported)
         : await reportCloudSuccessors(cloud, restating, ctx);
     if (live.length > 0) {
       ctx.io.out(
@@ -170,10 +230,7 @@ export async function forgetCommand(
         unreachable: [],
         stillShared: live,
         constellations: live,
-        ...(local !== undefined && {
-          rewritten: local.rewritten.map((x) => x.id),
-          notRewritten: local.notRewritten.map((x) => x.id),
-        }),
+        ...lists(reported),
       });
     }
     // A memory that may still repeat it is a partial success (exit 3, as `--everywhere`).
@@ -190,7 +247,8 @@ interface CloudSuccessors {
 
 /**
  * The later memories of `m`'s chain in Oort Cloud that restate one of its values (CON-144),
- * following `supersededBy`. A lookup that fails ends the walk, and is reported.
+ * following `supersededBy`, for an Oort Cloud that does not rewrite them (it leaves the chain as
+ * it was, so this runs after the forget). A lookup that fails ends the walk, and is reported.
  */
 async function laterRestating(cloud: CloudClient, m: CloudMemory): Promise<CloudSuccessors> {
   const restating: CloudMemory[] = [];
@@ -211,7 +269,7 @@ async function laterRestating(cloud: CloudClient, m: CloudMemory): Promise<Cloud
 }
 
 /**
- * Names each later memory that may still restate the forgotten one in Oort Cloud, which does not
+ * Names each later memory that may still restate the forgotten one in an Oort Cloud that does not
  * rewrite them, and the Constellations it is shared to, and one the walk could not read. True
  * when there is none of either.
  */
@@ -265,9 +323,14 @@ async function forgetEverywhere(
     ctx.io.out('Kept.\n');
     return 0;
   }
+  const answer = await cloud.forgetEverywhere(t.id);
+  const r = namedOutcome(answer, t.edges);
+  // As a plain forget: an Oort Cloud that does not rewrite answers without the lists.
+  const rewrites = answer.rewrites === null ? undefined : await withTexts(cloud, answer.rewrites);
   const restating: CloudSuccessors =
-    t.memory === null ? { restating: [] } : await laterRestating(cloud, t.memory);
-  const r = namedOutcome(await cloud.forgetEverywhere(t.id), t.edges);
+    rewrites !== undefined || t.memory === null
+      ? { restating: [] }
+      : await laterRestating(cloud, t.memory);
   ctx.io.out(t.memory === null ? `${t.id} was already forgotten.\n` : `Forgot ${t.id}.\n`);
   if (r.withdrawn.length > 0) ctx.io.out(`Withdrawn from ${copiesLabel(r.withdrawn)}.\n`);
   if (r.requested.length > 0) {
@@ -283,7 +346,10 @@ async function forgetEverywhere(
   if (r.withdrawn.length + r.requested.length + r.unreachable.length === 0) {
     ctx.io.out('It was not shared to any Constellation.\n');
   }
-  const complete = await reportCloudSuccessors(cloud, restating, ctx);
+  const complete =
+    rewrites !== undefined
+      ? reportSuccessors(ctx, rewrites)
+      : await reportCloudSuccessors(cloud, restating, ctx);
   if (jsonMode(ctx)) {
     const stillShared = [...r.requested, ...r.unreachable].filter(
       (c, i, all) => all.findIndex((x) => x.constellation === c.constellation) === i,
@@ -301,6 +367,7 @@ async function forgetEverywhere(
           [...r.withdrawn, ...r.requested, ...r.unreachable].map((c) => [c.constellation, c]),
         ).values(),
       ],
+      ...lists(rewrites),
     });
   }
   // A copy not reached, or a later memory that may restate it, is a partial success (exit 3).

@@ -1,6 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { IncludeLevel, Memory, RecallMode, RecallResult, Tier } from '@oortmem/core';
+import type {
+  IncludeLevel,
+  Memory,
+  NotRewrittenReason,
+  RecallMode,
+  RecallResult,
+  Tier,
+} from '@oortmem/core';
 import {
   TIMING_HEADER,
   connectedSince,
@@ -479,6 +486,52 @@ export interface CloudShareEdge {
   withdrawnAt?: string | null;
 }
 
+/**
+ * Why Oort Cloud left a later memory as it was (CON-161): core's reasons, and the cloud's own.
+ * `quota`: the account is at a usage cap. `unpaid`: its plan does not allow model calls now (the
+ * forget itself always happens). `timeout`: in a Constellation, the rewrite did not come back in
+ * time. A newer Oort Cloud may send a reason not listed here.
+ */
+export type CloudNotRewrittenReason = NotRewrittenReason | 'quota' | 'unpaid' | 'timeout';
+
+/**
+ * What a forget did to the later memories of the forgotten one's chain, as Oort Cloud answers it
+ * (CON-161): memory ids. `null` from an Oort Cloud that does not rewrite them (a plain forget
+ * answers 204 with no body there, and `?everywhere=1` has neither list).
+ */
+export interface CloudRewrites {
+  /** Rewritten to their current fact. */
+  rewritten: string[];
+  /** May still restate it, left as they were: each with the reason given, if it gave one. */
+  notRewritten: { id: string; reason?: string }[];
+}
+
+/**
+ * The rewrite lists of a forget's answer, read defensively: `null` when it has neither list (an
+ * Oort Cloud from before rewrites, or a body that is not an object). A missing list is empty, a
+ * non-string id is dropped, and an id in both lists counts as not rewritten, so nothing is ever
+ * claimed rewritten that the answer does not say plainly.
+ */
+export function rewritesOf(body: unknown): CloudRewrites | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (!Array.isArray(b['rewritten']) && !Array.isArray(b['notRewritten'])) return null;
+  const ids = (v: unknown): string[] =>
+    Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string'))] : [];
+  const reasons =
+    typeof b['reasons'] === 'object' && b['reasons'] !== null && !Array.isArray(b['reasons'])
+      ? (b['reasons'] as Record<string, unknown>)
+      : {};
+  const left = ids(b['notRewritten']);
+  return {
+    rewritten: ids(b['rewritten']).filter((id) => !left.includes(id)),
+    notRewritten: left.map((id) => {
+      const reason = Object.hasOwn(reasons, id) ? reasons[id] : undefined;
+      return typeof reason === 'string' ? { id, reason } : { id };
+    }),
+  };
+}
+
 /** What `DELETE /v1/memories/:id?everywhere=1` answers: Constellation ids (CON-67). */
 export interface CloudForgetEverywhere {
   /** The copies only you contributed to: withdrawn. */
@@ -487,6 +540,8 @@ export interface CloudForgetEverywhere {
   requested: string[];
   /** Not reached (try again later; a Constellation you left needs a full key). The copy stays. */
   unreachable: string[];
+  /** CON-161: what it did to the later memories of its chain (`null`: an older Oort Cloud). */
+  rewrites: CloudRewrites | null;
 }
 
 export interface CloudClient {
@@ -616,7 +671,11 @@ export interface CloudClient {
   }): Promise<{ memories: CloudMemory[]; next?: string }>;
   /** By id, or by a unique prefix of at least 8 characters (409 `ambiguous` when several match). */
   get(ref: string): Promise<CloudMemory>;
-  forget(id: string): Promise<void>;
+  /**
+   * Forgets a memory. The answer says what Oort Cloud did to the later memories of its chain
+   * (CON-161); `null` from an Oort Cloud that does not rewrite them.
+   */
+  forget(id: string): Promise<CloudRewrites | null>;
   pin(id: string, pinned: boolean): Promise<void>;
   stats(): Promise<CloudStats>;
   /** The v1 export, as JSON Lines text. */
@@ -935,6 +994,7 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
           withdrawn: ids(r.withdrawn),
           requested: ids(r.requested),
           unreachable: ids(r.unreachable),
+          rewrites: rewritesOf(r),
         };
       },
       observe: (b) => json('POST', '/v1/observe', b),
@@ -946,7 +1006,14 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
       },
       get: (id) => json('GET', idPath(id)),
       forget: async (id) => {
-        await call('DELETE', idPath(id));
+        // 204 with no body from an Oort Cloud that does not rewrite; a body that does not parse
+        // never undoes a forget that happened, so it reads as no lists.
+        const text = await (await call('DELETE', idPath(id))).text();
+        try {
+          return rewritesOf(text.trim() === '' ? null : JSON.parse(text));
+        } catch {
+          return null;
+        }
       },
       pin: async (id, pinned) => {
         await call('POST', `${idPath(id)}/${pinned ? 'pin' : 'unpin'}`);

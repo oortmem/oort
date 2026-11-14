@@ -53,7 +53,8 @@
 
 `forget(id)` deletes a memory from every storage tier. Locally (0.10.0 or newer) it also rewrites
 the later memories of its chain that restate one of its values, sending the writer only that later
-memory, and lists any it left as they were in `notRewritten`: check or forget those too. A rewrite
+memory, and lists any it left as they were in `notRewritten`: check or forget those too. An Oort
+Cloud that rewrites them reports the same lists. A rewrite
 only reuses that memory's words but can still change its meaning (a dropped "not"), so read it.
 The local store overwrites what it deletes; copies taken before a schema migration
 (`oort.sqlite.pre-v*`), exports and disk backups are not reached. In Oort Cloud a copy shared to a

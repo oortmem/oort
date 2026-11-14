@@ -2,6 +2,7 @@ import { VERSION, activation, truncateUtf8, type Memory } from '@oortmem/core';
 import {
   OortCloudError,
   everywhereTarget,
+  type CloudRewrites,
   findCloudMemory,
   type CloudClient,
   type CloudMemory,
@@ -202,14 +203,27 @@ export async function forget(ctx: Ctx, id: string, everywhere: boolean): Promise
     const r = await c.forgetEverywhere(t.id);
     return {
       forgotten: t.id,
+      ...rewriteLists(r.rewrites),
       withdrawn: [...r.withdrawn],
       requested: [...r.requested],
       unreachable: [...r.unreachable],
     };
   }
   const m = await findCloudMemory(c, id);
-  await c.forget(m.id);
-  return { forgotten: m.id };
+  return { forgotten: m.id, ...rewriteLists(await c.forget(m.id)) };
+}
+
+/**
+ * What Oort Cloud did to the later memories of the forgotten one's chain (CON-161), as local mode
+ * reports it: ids, each list absent when empty, and both absent from an Oort Cloud that does not
+ * rewrite them.
+ */
+function rewriteLists(r: CloudRewrites | null): Pick<ForgetResult, 'rewritten' | 'notRewritten'> {
+  if (r === null) return {};
+  return {
+    ...(r.rewritten.length > 0 && { rewritten: [...r.rewritten] }),
+    ...(r.notRewritten.length > 0 && { notRewritten: r.notRewritten.map((x) => x.id) }),
+  };
 }
 
 /** Cloud pins answer 204 either way, so whether anything changed is unknown (`changed: null`). */

@@ -139,7 +139,11 @@ restate one of its values ("changed from 3000 to 8080"), before it returns: the 
 each such memory alone, never the forgotten one, and states its current fact; a rewrite that adds
 a word or keeps a value is not used. `rewritten` lists the ones rewritten. Any left as they were
 (no writer, a failed or rejected rewrite, a concurrent change) are listed in `notRewritten`; check
-or forget them too. See [Memories that restated it](cli.md#memories-that-restated-it).
+or forget them too. See [Memories that restated it](cli.md#memories-that-restated-it). In Oort
+Cloud the cloud rewrites them, and the result carries the same `rewritten` and `notRewritten`
+(with `everywhere` too); Oort Cloud can also leave one as it was because the account is at a usage
+cap, the plan does not allow model calls now, or a Constellation's rewrite did not finish in time.
+An Oort Cloud that does not rewrite answers without the lists, and the result leaves both out.
 
 **`forget` with `everywhere`** (Oort Cloud) does what `oort forget --everywhere` does: it forgets
 the memory, then withdraws your copies in Constellations. The result lists Constellation ids:

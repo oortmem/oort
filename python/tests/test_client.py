@@ -820,6 +820,36 @@ class CloudMode(unittest.TestCase):
             self.assertNotIn(secret, format_for_prompt(r))
         self.assertIn("[REDACTED:env-secret]", r.memories[0].text)
 
+    def test_forget_reports_what_oort_cloud_rewrote_and_reads_an_older_answer(self) -> None:
+        mem = {"id": "a1b2c3d4", "text": "The port is 3000.", "scope": {}, "tier": "warm", "pinned": False}
+        self.rec.answers["GET /v1/memories/a1b2c3d4"] = (200, mem)
+        later, nxt = "b1b2c3d4", "c1b2c3d4"
+        cases = [
+            # CON-161: the lists, as local mode reports them.
+            ({"forgotten": "a1b2c3d4", "rewritten": [later], "notRewritten": [nxt], "reasons": {nxt: "quota"}}, [later], [nxt]),
+            # Nothing to rewrite: both left out, as locally.
+            ({"forgotten": "a1b2c3d4", "rewritten": [], "notRewritten": [], "reasons": {}}, None, None),
+            # An Oort Cloud from before rewrites: 204 with no body, or no lists.
+            (b"", None, None),
+            ({"forgotten": "a1b2c3d4"}, None, None),
+            # Odd answers never claim a rewrite.
+            ({"rewritten": "yes", "notRewritten": 7}, None, None),
+            ({"rewritten": [later, 3], "notRewritten": [later]}, None, [later]),
+            (b"<html>", None, None),
+        ]
+        with self.oort() as o:
+            for body, rewritten, not_rewritten in cases:
+                self.rec.answers["DELETE /v1/memories/a1b2c3d4"] = (204 if body == b"" else 200, body)
+                r = o.forget("a1b2c3d4")
+                self.assertEqual((r.forgotten, r.rewritten, r.not_rewritten), ("a1b2c3d4", rewritten, not_rewritten), body)
+            self.rec.answers["GET /v1/memories/a1b2c3d4/shares"] = (200, {"shares": []})
+            self.rec.answers["DELETE /v1/memories/a1b2c3d4"] = (200, {"forgotten": "a1b2c3d4", "rewritten": [later], "notRewritten": [], "reasons": {}, "withdrawn": [], "requested": [], "unreachable": []})
+            r = o.forget("a1b2c3d4", everywhere=True)
+            self.assertEqual((r.rewritten, r.not_rewritten, r.withdrawn), ([later], None, []))
+            self.rec.answers["DELETE /v1/memories/a1b2c3d4"] = (200, {"withdrawn": ["c_1"], "requested": [], "unreachable": []})
+            r = o.forget("a1b2c3d4", everywhere=True)
+            self.assertEqual((r.rewritten, r.not_rewritten, r.withdrawn), (None, None, ["c_1"]))
+
     def test_limits_and_temporal_rules_hold_before_any_request(self) -> None:
         from oortmem import OortUsageError
 

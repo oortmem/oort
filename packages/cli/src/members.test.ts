@@ -539,6 +539,38 @@ describe('oort mcp in cloud mode: forget and shared copies (CON-67)', () => {
     await w.close();
   });
 
+  it('mcp.cloud-forget-lists-what-oort-cloud-rewrote-and-says-what-to-do-with-the-rest (CON-161)', async () => {
+    const { e, w, backend } = await shared();
+    const later = '66666666-7777-4888-8999-aaaaaaaaaaaa';
+    const next = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
+    e.cloud.forgetAnswer = {
+      rewritten: [later],
+      notRewritten: [next],
+      reasons: { [next]: 'quota' },
+    };
+    expect(await backend.forget({ id: ID })).toEqual({
+      forgotten: ID,
+      stillShared: ['oort-core', 'design'],
+      rewritten: [later],
+      notRewritten: [next],
+      note: `Still shared to oort-core, design. To withdraw those copies, the person runs: oort forget ${ID} --everywhere Later memories that restate it were left as they were (${next}). Tell the person; they can check each with \`oort inspect <id>\` or forget it too.`,
+    });
+    await w.close();
+  });
+
+  it('mcp.cloud-forget-of-a-memory-never-shared-names-what-was-rewritten (CON-161)', async () => {
+    const { e, w, backend } = await shared();
+    const other = '66666666-7777-4888-8999-aaaaaaaaaaaa';
+    const later = '88888888-7777-4888-8999-aaaaaaaaaaaa';
+    e.cloud.memories.set(other, fakeMemory({ id: other, text: 'Private.' }));
+    e.cloud.forgetAnswer = { rewritten: [later] };
+    expect(await backend.forget({ id: other })).toEqual({ forgotten: other, rewritten: [later] });
+    e.cloud.forgetAnswer = 'pre-rewrite';
+    e.cloud.memories.set(other, fakeMemory({ id: other, text: 'Private.' }));
+    expect(await backend.forget({ id: other })).toEqual({ forgotten: other });
+    await w.close();
+  });
+
   it('mcp.cloud-forget-with-a-failed-shares-lookup-still-forgets-without-a-note', async () => {
     const { e, w, backend } = await shared();
     e.cloud.fail = { 'GET /v1/memories/:id/shares': 503 };

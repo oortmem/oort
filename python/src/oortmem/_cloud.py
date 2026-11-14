@@ -243,6 +243,28 @@ def _id_path(i: str) -> str:
     return "/v1/memories/" + urllib.parse.quote(i, safe="")
 
 
+def _rewrite_lists(answer: Any) -> Dict[str, Any]:
+    """What Oort Cloud did to the later memories of the forgotten one's chain (CON-161), as local
+    mode reports it: ids, each list absent when empty. Read defensively: an Oort Cloud that does
+    not rewrite sends neither list (nothing is reported), a non-string id is dropped, and an id in
+    both lists counts as not rewritten, so nothing is claimed rewritten that the answer does not
+    say plainly."""
+    if not isinstance(answer, Mapping):
+        return {}
+    rewritten, left = answer.get("rewritten"), answer.get("notRewritten")
+    if not isinstance(rewritten, list) and not isinstance(left, list):
+        return {}
+    ids = lambda v: list(dict.fromkeys(x for x in v if isinstance(x, str))) if isinstance(v, list) else []  # noqa: E731
+    not_rewritten = ids(left)
+    out: Dict[str, Any] = {}
+    done = [x for x in ids(rewritten) if x not in not_rewritten]
+    if done:
+        out["rewritten"] = done
+    if not_rewritten:
+        out["notRewritten"] = not_rewritten
+    return out
+
+
 def find_memory(c: CloudClient, ref: str, user: Optional[str] = None) -> Mapping[str, Any]:
     m = c.call("GET", _id_path(ref), user=user)
     if not isinstance(m, Mapping):
@@ -409,13 +431,20 @@ class CloudOps:
             ids = lambda v: [x for x in v if isinstance(x, str)] if isinstance(v, list) else []  # noqa: E731
             return {
                 "forgotten": target,
+                **_rewrite_lists(r),
                 "withdrawn": ids(r.get("withdrawn")),
                 "requested": ids(r.get("requested")),
                 "unreachable": ids(r.get("unreachable")),
             }
         m = self._find(ref)
-        self._call("DELETE", _id_path(m["id"]))
-        return {"forgotten": m["id"]}
+        # Read as text: 204 with no body from an Oort Cloud that does not rewrite, and a body that
+        # does not parse never undoes a forget that happened.
+        body = self.c.call("DELETE", _id_path(m["id"]), user=self.user, text=True)
+        try:
+            answer = json.loads(body) if body.strip() else None
+        except ValueError:
+            answer = None
+        return {"forgotten": m["id"], **_rewrite_lists(answer)}
 
     def _everywhere_target(self, ref: str) -> str:
         """As ``oort forget --everywhere``: a memory already forgotten is still found, by its full
