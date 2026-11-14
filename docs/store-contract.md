@@ -183,9 +183,13 @@ rejects it, and every store rejects it at run time with a `TypeError`.
   staying in a free page. The lexical index (schema version 9, CON-159) is a plain contentless
   FTS5 table with FTS5's `secure-delete` option on, and `memories_indexed` keeps the exact strings
   each memory was indexed with. `forget`, and every rewrite, hands those strings to FTS5's
-  `'delete'` command, which removes the row's terms from the index's pages at once: no merge, so
-  `forget` takes about as long at 100,000 memories as at 1,000. The side row goes in the same
-  transaction. `forget` then truncates the WAL (`journal_size_limit = 0`) and logs a notice when
+  `'delete'` command, which removes the row's terms from the index's pages in place, and deletes
+  the side row in the same transaction. One thing stays: FTS5 keeps a key for each page of the
+  index, a prefix of the page's first term, and deleting that term leaves the key. So before the
+  transaction commits, the store looks for a key that is a prefix of a deleted term and of no live
+  term; only when it finds one does it merge the index (`optimize`), which writes every key again.
+  `forget` no longer rewrites the whole search index otherwise, so it stays quick as the store
+  grows. `forget` then truncates the WAL (`journal_size_limit = 0`) and logs a notice when
   another connection's read keeps it from doing so. Text an edit replaced leaves the index the
   same way.
 - **A store from 0.9.0 or older is rewritten once** (CON-140). It ran without `secure_delete`, so
@@ -528,26 +532,33 @@ row in `nodes`, which names an org, customer, agent or run.
 Schema version 9 (CON-159) changes how the lexical index deletes a row. Up to version 8,
 `memories_fts2` was a contentless FTS5 table with `contentless_delete = 1`: a delete by rowid
 left a tombstone, and the row's terms stayed in the index's segments until a merge, so `forget`
-merged the whole index (`optimize`) under the write lock, about 2 to 3 s at 100,000 memories. In
+merged the whole index (`optimize`) under the write lock, which took longer as the store grew. In
 version 9 it is a plain contentless table (`content = ''`) with FTS5's persistent `secure-delete`
 option on, and a new table, `memories_indexed (rid, text, stub, entities)`, holds the exact
 strings each memory's index row was written with (core's `tokenizeLexical` output joined by
 spaces; `text` empty for a cold memory). Every delete and rewrite reads them there and hands them
 to FTS5's `'delete'` command. They are never computed again from the stored text: a later
 tokeniser, ICU or Unicode version could give other tokens, and then the old terms would stay in
-the index. A write that finds a memory with no row in `memories_indexed`, which only a bug
-leaves, removes its index row by tokenising its stored text again, logs it, and records
-`lexical_rebuild` in `meta`, so the next open that may migrate rebuilds the index. Opening a
+the index. The page keys FTS5 keeps in `memories_fts2_idx` are the one thing such a delete does
+not rewrite: a write transaction that deleted a term checks, before it commits, whether a key is
+a prefix of that term and of no live term, and only then merges the index, so no key keeps part
+of a forgotten word. A write that finds a stored memory with no row in `memories_indexed`, which
+only a bug leaves, rebuilds the whole index from the stored rows in the same transaction and logs
+that it did, whichever process writes (a hook or an MCP server that never migrates included). An
+index whose `secure-delete` option is off, or that has no `memories_indexed`, is rebuilt by the
+next open that may migrate. Opening a
 version 8 store (or an older one, on its way up) rebuilds the index in one transaction, with the
 same "Rebuilding the search index (N memories)…" line and 60-second wait as version 4, and swaps
 the guard triggers to `oort_writer_v9()`; it takes no copy, since nothing is lost going back.
 As at version 4, the rebuilt index's BM25 totals count the live rows only, so lexical scores
 shift once; from then on a deleted or rewritten row is subtracted from them.
 `migrate: false` refuses a version 8 store with `StoreMigrationRequiredError`, and a version 9
-store missing `memories_indexed` the same way until an open that may migrate rebuilds it. An
-FTS5 older than SQLite 3.42.0 cannot read a table whose rows were deleted with `secure-delete` on;
-the store's own SQLite (better-sqlite3) is newer. `downgradeSqliteStore({ path, to: 8 })` rebuilds
-the index as version 8's, drops `memories_indexed` and puts version 8's guard back.
+store whose index needs that rebuild the same way. Once a row has been deleted with
+`secure-delete` on, the table may no longer be read or written by any FTS5 older than SQLite
+3.42.0; the store's own SQLite (better-sqlite3) is newer. `downgradeSqliteStore({ path, to: 8 })`
+rebuilds the index as version 8's, drops `memories_indexed` and puts version 8's guard back. A
+downgrade runs with `secure_delete` and truncates the WAL when it is done, so the tables it drops
+or rebuilds leave no words in free pages.
 
 `downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x,
 `downgradeSqliteStore({ path, to: 2 })` to version 2 for Oort 0.3 to 0.5, and `{ path, to: 3 }` to

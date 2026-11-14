@@ -2190,8 +2190,8 @@ exit 3. `--json` has no `rewritten` or `notRewritten` there.
 
 What stays on disk: the store overwrites deleted rows with zeros and purges them from its search
 index when you forget, so nothing you forget with this version stays in `oort.sqlite` (see the
-store contract). The keyword index removes only the forgotten memory's own words, in place, so a
-forget does not rewrite the index and takes about as long in a large store as in a small one.
+store contract). The keyword index removes the forgotten memory's own words in place, so a
+forget no longer rewrites the whole search index, and it stays quick as the store grows.
 A store from Oort 0.9.0 or older can still hold text deleted then in its free
 space. The first open that may migrate rewrites such a store once (`VACUUM`) when it is at most
 32 MB; a bigger one waits for `oort doctor --vacuum`, and until then `oort doctor` warns that older

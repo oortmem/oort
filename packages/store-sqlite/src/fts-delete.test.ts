@@ -397,15 +397,18 @@ describe('schema version 9: a lexical index that deletes a row by its own terms 
     }
   });
 
-  it('fts-delete.a-memory-without-its-indexed-strings-is-removed-and-marks-a-rebuild', async () => {
+  it('fts-delete.a-memory-without-its-indexed-strings-rebuilds-the-index-in-its-transaction', async () => {
     const s = fresh();
     const logged: string[] = [];
-    let store: MemoryStore = await open(s, { log: (m) => logged.push(m) });
+    // A hook's open (no migrations): the rebuild cannot wait for the next `oort` command.
+    let store: MemoryStore = await open(s);
     await store.upsertMany(TG, [
       makeMemory({ id: 'n', text: 'a neighbour' }),
       makeMemory({ id: 'secret', text: `the port is ${MARKER}`, entities: [MARKER] }),
       makeMemory({ id: 'edit', text: `edit ${MARKER}x me` }),
     ]);
+    await store.close();
+    store = await open(s, { migrate: false, log: (m) => logged.push(m) });
     // A bug elsewhere lost their side rows.
     const db = raw(s.dbPath);
     db.prepare(
@@ -414,31 +417,138 @@ describe('schema version 9: a lexical index that deletes a row by its own terms 
     db.close();
 
     await store.forget(TG, 'secret');
-    await store.upsert(TG, makeMemory({ id: 'edit', text: 'edited' }));
-    expect(logged.filter((m) => m.includes('rebuilds the search index'))).toHaveLength(2);
+    expect(logged.filter((m) => m.includes('search index was rebuilt'))).toHaveLength(1);
     expect(logged.join('\n')).not.toContain(MARKER);
     expect(await store.lexical(TG, MARKER, 10)).toEqual([]);
+    expect((await store.lexical(TG, `${MARKER}x`, 10)).map((h) => h.id)).toEqual(['edit']);
+    // The rebuild gave every memory its side row back: the rewrite needs no second one.
+    await store.upsert(TG, makeMemory({ id: 'edit', text: 'edited' }));
+    expect(logged.filter((m) => m.includes('search index was rebuilt'))).toHaveLength(1);
     expect(await store.lexical(TG, `${MARKER}x`, 10)).toEqual([]);
+    await store.close();
     checkpoint(s.dbPath);
     expect(inShadowTables(s.dbPath, MARKER)).toBe(false);
-    expect(read(s.dbPath, "SELECT value FROM meta WHERE key = 'lexical_rebuild'")).toHaveLength(1);
-    await store.close();
-
-    // A hook's open (no migrations) leaves the rebuild to the next open that may migrate.
-    store = await open(s, { migrate: false });
-    await store.close();
-    expect(read(s.dbPath, "SELECT value FROM meta WHERE key = 'lexical_rebuild'")).toHaveLength(1);
-
-    logged.length = 0;
-    store = await open(s, { log: (m) => logged.push(m) });
-    await store.close();
-    expect(logged.join('\n')).toContain('Rebuilding the search index (2 memories)');
+    expect(bytesOf(s.dbPath).includes(MARKER)).toBe(false);
     expect(read(s.dbPath, "SELECT value FROM meta WHERE key = 'lexical_rebuild'")).toEqual([]);
     const { live, rebuilt } = liveAndRebuilt(s);
     expect(live).toEqual(rebuilt);
     expect(live.values).toHaveLength(2);
   });
+
+  it(
+    'fts-delete.forget-leaves-no-page-key-that-names-a-forgotten-term',
+    { timeout: 300_000 },
+    async () => {
+      // FTS5 keeps one key per leaf page in `*_idx`: the shortest prefix of the page's first term
+      // that sets it apart from the page before. Deleting that term leaves the key behind.
+      const s = fresh();
+      const store = await open(s);
+      const N = 20_000;
+      const term = (i: number) => `w${String(i).padStart(6, '0')}secretqq`;
+      for (let i = 0; i < N; i += 2000) {
+        await store.upsertMany(
+          TG,
+          Array.from({ length: 2000 }, (_, k) =>
+            makeMemory({ id: `m${i + k}`, text: `common ${term(i + k)}`, stub: 'x' }),
+          ),
+        );
+      }
+      await store.close();
+      let db = raw(s.dbPath);
+      db.function(WRITER_GUARD, () => 1);
+      db.exec(`INSERT INTO ${FTS_TABLE} (${FTS_TABLE}) VALUES ('optimize')`);
+      db.close();
+      // A page whose first term is one memory's alone, with a key longer than `w`.
+      const keys = pageKeys(s.dbPath);
+      const firsts = keys
+        .filter((k) => k.length > 4 && k.startsWith('w'))
+        .map((k) => ({
+          k,
+          owners: Array.from({ length: N }, (_, i) => i).filter((i) => term(i).startsWith(k)),
+        }))
+        .filter((x) => x.owners.length === 1);
+      expect(firsts.length).toBeGreaterThan(2);
+      const target = firsts[Math.floor(firsts.length / 2)]!;
+      const forgotten = term(target.owners[0]!);
+      expect(leakedKeys(s.dbPath, forgotten)).toEqual([]);
+
+      const again = await open(s);
+      await again.forget(TG, `m${target.owners[0]}`);
+      await again.close();
+      checkpoint(s.dbPath);
+      expect(leakedKeys(s.dbPath, forgotten)).toEqual([]);
+      expect(inShadowTables(s.dbPath, forgotten.slice(1))).toBe(false);
+      expect(bytesOf(s.dbPath).includes(forgotten.slice(1))).toBe(false);
+      db = raw(s.dbPath);
+      db.exec(`INSERT INTO ${FTS_TABLE} (${FTS_TABLE}) VALUES ('integrity-check')`);
+      db.close();
+      // The merge kept every live entry and the BM25 totals.
+      const { live, rebuilt } = liveAndRebuilt(s);
+      expect(live).toEqual(rebuilt);
+    },
+  );
+
+  it('fts-delete.a-forget-that-leaves-no-key-merges-nothing', async () => {
+    const s = fresh();
+    const store = await open(s);
+    await store.upsertMany(TG, [makeMemory({ id: 'n', text: 'aaa neighbour' })]);
+    await store.upsert(TG, makeMemory({ id: 'a', text: 'neighbour gone' }));
+    await store.upsert(TG, makeMemory({ id: 'z', text: 'neighbour later' }));
+    checkpoint(s.dbPath);
+    const before = segments(s.dbPath);
+    expect(before).toBeGreaterThan(1);
+    await store.forget(TG, 'a');
+    checkpoint(s.dbPath);
+    expect(segments(s.dbPath)).toBe(before);
+    await store.close();
+  });
+
+  it('fts-delete.an-index-without-secure-delete-is-rebuilt', async () => {
+    const s = fresh();
+    let store = await open(s);
+    await store.upsert(TG, makeMemory({ id: 'a', text: 'auth service' }));
+    await store.close();
+    const db = raw(s.dbPath);
+    db.exec(`INSERT INTO ${FTS_TABLE} (${FTS_TABLE}, rank) VALUES ('secure-delete', 0)`);
+    db.close();
+    const err = await open(s, { migrate: false }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StoreMigrationRequiredError);
+    store = await open(s);
+    await store.close();
+    expect(
+      read<{ v: number }>(s.dbPath, `SELECT v FROM ${FTS_TABLE}_config WHERE k = 'secure-delete'`),
+    ).toEqual([{ v: 1 }]);
+  });
 });
+
+/** The text of every leaf-page key in the lexical index (`*_idx`), without its leading byte. */
+function pageKeys(dbPath: string): string[] {
+  return read<{ term: Buffer }>(dbPath, `SELECT term FROM ${FTS_TABLE}_idx`)
+    .map((r) => Buffer.from(r.term))
+    .filter((b) => b.length > 1)
+    .map((b) => b.subarray(1).toString('latin1'));
+}
+
+/** Page keys that are a prefix of `token` while no live term starts with them. */
+function leakedKeys(dbPath: string, token: string): string[] {
+  const db = raw(dbPath, true);
+  try {
+    db.exec(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS temp.terms USING fts5vocab(main, ${FTS_TABLE}, row)`,
+    );
+    const terms = (db.prepare('SELECT term FROM temp.terms').all() as { term: string }[]).map((r) =>
+      Buffer.from(r.term),
+    );
+    const t = Buffer.from(token);
+    return (db.prepare(`SELECT term FROM ${FTS_TABLE}_idx`).all() as { term: Buffer }[])
+      .map((r) => Buffer.from(r.term).subarray(1))
+      .filter((k) => k.length > 0 && t.subarray(0, k.length).equals(k))
+      .filter((k) => !terms.some((x) => x.subarray(0, k.length).equals(k)))
+      .map((k) => k.toString('latin1'));
+  } finally {
+    db.close();
+  }
+}
 
 describe('schema migration 8 to 9 (CON-159)', () => {
   /** A version 9 store with memories, a cold one included. */
@@ -562,6 +672,70 @@ describe('schema migration 8 to 9 (CON-159)', () => {
       const { live, rebuilt } = liveAndRebuilt(s);
       expect(live).toEqual(rebuilt);
     }
+  });
+
+  it('fts-delete.a-downgrade-leaves-no-words-in-free-pages', async () => {
+    // Version 8 and version 3 each forget their own way (a delete by rowid, then a merge).
+    for (const [to, table, guard] of [
+      [8, 'memories_fts2', 'oort_writer_v8'],
+      [3, 'memories_fts', undefined],
+    ] as const) {
+      const s = fresh();
+      const store = await open(s);
+      await store.upsertMany(TG, [
+        makeMemory({ id: 'n', text: 'a neighbour' }),
+        makeMemory({ id: 'secret', text: `the port is ${MARKER}`, entities: [MARKER] }),
+      ]);
+      await store.close();
+      downgradeSqliteStore({ path: s.dbPath, to });
+      clearCopies(s);
+      // That version's forget, with its store's pragmas.
+      const db = raw(s.dbPath);
+      if (guard !== undefined) db.function(guard, () => 1);
+      db.pragma('secure_delete = ON');
+      db.pragma('journal_size_limit = 0');
+      db.transaction(() => {
+        const { rid } = db
+          .prepare("DELETE FROM memories WHERE id = 'secret' RETURNING rid")
+          .get() as {
+          rid: number;
+        };
+        db.prepare(`DELETE FROM ${table} WHERE rowid = ?`).run(rid);
+        db.prepare("DELETE FROM memories_vec WHERE id = 'secret'").run();
+        db.exec(`INSERT INTO ${table} (${table}) VALUES ('optimize')`);
+      })();
+      db.pragma('wal_checkpoint(TRUNCATE)');
+      db.close();
+      expect(bytesOf(s.dbPath).includes(MARKER)).toBe(false);
+    }
+  });
+
+  it('fts-delete.entities-that-do-not-parse-never-fail-the-upgrade', async () => {
+    const s = await seeded();
+    downgradeSqliteStore({ path: s.dbPath, to: 8 });
+    clearCopies(s);
+    const db = raw(s.dbPath);
+    db.function('oort_writer_v8', () => 1);
+    db.prepare("UPDATE memories SET entities = 'not json' WHERE id = 'a'").run();
+    db.prepare(`UPDATE memories SET entities = '{"x":1}' WHERE id = 'b'`).run();
+    db.close();
+    await (await open(s)).close();
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(9);
+    expect(await finds(s, 'auth')).toEqual(['a']);
+    expect(await finds(s, '認証')).toEqual(['b']);
+    // And a write that has to index such a row again does not fail either.
+    const raw2 = raw(s.dbPath);
+    raw2
+      .prepare(
+        `DELETE FROM ${FTS_VALUES_TABLE} WHERE rid = (SELECT rid FROM memories WHERE id = 'a')`,
+      )
+      .run();
+    raw2.close();
+    const store = await open(s, { migrate: false });
+    expect(await store.setTier(TG, 'a', 'hot')).toBe(true);
+    await store.close();
+    const { live, rebuilt } = liveAndRebuilt(s);
+    expect(live).toEqual(rebuilt);
   });
 
   it('fts-delete.a-v9-store-without-its-side-table-is-repaired', async () => {

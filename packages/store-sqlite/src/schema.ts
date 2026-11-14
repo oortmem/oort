@@ -310,11 +310,19 @@ export const FTS_TABLE_V1 = 'memories_fts';
 export const FTS_VALUES_TABLE = 'memories_indexed';
 
 /**
- * Set in `meta` when a write found a memory with no row in `FTS_VALUES_TABLE` (which only a bug
- * leaves) and removed its index row by tokenising its stored text again: the next open that may
- * migrate rebuilds the index (`lexicalIndexState`), in case that gave other tokens.
+ * A stored row's entities, read the way `migrateV7toV8` reads them: JSON that does not parse,
+ * or is not an array, is no entities, and anything in it that is not a string is left out. The
+ * lexical index is always written from this, so a damaged row never fails a write or a rebuild.
  */
-export const LEXICAL_REBUILD_KEY = 'lexical_rebuild';
+export function rowEntities(json: string): string[] {
+  let entities: unknown;
+  try {
+    entities = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  return Array.isArray(entities) ? entities.filter((e): e is string => typeof e === 'string') : [];
+}
 
 /** Which address fields each level has; anything else is NULL. Mirrors core's `Address` union. */
 const LEVEL_CHECK = `CHECK (
@@ -584,7 +592,7 @@ export function rebuildFts(
     const rows = page.all(after);
     if (rows.length === 0) break;
     for (const r of rows) {
-      const entities = JSON.parse(r.entities) as string[];
+      const entities = rowEntities(r.entities);
       insert(
         r.rid,
         r.tier === 'cold' ? '' : indexed(r.text),
@@ -599,7 +607,6 @@ export function rebuildFts(
   db.exec(`INSERT INTO ${table} (${table}) VALUES ('optimize')`);
   if (version === 2) recordLexical(db, icu);
   else db.exec("DELETE FROM meta WHERE key IN ('lexical_version', 'lexical_icu')");
-  db.prepare('DELETE FROM meta WHERE key = ?').run(LEXICAL_REBUILD_KEY);
   return n;
 }
 
@@ -658,14 +665,20 @@ function createLexicalIndex(db: Database): void {
       )`);
 }
 
-/** Whether the lexical index is version 9's: no `contentless_delete`, and its values table. */
+/**
+ * Whether the lexical index is version 9's: no `contentless_delete`, FTS5's `secure-delete` on
+ * (without it a delete leaves the row's terms in the index), and its values table.
+ */
 function isLexicalIndexV9(db: Database): boolean {
   const sql = db
     .prepare<[string], { sql: string | null }>('SELECT sql FROM sqlite_master WHERE name = ?')
     .get(FTS_TABLE)?.sql;
-  return (
-    typeof sql === 'string' && !sql.includes('contentless_delete') && exists(db, FTS_VALUES_TABLE)
-  );
+  if (typeof sql !== 'string' || sql.includes('contentless_delete')) return false;
+  if (!exists(db, FTS_VALUES_TABLE) || !exists(db, `${FTS_TABLE}_config`)) return false;
+  const secure = db
+    .prepare<[], { v: unknown }>(`SELECT v FROM ${FTS_TABLE}_config WHERE k = 'secure-delete'`)
+    .get();
+  return Number(secure?.v) === 1;
 }
 
 /**
@@ -745,8 +758,6 @@ export function lexicalIndexState(
   const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
   if (get.get('lexical_version')?.value !== String(LEXICAL_VERSION)) return 'rebuild';
   if (indexNeedsRepair(db)) return 'rebuild';
-  // A write found a memory without its indexed strings (`LEXICAL_REBUILD_KEY`).
-  if (get.get(LEXICAL_REBUILD_KEY) !== undefined) return 'rebuild';
   const now = icuMajor(icu);
   if (now === undefined) return holdsSegmentedText(db) ? 'unknown-icu' : 'current';
   // Recorded as a major (`78`), or as a full version by an earlier build (`78.3`).
@@ -1446,7 +1457,8 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
  * index (the RaBitQ index is dropped, a binary index kept), 7 for Oort before memory links (the
  * link schema is dropped), 8 for Oort before version 9's lexical index (it is rebuilt as version
  * 8's, with `contentless_delete` and no `FTS_VALUES_TABLE`). Refuses, changing nothing, when the
- * store holds anything that version cannot represent (see `migrateV2toV1`, `migrateV3toV2`, `migrateV5toV4` and `migrateV8toV7`). Leaving version 6 drops the binary index and the writer
+ * store holds anything that version cannot represent (see `migrateV2toV1`, `migrateV3toV2`,
+ * `migrateV5toV4` and `migrateV8toV7`). Leaving version 6 drops the binary index and the writer
  * guard; leaving version 4 rebuilds the lexical index with tokeniser v1. No other connection may
  * have the store open. Opening a store never does this: migrations only roll forward.
  */
