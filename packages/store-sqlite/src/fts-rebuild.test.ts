@@ -218,7 +218,7 @@ const getMeta = (dbPath: string, key: string): string | undefined => {
   }
 };
 
-describe('rebuild cost (CON-110 review)', () => {
+describe('rebuild cost (CON-110)', () => {
   it('fts-rebuild.says-it-is-rebuilding', async () => {
     const s = copy3();
     const lines: string[] = [];
@@ -273,7 +273,7 @@ describe('rebuild cost (CON-110 review)', () => {
   });
 });
 
-describe('ICU bookkeeping (CON-110 re-review)', () => {
+describe('ICU bookkeeping (CON-110)', () => {
   const major = (process.versions.icu ?? '').split('.')[0] ?? '';
 
   /** Counts the segmented-script scans (the oort_segmented query) the callback causes. */
@@ -346,7 +346,7 @@ describe('the ICU guard with an unknown runtime ICU', () => {
   });
 });
 
-describe('older Oort processes and the version 4 index (CON-110 review)', () => {
+describe('older Oort processes and the version 4 index (CON-110)', () => {
   it('fts-rebuild.an-old-process-cannot-write-the-old-index-name', async () => {
     const s = copy3();
     // A 0.5.x or 0.6.0 MCP server or daemon, already running against the version 3 store, with
@@ -454,7 +454,7 @@ it('fts-rebuild.sweeps-copies-a-killed-backup-left-behind', async () => {
   expect(fs.existsSync(unrelated)).toBe(true);
 });
 
-describe('a hook opens a store whose index needs repair first (CON-110 re-review)', () => {
+describe('a hook opens a store whose index needs repair first (CON-110)', () => {
   const g = localGrant({
     orgId: 'local',
     customerId: 'self',

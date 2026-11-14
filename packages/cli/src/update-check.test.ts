@@ -313,7 +313,7 @@ describe('the SessionStart notice', () => {
   });
 });
 
-describe('review fixes', () => {
+describe('hardening', () => {
   it('update.the-background-check-gets-only-its-allowlisted-environment (M3)', () => {
     const env = {
       PATH: '/usr/bin',

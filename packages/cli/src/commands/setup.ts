@@ -626,7 +626,7 @@ export async function setupCommand(
       const current = state.state === 'ok' ? state.managed : undefined;
       let plan: { bin: string; install: boolean } | undefined;
       if (opts.thisCopy !== true && state.state === 'untrusted') {
-        // Never reused, never installed over, never worked around (PR #78 review, I1).
+        // Never reused, never installed over, never worked around (PR #78).
         managed.status = 'untrusted';
         managed.reason = 'untrusted';
         p.info(ui.warn(`Skipped connecting: ${untrustedManagedMessage(state.problem, env)}`));
@@ -747,7 +747,7 @@ export async function setupCommand(
           }
         }
         if (bin !== undefined) {
-          // The last check before any config is written: the path is still safe (PR #78, I1).
+          // The last check before any config is written: the path is still safe (PR #78).
           try {
             checkAgentPath(bin, ctx);
           } catch (e) {

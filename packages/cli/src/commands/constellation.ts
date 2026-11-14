@@ -59,7 +59,7 @@ export async function constellationCreateCommand(
   }
   const client = await clientFor(ctx);
   // The API takes a Galaxy by id only: resolve the slug or name here first, among your own
-  // Galaxies, and refuse a reference that matches more than one (CON-97 review).
+  // Galaxies, and refuse a reference that matches more than one (CON-97).
   const target = galaxy === undefined ? undefined : resolveGalaxy(await client.galaxies(), galaxy);
   const c = await client.createConstellation(n, target?.id);
   if (jsonMode(ctx)) emit(ctx, c);

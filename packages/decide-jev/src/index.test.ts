@@ -644,7 +644,7 @@ describe('jevDecider.judge (CON-71)', () => {
   });
 });
 
-describe('jevDecider.judge hardening (CON-71 review)', () => {
+describe('jevDecider.judge hardening (CON-71)', () => {
   it('judge.instructions-treat-fields-as-quoted-data', async () => {
     const s = stub(() => ({ verdict: choiceA('rejected', { rejected: 0.9, other: 0.1 }) }));
     await jevDecider({ client: s.client }).judge!({

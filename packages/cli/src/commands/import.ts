@@ -302,7 +302,7 @@ export const IMPORT_FILE_MAX_BYTES = 100 * 1024 * 1024;
 
 const isText = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max;
 
-/** The times a file may state: years 0000 to 9999 (re-review Info 3). */
+/** The times a file may state: years 0000 to 9999. */
 const MIN_TIME = Date.parse('0000-01-01T00:00:00.000Z');
 const MAX_TIME = Date.parse('9999-12-31T23:59:59.999Z');
 
@@ -361,7 +361,7 @@ function fileSource(v: unknown): MemorySource {
 }
 
 /**
- * One export line as this store keeps it (security review of CON-137): rebuilt from its content
+ * One export line as this store keeps it (CON-137): rebuilt from its content
  * alone, so nothing else a file claims reaches the store. Kept: id, type, text, stub, entities,
  * salience (0 to 1), pin, source (when well formed), project and author, and the times. Reset as
  * for a new memory: tier warm, access log empty, never confirmed here, no provenance. Times are
@@ -385,7 +385,7 @@ function rebuilt(
   const salience = x['salience'];
   if (typeof salience !== 'number' || !Number.isFinite(salience)) return 'invalid';
   if (salience < 0 || salience > 1) return 'invalid';
-  // Times as numbers (re-review Info 3), a start after now clamped to now.
+  // Times as numbers, a start after now clamped to now.
   const nowT = now.getTime();
   const createdRaw = fileTime(x['createdAt']);
   const updatedRaw = fileTime(x['updatedAt']);
@@ -399,7 +399,7 @@ function rebuilt(
   // An end is kept only when it holds together: in valid time after the start (both the start the
   // file gives and the clamped one), in transaction time with a reason and not before the record.
   // One that does not (including one a clamped start overtook) leaves the line out: an ended fact
-  // never becomes current (re-review Info 2). A valid-time end still ahead is kept, so a fact
+  // never becomes current. A valid-time end still ahead is kept, so a fact
   // planned to end does so on time; a record cannot have been ended in the future, so an expiry
   // ahead of now is dropped.
   const validToT = endTime(x['validTo']);
@@ -433,7 +433,7 @@ function rebuilt(
     ...(m.place !== undefined && { place: m.place }),
   };
   if (type === 'judgment') {
-    // Ended in the file: only a person here may end a decision (re-review N1).
+    // Ended in the file: only a person here may end a decision.
     if (endedJudgment(x['judgment'])) return 'ended';
     let j: Judgment;
     try {
@@ -522,7 +522,7 @@ export async function importFileCommand(
       throw e;
     }
     // An export never repeats an id: which copy is real is unknowable, and the counts asked
-    // about would not match what is stored (re-review Info 1).
+    // about would not match what is stored.
     const seen = new Set<unknown>();
     for (const m of memories) {
       const id = (m as unknown as Record<string, unknown>)['id'];

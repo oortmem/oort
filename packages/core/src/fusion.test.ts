@@ -139,7 +139,7 @@ describe('fusion', () => {
     expect(knownAt('2026-11-04T00:00:00.000Z')).toEqual(['right']);
   });
 
-  it('fusion.known-at-hides-a-fact-after-its-own-end (review 10)', () => {
+  it('fusion.known-at-hides-a-fact-after-its-own-end', () => {
     // "Freeze until 11-02", expired by consolidation on 11-03: its end was known from the start.
     const freeze = makeMemory({
       id: 'freeze',

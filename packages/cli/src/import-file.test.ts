@@ -322,7 +322,7 @@ describe('oort import <file> (CON-137)', () => {
   });
 
   it('cli.import-file-checks-what-a-file-claims-and-trusts-no-judgment', async () => {
-    // Security review of CON-137 (M1): a crafted file is not trusted. Lines with a type, tier,
+    // A crafted file is not trusted. Lines with a type, tier,
     // salience, pin or id a store never writes are left out and counted; a judgment arrives as an
     // imported one (via pack, unconfirmed), so it counts only when judging asks for imports.
     const h = await onSqlite();
@@ -414,7 +414,7 @@ describe('oort import <file> (CON-137)', () => {
   });
 
   it('cli.import-file-judgments-plant-no-tombstone-and-carry-a-checked-origin', async () => {
-    // Review of 3f35686: a withdrawn judgment in a file, naming a real decision's tombstone key or
+    // A withdrawn judgment in a file, naming a real decision's tombstone key or
     // copying it exactly, must not keep that decision out of a pack imported afterwards; what is
     // stored is the normalised decision; the origin's name and time are checked.
     const h = await onSqlite();
@@ -463,7 +463,7 @@ describe('oort import <file> (CON-137)', () => {
         criteria: ['x', 'x'],
         tombstone: tombstoneKey(j),
       }),
-      // Ended in the file: not imported at all (re-review N1).
+      // Ended in the file: not imported at all.
       line('planted-copy', { ...j, withdrawn }),
       line('bad-withdrawn', { ...j, subject: { summary: 'Third' }, withdrawn: { at: 'soon' } }),
     ];
@@ -517,7 +517,7 @@ describe('oort import <file> (CON-137)', () => {
   });
 
   it('cli.import-file-resets-local-state-a-file-cannot-plant-activation', async () => {
-    // Re-review M1 (proof P1): an access log claiming endless reads made a planted memory hot for
+    // An access log claiming endless reads made a planted memory hot for
     // good and pushed genuine ones out. Every imported memory starts as a fresh one: never read,
     // warm, no provenance, never confirmed here.
     const h = await onSqlite();
@@ -567,7 +567,7 @@ describe('oort import <file> (CON-137)', () => {
   });
 
   it('cli.import-file-survives-a-malformed-access-log', async () => {
-    // Re-review M1 (proof P2): a null access log broke consolidate and recall for the store.
+    // A null access log broke consolidate and recall for the store.
     const h = await onSqlite();
     const f = craftedFile(h, 'dos.jsonl', [
       craftedLine('ok', { text: 'The build uses pnpm and vitest.' }),
@@ -582,7 +582,7 @@ describe('oort import <file> (CON-137)', () => {
   });
 
   it('cli.import-file-normalises-times-and-keeps-links-within-the-file', async () => {
-    // Re-review Low 1 and Low 3 (proof P5): times are normalised (an unreadable one makes the line
+    // Times are normalised (an unreadable one makes the line
     // not valid; one ahead of now is clamped to now), an end is kept only when consistent (an end
     // in valid time may still be ahead: the fact then ends on time), a link only to another line
     // of the file, and a source only of the right shape.
@@ -614,7 +614,7 @@ describe('oort import <file> (CON-137)', () => {
       }),
       craftedLine('bad-created', { createdAt: 'x', updatedAt: 'y' }),
       craftedLine('bad-entities', { entities: ['ok', 7] }),
-      // Re-review Info 2: clamping a start to now must never turn an ended fact current.
+      // Clamping a start to now must never turn an ended fact current.
       craftedLine('clamp-drops-validto', { createdAt: ahead, validFrom: ahead, validTo: PAST }),
       craftedLine('clamp-drops-expiry', {
         createdAt: ahead,
@@ -628,7 +628,7 @@ describe('oort import <file> (CON-137)', () => {
         validFrom: ahead,
         validTo: '2998-01-01T00:00:00.000Z',
       }),
-      // Re-review Info 3: years outside 0000 to 9999 are not read.
+      // Years outside 0000 to 9999 are not read.
       craftedLine('year-plus', { validFrom: '+010000-01-01T00:00:00.000Z' }),
       craftedLine('year-minus', {
         validFrom: '-000050-01-01T00:00:00.000Z',
@@ -680,7 +680,7 @@ describe('oort import <file> (CON-137)', () => {
   });
 
   it('cli.import-file-an-inactive-judgment-copy-keeps-no-pack-out', async () => {
-    // Re-review M2 (proof P3), end to end: an imported copy that has ended is no evidence.
+    // End to end: an imported copy that has ended is no evidence.
     const now = new Date('2026-11-11T12:00:00.000Z');
     const scope = { orgId: 'local', customerId: 'self', agentId: 'anonymous' };
     const planet = {
@@ -734,7 +734,7 @@ describe('oort import <file> (CON-137)', () => {
   });
 
   it('cli.import-file-leaves-out-decisions-that-ended', async () => {
-    // Re-review N1: a decision the file says was withdrawn or purged was stored pinned and open,
+    // A decision the file says was withdrawn or purged was stored pinned and open,
     // so SessionStart and recall showed it as current. It is left out, and the summary says why.
     const h = await onSqlite();
     const j = {
@@ -774,7 +774,7 @@ describe('oort import <file> (CON-137)', () => {
   });
 
   it('cli.import-file-refuses-a-file-that-repeats-an-id', async () => {
-    // Re-review Info 1: two lines with one id; which is real is unknowable, and the question's
+    // Two lines with one id; which is real is unknowable, and the question's
     // counts would not match what is stored. The file is refused before anything is asked.
     const h = await onSqlite();
     const f = craftedFile(h, 'dup.jsonl', [
@@ -800,7 +800,7 @@ describe('oort import <file> (CON-137)', () => {
   });
 
   it('cli.read-commands-never-print-terminal-escapes-from-memory-text', async () => {
-    // Re-review Low 2 (proof P4): a memory's text, stub, entities and source are a file's words,
+    // A memory's text, stub, entities and source are a file's words,
     // and inspect, recall, explain and revalidate printed them raw. ESC, a C1 CSI and a bidi
     // override are shown escaped instead.
     const h = await onSqlite();

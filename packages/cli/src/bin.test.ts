@@ -576,7 +576,7 @@ describe('oort bin', () => {
     expect(fs.existsSync(settings)).toBe(false);
   });
 
-  it('cli.a-copy-under-tmp-is-never-written-plain-or-this-copy (PR #78 I2)', async () => {
+  it('cli.a-copy-under-tmp-is-never-written-plain-or-this-copy (PR #78)', async () => {
     const s = sandbox({ trusted: true });
     const settings = path.join(s.home, '.claude', 'settings.json');
     // The real bin, copied under /tmp (on macOS, /private/tmp: not os.tmpdir()).

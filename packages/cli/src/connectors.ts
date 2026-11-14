@@ -716,7 +716,7 @@ export interface HostStatus {
    * this one (another copy of oort, such as one `--this-copy` wrote).
    */
   otherCopy?: string;
-  /** `connected` only: the binary the entry runs (doctor judges it: PR #78 review, N3). */
+  /** `connected` only: the binary the entry runs (doctor judges it: PR #78). */
   command?: string;
   /** Why the file is `invalid` (holds no config values). */
   message?: string;

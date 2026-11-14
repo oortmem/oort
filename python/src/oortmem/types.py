@@ -28,6 +28,7 @@ __all__ = [
     "Pack",
     "JudgmentView",
     "MemoryView",
+    "RecallVia",
     "RecallWhy",
     "RecalledMemory",
     "Temporal",
@@ -192,6 +193,17 @@ class MemoryView:
 
 
 @dataclass(**_FROZEN)
+class RecallVia:
+    """How a link brought a memory into a recall: the link's kind, the id of the returned memory
+    it was reached ``from``, and a ``weight`` from 0 to 1."""
+
+    kind: Literal["explicit", "episode", "about"]
+    #: ``from`` on the wire.
+    from_: str
+    weight: float
+
+
+@dataclass(**_FROZEN)
 class RecallWhy:
     """Diagnostic (experimental): may change in a minor release."""
 
@@ -206,6 +218,9 @@ class RecallWhy:
     place_path: Optional[str] = None
     #: With ``near``: metres from the query point to the memory's region (0 inside it).
     distance_m: Optional[float] = None
+    #: Set when the search did not find this memory and a link from a returned one did (local
+    #: mode only). It passed the same relevance gate as a hit.
+    via: Optional[RecallVia] = None
 
 
 @dataclass(**_FROZEN)

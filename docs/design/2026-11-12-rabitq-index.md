@@ -439,8 +439,7 @@ the RaBitQ index is built on the file after the binary one is measured, which dr
   machine running out of page cache for a 1.9 GB file inside one transaction, not the encoding
   (15 µs a vector). This was the first, single-transaction build; the build now commits in
   batches of 10,000 and reads `memories_vec` once plus a 20,000-vector sample (§2). It has not
-  been re-timed at one million (the machine was too loaded during the review fixes for a timing
-  to mean anything).
+  been re-timed at one million.
 
 At 20,000 vectors in 2,000 clusters of 10 (`OORT_BENCH_RAM_N=20000`), the flat-tail case of §4,
 the bound alone read 1,406 vectors a query on average; this run predates the budget, which now

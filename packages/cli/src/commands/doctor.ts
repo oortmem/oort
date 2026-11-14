@@ -373,7 +373,7 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
       judged !== undefined && 'version' in judged && judged.version !== undefined
         ? `oort ${shown(judged.version)}`
         : 'version unknown';
-    // One line for it (PR #78 review, N5): the bin row says what the hooks run, and that you ran
+    // One line for it (PR #78): the bin row says what the hooks run, and that you ran
     // another copy.
     const also = `; you ran another copy, oort ${VERSION}, at ${shown(tilde(here, home))}`;
     let told = false;
@@ -431,7 +431,7 @@ async function hookChecks(ctx: Ctx, cmd: string | undefined, home: string): Prom
 const HOOK_FIX = 'oort install claude-code';
 
 /**
- * What a binary agents run is, for doctor (PR #78 review, I3). Only two copies are vouched for:
+ * What a binary agents run is, for doctor (PR #78). Only two copies are vouched for:
  * the managed copy that checks out and is safe (`managedCopy`) and the running copy when it stays
  * put and nobody else can change it (`runningUnstable`); their versions come from their files.
  * Anything else is judged by where it lives and never by what it prints: doctor reads files only
@@ -484,7 +484,7 @@ function judgeCopy(ctx: Ctx, bin: string): Judged {
     home: env['HOME'] ?? '',
     strict: real === oortReal || real.startsWith(oortReal + path.sep),
   });
-  // The whole package it belongs to, as for the running copy (PR #78 review).
+  // The whole package it belongs to, as for the running copy (PR #78).
   const t = u ?? copyTree(real, env, real === oortReal || real.startsWith(oortReal + path.sep));
   if (t !== undefined) return { kind: 'unsafe', why: shown(untrustedText(t)) };
   const version = nearestPackageVersion(real);
@@ -633,7 +633,7 @@ function unstableHooksNote(ctx: Ctx, bin: string, show: string): Check | undefin
 }
 
 /**
- * The managed copy is there but not safe to run (PR #78 review, I1): a fail naming the directory
+ * The managed copy is there but not safe to run (PR #78): a fail naming the directory
  * and the command that fixes it. Setup, install and connect refuse it the same way.
  */
 function managedChecks(ctx: Ctx): Check[] {
@@ -792,7 +792,7 @@ function mcpChecks(ctx: Ctx, cmd: string | undefined): Check[] {
     switch (s.state) {
       case 'connected':
       case 'outdated': {
-        // The binary the entry runs, judged as the hooks' is (PR #78 review, I3 and N3): even an
+        // The binary the entry runs, judged as the hooks' is (PR #78): even an
         // entry that is exactly what `oort connect` writes is not ok if what it runs is unsafe.
         const bin = s.state === 'connected' ? s.command : s.otherCopy;
         const j = bin === undefined ? undefined : judgeCopy(ctx, bin);

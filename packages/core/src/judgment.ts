@@ -1333,8 +1333,8 @@ export function fileOrigin(o: {
 /**
  * A judgment read from an Oort export file, as this store keeps it (CON-137): the decision
  * normalised and redacted as a pack's is, imported (`via: 'pack'` from `origin`), never confirmed
- * and with no tombstone of its own. A decision the file says was withdrawn or purged is refused
- * (re-review N1): stored, it would be pinned and shown as current, and only a person here may
+ * and with no tombstone of its own. A decision the file says was withdrawn or purged is refused:
+ * stored, it would be pinned and shown as current, and only a person here may
  * end one. Throws `JudgmentInputError` or `JudgmentPackError` otherwise.
  */
 export function importedJudgment(raw: unknown, origin: JudgmentPackOrigin): Judgment {

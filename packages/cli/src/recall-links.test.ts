@@ -5,6 +5,7 @@ import type { MemoryStore, Reranker } from '@oortmem/core';
 import { TG } from '@oortmem/core/store-conformance';
 import { writeCloudSettings } from './cloud.js';
 import { createKeychain } from './keychain.js';
+import { withSeeds } from './engine/recall.js';
 import { localBackend } from './mcp.js';
 import { runCli } from './program.js';
 import { createOortWith } from './sdk/create.js';
@@ -199,6 +200,104 @@ describe('MCP recall and the SDK carry via (CON-149)', () => {
       expect(ids).not.toContain(b);
     }
     await oort.close();
+  });
+});
+
+describe('a linked memory comes only with the hit it was reached from', () => {
+  const C = '33333333-3333-4333-8333-333333333333';
+  const S = '44444444-4444-4444-8444-444444444444';
+  const L = '55555555-5555-4555-8555-555555555555';
+  const scores: [string, number][] = [
+    ['port 8080', 0.9],
+    ['port 8081', 0.8],
+    ['port 8082', 0.7],
+    ['Postgres', 0.75],
+    ['port 8083', 0.5],
+  ];
+  const ranked: Reranker = {
+    async rerank(_q, docs, topK) {
+      return docs
+        .map((d) => ({ id: d.id, score: scores.find(([t]) => d.text.includes(t))?.[1] ?? 0.1 }))
+        .sort((x, y) => y.score - x.score)
+        .slice(0, topK);
+    },
+  };
+
+  /**
+   * Four hits (A .9, B .8, C .7, S .5) and L, which has no query word, is linked to S by a
+   * person and scores .75: above C and S, so the reranked order is A, B, L, C, S.
+   */
+  async function scenario(): Promise<Harness> {
+    const h = harness();
+    const hit = (id: string, text: string) =>
+      h.store.upsert(TG, memory({ id, text, stub: 'port', entities: [] }));
+    // A and S share every query word, so S is among the memories links are followed from and
+    // fusion is not confident: the reranker is called and puts S last.
+    await hit(A, 'which port does auth-service use: port 8080');
+    await hit(B, 'auth-service has port 8081');
+    await hit(C, 'auth-service has port 8082');
+    await hit(S, 'which port does auth-service use: port 8083');
+    await h.store.upsert(
+      TG,
+      memory({ id: L, text: 'It runs on Postgres 16.', stub: 'storage engine', entities: [] }),
+    );
+    await h.store.link!(TG, S, L, { assertedBy: 'user' });
+    const plain = h.wire;
+    h.wire = async (dir, o) => {
+      const { embed: _e, ...w } = await plain(dir, o);
+      return { ...w, rerank: ranked };
+    };
+    return h;
+  }
+
+  it('links.mcp-recall-limit-keeps-the-hits-and-drops-a-link-without-its-hit', async () => {
+    const h = await scenario();
+    const w = await h.wire(h.cwd);
+    const out = await localBackend({ wired: w }).recall({ query: QUERY, limit: 3 });
+    expect(out.memories.map((m) => m.id)).toEqual([A, B, C]);
+    expect(out.memories.every((m) => m.via === undefined)).toBe(true);
+  });
+
+  it('links.mcp-recall-limit-returns-a-link-beside-its-hit-never-in-a-hit-slot', async () => {
+    const h = await scenario();
+    const w = await h.wire(h.cwd);
+    const backend = localBackend({ wired: w });
+    for (const limit of [4, 5, 10]) {
+      const out = await backend.recall({ query: QUERY, limit });
+      const ids = out.memories.map((m) => m.id);
+      // Every hit is there, and the linked memory is extra.
+      expect(ids.filter((id) => id !== L)).toEqual([A, B, C, S]);
+      expect(ids).toContain(L);
+      expect(out.memories.find((m) => m.id === L)!.via).toMatchObject({
+        kind: 'explicit',
+        from: S,
+      });
+    }
+  });
+
+  it('links.cli-recall-limit-keeps-the-hits-and-drops-a-link-without-its-hit', async () => {
+    const ids = async (limit: string): Promise<string[]> => {
+      // A harness each: a recall records access, which moves the next one's fused order.
+      const h = await scenario();
+      const r = await h.run(['recall', QUERY, '--json', '--limit', limit]);
+      return data(r.io.stdout).memories.map((m: { id: string }) => m.id);
+    };
+    expect(await ids('3')).toEqual([A, B, C]);
+    expect(await ids('4')).toEqual([A, B, L, C, S]);
+  });
+});
+
+describe('withSeeds', () => {
+  const m = (id: string, from?: string) =>
+    ({
+      id,
+      explanation: from === undefined ? {} : { via: { kind: 'explicit', from, weight: 1 } },
+    }) as never;
+
+  it('links.a-cut-list-loses-a-linked-memory-whose-hit-was-cut', () => {
+    const all = [m('a'), m('l', 's'), m('b'), m('s')];
+    expect(withSeeds(all.slice(0, 3)).map((x: { id: string }) => x.id)).toEqual(['a', 'b']);
+    expect(withSeeds(all).map((x: { id: string }) => x.id)).toEqual(['a', 'l', 'b', 's']);
   });
 });
 

@@ -36,7 +36,7 @@ describe('factInterval', () => {
     expect(factInterval('The service listens on port 8080.', AT)).toEqual({});
   });
 
-  it('temporal.as-of-a-weekday-takes-the-closest-reading (review 5)', () => {
+  it('temporal.as-of-a-weekday-takes-the-closest-reading', () => {
     // Wednesday: "as of Monday" is two days ago, not next week.
     expect(factInterval('As of Monday we use pnpm.', AT).validFrom).toBe(
       '2026-11-02T00:00:00.000Z',
@@ -52,13 +52,13 @@ describe('factInterval', () => {
     expect(factInterval('The office is open from Monday to Friday.', AT)).toEqual({});
   });
 
-  it('temporal.a-past-end-is-kept (review 7)', () => {
+  it('temporal.a-past-end-is-kept', () => {
     expect(factInterval('The deploy freeze ran until yesterday.', AT)).toEqual({
       validTo: '2026-11-04T00:00:00.000Z',
     });
   });
 
-  it('temporal.relative-days-use-the-turn-offset (review 11)', () => {
+  it('temporal.relative-days-use-the-turn-offset', () => {
     // 23:30 on Wednesday in New York is already Thursday in UTC.
     const ny = new Date('2026-11-05T04:30:00.000Z');
     expect(factInterval('We use port 8080 until tomorrow.', ny, -300).validTo).toBe(
@@ -99,7 +99,7 @@ describe('checkWriterDate', () => {
     expect(r.fixed).toEqual({ from: '2026-11-02', to: '2026-11-03' });
   });
 
-  it('temporal.a-stated-date-is-never-rewritten (review 1)', () => {
+  it('temporal.a-stated-date-is-never-rewritten', () => {
     // The writer copied a date the user gave; "today" is about the agreement, not the cutover.
     const stated = checkWriterDate(
       'Today we agreed the cutover is 2026-12-01',
@@ -162,7 +162,7 @@ describe('temporalIntent', () => {
     }
   });
 
-  it('temporal.intent-prompt-shaped-text-with-history-words-stays-current (review 2)', () => {
+  it('temporal.intent-prompt-shaped-text-with-history-words-stays-current', () => {
     // Hook prompts are instructions, not questions about history.
     for (const q of [
       'fix the test, the config changed',
@@ -205,7 +205,7 @@ describe('temporalIntent', () => {
 
   it('temporal.intent-a-future-date-is-not-as-of', () => {
     expect(temporalIntent('which port will we use next Friday', AT).mode).toBe('current');
-    // Review 3: a coming weekday is never shifted a year back into an as-of.
+    // A coming weekday is never shifted a year back into an as-of.
     expect(temporalIntent('can you finish the migration by Friday', AT)).toEqual({
       mode: 'current',
     });

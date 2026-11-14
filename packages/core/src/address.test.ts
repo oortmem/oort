@@ -117,7 +117,7 @@ describe('addresses', () => {
   });
 });
 
-describe('address errors name a field safely (CON-137 security review, L-c)', () => {
+describe('address errors name a field safely (CON-137)', () => {
   // A field name comes from a file (an export line) and ends up in a message on a terminal.
   const osc = '\u001b]8;;https://evil.example\u0007click\u001b]8;;\u0007';
   it('quotes and escapes an unknown field name', () => {

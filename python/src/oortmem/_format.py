@@ -19,10 +19,10 @@ from __future__ import annotations
 import math
 import re
 from datetime import datetime, timezone
-from typing import Any, List, Mapping, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 from ._scrub import clean as _scrub_text
-from .types import RecallResult, RecalledMemory, from_wire
+from .types import RecallResult, RecalledMemory, RecallVia, from_wire
 
 __all__ = ["format_for_prompt", "DEFAULT_BUDGET_CHARS"]
 
@@ -109,6 +109,10 @@ def _when(m: RecalledMemory, now_ms: float) -> str:
     return f"{span}, later corrected" if m.status == "corrected" else span
 
 
+def _via(m: RecalledMemory) -> Optional[RecallVia]:
+    return None if m.why is None else m.why.via
+
+
 def _hive(m: RecalledMemory) -> bool:
     return m.origin is not None and m.origin.level in ("constellation", "galaxy")
 
@@ -118,6 +122,8 @@ def _label(m: RecalledMemory, labelled: bool, now_ms: float) -> str:
     if labelled and m.origin is not None:
         parts.append(m.origin.space)
     parts.append(_when(m, now_ms))
+    if _via(m) is not None:
+        parts.append("linked")
     if m.origin is not None and m.origin.overridden_by is not None:
         parts.append("overridden by a narrower memory")
     return ", ".join(parts)
@@ -138,21 +144,40 @@ def injectable_text(text: str) -> str:
 def _render(memories: List[RecalledMemory], budget: int, now_ms: float) -> str:
     total = _js_len(_OPEN) + _js_len(_CLOSE)
     hive = 0
-    lines: List[str] = []
+    fitted: Dict[int, str] = {}
     labelled = any(_hive(m) for m in memories)
-    for m in memories:
+
+    def line_of(m: RecalledMemory) -> str:
         note = f" (may be outdated; last confirmed {_age(m.valid_from, now_ms)})" if m.stale else ""
-        line = f"- [{_label(m, labelled, now_ms)}] {injectable_text(m.text)}{note}"
-        cost = _js_len(line) + (1 if lines else 0)
+        return f"- [{_label(m, labelled, now_ms)}] {injectable_text(m.text)}{note}"
+
+    def take(i: int, m: RecalledMemory) -> str:
+        nonlocal total, hive
+        line = line_of(m)
+        cost = _js_len(line) + (1 if fitted else 0)
         from_hive = _hive(m)
         if from_hive and hive + cost > HIVE_QUOTA * budget:
-            continue
+            return "over-quota"
         if total + cost > budget:
-            break
-        lines.append(line)
+            return "no-room"
+        fitted[i] = line
         total += cost
         if from_hive:
             hive += cost
+        return "taken"
+
+    # The search's own hits first, in order, stopping at the first that does not fit.
+    for i, m in enumerate(memories):
+        if _via(m) is None and take(i, m) == "no-room":
+            break
+    # Then memories a link brought in, with what is left: one never takes a hit's place, and is
+    # never shown without the memory it was reached from.
+    shown = {memories[i].id for i in fitted}
+    for i, m in enumerate(memories):
+        via = _via(m)
+        if via is not None and via.from_ in shown:
+            take(i, m)
+    lines = [fitted[i] for i in sorted(fitted)]
     return "" if not lines else _OPEN + "\n".join(lines) + _CLOSE
 
 

@@ -1,6 +1,6 @@
 /**
- * The schema version 4 rebuild on a large version 3 store with a long rewrite history (CON-110
- * review): memory stays bounded, the index passes FTS5's integrity check, a process killed
+ * The schema version 4 rebuild on a large version 3 store with a long rewrite history
+ * (CON-110): memory stays bounded, the index passes FTS5's integrity check, a process killed
  * mid-rebuild leaves the store as it was, and opens during the rebuild wait or fail open.
  *
  * The migrating process is a child running the built package (`dist/`), so it can be measured
@@ -189,7 +189,7 @@ async function finds(s: { dbPath: string; coldDir: string }, q: string): Promise
   }
 }
 
-describe('rebuild under load (CON-110 review)', { timeout: 300_000 }, () => {
+describe('rebuild under load (CON-110)', { timeout: 300_000 }, () => {
   it('fts-rebuild-load.a-large-history-store-migrates-within-memory-bounds', async () => {
     const s = copy();
     const migrating = await openInChild(s).exit;

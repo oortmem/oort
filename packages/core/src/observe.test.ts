@@ -895,13 +895,13 @@ describe('observe: dates and the REFINE / SUPERSEDE / CORRECT split (CON-34, CON
     expect((await store.list(localGrant(FILTER))).map((m) => m.id)).toEqual([b.memoryId]);
   });
 
-  describe('review fixes', () => {
+  describe('follow-up fixes', () => {
     const run = (text: string, iso: string, extra: Partial<Observation> = {}) => ({
       o: { ...obs(text, iso), ...extra },
       now: { now: new Date(iso) },
     });
 
-    it('observe.a-stated-date-is-logged-not-rewritten (review 1)', async () => {
+    it('observe.a-stated-date-is-logged-not-rewritten', async () => {
       const { store, deps } = setup(gate(0.9), [rec(null, 'ADD')]);
       const write: MemoryWriter = {
         async write() {
@@ -925,7 +925,7 @@ describe('observe: dates and the REFINE / SUPERSEDE / CORRECT split (CON-34, CON
       });
     });
 
-    it('observe.refine-of-a-cold-memory-survives-recall (review 4)', async () => {
+    it('observe.refine-of-a-cold-memory-survives-recall', async () => {
       const { store, deps } = setup(gate(0.9), [rec('C', 'REFINE')]);
       await seedCold(
         store,
@@ -949,7 +949,7 @@ describe('observe: dates and the REFINE / SUPERSEDE / CORRECT split (CON-34, CON
       expect(r.memories.find((m) => m.id === 'C')?.text).toBe('claim: auth on port 3000 over TLS');
     });
 
-    it('observe.correct-and-refine-honour-the-text-bounds (review 6)', async () => {
+    it('observe.correct-and-refine-honour-the-text-bounds', async () => {
       const prior = () =>
         makeMemory({
           id: 'P',
@@ -984,7 +984,7 @@ describe('observe: dates and the REFINE / SUPERSEDE / CORRECT split (CON-34, CON
       });
     });
 
-    it('observe.a-past-end-stores-the-fact-already-ended (review 7)', async () => {
+    it('observe.a-past-end-stores-the-fact-already-ended', async () => {
       const { store, deps } = setup(gate(0.9), [rec(null, 'ADD')]);
       const { o, now } = run('the deploy freeze ran until yesterday', WED);
       const res = await observe(o, localScope(), { ...deps, ...now });
@@ -994,7 +994,7 @@ describe('observe: dates and the REFINE / SUPERSEDE / CORRECT split (CON-34, CON
       });
     });
 
-    it('observe.since-before-the-prior-makes-the-update-current (review 8)', async () => {
+    it('observe.since-before-the-prior-makes-the-update-current', async () => {
       let next: ReconcileDecision[] = [rec(null, 'ADD')];
       const { store, deps } = setup(gate(0.9), () => next);
       const a = await observe(obs('auth on port 3000', '2026-11-01T00:00:00.000Z'), localScope(), {
@@ -1020,7 +1020,7 @@ describe('observe: dates and the REFINE / SUPERSEDE / CORRECT split (CON-34, CON
       expect((await store.list(localGrant(FILTER))).map((m) => m.id)).toEqual([b.memoryId]);
     });
 
-    it('observe.refine-stamps-the-turn-and-appends-only-new-decisions (review 9)', async () => {
+    it('observe.refine-stamps-the-turn-and-appends-only-new-decisions', async () => {
       let next: ReconcileDecision[] = [rec(null, 'ADD')];
       const { store, deps } = setup(gate(0.9), () => next);
       const a = await observe(obs('auth on port 3000'), localScope(), deps);
@@ -1037,7 +1037,7 @@ describe('observe: dates and the REFINE / SUPERSEDE / CORRECT split (CON-34, CON
       expect(m?.source.decisions).toHaveLength(3 + 2 * 3);
     });
 
-    it('observe.relative-dates-use-the-turn-offset (review 11)', async () => {
+    it('observe.relative-dates-use-the-turn-offset', async () => {
       const { store, deps } = setup(gate(0.9), [rec(null, 'ADD')]);
       const at = '2026-11-04T23:30:00-05:00';
       const res = await observe(obs('auth on port 8080 until tomorrow', at), localScope(), {

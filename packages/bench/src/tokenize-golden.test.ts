@@ -50,7 +50,7 @@ function corpus(): string[] {
 
 /**
  * English as people write it in chat, beyond the ASCII fixtures: emoji with variation selectors
- * and keycaps, ZWJ sequences, skin tones, ellipses and curly quotes (CON-110 review).
+ * and keycaps, ZWJ sequences, skin tones, ellipses and curly quotes (CON-110).
  */
 const CHAT_ENGLISH = [
   '⚠️ the deploy script deletes the staging prefix, check it first',

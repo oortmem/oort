@@ -95,7 +95,7 @@ describe('tokenizeLexical v2 (CON-110)', () => {
       '’',
       '“',
       '😀',
-      // Emoji with variation selectors, keycaps and ZWJ sequences, and leaders (CON-110 review).
+      // Emoji with variation selectors, keycaps and ZWJ sequences, and leaders (CON-110).
       '⚠️',
       '❤️',
       '✔️',
@@ -215,7 +215,7 @@ describe('tokeniser v2 consumers (CON-110)', () => {
   });
 });
 
-describe('tokenizeLexical cost (CON-110 review)', () => {
+describe('tokenizeLexical cost (CON-110)', () => {
   it('tokenize.joiner-runs-are-linear', () => {
     // A trimming regex took 2.5 s for 40,000 dashes (quadratic); trimming is linear now.
     // The slow case: a long run of joiners inside a word, so a trailing-joiner match fails late.

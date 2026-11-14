@@ -747,8 +747,8 @@ export function nodeKeyOfColumns(r: {
 }
 
 /**
- * The `node_id` of `key` in `nodes`, added when it is new. Node rows are never deleted while the
- * store is at version 8.
+ * The `node_id` of `key` in `nodes`, added when it is new. A node's row is deleted with the
+ * node's last memory (`forget`), so a node that gets a memory again gets a new `node_id`.
  */
 export function nodeIdOf(db: Database, key: string): number {
   const found = db

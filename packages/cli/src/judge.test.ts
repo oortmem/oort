@@ -742,7 +742,7 @@ describe('oort judge: confirmations (CON-107)', () => {
     const no = await h.run(args, terminal);
     expectDeclined(no);
     expect(no.io.stdout).toContain('Not imported.');
-    // Re-review N1: the question says where an imported judgment is shown.
+    // The question says where an imported judgment is shown.
     expect(no.io.asked.join('')).toContain('pinned and shown at every session start');
     const yes = await h.run(args, PIPED_YES);
     expectAsked(yes);

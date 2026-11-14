@@ -863,7 +863,7 @@ describe('recall modes (CON-34)', () => {
     expect(r.memories.map((m) => m.id)).toEqual(['v1', 'v2', 'v3']);
   });
 
-  it('recall.a-prompt-mentioning-a-change-stays-current (review 2)', async () => {
+  it('recall.a-prompt-mentioning-a-change-stays-current', async () => {
     const store = await setup(chain());
     const r = await recall(
       { text: 'fix the auth service port, it changed', scope: SCOPE },

@@ -673,7 +673,7 @@ describe('the hooks skip a daemon that hung or refused (circuit breaker)', () =>
   });
 });
 
-describe('oort serve security review fixes', () => {
+describe('oort serve hardening', () => {
   const marker = (s: Sandbox): string => path.join(s.oortHome, SKIP_FILE);
 
   it('serve.refuses-a-symlinked-socket-directory-and-leaves-the-target-alone (M1)', async () => {

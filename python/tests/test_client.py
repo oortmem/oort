@@ -1016,7 +1016,7 @@ class CloudEndUsers(unittest.TestCase):
             self.assertEqual((e.exception.reason, e.exception.retryable, e.exception.fix), ("end-users-unsupported", False, None))
             self.assertEqual(e.exception.message, END_USERS_UNSUPPORTED)
         self.assertEqual({(m, p) for m, p, _ in self.sent()}, {("GET", "/v1/whoami")})
-        # The account's end-user routes ask no whoami (security review, L-b): the older cloud has
+        # The account's end-user routes ask no whoami: the older cloud has
         # no such route, and its 404 is the same refusal.
         self.rec.seen.clear()
         for call in (lambda: o.end_users.count(), lambda: o.end_users.erase("ada")):
@@ -1119,7 +1119,7 @@ class CloudEndUsers(unittest.TestCase):
             b'{"oort": "export", "version": 1, "memories": 3}\n{"id": "m1"}\n',
             b"",
             b'{"oort": "export", "version": 1, "memories": true}\n{}\n',
-            # Hardening (security review): only version 1, and every line this end user's.
+            # Hardening: only version 1, and every line this end user's.
             b'{"oort": "export", "version": 2, "memories": 1, "scopes": []}\n' + line("u:ada"),
             head + line("u:bob"),
             head + line("self"),
@@ -1159,7 +1159,7 @@ class CloudEndUsers(unittest.TestCase):
         self.assertEqual((e.exception.reason, e.exception.status, e.exception.message), ("end-users-unsupported", 404, END_USERS_NOT_OFFERED))
 
     def test_erase_needs_what_was_erased_in_the_answer(self) -> None:
-        # Re-review info: a 2xx without the `erased` object is no proof anything was erased.
+        # A 2xx without the `erased` object is no proof anything was erased.
         from oortmem import OortInternalError
 
         for body in ({}, {"erased": None}, {"erased": "yes"}, {"erased": [1]}, ["erased"]):

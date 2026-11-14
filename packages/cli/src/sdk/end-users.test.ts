@@ -120,7 +120,7 @@ describe('cloud end users (CON-132)', () => {
     }
     // Only whoami went out (a refusal is asked again, never kept), and nothing was written.
     expect(new Set(c.seen)).toEqual(new Set(['GET /v1/whoami']));
-    // The account's end-user routes ask no whoami (security review, L-b): the older cloud has no
+    // The account's end-user routes ask no whoami: the older cloud has no
     // such route, and its 404 is the same refusal.
     c.seen.length = 0;
     for (const call of [() => oort.endUsers.count(), () => oort.endUsers.erase('ada')]) {
@@ -297,7 +297,7 @@ describe('cloud end users (CON-132)', () => {
   });
 
   it('sdk.end-users-export-needs-a-server-key-and-a-readable-export', async () => {
-    // A key without the capability: no whoami first; Oort Cloud refuses it (security review, L-b).
+    // A key without the capability: no whoami first; Oort Cloud refuses it.
     const { oort, c } = await cloud();
     await expect(oort.endUsers.export('ada')).rejects.toMatchObject({
       code: 'refused',
@@ -328,7 +328,7 @@ describe('cloud end users (CON-132)', () => {
   });
 
   it('sdk.end-users-export-holds-only-that-end-users-memories-in-version-1', async () => {
-    // A server-side mix-up must never reach the person as their data (security review): a line
+    // A server-side mix-up must never reach the person as their data: a line
     // of another end user, of the account, or a format this SDK does not check is refused.
     const line = (customerId: string) =>
       JSON.stringify({ id: 'm1', text: 't', scope: { orgId: 'acct:a1', customerId } });
@@ -375,7 +375,7 @@ describe('cloud end users (CON-132)', () => {
   });
 
   it('sdk.end-users-erase-needs-what-was-erased-in-the-answer', async () => {
-    // Re-review info: a 2xx without the `erased` object is no proof anything was erased.
+    // A 2xx without the `erased` object is no proof anything was erased.
     const c = fakeCloud(KEY);
     let body: unknown = {};
     const fetch: typeof c.fetch = async (input, init) => {

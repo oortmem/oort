@@ -1,7 +1,6 @@
 # SDKs: `createOort()` for TypeScript and `Oort` for Python, one API shape
 
-Date: 2026-11-06. Status: proposed design, revised the same day after an independent review of the
-build effort and security. Issues: CON-108 (this spec), CON-24 (Python client), CON-107 (the
+Date: 2026-11-06. Status: proposed design, revised the same day for build effort and security. Issues: CON-108 (this spec), CON-24 (Python client), CON-107 (the
 `oort.v1` contract), CON-84 (spatial `Place`), CON-92 (end users, B2B2C). Releases: **0.6.0**
 (TypeScript SDK, before the 18 November launch) and **0.7.0** (native Python client, about 25
 November).
