@@ -628,8 +628,15 @@ function judgeOutput(r: JudgeResult): Record<string, unknown> {
 }
 
 /** The `forget` tool's note for later memories left as they were (CON-144; Oort Cloud's, CON-161). */
-const leftAsTheyWere = (ids: readonly string[]): string =>
-  `Later memories that restate it were left as they were (${ids.join(', ')}). Tell the person; they can check each with \`oort inspect <id>\` or forget it too.`;
+const leftAsTheyWere = (ids: readonly string[], unnamed = 0): string => {
+  const which =
+    unnamed === 0
+      ? ids.join(', ')
+      : ids.length === 0
+        ? `${unnamed} without a usable id`
+        : `${ids.join(', ')}, and ${unnamed} more`;
+  return `Later memories that restate it were left as they were (${which}). Tell the person; they can check each with \`oort inspect <id>\` or forget it too.`;
+};
 
 /**
  * Oort Cloud as an MCP memory backend: the same seven tools, answered by the API for this
@@ -673,17 +680,19 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
       // copies is the person's confirmed step, so the note gives them the command (CON-67).
       const live = liveCopies((await sharesOf(client, m.id)) ?? []);
       // What Oort Cloud did to the later memories that restated it (CON-161), as local mode
-      // reports it; nothing from an Oort Cloud that does not rewrite them.
+      // reports it; nothing from an Oort Cloud from before CON-156. Only memory ids are passed on:
+      // the others are counted in the note.
       const r = await client.forget(m.id);
       const names = live.map(copyName);
       const left = r?.notRewritten.map((x) => x.id) ?? [];
+      const unnamed = r?.unnamed.length ?? 0;
       const notes = [
         ...(names.length > 0
           ? [
               `Still shared to ${names.join(', ')}. To withdraw those copies, the person runs: oort forget ${m.id} --everywhere`,
             ]
           : []),
-        ...(left.length > 0 ? [leftAsTheyWere(left)] : []),
+        ...(left.length + unnamed > 0 ? [leftAsTheyWere(left, unnamed)] : []),
       ];
       return {
         forgotten: m.id,

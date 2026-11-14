@@ -47,7 +47,7 @@ interface ForgetData {
   constellations: SharedCopy[];
   /**
    * Later memories that restated it, rewritten to their current fact (CON-144; Oort Cloud's,
-   * CON-161). Absent from an Oort Cloud that does not rewrite them.
+   * CON-161). Absent from an Oort Cloud from before CON-156.
    */
   rewritten?: string[];
   /** Later memories that restate it and were left as they were. Absent as `rewritten`. */
@@ -84,6 +84,48 @@ export interface Successors {
   rewritten: readonly { id: string; text?: string }[];
   /** `reason`: core's, Oort Cloud's own, one a newer cloud added, or none given. */
   notRewritten: readonly { id: string; reason?: string }[];
+  /** Oort Cloud's, named with something that is not a memory id (see `CloudRewrites`). */
+  unnamed?: readonly { name: string; reason?: string }[];
+}
+
+/** One line per memory rewritten, with its new text when it could be read. */
+function reportRewritten(ctx: Ctx, rewritten: Successors['rewritten']): void {
+  for (const m of rewritten) {
+    ctx.io.out(
+      m.text === undefined
+        ? `Rewrote ${short(m.id)} to its current fact. Read it with \`oort inspect ${m.id}\`.\n`
+        : `Rewrote ${short(m.id)} to its current fact: "${shown(clip(m.text, 80))}"\n`,
+    );
+  }
+}
+
+/**
+ * One line (and `not-rewritten` warning) per memory left as it was, with the command that forgets
+ * it too: with `--everywhere` when the forgotten memory was shared, as its later ones may be. One
+ * Oort Cloud named with something that is not a memory id is shown escaped, with no command.
+ * True when there is none.
+ */
+function reportLeft(
+  ctx: Ctx,
+  r: Pick<Successors, 'notRewritten' | 'unnamed'>,
+  opts: { everywhere?: boolean } = {},
+): boolean {
+  const flag = opts.everywhere === true ? ' --everywhere' : '';
+  for (const m of r.notRewritten) {
+    const what =
+      m.reason === 'chain-too-long'
+        ? 'is a later memory of its chain and may restate it'
+        : 'may still restate it';
+    const msg = `${short(m.id)} ${what}, because ${why(m.reason)}. Check it with \`oort inspect ${m.id}\`, or forget it too: \`oort forget ${m.id}${flag}\`.`;
+    ctx.io.out(`${msg}\n`);
+    noteWarning(ctx, 'not-rewritten', msg);
+  }
+  for (const m of r.unnamed ?? []) {
+    const msg = `A later memory may still restate it, because ${why(m.reason)}, but Oort Cloud named it "${shown(clip(m.name, 40))}", which is not a memory id.`;
+    ctx.io.out(`${msg}\n`);
+    noteWarning(ctx, 'not-rewritten', msg);
+  }
+  return r.notRewritten.length + (r.unnamed?.length ?? 0) === 0;
 }
 
 /**
@@ -92,55 +134,74 @@ export interface Successors {
  * too. True when every one was rewritten.
  */
 export function reportSuccessors(ctx: Ctx, r: Successors): boolean {
-  for (const m of r.rewritten) {
-    ctx.io.out(
-      m.text === undefined
-        ? `Rewrote ${short(m.id)} to its current fact. Read it with \`oort inspect ${m.id}\`.\n`
-        : `Rewrote ${short(m.id)} to its current fact: "${shown(clip(m.text, 80))}"\n`,
-    );
-  }
-  for (const m of r.notRewritten) {
-    const what =
-      m.reason === 'chain-too-long'
-        ? 'is a later memory of its chain and may restate it'
-        : 'may still restate it';
-    const msg = `${short(m.id)} ${what}, because ${why(m.reason)}. Check it with \`oort inspect ${m.id}\`, or forget it too: \`oort forget ${m.id}\`.`;
-    ctx.io.out(`${msg}\n`);
-    noteWarning(ctx, 'not-rewritten', msg);
-  }
-  return r.notRewritten.length === 0;
+  reportRewritten(ctx, r.rewritten);
+  return reportLeft(ctx, r);
 }
 
 const ids = (copies: readonly SharedCopy[]): string[] => copies.map((c) => c.constellation);
 
-/** `--json`'s `rewritten` and `notRewritten`: absent when nobody rewrote (an older Oort Cloud). */
+/** `--json`'s `rewritten` and `notRewritten` (memory ids): absent from before CON-156. */
 const lists = (r: Successors | undefined): Pick<ForgetData, 'rewritten' | 'notRewritten'> =>
   r === undefined
     ? {}
     : { rewritten: r.rewritten.map((x) => x.id), notRewritten: r.notRewritten.map((x) => x.id) };
 
+/** How long one read of a rewrite may take, and how many run at once (CON-161). */
+const READ_TIMEOUT_MS = 5_000;
+const PARALLEL_READS = 4;
+
 /**
- * The rewrites Oort Cloud reported, each with its new text when it can be read (best effort: a
- * failed read only leaves the text out).
+ * Each id with its memory's text, read with `read`: the first `limit` only, `parallel` at once,
+ * each given up after `timeoutMs`. A read that fails, times out, or answers with another memory
+ * or a text that is not a string leaves the text out; the rest are not read.
  */
-async function withTexts(cloud: CloudClient, r: CloudRewrites): Promise<Successors> {
-  const rewritten = await Promise.all(
-    r.rewritten.map(async (id) => {
-      try {
-        return { id, text: (await cloud.get(id)).text };
-      } catch {
-        return { id };
-      }
-    }),
-  );
-  return { rewritten, notRewritten: r.notRewritten };
+export async function readTexts(
+  ids: readonly string[],
+  read: (id: string) => Promise<{ id?: unknown; text?: unknown }>,
+  opts: { limit?: number; parallel?: number; timeoutMs?: number } = {},
+): Promise<{ id: string; text?: string }[]> {
+  const { limit = MAX_CHAIN, parallel = PARALLEL_READS, timeoutMs = READ_TIMEOUT_MS } = opts;
+  const out: { id: string; text?: string }[] = ids.map((id) => ({ id }));
+  const one = async (id: string): Promise<string | undefined> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const m = await Promise.race([
+        read(id),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
+        }),
+      ]);
+      return m.id === id && typeof m.text === 'string' ? m.text : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < Math.min(limit, ids.length)) {
+      const i = next++;
+      const text = await one(ids[i]!);
+      if (text !== undefined) out[i] = { id: ids[i]!, text };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, parallel) }, worker));
+  return out;
 }
+
+/** The rewrites Oort Cloud reported, read back for their text (`readTexts`), best effort. */
+const withTexts = async (
+  cloud: CloudClient,
+  r: CloudRewrites,
+): Promise<{ id: string; text?: string }[]> =>
+  readTexts(r.rewritten, (id) => cloud.get(id, { timeoutMs: READ_TIMEOUT_MS }));
 
 /**
  * `oort forget <id> [--yes] [--everywhere]`: deletes a memory everywhere (main record and cold
  * copy). The later memories of its chain that restate it are rewritten to their current fact,
  * locally (CON-144) and by Oort Cloud (CON-161); any left as they were are named, with exit 3. An
- * Oort Cloud that does not rewrite answers without the lists: then the CLI finds the later
+ * Oort Cloud from before CON-156 answers without the lists: then the CLI finds the later
  * memories that restate it itself and names them, as before. In Oort Cloud a copy shared to a
  * Constellation is the team's memory and stays: the question (and `--json`'s warnings) say where,
  * and `--everywhere` withdraws the copies only you contributed to, filing a removal request with
@@ -186,14 +247,13 @@ export async function forgetCommand(
       return 0;
     }
     let local: ForgetOutcome | undefined;
-    let rewrites: Successors | undefined;
+    let answer: CloudRewrites | null = null;
     let restating: CloudSuccessors = { restating: [] };
     if (cloud !== undefined) {
-      const answer = await cloud.forget(m.id);
-      // An Oort Cloud that does not rewrite left the chain as it was: find the later memories
-      // that restate it, to name them.
+      answer = await cloud.forget(m.id);
+      // An Oort Cloud from before CON-156 left the chain as it was: find the later memories that
+      // restate it, to name them.
       if (answer === null) restating = await laterRestating(cloud, m);
-      else rewrites = await withTexts(cloud, answer);
     } else {
       local = await forgetMemory(
         {
@@ -206,11 +266,14 @@ export async function forgetCommand(
       );
     }
     ctx.io.out(`Forgot ${m.id}.\n`);
-    const reported = local ?? rewrites;
+    // What Oort Cloud left as it was is printed before its rewrites are read back, so a slow read
+    // (or Ctrl-C) never hides it.
     const complete =
-      reported !== undefined
-        ? reportSuccessors(ctx, reported)
-        : await reportCloudSuccessors(cloud, restating, ctx);
+      local !== undefined
+        ? reportSuccessors(ctx, local)
+        : answer !== null
+          ? reportLeft(ctx, answer, { everywhere: live.length > 0 })
+          : await reportCloudSuccessors(cloud, restating, ctx);
     if (live.length > 0) {
       ctx.io.out(
         `Still shared to ${copiesLabel(live)}: that copy is the team's now. \`oort forget ${m.id} --everywhere\` withdraws it.\n`,
@@ -220,6 +283,12 @@ export async function forgetCommand(
     if (edges === undefined) {
       warn(ctx, 'shares-unknown', 'Could not check whether it was shared to a Constellation.');
     }
+    const rewrites: Successors | undefined =
+      cloud !== undefined && answer !== null
+        ? { ...answer, rewritten: await withTexts(cloud, answer) }
+        : undefined;
+    if (rewrites !== undefined) reportRewritten(ctx, rewrites.rewritten);
+    const reported = local ?? rewrites;
     if (jsonMode(ctx)) {
       emit<ForgetData>(ctx, {
         id: m.id,
@@ -247,8 +316,8 @@ interface CloudSuccessors {
 
 /**
  * The later memories of `m`'s chain in Oort Cloud that restate one of its values (CON-144),
- * following `supersededBy`, for an Oort Cloud that does not rewrite them (it leaves the chain as
- * it was, so this runs after the forget). A lookup that fails ends the walk, and is reported.
+ * following `supersededBy`, for an Oort Cloud from before CON-156, which does not rewrite them (it
+ * leaves the chain as it was, so this runs after the forget). A lookup that fails ends the walk, and is reported.
  */
 async function laterRestating(cloud: CloudClient, m: CloudMemory): Promise<CloudSuccessors> {
   const restating: CloudMemory[] = [];
@@ -269,8 +338,8 @@ async function laterRestating(cloud: CloudClient, m: CloudMemory): Promise<Cloud
 }
 
 /**
- * Names each later memory that may still restate the forgotten one in an Oort Cloud that does not
- * rewrite them, and the Constellations it is shared to, and one the walk could not read. True
+ * Names each later memory that may still restate the forgotten one in an Oort Cloud from before
+ * CON-156, which does not rewrite them, and the Constellations it is shared to, and one the walk could not read. True
  * when there is none of either.
  */
 async function reportCloudSuccessors(
@@ -325,10 +394,9 @@ async function forgetEverywhere(
   }
   const answer = await cloud.forgetEverywhere(t.id);
   const r = namedOutcome(answer, t.edges);
-  // As a plain forget: an Oort Cloud that does not rewrite answers without the lists.
-  const rewrites = answer.rewrites === null ? undefined : await withTexts(cloud, answer.rewrites);
+  // As a plain forget: an Oort Cloud from before CON-156 answers without the lists.
   const restating: CloudSuccessors =
-    rewrites !== undefined || t.memory === null
+    answer.rewrites !== null || t.memory === null
       ? { restating: [] }
       : await laterRestating(cloud, t.memory);
   ctx.io.out(t.memory === null ? `${t.id} was already forgotten.\n` : `Forgot ${t.id}.\n`);
@@ -347,9 +415,14 @@ async function forgetEverywhere(
     ctx.io.out('It was not shared to any Constellation.\n');
   }
   const complete =
-    rewrites !== undefined
-      ? reportSuccessors(ctx, rewrites)
+    answer.rewrites !== null
+      ? reportLeft(ctx, answer.rewrites, { everywhere: true })
       : await reportCloudSuccessors(cloud, restating, ctx);
+  const rewrites: Successors | undefined =
+    answer.rewrites !== null
+      ? { ...answer.rewrites, rewritten: await withTexts(cloud, answer.rewrites) }
+      : undefined;
+  if (rewrites !== undefined) reportRewritten(ctx, rewrites.rewritten);
   if (jsonMode(ctx)) {
     const stillShared = [...r.requested, ...r.unreachable].filter(
       (c, i, all) => all.findIndex((x) => x.constellation === c.constellation) === i,

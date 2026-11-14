@@ -68,6 +68,8 @@ export interface FakeCloud {
    * a plain forget answers 204 with no body, `?everywhere=1` the Constellation lists alone.
    */
   forgetAnswer?: Record<string, unknown> | 'pre-rewrite';
+  /** Awaited before answering `GET /v1/memories/:id` (the id asked): a test's hold on reads. */
+  getGate?: (id: string) => Promise<void> | void;
 }
 
 /** Per-user memory as the fake runs it (CON-132). */
@@ -1082,6 +1084,7 @@ export function fakeCloud(key: string): FakeCloud {
             return err(409, 'ambiguous', `${hits.length} memories start with this prefix.`);
           m = hits[0];
         }
+        if (req.method === 'GET' && idMatch[3] === undefined) await c.getGate?.(ref);
         if (m === undefined) return err(404, 'not_found', 'No such memory.');
         const id = m.id;
         if (idMatch[3] !== undefined) {

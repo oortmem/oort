@@ -143,7 +143,9 @@ or forget them too. See [Memories that restated it](cli.md#memories-that-restate
 Cloud the cloud rewrites them, and the result carries the same `rewritten` and `notRewritten`
 (with `everywhere` too); Oort Cloud can also leave one as it was because the account is at a usage
 cap, the plan does not allow model calls now, or a Constellation's rewrite did not finish in time.
-An Oort Cloud that does not rewrite answers without the lists, and the result leaves both out.
+Only memory ids are listed: `notRewrittenUnnamed` counts any left as they were that Oort Cloud
+named with something else. An Oort Cloud that does not rewrite answers without the lists, and the
+result leaves them out.
 
 **`forget` with `everywhere`** (Oort Cloud) does what `oort forget --everywhere` does: it forgets
 the memory, then withdraws your copies in Constellations. The result lists Constellation ids:

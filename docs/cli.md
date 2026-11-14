@@ -2188,7 +2188,11 @@ it left as it was, with the reason. `oort forget` (plain or `--everywhere`) repo
 above, `--json` and exit 3 included; it reads each rewrite to print it. Oort Cloud has three
 reasons of its own: the account is at a usage cap; the plan does not allow model calls now (the
 forget itself still happens); or, in a Constellation, the rewrite did not finish in time. A reason
-this version does not know is shown as Oort Cloud gave it.
+this version does not know is shown as Oort Cloud gave it. What was left as it was is printed
+first; then up to 64 rewrites are read back, 4 at a time, each for at most 5 seconds (any other
+is named without its text). When the forgotten memory was shared to a Constellation, the command
+suggested for a later memory adds `--everywhere`. A later memory Oort Cloud names with something
+that is not a memory id still counts (exit 3), and is shown escaped with no command.
 
 ```
 $ oort forget 1b2c3d4e --yes

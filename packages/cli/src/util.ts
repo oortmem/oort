@@ -458,6 +458,12 @@ export function clip(text: string, n: number): string {
 
 export const short = (id: string): string => id.slice(0, 8);
 
+/**
+ * A memory id as Oort Cloud issues them: a UUID. An id from an answer that is not one is never
+ * put in a route, a command or a result (`..` would reach another route; a `;` a shell).
+ */
+export const CLOUD_MEMORY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const fixed = (x: number | undefined, digits = 2): string =>
   x === undefined ? '-' : x.toFixed(digits);
 

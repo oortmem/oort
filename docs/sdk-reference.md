@@ -692,6 +692,11 @@ export interface ForgetResult {
    * and a Constellation's time budget). Absent as `rewritten`.
    */
   notRewritten?: string[];
+  /**
+   * Cloud: how many later memories Oort Cloud also left as they were but named with something
+   * that is not a memory id, so they cannot be listed. Absent when there were none.
+   */
+  notRewrittenUnnamed?: number;
   /** Cloud `everywhere`: the Constellations (ids) whose copy only you contributed to, withdrawn. */
   withdrawn?: string[];
   /**

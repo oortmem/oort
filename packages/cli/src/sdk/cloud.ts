@@ -215,14 +215,18 @@ export async function forget(ctx: Ctx, id: string, everywhere: boolean): Promise
 
 /**
  * What Oort Cloud did to the later memories of the forgotten one's chain (CON-161), as local mode
- * reports it: ids, each list absent when empty, and both absent from an Oort Cloud that does not
- * rewrite them.
+ * reports it: memory ids, each list absent when empty, and all absent from an Oort Cloud from
+ * before CON-156. Ones left as they were but named with something that is not a memory id are
+ * only counted (`notRewrittenUnnamed`).
  */
-function rewriteLists(r: CloudRewrites | null): Pick<ForgetResult, 'rewritten' | 'notRewritten'> {
+function rewriteLists(
+  r: CloudRewrites | null,
+): Pick<ForgetResult, 'rewritten' | 'notRewritten' | 'notRewrittenUnnamed'> {
   if (r === null) return {};
   return {
     ...(r.rewritten.length > 0 && { rewritten: [...r.rewritten] }),
     ...(r.notRewritten.length > 0 && { notRewritten: r.notRewritten.map((x) => x.id) }),
+    ...(r.unnamed.length > 0 && { notRewrittenUnnamed: r.unnamed.length }),
   };
 }
 

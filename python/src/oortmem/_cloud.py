@@ -190,10 +190,10 @@ class CloudClient:
                 raise end_users_unsupported()
             self._end_users = True
 
-    def call(self, method: str, route: str, body: Optional[Any] = None, user: Optional[str] = None, text: bool = False) -> Any:
+    def call(self, method: str, route: str, body: Optional[Any] = None, user: Optional[str] = None, text: bool = False, errors: str = "strict") -> Any:
         """One request. With ``user``, it names that end user (``Oort-User``), and only once the
         key's capability is known. With ``text``, the answer is returned as text (an export's
-        JSON Lines), not parsed as JSON."""
+        JSON Lines), not parsed as JSON, decoded with ``errors`` (``replace`` never fails)."""
         if user is not None:
             self.require_end_users()
         headers = {
@@ -225,7 +225,7 @@ class CloudClient:
             raise cloud_error(r.status, code, msg, parse_retry_after(r.headers.get("retry-after")))
         if text:
             try:
-                return r.body.decode("utf-8")
+                return r.body.decode("utf-8", errors)
             except UnicodeDecodeError:
                 raise OortInternalError("An internal error stopped this call (UnicodeDecodeError).") from None
         if r.status == 204 or not r.body:
@@ -245,23 +245,28 @@ def _id_path(i: str) -> str:
 
 def _rewrite_lists(answer: Any) -> Dict[str, Any]:
     """What Oort Cloud did to the later memories of the forgotten one's chain (CON-161), as local
-    mode reports it: ids, each list absent when empty. Read defensively: an Oort Cloud that does
-    not rewrite sends neither list (nothing is reported), a non-string id is dropped, and an id in
-    both lists counts as not rewritten, so nothing is claimed rewritten that the answer does not
-    say plainly."""
+    mode reports it: memory ids, each list absent when empty. Read defensively: an Oort Cloud from
+    before CON-156 sends neither list (nothing is reported); only memory ids (UUIDs) are passed on,
+    so nothing reaches a route or a command that is not one; one left as it was but named with
+    something else is only counted (``notRewrittenUnnamed``); and an id in both lists counts as
+    not rewritten, so nothing is claimed rewritten that the answer does not say plainly."""
     if not isinstance(answer, Mapping):
         return {}
     rewritten, left = answer.get("rewritten"), answer.get("notRewritten")
     if not isinstance(rewritten, list) and not isinstance(left, list):
         return {}
-    ids = lambda v: list(dict.fromkeys(x for x in v if isinstance(x, str))) if isinstance(v, list) else []  # noqa: E731
-    not_rewritten = ids(left)
+    is_id = lambda x: isinstance(x, str) and _FULL_ID.fullmatch(x) is not None  # noqa: E731
+    not_rewritten = list(dict.fromkeys(x for x in (left or []) if is_id(x))) if isinstance(left, list) else []
+    unnamed = len({json.dumps(x, sort_keys=True, default=str) for x in left if not is_id(x)}) if isinstance(left, list) else 0
+    gone = set(not_rewritten)
+    done = [x for x in dict.fromkeys(rewritten) if is_id(x) and x not in gone] if isinstance(rewritten, list) else []
     out: Dict[str, Any] = {}
-    done = [x for x in ids(rewritten) if x not in not_rewritten]
     if done:
         out["rewritten"] = done
     if not_rewritten:
         out["notRewritten"] = not_rewritten
+    if unnamed:
+        out["notRewrittenUnnamed"] = unnamed
     return out
 
 
@@ -437,9 +442,9 @@ class CloudOps:
                 "unreachable": ids(r.get("unreachable")),
             }
         m = self._find(ref)
-        # Read as text: 204 with no body from an Oort Cloud that does not rewrite, and a body that
-        # does not parse never undoes a forget that happened.
-        body = self.c.call("DELETE", _id_path(m["id"]), user=self.user, text=True)
+        # Read as text: 204 with no body from an Oort Cloud from before CON-156, and a body that
+        # does not decode or parse never undoes a forget that happened.
+        body = self.c.call("DELETE", _id_path(m["id"]), user=self.user, text=True, errors="replace")
         try:
             answer = json.loads(body) if body.strip() else None
         except ValueError:

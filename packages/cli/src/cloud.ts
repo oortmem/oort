@@ -20,7 +20,7 @@ import {
 } from './cloud-http.js';
 import type { Env } from './io.js';
 import { ACCOUNT_URL, parseRetryAfter } from './relay.js';
-import { Refusal, shown, writeOwnerOnly } from './util.js';
+import { CLOUD_MEMORY_ID, Refusal, shown, writeOwnerOnly } from './util.js';
 
 /**
  * Oort Cloud, as the CLI sees it: where the API is, which store this machine uses, and what the
@@ -496,40 +496,61 @@ export type CloudNotRewrittenReason = NotRewrittenReason | 'quota' | 'unpaid' | 
 
 /**
  * What a forget did to the later memories of the forgotten one's chain, as Oort Cloud answers it
- * (CON-161): memory ids. `null` from an Oort Cloud that does not rewrite them (a plain forget
- * answers 204 with no body there, and `?everywhere=1` has neither list).
+ * (CON-161). `null` from an Oort Cloud from before CON-156 (a plain forget answers 204 with no
+ * body there, and `?everywhere=1` has neither list).
  */
 export interface CloudRewrites {
-  /** Rewritten to their current fact. */
+  /** Rewritten to their current fact: memory ids. */
   rewritten: string[];
-  /** May still restate it, left as they were: each with the reason given, if it gave one. */
+  /** May still restate it, left as they were: memory ids, each with the reason given, if any. */
   notRewritten: { id: string; reason?: string }[];
+  /**
+   * Also left as they were, but named with something that is not a memory id: `name` is the value
+   * as given (JSON when it is not a string). They count, but are never printed raw, put in a
+   * command, or passed on as an id.
+   */
+  unnamed: { name: string; reason?: string }[];
 }
 
 /**
  * The rewrite lists of a forget's answer, read defensively: `null` when it has neither list (an
- * Oort Cloud from before rewrites, or a body that is not an object). A missing list is empty, a
- * non-string id is dropped, and an id in both lists counts as not rewritten, so nothing is ever
- * claimed rewritten that the answer does not say plainly.
+ * Oort Cloud from before CON-156, or a body that is not an object). A missing list is empty; only
+ * memory ids (`CLOUD_MEMORY_ID`) count as rewritten, and an id in both lists counts as not
+ * rewritten, so nothing is ever claimed rewritten that the answer does not say plainly.
  */
 export function rewritesOf(body: unknown): CloudRewrites | null {
   if (typeof body !== 'object' || body === null) return null;
   const b = body as Record<string, unknown>;
   if (!Array.isArray(b['rewritten']) && !Array.isArray(b['notRewritten'])) return null;
-  const ids = (v: unknown): string[] =>
-    Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string'))] : [];
+  const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
   const reasons =
     typeof b['reasons'] === 'object' && b['reasons'] !== null && !Array.isArray(b['reasons'])
       ? (b['reasons'] as Record<string, unknown>)
       : {};
-  const left = ids(b['notRewritten']);
-  return {
-    rewritten: ids(b['rewritten']).filter((id) => !left.includes(id)),
-    notRewritten: left.map((id) => {
-      const reason = Object.hasOwn(reasons, id) ? reasons[id] : undefined;
-      return typeof reason === 'string' ? { id, reason } : { id };
-    }),
+  const reasonOf = (key: unknown): { reason?: string } => {
+    const r = typeof key === 'string' && Object.hasOwn(reasons, key) ? reasons[key] : undefined;
+    return typeof r === 'string' ? { reason: r } : {};
   };
+  const isId = (x: unknown): x is string => typeof x === 'string' && CLOUD_MEMORY_ID.test(x);
+  const out: CloudRewrites = { rewritten: [], notRewritten: [], unnamed: [] };
+  const left = new Set<string>();
+  const odd = new Set<string>();
+  for (const x of list(b['notRewritten'])) {
+    if (isId(x)) {
+      if (!left.has(x)) out.notRewritten.push({ id: x, ...reasonOf(x) });
+      left.add(x);
+      continue;
+    }
+    const name = typeof x === 'string' ? x : (JSON.stringify(x) ?? String(x));
+    if (!odd.has(name)) out.unnamed.push({ name, ...reasonOf(x) });
+    odd.add(name);
+  }
+  const done = new Set<string>();
+  for (const x of list(b['rewritten'])) {
+    if (isId(x) && !left.has(x) && !done.has(x)) out.rewritten.push(x);
+    if (isId(x)) done.add(x);
+  }
+  return out;
 }
 
 /** What `DELETE /v1/memories/:id?everywhere=1` answers: Constellation ids (CON-67). */
@@ -540,7 +561,7 @@ export interface CloudForgetEverywhere {
   requested: string[];
   /** Not reached (try again later; a Constellation you left needs a full key). The copy stays. */
   unreachable: string[];
-  /** CON-161: what it did to the later memories of its chain (`null`: an older Oort Cloud). */
+  /** CON-161: what it did to the later memories of its chain (`null`: from before CON-156). */
   rewrites: CloudRewrites | null;
 }
 
@@ -669,11 +690,14 @@ export interface CloudClient {
     cursor?: string;
     limit?: number;
   }): Promise<{ memories: CloudMemory[]; next?: string }>;
-  /** By id, or by a unique prefix of at least 8 characters (409 `ambiguous` when several match). */
-  get(ref: string): Promise<CloudMemory>;
+  /**
+   * By id, or by a unique prefix of at least 8 characters (409 `ambiguous` when several match).
+   * `timeoutMs` replaces the client's own for this one request.
+   */
+  get(ref: string, opts?: { timeoutMs?: number }): Promise<CloudMemory>;
   /**
    * Forgets a memory. The answer says what Oort Cloud did to the later memories of its chain
-   * (CON-161); `null` from an Oort Cloud that does not rewrite them.
+   * (CON-161); `null` from an Oort Cloud from before CON-156.
    */
   forget(id: string): Promise<CloudRewrites | null>;
   pin(id: string, pinned: boolean): Promise<void>;
@@ -810,11 +834,12 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
     route: string,
     body: { json?: unknown; text?: string } | undefined,
     user: string | undefined,
+    timeoutMs = timeout,
   ): Promise<{ res: Response; done: () => CloudTiming }> {
     if (user !== undefined) await requireEndUsers();
     const t0 = performance.now();
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), timeout);
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
     const headers: Record<string, string> = { authorization: `Bearer ${opts.key}` };
     if (user !== undefined) headers[END_USER_HEADER] = user;
     if (opts.serverTiming === true) headers[TIMING_HEADER] = '1';
@@ -1004,9 +1029,14 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
         const qs = p.toString();
         return json('GET', `/v1/memories${qs === '' ? '' : `?${qs}`}`);
       },
-      get: (id) => json('GET', idPath(id)),
+      get: async (id, o) =>
+        o?.timeoutMs === undefined
+          ? json('GET', idPath(id))
+          : ((await (
+              await timedCall('GET', idPath(id), undefined, user, o.timeoutMs)
+            ).res.json()) as CloudMemory),
       forget: async (id) => {
-        // 204 with no body from an Oort Cloud that does not rewrite; a body that does not parse
+        // 204 with no body from an Oort Cloud from before CON-156; a body that does not parse
         // never undoes a forget that happened, so it reads as no lists.
         const text = await (await call('DELETE', idPath(id))).text();
         try {
@@ -1050,7 +1080,6 @@ export async function findCloudMemory(client: CloudClient, ref: string): Promise
 }
 
 /** A full memory id: what the API needs to find the copies of a memory already forgotten. */
-const FULL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A Constellation holding (or that held) a copy of one of your memories (CON-67). */
 export interface SharedCopy {
@@ -1138,7 +1167,8 @@ export async function everywhereTarget(
   try {
     memory = await findCloudMemory(client, ref);
   } catch (e) {
-    if (!(e instanceof OortCloudError && e.kind === 'not-found' && FULL_ID.test(ref))) throw e;
+    if (!(e instanceof OortCloudError && e.kind === 'not-found' && CLOUD_MEMORY_ID.test(ref)))
+      throw e;
     // Only a missing record means "no copies": a refusal (outside the hive beta), a network
     // failure or a 5xx is the real reason, and is what the person sees.
     let edges: CloudShareEdge[];
