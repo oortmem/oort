@@ -243,15 +243,21 @@ export interface RememberResult {
 export interface ForgetResult {
   forgotten: string;
   /**
-   * Local: later memories of its chain that restated it, rewritten to their current fact (CON-144). Absent
-   * when there were none.
+   * Later memories of its chain that restated it, rewritten to their current fact (CON-144; in
+   * Oort Cloud CON-161). Absent when there were none, and from an Oort Cloud that does not rewrite.
    */
   rewritten?: string[];
   /**
-   * Local: later memories that restate it and were left as they were (see `ForgetOutcome` for why, such as no memory writer or a rewrite
-   * that added words). Absent when there were none.
+   * Later memories that restate it and were left as they were (see `ForgetOutcome` for why, such
+   * as no memory writer or a rewrite that added words; Oort Cloud adds a usage cap, an unpaid plan
+   * and a Constellation's time budget). Absent as `rewritten`.
    */
   notRewritten?: string[];
+  /**
+   * Cloud: how many later memories Oort Cloud also left as they were but named with something
+   * that is not a memory id, so they cannot be listed. Absent when there were none.
+   */
+  notRewrittenUnnamed?: number;
   /** Cloud `everywhere`: the Constellations (ids) whose copy only you contributed to, withdrawn. */
   withdrawn?: string[];
   /**

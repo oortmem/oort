@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { CloudClient } from './cloud.js';
 import { scrubForCloud } from './cloud-scrub.js';
 import { turnObservation } from './engine/observe.js';
-import { writePath } from './util.js';
+import { CLOUD_MEMORY_ID as MEMORY_ID, writePath } from './util.js';
 import type { Wired } from './wire.js';
 import { grantFor } from '@oortmem/claude-code';
 
@@ -110,9 +110,6 @@ export const REMEMBER_OUTCOMES: readonly RememberResult['outcome'][] = [
   'corrected',
   'skipped',
 ];
-
-/** A memory id as Oort Cloud issues them: a UUID. */
-const MEMORY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A cloud remember's result: as `RememberResult`, with `unknown` for an outcome Oort never reports. */
 export type CloudRememberResult = Omit<RememberResult, 'outcome'> & {

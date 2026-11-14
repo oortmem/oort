@@ -338,10 +338,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
       return {
         forgotten: m.id,
         ...(r.rewritten.length > 0 && { rewritten: r.rewritten.map((x) => x.id) }),
-        ...(left.length > 0 && {
-          notRewritten: left,
-          note: `Later memories that restate it were left as they were (${left.join(', ')}). Tell the person; they can check each with \`oort inspect <id>\` or forget it too.`,
-        }),
+        ...(left.length > 0 && { notRewritten: left, note: leftAsTheyWere(left) }),
       };
     },
 
@@ -630,6 +627,16 @@ function judgeOutput(r: JudgeResult): Record<string, unknown> {
   };
 }
 
+/** The `forget` tool's note for later memories left as they were (CON-144; Oort Cloud's, CON-161). */
+const leftAsTheyWere = (ids: readonly string[], unnamed = 0): string => {
+  // With no usable id there is no command to give.
+  if (ids.length === 0) {
+    return `Later memories that restate it were left as they were (${unnamed} without a usable id). Tell the person.`;
+  }
+  const which = unnamed === 0 ? ids.join(', ') : `${ids.join(', ')}, and ${unnamed} more`;
+  return `Later memories that restate it were left as they were (${which}). Tell the person; they can check each with \`oort inspect <id>\` or forget it too.`;
+};
+
 /**
  * Oort Cloud as an MCP memory backend: the same seven tools, answered by the API for this
  * machine's project (plus account-wide memories). Recall goes through `runRecall`, which already
@@ -671,13 +678,27 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
       // a failed lookup never blocks the forget, it only leaves the note out. Withdrawing the
       // copies is the person's confirmed step, so the note gives them the command (CON-67).
       const live = liveCopies((await sharesOf(client, m.id)) ?? []);
-      await client.forget(m.id);
-      if (live.length === 0) return { forgotten: m.id };
+      // What Oort Cloud did to the later memories that restated it (CON-161), as local mode
+      // reports it; nothing from an Oort Cloud from before CON-156. Only memory ids are passed on:
+      // the others are counted in the note.
+      const r = await client.forget(m.id);
       const names = live.map(copyName);
+      const left = r?.notRewritten.map((x) => x.id) ?? [];
+      const unnamed = r?.unnamed.length ?? 0;
+      const notes = [
+        ...(names.length > 0
+          ? [
+              `Still shared to ${names.join(', ')}. To withdraw those copies, the person runs: oort forget ${m.id} --everywhere`,
+            ]
+          : []),
+        ...(left.length + unnamed > 0 ? [leftAsTheyWere(left, unnamed)] : []),
+      ];
       return {
         forgotten: m.id,
-        stillShared: names,
-        note: `Still shared to ${names.join(', ')}. To withdraw those copies, the person runs: oort forget ${m.id} --everywhere`,
+        ...(names.length > 0 && { stillShared: names }),
+        ...(r !== null && r.rewritten.length > 0 && { rewritten: [...r.rewritten] }),
+        ...(left.length > 0 && { notRewritten: left }),
+        ...(notes.length > 0 && { note: notes.join(' ') }),
       };
     },
 

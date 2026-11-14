@@ -553,7 +553,7 @@ every error that exits 1.
 oort recall "auth port" --json | jq '.data.memories[0].text'
 oort inspect --json | jq '.data.memories | length'
 oort remember "We deploy on Fridays." --json # { "results": [{ "fact": 0, "outcome", "id", "supersedes"?, "reason"? }] }
-oort forget 1b2c3d4e --yes --json            # { "id", "forgotten": true, "everywhere", "withdrawnFrom", "removalRequested", "unreachable", "stillShared", "constellations", "rewritten", "notRewritten" } (the last two local only)
+oort forget 1b2c3d4e --yes --json            # { "id", "forgotten": true, "everywhere", "withdrawnFrom", "removalRequested", "unreachable", "stillShared", "constellations", "rewritten", "notRewritten" } (the last two absent from an Oort Cloud that does not rewrite)
 oort consolidate --json                      # { "promoted": [ids], "demoted", "evicted", "expired", "counts": {…}, "complete" }
 oort import claude-code --since 14d --yes --json   # { "outcome", "estimate": {…}, "imported": { "observations", "outcomes", "failedSessions", "notAttempted"? } }
 oort open memory 1b2c3d4e --json             # { "target": "memory", "url": "https://oortcloud.dev/dashboard/memories/…", "opened": false }
@@ -1326,7 +1326,7 @@ For a container sidecar, or a backend that is not you. The same protocol on TCP,
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
 | `oort stats` | Counts per tier and validity, store and cold sizes, the hook queue, when the store was last consolidated (and when it is next due), and memory use. | `--json` |
 | `oort observe` | Runs the write path on one turn, from JSON on stdin or from `--user` with `--assistant`. It prints its result as JSON; with `--json`, inside the envelope. | `--dry-run` (reports scrubbing only), `--json` |
-| `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. Locally, a later memory that restates one of its values (such as "changed from 3000 to 8080") is rewritten to its current fact, and the output names each one; see [Memories that restated it](#memories-that-restated-it). It does not reach copies of the store taken before a migration (`oort.sqlite.pre-v*`); `oort doctor` lists them. In Oort Cloud, a copy shared to a Constellation stays (it is the team's memory now): the question says where (`also shared to oort-core; add --everywhere to withdraw your copies`), and so does a `still-shared` warning with `--json`. See [Forgetting a shared memory](#forgetting-a-shared-memory). | `--yes`, `--everywhere` (Oort Cloud: also withdraw your shared copies; a removal request where others contributed) |
+| `oort forget <id>` | Deletes a memory everywhere. It asks first on a terminal. A later memory that restates one of its values (such as "changed from 3000 to 8080") is rewritten to its current fact (locally, and by an Oort Cloud that rewrites them), and the output names each one; see [Memories that restated it](#memories-that-restated-it). It does not reach copies of the store taken before a migration (`oort.sqlite.pre-v*`); `oort doctor` lists them. In Oort Cloud, a copy shared to a Constellation stays (it is the team's memory now): the question says where (`also shared to oort-core; add --everywhere to withdraw your copies`), and so does a `still-shared` warning with `--json`. See [Forgetting a shared memory](#forgetting-a-shared-memory). | `--yes`, `--everywhere` (Oort Cloud: also withdraw your shared copies; a removal request where others contributed) |
 | `oort pin <id>` / `oort unpin <id>` | A pinned memory is never sent to cold storage. | |
 | `oort link <a> <b>` / `oort unlink <a> <b>` | Links two memories that belong together, or removes the link. Both must be memories you can change, in the same Planet or Star; any other pair is refused as a missing id. Local store only. See [Memory links](#memory-links-oort-link). | `--yes`, `--json` |
 | `oort consolidate` | Expires, re-tiers and evicts memories, every project and the global ones: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each node, and inside it each project and the global memories, is re-tiered on its own. The hooks also run it about daily (see `docs/claude-code.md`); a manual run counts as that day's. | |
@@ -2179,14 +2179,33 @@ Forgot 1b2c3d4e-….
 5f6a7b8c may still restate it, because no memory writer is set up (oort doctor says why). Check it with `oort inspect 5f6a7b8c-…`, or forget it too: `oort forget 5f6a7b8c-…`.
 ```
 
-With `--json`, `rewritten` and `notRewritten` list their ids (local mode only), and each one left
-as it was is a `not-rewritten` warning. Up to four writer calls run at once. Forgetting the newest
+With `--json`, `rewritten` and `notRewritten` list their ids, and each one left as it was is a
+`not-rewritten` warning. Up to four writer calls run at once. Forgetting the newest
 memory of a chain changes nothing else: its predecessor stays ended.
 
-In Oort Cloud nothing is rewritten yet. `oort forget` still finds the later memories that hold a
-forgotten value, names each one in a `not-rewritten` warning (with the Constellations it is shared
-to, if any), and exits 3; a later memory it could not read is a `successors-unknown` warning, also
-exit 3. `--json` has no `rewritten` or `notRewritten` there.
+In Oort Cloud the cloud rewrites them, and its answer names each memory it rewrote and each one
+it left as it was, with the reason. `oort forget` (plain or `--everywhere`) reports them exactly as
+above, `--json` and exit 3 included; it reads each rewrite to print it. Oort Cloud has three
+reasons of its own: the account is at a usage cap; the plan does not allow model calls now (the
+forget itself still happens); or, in a Constellation, the rewrite did not finish in time. A reason
+this version does not know is shown as Oort Cloud gave it. What was left as it was is printed
+first; then up to 64 rewrites are read back, 4 at a time, each for at most 5 seconds and all within
+10 seconds (any other is named without its text). When the forgotten memory was shared to a Constellation, the command
+suggested for a later memory adds `--everywhere`. A later memory Oort Cloud names with something
+that is not a memory id still counts (exit 3), and is shown escaped with no command; `--json`
+counts them in `notRewrittenUnnamed`.
+
+```
+$ oort forget 1b2c3d4e --yes
+Forgot 1b2c3d4e-….
+5f6a7b8c may still restate it, because the account is at a usage cap. Check it with `oort inspect 5f6a7b8c-…`, or forget it too: `oort forget 5f6a7b8c-…`.
+```
+
+An Oort Cloud that does not rewrite answers without these lists. Then `oort forget` finds the
+later memories that hold a forgotten value itself, names each one in a `not-rewritten` warning
+(with the Constellations it is shared to, if any), and exits 3; a later memory it could not read is
+a `successors-unknown` warning, also exit 3. `--json` has no `rewritten` or `notRewritten` there,
+and the SDK and the MCP `forget` tool leave them out too.
 
 What stays on disk: the store overwrites deleted rows with zeros and purges them from its search
 index when you forget, so nothing you forget with this version stays in `oort.sqlite` (see the

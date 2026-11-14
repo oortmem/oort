@@ -74,9 +74,10 @@
       "billing": "any"
     },
     {
+      "$comment": "Forget (CON-156, as local forget since oortmem 0.10.0): deletes the memory and rewrites the later memories of its supersede chain that restate one of its values, through the account's memory writer. forgotten is the id asked for (an unknown id is not an error). rewritten and notRewritten are memory ids; reasons gives each notRewritten id's reason: no-writer, failed, rejected, unchanged, changed, not-writable, chain-too-long, or Oort Cloud's own quota (a usage cap; a rewrite counts as one save), unpaid and timeout (a Constellation's time budget). An Oort Cloud from before CON-156 answers 204 with no body.",
       "method": "DELETE",
       "path": "/v1/memories/:id",
-      "status": 204,
+      "response": ["forgotten", "rewritten", "notRewritten", "reasons"],
       "billing": "any"
     },
     {
@@ -266,7 +267,7 @@
       {
         "method": "DELETE",
         "path": "/v1/constellations/:c/memories/:id",
-        "response": ["outcome"]
+        "response": ["outcome", "rewritten", "notRewritten", "reasons"]
       },
       {
         "method": "GET",
@@ -276,7 +277,15 @@
       {
         "method": "DELETE",
         "path": "/v1/memories/:id?everywhere=1",
-        "response": ["withdrawn", "requested", "unreachable"]
+        "response": [
+          "forgotten",
+          "rewritten",
+          "notRewritten",
+          "reasons",
+          "withdrawn",
+          "requested",
+          "unreachable"
+        ]
       },
       {
         "method": "PUT",

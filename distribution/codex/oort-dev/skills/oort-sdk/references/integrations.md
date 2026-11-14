@@ -81,10 +81,11 @@ Python today and for any other language. See [cli-and-python.md](cli-and-python.
   usage error.
 - Memory relationships (typed links between memories). There is a design note only; no method,
   option or field links memories.
-- Rewriting on `forget` in Oort Cloud. Locally (0.10.0 or newer), `forget(id)` rewrites the later
+- Reporting Oort Cloud's `forget` rewrites. Locally (0.10.0 or newer), `forget(id)` rewrites the later
   memories of its chain that restate one of its values and lists them in `rewritten` and
-  `notRewritten`. Oort Cloud rewrites nothing yet: such a memory stays as it was, the cloud result
-  has neither field, and the CLI's `oort forget` names each one in a `not-rewritten` warning.
+  `notRewritten`. In cloud mode 0.10.0 has neither field, and the CLI's `oort forget` finds each
+  such memory itself and names it in a `not-rewritten` warning. Newer versions read both lists from
+  Oort Cloud's forget answer when it carries them.
 - `store.vectorIndex: 'auto'` choosing the RaBitQ index. `rabitq` (0.10.0 or newer) is opt-in;
   `auto` never builds it. Its native engine ships for macOS arm64 and Linux x64 and arm64 (glibc);
   anywhere else the same index runs in TypeScript.

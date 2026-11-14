@@ -24,6 +24,7 @@ import {
   createCloudClient,
   readCloudSettings,
   writeCloudSettings,
+  rewritesOf,
 } from './cloud.js';
 import { uploadChunk } from './commands/cloud.js';
 import { createKeychain } from './keychain.js';
@@ -827,5 +828,20 @@ describe('Stars and Oort Cloud (CON-62)', () => {
     });
     // A contradiction naming a Star memory never leaves the machine.
     expect(JSON.stringify(e.cloud.memories.get(byClaude.id))).not.toContain(secret.id);
+  });
+});
+
+describe('rewritesOf (CON-161)', () => {
+  it('cloud.rewrites-of-a-long-answer-reads-in-linear-time', () => {
+    const ids = Array.from(
+      { length: 150_000 },
+      (_, i) => `${i.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`,
+    );
+    const t0 = performance.now();
+    const r = rewritesOf({ rewritten: ids.slice(0, 100_000), notRewritten: ids.slice(100_000) });
+    // A check per id against a list would take many seconds here.
+    expect(performance.now() - t0).toBeLessThan(2_000);
+    expect(r?.rewritten).toHaveLength(100_000);
+    expect(r?.notRewritten).toHaveLength(50_000);
   });
 });

