@@ -1275,45 +1275,64 @@ describe('oort forget reports what Oort Cloud rewrote (CON-161)', () => {
     ]);
   });
 
-  it('forget.cloud-an-abandoned-read-of-a-stalled-body-leaves-no-socket-open', async () => {
-    const open = new Set<import('node:net').Socket>();
-    let requests = 0;
-    let most = 0;
-    const server = http.createServer((req, res) => {
-      requests += 1;
-      most = Math.max(most, requests);
-      req.socket.once('close', () => (requests -= 1));
-      // Headers and part of the body, then nothing.
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.write('{"id":"');
-    });
-    server.on('connection', (s) => {
-      open.add(s);
-      s.once('close', () => open.delete(s));
-    });
-    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-    try {
-      const { port } = server.address() as import('node:net').AddressInfo;
-      const client = createCloudClient({ url: `http://127.0.0.1:${port}`, key: 'k' });
-      const ids = Array.from(
-        { length: 6 },
-        (_, i) => `${i.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`,
-      );
-      const texts = await readTexts(
-        ids,
-        (id, signal) => client.get(id, { timeoutMs: 100, signal }),
-        { timeoutMs: 100 },
-      );
-      expect(texts).toEqual(ids.map((id) => ({ id })));
-      expect(most).toBeLessThanOrEqual(4);
-      // Every read was aborted, its connection with it.
-      for (let i = 0; i < 50 && open.size > 0; i++) await new Promise((r) => setTimeout(r, 10));
-      expect(open.size).toBe(0);
-    } finally {
-      server.closeAllConnections();
-      await new Promise((r) => server.close(r));
-    }
-  });
+  it(
+    'forget.cloud-an-abandoned-read-of-a-stalled-body-leaves-no-socket-open',
+    { timeout: 15_000 },
+    async () => {
+      const open = new Set<import('node:net').Socket>();
+      /** The connections that carried a read: aborting the read closes each one. */
+      const reading = new Set<import('node:net').Socket>();
+      let requests = 0;
+      let most = 0;
+      const server = http.createServer((req, res) => {
+        requests += 1;
+        most = Math.max(most, requests);
+        reading.add(req.socket);
+        req.socket.once('close', () => {
+          requests -= 1;
+          reading.delete(req.socket);
+        });
+        // Headers and part of the body, then nothing.
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.write('{"id":"');
+      });
+      server.on('connection', (s) => {
+        open.add(s);
+        s.once('close', () => open.delete(s));
+      });
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+      try {
+        const { port } = server.address() as import('node:net').AddressInfo;
+        const client = createCloudClient({ url: `http://127.0.0.1:${port}`, key: 'k' });
+        const ids = Array.from(
+          { length: 6 },
+          (_, i) => `${i.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`,
+        );
+        const texts = await readTexts(
+          ids,
+          (id, signal) => client.get(id, { timeoutMs: 100, signal }),
+          { timeoutMs: 100 },
+        );
+        expect(texts).toEqual(ids.map((id) => ({ id })));
+        expect(most).toBeLessThanOrEqual(4);
+        const until = async (done: () => boolean, ms: number): Promise<void> => {
+          for (const end = Date.now() + ms; !done() && Date.now() < end;) {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+        };
+        // Every read was aborted, its connection with it, at once.
+        await until(() => reading.size === 0, 500);
+        expect(reading.size).toBe(0);
+        // Node 24's fetch may also open spare connections that never carry a request; it keeps them
+        // idle (not holding the process) and closes them after its keep-alive timeout, about 3 s.
+        await until(() => open.size === 0, 8_000);
+        expect(open.size).toBe(0);
+      } finally {
+        server.closeAllConnections();
+        await new Promise((r) => server.close(r));
+      }
+    },
+  );
 
   it('forget.cloud-dot-ids-never-reach-another-route', async () => {
     const e = setup();
