@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as http from 'node:http';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeCloud, fakeMemory, type FakeCloud } from '../test/helpers/fake-cloud.js';
@@ -14,7 +15,7 @@ import {
   data,
   failed,
 } from '../test/helpers.js';
-import { writeCloudSettings } from './cloud.js';
+import { createCloudClient, writeCloudSettings } from './cloud.js';
 import { readTexts } from './commands/forget.js';
 import { marked } from './commands/share.js';
 import { createKeychain } from './keychain.js';
@@ -1004,10 +1005,19 @@ describe('oort forget reports what Oort Cloud rewrote (CON-161)', () => {
     chain(e);
     // An id in both lists is not claimed as rewritten; a non-string id is dropped; reasons that
     // are not an object give no reason.
-    e.cloud.forgetAnswer = { rewritten: [LATER, 42, null], notRewritten: [LATER, {}], reasons: [] };
+    e.cloud.forgetAnswer = {
+      rewritten: [LATER, 42, null, {}, [1]],
+      notRewritten: [LATER, {}, [1], {}],
+      reasons: [],
+    };
     const r = await e.run(['forget', ID, '--yes', '--json']);
     expect(r.code, r.io.stderr).toBe(3);
-    expect(data(r.io.stdout, 'forget')).toMatchObject({ rewritten: [], notRewritten: [LATER] });
+    // Each odd entry counts, a repeated one too (as the Python SDK counts them).
+    expect(data(r.io.stdout, 'forget')).toMatchObject({
+      rewritten: [],
+      notRewritten: [LATER],
+      notRewrittenUnnamed: 3,
+    });
     expect(r.io.stderr).not.toContain('Rewrote');
     // A body that is not JSON reads as no lists: the CLI walks the chain itself.
     const g = setup();
@@ -1139,7 +1149,12 @@ describe('oort forget reports what Oort Cloud rewrote (CON-161)', () => {
     j.cloud.forgetAnswer = { rewritten: ['not-an-id'], notRewritten: [evil, NEXT] };
     const json = await j.run(['forget', ID, '--yes', '--json']);
     expect(json.code).toBe(3);
-    expect(data(json.io.stdout, 'forget')).toMatchObject({ rewritten: [], notRewritten: [NEXT] });
+    // As the SDK: the ones named with something else are counted.
+    expect(data(json.io.stdout, 'forget')).toMatchObject({
+      rewritten: [],
+      notRewritten: [NEXT],
+      notRewrittenUnnamed: 1,
+    });
   });
 
   it('forget.cloud-a-rewrite-read-back-with-odd-text-or-another-id-never-crashes', async () => {
@@ -1200,13 +1215,104 @@ describe('oort forget reports what Oort Cloud rewrote (CON-161)', () => {
     );
   });
 
+  /** A read that answers only when it is aborted, and then settles `settleMs` later. */
+  const untilAborted =
+    (settleMs = 0) =>
+    (_id: string, signal: AbortSignal): Promise<never> =>
+      new Promise<never>((_, reject) =>
+        signal.addEventListener('abort', () =>
+          setTimeout(() => reject(new Error('aborted')), settleMs),
+        ),
+      );
+
   it('forget.cloud-a-read-that-never-answers-gives-up-after-its-timeout', async () => {
+    const stuck = untilAborted();
     const texts = await readTexts(
       ['a', 'b', 'c'],
-      async (id) => (id === 'b' ? new Promise<never>(() => {}) : { id, text: `T${id}` }),
+      async (id, signal) => (id === 'b' ? stuck(id, signal) : { id, text: `T${id}` }),
       { timeoutMs: 20 },
     );
     expect(texts).toEqual([{ id: 'a', text: 'Ta' }, { id: 'b' }, { id: 'c', text: 'Tc' }]);
+  });
+
+  it('forget.cloud-reads-back-at-most-4-at-once-even-while-abandoned-ones-wind-down', async () => {
+    let inFlight = 0;
+    let most = 0;
+    const slow = untilAborted(15);
+    const texts = await readTexts(
+      Array.from({ length: 12 }, (_, i) => `id${i}`),
+      async (id, signal) => {
+        inFlight += 1;
+        most = Math.max(most, inFlight);
+        try {
+          return await slow(id, signal);
+        } finally {
+          inFlight -= 1;
+        }
+      },
+      { timeoutMs: 5 },
+    );
+    expect(texts.every((t) => t.text === undefined)).toBe(true);
+    expect(most).toBe(4);
+    expect(inFlight).toBe(0);
+  });
+
+  it('forget.cloud-read-back-stops-at-its-overall-deadline', async () => {
+    const t0 = Date.now();
+    const texts = await readTexts(
+      ['a', 'b', 'c', 'd', 'e', 'f'],
+      async (id, signal) => (id === 'a' ? { id, text: 'Ta' } : untilAborted()(id, signal)),
+      { timeoutMs: 60_000, deadlineMs: 40, parallel: 1 },
+    );
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(texts).toEqual([
+      { id: 'a', text: 'Ta' },
+      { id: 'b' },
+      { id: 'c' },
+      { id: 'd' },
+      { id: 'e' },
+      { id: 'f' },
+    ]);
+  });
+
+  it('forget.cloud-an-abandoned-read-of-a-stalled-body-leaves-no-socket-open', async () => {
+    const open = new Set<import('node:net').Socket>();
+    let requests = 0;
+    let most = 0;
+    const server = http.createServer((req, res) => {
+      requests += 1;
+      most = Math.max(most, requests);
+      req.socket.once('close', () => (requests -= 1));
+      // Headers and part of the body, then nothing.
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"id":"');
+    });
+    server.on('connection', (s) => {
+      open.add(s);
+      s.once('close', () => open.delete(s));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const { port } = server.address() as import('node:net').AddressInfo;
+      const client = createCloudClient({ url: `http://127.0.0.1:${port}`, key: 'k' });
+      const ids = Array.from(
+        { length: 6 },
+        (_, i) => `${i.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`,
+      );
+      const texts = await readTexts(
+        ids,
+        (id, signal) => client.get(id, { timeoutMs: 100, signal }),
+        { timeoutMs: 100 },
+      );
+      expect(texts).toEqual(ids.map((id) => ({ id })));
+      expect(most).toBeLessThanOrEqual(4);
+      // Every read was aborted, its connection with it.
+      for (let i = 0; i < 50 && open.size > 0; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(open.size).toBe(0);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
+    }
   });
 
   it('forget.cloud-dot-ids-never-reach-another-route', async () => {

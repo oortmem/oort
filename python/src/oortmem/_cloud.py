@@ -256,10 +256,14 @@ def _rewrite_lists(answer: Any) -> Dict[str, Any]:
     if not isinstance(rewritten, list) and not isinstance(left, list):
         return {}
     is_id = lambda x: isinstance(x, str) and _FULL_ID.fullmatch(x) is not None  # noqa: E731
-    not_rewritten = list(dict.fromkeys(x for x in (left or []) if is_id(x))) if isinstance(left, list) else []
-    unnamed = len({json.dumps(x, sort_keys=True, default=str) for x in left if not is_id(x)}) if isinstance(left, list) else 0
+    # Filtered before anything is hashed: an entry may be a list or an object.
+    lefts = left if isinstance(left, list) else []
+    not_rewritten = list(dict.fromkeys(x for x in lefts if is_id(x)))
+    # Each odd one counts, a repeated one too (as the CLI and the TypeScript SDK count them).
+    unnamed = sum(1 for x in lefts if not is_id(x))
     gone = set(not_rewritten)
-    done = [x for x in dict.fromkeys(rewritten) if is_id(x) and x not in gone] if isinstance(rewritten, list) else []
+    rewrites = rewritten if isinstance(rewritten, list) else []
+    done = [x for x in dict.fromkeys(x for x in rewrites if is_id(x)) if x not in gone]
     out: Dict[str, Any] = {}
     if done:
         out["rewritten"] = done

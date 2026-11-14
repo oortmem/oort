@@ -558,7 +558,7 @@ describe('oort mcp in cloud mode: forget and shared copies (CON-67)', () => {
     await w.close();
   });
 
-  it('mcp.cloud-forget-never-puts-an-id-that-is-not-a-memory-id-in-its-answer (CON-161 review)', async () => {
+  it('mcp.cloud-forget-never-puts-an-id-that-is-not-a-memory-id-in-its-answer (CON-161)', async () => {
     const { e, w, backend } = await shared();
     const other = '66666666-7777-4888-8999-aaaaaaaaaaaa';
     const next = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
@@ -573,7 +573,8 @@ describe('oort mcp in cloud mode: forget and shared copies (CON-67)', () => {
     e.cloud.forgetAnswer = { notRewritten: ['\u0007'] };
     expect(await backend.forget({ id: other })).toEqual({
       forgotten: other,
-      note: 'Later memories that restate it were left as they were (1 without a usable id). Tell the person; they can check each with `oort inspect <id>` or forget it too.',
+      // No usable id: no command to suggest.
+      note: 'Later memories that restate it were left as they were (1 without a usable id). Tell the person.',
     });
     await w.close();
   });

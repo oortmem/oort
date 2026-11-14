@@ -629,12 +629,11 @@ function judgeOutput(r: JudgeResult): Record<string, unknown> {
 
 /** The `forget` tool's note for later memories left as they were (CON-144; Oort Cloud's, CON-161). */
 const leftAsTheyWere = (ids: readonly string[], unnamed = 0): string => {
-  const which =
-    unnamed === 0
-      ? ids.join(', ')
-      : ids.length === 0
-        ? `${unnamed} without a usable id`
-        : `${ids.join(', ')}, and ${unnamed} more`;
+  // With no usable id there is no command to give.
+  if (ids.length === 0) {
+    return `Later memories that restate it were left as they were (${unnamed} without a usable id). Tell the person.`;
+  }
+  const which = unnamed === 0 ? ids.join(', ') : `${ids.join(', ')}, and ${unnamed} more`;
   return `Later memories that restate it were left as they were (${which}). Tell the person; they can check each with \`oort inspect <id>\` or forget it too.`;
 };
 

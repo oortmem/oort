@@ -52,6 +52,11 @@ interface ForgetData {
   rewritten?: string[];
   /** Later memories that restate it and were left as they were. Absent as `rewritten`. */
   notRewritten?: string[];
+  /**
+   * Oort Cloud: how many more it left as they were, named with something that is not a memory id
+   * (as the SDK's). Absent when there were none.
+   */
+  notRewrittenUnnamed?: number;
 }
 
 const WHY: Record<CloudNotRewrittenReason, string> = {
@@ -141,52 +146,93 @@ export function reportSuccessors(ctx: Ctx, r: Successors): boolean {
 const ids = (copies: readonly SharedCopy[]): string[] => copies.map((c) => c.constellation);
 
 /** `--json`'s `rewritten` and `notRewritten` (memory ids): absent from before CON-156. */
-const lists = (r: Successors | undefined): Pick<ForgetData, 'rewritten' | 'notRewritten'> =>
+const lists = (
+  r: Successors | undefined,
+): Pick<ForgetData, 'rewritten' | 'notRewritten' | 'notRewrittenUnnamed'> =>
   r === undefined
     ? {}
-    : { rewritten: r.rewritten.map((x) => x.id), notRewritten: r.notRewritten.map((x) => x.id) };
-
-/** How long one read of a rewrite may take, and how many run at once (CON-161). */
-const READ_TIMEOUT_MS = 5_000;
-const PARALLEL_READS = 4;
+    : {
+        rewritten: r.rewritten.map((x) => x.id),
+        notRewritten: r.notRewritten.map((x) => x.id),
+        ...((r.unnamed?.length ?? 0) > 0 && { notRewrittenUnnamed: r.unnamed?.length }),
+      };
 
 /**
- * Each id with its memory's text, read with `read`: the first `limit` only, `parallel` at once,
- * each given up after `timeoutMs`. A read that fails, times out, or answers with another memory
- * or a text that is not a string leaves the text out; the rest are not read.
+ * Reading rewrites back (CON-161): how long one read may take, how long they all may take, how
+ * many run at once, and how long an abandoned read may take to wind down.
+ */
+const READ_TIMEOUT_MS = 5_000;
+const READ_DEADLINE_MS = 10_000;
+const PARALLEL_READS = 4;
+const WIND_DOWN_MS = 1_000;
+
+/**
+ * Each id with its memory's text, read with `read`: the first `limit` only, at most `parallel`
+ * at once, each aborted (through its signal) after `timeoutMs`, and all of them after
+ * `deadlineMs`; the rest are not read. A read that fails, is aborted, or answers with another
+ * memory or a text that is not a string leaves the text out.
+ *
+ * An aborted read is waited for until it settles, so it never holds a connection past this call
+ * and never runs beside `parallel` others. One that does not settle within `WIND_DOWN_MS` keeps
+ * its place: that worker starts no other read.
  */
 export async function readTexts(
   ids: readonly string[],
-  read: (id: string) => Promise<{ id?: unknown; text?: unknown }>,
-  opts: { limit?: number; parallel?: number; timeoutMs?: number } = {},
+  read: (id: string, signal: AbortSignal) => Promise<{ id?: unknown; text?: unknown }>,
+  opts: { limit?: number; parallel?: number; timeoutMs?: number; deadlineMs?: number } = {},
 ): Promise<{ id: string; text?: string }[]> {
-  const { limit = MAX_CHAIN, parallel = PARALLEL_READS, timeoutMs = READ_TIMEOUT_MS } = opts;
+  const {
+    limit = MAX_CHAIN,
+    parallel = PARALLEL_READS,
+    timeoutMs = READ_TIMEOUT_MS,
+    deadlineMs = READ_DEADLINE_MS,
+  } = opts;
   const out: { id: string; text?: string }[] = ids.map((id) => ({ id }));
-  const one = async (id: string): Promise<string | undefined> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+  const all = new AbortController();
+  const deadline = setTimeout(() => all.abort(), deadlineMs);
+  /** The text, if any, and whether the read settled (an abandoned one may not have). */
+  const one = async (id: string): Promise<{ text?: string; settled: boolean }> => {
+    const ctl = new AbortController();
+    const stop = (): void => ctl.abort();
+    all.signal.addEventListener('abort', stop, { once: true });
+    const timer = setTimeout(stop, timeoutMs);
+    let settled = false;
+    const reading = read(id, ctl.signal).then(
+      (m) => (m.id === id && typeof m.text === 'string' ? m.text : undefined),
+      () => undefined,
+    );
+    void reading.finally(() => (settled = true));
+    const aborted = new Promise<void>((r) => {
+      if (ctl.signal.aborted) r();
+      else ctl.signal.addEventListener('abort', () => r(), { once: true });
+    });
     try {
-      const m = await Promise.race([
-        read(id),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
-        }),
-      ]);
-      return m.id === id && typeof m.text === 'string' ? m.text : undefined;
-    } catch {
-      return undefined;
+      const text = await Promise.race([reading, aborted.then(() => undefined)]);
+      if (!ctl.signal.aborted)
+        return text === undefined ? { settled: true } : { text, settled: true };
+      let grace: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([reading, new Promise((r) => (grace = setTimeout(r, WIND_DOWN_MS)))]);
+      clearTimeout(grace);
+      return { settled };
     } finally {
       clearTimeout(timer);
+      all.signal.removeEventListener('abort', stop);
     }
   };
   let next = 0;
   const worker = async (): Promise<void> => {
-    while (next < Math.min(limit, ids.length)) {
+    while (!all.signal.aborted && next < Math.min(limit, ids.length)) {
       const i = next++;
-      const text = await one(ids[i]!);
-      if (text !== undefined) out[i] = { id: ids[i]!, text };
+      const r = await one(ids[i]!);
+      if (r.text !== undefined) out[i] = { id: ids[i]!, text: r.text };
+      if (!r.settled) return;
     }
   };
-  await Promise.all(Array.from({ length: Math.max(1, parallel) }, worker));
+  try {
+    await Promise.all(Array.from({ length: Math.max(1, parallel) }, worker));
+  } finally {
+    clearTimeout(deadline);
+  }
   return out;
 }
 
@@ -195,7 +241,7 @@ const withTexts = async (
   cloud: CloudClient,
   r: CloudRewrites,
 ): Promise<{ id: string; text?: string }[]> =>
-  readTexts(r.rewritten, (id) => cloud.get(id, { timeoutMs: READ_TIMEOUT_MS }));
+  readTexts(r.rewritten, (id, signal) => cloud.get(id, { timeoutMs: READ_TIMEOUT_MS, signal }));
 
 /**
  * `oort forget <id> [--yes] [--everywhere]`: deletes a memory everywhere (main record and cold

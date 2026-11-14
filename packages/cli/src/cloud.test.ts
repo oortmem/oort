@@ -831,7 +831,7 @@ describe('Stars and Oort Cloud (CON-62)', () => {
   });
 });
 
-describe('rewritesOf (CON-161 review)', () => {
+describe('rewritesOf (CON-161)', () => {
   it('cloud.rewrites-of-a-long-answer-reads-in-linear-time', () => {
     const ids = Array.from(
       { length: 150_000 },

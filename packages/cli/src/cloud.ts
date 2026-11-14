@@ -534,16 +534,15 @@ export function rewritesOf(body: unknown): CloudRewrites | null {
   const isId = (x: unknown): x is string => typeof x === 'string' && CLOUD_MEMORY_ID.test(x);
   const out: CloudRewrites = { rewritten: [], notRewritten: [], unnamed: [] };
   const left = new Set<string>();
-  const odd = new Set<string>();
   for (const x of list(b['notRewritten'])) {
     if (isId(x)) {
       if (!left.has(x)) out.notRewritten.push({ id: x, ...reasonOf(x) });
       left.add(x);
       continue;
     }
+    // Each one counts, a repeated one too (as the Python SDK counts them).
     const name = typeof x === 'string' ? x : (JSON.stringify(x) ?? String(x));
-    if (!odd.has(name)) out.unnamed.push({ name, ...reasonOf(x) });
-    odd.add(name);
+    out.unnamed.push({ name, ...reasonOf(x) });
   }
   const done = new Set<string>();
   for (const x of list(b['rewritten'])) {
@@ -692,9 +691,10 @@ export interface CloudClient {
   }): Promise<{ memories: CloudMemory[]; next?: string }>;
   /**
    * By id, or by a unique prefix of at least 8 characters (409 `ambiguous` when several match).
-   * `timeoutMs` replaces the client's own for this one request.
+   * With `timeoutMs` or `signal`, the whole read (its body too) is aborted, connection and all,
+   * at that deadline or that signal.
    */
-  get(ref: string, opts?: { timeoutMs?: number }): Promise<CloudMemory>;
+  get(ref: string, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<CloudMemory>;
   /**
    * Forgets a memory. The answer says what Oort Cloud did to the later memories of its chain
    * (CON-161); `null` from an Oort Cloud from before CON-156.
@@ -835,11 +835,15 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
     body: { json?: unknown; text?: string } | undefined,
     user: string | undefined,
     timeoutMs = timeout,
+    signal?: AbortSignal,
   ): Promise<{ res: Response; done: () => CloudTiming }> {
     if (user !== undefined) await requireEndUsers();
     const t0 = performance.now();
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeoutMs);
+    // `signal` stays linked after the headers: aborting it then stops the body, and its socket.
+    if (signal?.aborted === true) abort.abort();
+    else signal?.addEventListener('abort', () => abort.abort(), { once: true });
     const headers: Record<string, string> = { authorization: `Bearer ${opts.key}` };
     if (user !== undefined) headers[END_USER_HEADER] = user;
     if (opts.serverTiming === true) headers[TIMING_HEADER] = '1';
@@ -1029,12 +1033,30 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
         const qs = p.toString();
         return json('GET', `/v1/memories${qs === '' ? '' : `?${qs}`}`);
       },
-      get: async (id, o) =>
-        o?.timeoutMs === undefined
-          ? json('GET', idPath(id))
-          : ((await (
-              await timedCall('GET', idPath(id), undefined, user, o.timeoutMs)
-            ).res.json()) as CloudMemory),
+      get: async (id, o = {}) => {
+        if (o.timeoutMs === undefined && o.signal === undefined) return json('GET', idPath(id));
+        // One deadline for the whole read, body included (the request's own timer stops at the
+        // headers), so a body that stalls is aborted with its connection.
+        const ctl = new AbortController();
+        const stop = (): void => ctl.abort();
+        const timer = o.timeoutMs === undefined ? undefined : setTimeout(stop, o.timeoutMs);
+        if (o.signal?.aborted === true) stop();
+        else o.signal?.addEventListener('abort', stop, { once: true });
+        try {
+          const { res } = await timedCall(
+            'GET',
+            idPath(id),
+            undefined,
+            user,
+            o.timeoutMs ?? timeout,
+            ctl.signal,
+          );
+          return (await res.json()) as CloudMemory;
+        } finally {
+          clearTimeout(timer);
+          o.signal?.removeEventListener('abort', stop);
+        }
+      },
       forget: async (id) => {
         // 204 with no body from an Oort Cloud from before CON-156; a body that does not parse
         // never undoes a forget that happened, so it reads as no lists.
@@ -1078,8 +1100,6 @@ export async function findCloudMemory(client: CloudClient, ref: string): Promise
     throw e;
   }
 }
-
-/** A full memory id: what the API needs to find the copies of a memory already forgotten. */
 
 /** A Constellation holding (or that held) a copy of one of your memories (CON-67). */
 export interface SharedCopy {

