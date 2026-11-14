@@ -63,28 +63,28 @@ usage error.
 
 ## Methods
 
-| Method                                            | Returns                             | Cloud mode                                                        |
-| ------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------- |
-| `recall(query, opts?)`                            | `RecallResult`                      | yes                                                               |
-| `observe(turn, { signal? })`                      | `ObserveResult`                     | yes                                                               |
-| `remember(facts, { type?, place? })`              | `RememberResult`                    | yes (`place`: `refused`, `local-only`)                            |
-| `forget(id, { everywhere? })`                     | `ForgetResult`                      | yes (`everywhere`: cloud only)                                    |
-| `pin(id)` / `unpin(id)`                           | `PinResult`                         | yes (`changed: null`)                                             |
-| `recent({ since?, limit? })`                      | `{ memories, warnings }`            | yes                                                               |
-| `explain(id)`                                     | `Explanation`                       | yes (`links` is empty)                                            |
-| `link(from, to)` / `unlink(from, to)`             | `LinkResult` / `UnlinkResult`       | `refused` (`local-only`)                                          |
-| `whoami()`                                        | `Whoami`                            | yes                                                               |
-| `judge.record(input)`                             | `RecordJudgmentView`                | `refused`                                                         |
-| `judge.apply(item, opts?)`                        | `JudgeResult`                       | `refused`                                                         |
-| `judge.list({ domain?, by?, all?, limit? })`      | `{ judgments }`                     | `refused`                                                         |
-| `judge.confirm(id)`                               | `{ id, changed }` (expert role)     | `refused`                                                         |
-| `consolidate({ budgetMs?, signal? })`             | `ConsolidateResult`                 | `refused`                                                         |
-| `scoped({ user?, project?, agent?, judgeRole? })` | a new handle                        | `project`, `agent` only in 0.7.0 (`user`: after it, a server key) |
-| `endUsers.erase(user)`                            | `EndUserErasure`                    | 0.8.0, a server key                                               |
-| `endUsers.count()`                                | `EndUserCount`                      | 0.8.0, a server key                                               |
-| `endUsers.export(user)`                           | `EndUserExport`                     | 0.8.0, a server key                                               |
-| `close()`, `[Symbol.asyncDispose]()`              | `void`                              |                                                                   |
-| `formatForPrompt(result, { budgetChars? })`       | `string` (a function, not a method) | both                                                              |
+| Method                                               | Returns                             | Cloud mode                                                        |
+| ---------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------- |
+| `recall(query, opts?)`                               | `RecallResult`                      | yes                                                               |
+| `observe(turn, { signal? })`                         | `ObserveResult`                     | yes                                                               |
+| `remember(facts, { type?, place? })`                 | `RememberResult`                    | yes (`place`: `refused`, `local-only`)                            |
+| `forget(id, { everywhere? })`                        | `ForgetResult`                      | yes (`everywhere`: cloud only)                                    |
+| `pin(id)` / `unpin(id)`                              | `PinResult`                         | yes (`changed: null`)                                             |
+| `recent({ since?, limit? })`                         | `{ memories, warnings }`            | yes                                                               |
+| `explain(id)`                                        | `Explanation`                       | yes (`links`, after 0.10.0, is empty)                             |
+| `link(from, to)` / `unlink(from, to)` (after 0.10.0) | `LinkResult` / `UnlinkResult`       | `refused` (`local-only`)                                          |
+| `whoami()`                                           | `Whoami`                            | yes                                                               |
+| `judge.record(input)`                                | `RecordJudgmentView`                | `refused`                                                         |
+| `judge.apply(item, opts?)`                           | `JudgeResult`                       | `refused`                                                         |
+| `judge.list({ domain?, by?, all?, limit? })`         | `{ judgments }`                     | `refused`                                                         |
+| `judge.confirm(id)`                                  | `{ id, changed }` (expert role)     | `refused`                                                         |
+| `consolidate({ budgetMs?, signal? })`                | `ConsolidateResult`                 | `refused`                                                         |
+| `scoped({ user?, project?, agent?, judgeRole? })`    | a new handle                        | `project`, `agent` only in 0.7.0 (`user`: after it, a server key) |
+| `endUsers.erase(user)`                               | `EndUserErasure`                    | 0.8.0, a server key                                               |
+| `endUsers.count()`                                   | `EndUserCount`                      | 0.8.0, a server key                                               |
+| `endUsers.export(user)`                              | `EndUserExport`                     | 0.8.0, a server key                                               |
+| `close()`, `[Symbol.asyncDispose]()`                 | `void`                              |                                                                   |
+| `formatForPrompt(result, { budgetChars? })`          | `string` (a function, not a method) | both                                                              |
 
 **`recall` options.** `limit` (1 to 50, default 10), `mode` (`current`, `as-of`, `history`,
 `known-at`), `asOf` (valid time), `knownAt` (transaction time), `include` (narrows the levels
@@ -244,7 +244,10 @@ const { memories } = await oort.recall('when does the billing service deploy?');
 console.log(memories.map((m) => m.text).join('\n'));
 ```
 
-## Memory links (local mode)
+## Memory links (local mode, after 0.10.0)
+
+Not in 0.10.0: `link`, `unlink`, `Explanation.links` and `why.via` come in the release after it.
+On 0.10.0, do not call them.
 
 `link(from, to)` says two memories belong together; `unlink` removes it, or blocks a pair that was
 not linked. Both memories must be ones the handle writes, in the same Planet or Star: any other
