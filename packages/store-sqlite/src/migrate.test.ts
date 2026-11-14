@@ -908,7 +908,7 @@ describe('schema migration 4 to 5', () => {
     const s = fresh();
     await (await openSqliteStore(optsFor(s))).close();
     expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
-    expect(SCHEMA_VERSION).toBe(8);
+    expect(SCHEMA_VERSION).toBe(9);
     expect(columns(s.dbPath)).toEqual(['place', 'place_node']);
     expect(hasPlaceTable(s.dbPath)).toBe(true);
   });

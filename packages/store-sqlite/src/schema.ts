@@ -46,8 +46,15 @@ import { startRabitqBuild, dropRabitqIndex, hasRabitqIndex } from './rabitq-stor
  *    of the new tables cascades with its memory. The guard triggers call `oort_writer_v8()`, so a
  *    writer that predates it (which would write a memory without its index rows) fails loudly.
  *    The migration fills them from the stored rows in one transaction; nothing is rewritten.
+ * 9: a lexical index that deletes a row by its own terms (CON-159). `memories_fts2` is a plain
+ *    contentless FTS5 table (no `contentless_delete`) with FTS5's `secure-delete` option on, and
+ *    `memories_indexed` (`FTS_VALUES_TABLE`) keeps the exact strings each memory was indexed
+ *    with. Every delete and rewrite hands those strings to FTS5's `'delete'` command, which
+ *    removes the row's terms from the index at once, so `forget` no longer merges the index. The
+ *    guard triggers call `oort_writer_v9()`. The migration rebuilds the index from the stored
+ *    rows in one transaction; nothing else changes.
  */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /**
  * The binary index (schema version 6): one row per searchable (hot or warm) vector, with its
@@ -59,10 +66,13 @@ export const BIT_TABLE = 'memories_vec_bit';
 
 /**
  * The SQL function every write to `memories` calls through the guard triggers. A connection
- * defines it with `defineWriterGuard`; one that does not (an Oort that predates version 8) gets
- * `no such function: oort_writer_v8` and writes nothing.
+ * defines it with `defineWriterGuard`; one that does not (an Oort that predates version 9) gets
+ * `no such function: oort_writer_v9` and writes nothing.
  */
-export const WRITER_GUARD = 'oort_writer_v8';
+export const WRITER_GUARD = 'oort_writer_v9';
+
+/** The version 8 guard's function, which a downgrade to version 8 puts back. */
+const WRITER_GUARD_V8 = 'oort_writer_v8';
 
 /** The version 7 guard's function, which a downgrade to version 7 puts back. */
 const WRITER_GUARD_V7 = 'oort_writer_v7';
@@ -289,6 +299,31 @@ export const FTS_TABLE = 'memories_fts2';
 /** The table of schema versions 1 to 3. */
 export const FTS_TABLE_V1 = 'memories_fts';
 
+/**
+ * The exact strings each memory's lexical index row was written with (schema version 9,
+ * CON-159): `rid`, then `text`, `stub` and `entities` as the index got them (core's
+ * `tokenizeLexical` joined by spaces; `text` empty for a cold memory). A contentless FTS5 table
+ * removes a row only when it is handed the values it was indexed with, byte for byte; tokenising
+ * the stored text again could give other tokens under another ICU, Unicode or tokeniser version,
+ * and then leave the old terms behind. So every delete and rewrite reads them from here.
+ */
+export const FTS_VALUES_TABLE = 'memories_indexed';
+
+/**
+ * A stored row's entities, read the way `migrateV7toV8` reads them: JSON that does not parse,
+ * or is not an array, is no entities, and anything in it that is not a string is left out. The
+ * lexical index is always written from this, so a damaged row never fails a write or a rebuild.
+ */
+export function rowEntities(json: string): string[] {
+  let entities: unknown;
+  try {
+    entities = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  return Array.isArray(entities) ? entities.filter((e): e is string => typeof e === 'string') : [];
+}
+
 /** Which address fields each level has; anything else is NULL. Mirrors core's `Address` union. */
 const LEVEL_CHECK = `CHECK (
   coalesce(length(org_id), 0) > 0 AND coalesce(length(author_agent_id), 0) > 0 AND (
@@ -511,21 +546,41 @@ export function migrateV1toV2(db: Database, dimension: number): void {
  * writes them. Records the tokeniser and ICU versions in `meta` (version 2), or removes them
  * (version 1, which older Oort versions do not know).
  *
+ * `legacy` builds the index of schema versions 4 to 8 (and always for tokeniser 1): a
+ * `contentless_delete` table and no `FTS_VALUES_TABLE`, for a downgrade. Otherwise it builds
+ * version 9's (`createLexicalIndex`) and fills `FTS_VALUES_TABLE` with the same strings.
+ *
  * BM25's row and token totals start again from the live rows. A long-lived contentless-delete
  * index never subtracts a rewritten row from them, so lexical scores shift once at the rebuild,
  * by the history the old index carried. That is accepted: carrying the history over would grow
  * without bound with every past rewrite.
  */
-export function rebuildFts(db: Database, version: 1 | 2, icu = lexicalIcuVersion()): number {
+export function rebuildFts(
+  db: Database,
+  version: 1 | 2,
+  icu = lexicalIcuVersion(),
+  legacy = version === 1,
+): number {
   const tokenize = tokenizerForVersion(version);
   const indexed = (text: string): string => tokenize(text).join(' ');
   const table = version === 1 ? FTS_TABLE_V1 : FTS_TABLE;
   db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE_V1}`);
   db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE}`);
-  db.exec(ftsTable(version === 1 ? FTS_TOKENIZE_V1 : FTS_TOKENIZE, table));
-  const insert = db.prepare<[number, string, string, string]>(
+  db.exec(`DROP TABLE IF EXISTS ${FTS_VALUES_TABLE}`);
+  if (legacy) db.exec(ftsTable(version === 1 ? FTS_TOKENIZE_V1 : FTS_TOKENIZE, table));
+  else createLexicalIndex(db);
+  const ftsInsert = db.prepare<[number, string, string, string]>(
     `INSERT INTO ${table} (rowid, text, stub, entities) VALUES (?, ?, ?, ?)`,
   );
+  const valuesInsert = legacy
+    ? undefined
+    : db.prepare<[number, string, string, string]>(
+        `INSERT INTO ${FTS_VALUES_TABLE} (rid, text, stub, entities) VALUES (?, ?, ?, ?)`,
+      );
+  const insert = (rid: number, text: string, stub: string, entities: string): void => {
+    ftsInsert.run(rid, text, stub, entities);
+    valuesInsert?.run(rid, text, stub, entities);
+  };
   // Paged by rid: better-sqlite3 cannot write while a statement is still iterating.
   const page = db.prepare<
     [number],
@@ -537,8 +592,8 @@ export function rebuildFts(db: Database, version: 1 | 2, icu = lexicalIcuVersion
     const rows = page.all(after);
     if (rows.length === 0) break;
     for (const r of rows) {
-      const entities = JSON.parse(r.entities) as string[];
-      insert.run(
+      const entities = rowEntities(r.entities);
+      insert(
         r.rid,
         r.tier === 'cold' ? '' : indexed(r.text),
         indexed(r.stub),
@@ -566,12 +621,17 @@ function recordLexical(db: Database, icu = lexicalIcuVersion()): void {
 }
 
 /**
- * Contentless (content = '', contentless_delete = 1). Nothing syncs it automatically: the store
+ * The lexical index of schema versions 1 to 8: contentless (content = '', contentless_delete = 1),
+ * so a row is deleted by its rowid alone. Nothing syncs it automatically: the store
  * inserts and deletes every row explicitly, in the same transaction as the memories write, and
  * keeps rowid = memories.rid. It indexes core's tokenizeLexical output joined by spaces (so token
  * boundaries match the in-memory store), and an empty text column for cold rows so they match
  * lexically only through stub and entities. An external content table (content = memories)
  * cannot express either.
+ *
+ * A contentless-delete table records a deleted row as a tombstone, and FTS5's `secure-delete`
+ * cannot apply to it: the row's terms stay in the index's segments until they merge. Version 9
+ * replaces it (`createLexicalIndex`).
  */
 function ftsTable(tokenize: string, table: string): string {
   return `CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(
@@ -581,7 +641,54 @@ function ftsTable(tokenize: string, table: string): string {
       )`;
 }
 
-/** Version 3 to 4, inside the caller's transaction: the lexical index rebuilt with tokeniser v2. */
+/**
+ * The lexical index of schema version 9 (CON-159), with `FTS_VALUES_TABLE` beside it, both
+ * empty. A plain contentless table (content = '', no `contentless_delete`): the store deletes a
+ * row with FTS5's `'delete'` command, handing it the strings the row was indexed with (read from
+ * `FTS_VALUES_TABLE`), so FTS5 knows the row's terms and, with its persistent `secure-delete`
+ * option on, removes them from the index's pages at once instead of leaving a tombstone. Like
+ * version 8's, it is written explicitly in the memories write's transaction, rowid = rid, from
+ * core's tokeniser output, with an empty text column for cold rows.
+ */
+function createLexicalIndex(db: Database): void {
+  db.exec(`CREATE VIRTUAL TABLE ${FTS_TABLE} USING fts5(
+        text, stub, entities,
+        content = '',
+        tokenize = "${FTS_TOKENIZE}"
+      )`);
+  db.exec(`INSERT INTO ${FTS_TABLE} (${FTS_TABLE}, rank) VALUES ('secure-delete', 1)`);
+  db.exec(`CREATE TABLE ${FTS_VALUES_TABLE} (
+        rid INTEGER PRIMARY KEY,
+        text TEXT NOT NULL,
+        stub TEXT NOT NULL,
+        entities TEXT NOT NULL
+      )`);
+}
+
+/**
+ * Whether the lexical index is version 9's: no `contentless_delete`, declared with the current
+ * `FTS_TOKENIZE` (the tokenizer each connection's scratch table for deleted terms uses), FTS5's
+ * `secure-delete` on (without it a delete leaves the row's terms in the index), and its values
+ * table.
+ */
+function isLexicalIndexV9(db: Database): boolean {
+  const sql = db
+    .prepare<[string], { sql: string | null }>('SELECT sql FROM sqlite_master WHERE name = ?')
+    .get(FTS_TABLE)?.sql;
+  if (typeof sql !== 'string' || sql.includes('contentless_delete')) return false;
+  if (!sql.includes(FTS_TOKENIZE)) return false;
+  if (!exists(db, FTS_VALUES_TABLE) || !exists(db, `${FTS_TABLE}_config`)) return false;
+  const secure = db
+    .prepare<[], { v: unknown }>(`SELECT v FROM ${FTS_TABLE}_config WHERE k = 'secure-delete'`)
+    .get();
+  return Number(secure?.v) === 1;
+}
+
+/**
+ * Version 3 to 4, inside the caller's transaction: the lexical index rebuilt with tokeniser v2.
+ * It builds version 9's index directly: a store this old goes on up to 9 in the same transaction,
+ * and `migrateV8toV9` then has nothing to rebuild.
+ */
 export function migrateV3toV4(db: Database): void {
   rebuildFts(db, 2);
 }
@@ -593,6 +700,8 @@ export function migrateV3toV4(db: Database): void {
  */
 export function indexNeedsRepair(db: Database): boolean {
   if (exists(db, FTS_TABLE_V1) || !exists(db, FTS_TABLE)) return true;
+  // Version 9's index, with its values table (CON-159).
+  if (!isLexicalIndexV9(db)) return true;
   const empty = db.prepare(`SELECT rowid FROM ${FTS_TABLE} LIMIT 1`).get() === undefined;
   return empty && db.prepare('SELECT 1 FROM memories LIMIT 1').get() !== undefined;
 }
@@ -873,8 +982,9 @@ export function ensureLinkIndexes(db: Database): void {
  * No link row exists before version 8, so none is written. Nothing else changes.
  */
 export function migrateV7toV8(db: Database): void {
+  // Version 8's guard goes on at the end: this connection defines only the current version's
+  // function, and the backfill below writes `memories`.
   dropWriterGuard(db);
-  createWriterGuard(db);
   createLinkSchema(db);
   const nodeIds = new Map<string, number>();
   const nodeId = (key: string): number => {
@@ -956,6 +1066,7 @@ export function migrateV7toV8(db: Database): void {
     .all()) {
     nodeId(nodeKeyOfColumns(r));
   }
+  createWriterGuard(db, WRITER_GUARD_V8);
 }
 
 /** How many link rows version 7 cannot hold, and nothing could rebuild: explicit, distilled, blocks. */
@@ -997,6 +1108,31 @@ export function migrateV8toV7(db: Database, dropLinks = false): void {
   `);
   dropWriterGuard(db);
   createWriterGuard(db, WRITER_GUARD_V7);
+}
+
+/**
+ * Version 8 to 9, inside the caller's transaction (CON-159): the guard triggers call
+ * `oort_writer_v9`, and the lexical index is rebuilt as version 9's, with `FTS_VALUES_TABLE`
+ * filled from the stored rows. Returns how many memories it indexed: none when the index already
+ * is version 9's (`migrateV3toV4` built it in the same transaction).
+ */
+export function migrateV8toV9(db: Database, icu = lexicalIcuVersion()): number {
+  dropWriterGuard(db);
+  createWriterGuard(db);
+  return isLexicalIndexV9(db) ? 0 : rebuildFts(db, 2, icu);
+}
+
+/**
+ * Version 9 back to 8, inside the caller's transaction: the lexical index rebuilt as version 8's
+ * (`contentless_delete`, no `FTS_VALUES_TABLE`), and version 8's guard put back. Nothing else
+ * changes; version 8 can hold everything version 9 can. `rebuild: false` only drops
+ * `FTS_VALUES_TABLE`, for a downgrade on below version 4, which rebuilds the index itself.
+ */
+export function migrateV9toV8(db: Database, rebuild = true): void {
+  if (rebuild) rebuildFts(db, 2, lexicalIcuVersion(), true);
+  else db.exec(`DROP TABLE IF EXISTS ${FTS_VALUES_TABLE}`);
+  dropWriterGuard(db);
+  createWriterGuard(db, WRITER_GUARD_V8);
 }
 
 /**
@@ -1213,6 +1349,9 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       db.exec(memoriesV2('memories', true, true));
       db.exec(INDEXES_V2);
       migrateV7toV8(db);
+      createLexicalIndex(db);
+      recordLexical(db, opts.icu ?? lexicalIcuVersion());
+      migrateV8toV9(db);
     } else if (version === '1') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 1);
       assertMigratable(db);
@@ -1224,6 +1363,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV5toV6(db);
       migrateV6toV7(db);
       migrateV7toV8(db);
+      migrateV8toV9(db);
     } else if (version === '2') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 2);
       rebuilding();
@@ -1233,6 +1373,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV5toV6(db);
       migrateV6toV7(db);
       migrateV7toV8(db);
+      migrateV8toV9(db);
     } else if (version === '3') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 3);
       rebuilding();
@@ -1241,21 +1382,27 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV5toV6(db);
       migrateV6toV7(db);
       migrateV7toV8(db);
+      migrateV8toV9(db);
     } else if (
       version === '4' ||
       version === '5' ||
       version === '6' ||
       version === '7' ||
+      version === '8' ||
       version === String(SCHEMA_VERSION)
     ) {
       // Version 4 to 5 adds columns and an empty index, 5 to 6 and 6 to 7 the writer guard, 7 to
-      // 8 the link schema filled from stored rows: no rebuild, and no notice.
-      if (version === '4' || version === '5' || version === '6' || version === '7') {
+      // 8 the link schema filled from stored rows: no rebuild, and no notice. 8 to 9 rebuilds the
+      // lexical index (CON-159), and says so.
+      const older = ['4', '5', '6', '7', '8'];
+      if (older.includes(version)) {
         if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, Number(version));
         if (version === '4') migrateV4toV5(db);
         if (version === '4' || version === '5') migrateV5toV6(db);
-        if (version !== '7') migrateV6toV7(db);
-        migrateV7toV8(db);
+        if (version !== '7' && version !== '8') migrateV6toV7(db);
+        if (version !== '8') migrateV7toV8(db);
+        if (!isLexicalIndexV9(db)) rebuilding();
+        migrateV8toV9(db, opts.icu ?? lexicalIcuVersion());
       }
       // An index to repair is a migration: an open that may not migrate (a hook) refuses, changing
       // nothing, rather than create an empty index that would then look current. The same for a
@@ -1265,6 +1412,8 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
         throw new StoreMigrationRequiredError(db.name, SCHEMA_VERSION);
       }
       if (opts.migrate !== false) ensureLinkIndexes(db);
+      // A pending-rebuild mark an earlier build of version 9 could leave; nothing reads it.
+      if (opts.migrate !== false) db.exec("DELETE FROM meta WHERE key = 'lexical_rebuild'");
       // The drift guard needs a write; an open that may not migrate (a hook) leaves it to the next.
       if (opts.migrate !== false) {
         const icu = opts.icu ?? lexicalIcuVersion();
@@ -1287,12 +1436,8 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
     put.run('schema_version', String(SCHEMA_VERSION));
     if (stored === undefined) put.run('dimension', String(dimension));
 
-    // A new store gets the version 2 index here (see `ftsTable`); a migrated one has it already,
-    // and one whose index needs repair was rebuilt above or refused.
-    if (fresh) {
-      db.exec(ftsTable(FTS_TOKENIZE, FTS_TABLE));
-      recordLexical(db, opts.icu ?? lexicalIcuVersion());
-    }
+    // A new store got version 9's index above (`createLexicalIndex`); a migrated one has it
+    // already, and one whose index needs repair was rebuilt above or refused.
     if (!exists(db, 'memories_vec')) db.exec(vecV2(dimension));
     if (!exists(db, PLACE_TABLE)) rebuildPlaceIndex(db, opts.log);
     createWriterGuard(db);
@@ -1315,26 +1460,33 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
  * again (the default), 2 for Oort 0.3 to 0.5, 3 for Oort before tokeniser v2, 4 for Oort before
  * spatial memory (0.8), 5 for Oort before the binary vector index, 6 for Oort before the RaBitQ
  * index (the RaBitQ index is dropped, a binary index kept), 7 for Oort before memory links (the
- * link schema is dropped). Refuses, changing nothing, when the store holds anything that version
- * cannot represent (see `migrateV2toV1`, `migrateV3toV2`, `migrateV5toV4` and `migrateV8toV7`). Leaving version 6 drops the binary index and the writer
+ * link schema is dropped), 8 for Oort before version 9's lexical index (it is rebuilt as version
+ * 8's, with `contentless_delete` and no `FTS_VALUES_TABLE`). Refuses, changing nothing, when the
+ * store holds anything that version cannot represent (see `migrateV2toV1`, `migrateV3toV2`,
+ * `migrateV5toV4` and `migrateV8toV7`). Leaving version 6 drops the binary index and the writer
  * guard; leaving version 4 rebuilds the lexical index with tokeniser v1. No other connection may
  * have the store open. Opening a store never does this: migrations only roll forward.
  */
 export function downgradeSchema(
   db: Database,
-  to: 1 | 2 | 3 | 4 | 5 | 6 | 7 = 1,
+  to: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 = 1,
   opts: { dropLinks?: boolean } = {},
 ): void {
   db.transaction(() => {
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     let version = Number(get.get('schema_version')?.value);
     if (version <= to && version >= 1) return;
-    if (![2, 3, 4, 5, 6, 7, 8].includes(version)) {
+    if (![2, 3, 4, 5, 6, 7, 8, 9].includes(version)) {
       throw new Error(
         `sqlite store: cannot downgrade schema version ${Number.isNaN(version) ? 'unknown' : version}`,
       );
     }
-    if (version === 8) {
+    if (version === 9) {
+      // Below 4 the index is rebuilt with tokeniser v1 anyway: one rebuild, not two.
+      migrateV9toV8(db, to >= 4);
+      version = 8;
+    }
+    if (version === 8 && to < 8) {
       migrateV8toV7(db, opts.dropLinks === true);
       version = 7;
     }

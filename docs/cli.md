@@ -2209,9 +2209,9 @@ and the SDK and the MCP `forget` tool leave them out too.
 
 What stays on disk: the store overwrites deleted rows with zeros and purges them from its search
 index when you forget, so nothing you forget with this version stays in `oort.sqlite` (see the
-store contract). Clearing the keyword index rewrites all of it, so a forget takes about 2 to 3
-seconds at 100,000 memories (well under a second for a few thousand), and other Oort processes wait
-for it meanwhile; CON-159 tracks making it cheaper. A store from Oort 0.9.0 or older can still hold text deleted then in its free
+store contract). The keyword index removes the forgotten memory's own words in place, so a
+forget no longer rewrites the whole search index, and it stays quick as the store grows.
+A store from Oort 0.9.0 or older can still hold text deleted then in its free
 space. The first open that may migrate rewrites such a store once (`VACUUM`) when it is at most
 32 MB; a bigger one waits for `oort doctor --vacuum`, and until then `oort doctor` warns that older
 deleted text may remain. Forget cannot reach copies taken before a schema migration

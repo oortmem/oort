@@ -1,7 +1,7 @@
 /**
  * `forget` leaves no copy in the file (CON-140). SQLite normally leaves deleted rows in free
- * pages, and FTS5 keeps a deleted row's terms in its segments until they merge, so the store runs
- * with `PRAGMA secure_delete`, and `forget` merges the lexical index and truncates the WAL.
+ * pages, so the store runs with `PRAGMA secure_delete`; the lexical index removes a row's terms
+ * itself (FTS5's `secure-delete`, CON-159); and `forget` truncates the WAL.
  * Each test scans the raw bytes of `oort.sqlite` (and its `-wal`) for a marker and its vector.
  */
 import * as fs from 'node:fs';
@@ -18,6 +18,7 @@ import {
   sqliteVectorIndex,
   vacuumSqliteStore,
   BIT_TABLE,
+  FTS_VALUES_TABLE,
   WRITER_GUARD,
 } from './index.js';
 
@@ -196,8 +197,10 @@ describe('forgetting a memory a later one restated (CON-144)', () => {
 });
 
 /**
- * A store as Oort 0.9.0 left it (schema 6, no `secure_delete`): a forgotten memory's text in a
- * free page and in the lexical index's segments, a zero vector, and no record of the erase.
+ * A store as Oort 0.9.0 left it (no `secure_delete`): a forgotten memory's text in a free page
+ * and in the lexical index's segments, a zero vector, and no record of the erase. Its schema is
+ * the current one, so that a hook can open it; the lexical index's own `secure-delete` is off for
+ * the delete, which then leaves a tombstone holding the terms, as 0.9.0's index did.
  */
 async function asOld(index: 'int8' | 'binary'): Promise<string> {
   const { store, dbPath } = await openAt(index);
@@ -212,7 +215,18 @@ async function asOld(index: 'int8' | 'binary'): Promise<string> {
   };
   // 0.9.0's forget: the row, its lexical entry (a tombstone) and its vector, nothing merged.
   raw.prepare("DELETE FROM memories WHERE id = 'secret'").run();
-  raw.prepare('DELETE FROM memories_fts2 WHERE rowid = ?').run(rid);
+  const indexed = raw
+    .prepare(`SELECT text, stub, entities FROM ${FTS_VALUES_TABLE} WHERE rid = ?`)
+    .get(rid) as { text: string; stub: string; entities: string };
+  raw.exec("INSERT INTO memories_fts2 (memories_fts2, rank) VALUES ('secure-delete', 0)");
+  raw
+    .prepare(
+      `INSERT INTO memories_fts2 (memories_fts2, rowid, text, stub, entities)
+       VALUES ('delete', ?, ?, ?, ?)`,
+    )
+    .run(rid, indexed.text, indexed.stub, indexed.entities);
+  raw.exec("INSERT INTO memories_fts2 (memories_fts2, rank) VALUES ('secure-delete', 1)");
+  raw.prepare(`DELETE FROM ${FTS_VALUES_TABLE} WHERE rid = ?`).run(rid);
   raw.prepare("DELETE FROM memories_vec WHERE id = 'secret'").run();
   if (index === 'binary') raw.prepare(`DELETE FROM ${BIT_TABLE} WHERE id = 'secret'`).run();
   // 0.9.0 also kept an all-zero vector.
