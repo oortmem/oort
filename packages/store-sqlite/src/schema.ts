@@ -1409,6 +1409,8 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
         throw new StoreMigrationRequiredError(db.name, SCHEMA_VERSION);
       }
       if (opts.migrate !== false) ensureLinkIndexes(db);
+      // A pending-rebuild mark an earlier build of version 9 could leave; nothing reads it.
+      if (opts.migrate !== false) db.exec("DELETE FROM meta WHERE key = 'lexical_rebuild'");
       // The drift guard needs a write; an open that may not migrate (a hook) leaves it to the next.
       if (opts.migrate !== false) {
         const icu = opts.icu ?? lexicalIcuVersion();

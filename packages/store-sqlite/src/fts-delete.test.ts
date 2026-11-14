@@ -49,7 +49,10 @@ function fresh(): Paths {
   return { dir, dbPath: path.join(dir, 'oort.sqlite'), coldDir: path.join(dir, 'cold') };
 }
 
-const open = (s: Paths, extra: { migrate?: boolean; log?: (m: string) => void } = {}) =>
+const open = (
+  s: Paths,
+  extra: { migrate?: boolean; log?: (m: string) => void; icu?: string } = {},
+) =>
   openSqliteStore({
     path: s.dbPath,
     coldDir: s.coldDir,
@@ -408,7 +411,8 @@ describe('schema version 9: a lexical index that deletes a row by its own terms 
       makeMemory({ id: 'edit', text: `edit ${MARKER}x me` }),
     ]);
     await store.close();
-    store = await open(s, { migrate: false, log: (m) => logged.push(m) });
+    // This runtime's ICU, which the rebuild records (not the default `lexicalIcuVersion()`).
+    store = await open(s, { migrate: false, log: (m) => logged.push(m), icu: '72.1' });
     // A bug elsewhere lost their side rows.
     const db = raw(s.dbPath);
     db.prepare(
@@ -430,6 +434,9 @@ describe('schema version 9: a lexical index that deletes a row by its own terms 
     expect(inShadowTables(s.dbPath, MARKER)).toBe(false);
     expect(bytesOf(s.dbPath).includes(MARKER)).toBe(false);
     expect(read(s.dbPath, "SELECT value FROM meta WHERE key = 'lexical_rebuild'")).toEqual([]);
+    expect(read(s.dbPath, "SELECT value FROM meta WHERE key = 'lexical_icu'")).toEqual([
+      { value: '72' },
+    ]);
     const { live, rebuilt } = liveAndRebuilt(s);
     expect(live).toEqual(rebuilt);
     expect(live.values).toHaveLength(2);
@@ -488,6 +495,144 @@ describe('schema version 9: a lexical index that deletes a row by its own terms 
     },
   );
 
+  it('fts-delete.a-page-key-ending-in-a-folded-letter-is-found', { timeout: 300_000 }, async () => {
+    // unicode61 folds a final sigma (ς) to σ, so the index's term is not the stored token. With
+    // `ω…ορ` before it, the page key of `ω…ος` is the whole term `ω…οσ`.
+    const s = fresh();
+    const store = await open(s);
+    const N = 10_000;
+    const word = (i: number, end: string) => `ω${String(i).padStart(5, '0')}ο${end}`;
+    for (let i = 0; i < N; i += 1000) {
+      await store.upsertMany(
+        TG,
+        Array.from({ length: 1000 }, (_, k) => [
+          makeMemory({ id: `k${i + k}`, text: `common ${word(i + k, 'ρ')}`, stub: 'x' }),
+          makeMemory({ id: `m${i + k}`, text: `common ${word(i + k, 'ς')}`, stub: 'x' }),
+        ]).flat(),
+      );
+    }
+    await store.close();
+    optimizeRaw(s.dbPath);
+    const keys = new Set(pageKeyBytes(s.dbPath).map((k) => k.toString('hex')));
+    const owners = Array.from({ length: N }, (_, i) => i).filter((i) =>
+      keys.has(Buffer.from(word(i, 'σ')).toString('hex')),
+    );
+    expect(owners.length).toBeGreaterThan(2);
+    const i = owners[Math.floor(owners.length / 2)]!;
+    const term = word(i, 'σ');
+
+    const again = await open(s);
+    await again.forget(TG, `m${i}`);
+    await again.close();
+    checkpoint(s.dbPath);
+    expect(leakedKeys(s.dbPath, term)).toEqual([]);
+    expect(inShadowTables(s.dbPath, term)).toBe(false);
+    expect(bytesOf(s.dbPath).includes(term)).toBe(false);
+    expect(bytesOf(s.dbPath).includes(word(i, 'ς'))).toBe(false);
+    const { live, rebuilt } = liveAndRebuilt(s);
+    expect(live).toEqual(rebuilt);
+  });
+
+  it.each([
+    {
+      script: 'CJK',
+      // Bigrams over 2,000 Han characters spread across the block: page keys end inside a
+      // 3-byte character, and hundreds of terms share each first character.
+      text: (r: () => number) =>
+        Array.from({ length: 40 }, () =>
+          String.fromCodePoint(0x4e00 + 10 * Math.floor(r() * 2000)),
+        ).join(''),
+    },
+    {
+      script: 'Cyrillic',
+      text: (r: () => number) =>
+        Array.from({ length: 8 }, () =>
+          Array.from({ length: 4 + Math.floor(r() * 4) }, () =>
+            String.fromCodePoint(0x430 + Math.floor(r() * 32)),
+          ).join(''),
+        ).join(' '),
+    },
+  ])(
+    'fts-delete.a-$script-forget-merges-only-when-a-key-would-keep-part-of-a-forgotten-word',
+    { timeout: 300_000 },
+    async ({ text }) => {
+      const s = fresh();
+      const store = await open(s);
+      const N = 20_000;
+      const r = prng(7);
+      const texts = Array.from({ length: N }, () => text(r));
+      for (let i = 0; i < N; i += 2000) {
+        await store.upsertMany(
+          TG,
+          texts
+            .slice(i, i + 2000)
+            .map((t, k) => makeMemory({ id: `m${i + k}`, text: t, stub: 'x' })),
+        );
+      }
+      await store.close();
+      optimizeRaw(s.dbPath);
+
+      const docs = termDocs(s.dbPath);
+      const live = await open(s);
+      const byHex = new Map(docs.map((d) => [d.hex, d]));
+      let merges = 0;
+      let leaks = 0;
+      const gone: Buffer[] = [];
+      try {
+        for (let n = 0; n < 40; n++) {
+          const id = `m${Math.floor(r() * N)}`;
+          const rid = read<{ rid: number }>(
+            s.dbPath,
+            'SELECT rid FROM memories WHERE id = ?',
+            id,
+          )[0]?.rid;
+          if (rid === undefined) continue;
+          const terms = termsOf(s.dbPath, rid);
+          const before = segids(s.dbPath);
+          const keys = pageKeyBytes(s.dbPath);
+          // Whether some key is a prefix of one of its terms and of no term still live after it.
+          const liveAfter = (k: Buffer) => {
+            for (let x = lowerBound(docs, k); x < docs.length; x++) {
+              const d = docs[x]!;
+              if (!startsWith(d.term, k)) return false;
+              if (d.docs - (terms.has(d.hex) ? 1 : 0) > 0) return true;
+            }
+            return false;
+          };
+          const leak = keys.some(
+            (k) => [...terms.values()].some((t) => startsWith(t, k)) && !liveAfter(k),
+          );
+          await live.forget(TG, id);
+          const merged = segids(s.dbPath) !== before;
+          expect(merged).toBe(leak);
+          if (merged) merges++;
+          if (leak) leaks++;
+          for (const [hex, t] of terms) {
+            const d = byHex.get(hex)!;
+            d.docs--;
+            if (d.docs === 0) gone.push(t);
+          }
+        }
+      } finally {
+        await live.close();
+      }
+      expect(merges).toBe(leaks);
+      // No key is a prefix of a forgotten term unless a live term starts with it.
+      const after = pageKeyBytes(s.dbPath);
+      for (const t of gone) {
+        for (const k of after) {
+          if (!startsWith(t, k)) continue;
+          const d = docs
+            .slice(lowerBound(docs, k))
+            .find((e) => !startsWith(e.term, k) || e.docs > 0);
+          expect(d !== undefined && startsWith(d.term, k)).toBe(true);
+        }
+      }
+      const { live: index, rebuilt } = liveAndRebuilt(s);
+      expect(index).toEqual(rebuilt);
+    },
+  );
+
   it('fts-delete.a-forget-that-leaves-no-key-merges-nothing', async () => {
     const s = fresh();
     const store = await open(s);
@@ -520,6 +665,84 @@ describe('schema version 9: a lexical index that deletes a row by its own terms 
     ).toEqual([{ v: 1 }]);
   });
 });
+
+/** Every leaf-page key in the lexical index (`*_idx`), as bytes without its leading byte. */
+function pageKeyBytes(dbPath: string): Buffer[] {
+  return read<{ term: Buffer }>(dbPath, `SELECT term FROM ${FTS_TABLE}_idx`)
+    .map((r) => Buffer.from(r.term).subarray(1))
+    .filter((b) => b.length > 0);
+}
+
+/** The lexical index's segment ids, as one string: a merge writes new ones. */
+const segids = (dbPath: string): string =>
+  read<{ segid: number }>(dbPath, `SELECT DISTINCT segid FROM ${FTS_TABLE}_idx ORDER BY segid`)
+    .map((r) => r.segid)
+    .join(',');
+
+const startsWith = (t: Buffer, k: Buffer): boolean => t.subarray(0, k.length).equals(k);
+
+/** The first index of `sorted` whose term is at or after `k`, by bytes. */
+function lowerBound(sorted: { term: Buffer }[], k: Buffer): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (Buffer.compare(sorted[mid]!.term, k) < 0) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Merges the lexical index into one segment, as a long-lived store's index would be. */
+function optimizeRaw(dbPath: string): void {
+  const db = raw(dbPath);
+  db.function(WRITER_GUARD, () => 1);
+  db.exec(`INSERT INTO ${FTS_TABLE} (${FTS_TABLE}) VALUES ('optimize')`);
+  db.close();
+}
+
+/** Every term of the lexical index, sorted by bytes, with how many memories hold it. */
+function termDocs(dbPath: string): { term: Buffer; hex: string; docs: number }[] {
+  const db = raw(dbPath, true);
+  try {
+    db.exec(`CREATE VIRTUAL TABLE temp.rows USING fts5vocab(main, ${FTS_TABLE}, row)`);
+    return (db.prepare('SELECT term, doc FROM temp.rows').all() as { term: string; doc: number }[])
+      .map((r) => {
+        const term = Buffer.from(r.term);
+        return { term, hex: term.toString('hex'), docs: r.doc };
+      })
+      .sort((a, b) => Buffer.compare(a.term, b.term));
+  } finally {
+    db.close();
+  }
+}
+
+/** The terms the lexical index holds for one memory, keyed by their hex. */
+function termsOf(dbPath: string, rid: number): Map<string, Buffer> {
+  const db = raw(dbPath, true);
+  try {
+    db.exec(`CREATE VIRTUAL TABLE temp.inst USING fts5vocab(main, ${FTS_TABLE}, instance)`);
+    const out = new Map<string, Buffer>();
+    for (const r of db.prepare('SELECT term FROM temp.inst WHERE doc = ?').all(rid) as {
+      term: string;
+    }[]) {
+      const b = Buffer.from(r.term);
+      out.set(b.toString('hex'), b);
+    }
+    return out;
+  } finally {
+    db.close();
+  }
+}
+
+/** A small deterministic generator, so a failure can be run again. */
+function prng(seed: number): () => number {
+  let x = seed >>> 0;
+  return () => {
+    x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+    return x / 2 ** 32;
+  };
+}
 
 /** The text of every leaf-page key in the lexical index (`*_idx`), without its leading byte. */
 function pageKeys(dbPath: string): string[] {
@@ -736,6 +959,21 @@ describe('schema migration 8 to 9 (CON-159)', () => {
     await store.close();
     const { live, rebuilt } = liveAndRebuilt(s);
     expect(live).toEqual(rebuilt);
+  });
+
+  it('fts-delete.an-open-that-may-migrate-drops-a-pending-rebuild-mark', async () => {
+    const s = fresh();
+    let store = await open(s);
+    await store.close();
+    const db = raw(s.dbPath);
+    db.prepare("INSERT INTO meta (key, value) VALUES ('lexical_rebuild', '1')").run();
+    db.close();
+    store = await open(s, { migrate: false });
+    await store.close();
+    expect(read(s.dbPath, "SELECT value FROM meta WHERE key = 'lexical_rebuild'")).toHaveLength(1);
+    store = await open(s);
+    await store.close();
+    expect(read(s.dbPath, "SELECT value FROM meta WHERE key = 'lexical_rebuild'")).toEqual([]);
   });
 
   it('fts-delete.a-v9-store-without-its-side-table-is-repaired', async () => {

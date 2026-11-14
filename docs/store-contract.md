@@ -186,8 +186,9 @@ rejects it, and every store rejects it at run time with a `TypeError`.
   `'delete'` command, which removes the row's terms from the index's pages in place, and deletes
   the side row in the same transaction. One thing stays: FTS5 keeps a key for each page of the
   index, a prefix of the page's first term, and deleting that term leaves the key. So before the
-  transaction commits, the store looks for a key that is a prefix of a deleted term and of no live
-  term; only when it finds one does it merge the index (`optimize`), which writes every key again.
+  transaction commits, the store looks for a key that is a prefix of a deleted term, as FTS5's
+  tokenizer stored it, and of no live term; only when it finds one does it merge the index
+  (`optimize`), which writes every key again.
   `forget` no longer rewrites the whole search index otherwise, so it stays quick as the store
   grows. `forget` then truncates the WAL (`journal_size_limit = 0`) and logs a notice when
   another connection's read keeps it from doing so. Text an edit replaced leaves the index the
@@ -542,12 +543,16 @@ tokeniser, ICU or Unicode version could give other tokens, and then the old term
 the index. The page keys FTS5 keeps in `memories_fts2_idx` are the one thing such a delete does
 not rewrite: a write transaction that deleted a term checks, before it commits, whether a key is
 a prefix of that term and of no live term, and only then merges the index, so no key keeps part
-of a forgotten word. A write that finds a stored memory with no row in `memories_indexed`, which
-only a bug leaves, rebuilds the whole index from the stored rows in the same transaction and logs
-that it did, whichever process writes (a hook or an MCP server that never migrates included). An
-index whose `secure-delete` option is off, or that has no `memories_indexed`, is rebuilt by the
-next open that may migrate. Opening a
-version 8 store (or an older one, on its way up) rebuilds the index in one transaction, with the
+of a forgotten word. It compares bytes, so a key that ends inside a character (common in CJK text)
+is checked as exactly as any other. The deleted terms are the ones FTS5's tokenizer stored, which
+can differ from the stored tokens (it folds a final sigma to σ): the deleted strings go through a
+contentless FTS5 table with the same tokenizer in an in-memory database each connection attaches,
+which is emptied before the transaction ends. A write that finds a stored memory with no row in
+`memories_indexed`, which only a bug leaves, rebuilds the whole index from the stored rows in the
+same transaction and logs that it did, whichever process writes (a hook or an MCP server that never
+migrates included). An index whose `secure-delete` option is off, or that has no `memories_indexed`,
+is rebuilt by the next open that may migrate. Opening a version 8 store (or an older one, on its way
+up) rebuilds the index in one transaction, with the
 same "Rebuilding the search index (N memories)…" line and 60-second wait as version 4, and swaps
 the guard triggers to `oort_writer_v9()`; it takes no copy, since nothing is lost going back.
 As at version 4, the rebuilt index's BM25 totals count the live rows only, so lexical scores

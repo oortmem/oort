@@ -107,6 +107,7 @@ import {
   downgradeSchema,
   ENTITY_TABLE,
   FTS_TABLE,
+  FTS_TOKENIZE,
   FTS_VALUES_TABLE,
   rebuildFts,
   rowEntities,
@@ -336,9 +337,15 @@ const BACKUP_BEFORE = { 1: 'pre-v2', 2: 'pre-v3', 3: 'pre-v4', 4: 'pre-v5' } as 
 
 /** The `fts5vocab` table over the lexical index's terms each connection keeps in `temp`. */
 const LEXICAL_TERMS = 'oort_lexical_terms';
-/** How many live terms `liveTermStartsWith` reads before it gives up and asks for a merge. */
-const LIVE_TERM_SCAN = 64;
-const UTF8 = new TextDecoder('utf-8', { fatal: true });
+/**
+ * A contentless FTS5 table each connection keeps in an in-memory database it attaches (so it
+ * never reaches a file), with the lexical index's tokenizer: the strings a write transaction
+ * deletes from the index go through it, so `settleLexical` reads the terms FTS5 stored for them
+ * (unicode61 folds some letters, a final sigma to σ), not the tokens Oort stored. Emptied at the
+ * end of every write transaction.
+ */
+const LEXICAL_SCRATCH = 'oort_lexical';
+const LEXICAL_DELETED = `${LEXICAL_SCRATCH}.deleted`;
 
 /** sqlite-vec's upper bound on `k` in a KNN query. */
 const MAX_KNN = 4096;
@@ -1194,10 +1201,17 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
 
   type Params = Record<string, unknown>;
 
-  // The index's live terms, for `settleLexical` (per connection, in `temp`).
+  // The index's live terms and the terms a write deleted, for `settleLexical` (per connection).
   db.exec(
     `CREATE VIRTUAL TABLE IF NOT EXISTS temp.${LEXICAL_TERMS} USING fts5vocab(main, ${FTS_TABLE}, instance)`,
   );
+  db.exec(`ATTACH DATABASE ':memory:' AS ${LEXICAL_SCRATCH}`);
+  db.exec(
+    `CREATE VIRTUAL TABLE ${LEXICAL_DELETED} USING fts5(
+       text, content = '', tokenize = "${FTS_TOKENIZE}"
+     )`,
+  );
+  db.exec(`CREATE VIRTUAL TABLE ${LEXICAL_DELETED}_terms USING fts5vocab(deleted, row)`);
 
   const q = {
     upsertRow: db.prepare<[RowParams], { rid: number }>(
@@ -1259,15 +1273,17 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        WHERE segid = ? AND term IN (SELECT unhex(value) FROM json_each(?))`,
     ),
     /**
-     * The index's first live term at or after a point, and after one (`fts5vocab`, `instance`:
-     * it reads one entry, where `row` would count a term's every document).
+     * The index's first live term at or after some bytes (`fts5vocab`, `instance`: it reads one
+     * entry, where `row` would count a term's every document). FTS5 compares the bytes as they
+     * are, so a page key that ends inside a character seeks exactly.
      */
-    termAtOrAfter: db.prepare<[string], { term: string }>(
-      `SELECT term FROM temp.${LEXICAL_TERMS} WHERE term >= ? LIMIT 1`,
+    termAtOrAfter: db.prepare<[Buffer], { term: string }>(
+      `SELECT term FROM temp.${LEXICAL_TERMS} WHERE term >= CAST(? AS TEXT) LIMIT 1`,
     ),
-    termAfter: db.prepare<[string], { term: string }>(
-      `SELECT term FROM temp.${LEXICAL_TERMS} WHERE term > ? LIMIT 1`,
-    ),
+    /** The strings a write deleted from the index, their terms, and emptying them again. */
+    deletedAdd: db.prepare<[string]>(`INSERT INTO ${LEXICAL_DELETED} (text) VALUES (?)`),
+    deletedTerms: db.prepare<[], { term: string }>(`SELECT term FROM ${LEXICAL_DELETED}_terms`),
+    deletedClear: db.prepare(`INSERT INTO ${LEXICAL_DELETED} (deleted) VALUES ('delete-all')`),
     ftsOptimize: db.prepare(`INSERT INTO ${FTS_TABLE} (${FTS_TABLE}) VALUES ('optimize')`),
     vecGet: db.prepare<[string], { embedding: Buffer }>(
       'SELECT embedding FROM memories_vec WHERE id = ?',
@@ -1673,9 +1689,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
 
   /**
    * What the current write transaction took out of the lexical index, for `settleLexical` at its
-   * end: the tokens it deleted, and whether the index must be rebuilt.
+   * end: whether it deleted strings (in `LEXICAL_DELETED`), and whether the index must be rebuilt.
    */
-  const lexical = { removed: new Set<string>(), rebuild: false };
+  const lexical = { deleted: false, rebuild: false };
 
   /**
    * Takes the memory at `rid` out of the lexical index (CON-159): FTS5's `'delete'` with the
@@ -1687,15 +1703,16 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
    * tokenising its text again gives them only while the tokeniser (and the ICU and Unicode data
    * under it) is unchanged. So the transaction rebuilds the whole index before it commits
    * (`settleLexical`), whichever connection runs it: a hook or a server that never migrates
-   * would otherwise keep the terms.
+   * would otherwise keep the terms. The rebuild reads every memory, which a hook's write can
+   * afford only because this happens once, to repair what a bug left; the side rows it writes
+   * keep later writes from needing it.
    */
   function removeFts(rid: number, was: IndexedColumns | undefined, old = q.indexedGet.get(rid)) {
     if (old !== undefined) {
       q.ftsDelete.run(rid, old.text, old.stub, old.entities);
       q.indexedDelete.run(rid);
-      for (const s of [old.text, old.stub, old.entities]) {
-        for (const t of s.split(' ')) if (t.length > 0) lexical.removed.add(t);
-      }
+      q.deletedAdd.run(`${old.text} ${old.stub} ${old.entities}`);
+      lexical.deleted = true;
       return;
     }
     if (was === undefined || lexical.rebuild) return;
@@ -1705,52 +1722,35 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     );
   }
 
-  /**
-   * Whether a live term of the lexical index starts with `key` (bytes). Terms are read in order
-   * from the longest whole-character prefix of `key`; past `LIVE_TERM_SCAN` of them without an
-   * answer, it says no, so the caller merges rather than guess.
-   */
+  /** Whether a live term of the lexical index starts with `key` (bytes). */
   function liveTermStartsWith(key: Buffer): boolean {
-    let end = key.length;
-    let from: string | undefined;
-    for (; end >= Math.max(0, key.length - 3); end--) {
-      try {
-        from = UTF8.decode(key.subarray(0, end));
-        break;
-      } catch {
-        // A key can end inside a character: try a shorter one.
-      }
-    }
-    if (from === undefined) return false;
-    const head = Buffer.from(from);
-    let term = q.termAtOrAfter.get(from)?.term;
-    for (let n = 0; term !== undefined && n < LIVE_TERM_SCAN; n++) {
-      const t = Buffer.from(term);
-      if (!t.subarray(0, head.length).equals(head)) return false;
-      if (t.subarray(0, key.length).equals(key)) return true;
-      term = q.termAfter.get(term)?.term;
-    }
-    return false;
+    const term = q.termAtOrAfter.get(key)?.term;
+    if (term === undefined) return false;
+    const t = Buffer.from(term);
+    return t.subarray(0, key.length).equals(key);
   }
 
   /**
    * Run by every write transaction before it commits. A rebuild asked for by `removeFts` happens
    * here, from the stored rows. Otherwise: FTS5 keeps one key per leaf page in `*_idx`, the
    * shortest prefix of the page's first term that sets it apart from the page before, and its
-   * `secure-delete` leaves that key when it deletes the term. A key that is a prefix of a token
+   * `secure-delete` leaves that key when it deletes the term. A key that is a prefix of a term
    * this transaction deleted, and of no live term, would still name part of it; then the index
    * is merged (`optimize`), which writes every key again. A key some live term starts with says
-   * nothing new and is left.
+   * nothing new and is left. The deleted terms are FTS5's own, from `LEXICAL_DELETED`, which is
+   * emptied here.
    */
   function settleLexical(): void {
+    const removed = lexical.deleted ? q.deletedTerms.all() : [];
+    if (lexical.deleted) q.deletedClear.run();
     if (lexical.rebuild) {
-      rebuildFts(db, 2);
+      rebuildFts(db, 2, icu);
       return;
     }
-    if (lexical.removed.size === 0) return;
+    if (removed.length === 0) return;
     const prefixes = new Set<string>();
-    for (const t of lexical.removed) {
-      const b = Buffer.from(t);
+    for (const { term } of removed) {
+      const b = Buffer.from(term);
       for (let n = 1; n <= b.length; n++) prefixes.add(`30${b.subarray(0, n).toString('hex')}`);
     }
     const wanted = JSON.stringify([...prefixes]);
@@ -1778,9 +1778,9 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
    * nothing to keep and is created again empty.
    */
   function rewriteIndex(): void {
-    const first = q.termAtOrAfter.get('');
+    const first = q.termAtOrAfter.get(Buffer.alloc(0));
     if (first === undefined) {
-      rebuildFts(db, 2);
+      rebuildFts(db, 2, icu);
       return;
     }
     q.ftsInsert.run(-1, first.term, '', '');
@@ -1796,7 +1796,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         settleLexical();
         return r;
       } finally {
-        lexical.removed.clear();
+        // A transaction that fails rolls `LEXICAL_DELETED` back to empty with everything else.
+        lexical.deleted = false;
         lexical.rebuild = false;
       }
     };
