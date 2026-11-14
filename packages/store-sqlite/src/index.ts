@@ -1169,6 +1169,17 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           .map((r) => r.path),
       ),
     );
+    // The index's live terms and the terms a write deleted, for `settleLexical` (per connection).
+    db.exec(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS temp.${LEXICAL_TERMS} USING fts5vocab(main, ${FTS_TABLE}, instance)`,
+    );
+    db.exec(`ATTACH DATABASE ':memory:' AS ${LEXICAL_SCRATCH}`);
+    db.exec(
+      `CREATE VIRTUAL TABLE ${LEXICAL_DELETED} USING fts5(
+         text, content = '', tokenize = "${FTS_TOKENIZE}"
+       )`,
+    );
+    db.exec(`CREATE VIRTUAL TABLE ${LEXICAL_DELETED}_terms USING fts5vocab(deleted, row)`);
   } catch (e) {
     db.close();
     throw e;
@@ -1200,18 +1211,6 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   );
 
   type Params = Record<string, unknown>;
-
-  // The index's live terms and the terms a write deleted, for `settleLexical` (per connection).
-  db.exec(
-    `CREATE VIRTUAL TABLE IF NOT EXISTS temp.${LEXICAL_TERMS} USING fts5vocab(main, ${FTS_TABLE}, instance)`,
-  );
-  db.exec(`ATTACH DATABASE ':memory:' AS ${LEXICAL_SCRATCH}`);
-  db.exec(
-    `CREATE VIRTUAL TABLE ${LEXICAL_DELETED} USING fts5(
-       text, content = '', tokenize = "${FTS_TOKENIZE}"
-     )`,
-  );
-  db.exec(`CREATE VIRTUAL TABLE ${LEXICAL_DELETED}_terms USING fts5vocab(deleted, row)`);
 
   const q = {
     upsertRow: db.prepare<[RowParams], { rid: number }>(

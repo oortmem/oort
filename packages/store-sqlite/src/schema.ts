@@ -666,14 +666,17 @@ function createLexicalIndex(db: Database): void {
 }
 
 /**
- * Whether the lexical index is version 9's: no `contentless_delete`, FTS5's `secure-delete` on
- * (without it a delete leaves the row's terms in the index), and its values table.
+ * Whether the lexical index is version 9's: no `contentless_delete`, declared with the current
+ * `FTS_TOKENIZE` (the tokenizer each connection's scratch table for deleted terms uses), FTS5's
+ * `secure-delete` on (without it a delete leaves the row's terms in the index), and its values
+ * table.
  */
 function isLexicalIndexV9(db: Database): boolean {
   const sql = db
     .prepare<[string], { sql: string | null }>('SELECT sql FROM sqlite_master WHERE name = ?')
     .get(FTS_TABLE)?.sql;
   if (typeof sql !== 'string' || sql.includes('contentless_delete')) return false;
+  if (!sql.includes(FTS_TOKENIZE)) return false;
   if (!exists(db, FTS_VALUES_TABLE) || !exists(db, `${FTS_TABLE}_config`)) return false;
   const secure = db
     .prepare<[], { v: unknown }>(`SELECT v FROM ${FTS_TABLE}_config WHERE k = 'secure-delete'`)

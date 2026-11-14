@@ -13,12 +13,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { forgetMemory, tokenizeLexical, type Memory, type MemoryStore } from '@oortmem/core';
 import { makeMemory, TG } from '@oortmem/core/store-conformance';
 import {
   downgradeSqliteStore,
   FTS_TABLE,
+  FTS_TOKENIZE,
   FTS_VALUES_TABLE,
   openSqliteStore,
   SCHEMA_VERSION,
@@ -646,6 +647,56 @@ describe('schema version 9: a lexical index that deletes a row by its own terms 
     checkpoint(s.dbPath);
     expect(segments(s.dbPath)).toBe(before);
     await store.close();
+  });
+
+  it('fts-delete.an-index-declared-with-another-tokenizer-is-rebuilt', async () => {
+    const s = fresh();
+    let store = await open(s);
+    await store.upsert(TG, makeMemory({ id: 'a', text: 'auth service' }));
+    await store.close();
+    const ftsSql = () =>
+      read<{ sql: string }>(s.dbPath, 'SELECT sql FROM sqlite_master WHERE name = ?', FTS_TABLE)[0]!
+        .sql;
+    const other = FTS_TOKENIZE.replace(`tokenchars '-_.'`, `tokenchars '-_'`);
+    expect(other).not.toBe(FTS_TOKENIZE);
+    const db = raw(s.dbPath);
+    db.unsafeMode(true);
+    db.pragma('writable_schema = ON');
+    db.prepare('UPDATE sqlite_master SET sql = ? WHERE name = ?').run(
+      ftsSql().replace(FTS_TOKENIZE, other),
+      FTS_TABLE,
+    );
+    db.close();
+    expect(ftsSql()).not.toContain(FTS_TOKENIZE);
+    const err = await open(s, { migrate: false }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StoreMigrationRequiredError);
+    store = await open(s);
+    expect((await store.lexical(TG, 'auth', 10)).map((h) => h.id)).toEqual(['a']);
+    await store.close();
+    expect(ftsSql()).toContain(FTS_TOKENIZE);
+  });
+
+  it('fts-delete.an-open-that-fails-setting-up-the-lexical-scratch-closes-its-connection', async () => {
+    const s = fresh();
+    await (await open(s)).close();
+    const exec = Database.prototype.exec;
+    const execSpy = vi.spyOn(Database.prototype, 'exec').mockImplementation(function (
+      this: Database.Database,
+      sql: string,
+    ) {
+      if (sql.startsWith('ATTACH DATABASE')) throw new Error('attach failed');
+      return exec.call(this, sql);
+    });
+    const closeSpy = vi.spyOn(Database.prototype, 'close');
+    try {
+      await expect(open(s)).rejects.toThrow('attach failed');
+      const failed = execSpy.mock.contexts.at(-1) as Database.Database;
+      expect(closeSpy.mock.contexts).toContain(failed);
+      expect(failed.open).toBe(false);
+    } finally {
+      execSpy.mockRestore();
+      closeSpy.mockRestore();
+    }
   });
 
   it('fts-delete.an-index-without-secure-delete-is-rebuilt', async () => {
