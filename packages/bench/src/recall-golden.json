@@ -2567,13 +2567,23 @@
     },
     {
       "question": "who approved the quarterly budget for the search gateway",
-      "ids": ["m7-1309"],
+      "ids": ["m7-336", "m7-1309"],
       "explanations": [
         {
-          "lexicalRank": 47,
+          "lexicalRank": 49,
+          "denseRank": 33,
+          "fused": 0.020842125074469406,
+          "rrf": 0.019927000098648517,
+          "coverage": 0.6,
+          "dense": 0.47635704278945923,
+          "activation": 2.421837201583958,
+          "hydrated": false
+        },
+        {
+          "lexicalRank": 45,
           "denseRank": 32,
-          "fused": 0.020228367258114176,
-          "rrf": 0.02021535960991467,
+          "fused": 0.02040649693389752,
+          "rrf": 0.02039337474120083,
           "coverage": 0.6,
           "dense": 0.47635704278945923,
           "activation": -4.339975591965219,
@@ -2584,7 +2594,7 @@
       "gate": {
         "by": "coverage",
         "threshold": 0.5,
-        "dropped": 9
+        "dropped": 8
       },
       "embedSkipped": null,
       "degraded": ["no-reranker"],
@@ -2592,7 +2602,7 @@
         "mode": "current",
         "inferred": true
       },
-      "injected": "8afc58db7ad9ea1b555e3d03aa4d69bd51c1f0522889afccba9304ff70d784a3"
+      "injected": "8a735db144401b7eb6a42cec7e86299e26e55f93268d817247a812334e7d9bdd"
     },
     {
       "question": "the incident escalation policy for the notify relay",
