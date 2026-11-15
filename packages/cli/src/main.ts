@@ -76,7 +76,7 @@ try {
           // No daemon answered. `serve.autostart` (on by default) or a `restarting` daemon: start
           // one for the prompts that follow, but only after this hook has answered in-process
           // (`afterOutput`), so this prompt never waits on it. Best effort: a start that fails
-          // opens the breaker for a minute and never changes this hook's answer.
+          // opens the breaker (1, 5, then 30 minutes) and never changes this hook's answer.
           const [{ homeFrom }, { homedir }, { realpathSync }] = await Promise.all([
             import('./serve-protocol.js'),
             import('node:os'),
@@ -88,7 +88,7 @@ try {
               try {
                 client.spawnDaemon(realpathSync(binPath()), home, io.env);
               } catch {
-                client.writeSkip(home, Date.now() + client.SKIP_AFTER_REFUSAL_MS, 'refused');
+                client.recordStartFailure(home, 'start');
               }
             };
           }

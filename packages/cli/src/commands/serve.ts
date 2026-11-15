@@ -4,14 +4,14 @@ import * as path from 'node:path';
 import { VERSION, resolveConfig, resolveHome } from '@oortmem/core';
 import { binPath } from '../io.js';
 import {
-  SKIP_AFTER_REFUSAL_MS,
   callDaemon,
   clearSkip,
   readSkip,
+  recordStartFailure,
   removeLeftovers,
+  resetAutostart,
   socketTrust,
   spawnDaemon,
-  writeSkip,
 } from '../serve-client.js';
 import { lockPathFor, socketPathFor } from '../serve-protocol.js';
 import { TOKEN_ENV, serviceSettings, writeTokenFile } from '../serve-token.js';
@@ -91,7 +91,11 @@ export async function serveCommand(
   // tries the daemon again. A start closes it once the daemon listens.
   // Read first: status explains a start that was refused for a pending migration.
   const priorSkip = readSkip(home);
-  if (action === 'status' || action === 'stop') clearSkip(home);
+  if (action === 'status' || action === 'stop') {
+    clearSkip(home);
+    // And autostart's failure count: whatever failed, a person is looking at it now.
+    resetAutostart(home);
+  }
   switch (action ?? 'start') {
     case 'start':
       break;
@@ -137,7 +141,7 @@ export async function serveCommand(
   } catch (e) {
     // An invalid home config will not fix itself: open the breaker, as for a start refused
     // below, so autostart does not start a daemon that fails on every prompt.
-    if (opts.detach !== true) writeSkip(home, Date.now() + SKIP_AFTER_REFUSAL_MS, 'refused');
+    if (opts.detach !== true) recordStartFailure(home, 'start');
     throw e;
   }
   const idleMs = opts.idle !== undefined ? parseIdle(opts.idle) : config.serve.idleMinutes * 60_000;
@@ -176,6 +180,7 @@ export async function serveCommand(
       return detached(running.result['pid'], true);
     }
     clearSkip(home); // so a refusal written below is this start's, not an older one
+    resetAutostart(home); // started by hand: autostart's backoff starts again
     const pid = spawnDaemon(
       fs.realpathSync(binPath()),
       home,
@@ -236,13 +241,10 @@ export async function serveCommand(
     });
   } catch (e) {
     // A daemon that will not start (a pending migration, a bad directory) opens the breaker, so
-    // autostart does not try again on every session; "another one runs" does not.
+    // autostart does not try again on every prompt, and waits longer each time (1, 5, then 30
+    // minutes); "another one runs" does not.
     if (!(e instanceof ServeRefusal) || e.tripsBreaker) {
-      writeSkip(
-        home,
-        Date.now() + SKIP_AFTER_REFUSAL_MS,
-        e instanceof MigrationRequired ? 'migration' : 'refused',
-      );
+      recordStartFailure(home, e instanceof MigrationRequired ? 'migration' : 'start');
     }
     throw e;
   }

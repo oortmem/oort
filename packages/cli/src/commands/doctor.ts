@@ -80,10 +80,20 @@ import {
   autostartOff,
   callDaemon,
   clearSkip,
+  readAutostartState,
   readSkip,
   type AutostartOff,
 } from '../serve-client.js';
-import { socketPathFor } from '../serve-protocol.js';
+import { inspectDir, socketPathFor } from '../serve-protocol.js';
+
+/** `p` with its symlinks resolved, or `p` when that fails. */
+function realOr(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
 import { HOOK_RABITQ_MAX_LOAD } from './hook.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info' | 'unknown';
@@ -713,6 +723,8 @@ const AUTOSTART_OFF: Record<AutostartOff, string> = {
   'serve.autostart':
     'off: serve.autostart is false in the home config, so no hook starts the daemon',
   config: 'off: the home config.json does not parse, so no hook starts the daemon',
+  'serve.invalid':
+    'off: serve in the home config.json is not valid (serve.autostart must be true or false, serve.idleMinutes a whole number from 1 to 1440), so no hook starts the daemon',
 };
 
 /**
@@ -727,6 +739,13 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
   const show = shown(tilde(socket, ctx.io.env['HOME'] ?? ''));
   const base = { group: 'serve' as const, name: 'daemon' };
   const off = autostartOff(home, ctx.io.env);
+  const userHome = ctx.io.env['HOME'] ?? '';
+  const socketDir = path.dirname(socket);
+  const dirShown = shown(tilde(socketDir, userHome));
+  const logShown = shown(tilde(path.join(home, 'logs', 'serve.log'), userHome));
+  // The daemon listens only in a real directory of this user's that nobody else can write, and
+  // makes it 0700 (`checkSocketDir`); the hooks connect only to a socket there.
+  const dirState = process.platform === 'win32' ? 'ok' : inspectDir(socketDir);
   let idleMinutes = 30;
   try {
     idleMinutes = resolveConfig(ctx.io.cwd, ctx.io.env, { projectConfig: false }).serve.idleMinutes;
@@ -742,6 +761,37 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
         ? `on: a hook that finds no daemon answers in-process, then starts one; it exits after ${minutesText(idleMinutes * 60_000)} without a request`
         : AUTOSTART_OFF[off],
   };
+  if (off === undefined || off === 'serve.autostart' || off === 'OORT_NO_AUTOSTART') {
+    switch (dirState) {
+      case 'symlink':
+        Object.assign(autostart, {
+          status: 'warn',
+          detail: `${off === undefined ? 'on, but cannot run' : AUTOSTART_OFF[off]}: ${dirShown} is a symlink, and the daemon never listens in a symlinked directory (it could be pointed elsewhere), so the hooks always run in-process; point OORT_HOME at the real directory`,
+          fix: `set OORT_HOME to the real directory (${shown(tilde(realOr(socketDir), userHome))}) in the environment your agent starts with`,
+        });
+        break;
+      case 'writable-by-others':
+        Object.assign(autostart, {
+          status: 'warn',
+          detail: `${off === undefined ? 'on, but cannot run' : AUTOSTART_OFF[off]}: ${dirShown} is writable by group or others, so the daemon refuses to listen there and the hooks run in-process`,
+          fix: `chmod 700 ${dirShown}`,
+        });
+        break;
+      case 'foreign':
+      case 'not-a-directory':
+        Object.assign(autostart, {
+          status: 'warn',
+          detail: `${off === undefined ? 'on, but cannot run' : AUTOSTART_OFF[off]}: ${dirShown} is ${dirState === 'foreign' ? "another user's" : 'not a directory'}, so the daemon refuses to listen there and the hooks run in-process`,
+          fix: 'point OORT_HOME at a directory of your own',
+        });
+        break;
+      case 'readable-by-others':
+        autostart.detail += `; the daemon makes ${dirShown} 0700 when it starts (autostart included), because its socket's privacy relies on that directory: some systems do not enforce a socket's own mode`;
+        break;
+      default:
+        break;
+    }
+  }
   const skip = readSkip(home);
   // A refusal for a pending migration needs no row: the store check below migrates the store and
   // reopens the daemon to the hooks.
@@ -752,13 +802,26 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
             group: 'serve',
             name: 'hooks',
             status: 'warn',
-            detail: `skip the daemon until ${new Date(skip.until).toISOString()}, after ${skip.reason === 'refused' ? `a refusal (another protocol or version, an answer that is not a hook result, or a daemon that would not start: see ${shown(tilde(path.join(home, 'logs', 'serve.log'), ctx.io.env['HOME'] ?? ''))})` : 'a hook timed out on it'}; they run in-process (${SKIP_FILE})`,
+            detail: `skip the daemon until ${new Date(skip.until).toISOString()}, after ${skipCause(skip.reason)}; they run in-process (${SKIP_FILE})`,
             fix: 'oort serve status (tries it again), or oort serve stop && oort serve --detach',
             fixCommand: 'oort serve status',
           },
         ]
       : [];
   return [...(await daemonChecks()), autostart, ...skipping];
+
+  function skipCause(reason: string | undefined): string {
+    switch (reason) {
+      case 'start': {
+        const n = readAutostartState(home).failures;
+        return `a daemon the hooks started did not start or did not stay up (${n} time${n === 1 ? '' : 's'} in a row; the wait grows from 1 to 5 to 30 minutes, and editing the home config tries again at once): see ${logShown}`;
+      }
+      case 'refused':
+        return `a refusal (another protocol or version, or an answer that is not a hook result): see ${logShown}`;
+      default:
+        return 'a hook timed out on it';
+    }
+  }
 
   /** Not running: what happens next, and why it last stopped. */
   function notRunning(what: string): string {
@@ -790,8 +853,17 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
         typeof idleExit === 'number' && Number.isFinite(idleExit)
           ? `; exits after ${minutesText(idleExit)} without a request`
           : '';
+      const startedAt = r.result['startedAt'];
+      const started =
+        typeof startedAt === 'string' && /^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(startedAt)
+          ? `; started ${startedAt} (it keeps the environment of the session that started it until it exits: oort serve stop to pick up a change)`
+          : '';
       return [
-        { ...base, status: 'ok', detail: `running, pid ${pid}, oort ${version}, ${show}${exits}` },
+        {
+          ...base,
+          status: 'ok',
+          detail: `running, pid ${pid}, oort ${version}, ${show}${started}${exits}`,
+        },
       ];
     }
     switch (r.reason) {
@@ -816,6 +888,15 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
           },
         ];
       case 'untrusted':
+        if (dirState === 'symlink') {
+          return [
+            {
+              ...base,
+              status: 'info',
+              detail: `not running: ${dirShown} is a symlink, where the daemon never listens; hooks run in-process`,
+            },
+          ];
+        }
         return [
           {
             ...base,

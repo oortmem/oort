@@ -9,7 +9,15 @@ import { TG } from '@oortmem/core/store-conformance';
 import type { Memory } from '@oortmem/core';
 import { downgradeSqliteStore, openSqliteStore, sqliteSchemaVersion } from '@oortmem/store-sqlite';
 import { memory, tmpdir, data } from '../test/helpers.js';
-import { RESTART_FILE, SKIP_FILE, callDaemon, hookViaDaemon, readSkip } from './serve-client.js';
+import {
+  AUTOSTART_FILE,
+  RESTART_FILE,
+  SKIP_FILE,
+  callDaemon,
+  hookViaDaemon,
+  readSkip,
+  writeAutostartState,
+} from './serve-client.js';
 import { checkSocketPath } from './serve-daemon.js';
 import {
   FrameDecoder,
@@ -520,6 +528,8 @@ describe('serve.autostart: on by default', () => {
     expect(running['daemon']?.status).toBe('ok');
     expect(running['daemon']?.detail).toContain(`pid ${pid}`);
     expect(running['daemon']?.detail).toContain('exits after 30m without a request');
+    // When it started: it keeps the environment of the session that started it until it exits.
+    expect(running['daemon']?.detail).toMatch(/started \d{4}-\d\d-\d\dT[\d:.]+Z/);
     expect(running['autostart']?.detail).toMatch(/^on/);
 
     // A session start (the usual first hook of a session) starts it too.
@@ -594,7 +604,7 @@ describe('serve.autostart: on by default', () => {
     expect(failed.exitCode).toBe(0);
     expect(failed.stdout).toBe(baseline);
     expect(fs.readFileSync(log, 'utf8')).toBe('stdout\nspawn serve\n');
-    expect(readSkip(s.oortHome)?.reason).toBe('refused');
+    expect(readSkip(s.oortHome)?.reason).toBe('start');
     // So the next prompt does not try again at once.
     fs.rmSync(log);
     const next = await run({ SPAWN_FAILS: '1' });
@@ -605,6 +615,7 @@ describe('serve.autostart: on by default', () => {
 
     // A start that cannot even open its log (logs is a file): the same.
     fs.rmSync(path.join(s.oortHome, SKIP_FILE));
+    fs.rmSync(path.join(s.oortHome, AUTOSTART_FILE), { force: true });
     fs.rmSync(path.join(s.oortHome, 'logs', 'serve.log'), { force: true });
     const logs = path.join(s.oortHome, 'logs');
     fs.renameSync(logs, `${logs}.d`);
@@ -615,7 +626,7 @@ describe('serve.autostart: on by default', () => {
     });
     expect(noLog.exitCode).toBe(0);
     expect(noLog.stdout).toBe(baseline);
-    expect(readSkip(s.oortHome)?.reason).toBe('refused');
+    expect(readSkip(s.oortHome)?.reason).toBe('start');
     expect(fs.existsSync(s.socket)).toBe(false);
   });
 
@@ -654,6 +665,9 @@ describe('serve.autostart: on by default', () => {
     await until(() => !alive(pid));
     expect(fs.lstatSync(s.socket).isSocket()).toBe(true);
     expect(fs.existsSync(lockPathFor(s.socket))).toBe(true);
+    // A daemon that ran for a while before it crashed (one that dies within a minute of its start
+    // is not restarted at once: see the test below).
+    writeAutostartState(s.oortHome, { spawnedAt: Date.now() - 5 * 60_000, failures: 0 });
     // The next prompt finds a socket nobody listens on: it answers in-process and starts another.
     const r = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s), env });
     expect(r.exitCode).toBe(0);
@@ -687,6 +701,34 @@ describe('serve.autostart: on by default', () => {
     const doctor = await doctorServe(s, env);
     expect(doctor['daemon']?.detail).toContain('last stopped: idle');
     expect(doctor['autostart']?.detail).toContain('exits after 7m without a request');
+  });
+});
+
+describe('doctor explains an Oort home the daemon will not use as it is', () => {
+  it('serve.doctor-a-symlinked-oort-home-says-autostart-cannot-run-there', async () => {
+    const s = sandbox();
+    const real = path.join(s.root, 'real-oort');
+    fs.mkdirSync(real, { mode: 0o700 });
+    fs.symlinkSync(real, s.oortHome);
+    const env = autoEnv(s);
+    const r = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s), env });
+    expect(r.exitCode).toBe(0);
+    await sleep(1000);
+    expect(fs.existsSync(path.join(real, 'oort.sock'))).toBe(false);
+    const rows = await doctorServe(s, env);
+    expect(rows['autostart']?.detail).toContain('symlink');
+    expect(rows['autostart']?.detail).toContain('OORT_HOME');
+    expect(rows['daemon']?.detail).not.toContain('belongs to another user');
+  });
+
+  it('serve.doctor-a-group-readable-oort-home-says-the-daemon-makes-it-0700', async () => {
+    const s = sandbox();
+    fs.mkdirSync(s.oortHome, { mode: 0o700 });
+    fs.chmodSync(s.oortHome, 0o750);
+    const rows = await doctorServe(s, autoEnv(s));
+    expect(rows['autostart']?.detail).toContain('0700');
+    // Doctor only reads: the mode is unchanged.
+    expect(fs.statSync(s.oortHome).mode & 0o777).toBe(0o750);
   });
 });
 
@@ -1029,13 +1071,15 @@ describe('oort serve hardening', () => {
   it('serve.an-invalid-home-config-opens-the-breaker-so-autostart-does-not-retry-every-prompt', async () => {
     const s = sandbox();
     fs.mkdirSync(s.oortHome, { mode: 0o700 });
-    // Valid JSON, so autostart is on, but a key the config module refuses: the daemon cannot start.
-    fs.writeFileSync(path.join(s.oortHome, 'config.json'), '{"serve":{"idleMinutes":0}}\n');
+    // Valid JSON with valid serve settings, so autostart is on, but another key the config module
+    // refuses: the daemon cannot start.
+    fs.writeFileSync(path.join(s.oortHome, 'config.json'), '{"embed":{"nested":2}}\n');
     const env = autoEnv(s);
     expect(
       (await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s), env })).exitCode,
     ).toBe(0);
-    await until(() => readSkip(s.oortHome)?.reason === 'refused');
+    // The breaker is written before the refusal reaches the log: wait for both.
+    await until(() => readSkip(s.oortHome)?.reason === 'start' && serveLog(s).includes('nested'));
     const logBefore = serveLog(s);
     expect(
       (await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s), env })).exitCode,
@@ -1043,6 +1087,80 @@ describe('oort serve hardening', () => {
     await sleep(1500);
     expect(serveLog(s)).toBe(logBefore);
     expect(fs.existsSync(s.socket)).toBe(false);
+    // Doctor names the failed start and points at the log.
+    const hooks = (await doctorServe(s, env))['hooks'];
+    expect(hooks?.detail).toContain('did not start');
+    expect(hooks?.detail).toContain('serve.log');
+  });
+
+  it('serve.autostart-a-serve-value-of-the-wrong-type-turns-it-off-and-doctor-says-why', async () => {
+    const { s } = await seededWithBaseline();
+    autostarted.push(s);
+    // The string "false": the config check refuses it (the hook itself logs that and injects
+    // nothing), and no hook starts a daemon that would refuse it on every start.
+    fs.writeFileSync(path.join(s.oortHome, 'config.json'), '{"serve":{"autostart":"false"}}\n');
+    const env = autoEnv(s);
+    const r = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s), env });
+    expect(r.exitCode).toBe(0);
+    await sleep(1500);
+    expect(serveLog(s)).toBe('');
+    expect(readSkip(s.oortHome)).toBeUndefined();
+    const detail = (await doctorServe(s, env))['autostart']?.detail;
+    expect(detail).toContain('off');
+    expect(detail).toContain('true or false');
+  });
+
+  it('serve.autostart-a-daemon-that-dies-right-after-listening-is-not-restarted-on-every-prompt', async () => {
+    const { s, baseline } = await seededWithBaseline();
+    autostarted.push(s);
+    // Through NODE_OPTIONS, which the daemon inherits: every hook records its starts, and the
+    // daemon exits 50 ms after it listens, as one that crashes (out of memory, a native fault).
+    const preload = path.join(s.root, 'crash.mjs');
+    const starts = path.join(s.root, 'starts.txt');
+    fs.writeFileSync(
+      preload,
+      [
+        "import cp from 'node:child_process';",
+        "import net from 'node:net';",
+        "import { appendFileSync } from 'node:fs';",
+        "import { syncBuiltinESMExports } from 'node:module';",
+        "if (process.argv[2] === 'serve') {",
+        '  const listen = net.Server.prototype.listen;',
+        '  net.Server.prototype.listen = function (...a) {',
+        "    this.once('listening', () => setTimeout(() => process.kill(process.pid, 'SIGKILL'), 50));",
+        '    return listen.apply(this, a);',
+        '  };',
+        '} else {',
+        '  const spawn = cp.spawn;',
+        '  cp.spawn = (cmd, args, opts) => {',
+        "    if (Array.isArray(args) && args[1] === 'serve') appendFileSync(process.env.STARTS, 'start\\n');",
+        '    return spawn(cmd, args, opts);',
+        '  };',
+        '  syncBuiltinESMExports();',
+        '}',
+      ].join('\n'),
+    );
+    const env = {
+      ...autoEnv(s),
+      NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+      STARTS: starts,
+    };
+    const first = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s), env });
+    expect(first.stdout).toBe(baseline);
+    // It listened, then died, leaving its socket and pid file.
+    await until(() => serveLog(s).includes('listening on'));
+    await until(() => {
+      const pid = Number(fs.readFileSync(lockPathFor(s.socket), 'utf8'));
+      return !alive(pid);
+    });
+    for (let i = 0; i < 10; i++) {
+      const r = await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s), env });
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toBe(baseline);
+    }
+    const n = fs.readFileSync(starts, 'utf8').trim().split('\n').length;
+    expect(n).toBeGreaterThanOrEqual(1);
+    expect(n).toBeLessThanOrEqual(2);
   });
 
   it('serve.after-an-upgrade-says-run-oort-doctor-and-doctor-reopens-it', async () => {

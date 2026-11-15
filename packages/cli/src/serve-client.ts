@@ -237,14 +237,18 @@ export const SKIP_FILE = 'serve.skip-until';
 export const SKIP_AFTER_TIMEOUT_MS = 5 * 60_000;
 export const SKIP_AFTER_REFUSAL_MS = 60_000;
 
-/** `migration`: the daemon would not start because the store needs its schema migration (`oort doctor`). */
-export type SkipReason = 'timeout' | 'refused' | 'migration';
+/**
+ * `migration`: the daemon would not start because the store needs its schema migration
+ * (`oort doctor`). `start`: a daemon the hooks started did not start or did not stay up; the wait
+ * grows with each failure in a row (`backoffMs`).
+ */
+export type SkipReason = 'timeout' | 'refused' | 'migration' | 'start';
 export interface Skip {
   until: number;
   reason?: SkipReason;
 }
 
-const SKIP_LINE = /^(\d{1,16})(?: (timeout|refused|migration))?\s*$/;
+const SKIP_LINE = /^(\d{1,16})(?: (timeout|refused|migration|start))?\s*$/;
 
 /** The marker's text, undefined when there is none. One read. */
 function readSkipText(home: string): string | undefined {
@@ -377,7 +381,15 @@ export async function hookViaDaemon(
   const now = opts.now ?? Date.now;
   const marker = readSkipText(home);
   const skip = parseSkip(marker);
-  if (skip !== undefined && skip.until > now()) return { served: false, reason: 'skipped' };
+  if (skip !== undefined && skip.until > now()) {
+    // A failed start waits out its backoff, unless the home config changed since: that may be
+    // the fix, so the next prompt tries at once.
+    if (skip.reason !== 'start' || readAutostartState(home).configMtime === configMtime(home)) {
+      return { served: false, reason: 'skipped' };
+    }
+    clearSkip(home);
+    writeAutostartState(home, { failures: 0 });
+  }
   const { timing, now: _now, ...callOpts } = opts;
   const r = await callDaemon(
     socketPathFor(home, env),
@@ -390,6 +402,7 @@ export async function hookViaDaemon(
     const stdout = typeof raw === 'string' ? validHookStdout(event, raw) : undefined;
     if (stdout !== undefined) {
       if (marker !== undefined) clearSkip(home); // expired or garbled: the daemon is fine again
+      noteServed(home, now());
       const timings = timing === true ? validTimings(r.result['timings']) : undefined;
       return { served: true, stdout, ...(timings !== undefined && { timings }) };
     }
@@ -426,10 +439,14 @@ export async function hookViaDaemon(
  * - `windows`: the daemon needs Unix sockets, so on Windows autostart does nothing;
  * - `OORT_NO_AUTOSTART`: set (and not `0` or `false`) in the hook's environment;
  * - `serve.autostart`: `false` in the home config (`$OORT_HOME/config.json`);
- * - `config`: a home config that does not parse, which the daemon could not read either.
+ * - `config`: a home config that does not parse, which the daemon could not read either;
+ * - `serve.invalid`: `serve` is not an object, `serve.autostart` is not a boolean, or
+ *   `serve.idleMinutes` is not a whole number from 1 to 1440. The daemon's config check would
+ *   refuse it, so a start would fail every time; only `true` or no key means on.
  * Read without the config module; a project's `oort.config.json` is never consulted.
  */
-export type AutostartOff = 'windows' | 'OORT_NO_AUTOSTART' | 'serve.autostart' | 'config';
+export type AutostartOff =
+  'windows' | 'OORT_NO_AUTOSTART' | 'serve.autostart' | 'config' | 'serve.invalid';
 
 const truthy = (v: string | undefined): boolean =>
   v !== undefined && v.trim() !== '' && !['0', 'false', 'no'].includes(v.trim().toLowerCase());
@@ -447,12 +464,29 @@ export function autostartOff(
   } catch {
     return undefined; // no home config: the defaults, on
   }
+  let raw: unknown;
   try {
-    const raw = JSON.parse(text) as { serve?: { autostart?: unknown } } | null;
-    return raw?.serve?.autostart === false ? 'serve.autostart' : undefined;
+    raw = JSON.parse(text);
   } catch {
     return 'config';
   }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return 'serve.invalid';
+  if (!Object.hasOwn(raw, 'serve')) return undefined;
+  const serve = (raw as { serve?: unknown }).serve;
+  if (typeof serve !== 'object' || serve === null || Array.isArray(serve)) return 'serve.invalid';
+  const { autostart, idleMinutes } = serve as { autostart?: unknown; idleMinutes?: unknown };
+  if (
+    idleMinutes !== undefined &&
+    !(
+      Number.isInteger(idleMinutes) &&
+      (idleMinutes as number) >= 1 &&
+      (idleMinutes as number) <= 1440
+    )
+  ) {
+    return 'serve.invalid';
+  }
+  if (autostart === undefined || autostart === true) return undefined;
+  return autostart === false ? 'serve.autostart' : 'serve.invalid';
 }
 
 /**
@@ -494,13 +528,152 @@ export function autostartPlan(
   r: HookAttempt,
   home: string,
   env: Record<string, string | undefined>,
+  now = Date.now(),
 ): 'restart' | 'start' | undefined {
   if (r.served) return undefined;
   if (r.code === 'restarting') return r.tripped === true ? undefined : 'restart';
   if (r.reason !== 'absent' && r.reason !== 'refused') return undefined;
   if (autostartOff(home, env) !== undefined) return undefined;
-  if (daemonStarting(lockPathFor(socketPathFor(home, env)))) return undefined;
+  if (daemonStarting(lockPathFor(socketPathFor(home, env)), now)) return undefined;
+  // The last start (`spawnDaemon` records it): under 30 s ago, that daemon is still coming up or
+  // has just died; start no other. Under a minute ago with nothing answering, it died young (a
+  // crash after listening, or before it could open the breaker itself): a failure, which opens
+  // the breaker for the next step of the backoff.
+  const spawnedAt = readAutostartState(home).spawnedAt;
+  const age = spawnedAt === undefined ? Infinity : now - spawnedAt;
+  if (age >= 0 && age < RECENT_SPAWN_MS) return undefined;
+  if (age >= 0 && age < YOUNG_DEATH_MS) {
+    recordStartFailure(home, 'start', now);
+    return undefined;
+  }
   return 'start';
+}
+
+/**
+ * What autostart remembers between hooks, in `<home>/serve.autostart` (0600, never through a
+ * symlink): when a hook last started a daemon, how many starts in a row failed, and the home
+ * config's mtime when the last one failed (an edit starts the count again).
+ * One line: `<spawnedAt|-> <failures> <configMtime|->`.
+ */
+export const AUTOSTART_FILE = 'serve.autostart';
+/** A start younger than this is not repeated: that daemon is still coming up, or just died. */
+export const RECENT_SPAWN_MS = 30_000;
+/** A daemon gone within this long of its start died young: a failed start. */
+export const YOUNG_DEATH_MS = 60_000;
+/** The breaker after the 1st, 2nd and 3rd (and every later) failed start in a row. */
+const BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000] as const;
+
+export interface AutostartState {
+  spawnedAt?: number;
+  failures: number;
+  configMtime?: number;
+}
+
+/** How long the breaker stays open after `failures` failed starts in a row. */
+export function backoffMs(failures: number): number {
+  return BACKOFF_MS[Math.min(Math.max(failures, 1), BACKOFF_MS.length) - 1] as number;
+}
+
+/** The home config's mtime in ms, or -1 when there is none. */
+export function configMtime(home: string): number {
+  try {
+    return Math.trunc(fs.statSync(path.join(home, 'config.json')).mtimeMs);
+  } catch {
+    return -1;
+  }
+}
+
+const STATE_LINE = /^(\d{1,16}|-) (\d{1,4}) (-?\d{1,16}|-)\s*$/;
+
+/** The state, or none (no failures) when the file is missing or garbled. */
+export function readAutostartState(home: string): AutostartState {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(home, AUTOSTART_FILE), 'utf8');
+  } catch {
+    return { failures: 0 };
+  }
+  const m = STATE_LINE.exec(text);
+  if (m === null) return { failures: 0 };
+  const num = (t: string | undefined): number | undefined =>
+    t === undefined || t === '-' ? undefined : Number(t);
+  const spawnedAt = num(m[1]);
+  const configMtime = num(m[3]);
+  return {
+    failures: Number(m[2]),
+    ...(spawnedAt !== undefined && { spawnedAt }),
+    ...(configMtime !== undefined && { configMtime }),
+  };
+}
+
+/** Writes the state (0600, never through a symlink). Best effort. */
+export function writeAutostartState(home: string, st: AutostartState): void {
+  const show = (n: number | undefined): string => (n === undefined ? '-' : String(Math.trunc(n)));
+  try {
+    const { O_WRONLY, O_CREAT, O_TRUNC } = fs.constants;
+    const fd = fs.openSync(
+      path.join(home, AUTOSTART_FILE),
+      O_WRONLY | O_CREAT | O_TRUNC | NOFOLLOW,
+      0o600,
+    );
+    try {
+      if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
+      fs.writeSync(
+        fd,
+        `${show(st.spawnedAt)} ${Math.min(st.failures, 9999)} ${show(st.configMtime)}\n`,
+      );
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // No record: autostart only retries sooner.
+  }
+}
+
+/** Forgets the starts and failures (a start, stop or status by hand). Best effort. */
+export function resetAutostart(home: string): void {
+  try {
+    fs.unlinkSync(path.join(home, AUTOSTART_FILE));
+  } catch {
+    // Not there.
+  }
+}
+
+/**
+ * A daemon did not start or did not stay up: one more failure in a row (the first again when the
+ * home config changed since the last), and the breaker opens for `backoffMs` of them. Returns
+ * until when. `migration` keeps its own reason, which `oort doctor` clears once it migrates.
+ */
+export function recordStartFailure(
+  home: string,
+  reason: 'start' | 'migration',
+  now = Date.now(),
+): number {
+  const st = readAutostartState(home);
+  const mtime = configMtime(home);
+  const failures = st.configMtime === mtime ? st.failures + 1 : 1;
+  writeAutostartState(home, {
+    ...(st.spawnedAt !== undefined && { spawnedAt: st.spawnedAt }),
+    failures,
+    configMtime: mtime,
+  });
+  const until = now + backoffMs(failures);
+  writeSkip(home, until, reason);
+  return until;
+}
+
+/**
+ * A daemon answered a hook. Once it has been up for a minute, it is healthy: the failure count
+ * goes back to 0. One read of a small file; a write only when there were failures.
+ */
+export function noteServed(home: string, now = Date.now()): void {
+  const st = readAutostartState(home);
+  if (st.failures === 0) return;
+  if (st.spawnedAt !== undefined && now - st.spawnedAt < YOUNG_DEATH_MS) return;
+  writeAutostartState(home, {
+    ...(st.spawnedAt !== undefined && { spawnedAt: st.spawnedAt }),
+    failures: 0,
+  });
 }
 
 /**
@@ -519,11 +692,25 @@ export function privateDir(dir: string): void {
   else if (state !== 'ok') throw new Error(`${dir}: ${state}`);
 }
 
+/** serve.log past this is moved to serve.log.1 (replacing an older one) before a start writes. */
+export const LOG_MAX_BYTES = 1024 * 1024;
+
 /**
- * Opens `file` for appending, 0600, never through a symlink; a wider mode is tightened. The caller
- * closes the descriptor.
+ * Opens `file` for appending, 0600, never through a symlink; a wider mode is tightened. A regular
+ * file of this user's over LOG_MAX_BYTES is first renamed to `<file>.1` (a rename moves the link,
+ * never what a symlink points at), so the log keeps at most about twice that. The caller closes
+ * the descriptor.
  */
 export function openPrivateLog(file: string): number {
+  try {
+    const st = fs.lstatSync(file);
+    const me = currentUid();
+    if (st.isFile() && (me === undefined || st.uid === me) && st.size > LOG_MAX_BYTES) {
+      fs.renameSync(file, `${file}.1`);
+    }
+  } catch {
+    // Not there yet, or another start rotated it a moment ago.
+  }
   const { O_WRONLY, O_CREAT, O_APPEND } = fs.constants;
   const fd = fs.openSync(file, O_WRONLY | O_CREAT | O_APPEND | NOFOLLOW, 0o600);
   try {
@@ -543,7 +730,7 @@ export function openPrivateLog(file: string): number {
  * `OORT_HOME`, so a relative `OORT_HOME` cannot make it serve another home. Does not wait: a
  * second daemon started at the same moment finds the lock taken and exits. A spawn that fails
  * opens the circuit breaker, so the next sessions do not try again at once; one that fails at
- * once (no pid) also throws.
+ * once (no pid) also throws. A start is recorded in AUTOSTART_FILE.
  */
 export function spawnDaemon(
   bin: string,
@@ -562,11 +749,19 @@ export function spawnDaemon(
       stdio: ['ignore', fd, fd],
       env: { ...env, OORT_HOME: home } as NodeJS.ProcessEnv,
     });
-    // A failed spawn must never crash a hook; it only opens the breaker for a minute.
-    child.on('error', () => writeSkip(home, Date.now() + SKIP_AFTER_REFUSAL_MS, 'refused'));
+    // A failed spawn must never crash a hook; it only opens the breaker (the backoff's next step).
+    child.on('error', () => recordStartFailure(home, 'start'));
     child.unref();
     // No pid: the spawn failed (its 'error' comes later, after a hook has exited). Say so now.
     if (child.pid === undefined) throw new Error('could not start oort serve');
+    // When: so the next hooks neither start another while this one comes up, nor miss that it
+    // died young (`autostartPlan`).
+    const st = readAutostartState(home);
+    writeAutostartState(home, {
+      spawnedAt: Date.now(),
+      failures: st.failures,
+      ...(st.configMtime !== undefined && { configMtime: st.configMtime }),
+    });
     return child.pid;
   } finally {
     fs.closeSync(fd);

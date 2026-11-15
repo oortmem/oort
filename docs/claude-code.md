@@ -102,6 +102,8 @@ input over a Unix socket to a process that has the store open and the adapters l
 back to in-process whenever it does not answer (see `oort serve` in `docs/cli.md`). The hooks
 start it themselves (`serve.autostart`, on by default): a hook that finds none answers in-process,
 then starts one for the prompts that follow, and it exits after 30 minutes without a request.
+It keeps the environment of the session that started it (your provider keys included) until it
+exits, and serves every session with it: after changing a key or variable, run `oort serve stop`.
 `{ "serve": { "autostart": false } }` in `~/.oort/config.json`, or `OORT_NO_AUTOSTART=1`, turns
 that off. Measured with
 `pnpm bench:serve` on 2026-11-05 (2,000 synthetic memories, lexical-only so no network, 40 runs, an
