@@ -12,6 +12,13 @@
  * stale. The
  * 30 abstention questions (`_abs` ids) are their own group. Verbatim storage never supersedes, so
  * stale-leak here is a baseline to compare links against, not a measure of Oort's updates.
+ *
+ * Stale-above-current asks the sharper question: does the outdated answer rank above the current
+ * one? The file does not say which answer session holds the current fact. `answer_session_ids`
+ * lists both and `has_answer` marks turns in both; the only order is the sessions' dates. So the
+ * later session is taken as current, and the questions where that is known to be wrong are left
+ * out of that metric (`STALE_ORDER_UNKNOWN`). Recall and stale-leak still score them as before, so
+ * results stay comparable with earlier runs.
  */
 import type { Haystack, PublicSet, Question, Turn } from './public-sets.js';
 
@@ -24,6 +31,32 @@ export const LONGMEMEVAL_GROUPS = [
   'single-session-preference',
   'abstention',
 ];
+
+/**
+ * Knowledge-update questions of the pinned LongMemEval_S revision left out of stale-above-current,
+ * found by reading all 72 of them (70 have two answer sessions). In each, the later session is not
+ * simply the current answer:
+ * - the question asks for the earlier value (the answer is in the earlier session);
+ * - the question asks for both values, or how one changed (both sessions are the answer);
+ * - the dates are the wrong way round (the update is dated before the fact it updates).
+ */
+export const STALE_ORDER_UNKNOWN: Readonly<Record<string, string>> = {
+  '07741c44': 'asks for the earlier value',
+  '0977f2af': 'asks for the earlier value',
+  '0ddfec37': 'asks for the earlier value',
+  '10e09553': 'asks for the earlier value',
+  '50635ada': 'asks for the earlier value',
+  '89941a94': 'asks for the earlier value',
+  '9bbe84a2': 'asks for the earlier value',
+  dfde3500: 'asks for the earlier value',
+  e66b632c: 'asks for the earlier value',
+  '031748ae': 'asks for both values',
+  '6071bd76': 'asks how the value changed',
+  c4ea545c: 'asks how the value changed',
+  c6853660: 'asks how the value changed',
+  f685340e: 'asks for both values',
+  '618f13b2': 'the update is dated before the fact it updates',
+};
 
 /** `2023/05/20 (Sat) 02:21` as an ISO time (no zone in the file: read as UTC). */
 export function parseLongMemEvalDate(s: string): string {
@@ -117,6 +150,7 @@ export function loadLongMemEval(json: unknown): PublicSet {
       answerSessions: expectedSessions,
       ...(stale !== undefined && { stale }),
       ...(staleSessions !== undefined && { staleSessions }),
+      ...(stale !== undefined && qid in STALE_ORDER_UNKNOWN && { staleOrderUnknown: true }),
       ...(abstention && { abstention: true }),
     };
     haystacks.push({

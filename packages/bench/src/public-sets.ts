@@ -28,7 +28,8 @@ import { EMBEDDING_DIMENSION } from './generate.js';
 import { linksOverride, viaOf, type LinksMode } from './links.js';
 import { ALL_SCOPE } from './seed.js';
 import { fakeEmbedder } from './fake-embed.js';
-import { verbatimDecider, verbatimWriter } from './verbatim.js';
+import { questionResults, runLabel, type QuestionResult } from './per-question.js';
+import { verbatimDecider, verbatimWriter, type EntitySource } from './verbatim.js';
 
 export interface Turn {
   /** Unique within the haystack: what evidence names. */
@@ -53,6 +54,8 @@ export interface Question {
   answerSessions?: string[];
   /** Sessions holding an outdated answer, for session-level stale-leak. */
   staleSessions?: string[];
+  /** Which answer is current is not known: left out of stale-above-current. */
+  staleOrderUnknown?: boolean;
   abstention?: boolean;
 }
 
@@ -85,15 +88,26 @@ export const observationOf = (t: Turn): Observation => ({
 });
 
 /**
- * The text `observe` embeds for a turn: scrubbed and capped first, exactly as `observe` does, so
- * a prefetched vector is the one `observe` asks for. Undefined when the scrubber drops the turn.
+ * The observation as `observe` hands it on: scrubbed and capped first, exactly as `observe` does,
+ * so what is prefetched for it is what `observe` asks for. Undefined when the scrubber drops it.
  */
-export function embedTextOf(t: Turn): string | undefined {
+export function observedOf(t: Turn): Observation | undefined {
   const s = scrubObservation(observationOf(t));
-  if (s.dropped) return undefined;
-  const obs = capObservation(s.obs);
-  return `${obs.userText}\n${obs.assistantText}`;
+  return s.dropped ? undefined : capObservation(s.obs);
 }
+
+/** The text `observe` embeds for a turn (see `observedOf`). */
+export function embedTextOf(t: Turn): string | undefined {
+  const obs = observedOf(t);
+  return obs === undefined ? undefined : `${obs.userText}\n${obs.assistantText}`;
+}
+
+/**
+ * `full`: recall reranks when a reranker is given (as `oort recall` and MCP do). `fast`: no
+ * reranker, as the prompt hook's default `recall.promptMode` `fast` runs it.
+ */
+export const SPEEDS = ['full', 'fast'] as const;
+export type Speed = (typeof SPEEDS)[number];
 
 export interface RunPublicOptions {
   set: PublicSet;
@@ -102,6 +116,13 @@ export interface RunPublicOptions {
   rerank?: Reranker;
   ks?: number[];
   links?: LinksMode;
+  /** `fast` leaves the reranker out, as the prompt hook does (default `full`). */
+  speed?: Speed;
+  /**
+   * Entities for each stored turn (`entities.ts`). Default none, as every earlier run: then no
+   * memory names an entity and `about` links never form.
+   */
+  entities?: { source: EntitySource; prefetch?(observations: Observation[]): Promise<void> };
   /** Apply recall's relevance gate (default true: today's recall). */
   gate?: boolean;
   log?: (message: string) => void;
@@ -117,11 +138,17 @@ export interface PublicReport {
   /** Turns the scrubber dropped (a secret-shaped string), so they hold no memory. */
   scrubbed: number;
   links: LinksMode;
+  speed: Speed;
   /** Evidence recall over turns. */
   turn: EvalReport;
   /** Recall over answer sessions: @k counts the sessions of the top k returned turns. */
   session?: EvalReport;
   ms: number;
+}
+
+/** A run's totals and its per-question results (`per-question.ts`), turn level then session. */
+export interface PublicRun extends PublicReport {
+  perQuestion: QuestionResult[];
 }
 
 /** Each turn's text, embedded in batches before the turns are observed. */
@@ -143,20 +170,31 @@ export function sessionsOfRounds(ids: string[], sessionOf: Map<string, string>):
   });
 }
 
-export async function runPublicSet(opts: RunPublicOptions): Promise<PublicReport> {
+/** Each turn's entities, asked for before the turns are observed. */
+async function prefetchEntities(set: PublicSet, src: RunPublicOptions['entities']): Promise<void> {
+  if (src?.prefetch === undefined) return;
+  await src.prefetch(set.haystacks.flatMap((h) => h.turns.flatMap((t) => observedOf(t) ?? [])));
+}
+
+export async function runPublicSet(opts: RunPublicOptions): Promise<PublicRun> {
   const { set } = opts;
   const ks = [...new Set([...(opts.ks ?? [5, 10]), 10])].sort((a, b) => a - b);
   const maxK = Math.max(...ks);
   const log = opts.log ?? (() => {});
   const links = opts.links ?? 'off';
+  const speed = opts.speed ?? 'full';
+  const rerank = speed === 'full' ? opts.rerank : undefined;
   const t0 = performance.now();
   await prefetch(set, opts.embed);
+  await prefetchEntities(set, opts.entities);
   const rows: EvalRow[] = [];
   const outcomes: RowOutcome[] = [];
   const groups: string[] = [];
+  const ids: string[] = [];
   const sessionRows: EvalRow[] = [];
   const sessionOutcomes: RowOutcome[] = [];
   const sessionGroups: string[] = [];
+  const sessionIds: string[] = [];
   let turns = 0;
   let scrubbed = 0;
   const docEmbed: Embedder = opts.embed ?? fakeEmbedder(EMBEDDING_DIMENSION);
@@ -188,7 +226,9 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicReport
             store,
             embed: docEmbed,
             decide: verbatimDecider(),
-            write: verbatimWriter(),
+            write: verbatimWriter(
+              opts.entities === undefined ? {} : { entities: opts.entities.source },
+            ),
             config,
             now: new Date(t.at),
             harness: 'bench-public',
@@ -215,10 +255,10 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicReport
               config,
               now: new Date(h.now),
               ...(opts.embed !== undefined && { embed: opts.embed }),
-              ...(opts.rerank !== undefined && { rerank: opts.rerank }),
+              ...(rerank !== undefined && { rerank }),
             },
           );
-          const ids = r.memories.map((m) => m.id);
+          const returned = r.memories.map((m) => m.id);
           const ref = (refs: string[]): string[] =>
             refs.flatMap((x) => {
               const id = idOf.get(x);
@@ -229,22 +269,26 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicReport
             expectedMemoryIds: q.abstention === true ? [] : ref(q.evidence),
             ...(q.abstention === true && { category: 'abstention' as const }),
             ...(q.stale !== undefined && { notExpectedMemoryIds: ref(q.stale) }),
+            ...(q.staleOrderUnknown === true && { staleOrderUnknown: true }),
           });
           outcomes.push({
-            ids,
-            aboveThreshold: ids.length,
+            ids: returned,
+            aboveThreshold: returned.length,
             linked: r.memories.filter((m) => viaOf(m) !== undefined).map((m) => m.id),
           });
           groups.push(q.group);
+          ids.push(q.id);
           if (q.answerSessions !== undefined && q.abstention !== true) {
-            const sessions = sessionsOfRounds(ids, sessionOf);
+            const sessions = sessionsOfRounds(returned, sessionOf);
             sessionRows.push({
               question: q.question,
               expectedMemoryIds: q.answerSessions,
               ...(q.staleSessions !== undefined && { notExpectedMemoryIds: q.staleSessions }),
+              ...(q.staleOrderUnknown === true && { staleOrderUnknown: true }),
             });
             sessionOutcomes.push({ ids: sessions, aboveThreshold: sessions.length });
             sessionGroups.push(q.group);
+            sessionIds.push(q.id);
           }
         }
       } finally {
@@ -257,6 +301,7 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicReport
       log(`${set.name}: ${n + 1} of ${set.haystacks.length} haystacks`);
     }
   }
+  const run = runLabel({ links, speed });
   const grouping = (names: string[]) => ({
     of: (_: EvalRow, i: number) => names[i] as string,
     order: set.groups,
@@ -270,10 +315,20 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicReport
     droppedQuestions: set.droppedQuestions,
     scrubbed,
     links,
+    speed,
     turn: computeMetrics(rows, outcomes, ks, 0, grouping(groups)),
     ...(sessionRows.length > 0 && {
       session: computeMetrics(sessionRows, sessionOutcomes, ks, 0, grouping(sessionGroups)),
     }),
     ms: performance.now() - t0,
+    perQuestion: [
+      ...questionResults(rows, outcomes, ks, { run, level: 'turn', ids, groups }),
+      ...questionResults(sessionRows, sessionOutcomes, ks, {
+        run,
+        level: 'session',
+        ids: sessionIds,
+        groups: sessionGroups,
+      }),
+    ],
   };
 }

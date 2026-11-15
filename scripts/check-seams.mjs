@@ -52,7 +52,7 @@ export const SEAMS = {
     network: true,
   },
   bench: {
-    uses: ['core', 'store-sqlite', 'embed-voyage', 'rerank-voyage', 'local-models'],
+    uses: ['core', 'store-sqlite', 'embed-voyage', 'rerank-voyage', 'local-models', 'writer'],
     network: true,
   },
 };

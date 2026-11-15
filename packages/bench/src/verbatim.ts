@@ -5,7 +5,8 @@ import type { DecisionController, MemoryWriter, Observation, WrittenMemory } fro
  * own words. The public-set adapters (CON-147) feed dialogue through `observe` with these, so
  * each turn becomes exactly one memory whose `turnRef` names the turn, and evidence recall can be
  * scored without a judge. What it measures is retrieval over raw turns; the writer that rewrites
- * a turn into standalone facts (and the reconcile step that supersedes) are not in the loop.
+ * a turn into standalone facts (and the reconcile step that supersedes) are not in the loop. The
+ * writer's entities can be (`verbatimWriter({ entities })`), so `about` links can form.
  */
 export function verbatimDecider(): DecisionController {
   return {
@@ -27,7 +28,15 @@ export function verbatimDecider(): DecisionController {
 export const turnText = (obs: Observation): string =>
   [obs.userText, obs.assistantText].filter((t) => t.trim() !== '').join('\n');
 
-export function verbatimWriter(): MemoryWriter {
+/** Where a verbatim memory's entities come from (`entities.ts`): the observation in, names out. */
+export type EntitySource = (obs: Observation) => Promise<string[]>;
+
+/**
+ * Stores the turn in its own words. Without `entities` (the default, as every earlier run) a
+ * memory names no entity, so recall's `about` links (memories sharing an entity) never form;
+ * with it, the memory keeps the turn's text and takes its entities from that source.
+ */
+export function verbatimWriter(opts: { entities?: EntitySource } = {}): MemoryWriter {
   return {
     async write(obs): Promise<WrittenMemory> {
       const text = turnText(obs);
@@ -35,7 +44,7 @@ export function verbatimWriter(): MemoryWriter {
       return {
         text,
         stub: head.length <= 80 ? head : `${head.slice(0, 77).trimEnd()}...`,
-        entities: [],
+        entities: opts.entities === undefined ? [] : await opts.entities(obs),
         type: 'episodic',
       };
     },
