@@ -126,10 +126,10 @@ off so questions do not influence each other, and the returned memories are mapp
   authors found best; `turnRef` is `<session id>#<round>`, `at` the session's date plus a second
   per round, and recall's "now" the question's date. A round is evidence when either message has
   `has_answer`. Two scores: turn recall@k (rounds) and session recall@k (the sessions of the top
-  k returned rounds against `answer_session_ids`). For `knowledge-update`, the latest answer
-  session and its rounds are expected, and earlier answer sessions and their rounds count toward
-  stale-leak, at both levels. The
-  30 abstention questions (`_abs` ids) are their own group.
+  k returned rounds against `answer_session_ids`). For `knowledge-update`, one answer session
+  and its rounds are expected and the other counts toward stale-leak, at both levels: the later
+  one is expected unless the question asks otherwise (see below). The 30 abstention questions
+  (`_abs` ids) are their own group.
 
 ### Stale above current (`knowledge-update`)
 
@@ -139,20 +139,33 @@ measures the harness. **Stale above current** asks what matters: does the outdat
 above the current one (best round against best round, or session against session, in the top 10)?
 A question where only the outdated answer comes back counts; one where neither does, does not.
 
-The file does not mark which answer session holds the current fact. `answer_session_ids` lists
-both (70 of the 72 `knowledge-update` questions in the pinned revision have two answer sessions
-with `has_answer` rounds), and the only order between them is the sessions' dates. The adapter
-takes the later session as current, as it already did for stale-leak. Reading all 70 showed where
-that is wrong, and those questions are left out of stale above current only
-(`STALE_ORDER_UNKNOWN` in `src/longmemeval.ts`, each with its reason):
+### Which knowledge-update answer is current
 
-- 9 ask for the earlier value ("What was my previous ...", "before I got ...");
-- 5 ask for both values, or how the value changed ("did I switch to more or less ...");
-- 1 has its dates the wrong way round: the session with the update is dated before the one it
-  updates.
+The file does not mark which answer session holds the value a question asks for.
+`answer_session_ids` lists both (70 of the 72 `knowledge-update` questions in the pinned revision
+have two answer sessions with `has_answer` rounds), and the only order between them is the
+sessions' dates. The adapter takes the later session as current. Reading the question, the answer
+and both sessions of all 70 showed where that is wrong, and those questions are relabelled
+(`KNOWLEDGE_UPDATE_OVERRIDES` in `src/longmemeval.ts`, each with its reason; a test checks the
+table against the pinned file when it is in the cache):
 
-That leaves 55 questions scored. Recall and stale-leak still score all 70 as before, with the
-later session expected, so totals stay comparable with earlier runs.
+- 8 ask for the earlier value ("What was my previous ...", "before I got ..."). The earlier
+  session is expected and the later one counts as stale.
+- 8 are scored for recall only, with every answer session expected and no stale label, so they
+  count toward neither stale-leak nor stale above current: 5 ask for both values or how the value
+  changed ("did I switch to more or less ..."), 1 can be answered from either session, 1 has an
+  answer that adds the two sessions up, and 1 has its dates the wrong way round (the session with
+  the update is dated before the one it updates).
+
+That leaves 62 questions with a stale label. Recall, stale-leak and stale above current all use
+these labels.
+
+**The knowledge-update baseline moved.** Runs before this relabelling took the later session as
+current for all 70 questions, so on the earlier-value questions they expected the wrong session
+and counted the right one as stale, and on the recall-only ones they counted a session the
+question needs as stale. Knowledge-update recall, stale-leak and stale above current (and the
+overall totals that include them) from earlier runs, including the recorded baselines, are not
+comparable with runs since; rerun both sides before comparing.
 
 Limits worth knowing:
 

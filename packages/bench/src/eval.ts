@@ -38,12 +38,6 @@ export interface EvalRow {
   lang?: string;
   /** Pins a row to one multilingual condition; rows without one run in every condition. */
   condition?: EvalCondition;
-  /**
-   * Leave this row out of stale-above-current: which of its answers is the current one is not
-   * known (a question about the earlier value, or dates that disagree with the text). Set by a
-   * dataset adapter (`longmemeval.ts`); never read from an eval file.
-   */
-  staleOrderUnknown?: boolean;
 }
 
 export const EVAL_CONDITIONS = ['mono', 'cross', 'mixed'] as const;
@@ -137,7 +131,7 @@ export interface GroupMetrics {
    * Of the rows with both expected and not-expected ids, the fraction where a not-expected id
    * (the outdated answer) ranks above every expected one (the current answer) in the top 10. A
    * row where only the outdated answer comes back counts; one where neither does, does not.
-   * Null when no row qualifies. Rows marked `staleOrderUnknown` are left out.
+   * Null when no row qualifies.
    */
   staleAboveCurrent: number | null;
   /** Fraction of abstention rows that returned a memory (above the threshold); null when none. */
@@ -241,7 +235,7 @@ export function scoreRow(r: EvalRow, o: RowOutcome, ks: readonly number[]): RowS
     rr: expected.length === 0 ? null : first === Infinity ? 0 : 1 / first,
     staleLeak: stale.length === 0 ? null : firstStale === Infinity ? 0 : 1,
     staleAboveCurrent:
-      stale.length === 0 || expected.length === 0 || r.staleOrderUnknown === true
+      stale.length === 0 || expected.length === 0
         ? null
         : firstStale < best(ranks, STALE_WINDOW)
           ? 1

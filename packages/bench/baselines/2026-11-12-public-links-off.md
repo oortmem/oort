@@ -19,7 +19,10 @@ Model for the `fast` run: local `bge-small-en-v1.5` (512 dimensions), as pulled 
 Two scores. Turn recall@k: the rounds holding the answer among the top k returned rounds.
 Session recall@k: the answer sessions among the sessions of the top k returned rounds. On
 knowledge-update, only the latest answer session (and its rounds) is expected; earlier answer
-sessions (and their rounds) count toward stale-leak.
+sessions (and their rounds) count toward stale-leak. Those labels have since been corrected for
+the questions that ask for the earlier value or need both sessions (`../eval/public/README.md`,
+"Which knowledge-update answer is current"), so the knowledge-update and overall rows here are
+not comparable with later runs.
 
 ## All 500 questions, lexical
 

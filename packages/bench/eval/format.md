@@ -114,17 +114,17 @@ JSON Lines, in `<report>.questions.jsonl` (`--questions <file>` picks another pa
 without `--out`; it must not name the `--out` file, which is refused before anything runs). One line
 per question per run:
 
-| Field                             | What it holds                                                                                                                                 |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run`                             | the run's settings: `links=off`, plus `pass=cold` or `pass=warm` with a warm-up (`links=off,speed=full` for the public sets)                  |
-| `level`                           | `memory` for an eval file; `turn` or `session` for the public sets                                                                            |
-| `id`, `group`, `question`         | the row number (from 1, empty rows skipped) or the dataset's question id; its category or question type; its text                             |
-| `ranks`                           | the 1-based rank of each expected id among the returned ones, `null` when it did not come back                                                |
-| `staleRanks`                      | the same for each not-expected id, when the row lists any                                                                                     |
-| `returned`, `aboveThreshold`      | how many memories came back, and how many cleared the abstention threshold                                                                    |
-| `linked`, `linkedExpected`        | link-admitted memories in the top 10, and how many of them were expected                                                                      |
-| `metrics`                         | the question's share of each mean metric: `recall@<k>`, `mrr`, `staleLeak`, `staleAboveCurrent`, `abstainFp` (`null` where it does not count) |
-| `abstention`, `staleOrderUnknown` | present (`true`) on abstention rows, and on rows left out of stale above current                                                              |
+| Field                        | What it holds                                                                                                                                 |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`                        | the run's settings: `links=off`, plus `pass=cold` or `pass=warm` with a warm-up (`links=off,speed=full` for the public sets)                  |
+| `level`                      | `memory` for an eval file; `turn` or `session` for the public sets                                                                            |
+| `id`, `group`, `question`    | the row number (from 1, empty rows skipped) or the dataset's question id; its category or question type; its text                             |
+| `ranks`                      | the 1-based rank of each expected id among the returned ones, `null` when it did not come back                                                |
+| `staleRanks`                 | the same for each not-expected id, when the row lists any                                                                                     |
+| `returned`, `aboveThreshold` | how many memories came back, and how many cleared the abstention threshold                                                                    |
+| `linked`, `linkedExpected`   | link-admitted memories in the top 10, and how many of them were expected                                                                      |
+| `metrics`                    | the question's share of each mean metric: `recall@<k>`, `mrr`, `staleLeak`, `staleAboveCurrent`, `abstainFp` (`null` where it does not count) |
+| `abstention`                 | present (`true`) on abstention rows                                                                                                           |
 
 The mean of a metric over a run's lines is that run's total for it. Link precision is pooled over
 rows, so it is not in `metrics`; `linked` and `linkedExpected` give it.
