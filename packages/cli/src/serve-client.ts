@@ -11,6 +11,7 @@ import {
   encodeFrame,
   inspectDir,
   homeFrom,
+  lockPathFor,
   socketPathFor,
   type ErrorCode,
   type Method,
@@ -421,18 +422,85 @@ export async function hookViaDaemon(
 }
 
 /**
- * `serve.autostart` from the home config (`$OORT_HOME/config.json`), read without the config
- * module: true only when the file says so. A project's `oort.config.json` is never consulted.
+ * Why autostart is off, or undefined when it is on (the default):
+ * - `windows`: the daemon needs Unix sockets, so on Windows autostart does nothing;
+ * - `OORT_NO_AUTOSTART`: set (and not `0` or `false`) in the hook's environment;
+ * - `serve.autostart`: `false` in the home config (`$OORT_HOME/config.json`);
+ * - `config`: a home config that does not parse, which the daemon could not read either.
+ * Read without the config module; a project's `oort.config.json` is never consulted.
  */
-export function autostartEnabled(home: string): boolean {
+export type AutostartOff = 'windows' | 'OORT_NO_AUTOSTART' | 'serve.autostart' | 'config';
+
+const truthy = (v: string | undefined): boolean =>
+  v !== undefined && v.trim() !== '' && !['0', 'false', 'no'].includes(v.trim().toLowerCase());
+
+export function autostartOff(
+  home: string,
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform = process.platform,
+): AutostartOff | undefined {
+  if (platform === 'win32') return 'windows';
+  if (truthy(env['OORT_NO_AUTOSTART'])) return 'OORT_NO_AUTOSTART';
+  let text: string;
   try {
-    const raw = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')) as {
-      serve?: { autostart?: unknown };
-    };
-    return raw.serve?.autostart === true;
+    text = fs.readFileSync(path.join(home, 'config.json'), 'utf8');
   } catch {
-    return false;
+    return undefined; // no home config: the defaults, on
   }
+  try {
+    const raw = JSON.parse(text) as { serve?: { autostart?: unknown } } | null;
+    return raw?.serve?.autostart === false ? 'serve.autostart' : undefined;
+  } catch {
+    return 'config';
+  }
+}
+
+/**
+ * A daemon that holds the lock but does not listen yet stays "starting" this long: it is opening
+ * the store and warming its first engine (loading a local model can take seconds). Past this, a
+ * hook starts another, and that one's lock check decides (a reused pid, a daemon that hangs).
+ */
+export const STARTING_GRACE_MS = 60_000;
+
+/**
+ * Whether a daemon is starting for this lock: its pid file is a regular file, younger than
+ * STARTING_GRACE_MS, naming a live process. A hook then starts none (it would only find the lock
+ * taken and exit). One lstat, one read, one signal-0.
+ */
+export function daemonStarting(lock: string, now = Date.now()): boolean {
+  try {
+    const st = fs.lstatSync(lock);
+    if (!st.isFile() || now - st.mtimeMs > STARTING_GRACE_MS) return false;
+    const pid = Number(fs.readFileSync(lock, 'utf8').trim());
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM'; // alive, another user's
+  }
+}
+
+/**
+ * What a hook does after `hookViaDaemon` did not get an answer: the function that starts a
+ * daemon, or undefined to start none. Called with the attempt's result; the caller runs the
+ * function only after the hook's own answer is written, so a prompt never waits on a start.
+ * - `restarting` (not tripped): the daemon was an older oort and is exiting for this one; start
+ *   this version's in its place whatever autostart says, since one was running.
+ * - No daemon (`absent`) or a dead one's socket (`refused`): start one when autostart is on and
+ *   none is starting already.
+ * Anything else (a timeout, an open breaker, a refusal) starts nothing.
+ */
+export function autostartPlan(
+  r: HookAttempt,
+  home: string,
+  env: Record<string, string | undefined>,
+): 'restart' | 'start' | undefined {
+  if (r.served) return undefined;
+  if (r.code === 'restarting') return r.tripped === true ? undefined : 'restart';
+  if (r.reason !== 'absent' && r.reason !== 'refused') return undefined;
+  if (autostartOff(home, env) !== undefined) return undefined;
+  if (daemonStarting(lockPathFor(socketPathFor(home, env)))) return undefined;
+  return 'start';
 }
 
 /**
@@ -474,7 +542,8 @@ export function openPrivateLog(file: string): number {
  * appended to `$OORT_HOME/logs/serve.log` (0600). `home` is absolute and goes to the child as its
  * `OORT_HOME`, so a relative `OORT_HOME` cannot make it serve another home. Does not wait: a
  * second daemon started at the same moment finds the lock taken and exits. A spawn that fails
- * opens the circuit breaker, so the next sessions do not try again at once.
+ * opens the circuit breaker, so the next sessions do not try again at once; one that fails at
+ * once (no pid) also throws.
  */
 export function spawnDaemon(
   bin: string,
@@ -496,6 +565,8 @@ export function spawnDaemon(
     // A failed spawn must never crash a hook; it only opens the breaker for a minute.
     child.on('error', () => writeSkip(home, Date.now() + SKIP_AFTER_REFUSAL_MS, 'refused'));
     child.unref();
+    // No pid: the spawn failed (its 'error' comes later, after a hook has exited). Say so now.
+    if (child.pid === undefined) throw new Error('could not start oort serve');
     return child.pid;
   } finally {
     fs.closeSync(fd);

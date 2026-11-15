@@ -280,6 +280,8 @@ function binEnv() {
     HOME: home,
     OORT_HOME: path.join(home, '.oort'),
     OORT_NO_KEYCHAIN: '1',
+    // A hook here must not leave an `oort serve` running (autostart is on by default).
+    OORT_NO_AUTOSTART: '1',
   };
   const run = async (
     args: string[],

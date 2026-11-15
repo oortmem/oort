@@ -26,9 +26,12 @@ try {
     const event = args[1] as string;
     const { processIo, binPath, HOOK_STDIN_CAP_MS } = await import('./io.js');
     let via = 'process';
+    /** Starts `oort serve`, once this hook's answer is written (set below when one should). */
+    let startDaemon: (() => void) | undefined;
     const io = processIo(evalMode ? undefined : process.argv[1], {
       hook,
       ...(process.env['OORT_HOOK_TIMING'] === '1' && { timing: () => `${event} via=${via}` }),
+      afterOutput: () => startDaemon?.(),
     });
     /**
      * The two events that inject context try `oort serve` first (CON-18): one connect to a local
@@ -69,25 +72,25 @@ try {
             });
           }
           io.hookExit(stdout);
-        } else if (
-          (event === 'SessionStart' && (r.reason === 'absent' || r.reason === 'refused')) ||
-          (r.code === 'restarting' && r.tripped !== true)
-        ) {
-          // `serve.autostart` (home config, default off): start one for the prompts that follow.
-          // `restarting`: the daemon was an older oort and is exiting for this one; start this
-          // version's in its place, whatever autostart says (one was running). Best effort: a
-          // failed start never keeps this hook from running.
-          const { homeFrom } = await import('./serve-protocol.js');
-          const { homedir } = await import('node:os');
+        } else {
+          // No daemon answered. `serve.autostart` (on by default) or a `restarting` daemon: start
+          // one for the prompts that follow, but only after this hook has answered in-process
+          // (`afterOutput`), so this prompt never waits on it. Best effort: a start that fails
+          // opens the breaker for a minute and never changes this hook's answer.
+          const [{ homeFrom }, { homedir }, { realpathSync }] = await Promise.all([
+            import('./serve-protocol.js'),
+            import('node:os'),
+            import('node:fs'),
+          ]);
           const home = homeFrom(io.env, homedir);
-          try {
-            if (r.code === 'restarting' || client.autostartEnabled(home)) {
-              const { realpathSync } = await import('node:fs');
-              client.spawnDaemon(realpathSync(binPath()), home, io.env);
-            }
-          } catch {
-            // The hook goes on in-process; the breaker keeps the next sessions from retrying at once.
-            client.writeSkip(home, Date.now() + client.SKIP_AFTER_REFUSAL_MS, 'refused');
+          if (client.autostartPlan(r, home, io.env) !== undefined) {
+            startDaemon = () => {
+              try {
+                client.spawnDaemon(realpathSync(binPath()), home, io.env);
+              } catch {
+                client.writeSkip(home, Date.now() + client.SKIP_AFTER_REFUSAL_MS, 'refused');
+              }
+            };
           }
         }
       } catch {

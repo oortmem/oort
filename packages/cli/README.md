@@ -15,7 +15,7 @@ Other commands you will use:
 - `oort update` updates every copy of oort on the machine (the one the hooks run included) to the latest release. Once a day oort checks npm for one and says so; `OORT_NO_UPDATE_CHECK=1` turns that off.
 - `oort mcp` runs the local MCP server for any MCP client.
 - `oort connect <host>` and `oort disconnect <host>` add or remove one agent (`oort install <host>` does the same).
-- `oort serve --detach` starts a local daemon that makes the Claude Code hooks faster; they work without it.
+- `oort serve` is a local daemon that makes the Claude Code hooks faster. The hooks start it themselves when it is not running and it exits when idle; `{ "serve": { "autostart": false } }` in `~/.oort/config.json` turns that off, and the hooks work without it.
 - `oort login` uses Oort Pro, so you need no vendor keys.
 - `oort keys set <provider>` stores your own Voyage, TypeSafe or Anthropic key.
 

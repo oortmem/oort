@@ -164,14 +164,32 @@ describe('config', () => {
     fs.writeFileSync(path.join(home, 'config.json'), '{"serve":{"idleMinutes":5}}');
     fs.writeFileSync(
       path.join(cwd, 'oort.config.json'),
-      '{"serve":{"autostart":true,"idleMinutes":1},"recall":{"budgetChars":100}}',
+      '{"serve":{"autostart":false,"idleMinutes":1},"recall":{"budgetChars":100}}',
     );
     const c = resolveConfig(cwd, { OORT_HOME: home });
-    expect(c.serve).toEqual({ autostart: false, idleMinutes: 5 });
+    expect(c.serve).toEqual({ autostart: true, idleMinutes: 5 });
     expect(c.sources['serve']).toBe('home');
     expect(c.ignoredProjectKeys).toEqual(['serve']);
     expect(c.recall.budgetChars).toBe(100); // other project keys still apply
     expect(resolveConfig(home, { OORT_HOME: home }).ignoredProjectKeys).toBeUndefined();
+  });
+
+  it('config.serve-autostart-is-on-by-default-and-a-home-config-turns-it-off', () => {
+    const home = tmp();
+    // No config at all, and a config that never mentions serve (an upgrade): on, 30 minutes.
+    expect(resolveConfig(home, { OORT_HOME: home }).serve).toEqual({
+      autostart: true,
+      idleMinutes: 30,
+    });
+    fs.writeFileSync(path.join(home, 'config.json'), '{"recall":{"budgetChars":100}}');
+    expect(resolveConfig(home, { OORT_HOME: home }).serve.autostart).toBe(true);
+    fs.writeFileSync(path.join(home, 'config.json'), '{"serve":{"idleMinutes":10}}');
+    expect(resolveConfig(home, { OORT_HOME: home }).serve).toEqual({
+      autostart: true,
+      idleMinutes: 10,
+    });
+    fs.writeFileSync(path.join(home, 'config.json'), '{"serve":{"autostart":false}}');
+    expect(resolveConfig(home, { OORT_HOME: home }).serve.autostart).toBe(false);
   });
 
   it('config.store-vector-index-defaults-to-auto-and-is-read-from-the-home-config-only (CON-17)', () => {

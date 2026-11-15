@@ -72,6 +72,8 @@ const env = {
   OORT_HOME: oortHome,
   OORT_NO_KEYCHAIN: '1',
   OORT_HOOK_TIMING: '1',
+  // The in-process series must stay in-process: this bench starts its own daemon for the other.
+  OORT_NO_AUTOSTART: '1',
 };
 const socket = protocol.socketPathFor(oortHome);
 

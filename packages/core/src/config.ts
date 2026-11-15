@@ -196,12 +196,15 @@ const project = z
  */
 const serve = z
   .strictObject({
-    /** SessionStart starts a detached daemon when none is running. */
-    autostart: z.boolean().default(false),
+    /**
+     * A hook that finds no daemon starts a detached one, after answering in-process; the next
+     * prompts use it. On by default; `false` keeps every hook in-process unless you start one.
+     */
+    autostart: z.boolean().default(true),
     /** The daemon exits after this many minutes without a hook request. */
     idleMinutes: z.number().int().min(1).max(1440).default(30),
   })
-  .default({ autostart: false, idleMinutes: 30 });
+  .default({ autostart: true, idleMinutes: 30 });
 
 /**
  * Judgment memory (CON-71). Read from the home config only: a repository's `oort.config.json`

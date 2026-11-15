@@ -131,7 +131,15 @@ export async function serveCommand(
   if (opts.listen !== undefined && opts.idle !== undefined) {
     throw new Refusal('Service mode has no idle exit: drop --idle.');
   }
-  const config = resolveConfig(io.cwd, io.env, { projectConfig: false });
+  let config: ReturnType<typeof resolveConfig>;
+  try {
+    config = resolveConfig(io.cwd, io.env, { projectConfig: false });
+  } catch (e) {
+    // An invalid home config will not fix itself: open the breaker, as for a start refused
+    // below, so autostart does not start a daemon that fails on every prompt.
+    if (opts.detach !== true) writeSkip(home, Date.now() + SKIP_AFTER_REFUSAL_MS, 'refused');
+    throw e;
+  }
   const idleMs = opts.idle !== undefined ? parseIdle(opts.idle) : config.serve.idleMinutes * 60_000;
   // Read once, before anything starts, then out of every environment a child could inherit.
   const listen =
