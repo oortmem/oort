@@ -8,7 +8,7 @@ import { computeMetrics, renderReport, scoreRow, type EvalRow, type RowOutcome }
 import { fakeEmbedder } from './fake-embed.js';
 import { fakeReranker } from './fake-rerank.js';
 import { EMBEDDING_DIMENSION } from './generate.js';
-import { loadLongMemEval, STALE_ORDER_UNKNOWN } from './longmemeval.js';
+import { loadLongMemEval } from './longmemeval.js';
 import {
   parseQuestionResults,
   questionResults,
@@ -55,41 +55,26 @@ describe('stale above current', () => {
     expect(score(['o2', 'n1'], rounds)).toBe(1);
   });
 
-  it('stale-above-current.only-for-rows-with-both-answers-and-a-known-order', () => {
+  it('stale-above-current.only-for-rows-with-both-answers', () => {
     const score = (row: EvalRow) => scoreRow(row, out(['old', 'new']), [10]).staleAboveCurrent;
     expect(score(ku({ notExpectedMemoryIds: undefined }))).toBeNull();
     expect(score(ku({ expectedMemoryIds: [] }))).toBeNull();
-    expect(score(ku({ staleOrderUnknown: true }))).toBeNull();
-    const rows = [ku(), ku(), ku({ staleOrderUnknown: true }), ku({ category: 'single-fact' })];
+    const rows = [
+      ku(),
+      ku(),
+      ku({ notExpectedMemoryIds: undefined }),
+      ku({ category: 'single-fact' }),
+    ];
     const r = computeMetrics(
       rows,
       [out(['old', 'new']), out(['new', 'old']), out(['old', 'new']), out(['new'])],
       [10],
     );
-    // The unknown-order row is left out: one of two, not two of three.
+    // The row without an outdated answer is left out: one of two, not two of three. It is left
+    // out of stale-leak too: two of two, not two of three.
     expect(r.groups['knowledge-update']?.staleAboveCurrent).toBe(0.5);
-    // Stale-leak still counts every row that lists an outdated answer.
     expect(r.groups['knowledge-update']?.staleLeak).toBe(1);
     expect(renderReport(r)).toMatch(/\| Stale-leak \| Stale above current \| Abstain FP \|/);
-  });
-
-  it('stale-above-current.longmemeval-marks-questions-whose-current-answer-is-not-known', () => {
-    const plain = loadLongMemEval(sample());
-    const kuQ = plain.haystacks[1]?.questions[0];
-    expect(kuQ).toMatchObject({ group: 'knowledge-update', stale: ['k-old#0'] });
-    expect(kuQ?.staleOrderUnknown).toBeUndefined();
-    // The same question under an id on the list (it asks for the earlier value).
-    expect(STALE_ORDER_UNKNOWN['50635ada']).toMatch(/earlier value/);
-    const renamed = sample().map((q) =>
-      q['question_id'] === 'sample-ku' ? { ...q, question_id: '50635ada' } : q,
-    );
-    const listed = loadLongMemEval(renamed).haystacks[1]?.questions[0];
-    expect(listed).toMatchObject({ staleOrderUnknown: true, stale: ['k-old#0'] });
-    // Every listed id is a LongMemEval question id, and each says why.
-    for (const [id, why] of Object.entries(STALE_ORDER_UNKNOWN)) {
-      expect(id).toMatch(/^[0-9a-f]{8}$/);
-      expect(why).not.toBe('');
-    }
   });
 });
 

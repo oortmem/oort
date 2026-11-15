@@ -54,8 +54,6 @@ export interface Question {
   answerSessions?: string[];
   /** Sessions holding an outdated answer, for session-level stale-leak. */
   staleSessions?: string[];
-  /** Which answer is current is not known: left out of stale-above-current. */
-  staleOrderUnknown?: boolean;
   abstention?: boolean;
 }
 
@@ -269,7 +267,6 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicRun> {
             expectedMemoryIds: q.abstention === true ? [] : ref(q.evidence),
             ...(q.abstention === true && { category: 'abstention' as const }),
             ...(q.stale !== undefined && { notExpectedMemoryIds: ref(q.stale) }),
-            ...(q.staleOrderUnknown === true && { staleOrderUnknown: true }),
           });
           outcomes.push({
             ids: returned,
@@ -284,7 +281,6 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicRun> {
               question: q.question,
               expectedMemoryIds: q.answerSessions,
               ...(q.staleSessions !== undefined && { notExpectedMemoryIds: q.staleSessions }),
-              ...(q.staleOrderUnknown === true && { staleOrderUnknown: true }),
             });
             sessionOutcomes.push({ ids: sessions, aboveThreshold: sessions.length });
             sessionGroups.push(q.group);

@@ -23,8 +23,6 @@ export interface QuestionResult {
   group: string;
   question: string;
   abstention?: true;
-  /** Left out of stale-above-current (see `EvalRow.staleOrderUnknown`). */
-  staleOrderUnknown?: true;
   /** 1-based rank of each expected id among the returned ones; null when it did not come back. */
   ranks: (number | null)[];
   /** The same for each outdated (not-expected) id; absent when the question lists none. */
@@ -81,7 +79,6 @@ export function questionResults(
       group: meta.groups?.[i] ?? r.category ?? 'uncategorized',
       question: r.question,
       ...(r.category === 'abstention' && { abstention: true as const }),
-      ...(r.staleOrderUnknown === true && { staleOrderUnknown: true as const }),
       ranks: ranksOf(r.expectedMemoryIds, o.ids),
       ...(r.notExpectedMemoryIds !== undefined && {
         staleRanks: ranksOf(r.notExpectedMemoryIds, o.ids),
