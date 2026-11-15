@@ -253,3 +253,24 @@ describe('formatRange', () => {
     );
   });
 });
+
+describe('cost on long text', () => {
+  it('parse.a-megabyte-of-dates-stays-cheap', () => {
+    // Text full of dates must not cost more than a few milliseconds per kilobyte: the write path
+    // and the store migration read it inside a transaction. Generous bound: the machine may be busy.
+    const big = 'last week 2023-05-01 '.repeat(50_000);
+    expect(big.length).toBeGreaterThan(1_000_000);
+    occurrencesOf('warm up chrono on 2023-05-01', NOW);
+    const t = performance.now();
+    const o = occurrencesOf(big, NOW);
+    const q = queryRange(`what did I do ${big}`, NOW);
+    expect(performance.now() - t).toBeLessThan(200);
+    expect(o.length).toBeGreaterThan(1);
+    expect(q).toBeDefined();
+  });
+
+  it('parse.an-unreadable-time-places-nothing', () => {
+    expect(occurrencesOf('I went hiking last weekend', new Date(Number.NaN))).toEqual([]);
+    expect(queryRange('what did I do last weekend', new Date(Number.NaN))).toBeUndefined();
+  });
+});

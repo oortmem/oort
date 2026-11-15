@@ -15,6 +15,7 @@ import {
   OCCURRED_READ,
   OCCURRED_TABLE,
   openSqliteStore,
+  SHORT_OCCURRENCE_DAYS,
   SCHEMA_VERSION,
   sqliteSchemaVersion,
   StoreMigrationRequiredError,
@@ -145,6 +146,44 @@ describe('schema version 10: event time', () => {
     }
   });
 
+  it('occurred.v9-to-v10-reads-a-refined-memory-against-its-last-rewrite', async () => {
+    // Created 1 May, refined on 10 June with "last weekend": that weekend is 3 to 4 June.
+    const s = fresh();
+    const store = await openSqliteStore(optsFor(s));
+    await store.upsert(
+      TG,
+      makeMemory({
+        id: 'refined',
+        text: 'I went hiking with Sam last weekend.',
+        createdAt: '2023-05-01T09:00:00.000Z',
+        validFrom: '2023-05-01T09:00:00.000Z',
+        updatedAt: '2023-06-10T09:00:00.000Z',
+        source: {
+          harness: 'claude-code',
+          decisions: [
+            {
+              stage: 'refine',
+              question: 'previous-text',
+              answer: 'I like hiking.',
+              probability: 1,
+            },
+          ],
+        },
+      }),
+    );
+    await store.close();
+    downgradeSqliteStore({ path: s.dbPath, to: 9 });
+    const again = await openSqliteStore(optsFor(s));
+    try {
+      expect((await again.get(TG, 'refined'))?.occurred?.[0]).toMatchObject({
+        from: '2023-06-03T00:00:00.000Z',
+        to: '2023-06-05T00:00:00.000Z',
+      });
+    } finally {
+      await again.close();
+    }
+  });
+
   it('occurred.v9-open-that-may-not-migrate-changes-nothing', async () => {
     const s = await v9();
     const bytes = fs.readFileSync(s.dbPath);
@@ -192,7 +231,7 @@ describe('schema version 10: event time', () => {
     }
   });
 
-  it('occurred.the-range-read-is-one-range-of-its-index', async () => {
+  it('occurred.the-range-read-is-two-bounded-ranges-of-its-index', async () => {
     const s = fresh();
     await (await openSqliteStore(optsFor(s))).close();
     const db = raw(s.dbPath);
@@ -203,11 +242,70 @@ describe('schema version 10: event time', () => {
           .prepare(`EXPLAIN QUERY PLAN ${OCCURRED_READ}`)
           .all(Object.fromEntries(names.map((n) => [n, null]))) as { detail: string }[]
       ).map((r) => r.detail);
-      expect(steps.join('\n')).toMatch(
-        /SEARCH o USING COVERING INDEX memory_occurred_from \(from_ms>\? AND from_ms<\?\)/,
+      // Short occurrences and long ones, each a range of the index by start: a short one is read
+      // only from a month before the range, so "yesterday" does not walk a year of rows.
+      const ranges = steps.filter((d) =>
+        /SEARCH \w+ USING COVERING INDEX memory_occurred_from \(long=\? AND from_ms>\? AND from_ms<\?\)/.test(
+          d,
+        ),
       );
+      expect(ranges, steps.join('\n')).toHaveLength(2);
       expect(steps.join('\n')).toMatch(/SEARCH m USING INTEGER PRIMARY KEY \(rowid=\?\)/);
-      expect(steps.filter((d) => /^SCAN (o|m)\b/.test(d))).toEqual([]);
+      // No table is scanned: only the union of the two index ranges is read through.
+      expect(steps.filter((d) => /^SCAN (m|memories|memory_occurred)\b/.test(d))).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('occurred.yesterday-reads-only-recent-short-rows', async () => {
+    // A store with a year of memories, one a day: a read for one day looks at a month of short
+    // rows at most, not the year, and still finds a long occurrence that started long before.
+    const s = fresh();
+    const store = await openSqliteStore(optsFor(s));
+    const day = 86_400_000;
+    const start = Date.parse('2023-01-01T00:00:00.000Z');
+    const ms: Memory[] = [];
+    for (let i = 0; i < 365; i++) {
+      const at = new Date(start + i * day).toISOString();
+      ms.push(
+        makeMemory({
+          id: `d${i}`,
+          text: `note ${i}`,
+          createdAt: at,
+          validFrom: at,
+          updatedAt: at,
+          occurred: occurrencesOf(`note ${i}`, new Date(at)),
+        }),
+      );
+    }
+    const yearAt = '2023-01-02T00:00:00.000Z';
+    ms.push(
+      makeMemory({
+        id: 'year',
+        text: 'In 2023 I learned to sail.',
+        createdAt: yearAt,
+        validFrom: yearAt,
+        updatedAt: yearAt,
+        occurred: occurrencesOf('In 2023 I learned to sail.', new Date(yearAt)),
+      }),
+    );
+    await store.upsertMany(TG, ms);
+    const range = { from: '2023-12-30T00:00:00.000Z', to: '2023-12-31T00:00:00.000Z' };
+    const ids = (await store.occurredIn!(TG, range, 10)).map((h) => h.id);
+    expect(ids).toEqual(['year', 'd363']);
+    await store.close();
+    const db = raw(s.dbPath);
+    try {
+      const from = Date.parse(range.from);
+      const to = Date.parse(range.to);
+      const read = (sql: string) => (db.prepare(sql).get({ from, to }) as { n: number }).n;
+      // What the short arm's index range covers: rows that start within 31 days before.
+      expect(
+        read(
+          `SELECT count(*) AS n FROM ${OCCURRED_TABLE} WHERE long = 0 AND from_ms >= @from - ${SHORT_OCCURRENCE_DAYS} * 86400000 AND from_ms < @to`,
+        ),
+      ).toBeLessThanOrEqual(SHORT_OCCURRENCE_DAYS + 1);
     } finally {
       db.close();
     }

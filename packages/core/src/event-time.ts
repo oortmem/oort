@@ -50,7 +50,7 @@ const cache: { key: string; out: chrono.ParsedResult[] }[] = [];
 const CACHE_SIZE = 4;
 
 /**
- * chrono's parse, loading chrono only for a text with a date cue (CON-82). The last few results
+ * chrono's parse, loading chrono only for a text with a date cue. The last few results
  * are kept, so the write path's two readers of one turn (validity bounds and event time) parse it
  * once.
  */
@@ -449,6 +449,16 @@ function fromChrono(
   };
 }
 
+/**
+ * At most this many characters of a text are read for times: a memory or a question names its
+ * times early, and the parse must stay cheap on a pasted log (it runs inside writes).
+ */
+export const MAX_TIME_TEXT = 8_000;
+/** At most this many matches per reader (the patterns, chrono) are looked at. */
+const MAX_MATCHES = 64;
+/** How far before a date a cue word ("in", "since") is looked for. */
+const CUE_REACH = 24;
+
 const overlaps = (found: readonly Found[], i: number, n: number): boolean =>
   found.some((f) => i < f.index + f.length && f.index < i + n);
 
@@ -465,7 +475,7 @@ function findTimes(text: string, ref: number, offset: number, forQuery: boolean)
   const out: Found[] = [];
   for (const p of PATTERNS) {
     p.re.lastIndex = 0;
-    for (let m = p.re.exec(text); m !== null; m = p.re.exec(text)) {
+    for (let m = p.re.exec(text); m !== null && out.length < MAX_MATCHES; m = p.re.exec(text)) {
       const f = p.read(m, ref, offset);
       // An earlier pattern already read these words ("summer of 2023" before "of 2023").
       if (f === undefined || overlaps(out, m.index, m[0].length)) continue;
@@ -477,7 +487,7 @@ function findTimes(text: string, ref: number, offset: number, forQuery: boolean)
     text,
     { instant: new Date(ref), timezone: offset },
     { forwardDate: false },
-  )) {
+  ).slice(0, MAX_MATCHES)) {
     if (overlaps(out, r.index, r.text.length)) continue;
     const f = fromChrono(r, text, ref, offset, forQuery);
     if (f === undefined) continue;
@@ -515,7 +525,9 @@ function findTimes(text: string, ref: number, offset: number, forQuery: boolean)
   return [...out, ...joined].sort((x, y) => x.index - y.index);
 }
 
-const iso = (t: number) => new Date(t).toISOString();
+/** An instant as ISO 8601, or undefined for one that is not a valid date. */
+const isoOf = (t: number): string | undefined =>
+  Number.isFinite(t) && Math.abs(t) <= 8.64e15 ? new Date(t).toISOString() : undefined;
 
 /**
  * When the events `text` describes happened, resolved against `at` (the turn's time) in `offset`
@@ -528,28 +540,37 @@ const iso = (t: number) => new Date(t).toISOString();
  */
 export function occurrencesOf(text: string, written: Date, offset = 0): Occurrence[] {
   const ref = written.getTime();
-  const found = findTimes(text, ref, offset, false).filter(
-    (f) => f.to > f.from && f.to - f.from <= MAX_OCCURRENCE_DAYS * DAY_MS,
-  );
+  const [from, to] = period(ref, 'day', offset);
+  const mFrom = isoOf(from);
+  const mTo = isoOf(to);
+  // A time that is not a date (an unreadable turn time) places nothing.
+  if (mFrom === undefined || mTo === undefined) return [];
+  const mention: Occurrence = { from: mFrom, to: mTo, precision: 'day', source: 'mention' };
+  let found: Found[];
+  try {
+    found = findTimes(text.slice(0, MAX_TIME_TEXT), ref, offset, false).filter(
+      (f) => f.to > f.from && f.to - f.from <= MAX_OCCURRENCE_DAYS * DAY_MS,
+    );
+  } catch {
+    // A parse that fails states nothing: the memory keeps the day it was said.
+    return [mention];
+  }
   const weekdays = found.filter((f) => f.weekdayOnly === true).length;
   const stated: Occurrence[] = [];
   const seen = new Set<string>();
   for (const f of found) {
     if (f.weekdayOnly === true && weekdays > SCHEDULE_WEEKDAYS) continue;
-    const o: Occurrence = {
-      from: iso(f.from),
-      to: iso(f.to),
-      precision: f.precision,
-      source: f.source,
-    };
+    const oFrom = isoOf(f.from);
+    const oTo = isoOf(f.to);
+    if (oFrom === undefined || oTo === undefined) continue;
+    const o: Occurrence = { from: oFrom, to: oTo, precision: f.precision, source: f.source };
     const key = `${o.from}|${o.to}`;
     if (seen.has(key)) continue;
     seen.add(key);
     stated.push(o);
     if (stated.length >= MAX_STATED_OCCURRENCES) break;
   }
-  const [from, to] = period(ref, 'day', offset);
-  return [...stated, { from: iso(from), to: iso(to), precision: 'day', source: 'mention' }];
+  return [...stated, mention];
 }
 
 /** A query's time range and where its words are, as `queryRange` reads them. */
@@ -577,21 +598,28 @@ const THIS_PERIOD = /\bthis\s+(week|month|year)\b/i;
  */
 export function queryRange(query: string, now: Date): QueryTime | undefined {
   const ref = now.getTime();
+  if (!Number.isFinite(ref)) return undefined;
+  const text = query.slice(0, MAX_TIME_TEXT);
   const today = period(ref, 'day', 0);
-  for (const f of findTimes(query, ref, 0, true)) {
-    const sofar = f.present === true && THIS_PERIOD.test(f.text) && PAST_QUESTION.test(query);
+  // Only the words just before a date can cue it: a long query is not scanned again per date.
+  const lead = (i: number) => text.slice(Math.max(0, i - CUE_REACH), i);
+  for (const f of findTimes(text, ref, 0, true)) {
+    const sofar = f.present === true && THIS_PERIOD.test(f.text) && PAST_QUESTION.test(text);
     const cued =
       sofar ||
-      CUE_BEFORE.test(query.slice(0, f.index)) ||
+      CUE_BEFORE.test(lead(f.index)) ||
       /^(on|in|at|as\s+of|during|by)\b/i.test(f.text) ||
       CUE_WORDS.test(f.text);
     if (!cued || (f.present === true && !sofar)) continue;
     if (f.from >= today[0]) continue;
     let to = f.to;
-    if (sofar || /\bsince\s*$/i.test(query.slice(0, f.index))) to = today[1];
+    if (sofar || /\bsince\s*$/i.test(lead(f.index))) to = today[1];
+    const from = isoOf(f.from);
+    const end = isoOf(Math.min(to, today[1]));
+    if (from === undefined || end === undefined) continue;
     return {
-      from: iso(f.from),
-      to: iso(Math.min(to, today[1])),
+      from,
+      to: end,
       precision: to !== f.to ? 'span' : f.precision,
       text: f.text,
       index: f.index,

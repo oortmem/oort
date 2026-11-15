@@ -100,6 +100,28 @@ export function timeScore(m: Memory, r: TimeRange): number {
 }
 
 /**
+ * The reranked order with a bounded time boost: each memory's rerank score `s` plus
+ * |s| × TIME_BOOST × its time score, so the reranker's judgement stands and a memory that fits
+ * the query's time can pass one that scored up to 10% higher. Using |s| keeps the boost upward for
+ * a reranker that returns negative scores. The gate still reads the raw score. Ties keep the
+ * reranker's order.
+ */
+export function timeBoosted<T extends { id: string }>(
+  next: readonly T[],
+  scores: ReadonlyMap<string, number>,
+  memories: ReadonlyMap<string, Memory>,
+  range: TimeRange,
+): T[] {
+  const boosted = (f: T): number => {
+    const m = memories.get(f.id);
+    const s = scores.get(f.id) ?? 0;
+    return m === undefined ? s : s + Math.abs(s) * TIME_BOOST * timeScore(m, range);
+  };
+  const keyed = next.map((f, i) => ({ f, i, b: boosted(f) }));
+  return keyed.sort((x, y) => y.b - x.b || x.i - y.i).map((x) => x.f);
+}
+
+/**
  * The channel's list for one node: every memory in `pool` with a time score above 0, best first
  * by time score times relevance (`relevance(m)`, 0 to 1: the dense similarity or the share of the
  * query's words), spread over days: the best memory of each day, days in order of their best,

@@ -266,7 +266,13 @@ export function timeShape(query: string, rangeText = ''): TimeShape {
  * more than 30 days ahead means the last one ("in March" asked in November is this year's March).
  */
 export function temporalIntent(query: string, now: Date): TemporalIntent {
-  const q = queryRange(query, now);
+  let q: ReturnType<typeof queryRange>;
+  try {
+    q = queryRange(query, now);
+  } catch {
+    // A reader that fails names no range: the question reads as one without a time.
+    q = undefined;
+  }
   const range: TimeRange | undefined =
     q === undefined ? undefined : { from: q.from, to: q.to, precision: q.precision };
   const end = range === undefined ? undefined : new Date(Date.parse(range.to) - 1).toISOString();

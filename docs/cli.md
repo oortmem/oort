@@ -1619,9 +1619,12 @@ dense searches and fuses all three by reciprocal rank (k = 60):
   after it less and less (halving every 30 days). The range is widened a little first: a week by
   a day, a month by three days, a year by a week.
 - A memory outside the range keeps whatever the other lists give it. The time list only adds.
-- After a rerank, a memory's place is its rerank score times at most 1.1, by how well its time
-  fits. The relevance gate still reads the plain rerank score, so a weak match is not let in by its
-  date.
+- After a rerank, a memory's place is its rerank score raised by at most a tenth of its size, by
+  how well its time fits. The relevance gate still reads the plain rerank score, so a weak match is
+  not let in by its date.
+- Without a rerank (`fast`, or a rerank that failed), a memory only the time list found, with no
+  word of the query and no dense match, fails the relevance gate. It then takes no place among the
+  results, so it never pushes out a memory the searches found.
 
 `recall.timeChannel: false` turns the list off; a question about a state still reads as-of. A
 query with no time in it is ranked exactly as before. Recalled memories that state a time say so:

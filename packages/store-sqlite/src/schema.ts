@@ -13,6 +13,8 @@ import {
   type NodeRef,
 } from '@oortmem/core';
 import { BINARY_AUTO_THRESHOLD, binaryCode, bitWidth } from './binary.js';
+
+const DAY_MS = 86_400_000;
 import { startRabitqBuild, dropRabitqIndex, hasRabitqIndex } from './rabitq-store.js';
 
 /**
@@ -1150,28 +1152,43 @@ export function migrateV9toV8(db: Database, rebuild = true): void {
 }
 
 /**
- * A memory's occurrence rows: each interval in epoch ms, and 1 when the text stated it (not the
- * `mention` day). Invalid or missing JSON gives none.
+ * An occurrence at most this many days long is short: a day, a week, a month, a weekend. The
+ * range read looks for short ones only from this long before the range, and for the few long
+ * ones (a season, a year, "the past few months") from `MAX_OCCURRENCE_DAYS` before it.
+ */
+export const SHORT_OCCURRENCE_DAYS = 32;
+
+/**
+ * A memory's occurrence rows: each interval in epoch ms, 1 when the text stated it (not the
+ * `mention` day), and 1 when it is longer than `SHORT_OCCURRENCE_DAYS`. Invalid or missing JSON
+ * gives none.
  */
 export function occurrenceRows(
   json: string | null,
-): { from: number; to: number; stated: number }[] {
+): { from: number; to: number; stated: number; long: number }[] {
   if (json === null) return [];
   try {
-    return checkOccurrences(JSON.parse(json)).map((o) => ({
-      from: Date.parse(o.from),
-      to: Date.parse(o.to),
-      stated: o.source === 'mention' ? 0 : 1,
-    }));
+    return checkOccurrences(JSON.parse(json)).map((o) => {
+      const from = Date.parse(o.from);
+      const to = Date.parse(o.to);
+      return {
+        from,
+        to,
+        stated: o.source === 'mention' ? 0 : 1,
+        long: to - from > SHORT_OCCURRENCE_DAYS * DAY_MS ? 1 : 0,
+      };
+    });
   } catch {
     return [];
   }
 }
 
 /**
- * The event-time schema of version 10. `memory_occurred_from` leads with the start, so a read for
- * a range is one index range: an occurrence is never longer than `MAX_OCCURRENCE_DAYS`, so every
- * one that overlaps [from, to) starts in [from - MAX_OCCURRENCE_DAYS, to).
+ * The event-time schema of version 10. `memory_occurred_from` leads with `long`, then the start,
+ * so a read for a range is two index ranges: short occurrences that start in
+ * [from - SHORT_OCCURRENCE_DAYS, to), and long ones (never longer than `MAX_OCCURRENCE_DAYS`)
+ * that start in [from - MAX_OCCURRENCE_DAYS, to). A read for one day walks a month of rows, not a
+ * year of them.
  */
 function createOccurrenceSchema(db: Database): void {
   db.exec(`
@@ -1181,29 +1198,55 @@ function createOccurrenceSchema(db: Database): void {
       from_ms    INTEGER NOT NULL,
       to_ms      INTEGER NOT NULL,
       stated     INTEGER NOT NULL CHECK (stated IN (0, 1)),
+      long       INTEGER NOT NULL CHECK (long IN (0, 1)),
       CHECK (to_ms > from_ms)
     );
-    CREATE INDEX memory_occurred_from ON ${OCCURRED_TABLE} (from_ms, to_ms, stated, memory_rid);
+    CREATE INDEX memory_occurred_from ON ${OCCURRED_TABLE} (long, from_ms, to_ms, stated, memory_rid);
     CREATE INDEX memory_occurred_rid ON ${OCCURRED_TABLE} (memory_rid);
   `);
+}
+
+/** A refined memory's text was last rewritten when it was last updated, not when it was made. */
+function rewrittenAt(row: { created_at: string; updated_at: string; source: string }): number {
+  try {
+    const decisions = (JSON.parse(row.source) as { decisions?: unknown }).decisions;
+    const refined =
+      Array.isArray(decisions) &&
+      decisions.some(
+        (d: { stage?: unknown; question?: unknown }) =>
+          d?.stage === 'refine' && d?.question === 'previous-text',
+      );
+    if (refined) {
+      const t = Date.parse(row.updated_at);
+      if (Number.isFinite(t)) return t;
+    }
+  } catch {
+    // An unreadable source: the time it was made.
+  }
+  return Date.parse(row.created_at);
 }
 
 /**
  * Version 9 to 10, inside the caller's transaction: the guard triggers call
  * `oort_writer_v10`, the event-time schema is created, and it is filled from the stored rows:
- * each memory's occurrences are read from its text against the time it was stored
- * (`created_at`), as the write path reads a turn against the turn's time, in UTC. Returns how many
- * memories it read.
+ * each memory's occurrences are read from its text against the time the text was written (when
+ * it was made, or for a refined memory when it was last updated), in UTC, as the write path reads
+ * a turn against the turn's time. The turn's own UTC offset is not stored, so it is not used. A
+ * text the reader fails on keeps only the day it was written; one with no readable time keeps
+ * none. Returns how many memories it read.
  */
 export function migrateV9toV10(db: Database): number {
   dropWriterGuard(db);
   createOccurrenceSchema(db);
-  const page = db.prepare<[number], { rid: number; text: string; created_at: string }>(
-    `SELECT rid, text, created_at FROM memories WHERE rid > ? ORDER BY rid LIMIT 1000`,
+  const page = db.prepare<
+    [number],
+    { rid: number; text: string; created_at: string; updated_at: string; source: string }
+  >(
+    `SELECT rid, text, created_at, updated_at, source FROM memories WHERE rid > ? ORDER BY rid LIMIT 1000`,
   );
   const set = db.prepare<[string, number]>('UPDATE memories SET occurred = ? WHERE rid = ?');
-  const insert = db.prepare<[number, number, number, number]>(
-    `INSERT INTO ${OCCURRED_TABLE} (memory_rid, from_ms, to_ms, stated) VALUES (?, ?, ?, ?)`,
+  const insert = db.prepare<[number, number, number, number, number]>(
+    `INSERT INTO ${OCCURRED_TABLE} (memory_rid, from_ms, to_ms, stated, long) VALUES (?, ?, ?, ?, ?)`,
   );
   let after = -Infinity;
   let n = 0;
@@ -1213,11 +1256,22 @@ export function migrateV9toV10(db: Database): number {
     if (rows.length === 0) break;
     for (const r of rows) {
       after = r.rid;
-      const t = Date.parse(r.created_at);
+      const t = rewrittenAt(r);
       if (Number.isNaN(t)) continue;
-      const json = JSON.stringify(occurrencesOf(r.text, new Date(t)));
+      let json: string | undefined;
+      try {
+        json = JSON.stringify(occurrencesOf(r.text, new Date(t)));
+      } catch {
+        // One text the reader fails on must not keep the store from opening.
+        try {
+          json = JSON.stringify(occurrencesOf('', new Date(t)));
+        } catch {
+          json = undefined;
+        }
+      }
+      if (json === undefined) continue;
       set.run(json, r.rid);
-      for (const o of occurrenceRows(json)) insert.run(r.rid, o.from, o.to, o.stated);
+      for (const o of occurrenceRows(json)) insert.run(r.rid, o.from, o.to, o.stated, o.long);
       n++;
     }
   }
@@ -1227,7 +1281,9 @@ export function migrateV9toV10(db: Database): number {
 
 /**
  * Version 10 back to 9, inside the caller's transaction: drops the event-time schema and puts
- * the version 9 guard back. Nothing is refused: event time is read again from each memory's text.
+ * the version 9 guard back. Nothing is refused, but nothing of it is kept: going up again reads
+ * event time anew from each memory's text, so what the text does not say (the turn's UTC offset,
+ * `occurred` set by an SDK caller or a version 2 import) is lost.
  */
 export function migrateV10toV9(db: Database): void {
   db.exec(`

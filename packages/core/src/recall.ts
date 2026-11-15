@@ -44,7 +44,7 @@ import {
 import { temporalIntent, type RecallMode, type TimeShape } from './temporal.js';
 import { PART_MIN_WORDS, PART_RERANK_FLOOR, subQueries } from './subqueries.js';
 import { formatRange, type TimeRange } from './event-time.js';
-import { readOccurrences, TIME_BOOST, timeList, timeScore } from './time-channel.js';
+import { readOccurrences, timeBoosted, timeList, timeScore } from './time-channel.js';
 import { isStale, lastConfirmed } from './volatile.js';
 import {
   CONFIDENT_COVERAGE,
@@ -668,7 +668,6 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   // Relevance gate (CON-45): a reranker score when there is one, else query-word coverage or a
   // strong dense match. A threshold of 0 switches that test off.
   const { minRerankScore, minCoverage, minDenseScore } = config.recall;
-  const candidates = ordered.slice(0, config.recall.returnK);
   const byRerank = rerankScores.size > 0;
   const relevant = (id: string): boolean => {
     const rs = rerankScores.get(id);
@@ -706,6 +705,17 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     }
     return minDenseScore > 0 && (partDense[p]!.get(id) ?? -1) >= minDenseScore;
   };
+  // A memory only the time channel found (no lexical or dense hit) that fails the gate takes no
+  // place: without a reranker to judge it, it would push out a searched hit and then be dropped.
+  // Every other memory is sliced and gated as without a time range.
+  // A hit of any search counts, the whole query's or a part's: a part's best match comes from its
+  // own lexical and dense lists, so it is never time-only.
+  const searched = new Set([...lexicalAllLegs.flat(2), ...denseAllLegs.flat(2)].map((h) => h.id));
+  const timeOnlyDropped = (id: string): boolean =>
+    timeRange !== undefined && !searched.has(id) && !relevant(id);
+  const candidates = (
+    timeRange === undefined ? ordered : ordered.filter((f) => !timeOnlyDropped(f.id))
+  ).slice(0, config.recall.returnK);
   let kept = candidates.filter((f) => relevant(f.id) || relevantToPart(f.id));
   const dropped = candidates.length - kept.length;
 
@@ -1172,26 +1182,6 @@ function liveIsEnough(
   const top = coverage.get(topId) ?? 0;
   if (top < 1) return false;
   return cold.every((f) => (coverage.get(f.id) ?? 0) <= top - CONFIDENT_COVERAGE_GAP);
-}
-
-/**
- * The reranked order with a bounded time boost: each memory's rerank score times
- * 1 + TIME_BOOST × its time score, so the reranker's judgement stands and a memory that fits the
- * query's time can pass one that scored up to 10% higher. The gate still reads the raw score.
- */
-function timeBoosted<T extends { id: string }>(
-  next: T[],
-  scores: Map<string, number>,
-  memories: Map<string, Memory>,
-  range: TimeRange,
-): T[] {
-  const boosted = (f: T): number => {
-    const m = memories.get(f.id);
-    const s = scores.get(f.id) ?? 0;
-    return m === undefined ? s : s * (1 + TIME_BOOST * timeScore(m, range));
-  };
-  const keyed = next.map((f, i) => ({ f, i, b: boosted(f) }));
-  return keyed.sort((x, y) => y.b - x.b || x.i - y.i).map((x) => x.f);
 }
 
 const TIMED_OUT = Symbol('timed-out');

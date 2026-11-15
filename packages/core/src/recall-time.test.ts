@@ -9,7 +9,7 @@ import { createMemoryStore } from './memory-store.js';
 import type { Memory } from './model.js';
 import { formatForInjection, recall, type RecallResult } from './recall.js';
 import { makeMemory, TG } from './store-conformance.js';
-import { TIME_BOOST, timeScore } from './time-channel.js';
+import { TIME_BOOST, timeBoosted, timeScore } from './time-channel.js';
 
 /**
  * The time channel: a past time in the query ranks memories by when what they tell of happened,
@@ -287,6 +287,23 @@ describe('recall: the time channel', () => {
   });
 });
 
+describe('recall: the time channel without a reranker', () => {
+  it('time.memories-found-only-by-time-never-take-a-searched-hits-place', async () => {
+    // Fast mode: no reranker judges a memory the range read alone found, and the gate drops it
+    // (no words of the query, no dense match). It must not push out a hit the gate would keep.
+    const poles = said('poles', 'My hiking poles are in the closet.', '2023-01-09T09:00:00.000Z');
+    const filler = Array.from({ length: 10 }, (_, i) =>
+      said(`shed${i}`, `Painted the shed, coat ${i}.`, `2023-03-${String(i + 10)}T09:00:00.000Z`),
+    );
+    const { store } = await storeWith([hike, boots, poles, ...filler]);
+    const r = await recall(
+      { text: 'Where did I go hiking in March?', scope: SCOPE },
+      { store, config: withRecall({ returnK: 3, minCoverage: 0.3 }), now: NOW },
+    );
+    expect(new Set(r.memories.map((m) => m.id))).toEqual(new Set(['hike', 'poles', 'boots']));
+  });
+});
+
 describe('timeScore', () => {
   const march = {
     from: '2023-03-01T00:00:00.000Z',
@@ -314,5 +331,35 @@ describe('timeScore', () => {
     const wedding = said('w', 'We got married on March 4, 2021.', '2023-03-20T00:00:00.000Z');
     // March 2021 is not March 2023: only the mention, inside the range, counts.
     expect(timeScore(wedding, march)).toBeCloseTo(0.4, 6);
+  });
+});
+
+describe('timeBoosted', () => {
+  const march = {
+    from: '2023-03-01T00:00:00.000Z',
+    to: '2023-04-01T00:00:00.000Z',
+    precision: 'month' as const,
+  };
+  const memories = new Map([
+    ['hike', hike],
+    ['boots', boots],
+  ]);
+  const order = (scores: Record<string, number>) =>
+    timeBoosted(
+      Object.keys(scores).map((id) => ({ id })),
+      new Map(Object.entries(scores)),
+      memories,
+      march,
+    ).map((f) => f.id);
+
+  it('boost.lifts-a-memory-in-the-range-by-at-most-the-bound', () => {
+    expect(order({ boots: 0.5, hike: 0.49 })).toEqual(['hike', 'boots']);
+    expect(order({ boots: 0.5, hike: 0.4 })).toEqual(['boots', 'hike']);
+  });
+
+  it('boost.never-demotes-a-negative-score', () => {
+    // A reranker that returns logits: a memory in the range must still move up, not down.
+    expect(order({ boots: -0.49, hike: -0.5 })).toEqual(['hike', 'boots']);
+    expect(order({ boots: -0.4, hike: -0.5 })).toEqual(['boots', 'hike']);
   });
 });

@@ -590,16 +590,26 @@ or rebuilds leave no words in free pages.
 
 Schema version 10 (event time) adds one nullable column, `occurred`: the JSON
 `Memory.occurred` (see [Event time](#event-time)). A table, `memory_occurred (memory_rid, from_ms,
-to_ms, stated)`, holds one row per occurrence, rewritten with the memory and deleted with it (a
-foreign key with `ON DELETE CASCADE`), and the index `memory_occurred_from (from_ms, to_ms,
-stated, memory_rid)` serves the range read: one range of `from_ms` (an occurrence is at most 367
-days long, so one that overlaps the query starts at most that long before it), filtered on
-`to_ms` inside the index. Opening a version 9 store (or an older one, on its way up) adds them in
-one transaction, reads each memory's event time again from its text against its `createdAt`, as a
-write would, and swaps the guard triggers to `oort_writer_v10()`; it takes no copy, since nothing
-is lost going back. `migrate: false` refuses a version 9 store with `StoreMigrationRequiredError`.
+to_ms, stated, long)`, holds one row per occurrence, rewritten with the memory and deleted with it
+(a foreign key with `ON DELETE CASCADE`). `long` is 1 for an occurrence longer than 32 days (a
+season, a year, "the past few months"). The index `memory_occurred_from (long, from_ms, to_ms,
+stated, memory_rid)` serves the range read as two index ranges: short occurrences that start at
+most 32 days before the range, and long ones that start at most 367 days before it (no occurrence
+is longer), each filtered on `to_ms` inside the index. A read for one day so walks about a month of
+rows, not a year of them.
+
+Opening a version 9 store (or an older one, on its way up) adds them in one transaction and swaps
+the guard triggers to `oort_writer_v10()`. It reads each memory's event time again from its text,
+in UTC, against the time the text was written: its `createdAt`, or its `updatedAt` for a memory
+that was refined (a refine rewrites the text). A text the reader fails on keeps only the day it was
+written, so one memory cannot keep the store from opening. It takes no copy. `migrate: false`
+refuses a version 9 store with `StoreMigrationRequiredError`.
+
 `downgradeSqliteStore({ path, to: 9 })` drops the column, the table and its indexes and puts
-version 9's guard back.
+version 9's guard back. Event time does not survive a trip down to 9 and back up: it is read
+again from the text, so what the text alone does not give is lost. That is the turn's UTC offset,
+the turn's own time when it differs from the memory's timestamps, and any `occurred` an SDK caller
+or a version 2 import set.
 
 `downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x,
 `downgradeSqliteStore({ path, to: 2 })` to version 2 for Oort 0.3 to 0.5, and `{ path, to: 3 }` to
@@ -609,7 +619,7 @@ and the R*Tree are dropped), `{ path, to: 5 }` to version 5 (the binary index an
 guard are dropped; the int8 vectors were never moved), `{ path, to: 6 }` to version 6 (the
 RaBitQ index is dropped and version 6's guard restored), `{ path, to: 7 }` to version 7 (above),
 `{ path, to: 8 }` to version 8 (the lexical index is rebuilt as version 8's), and `{ path, to: 9 }`
-to version 9 (event time is dropped). Opening a store never goes down: migrations only roll forward. It first
+to version 9 (event time is dropped, and read again from text on the way back up). Opening a store never goes down: migrations only roll forward. It first
 copies the database to `<path>.pre-downgrade.<UTC time>` (the three newest are kept), and refuses
 while the store holds anything the target version cannot represent (for version 4 and below, any
 memory with a place; for version 2, also any judgment; for

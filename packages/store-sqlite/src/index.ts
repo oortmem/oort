@@ -125,6 +125,7 @@ import {
   migrationBlockers,
   OCCURRED_TABLE,
   occurrenceRows,
+  SHORT_OCCURRENCE_DAYS,
   PLACE_TABLE,
   placeCount,
   rabitqIndexPlan,
@@ -139,6 +140,7 @@ import {
 export {
   BIT_TABLE,
   OCCURRED_TABLE,
+  SHORT_OCCURRENCE_DAYS,
   FTS_TABLE,
   FTS_VALUES_TABLE,
   FTS_TOKENIZE,
@@ -697,18 +699,21 @@ function live(patterns: readonly NodePattern[]): NodePattern[] {
 }
 
 /**
- * The event-time read for a grant of `n` patterns: one range of `memory_occurred_from`
- * (an occurrence that overlaps [from, to) starts in [from - MAX_OCCURRENCE_DAYS, to)), joined to
- * its memory by rid, inside the grant (and the spatial predicate, when given). Per memory its best
- * occurrence: stated before `mention` (the 1e15 offset), then nearest the range's middle.
+ * The event-time read for a grant of `n` patterns: two ranges of `memory_occurred_from`, short
+ * occurrences that start in [from - SHORT_OCCURRENCE_DAYS, to) and long ones that start in
+ * [from - MAX_OCCURRENCE_DAYS, to) (together, every occurrence that overlaps [from, to)), joined
+ * to their memory by rid, inside the grant (and the spatial predicate, when given). Per memory its
+ * best occurrence: stated before `mention` (the 1e15 offset), then nearest the range's middle.
  */
 function occurredSql(n: number, spatial?: string): string {
+  const arm = (long: 0 | 1, lo: string) =>
+    `SELECT memory_rid, from_ms, to_ms, stated FROM ${OCCURRED_TABLE} INDEXED BY memory_occurred_from
+       WHERE long = ${long} AND from_ms >= ${lo} AND from_ms < @to AND to_ms > @from`;
   return `SELECT m.id AS id, m.tier AS tier,
        min((1 - o.stated) * 1e15 + abs((o.from_ms + o.to_ms) / 2.0 - @mid)) AS key
-     FROM ${OCCURRED_TABLE} o INDEXED BY memory_occurred_from
+     FROM (${arm(0, '@loShort')} UNION ALL ${arm(1, '@lo')}) o
      CROSS JOIN memories m ON m.rid = o.memory_rid
-     WHERE o.from_ms >= @lo AND o.from_ms < @to AND o.to_ms > @from
-       AND ${grantSql(n)}${spatial === undefined ? '' : ` AND ${spatial}`}
+     WHERE ${grantSql(n)}${spatial === undefined ? '' : ` AND ${spatial}`}
      GROUP BY m.rid
      ORDER BY key, m.id
      LIMIT @k`;
@@ -1289,8 +1294,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     setAccess: db.prepare<[string, string]>('UPDATE memories SET access_log = ? WHERE id = ?'),
     placeDelete: db.prepare<[number]>(`DELETE FROM ${PLACE_TABLE} WHERE rid = ?`),
     occurredDelete: db.prepare<[number]>(`DELETE FROM ${OCCURRED_TABLE} WHERE memory_rid = ?`),
-    occurredInsert: db.prepare<[number, number, number, number]>(
-      `INSERT INTO ${OCCURRED_TABLE} (memory_rid, from_ms, to_ms, stated) VALUES (?, ?, ?, ?)`,
+    occurredInsert: db.prepare<[number, number, number, number, number]>(
+      `INSERT INTO ${OCCURRED_TABLE} (memory_rid, from_ms, to_ms, stated, long) VALUES (?, ?, ?, ?, ?)`,
     ),
     placeInsert: db.prepare<[number, number, number, number, number, number, number, string]>(
       `INSERT INTO ${PLACE_TABLE} (rid, min_x, max_x, min_y, max_y, min_z, max_z, map_key)
@@ -1950,7 +1955,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     writeLinkIndexes(row.rid, m, address, existing);
     q.occurredDelete.run(row.rid);
     for (const o of occurrenceRows(m.occurred === undefined ? null : JSON.stringify(m.occurred))) {
-      q.occurredInsert.run(row.rid, o.from, o.to, o.stated);
+      q.occurredInsert.run(row.rid, o.from, o.to, o.stated, o.long);
     }
     q.placeDelete.run(row.rid);
     const box = placeBox(m.place);
@@ -2579,6 +2584,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           from,
           to,
           lo: from - MAX_OCCURRENCE_DAYS * DAY_MS,
+          loShort: from - SHORT_OCCURRENCE_DAYS * DAY_MS,
           mid: (from + to) / 2,
           k: Math.floor(k),
         })
