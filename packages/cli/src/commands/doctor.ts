@@ -75,8 +75,25 @@ import {
   shellPath,
 } from './managed.js';
 import { tempDirs, trustedPath, untrustedText } from '../trust.js';
-import { SKIP_FILE, callDaemon, clearSkip, readSkip } from '../serve-client.js';
-import { socketPathFor } from '../serve-protocol.js';
+import {
+  SKIP_FILE,
+  autostartOff,
+  callDaemon,
+  clearSkip,
+  readAutostartState,
+  readSkip,
+  type AutostartOff,
+} from '../serve-client.js';
+import { inspectDir, socketPathFor } from '../serve-protocol.js';
+
+/** `p` with its symlinks resolved, or `p` when that fails. */
+function realOr(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
 import { HOOK_RABITQ_MAX_LOAD } from './hook.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info' | 'unknown';
@@ -661,16 +678,120 @@ function currentManaged(ctx: Ctx): ReturnType<typeof managedCopy> {
   return managedIsCurrent(m) ? m : undefined;
 }
 
+/** A duration as `oort serve` prints one: 45s, 30m, 2h, 1h 30m. */
+function minutesText(ms: number): string {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  const m = Math.round(ms / 60_000);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h${m % 60 > 0 ? ` ${m % 60}m` : ''}`;
+}
+
 /**
- * `oort serve`: running or not, its pid, version and socket, and a warning when it is another
- * oort than this one (the hooks then run in-process until it restarts). Reads only; a stale
- * socket is reported, never removed.
+ * Why the daemon last stopped, from the last `stopped (<reason>)` line of `logs/serve.log`
+ * (`idle`, `requested`, `SIGTERM`, `replaced by oort x`, ...), with its time. Reads the last 16 KB
+ * only; the log holds start and stop lines, never a prompt or a memory.
+ */
+export function lastServeStop(home: string): { reason: string; at: string } | undefined {
+  let text: string;
+  try {
+    const fd = fs.openSync(path.join(home, 'logs', 'serve.log'), 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      const len = Math.min(size, 16 * 1024);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      text = buf.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+  // oxlint-disable-next-line no-control-regex
+  const lines = text.replace(/\u001b\[[0-9;]*m/g, '').split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = /^(\d{4}-\d\d-\d\dT[\d:.]+Z) stopped \(([^)\n]{1,80})\)\s*$/.exec(lines[i] ?? '');
+    if (m !== null) return { at: m[1] as string, reason: m[2] as string };
+  }
+  return undefined;
+}
+
+const AUTOSTART_OFF: Record<AutostartOff, string> = {
+  windows:
+    'off: oort serve needs Unix sockets and does not run on Windows, so the hooks always run in-process',
+  OORT_NO_AUTOSTART: 'off: OORT_NO_AUTOSTART is set, so no hook starts the daemon',
+  'serve.autostart':
+    'off: serve.autostart is false in the home config, so no hook starts the daemon',
+  config: 'off: the home config.json does not parse, so no hook starts the daemon',
+  'serve.invalid':
+    'off: serve in the home config.json is not valid (serve.autostart must be true or false, serve.idleMinutes a whole number from 1 to 1440), so no hook starts the daemon',
+};
+
+/**
+ * `oort serve`: whether hooks start it (`serve.autostart`, on by default), running or not and
+ * why (its pid, version, socket and idle exit; or why it last stopped), and a warning when it is
+ * another oort than this one (the hooks then run in-process until it restarts). Reads only; a
+ * stale socket is reported, never removed.
  */
 async function serveChecks(ctx: Ctx): Promise<Check[]> {
   const home = resolveHome(ctx.io.env);
   const socket = socketPathFor(home, ctx.io.env);
   const show = shown(tilde(socket, ctx.io.env['HOME'] ?? ''));
   const base = { group: 'serve' as const, name: 'daemon' };
+  const off = autostartOff(home, ctx.io.env);
+  const userHome = ctx.io.env['HOME'] ?? '';
+  const socketDir = path.dirname(socket);
+  const dirShown = shown(tilde(socketDir, userHome));
+  const logShown = shown(tilde(path.join(home, 'logs', 'serve.log'), userHome));
+  // The daemon listens only in a real directory of this user's that nobody else can write, and
+  // makes it 0700 (`checkSocketDir`); the hooks connect only to a socket there.
+  const dirState = process.platform === 'win32' ? 'ok' : inspectDir(socketDir);
+  let idleMinutes = 30;
+  try {
+    idleMinutes = resolveConfig(ctx.io.cwd, ctx.io.env, { projectConfig: false }).serve.idleMinutes;
+  } catch {
+    // An invalid config: its own check reports it.
+  }
+  const autostart: Check = {
+    group: 'serve',
+    name: 'autostart',
+    status: 'info',
+    detail:
+      off === undefined
+        ? `on: a hook that finds no daemon answers in-process, then starts one; it exits after ${minutesText(idleMinutes * 60_000)} without a request`
+        : AUTOSTART_OFF[off],
+  };
+  if (off === undefined || off === 'serve.autostart' || off === 'OORT_NO_AUTOSTART') {
+    switch (dirState) {
+      case 'symlink':
+        Object.assign(autostart, {
+          status: 'warn',
+          detail: `${off === undefined ? 'on, but cannot run' : AUTOSTART_OFF[off]}: ${dirShown} is a symlink, and the daemon never listens in a symlinked directory (it could be pointed elsewhere), so the hooks always run in-process; point OORT_HOME at the real directory`,
+          fix: `set OORT_HOME to the real directory (${shown(tilde(realOr(socketDir), userHome))}) in the environment your agent starts with`,
+        });
+        break;
+      case 'writable-by-others':
+        Object.assign(autostart, {
+          status: 'warn',
+          detail: `${off === undefined ? 'on, but cannot run' : AUTOSTART_OFF[off]}: ${dirShown} is writable by group or others, so the daemon refuses to listen there and the hooks run in-process`,
+          fix: `chmod 700 ${dirShown}`,
+        });
+        break;
+      case 'foreign':
+      case 'not-a-directory':
+        Object.assign(autostart, {
+          status: 'warn',
+          detail: `${off === undefined ? 'on, but cannot run' : AUTOSTART_OFF[off]}: ${dirShown} is ${dirState === 'foreign' ? "another user's" : 'not a directory'}, so the daemon refuses to listen there and the hooks run in-process`,
+          fix: 'point OORT_HOME at a directory of your own',
+        });
+        break;
+      case 'readable-by-others':
+        autostart.detail += `; the daemon makes ${dirShown} 0700 when it starts (autostart included), because its socket's privacy relies on that directory: some systems do not enforce a socket's own mode`;
+        break;
+      default:
+        break;
+    }
+  }
   const skip = readSkip(home);
   // A refusal for a pending migration needs no row: the store check below migrates the store and
   // reopens the daemon to the hooks.
@@ -681,16 +802,39 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
             group: 'serve',
             name: 'hooks',
             status: 'warn',
-            detail: `skip the daemon until ${new Date(skip.until).toISOString()}, after ${skip.reason === 'refused' ? 'a refusal (another protocol or version, an answer that is not a hook result, or a daemon that would not start)' : 'a hook timed out on it'}; they run in-process (${SKIP_FILE})`,
+            detail: `skip the daemon until ${new Date(skip.until).toISOString()}, after ${skipCause(skip.reason)}; they run in-process (${SKIP_FILE})`,
             fix: 'oort serve status (tries it again), or oort serve stop && oort serve --detach',
             fixCommand: 'oort serve status',
           },
         ]
       : [];
-  return [...(await daemonChecks()), ...skipping];
+  return [...(await daemonChecks()), autostart, ...skipping];
+
+  function skipCause(reason: string | undefined): string {
+    switch (reason) {
+      case 'start': {
+        const n = readAutostartState(home).failures;
+        return `a daemon the hooks started did not start or did not stay up (${n} time${n === 1 ? '' : 's'} in a row; the wait grows from 1 to 5 to 30 minutes, and editing the home config tries again at once): see ${logShown}`;
+      }
+      case 'refused':
+        return `a refusal (another protocol or version, or an answer that is not a hook result): see ${logShown}`;
+      default:
+        return 'a hook timed out on it';
+    }
+  }
+
+  /** Not running: what happens next, and why it last stopped. */
+  function notRunning(what: string): string {
+    const last = lastServeStop(home);
+    const next =
+      off === undefined
+        ? 'the next prompt or session starts it (serve.autostart); until it answers, hooks run in-process'
+        : 'hooks run in-process';
+    return `${what}; ${next}${last === undefined ? '' : `; last stopped: ${shown(last.reason)} at ${last.at}`}`;
+  }
 
   async function daemonChecks(): Promise<Check[]> {
-    const r = await callDaemon(socket, 'ping', {}, { budgetMs: 1000 });
+    const r = await callDaemon(socket, 'status', {}, { budgetMs: 1000 });
     if (r.ok) {
       const version = shown(r.result['version']);
       const pid = shown(r.result['pid']);
@@ -704,7 +848,23 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
           },
         ];
       }
-      return [{ ...base, status: 'ok', detail: `running, pid ${pid}, oort ${version}, ${show}` }];
+      const idleExit = r.result['idleExitMs'];
+      const exits =
+        typeof idleExit === 'number' && Number.isFinite(idleExit)
+          ? `; exits after ${minutesText(idleExit)} without a request`
+          : '';
+      const startedAt = r.result['startedAt'];
+      const started =
+        typeof startedAt === 'string' && /^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(startedAt)
+          ? `; started ${startedAt} (it keeps the environment of the session that started it until it exits: oort serve stop to pick up a change)`
+          : '';
+      return [
+        {
+          ...base,
+          status: 'ok',
+          detail: `running, pid ${pid}, oort ${version}, ${show}${started}${exits}`,
+        },
+      ];
     }
     switch (r.reason) {
       case 'absent':
@@ -712,7 +872,7 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
           {
             ...base,
             status: 'info',
-            detail: 'not running; hooks run in-process',
+            detail: notRunning('not running'),
             fix: 'oort serve --detach',
           },
         ];
@@ -721,11 +881,22 @@ async function serveChecks(ctx: Ctx): Promise<Check[]> {
           {
             ...base,
             status: 'info',
-            detail: `not running; a stopped daemon left ${show} behind (the next start replaces it)`,
+            detail: notRunning(
+              `not running; a stopped daemon left ${show} behind (the next start replaces it)`,
+            ),
             fix: 'oort serve --detach',
           },
         ];
       case 'untrusted':
+        if (dirState === 'symlink') {
+          return [
+            {
+              ...base,
+              status: 'info',
+              detail: `not running: ${dirShown} is a symlink, where the daemon never listens; hooks run in-process`,
+            },
+          ];
+        }
         return [
           {
             ...base,

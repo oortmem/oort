@@ -154,6 +154,11 @@ export function processIo(
      * `oort-hook <label> <ms since process start>`.
      */
     timing?: () => string;
+    /**
+     * Runs once the hook's stdout is flushed, just before the process exits: work the answer must
+     * never wait on (starting `oort serve`). Must not throw.
+     */
+    afterOutput?: () => void;
   } = {},
 ): Io {
   process.stdout.on('error', (e: NodeJS.ErrnoException) => {
@@ -278,10 +283,18 @@ export function processIo(
     },
     hookExit(stdout) {
       const timing = opts.timing;
+      const done = (): never => {
+        try {
+          opts.afterOutput?.();
+        } catch {
+          // Nothing after the answer may change how the hook exits.
+        }
+        return process.exit(0);
+      };
       const exit = (): void => {
-        if (timing === undefined) process.exit(0);
+        if (timing === undefined) return done();
         const line = `oort-hook ${timing()} ${performance.now().toFixed(2)}ms\n`;
-        process.stderr.write(line, () => process.exit(0));
+        process.stderr.write(line, done);
       };
       if (stdout.length === 0) exit();
       else process.stdout.write(stdout, exit);

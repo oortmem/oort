@@ -68,6 +68,8 @@ function sandbox(opts: { trusted?: boolean } = {}): Sandbox {
       OORT_NO_KEYCHAIN: '1',
       // The real bin's SessionStart would start a background update check (a request to npm).
       OORT_NO_UPDATE_CHECK: '1',
+      // Nor may a test's hook leave an `oort serve` running (autostart is on by default).
+      OORT_NO_AUTOSTART: '1',
     },
   };
 }

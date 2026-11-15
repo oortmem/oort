@@ -109,6 +109,8 @@ function sandbox(cloud: LocalCloud): Sandbox {
       OORT_NO_KEYCHAIN: '1',
       // The real bin's SessionStart would start a background update check (a request to npm).
       OORT_NO_UPDATE_CHECK: '1',
+      // These tests start the daemon themselves when they want one.
+      OORT_NO_AUTOSTART: '1',
       OORT_API_KEY: oortKey,
       OORT_CLOUD_URL: cloud.url,
     },

@@ -401,6 +401,7 @@ scrubs each memory again as it uploads it.
 | `OORT_SITE_URL` | The site `oort login` signs in at, for local development (default `https://oortcloud.dev`). The same rule applies. |
 | `OORT_NO_KEYCHAIN=1` | Switches stored keys (Keychain and `credentials.json`) off for every command (see `oort keys`). |
 | `OORT_HOME` | The store directory (default `~/.oort`). |
+| `OORT_NO_AUTOSTART=1` | A hook never starts `oort serve`, whatever `serve.autostart` says (see [the local daemon](#the-local-daemon-oort-serve)). |
 | `OORT_OUTPUT=json` | Turns `--json` on for every command that has it, as if each were given `--json` (see [JSON output](#json-output-oortv1)). It never changes `oort hook`, `oort mcp` or a foreground `oort serve`. |
 | `OORT_HOOK_TIMING=1` | Diagnostics. A `UserPromptSubmit` or `SessionStart` hook prints two stderr lines: `oort-hook <event> via=<process\|daemon> <ms>ms`, and `oort-timing {…}` with the hook log's timings for that prompt (numbers only). In cloud mode these include `cloudMs` (the whole request), `cloudHeadersMs`, `cloudBodyMs`, `cloudConnected` (1 when the request opened a connection) with `cloudDnsMs`, `cloudTcpMs` and `cloudTlsMs`, `cloudRecallMs` (the API's recall itself), the API's own stages as `server<Name>Ms`, and `serverLexicalFirstHit` (1 when the API answered from its lexical search without embedding the prompt, 0 when it embedded): the hook asks Oort Cloud for its `Server-Timing` breakdown. A daemon adds `socketMs`, and asks Oort Cloud for Server-Timing only when it was itself started with the variable. |
 | `NO_COLOR`, `FORCE_COLOR`, `COLORTERM`, `COLORFGBG` | See Colour above. |
@@ -1133,7 +1134,10 @@ oort serve stop
 Every hook is a new process that loads the engine, opens SQLite and reads
 keys. `oort serve` keeps one process running that has done all of that
 already, so a hook only connects to it, sends its input and prints the answer.
-It is optional: without it, the hooks work exactly as before.
+In cloud mode it also keeps the HTTPS connection to Oort Cloud open, so a
+prompt does not set up a new one. The hooks start it on their own (autostart,
+on by default, below), and it exits after 30 minutes without a request. It is
+optional: without it, the hooks work exactly as before.
 
 - **Which hooks.** `UserPromptSubmit` and `SessionStart`, the two that inject
   context, try the daemon first. `Stop` (which reads the transcript) and the
@@ -1211,23 +1215,80 @@ It is optional: without it, the hooks work exactly as before.
   unexpected field is refused. No parameter names a file: `cwd` only selects
   the project, as the hook input's own `cwd` does.
 
-Start it on demand with `serve.autostart` in `~/.oort/config.json` (default
-off). `SessionStart` then starts a detached daemon when none runs, and that
-session's prompts use it. When that start fails, or the daemon refuses to start
-(a pending migration, a bad directory), the circuit breaker opens for a minute,
-so not every session tries again. Only the home config is read for `serve`: a
-`serve` key in a repository's `oort.config.json` is ignored, with a warning.
+**Autostart (on by default).** A `UserPromptSubmit` or `SessionStart` hook
+that finds no daemon (no socket, or the socket of one that died) answers that
+prompt in-process, exactly as without a daemon, and only after its answer is
+written starts a detached `oort serve`. The prompts that follow use it. So the
+first prompt never waits for the daemon, and a start that fails never changes
+the hook's answer or its exit code. The daemon exits after
+`serve.idleMinutes` (default 30) without a request; the next prompt after that
+starts it again.
+
+- **One daemon.** Several hooks at once (several sessions starting together)
+  may each start one; the first to take the lock (`oort.pid`, created
+  exclusively) serves, and the others find it taken and exit. A hook starts
+  none while a live daemon holds the lock and is still starting (up to a
+  minute). A daemon that crashed leaves its socket and pid file behind; the
+  next hook finds nobody answering, and the daemon it starts replaces both.
+  A hook also starts none within 30 seconds of the last start
+  (`~/.oort/serve.autostart`, mode 600, holds when that was).
+- **When a start fails.** When the start fails, the daemon refuses to start
+  (a pending migration, a bad directory, an invalid `~/.oort/config.json`), or
+  it stops within a minute of its start (a crash), the circuit breaker opens:
+  for 1 minute after the first failure in a row, 5 after the second, and 30
+  after the third and every later one. Editing `~/.oort/config.json` tries
+  again on the next prompt and starts the count again, and so do
+  `oort serve --detach`, `oort serve status` and `oort serve stop`; a daemon
+  that serves a prompt after a minute up resets it. The reason is in
+  `~/.oort/logs/serve.log`, and `oort doctor` shows the count and points
+  there. A `serve.autostart` that is not `true` or `false`, or a
+  `serve.idleMinutes` that is not a whole number from 1 to 1440, turns
+  autostart off (the daemon could not start with it), and `oort doctor` says
+  so.
+- **Its environment.** A daemon a hook started keeps the environment of the
+  session that started it (provider keys such as `VOYAGE_API_KEY`,
+  `OORT_CLOUD_URL`, proxy and certificate variables) until it exits, and
+  serves every later session and project of this Oort home with it. A key or
+  variable you change afterwards takes effect once it restarts:
+  `oort serve stop` (the next prompt starts a new one). `oort doctor` shows
+  when the running daemon started.
+- **Turning it off.** In `~/.oort/config.json`, or with `OORT_NO_AUTOSTART=1`
+  in the environment your agent starts with. The hooks then run in-process
+  unless you start the daemon yourself (`oort serve --detach`).
+- **Where it listens.** The daemon listens only in a real directory of yours
+  that nobody else can write. When `~/.oort` is a symlink (common with
+  dotfiles), it never listens there and the hooks always run in-process: set
+  `OORT_HOME` to the real directory. When group or others can read `~/.oort`,
+  the daemon makes it 0700 as it starts, because its socket's privacy relies
+  on that directory (some systems do not enforce a socket's own mode).
+  `oort doctor` reports both.
 
 ```json
-{ "serve": { "autostart": true, "idleMinutes": 30 } }
+{ "serve": { "autostart": false } }
 ```
 
+```json
+{ "serve": { "idleMinutes": 60 } }
+```
+
+Only the home config is read for `serve`: a `serve` key in a repository's
+`oort.config.json` is ignored, with a warning, so a repository cannot start
+processes on your machine. A config that never mentions `serve` gets the
+defaults (autostart on, 30 minutes), including one written by an older
+version. On Windows the daemon does not run (it needs Unix sockets), so
+autostart does nothing there and the hooks always run in-process.
+
 `--detach` and autostart write the daemon's output to `~/.oort/logs/serve.log`
-(mode 600). It holds start and stop lines only, never a prompt or a memory.
+(mode 600): start and stop lines, and why a start was refused (for example
+`cannot open the store: <message>`), never a prompt or a memory. Past 1 MB it
+moves to `serve.log.1` (replacing an older one) when the next daemon starts.
 `oort serve status` shows the pid, version, socket, uptime and how many
 requests it served. It exits 0 when the daemon answers and 1 when it does not
 (`--json` still prints the state, with `running: false`), so
-`oort serve status || oort serve --detach` works. `oort doctor` shows the same under `serve`.
+`oort serve status || oort serve --detach` works. `oort doctor` shows the same under `serve`,
+with whether autostart is on (and what turned it off), when a running daemon
+exits, and why a stopped one last stopped (`idle`, `requested`, a signal, or
+`replaced by oort <version>`).
 
 **After an update.** `oort update` stops the old daemon and starts the new
 one itself. Otherwise the daemon gives way on its own: when a hook from a newer
@@ -2475,7 +2536,7 @@ Pro, with no key and a 3 second timeout.
 | --- | --- | --- |
 | `keys` | Per role, the key that wins: your own (env or stored) or Oort Pro (env or stored), presence only. A role on a local model instead loads it and runs it once, offline. On Linux and Windows, also that `credentials.json` is not wider than mode 600. | A wider file: `chmod 600 <file>`. No key: `oort models pull (free local embed and rerank, no keys), oort keys set <provider>, or oort login (Oort Pro)`; for decide and write, which no local model does, the key or Oort Pro. Without a Keychain or `credentials.json`, the variable to set in your agent's environment instead. A model the relay does not serve: use the default model, or set the vendor key. |
 | `hooks` | The Claude Code hooks in `~/.claude/settings.json`: all three events, and the binary they run. Hooks that run the managed `~/.oort/cli` while you run a copy from `PATH` are fine: the `claude-code bin` row names both, each with its own version. A managed copy that is there but not safe to run (`managed copy`) is a fail, and its fix always removes and reinstalls it (`rm -r <prefix> && oort setup`, with `chmod go-w` on `OORT_HOME` after the `rm` when only `OORT_HOME` itself is too open): Oort never repairs a copy like this in place. | Missing, or a command that is not executable: `oort install claude-code`. Doctor never runs a hook's binary: versions come from the package's files. The managed copy (when it checks out and is safe) and the copy you ran are ok at this version or newer. Any other copy that stays put and is yours, such as your own build written with `--this-copy`, is an info line naming it ("the hooks run another copy at X (oort V)", try: `oort install claude-code` to use the managed copy, or keep it if you built it). A copy in a temp directory or package cache, or one someone else could change, is a fail. A hook binary that is older than the oort you run, or whose files do not say a version, is a warning naming both versions and the path: `oort update` (or `oort install claude-code` from the oort you want). When the oort you run lives somewhere temporary or under a Node version manager (the npx or pnpm dlx cache, a temp directory, `fnm_multishells`, `.nvm/`, `node-versions/`, `.volta/`, `.asdf/`), the fix never points the hooks at it: it names the managed copy instead, `~/.oort/cli/bin/oort install claude-code` (with `npm i -g --prefix ~/.oort/cli oortmem &&` first when there is none). Hooks that run a copy that does not stay put (under a version manager, in `fnm_multishells`, or in the npx or pnpm dlx cache) get an info line (`claude-code node`) naming the fix: with no managed copy, `oort setup, or npm i -g --prefix ~/.oort/cli oortmem and then oort install claude-code`; with one, `~/.oort/cli/bin/oort install claude-code`. Unparseable settings: fix the JSON, then the same fix. |
-| `serve` | Whether `oort serve` runs: its pid, version and socket. Not running is information only. Whether the hooks skip the daemon after a timeout or refusal, and until when. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
+| `serve` | Whether `oort serve` runs: its pid, version, socket, when it started (it keeps that session's environment) and idle exit; when it does not, whether the next prompt starts it and why it last stopped (from `~/.oort/logs/serve.log`). Not running is information only. Whether autostart is on, or what turned it off (`serve.autostart`, an invalid `serve` value, `OORT_NO_AUTOSTART`, Windows), and an Oort home the daemon will not listen in (a symlink, a directory others can write) or makes 0700 as it starts. Whether the hooks skip the daemon after a timeout, a refusal or failed starts (with how many in a row), and until when. | Another oort version than this one (a warning; the hooks run in-process until it restarts): `oort serve stop && oort serve --detach`. A socket nobody answers on, or one that is not yours alone: the same, or remove it. |
 | `mcp` | Each host's `oort` entry: connected, from another path or version, a command that is not executable, someone else's, or a file that does not parse. Entries are judged against the binary `oort connect` would write now: the managed copy when it checks out, else the copy you ran. The binary an entry runs follows the hooks' rules, also for an entry that is exactly what `oort connect` writes: the managed or the running copy is ok, another copy of yours that stays put and is this version or newer (one written with `--this-copy`) is an info line naming it, and one in a temp directory or someone else's is a fail. | `oort connect <host>`, or fix the file by hand. A host found but not connected is listed with `oort connect <host>` to try. |
 | `store` | `~/.oort/oort.sqlite` opens, and how many memories are visible from here; how many are in your Planet and in the acting agent's Star (`Planet: 12 memories (every project); Star cursor: 3 memories`); which agent it acts as, where its new memories go, and which agents keep a Star; when the hooks last consolidated the store and when they next will; the embedder its vectors come from matches the configured one; the dense index it searches (`vector-index`, 0.9.0 or newer: `int8, exact`, `binary, 1-bit codes rescored in int8` or, from 0.10.0, `rabitq, ...` with its engine, with the number of searchable vectors and the `store.vectorIndex` setting; a warning when the RaBitQ index runs without its native engine, a note when it is being built or is due a new centre (`vector-index-centre`), and a warning when it is too large for the hooks to load and `oort serve` is not running (`vector-index-hooks`)); `~/.oort` is not readable by others. | Does not open: close other oort processes and run `oort stats`. RaBitQ without its native engine: reinstall on a supported platform, or set `store.vectorIndex` to `binary`. Due a new centre: `oort reindex`. Too large for the hooks: `oort serve --detach`. Last consolidation failed: `oort consolidate`. Another embedder: `oort reembed`. Readable by others: `chmod 700 ~/.oort`. Copies taken before a schema migration (`backups`, information): each `oort.sqlite.pre-v*` and `pre-downgrade` file, which holds memories as they were then and which `oort forget` does not reach; delete them once Oort works as before (`rm <files>`). Text deleted by Oort 0.9.0 or older may remain in the file (`erase`, a store over 32 MB that has not been rewritten once yet): `oort doctor --vacuum`. Vectors that are all zeros (`zero-vectors`, stored by an older version; they match nothing): `oort doctor --vacuum`. |
 | `relay` | The relay URL in use, and, when a role goes through Oort Pro, whether its `/health` answers within 3 seconds. | An invalid `OORT_RELAY_URL`: unset it. Unreachable (a warning): check your network or proxy. |
