@@ -103,8 +103,9 @@ word-coverage test, and every rerank threshold gives the same result.
 with code 2, sending nothing. `--plan` prints it and exits 0. The plan counts, exactly, the
 distinct turn texts to embed (deduplicated across haystacks, minus those already in the embedding
 cache), the requests they take (128 per request) and their characters and tokens; and, as upper
-bounds, one query embedding per question and one rerank call (with that haystack's longest
-`rerankK` documents) per question for each run that reranks. With `--entities writer` it also
+bounds, one query embedding request per question (a question about two or more things also sends
+each of its parts in that request: the plan counts these inputs and their tokens) and one rerank
+call (with that haystack's longest `rerankK` documents) per question for each run that reranks. With `--entities writer` it also
 counts the writer calls (one per distinct turn text not in the entity cache) and their characters,
 with tokens estimated at 4 characters each; those are not priced here. Tokens are counted with Voyage's published tokenizer when it is in
 `packages/bench/.cache/tokenizers/voyage-3.5-lite/` (`tokenizer.json` and `tokenizer_config.json`

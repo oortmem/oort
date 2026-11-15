@@ -18,6 +18,7 @@ export * from './tokenize.js';
 export * from './gate.js';
 export * from './recall.js';
 export * from './relevance.js';
+export { MAX_SUB_QUERIES, subQueries } from './subqueries.js';
 export * from './forget.js';
 export * from './observe.js';
 export * from './temporal.js';

@@ -7,8 +7,9 @@
  * of 128, and their characters. Tokens are counted with the provider's published tokenizer when it
  * is in the cache (`--tokenizer`), else estimated at 4 characters each and labelled so.
  *
- * Upper bounds: query embeddings (one per question; recall skips some when its lexical search is
- * already sure) and rerank calls (one per question, each with at most `rerankK` documents; recall
+ * Upper bounds: query embeddings (one request per question; recall skips some when its lexical
+ * search is already sure; a question about two or more things also sends each of its parts, in the
+ * same request) and rerank calls (one per question, each with at most `rerankK` documents; recall
  * skips some when fusion is confident), for each run that reranks (a `fast` run does not). The
  * rerank bound assumes every call carries that haystack's longest documents.
  *
@@ -18,7 +19,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { truncateUtf8 } from '@oortmem/core';
+import { subQueries, truncateUtf8 } from '@oortmem/core';
 import { embedTextOf, type PublicSet } from './public-sets.js';
 import { turnText } from './verbatim.js';
 
@@ -59,8 +60,11 @@ export interface PublicPlan {
   embed?: {
     model: string;
     documents: { texts: number; cached: number; requests: number; chars: number; tokens: number };
-    /** Upper bound: one request per question. */
-    queries: { requests: number; tokens: number };
+    /**
+     * Upper bound: one request per question, with the question and each of its sub-queries as
+     * inputs (`inputs`; `split`: the questions that split).
+     */
+    queries: { requests: number; inputs: number; split: number; tokens: number };
     usd: number;
   };
   rerank?: {
@@ -127,9 +131,10 @@ export function planPublicSet(
     const todo = unique.filter((t) => opts.cached?.(t) !== true);
     const sent = todo.map((t) => truncateUtf8(t, EMBED_INPUT_MAX_BYTES));
     const docTokens = sent.reduce((n, t) => n + tokensOf(t), 0);
-    const queryTokens = set.haystacks
+    const queryTexts = set.haystacks
       .flatMap((h) => h.questions)
-      .reduce((n, q) => n + tokensOf(q.question), 0);
+      .map((q) => [q.question, ...(subQueries(q.question) ?? [])]);
+    const queryTokens = queryTexts.flat().reduce((n, t) => n + tokensOf(t), 0);
     plan.embed = {
       model: opts.embedModel,
       documents: {
@@ -139,7 +144,12 @@ export function planPublicSet(
         chars: sent.reduce((n, t) => n + t.length, 0),
         tokens: docTokens,
       },
-      queries: { requests: questions, tokens: queryTokens },
+      queries: {
+        requests: questions,
+        inputs: queryTexts.flat().length,
+        split: queryTexts.filter((q) => q.length > 1).length,
+        tokens: queryTokens,
+      },
       usd: ((docTokens + queryTokens) / 1e6) * (PRICE_PER_MTOK[opts.embedModel] ?? Number.NaN),
     };
   }
@@ -203,7 +213,7 @@ export function renderPlan(p: PublicPlan): string {
     const d = p.embed.documents;
     lines.push(
       `Embed (${p.embed.model}): ${n(d.texts)} distinct turn texts, ${n(d.cached)} already cached; ${n(d.requests)} requests of up to 128, ${n(d.chars)} chars, ${n(d.tokens)} ${tok}.`,
-      `  Queries, at most: ${n(p.embed.queries.requests)} requests, ${n(p.embed.queries.tokens)} ${tok}.`,
+      `  Queries, at most: ${n(p.embed.queries.requests)} requests with ${n(p.embed.queries.inputs)} inputs (${n(p.embed.queries.split)} questions split into sub-queries), ${n(p.embed.queries.tokens)} ${tok}.`,
       `  Cost at list price, at most: $${usd(p.embed.usd)}.`,
     );
   }

@@ -53,6 +53,14 @@ export function viaLabel(
   return `${via.kind} <- ${rank === undefined ? short(via.from) : `#${rank}`}`;
 }
 
+/**
+ * The parts of a question about several things, each searched beside it:
+ * `parts: 1 "buy the desk", 2 "buy the chair"`. A part's best match shows its number in `part`.
+ */
+export function partsLabel(parts: string[]): string {
+  return `parts: ${parts.map((p, i) => `${i + 1} ${JSON.stringify(p)}`).join(', ')}`;
+}
+
 /** The spatial filter in a few words: `within room:B, within 2 m of 1,2 on hq`. */
 export function spatialLabel(f: SpatialFilter): string {
   const parts: string[] = [];
@@ -89,6 +97,8 @@ export async function explainCommand(
     });
     // The `via` column appears only when a link brought something in.
     const linked = result.memories.some((m) => m.explanation.via !== undefined);
+    // The `part` column appears only for a question split into parts.
+    const split = result.subQueries !== undefined;
     const rankOf = new Map(result.memories.map((m, i) => [m.id, i + 1]));
     recallWarnings(ctx, w, view, result);
     if (jsonMode(ctx)) {
@@ -108,6 +118,7 @@ export async function explainCommand(
         ...(result.read !== undefined && { read: result.read }),
         memories,
         ...(result.temporal !== undefined && { temporal: result.temporal }),
+        ...(result.subQueries !== undefined && { subQueries: result.subQueries }),
         timings: result.timings,
         ...(result.degraded !== undefined && { degraded: result.degraded }),
         ...(result.spatial !== undefined && { spatial: result.spatial }),
@@ -132,6 +143,7 @@ export async function explainCommand(
         fixed(e.activation),
         e.hydrated ? 'yes' : 'no',
         fromLabel(m.origin),
+        ...(split ? [e.part === undefined ? '-' : String(e.part)] : []),
         ...(linked ? [viaLabel(e.via, rankOf)] : []),
         ...(spatial === undefined
           ? []
@@ -151,6 +163,7 @@ export async function explainCommand(
         agentLabel(w),
         ...(result.read !== undefined ? [`reads: ${result.read.join(', ')}`] : []),
         modeLabel(result.temporal),
+        ...(result.subQueries !== undefined ? [partsLabel(result.subQueries)] : []),
         ...(spatial === undefined ? [] : [`place: ${spatialLabel(spatial)}`]),
         ...(result.degraded !== undefined ? [`degraded: ${result.degraded.join(', ')}`] : []),
       ),
@@ -175,6 +188,7 @@ export async function explainCommand(
           'activation',
           'hydrated',
           'from',
+          ...(split ? ['part'] : []),
           ...(linked ? ['via'] : []),
           ...(spatial === undefined ? [] : ['place', 'dist m']),
           'text',

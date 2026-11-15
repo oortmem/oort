@@ -264,6 +264,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           e.lexicalRank !== undefined ? `lexical #${e.lexicalRank}` : undefined,
           e.denseRank !== undefined ? `dense #${e.denseRank}` : undefined,
           e.reranked !== undefined ? `rerank ${fixed(e.reranked)}` : undefined,
+          e.part !== undefined ? `best for part ${e.part}` : undefined,
           e.via !== undefined ? `linked (${e.via.kind})` : undefined,
           m.pinned ? 'pinned' : undefined,
         ].filter((x) => x !== undefined);
