@@ -71,10 +71,14 @@ with its own table and its own per-question lines, labelled `links=<mode>,speed=
   `--entities writer[:model]` asks the memory writer, the model a normal write names entities with
   (`@oortmem/writer`, default model `writer.model`), for each turn's entities; the stored text is
   still the turn's own words. It is a paid model call per distinct turn text: it prints a plan and
-  needs `--yes` like the paid embedder, reads `ANTHROPIC_API_KEY`, and caches its answers by model
-  and text in `packages/bench/.cache/entities/<model>.sqlite`, so later runs call it for nothing it
-  has seen. A turn whose call fails is stored without entities and counted (`entityUsage` in the
-  report); the run stops when more than 10 calls, and more than 1% of them, fail.
+  needs `--yes` like the paid embedder, reads `ANTHROPIC_API_KEY`, and caches its answers by model,
+  writer prompt and text in `packages/bench/.cache/entities/<model>.sqlite`, so later runs call it
+  for nothing it has seen, and a changed writer prompt starts afresh. A turn whose call fails is
+  stored without entities and counted (`entityUsage` in the report); the run stops when more than
+  10 calls, and more than 1% of them, fail, after the calls already in flight finish. In cache
+  file names, any character of a model name other than letters, digits, `_`, `.` and `-` becomes
+  `_`, and an empty model name (`--entities writer:`) is refused, as it is for `--embed` and
+  `--rerank`.
 
 **Per-question results and `compare`.** With `--out <file>.json` each run's per-question lines go to
 `<file>.questions.jsonl`: the question id and type, the rank of every expected round and answer

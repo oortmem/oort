@@ -111,7 +111,8 @@ pnpm eval compare <a.questions.jsonl> <b.questions.jsonl>   # is a difference be
 
 `--out <report.json>` writes the totals as JSON, and the per-question results beside them as
 JSON Lines, in `<report>.questions.jsonl` (`--questions <file>` picks another path, and writes them
-without `--out`). One line per question per run:
+without `--out`; it must not name the `--out` file, which is refused before anything runs). One line
+per question per run:
 
 | Field                             | What it holds                                                                                                                                 |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -152,7 +153,8 @@ the paired difference B - A, and:
   Questions that did not move are left out of it.
 
 Both runs must have asked the same questions: an id on one side only, or an id whose question or
-group differs, stops the comparison with the ids named (compare runs of the same set, with the
+group differs, stops the comparison with the ids named. Control characters in ids, groups and
+run labels are dropped when printed, and `|` is escaped in table cells (compare runs of the same set, with the
 same `--limit`). A file with one run needs no `--run-a` or `--run-b`. Two files that hold the same
 several runs (two runs of the same grid, before and after a change) are compared run by run;
 otherwise name the runs. No correction is made for testing many metrics and groups at once.

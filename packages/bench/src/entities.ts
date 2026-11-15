@@ -42,6 +42,11 @@ export interface CachingEntities {
 export interface WriterEntitiesOptions {
   /** Part of the cache key: answers of one model are never served for another. */
   model: string;
+  /**
+   * Part of the cache key: the writer's prompts (`writerPromptVersion` in `public-main.ts`), so
+   * answers from an older prompt are never served after it changes. Default empty.
+   */
+  version?: string;
   /** A SQLite file that keeps answers across runs; memory only without it. */
   file?: string;
   /** Writer calls in flight during `prefetch` (default 8). */
@@ -68,16 +73,27 @@ export function writerEntities(writer: MemoryWriter, opts: WriterEntitiesOptions
   const usage: EntityUsage = { calls: 0, failed: 0, hits: 0 };
   const maxFailures = opts.maxFailures ?? ((calls: number) => Math.max(10, calls / 100));
   const key = (text: string): string =>
-    createHash('sha256').update(`${opts.model}\0${text}`).digest('hex');
+    createHash('sha256')
+      .update(`${opts.model}\0${opts.version ?? ''}\0${text}`)
+      .digest('hex');
   const lookup = (k: string): string[] | undefined => {
     const hit = mem.get(k);
     if (hit !== undefined) return hit;
     const row = getStmt?.get(k);
     if (row === undefined) return undefined;
-    const v = JSON.parse(row.v) as string[];
+    // A value that is not a list of strings (a damaged or foreign file) is a miss, asked again.
+    let v: unknown;
+    try {
+      v = JSON.parse(row.v);
+    } catch {
+      return undefined;
+    }
+    if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) return undefined;
     mem.set(k, v);
     return v;
   };
+  // Set when the failure cap trips: no worker starts another call after that.
+  let stopped = false;
   const ask = async (obs: Observation): Promise<string[]> => {
     const k = key(entityTextOf(obs));
     usage.calls++;
@@ -88,7 +104,8 @@ export function writerEntities(writer: MemoryWriter, opts: WriterEntitiesOptions
       return w.entities;
     } catch (e) {
       usage.failed++;
-      if (usage.failed > maxFailures(usage.calls)) {
+      if (stopped || usage.failed > maxFailures(usage.calls)) {
+        stopped = true;
         throw new Error(
           `entities: ${usage.failed} of ${usage.calls} writer calls failed, stopping. Last error: ${(e as Error).message}`,
         );
@@ -115,9 +132,15 @@ export function writerEntities(writer: MemoryWriter, opts: WriterEntitiesOptions
       });
       let next = 0;
       const worker = async (): Promise<void> => {
-        while (next < todo.length) await ask(todo[next++] as Observation);
+        while (!stopped && next < todo.length) await ask(todo[next++] as Observation);
       };
-      await Promise.all(Array.from({ length: Math.max(1, opts.concurrency ?? 8) }, worker));
+      // Every worker settles before an error comes out, so no call is still in flight (and none
+      // writes to the cache) once the caller closes it.
+      const done = await Promise.allSettled(
+        Array.from({ length: Math.max(1, opts.concurrency ?? 8) }, worker),
+      );
+      const failed = done.find((d): d is PromiseRejectedResult => d.status === 'rejected');
+      if (failed !== undefined) throw failed.reason;
     },
     has: (text) => lookup(key(text)) !== undefined,
     usage: () => ({ ...usage }),

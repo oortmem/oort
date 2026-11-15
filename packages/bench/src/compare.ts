@@ -104,9 +104,19 @@ export interface Comparison {
 
 const key = (r: QuestionResult): string => `${r.level}\0${r.id}`;
 
+/**
+ * Text read from a file, safe to print: control characters (terminal escapes, line breaks) are
+ * dropped, so a crafted id or group cannot rewrite the terminal or break a table row.
+ */
+// oxlint-disable-next-line no-control-regex -- matching control characters is the point
+export const printable = (s: string): string => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+
+/** `printable`, with `|` escaped so the text stays in one markdown table cell. */
+const tableText = (s: string): string => printable(s).replace(/\|/g, '\\|');
+
 /** A few example ids for an error message. */
 const some = (ids: string[]): string =>
-  `${ids.slice(0, 5).join(', ')}${ids.length > 5 ? `, and ${ids.length - 5} more` : ''}`;
+  `${ids.slice(0, 5).map(printable).join(', ')}${ids.length > 5 ? `, and ${ids.length - 5} more` : ''}`;
 
 /**
  * Pairs two runs question by question and tests every metric, overall and per group. Throws when
@@ -123,7 +133,9 @@ export function compareRuns(
     const m = new Map<string, QuestionResult>();
     for (const r of rs) {
       if (m.has(key(r)))
-        throw new Error(`${label} lists question ${r.id} (${r.level}) more than once`);
+        throw new Error(
+          `${printable(label)} lists question ${printable(r.id)} (${printable(r.level)}) more than once`,
+        );
       m.set(key(r), r);
     }
     return m;
@@ -135,8 +147,8 @@ export function compareRuns(
   if (onlyA.length > 0 || onlyB.length > 0) {
     const name = (k: string): string => k.replace('\0', ' ');
     throw new Error(
-      `the runs did not ask the same questions: ${onlyA.length} only in ${la}` +
-        `${onlyA.length > 0 ? ` (${some(onlyA.map(name))})` : ''}, ${onlyB.length} only in ${lb}` +
+      `the runs did not ask the same questions: ${onlyA.length} only in ${printable(la)}` +
+        `${onlyA.length > 0 ? ` (${some(onlyA.map(name))})` : ''}, ${onlyB.length} only in ${printable(lb)}` +
         `${onlyB.length > 0 ? ` (${some(onlyB.map(name))})` : ''}. ` +
         'Compare runs of the same set, with the same --limit.',
     );
@@ -206,7 +218,9 @@ export function pickRuns(
   const pick = (runs: string[], name: string | undefined, side: string): string | undefined => {
     if (name !== undefined) {
       if (!runs.includes(name))
-        throw new Error(`--run-${side} ${name}: not in file ${side} (it has ${runs.join('; ')})`);
+        throw new Error(
+          `--run-${side} ${printable(name)}: not in file ${side} (it has ${runs.map(printable).join('; ')})`,
+        );
       return name;
     }
     return runs.length === 1 ? runs[0] : undefined;
@@ -221,8 +235,8 @@ export function pickRuns(
     }
   }
   throw new Error(
-    `pick the runs to compare with --run-a and --run-b. File a has: ${ra.join('; ')}. ` +
-      `File b has: ${rb.join('; ')}.`,
+    `pick the runs to compare with --run-a and --run-b. File a has: ${ra.map(printable).join('; ')}. ` +
+      `File b has: ${rb.map(printable).join('; ')}.`,
   );
 }
 
@@ -231,14 +245,14 @@ const pValue = (p: number): string => (p < 0.001 ? '<0.001' : p.toFixed(3));
 
 export function renderComparison(c: Comparison): string {
   const lines = [
-    `A: ${c.a}`,
-    `B: ${c.b}`,
+    `A: ${tableText(c.a)}`,
+    `B: ${tableText(c.b)}`,
     `${c.questions} paired lines (a question once per level).`,
   ];
   for (const level of new Set(c.rows.map((r) => r.level))) {
     lines.push(
       '',
-      `Level: ${level}. B - A with a 95% bootstrap interval; sign test over the questions that moved.`,
+      `Level: ${printable(level)}. B - A with a 95% bootstrap interval; sign test over the questions that moved.`,
       '',
       '| Group | Metric | n | A | B | B - A | 95% interval | Up / down / same | Sign p |',
       '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
@@ -246,8 +260,8 @@ export function renderComparison(c: Comparison): string {
     for (const r of c.rows.filter((x) => x.level === level)) {
       lines.push(
         `| ${[
-          r.group,
-          r.metric,
+          tableText(r.group),
+          tableText(r.metric),
           String(r.n),
           cell(r.a),
           cell(r.b),

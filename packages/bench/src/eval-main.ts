@@ -16,7 +16,7 @@ import { openSqliteStore, VECTOR_INDEXES, type VectorIndex } from '@oortmem/stor
 import { belowMinRecall10, loadEvalRows, renderRun, runEval, type EvalRun } from './eval.js';
 import { compareFiles } from './compare.js';
 import { linkModesFor } from './links.js';
-import { questionsPathFor, writeQuestionsJsonl } from './per-question.js';
+import { outputPaths, writeQuestionsJsonl } from './per-question.js';
 import { publicMain } from './public-main.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { demoMemories } from './fixture.js';
@@ -180,6 +180,12 @@ async function main(): Promise<number> {
   const linkModes = linkModesFor(values.links);
   if (values.hook && !values.demo)
     throw new Error('--hook goes with --demo; pass a file otherwise');
+  // Checked before anything runs: the per-question lines must not overwrite the totals.
+  const outputs = outputPaths(
+    values.out !== undefined ? fromUser(values.out) : undefined,
+    values.questions !== undefined ? fromUser(values.questions) : undefined,
+  );
+  const questionsFile = outputs.questions;
   const minRecall10 = Number(values['min-recall10']);
   if (!(minRecall10 >= 0 && minRecall10 <= 1))
     throw new Error('--min-recall10 must be between 0 and 1');
@@ -262,13 +268,7 @@ async function main(): Promise<number> {
     });
     const single = totals.length === 1 ? totals[0] : undefined;
     const json = `${JSON.stringify(single ?? totals, null, 2)}\n`;
-    if (values.out !== undefined) fs.writeFileSync(fromUser(values.out), json);
-    const questionsFile =
-      values.questions !== undefined
-        ? fromUser(values.questions)
-        : values.out !== undefined
-          ? questionsPathFor(fromUser(values.out))
-          : undefined;
+    if (outputs.out !== undefined) fs.writeFileSync(outputs.out, json);
     if (questionsFile !== undefined) {
       writeQuestionsJsonl(questionsFile, perQuestion);
       process.stderr.write(`eval: per-question results: ${questionsFile}\n`);

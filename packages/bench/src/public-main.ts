@@ -1,6 +1,7 @@
 /**
  * `pnpm eval --set locomo|longmemeval` (CON-147): see `eval/public/README.md`.
  */
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +14,7 @@ import {
   localReranker,
 } from '@oortmem/local-models';
 import { voyageReranker } from '@oortmem/rerank-voyage';
-import { anthropicWriter } from '@oortmem/writer';
+import { anthropicWriter, buildWriterPrompt, WRITER_SYSTEM_PROMPT } from '@oortmem/writer';
 import {
   CACHE_DIR,
   checkDataset,
@@ -37,7 +38,7 @@ import {
   tokenizerCounter,
   type TokenCounter,
 } from './public-plan.js';
-import { questionsPathFor, writeQuestionsJsonl, type QuestionResult } from './per-question.js';
+import { outputPaths, writeQuestionsJsonl, type QuestionResult } from './per-question.js';
 import {
   runPublicSet,
   SPEEDS,
@@ -80,6 +81,44 @@ const VERSION = (
     version: string;
   }
 ).version;
+
+/**
+ * A model name as a cache file name: anything but letters, digits, `_`, `.` and `-` becomes `_`,
+ * so a name like `../x` never leaves the cache directory. An empty name is refused.
+ */
+export function cacheFileName(model: string): string {
+  if (model === '') throw new Error('empty model name');
+  return model.replace(/[^\w.-]/g, '_');
+}
+
+/**
+ * The writer's prompts as a short hash: the system prompt and the message it builds for a turn.
+ * Part of the entity cache key, so a changed prompt never reads answers written under the old one.
+ */
+export function writerPromptVersion(): string {
+  const probe = buildWriterPrompt(
+    {
+      userText: 'u',
+      assistantText: 'a',
+      toolSummaries: [],
+      sessionId: 's',
+      turnRef: 't',
+      at: '2024-01-01T00:00:00.000Z',
+    },
+    'ADD',
+  );
+  return createHash('sha256')
+    .update(`${WRITER_SYSTEM_PROMPT}\0${probe}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/** `kind[:model]` from a flag; `kind:` with nothing after it is refused. */
+function kindAndModel(flag: string, raw: string): [string, string | undefined] {
+  const [kind, model] = raw.split(/:(.*)/s) as [string, string | undefined];
+  if (model === '') throw new Error(`--${flag} ${raw}: empty model name`);
+  return [kind, model];
+}
 
 /** Parses `--speed`: a comma list of `full` and `fast`, or `grid` for both. */
 export function parseSpeeds(raw: string | undefined): Speed[] {
@@ -124,8 +163,8 @@ interface Models {
 function models(a: PublicArgs, cacheDir: string): Models {
   const home = a.home ?? resolveHome();
   const defaults = resolveConfig(home, { OORT_HOME: home }, { projectConfig: false });
-  const [embedKind, embedModel] = a.embed.split(/:(.*)/s) as [string, string | undefined];
-  const [rerankKind, rerankModel] = a.rerank.split(/:(.*)/s) as [string, string | undefined];
+  const [embedKind, embedModel] = kindAndModel('embed', a.embed);
+  const [rerankKind, rerankModel] = kindAndModel('rerank', a.rerank);
   const out: Models = {
     embedLabel: 'none (lexical only)',
     rerankLabel: 'none',
@@ -135,7 +174,11 @@ function models(a: PublicArgs, cacheDir: string): Models {
   const cached = (base: Embedder, model: string): CachingEmbedder =>
     cachingEmbedder(base, {
       model: `${model}@${EMBEDDING_DIMENSION}`,
-      file: path.join(cacheDir, 'embeddings', `${model}-${EMBEDDING_DIMENSION}.sqlite`),
+      file: path.join(
+        cacheDir,
+        'embeddings',
+        `${cacheFileName(model)}-${EMBEDDING_DIMENSION}.sqlite`,
+      ),
     });
   if (embedKind === 'fake') {
     out.embed = fakeEmbedder(EMBEDDING_DIMENSION);
@@ -172,17 +215,15 @@ function models(a: PublicArgs, cacheDir: string): Models {
     out.rerankLabel = `voyage ${model}`;
     if (a.yes && !a.plan) out.rerank = voyageReranker({ model });
   } else if (rerankKind !== 'none') throw new Error(`unknown --rerank "${a.rerank}"`);
-  const [entitiesKind, writerModel] = (a.entities ?? 'none').split(/:(.*)/s) as [
-    string,
-    string | undefined,
-  ];
+  const [entitiesKind, writerModel] = kindAndModel('entities', a.entities ?? 'none');
   if (entitiesKind === 'writer') {
     const model = writerModel ?? defaults.writer.model;
     out.paid.writer = model;
     out.entitiesLabel = `writer ${model}`;
-    const file = path.join(cacheDir, 'entities', `${model}.sqlite`);
+    const file = path.join(cacheDir, 'entities', `${cacheFileName(model)}.sqlite`);
+    const version = writerPromptVersion();
     if (a.yes && !a.plan) {
-      out.entities = writerEntities(anthropicWriter({ model }), { model, file });
+      out.entities = writerEntities(anthropicWriter({ model }), { model, version, file });
     } else {
       out.planEntities = writerEntities(
         {
@@ -190,7 +231,7 @@ function models(a: PublicArgs, cacheDir: string): Models {
             throw new Error('a plan never writes');
           },
         },
-        { model, file },
+        { model, version, file },
       );
     }
   } else if (entitiesKind !== 'none') {
@@ -230,6 +271,8 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
   if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) {
     throw new Error('--limit must be a positive integer');
   }
+  // Checked before anything runs: a paid run must not end by overwriting its own totals.
+  const { questions: questionsFile } = outputPaths(a.out, a.questions);
   if (a.file !== undefined && !a.unpinned) {
     log(
       `refusing ${a.file}: a file given by path runs only with --unpinned (its numbers are then recorded as unpinned). Use --fetch for the pinned revision.`,
@@ -332,7 +375,6 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
     ...(m.embed !== undefined && 'usage' in m.embed && { embedUsage: m.embed.usage() }),
     ...(m.entities !== undefined && { entityUsage: m.entities.usage() }),
   };
-  const questionsFile = a.questions ?? (a.out !== undefined ? questionsPathFor(a.out) : undefined);
   const json = `${JSON.stringify({ ...meta, ...(questionsFile !== undefined && { questions: path.basename(questionsFile) }), runs: reports }, null, 2)}\n`;
   if (a.out !== undefined) fs.writeFileSync(a.out, json);
   if (questionsFile !== undefined) {

@@ -9,6 +9,7 @@
  * `scoreRow` the totals use, so the mean of a metric over a run's lines is that run's total.
  */
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { linkCounts, ranksOf, scoreRow, type EvalRow, type RowOutcome } from './eval.js';
 
 export interface QuestionResult {
@@ -99,6 +100,21 @@ export function questionsPathFor(totals: string): string {
   return `${totals.replace(/\.json$/i, '')}.questions.jsonl`;
 }
 
+/**
+ * The totals file and the per-question file of a run: `questions` when given, else beside `out`.
+ * Refuses the two naming the same file, which would overwrite the totals with the lines.
+ */
+export function outputPaths(
+  out: string | undefined,
+  questions: string | undefined,
+): { out?: string; questions?: string } {
+  const q = questions ?? (out !== undefined ? questionsPathFor(out) : undefined);
+  if (out !== undefined && q !== undefined && path.resolve(out) === path.resolve(q)) {
+    throw new Error(`--out and --questions name the same file (${out}); give them different paths`);
+  }
+  return { ...(out !== undefined && { out }), ...(q !== undefined && { questions: q }) };
+}
+
 export const toJsonl = (records: readonly QuestionResult[]): string =>
   records.map((r) => `${JSON.stringify(r)}\n`).join('');
 
@@ -132,7 +148,7 @@ export function parseQuestionResults(text: string, where = 'per-question file'):
       typeof metrics !== 'object' ||
       metrics === null ||
       Array.isArray(metrics) ||
-      !Object.values(metrics).every((v) => v === null || typeof v === 'number')
+      !Object.values(metrics).every((v) => v === null || Number.isFinite(v))
     ) {
       throw new Error(`${at}: metrics must map names to numbers or null`);
     }
