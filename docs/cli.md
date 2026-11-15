@@ -1625,6 +1625,11 @@ dense searches and fuses all three by reciprocal rank (k = 60):
 - Without a rerank (`fast`, or a rerank that failed), a memory only the time list found, with no
   word of the query and no dense match, fails the relevance gate. It then takes no place among the
   results, so it never pushes out a memory the searches found.
+- Without a reranker (`fast`), the words that name the range ("last Saturday", "a week ago") are
+  left out of the relevance gate's word count, and out of the lexical and dense searches bar the
+  calendar names among them ("Saturday", "March", "2022"). No memory says "last" or "ago": counted
+  as query words, they would halve every memory's coverage and the gate would drop what the
+  question is about. A reranker reads every word, so with one the search and the gate keep them.
 
 `recall.timeChannel: false` turns the list off; a question about a state still reads as-of. A
 query with no time in it is ranked exactly as before. Recalled memories that state a time say so:

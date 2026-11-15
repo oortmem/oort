@@ -209,6 +209,27 @@ describe('temporalIntent', () => {
         precision: 'day',
       },
       shape: 'range',
+      fastText: 'what did we deploy',
+      fastGate: 'what did we deploy',
+    });
+  });
+
+  it('temporal.intent-range-words-without-a-reranker', () => {
+    // A relative range names nothing a memory says: both drop it.
+    expect(temporalIntent('Which book did I finish a week ago?', AT)).toMatchObject({
+      fastText: 'Which book did I finish?',
+      fastGate: 'Which book did I finish?',
+    });
+    // Calendar names stay in the search, never in the gate's word count.
+    expect(temporalIntent('Who did I go with to the music event last Saturday?', AT)).toMatchObject(
+      {
+        fastText: 'Who did I go with to the music event? Saturday',
+        fastGate: 'Who did I go with to the music event?',
+      },
+    );
+    expect(temporalIntent('what did we ship from July to October?', AT)).toMatchObject({
+      fastText: 'what did we ship from? July October',
+      fastGate: 'what did we ship from?',
     });
   });
 

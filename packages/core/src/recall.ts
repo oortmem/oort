@@ -271,13 +271,8 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   const now = deps.now ?? new Date();
   // Scrub once: the query text reaches embedders and rerankers, which may be remote. Temporal
   // words ("on 2 April", "changed over time") pick the view and are not searched for.
-  const { view, temporal, text } = viewFor(q, scrub(q.text).text, now);
+  const { view, temporal, text: asked, fast } = viewFor(q, scrub(q.text).text, now);
   if (q.includeWithdrawn === true) view.includeWithdrawn = true;
-  // A question about two or more things: each part is searched beside the whole question, and
-  // its best match keeps a place in the top k. Rules in code, no model call; a query that does
-  // not split takes exactly the path it always took.
-  const parts = subQueries(text);
-  const searches = parts === undefined ? [text] : [text, ...parts];
   // The time channel: a past time read from the query ranks, and never filters.
   const timeRange =
     temporal.inferred && view.mode === 'current' && config.recall.timeChannel
@@ -288,6 +283,17 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     delete temporal.range;
     delete temporal.shape;
   }
+  // A range keeps every word for the reranker to read. Without a reranker, the words that name it
+  // ("last Saturday", "a week ago") are in no memory: they are not searched for, bar the calendar
+  // names among them, and do not count against a memory's coverage at the gate.
+  const rangeWords = timeRange !== undefined && !deps.rerank ? fast : undefined;
+  const text = rangeWords?.text ?? asked;
+  // A question about two or more things: each part is searched beside the whole question, and
+  // its best match keeps a place in the top k. Rules in code, no model call; a query that does
+  // not split takes exactly the path it always took. The parts are read from the question as
+  // asked.
+  const parts = subQueries(asked);
+  const searches = parts === undefined ? [text] : [text, ...parts];
   const t0 = clock();
   const degraded: Degradation[] = [];
   const timings: Record<string, number> = {
@@ -310,7 +316,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     }
   };
 
-  const queryTokens = informativeTokens(text);
+  const queryTokens = informativeTokens(rangeWords?.gate ?? text);
   // Memories read while deciding, reused below so nothing is read twice.
   const prefetched = new Map<string, Memory | null>();
   const read = async (id: string): Promise<Memory | null> => {
@@ -762,7 +768,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
       if (ask !== undefined) {
         try {
           const answer = await ask.call(deps.decide, {
-            query: text,
+            query: asked,
             memories: live.map((f) => {
               const rs = rerankScores.get(f.id);
               return {
@@ -1070,7 +1076,12 @@ function viewFor(
   q: RecallQuery,
   text: string,
   now: Date,
-): { view: TemporalView; temporal: RecallTemporal; text: string } {
+): {
+  view: TemporalView;
+  temporal: RecallTemporal;
+  text: string;
+  fast?: { text?: string; gate?: string };
+} {
   const at = (iso: string | undefined) => iso ?? now.toISOString();
   let view: TemporalView;
   let inferred = false;
@@ -1095,7 +1106,11 @@ function viewFor(
     if (i.range !== undefined) {
       const temporal: RecallTemporal = { ...view, inferred, range: i.range };
       if (i.shape !== undefined) temporal.shape = i.shape;
-      return { view, temporal, text: search };
+      const fast = {
+        ...(i.fastText !== undefined && { text: i.fastText }),
+        ...(i.fastGate !== undefined && { gate: i.fastGate }),
+      };
+      return { view, temporal, text: search, fast };
     }
   }
   return { view, temporal: { ...view, inferred }, text: search };

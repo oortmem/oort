@@ -302,6 +302,49 @@ describe('recall: the time channel without a reranker', () => {
     );
     expect(new Set(r.memories.map((m) => m.id))).toEqual(new Set(['hike', 'poles', 'boots']));
   });
+
+  it('time.without-a-reranker-the-range-words-are-not-searched-for', async () => {
+    // "last Saturday" is in no memory: counted as query words, it halves every memory's coverage
+    // and the gate drops what the question is about. A reranker still reads every word.
+    const book = said('book', 'Dune is a great book.', '2023-04-15T18:00:00.000Z');
+    const q = { text: 'Which book did I read last Saturday?', scope: SCOPE };
+    const fast = await recall(q, { store: (await storeWith([book])).store, config, now: NOW });
+    expect(fast.temporal?.range?.from).toBe('2023-04-15T00:00:00.000Z');
+    expect(fast.memories.map((m) => m.id)).toEqual(['book']);
+
+    const asked: string[] = [];
+    const rerank: Reranker = {
+      async rerank(query, docs) {
+        asked.push(query);
+        return docs.map((d) => ({ id: d.id, score: 0.9 }));
+      },
+    };
+    await recall(q, {
+      store: (await storeWith([book])).store,
+      rerank,
+      config: withRecall({ skipRerankWhenConfident: false }),
+      now: NOW,
+    });
+    expect(asked).toEqual(['Which book did I read last Saturday?']);
+  });
+
+  it('time.without-a-reranker-calendar-names-are-still-searched-for', async () => {
+    // "Saturday" may be in a memory: the search keeps it, while the gate counts only "book" and
+    // "read", so a memory that says neither "last" nor "Saturday" is not held back by them.
+    const sat = said('sat', 'On Saturday: tea with Ana.', '2023-04-15T18:00:00.000Z');
+    const book = said('book', 'Dune is a great book.', '2023-04-15T18:00:00.000Z');
+    const r = await recall(
+      { text: 'Which book did I read last Saturday?', scope: SCOPE },
+      {
+        store: (await storeWith([sat, book])).store,
+        config: withRecall({ minCoverage: 0 }),
+        now: NOW,
+      },
+    );
+    const sats = r.memories.find((m) => m.id === 'sat')?.explanation;
+    expect(sats?.lexicalRank).toBeDefined();
+    expect(r.memories.find((m) => m.id === 'book')?.explanation.coverage).toBe(0.5);
+  });
 });
 
 describe('timeScore', () => {

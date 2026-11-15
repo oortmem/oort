@@ -187,6 +187,15 @@ export interface TemporalIntent {
   /** The query without its temporal words, to search with; absent when nothing was removed. */
   text?: string;
   /**
+   * With a `range` the query keeps every word, for a reranker to read. Without one, recall
+   * searches with `fastText` and judges coverage by `fastGate`, both set when they differ from
+   * the query: `fastGate` is the query without the words that name the range ("last Saturday",
+   * "a week ago"), which no memory says; `fastText` is `fastGate` with the calendar names among
+   * those words added back ("Saturday", "March", "2022"), which a memory may say.
+   */
+  fastText?: string;
+  fastGate?: string;
+  /**
    * The past time the query names, widened to what it says ("in March" is the month), when it
    * names one. Recall ranks by it (a time channel) and never filters by it, unless `shape` is
    * `state`, which reads as-of its end.
@@ -211,6 +220,10 @@ const HISTORY_QUESTIONS = [
 const isHistoryQuestion = (q: string): boolean => HISTORY_QUESTIONS.some((re) => re.test(q));
 /** A preposition left dangling once the date it introduced is removed. */
 const DANGLING = /\b(on|in|at|as\s+of|by|during|since)\s*$/i;
+
+/** Calendar names in a range's words: a memory may say "Saturday", "in March" or "in 2022". */
+const CALENDAR_NAME =
+  /\b(?:january|february|march|april|may|june|july|august|september|october|november|december|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4})\b/gi;
 
 /** `query` with `part` removed (and a preposition it leaves dangling), whitespace tidied. */
 function without(query: string, part: string, dangling = false): string {
@@ -289,7 +302,14 @@ export function temporalIntent(query: string, now: Date): TemporalIntent {
   if (shape === 'state') {
     return withText({ mode: 'as-of', asOf: end, range, shape }, rest, query);
   }
-  return { mode: 'current', range, shape };
+  const i: TemporalIntent = { mode: 'current', range, shape };
+  // Tidied: no space left before a question mark where the range words were.
+  const tidy = (t: string) => t.replace(/\s+([?.!,;:])/g, '$1');
+  const gate = tidy(rest);
+  const named = [gate, ...(q.text.match(CALENDAR_NAME) ?? [])].join(' ').trim();
+  if (gate !== '' && gate !== query) i.fastGate = gate;
+  if (named !== '' && named !== query) i.fastText = named;
+  return i;
 }
 
 function withText(i: TemporalIntent, rest: string, query: string): TemporalIntent {

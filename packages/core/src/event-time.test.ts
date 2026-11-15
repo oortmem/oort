@@ -125,6 +125,9 @@ describe('timeShape: what a query asks about its time', () => {
       mode: 'current',
       range: { from: day('2023-03-01'), to: day('2023-04-01'), precision: 'month' },
       shape: 'range',
+      // Without a reranker: the gate counts no range word, the search keeps the month's name.
+      fastText: 'Where did I go? March',
+      fastGate: 'Where did I go?',
     });
     expect(temporalIntent('what port did we move auth to?', NOW)).toEqual({ mode: 'current' });
   });
