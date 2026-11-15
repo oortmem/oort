@@ -43,20 +43,53 @@ pnpm eval --set longmemeval --embed local --home <oort home with pulled models>
 pnpm eval --set longmemeval --limit 50             # --limit spreads N haystacks through the file
 pnpm eval --set longmemeval --embed voyage --rerank voyage --plan   # counts and cost, sends nothing
 pnpm eval --set longmemeval --links grid           # the ablation grid, over the link kinds recall follows
+pnpm eval --set longmemeval --links off,all --speed grid --out lme.json
+                                                   # each links mode with and without the reranker;
+                                                   # per-question lines in lme.questions.jsonl
+pnpm eval compare lme.questions.jsonl lme.questions.jsonl --run-a links=off,speed=full --run-b links=all,speed=full
 pnpm eval --set locomo --fetch                     # local only: publish no LoCoMo numbers
 pnpm eval --set longmemeval ./other.json --unpinned  # a file by path, recorded as unpinned
 ```
 
 Options: `--embed none|fake|local[:model]|voyage[:model]`, `--rerank none|local[:model]|voyage[:model]`,
 `--k 5,10`, `--no-gate` (recall's relevance gate off, for comparison), `--links` (as for plain
-eval files, `../format.md`), `--json`, `--out <file>` (the JSON report), `--cache-dir <dir>`.
+eval files, `../format.md`), `--speed full|fast|grid`, `--entities none|writer[:model]`, `--json`,
+`--out <file>` (the JSON report, with the per-question lines beside it), `--questions <file>`
+(the per-question lines elsewhere), `--cache-dir <dir>`.
+
+**Runs.** Every links mode runs at every speed (`--links off,all --speed grid` is four runs), each
+with its own table and its own per-question lines, labelled `links=<mode>,speed=<speed>`.
+
+- `--speed full` (the default) reranks when `--rerank` names a reranker, as `oort recall` and MCP
+  do. `--speed fast` leaves the reranker out, as the prompt hook does in its default
+  `recall.promptMode` `fast`, so that ranking is measured too. The hook in `fast` mode also
+  follows no links, so `--speed fast --links off` is the ranking it gives today; `fast` with links
+  on shows what following links without a rerank would do. A fast run sends no rerank call, and
+  with the embedding cache warm it sends nothing at all.
+- `--entities none` (the default, as every earlier run) stores each turn with no entities, so the
+  `about` links (memories that name the same entity) never form and only same-session links can.
+  `--entities writer[:model]` asks the memory writer, the model a normal write names entities with
+  (`@oortmem/writer`, default model `writer.model`), for each turn's entities; the stored text is
+  still the turn's own words. It is a paid model call per distinct turn text: it prints a plan and
+  needs `--yes` like the paid embedder, reads `ANTHROPIC_API_KEY`, and caches its answers by model
+  and text in `packages/bench/.cache/entities/<model>.sqlite`, so later runs call it for nothing it
+  has seen. A turn whose call fails is stored without entities and counted (`entityUsage` in the
+  report); the run stops when more than 10 calls, and more than 1% of them, fail.
+
+**Per-question results and `compare`.** With `--out <file>.json` each run's per-question lines go to
+`<file>.questions.jsonl`: the question id and type, the rank of every expected round and answer
+session (and of the outdated ones for `knowledge-update`), and the question's share of each
+metric. `pnpm eval compare` reads two such files and prints, per metric and question type, the
+paired difference with a seeded 95% bootstrap interval and an exact sign test (`../format.md`).
 
 **Paid models.** `--embed voyage` or `--rerank voyage` without `--yes` prints the plan and exits
 with code 2, sending nothing. `--plan` prints it and exits 0. The plan counts, exactly, the
 distinct turn texts to embed (deduplicated across haystacks, minus those already in the embedding
 cache), the requests they take (128 per request) and their characters and tokens; and, as upper
-bounds, one query embedding and one rerank call (with that haystack's longest `rerankK`
-documents) per question. Tokens are counted with Voyage's published tokenizer when it is in
+bounds, one query embedding per question and one rerank call (with that haystack's longest
+`rerankK` documents) per question for each run that reranks. With `--entities writer` it also
+counts the writer calls (one per distinct turn text not in the entity cache) and their characters,
+with tokens estimated at 4 characters each; those are not priced here. Tokens are counted with Voyage's published tokenizer when it is in
 `packages/bench/.cache/tokenizers/voyage-3.5-lite/` (`tokenizer.json` and `tokenizer_config.json`
 from [MongoDB/voyage-3.5-lite@3331232](https://huggingface.co/MongoDB/voyage-3.5-lite); the
 rerank-3-lite tokenizer file is identical), else estimated at 4 characters a token and labelled
@@ -94,11 +127,35 @@ off so questions do not influence each other, and the returned memories are mapp
   stale-leak, at both levels. The
   30 abstention questions (`_abs` ids) are their own group.
 
+### Stale above current (`knowledge-update`)
+
+Stale-leak counts a question when an outdated answer comes back at all. Verbatim storage never
+supersedes, so both answers are in the store and returning both is right; stale-leak here mostly
+measures the harness. **Stale above current** asks what matters: does the outdated answer rank
+above the current one (best round against best round, or session against session, in the top 10)?
+A question where only the outdated answer comes back counts; one where neither does, does not.
+
+The file does not mark which answer session holds the current fact. `answer_session_ids` lists
+both (70 of the 72 `knowledge-update` questions in the pinned revision have two answer sessions
+with `has_answer` rounds), and the only order between them is the sessions' dates. The adapter
+takes the later session as current, as it already did for stale-leak. Reading all 70 showed where
+that is wrong, and those questions are left out of stale above current only
+(`STALE_ORDER_UNKNOWN` in `src/longmemeval.ts`, each with its reason):
+
+- 9 ask for the earlier value ("What was my previous ...", "before I got ...");
+- 5 ask for both values, or how the value changed ("did I switch to more or less ...");
+- 1 has its dates the wrong way round: the session with the update is dated before the one it
+  updates.
+
+That leaves 55 questions scored. Recall and stale-leak still score all 70 as before, with the
+later session expected, so totals stay comparable with earlier runs.
+
 Limits worth knowing:
 
 - This measures retrieval over raw turns. The writer that turns a turn into standalone facts and
-  the reconcile step that supersedes an outdated fact are not in the loop, so stale-leak here is
-  a baseline to compare links against, not a measure of how Oort handles updates.
+  the reconcile step that supersedes an outdated fact are not in the loop (`--entities writer`
+  takes only the writer's entities), so stale-leak here is a baseline to compare links against,
+  not a measure of how Oort handles updates.
 - `observe` caps a turn at 32 KB and the local embedder reads the first 512 tokens of it; long
   assistant replies in LongMemEval are cut by both.
 - Recall's relevance gate drops weak matches, so recall@10 can be lower than "top 10 of a ranked

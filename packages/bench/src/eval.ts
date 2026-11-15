@@ -15,6 +15,7 @@ import {
 } from '@oortmem/core';
 import { openSqliteStore, sqliteVectorIndex, type VectorIndex } from '@oortmem/store-sqlite';
 import { linksOverride, viaOf, type LinksMode } from './links.js';
+import { questionResults, runLabel, type QuestionResult } from './per-question.js';
 
 export const CATEGORIES = [
   'single-fact',
@@ -37,6 +38,12 @@ export interface EvalRow {
   lang?: string;
   /** Pins a row to one multilingual condition; rows without one run in every condition. */
   condition?: EvalCondition;
+  /**
+   * Leave this row out of stale-above-current: which of its answers is the current one is not
+   * known (a question about the earlier value, or dates that disagree with the text). Set by a
+   * dataset adapter (`longmemeval.ts`); never read from an eval file.
+   */
+  staleOrderUnknown?: boolean;
 }
 
 export const EVAL_CONDITIONS = ['mono', 'cross', 'mixed'] as const;
@@ -126,6 +133,13 @@ export interface GroupMetrics {
   mrr: number | null;
   /** Fraction of rows listing not-expected ids where any appears in the top 10; null when none list any. */
   staleLeak: number | null;
+  /**
+   * Of the rows with both expected and not-expected ids, the fraction where a not-expected id
+   * (the outdated answer) ranks above every expected one (the current answer) in the top 10. A
+   * row where only the outdated answer comes back counts; one where neither does, does not.
+   * Null when no row qualifies. Rows marked `staleOrderUnknown` are left out.
+   */
+  staleAboveCurrent: number | null;
   /** Fraction of abstention rows that returned a memory (above the threshold); null when none. */
   abstainFp: number | null;
   /**
@@ -176,53 +190,105 @@ function paired(rows: EvalRow[], outcomes: RowOutcome[]): { r: EvalRow; o: RowOu
 
 /** MRR is taken over the top results only: fixed at 10, whatever `--k` asks for. */
 const MRR_WINDOW = 10;
+/** Stale-leak and stale-above-current look at the same top 10. */
+const STALE_WINDOW = 10;
 /** Link precision looks at the same top 10 the links bar is set on (design section 11). */
 const LINK_WINDOW = 10;
 
-function groupMetrics(rows: EvalRow[], outcomes: RowOutcome[], ks: number[]): GroupMetrics {
-  const all = paired(rows, outcomes);
-  const withExpected = all.filter((x) => x.r.expectedMemoryIds.length > 0);
+/** The 1-based rank of each of `ids` in `returned`, null for one that did not come back. */
+export function ranksOf(ids: readonly string[], returned: readonly string[]): (number | null)[] {
+  const at = new Map<string, number>();
+  returned.forEach((id, i) => {
+    if (!at.has(id)) at.set(id, i + 1);
+  });
+  return ids.map((id) => at.get(id) ?? null);
+}
+
+/** The best (lowest) rank within the top `window`, Infinity when none is there. */
+const best = (ranks: readonly (number | null)[], window: number): number =>
+  Math.min(Infinity, ...ranks.filter((r): r is number => r !== null && r <= window));
+
+/**
+ * One row's share of each mean metric: what `GroupMetrics` averages, null where the row does not
+ * count toward that metric. Kept per row so a run can be written question by question and two runs
+ * compared with a paired test (`compare.ts`).
+ */
+export interface RowScore {
+  recallAt: Record<number, number | null>;
+  /** Reciprocal rank of the first expected id in the top 10 (0 when none is there). */
+  rr: number | null;
+  staleLeak: number | null;
+  staleAboveCurrent: number | null;
+  abstainFp: number | null;
+}
+
+export function scoreRow(r: EvalRow, o: RowOutcome, ks: readonly number[]): RowScore {
+  const expected = r.expectedMemoryIds;
+  const stale = r.notExpectedMemoryIds ?? [];
+  const ranks = ranksOf(expected, o.ids);
+  const staleRanks = ranksOf(stale, o.ids);
   const recallAt: Record<number, number | null> = {};
   for (const k of ks) {
-    recallAt[k] = mean(
-      withExpected.map(({ r, o }) => {
-        const top = new Set(o.ids.slice(0, k));
-        return r.expectedMemoryIds.filter((id) => top.has(id)).length / r.expectedMemoryIds.length;
-      }),
-    );
+    recallAt[k] =
+      expected.length === 0
+        ? null
+        : ranks.filter((x) => x !== null && x <= k).length / expected.length;
   }
-  const mrr = mean(
-    withExpected.map(({ r, o }) => {
-      const want = new Set(r.expectedMemoryIds);
-      const rank = o.ids.slice(0, MRR_WINDOW).findIndex((id) => want.has(id));
-      return rank < 0 ? 0 : 1 / (rank + 1);
-    }),
-  );
-  const staleLeak = mean(
-    all
-      .filter((x) => (x.r.notExpectedMemoryIds ?? []).length > 0)
-      .map(({ r, o }) => {
-        const top = new Set(o.ids.slice(0, 10));
-        return (r.notExpectedMemoryIds ?? []).some((id) => top.has(id)) ? 1 : 0;
-      }),
-  );
-  const abstainFp = mean(
-    all.filter((x) => x.r.category === 'abstention').map(({ o }) => (o.aboveThreshold > 0 ? 1 : 0)),
-  );
+  const first = best(ranks, MRR_WINDOW);
+  const firstStale = best(staleRanks, STALE_WINDOW);
+  return {
+    recallAt,
+    rr: expected.length === 0 ? null : first === Infinity ? 0 : 1 / first,
+    staleLeak: stale.length === 0 ? null : firstStale === Infinity ? 0 : 1,
+    staleAboveCurrent:
+      stale.length === 0 || expected.length === 0 || r.staleOrderUnknown === true
+        ? null
+        : firstStale < best(ranks, STALE_WINDOW)
+          ? 1
+          : 0,
+    abstainFp: r.category === 'abstention' ? (o.aboveThreshold > 0 ? 1 : 0) : null,
+  };
+}
+
+/** Of a row's link-admitted memories in the top 10, how many, and how many were expected. */
+export function linkCounts(r: EvalRow, o: RowOutcome): { linked: number; expected: number } {
+  const top = new Set(o.ids.slice(0, LINK_WINDOW));
+  const want = new Set(r.expectedMemoryIds);
+  let linked = 0;
+  let expected = 0;
+  for (const id of o.linked ?? []) {
+    if (!top.has(id)) continue;
+    linked++;
+    if (want.has(id)) expected++;
+  }
+  return { linked, expected };
+}
+
+const meanOf = (xs: (number | null)[]): number | null =>
+  mean(xs.filter((x): x is number => x !== null));
+
+function groupMetrics(rows: EvalRow[], outcomes: RowOutcome[], ks: number[]): GroupMetrics {
+  const all = paired(rows, outcomes);
+  const scores = all.map(({ r, o }) => scoreRow(r, o, ks));
+  const recallAt: Record<number, number | null> = {};
+  for (const k of ks) recallAt[k] = meanOf(scores.map((s) => s.recallAt[k] ?? null));
   // Pooled over the rows, not averaged per row: most rows bring in no linked memory at all.
   let linked = 0;
   let linkedExpected = 0;
   for (const { r, o } of all) {
-    const top = new Set(o.ids.slice(0, LINK_WINDOW));
-    const want = new Set(r.expectedMemoryIds);
-    for (const id of o.linked ?? []) {
-      if (!top.has(id)) continue;
-      linked++;
-      if (want.has(id)) linkedExpected++;
-    }
+    const c = linkCounts(r, o);
+    linked += c.linked;
+    linkedExpected += c.expected;
   }
-  const linkPrecision = linked === 0 ? null : linkedExpected / linked;
-  return { rows: rows.length, recallAt, mrr, staleLeak, abstainFp, linkPrecision };
+  return {
+    rows: rows.length,
+    recallAt,
+    mrr: meanOf(scores.map((s) => s.rr)),
+    staleLeak: meanOf(scores.map((s) => s.staleLeak)),
+    staleAboveCurrent: meanOf(scores.map((s) => s.staleAboveCurrent)),
+    abstainFp: meanOf(scores.map((s) => s.abstainFp)),
+    linkPrecision: linked === 0 ? null : linkedExpected / linked,
+  };
 }
 
 /**
@@ -435,6 +501,11 @@ export interface EvalRun extends EvalReport {
   warmUp?: WarmUpStats;
   /** The links mode the run used (`off` is today's recall). */
   links?: LinksMode;
+  /**
+   * One result per row (`per-question.ts`), cold then warm; run label `links=<mode>`, plus
+   * `pass=cold` or `pass=warm` with a warm-up. Not part of the totals: written to its own file.
+   */
+  perQuestion?: QuestionResult[];
 }
 
 /**
@@ -543,7 +614,8 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalRun> {
           ...(opts.now !== undefined ? { now: opts.now } : {}),
         },
       );
-    const runRows = async (): Promise<EvalReport> => {
+    const perQuestion: QuestionResult[] = [];
+    const runRows = async (pass?: 'cold' | 'warm'): Promise<EvalReport> => {
       const reads = { hydrated: 0, asked: 0, stopped: 0 };
       // Each pass reports its own rescoring (the warm-up's recalls also read vectors).
       rescoring.denseQueries = 0;
@@ -563,6 +635,12 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalRun> {
           linked: r.memories.filter((m) => viaOf(m) !== undefined).map((m) => m.id),
         });
       }
+      perQuestion.push(
+        ...questionResults(opts.rows, outcomes, ks, {
+          run: runLabel({ links, ...(pass !== undefined && { pass }) }),
+          level: 'memory',
+        }),
+      );
       return {
         ...computeMetrics(opts.rows, outcomes, ks, opts.skippedEmpty ?? 0),
         ...(vectorIndex !== undefined && { vectorIndex }),
@@ -579,8 +657,8 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalRun> {
         reads,
       };
     };
-    const cold = await runRows();
-    if (opts.warmUp === undefined) return { ...cold, links };
+    const cold = await runRows(opts.warmUp === undefined ? undefined : 'cold');
+    if (opts.warmUp === undefined) return { ...cold, links, perQuestion };
     // The warm-up pass: a disjoint question set whose recalls record accesses on the copy (and,
     // once links exist, learn recalledWith pairs there), so the second pass sees that history.
     // Only the copy is written; hydration stays off, so tiers do not move under the rows.
@@ -595,8 +673,8 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalRun> {
       },
     };
     for (const row of opts.warmUp) await recallRow(row, recording);
-    const warm = await runRows();
-    return { ...cold, warm, warmUp, links };
+    const warm = await runRows('warm');
+    return { ...cold, warm, warmUp, links, perQuestion };
   } finally {
     await store.close();
     fs.rmSync(copy.dir, { recursive: true, force: true });
@@ -614,13 +692,14 @@ export function renderReport(r: EvalReport): string {
     ...r.ks.map((k) => `recall@${k}`),
     'MRR@10',
     'Stale-leak',
+    'Stale above current',
     'Abstain FP',
     'Link precision',
   ];
   const lines = [`| ${head.join(' | ')} |`, `| ${head.map(() => '---').join(' | ')} |`];
   for (const [name, g] of Object.entries(r.groups)) {
     lines.push(
-      `| ${[name, String(g.rows), ...r.ks.map((k) => cell(g.recallAt[k])), cell(g.mrr), cell(g.staleLeak), cell(g.abstainFp), cell(g.linkPrecision)].join(' | ')} |`,
+      `| ${[name, String(g.rows), ...r.ks.map((k) => cell(g.recallAt[k])), cell(g.mrr), cell(g.staleLeak), cell(g.staleAboveCurrent), cell(g.abstainFp), cell(g.linkPrecision)].join(' | ')} |`,
     );
   }
   if (r.skippedEmpty > 0) {

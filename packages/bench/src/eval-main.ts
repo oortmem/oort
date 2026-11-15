@@ -14,7 +14,9 @@ import {
 import { voyageReranker } from '@oortmem/rerank-voyage';
 import { openSqliteStore, VECTOR_INDEXES, type VectorIndex } from '@oortmem/store-sqlite';
 import { belowMinRecall10, loadEvalRows, renderRun, runEval, type EvalRun } from './eval.js';
+import { compareFiles } from './compare.js';
 import { linkModesFor } from './links.js';
+import { questionsPathFor, writeQuestionsJsonl } from './per-question.js';
 import { publicMain } from './public-main.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { demoMemories } from './fixture.js';
@@ -34,6 +36,7 @@ const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>]
                  [--abstain-threshold <n>] [--no-gate] [--json]
                  [--vector-index auto|int8|binary|rabitq] [--cold-share <0..1>] [--no-adaptive-stop]
                  [--warm-up <file.jsonl>] [--links off|user|<kind>|all|grid]
+                 [--out <file.json>] [--questions <file.jsonl>]
        pnpm eval --demo [--hook] [--json]    synthetic 1512-memory store + the bundled 29-row
                  fixture (--hook: the 15-row hook-shaped set instead)
        pnpm eval --set multilingual [--embed none|fake|local[:model]|voyage[:model]]
@@ -42,8 +45,13 @@ const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>]
                  [--vector-index auto|int8|binary|rabitq]
        pnpm eval --set locomo|longmemeval [--fetch] [--plan] [--yes] [<file.json> --unpinned]
                  [--embed none|fake|local[:model]|voyage[:model]] [--rerank none|local|voyage]
-                 [--limit <haystacks>] [--links <modes>] [--no-gate] [--k 5,10] [--json] [--out <file>]
+                 [--limit <haystacks>] [--links <modes>] [--speed full|fast|grid]
+                 [--entities none|writer[:model]] [--no-gate] [--k 5,10] [--json]
+                 [--out <file.json>] [--questions <file.jsonl>]
                  (eval/public/README.md: never bundled; paid models print a plan and need --yes)
+       pnpm eval compare <a.questions.jsonl> <b.questions.jsonl> [--run-a <run>] [--run-b <run>]
+                 [--resamples 10000] [--seed 1] [--json]
+                 paired bootstrap interval and sign test per metric and group (eval/format.md)
 
 Runs recall for each row against a temp copy of the store (the live store is never written).`;
 
@@ -72,6 +80,13 @@ async function main(): Promise<number> {
       hook: { type: 'boolean', default: false },
       'warm-up': { type: 'string' },
       links: { type: 'string', default: 'off' },
+      speed: { type: 'string' },
+      entities: { type: 'string' },
+      questions: { type: 'string' },
+      'run-a': { type: 'string' },
+      'run-b': { type: 'string' },
+      resamples: { type: 'string' },
+      seed: { type: 'string' },
       set: { type: 'string' },
       embed: { type: 'string', default: 'none' },
       rerank: { type: 'string', default: 'none' },
@@ -93,6 +108,30 @@ async function main(): Promise<number> {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
+  if (positionals[0] === 'compare') {
+    const [, a, b, ...extra] = positionals;
+    if (a === undefined || b === undefined || extra.length > 0)
+      throw new Error(`compare takes two per-question files\n${USAGE}`);
+    const int = (raw: string | undefined, name: string): number | undefined => {
+      if (raw === undefined) return undefined;
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 0) throw new Error(`--${name} must be a whole number`);
+      return n;
+    };
+    const resamples = int(values.resamples, 'resamples');
+    if (resamples === 0) throw new Error('--resamples must be at least 1');
+    const seed = int(values.seed, 'seed');
+    process.stdout.write(
+      `${compareFiles(fromUser(a), fromUser(b), {
+        ...(values['run-a'] !== undefined && { runA: values['run-a'] }),
+        ...(values['run-b'] !== undefined && { runB: values['run-b'] }),
+        ...(resamples !== undefined && { resamples }),
+        ...(seed !== undefined && { seed }),
+        json: values.json,
+      })}\n`,
+    );
+    return 0;
+  }
   if (values.set === 'locomo' || values.set === 'longmemeval') {
     return publicMain(
       {
@@ -106,16 +145,22 @@ async function main(): Promise<number> {
         rerank: values.rerank,
         ...(values.limit !== undefined && { limit: values.limit }),
         links: values.links,
+        ...(values.speed !== undefined && { speed: values.speed }),
+        ...(values.entities !== undefined && { entities: values.entities }),
         noGate: values['no-gate'],
         k: values.k,
         json: values.json,
         ...(values.out !== undefined && { out: fromUser(values.out) }),
+        ...(values.questions !== undefined && { questions: fromUser(values.questions) }),
         ...(values.home !== undefined && { home: fromUser(values.home) }),
         ...(values.tokenizer !== undefined && { tokenizer: fromUser(values.tokenizer) }),
         ...(values['cache-dir'] !== undefined && { cacheDir: fromUser(values['cache-dir']) }),
       },
       (m) => process.stderr.write(`eval: ${m}\n`),
     );
+  }
+  if (values.speed !== undefined || values.entities !== undefined) {
+    throw new Error('--speed and --entities go with --set locomo or --set longmemeval');
   }
   if (values.set !== undefined) {
     if (values.set !== 'multilingual') throw new Error(`unknown --set "${values.set}"`);
@@ -208,12 +253,27 @@ async function main(): Promise<number> {
         }),
       );
     }
-    const single = runs.length === 1 ? runs[0] : undefined;
-    process.stdout.write(
-      values.json
-        ? `${JSON.stringify(single ?? runs, null, 2)}\n`
-        : `${runs.map(renderRun).join('\n\n')}\n`,
-    );
+    const perQuestion = runs.flatMap((r) => r.perQuestion ?? []);
+    // The totals leave the per-question lines out: those go to their own file.
+    const totals = runs.map((r) => {
+      const t = { ...r };
+      delete t.perQuestion;
+      return t;
+    });
+    const single = totals.length === 1 ? totals[0] : undefined;
+    const json = `${JSON.stringify(single ?? totals, null, 2)}\n`;
+    if (values.out !== undefined) fs.writeFileSync(fromUser(values.out), json);
+    const questionsFile =
+      values.questions !== undefined
+        ? fromUser(values.questions)
+        : values.out !== undefined
+          ? questionsPathFor(fromUser(values.out))
+          : undefined;
+    if (questionsFile !== undefined) {
+      writeQuestionsJsonl(questionsFile, perQuestion);
+      process.stderr.write(`eval: per-question results: ${questionsFile}\n`);
+    }
+    process.stdout.write(values.json ? json : `${runs.map(renderRun).join('\n\n')}\n`);
     const below = belowMinRecall10(runs, minRecall10);
     if (below.length > 0) {
       process.stderr.write(`eval: below --min-recall10 ${minRecall10}: ${below.join('; ')}\n`);

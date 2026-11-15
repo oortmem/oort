@@ -50,6 +50,11 @@ Computed overall and per category.
 - **recall@k**: for each row with expected ids, the fraction of them in the top k; averaged over those rows.
 - **MRR@10**: reciprocal rank of the first expected id within the top 10 (0 when none); averaged over the same rows. The window is fixed at 10 whatever `--k` is.
 - **stale-leak rate**: the fraction of rows that list `notExpectedMemoryIds` where any of them appears in the top 10.
+- **stale above current**: of the rows with both expected and not-expected ids, the fraction
+  where a not-expected id (the outdated answer) ranks above every expected one (the current
+  answer) in the top 10. A row where only the outdated answer comes back counts; a row where
+  neither comes back does not. Stale-leak says an outdated answer came back at all; this says
+  whether it beat the current one, which is what a reader sees first.
 - **abstention false-positive rate**: the fraction of `abstention` rows that returned a memory.
 - **link precision**: of the memories a link brought in (`explanation.via`) in the top 10 of every
   row, the share that were expected; pooled over the rows, not averaged per row. `-` when no row
@@ -69,11 +74,13 @@ empty question, reporting how many.
 ```sh
 pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>] [--k 5,10] [--min-recall10 0.8] [--json]
                        [--warm-up <file.jsonl>] [--links off|user|<kind>|all|grid]
+                       [--out <report.json>] [--questions <file.jsonl>]
 pnpm eval --demo [--dense] [--warm-up packages/bench/eval/warm-up.jsonl]
                         # a synthetic 1,512-memory store and the bundled 29-row eval/fixture.jsonl
 pnpm eval --demo --hook --dense   # the 15-row hook-shaped set, no reranker (the prompt hook's `fast`)
 pnpm eval --set multilingual [--embed …] [--rerank …]   # 13 languages, three conditions (multilingual/README.md)
 pnpm eval --set locomo|longmemeval [--fetch] [--plan] [--embed …] [--rerank …]   # public sets (public/README.md)
+pnpm eval compare <a.questions.jsonl> <b.questions.jsonl>   # is a difference between two runs real?
 ```
 
 - The bundled demo is a smoke test of the eval pipeline, not a quality benchmark. Its 1,500
@@ -99,6 +106,56 @@ pnpm eval --set locomo|longmemeval [--fetch] [--plan] [--embed …] [--rerank �
 - `eval/fixture.jsonl`, `eval/hook.jsonl` and `eval/warm-up.jsonl` are generated:
   `pnpm --filter @oortmem/bench run fixture`. A test checks they are in sync with the generator,
   and that the fixture's first 23 rows are the ones it had before the multi-hop rows.
+
+### Per-question results (`--out`, `--questions`)
+
+`--out <report.json>` writes the totals as JSON, and the per-question results beside them as
+JSON Lines, in `<report>.questions.jsonl` (`--questions <file>` picks another path, and writes them
+without `--out`). One line per question per run:
+
+| Field                             | What it holds                                                                                                                                 |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`                             | the run's settings: `links=off`, plus `pass=cold` or `pass=warm` with a warm-up (`links=off,speed=full` for the public sets)                  |
+| `level`                           | `memory` for an eval file; `turn` or `session` for the public sets                                                                            |
+| `id`, `group`, `question`         | the row number (from 1, empty rows skipped) or the dataset's question id; its category or question type; its text                             |
+| `ranks`                           | the 1-based rank of each expected id among the returned ones, `null` when it did not come back                                                |
+| `staleRanks`                      | the same for each not-expected id, when the row lists any                                                                                     |
+| `returned`, `aboveThreshold`      | how many memories came back, and how many cleared the abstention threshold                                                                    |
+| `linked`, `linkedExpected`        | link-admitted memories in the top 10, and how many of them were expected                                                                      |
+| `metrics`                         | the question's share of each mean metric: `recall@<k>`, `mrr`, `staleLeak`, `staleAboveCurrent`, `abstainFp` (`null` where it does not count) |
+| `abstention`, `staleOrderUnknown` | present (`true`) on abstention rows, and on rows left out of stale above current                                                              |
+
+The mean of a metric over a run's lines is that run's total for it. Link precision is pooled over
+rows, so it is not in `metrics`; `linked` and `linkedExpected` give it.
+
+### Comparing two runs (`pnpm eval compare`)
+
+A difference of a point or two on a few hundred questions is often noise. `compare` pairs two runs
+question by question and tests every metric, overall and per group:
+
+```sh
+pnpm eval compare before.questions.jsonl after.questions.jsonl
+pnpm eval compare grid.questions.jsonl grid.questions.jsonl \
+  --run-a links=off,speed=full --run-b links=all,speed=full
+pnpm eval compare a.questions.jsonl b.questions.jsonl --resamples 10000 --seed 1 --json
+```
+
+For each level, group and metric it prints the mean of A and of B over the questions both count,
+the paired difference B - A, and:
+
+- a **95% bootstrap interval** of that difference: the questions are resampled with replacement
+  (`--resamples`, default 10,000) and the middle 95% of the resampled mean differences is kept. The
+  resampling is seeded (`--seed`, default 1, `src/prng.ts`), so the same files always print the
+  same interval. An interval that contains 0 does not show a real change.
+- an **exact sign test**: how many questions went up, down or stayed the same, and the two-sided
+  binomial probability of a split at least that uneven if up and down were equally likely.
+  Questions that did not move are left out of it.
+
+Both runs must have asked the same questions: an id on one side only, or an id whose question or
+group differs, stops the comparison with the ids named (compare runs of the same set, with the
+same `--limit`). A file with one run needs no `--run-a` or `--run-b`. Two files that hold the same
+several runs (two runs of the same grid, before and after a change) are compared run by run;
+otherwise name the runs. No correction is made for testing many metrics and groups at once.
 
 ### Warm-up (`--warm-up <file>`)
 
@@ -144,7 +201,8 @@ Two things to know when reading a links run:
 
 The prompt hook recalls without a reranker by default (`recall.promptMode: fast`), and decision 3
 of the links design keeps links out of that path until a separate bar is met on hook-shaped
-queries. `eval/hook.jsonl` is a synthetic stand-in over the demo store: short conversational
+queries. For the public sets, `--speed fast` runs that path (no reranker); see `public/README.md`.
+`eval/hook.jsonl` is a synthetic stand-in over the demo store: short conversational
 prompts (4 single-fact, the 6 multi-hop needs as a person would type them, and 5 prompts with no
 memory need, such as "ok run the tests again"). Run it with `--demo --hook --dense`, which is the
 `fast` path (fake embedder, no reranker). Real hook queries from imported transcripts stay out of

@@ -230,6 +230,9 @@ importers:
       '@oortmem/store-sqlite':
         specifier: workspace:*
         version: link:../store-sqlite
+      '@oortmem/writer':
+        specifier: workspace:*
+        version: link:../writer
       better-sqlite3:
         specifier: 13.0.3
         version: 13.0.3

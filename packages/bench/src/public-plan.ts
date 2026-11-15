@@ -9,8 +9,12 @@
  *
  * Upper bounds: query embeddings (one per question; recall skips some when its lexical search is
  * already sure) and rerank calls (one per question, each with at most `rerankK` documents; recall
- * skips some when fusion is confident). The rerank bound assumes every call carries that
- * haystack's longest documents.
+ * skips some when fusion is confident), for each run that reranks (a `fast` run does not). The
+ * rerank bound assumes every call carries that haystack's longest documents.
+ *
+ * With `--entities writer`: one writer call per distinct turn text not yet in the entity cache,
+ * and the characters they carry. Tokens there are estimated at 4 characters each (the writer's
+ * tokenizer is not published), before the writer's own instructions, and not priced here.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -61,11 +65,24 @@ export interface PublicPlan {
   };
   rerank?: {
     model: string;
-    /** Upper bound: one call per question. */
+    /** Upper bound: one call per question per run that reranks. */
     calls: number;
+    /** Runs that rerank (each links mode at speed `full`). */
+    runs: number;
     documentsPerCall: number;
     tokens: number;
     usd: number;
+  };
+  writer?: {
+    model: string;
+    /** Distinct turn texts, and those already in the entity cache. */
+    texts: number;
+    cached: number;
+    /** One call per uncached text. */
+    calls: number;
+    chars: number;
+    /** Estimated at 4 characters each, without the writer's instructions. */
+    tokens: number;
   };
 }
 
@@ -78,6 +95,12 @@ export function planPublicSet(
     tokens: TokenCounter;
     /** True when the embedding cache already holds this document text. */
     cached?: (text: string) => boolean;
+    /** Runs that rerank (default 1). */
+    rerankRuns?: number;
+    /** The writer model asked for entities (`--entities writer`). */
+    writerModel?: string;
+    /** True when the entity cache already holds this turn text. */
+    writerCached?: (text: string) => boolean;
   },
 ): PublicPlan {
   const questions = set.haystacks.reduce((n, h) => n + h.questions.length, 0);
@@ -120,7 +143,8 @@ export function planPublicSet(
       usd: ((docTokens + queryTokens) / 1e6) * (PRICE_PER_MTOK[opts.embedModel] ?? Number.NaN),
     };
   }
-  if (opts.rerankModel !== undefined) {
+  const runs = opts.rerankRuns ?? 1;
+  if (opts.rerankModel !== undefined && runs > 0) {
     let tokens = 0;
     let perCall = 0;
     for (const h of set.haystacks) {
@@ -137,12 +161,29 @@ export function planPublicSet(
         tokens += qt * docs.length + docSum;
       }
     }
+    tokens *= runs;
     plan.rerank = {
       model: opts.rerankModel,
-      calls: questions,
+      calls: questions * runs,
+      runs,
       documentsPerCall: perCall,
       tokens,
       usd: (tokens / 1e6) * (PRICE_PER_MTOK[opts.rerankModel] ?? Number.NaN),
+    };
+  }
+  if (opts.writerModel !== undefined) {
+    const unique = [
+      ...new Set(set.haystacks.flatMap((h) => h.turns.flatMap((t) => embedTextOf(t) ?? []))),
+    ];
+    const todo = unique.filter((t) => opts.writerCached?.(t) !== true);
+    const chars = todo.reduce((n, t) => n + t.length, 0);
+    plan.writer = {
+      model: opts.writerModel,
+      texts: unique.length,
+      cached: unique.length - todo.length,
+      calls: todo.length,
+      chars,
+      tokens: todo.reduce((n, t) => n + estimateTokens.count(t), 0),
     };
   }
   return plan;
@@ -168,13 +209,20 @@ export function renderPlan(p: PublicPlan): string {
   }
   if (p.rerank !== undefined) {
     lines.push(
-      `Rerank (${p.rerank.model}), at most: ${n(p.rerank.calls)} calls of up to ${p.rerank.documentsPerCall} documents, ${n(p.rerank.tokens)} ${tok} (query tokens x documents + document tokens).`,
+      `Rerank (${p.rerank.model}), at most: ${n(p.rerank.calls)} calls (${n(p.rerank.runs)} run(s) that rerank) of up to ${p.rerank.documentsPerCall} documents, ${n(p.rerank.tokens)} ${tok} (query tokens x documents + document tokens).`,
       `  Cost at list price, at most: $${usd(p.rerank.usd)}.`,
     );
   }
-  if (p.embed === undefined && p.rerank === undefined) {
+  if (p.writer !== undefined) {
+    const w = p.writer;
     lines.push(
-      'No paid model is configured (--embed voyage or --rerank voyage): this run is free.',
+      `Entities (writer ${w.model}): ${n(w.texts)} distinct turn texts, ${n(w.cached)} already cached; ${n(w.calls)} writer calls, ${n(w.chars)} chars, about ${n(w.tokens)} input tokens (estimated at 4 chars each) plus the writer's instructions on every call, and its output.`,
+      `  Not priced here: see the model provider's price list.`,
+    );
+  }
+  if (p.embed === undefined && p.rerank === undefined && p.writer === undefined) {
+    lines.push(
+      'No paid model is configured (--embed voyage, --rerank voyage or --entities writer): this run is free.',
     );
   }
   return lines.join('\n');

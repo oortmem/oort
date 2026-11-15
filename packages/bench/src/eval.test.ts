@@ -137,6 +137,36 @@ describe('eval', () => {
     expect(report.skippedEmpty).toBe(0);
   });
 
+  it('eval.per-question-lines-for-each-pass (stale above current)', async () => {
+    const { dbPath, coldDir } = await handBuiltStore();
+    const base = { rows: ROWS, storePath: dbPath, coldDir, dimension: DIM, now: new Date(NOW) };
+    const report = await runEval(base);
+    const lines = report.perQuestion ?? [];
+    expect(lines.map((l) => l.id)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
+    expect(new Set(lines.map((l) => `${l.run}/${l.level}`))).toEqual(new Set(['links=off/memory']));
+    // The current port (m1) ranks first, its outdated value (m0) is not returned.
+    expect(lines[0]).toMatchObject({
+      group: 'knowledge-update',
+      ranks: [1],
+      staleRanks: [null],
+      metrics: { staleLeak: 0, staleAboveCurrent: 0 },
+    });
+    // The as-of row that wants the newer value leaks the older one, which ranks above it.
+    expect(lines[4]?.metrics['staleAboveCurrent']).toBe(1);
+    expect(report.groups['temporal']?.staleAboveCurrent).toBeCloseTo(0.5);
+    expect(report.groups['knowledge-update']?.staleAboveCurrent).toBe(0);
+    // With a warm-up: the cold lines, then the warm ones.
+    const warm = await runEval({
+      ...base,
+      warmUp: [{ question: 'billing worker pnpm', expectedMemoryIds: [] }],
+    });
+    expect([...new Set((warm.perQuestion ?? []).map((l) => l.run))]).toEqual([
+      'links=off,pass=cold',
+      'links=off,pass=warm',
+    ]);
+    expect(warm.perQuestion).toHaveLength(16);
+  });
+
   it('eval.skips-empty-questions', async () => {
     const importRow = {
       memoryId: 'm2',
