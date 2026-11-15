@@ -130,7 +130,8 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 `known-at`), `asOf` (valid time), `knownAt` (transaction time), `include` (narrows the levels
 read: `self`, `planet`, `star`, `constellation`, `galaxy`), `budgetChars` (the default block size
 for `formatForPrompt`), `includeWithdrawn`, `speed` (`full`: embed and rerank; `fast`: no rerank;
-`lexical`: no model call), `inferTime` (default true: "on 2 April" picks as-of, as the CLI does),
+`lexical`: no model call), `inferTime` (default true, as the CLI does: a past time in the query ranks the results, and a
+question about a state then, "which port did we use on 2 April", picks as-of),
 `within` and `near` (spatial memory, 0.9.0 or newer, local mode only: see
 [Spatial memory](#spatial-memory)) and `signal`.
 

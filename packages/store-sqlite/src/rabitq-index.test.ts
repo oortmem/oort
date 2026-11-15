@@ -884,7 +884,7 @@ describe('schema migration 6 to 7', () => {
     try {
       expect(() =>
         db.prepare("UPDATE memories SET salience = 0.9 WHERE id = 'v4-01'").run(),
-      ).toThrow(/no such function: oort_writer_v9/);
+      ).toThrow(/no such function: oort_writer_v10/);
     } finally {
       db.close();
     }

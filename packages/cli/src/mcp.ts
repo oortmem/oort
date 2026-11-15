@@ -35,6 +35,7 @@ import {
 } from './judge-cap.js';
 import {
   LINKS_IGNORED_IN_CLOUD,
+  happenedOf,
   linksIgnoredInCloud,
   runRecall,
   withSeeds,
@@ -287,6 +288,7 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           ...(e.via !== undefined && {
             via: { kind: e.via.kind, from: e.via.from, weight: Number(e.via.weight.toFixed(3)) },
           }),
+          ...happenedOf(m),
         };
       });
       const lexicalOnly = w.mode !== 'cloud' && (w.embed === undefined || w.rerank === undefined);

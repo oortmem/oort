@@ -89,14 +89,16 @@ per dimension, two's complement), and is absent when the memory has none.
 | `source`          | `{ harness, sessionId?, turnRef?, decisions: { stage, question, answer, probability }[] }` |
 | `judgment`        | object, `judgment` memories only (version 2): the expert's decision, see `docs/cli.md` |
 | `place`           | object, optional (version 2, Oort 0.9.0 or newer): where the memory is, `{ nodeId?, mapId?, mapVersion?, frame?, pose?, extent?, geo?, sigma? }`, see Places in `docs/cli.md` |
+| `occurred`        | array, optional (version 2): when what the memory tells of happened, `{ from, to, precision, source }[]`, see Event time in `docs/store-contract.md` |
 | `embedding`       | base64 string, optional                                    |
 | `createdAt`       | ISO 8601                                                   |
 | `updatedAt`       | ISO 8601                                                   |
 
 No other fields appear. The two `…Hidden` flags appear only when set, `judgment` only on a
 `judgment` memory, and `place` only on a memory that has one (version 1 holds neither, so
-`--format 1` refuses such a memory). A reader that predates `place` ignores it, so the format
-version stays 2. Decoding an embedding in Node:
+`--format 1` refuses such a memory). A reader that predates `place` or `occurred` ignores it, so the format
+version stays 2. Version 1 never holds `occurred`; `oort import` reads it again from the
+text, against `createdAt`, for any line without one. Decoding an embedding in Node:
 
 ```js
 const vector = Int8Array.from(Buffer.from(line.embedding, 'base64'));

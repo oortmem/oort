@@ -153,6 +153,27 @@ export interface MemoryStore {
    */
   readonly links?: true;
   /**
+   * True when the store keeps `Memory.occurred` and has `occurredIn` (event time;
+   * `occurrenceConformance` proves it). Absent: recall's time channel ranks only what the lexical
+   * and dense searches found, by the `occurred` each memory comes back with (or its `validFrom`).
+   */
+  readonly occurrences?: true;
+  /**
+   * The memories within `grant.read` with an occurrence (`Memory.occurred`) that overlaps
+   * [`range.from`, `range.to`), at most `k`, as ids: stated occurrences (`explicit`, `relative`)
+   * before `mention` ones, then the occurrence whose middle is nearest the range's middle, then by
+   * id. `score` orders the list (higher first) and means nothing else. An occurrence is never
+   * longer than `MAX_OCCURRENCE_DAYS`, so the read is one bounded range of an index. Cold memories
+   * count; temporal validity does not filter (fusion does). With `opts.spatial`, only memories that
+   * pass it. A store with `occurrences` has it.
+   */
+  occurredIn?(
+    grant: Grant,
+    range: { from: string; to: string },
+    k: number,
+    opts?: SearchOptions,
+  ): Promise<Hit[]>;
+  /**
    * Links `a` and `b` explicitly, asserted by `opts.assertedBy`, and removes any block on the
    * pair. Needs `grant.write` on both, both in one node, and that node not at level `hive`;
    * anything else (an unknown id, one outside the grant, two nodes, a hive node, `a === b`)

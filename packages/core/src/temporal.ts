@@ -1,5 +1,5 @@
 import type * as chrono from 'chrono-node';
-import { loadChrono, mayHaveDateCue } from './date-cue.js';
+import { chronoParse, queryRange, type TimeRange } from './event-time.js';
 
 /**
  * Time handling in code, never in a model (CON-34): relative expressions are resolved with
@@ -15,15 +15,10 @@ const ref = (at: Date, offset = 0) => ({ instant: at, timezone: offset });
 
 /**
  * chrono's parse, loading chrono only for a text with a date cue (CON-82): a text without one
- * is a text chrono reads nothing the functions below act on.
+ * is a text chrono reads nothing the functions below act on. Shared with `occurrencesOf`, so the
+ * write path parses a turn once.
  */
-function parse(
-  text: string,
-  reference: chrono.ParsingReference,
-  option: chrono.ParsingOption,
-): chrono.ParsedResult[] {
-  return mayHaveDateCue(text) ? loadChrono().parse(text, reference, option) : [];
-}
+const parse = chronoParse;
 
 /** Midnight of `d`'s day in the given offset, as an instant. */
 const startOfDay = (d: Date, offset = 0): Date => {
@@ -32,7 +27,6 @@ const startOfDay = (d: Date, offset = 0): Date => {
     Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - offset * MIN_MS,
   );
 };
-const endOfDay = (d: Date): Date => new Date(startOfDay(d).getTime() + DAY_MS - 1);
 /** `d`'s calendar day in the given offset. */
 const ymd = (d: Date, offset = 0): string =>
   new Date(d.getTime() + offset * MIN_MS).toISOString().slice(0, 10);
@@ -177,14 +171,29 @@ export function checkWriterDate(
 
 export type RecallMode = 'current' | 'as-of' | 'history' | 'known-at';
 
+/**
+ * What a query with a time in it asks, read in code: `state` asks what held then ("which
+ * port did we use in March", "as of 2 April"), `order` which of two things came first, `duration`
+ * how long or how many days, `count` how many, `range` what happened in that time.
+ */
+export type TimeShape = 'range' | 'order' | 'duration' | 'count' | 'state';
+
 export interface TemporalIntent {
   mode: RecallMode;
-  /** For `as-of`: the end of the day the query names. */
+  /** For `as-of`: the end of the time the query names. */
   asOf?: string;
-  /** For `known-at`: the end of the day the query names. */
+  /** For `known-at`: the end of the time the query names. */
   knownAt?: string;
   /** The query without its temporal words, to search with; absent when nothing was removed. */
   text?: string;
+  /**
+   * The past time the query names, widened to what it says ("in March" is the month), when it
+   * names one. Recall ranks by it (a time channel) and never filters by it, unless `shape` is
+   * `state`, which reads as-of its end.
+   */
+  range?: TimeRange;
+  /** What the query asks about that time; set with `range`. */
+  shape?: TimeShape;
 }
 
 const KNOWN =
@@ -213,52 +222,68 @@ function without(query: string, part: string, dangling = false): string {
 }
 
 /**
- * A cheap read of a query's temporal intent, in code: "what did we believe … on <day>" is
- * known-at that day; an anchored history question ("how has X changed") asks for the chain; a
- * past day with a cue ("on 2 April 2026", "in March", "yesterday") is as-of that day; anything
- * else, including "now", coming weekdays and other future days, is the current state. A month
- * and day with no year that reads more than 30 days ahead means the last one ("in March" asked
- * in November is this year's March).
+ * Verbs that name a state, not an event, right after their subject: "which port did we use",
+ * "where did I live", "what car does she own". Kept to verbs that rarely name a one-off event:
+ * reading a state as-of hides what was said after the range, so an unsure question stays an
+ * event question, which only ranks.
+ */
+const STATIVE_DID =
+  /\b(did|does|do)\s+(?:i|we|you|he|she|they|it|(?:(?:my|our|your|his|her|their|the)\s+)?(?!(?:i|we|you|he|she|they|it)\b)[\w-]+(?:\s+[\w-]+){0,2}?)\s+(use|own|live|work|weigh|prefer|belong|run\s+on|listen\s+on|mean)\b/i;
+/**
+ * A question about a state with "was" or "were": "what was my salary in 2023". Not a passive
+ * ("how many babies were born"), which names events.
+ */
+const COPULA =
+  /^\s*(?:what|which|who|where|how\s+much|how\s+many\s+\w+)\s+(?:[\w'-]+\s+){0,2}?(?:was|were)\b(?!\s+(?:\w+ed|born|held|made|given|sold|built|taken|won|lost|bought|sent|seen|done|eaten|written|told|thrown|hit|put|set|paid|met|spent)\b)/i;
+/** A clause with a subject and its own verb ("the restaurant I went to"): an event, not a state. */
+const EVENT_CLAUSE = /\b(i|we|you|he|she|they)\s+(?!was\b|were\b|am\b|is\b|are\b|be\b)[a-z]+/i;
+const ORDER =
+  /\b(which|what|who)\b[^?]*\b(first|earlier|earliest|sooner)\b|\bin\s+what\s+order\b|\b(order|sequence)\s+(of|in\s+which)\b|\bbefore\s+or\s+after\b/i;
+const DURATION =
+  /\bhow\s+(long|many\s+(days|weeks|months|years|hours|minutes|nights)|much\s+time)\b|\b(days|weeks|months|years)\s+(between|since|passed|elapsed|apart|before|after)\b/i;
+const COUNT = /\bhow\s+(many|often)\b|\bnumber\s+of\b/i;
+
+/** What a query with a range asks: a state, an order, a duration, a count, or what happened. */
+export function timeShape(query: string, rangeText = ''): TimeShape {
+  const rest = rangeText === '' ? query : without(query, rangeText, true);
+  if (/\bas\s+of\b/i.test(query) || STATIVE_DID.test(rest)) return 'state';
+  if (COPULA.test(rest) && !EVENT_CLAUSE.test(rest.replace(COPULA, ''))) return 'state';
+  if (ORDER.test(rest)) return 'order';
+  if (DURATION.test(rest)) return 'duration';
+  if (COUNT.test(rest)) return 'count';
+  return 'range';
+}
+
+/**
+ * A cheap read of a query's temporal intent, in code (CON-34): "what did we believe …
+ * on <day>" is known-at that day; an anchored history question ("how has X changed") asks for the
+ * chain. A past time with a cue ("on 2 April 2026", "in March", "last weekend", "the past two
+ * months") becomes `range`, widened to what it names: a question about a state then ("which build
+ * tool did we use in March", "as of 2 April") is as-of the end of it, with the date words left out
+ * of the search; any other question keeps every word and the current view, and recall ranks by
+ * the range instead of filtering by it. Anything else, including "now", "this week", coming
+ * weekdays and other future days, is the current state. A month and day with no year that reads
+ * more than 30 days ahead means the last one ("in March" asked in November is this year's March).
  */
 export function temporalIntent(query: string, now: Date): TemporalIntent {
-  const r = parse(query, ref(now), { forwardDate: false })[0];
-  let day: Date | undefined;
-  if (r !== undefined) {
-    let d = r.start.date();
-    const c = r.start;
-    const relative =
-      /\b(next|this|coming|tomorrow|tonight|in\s+\d+)\b/i.test(r.text) ||
-      (c.isCertain('weekday') && !c.isCertain('day'));
-    const explicitMonth = c.isCertain('month') && !c.isCertain('year') && !relative;
-    if (explicitMonth && d.getTime() > now.getTime() + 30 * DAY_MS) {
-      d = new Date(Date.UTC(d.getUTCFullYear() - 1, d.getUTCMonth(), d.getUTCDate(), 12));
-    }
-    // "This week" or "today" asks about the present, even when chrono dates it a few days back.
-    const present = /\b(this|today|tonight|now|currently)\b/i.test(r.text);
-    // A bare date is a keyword ("2026-05-16 pooling" looks up the event that day mentions); a
-    // question about state then needs a cue: "on 2 April", "in March", "as of", "yesterday".
-    const cued =
-      DANGLING.test(query.slice(0, r.index)) ||
-      /^(on|in|at|as\s+of|during|by)\b/i.test(r.text) ||
-      /\b(yesterday|ago|last|earlier|previous)\b/i.test(r.text);
-    if (!present && cued && d.getTime() < startOfDay(now).getTime()) day = d;
-  }
+  const q = queryRange(query, now);
+  const range: TimeRange | undefined =
+    q === undefined ? undefined : { from: q.from, to: q.to, precision: q.precision };
+  const end = range === undefined ? undefined : new Date(Date.parse(range.to) - 1).toISOString();
   let rest = query;
-  if (day !== undefined && r !== undefined) rest = without(rest, r.text, true);
+  if (q !== undefined) rest = without(rest, q.text, true);
   const known = KNOWN.exec(rest);
-  if (known !== null && day !== undefined) {
-    return withText(
-      { mode: 'known-at', knownAt: endOfDay(day).toISOString() },
-      without(rest, known[0]),
-      query,
-    );
+  if (known !== null && end !== undefined) {
+    return withText({ mode: 'known-at', knownAt: end }, without(rest, known[0]), query);
   }
   // History keeps every word: "changed" or "before" may be what the memory itself says.
   if (isHistoryQuestion(query)) return { mode: 'history' };
-  if (day !== undefined) {
-    return withText({ mode: 'as-of', asOf: endOfDay(day).toISOString() }, rest, query);
+  if (range === undefined || end === undefined || q === undefined) return { mode: 'current' };
+  const shape = timeShape(query, q.text);
+  if (shape === 'state') {
+    return withText({ mode: 'as-of', asOf: end, range, shape }, rest, query);
   }
-  return { mode: 'current' };
+  return { mode: 'current', range, shape };
 }
 
 function withText(i: TemporalIntent, rest: string, query: string): TemporalIntent {

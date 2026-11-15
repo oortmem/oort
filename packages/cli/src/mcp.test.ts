@@ -6,6 +6,7 @@ import { AWS_KEY, harness, memory, type Harness } from '../test/helpers.js';
 import { ALL_TOOL_NAMES } from '@oortmem/mcp';
 import { INSTRUCTIONS, createOortServer, localBackend } from './mcp.js';
 import type { CloudClient } from './cloud.js';
+import { occurrencesOf } from '@oortmem/core';
 import { TG } from '@oortmem/core/store-conformance';
 
 type Era = 'legacy' | 'modern';
@@ -129,6 +130,39 @@ describe.each<Era>(['legacy', 'modern'])('oort mcp (%s era)', (era) => {
     expect(r.memories).toEqual([]);
     expect(r.abstained).toBe(true);
     expect(r.note).toMatch(/no relevant memories/i);
+  });
+
+  it('mcp.recall-says-when-a-fact-happened-and-the-time-it-ranked-by', async () => {
+    const { client, h } = await connect(era, { adapters: false });
+    const said = '2026-04-02T09:00:00.000Z';
+    const text = 'In March I went hiking at Mount Tam with Sam.';
+    await h.store.upsertMany(TG, [
+      memory({
+        id: 'hike',
+        text,
+        stub: 'hiking at Mount Tam',
+        entities: ['mount-tam'],
+        createdAt: said,
+        occurred: occurrencesOf(text, new Date(said)),
+      }),
+    ]);
+    const r = json<{ memories: { id: string; happened?: string }[]; mode: string }>(
+      await client.callTool({
+        name: 'recall',
+        arguments: { query: 'where did I go hiking in March 2026?' },
+      }),
+    );
+    expect(r.mode).toBe('current, ranked by time 2026-03');
+    expect(r.memories).toMatchObject([{ id: 'hike', happened: '2026-03' }]);
+    // A fact that states no time says nothing of when it happened, and a query without one
+    // keeps its plain mode.
+    await h.store.upsert(TG, memory({ id: 'port' }));
+    const plain = json<{ memories: { id: string }[]; mode: string }>(
+      await client.callTool({ name: 'recall', arguments: { query: 'auth service port' } }),
+    );
+    expect(plain.mode).toBe('current');
+    expect(plain.memories[0]).toEqual(expect.objectContaining({ id: 'port' }));
+    expect(plain.memories[0]).not.toHaveProperty('happened');
   });
 
   it('mcp.recall-takes-a-temporal-mode', async () => {

@@ -300,7 +300,8 @@ A refine rewrites the memory in place, records the refining turn, and appends on
 decisions. A cold memory that is refined moves back to warm.
 
 The prompt hook reads the time mode from the prompt (see [Time](cli.md#time-recall-modes)): "what
-port did we use in March" gets what was true then, and a history question ("how has the build
+port did we use in March" gets what was true then, a question about an event then ("where did I
+go hiking in March") ranks memories by when what they tell of happened, and a history question ("how has the build
 changed?") gets every version, oldest first. An ordinary instruction that mentions a change ("fix
 the test, the config changed") stays current. In the injected block a version that is no longer current shows its interval instead
 of its age:
@@ -316,3 +317,10 @@ of its age:
 The last line is a volatile fact (a status, a current version, an owner) that nobody confirmed
 within `recall.staleAfterDays` (default 30). `oort revalidate` lists them; confirming one in a
 session clears the note.
+
+A memory that states when what it tells of happened says so in its label, resolved against the
+day it was said, so the model need not work out "last weekend" itself:
+
+```text
+- [episodic, 3d ago, happened 2026-11-07 to 2026-11-08] Went hiking at Mount Tam with Sam last weekend.
+```

@@ -313,6 +313,29 @@ return every place. `spatialConformance(name, make)` in `@oortmem/core/store-con
 store: the place round-trips, whole-segment matching, the radius and its edge, other maps and frames,
 the combined filter, the grant still applying, and the filter applying before `k`.
 
+## Event time
+
+A memory may carry `occurred`: when what it tells of happened, read in code from its text when it
+is written, against the time of the turn that said it. Each entry is `{ from, to, precision,
+source }`: ISO instants in UTC, `from` before `to` and at most 367 days apart, `precision` one of
+`day`, `week`, `month`, `year` or `span`, and `source` one of `explicit` (a stated date),
+`relative` ("last weekend", "two weeks ago") or `mention` (the day it was said, always last). At
+most nine entries. Core's `checkOccurrences` checks a value as a store must on write.
+
+A store that sets `occurrences: true` keeps `occurred` as written and has
+`occurredIn(grant, { from, to }, k, opts?)`: the memories in the grant with an occurrence that
+overlaps `[from, to)`, as `Hit`s, at most `k`. Those with a stated time come before those placed
+only by when they were said, then the one whose occurrence's middle is nearest the range's middle,
+then by id. The score only orders. A cold memory counts. A spatial filter in `opts` applies as it
+does to `lexical` and `dense`. Recall calls it beside the lexical search when a question names a
+past time, and fuses what it returns as one more ranked list (see Time in `docs/cli.md`).
+
+A store without it still works: recall ranks the memories the lexical and dense searches found by
+the `occurred` they come back with, or, without one, by their `validFrom` as the day they were said.
+`occurrenceConformance(name, make)` in `@oortmem/core/store-conformance` proves a store: the
+round trip and rewrite, the check on write, overlap with its bounds, a long occurrence found from
+its far end, the order and `k`, the grant and a spatial filter, and forget and cold memories.
+
 ## Known limit
 
 SQLite's lexical scores come from FTS5's `bm25`, which uses term statistics over the whole table.
@@ -565,6 +588,19 @@ rebuilds the index as version 8's, drops `memories_indexed` and puts version 8's
 downgrade runs with `secure_delete` and truncates the WAL when it is done, so the tables it drops
 or rebuilds leave no words in free pages.
 
+Schema version 10 (event time) adds one nullable column, `occurred`: the JSON
+`Memory.occurred` (see [Event time](#event-time)). A table, `memory_occurred (memory_rid, from_ms,
+to_ms, stated)`, holds one row per occurrence, rewritten with the memory and deleted with it (a
+foreign key with `ON DELETE CASCADE`), and the index `memory_occurred_from (from_ms, to_ms,
+stated, memory_rid)` serves the range read: one range of `from_ms` (an occurrence is at most 367
+days long, so one that overlaps the query starts at most that long before it), filtered on
+`to_ms` inside the index. Opening a version 9 store (or an older one, on its way up) adds them in
+one transaction, reads each memory's event time again from its text against its `createdAt`, as a
+write would, and swaps the guard triggers to `oort_writer_v10()`; it takes no copy, since nothing
+is lost going back. `migrate: false` refuses a version 9 store with `StoreMigrationRequiredError`.
+`downgradeSqliteStore({ path, to: 9 })` drops the column, the table and its indexes and puts
+version 9's guard back.
+
 `downgradeSqliteStore({ path })` takes a store back to version 1 for Oort 0.2.x,
 `downgradeSqliteStore({ path, to: 2 })` to version 2 for Oort 0.3 to 0.5, and `{ path, to: 3 }` to
 version 3 for Oort before tokeniser v2 (the lexical index is rebuilt with tokeniser v1, as
@@ -572,7 +608,8 @@ version 3 for Oort before tokeniser v2 (the lexical index is rebuilt with tokeni
 and the R*Tree are dropped), `{ path, to: 5 }` to version 5 (the binary index and the writer
 guard are dropped; the int8 vectors were never moved), `{ path, to: 6 }` to version 6 (the
 RaBitQ index is dropped and version 6's guard restored), `{ path, to: 7 }` to version 7 (above),
-and `{ path, to: 8 }` to version 8 (the lexical index is rebuilt as version 8's). Opening a store never goes down: migrations only roll forward. It first
+`{ path, to: 8 }` to version 8 (the lexical index is rebuilt as version 8's), and `{ path, to: 9 }`
+to version 9 (event time is dropped). Opening a store never goes down: migrations only roll forward. It first
 copies the database to `<path>.pre-downgrade.<UTC time>` (the three newest are kept), and refuses
 while the store holds anything the target version cannot represent (for version 4 and below, any
 memory with a place; for version 2, also any judgment; for

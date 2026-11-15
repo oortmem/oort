@@ -27,6 +27,7 @@ import type { Decision, Memory, Scope } from './model.js';
 import { checkPlace, frameOf, placeDistance, type Place } from './place.js';
 import { scrubObservation } from './scrub.js';
 import { checkWriterDate, factInterval, utcOffset } from './temporal.js';
+import { occurrencesOf } from './event-time.js';
 import { tokenizeLexical } from './tokenize.js';
 
 export type MemoryOutcomeKind =
@@ -345,6 +346,9 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
       : from;
   const validTo = bounds.validTo ?? null;
   const validFrom = startBefore(bounds.validFrom ?? turnAt.toISOString(), validTo);
+  // When what it tells of happened, read against the turn's own time, then the turn's
+  // day: recall ranks time questions by it. It never bounds validity.
+  const occurred = occurrencesOf(w.text, turnAt, offset);
 
   if (action === 'REFINE' && prior !== undefined) {
     // Same fact, more detail: rewrite in place. The earlier wording stays in the decisions, and
@@ -364,6 +368,7 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
       salience: Math.max(prior.salience, a.salience),
       validFrom: startBefore(bounds.validFrom ?? prior.validFrom, to),
       validTo: to,
+      occurred,
       lastConfirmedAt: iso,
       updatedAt: iso,
       source: {
@@ -404,6 +409,7 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
     validFrom,
     validTo,
+    occurred,
     expiredAt: null,
     endReason: null,
     lastConfirmedAt: null,

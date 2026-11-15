@@ -199,8 +199,17 @@ describe('temporalIntent', () => {
   it('temporal.intent-a-bare-date-is-a-keyword-not-as-of', () => {
     expect(temporalIntent('2026-05-16 connection pooling tsup', AT)).toEqual({ mode: 'current' });
     expect(temporalIntent('2026-09-16', AT)).toEqual({ mode: 'current' });
-    // A relative past day needs no preposition.
-    expect(temporalIntent('what did we deploy yesterday', AT).mode).toBe('as-of');
+    // A relative past day needs no preposition. "What did we deploy" asks about an event, so it is
+    // a range to rank by, not an as-of filter.
+    expect(temporalIntent('what did we deploy yesterday', AT)).toEqual({
+      mode: 'current',
+      range: {
+        from: '2026-11-03T00:00:00.000Z',
+        to: '2026-11-04T00:00:00.000Z',
+        precision: 'day',
+      },
+      shape: 'range',
+    });
   });
 
   it('temporal.intent-a-future-date-is-not-as-of', () => {

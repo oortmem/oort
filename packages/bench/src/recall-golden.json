@@ -775,7 +775,13 @@
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-02-08T23:59:59.999Z",
-        "inferred": true
+        "inferred": true,
+        "range": {
+          "from": "2026-02-08T00:00:00.000Z",
+          "to": "2026-02-09T00:00:00.000Z",
+          "precision": "day"
+        },
+        "shape": "state"
       },
       "injected": "a0d0583c42ecdb206926098b0d639aa79f7ef1b1997fffac85c5df8e46f385be"
     },
@@ -832,7 +838,13 @@
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-03-16T23:59:59.999Z",
-        "inferred": true
+        "inferred": true,
+        "range": {
+          "from": "2026-03-16T00:00:00.000Z",
+          "to": "2026-03-17T00:00:00.000Z",
+          "precision": "day"
+        },
+        "shape": "state"
       },
       "injected": "2901661547e83e81b434095ed210056cb1e07aa2f86d7c8acec82846e1d2a479"
     },
@@ -1438,7 +1450,7 @@
         "mode": "current",
         "inferred": true
       },
-      "injected": "315499b393c379a6bb3be2380e8dd01a5949792603251d459bb1058aaa53b5c8"
+      "injected": "d287492916d09f4f717d9e0c5e6165b67799d4a8c8552335e1534ac6e191aeb1"
     },
     {
       "question": "2026-09-04 token footprint",
@@ -1497,7 +1509,7 @@
         "mode": "current",
         "inferred": true
       },
-      "injected": "f7e04203ca9e79398faa00a13e41b5638e55f1609f2fdb7c378ed392b6f4ebba"
+      "injected": "55aa535f0f63b96a4e181eecdd56bbab06fefada5039ae86ebba7ea59823d2d5"
     },
     {
       "question": "2026-03-28 rate class",
@@ -1564,7 +1576,7 @@
         "mode": "current",
         "inferred": true
       },
-      "injected": "9e8c30c2cd9ae54e341c9ad6b3ec2a710dbd5d31278ee883fdd572eb2900d71a"
+      "injected": "ae8b40797b07ad0231ba403b515b7ec1aa19da9ab454e05bebdcf6f12b8760f1"
     },
     {
       "question": "than rather ioredis with migrations schema",
@@ -1683,7 +1695,7 @@
         "mode": "current",
         "inferred": true
       },
-      "injected": "4dbbb40f65722603d0b4b3bf884e1df61720f1135b5be370d40d8fa9938b0bee"
+      "injected": "984336bbfeabcd2c7ee456c6b4bed6fa94e061d04e7fde1c17f15524d55e1074"
     },
     {
       "question": "than rather ioredis with limiting rate",
@@ -1809,7 +1821,7 @@
         "mode": "current",
         "inferred": true
       },
-      "injected": "c9262a7b1f04139d8bf2af0b5e293084aec0764eb94f382744a25ca52bd392c2"
+      "injected": "d03ea0f5becb4d72ce5d40eea219c3ed4c64ad34e42db597b8e8b1bcef318997"
     },
     {
       "question": "which package manager does edge-router-10 use now",
@@ -2086,7 +2098,13 @@
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-02-08T23:59:59.999Z",
-        "inferred": true
+        "inferred": true,
+        "range": {
+          "from": "2026-02-08T00:00:00.000Z",
+          "to": "2026-02-09T00:00:00.000Z",
+          "precision": "day"
+        },
+        "shape": "state"
       },
       "injected": "a0d0583c42ecdb206926098b0d639aa79f7ef1b1997fffac85c5df8e46f385be"
     },
@@ -2146,7 +2164,13 @@
       "temporal": {
         "mode": "as-of",
         "asOf": "2026-03-16T23:59:59.999Z",
-        "inferred": true
+        "inferred": true,
+        "range": {
+          "from": "2026-03-16T00:00:00.000Z",
+          "to": "2026-03-17T00:00:00.000Z",
+          "precision": "day"
+        },
+        "shape": "state"
       },
       "injected": "2901661547e83e81b434095ed210056cb1e07aa2f86d7c8acec82846e1d2a479"
     },
@@ -2311,7 +2335,7 @@
         "mode": "current",
         "inferred": true
       },
-      "injected": "4510d04fac22d0242cf6bd55b3db963e8c84ab66c91e82a52900d7917f575acf"
+      "injected": "06081cde5ebf1105a90ad5c0fca6bcf12abf3af741c027ce695eda0838c8735e"
     },
     {
       "question": "2026-01-21",
@@ -2427,7 +2451,7 @@
         "mode": "current",
         "inferred": true
       },
-      "injected": "cbb28f129749ee7497d235bc3ee24700a5ef1e03eecca3091efd6b57f8b7d20b"
+      "injected": "f3ce4c9c17db239c8ddf0296230d3fc0c35d6878cf9a208d1d8d1b717b5c4f83"
     },
     {
       "question": "2026-06-13",
@@ -2545,7 +2569,7 @@
         "mode": "current",
         "inferred": true
       },
-      "injected": "9d06a454e29423536e9ed49c9e7dfdee2dcba4398c31fc634c90b8c8813b847e"
+      "injected": "2da096dd8f94b9e7367a5b188e03d9709cecdba8cb3ce62d03c9fa61f6c401ef"
     },
     {
       "question": "auth service rollback plan for the billing team",
@@ -2602,7 +2626,7 @@
         "mode": "current",
         "inferred": true
       },
-      "injected": "8a735db144401b7eb6a42cec7e86299e26e55f93268d817247a812334e7d9bdd"
+      "injected": "501816272c61e663a17bb763b6bd3b10e7d70861fc884eb2d66de7cd4d274e62"
     },
     {
       "question": "the incident escalation policy for the notify relay",

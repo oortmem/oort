@@ -147,7 +147,7 @@ describe('lazy chrono (CON-82)', () => {
     });
     expect(cue.chronoLoaded()).toBe(false);
 
-    expect(t.temporalIntent('what did we deploy yesterday', AT).mode).toBe('as-of');
+    expect(t.temporalIntent('what did we deploy yesterday', AT).range?.precision).toBe('day');
     expect(cue.chronoLoaded()).toBe(true);
   });
 

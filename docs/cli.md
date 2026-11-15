@@ -1574,19 +1574,59 @@ transaction time (`createdAt` to `expiredAt`: when Oort believed it). A recall r
 
 Without a flag the mode comes from the query, in code (chrono-node, no model call):
 
-- "on 2 April 2026", "in March" or "yesterday" is as-of the end of that day. The date words are
-  left out of the search. A coming day ("by Friday", "next week") stays current, and a bare date
-  with no "on", "in" or "as of" stays a keyword ("2026-05-16 pooling" finds the memory that
-  mentions it).
+- A past time with a cue ("on 2 April 2026", "in March", "yesterday", "last weekend", "two weeks
+  ago", "the past two months", "last summer", "in 2023", "since March") names a range: the whole
+  day, week, month, season or year it says, not its last instant. What recall does with it depends
+  on the question:
+  - A question about a state then ("which build tool did we use in March", "what was my salary in
+    2023", "as of 2 April") is as-of the end of the range. The date words are left out of the
+    search.
+  - Any other question ("where did I go hiking in March", "what did I buy two weeks ago", "how many
+    weddings did I attend this year") stays current and keeps every word. The range ranks: see
+    [How a time in the query ranks](#how-a-time-in-the-query-ranks). Nothing is filtered out by it.
+  - A coming day ("by Friday", "next week"), the present ("this week", "today") and a bare date
+    with no "on", "in" or "as of" are not a range. A bare date stays a keyword ("2026-05-16
+    pooling" finds the memory that mentions it). "This week", "this month" or "this year" in a
+    question about the past runs from its start to today.
 - A history question, asked as one: "how has X changed", "history of X", "what did X used to
   be", "what was X before". Every word stays in the search. A prompt that only mentions a change
   ("fix the test, the config changed") stays current.
 - "what did we believe … on <day>" is known-at that day.
 
-`--json` reports the view under `temporal` (`inferred: true` when it came from the query). If the
+`--json` reports the view under `temporal` (`inferred: true` when it came from the query, `range`
+and `shape` when the query named a past time). If the
 store reports no view (an older Oort Cloud API), `recall` and `explain` warn on stderr that a
 requested mode may not have been applied. Validity is a filter; recency only breaks ties in the
 ranking.
+
+#### How a time in the query ranks
+
+Each memory carries when what it tells of happened (`occurred`), read in code when it is stored,
+against the time of the turn that said it: "I went hiking last weekend", said on 22 May 2023, is
+20 to 21 May 2023; "we got married on 4 March 2021" is that day; "in 2019" is that year. Each
+time keeps how precise it is (day, week, month, year or span) and where it came from (`explicit`
+for a stated date, `relative` for "last weekend" or "two weeks ago"). Every memory also has the
+day it was said (`mention`). A plan ("I'm going to Japan in March") reads the coming March.
+
+When a question names a range and stays current, recall adds a third list beside the lexical and
+dense searches and fuses all three by reciprocal rank (k = 60):
+
+- The list holds memories the searches found, plus those the store finds by event time (a range
+  read on an index, when the store has one). Each is scored by how much of what it tells of lies
+  in the range (a stated time counts fully, a relative one a little less) and how close it is to
+  the range's middle. A memory with no stated time is placed by when it was said: inside the
+  range it counts a little, before the range not at all (it cannot tell of a time still to come),
+  after it less and less (halving every 30 days). The range is widened a little first: a week by
+  a day, a month by three days, a year by a week.
+- A memory outside the range keeps whatever the other lists give it. The time list only adds.
+- After a rerank, a memory's place is its rerank score times at most 1.1, by how well its time
+  fits. The relevance gate still reads the plain rerank score, so a weak match is not let in by its
+  date.
+
+`recall.timeChannel: false` turns the list off; a question about a state still reads as-of. A
+query with no time in it is ranked exactly as before. Recalled memories that state a time say so:
+`happened 2023-05-20 to 2023-05-21` in the prompt hook's labels, `happened` in MCP `recall`
+results.
 
 A fact can end two ways. **Superseded**: the situation changed, so the old fact gets `validTo`
 (the new fact's start) and `endReason: superseded`. **Corrected**: the old fact was wrong from the

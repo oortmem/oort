@@ -158,6 +158,12 @@ const recall = z
      * Home config only.
      */
     userLinks: z.boolean().default(true),
+    /**
+     * The time channel: a past time read from the query ("last weekend", "in March")
+     * ranks memories by when what they describe happened, as one more fusion list, never a filter.
+     * Off: such a query is ranked by its words alone.
+     */
+    timeChannel: z.boolean().default(true),
   })
   .default({
     lexicalK: 50,
@@ -180,6 +186,7 @@ const recall = z
     sufficientAt: 0.7,
     links: LINKS_DEFAULT,
     userLinks: true,
+    timeChannel: true,
   });
 
 const project = z

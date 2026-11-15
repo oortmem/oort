@@ -95,8 +95,16 @@ const optsFor = (s: Paths, extra: Partial<SqliteStoreOptions> = {}): SqliteStore
   ...extra,
 });
 
-const render = (m: Memory | null) =>
-  m === null ? null : { ...m, embedding: m.embedding === undefined ? null : [...m.embedding] };
+/**
+ * A memory as compared across schema versions. Event time (`occurred`) is read from each memory's
+ * text by the migration to version 10, so it is left out here; `occurrences.test.ts`
+ * checks it.
+ */
+const render = (m: Memory | null) => {
+  if (m === null) return null;
+  const { occurred: _occurred, ...rest } = m;
+  return { ...rest, embedding: m.embedding === undefined ? null : [...m.embedding] };
+};
 
 /** A raw connection, as an older Oort or a tool would open the file: no writer guard. */
 function raw(dbPath: string): Database.Database {
@@ -400,11 +408,11 @@ describe('schema migration 5 to 6', () => {
     await (await openSqliteStore(optsFor(s))).close();
     const db = raw(s.dbPath);
     db.function(WRITER_GUARD, () => 1);
-    db.prepare("UPDATE meta SET value = '10' WHERE key = 'schema_version'").run();
+    db.prepare("UPDATE meta SET value = '11' WHERE key = 'schema_version'").run();
     db.close();
     const before = hashFile(s.dbPath);
     await expect(openSqliteStore(optsFor(s, { vectorIndex: 'binary' }))).rejects.toThrow(
-      /schema version 10 is not supported \(expected 9\)/,
+      /schema version 11 is not supported \(expected 10\)/,
     );
     expect(hashFile(s.dbPath)).toBe(before);
   });
@@ -419,9 +427,9 @@ describe('schema migration 5 to 6', () => {
     try {
       expect(() =>
         db.prepare("UPDATE memories SET salience = 0.9 WHERE id = 'v4-01'").run(),
-      ).toThrow(/no such function: oort_writer_v9/);
+      ).toThrow(/no such function: oort_writer_v10/);
       expect(() => db.prepare("DELETE FROM memories WHERE id = 'v4-01'").run()).toThrow(
-        /no such function: oort_writer_v9/,
+        /no such function: oort_writer_v10/,
       );
       // Reads still work: an older reader sees the same int8 vectors.
       expect(db.prepare('SELECT count(*) AS n FROM memories').get()).toEqual({ n: 37 });

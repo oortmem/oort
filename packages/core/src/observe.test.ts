@@ -223,6 +223,41 @@ describe('observe', () => {
     expect(m?.source.harness).toBe('unknown');
   });
 
+  it('observe.stores-when-it-happened-read-against-the-turns-time', async () => {
+    // The turn is from May 2023, observed later: "last weekend" is that turn's weekend.
+    const { store, deps } = setup(gate(0.9, 0.5), [rec(null, 'ADD')]);
+    const res = await observe(
+      obs('I went hiking with Sam last weekend', '2023-05-22T10:00:00.000Z'),
+      localScope(),
+      deps,
+    );
+    const m = await store.get(TG, res.memoryId ?? '');
+    expect(m?.occurred).toEqual([
+      {
+        from: '2023-05-20T00:00:00.000Z',
+        to: '2023-05-22T00:00:00.000Z',
+        precision: 'span',
+        source: 'relative',
+      },
+      {
+        from: '2023-05-22T00:00:00.000Z',
+        to: '2023-05-23T00:00:00.000Z',
+        precision: 'day',
+        source: 'mention',
+      },
+    ]);
+    // No date in it: only the day it was said.
+    const plain = await observe(obs('auth moved', '2023-05-22T10:00:00.000Z'), localScope(), deps);
+    expect((await store.get(TG, plain.memoryId ?? ''))?.occurred).toEqual([
+      {
+        from: '2023-05-22T00:00:00.000Z',
+        to: '2023-05-23T00:00:00.000Z',
+        precision: 'day',
+        source: 'mention',
+      },
+    ]);
+  });
+
   it('observe.high-salience-is-hot', async () => {
     const { store, deps } = setup(gate(0.9, 0.85), [rec(null, 'ADD')]);
     const res = await observe(obs('auth moved'), localScope(), deps);

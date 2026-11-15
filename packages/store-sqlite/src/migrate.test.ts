@@ -107,8 +107,16 @@ const optsFor = (s: { dbPath: string; coldDir: string }) => ({
   log: () => {},
 });
 
-const render = (m: Memory | null) =>
-  m === null ? null : { ...m, embedding: m.embedding === undefined ? null : [...m.embedding] };
+/**
+ * A memory as compared across schema versions. Event time (`occurred`) is read from each memory's
+ * text by the migration to version 10, so it is left out here; `occurrences.test.ts`
+ * checks it.
+ */
+const render = (m: Memory | null) => {
+  if (m === null) return null;
+  const { occurred: _occurred, ...rest } = m;
+  return { ...rest, embedding: m.embedding === undefined ? null : [...m.embedding] };
+};
 
 /**
  * The grant 0.2.1 read with: the principal's Planet, memories its own agent wrote. Since CON-62 the
@@ -908,7 +916,7 @@ describe('schema migration 4 to 5', () => {
     const s = fresh();
     await (await openSqliteStore(optsFor(s))).close();
     expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
-    expect(SCHEMA_VERSION).toBe(9);
+    expect(SCHEMA_VERSION).toBe(10);
     expect(columns(s.dbPath)).toEqual(['place', 'place_node']);
     expect(hasPlaceTable(s.dbPath)).toBe(true);
   });

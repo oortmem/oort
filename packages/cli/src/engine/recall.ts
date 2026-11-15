@@ -3,6 +3,7 @@ import {
   ScopeDeniedError,
   checkPlace,
   checkSpatialFilter,
+  formatRange,
   isIncludeLevel,
   readableNodes,
   recall,
@@ -11,6 +12,7 @@ import {
   type Grant,
   type IncludeLevel,
   type MemoryStore,
+  type Occurrence,
   type Place,
   type RecallMode,
   type RecallResult,
@@ -193,12 +195,27 @@ export function viewIgnoredWarning(view: TemporalView): string {
   return `the store did not report the time mode, so "${view.mode}" may not have been applied; these may be current facts.`;
 }
 
-/** The temporal view in a few words: `current`, `as-of 2026-04-01`. */
+/**
+ * The temporal view in a few words: `current`, `as-of 2026-04-01`, or with a time the query named
+ * and recall ranked by, `current, ranked by time 2026-03`.
+ */
 export function timeMode(t: RecallResult['temporal']): string {
   // A backend that reports no view (an older cloud API) gets no claim either way.
   if (t === undefined) return 'not reported';
   const at = t.asOf ?? t.knownAt;
-  return at === undefined ? t.mode : `${t.mode} ${at.slice(0, 10)}`;
+  const mode = at === undefined ? t.mode : `${t.mode} ${at.slice(0, 10)}`;
+  return t.mode === 'current' && t.range !== undefined
+    ? `${mode}, ranked by time ${formatRange(t.range)}`
+    : mode;
+}
+
+/**
+ * When a memory says what it tells of happened: up to two of its stated times, as a reader sees
+ * them (`2023-05-20`, `2023-03`), or nothing when it states none.
+ */
+export function happenedOf(m: { occurred?: readonly Occurrence[] }): { happened?: string } {
+  const stated = (m.occurred ?? []).filter((o) => o.source !== 'mention').slice(0, 2);
+  return stated.length === 0 ? {} : { happened: stated.map(formatRange).join(', ') };
 }
 
 /**

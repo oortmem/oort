@@ -27,6 +27,7 @@ import type { MemoryStore, ScopeFilter } from './adapters.js';
 import { GrantError, localGrant, nodeGrant, principalGrant, type Grant } from './grant.js';
 import type { Memory, Scope } from './model.js';
 import type { NearQuery, Place, SpatialFilter } from './place.js';
+import type { Occurrence } from './event-time.js';
 import { localScope } from './scope.js';
 import { isolationViolations, nonInterference } from './isolation.js';
 import {
@@ -2163,6 +2164,151 @@ export function linksConformance(
       // The newest first: 16 explicit links and 20 memories per entity.
       expect(of('explicit').sort()).toEqual(many.slice(-16));
       expect(of('about').sort()).toEqual(many.slice(-20));
+    });
+  });
+}
+
+/**
+ * Event time: the suite a store with `occurrences: true` must pass, on top of
+ * `storeConformance`. `Memory.occurred` round-trips exactly and is checked on write; `occurredIn`
+ * returns the memories with an occurrence overlapping the range, inside the grant and the spatial
+ * filter, stated occurrences first, then nearest the range's middle, then by id, at most k.
+ */
+export function occurrenceConformance(name: string, make: () => Promise<MemoryStore>): void {
+  describe(`store event time: ${name}`, () => {
+    let store: MemoryStore;
+
+    beforeEach(async () => {
+      store = await make();
+    });
+
+    afterEach(async () => {
+      await store.close();
+    });
+
+    const DAY = 86_400_000;
+    const day = (iso: string, days = 1): Occurrence => ({
+      from: `${iso}T00:00:00.000Z`,
+      to: new Date(Date.parse(`${iso}T00:00:00.000Z`) + days * DAY).toISOString(),
+      precision: days === 1 ? 'day' : 'span',
+      source: 'explicit',
+    });
+    const said = (iso: string): Occurrence => ({ ...day(iso), source: 'mention' });
+    const at = (id: string, occurred: Occurrence[] | undefined, extra: Partial<Memory> = {}) =>
+      makeMemory({ id, ...(occurred !== undefined && { occurred }), ...extra });
+    const range = (from: string, to: string) => ({
+      from: `${from}T00:00:00.000Z`,
+      to: `${to}T00:00:00.000Z`,
+    });
+    const read = async (from: string, to: string, k = 50, g: Grant = TG) =>
+      ids(await store.occurredIn!(g, range(from, to), k));
+
+    it('occurrences.store-says-it-keeps-them', () => {
+      expect(store.occurrences).toBe(true);
+      expect(typeof store.occurredIn).toBe('function');
+    });
+
+    it('occurrences.roundtrip-exactly-and-a-rewrite-replaces-them', async () => {
+      const m = at('m', [day('2023-05-20', 2), said('2023-05-22')]);
+      await store.upsert(TG, m);
+      expect(await store.get(TG, 'm')).toEqual(m);
+      expect((await store.list(TG, { validOnly: false }))[0]?.occurred).toEqual(m.occurred);
+      expect(await read('2023-05-21', '2023-05-22')).toEqual(['m']);
+      // Rewritten with other occurrences: only the new ones are read.
+      await store.upsert(TG, at('m', [said('2024-01-01')]));
+      expect(await read('2023-05-01', '2023-06-01')).toEqual([]);
+      expect(await read('2024-01-01', '2024-01-02')).toEqual(['m']);
+      // Rewritten without any: none.
+      await store.upsert(TG, at('m', undefined));
+      expect((await store.get(TG, 'm'))?.occurred).toBeUndefined();
+      expect(await read('2024-01-01', '2024-01-02')).toEqual([]);
+    });
+
+    it('occurrences.are-checked-on-write', async () => {
+      const bad = (occurred: unknown) => ({ ...at('bad', undefined), occurred }) as Memory;
+      for (const o of [
+        'soon',
+        [{ ...day('2023-05-20'), to: '2023-05-19T00:00:00.000Z' }],
+        [{ ...day('2023-05-20'), source: 'guess' }],
+        [{ ...day('2023-05-20'), precision: 'hour' }],
+        [day('2020-01-01', 400)],
+        [{ ...day('2023-05-20'), extra: 1 }],
+      ]) {
+        await expect(store.upsert(TG, bad(o))).rejects.toThrow(RangeError);
+      }
+      await expect(store.upsertMany(TG, [at('ok', [day('2023-01-01')]), bad('x')])).rejects.toThrow(
+        RangeError,
+      );
+      expect(await store.get(TG, 'bad')).toBeNull();
+      expect(await store.get(TG, 'ok')).toBeNull();
+    });
+
+    it('occurrences.a-range-read-returns-overlaps-only', async () => {
+      await store.upsert(TG, at('before', [day('2023-05-19')]));
+      await store.upsert(TG, at('first', [day('2023-05-20')]));
+      await store.upsert(TG, at('last', [day('2023-05-21')]));
+      await store.upsert(TG, at('after', [day('2023-05-22')]));
+      await store.upsert(TG, at('bare', undefined));
+      // `from` inclusive, `to` exclusive, on both sides.
+      expect((await read('2023-05-20', '2023-05-22')).sort()).toEqual(['first', 'last']);
+      expect(await read('2023-05-22', '2023-05-22')).toEqual([]);
+      expect(await read('2023-05-23', '2023-05-30')).toEqual([]);
+    });
+
+    it('occurrences.a-long-occurrence-is-found-from-its-far-end', async () => {
+      // A year-long occurrence overlaps a range near its end: the bounded read still finds it.
+      await store.upsert(TG, at('year', [{ ...day('2022-01-01', 365), precision: 'year' }]));
+      expect(await read('2022-12-30', '2022-12-31')).toEqual(['year']);
+      expect(await read('2023-01-01', '2023-01-02')).toEqual([]);
+    });
+
+    it('occurrences.stated-first-then-nearest-the-middle-then-id-and-k', async () => {
+      await store.upsert(TG, at('m-mid', [said('2023-05-15')]));
+      await store.upsert(TG, at('s-edge', [day('2023-05-02')]));
+      await store.upsert(TG, at('s-mid', [day('2023-05-16')]));
+      await store.upsert(TG, at('s-mid-b', [day('2023-05-16')]));
+      // Its stated occurrence counts, not its mention near the middle.
+      await store.upsert(TG, at('both', [day('2023-05-31'), said('2023-05-16')]));
+      expect(await read('2023-05-01', '2023-06-01')).toEqual([
+        's-mid',
+        's-mid-b',
+        's-edge',
+        'both',
+        'm-mid',
+      ]);
+      expect(await read('2023-05-01', '2023-06-01', 2)).toEqual(['s-mid', 's-mid-b']);
+      const scored = await store.occurredIn!(TG, range('2023-05-01', '2023-06-01'), 50);
+      // Higher score first.
+      for (let i = 1; i < scored.length; i++) {
+        expect(scored[i]!.score).toBeLessThanOrEqual(scored[i - 1]!.score);
+      }
+    });
+
+    it('occurrences.read-inside-the-grant-and-the-spatial-filter', async () => {
+      const other = { ...localScope(), projectId: 'other' };
+      await store.upsert(TG, at('here', [day('2023-05-20')]));
+      await store.upsert(TG, at('there', [day('2023-05-20')], { scope: other }));
+      expect(await read('2023-05-20', '2023-05-21', 50, localGrant(LOCAL))).toEqual(['here']);
+      expect((await read('2023-05-20', '2023-05-21')).sort()).toEqual(['here', 'there']);
+      if (store.spatial === true) {
+        await store.upsert(TG, at('placed', [day('2023-05-20')], { place: { nodeId: 'room:B' } }));
+        const hits = await store.occurredIn!(TG, range('2023-05-20', '2023-05-21'), 50, {
+          spatial: { within: 'room:B' },
+        });
+        expect(ids(hits)).toEqual(['placed']);
+      }
+    });
+
+    it('occurrences.forget-removes-them-and-cold-keeps-them', async () => {
+      await store.upsert(TG, at('gone', [day('2023-05-20')]));
+      await store.forget(TG, 'gone');
+      expect(await read('2023-05-20', '2023-05-21')).toEqual([]);
+      const cold = await seedCold(
+        store,
+        at('cold', [day('2023-05-20')], { embedding: vec(1, 2, 3, 4) }),
+      );
+      expect(await read('2023-05-20', '2023-05-21')).toEqual([cold.id]);
+      expect((await store.get(TG, 'cold'))?.occurred).toEqual(cold.occurred);
     });
   });
 }

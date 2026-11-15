@@ -207,8 +207,8 @@ describe('schema version 8: links', () => {
     const s = fresh();
     await (await openSqliteStore(optsFor(s))).close();
     // Version 9 (CON-159) keeps them as version 8 made them.
-    expect(SCHEMA_VERSION).toBe(9);
-    expect(WRITER_GUARD).toBe('oort_writer_v9');
+    expect(SCHEMA_VERSION).toBe(10);
+    expect(WRITER_GUARD).toBe('oort_writer_v10');
     expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(tableNames(s.dbPath)).toEqual(['memory_entities', 'memory_links', 'nodes']);
     expect(episodeColumns(s.dbPath)).toEqual(['session_id', 'episode_seq']);
@@ -303,10 +303,10 @@ describe('schema version 8: links', () => {
     db.function('oort_writer_v7', () => 1);
     try {
       expect(() => db.prepare("UPDATE memories SET salience = 0.9 WHERE id = 'm1'").run()).toThrow(
-        /no such function: oort_writer_v9/,
+        /no such function: oort_writer_v10/,
       );
       expect(() => db.prepare("DELETE FROM memories WHERE id = 'm1'").run()).toThrow(
-        /no such function: oort_writer_v9/,
+        /no such function: oort_writer_v10/,
       );
     } finally {
       db.close();
