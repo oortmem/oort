@@ -23,12 +23,24 @@ import {
   type ResolvedConfig,
 } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
-import { computeMetrics, type EvalReport, type EvalRow, type RowOutcome } from './eval.js';
+import {
+  computeMetrics,
+  gateOf,
+  hitScore,
+  type EvalReport,
+  type EvalRow,
+  type RowOutcome,
+} from './eval.js';
 import { EMBEDDING_DIMENSION } from './generate.js';
 import { linksOverride, viaOf, type LinksMode } from './links.js';
 import { ALL_SCOPE } from './seed.js';
 import { fakeEmbedder } from './fake-embed.js';
-import { questionResults, runLabel, type QuestionResult } from './per-question.js';
+import {
+  questionResults,
+  runLabel,
+  type GateThresholds,
+  type QuestionResult,
+} from './per-question.js';
 import { verbatimDecider, verbatimWriter, type EntitySource } from './verbatim.js';
 
 export interface Turn {
@@ -195,6 +207,7 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicRun> {
   const sessionIds: string[] = [];
   let turns = 0;
   let scrubbed = 0;
+  let gate: GateThresholds | undefined;
   const docEmbed: Embedder = opts.embed ?? fakeEmbedder(EMBEDDING_DIMENSION);
   for (const [n, h] of set.haystacks.entries()) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-public-'));
@@ -217,6 +230,7 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicRun> {
             ...linksOverride(links, base),
           },
         } as ResolvedConfig;
+        gate = gateOf(config);
         const sessionOf = new Map<string, string>();
         const idOf = new Map<string, string>();
         for (const t of h.turns) {
@@ -257,6 +271,7 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicRun> {
             },
           );
           const returned = r.memories.map((m) => m.id);
+          const scores = r.memories.map(hitScore);
           const ref = (refs: string[]): string[] =>
             refs.flatMap((x) => {
               const id = idOf.get(x);
@@ -272,17 +287,26 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicRun> {
             ids: returned,
             aboveThreshold: returned.length,
             linked: r.memories.filter((m) => viaOf(m) !== undefined).map((m) => m.id),
+            scores,
+            ...(r.adaptiveStop !== undefined && { adaptiveStop: true }),
           });
           groups.push(q.group);
           ids.push(q.id);
           if (q.answerSessions !== undefined && q.abstention !== true) {
             const sessions = sessionsOfRounds(returned, sessionOf);
+            // The scores of the same rounds, so they stay beside their sessions.
+            const sessionScores = scores.filter((_, i) => sessionOf.has(returned[i] as string));
             sessionRows.push({
               question: q.question,
               expectedMemoryIds: q.answerSessions,
               ...(q.staleSessions !== undefined && { notExpectedMemoryIds: q.staleSessions }),
             });
-            sessionOutcomes.push({ ids: sessions, aboveThreshold: sessions.length });
+            sessionOutcomes.push({
+              ids: sessions,
+              aboveThreshold: sessions.length,
+              scores: sessionScores,
+              ...(r.adaptiveStop !== undefined && { adaptiveStop: true }),
+            });
             sessionGroups.push(q.group);
             sessionIds.push(q.id);
           }
@@ -318,12 +342,19 @@ export async function runPublicSet(opts: RunPublicOptions): Promise<PublicRun> {
     }),
     ms: performance.now() - t0,
     perQuestion: [
-      ...questionResults(rows, outcomes, ks, { run, level: 'turn', ids, groups }),
+      ...questionResults(rows, outcomes, ks, {
+        run,
+        level: 'turn',
+        ids,
+        groups,
+        ...(gate !== undefined && { gate }),
+      }),
       ...questionResults(sessionRows, sessionOutcomes, ks, {
         run,
         level: 'session',
         ids: sessionIds,
         groups: sessionGroups,
+        ...(gate !== undefined && { gate }),
       }),
     ],
   };

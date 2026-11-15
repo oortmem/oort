@@ -9,13 +9,19 @@ import {
   resolveConfig,
   type Embedder,
   type MemoryStore,
+  type RecalledMemory,
   type Reranker,
   type ResolvedConfig,
   type ScopeFilter,
 } from '@oortmem/core';
 import { openSqliteStore, sqliteVectorIndex, type VectorIndex } from '@oortmem/store-sqlite';
 import { linksOverride, viaOf, type LinksMode } from './links.js';
-import { questionResults, runLabel, type QuestionResult } from './per-question.js';
+import {
+  questionResults,
+  runLabel,
+  type GateThresholds,
+  type QuestionResult,
+} from './per-question.js';
 
 export const CATEGORIES = [
   'single-fact',
@@ -172,7 +178,35 @@ export interface RowOutcome {
   aboveThreshold: number;
   /** The returned ids a link brought in (`explanation.via`); absent or empty without links. */
   linked?: string[];
+  /** Recall's scores for each of `ids`, in the same order (`per-question.ts`). */
+  scores?: HitScore[];
+  /** True when recall asked the adaptive stop (cold matches beside live ones). */
+  adaptiveStop?: boolean;
 }
+
+/** What recall's relevance gate read for one returned memory (`explanation`). */
+export interface HitScore {
+  rerank?: number;
+  coverage: number;
+  dense?: number;
+  /** A link brought it in. */
+  linked?: boolean;
+}
+
+/** The gate's inputs from a returned memory's explanation. */
+export const hitScore = (m: RecalledMemory): HitScore => ({
+  ...(m.explanation.reranked !== undefined && { rerank: m.explanation.reranked }),
+  coverage: m.explanation.coverage,
+  ...(m.explanation.dense !== undefined && { dense: m.explanation.dense }),
+  ...(viaOf(m) !== undefined && { linked: true }),
+});
+
+/** The gate thresholds a resolved config applies. */
+export const gateOf = (c: ResolvedConfig): GateThresholds => ({
+  rerank: c.recall.minRerankScore,
+  coverage: c.recall.minCoverage,
+  dense: c.recall.minDenseScore,
+});
 
 const mean = (xs: number[]): number | null =>
   xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -627,12 +661,15 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalRun> {
               opts.abstainThreshold === undefined || m.explanation.fused > opts.abstainThreshold,
           ).length,
           linked: r.memories.filter((m) => viaOf(m) !== undefined).map((m) => m.id),
+          scores: r.memories.map(hitScore),
+          ...(r.adaptiveStop !== undefined && { adaptiveStop: true }),
         });
       }
       perQuestion.push(
         ...questionResults(opts.rows, outcomes, ks, {
           run: runLabel({ links, ...(pass !== undefined && { pass }) }),
           level: 'memory',
+          gate: gateOf(config),
         }),
       );
       return {
