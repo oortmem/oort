@@ -320,7 +320,11 @@ is written, against the time of the turn that said it. Each entry is `{ from, to
 source }`: ISO instants in UTC, `from` before `to` and at most 367 days apart, `precision` one of
 `day`, `week`, `month`, `year` or `span`, and `source` one of `explicit` (a stated date),
 `relative` ("last weekend", "two weeks ago") or `mention` (the day it was said, always last). At
-most nine entries. Core's `checkOccurrences` checks a value as a store must on write.
+most nine entries. Core's `checkOccurrences` checks a value as a store must on write, and a store
+refuses a write whose `occurred` fails it. The write path never sends one that would: what Oort
+reads from text keeps only times a store accepts (a year from 0 to 9999, so "5012 BC" adds
+nothing), and `observe` and `oort import` store a memory without event time rather than fail when
+the reading does not hold. An `occurred` a caller sets itself is checked strictly.
 
 A store that sets `occurrences: true` keeps `occurred` as written and has
 `occurredIn(grant, { from, to }, k, opts?)`: the memories in the grant with an occurrence that

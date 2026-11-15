@@ -526,8 +526,14 @@ function findTimes(text: string, ref: number, offset: number, forQuery: boolean)
 }
 
 /** An instant as ISO 8601, or undefined for one that is not a valid date. */
-const isoOf = (t: number): string | undefined =>
-  Number.isFinite(t) && Math.abs(t) <= 8.64e15 ? new Date(t).toISOString() : undefined;
+function isoOf(t: number): string | undefined {
+  if (!Number.isFinite(t) || Math.abs(t) > 8.64e15) return undefined;
+  const d = new Date(t);
+  // Years 0 to 9999 only: outside them ISO 8601 needs a sign and six digits ("+012345-…"),
+  // which no store accepts.
+  const y = d.getUTCFullYear();
+  return y >= 0 && y <= 9999 ? d.toISOString() : undefined;
+}
 
 /**
  * When the events `text` describes happened, resolved against `at` (the turn's time) in `offset`
@@ -546,6 +552,7 @@ export function occurrencesOf(text: string, written: Date, offset = 0): Occurren
   // A time that is not a date (an unreadable turn time) places nothing.
   if (mFrom === undefined || mTo === undefined) return [];
   const mention: Occurrence = { from: mFrom, to: mTo, precision: 'day', source: 'mention' };
+  if (occurrenceProblem(mention) !== undefined) return [];
   let found: Found[];
   try {
     found = findTimes(text.slice(0, MAX_TIME_TEXT), ref, offset, false).filter(
@@ -564,6 +571,8 @@ export function occurrencesOf(text: string, written: Date, offset = 0): Occurren
     const oTo = isoOf(f.to);
     if (oFrom === undefined || oTo === undefined) continue;
     const o: Occurrence = { from: oFrom, to: oTo, precision: f.precision, source: f.source };
+    // Only what a store accepts: the same rule as `checkOccurrences`.
+    if (occurrenceProblem(o) !== undefined) continue;
     const key = `${o.from}|${o.to}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -661,30 +670,36 @@ export function checkOccurrences(raw: unknown): Occurrence[] {
     throw new RangeError(`occurred holds at most ${MAX_STATED_OCCURRENCES + 1} entries`);
   }
   return raw.map((o: unknown, i): Occurrence => {
-    if (typeof o !== 'object' || o === null)
-      throw new RangeError(`occurred[${i}] must be an object`);
-    const { from, to, precision, source, ...extra } = o as Record<string, unknown>;
-    if (Object.keys(extra).length > 0) {
-      throw new RangeError(`occurred[${i}] has unknown field ${Object.keys(extra)[0]}`);
-    }
-    if (typeof from !== 'string' || !ISO_INSTANT.test(from) || Number.isNaN(Date.parse(from))) {
-      throw new RangeError(`occurred[${i}].from must be an ISO instant`);
-    }
-    if (typeof to !== 'string' || !ISO_INSTANT.test(to) || Number.isNaN(Date.parse(to))) {
-      throw new RangeError(`occurred[${i}].to must be an ISO instant`);
-    }
-    const span = Date.parse(to) - Date.parse(from);
-    if (!(span > 0) || span > MAX_OCCURRENCE_DAYS * DAY_MS) {
-      throw new RangeError(
-        `occurred[${i}] must end after it starts, at most ${MAX_OCCURRENCE_DAYS} days later`,
-      );
-    }
-    if (!PRECISIONS.includes(precision as TimePrecision)) {
-      throw new RangeError(`occurred[${i}].precision must be one of ${PRECISIONS.join(', ')}`);
-    }
-    if (!SOURCES.includes(source as OccurrenceSource)) {
-      throw new RangeError(`occurred[${i}].source must be one of ${SOURCES.join(', ')}`);
-    }
-    return { from, to, precision: precision as TimePrecision, source: source as OccurrenceSource };
+    const problem = occurrenceProblem(o);
+    if (problem !== undefined) throw new RangeError(`occurred[${i}]${problem}`);
+    return o as Occurrence;
   });
+}
+
+/**
+ * What is wrong with `o` as one occurrence (` must be an object`, `.from must be an ISO
+ * instant`, …), or undefined when a store accepts it. The one rule `checkOccurrences` applies to
+ * what a caller writes and `occurrencesOf` applies to what it reads from text.
+ */
+function occurrenceProblem(o: unknown): string | undefined {
+  if (typeof o !== 'object' || o === null || Array.isArray(o)) return ' must be an object';
+  const { from, to, precision, source, ...extra } = o as Record<string, unknown>;
+  if (Object.keys(extra).length > 0) return ` has unknown field ${Object.keys(extra)[0]}`;
+  if (typeof from !== 'string' || !ISO_INSTANT.test(from) || Number.isNaN(Date.parse(from))) {
+    return '.from must be an ISO instant';
+  }
+  if (typeof to !== 'string' || !ISO_INSTANT.test(to) || Number.isNaN(Date.parse(to))) {
+    return '.to must be an ISO instant';
+  }
+  const span = Date.parse(to) - Date.parse(from);
+  if (!(span > 0) || span > MAX_OCCURRENCE_DAYS * DAY_MS) {
+    return ` must end after it starts, at most ${MAX_OCCURRENCE_DAYS} days later`;
+  }
+  if (!PRECISIONS.includes(precision as TimePrecision)) {
+    return `.precision must be one of ${PRECISIONS.join(', ')}`;
+  }
+  if (!SOURCES.includes(source as OccurrenceSource)) {
+    return `.source must be one of ${SOURCES.join(', ')}`;
+  }
+  return undefined;
 }

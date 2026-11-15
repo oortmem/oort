@@ -274,3 +274,44 @@ describe('cost on long text', () => {
     expect(queryRange('what did I do last weekend', new Date(Number.NaN))).toBeUndefined();
   });
 });
+
+describe('only what a store accepts', () => {
+  // Found in LongMemEval_S haystacks: a year before year 0 has no plain ISO 8601 form
+  // ("-005012-06-12T…"), and a store refused the whole write.
+  const cases: [string, string][] = [
+    [
+      'Some thinkers tended to agree upon the date of June 12, 5012 BC at noon, as the time for Creation.',
+      '2023-05-21T05:21:00.000Z',
+    ],
+    [
+      'The first cities emerged in Mesopotamia about 5000 or 6000 years ago.',
+      '2023-05-27T18:50:00.000Z',
+    ],
+  ];
+  for (const [text, at] of cases) {
+    it(`valid.${text.slice(0, 40)}`, () => {
+      const o = occurrencesOf(text, new Date(at));
+      expect(() => checkOccurrences(o)).not.toThrow();
+      expect(o.at(-1)?.source).toBe('mention');
+      for (const x of o) expect(x.from).toMatch(/^\d{4}-/);
+    });
+  }
+
+  it('valid.a-turn-time-outside-years-0-to-9999-places-nothing', () => {
+    expect(occurrencesOf('noted', new Date('+012345-01-01T00:00:00.000Z'))).toEqual([]);
+    expect(occurrencesOf('noted', new Date(Date.UTC(-1, 0, 1)))).toEqual([]);
+  });
+
+  it('valid.a-caller-who-writes-one-is-still-refused', () => {
+    expect(() =>
+      checkOccurrences([
+        {
+          from: '-005012-06-12T00:00:00.000Z',
+          to: '-005012-06-13T00:00:00.000Z',
+          precision: 'day',
+          source: 'explicit',
+        },
+      ]),
+    ).toThrow(/occurred\[0\]\.from must be an ISO instant/);
+  });
+});
