@@ -1,6 +1,7 @@
 /**
  * `pnpm eval --set locomo|longmemeval` (CON-147): see `eval/public/README.md`.
  */
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +14,7 @@ import {
   localReranker,
 } from '@oortmem/local-models';
 import { voyageReranker } from '@oortmem/rerank-voyage';
+import { anthropicWriter, buildWriterPrompt, WRITER_SYSTEM_PROMPT } from '@oortmem/writer';
 import {
   CACHE_DIR,
   checkDataset,
@@ -22,6 +24,7 @@ import {
   type DatasetName,
 } from './datasets.js';
 import { cachingEmbedder, type CachingEmbedder } from './embed-cache.js';
+import { writerEntities, type CachingEntities } from './entities.js';
 import { cell, renderReport } from './eval.js';
 import { fakeEmbedder } from './fake-embed.js';
 import { EMBEDDING_DIMENSION } from './generate.js';
@@ -35,7 +38,14 @@ import {
   tokenizerCounter,
   type TokenCounter,
 } from './public-plan.js';
-import { runPublicSet, type PublicReport, type PublicSet } from './public-sets.js';
+import { outputPaths, writeQuestionsJsonl, type QuestionResult } from './per-question.js';
+import {
+  runPublicSet,
+  SPEEDS,
+  type PublicReport,
+  type PublicSet,
+  type Speed,
+} from './public-sets.js';
 
 export interface PublicArgs {
   set: DatasetName;
@@ -49,10 +59,16 @@ export interface PublicArgs {
   rerank: string;
   limit?: string;
   links: string;
+  /** `full`, `fast`, a comma list of both, or `grid` (both). Default `full`. */
+  speed?: string;
+  /** `none` (default) or `writer[:model]`: entities for each stored turn (`entities.ts`). */
+  entities?: string;
   noGate: boolean;
   k: string;
   json: boolean;
   out?: string;
+  /** Where the per-question lines go; default beside `out` (`<out>.questions.jsonl`). */
+  questions?: string;
   home?: string;
   tokenizer?: string;
   cacheDir?: string;
@@ -65,6 +81,55 @@ const VERSION = (
     version: string;
   }
 ).version;
+
+/**
+ * A model name as a cache file name: anything but letters, digits, `_`, `.` and `-` becomes `_`,
+ * so a name like `../x` never leaves the cache directory. An empty name is refused.
+ */
+export function cacheFileName(model: string): string {
+  if (model === '') throw new Error('empty model name');
+  return model.replace(/[^\w.-]/g, '_');
+}
+
+/**
+ * The writer's prompts as a short hash: the system prompt and the message it builds for a turn.
+ * Part of the entity cache key, so a changed prompt never reads answers written under the old one.
+ */
+export function writerPromptVersion(): string {
+  const probe = buildWriterPrompt(
+    {
+      userText: 'u',
+      assistantText: 'a',
+      toolSummaries: [],
+      sessionId: 's',
+      turnRef: 't',
+      at: '2024-01-01T00:00:00.000Z',
+    },
+    'ADD',
+  );
+  return createHash('sha256')
+    .update(`${WRITER_SYSTEM_PROMPT}\0${probe}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/** `kind[:model]` from a flag; `kind:` with nothing after it is refused. */
+function kindAndModel(flag: string, raw: string): [string, string | undefined] {
+  const [kind, model] = raw.split(/:(.*)/s) as [string, string | undefined];
+  if (model === '') throw new Error(`--${flag} ${raw}: empty model name`);
+  return [kind, model];
+}
+
+/** Parses `--speed`: a comma list of `full` and `fast`, or `grid` for both. */
+export function parseSpeeds(raw: string | undefined): Speed[] {
+  if (raw === undefined) return ['full'];
+  if (raw.trim() === 'grid') return [...SPEEDS];
+  const items = raw.split(',').map((s) => s.trim());
+  const bad = items.filter((s) => !(SPEEDS as readonly string[]).includes(s));
+  if (bad.length > 0 || items.length === 0)
+    throw new Error(`--speed takes ${SPEEDS.join(', ')} or grid, got "${raw}"`);
+  return [...new Set(items)] as Speed[];
+}
 
 /**
  * `limit` items spread evenly through `xs` (the first, then every `xs.length / limit`-th), so a
@@ -84,23 +149,36 @@ export function loadSet(name: DatasetName, file: string, limit?: number): Public
 interface Models {
   embed?: CachingEmbedder | Embedder;
   rerank?: Reranker;
+  entities?: CachingEntities;
   embedLabel: string;
   rerankLabel: string;
-  paid: { embed?: string; rerank?: string };
+  entitiesLabel: string;
+  paid: { embed?: string; rerank?: string; writer?: string };
   /** For a plan: the embedding cache of the paid model, to count what is already embedded. */
   planCache?: CachingEmbedder;
+  /** For a plan: the entity cache of the writer model. */
+  planEntities?: CachingEntities;
 }
 
 function models(a: PublicArgs, cacheDir: string): Models {
   const home = a.home ?? resolveHome();
   const defaults = resolveConfig(home, { OORT_HOME: home }, { projectConfig: false });
-  const [embedKind, embedModel] = a.embed.split(/:(.*)/s) as [string, string | undefined];
-  const [rerankKind, rerankModel] = a.rerank.split(/:(.*)/s) as [string, string | undefined];
-  const out: Models = { embedLabel: 'none (lexical only)', rerankLabel: 'none', paid: {} };
+  const [embedKind, embedModel] = kindAndModel('embed', a.embed);
+  const [rerankKind, rerankModel] = kindAndModel('rerank', a.rerank);
+  const out: Models = {
+    embedLabel: 'none (lexical only)',
+    rerankLabel: 'none',
+    entitiesLabel: 'none',
+    paid: {},
+  };
   const cached = (base: Embedder, model: string): CachingEmbedder =>
     cachingEmbedder(base, {
       model: `${model}@${EMBEDDING_DIMENSION}`,
-      file: path.join(cacheDir, 'embeddings', `${model}-${EMBEDDING_DIMENSION}.sqlite`),
+      file: path.join(
+        cacheDir,
+        'embeddings',
+        `${cacheFileName(model)}-${EMBEDDING_DIMENSION}.sqlite`,
+      ),
     });
   if (embedKind === 'fake') {
     out.embed = fakeEmbedder(EMBEDDING_DIMENSION);
@@ -137,6 +215,28 @@ function models(a: PublicArgs, cacheDir: string): Models {
     out.rerankLabel = `voyage ${model}`;
     if (a.yes && !a.plan) out.rerank = voyageReranker({ model });
   } else if (rerankKind !== 'none') throw new Error(`unknown --rerank "${a.rerank}"`);
+  const [entitiesKind, writerModel] = kindAndModel('entities', a.entities ?? 'none');
+  if (entitiesKind === 'writer') {
+    const model = writerModel ?? defaults.writer.model;
+    out.paid.writer = model;
+    out.entitiesLabel = `writer ${model}`;
+    const file = path.join(cacheDir, 'entities', `${cacheFileName(model)}.sqlite`);
+    const version = writerPromptVersion();
+    if (a.yes && !a.plan) {
+      out.entities = writerEntities(anthropicWriter({ model }), { model, version, file });
+    } else {
+      out.planEntities = writerEntities(
+        {
+          write: async () => {
+            throw new Error('a plan never writes');
+          },
+        },
+        { model, version, file },
+      );
+    }
+  } else if (entitiesKind !== 'none') {
+    throw new Error(`unknown --entities "${a.entities}" (none or writer[:model])`);
+  }
   return out;
 }
 
@@ -152,6 +252,8 @@ export function renderPublic(r: PublicReport, header: string[]): string {
     lines.push('', 'Recall over answer sessions:', '', renderReport(r.session));
   }
   lines.push(
+    '',
+    'Stale above current: of the questions with an outdated and a current answer, the share where the outdated one ranks higher (eval/public/README.md).',
     '',
     `${r.haystacks} haystacks, ${r.turns} turns observed (${r.scrubbed} dropped by the secret scrubber); ${r.droppedQuestions} questions without a readable evidence turn left out, ${r.droppedEvidence} unreadable evidence references dropped. ${(r.ms / 60_000).toFixed(1)} min.`,
   );
@@ -169,6 +271,8 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
   if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) {
     throw new Error('--limit must be a positive integer');
   }
+  // Checked before anything runs: a paid run must not end by overwriting its own totals.
+  const { questions: questionsFile } = outputPaths(a.out, a.questions);
   if (a.file !== undefined && !a.unpinned) {
     log(
       `refusing ${a.file}: a file given by path runs only with --unpinned (its numbers are then recorded as unpinned). Use --fetch for the pinned revision.`,
@@ -195,8 +299,15 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
     log(`warning: ${file} has SHA-256 ${check.sha256}, not the recorded ${src.sha256}`);
   }
   const set = loadSet(a.set, file, limit);
+  const speeds = parseSpeeds(a.speed);
+  const linkModes = linkModesFor(a.links);
   const m = models(a, cacheDir);
-  const paid = m.paid.embed !== undefined || m.paid.rerank !== undefined;
+  // A fast run never reranks: a reranker only costs when some run is full.
+  const reranks = speeds.includes('full') ? linkModes.length : 0;
+  const paid =
+    m.paid.embed !== undefined ||
+    (m.paid.rerank !== undefined && reranks > 0) ||
+    m.paid.writer !== undefined;
   if (a.plan || (paid && !a.yes)) {
     const tokens = await counter(a, cacheDir);
     const defaults = resolveConfig(cacheDir, { OORT_HOME: cacheDir }, { projectConfig: false });
@@ -204,12 +315,18 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
       ...(m.paid.embed !== undefined && { embedModel: m.paid.embed }),
       ...(m.paid.rerank !== undefined && { rerankModel: m.paid.rerank }),
       rerankK: Math.max(defaults.recall.rerankK, ...ks),
+      rerankRuns: reranks,
       tokens,
       ...(m.planCache !== undefined && {
         cached: (t: string) => (m.planCache as CachingEmbedder).has(t, 'document'),
       }),
+      ...(m.paid.writer !== undefined && { writerModel: m.paid.writer }),
+      ...(m.planEntities !== undefined && {
+        writerCached: (t: string) => (m.planEntities as CachingEntities).has(t),
+      }),
     });
     m.planCache?.close();
+    m.planEntities?.close();
     process.stdout.write(`${a.json ? JSON.stringify(plan, null, 2) : renderPlan(plan)}\n`);
     if (!a.plan) {
       log('paid models need --yes after reading the plan above: nothing was sent');
@@ -218,22 +335,28 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
     return 0;
   }
   const reports: PublicReport[] = [];
+  const perQuestion: QuestionResult[] = [];
   try {
-    for (const links of linkModesFor(a.links)) {
-      reports.push(
-        await runPublicSet({
+    for (const links of linkModes) {
+      for (const speed of speeds) {
+        const { perQuestion: lines, ...report } = await runPublicSet({
           set,
           ks,
           links,
+          speed,
           log,
           ...(a.noGate && { gate: false }),
           ...(m.embed !== undefined && { embed: m.embed }),
           ...(m.rerank !== undefined && { rerank: m.rerank }),
-        }),
-      );
+          ...(m.entities !== undefined && { entities: m.entities }),
+        });
+        reports.push(report);
+        perQuestion.push(...lines);
+      }
     }
   } finally {
     if (m.embed !== undefined && 'close' in m.embed) m.embed.close();
+    m.entities?.close();
   }
   const meta = {
     oort: VERSION,
@@ -246,12 +369,18 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
     },
     embed: m.embedLabel,
     rerank: m.rerankLabel,
+    entities: m.entitiesLabel,
     gate: !a.noGate,
     limit: limit ?? null,
     ...(m.embed !== undefined && 'usage' in m.embed && { embedUsage: m.embed.usage() }),
+    ...(m.entities !== undefined && { entityUsage: m.entities.usage() }),
   };
-  const json = `${JSON.stringify({ ...meta, runs: reports }, null, 2)}\n`;
+  const json = `${JSON.stringify({ ...meta, ...(questionsFile !== undefined && { questions: path.basename(questionsFile) }), runs: reports }, null, 2)}\n`;
   if (a.out !== undefined) fs.writeFileSync(a.out, json);
+  if (questionsFile !== undefined) {
+    writeQuestionsJsonl(questionsFile, perQuestion);
+    log(`per-question results: ${questionsFile}`);
+  }
   if (a.json) {
     process.stdout.write(json);
   } else {
@@ -259,7 +388,7 @@ export async function publicMain(a: PublicArgs, log: (m: string) => void): Promi
       process.stdout.write(
         `${renderPublic(r, [
           `${src.name}, ${src.revision}, SHA-256 ${check.sha256}${check.pinned ? '' : ' (not the pinned revision)'}.`,
-          `Oort bench ${VERSION}; embed ${m.embedLabel}; rerank ${m.rerankLabel}; relevance gate ${a.noGate ? 'off' : 'on'}; links ${r.links}.`,
+          `Oort bench ${VERSION}; embed ${m.embedLabel}; rerank ${r.speed === 'fast' ? 'none (speed fast)' : m.rerankLabel}; entities ${m.entitiesLabel}; relevance gate ${a.noGate ? 'off' : 'on'}; links ${r.links}; speed ${r.speed}.`,
         ])}\n\n`,
       );
     }

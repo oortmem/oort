@@ -24,6 +24,7 @@
     "@oortmem/local-models": "workspace:*",
     "@oortmem/rerank-voyage": "workspace:*",
     "@oortmem/store-sqlite": "workspace:*",
+    "@oortmem/writer": "workspace:*",
     "better-sqlite3": "13.0.3"
   },
   "devDependencies": {
