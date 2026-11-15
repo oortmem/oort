@@ -1661,9 +1661,11 @@ For a split question:
   reranker's best. A note about one of the two things answers the whole question only in part,
   so the reranker scores it low even when it is exactly the evidence asked for.
 - **Relevance gate.** A part's best match passes the gate when it passes for the whole question,
-  or when it passes against its own part: it holds at least `minCoverage` of the part's words, or
-  its vector similarity to the part is at least `minDenseScore`. A match that does neither is
-  still dropped. Every other memory faces the gate as before.
+  or when it passes against its own part: it holds at least `minCoverage` of the part's words and
+  at least two of them, or its vector similarity to the part is at least `minDenseScore`. So a
+  part of one word ("bus") never lets a memory in on that word alone. With a reranker, the part's
+  test applies only when the memory's rerank score is at least half of `minRerankScore`. A match
+  that passes neither way is dropped. Every other memory faces the gate as before.
 
 The same rules run in `fast` mode (the prompt hook's default: no reranker) and in `full` mode.
 `oort explain` shows the parts in its header (`parts: 1 "buy standing desk", 2 "buy ergonomic

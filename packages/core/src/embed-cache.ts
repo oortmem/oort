@@ -82,12 +82,14 @@ export function cachingEmbedder(
         missing.map((i) => texts[i] as string),
         kind,
       );
-      for (const [j, i] of missing.entries()) {
-        const v = fresh[j];
-        if (v === undefined) continue;
-        out[i] = v;
-        await cache.set(keys[i] as string, v).catch(() => {});
-      }
+      await Promise.all(
+        missing.map((i, j) => {
+          const v = fresh[j];
+          if (v === undefined) return undefined;
+          out[i] = v;
+          return cache.set(keys[i] as string, v).catch(() => {});
+        }),
+      );
       if (missing.length === texts.length) return fresh;
       return out.map((v) => (v === undefined ? v : Int8Array.from(v))) as Int8Array[];
     },

@@ -33,6 +33,18 @@ export function subQueries(text: string): string[] | undefined {
 
 /** The most parts a question is split into; a longer list is not a two-event question. */
 export const MAX_SUB_QUERIES = 4;
+/**
+ * A part's best match may pass the relevance gate on its part (and not on the whole question)
+ * only with a rerank score of at least this share of `recall.minRerankScore`, when it has one: a
+ * note about one of two things scores lower against the whole question than the evidence for
+ * both, but not far below the threshold.
+ */
+export const PART_RERANK_FLOOR = 0.5;
+/**
+ * The informative words of its part a part's best match must hold to pass the gate on words: a
+ * part of one word ("bus") never passes on that word alone, only on closeness to the part.
+ */
+export const PART_MIN_WORDS = 2;
 /** Longer texts are prompts with context, not questions about events. */
 const MAX_CHARS = 400;
 /** The most words in one part. */

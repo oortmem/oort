@@ -42,7 +42,7 @@ import {
   type SpatialFilter,
 } from './place.js';
 import { temporalIntent, type RecallMode } from './temporal.js';
-import { subQueries } from './subqueries.js';
+import { PART_MIN_WORDS, PART_RERANK_FLOOR, subQueries } from './subqueries.js';
 import { isStale, lastConfirmed } from './volatile.js';
 import {
   CONFIDENT_COVERAGE,
@@ -611,8 +611,10 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   };
   // A part's best match is judged against its part as well: it is about one of the things
   // asked, so it covers few of the whole question's words and a reranker scores it low against
-  // the whole. It passes on the part's words or its closeness to the part, at the same
-  // thresholds; a match that is neither is still dropped.
+  // the whole. It passes on the part's words (at least `minCoverage` of them, and at least
+  // PART_MIN_WORDS) or on its closeness to the part (`minDenseScore`), and, when reranked, only
+  // with a score of at least PART_RERANK_FLOOR × `minRerankScore`. One shared word, or a score
+  // far below the threshold, never lets a memory in.
   const partOf = new Map<string, number>();
   heads.forEach((id, p) => {
     if (id !== undefined && !partOf.has(id)) partOf.set(id, p);
@@ -624,9 +626,16 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   const relevantToPart = (id: string): boolean => {
     const p = partOf.get(id);
     if (p === undefined) return false;
+    const rs = rerankScores.get(id);
+    if (rs !== undefined && rs < minRerankScore * PART_RERANK_FLOOR) return false;
     if (minCoverage === 0) return true;
     const m = memories.get(id);
-    if (m !== undefined && queryCoverage(partTokens[p]!, m) >= minCoverage) return true;
+    if (m !== undefined) {
+      const words = partTokens[p]!;
+      const doc = informativeTokens([m.text, m.stub, ...m.entities].join(' '));
+      const held = [...words].filter((t) => doc.has(t)).length;
+      if (held >= PART_MIN_WORDS && queryCoverage(words, m) >= minCoverage) return true;
+    }
     return minDenseScore > 0 && (partDense[p]!.get(id) ?? -1) >= minDenseScore;
   };
   let kept = candidates.filter((f) => relevant(f.id) || relevantToPart(f.id));
