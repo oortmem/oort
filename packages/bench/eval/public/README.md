@@ -47,6 +47,9 @@ pnpm eval --set longmemeval --links off,all --speed grid --out lme.json
                                                    # each links mode with and without the reranker;
                                                    # per-question lines in lme.questions.jsonl
 pnpm eval compare lme.questions.jsonl lme.questions.jsonl --run-a links=off,speed=full --run-b links=all,speed=full
+pnpm eval --set longmemeval --embed voyage --rerank voyage --no-gate --plan   # what a gate-off run sends
+pnpm eval --set longmemeval --embed voyage --rerank voyage --no-gate --yes --out lme-open.json
+pnpm eval sweep-gate lme-open.questions.jsonl      # replay the relevance gate offline (../format.md)
 pnpm eval --set locomo --fetch                     # local only: publish no LoCoMo numbers
 pnpm eval --set longmemeval ./other.json --unpinned  # a file by path, recorded as unpinned
 ```
@@ -85,6 +88,16 @@ with its own table and its own per-question lines, labelled `links=<mode>,speed=
 session (and of the outdated ones for `knowledge-update`), and the question's share of each
 metric. `pnpm eval compare` reads two such files and prints, per metric and question type, the
 paired difference with a seeded 95% bootstrap interval and an exact sign test (`../format.md`).
+
+**Choosing the relevance gate's threshold (`sweep-gate`).** Each per-question line also carries
+recall's scores for every returned round (`scores`: rerank score, word coverage, dense similarity,
+and which rounds are expected). From one run with `--no-gate --links off`, `pnpm eval sweep-gate`
+replays the gate at every candidate threshold, a fixed per-round threshold as recall applies
+today, a top-score threshold and a margin between the two best scores, and prints turn and
+session recall@10 and the abstention false-positive rate for each, against today's default with
+paired 95% bootstrap intervals (`../format.md`). It calls no model, so the paid run is made once.
+Only `--speed full` with a reranker gives rerank scores to sweep: in a `fast` run the gate is the
+word-coverage test, and every rerank threshold gives the same result.
 
 **Paid models.** `--embed voyage` or `--rerank voyage` without `--yes` prints the plan and exits
 with code 2, sending nothing. `--plan` prints it and exits 0. The plan counts, exactly, the
@@ -176,6 +189,6 @@ Limits worth knowing:
 - `observe` caps a turn at 32 KB and the local embedder reads the first 512 tokens of it; long
   assistant replies in LongMemEval are cut by both.
 - Recall's relevance gate drops weak matches, so recall@10 can be lower than "top 10 of a ranked
-  list" would be. `--no-gate` shows the difference.
+  list" would be. `--no-gate` shows the difference, and `sweep-gate` shows it at every threshold.
 
 Baselines are recorded in `../../baselines/`.

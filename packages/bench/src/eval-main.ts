@@ -15,6 +15,7 @@ import { voyageReranker } from '@oortmem/rerank-voyage';
 import { openSqliteStore, VECTOR_INDEXES, type VectorIndex } from '@oortmem/store-sqlite';
 import { belowMinRecall10, loadEvalRows, renderRun, runEval, type EvalRun } from './eval.js';
 import { compareFiles } from './compare.js';
+import { sweepFile } from './gate-sweep.js';
 import { linkModesFor } from './links.js';
 import { outputPaths, writeQuestionsJsonl } from './per-question.js';
 import { publicMain } from './public-main.js';
@@ -52,6 +53,9 @@ const USAGE = `usage: pnpm eval <file.jsonl> [--store <path>] [--cold-dir <dir>]
        pnpm eval compare <a.questions.jsonl> <b.questions.jsonl> [--run-a <run>] [--run-b <run>]
                  [--resamples 10000] [--seed 1] [--json]
                  paired bootstrap interval and sign test per metric and group (eval/format.md)
+       pnpm eval sweep-gate <run.questions.jsonl> [--run <run>] [--step 0.05]
+                 [--margins 0.02,0.05,0.1,0.2] [--resamples 10000] [--seed 1] [--json]
+                 replays the relevance gate at many thresholds from a --no-gate run (eval/format.md)
 
 Runs recall for each row against a temp copy of the store (the live store is never written).`;
 
@@ -85,6 +89,9 @@ async function main(): Promise<number> {
       questions: { type: 'string' },
       'run-a': { type: 'string' },
       'run-b': { type: 'string' },
+      run: { type: 'string' },
+      step: { type: 'string' },
+      margins: { type: 'string' },
       resamples: { type: 'string' },
       seed: { type: 'string' },
       set: { type: 'string' },
@@ -108,19 +115,45 @@ async function main(): Promise<number> {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
+  const int = (raw: string | undefined, name: string): number | undefined => {
+    if (raw === undefined) return undefined;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 0) throw new Error(`--${name} must be a whole number`);
+    return n;
+  };
+  const resamples = int(values.resamples, 'resamples');
+  if (resamples === 0) throw new Error('--resamples must be at least 1');
+  const seed = int(values.seed, 'seed');
+  if (positionals[0] === 'sweep-gate') {
+    const [, file, ...extra] = positionals;
+    if (file === undefined || extra.length > 0)
+      throw new Error(`sweep-gate takes one per-question file\n${USAGE}`);
+    const fraction = (raw: string, name: string): number => {
+      const n = Number(raw.trim());
+      if (raw.trim() === '' || !(n >= 0 && n < 1))
+        throw new Error(`--${name}: ${raw} is not in 0..1`);
+      return n;
+    };
+    const step = values.step !== undefined ? fraction(values.step, 'step') : undefined;
+    if (step === 0) throw new Error('--step must be above 0');
+    process.stdout.write(
+      `${sweepFile(fromUser(file), {
+        ...(values.run !== undefined && { run: values.run }),
+        ...(step !== undefined && { step }),
+        ...(values.margins !== undefined && {
+          margins: values.margins.split(',').map((m) => fraction(m, 'margins')),
+        }),
+        ...(resamples !== undefined && { resamples }),
+        ...(seed !== undefined && { seed }),
+        json: values.json,
+      })}\n`,
+    );
+    return 0;
+  }
   if (positionals[0] === 'compare') {
     const [, a, b, ...extra] = positionals;
     if (a === undefined || b === undefined || extra.length > 0)
       throw new Error(`compare takes two per-question files\n${USAGE}`);
-    const int = (raw: string | undefined, name: string): number | undefined => {
-      if (raw === undefined) return undefined;
-      const n = Number(raw);
-      if (!Number.isInteger(n) || n < 0) throw new Error(`--${name} must be a whole number`);
-      return n;
-    };
-    const resamples = int(values.resamples, 'resamples');
-    if (resamples === 0) throw new Error('--resamples must be at least 1');
-    const seed = int(values.seed, 'seed');
     process.stdout.write(
       `${compareFiles(fromUser(a), fromUser(b), {
         ...(values['run-a'] !== undefined && { runA: values['run-a'] }),

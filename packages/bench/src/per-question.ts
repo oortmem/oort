@@ -7,6 +7,11 @@
  * how many cleared the abstention threshold, and the link-admitted memories in the top 10. It
  * also carries the question's own share of each mean metric (`metrics`), computed by the same
  * `scoreRow` the totals use, so the mean of a metric over a run's lines is that run's total.
+ *
+ * When recall's own scores are at hand (`RowOutcome.scores`), each line also carries them per
+ * returned memory (`scores`): the rerank score, word coverage and dense similarity recall's
+ * relevance gate reads, and which returned memories were expected. That is enough to replay the
+ * gate at another threshold offline (`gate-sweep.ts`).
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -38,6 +43,55 @@ export interface QuestionResult {
    * k, `mrr` (reciprocal rank in the top 10), `staleLeak`, `staleAboveCurrent`, `abstainFp`.
    */
   metrics: Record<string, number | null>;
+  /** Recall's scores for each returned memory (`QuestionScores`); absent in older files. */
+  scores?: QuestionScores;
+}
+
+/** The thresholds of recall's relevance gate in a run; all 0 with the gate off (`--no-gate`). */
+export interface GateThresholds {
+  /** `recall.minRerankScore`. */
+  rerank: number;
+  /** `recall.minCoverage`. */
+  coverage: number;
+  /** `recall.minDenseScore`. */
+  dense: number;
+}
+
+/** Returned memories a line keeps scores for, from the top. */
+export const SCORES_KEPT = 50;
+
+/**
+ * Per returned memory, in returned order (the top `SCORES_KEPT`), what recall's relevance gate
+ * reads: arrays of one length, index i for the i-th returned memory. Scores are rounded down to 4
+ * decimals (`roundScore`), which keeps every comparison with a 4-decimal threshold exact.
+ */
+export interface QuestionScores {
+  /** The gate the run applied. */
+  gate: GateThresholds;
+  /** The reranker's score; null when there is none (no reranker, a skipped or failed rerank). */
+  rerank: (number | null)[];
+  /** The share of the question's informative words the memory holds. */
+  coverage: number[];
+  /** The dense (cosine) similarity; null when the dense search did not score the memory. */
+  dense: (number | null)[];
+  /** Which expected id the memory is (an index into `ranks`), null for none. */
+  expected: (number | null)[];
+  /** The same for the outdated ids (an index into `staleRanks`); only with `staleRanks`. */
+  stale?: (number | null)[];
+  /** Positions of the memories a link brought in; absent when none. */
+  linked?: number[];
+  /** Present when recall asked the adaptive stop: the gate then also decided what it was asked. */
+  adaptiveStop?: true;
+}
+
+/**
+ * `x` to 4 decimals, rounded down: the result is never above `x`, so for any threshold `t` with at
+ * most 4 decimals, `roundScore(x) >= t` exactly when `x >= t`.
+ */
+export function roundScore(x: number): number {
+  const n = Math.round(x * 1e4);
+  const r = n / 1e4;
+  return r > x ? (n - 1) / 1e4 : r;
 }
 
 /** A run label from its settings, in the order given: `{ links: 'off', speed: 'full' }`. */
@@ -53,6 +107,37 @@ export interface QuestionMeta {
   ids?: readonly string[];
   /** Per row; default: the row's category, or `uncategorized`. */
   groups?: readonly string[];
+  /** The run's gate thresholds: with them, lines whose outcome has scores carry `scores`. */
+  gate?: GateThresholds;
+}
+
+/** Where each of `returned` sits in `ids`, null for none. */
+const indexIn = (ids: readonly string[], returned: readonly string[]): (number | null)[] => {
+  const at = new Map<string, number>();
+  ids.forEach((id, j) => {
+    if (!at.has(id)) at.set(id, j);
+  });
+  return returned.map((id) => at.get(id) ?? null);
+};
+
+function scoresOf(r: EvalRow, o: RowOutcome, gate: GateThresholds): QuestionScores | undefined {
+  if (o.scores === undefined) return undefined;
+  const ids = o.ids.slice(0, SCORES_KEPT);
+  const hits = o.scores.slice(0, SCORES_KEPT);
+  if (hits.length !== ids.length) throw new Error('per-question: one score per returned id');
+  const linked = hits.flatMap((h, i) => (h.linked === true ? [i] : []));
+  return {
+    gate,
+    rerank: hits.map((h) => (h.rerank === undefined ? null : roundScore(h.rerank))),
+    coverage: hits.map((h) => roundScore(h.coverage)),
+    dense: hits.map((h) => (h.dense === undefined ? null : roundScore(h.dense))),
+    expected: indexIn(r.expectedMemoryIds, ids),
+    ...(r.notExpectedMemoryIds !== undefined && {
+      stale: indexIn(r.notExpectedMemoryIds, ids),
+    }),
+    ...(linked.length > 0 && { linked }),
+    ...(o.adaptiveStop === true && { adaptiveStop: true as const }),
+  };
 }
 
 /** One result per row: `outcomes[i]` is what recall returned for `rows[i]`. */
@@ -72,6 +157,7 @@ export function questionResults(
     metrics['staleAboveCurrent'] = s.staleAboveCurrent;
     metrics['abstainFp'] = s.abstainFp;
     const links = linkCounts(r, o);
+    const scores = meta.gate === undefined ? undefined : scoresOf(r, o, meta.gate);
     return {
       run: meta.run,
       level: meta.level,
@@ -88,6 +174,7 @@ export function questionResults(
       linked: links.linked,
       linkedExpected: links.expected,
       metrics,
+      ...(scores !== undefined && { scores }),
     };
   });
 }

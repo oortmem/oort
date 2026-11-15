@@ -81,6 +81,7 @@ pnpm eval --demo --hook --dense   # the 15-row hook-shaped set, no reranker (the
 pnpm eval --set multilingual [--embed …] [--rerank …]   # 13 languages, three conditions (multilingual/README.md)
 pnpm eval --set locomo|longmemeval [--fetch] [--plan] [--embed …] [--rerank …]   # public sets (public/README.md)
 pnpm eval compare <a.questions.jsonl> <b.questions.jsonl>   # is a difference between two runs real?
+pnpm eval sweep-gate <run.questions.jsonl>   # replay the relevance gate at many thresholds, offline
 ```
 
 - The bundled demo is a smoke test of the eval pipeline, not a quality benchmark. Its 1,500
@@ -125,9 +126,78 @@ per question per run:
 | `linked`, `linkedExpected`   | link-admitted memories in the top 10, and how many of them were expected                                                                      |
 | `metrics`                    | the question's share of each mean metric: `recall@<k>`, `mrr`, `staleLeak`, `staleAboveCurrent`, `abstainFp` (`null` where it does not count) |
 | `abstention`                 | present (`true`) on abstention rows                                                                                                           |
+| `scores`                     | recall's scores for each returned memory, for `sweep-gate` (below); absent in files written before it was added                               |
 
 The mean of a metric over a run's lines is that run's total for it. Link precision is pooled over
 rows, so it is not in `metrics`; `linked` and `linkedExpected` give it.
+
+`scores` holds arrays of one length, one entry per returned memory in returned order (the top 50
+at most), with what recall's relevance gate reads:
+
+| Field          | What it holds                                                                                                   |
+| -------------- | --------------------------------------------------------------------------------------------------------------- |
+| `gate`         | the run's thresholds: `rerank` (`recall.minRerankScore`), `coverage`, `dense`; all 0 with `--no-gate`           |
+| `rerank`       | the reranker's score, `null` when there is none (no reranker, or a rerank skipped as confident, failed or late) |
+| `coverage`     | the share of the question's informative words the memory holds                                                  |
+| `dense`        | the dense (cosine) similarity, `null` when the dense search did not score it                                    |
+| `expected`     | which expected id the memory is, as an index into `ranks`, or `null`                                            |
+| `stale`        | the same for the outdated ids, as an index into `staleRanks` (only with `staleRanks`)                           |
+| `linked`       | the positions of memories a link brought in, when there are any                                                 |
+| `adaptiveStop` | `true` when recall asked the adaptive stop for this question                                                    |
+
+Scores are rounded down to 4 decimals, so comparing one with any threshold of at most 4 decimals
+gives the same answer as comparing the unrounded score. `compare` ignores `scores`, and reads files
+written before they were added.
+
+### Sweeping the relevance gate (`pnpm eval sweep-gate`)
+
+Recall's relevance gate (`recall.minRerankScore`, `recall.minCoverage`, `recall.minDenseScore`)
+decides when nothing is good enough to return. `sweep-gate` picks its threshold from data: it reads
+the per-question lines of one run made with the gate off and replays other gates on them, with no
+model call, so one paid run covers every candidate.
+
+```sh
+pnpm eval --set longmemeval --embed voyage --rerank voyage --no-gate --out lme-open.json
+pnpm eval sweep-gate lme-open.questions.jsonl [--run links=off,speed=full] [--step 0.05]
+                     [--margins 0.02,0.05,0.1,0.2] [--resamples 10000] [--seed 1] [--json]
+```
+
+How recall gates today: after the rerank, each of the top `returnK` memories is tested on its
+own, and kept in its place or dropped. A memory with a rerank score is kept when the score is at
+least `minRerankScore`. One without a rerank score (no reranker, as the prompt hook's `fast` mode
+runs; or a rerank skipped because fusion was confident, or one that failed or ran past its time
+budget) is kept when it holds at least `minCoverage` of the question's informative words, or has a
+dense similarity of at least `minDenseScore`. A threshold of 0 turns its test off; `--no-gate`
+sets all three to 0. Memories a link brings in are admitted after the gate, only beside a hit that
+passed it, and the adaptive stop then reads the kept hits.
+
+The sweep replays three kinds of gate on memories with a rerank score; a memory without one is
+tested on coverage and dense similarity as recall does (at recall's defaults):
+
+- `fixed t`: today's gate with `minRerankScore` t: each memory scoring below t is dropped.
+- `top t`: nothing is returned when the best rerank score is below t; otherwise every memory is.
+- `margin d, floor f`: nothing is returned when the best score is below f, or leads the second best
+  by less than d (a single memory leads by its own score); otherwise memories below f are dropped.
+  With d = 0 this is `fixed f`.
+
+Thresholds run from 0 to 0.95 in steps of `--step` (default 0.05), and `margin` takes each one as
+its floor with each of `--margins`. For each gate it prints recall@10 on the answerable questions at
+each level, the mean number of memories returned on them, and the abstention false-positive rate
+(abstention questions that still return something). Each is compared, question by question, with
+today's default (`fixed 0.35`): the paired difference with a 95% bootstrap interval, resampled and
+seeded as `compare` does, so the same file always prints the same table. An interval that holds 0
+is within the noise band. Gates on the Pareto front of the first level's recall@10 and the
+false-positive rate are marked, and a second table gives their recall@10 per group.
+
+The replay is exact for the run it reads: a test checks that `fixed 0.35` replayed on a run with
+the gate off gives the same ranks and metrics, question by question, as a run with the gate on. It
+refuses what it cannot replay: a run with the gate on (what it dropped is not in the file), a file
+without `scores`, a run where links brought memories in (the gate also decides which are admitted;
+sweep a `--links off` run), questions that asked the adaptive stop, and questions that returned
+more than the 50 memories a line keeps scores for (`--k` above 50). In a run with no rerank
+score at all (`--speed fast`, or no `--rerank`) every gate is the same coverage test, and only the
+baseline is shown. Stale-leak and stale above current are not in the table; `--json` has the full
+result.
 
 ### Comparing two runs (`pnpm eval compare`)
 
