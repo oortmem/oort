@@ -165,7 +165,7 @@ function formatOf(file: string, flag: string | undefined): 'csv' | 'jsonl' {
 function judgmentLine(
   j: Pick<Judgment, 'verdict' | 'subject' | 'domain' | 'by' | 'decidedAt'>,
 ): string {
-  return `${shown(j.verdict)} "${shown(clip(j.subject.summary, 70))}" (${shown(j.domain)}, by ${shown(j.by)}, ${j.decidedAt.slice(0, 10)})`;
+  return `${shown(j.verdict)} "${shown(clip(j.subject.summary, 70))}" (${shown(j.domain)}, by ${shown(j.by)}, ${shown(j.decidedAt.slice(0, 10))})`;
 }
 
 /** Characters an operator id may not hold: controls, bidi and invisible format characters. */
@@ -553,7 +553,7 @@ function printJudgeResult(ctx: Ctx, w: Wired, r: JudgeResult): void {
   const ui = uiFor(ctx.io);
   const n = r.precedents.filter((p) => p.near).length;
   const experts = [...new Set(r.precedents.map((p) => p.by))].map((b) => shown(b)).join(', ');
-  ctx.io.out(ui.header('judge', r.status, agentLabel(w)));
+  ctx.io.out(ui.header('judge', shown(r.status), agentLabel(w)));
   if (r.status === 'suggested' && r.prediction !== undefined) {
     ctx.io.out(
       `${ui.bold(`Prediction: ${shown(r.prediction.verdict)}`)} (probability ${fixed(r.prediction.probability)}), from ${n} precedent${n === 1 ? '' : 's'}. A prediction, not ${experts}'s decision.\n`,
@@ -605,7 +605,7 @@ function printJudgeResult(ctx: Ctx, w: Wired, r: JudgeResult): void {
         ? ', agent-recorded (confirmed)'
         : ', agent-recorded (unconfirmed)';
     ctx.io.out(
-      `${i + 1}. ${shown(p.verdict)}  ${fixed(p.similarity)}${mark}  "${shown(clip(p.subject.summary, 70))}"  by ${shown(p.by)}, ${p.decidedAt.slice(0, 10)}${from}${agent}  ${short(p.id)}\n`,
+      `${i + 1}. ${shown(p.verdict)}  ${fixed(p.similarity)}${mark}  "${shown(clip(p.subject.summary, 70))}"  by ${shown(p.by)}, ${shown(p.decidedAt.slice(0, 10))}${from}${agent}  ${shown(short(p.id))}\n`,
     );
     ctx.io.out(`   reason: ${shown(clip(p.reason, 200))}\n`);
   }
@@ -706,7 +706,7 @@ async function judgeListInCloud(
   );
   if (items.length === 0) {
     ctx.io.err(
-      `oort: no judgments yet; a person records them in the dashboard (${DASHBOARD_JUDGMENTS_URL}).\n`,
+      `oort: no judgments yet. A person records them in the dashboard (${DASHBOARD_JUDGMENTS_URL}), and an agent can record them over MCP, unconfirmed until a person confirms them.\n`,
     );
     return 0;
   }
@@ -729,7 +729,7 @@ function cloudJudgmentLines(j: JudgmentView & { id: string }): string {
     (j.pack === undefined ? '' : ` [imported from pack ${shown(j.pack.name)}]`) +
     originTag(j);
   return (
-    `${short(j.id)}  ${judgmentLine(j)}${state}\n` +
+    `${shown(short(j.id))}  ${judgmentLine(j)}${state}\n` +
     `          reason: ${shown(clip(j.reason, 200))}\n`
   );
 }

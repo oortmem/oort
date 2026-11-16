@@ -5,7 +5,9 @@ import { tmpdir } from '../../test/helpers.js';
 import { fakeCloud, seedFakeJudgment, type FakeCloud } from '../../test/helpers/fake-cloud.js';
 import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
 import { OortCloudError, cloudErrorKind } from '../cloud.js';
-import { cloudJudgmentView, DASHBOARD_JUDGMENTS_URL } from './cloud.js';
+import { labelOrigin } from '@oortmem/core';
+import CONTRACT from '../../test/cloud-contract.json' with { type: 'json' };
+import { cloudJudgeResult, cloudJudgmentView, DASHBOARD_JUDGMENTS_URL } from './cloud.js';
 import { createOortWith } from './create.js';
 import { OortRefusedError, toOortError } from './errors.js';
 import type { OortOptions } from './types.js';
@@ -18,6 +20,7 @@ import type { OortOptions } from './types.js';
 
 const KEY = ['oort', 'sk', 'judgments'.padEnd(43, 'J')].join('_');
 const NOW = '2026-11-05T12:00:00.000Z';
+const ID = '6a4b1c2d-0e1f-4a2b-8c3d-4e5f6a7b8c9d';
 
 async function cloud(setup: (c: FakeCloud) => void = () => {}, over: OortOptions = {}) {
   const c = fakeCloud(KEY);
@@ -202,7 +205,7 @@ describe('judgments in cloud mode', () => {
 
   it('sdk.cloud-judge-views-fill-the-origin-an-older-cloud-leaves-out', () => {
     const base = {
-      id: 'j1',
+      id: ID,
       subject: { summary: 'Post' },
       verdict: 'rejected',
       verdicts: ['approved', 'rejected'],
@@ -222,6 +225,149 @@ describe('judgments in cloud mode', () => {
     expect(
       cloudJudgmentView({ ...base, via: 'cli', confirmed: true, origin: 'dashboard' }),
     ).toMatchObject({ origin: 'dashboard' });
+  });
+
+  it('sdk.cloud-judge-views-read-an-unconfirmed-mcp-record-as-core-does', () => {
+    // An older Oort Cloud may send neither origin nor agentRecorded: the view then follows core's
+    // labelOrigin, so an agent's unconfirmed record never reads as a person's.
+    const base = {
+      id: ID,
+      subject: { summary: 'Post' },
+      verdict: 'rejected',
+      reason: 'r',
+      domain: 'content',
+      by: 'ada',
+      decidedAt: NOW,
+    };
+    const agent = cloudJudgmentView({ ...base, via: 'mcp', confirmed: false });
+    expect(agent).toMatchObject({ origin: 'agent', agentRecorded: true, confirmed: false });
+    expect(agent.origin).toBe(labelOrigin({ via: 'mcp' }));
+    expect(cloudJudgmentView({ ...base, confirmed: false })).toMatchObject({
+      via: 'mcp',
+      origin: 'agent',
+      agentRecorded: true,
+    });
+    expect(cloudJudgmentView({ ...base, via: 'mcp', confirmed: true })).toMatchObject({
+      origin: 'integration',
+      agentRecorded: false,
+    });
+    expect(cloudJudgmentView({ ...base, via: 'cli', confirmed: true })).toMatchObject({
+      origin: 'integration',
+      agentRecorded: false,
+    });
+    // What the server states wins over the fallback.
+    expect(
+      cloudJudgmentView({ ...base, via: 'mcp', confirmed: false, agentRecorded: false }),
+    ).toMatchObject({ agentRecorded: false, origin: 'integration' });
+
+    const apply = cloudJudgeResult({
+      status: 'needs-expert',
+      precedents: [{ ...base, via: 'mcp', confirmed: false, similarity: 0.9, near: true }],
+    });
+    expect(apply.precedents[0]).toMatchObject({ via: 'mcp', agentRecorded: true });
+  });
+
+  it('sdk.cloud-judge-views-take-only-known-values-from-the-cloud', () => {
+    const base = {
+      id: ID,
+      subject: { summary: 'Post' },
+      verdict: 'rejected',
+      reason: 'r',
+      domain: 'content',
+      by: 'ada',
+      decidedAt: NOW,
+      via: 'cli',
+      confirmed: true,
+      agentRecorded: false,
+    };
+    expect(cloudJudgmentView(base)).toMatchObject({ id: ID, decidedAt: NOW, via: 'cli' });
+    // An id that is not an Oort Cloud memory id makes the answer unreadable.
+    for (const id of ['j1', `\u001b[8m${ID}`, `${ID}\n`]) {
+      expect(() => cloudJudgmentView({ ...base, id })).toThrow();
+    }
+    // A time that is not an ISO date, or a via Oort does not know, is not passed on.
+    const odd = cloudJudgmentView({
+      ...base,
+      decidedAt: '\u001b]0;pwn\u0007',
+      via: '\u001b[2Jcli',
+      status: 'withdrawn',
+      withdrawn: { at: 'Tue 3 Nov 2026 \u001b[8m', by: 'grace' },
+    });
+    expect(odd).toMatchObject({ decidedAt: '', via: 'mcp' });
+    expect(odd.withdrawn).toBeUndefined();
+    expect(cloudJudgmentView({ ...base, withdrawn: { at: NOW, by: 'grace' } }).withdrawn).toEqual({
+      at: NOW,
+      by: 'grace',
+    });
+
+    const result = {
+      status: 'needs-expert',
+      why: 'too-few',
+      precedents: [{ ...base, similarity: 0.9, near: true }],
+    };
+    expect(cloudJudgeResult(result)).toMatchObject({ status: 'needs-expert', why: 'too-few' });
+    expect(() => cloudJudgeResult({ ...result, status: '\u001b[2Jsuggested' })).toThrow();
+    expect(cloudJudgeResult({ ...result, why: '\u001b[8m' }).why).toBeUndefined();
+    expect(() =>
+      cloudJudgeResult({ ...result, precedents: [{ ...result.precedents[0], id: 'x' }] }),
+    ).toThrow();
+    expect(
+      cloudJudgeResult({
+        ...result,
+        precedents: [{ ...result.precedents[0], decidedAt: '\u001b[31mRED' }],
+      }).precedents[0],
+    ).toMatchObject({ decidedAt: '' });
+  });
+
+  it('sdk.cloud-judge-contract-pins-via-and-agentRecorded', async () => {
+    // A server that leaves either out would make clients guess who recorded a label.
+    const fields = CONTRACT.judgments as unknown as Record<string, string[]>;
+    for (const key of ['judgment', 'precedent']) {
+      expect(fields[key]).toEqual(expect.arrayContaining(['id', 'via', 'agentRecorded']));
+    }
+    const c = fakeCloud(KEY);
+    c.judgments.now = () => new Date(NOW);
+    const at = new Date(Date.parse(NOW) - 86_400_000);
+    await seedFakeJudgment(
+      c,
+      {
+        subject: 'Post says a vitamin cures the flu',
+        verdict: 'rejected',
+        reason: 'No source.',
+        domain: 'content',
+        by: 'ada',
+      },
+      at,
+    );
+    await seedFakeJudgment(
+      c,
+      {
+        subject: 'Post says a tea cures the flu',
+        verdict: 'rejected',
+        reason: 'No source.',
+        domain: 'content',
+        by: 'ada',
+      },
+      at,
+    );
+    const auth = { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' };
+    const list = (await (
+      await c.fetch('https://api.oortcloud.dev/v1/judgments', { headers: auth })
+    ).json()) as { judgments: Record<string, unknown>[] };
+    const apply = (await (
+      await c.fetch('https://api.oortcloud.dev/v1/judgments/apply', {
+        method: 'POST',
+        headers: auth,
+        body: JSON.stringify({ item: { summary: 'Post says a vitamin cures colds' } }),
+      })
+    ).json()) as { precedents: Record<string, unknown>[] };
+    const required = (key: string) => fields[key]!.filter((f) => !f.endsWith('?'));
+    expect(list.judgments.length).toBeGreaterThan(0);
+    expect(apply.precedents.length).toBeGreaterThan(0);
+    for (const j of list.judgments)
+      expect(Object.keys(j)).toEqual(expect.arrayContaining(required('judgment')));
+    for (const p of apply.precedents)
+      expect(Object.keys(p)).toEqual(expect.arrayContaining(required('precedent')));
   });
 });
 

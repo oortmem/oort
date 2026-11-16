@@ -17,7 +17,7 @@ import {
 } from '../cloud.js';
 import { scrubForCloud } from '../cloud-scrub.js';
 import { cloudRememberRequest } from '../remember.js';
-import { starInCloudMessage } from '../util.js';
+import { CLOUD_MEMORY_ID, starInCloudMessage } from '../util.js';
 import { privacyStatement } from '../wire.js';
 import type { Ctx } from './context.js';
 import { OortInternalError, OortRefusedError, OortUsageError } from './errors.js';
@@ -480,6 +480,54 @@ const nums = (v: unknown): Record<string, number> =>
     Object.entries(obj(v)).flatMap(([k, x]) => (typeof x === 'number' ? [[clean(k), x]] : [])),
   );
 
+/** An Oort Cloud memory id, else the answer is unreadable: no other id is put in a result. */
+const cloudId = (v: unknown): string => {
+  if (typeof v !== 'string' || !CLOUD_MEMORY_ID.test(v)) throw unreadable();
+  return v;
+};
+
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/;
+/** A time from Oort Cloud: only an ISO date is passed on. */
+const isoTime = (v: unknown): v is string =>
+  typeof v === 'string' && ISO_TIME.test(v) && !Number.isNaN(Date.parse(v));
+
+const VIAS: Record<JudgmentVia, true> = {
+  cli: true,
+  mcp: true,
+  import: true,
+  pack: true,
+  sdk: true,
+};
+const JUDGE_STATUSES: Record<JudgeResult['status'], true> = {
+  suggested: true,
+  'needs-expert': true,
+  'precedents-only': true,
+};
+const JUDGE_WHYS: Record<NonNullable<JudgeResult['why']>, true> = {
+  'no-precedents': true,
+  'too-far': true,
+  'too-few': true,
+  'precedents-disagree': true,
+  'low-confidence': true,
+  'no-decider': true,
+  'decider-failed': true,
+};
+const known = <K extends string>(set: Record<K, true>, v: unknown): v is K =>
+  typeof v === 'string' && Object.hasOwn(set, v);
+
+/**
+ * How a judgment arrived, as core reads it. A missing or unknown `via` reads `mcp`, which is never
+ * taken for a person. Without the server's `agentRecorded`, an `mcp` record no person confirmed is
+ * an agent's, as core's `labelOrigin` reads a record from before origins.
+ */
+function provenance(j: Record<string, unknown>): { via: JudgmentVia; agentRecorded: boolean } {
+  const via = known(VIAS, j['via']) ? j['via'] : 'mcp';
+  const agentRecorded =
+    j['agentRecorded'] === true ||
+    (j['agentRecorded'] === undefined && via === 'mcp' && j['confirmed'] !== true);
+  return { via, agentRecorded };
+}
+
 /**
  * How a label arrived. An Oort Cloud on a core from before label origins answers none: the SDK
  * reads it as older local records read (`agent` when an agent recorded it and no person confirmed
@@ -516,11 +564,11 @@ function packOf(v: unknown): { pack?: { id: string; name: string } } {
 /** A listed judgment from Oort Cloud as the local `JudgmentView`. */
 export function cloudJudgmentView(raw: unknown): JudgmentView & { id: string } {
   const j = obj(raw);
-  if (typeof j['id'] !== 'string') throw unreadable();
-  const agentRecorded = j['agentRecorded'] === true;
+  const id = cloudId(j['id']);
+  const { via, agentRecorded } = provenance(j);
   const w = obj(j['withdrawn']);
   return {
-    id: j['id'],
+    id,
     subject: subjectOf(j['subject']),
     verdict: text(j['verdict']),
     verdicts: texts(j['verdicts']),
@@ -528,13 +576,13 @@ export function cloudJudgmentView(raw: unknown): JudgmentView & { id: string } {
     criteria: texts(j['criteria']),
     domain: text(j['domain']),
     by: text(j['by']),
-    decidedAt: typeof j['decidedAt'] === 'string' ? j['decidedAt'] : '',
-    via: (typeof j['via'] === 'string' ? j['via'] : 'mcp') as JudgmentVia,
+    decidedAt: isoTime(j['decidedAt']) ? j['decidedAt'] : '',
+    via,
     status: (typeof j['status'] === 'string' ? j['status'] : 'current') as MemoryStatus,
     confirmed: j['confirmed'] === true,
     agentRecorded,
     ...cloudLabel(j, agentRecorded),
-    ...(typeof w['at'] === 'string' && { withdrawn: { at: w['at'], by: text(w['by']) } }),
+    ...(isoTime(w['at']) && { withdrawn: { at: w['at'], by: text(w['by']) } }),
     ...packOf(j['pack']),
   };
 }
@@ -601,11 +649,11 @@ export async function applyJudgments(
 /** Oort Cloud's answer to an apply as the local `JudgeResult`, with no `predictionId`. */
 export function cloudJudgeResult(raw: unknown): JudgeResult {
   const r = obj(raw);
-  if (typeof r['status'] !== 'string' || !Array.isArray(r['precedents'])) throw unreadable();
+  if (!known(JUDGE_STATUSES, r['status']) || !Array.isArray(r['precedents'])) throw unreadable();
   const p = obj(r['prediction']);
   return {
-    status: r['status'] as JudgeResult['status'],
-    ...(typeof r['why'] === 'string' && { why: r['why'] as JudgeResult['why'] }),
+    status: r['status'],
+    ...(known(JUDGE_WHYS, r['why']) && { why: r['why'] }),
     ...(typeof p['verdict'] === 'string' && {
       prediction: {
         verdict: clean(p['verdict']),
@@ -616,22 +664,22 @@ export function cloudJudgeResult(raw: unknown): JudgeResult {
     precedents: r['precedents'].map((x) => {
       const q = obj(x);
       const confirmed = q['confirmed'] === true;
-      const via = (typeof q['via'] === 'string' ? q['via'] : 'mcp') as JudgmentVia;
+      const { via, agentRecorded } = provenance(q);
       return {
-        id: text(q['id']),
+        id: cloudId(q['id']),
         subject: subjectOf(q['subject']),
         verdict: text(q['verdict']),
         reason: text(q['reason']),
         criteria: texts(q['criteria']),
         domain: text(q['domain']),
         by: text(q['by']),
-        decidedAt: typeof q['decidedAt'] === 'string' ? q['decidedAt'] : '',
+        decidedAt: isoTime(q['decidedAt']) ? q['decidedAt'] : '',
         similarity: num(q['similarity']),
         near: q['near'] === true,
         ...(typeof q['agrees'] === 'boolean' && { agrees: q['agrees'] }),
         via,
         confirmed,
-        agentRecorded: q['agentRecorded'] === true,
+        agentRecorded,
         ...packOf(q['pack']),
       };
     }),

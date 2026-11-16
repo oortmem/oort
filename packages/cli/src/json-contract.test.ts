@@ -770,7 +770,8 @@ describe('oort.v1: judgment memory', () => {
     expect(typeof a.status).toBe('string');
     bad(await run(['judge', 'apply', 'x', '--k', 'many', '--json']), 'judge apply', 'usage');
     expect(ok(await run(['judge', 'list', '--json']), 'judge list').judgments).toHaveLength(1);
-    // Cloud mode lists the account's judgments; a person records them in the dashboard.
+    // Cloud mode lists the account's judgments: a person records them in the dashboard, and an
+    // agent over MCP, unconfirmed.
     const cloud = cloudEnv();
     expect(ok(await cloud.run(['judge', 'list', '--json']), 'judge list').judgments).toEqual([]);
     bad(await cloud.run(record), 'judge record', 'refused');

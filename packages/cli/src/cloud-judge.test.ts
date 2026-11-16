@@ -19,7 +19,11 @@ import { wire as realWire, type WireFn } from './wire.js';
 const oortKey = (): string => ['oort', 'sk', `judge${Date.now()}`.padEnd(43, 'J')].join('_');
 const DAY = 86_400_000;
 
-function setup() {
+/**
+ * A run against the fake Oort Cloud. `tamper` rewrites the body of each 200 answer from the
+ * judgment routes, as a compromised or misbehaving server might.
+ */
+function setup(tamper?: (route: string, body: any) => unknown) {
   const root = tmpdir();
   const home = path.join(root, 'oort-home');
   const cwd = path.join(root, 'project');
@@ -28,15 +32,23 @@ function setup() {
   const cloud = fakeCloud(key);
   writeCloudSettings(home, { store: 'cloud' });
   const env = { HOME: root, OORT_HOME: home, OORT_NO_KEYCHAIN: '1', OORT_API_KEY: key };
+  const fetch: typeof globalThis.fetch =
+    tamper === undefined
+      ? cloud.fetch
+      : async (input, init) => {
+          const req = new Request(input, init);
+          const res = await cloud.fetch(input, init);
+          const { pathname } = new URL(req.url);
+          if (!pathname.startsWith('/v1/judgments') || res.status !== 200) return res;
+          return Response.json(tamper(`${req.method} ${pathname}`, await res.json()));
+        };
   const wire: WireFn = (dir, o = {}) =>
-    realWire(dir, { ...o, keychain: async () => undefined, fetch: cloud.fetch });
+    realWire(dir, { ...o, keychain: async () => undefined, fetch });
   return {
     cloud,
     async run(args: string[]) {
       const io = fakeIo({ cwd, env });
-      const code = await runCli(args, io, wire, createKeychain({ platform: 'none' }), {
-        fetch: cloud.fetch,
-      });
+      const code = await runCli(args, io, wire, createKeychain({ platform: 'none' }), { fetch });
       return { code, io };
     },
     wired: () =>
@@ -118,6 +130,67 @@ describe('judgments from the CLI in cloud mode', () => {
     });
     expect(e.cloud.seen.filter((s) => s.includes('/v1/judgments'))).toEqual([]);
     expect(e.cloud.judgments.records).toEqual([]);
+  });
+});
+
+describe('judgment text from Oort Cloud in human output', () => {
+  const ESC = '\u001b';
+  const raw = (r: { io: { stdout: string; stderr: string } }) => r.io.stdout + r.io.stderr;
+
+  it('cli.cloud-judge-list-prints-no-control-characters-from-the-cloud', async () => {
+    const e = setup((route, b) => {
+      if (route === 'GET /v1/judgments') {
+        for (const x of b.judgments) x.decidedAt = `${ESC}]0;pwn\u0007xx`;
+      }
+      return b;
+    });
+    await seed(e.cloud);
+    const r = await e.run(['judge', 'list']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toContain(judgment.subject);
+    expect(raw(r)).not.toContain(ESC);
+    expect(raw(r)).not.toContain('\u0007');
+
+    const id = setup((route, b) => {
+      if (route === 'GET /v1/judgments') for (const x of b.judgments) x.id = `${ESC}[8m${x.id}`;
+      return b;
+    });
+    await seed(id.cloud);
+    const refused = await id.run(['judge', 'list']);
+    expect(refused.code).not.toBe(0);
+    expect(raw(refused)).not.toContain(ESC);
+  });
+
+  it('cli.cloud-judge-apply-prints-no-control-characters-from-the-cloud', async () => {
+    const tampered = (change: (b: any) => void) =>
+      setup((route, b) => {
+        if (route === 'POST /v1/judgments/apply') change(b);
+        return b;
+      });
+    const cases = [
+      tampered((b) => {
+        b.status = `${ESC}[2J${ESC}[Hsuggested`;
+      }),
+      tampered((b) => {
+        for (const p of b.precedents) p.id = `${ESC}[8m`;
+      }),
+      tampered((b) => {
+        for (const p of b.precedents) p.decidedAt = `${ESC}[31mRED${ESC}[0m`;
+      }),
+      tampered((b) => {
+        b.why = `${ESC}[8m`;
+      }),
+    ];
+    for (const e of cases) {
+      await seedFakeJudgment(e.cloud, judgment, new Date(Date.now() - DAY));
+      await seedFakeJudgment(
+        e.cloud,
+        { ...judgment, subject: 'Post says a vitamin cures colds' },
+        new Date(Date.now() - DAY),
+      );
+      const r = await e.run(['judge', 'apply', 'Post says a vitamin cures colds']);
+      expect(raw(r)).not.toContain(ESC);
+    }
   });
 });
 
