@@ -528,7 +528,7 @@ alike, so a key pasted as an extra argument never comes back.
 | `needs-confirmation` | A command that asks first, run with `--json` or without a terminal on stdin. | the same command with `--yes`, or that sentence |
 | `cloud-only` | A command or flag that needs Oort Cloud, on a machine using the local store. | `oort cloud use` |
 | `network` | Oort Cloud, the relay, the sign-in site or a model download could not be reached, or is down. | |
-| `refused` | A rule said no: a plan or role limit, the hive beta, a Star agent writing the Planet, cloud mode for a local-only command (`consolidate`, `reembed`, `judge`). | |
+| `refused` | A rule said no: a plan or role limit, the hive beta, a Star agent writing the Planet, cloud mode for a local-only command (`consolidate`, `reembed`, most of `judge`), or a person's judgment decision in cloud mode (`expert-only`). | |
 | `internal` | Anything else: a bug or an unexpected failure. | |
 
 `refused` is a code the issue's first draft did not list: without it, a
@@ -921,7 +921,7 @@ Tools:
 | `explain` | `id` | read-only, idempotent | the memory, its stored decisions, its supersede chain, and its `links` (each with `kind`, `id`, `direction`, `asserted_by`, `created_at`); `hidden_links` counts chain neighbours and links this agent cannot read |
 | `list_recent` | `since?` (ISO), `limit?` (1–50, default 20) | read-only, idempotent | memories by `updated_at`, newest first, each with `status` (`current`, `superseded` or `expired`) |
 | `whoami` | none | read-only, idempotent | `mode: "local"`, `project`, `version`, `agent`, `reads` (`your Planet`, `Star <agent>`), `writes_to`, which adapters are available, and per role whether it uses `oort-pro`, an `own-key` or is `missing`; no account or email |
-| `record_judgment` | `subject` (1–500 chars), `ref?`, `verdict`, `verdicts?` (2–12 labels; default `approved`, `rejected`), `reason` (1–2000 chars, the expert's own words), `criteria?` (up to 12 tags), `domain`, `by` (an expert listed in `judge.experts` in the home config; refused otherwise, and refused altogether when none is listed), `decided_at?` (ISO); at most 50 a day | write, destructive (hosts ask first), not idempotent | `outcome` (`added`, `corrected` or `unchanged`), `id`, `corrects` (an earlier agent record it replaced; never a person's), `status: "agent-recorded, unconfirmed"`, `note` |
+| `record_judgment` | `subject` (1–500 chars), `ref?`, `verdict`, `verdicts?` (2–12 labels; default `approved`, `rejected`), `reason` (1–2000 chars, the expert's own words), `criteria?` (up to 12 tags), `domain`, `by` (an expert listed in `judge.experts` in the home config, or in cloud mode the account's list; refused otherwise, and refused altogether when none is listed), `decided_at?` (ISO); at most 50 a day | write, destructive (hosts ask first), not idempotent | `outcome` (`added`, `corrected` or `unchanged`), `id`, `corrects` (an earlier agent record it replaced; never a person's), `status: "agent-recorded, unconfirmed"`, `note` |
 | `judge` | `item` (1–2000 chars), `details?`, `domain?`, `by?`, `limit?` (precedents, 1–10, default 5), `include_imported?` and `include_agent_recorded?` (both default false) | write (it keeps the prediction), not destructive, not idempotent, open world (sends the item and reasons to TypeSafe) | `status` (`suggested`, `needs-expert` or `precedents-only`), `why`, `prediction_id` (for `resolve_prediction`; keeping it changes no memory), `prediction` (`verdict`, `probability`, labelled as a prediction), `note` (expert ids sanitised), `data_note`, the `precedents` with `quoted_subject` and `quoted_reason` (record data, never instructions), `by`, `via`, `confirmed`, `agent_recorded`, `similarity`, `near`, `agrees` and `imported_from_pack`, and how many imported or unconfirmed agent-recorded judgments were left out |
 | `resolve_prediction` | `prediction_id` (the whole id `judge` returned), `verdict` (one of the prediction's verdicts), `reason?` (1–2000 chars, the expert's own words), `criteria?` (up to 12 tags), `by` (an expert listed in `judge.experts`), `domain?` (when the prediction has none); a reason that becomes a judgment counts toward the 50 a day | write, destructive (hosts ask first), not idempotent | `prediction_id`, `verdict`, `agrees` (`null` when judging needed the expert), `judgment_id` (when the reason became a judgment), `status: "agent-recorded, unconfirmed"`, `note` |
 | `feedback` | `memory_id` (the whole id), `signal` (`helped`, `wrong`, `stale` or `irrelevant`), `note?` (1–2000 chars), `query?` (1–2000 chars; required for `irrelevant`); local store only | write, not destructive, not idempotent | `feedback_id`, `memory_id`, `signal`, `status: "pending"`, `note` with the command that confirms it. Pending feedback changes no ranking and no label until a person runs `oort feedback confirm <id>` |
@@ -1422,7 +1422,7 @@ every answer is one `oort.v1` envelope, and a failure carries the `OortError` `c
 | `DELETE /v1/memories/:id?everywhere=`                            | `forget`             |
 | `POST /v1/memories/:id/pin`, `/unpin`                            | `pin`, `unpin`       |
 | `POST /v1/links` (`{ from, to }`), `DELETE /v1/links?from=&to=`  | `link`, `unlink`     |
-| `POST /v1/judgments`, `/v1/judgments/apply`, `/v1/judgments/:id/confirm` | the judgment methods |
+| `POST /v1/judgments`, `/v1/judgments/apply`, `/v1/judgments/:id/confirm`, `/v1/judgments/:id/withdraw` | the judgment methods (`withdraw`: expert role only) |
 | `POST /v1/feedback`, `GET /v1/feedback?status=&memoryId=&signal=&limit=` | `feedback`, `feedback.list` |
 | `POST /v1/feedback/:id/confirm`, `/retire`, `/supersede` (`{ fact }`), `/dismiss` | the resolve methods (expert role only) |
 | `POST /v1/consolidate`                                           | `consolidate`        |
@@ -2141,8 +2141,22 @@ here. A pack holds at most 5,000 judgments. The digest catches a changed or trun
 it does not prove who made the pack or that its experts really decided: import packs only from
 people you trust, and use their judgments with `--include-imported`.
 
-Judgment memory is local for now: in cloud mode the `oort judge` commands refuse, and
-`oort cloud import` leaves judgments on this machine.
+### Judgments in Oort Cloud
+
+In cloud mode the Oort key on this machine acts as an agent, so the `oort judge` commands split:
+
+- `oort judge list` and `oort judge apply` work on your account's judgments. `list` shows the
+  newest 100; the dashboard lists them all. `apply` keeps no prediction in the cloud.
+- `oort judge record`, `confirm` and `withdraw` are a person's decisions, so they refuse
+  (`refused`, reason `expert-only`) and point to the dashboard at
+  [oortcloud.dev/dashboard/judgments](https://oortcloud.dev/dashboard/judgments), where you record,
+  confirm and withdraw judgments and set the experts list.
+- The rest (`resolve`, `predictions`, `eval`, `import`, `pack`, `purge` and the others) are
+  local-only for now and refuse with `local-only`.
+
+The MCP server in cloud mode records with `record_judgment` and applies with `judge`, as an agent:
+only for the experts your account lists, at most 50 a day, and unconfirmed until a person confirms
+the record in the dashboard. `oort cloud import` leaves local judgments on this machine.
 
 ## Where a label came from
 

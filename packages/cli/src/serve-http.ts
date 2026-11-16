@@ -567,6 +567,15 @@ const ROUTES: Route[] = [
     call: (m) => (h, b) => h.judge.confirm(idOf(m[1]!), confirmOptions(b)),
   },
   {
+    method: 'POST',
+    name: 'POST /v1/judgments/:id/withdraw',
+    match: new RegExp(`^/v1/judgments/${ID}/withdraw$`),
+    call: (m) => (h, b) => {
+      noFields(b);
+      return h.judge.withdraw(idOf(m[1]!));
+    },
+  },
+  {
     method: 'GET',
     name: 'GET /v1/judgments',
     match: /^\/v1\/judgments$/,

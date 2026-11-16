@@ -1,7 +1,7 @@
 [
   {
     "id": "judge.agent-record-is-unconfirmed",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "seed": "empty",
     "options": {
       "agent": "bot",
@@ -64,7 +64,8 @@
             "harness": "sdk",
             "unconfirmedAgent": true
           }
-        }
+        },
+        "transports": ["local"]
       },
       {
         "call": "judge.confirm",
@@ -82,7 +83,7 @@
   },
   {
     "id": "judge.agent-role-needs-listed-experts",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "steps": [
       {
         "call": "judge.record",
@@ -104,7 +105,7 @@
   },
   {
     "id": "judge.agent-role-records-only-for-a-listed-expert",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "options": {
       "config": {
         "judge": {
@@ -133,7 +134,7 @@
   },
   {
     "id": "judge.the-daily-cap-is-shared-with-mcp",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "options": {
       "config": {
         "judge": {
@@ -360,11 +361,9 @@
   },
   {
     "id": "judge.an-agent-never-corrects-a-person",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
+    "seed": "person-judgment",
     "options": {
-      "judge": {
-        "role": "expert"
-      },
       "config": {
         "judge": {
           "experts": ["ada"]
@@ -377,33 +376,6 @@
         "args": {
           "subject": "Post 1",
           "ref": "post-1",
-          "verdict": "rejected",
-          "reason": "No source.",
-          "domain": "content",
-          "by": "ada"
-        },
-        "expect": {
-          "result": {
-            "outcome": "added"
-          }
-        },
-        "save": {
-          "person": "$.id"
-        }
-      },
-      {
-        "call": "scoped",
-        "args": {
-          "judgeRole": "agent"
-        },
-        "as": "agent"
-      },
-      {
-        "call": "judge.record",
-        "on": "agent",
-        "args": {
-          "subject": "Post 1",
-          "ref": "post-1",
           "verdict": "approved",
           "reason": "Looks fine.",
           "domain": "content",
@@ -412,6 +384,7 @@
         "expect": {
           "result": {
             "outcome": "added",
+            "status": "agent-recorded",
             "corrects": {
               "$absent": true
             }
@@ -425,7 +398,7 @@
             "judgments": {
               "$len": 2,
               "$some": {
-                "id": "${person}",
+                "via": "cli",
                 "status": "current",
                 "verdict": "rejected"
               }
@@ -437,7 +410,7 @@
   },
   {
     "id": "judge.apply-leaves-out-unconfirmed-agent-records",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "seed": "judgments",
     "steps": [
       {
@@ -507,10 +480,12 @@
   },
   {
     "id": "judge.input-limits",
-    "transports": ["local"],
+    "transports": ["local", "cloud"],
     "options": {
-      "judge": {
-        "role": "expert"
+      "config": {
+        "judge": {
+          "experts": ["ada"]
+        }
       }
     },
     "steps": [
@@ -549,58 +524,9 @@
     ]
   },
   {
-    "id": "judge.is-local-only",
+    "id": "judge.predictions-are-local-only-in-cloud",
     "transports": ["cloud"],
     "steps": [
-      {
-        "call": "judge.record",
-        "args": {
-          "subject": "s",
-          "verdict": "rejected",
-          "reason": "r",
-          "domain": "content",
-          "by": "ada"
-        },
-        "expect": {
-          "error": {
-            "code": "refused",
-            "reason": "local-only"
-          }
-        }
-      },
-      {
-        "call": "judge.apply",
-        "args": {
-          "item": "s"
-        },
-        "expect": {
-          "error": {
-            "code": "refused",
-            "reason": "local-only"
-          }
-        }
-      },
-      {
-        "call": "judge.list",
-        "expect": {
-          "error": {
-            "code": "refused",
-            "reason": "local-only"
-          }
-        }
-      },
-      {
-        "call": "judge.confirm",
-        "args": {
-          "id": "11111111-0000-4000-8000-000000000001"
-        },
-        "expect": {
-          "error": {
-            "code": "refused",
-            "reason": "local-only"
-          }
-        }
-      },
       {
         "call": "judge.resolve",
         "args": {
@@ -634,11 +560,165 @@
         }
       },
       {
+        "call": "judge.getPrediction",
+        "args": {
+          "id": "11111111-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "local-only"
+          }
+        }
+      },
+      {
+        "call": "judge.forgetPrediction",
+        "args": {
+          "id": "11111111-0000-4000-8000-000000000001"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "local-only"
+          }
+        }
+      },
+      {
         "call": "consolidate",
         "expect": {
           "error": {
             "code": "refused",
             "reason": "local-only"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.cloud-expert-role-is-refused",
+    "description": "An Oort key acts in the agent role: an expert-role handle is refused before any request, and expert decisions are made in the dashboard.",
+    "transports": ["cloud"],
+    "options": {
+      "judge": {
+        "role": "expert"
+      }
+    },
+    "expectCreate": {
+      "error": {
+        "code": "refused",
+        "reason": "expert-only",
+        "message": {
+          "$regex": "dashboard"
+        }
+      }
+    },
+    "steps": []
+  },
+  {
+    "id": "judge.cloud-a-key-records-and-a-person-decides",
+    "description": "In Oort Cloud a key records for the account's listed experts, unconfirmed; confirm, withdraw and the experts list are a person's, in the dashboard (expert_only on the wire).",
+    "transports": ["cloud"],
+    "options": {
+      "config": {
+        "judge": {
+          "experts": ["ada"]
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "judge.experts",
+        "expect": {
+          "result": {
+            "experts": ["ada"]
+          }
+        }
+      },
+      {
+        "call": "judge.record",
+        "args": {
+          "subject": "Post claims a cure",
+          "verdict": "rejected",
+          "reason": "No source.",
+          "domain": "content",
+          "by": "ada"
+        },
+        "expect": {
+          "result": {
+            "outcome": "added",
+            "status": "agent-recorded"
+          }
+        },
+        "save": {
+          "j": "$.id"
+        }
+      },
+      {
+        "call": "judge.list",
+        "expect": {
+          "result": {
+            "judgments": [
+              {
+                "id": "${j}",
+                "via": "mcp",
+                "agentRecorded": true,
+                "confirmed": false,
+                "origin": "agent"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "call": "judge.confirm",
+        "args": {
+          "id": "${j}"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "expert-only",
+            "status": 403
+          }
+        }
+      },
+      {
+        "call": "judge.withdraw",
+        "args": {
+          "id": "${j}"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "expert-only",
+            "status": 403
+          }
+        }
+      },
+      {
+        "call": "judge.setExperts",
+        "args": {
+          "experts": ["ada", "grace"]
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "expert-only",
+            "status": 403
+          }
+        }
+      },
+      {
+        "call": "judge.apply",
+        "args": {
+          "item": "Post claims a cure"
+        },
+        "expect": {
+          "result": {
+            "agentRecordedExcluded": 1,
+            "predictionId": {
+              "$absent": true
+            }
           }
         }
       }

@@ -227,6 +227,9 @@ def _cloud_kind(status: int, code: Optional[str]) -> str:
         return "end-user-limit"
     if status == 402:
         return "payment-required"
+    if status == 503 and code == "cap_unavailable":
+        # The daily count of agent-recorded judgments could not be kept: nothing was saved.
+        return "refused"
     if status == 403:
         if code == "cloud_not_enabled":
             return "not-enabled"
@@ -354,6 +357,12 @@ def cloud_error(
         # CON-132: only a server key acts for end users.
         if api_code == "end_users_not_allowed":
             return OortRefusedError(message, **opts, reason="end-users-not-allowed")
+        # Judgment refusals, with the reasons local mode gives them.
+        if api_code == "cap_unavailable":
+            return OortRefusedError(message, **opts, reason="cap-unavailable", retryable=True)
+        judged = _JUDGMENT_REASONS.get(api_code or "")
+        if judged is not None:
+            return OortRefusedError(message, **opts, reason=judged)
         return OortRefusedError(message, **opts, reason="forbidden")
     if kind == "end-user-limit":
         return OortRefusedError(message, **opts, reason="end-user-limit")
@@ -376,6 +385,8 @@ def cloud_error(
         return OortNeedsConfirmationError(message, **opts, reason="findings-unacknowledged")
     if api_code == "scope_denied":
         return OortRefusedError(message, **opts, reason="scope-denied")
+    if status == 409 and api_code == "not_current":
+        return OortRefusedError(message, **opts, reason="not-current")
     # CON-132's end-user refusals, with the reasons the client's own checks use.
     usage = _END_USER_USAGE.get(api_code or "")
     if usage is not None:
@@ -386,6 +397,14 @@ def cloud_error(
         # Erased while the write ran: nothing was stored, and a retry would make a new end user.
         return OortRefusedError(message, **opts, reason="end-user-erased")
     return OortUsageError(message, **opts, reason="bad-request")
+
+
+_JUDGMENT_REASONS = {
+    "experts_not_listed": "experts-not-listed",
+    "not_an_expert": "not-an-expert",
+    "daily_limit": "daily-limit",
+    "expert_only": "expert-only",
+}
 
 
 _END_USER_USAGE = {

@@ -60,6 +60,7 @@ import type {
 import {
   ConfirmOptionsSchema,
   ConsolidateSchema,
+  ExpertsSchema,
   ExportTrainingSchema,
   FactSchema,
   FactsSchema,
@@ -107,7 +108,7 @@ interface State {
 let poolRefs = 0;
 
 const CLOUD_ONLY = ['url', 'timeoutMs', 'fetch'] as const;
-const LOCAL_ONLY = ['config', 'migrate', 'judge'] as const;
+const LOCAL_ONLY = ['config', 'migrate'] as const;
 
 /** Refuses an option the resolved mode does not take: never silently ignored. */
 function checkMode(o: OortOptions, mode: 'local' | 'cloud'): void {
@@ -117,6 +118,9 @@ function checkMode(o: OortOptions, mode: 'local' | 'cloud'): void {
     return;
   }
   for (const k of LOCAL_ONLY) if (set(k)) throw local.notInMode(k, mode);
+  // An Oort key acts as an agent: the expert role is the dashboard's, refused before any request.
+  if (o.judge?.role === 'expert') throw cloud.cloudExpertOnly();
+  if (o.judge?.operator !== undefined) throw local.notInMode('judge.operator', mode);
   if (o.mode === 'cloud' && set('home')) throw local.notInMode('home', mode);
   for (const k of ['voyage', 'typesafe', 'anthropic'] as const) {
     if (o.keys?.[k] !== undefined) throw local.notInMode(`keys.${k}`, mode);
@@ -314,6 +318,12 @@ class OortHandle implements Oort {
         ),
       evalLive: (opts = {}) =>
         this.#run((ctx) => judge.evalLive(ctx, check(LiveEvalSchema, opts, 'eval options'))),
+      withdraw: (id: string) => this.#run((ctx) => judge.withdraw(ctx, check(IdSchema, id, 'id'))),
+      experts: {
+        get: () => this.#run((ctx) => judge.experts(ctx)),
+        set: (experts: readonly string[]) =>
+          this.#run((ctx) => judge.setExperts(ctx, check(ExpertsSchema, experts, 'experts'))),
+      },
     };
   }
 

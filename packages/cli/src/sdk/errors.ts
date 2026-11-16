@@ -190,6 +190,28 @@ function endUserRefusal(
   }
 }
 
+/**
+ * Oort Cloud's judgment refusals, with the reasons local mode gives the same refusals: the wire
+ * codes are snake_case, the reasons kebab-case.
+ */
+const JUDGMENT_REASONS: Readonly<Record<string, string>> = {
+  experts_not_listed: 'experts-not-listed',
+  not_an_expert: 'not-an-expert',
+  daily_limit: 'daily-limit',
+  expert_only: 'expert-only',
+};
+
+function judgmentRefusal(
+  e: OortCloudError,
+  opts: { fix: string | null; status: number; retryAfter?: number },
+): OortError | undefined {
+  // The daily count could not be kept, so nothing was saved: the same call may be run again.
+  if (e.apiCode === 'cap_unavailable')
+    return new OortRefusedError(e.message, { ...opts, reason: 'cap-unavailable', retryable: true });
+  const reason = e.apiCode === undefined ? undefined : JUDGMENT_REASONS[e.apiCode];
+  return reason === undefined ? undefined : new OortRefusedError(e.message, { ...opts, reason });
+}
+
 /** Oort Cloud's refusal as its SDK class, with the reason its kind and the API's code give. */
 function fromCloud(e: OortCloudError): OortError {
   const info = describeError(e, () => '');
@@ -212,11 +234,14 @@ function fromCloud(e: OortCloudError): OortError {
     case 'not-enabled':
     case 'hive-not-enabled':
       return new OortRefusedError(e.message, { ...opts, reason: e.kind });
-    case 'refused':
+    case 'refused': {
       // CON-132: only a server key acts for end users.
       if (e.apiCode === 'end_users_not_allowed')
         return new OortRefusedError(e.message, { ...opts, reason: 'end-users-not-allowed' });
+      const judged = judgmentRefusal(e, opts);
+      if (judged !== undefined) return judged;
       return new OortRefusedError(e.message, { ...opts, reason: 'forbidden' });
+    }
     case 'end-user-limit':
       // The plan's end users are all taken: a new one waits for an erasure, not for time.
       return new OortRefusedError(e.message, { ...opts, reason: e.kind });
@@ -246,6 +271,8 @@ function fromCloud(e: OortCloudError): OortError {
         });
       if (e.apiCode === 'scope_denied')
         return new OortRefusedError(e.message, { ...opts, reason: 'scope-denied' });
+      if (e.status === 409 && e.apiCode === 'not_current')
+        return new OortRefusedError(e.message, { ...opts, reason: 'not-current' });
       return (
         endUserRefusal(e, opts) ?? new OortUsageError(e.message, { ...opts, reason: 'bad-request' })
       );

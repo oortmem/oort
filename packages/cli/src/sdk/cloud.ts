@@ -1,4 +1,11 @@
-import { VERSION, activation, truncateUtf8, type Memory } from '@oortmem/core';
+import {
+  VERSION,
+  activation,
+  isLabelOrigin,
+  normaliseJudgment,
+  truncateUtf8,
+  type Memory,
+} from '@oortmem/core';
 import {
   OortCloudError,
   everywhereTarget,
@@ -10,21 +17,31 @@ import {
 } from '../cloud.js';
 import { scrubForCloud } from '../cloud-scrub.js';
 import { cloudRememberRequest } from '../remember.js';
-import { starInCloudMessage } from '../util.js';
+import { CLOUD_MEMORY_ID, starInCloudMessage } from '../util.js';
 import { privacyStatement } from '../wire.js';
 import type { Ctx } from './context.js';
 import { OortInternalError, OortRefusedError, OortUsageError } from './errors.js';
 import type {
+  ConfirmOptions,
   EndUserCount,
   EndUserErasure,
   EndUserExport,
   Explanation,
   ForgetResult,
+  JudgeItem,
+  JudgeOptions,
+  JudgeResult,
+  JudgmentInput,
+  JudgmentVia,
+  JudgmentView,
+  LabelOriginView,
+  MemoryStatus,
   MemoryType,
   MemoryView,
   ObserveResult,
   Outcome,
   PinResult,
+  RecordJudgmentView,
   RememberResult,
   Turn,
   Warning,
@@ -420,4 +437,345 @@ export function localOnly(what: string): OortRefusedError {
     `${what} is local-only for now: Oort Cloud does not hold it yet. Use mode: 'local'.`,
     { fix: 'oort cloud use --local', reason: 'local-only' },
   );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Judgments in Oort Cloud. An Oort key acts in the agent role: it records only for the account's
+// listed experts, within the daily cap, and what it records waits for a person to confirm it in
+// the dashboard. The answers are the local views; every text in them is scrubbed again here.
+
+/** Where a person confirms, withdraws and lists experts in Oort Cloud. */
+export const DASHBOARD_JUDGMENTS_URL = 'https://oortcloud.dev/dashboard/judgments';
+
+/** The expert role in cloud mode: refused before anything is sent. */
+export function cloudExpertOnly(): OortRefusedError {
+  return new OortRefusedError(
+    `Expert decisions in Oort Cloud are made in the dashboard (${DASHBOARD_JUDGMENTS_URL}): an Oort key acts in the agent role, so leave judge: { role: 'expert' } out in cloud mode.`,
+    { reason: 'expert-only' },
+  );
+}
+
+/** The experts list belongs to the account: an end user's handle has none of its own. */
+function refuseUser(ctx: Ctx, what: string): void {
+  if (ctx.user === null) return;
+  throw new OortUsageError(
+    `${what} acts for the account; this handle is scoped to an end user. Call it on the handle you made the end user's from.`,
+    { reason: 'user-not-supported' },
+  );
+}
+
+const unreadable = (): OortInternalError =>
+  new OortInternalError('Oort Cloud answered a judgment call this SDK cannot read.');
+
+const obj = (v: unknown): Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+const text = (v: unknown): string => clean(typeof v === 'string' ? v : '');
+const texts = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').map(clean) : [];
+const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+const optNum = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+const nums = (v: unknown): Record<string, number> =>
+  Object.fromEntries(
+    Object.entries(obj(v)).flatMap(([k, x]) => (typeof x === 'number' ? [[clean(k), x]] : [])),
+  );
+
+/** An Oort Cloud memory id, else the answer is unreadable: no other id is put in a result. */
+const cloudId = (v: unknown): string => {
+  if (typeof v !== 'string' || !CLOUD_MEMORY_ID.test(v)) throw unreadable();
+  return v;
+};
+
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/;
+/** A time from Oort Cloud: only an ISO date is passed on. */
+const isoTime = (v: unknown): v is string =>
+  typeof v === 'string' && ISO_TIME.test(v) && !Number.isNaN(Date.parse(v));
+
+const VIAS: Record<JudgmentVia, true> = {
+  cli: true,
+  mcp: true,
+  import: true,
+  pack: true,
+  sdk: true,
+};
+const JUDGE_STATUSES: Record<JudgeResult['status'], true> = {
+  suggested: true,
+  'needs-expert': true,
+  'precedents-only': true,
+};
+const JUDGE_WHYS: Record<NonNullable<JudgeResult['why']>, true> = {
+  'no-precedents': true,
+  'too-far': true,
+  'too-few': true,
+  'precedents-disagree': true,
+  'low-confidence': true,
+  'no-decider': true,
+  'decider-failed': true,
+};
+const known = <K extends string>(set: Record<K, true>, v: unknown): v is K =>
+  typeof v === 'string' && Object.hasOwn(set, v);
+
+/**
+ * How a judgment arrived, as core reads it. A missing or unknown `via` reads `mcp`, which is never
+ * taken for a person. Without the server's `agentRecorded`, an `mcp` record no person confirmed is
+ * an agent's, as core's `labelOrigin` reads a record from before origins.
+ */
+function provenance(j: Record<string, unknown>): { via: JudgmentVia; agentRecorded: boolean } {
+  const via = known(VIAS, j['via']) ? j['via'] : 'mcp';
+  const agentRecorded =
+    j['agentRecorded'] === true ||
+    (j['agentRecorded'] === undefined && via === 'mcp' && j['confirmed'] !== true);
+  return { via, agentRecorded };
+}
+
+/**
+ * How a label arrived. An Oort Cloud on a core from before label origins answers none: the SDK
+ * reads it as older local records read (`agent` when an agent recorded it and no person confirmed
+ * it, else `integration`).
+ */
+function cloudLabel(j: Record<string, unknown>, agentRecorded: boolean): LabelOriginView {
+  const up = obj(j['upstream']);
+  return {
+    origin: isLabelOrigin(j['origin']) ? j['origin'] : agentRecorded ? 'agent' : 'integration',
+    ...(typeof j['reviewer'] === 'string' && { reviewer: clean(j['reviewer']) }),
+    ...(typeof up['system'] === 'string' &&
+      typeof up['actor'] === 'string' && {
+        upstream: { system: clean(up['system']), actor: clean(up['actor']) },
+      }),
+    ...(isLabelOrigin(j['proposedOrigin']) && { proposedOrigin: j['proposedOrigin'] }),
+  };
+}
+
+function subjectOf(v: unknown): { summary: string; ref?: string } {
+  const s = obj(v);
+  return {
+    summary: text(s['summary']),
+    ...(typeof s['ref'] === 'string' && { ref: clean(s['ref']) }),
+  };
+}
+
+function packOf(v: unknown): { pack?: { id: string; name: string } } {
+  const p = obj(v);
+  return typeof p['id'] === 'string' && typeof p['name'] === 'string'
+    ? { pack: { id: clean(p['id']), name: clean(p['name']) } }
+    : {};
+}
+
+/** A listed judgment from Oort Cloud as the local `JudgmentView`. */
+export function cloudJudgmentView(raw: unknown): JudgmentView & { id: string } {
+  const j = obj(raw);
+  const id = cloudId(j['id']);
+  const { via, agentRecorded } = provenance(j);
+  const w = obj(j['withdrawn']);
+  return {
+    id,
+    subject: subjectOf(j['subject']),
+    verdict: text(j['verdict']),
+    verdicts: texts(j['verdicts']),
+    reason: text(j['reason']),
+    criteria: texts(j['criteria']),
+    domain: text(j['domain']),
+    by: text(j['by']),
+    decidedAt: isoTime(j['decidedAt']) ? j['decidedAt'] : '',
+    via,
+    status: (typeof j['status'] === 'string' ? j['status'] : 'current') as MemoryStatus,
+    confirmed: j['confirmed'] === true,
+    agentRecorded,
+    ...cloudLabel(j, agentRecorded),
+    ...(isoTime(w['at']) && { withdrawn: { at: w['at'], by: text(w['by']) } }),
+    ...packOf(j['pack']),
+  };
+}
+
+/** Records one judgment as an agent. Its fields are checked here first, as local mode checks them. */
+export async function recordJudgment(ctx: Ctx, input: JudgmentInput): Promise<RecordJudgmentView> {
+  refuseStar(ctx);
+  const body = {
+    subject: input.subject,
+    verdict: input.verdict,
+    reason: input.reason,
+    domain: input.domain,
+    by: input.by,
+    ...(input.ref !== undefined && { ref: input.ref }),
+    ...(input.verdicts !== undefined && { verdicts: [...input.verdicts] }),
+    ...(input.criteria !== undefined && { criteria: [...input.criteria] }),
+    ...(input.decidedAt !== undefined && { decidedAt: iso(input.decidedAt) }),
+  };
+  // A field the cloud would refuse is refused before anything leaves the machine. An agent's
+  // reviewer is ignored, as locally, so it is never sent.
+  normaliseJudgment(body, ctx.now());
+  return cloudRecordView(await clientOf(ctx).recordJudgment(body));
+}
+
+/** Oort Cloud's answer to a record as the local `RecordJudgmentView`. */
+export function cloudRecordView(raw: unknown): RecordJudgmentView {
+  const r = obj(raw);
+  if (typeof r['id'] !== 'string') throw unreadable();
+  return {
+    outcome: (typeof r['outcome'] === 'string'
+      ? r['outcome']
+      : 'added') as RecordJudgmentView['outcome'],
+    id: r['id'],
+    ...(typeof r['corrects'] === 'string' && { corrects: r['corrects'] }),
+    status: r['status'] === 'recorded' ? 'recorded' : 'agent-recorded',
+    redacted: texts(r['redacted']),
+    ...(r['embedFailed'] === true && { embedFailed: true as const }),
+  };
+}
+
+/**
+ * The expert's likely verdict from the account's judgments. Oort Cloud keeps no prediction a
+ * cloud handle could resolve (predictions are local-only), so no `predictionId` is passed on.
+ */
+export async function applyJudgments(
+  ctx: Ctx,
+  item: JudgeItem,
+  o: JudgeOptions,
+): Promise<JudgeResult> {
+  return cloudJudgeResult(
+    await clientOf(ctx).applyJudgments({
+      item: {
+        summary: item.summary,
+        ...(item.details !== undefined && { details: item.details }),
+        ...(item.ref !== undefined && { ref: item.ref }),
+        ...(item.domain !== undefined && { domain: item.domain }),
+        ...(item.by !== undefined && { by: item.by }),
+      },
+      ...o,
+    }),
+  );
+}
+
+/** Oort Cloud's answer to an apply as the local `JudgeResult`, with no `predictionId`. */
+export function cloudJudgeResult(raw: unknown): JudgeResult {
+  const r = obj(raw);
+  if (!known(JUDGE_STATUSES, r['status']) || !Array.isArray(r['precedents'])) throw unreadable();
+  const p = obj(r['prediction']);
+  return {
+    status: r['status'],
+    ...(known(JUDGE_WHYS, r['why']) && { why: r['why'] }),
+    ...(typeof p['verdict'] === 'string' && {
+      prediction: {
+        verdict: clean(p['verdict']),
+        probability: num(p['probability']),
+        probabilities: nums(p['probabilities']),
+      },
+    }),
+    precedents: r['precedents'].map((x) => {
+      const q = obj(x);
+      const confirmed = q['confirmed'] === true;
+      const { via, agentRecorded } = provenance(q);
+      return {
+        id: cloudId(q['id']),
+        subject: subjectOf(q['subject']),
+        verdict: text(q['verdict']),
+        reason: text(q['reason']),
+        criteria: texts(q['criteria']),
+        domain: text(q['domain']),
+        by: text(q['by']),
+        decidedAt: isoTime(q['decidedAt']) ? q['decidedAt'] : '',
+        similarity: num(q['similarity']),
+        near: q['near'] === true,
+        ...(typeof q['agrees'] === 'boolean' && { agrees: q['agrees'] }),
+        via,
+        confirmed,
+        agentRecorded,
+        ...packOf(q['pack']),
+      };
+    }),
+    verdicts: texts(r['verdicts']),
+    agreement: nums(r['agreement']),
+    similarity: r['similarity'] === 'dense' ? 'dense' : 'lexical',
+    threshold: num(r['threshold']),
+    minSimilarity: num(r['minSimilarity']),
+    ...(Array.isArray(r['degraded']) && { degraded: texts(r['degraded']) }),
+    decisions: (Array.isArray(r['decisions']) ? r['decisions'] : []).map((x) => {
+      const d = obj(x);
+      return {
+        stage: text(d['stage']),
+        question: text(d['question']),
+        answer: text(d['answer']),
+        probability: num(d['probability']),
+      };
+    }),
+    ...(optNum(r['importedExcluded']) !== undefined && {
+      importedExcluded: optNum(r['importedExcluded'])!,
+    }),
+    ...(optNum(r['agentRecordedExcluded']) !== undefined && {
+      agentRecordedExcluded: optNum(r['agentRecordedExcluded'])!,
+    }),
+  };
+}
+
+/** One page of judgments is at most this many (the API's limit). */
+const JUDGMENT_PAGE = 100;
+
+/** The account's judgments, newest first, paged through up to `limit` (default 100). */
+export async function listJudgments(
+  ctx: Ctx,
+  o: { domain?: string; by?: string; all?: boolean; limit?: number },
+): Promise<{ judgments: (JudgmentView & { id: string })[] }> {
+  const c = clientOf(ctx);
+  const limit = o.limit ?? 100;
+  const judgments: (JudgmentView & { id: string })[] = [];
+  let cursor: string | undefined;
+  while (judgments.length < limit) {
+    const r = await c.listJudgments({
+      ...(o.domain !== undefined && { domain: o.domain }),
+      ...(o.by !== undefined && { by: o.by }),
+      ...(o.all === true && { all: true }),
+      limit: Math.min(JUDGMENT_PAGE, limit - judgments.length),
+      ...(cursor !== undefined && { cursor }),
+    });
+    if (!Array.isArray(r.judgments)) throw unreadable();
+    judgments.push(...r.judgments.map(cloudJudgmentView));
+    if (typeof r.next !== 'string' || r.next === '' || r.judgments.length === 0) break;
+    cursor = r.next;
+  }
+  return { judgments: judgments.slice(0, limit) };
+}
+
+/** Sends a person's decision; Oort Cloud refuses a key's (`expert-only`), as the credential's role decides. */
+export async function confirmJudgment(
+  ctx: Ctx,
+  id: string,
+  o: ConfirmOptions,
+): Promise<{ id: string; changed: boolean }> {
+  const r = obj(
+    await clientOf(ctx).confirmJudgment(id, {
+      ...(o.reviewer !== undefined && { reviewer: o.reviewer }),
+    }),
+  );
+  if (typeof r['id'] !== 'string') throw unreadable();
+  return { id: r['id'], changed: r['changed'] === true };
+}
+
+export async function withdrawJudgment(
+  ctx: Ctx,
+  id: string,
+): Promise<{ id: string; withdrawn: true; changed: boolean; by: string | null }> {
+  const r = obj(await clientOf(ctx).withdrawJudgment(id));
+  if (typeof r['id'] !== 'string') throw unreadable();
+  return {
+    id: r['id'],
+    withdrawn: true,
+    changed: r['changed'] === true,
+    by: typeof r['by'] === 'string' ? clean(r['by']) : null,
+  };
+}
+
+/** The experts an agent may record for: the account's list. */
+export async function judgmentExperts(ctx: Ctx): Promise<{ experts: string[] }> {
+  refuseUser(ctx, 'judge.experts');
+  const r = await accountClient(ctx).judgmentExperts();
+  return { experts: texts(obj(r)['experts']) };
+}
+
+export async function setJudgmentExperts(
+  ctx: Ctx,
+  experts: readonly string[],
+): Promise<{ experts: string[] }> {
+  refuseUser(ctx, 'judge.experts');
+  const r = await accountClient(ctx).setJudgmentExperts([...experts]);
+  return { experts: texts(obj(r)['experts']) };
 }

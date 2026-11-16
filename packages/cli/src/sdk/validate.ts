@@ -273,6 +273,9 @@ export const LiveEvalSchema = z.strictObject({
   includeAgentResolved: z.boolean().optional(),
 });
 
+/** The experts list Oort Cloud keeps: at most 50 ids, each 1 to 128 characters. */
+export const ExpertsSchema = z.array(z.string().trim().min(1).max(128)).max(50);
+
 export const JudgeListSchema = z.strictObject({
   domain: z.string().optional(),
   by: z.string().optional(),

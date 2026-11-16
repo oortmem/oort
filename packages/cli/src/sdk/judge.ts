@@ -15,6 +15,7 @@ import {
   listPredictions as coreListPredictions,
   recordJudgment,
   resolvePrediction,
+  withdrawJudgment,
   type Judgment,
   labelOf,
   type LabelSource,
@@ -23,6 +24,7 @@ import {
 } from '@oortmem/core';
 import { AgentJudgmentCapError, refundAgentJudgment, reserveAgentJudgment } from '../judge-cap.js';
 import { storeOf, type Ctx } from './context.js';
+import * as cloud from './cloud.js';
 import { localOnly } from './cloud.js';
 import { findLocal } from './local.js';
 import { OortAmbiguousIdError, OortNotFoundError, OortRefusedError } from './errors.js';
@@ -47,7 +49,8 @@ import { judgeView, judgmentView, liveEvalView, predictionView } from './views.j
  * for experts the person listed in `judge.experts`, at most 50 a day per Oort home (MCP's cap and
  * counter), and what it records is stored exactly as MCP's (`via: 'mcp'`, `source.harness:
  * 'sdk'`), so every reader, 0.5.x included, treats it as unconfirmed. Expert role is explicit and
- * records `via: 'sdk'`.
+ * records `via: 'sdk'`. In cloud mode the record, list, apply, confirm, withdraw and experts calls
+ * go to Oort Cloud, whose credential sets the role (a key is an agent); predictions stay local.
  */
 
 /**
@@ -110,7 +113,7 @@ function recordView(r: RecordJudgmentResult, agent: boolean): RecordJudgmentView
 }
 
 export async function record(ctx: Ctx, input: JudgmentInput): Promise<RecordJudgmentView> {
-  localJudgments(ctx);
+  if (ctx.engine.mode === 'cloud') return cloud.recordJudgment(ctx, input);
   const store = storeOf(ctx);
   const now = ctx.now();
   const agent = ctx.judge.role === 'agent';
@@ -155,8 +158,8 @@ export async function apply(
   item: string | JudgeItem,
   o: JudgeOptions,
 ): Promise<JudgeResult> {
-  localJudgments(ctx);
   const i: JudgeItem = typeof item === 'string' ? { summary: item } : item;
+  if (ctx.engine.mode === 'cloud') return cloud.applyJudgments(ctx, i, o);
   const e = ctx.engine;
   const r = await coreJudge(
     {
@@ -191,7 +194,7 @@ export async function list(
   ctx: Ctx,
   o: { domain?: string; by?: string; all?: boolean; limit?: number },
 ): Promise<{ judgments: (JudgmentView & { id: string })[] }> {
-  localJudgments(ctx);
+  if (ctx.engine.mode === 'cloud') return cloud.listJudgments(ctx, o);
   const store = storeOf(ctx);
   const grant = ctx.principal.grant;
   const now = ctx.now();
@@ -226,7 +229,8 @@ export async function confirm(
   id: string,
   o: ConfirmOptions = {},
 ): Promise<{ id: string; changed: boolean }> {
-  localJudgments(ctx);
+  // Oort Cloud decides by the credential (a key is an agent, refused with `expert-only`).
+  if (ctx.engine.mode === 'cloud') return cloud.confirmJudgment(ctx, id, o);
   if (ctx.judge.role !== 'expert') {
     throw new OortRefusedError(
       'Only a person confirms an agent-recorded judgment: create the handle with judge: { role: "expert" } in a code path where a person decided.',
@@ -285,6 +289,54 @@ export async function confirm(
     label,
   );
   return { id: m.id, changed: ok };
+}
+
+/**
+ * Withdraws a judgment: it stops counting anywhere, at once (`oort judge withdraw`). Expert role
+ * only, recorded as withdrawn by the handle's operator. One already withdrawn is left as it was.
+ */
+export async function withdraw(
+  ctx: Ctx,
+  id: string,
+): Promise<{ id: string; withdrawn: true; changed: boolean; by: string | null }> {
+  if (ctx.engine.mode === 'cloud') return cloud.withdrawJudgment(ctx, id);
+  if (ctx.judge.role !== 'expert') {
+    throw new OortRefusedError(
+      'Only a person withdraws a judgment: create the handle with judge: { role: "expert" } in a code path where a person decided.',
+      { reason: 'expert-only' },
+    );
+  }
+  const m = await findLocal(ctx, id);
+  if (m.type !== 'judgment' || m.judgment === undefined) {
+    throw new OortNotFoundError('No judgment with that id in this scope.');
+  }
+  if (m.judgment.withdrawn !== undefined) {
+    return { id: m.id, withdrawn: true, changed: false, by: null };
+  }
+  const by = ctx.judge.operator;
+  const changed = await withdrawJudgment(storeOf(ctx), ctx.principal.grant, m, by, ctx.now());
+  return { id: m.id, withdrawn: true, changed, by: changed ? by : null };
+}
+
+/** The experts an agent may record judgments for: the home config's (local), the account's (cloud). */
+export async function experts(ctx: Ctx): Promise<{ experts: string[] }> {
+  if (ctx.engine.mode === 'cloud') return cloud.judgmentExperts(ctx);
+  return { experts: [...ctx.engine.config.judge.experts] };
+}
+
+/**
+ * Replaces the experts list. Oort Cloud takes it from the expert role only (a key is refused with
+ * `expert-only`); locally it lives in the home config, which code does not write.
+ */
+export async function setExperts(
+  ctx: Ctx,
+  list: readonly string[],
+): Promise<{ experts: string[] }> {
+  if (ctx.engine.mode === 'cloud') return cloud.setJudgmentExperts(ctx, list);
+  throw new OortRefusedError(
+    'Locally, the experts are judge.experts in the home config (~/.oort/config.json), or the config option when you create the handle; code does not write the home config.',
+    { reason: 'experts-in-config' },
+  );
 }
 
 /**

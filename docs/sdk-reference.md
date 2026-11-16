@@ -368,7 +368,10 @@ export interface OortOptions {
   env?: Record<string, string | undefined>;
   /** The fetch cloud mode uses; default the keep-alive pool. */
   fetch?: typeof fetch;
-  /** Default `{ role: 'agent' }`. */
+  /**
+   * Default `{ role: 'agent' }`. Cloud mode takes `{ role: 'agent' }` only: an Oort key acts as an
+   * agent, so `expert` is refused (`expert-only`) and expert decisions are made in the dashboard.
+   */
   judge?: {
     role: JudgeRole;
     operator?: string;
@@ -1426,12 +1429,37 @@ export interface OortJudge {
   }>;
   /**
    * Expert role only. Takes a judgment id, or a prediction id to confirm an agent's resolve of it
-   * (and the judgment that resolve recorded).
+   * (and the judgment that resolve recorded). In cloud mode Oort Cloud decides by the key, and
+   * a key acts as an agent (`expert-only`): a person confirms in the dashboard.
    */
   confirm(id: string, opts?: ConfirmOptions): Promise<{
     id: string;
     changed: boolean;
   }>;
+  /**
+   * Expert role only: the judgment stops counting anywhere, at once, recorded as withdrawn by the
+   * operator. `changed: false` (and `by: null`) when it was already withdrawn. In cloud mode, as
+   * `confirm`: a person withdraws in the dashboard.
+   */
+  withdraw(id: string): Promise<{
+    id: string;
+    withdrawn: true;
+    changed: boolean;
+    by: string | null;
+  }>;
+  /**
+   * The experts an agent may record judgments for. Local: the home config's `judge.experts` (or
+   * the `config` option). Cloud: the account's list, which a person sets in the dashboard; `set`
+   * from a key is refused (`expert-only`), and locally refused (`experts-in-config`).
+   */
+  readonly experts: {
+    get(): Promise<{
+      experts: string[];
+    }>;
+    set(experts: readonly string[]): Promise<{
+      experts: string[];
+    }>;
+  };
   /**
    * Records a person's decision on a prediction (`JudgeResult.predictionId`). In agent role it
    * is stored unconfirmed, and `by` must be listed in `judge.experts`.

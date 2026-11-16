@@ -125,6 +125,7 @@ describe('cloud url and errors', () => {
     for (const [k, kind] of [
       ...Object.entries(CONTRACT.errors),
       ...Object.entries(CONTRACT.endUsers.errors),
+      ...Object.entries(CONTRACT.judgments.errors),
     ]) {
       const [status, code] = k.split(':');
       expect(cloudErrorKind(Number(status), code), k).toBe(kind);

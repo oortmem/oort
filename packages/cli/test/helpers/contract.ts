@@ -13,7 +13,7 @@ import {
   type NodeRef,
 } from '@oortmem/core';
 import { openSqliteStore } from '@oortmem/store-sqlite';
-import type { FakeCloud } from './fake-cloud.js';
+import { fakeMemory, seedFakeJudgment, type FakeCloud } from './fake-cloud.js';
 import { FAKE_DIMENSION, hashEmbedder } from './sdk-fakes.js';
 
 /**
@@ -40,7 +40,13 @@ export interface Step {
   expect?: { result?: unknown; error?: unknown };
   save?: Record<string, string>;
   cloud?: { fail?: FailSpec };
+  /** The transports this step runs on; default every one the case names. */
+  transports?: Transport[];
 }
+
+/** Whether a step runs on `transport`. */
+export const stepRuns = (step: Step, transport: Transport): boolean =>
+  step.transports === undefined || step.transports.includes(transport);
 
 export interface Case {
   id: string;
@@ -425,4 +431,48 @@ export async function readJudgment(home: string, id: string): Promise<Record<str
 export function endUsersOf(fake: FakeCloud, c: Case): void {
   if (c.cloud?.endUsers === 'legacy') fake.endUsers.server = 'legacy';
   if (c.cloud?.endUsers === 'server-key') fake.endUsers.serverKey = true;
+}
+
+/**
+ * Seeds the fake Oort Cloud for a case: the seed's Planet memories and judgments, the bulk
+ * memories, the per-user setting, the judgment clock and the daily count (`counter`), and the
+ * account's experts list. A case's `options.config` stands for the home config: on the cloud
+ * transport only `judge.experts` may be in it, and it becomes the account's experts list (as the
+ * dashboard sets it). Returns the createOort options without `config`.
+ */
+export async function seedCloud(
+  fake: FakeCloud,
+  c: Case,
+  seed: Seed,
+  now: string,
+  options: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  for (const raw of seed.memories ?? []) {
+    const s = substitute(raw, new Map()) as SeedMemory;
+    if ((s.level ?? 'planet') !== 'planet' || (s.user ?? 'self') !== 'self') continue;
+    const m = seedMemory(s);
+    fake.memories.set(m.id, fakeMemory({ ...(m as unknown as Record<string, unknown>), id: m.id }));
+  }
+  for (let i = 0; i < (c.cloud?.memories ?? 0); i++) {
+    const at = new Date(Date.parse(now) - i * 60_000).toISOString();
+    const m = fakeMemory({ text: `bulk memory number ${i}`, updatedAt: at, createdAt: at });
+    fake.memories.set(m.id, m);
+  }
+  endUsersOf(fake, c);
+  fake.judgments.now = () => new Date(now);
+  for (const j of seed.judgments ?? []) {
+    await seedFakeJudgment(fake, j, new Date(Date.parse(now) - 86_400_000), new Date(now));
+  }
+  if (c.counter !== undefined) fake.judgments.counts.set(now.slice(0, 10), c.counter);
+  const { config, ...rest } = options;
+  if (config !== undefined) {
+    const { judge, ...other } = config as { judge?: { experts?: string[] } };
+    const extra = [
+      ...Object.keys(other),
+      ...Object.keys(judge ?? {}).filter((k) => k !== 'experts'),
+    ];
+    if (extra.length > 0) throw new Error(`a cloud case's config may hold judge.experts only`);
+    fake.judgments.experts = [...(judge?.experts ?? [])];
+  }
+  return rest;
 }

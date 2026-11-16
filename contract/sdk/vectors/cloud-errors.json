@@ -433,5 +433,95 @@
       "retryAfter": null,
       "message": "Oort Cloud refused the request (HTTP 409): This end user was erased."
     }
+  },
+  {
+    "status": 403,
+    "code": "experts_not_listed",
+    "message": "No experts are listed.",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "experts-not-listed",
+      "fix": null,
+      "status": 403,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused this (HTTP 403): No experts are listed."
+    }
+  },
+  {
+    "status": 403,
+    "code": "not_an_expert",
+    "message": "by is not a listed expert.",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "not-an-expert",
+      "fix": null,
+      "status": 403,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused this (HTTP 403): by is not a listed expert."
+    }
+  },
+  {
+    "status": 403,
+    "code": "daily_limit",
+    "message": "Agents recorded 50 judgments today.",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "daily-limit",
+      "fix": null,
+      "status": 403,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused this (HTTP 403): Agents recorded 50 judgments today."
+    }
+  },
+  {
+    "status": 403,
+    "code": "expert_only",
+    "message": "A person decides this in the dashboard.",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "expert-only",
+      "fix": null,
+      "status": 403,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused this (HTTP 403): A person decides this in the dashboard."
+    }
+  },
+  {
+    "status": 503,
+    "code": "cap_unavailable",
+    "message": "The daily count could not be kept.",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "cap-unavailable",
+      "fix": null,
+      "status": 503,
+      "retryable": true,
+      "retryAfter": null,
+      "message": "Oort Cloud refused this (HTTP 503): The daily count could not be kept."
+    }
+  },
+  {
+    "status": 409,
+    "code": "not_current",
+    "message": "That judgment is not current.",
+    "expect": {
+      "name": "OortRefusedError",
+      "code": "refused",
+      "reason": "not-current",
+      "fix": null,
+      "status": 409,
+      "retryable": false,
+      "retryAfter": null,
+      "message": "Oort Cloud refused the request (HTTP 409): That judgment is not current."
+    }
   }
 ]

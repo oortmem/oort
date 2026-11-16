@@ -83,7 +83,7 @@ ignored.
 | `migrate`       | `boolean`                                            | local                       | `true`, as every CLI command. `false` refuses an older store (`refused`, `migration-required`)       |
 | `env`           | `Record<string, string \| undefined>`                | all                         | `process.env`                                                                                        |
 | `fetch`         | `typeof fetch`                                       | cloud                       | a keep-alive connection pool                                                                         |
-| `judge`         | `{ role: 'agent' \| 'expert'; operator?: string }`   | local                       | `{ role: 'agent' }` (see [Judgments](#judgments))                                                    |
+| `judge`         | `{ role: 'agent' \| 'expert'; operator?: string }`   | local; cloud (`role: 'agent'` only) | `{ role: 'agent' }` (see [Judgments](#judgments))                                                    |
 
 **Keys.** Each model role (embed, rerank, decide, write) uses the first key found: `keys.<vendor>`,
 then `VOYAGE_API_KEY`, `TYPESAFE_API_KEY` or `ANTHROPIC_API_KEY`, then the Keychain (or
@@ -114,10 +114,12 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 | `explain(id)`                                  | `Explanation` (with `links` and `hiddenLinks`) | yes | yes (`links` is empty)   |
 | `link(from, to)` / `unlink(from, to)`          | `{ linked, unblocked, assertedBy }` / `{ removed, blocked }` | yes | `refused` (`local-only`) |
 | `whoami()`                                     | `Whoami` (mode, agent, project, user, reads, writesTo, routes) | yes | yes        |
-| `judge.record(input)`                          | `RecordJudgmentView`                       | yes   | `refused`                 |
-| `judge.apply(item, opts?)`                     | `JudgeResult`                              | yes   | `refused`                 |
-| `judge.list({ domain?, by?, all?, limit? })`   | `{ judgments }`                            | yes   | `refused`                 |
-| `judge.confirm(id, { reviewer? })`             | `{ id, changed }`                          | expert role only | `refused`      |
+| `judge.record(input)`                          | `RecordJudgmentView`                       | yes   | yes (agent role)          |
+| `judge.apply(item, opts?)`                     | `JudgeResult`                              | yes   | yes (no `predictionId`)   |
+| `judge.list({ domain?, by?, all?, limit? })`   | `{ judgments }`                            | yes   | yes                       |
+| `judge.confirm(id, { reviewer? })`             | `{ id, changed }`                          | expert role only | `refused` (`expert-only`: the dashboard) |
+| `judge.withdraw(id)`                           | `{ id, withdrawn, changed, by }`           | expert role only | `refused` (`expert-only`: the dashboard) |
+| `judge.experts.get()` / `judge.experts.set(experts)` | `{ experts }`                        | `get` (`set`: `experts-in-config`) | `get`; `set`: `refused` (`expert-only`: the dashboard) |
 | `judge.resolve(predictionId, { verdict, reason?, criteria?, by, domain?, reviewer? })` | `ResolveView` (`agrees`, `prediction`, `judgment?`) | yes | `refused` |
 | `judge.listPredictions({ status?, limit?, domain? })` | `{ predictions }`                   | yes   | `refused`                 |
 | `judge.getPrediction(id)` / `judge.forgetPrediction(id)` | `PredictionView` / `{ id, forgotten }` | yes | `refused`               |
@@ -348,6 +350,68 @@ UI, an import job): `createOort({ judge: { role: 'expert', operator: 'grace' } }
 anyone's judgments as `via: 'sdk'`, which counts as a person's, and may `confirm` an agent's
 record. `scoped({ judgeRole: 'agent' })` narrows a handle back to the agent role; nothing widens
 it. Framework tools always run in the agent role.
+
+`judge.withdraw(id)` takes a judgment back: it stops counting anywhere at once, and stays listed
+with `all: true`. It is the expert role's, like `confirm`. Withdrawing one that is already
+withdrawn returns `changed: false`. `judge.experts.get()` returns the experts list; locally it is
+the home config's (or the `config` option's), so `judge.experts.set()` is refused there
+(`experts-in-config`).
+
+### In Oort Cloud
+
+In cloud mode the credential sets the role. An Oort key acts in the agent role, so a cloud handle
+records, lists and applies judgments as an agent, under the same rules as locally.
+
+<!-- example: examples/src/cloud-judgments.ts -->
+
+```ts
+import { createOort, OortRefusedError } from 'oortmem';
+
+// In Oort Cloud an Oort key acts in the agent role: it records for the experts your account lists
+// in the dashboard, and what it records waits there for a person to confirm it.
+await using oort = await createOort({ mode: 'cloud', keySources: ['env'] });
+
+const { experts } = await oort.judge.experts.get();
+const draft = await oort.judge.record({
+  subject: 'Post claims a miracle cure for colds',
+  verdict: 'rejected',
+  reason: 'No source.',
+  domain: 'content',
+  by: experts[0]!,
+});
+console.log(draft.status); // 'agent-recorded'
+
+// Unconfirmed agent records are left out of judging until a person confirms them.
+const r = await oort.judge.apply({ summary: 'Post claims a miracle cure', domain: 'content' });
+console.log(r.status, r.agentRecordedExcluded);
+
+try {
+  await oort.judge.confirm(draft.id);
+} catch (e) {
+  // A person's decision: made in the dashboard, not with a key.
+  if (!(e instanceof OortRefusedError) || e.reason !== 'expert-only') throw e;
+  console.log('confirm in the dashboard');
+}
+```
+
+- It records only for the experts your account lists, which you set in the dashboard
+  (`judge.experts.get()` reads them). The same refusals apply: `experts-not-listed`,
+  `not-an-expert`, and `daily-limit` after 50 agent records a day. The cap is counted per account,
+  and per end user for a server key's `scoped({ user })` handles.
+- What it records stays unconfirmed until a person confirms it in the dashboard, so `judge.apply`
+  leaves it out until then.
+- A person's decisions are made in the dashboard at
+  [oortcloud.dev/dashboard/judgments](https://oortcloud.dev/dashboard/judgments): `judge.confirm`,
+  `judge.withdraw` and `judge.experts.set` are refused (`expert-only`).
+- `createOort({ mode: 'cloud', judge: { role: 'expert' } })` is refused before any request
+  (`expert-only`), and `judge.operator` is local only.
+- Predictions stay local: `judge.apply` keeps none in the cloud (no `predictionId`), and
+  `judge.resolve`, `judge.listPredictions`, `judge.getPrediction`, `judge.forgetPrediction`,
+  `judge.evalLive` and `exportTraining` are refused (`local-only`).
+- The experts list is the account's: on a handle scoped to an end user, `judge.experts.get()` is
+  refused (`user-not-supported`), while recording for those experts works.
+- `refused`, `cap-unavailable` (retryable) means Oort Cloud could not keep the daily count; nothing
+  was recorded.
 
 ### Predictions and what the expert decided
 
@@ -681,7 +745,7 @@ own error is reported by its class name only.
 | `OortNeedsConfirmationError`   | `needs-confirmation` | `preview-required`, `findings-unacknowledged` (Oort Cloud 409)                      |
 | `OortCloudOnlyError`           | `cloud-only`         | `hive-level`, `end-users` (`endUsers` locally), or `forget({ everywhere })` locally |
 | `OortNetworkError`             | `network`            | `unreachable`, `timeout`, `busy` (retryable)                                        |
-| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `conflict` (a prediction changed meanwhile; retryable), `in-progress` (a feedback row another call is resolving; retryable), `memory-changed` (a supersede could not take back its new memory; inspect it first), `predictions-unsupported` (a store that cannot keep predictions), `export-exists` (`exportTraining` into a directory that holds an earlier export; pass `force`), `not-a-directory` (`exportTraining` to a file or a symlink), `unsafe-directory` (`exportTraining` to an existing directory other users can write to), `store-changing` (`exportTraining` while labels kept changing; retryable), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
+| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only` (in Oort Cloud: a person's decision, made in the dashboard), `experts-in-config` (`judge.experts.set` locally), `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `conflict` (a prediction changed meanwhile; retryable), `in-progress` (a feedback row another call is resolving; retryable), `memory-changed` (a supersede could not take back its new memory; inspect it first), `predictions-unsupported` (a store that cannot keep predictions), `export-exists` (`exportTraining` into a directory that holds an earlier export; pass `force`), `not-a-directory` (`exportTraining` to a file or a symlink), `unsafe-directory` (`exportTraining` to an existing directory other users can write to), `store-changing` (`exportTraining` while labels kept changing; retryable), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
 | `OortInternalError`            | `internal`           | `store-busy` (retryable), `predictions-not-purged` (retryable), else none          |
 
 Retry what is `retryable`, then branch on `code`:
@@ -741,11 +805,11 @@ your Oort account); `whoami().routes` says which applies to each role.
 | `recall` | A Voyage embed (skipped on a cache hit or a confident keyword answer; a [question about two things](cli.md#questions-about-two-things) adds one input per part to the same request) and a Voyage rerank (skipped when confident, or with `speed: 'fast'`). With `recall.adaptiveStop: 'decide'` (0.9.0 or newer), a TypeSafe call when a `full` recall finds cold matches beside hot and warm ones. `speed: 'lexical'`: no model call | none (`decide` still needs a key) | Metered Oort Cloud recall |
 | `observe` | A TypeSafe gate, always. If kept: one Anthropic writer call, one batched Voyage embed, and a TypeSafe reconcile per fact | Gate, writer and reconcile still need keys | Metered Oort Cloud observe |
 | `remember` | One observe per fact | as above | One metered observe per fact |
-| `judge.record` | One Voyage embed | none | `refused` |
-| `judge.apply` | One Voyage embed and one TypeSafe judge call | TypeSafe judge only | `refused` |
+| `judge.record` | One Voyage embed | none | Metered as one Oort Cloud save |
+| `judge.apply` | One Voyage embed and one TypeSafe judge call | TypeSafe judge only | Metered as one Oort Cloud recall |
 | `forget` | None, unless later memories of its chain restate one of its values: then one Anthropic writer call (that memory's text only) and one Voyage embed for each (CON-144) | The writer call still needs a key; the embed is local | No model call |
 | `judge.resolve` | One Voyage embed when it records a judgment, else none | none | `refused` |
-| `pin`, `unpin`, `link`, `unlink`, `explain`, `recent`, `judge.list`, `judge.confirm`, `judge.listPredictions`, `judge.getPrediction`, `judge.forgetPrediction`, `judge.evalLive`, `consolidate`, `whoami` | none | none | No model call |
+| `pin`, `unpin`, `link`, `unlink`, `explain`, `recent`, `judge.list`, `judge.confirm`, `judge.withdraw`, `judge.experts`, `judge.listPredictions`, `judge.getPrediction`, `judge.forgetPrediction`, `judge.evalLive`, `consolidate`, `whoami` | none | none | No model call |
 
 `keySources: ['explicit']` turns off every implicit source, the relay included unless you pass
 `keys.oort`.

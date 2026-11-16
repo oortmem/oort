@@ -7,7 +7,6 @@ import {
   CASES,
   DEFAULT_NOW,
   ROOT,
-  endUsersOf,
   SECRETS,
   errorShape,
   expectMatch,
@@ -15,16 +14,16 @@ import {
   pick,
   readJson,
   readJudgment,
+  seedCloud,
   seedLocal,
-  seedMemory,
+  stepRuns,
   substitute,
   type Case,
   type Seed,
-  type SeedMemory,
   type Step,
   type Transport,
 } from '../../test/helpers/contract.js';
-import { fakeCloud, fakeMemory, type FakeCloud } from '../../test/helpers/fake-cloud.js';
+import { fakeCloud, type FakeCloud } from '../../test/helpers/fake-cloud.js';
 import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
 import { createOortWith } from './create.js';
 import type { Oort, RecallResult } from './types.js';
@@ -100,6 +99,12 @@ async function call(oort: Oort, step: Step, args: Record<string, unknown>): Prom
       return oort.judge.forgetPrediction(args['id'] as string);
     case 'judge.evalLive':
       return oort.judge.evalLive(args);
+    case 'judge.withdraw':
+      return oort.judge.withdraw(args['id'] as string);
+    case 'judge.experts':
+      return oort.judge.experts.get();
+    case 'judge.setExperts':
+      return oort.judge.experts.set(args['experts'] as string[]);
     case 'formatForPrompt': {
       const { result, ...opts } = args;
       return formatForPrompt(result as RecallResult, opts);
@@ -147,28 +152,14 @@ async function runCase(c: Case, transport: Transport): Promise<void> {
       );
   } else {
     fake = fakeCloud(key);
-    for (const raw of seed.memories ?? []) {
-      const s = substitute(raw, saved) as SeedMemory;
-      if ((s.level ?? 'planet') !== 'planet' || (s.user ?? 'self') !== 'self') continue;
-      const m = seedMemory(s);
-      fake.memories.set(
-        m.id,
-        fakeMemory({ ...(m as unknown as Record<string, unknown>), id: m.id }),
-      );
-    }
-    for (let i = 0; i < (c.cloud?.memories ?? 0); i++) {
-      const at = new Date(Date.parse(now) - i * 60_000).toISOString();
-      const m = fakeMemory({ text: `bulk memory number ${i}`, updatedAt: at, createdAt: at });
-      fake.memories.set(m.id, m);
-    }
+    const cloudOptions = await seedCloud(fake, c, seed, now, options);
     if (c.cloud?.fail !== undefined) fake.fail = { ...c.cloud.fail };
-    endUsersOf(fake, c);
     const env: Record<string, string> = { HOME: root, OORT_HOME: home, OORT_NO_KEYCHAIN: '1' };
     if (c.cloud?.noKey !== true) env['OORT_API_KEY'] = key;
     const f = fake;
     create = () =>
       createOortWith(
-        { mode: 'cloud', cwd, env, fetch: f.fetch, keySources: ['env'], ...options },
+        { mode: 'cloud', cwd, env, fetch: f.fetch, keySources: ['env'], ...cloudOptions },
         { now: () => new Date(now) },
       );
   }
@@ -186,6 +177,7 @@ async function runCase(c: Case, transport: Transport): Promise<void> {
   const handles = new Map<string, Oort>([['root', oort]]);
   try {
     for (const [i, step] of c.steps.entries()) {
+      if (!stepRuns(step, transport)) continue;
       const what = `step ${i} (${step.call})`;
       const args = substitute(step.args ?? {}, saved) as Record<string, unknown>;
       if (fake !== undefined) fake.fail = { ...c.cloud?.fail, ...step.cloud?.fail };

@@ -457,7 +457,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'record_judgment',
     title: 'Record a judgment',
     description:
-      'Record one decision an expert explicitly made, with their reason verbatim. Saved as agent-recorded and unconfirmed until a person confirms it; only for experts this machine lists.',
+      'Record one decision an expert explicitly made, with their reason verbatim. Saved as agent-recorded and unconfirmed until a person confirms it; only for experts the person listed.',
     annotations: {
       title: 'Record a judgment',
       readOnlyHint: false,

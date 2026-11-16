@@ -1,5 +1,19 @@
 import { randomUUID } from 'node:crypto';
+import {
+  JudgmentInputError,
+  activeJudgments,
+  confirmJudgment,
+  createMemoryStore,
+  judge as coreJudge,
+  localGrant,
+  recordJudgment,
+  type Judgment,
+  type Memory,
+  type MemoryStore,
+} from '@oortmem/core';
+import { judgeView, judgmentView } from '../../src/sdk/views.js';
 import CONTRACT from '../cloud-contract.json' with { type: 'json' };
+import { hashEmbedder, ruleDecider } from './sdk-fakes.js';
 
 /**
  * An in-process Oort Cloud that follows `cloud-contract.json`: the routes, the request and response
@@ -70,6 +84,235 @@ export interface FakeCloud {
   forgetAnswer?: Record<string, unknown> | 'pre-rewrite';
   /** Awaited before answering `GET /v1/memories/:id` (the id asked): a test's hold on reads. */
   getGate?: (id: string) => Promise<void> | void;
+  /** Judgments (the contract's `judgments`): core's own rules on an in-memory store. */
+  judgments: FakeJudgments;
+}
+
+/**
+ * Judgments as the fake keeps them: core's `recordJudgment` and `judge` on an in-memory store,
+ * with the SDK's deterministic models, so a cloud answer is the local one. The key in use acts in
+ * the agent role, as every Oort key does: it records only for `experts`, at most
+ * `limits.agentPerDay` a UTC day, and the expert-only routes answer 403 `expert_only`.
+ */
+export interface FakeJudgments {
+  store: MemoryStore;
+  /** The account's experts list (an end user's requests use the account's). */
+  experts: string[];
+  /** Agent records per UTC day (`YYYY-MM-DD`), for this fake's principal. */
+  counts: Map<string, number>;
+  /** The clock judgments are recorded and listed at; default the real one. */
+  now: () => Date;
+  /** Bodies sent to POST /v1/judgments, in order. */
+  records: Record<string, unknown>[];
+}
+
+const JUDGMENT_SCOPE = { orgId: 'local', customerId: 'self', agentId: 'anonymous' };
+const JUDGMENT_GRANT = localGrant({ ...JUDGMENT_SCOPE, projectIds: [null] });
+const fakeEmbed = hashEmbedder();
+
+function fakeJudgments(): FakeJudgments {
+  const j: FakeJudgments = {
+    experts: [],
+    counts: new Map(),
+    now: () => new Date(),
+    records: [],
+    store: createMemoryStore({ now: () => j.now() }),
+  };
+  return j;
+}
+
+/** Records a judgment as a person would have (a seed): `via` cli unless given. */
+export async function seedFakeJudgment(
+  c: FakeCloud,
+  s: {
+    subject: string;
+    verdict: string;
+    reason: string;
+    domain: string;
+    by: string;
+    ref?: string;
+    via?: 'cli' | 'mcp';
+    confirmed?: boolean;
+  },
+  at: Date,
+  confirmedAt = at,
+): Promise<string> {
+  const r = await recordJudgment(
+    {
+      subject: s.subject,
+      verdict: s.verdict,
+      reason: s.reason,
+      domain: s.domain,
+      by: s.by,
+      ...(s.ref !== undefined && { ref: s.ref }),
+    },
+    {
+      store: c.judgments.store,
+      grant: JUDGMENT_GRANT,
+      scope: JUDGMENT_SCOPE,
+      embed: fakeEmbed,
+      via: s.via ?? 'cli',
+      harness: 'seed',
+      now: at,
+    },
+  );
+  if (s.confirmed === true) {
+    await confirmJudgment(c.judgments.store, JUDGMENT_GRANT, r.memory, 'seed', confirmedAt);
+  }
+  return r.memory.id;
+}
+
+/** The judgment routes (the contract's `judgments.routes`); undefined for any other route. */
+async function judgmentRoute(c: FakeCloud, req: Request, url: URL): Promise<Response | undefined> {
+  const p = url.pathname;
+  if (!p.startsWith('/v1/judgments')) return undefined;
+  const j = c.judgments;
+  const now = j.now();
+  const limits = CONTRACT.judgments.limits;
+  const expertOnly = () =>
+    err(
+      403,
+      'expert_only',
+      'An Oort key acts as an agent: a person makes this decision in the dashboard.',
+    );
+  const bodyOf = async (max: number): Promise<Record<string, unknown> | Response> => {
+    const text = await req.text();
+    if (Buffer.byteLength(text) > max) return err(413, 'too_large', `At most ${max} bytes.`);
+    let b: unknown;
+    try {
+      b = text === '' ? {} : JSON.parse(text);
+    } catch {
+      return err(400, 'bad_request', 'The body must be a JSON object.');
+    }
+    if (typeof b !== 'object' || b === null || Array.isArray(b)) {
+      return err(400, 'bad_request', 'The body must be a JSON object.');
+    }
+    for (const f of ['origin', 'proposedOrigin', 'upstream']) {
+      if (f in b) return err(400, 'bad_request', `${f} is set by Oort Cloud, never sent.`);
+    }
+    return b as Record<string, unknown>;
+  };
+  if (p === '/v1/judgments/experts') {
+    if (req.method === 'PUT') return expertOnly();
+    return Response.json({ experts: [...j.experts] });
+  }
+  if (/^\/v1\/judgments\/[^/]+\/(confirm|withdraw)$/.test(p)) return expertOnly();
+  if (p === '/v1/judgments' && req.method === 'POST') {
+    const b = await bodyOf(limits.recordBytes);
+    if (b instanceof Response) return b;
+    j.records.push(b);
+    if (typeof b['by'] !== 'string') return err(400, 'bad_request', 'by is required.');
+    if (j.experts.length === 0) {
+      return err(
+        403,
+        'experts_not_listed',
+        'An agent records judgments only for the experts listed in the dashboard, and none are listed.',
+      );
+    }
+    if (!j.experts.includes(b['by'].trim())) {
+      return err(
+        403,
+        'not_an_expert',
+        'by is not one of the experts listed in the dashboard, so an agent cannot record judgments in their name.',
+      );
+    }
+    // A slot is reserved before the write and given back when nothing was written.
+    const day = now.toISOString().slice(0, 10);
+    const n = j.counts.get(day) ?? 0;
+    if (n >= limits.agentPerDay) {
+      return err(
+        403,
+        'daily_limit',
+        `Agents already recorded ${limits.agentPerDay} judgments today; a person records more in the dashboard.`,
+      );
+    }
+    j.counts.set(day, n + 1);
+    let wrote = false;
+    try {
+      const r = await recordJudgment(b as never, {
+        store: j.store,
+        grant: JUDGMENT_GRANT,
+        scope: JUDGMENT_SCOPE,
+        embed: fakeEmbed,
+        via: 'mcp',
+        harness: 'cloud',
+        label: { origin: 'agent' },
+        now,
+      });
+      wrote = r.outcome !== 'unchanged';
+      return Response.json({
+        outcome: r.outcome,
+        id: r.memory.id,
+        ...(r.supersedes !== undefined && { corrects: r.supersedes }),
+        status: 'agent-recorded',
+        redacted: [...r.redacted],
+        ...(r.embedFailed === true && { embedFailed: true }),
+      });
+    } catch (e) {
+      if (e instanceof JudgmentInputError) return err(400, 'bad_request', e.message);
+      throw e;
+    } finally {
+      if (!wrote) j.counts.set(day, (j.counts.get(day) ?? 1) - 1);
+    }
+  }
+  if (p === '/v1/judgments' && req.method === 'GET') {
+    const q = url.searchParams;
+    const limit = Number(q.get('limit') ?? limits.listLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > limits.listLimit) {
+      return err(400, 'bad_request', `limit must be 1 to ${limits.listLimit}.`);
+    }
+    const from = Number(q.get('cursor') ?? '0');
+    const domain = q.get('domain') ?? undefined;
+    const by = q.get('by') ?? undefined;
+    const items =
+      q.get('all') === 'true'
+        ? (await j.store.list(JUDGMENT_GRANT, { validOnly: false, embeddings: false })).filter(
+            (m): m is Memory & { judgment: Judgment } =>
+              m.type === 'judgment' &&
+              m.judgment !== undefined &&
+              (domain === undefined || m.judgment.domain === domain.toLowerCase()) &&
+              (by === undefined || m.judgment.by === by),
+          )
+        : await activeJudgments(
+            j.store,
+            JUDGMENT_GRANT,
+            {
+              ...(domain !== undefined && { domain }),
+              ...(by !== undefined && { by }),
+              includeImported: true,
+              includeAgentRecorded: true,
+            },
+            now,
+            false,
+          );
+    const page = items.slice(from, from + limit);
+    return Response.json({
+      judgments: page.map((m) => judgmentView(m.judgment, m, now)),
+      ...(from + limit < items.length && { next: String(from + limit) }),
+    });
+  }
+  if (p === '/v1/judgments/apply' && req.method === 'POST') {
+    const b = await bodyOf(limits.applyBytes);
+    if (b instanceof Response) return b;
+    const { item, ...o } = b as { item?: Record<string, unknown> } & Record<string, unknown>;
+    if (typeof item !== 'object' || item === null || typeof item['summary'] !== 'string') {
+      return err(400, 'bad_request', 'item.summary is required.');
+    }
+    const r = await coreJudge(
+      item as never,
+      { store: j.store, grant: JUDGMENT_GRANT, embed: fakeEmbed, decide: ruleDecider, now },
+      {
+        ...(typeof o['limit'] === 'number' && { k: o['limit'] }),
+        ...(typeof o['threshold'] === 'number' && { threshold: o['threshold'] }),
+        ...(typeof o['minSimilarity'] === 'number' && { minSimilarity: o['minSimilarity'] }),
+        ...(typeof o['minAgreement'] === 'number' && { minAgreement: o['minAgreement'] }),
+        ...(o['includeImported'] === true && { includeImported: true }),
+        ...(o['includeAgentRecorded'] === true && { includeAgentRecorded: true }),
+      },
+    );
+    return Response.json(judgeView(r));
+  }
+  return err(404, 'not_found', 'unhandled');
 }
 
 /** Per-user memory as the fake runs it (CON-132). */
@@ -199,6 +442,7 @@ const MATCHERS = [
   ...CONTRACT.archive.routes,
   ...CONTRACT.keys.routes,
   ...CONTRACT.endUsers.routes,
+  ...CONTRACT.judgments.routes,
 ].map((r) => ({
   method: r.method,
   re: new RegExp(`^${r.path.replace(/\?.*$/, '').replace(/:[a-z]+/g, '[^/]+')}$`),
@@ -337,6 +581,7 @@ export function fakeCloud(key: string): FakeCloud {
     whoamiAgents: [],
     keyRequests: [],
     endUsers: { server: 'current', serverKey: false, limit: 100, users: new Map(), headers: [] },
+    judgments: fakeJudgments(),
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
       const req = new Request(input, init);
       const url = new URL(req.url);
@@ -396,13 +641,19 @@ export function fakeCloud(key: string): FakeCloud {
         if (store === undefined) {
           store = fakeCloud(c.key);
           // A new end user is listed by their first write, within the limit.
-          if (url.pathname === '/v1/observe') {
+          if (
+            url.pathname === '/v1/observe' ||
+            (url.pathname === '/v1/judgments' && req.method === 'POST')
+          ) {
             if (eu.users.size >= eu.limit) {
               return err(402, 'end_user_limit', `This account has ${eu.limit} end users.`);
             }
             eu.users.set(id, store);
           }
         }
+        // The account's experts list, and its clock, apply to its end users.
+        store.judgments.experts = c.judgments.experts;
+        store.judgments.now = () => c.judgments.now();
         const headers = new Headers(req.headers);
         headers.delete('oort-user');
         return store.fetch(req.url, {
@@ -454,9 +705,18 @@ export function fakeCloud(key: string): FakeCloud {
       const p = url.pathname;
       const byName = (ref: string) =>
         [...c.hive.constellations.values()].find((x) => x.id === ref || x.name === ref);
-      if (c.lapsed === true && p !== '/v1/export') {
+      // Export, and the judgment routes outside Pro (list, withdraw, experts), work in every state.
+      const anyBilling =
+        p === '/v1/export' ||
+        (p.startsWith('/v1/judgments') &&
+          !(p === '/v1/judgments' && req.method === 'POST') &&
+          p !== '/v1/judgments/apply' &&
+          !p.endsWith('/confirm'));
+      if (c.lapsed === true && !anyBilling) {
         return err(402, 'payment_required', 'Oort Pro is not active on this account.');
       }
+      const judged = await judgmentRoute(c, req, url);
+      if (judged !== undefined) return judged;
       const project = (m: FakeMemory, want: string | null | undefined): boolean =>
         want === undefined || want === null
           ? true
@@ -494,6 +754,7 @@ export function fakeCloud(key: string): FakeCloud {
           ...(galaxies.length > 0 && { galaxies }),
           scope: c.narrowed === true ? 'narrowed' : 'full',
           ...(serverKey && { capabilities: [CONTRACT.endUsers.capability] }),
+          judge: { role: 'agent' },
         });
       }
       if (p === '/v1/keys') {

@@ -45,11 +45,14 @@ import {
   type RecordJudgmentResult,
 } from '@oortmem/core';
 import { emit, jsonMode, rawOut } from '../output.js';
+import { DASHBOARD_JUDGMENTS_URL, cloudJudgeResult, cloudJudgmentView } from '../sdk/cloud.js';
+import type { JudgmentView } from '../sdk/types.js';
 import { uiFor } from '../ui.js';
 import {
   Refusal,
   agentLabel,
   clip,
+  cloudOf,
   confirm,
   echo,
   fixed,
@@ -68,18 +71,34 @@ import type { Io } from '../io.js';
 /**
  * `oort judge …`: judgment memory (CON-71). An expert's approve or reject decisions, with their
  * reasons verbatim, recorded explicitly and applied to new items with an honest "needs the
- * expert" when the precedents disagree or are too far. Local store only for now.
+ * expert" when the precedents disagree or are too far. In cloud mode `list` and `apply` read
+ * Oort Cloud as an agent, the key's role; a person records, confirms and withdraws in the
+ * dashboard; the rest is local only for now.
  */
 
 /** Largest file `judge import`, `judge eval` and `judge pack import` read. */
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
-/** Refuses in cloud mode: Oort Cloud has no judgment memory yet. */
+/** Refuses in cloud mode: what Oort Cloud does not hold yet (packs, imports, predictions). */
 function localOnly(w: Wired): void {
   if (w.mode === 'cloud') {
     throw new Refusal(
-      'Judgment memory is local-only for now: Oort Cloud does not hold judgments yet. Run `oort cloud use --local` to use it.',
-      { code: 'refused' },
+      'This judgment command is local-only for now: Oort Cloud does not hold it yet (in cloud mode `oort judge list` and `oort judge apply` work). Run `oort cloud use --local` to use it.',
+      { code: 'refused', reason: 'local-only' },
+    );
+  }
+}
+
+/**
+ * Refuses a person's decision in cloud mode (R2): the Oort key on this machine acts as an agent,
+ * so a record from here would be an unconfirmed agent's, not the person's. They decide in the
+ * dashboard instead.
+ */
+function personInCloud(w: Wired, what: string): void {
+  if (w.mode === 'cloud') {
+    throw new Refusal(
+      `In Oort Cloud a person ${what} judgments in the dashboard: ${DASHBOARD_JUDGMENTS_URL}. The Oort key on this machine acts as an agent, so it cannot do this for you.`,
+      { code: 'refused', reason: 'expert-only' },
     );
   }
 }
@@ -143,8 +162,10 @@ function formatOf(file: string, flag: string | undefined): 'csv' | 'jsonl' {
 }
 
 /** A judgment for human eyes: every stored string through `shown`. */
-function judgmentLine(j: Judgment): string {
-  return `${shown(j.verdict)} "${shown(clip(j.subject.summary, 70))}" (${shown(j.domain)}, by ${shown(j.by)}, ${j.decidedAt.slice(0, 10)})`;
+function judgmentLine(
+  j: Pick<Judgment, 'verdict' | 'subject' | 'domain' | 'by' | 'decidedAt'>,
+): string {
+  return `${shown(j.verdict)} "${shown(clip(j.subject.summary, 70))}" (${shown(j.domain)}, by ${shown(j.by)}, ${shown(j.decidedAt.slice(0, 10))})`;
 }
 
 /** Characters an operator id may not hold: controls, bidi and invisible format characters. */
@@ -298,7 +319,7 @@ export async function judgeRecordCommand(o: JudgeRecordOptions, ctx: Ctx): Promi
     ...(o.decidedAt !== undefined && { decidedAt: o.decidedAt }),
   };
   return withWired(ctx, async (w) => {
-    localOnly(w);
+    personInCloud(w, 'records');
     const grant = writeGrant(w);
     let corrects: Memory | undefined;
     if (o.corrects !== undefined) {
@@ -454,7 +475,7 @@ export async function judgeApplyCommand(
 ): Promise<number> {
   const opts = judgeOptions(o);
   return withWired(ctx, async (w) => {
-    localOnly(w);
+    if (w.mode === 'cloud') return judgeApplyInCloud(ctx, w, summary, o, opts);
     const r = await refusing(() =>
       judge(
         {
@@ -495,11 +516,44 @@ export async function judgeApplyCommand(
   });
 }
 
+/** `oort judge apply` in cloud mode: Oort Cloud judges from the account's judgments. */
+async function judgeApplyInCloud(
+  ctx: Ctx,
+  w: Wired,
+  summary: string,
+  o: JudgeApplyOptions,
+  opts: JudgeOptions,
+): Promise<number> {
+  const r = cloudJudgeResult(
+    await cloudOf(w)!.applyJudgments({
+      item: {
+        summary,
+        ...(o.details !== undefined && { details: o.details }),
+        ...(o.ref !== undefined && { ref: o.ref }),
+        ...(o.domain !== undefined && { domain: o.domain }),
+        ...(o.by !== undefined && { by: o.by }),
+      },
+      ...(opts.k !== undefined && { limit: opts.k }),
+      ...(opts.threshold !== undefined && { threshold: opts.threshold }),
+      ...(opts.minSimilarity !== undefined && { minSimilarity: opts.minSimilarity }),
+      ...(opts.includeImported === true && { includeImported: true }),
+      ...(opts.includeAgentRecorded === true && { includeAgentRecorded: true }),
+    }),
+  );
+  if (jsonMode(ctx)) {
+    emit(ctx, r);
+    return 0;
+  }
+  // The same fields as core's result: the view only scrubbed its text again.
+  printJudgeResult(ctx, w, r as unknown as JudgeResult);
+  return 0;
+}
+
 function printJudgeResult(ctx: Ctx, w: Wired, r: JudgeResult): void {
   const ui = uiFor(ctx.io);
   const n = r.precedents.filter((p) => p.near).length;
   const experts = [...new Set(r.precedents.map((p) => p.by))].map((b) => shown(b)).join(', ');
-  ctx.io.out(ui.header('judge', r.status, agentLabel(w)));
+  ctx.io.out(ui.header('judge', shown(r.status), agentLabel(w)));
   if (r.status === 'suggested' && r.prediction !== undefined) {
     ctx.io.out(
       `${ui.bold(`Prediction: ${shown(r.prediction.verdict)}`)} (probability ${fixed(r.prediction.probability)}), from ${n} precedent${n === 1 ? '' : 's'}. A prediction, not ${experts}'s decision.\n`,
@@ -532,7 +586,9 @@ function printJudgeResult(ctx: Ctx, w: Wired, r: JudgeResult): void {
   }
   if (r.agentRecordedExcluded !== undefined && r.status !== 'suggested') {
     ctx.io.out(
-      `${r.agentRecordedExcluded} agent-recorded judgment(s) nobody confirmed were not used: confirm one with \`oort judge confirm <id>\`, or add --include-agent-recorded.\n`,
+      w.mode === 'cloud'
+        ? `${r.agentRecordedExcluded} agent-recorded judgment(s) nobody confirmed were not used: a person confirms them in the dashboard (${DASHBOARD_JUDGMENTS_URL}), or add --include-agent-recorded.\n`
+        : `${r.agentRecordedExcluded} agent-recorded judgment(s) nobody confirmed were not used: confirm one with \`oort judge confirm <id>\`, or add --include-agent-recorded.\n`,
     );
   }
   if (r.precedents.length === 0) return;
@@ -549,7 +605,7 @@ function printJudgeResult(ctx: Ctx, w: Wired, r: JudgeResult): void {
         ? ', agent-recorded (confirmed)'
         : ', agent-recorded (unconfirmed)';
     ctx.io.out(
-      `${i + 1}. ${shown(p.verdict)}  ${fixed(p.similarity)}${mark}  "${shown(clip(p.subject.summary, 70))}"  by ${shown(p.by)}, ${p.decidedAt.slice(0, 10)}${from}${agent}  ${short(p.id)}\n`,
+      `${i + 1}. ${shown(p.verdict)}  ${fixed(p.similarity)}${mark}  "${shown(clip(p.subject.summary, 70))}"  by ${shown(p.by)}, ${shown(p.decidedAt.slice(0, 10))}${from}${agent}  ${shown(short(p.id))}\n`,
     );
     ctx.io.out(`   reason: ${shown(clip(p.reason, 200))}\n`);
   }
@@ -561,7 +617,7 @@ export async function judgeListCommand(
   ctx: Ctx,
 ): Promise<number> {
   return withWired(ctx, async (w) => {
-    localOnly(w);
+    if (w.mode === 'cloud') return judgeListInCloud(ctx, w, o);
     const now = new Date();
     const items = await refusing(async () =>
       o.all === true
@@ -617,6 +673,67 @@ export async function judgeListCommand(
   });
 }
 
+/** At most this many judgments `oort judge list` shows from Oort Cloud (one page of the API). */
+const CLOUD_LIST_LIMIT = 100;
+
+/** `oort judge list` in cloud mode: the account's judgments, as Oort Cloud lists them. */
+async function judgeListInCloud(
+  ctx: Ctx,
+  w: Wired,
+  o: { domain?: string; by?: string; all?: boolean },
+): Promise<number> {
+  const r = await cloudOf(w)!.listJudgments({
+    ...(o.domain !== undefined && { domain: o.domain }),
+    ...(o.by !== undefined && { by: o.by }),
+    ...(o.all === true && { all: true }),
+    limit: CLOUD_LIST_LIMIT,
+  });
+  const items = (Array.isArray(r.judgments) ? r.judgments : []).map(cloudJudgmentView);
+  if (jsonMode(ctx)) {
+    emit(ctx, {
+      judgments: items.map((j) => ({ ...j, current: j.status === 'current' })),
+      ...(typeof r.next === 'string' && { truncated: true }),
+    });
+    return 0;
+  }
+  const ui = uiFor(ctx.io);
+  ctx.io.out(
+    ui.header(
+      'judgments',
+      `${items.length} ${o.all === true ? 'recorded' : 'current'}`,
+      agentLabel(w),
+    ),
+  );
+  if (items.length === 0) {
+    ctx.io.err(
+      `oort: no judgments yet. A person records them in the dashboard (${DASHBOARD_JUDGMENTS_URL}), and an agent can record them over MCP, unconfirmed until a person confirms them.\n`,
+    );
+    return 0;
+  }
+  for (const j of items) ctx.io.out(cloudJudgmentLines(j));
+  if (typeof r.next === 'string') {
+    ctx.io.out(`Only the newest ${CLOUD_LIST_LIMIT} are shown; the dashboard lists them all.\n`);
+  }
+  return 0;
+}
+
+/** One listed cloud judgment, as `oort judge list` prints a local one. */
+function cloudJudgmentLines(j: JudgmentView & { id: string }): string {
+  const state =
+    (j.status === 'withdrawn' ? ' [withdrawn]' : j.status === 'corrected' ? ' [corrected]' : '') +
+    (!isAgentVia(j.via)
+      ? ''
+      : j.agentRecorded
+        ? ' [agent-recorded, unconfirmed]'
+        : ' [agent-recorded, confirmed]') +
+    (j.pack === undefined ? '' : ` [imported from pack ${shown(j.pack.name)}]`) +
+    originTag(j);
+  return (
+    `${shown(short(j.id))}  ${judgmentLine(j)}${state}\n` +
+    `          reason: ${shown(clip(j.reason, 200))}\n`
+  );
+}
+
 /** `oort judge withdraw <id>`: the judgment stops counting anywhere, at once. */
 export async function judgeWithdrawCommand(
   id: string,
@@ -624,7 +741,7 @@ export async function judgeWithdrawCommand(
   ctx: Ctx,
 ): Promise<number> {
   return withWired(ctx, async (w) => {
-    localOnly(w);
+    personInCloud(w, 'withdraws');
     const m = await findJudgment(w, id);
     const grant = writeGrantFor(w, m);
     if (m.judgment.withdrawn !== undefined) {
@@ -660,7 +777,7 @@ export async function judgeConfirmCommand(
   ctx: Ctx,
 ): Promise<number> {
   return withWired(ctx, async (w) => {
-    localOnly(w);
+    personInCloud(w, 'confirms');
     let m: Memory & { judgment: Judgment };
     try {
       m = await findJudgment(w, id);
