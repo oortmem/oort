@@ -1401,7 +1401,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
          WHERE resolved = 0 AND expires_at <= ? ORDER BY expires_at LIMIT ?)`,
     ),
     predictionPendingAt: db.prepare<[Params], { n: number }>(
-      `SELECT count(*) AS n FROM ${PREDICTION_TABLE}
+      `SELECT count(*) AS n FROM ${PREDICTION_TABLE} INDEXED BY ${PREDICTION_TABLE}_pending
        WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
          AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
          AND author_agent_id = @author_agent_id AND resolved = 0`,
@@ -1409,6 +1409,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     // Up to `@cap` unresolved predictions at a node, every author and project: bounded work.
     predictionPendingNode: db.prepare<[Params], { n: number }>(
       `SELECT count(*) AS n FROM (SELECT 1 FROM ${PREDICTION_TABLE}
+       INDEXED BY ${PREDICTION_TABLE}_pending
        WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
          AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id AND resolved = 0
        LIMIT @cap)`,
@@ -1442,7 +1443,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        RETURNING id`,
     ),
     feedbackPendingAt: db.prepare<[Params], { n: number }>(
-      `SELECT count(*) AS n FROM ${FEEDBACK_TABLE}
+      `SELECT count(*) AS n FROM ${FEEDBACK_TABLE} INDEXED BY ${FEEDBACK_TABLE}_pending
        WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
          AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
          AND author_agent_id = @author_agent_id AND status = 'pending'`,
@@ -1450,6 +1451,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     // Up to `@cap` pending rows at a node, every author and project: bounded work.
     feedbackPendingNode: db.prepare<[Params], { n: number }>(
       `SELECT count(*) AS n FROM (SELECT 1 FROM ${FEEDBACK_TABLE}
+       INDEXED BY ${FEEDBACK_TABLE}_pending
        WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
          AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
          AND status = 'pending'
@@ -2869,7 +2871,18 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       ).run(ORPHAN_SWEEP_KEY, JSON.stringify({ at: now, build: STORE_BUILD }));
       return n;
     });
-    if (swept.immediate() > 0) truncateWal();
+    // A busy or locked store never fails the open: the marker stays as it was, so the next open
+    // tries again.
+    let n: number;
+    try {
+      n = swept.immediate();
+    } catch (e) {
+      log(
+        `oort store: feedback about forgotten memories was not swept (${e instanceof Error ? e.message : String(e)}); the next open tries again`,
+      );
+      return;
+    }
+    if (n > 0) truncateWal();
   }
 
   const handle: MemoryStore = {

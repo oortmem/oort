@@ -82,8 +82,9 @@ export const PREDICTION_TABLE = 'predictions';
  * about, its status, when it was given, and an applied `helped`'s key (unique: one per memory,
  * person and day). Created on every open when missing, like `predictions`, so it needs no schema
  * version. Indexed by memory and status (recall reads the open ones for the memories it returns,
- * and a forget removes every row about a memory, at every address), by node and time (listing)
- * and by status. A row is never a memory: no search or listing of memories reads this table.
+ * and a forget removes every row about a memory, at every address), by node and time (listing),
+ * by status, and pending rows alone by node and author (the pending caps count only those). A
+ * row is never a memory: no search or listing of memories reads this table.
  */
 export const FEEDBACK_TABLE = 'feedback';
 
@@ -1521,6 +1522,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_created ON ${PREDICTION_TABLE} (created_at DESC, id DESC);
       CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_expires ON ${PREDICTION_TABLE} (resolved, expires_at);
       CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_address ON ${PREDICTION_TABLE} (org_id, level, customer_id, agent_id, resolved);
+      CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_pending ON ${PREDICTION_TABLE} (org_id, level, customer_id, agent_id, author_agent_id) WHERE resolved = 0;
       CREATE TABLE IF NOT EXISTS ${FEEDBACK_TABLE} (
         id TEXT PRIMARY KEY,
         level TEXT NOT NULL,
@@ -1554,6 +1556,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_memory_status ON ${FEEDBACK_TABLE} (memory_id, status);
       CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_status ON ${FEEDBACK_TABLE} (status, created_at DESC);
       CREATE UNIQUE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_helped ON ${FEEDBACK_TABLE} (helped_key) WHERE helped_key IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_pending ON ${FEEDBACK_TABLE} (org_id, level, customer_id, agent_id, author_agent_id) WHERE status = 'pending';
     `);
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     const put = db.prepare(

@@ -11,6 +11,7 @@ import Database from 'better-sqlite3';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   dismissFeedback,
+  supersedingId,
   forgetMemory,
   recordFeedback,
   retireFeedback,
@@ -104,6 +105,27 @@ describe('sqlite feedback', () => {
          (SELECT 1 FROM memories WHERE memories.id = ${FEEDBACK_TABLE}.memory_id)`,
       ),
     ).toMatch(/SEARCH memories USING (COVERING )?INDEX/);
+    // The pending caps read pending rows alone, by node and author (unresolved predictions
+    // alike), as their statements name the index.
+    const node = `org_id = 'local' AND level = 'user' AND customer_id IS 'self' AND agent_id IS NULL
+      AND hive_id IS NULL AND run_id IS NULL`;
+    for (const [table, open] of [
+      [FEEDBACK_TABLE, `status = 'pending'`],
+      ['predictions', 'resolved = 0'],
+    ] as const) {
+      expect(
+        plan(
+          `SELECT count(*) FROM ${table} INDEXED BY ${table}_pending
+           WHERE ${node} AND author_agent_id = 'a' AND ${open}`,
+        ),
+      ).toMatch(new RegExp(`USING (COVERING )?INDEX ${table}_pending .*author_agent_id=\\?`));
+      expect(
+        plan(
+          `SELECT count(*) FROM (SELECT 1 FROM ${table} INDEXED BY ${table}_pending
+           WHERE ${node} AND ${open} LIMIT 50000)`,
+        ),
+      ).toMatch(new RegExp(`USING (COVERING )?INDEX ${table}_pending`));
+    }
     db.close();
   });
 
@@ -317,6 +339,82 @@ describe('sqlite feedback', () => {
     expect(rs.filter((r) => r.kept && r.applied)).toHaveLength(1);
     expect(rs.filter((r) => r.kept && r.reason === 'already-helped-today')).toHaveLength(4);
     expect(await s.listFeedback!(TG, { signal: 'helped' })).toHaveLength(5);
+    await s.close();
+  });
+
+  it('feedback.a-busy-sweep-never-fails-the-open-and-runs-on-the-next', async () => {
+    const dir = fresh();
+    const s1 = await openSqliteStore(optsIn(dir));
+    await s1.upsert(TG, makeMemory({ id: 'm1', scope: SCOPE }));
+    await s1.putFeedback!(TG, makeFeedback({ id: 'f1' }));
+    await s1.close();
+    const dbPath = optsIn(dir).path;
+    const raw = new Database(dbPath);
+    raw.function(WRITER_GUARD, () => 1);
+    raw.prepare(`DELETE FROM memories WHERE id = 'm1'`).run();
+    raw.prepare(`DELETE FROM meta WHERE key = ?`).run(ORPHAN_SWEEP_KEY);
+    // The sweep's write fails (as a lock held past the busy timeout would make it).
+    raw.exec(`CREATE TRIGGER sweep_fails BEFORE DELETE ON ${FEEDBACK_TABLE}
+      BEGIN SELECT RAISE(ABORT, 'database is locked'); END`);
+    raw.close();
+    const logs: string[] = [];
+    const s2 = await openSqliteStore({ ...optsIn(dir), log: (m) => logs.push(m) });
+    expect((await s2.listFeedback!(TG)).map((f) => f.id)).toEqual(['f1']);
+    await s2.close();
+    expect(logs.some((m) => m.includes('was not swept'))).toBe(true);
+    const fixed = new Database(dbPath);
+    expect(fixed.prepare(`SELECT 1 FROM meta WHERE key = ?`).get(ORPHAN_SWEEP_KEY)).toBeUndefined();
+    fixed.exec('DROP TRIGGER sweep_fails');
+    fixed.close();
+    const s3 = await openSqliteStore(optsIn(dir));
+    expect(await s3.listFeedback!(TG)).toEqual([]);
+    await s3.close();
+  });
+
+  it('feedback.a-reworded-supersede-takes-over-a-stopped-one-in-one-file', async () => {
+    const dir = fresh();
+    const s = await openSqliteStore(optsIn(dir));
+    await s.upsert(
+      TG,
+      makeMemory({ id: 'm1', scope: SCOPE, validFrom: '2026-11-01T00:00:00.000Z' }),
+    );
+    const r = await recordFeedback(
+      { memoryId: 'm1', signal: 'wrong', by: 'local-user' },
+      { store: s, grant: TG, scope: SCOPE, via: 'cli', now: NOW },
+    );
+    if (!r.kept) throw new Error('not kept');
+    const at = (min: number) => new Date(NOW.getTime() + min * 60_000);
+    const deps = (now: Date) => ({
+      store: s,
+      grant: TG,
+      scope: SCOPE,
+      by: 'ada',
+      now,
+      harness: 'test',
+    });
+    // Stops after the new memory is written, before the old one closes.
+    const real = s.upsertManyIfUnchanged!.bind(s);
+    let once = false;
+    const stopping = {
+      ...s,
+      upsertManyIfUnchanged: async (...a: Parameters<typeof real>) => {
+        if (!once) {
+          once = true;
+          throw new Error('stopped');
+        }
+        return real(...a);
+      },
+    } as MemoryStore;
+    await expect(
+      supersedeFeedback(r.feedback.id, 'The port is 8080', { ...deps(at(1)), store: stopping }),
+    ).rejects.toThrow('stopped');
+    expect(await s.get(TG, supersedingId(r.feedback.id))).not.toBeNull();
+    const done = await supersedeFeedback(r.feedback.id, 'The port is 8080 now', deps(at(7)));
+    const all = await s.list(TG, { validOnly: false, embeddings: false });
+    const current = all.filter((m) => m.expiredAt === null && m.validTo === null);
+    expect(current.map((m) => m.id)).toEqual([done.memory.id]);
+    expect(done.memory.text).toBe('The port is 8080 now');
+    expect(all.find((m) => m.id === 'm1')?.supersededBy).toBe(done.memory.id);
     await s.close();
   });
 });
