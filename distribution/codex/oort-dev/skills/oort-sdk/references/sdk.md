@@ -309,7 +309,8 @@ adds `feedback.helpedAccesses` accesses (default 2) once per memory and person p
 rejects with `refused` (`already-resolved`, or `in-progress` / `conflict`, both retryable) and
 changes nothing. A retire or supersede that stopped part way leaves the row `resolving` (its
 `claim` shows who, how long ago and the pending fact): the same call again finishes it, and after
-5 minutes `dismiss`, `retire` or a reworded `supersede` takes it over. Feedback is kept with its
+5 minutes `dismiss`, `retire` or a reworded `supersede` takes it over, finishing it when its
+changes are all in place (`already-resolved`) and otherwise putting them back first. Feedback is kept with its
 memory's project, and a kept prediction with the handle's project.
 
 <!-- example: examples/src/feedback.ts -->

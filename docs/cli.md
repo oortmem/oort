@@ -1170,16 +1170,19 @@ oort feedback dismiss 7c1d2e3f                # keep the memory, drop the label
   how), then change the memory, then close the feedback. When two run at once, one wins; the
   other changes nothing and says where the feedback stands (`It is retired now.`, or that another
   call is resolving it). If a call stops part way, the feedback stays `resolving` and recall still
-  labels the memory: run the same command again to finish it. A supersede run again never stores
-  the fact twice. `oort feedback list` shows who started it, how long ago, and the fact a
-  supersede would store (`claim` in `--json`).
+  labels the memory: run the same command again to finish it. That takes the feedback over
+  before it changes anything, so a call still running stops before its next change. A supersede
+  run again never stores the fact twice. `oort feedback list` shows who started it, who took it
+  over, how long ago, and the fact a supersede would store (`claim` in `--json`).
 - After 5 minutes a stopped retire or supersede can be taken over: `dismiss`, `retire`, or a
-  `supersede` with other words first puts back what it changed (the new memory it wrote, while
-  nothing else changed it, and the old memory's end), then does its own work. The closed
-  feedback keeps who started it (`resolved.claimedBy`).
+  `supersede` with other words. If everything it changes is already done (only closing the
+  feedback was left), it is finished as it was meant, nothing is undone, and the command says so
+  (`already-resolved`). Otherwise what it changed is put back first (the new memory it wrote,
+  while nothing used, linked or changed it, and the old memory's end), then the command does its
+  own work. The closed feedback keeps who started it (`resolved.claimedBy`).
 - A memory that is no longer current cannot be retired or superseded. If it ended another way
   while a supersede ran, the new memory is removed and the feedback goes back to `open`; if the
-  new memory was changed meanwhile, it is kept, the feedback still goes back to `open`, and the
+  new memory was recalled, linked or changed meanwhile, it is kept, the feedback still goes back to `open`, and the
   refusal names `oort inspect`. A supersede that finds another memory at the id it writes changes
   nothing and says so (`conflict`).
 

@@ -1278,13 +1278,17 @@ row. When two resolves run at once, one wins and the other rejects with `OortRef
 `already-resolved`, `in-progress` (another call is resolving it; retryable) or `conflict` (the
 row changed meanwhile and nothing was written; retryable). A call that stopped part way leaves
 the row `resolving`, and recall still returns `contested`: the same call again finishes it, and a
-supersede never stores the fact twice. The row's `claim` says who started it, `ageSeconds`, and the
-`fact` a supersede would store. Once `claim.canTakeOver` (5 minutes), `dismiss`, `retire` or a
-`supersede` with another fact takes it over: what it changed is put back first (its new memory,
-while nothing else changed it, and the old memory's end), and the closed row keeps
+supersede never stores the fact twice. The same call again takes the row over before it changes
+anything (`claim.takenOverBy`, `takenOverAt`), so a call still running stops before its next
+change. The row's `claim` says who started it, who took it over, `ageSeconds`, and the `fact` a
+supersede would store. Once `claim.canTakeOver` (5 minutes), `dismiss`, `retire` or a `supersede`
+with another fact takes it over. When everything the claim changes is already in place, it is
+finished as it was meant and the call rejects with `already-resolved`, saying nothing was undone.
+Otherwise what it changed is put back first (its new memory, while nothing recalled, linked or
+changed it, and the old memory's end; `claim.undoing` while that runs). The closed row keeps
 `resolved.claimedBy`. The new memory is authored by the expert. If the old memory ended another
-way meanwhile, the new one is removed and the row goes back to `open`; if the new one was changed
-meanwhile, it is kept, the row still goes back to `open`, and the error has reason
+way meanwhile, the new one is removed and the row goes back to `open`; if the new one was
+recalled, linked or changed meanwhile, it is kept, the row still goes back to `open`, and the error has reason
 `memory-changed` and is not retryable: inspect the memories first. Another memory already at the
 id a supersede writes is refused (`conflict`) and nothing changes. `forget(id)` deletes every feedback row about the memory, whoever gave it.
 
