@@ -1,5 +1,6 @@
 import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapters.js';
 import { grantWrites, type Grant } from './grant.js';
+import { purgePredictionsCiting } from './judgment.js';
 import type { Decision, Memory } from './model.js';
 import { tokenizeLexical } from './tokenize.js';
 
@@ -441,5 +442,9 @@ export async function forgetMemory(
     }
   }
   await store.forget(grant, id);
+  // Forget wins: a prediction that cited a forgotten judgment keeps none of its text.
+  if (target.type === 'judgment') {
+    await purgePredictionsCiting(store, grant, [id], 'forget', deps.now ?? new Date());
+  }
   return outcome;
 }

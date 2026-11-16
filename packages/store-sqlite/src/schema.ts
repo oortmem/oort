@@ -67,6 +67,15 @@ import { startRabitqBuild, dropRabitqIndex, hasRabitqIndex } from './rabitq-stor
 export const SCHEMA_VERSION = 10;
 
 /**
+ * Judging predictions and what a person decided about them (`MemoryStore.predictions`): one row
+ * per prediction, its record as JSON. Like `meta` and `cursors` it is created on every open when
+ * missing, so it needs no schema version: an Oort that predates it never reads it, and a
+ * downgrade keeps it as it is. A row is never a memory: no search or listing of memories reads
+ * this table.
+ */
+export const PREDICTION_TABLE = 'predictions';
+
+/**
  * The binary index (schema version 6): one row per searchable (hot or warm) vector, with its
  * 1-bit code (`binaryCode`), its int8 vector for rescoring as an auxiliary column, and the int8
  * index's partition and filter columns. A dense query scans only the codes; it reads `rescore`
@@ -1482,6 +1491,13 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS cursors (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS cold_index (id TEXT PRIMARY KEY, path TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS ${PREDICTION_TABLE} (
+        id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        resolved INTEGER NOT NULL,
+        record TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_created ON ${PREDICTION_TABLE} (created_at DESC, id DESC);
     `);
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     const put = db.prepare(

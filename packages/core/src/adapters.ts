@@ -9,6 +9,7 @@ import type {
 } from './links.js';
 import type { Decision, Memory, MemoryType, Scope, Tier } from './model.js';
 import type { Place, SpatialFilter } from './place.js';
+import type { Prediction, PredictionListOptions } from './prediction.js';
 
 /**
  * The adapter seam. Every pluggable piece of Oort (stores, embedders, rerankers,
@@ -203,6 +204,38 @@ export interface MemoryStore {
    * has it; recall takes no hop without it.
    */
   neighbours?(grant: Grant, seedIds: string[], opts: NeighbourOptions): Promise<NeighboursResult>;
+  /**
+   * True when the store keeps judging predictions (`predictionsConformance` proves it) and has
+   * `putPrediction`, `getPrediction`, `listPredictions` and `forgetPrediction`. A prediction is
+   * not a memory: no search, listing or export of memories ever returns one. Absent: judging
+   * returns no `predictionId`, and resolving one is refused.
+   */
+  readonly predictions?: true;
+  /**
+   * Writes the prediction `p` (insert or replace). With `expect`, only when the stored record's
+   * `revision` is `expect.revision` (`null`: only when no record has `p.id`). Resolves to false,
+   * writing nothing, when that guard fails, or when a record with `p.id` exists at another
+   * address or outside the grant. Rejects with `GrantError` when `p`'s address and author are
+   * outside `grant.write`.
+   */
+  putPrediction?(
+    grant: Grant,
+    p: Prediction,
+    expect?: { revision: number | null },
+  ): Promise<boolean>;
+  /** The prediction `id`, or null when it is unknown or outside the grant. */
+  getPrediction?(grant: Grant, id: string): Promise<Prediction | null>;
+  /**
+   * The predictions the grant reads, newest first (`createdAt`, then `id`), filtered by
+   * `opts.status` (`pending`: no `resolution`) and `opts.citing` (a precedent id or the
+   * `resolution.judgmentId`), at most `opts.limit`.
+   */
+  listPredictions?(grant: Grant, opts?: PredictionListOptions): Promise<Prediction[]>;
+  /**
+   * Deletes the prediction `id`, its text included. False for an unknown id or one outside
+   * `grant.write`, changing nothing.
+   */
+  forgetPrediction?(grant: Grant, id: string): Promise<boolean>;
   /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
    * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).

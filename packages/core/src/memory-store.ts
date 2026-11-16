@@ -11,6 +11,7 @@ import {
   type Grant,
 } from './grant.js';
 import { isCurrent, isZeroVector, type Memory, type Tier } from './model.js';
+import { selectPredictions, type Prediction } from './prediction.js';
 import {
   ABOUT_PER_ENTITY,
   aboutWeight,
@@ -109,6 +110,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   const main = new Map<string, Memory>();
   const cold = new Map<string, Memory>();
   const cursors = new Map<string, string>();
+  const predictions = new Map<string, Prediction>();
   /** Link and block rows, keyed `kind/a/b`, in the order they were first written. */
   const links = new Map<string, LinkRow>();
   /** Episode positions: assigned on insert, kept by a rewrite in the same session. */
@@ -318,6 +320,44 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
           score: (stated ? 2 : 1) - distance / (distance + 86_400_000),
           tier: m.tier,
         }));
+    },
+
+    predictions: true,
+
+    async putPrediction(grant, p, expect) {
+      open();
+      assertGrant(grant);
+      if (!grantWrites(grant, p)) throw new GrantError();
+      const was = predictions.get(p.id);
+      if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, p))) {
+        return false;
+      }
+      if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return false;
+      predictions.set(p.id, structuredClone(p));
+      return true;
+    },
+
+    async getPrediction(grant, id) {
+      open();
+      assertGrant(grant);
+      const p = predictions.get(id);
+      return p === undefined || !grantReads(grant, p) ? null : structuredClone(p);
+    },
+
+    async listPredictions(grant, listOpts = {}) {
+      open();
+      assertGrant(grant);
+      const readable = [...predictions.values()].filter((p) => grantReads(grant, p));
+      return selectPredictions(readable, listOpts).map((p) => structuredClone(p));
+    },
+
+    async forgetPrediction(grant, id) {
+      open();
+      assertGrant(grant);
+      const p = predictions.get(id);
+      if (p === undefined || !grantWrites(grant, p)) return false;
+      predictions.delete(id);
+      return true;
     },
 
     async link(grant, x, y, linkOpts: LinkOptions) {

@@ -41,6 +41,7 @@ import {
   resolveAddressing,
   sameRecordAddress,
   scopeOf,
+  selectPredictions,
   lexicalIcuVersion,
   tokenizeLexical,
   type AccessLog,
@@ -64,6 +65,7 @@ import {
   type MemoryStore,
   type NodePattern,
   type Place,
+  type Prediction,
   type Provenance,
   type SpatialFilter,
   type Tier,
@@ -128,6 +130,7 @@ import {
   SHORT_OCCURRENCE_DAYS,
   PLACE_TABLE,
   placeCount,
+  PREDICTION_TABLE,
   rabitqIndexPlan,
   schemaVersionOf,
   searchableVectors,
@@ -1352,6 +1355,21 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     coldDelete: db.prepare<[string], { path: string }>(
       'DELETE FROM cold_index WHERE id = ? RETURNING path',
     ),
+    predictionGet: db.prepare<[string], { record: string }>(
+      `SELECT record FROM ${PREDICTION_TABLE} WHERE id = ?`,
+    ),
+    predictionPut: db.prepare<[string, string, number, string]>(
+      `INSERT INTO ${PREDICTION_TABLE} (id, created_at, resolved, record) VALUES (?, ?, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET created_at = excluded.created_at,
+         resolved = excluded.resolved, record = excluded.record`,
+    ),
+    predictionList: db.prepare<[], { record: string }>(
+      `SELECT record FROM ${PREDICTION_TABLE} ORDER BY created_at DESC, id DESC`,
+    ),
+    predictionListByStatus: db.prepare<[number], { record: string }>(
+      `SELECT record FROM ${PREDICTION_TABLE} WHERE resolved = ? ORDER BY created_at DESC, id DESC`,
+    ),
+    predictionDelete: db.prepare<[string]>(`DELETE FROM ${PREDICTION_TABLE} WHERE id = ?`),
     getCursor: db.prepare<[string], { value: string }>('SELECT value FROM cursors WHERE key = ?'),
     setCursor: db.prepare<[string, string]>(
       `INSERT INTO cursors (key, value) VALUES (?, ?)
@@ -2563,6 +2581,29 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     return { skipped };
   }
 
+  /** The stored prediction `id`, whatever the grant (callers check it). */
+  const predictionRow = (id: string): Prediction | undefined => {
+    const r = q.predictionGet.get(id);
+    return r === undefined ? undefined : (JSON.parse(r.record) as Prediction);
+  };
+  const putPredictionTx = db.transaction(
+    (grant: Grant, p: Prediction, expect: { revision: number | null } | undefined): boolean => {
+      const was = predictionRow(p.id);
+      if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, p))) {
+        return false;
+      }
+      if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return false;
+      q.predictionPut.run(p.id, p.createdAt, p.resolution === undefined ? 0 : 1, JSON.stringify(p));
+      return true;
+    },
+  );
+  const forgetPredictionTx = db.transaction((grant: Grant, id: string): boolean => {
+    const was = predictionRow(id);
+    if (was === undefined || !grantWrites(grant, was)) return false;
+    q.predictionDelete.run(id);
+    return true;
+  });
+
   const handle: MemoryStore = {
     spatial: true,
     links: true,
@@ -2593,6 +2634,41 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           const d = stated ? r.key : r.key - 1e15;
           return { id: r.id, score: (stated ? 2 : 1) - d / (d + DAY_MS), tier: r.tier };
         });
+    },
+
+    predictions: true,
+
+    async putPrediction(grant, p, expect) {
+      open();
+      assertGrant(grant);
+      if (!grantWrites(grant, p)) throw new GrantError();
+      return putPredictionTx.immediate(grant, p, expect);
+    },
+
+    async getPrediction(grant, id) {
+      open();
+      assertGrant(grant);
+      const p = predictionRow(id);
+      return p === undefined || !grantReads(grant, p) ? null : p;
+    },
+
+    async listPredictions(grant, listOpts = {}) {
+      open();
+      assertGrant(grant);
+      const rows =
+        listOpts.status === undefined
+          ? q.predictionList.all()
+          : q.predictionListByStatus.all(listOpts.status === 'resolved' ? 1 : 0);
+      const readable = rows
+        .map((r) => JSON.parse(r.record) as Prediction)
+        .filter((p) => grantReads(grant, p));
+      return selectPredictions(readable, listOpts);
+    },
+
+    async forgetPrediction(grant, id) {
+      open();
+      assertGrant(grant);
+      return forgetPredictionTx.immediate(grant, id);
     },
 
     async link(grant, a, b, linkOpts) {
