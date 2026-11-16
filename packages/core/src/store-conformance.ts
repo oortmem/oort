@@ -2538,6 +2538,33 @@ export function predictionsConformance(name: string, make: () => Promise<MemoryS
       expect(await s.forgetPrediction(TG, 'p1')).toBe(false);
     });
 
+    it('predictions.forget-with-expect-deletes-only-the-revision-read', async () => {
+      await s.putPrediction(TG, makePrediction({ id: 'p1', revision: 3 }));
+      expect(await s.forgetPrediction(TG, 'p1', { revision: 2 })).toBe(false);
+      expect((await s.getPrediction(TG, 'p1'))?.revision).toBe(3);
+      expect(await s.forgetPrediction(TG, 'p1', { revision: 3 })).toBe(true);
+      expect(await s.getPrediction(TG, 'p1')).toBeNull();
+      expect(await s.forgetPrediction(TG, 'p1', { revision: 3 })).toBe(false);
+    });
+
+    it('predictions.pending-is-counted-per-author-at-an-address', async () => {
+      const planet: Address = { level: 'user', orgId: 'local', customerId: 'self' };
+      const by = (agentId: string) => addressed(planet, { agentId });
+      await s.putPrediction(TG, makePrediction({ id: 'a1', ...by('claude-code') }));
+      await s.putPrediction(TG, makePrediction({ id: 'b1', ...by('cursor') }));
+      await s.putPrediction(TG, makePrediction({ id: 'b2', ...by('cursor') }));
+      expect(await s.listPredictions(TG)).toHaveLength(3);
+      expect(
+        await store.countPendingPredictions!(makePrediction({ id: 'x', ...by('claude-code') })),
+      ).toBe(1);
+      expect(
+        await store.countPendingPredictions!(makePrediction({ id: 'x', ...by('cursor') })),
+      ).toBe(2);
+      expect(
+        await store.countPendingPredictions!(makePrediction({ id: 'x', ...by('codex') })),
+      ).toBe(0);
+    });
+
     it('predictions.are-not-memories', async () => {
       await s.putPrediction(TG, makePrediction({ id: 'p1', item: { summary: 'zebra quokka' } }));
       expect(await store.get(TG, 'p1')).toBeNull();

@@ -234,9 +234,11 @@ export interface MemoryStore {
   listPredictions?(grant: Grant, opts?: PredictionListOptions): Promise<Prediction[]>;
   /**
    * Deletes the prediction `id`, its text included, leaving none of it in a log or journal the
-   * store keeps. False for an unknown id or one outside `grant.write`, changing nothing.
+   * store keeps. False for an unknown id or one outside `grant.write`, changing nothing. With
+   * `expect: { revision: n }` it deletes only a record whose `revision` is still `n`, and is false
+   * otherwise, so a caller never deletes a record that changed after it read it.
    */
-  forgetPrediction?(grant: Grant, id: string): Promise<boolean>;
+  forgetPrediction?(grant: Grant, id: string, expect?: { revision: number }): Promise<boolean>;
   /**
    * Replaces every prediction that cites `judgmentId` (as a precedent or as
    * `resolution.judgmentId`), at every address, with `purgedPrediction(p, by, at)`, leaving none
@@ -253,8 +255,11 @@ export interface MemoryStore {
   ): Promise<{ purged: string[]; leftover: string[] }>;
   /** Deletes up to `limit` unresolved predictions whose `expiresAt` is at or before `now`, at every address. */
   pruneExpiredPredictions?(now: Date, limit: number): Promise<number>;
-  /** How many unresolved predictions are kept at `at`'s address (its node and project). */
-  countPendingPredictions?(at: Pick<Prediction, 'scope' | 'address'>): Promise<number>;
+  /**
+   * How many unresolved predictions `at`'s author keeps at `at`'s address (its node and project).
+   * Counted per author, so one agent filling its quota never blocks another at the same address.
+   */
+  countPendingPredictions?(at: Pick<Prediction, 'scope' | 'address' | 'author'>): Promise<number>;
   /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
    * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).

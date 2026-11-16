@@ -347,13 +347,26 @@ export async function forgetPrediction(
   localJudgments(ctx);
   const store = storeOf(ctx);
   const p = await findPrediction(store, ctx.principal.grant, ref);
-  if (ctx.judge.role === 'agent' && p.resolution !== undefined) {
-    throw new OortRefusedError(
+  const agent = ctx.judge.role === 'agent';
+  const expertOnly = () =>
+    new OortRefusedError(
       'Only a person forgets a resolved prediction: it is the record of what the expert decided.',
       { reason: 'expert-only' },
     );
-  }
-  if (!(await coreForgetPrediction(store, ctx.principal.grant, p.id))) {
+  if (agent && p.resolution !== undefined) throw expertOnly();
+  // The agent deletes only the pending record it read: one resolved meanwhile stays.
+  const expect = agent ? { revision: p.revision } : undefined;
+  if (!(await coreForgetPrediction(store, ctx.principal.grant, p.id, expect))) {
+    if (agent) {
+      const now = await store.getPrediction?.(ctx.principal.grant, p.id);
+      if (now?.resolution !== undefined) throw expertOnly();
+      if (now != null) {
+        throw new PredictionError(
+          'conflict',
+          'That prediction changed while this ran; nothing was forgotten. Try again.',
+        );
+      }
+    }
     throw new OortRefusedError('This handle cannot change that prediction.', {
       reason: 'scope-denied',
     });

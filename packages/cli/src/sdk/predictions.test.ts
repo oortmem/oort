@@ -205,3 +205,46 @@ describe('sdk predictions', () => {
     await agent.close();
   });
 });
+
+describe('sdk predictions: an agent forget', () => {
+  it('sdk.predictions.an-agent-forget-leaves-a-prediction-resolved-meanwhile', async () => {
+    const { createMemoryStore, localGrant } = await import('@oortmem/core');
+    const { makePrediction } = await import('@oortmem/core/store-conformance');
+    const { forgetPrediction } = await import('./judge.js');
+    const scope = { orgId: 'local', customerId: 'self', agentId: 'claude-code' };
+    const grant = localGrant({ ...scope, projectIds: [null] });
+    const store = createMemoryStore({ now: () => NOW });
+    const id = '0d6f3c1e-2b4a-4c8d-9e7f-1a2b3c4d5e6f';
+    await store.putPrediction!(grant, makePrediction({ id, scope }), { revision: null });
+    // A person resolves it after the agent read it, before the agent's delete runs.
+    const racing = {
+      ...store,
+      async forgetPrediction(g: typeof grant, pid: string, expect?: { revision: number }) {
+        const p = (await store.getPrediction!(g, pid))!;
+        const resolution = {
+          verdict: 'approved',
+          criteria: [],
+          by: 'ada',
+          at: NOW.toISOString(),
+          via: 'cli' as const,
+          agrees: false,
+        };
+        await store.putPrediction!(
+          g,
+          { ...p, resolution, revision: p.revision + 1 },
+          { revision: p.revision },
+        );
+        return store.forgetPrediction!(g, pid, expect);
+      },
+    };
+    const ctx = {
+      engine: { mode: 'local', store: racing },
+      principal: { grant },
+      judge: { role: 'agent' },
+    };
+    await expect(forgetPrediction(ctx as never, id)).rejects.toMatchObject({
+      reason: 'expert-only',
+    });
+    expect((await store.getPrediction!(grant, id))?.resolution?.by).toBe('ada');
+  });
+});

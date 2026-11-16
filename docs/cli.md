@@ -1911,11 +1911,11 @@ oort judge resolve 3fa2c1d0 --verdict approved --reason "Satire, clearly labelle
   judgment is withdrawn, and the prediction keeps who decided before and when, without their
   reason. When that judgment is outside your scope (an agent's own Star), it stays as it is,
   unconfirmed so judging leaves it out, and the result names it (`agentJudgmentKept`, reason
-  `not-writable`).
+  `not-writable`). A judgment a person already confirmed stays too (reason `confirmed`).
 - `oort judge predictions` lists pending predictions, newest first (`--resolved`, `--all`,
   `--domain`, `--limit`, `--json`). Pending predictions expire after 30 days, and judging deletes
   expired ones as it goes. Resolved ones stay, as the record `eval --live` reads, until you forget
-  them. One place keeps at most 5,000 pending predictions: above that, `oort judge apply` still
+  them. One author keeps at most 5,000 pending predictions in one place: above that, `oort judge apply` still
   answers but keeps nothing (`kept: false`, `notKept: "pending-cap"` in JSON). It also answers
   when the prediction cannot be saved (`write-failed`).
 - `oort judge forget-prediction <id>` (asks first; `--yes`) deletes one prediction. It leaves

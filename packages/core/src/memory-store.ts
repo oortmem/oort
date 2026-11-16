@@ -1,6 +1,6 @@
 import { appendAccess } from './activation.js';
 import type { GuardedWriteResult, Hit, MemoryStore } from './adapters.js';
-import { addressOf, canonicalMemory, nodeKey, nodeOf, sameAddress } from './address.js';
+import { addressOf, authorOf, canonicalMemory, nodeKey, nodeOf, sameAddress } from './address.js';
 import {
   assertGrant,
   cursorKey,
@@ -352,11 +352,12 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       return selectPredictions(readable, listOpts).map((p) => structuredClone(p));
     },
 
-    async forgetPrediction(grant, id) {
+    async forgetPrediction(grant, id, expect) {
       open();
       assertGrant(grant);
       const p = predictions.get(id);
       if (p === undefined || !grantWrites(grant, p)) return false;
+      if (expect !== undefined && p.revision !== expect.revision) return false;
       predictions.delete(id);
       return true;
     },
@@ -390,8 +391,12 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     async countPendingPredictions(at) {
       open();
       const where = addressOf(at);
+      const author = authorOf(at).agentId;
       return [...predictions.values()].filter(
-        (p) => p.resolution === undefined && sameAddress(addressOf(p), where),
+        (p) =>
+          p.resolution === undefined &&
+          sameAddress(addressOf(p), where) &&
+          authorOf(p).agentId === author,
       ).length;
     },
 

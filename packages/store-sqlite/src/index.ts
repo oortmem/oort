@@ -1383,7 +1383,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       `SELECT count(*) AS n FROM ${PREDICTION_TABLE}
        WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
          AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
-         AND project_id IS @project_id AND resolved = 0`,
+         AND project_id IS @project_id AND author_agent_id = @author_agent_id AND resolved = 0`,
     ),
     getCursor: db.prepare<[string], { value: string }>('SELECT value FROM cursors WHERE key = ?'),
     setCursor: db.prepare<[string, string]>(
@@ -2642,12 +2642,15 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       return true;
     },
   );
-  const forgetPredictionTx = db.transaction((grant: Grant, id: string): boolean => {
-    const was = predictionRow(id);
-    if (was === undefined || !grantWrites(grant, was)) return false;
-    q.predictionDelete.run(id);
-    return true;
-  });
+  const forgetPredictionTx = db.transaction(
+    (grant: Grant, id: string, expect: { revision: number } | undefined): boolean => {
+      const was = predictionRow(id);
+      if (was === undefined || !grantWrites(grant, was)) return false;
+      if (expect !== undefined && was.revision !== expect.revision) return false;
+      q.predictionDelete.run(id);
+      return true;
+    },
+  );
   /** `LIKE` text matching `s` literally. */
   const likeLiteral = (s: string): string => s.replace(/[\\%_]/g, (c) => `\\${c}`);
   const purgeCitingTx = db.transaction((judgmentId: string, by: string, at: Date): string[] => {
@@ -2735,10 +2738,10 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       return selectPredictions(readable, listOpts);
     },
 
-    async forgetPrediction(grant, id) {
+    async forgetPrediction(grant, id, expect) {
       open();
       assertGrant(grant);
-      const ok = forgetPredictionTx.immediate(grant, id);
+      const ok = forgetPredictionTx.immediate(grant, id, expect);
       if (ok) truncateWal();
       return ok;
     },
@@ -2760,7 +2763,12 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
 
     async countPendingPredictions(at) {
       open();
-      return q.predictionPendingAt.get(predictionAddress(at))?.n ?? 0;
+      return (
+        q.predictionPendingAt.get({
+          ...predictionAddress(at),
+          author_agent_id: authorOf(at).agentId,
+        })?.n ?? 0
+      );
     },
 
     async link(grant, a, b, linkOpts) {

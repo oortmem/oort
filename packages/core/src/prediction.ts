@@ -5,6 +5,7 @@ import {
   JudgmentInputError,
   confirmJudgment,
   isAgentVia,
+  isUnconfirmedAgentJudgment,
   judgmentCriterion,
   judgmentDomain,
   judgmentField,
@@ -348,13 +349,17 @@ export interface ResolveResult {
   /** The judgment the resolve recorded: a verdict other than the predicted one, with a reason. */
   judgment?: RecordJudgmentResult;
   /**
-   * A person's resolve replaced an agent's, but could not withdraw the judgment the agent's
-   * recorded: it is outside the person's grant (`not-writable`, for instance in that agent's own
-   * Star). It stays as it was, unconfirmed, so judging leaves it out.
+   * A person's resolve replaced an agent's, but did not withdraw the judgment the agent's
+   * recorded. `not-writable`: it is outside the person's grant (for instance in that agent's own
+   * Star); it stays as it was, unconfirmed, so judging leaves it out. `confirmed`: a person
+   * already confirmed it, so it is theirs now and stays.
    */
   agentJudgmentKept?: string;
-  agentJudgmentKeptReason?: 'not-writable';
+  agentJudgmentKeptReason?: AgentJudgmentKeptReason;
 }
+
+/** Why a person's resolve left the judgment an agent's resolve recorded in place. */
+export type AgentJudgmentKeptReason = 'not-writable' | 'confirmed';
 
 /**
  * True when resolving `p` with `input` would record a judgment: a reason, and a verdict other
@@ -455,7 +460,7 @@ export async function resolvePrediction(
   // The judgment's own checks, before anything is written.
   if (judgmentInput !== undefined) normaliseJudgment(judgmentInput, now);
 
-  let kept: string | undefined;
+  let kept: Kept | undefined;
   if (supersede) ({ p, kept } = await supersedeAgentResolve(deps, p, by, now));
 
   let judgment: RecordJudgmentResult | undefined;
@@ -489,26 +494,33 @@ export async function resolvePrediction(
     agrees,
     ...(judgment !== undefined && { judgment }),
     ...(kept !== undefined && {
-      agentJudgmentKept: kept,
-      agentJudgmentKeptReason: 'not-writable' as const,
+      agentJudgmentKept: kept.id,
+      agentJudgmentKeptReason: kept.reason,
     }),
   };
+}
+
+/** An agent's judgment a person's resolve left in place, and why. */
+interface Kept {
+  id: string;
+  reason: AgentJudgmentKeptReason;
 }
 
 /**
  * A person's resolve replacing an agent's unconfirmed one: the agent's resolve moves to
  * `superseded` (no reason or criteria kept) and the prediction is pending again, then the
  * judgment that resolve recorded is withdrawn, and so is any a superseded resolve recorded that
- * an earlier, interrupted call left current. A judgment outside the person's grant is left as it
- * is (unconfirmed, so judging leaves it out) and named in `kept`; this is decided before any
- * write. Returns the prediction as now stored.
+ * an earlier, interrupted call left current. Only an unconfirmed agent judgment is withdrawn. One
+ * outside the person's grant is left as it is (unconfirmed, so judging leaves it out), and one a
+ * person confirmed stays too; the latest is named in `kept`. This is decided before any write.
+ * Returns the prediction as now stored.
  */
 async function supersedeAgentResolve(
   deps: RecordJudgmentDeps,
   p: Prediction,
   by: string,
   now: Date,
-): Promise<{ p: Prediction; kept?: string }> {
+): Promise<{ p: Prediction; kept?: Kept }> {
   const store = predictionsOf(deps.store);
   const r = p.resolution!;
   const iso = now.toISOString();
@@ -524,13 +536,18 @@ async function supersedeAgentResolve(
   ];
   // Which of their judgments this grant can withdraw, before anything changes.
   const withdraw: Memory[] = [];
-  let kept: string | undefined;
+  let kept: Kept | undefined;
   for (const s of history) {
     if (s.judgmentId === undefined) continue;
+    const latest = s === history[history.length - 1];
     const m = await deps.store.get(deps.grant, s.judgmentId);
     if (m !== null && m.judgment?.withdrawn !== undefined) continue;
     if (m === null || !grantWrites(deps.grant, m)) {
-      if (s === history[history.length - 1]) kept = s.judgmentId;
+      if (latest) kept = { id: s.judgmentId, reason: 'not-writable' };
+      continue;
+    }
+    if (m.judgment === undefined || !isUnconfirmedAgentJudgment(m.judgment)) {
+      if (latest) kept = { id: s.judgmentId, reason: 'confirmed' };
       continue;
     }
     withdraw.push(m);
@@ -589,13 +606,17 @@ export async function confirmResolution(
   return true;
 }
 
-/** Deletes prediction `id` with its text. False for an unknown id or one outside the grant. */
+/**
+ * Deletes prediction `id` with its text. False for an unknown id or one outside the grant, and,
+ * with `expect`, for one whose `revision` changed since the caller read it.
+ */
 export async function forgetPrediction(
   store: MemoryStore,
   grant: Grant,
   id: string,
+  expect?: { revision: number },
 ): Promise<boolean> {
-  return predictionsOf(store).forgetPrediction(grant, id);
+  return predictionsOf(store).forgetPrediction(grant, id, expect);
 }
 
 // ---------------------------------------------------------------------------------------------

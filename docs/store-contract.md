@@ -360,8 +360,9 @@ and the memory methods never see it. It carries an address like a memory (`scope
   drops pending records whose `expiresAt` is at or before it. `limit` applies after the grant
   and every filter, so it never comes back short because of rows the grant cannot read.
   `selectPredictions` in `@oortmem/core` is the shared filter and order.
-- `forgetPrediction(grant, id)` deletes the record when it is inside `grant.write`, and returns
-  whether it did.
+- `forgetPrediction(grant, id, expect?)` deletes the record when it is inside `grant.write`, and
+  returns whether it did. With `expect: { revision: n }` it deletes only a record whose
+  `revision` is still `n`, so an agent never deletes a prediction a person resolved meanwhile.
 - `purgePredictionsCiting(grant, judgmentId, by, at)` replaces every record that cites the
   judgment with `purgedPrediction(p, by, at)`, at every address, not only the grant's: the caller
   is withdrawing, purging or forgetting that judgment, and derived copies go with it, as a
@@ -370,8 +371,9 @@ and the memory methods never see it. It carries an address like a memory (`scope
 - `pruneExpiredPredictions(now, limit)` deletes up to `limit` unresolved records whose
   `expiresAt` is at or before `now`, at every address. Resolved records are never pruned.
   It is not limited to a grant because an expired pending prediction can no longer be resolved by anyone.
-- `countPendingPredictions(p)` counts the unresolved records at `p`'s address (its node and
-  project). Judging keeps nothing above 5,000.
+- `countPendingPredictions(p)` counts the unresolved records `p`'s author keeps at `p`'s address
+  (its node and project). Judging keeps nothing above 5,000 per author, so one agent filling its
+  quota never blocks another at the same address.
 
 A forgotten or purged record leaves none of its text in a log or journal the store keeps: the
 SQLite store truncates its write-ahead log after each one, as it does after a memory's forget.

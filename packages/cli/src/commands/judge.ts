@@ -982,7 +982,9 @@ export async function judgeResolveCommand(
     }
     if (r.agentJudgmentKept !== undefined) {
       ctx.io.out(
-        `This replaces what an agent recorded. Its judgment ${short(r.agentJudgmentKept)} is outside this scope, so it stays as it is: unconfirmed, and judging leaves it out.\n`,
+        r.agentJudgmentKeptReason === 'confirmed'
+          ? `This replaces what an agent recorded. Its judgment ${short(r.agentJudgmentKept)} was confirmed by a person, so it stays.\n`
+          : `This replaces what an agent recorded. Its judgment ${short(r.agentJudgmentKept)} is outside this scope, so it stays as it is: unconfirmed, and judging leaves it out.\n`,
       );
     }
     return 0;

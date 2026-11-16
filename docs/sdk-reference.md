@@ -888,8 +888,8 @@ export interface JudgeResult {
    */
   predictionId?: string;
   /**
-   * False when the answer was not kept as a prediction: the scope already keeps 5,000
-   * unresolved ones (`notKept: 'pending-cap'`) or the write failed (`write-failed`). The answer
+   * False when the answer was not kept as a prediction: this author already keeps 5,000
+   * unresolved ones in the scope (`notKept: 'pending-cap'`) or the write failed (`write-failed`). The answer
    * is the same either way.
    */
   kept?: boolean;
@@ -979,11 +979,12 @@ export interface ResolveView {
   /** The judgment the resolve recorded: a verdict other than the predicted one, with a reason. */
   judgment?: RecordJudgmentView;
   /**
-   * This resolve replaced an agent's, but the judgment the agent's recorded is outside this
-   * handle's scope (`not-writable`): it stays, unconfirmed, so judging leaves it out.
+   * This resolve replaced an agent's, but left the judgment the agent's recorded in place.
+   * `not-writable`: it is outside this handle's scope; it stays, unconfirmed, so judging leaves it
+   * out. `confirmed`: a person already confirmed it, so it stays.
    */
   agentJudgmentKept?: string;
-  agentJudgmentKeptReason?: 'not-writable';
+  agentJudgmentKeptReason?: 'not-writable' | 'confirmed';
 }
 ```
 

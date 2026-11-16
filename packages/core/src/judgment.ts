@@ -877,6 +877,10 @@ export async function purgeJudgment(
  * Takes back a judgment `recordJudgment` just wrote, for a caller whose next step failed: the new
  * judgment is withdrawn and purged, and a judgment it corrected is put back exactly as it was
  * (`r.previous`), current again. Nothing to do for `unchanged`: that record was there before.
+ *
+ * The corrected judgment comes back only while it is still exactly as this call retired it:
+ * corrected by this judgment, not withdrawn, purged or forgotten since, and not corrected by
+ * another judgment that is still current. Otherwise it is left alone.
  */
 export async function undoRecordedJudgment(
   store: MemoryStore,
@@ -889,8 +893,48 @@ export async function undoRecordedJudgment(
   const m = await store.get(grant, r.memory.id);
   if (m !== null) await purgeJudgment(store, grant, m, by, now);
   if (r.outcome === 'corrected' && r.previous !== undefined) {
-    await store.upsert(grant, r.previous);
+    await restoreCorrected(store, grant, r.previous, r.memory.id, now);
   }
+}
+
+/** True while `m` is still the record `byId` corrected, with nothing done to it since. */
+function retiredBy(m: Memory | null, byId: string): m is Memory {
+  return (
+    m !== null &&
+    m.endReason === 'corrected' &&
+    m.supersededBy === byId &&
+    m.expiredAt !== undefined &&
+    m.judgment !== undefined &&
+    m.judgment.withdrawn === undefined &&
+    m.judgment.purged === undefined
+  );
+}
+
+async function restoreCorrected(
+  store: MemoryStore,
+  grant: Grant,
+  previous: Memory,
+  byId: string,
+  now: Date,
+): Promise<void> {
+  const live = await store.get(grant, previous.id);
+  if (!retiredBy(live, byId)) return;
+  // Another judgment that corrected the same record at the same time is still current: it stays
+  // the answer, and the corrected record stays retired.
+  const all = await store.list(grant, { validOnly: false, embeddings: false });
+  if (all.some((m) => m.id !== byId && m.supersedes === previous.id && isActiveJudgment(m, now))) {
+    return;
+  }
+  if (store.upsertManyIfUnchanged !== undefined) {
+    // Atomic: skipped when the record changed after the read above.
+    await store.upsertManyIfUnchanged(grant, [
+      { next: previous, was: { id: live.id, updatedAt: live.updatedAt, tier: live.tier } },
+    ]);
+    return;
+  }
+  const again = await store.get(grant, previous.id);
+  if (!retiredBy(again, byId) || again.updatedAt !== live.updatedAt) return;
+  await store.upsert(grant, previous);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -904,7 +948,7 @@ export const PREDICTION_LIMITS = Object.freeze({
   details: 4000,
   /** Expired, unresolved predictions one judging call deletes. */
   prune: 100,
-  /** Unresolved predictions one address keeps; above it judging answers but keeps nothing. */
+  /** Unresolved predictions one author keeps at one address; above it judging keeps nothing. */
   pending: 5000,
 });
 
@@ -1018,8 +1062,13 @@ function predictionRecord(
   const iso = ctx.now.toISOString();
   const domains = [...new Set(ctx.used.map((j) => j.domain))];
   const domain = ctx.item.domain ?? (domains.length === 1 ? domains[0] : undefined);
+  // Over the cap, the predicted verdict goes first, so the cap never drops it.
+  const cited = [...new Set(ctx.used.flatMap((j) => j.verdicts))];
+  const predicted = r.prediction?.verdict;
   const verdicts = firstLabels(
-    ctx.used.flatMap((j) => j.verdicts),
+    predicted !== undefined && cited.length > JUDGMENT_LIMITS.verdicts && cited.includes(predicted)
+      ? [predicted, ...cited]
+      : cited,
     JUDGMENT_LIMITS.verdicts,
   );
   const { item } = ctx;

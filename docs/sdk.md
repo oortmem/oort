@@ -404,8 +404,9 @@ console.log(live.resolved, live.bands.length);
   the daily limit only when it records a judgment, and the whole prediction id (a prefix is
   `not-found`). The decision stays unconfirmed until an expert role calls
   `judge.confirm(predictionId)`, and an expert role's own `resolve` replaces it (the agent's
-  judgment is withdrawn, or, outside the handle's scope, kept and named in `agentJudgmentKept`
-  with `agentJudgmentKeptReason: 'not-writable'`). A prefix that matches both a judgment and a prediction is
+  judgment is withdrawn, or kept and named in `agentJudgmentKept`: with
+  `agentJudgmentKeptReason: 'not-writable'` outside the handle's scope, or `'confirmed'` when a
+  person already confirmed it). A prefix that matches both a judgment and a prediction is
   `ambiguous-id`. `evalLive` leaves unconfirmed decisions out unless `includeAgentResolved` is
   set.
 - `evalLive` reports `overall` agreement, agreement on `suggested` items and their `coverage`,
@@ -413,12 +414,13 @@ console.log(live.resolved, live.bands.length);
   `meanProbability`), and the `criteria` the expert overruled most.
 - `judge.listPredictions()` lists pending predictions, newest first. Pass `status: 'resolved'` for
   decided ones. A pending prediction expires after 30 days; resolved ones stay until forgotten.
-  Above 5,000 pending in one place, `judge.apply` answers without keeping one (`kept: false`,
+  Above 5,000 pending from one author in one place, `judge.apply` answers without keeping one (`kept: false`,
   `notKept: 'pending-cap'`); a failed write is `notKept: 'write-failed'`.
 - Withdrawing, purging or forgetting a judgment first removes the text of every prediction that
   cited it; if one could not be purged the call fails (`internal`, `predictions-not-purged`,
   retryable) and the judgment is unchanged. `judge.forgetPrediction(id)` deletes one prediction
-  (in the agent role, only a pending one). It leaves the judgment its resolve recorded.
+  (in the agent role, only a pending one: if a person resolves it while the call runs, it stays
+  and the call is refused). It leaves the judgment its resolve recorded.
 - Predictions are in the store file, so backups include them.
 
 ## Scopes and multi-tenant use
