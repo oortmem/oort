@@ -199,6 +199,25 @@ export const JudgeOptionsSchema = z.strictObject({
   includeAgentRecorded: z.boolean().optional(),
 });
 
+export const ResolveInputSchema = z.strictObject({
+  verdict: z.string(),
+  reason: z.string().optional(),
+  criteria: z.array(z.string()).optional(),
+  by: z.string(),
+  domain: z.string().optional(),
+});
+
+export const PredictionListSchema = z.strictObject({
+  status: z.enum(['pending', 'resolved']).optional(),
+  limit: z.number().int().min(1).max(1000).optional(),
+  domain: z.string().optional(),
+});
+
+export const LiveEvalSchema = z.strictObject({
+  domain: z.string().optional(),
+  includeAgentResolved: z.boolean().optional(),
+});
+
 export const JudgeListSchema = z.strictObject({
   domain: z.string().optional(),
   by: z.string().optional(),

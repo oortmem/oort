@@ -18,7 +18,7 @@ export const TOOL_NAMES = [
  * Judgment memory (CON-71): offered only by a backend that implements them (the local store
  * today), so the remote connector's tool set is unchanged until it does.
  */
-export const JUDGMENT_TOOL_NAMES = ['record_judgment', 'judge'] as const;
+export const JUDGMENT_TOOL_NAMES = ['record_judgment', 'judge', 'resolve_prediction'] as const;
 /**
  * Memory links (CON-148): offered only by a backend whose store keeps links (the local store
  * today; Oort Cloud does not hold links yet).
@@ -277,6 +277,35 @@ export function inputSchemasFor(spaces: ToolSpaces, opts: ToolSchemaOptions = {}
         .default(false)
         .describe('Also use agent-recorded judgments nobody has confirmed'),
     }),
+    resolve_prediction: z.object({
+      prediction_id: z
+        .string()
+        .trim()
+        .min(4)
+        .max(64)
+        .describe('The prediction_id a judge call returned'),
+      verdict: Label.describe('The verdict the person chose, one of the prediction verdicts'),
+      reason: z
+        .string()
+        .trim()
+        .min(1)
+        .max(2000)
+        .optional()
+        .describe("The person's reason, exactly as they gave it; never reworded"),
+      criteria: z
+        .array(z.string().trim().min(1).max(64))
+        .max(12)
+        .optional()
+        .describe('Tags the reason relies on, e.g. no-source'),
+      by: z.string().trim().min(1).max(128).describe('The id of the expert who decided'),
+      domain: z
+        .string()
+        .trim()
+        .min(1)
+        .max(64)
+        .optional()
+        .describe('The domain, when the prediction has none'),
+    }),
     link: z.object({
       from: Id,
       to: Id.describe('The other memory: in the same Planet or Star, both yours to change'),
@@ -415,8 +444,23 @@ export const TOOLS: readonly ToolDefinition[] = [
     title: "Apply an expert's judgments",
     description:
       "Predict an expert's verdict on a new item from their judgments, with probability and cited precedents, or say it needs the expert. Sends the item and reasons to TypeSafe.",
-    // Reads only, but sends the item and the precedents' reasons to TypeSafe for the prediction.
+    // Reads memories only, but sends the item and the precedents' reasons to TypeSafe for the
+    // prediction. The prediction it keeps for a later resolve changes no memory.
     annotations: { ...read("Apply an expert's judgments"), openWorldHint: true },
+  },
+  {
+    name: 'resolve_prediction',
+    title: 'Record the decision on a prediction',
+    description:
+      'Record what a person decided on an item judge predicted, once they decided. A different verdict with a reason becomes a judgment. Unconfirmed until a person confirms it.',
+    annotations: {
+      title: 'Record the decision on a prediction',
+      readOnlyHint: false,
+      // It can add a judgment, which changes what judging answers, so hosts should ask first.
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
   },
   {
     name: 'link',

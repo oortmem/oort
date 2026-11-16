@@ -226,6 +226,17 @@ def call(o: Oort, step: Dict[str, Any], args: Dict[str, Any], now: datetime) -> 
         return o.judge.list(**kwargs(a))
     if c == "judge.confirm":
         return o.judge.confirm(a["id"])
+    if c == "judge.resolve":
+        i = a.pop("id")
+        return o.judge.resolve(i, **kwargs(a))
+    if c == "judge.listPredictions":
+        return o.judge.list_predictions(**kwargs(a))
+    if c == "judge.getPrediction":
+        return o.judge.get_prediction(a["id"])
+    if c == "judge.forgetPrediction":
+        return o.judge.forget_prediction(a["id"])
+    if c == "judge.evalLive":
+        return o.judge.eval_live(**kwargs(a))
     if c == "formatForPrompt":
         r = a.pop("result")
         res = r if isinstance(r, RecallResult) else from_wire(RecallResult, r)

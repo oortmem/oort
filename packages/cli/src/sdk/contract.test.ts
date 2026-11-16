@@ -88,6 +88,18 @@ async function call(oort: Oort, step: Step, args: Record<string, unknown>): Prom
       return oort.judge.list(args);
     case 'judge.confirm':
       return oort.judge.confirm(args['id'] as string);
+    case 'judge.resolve': {
+      const { id, ...input } = args;
+      return oort.judge.resolve(id as string, input as never);
+    }
+    case 'judge.listPredictions':
+      return oort.judge.listPredictions(args);
+    case 'judge.getPrediction':
+      return oort.judge.getPrediction(args['id'] as string);
+    case 'judge.forgetPrediction':
+      return oort.judge.forgetPrediction(args['id'] as string);
+    case 'judge.evalLive':
+      return oort.judge.evalLive(args);
     case 'formatForPrompt': {
       const { result, ...opts } = args;
       return formatForPrompt(result as RecallResult, opts);

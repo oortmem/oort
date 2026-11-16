@@ -1,0 +1,127 @@
+import * as path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { tmpdir } from '../../test/helpers.js';
+import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
+import { createOortWith } from './create.js';
+import type { Oort } from './types.js';
+
+/** Predictions from code: judge.apply keeps one, judge.resolve closes it, evalLive reports. */
+
+// In the past: the store lists memories valid at the real time.
+const NOW = new Date('2026-11-01T12:00:00.000Z');
+
+async function handles(): Promise<{ expert: Oort; agent: Oort }> {
+  const root = tmpdir('oort-sdk-predictions-');
+  const base = {
+    mode: 'local' as const,
+    home: path.join(root, 'home'),
+    env: { HOME: root, OORT_NO_KEYCHAIN: '1' },
+    config: { judge: { experts: ['ada'] } },
+  };
+  const deps = { adapters: fakeAdapters(), now: () => NOW };
+  const expert = await createOortWith({ ...base, judge: { role: 'expert' } }, deps as never);
+  const agent = await createOortWith(base, deps as never);
+  return { expert, agent };
+}
+
+async function seed(oort: Oort): Promise<void> {
+  for (const subject of [
+    'Post says a vitamin cures the flu',
+    'Post says a vitamin cures colds overnight',
+    'Post says a miracle remedy cures the flu',
+  ]) {
+    await oort.judge.record({
+      subject,
+      verdict: 'rejected',
+      reason: 'Health claim with no cited source.',
+      criteria: ['no-source'],
+      domain: 'content',
+      by: 'ada',
+    });
+  }
+}
+
+const item = { summary: 'Post says a vitamin cures the flu fast', domain: 'content' };
+
+describe('sdk predictions', () => {
+  it('sdk.predictions.apply-resolve-and-eval', async () => {
+    const { expert, agent } = await handles();
+    await seed(expert);
+    const r = await expert.judge.apply(item);
+    expect(r.predictionId).toEqual(expect.any(String));
+    const pending = await expert.judge.listPredictions();
+    expect(pending.predictions.map((p) => p.id)).toEqual([r.predictionId]);
+    expect(pending.predictions[0]).toMatchObject({
+      state: 'pending',
+      item: { summary: item.summary, domain: 'content' },
+      verdicts: ['approved', 'rejected'],
+    });
+
+    const reason = 'Satire account, labelled as parody.';
+    const resolved = await expert.judge.resolve(r.predictionId!, {
+      verdict: 'approved',
+      reason,
+      by: 'ada',
+    });
+    expect(resolved.agrees).toBe(r.prediction === undefined ? null : false);
+    expect(resolved.judgment).toMatchObject({ outcome: 'added', status: 'recorded' });
+    expect(resolved.prediction).toMatchObject({
+      state: 'resolved',
+      resolution: { verdict: 'approved', reason, by: 'ada', via: 'sdk', agentRecorded: false },
+    });
+    const listed = await expert.judge.list();
+    expect(listed.judgments.find((j) => j.id === resolved.judgment!.id)).toMatchObject({ reason });
+
+    await expect(
+      expert.judge.resolve(r.predictionId!, { verdict: 'approved', by: 'ada' }),
+    ).rejects.toMatchObject({ code: 'refused', reason: 'already-resolved' });
+    await expect(
+      expert.judge.resolve('00000000-dead', { verdict: 'approved', by: 'ada' }),
+    ).rejects.toMatchObject({ code: 'not-found' });
+
+    const report = await expert.judge.evalLive();
+    expect(report.resolved).toBe(1);
+    expect(report.pending).toBe(0);
+    expect((await expert.judge.getPrediction(r.predictionId!)).state).toBe('resolved');
+    expect(await expert.judge.forgetPrediction(r.predictionId!)).toEqual({
+      id: r.predictionId,
+      forgotten: true,
+    });
+    await expect(expert.judge.getPrediction(r.predictionId!)).rejects.toMatchObject({
+      code: 'not-found',
+    });
+    await expert.close();
+    await agent.close();
+  });
+
+  it('sdk.predictions.an-agent-resolve-is-unconfirmed-until-an-expert-confirms', async () => {
+    const { expert, agent } = await handles();
+    await seed(expert);
+    const r = await agent.judge.apply(item);
+    await expect(
+      agent.judge.resolve(r.predictionId!, { verdict: 'approved', by: 'bo', reason: 'No.' }),
+    ).rejects.toMatchObject({ code: 'refused', reason: 'not-an-expert' });
+    const resolved = await agent.judge.resolve(r.predictionId!, {
+      verdict: 'approved',
+      by: 'ada',
+      reason: 'Labelled satire.',
+    });
+    expect(resolved.prediction.resolution).toMatchObject({ via: 'mcp', agentRecorded: true });
+    expect(resolved.judgment?.status).toBe('agent-recorded');
+    expect((await expert.judge.evalLive()).agentResolvedExcluded).toBe(1);
+    await expect(agent.judge.confirm(r.predictionId!)).rejects.toMatchObject({
+      reason: 'expert-only',
+    });
+    expect(await expert.judge.confirm(r.predictionId!)).toEqual({
+      id: r.predictionId,
+      changed: true,
+    });
+    const after = await expert.judge.evalLive();
+    expect(after.resolved).toBe(1);
+    expect(after.agentResolvedExcluded).toBe(0);
+    const j = (await expert.judge.list()).judgments.find((x) => x.id === resolved.judgment!.id);
+    expect(j?.confirmed).toBe(true);
+    await expert.close();
+    await agent.close();
+  });
+});

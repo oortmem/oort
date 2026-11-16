@@ -43,7 +43,7 @@ const SERVICE_HEADERS_TIMEOUT_MS = 5_000;
 const CONNECTIONS_CHECK_MS = 1_000;
 const KEEP_ALIVE_MS = 5_000;
 /** What this daemon serves beyond the core routes (`GET /v1/health`). */
-export const CAPABILITIES = ['judgments', 'consolidate', 'links'] as const;
+export const CAPABILITIES = ['judgments', 'predictions', 'consolidate', 'links'] as const;
 /** A root handle is replaced once it is this old, so edited config and keys are picked up. */
 export const HANDLE_TTL_MS = 60_000;
 /** At most this many root handles (one per cwd, org and judge role) stay open. */
@@ -562,6 +562,54 @@ const ROUTES: Route[] = [
         ...(limit !== undefined && { limit }),
       });
     },
+  },
+  {
+    method: 'POST',
+    name: 'POST /v1/predictions/:id/resolve',
+    match: new RegExp(`^/v1/predictions/${ID}/resolve$`),
+    call: (m) => (h, b) => h.judge.resolve(idOf(m[1]!), b as never),
+  },
+  {
+    method: 'GET',
+    name: 'GET /v1/predictions/eval',
+    match: /^\/v1\/predictions\/eval$/,
+    query: ['domain', 'includeAgentResolved'],
+    call: (_m, q) => (h) => {
+      const domain = q.get('domain');
+      const includeAgentResolved = boolParam(q, 'includeAgentResolved');
+      return h.judge.evalLive({
+        ...(domain !== undefined && { domain }),
+        ...(includeAgentResolved !== undefined && { includeAgentResolved }),
+      });
+    },
+  },
+  {
+    method: 'GET',
+    name: 'GET /v1/predictions',
+    match: /^\/v1\/predictions$/,
+    query: ['status', 'limit', 'domain'],
+    call: (_m, q) => (h) => {
+      const status = q.get('status');
+      const limit = intParam(q, 'limit');
+      const domain = q.get('domain');
+      return h.judge.listPredictions({
+        ...(status !== undefined && { status: status as 'pending' }),
+        ...(limit !== undefined && { limit }),
+        ...(domain !== undefined && { domain }),
+      });
+    },
+  },
+  {
+    method: 'GET',
+    name: 'GET /v1/predictions/:id',
+    match: new RegExp(`^/v1/predictions/${ID}$`),
+    call: (m) => (h) => h.judge.getPrediction(idOf(m[1]!)),
+  },
+  {
+    method: 'DELETE',
+    name: 'DELETE /v1/predictions/:id',
+    match: new RegExp(`^/v1/predictions/${ID}$`),
+    call: (m) => (h) => h.judge.forgetPrediction(idOf(m[1]!)),
   },
   {
     method: 'POST',

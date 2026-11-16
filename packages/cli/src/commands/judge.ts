@@ -5,8 +5,16 @@ import {
   EVAL_THRESHOLDS,
   JudgmentInputError,
   JudgmentPackError,
+  PredictionError,
   activeJudgments,
   confirmJudgment,
+  confirmResolution,
+  evaluateLive,
+  findPrediction,
+  forgetPrediction,
+  listPredictions,
+  predictionState,
+  resolvePrediction,
   evaluateJudgments,
   formatJudgmentPack,
   importJudgmentPack,
@@ -24,7 +32,9 @@ import {
   type JudgeResult,
   type Judgment,
   type JudgmentInput,
+  type LiveEvalReport,
   type Memory,
+  type Prediction,
   type RecordJudgmentResult,
 } from '@oortmem/core';
 import { emit, jsonMode, rawOut } from '../output.js';
@@ -74,6 +84,16 @@ async function refusing<T>(fn: () => Promise<T>): Promise<T> {
   } catch (e) {
     if (e instanceof JudgmentInputError || e instanceof JudgmentPackError) {
       throw new Refusal(e.message);
+    }
+    if (e instanceof PredictionError) {
+      throw new Refusal(
+        e.message,
+        e.kind === 'not-found'
+          ? { code: 'not-found', fix: 'oort judge predictions --all' }
+          : e.kind === 'ambiguous'
+            ? { code: 'ambiguous-id' }
+            : { code: 'refused' },
+      );
     }
     throw e;
   }
@@ -333,6 +353,8 @@ export async function judgeApplyCommand(
           grant: writeGrant(w),
           ...(w.embed !== undefined && { embed: w.embed }),
           ...(w.decide !== undefined && { decide: w.decide }),
+          // Kept as a prediction, so the expert's decision can be recorded beside it.
+          keep: { scope: w.scope },
         },
         opts,
       ),
@@ -342,6 +364,11 @@ export async function judgeApplyCommand(
       return 0;
     }
     printJudgeResult(ctx, w, r);
+    if (r.predictionId !== undefined) {
+      ctx.io.out(
+        `\nKept as prediction ${short(r.predictionId)}. When the expert decides: \`oort judge resolve ${short(r.predictionId)} --verdict <label> [--reason <text>]\`.\n`,
+      );
+    }
     return 0;
   });
 }
@@ -511,7 +538,18 @@ export async function judgeConfirmCommand(
 ): Promise<number> {
   return withWired(ctx, async (w) => {
     localOnly(w);
-    const m = await findJudgment(w, id);
+    let m: Memory & { judgment: Judgment };
+    try {
+      m = await findJudgment(w, id);
+    } catch (e) {
+      // Not a judgment: a prediction an agent resolved, which a person confirms.
+      const p =
+        e instanceof Refusal && e.code === 'not-found'
+          ? await findPrediction(w.store, writeGrant(w), id).catch(() => undefined)
+          : undefined;
+      if (p === undefined) throw e;
+      return confirmResolved(ctx, w, p, o);
+    }
     const grant = writeGrantFor(w, m);
     if (!isUnconfirmedAgentJudgment(m.judgment)) {
       ctx.io.out(
@@ -631,8 +669,10 @@ export async function judgeImportCommand(
 
 /** `oort judge eval <file>`: agreement with the expert on held-out decisions, per domain. */
 export async function judgeEvalCommand(
-  file: string,
+  file: string | undefined,
   o: {
+    live?: boolean;
+    includeAgentResolved?: boolean;
     format?: string;
     domain?: string;
     by?: string;
@@ -645,6 +685,15 @@ export async function judgeEvalCommand(
   },
   ctx: Ctx,
 ): Promise<number> {
+  if (o.live === true) {
+    if (file !== undefined) {
+      throw new Refusal('--live reads resolved predictions, not a file: give one or the other.');
+    }
+    return judgeEvalLiveCommand(o, ctx);
+  }
+  if (file === undefined) {
+    throw new Refusal('Give a file of held-out decisions, or --live for resolved predictions.');
+  }
   const format = formatOf(file, o.format);
   const text = readInput(ctx.io, file);
   const rows = await refusing(async () =>
@@ -786,6 +835,298 @@ export async function judgePackImportCommand(
     } else {
       ctx.io.out(
         `Imported ${r.added.length} judgment(s) from pack ${shown(clip(m.name, 40))} (${m.digest.slice(0, 16)}); ${r.skipped.length} already here${r.tombstoned.length > 0 ? `, ${r.tombstoned.length} withdrawn or corrected here before (not brought back)` : ''}.\n`,
+      );
+    }
+    return 0;
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Predictions: what `judge apply` proposed, and what the expert then decided
+// ---------------------------------------------------------------------------------------------
+
+/** A prediction for human eyes: the item, and the predicted verdict or why there is none. */
+function predictionLine(p: Prediction): string {
+  const proposed =
+    p.verdict === null
+      ? `no prediction (${shown(p.why ?? p.outcome)})`
+      : `predicted ${shown(p.verdict)} at ${fixed(p.probability ?? 0)}`;
+  return `"${shown(clip(p.item.summary, 70))}"${p.domain === undefined ? '' : ` (${shown(p.domain)})`}: ${proposed}`;
+}
+
+function resolutionLine(p: Prediction): string {
+  const r = p.resolution;
+  if (r === undefined) return '';
+  const agrees = r.agrees === null ? '' : r.agrees ? ', agrees' : ', differs';
+  const agent = !isAgentVia(r.via)
+    ? ''
+    : r.confirmed === undefined
+      ? ' [agent-recorded, unconfirmed]'
+      : ` [agent-recorded, confirmed by ${shown(r.confirmed.by)}]`;
+  return `${shown(r.verdict)} by ${shown(r.by)}, ${r.at.slice(0, 10)}${agrees}${agent}`;
+}
+
+/** The prediction as `--json` prints it: the record without its address. */
+function plainPrediction(p: Prediction, now: Date) {
+  const { scope: _s, address: _a, author: _au, revision: _r, ...rest } = p;
+  return { ...rest, state: predictionState(p, now) };
+}
+
+export interface JudgeResolveOptions {
+  verdict?: string;
+  reason?: string;
+  criteria?: string;
+  by?: string;
+  domain?: string;
+  json?: boolean;
+}
+
+/**
+ * `oort judge resolve <id>`: the expert's decision on a kept prediction. A different verdict
+ * with a reason is recorded as a judgment, the reason verbatim.
+ */
+export async function judgeResolveCommand(
+  id: string,
+  o: JudgeResolveOptions,
+  ctx: Ctx,
+): Promise<number> {
+  if (o.verdict === undefined) throw new Refusal('--verdict is required.');
+  const criteria = list(o.criteria);
+  return withWired(ctx, async (w) => {
+    localOnly(w);
+    const by = o.by ?? w.config.judge.operator;
+    if (by === undefined) {
+      throw new Refusal('--by is required: the id of the expert who decided.');
+    }
+    const grant = writeGrant(w);
+    const r = await refusing(async () => {
+      const p = await findPrediction(w.store, grant, id);
+      return resolvePrediction(
+        p.id,
+        {
+          verdict: o.verdict!,
+          by,
+          ...(o.reason !== undefined && { reason: o.reason }),
+          ...(criteria !== undefined && { criteria }),
+          ...(o.domain !== undefined && { domain: o.domain }),
+        },
+        {
+          store: w.store,
+          grant,
+          scope: w.scope,
+          ...(w.embed !== undefined && { embed: w.embed }),
+          via: 'cli',
+          harness: 'cli',
+        },
+      );
+    });
+    if (r.judgment !== undefined && r.judgment.redacted.length > 0) {
+      warn(ctx, 'redacted', `redacted a secret (${r.judgment.redacted.join(', ')}) before saving.`);
+    }
+    const now = new Date();
+    if (jsonMode(ctx)) {
+      emit(ctx, {
+        prediction: plainPrediction(r.prediction, now),
+        agrees: r.agrees,
+        ...(r.judgment !== undefined && {
+          judgment: { outcome: r.judgment.outcome, id: r.judgment.memory.id },
+        }),
+      });
+      return 0;
+    }
+    const p = r.prediction;
+    const verdict = shown(p.resolution!.verdict);
+    const head =
+      r.agrees === null
+        ? `Resolved ${short(p.id)} as ${verdict}; judging had made no prediction.`
+        : r.agrees
+          ? `Resolved ${short(p.id)} as ${verdict}: agrees with the prediction.`
+          : `Resolved ${short(p.id)} as ${verdict}: the prediction was ${shown(p.verdict ?? '')}.`;
+    ctx.io.out(`${head}\n`);
+    if (r.judgment !== undefined) {
+      ctx.io.out(
+        `The reason is recorded as judgment ${short(r.judgment.memory.id)}, word for word, so judging cites it from now on.\n`,
+      );
+    } else if (r.agrees !== true && o.reason === undefined) {
+      ctx.io.out(
+        'Give --reason next time to teach judging why; without one nothing new is recorded.\n',
+      );
+    }
+    return 0;
+  });
+}
+
+/** `oort judge predictions`: kept predictions, pending ones unless asked otherwise. */
+export async function judgePredictionsCommand(
+  o: { resolved?: boolean; all?: boolean; domain?: string; limit?: string; json?: boolean },
+  ctx: Ctx,
+): Promise<number> {
+  const limit = number('--limit', o.limit, 1, 1000);
+  return withWired(ctx, async (w) => {
+    localOnly(w);
+    const now = new Date();
+    const status = o.all === true ? undefined : o.resolved === true ? 'resolved' : 'pending';
+    const ps = await refusing(() =>
+      listPredictions(
+        w.store,
+        writeGrant(w),
+        {
+          ...(status !== undefined && { status }),
+          ...(o.domain !== undefined && { domain: o.domain }),
+          ...(limit !== undefined && { limit: Math.round(limit) }),
+        },
+        now,
+      ),
+    );
+    if (jsonMode(ctx)) {
+      emit(ctx, { predictions: ps.map((p) => plainPrediction(p, now)) });
+      return 0;
+    }
+    const ui = uiFor(ctx.io);
+    ctx.io.out(ui.header('predictions', `${ps.length} ${status ?? 'kept'}`, agentLabel(w)));
+    if (ps.length === 0) {
+      ctx.io.err(
+        status === 'pending'
+          ? 'oort: no predictions wait for a decision; `oort judge apply` keeps one each time.\n'
+          : 'oort: no predictions yet.\n',
+      );
+      return 0;
+    }
+    for (const p of ps) {
+      const state = predictionState(p, now);
+      const tag = p.purged !== undefined ? ' [purged]' : state === 'expired' ? ' [expired]' : '';
+      ctx.io.out(`${short(p.id)}  ${predictionLine(p)}${tag}\n`);
+      if (p.resolution !== undefined) ctx.io.out(`          decided: ${resolutionLine(p)}\n`);
+    }
+    return 0;
+  });
+}
+
+/** `oort judge forget-prediction <id>`: delete a kept prediction and its text. */
+export async function judgeForgetPredictionCommand(
+  id: string,
+  o: { yes?: boolean },
+  ctx: Ctx,
+): Promise<number> {
+  return withWired(ctx, async (w) => {
+    localOnly(w);
+    const grant = writeGrant(w);
+    const p = await refusing(() => findPrediction(w.store, grant, id));
+    const ok = await confirm(
+      ctx.io,
+      `Forget prediction ${short(p.id)}: ${predictionLine(p)}?`,
+      o.yes === true,
+      'forget it',
+      { json: jsonMode(ctx) },
+    );
+    if (!ok) {
+      ctx.io.out('Kept.\n');
+      return 0;
+    }
+    const done = await refusing(() => forgetPrediction(w.store, grant, p.id));
+    if (!done) throw new Refusal('This agent cannot change that prediction.', { code: 'refused' });
+    ctx.io.out(`Forgot prediction ${short(p.id)}.\n`);
+    if (jsonMode(ctx)) emit(ctx, { id: p.id, forgotten: true });
+    return 0;
+  });
+}
+
+/** `oort judge confirm <prediction id>`: a person vouches for an agent-recorded resolve. */
+async function confirmResolved(
+  ctx: Ctx,
+  w: Wired,
+  p: Prediction,
+  o: { yes?: boolean; by?: string },
+): Promise<number> {
+  const r = p.resolution;
+  if (r === undefined || !isAgentVia(r.via) || r.confirmed !== undefined) {
+    ctx.io.out(
+      r === undefined
+        ? `${short(p.id)} is not resolved yet; there is nothing to confirm.\n`
+        : !isAgentVia(r.via)
+          ? `${short(p.id)} was resolved by a person; there is nothing to confirm.\n`
+          : `${short(p.id)} is already confirmed.\n`,
+    );
+    if (jsonMode(ctx))
+      emit(ctx, { id: p.id, confirmed: r?.confirmed !== undefined, changed: false, by: null });
+    return 0;
+  }
+  const by = operatorOf(w, o.by);
+  const ok = await confirm(
+    ctx.io,
+    `Confirm that ${shown(r.by)} really decided this? ${predictionLine(p)}\n  decided: ${resolutionLine(p)}${r.reason === undefined ? '' : `\n  reason: ${shown(clip(r.reason, 200))}`}\nIt will count in \`oort judge eval --live\`${r.judgmentId === undefined ? '' : ', and its judgment when judging'}.`,
+    o.yes === true,
+    'confirm it',
+    { json: jsonMode(ctx) },
+  );
+  if (!ok) {
+    ctx.io.out('Not confirmed.\n');
+    return 0;
+  }
+  await refusing(() => confirmResolution(w.store, writeGrant(w), p.id, by));
+  ctx.io.out(`Confirmed the decision on ${short(p.id)} (by ${shown(by)}).\n`);
+  if (jsonMode(ctx)) emit(ctx, { id: p.id, confirmed: true, changed: true, by });
+  return 0;
+}
+
+const band = (b: LiveEvalReport['bands'][number]): string =>
+  `${fixed(b.from, 1)}-${fixed(b.to, 1)}`;
+
+/** `oort judge eval --live`: agreement and calibration from resolved predictions. */
+async function judgeEvalLiveCommand(
+  o: { domain?: string; includeAgentResolved?: boolean; json?: boolean },
+  ctx: Ctx,
+): Promise<number> {
+  return withWired(ctx, async (w) => {
+    localOnly(w);
+    const r = await refusing(() =>
+      evaluateLive(w.store, writeGrant(w), {
+        ...(o.domain !== undefined && { domain: o.domain }),
+        ...(o.includeAgentResolved === true && { includeAgentResolved: true }),
+      }),
+    );
+    if (jsonMode(ctx)) {
+      emit(ctx, r);
+      return 0;
+    }
+    const ui = uiFor(ctx.io);
+    const pct = (x: number | null) => (x === null ? '-' : fixed(x, 3));
+    ctx.io.out(ui.header('judge eval --live', `${r.resolved} resolved`, `${r.pending} pending`));
+    if (r.resolved === 0) {
+      ctx.io.err(
+        'oort: no resolved predictions yet; record decisions with `oort judge resolve <id>`.\n',
+      );
+    }
+    ctx.io.out(
+      `Agreement: ${pct(r.overall.agreement)} (${r.overall.agreed}/${r.overall.predicted} predictions the expert agreed with).\n`,
+    );
+    ctx.io.out(
+      `Suggested: ${pct(r.suggested.agreement)} (${r.suggested.agreed}/${r.suggested.predicted}); coverage ${pct(r.coverage)}.\n`,
+    );
+    ctx.io.out(`\n${ui.bold('Calibration')} (agreement per confidence band):\n`);
+    ctx.io.out(
+      ui.table(
+        ['band', 'predicted', 'agreed', 'agreement', 'mean probability'],
+        r.bands.map((b) => [
+          band(b),
+          String(b.predicted),
+          String(b.agreed),
+          pct(b.agreement),
+          pct(b.meanProbability),
+        ]),
+      ),
+    );
+    if (r.criteria.length > 0) {
+      ctx.io.out(`\n${ui.bold('Most overruled criteria')}:\n`);
+      for (const c of r.criteria) {
+        ctx.io.out(
+          `${shown(c.criterion)}: ${c.disagreed} of ${c.predicted} overruled (${fixed(c.disagreement)})\n`,
+        );
+      }
+    }
+    if (r.agentResolvedExcluded > 0) {
+      ctx.io.out(
+        `\n${r.agentResolvedExcluded} agent-recorded decision(s) nobody confirmed were left out: confirm one with \`oort judge confirm <prediction id>\`, or add --include-agent-resolved.\n`,
       );
     }
     return 0;

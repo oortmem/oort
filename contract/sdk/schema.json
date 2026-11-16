@@ -108,6 +108,11 @@
             "judge.apply",
             "judge.list",
             "judge.confirm",
+            "judge.resolve",
+            "judge.listPredictions",
+            "judge.getPrediction",
+            "judge.forgetPrediction",
+            "judge.evalLive",
             "formatForPrompt",
             "reader.judgment"
           ]

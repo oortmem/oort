@@ -5,7 +5,10 @@ import {
   scrub,
   type Judgment,
   type JudgeResult as CoreJudgeResult,
+  type LiveEvalReport,
+  predictionState,
   type Memory,
+  type Prediction,
   type RecallResult as CoreRecallResult,
   type RecalledMemory as CoreRecalled,
 } from '@oortmem/core';
@@ -13,6 +16,8 @@ import type {
   IncludeLevel,
   JudgeResult,
   JudgmentView,
+  LiveEvalView,
+  PredictionView,
   MemoryStatus,
   MemoryView,
   RecallResult,
@@ -292,5 +297,61 @@ export function judgeView(r: CoreJudgeResult): JudgeResult {
     ...(r.agentRecordedExcluded !== undefined && {
       agentRecordedExcluded: r.agentRecordedExcluded,
     }),
+    ...(r.predictionId !== undefined && { predictionId: r.predictionId }),
+  };
+}
+
+/** A stored prediction as the SDK shows it: no address, every text field scrubbed again. */
+export function predictionView(p: Prediction, now: Date): PredictionView {
+  const r = p.resolution;
+  return {
+    id: p.id,
+    state: predictionState(p, now),
+    item: {
+      summary: clean(p.item.summary),
+      ...(p.item.details !== undefined && { details: clean(p.item.details) }),
+      ...(p.item.ref !== undefined && { ref: clean(p.item.ref) }),
+      ...(p.item.domain !== undefined && { domain: p.item.domain }),
+      ...(p.item.by !== undefined && { by: clean(p.item.by) }),
+    },
+    ...(p.domain !== undefined && { domain: p.domain }),
+    outcome: p.outcome,
+    ...(p.why !== undefined && { why: p.why }),
+    verdict: p.verdict,
+    probability: p.probability,
+    verdicts: [...p.verdicts],
+    precedentIds: [...p.precedentIds],
+    criteria: [...p.criteria],
+    createdAt: p.createdAt,
+    expiresAt: p.expiresAt,
+    ...(r !== undefined && {
+      resolution: {
+        verdict: r.verdict,
+        ...(r.reason !== undefined && { reason: clean(r.reason) }),
+        criteria: [...r.criteria],
+        by: clean(r.by),
+        at: r.at,
+        via: r.via,
+        agrees: r.agrees,
+        ...(r.judgmentId !== undefined && { judgmentId: r.judgmentId }),
+        agentRecorded: isAgentVia(r.via) && r.confirmed === undefined,
+      },
+    }),
+    ...(p.purged !== undefined && { purged: true as const }),
+  };
+}
+
+/** The live evaluation as plain data. */
+export function liveEvalView(r: LiveEvalReport): LiveEvalView {
+  return {
+    resolved: r.resolved,
+    overall: { ...r.overall },
+    suggested: { ...r.suggested },
+    coverage: r.coverage,
+    bands: r.bands.map((b) => ({ ...b })),
+    criteria: r.criteria.map((c) => ({ ...c })),
+    domains: Object.fromEntries(Object.entries(r.domains).map(([d, x]) => [d, { ...x }])),
+    pending: r.pending,
+    agentResolvedExcluded: r.agentResolvedExcluded,
   };
 }

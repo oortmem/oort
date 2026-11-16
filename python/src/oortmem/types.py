@@ -53,6 +53,16 @@ __all__ = [
     "JudgeResult",
     "JudgmentList",
     "ConfirmResult",
+    "PredictionItem",
+    "PredictionResolution",
+    "PredictionView",
+    "PredictionList",
+    "ResolveResult",
+    "ForgetPredictionResult",
+    "LiveAgreement",
+    "CalibrationBand",
+    "CriterionDisagreement",
+    "LiveEval",
     "ConsolidateResult",
     "Whoami",
     "EndUserErasure",
@@ -437,6 +447,8 @@ class JudgeResult:
     degraded: Optional[List[str]] = None
     imported_excluded: Optional[int] = None
     agent_recorded_excluded: Optional[int] = None
+    #: The kept prediction: resolve it with ``judge.resolve`` once a person decides.
+    prediction_id: Optional[str] = None
 
 
 @dataclass(**_FROZEN)
@@ -448,6 +460,117 @@ class JudgmentList:
 class ConfirmResult:
     id: str
     changed: bool
+
+
+@dataclass(**_FROZEN)
+class PredictionItem:
+    summary: str
+    details: Optional[str] = None
+    ref: Optional[str] = None
+    domain: Optional[str] = None
+    by: Optional[str] = None
+
+
+@dataclass(**_FROZEN)
+class PredictionResolution:
+    """What a person decided about a predicted item."""
+
+    verdict: str
+    criteria: List[str]
+    by: str
+    at: str
+    via: str
+    #: The person chose the predicted verdict; None when there was none.
+    agrees: Optional[bool]
+    #: Resolved by an agent and not confirmed: the live evaluation leaves it out.
+    agent_recorded: bool
+    reason: Optional[str] = None
+    judgment_id: Optional[str] = None
+
+
+@dataclass(**_FROZEN)
+class PredictionView:
+    """A kept prediction: what judging proposed, and what a person decided."""
+
+    id: str
+    state: Literal["pending", "resolved", "expired"]
+    item: PredictionItem
+    outcome: Literal["suggested", "needs-expert", "precedents-only"]
+    #: The predicted verdict; None when judging made none.
+    verdict: Optional[str]
+    probability: Optional[float]
+    verdicts: List[str]
+    precedent_ids: List[str]
+    criteria: List[str]
+    created_at: str
+    expires_at: str
+    domain: Optional[str] = None
+    why: Optional[str] = None
+    resolution: Optional[PredictionResolution] = None
+    purged: Optional[bool] = None
+
+
+@dataclass(**_FROZEN)
+class PredictionList:
+    predictions: List[PredictionView]
+
+
+@dataclass(**_FROZEN)
+class ResolveResult:
+    prediction: PredictionView
+    agrees: Optional[bool]
+    #: The judgment the resolve recorded: a verdict other than the predicted one, with a reason.
+    judgment: Optional[RecordJudgmentView] = None
+
+
+@dataclass(**_FROZEN)
+class ForgetPredictionResult:
+    id: str
+    forgotten: bool
+
+
+@dataclass(**_FROZEN)
+class LiveAgreement:
+    predicted: int
+    agreed: int
+    agreement: Optional[float]
+
+
+@dataclass(**_FROZEN)
+class CalibrationBand:
+    """Agreement among resolved predictions whose probability is in [from_, to)."""
+
+    #: ``from`` on the wire.
+    from_: float
+    to: float
+    predicted: int
+    agreed: int
+    agreement: Optional[float]
+    mean_probability: Optional[float]
+
+
+@dataclass(**_FROZEN)
+class CriterionDisagreement:
+    criterion: str
+    predicted: int
+    disagreed: int
+    disagreement: float
+
+
+@dataclass(**_FROZEN)
+class LiveEval:
+    """Agreement and calibration from resolved predictions."""
+
+    resolved: int
+    overall: LiveAgreement
+    suggested: LiveAgreement
+    coverage: Optional[float]
+    bands: List[CalibrationBand]
+    criteria: List[CriterionDisagreement]
+    #: Per domain: ``resolved``, ``predicted``, ``agreed`` and ``agreement``.
+    domains: Dict[str, Any]
+    pending: int
+    agent_resolved_excluded: int
 
 
 @dataclass(**_FROZEN)

@@ -1,12 +1,19 @@
 import {
   activeJudgments,
   confirmJudgment,
+  confirmResolution,
+  evaluateLive,
+  findPrediction,
+  forgetPrediction as coreForgetPrediction,
   isActiveJudgment,
   isUnconfirmedAgentJudgment,
   judge as coreJudge,
+  listPredictions as coreListPredictions,
   recordJudgment,
+  resolvePrediction,
   type Judgment,
   type Memory,
+  type RecordJudgmentResult,
 } from '@oortmem/core';
 import { AgentJudgmentCapError, refundAgentJudgment, reserveAgentJudgment } from '../judge-cap.js';
 import { storeOf, type Ctx } from './context.js';
@@ -19,10 +26,14 @@ import type {
   JudgeResult,
   JudgmentInput,
   JudgmentView,
+  LiveEvalView,
+  PredictionView,
   RecordJudgmentView,
+  ResolveInput,
+  ResolveView,
 } from './types.js';
 import { iso } from './validate.js';
-import { judgeView, judgmentView } from './views.js';
+import { judgeView, judgmentView, liveEvalView, predictionView } from './views.js';
 
 /**
  * Judgment memory from code (CON-108 §6.3). An SDK caller is an agent by default: it records only
@@ -36,43 +47,60 @@ function localJudgments(ctx: Ctx): void {
   if (ctx.engine.mode === 'cloud') throw localOnly('Judgment memory');
 }
 
+/** Refuses an agent acting in the name of an expert the person did not list in `judge.experts`. */
+function agentMayActFor(ctx: Ctx, by: string): void {
+  const experts = ctx.engine.config.judge.experts;
+  if (experts.length === 0) {
+    throw new OortRefusedError(
+      'An agent records judgments only for experts listed in judge.experts (the home config, or the config option), and none are listed.',
+      { reason: 'experts-not-listed' },
+    );
+  }
+  if (!experts.includes(by.trim())) {
+    throw new OortRefusedError(
+      'by is not one of the experts listed in judge.experts, so an agent cannot record judgments in their name.',
+      { reason: 'not-an-expert' },
+    );
+  }
+}
+
+/** Takes one slot of the machine's daily cap of agent-recorded judgments. */
+async function reserveSlot(ctx: Ctx, day: string): Promise<void> {
+  try {
+    await reserveAgentJudgment(ctx.engine.config.home, day);
+  } catch (e) {
+    if (e instanceof AgentJudgmentCapError && e.kind === 'daily-limit') {
+      throw new OortRefusedError(
+        'Agents on this machine already recorded 50 judgments today (MCP and SDK together); a person records more with `oort judge record`.',
+        { reason: 'daily-limit' },
+      );
+    }
+    throw new OortRefusedError(
+      "Could not keep this machine's daily count of agent-recorded judgments, so nothing was saved; try again.",
+      { reason: 'cap-unavailable', retryable: true },
+    );
+  }
+}
+
+function recordView(r: RecordJudgmentResult, agent: boolean): RecordJudgmentView {
+  return {
+    outcome: r.outcome,
+    id: r.memory.id,
+    ...(r.supersedes !== undefined && { corrects: r.supersedes }),
+    status: agent ? 'agent-recorded' : 'recorded',
+    redacted: [...r.redacted],
+    ...(r.embedFailed === true && { embedFailed: true as const }),
+  };
+}
+
 export async function record(ctx: Ctx, input: JudgmentInput): Promise<RecordJudgmentView> {
   localJudgments(ctx);
   const store = storeOf(ctx);
   const now = ctx.now();
   const agent = ctx.judge.role === 'agent';
-  if (agent) {
-    const experts = ctx.engine.config.judge.experts;
-    if (experts.length === 0) {
-      throw new OortRefusedError(
-        'An agent records judgments only for experts listed in judge.experts (the home config, or the config option), and none are listed.',
-        { reason: 'experts-not-listed' },
-      );
-    }
-    if (!experts.includes(input.by.trim())) {
-      throw new OortRefusedError(
-        'by is not one of the experts listed in judge.experts, so an agent cannot record judgments in their name.',
-        { reason: 'not-an-expert' },
-      );
-    }
-  }
+  if (agent) agentMayActFor(ctx, input.by);
   const day = now.toISOString().slice(0, 10);
-  if (agent) {
-    try {
-      await reserveAgentJudgment(ctx.engine.config.home, day);
-    } catch (e) {
-      if (e instanceof AgentJudgmentCapError && e.kind === 'daily-limit') {
-        throw new OortRefusedError(
-          'Agents on this machine already recorded 50 judgments today (MCP and SDK together); a person records more with `oort judge record`.',
-          { reason: 'daily-limit' },
-        );
-      }
-      throw new OortRefusedError(
-        "Could not keep this machine's daily count of agent-recorded judgments, so nothing was saved; try again.",
-        { reason: 'cap-unavailable', retryable: true },
-      );
-    }
-  }
+  if (agent) await reserveSlot(ctx, day);
   let wrote = false;
   try {
     const r = await recordJudgment(
@@ -99,14 +127,7 @@ export async function record(ctx: Ctx, input: JudgmentInput): Promise<RecordJudg
       },
     );
     wrote = r.outcome !== 'unchanged';
-    return {
-      outcome: r.outcome,
-      id: r.memory.id,
-      ...(r.supersedes !== undefined && { corrects: r.supersedes }),
-      status: agent ? 'agent-recorded' : 'recorded',
-      redacted: [...r.redacted],
-      ...(r.embedFailed === true && { embedFailed: true as const }),
-    };
+    return recordView(r, agent);
   } finally {
     if (agent && !wrote) await refundAgentJudgment(ctx.engine.config.home, day);
   }
@@ -134,6 +155,8 @@ export async function apply(
       ...(e.embed !== undefined && { embed: e.embed }),
       ...(e.decide !== undefined && { decide: e.decide }),
       now: ctx.now(),
+      // Kept as a prediction, so a person can resolve it.
+      keep: { scope: ctx.principal.scope },
     },
     {
       ...(o.limit !== undefined && { k: o.limit }),
@@ -189,7 +212,25 @@ export async function confirm(ctx: Ctx, id: string): Promise<{ id: string; chang
       { reason: 'expert-only' },
     );
   }
-  const m = await findLocal(ctx, id);
+  let m: Memory;
+  try {
+    m = await findLocal(ctx, id);
+  } catch (e) {
+    if (!(e instanceof OortNotFoundError)) throw e;
+    // Not a memory: a prediction whose agent-recorded resolve a person confirms.
+    const store = storeOf(ctx);
+    const p = await findPrediction(store, ctx.principal.grant, id).catch(() => {
+      throw e;
+    });
+    const changed = await confirmResolution(
+      store,
+      ctx.principal.grant,
+      p.id,
+      ctx.judge.operator,
+      ctx.now(),
+    );
+    return { id: p.id, changed };
+  }
   if (m.type !== 'judgment' || m.judgment === undefined) {
     throw new OortNotFoundError('No judgment with that id in this scope.');
   }
@@ -202,4 +243,105 @@ export async function confirm(ctx: Ctx, id: string): Promise<{ id: string; chang
   }
   const ok = await confirmJudgment(storeOf(ctx), ctx.principal.grant, m, ctx.judge.operator, now);
   return { id: m.id, changed: ok };
+}
+
+/**
+ * A person's decision on a prediction. In agent role the resolve is stored as MCP's is
+ * (`via: 'mcp'`, unconfirmed), `by` must be a listed expert, and a reason that becomes a judgment
+ * takes a slot of the daily cap.
+ */
+export async function resolve(ctx: Ctx, ref: string, input: ResolveInput): Promise<ResolveView> {
+  localJudgments(ctx);
+  const store = storeOf(ctx);
+  const grant = ctx.principal.grant;
+  const now = ctx.now();
+  const agent = ctx.judge.role === 'agent';
+  const p = await findPrediction(store, grant, ref);
+  if (agent) agentMayActFor(ctx, input.by);
+  const day = now.toISOString().slice(0, 10);
+  const mayRecord = agent && input.reason !== undefined && input.reason.trim() !== '';
+  if (mayRecord) await reserveSlot(ctx, day);
+  let wrote = false;
+  try {
+    const r = await resolvePrediction(
+      p.id,
+      {
+        verdict: input.verdict,
+        by: input.by,
+        ...(input.reason !== undefined && { reason: input.reason }),
+        ...(input.criteria !== undefined && { criteria: input.criteria }),
+        ...(input.domain !== undefined && { domain: input.domain }),
+      },
+      {
+        store,
+        grant,
+        scope: ctx.principal.scope,
+        ...(ctx.engine.embed !== undefined && { embed: ctx.engine.embed }),
+        via: agent ? 'mcp' : 'sdk',
+        harness: 'sdk',
+        now,
+      },
+    );
+    wrote = r.judgment !== undefined && r.judgment.outcome !== 'unchanged';
+    return {
+      prediction: predictionView(r.prediction, now),
+      agrees: r.agrees,
+      ...(r.judgment !== undefined && { judgment: recordView(r.judgment, agent) }),
+    };
+  } finally {
+    if (mayRecord && !wrote) await refundAgentJudgment(ctx.engine.config.home, day);
+  }
+}
+
+export async function listPredictions(
+  ctx: Ctx,
+  o: { status?: 'pending' | 'resolved'; limit?: number; domain?: string },
+): Promise<{ predictions: PredictionView[] }> {
+  localJudgments(ctx);
+  const now = ctx.now();
+  const ps = await coreListPredictions(
+    storeOf(ctx),
+    ctx.principal.grant,
+    {
+      status: o.status ?? 'pending',
+      ...(o.limit !== undefined && { limit: o.limit }),
+      ...(o.domain !== undefined && { domain: o.domain }),
+    },
+    now,
+  );
+  return { predictions: ps.map((p) => predictionView(p, now)) };
+}
+
+export async function getPrediction(ctx: Ctx, ref: string): Promise<PredictionView> {
+  localJudgments(ctx);
+  return predictionView(await findPrediction(storeOf(ctx), ctx.principal.grant, ref), ctx.now());
+}
+
+export async function forgetPrediction(
+  ctx: Ctx,
+  ref: string,
+): Promise<{ id: string; forgotten: true }> {
+  localJudgments(ctx);
+  const store = storeOf(ctx);
+  const p = await findPrediction(store, ctx.principal.grant, ref);
+  if (!(await coreForgetPrediction(store, ctx.principal.grant, p.id))) {
+    throw new OortRefusedError('This handle cannot change that prediction.', {
+      reason: 'scope-denied',
+    });
+  }
+  return { id: p.id, forgotten: true };
+}
+
+export async function evalLive(
+  ctx: Ctx,
+  o: { domain?: string; includeAgentResolved?: boolean },
+): Promise<LiveEvalView> {
+  localJudgments(ctx);
+  return liveEvalView(
+    await evaluateLive(storeOf(ctx), ctx.principal.grant, {
+      now: ctx.now(),
+      ...(o.domain !== undefined && { domain: o.domain }),
+      ...(o.includeAgentResolved === true && { includeAgentResolved: true }),
+    }),
+  );
 }
