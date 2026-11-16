@@ -420,7 +420,8 @@ console.log(live.resolved, live.bands.length);
   `meanProbability`), and the `criteria` the expert overruled most.
 - `judge.listPredictions()` lists pending predictions, newest first. Pass `status: 'resolved'` for
   decided ones. A pending prediction expires after 30 days; resolved ones stay until forgotten.
-  Above 5,000 pending from one author in one place, `judge.apply` answers without keeping one (`kept: false`,
+  Above 5,000 pending from one author at its home (any project), or 50,000 from all authors there,
+  `judge.apply` answers without keeping one (`kept: false`,
   `notKept: 'pending-cap'`); a failed write is `notKept: 'write-failed'`.
 - Withdrawing, purging or forgetting a judgment first removes the text of every prediction that
   cited it; if one could not be purged the call fails (`internal`, `predictions-not-purged`,
@@ -1265,7 +1266,8 @@ confirms it. An agent names a memory by its whole id; a person may use a unique 
 
 **Limits and races.** `note` and `query` lose invisible characters (zero-width, bidirectional
 and tag characters), are scrubbed of secrets, made one line and cut to 500 characters. One agent
-keeps at most 5,000 pending rows at its home, across every project; past that, `feedback()`
+keeps at most 5,000 pending rows at its home, across every project, and all agents together
+50,000 there; past that, `feedback()`
 returns `{ kept: false, reason: 'pending-cap' }`. A row is kept with its memory's project, so a
 handle scoped to another project does not see it.
 

@@ -347,7 +347,7 @@ resolve them later. A prediction is a record of its own, never a memory: recall,
 and the memory methods never see it. It carries an address like a memory (`scope`, optional
 `address` and `author`), and the store applies the grant to it the same way:
 
-- `putPrediction(grant, p, expect?)` writes `p` inside `grant.write` (else `GrantError`). With
+- `putPrediction(grant, p, expect?, caps?)` writes `p` inside `grant.write` (else `GrantError`). With
   `expect: { revision: null }` it writes only a new id; with `expect: { revision: n }` it
   replaces only a record whose `revision` is `n`. It returns `false`, writing nothing, when the
   guard fails, or when the id exists at another address or outside the grant. Two resolves of
@@ -371,9 +371,11 @@ and the memory methods never see it. It carries an address like a memory (`scope
 - `pruneExpiredPredictions(now, limit)` deletes up to `limit` unresolved records whose
   `expiresAt` is at or before `now`, at every address. Resolved records are never pruned.
   It is not limited to a grant because an expired pending prediction can no longer be resolved by anyone.
-- `countPendingPredictions(p)` counts the unresolved records `p`'s author keeps at `p`'s address
-  (its node and project). Judging keeps nothing above 5,000 per author, so one agent filling its
-  quota never blocks another at the same address.
+- `countPendingPredictions(p)` counts the unresolved records `p`'s author keeps at `p`'s node,
+  across every project. Judging passes `caps` to `putPrediction` (5,000 per author and 50,000 for
+  all authors at the node): the store counts both in the write's transaction and resolves to
+  `'pending-cap'`, writing nothing, when a new unresolved prediction would pass either. Without
+  `caps`, `putPrediction` resolves to a boolean as before.
 
 A forgotten or purged record leaves none of its text in a log or journal the store keeps: the
 SQLite store truncates its write-ahead log after each one, as it does after a memory's forget.

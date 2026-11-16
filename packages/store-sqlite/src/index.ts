@@ -73,6 +73,7 @@ import {
   type Prediction,
   type Feedback,
   type FeedbackWrite,
+  type PendingCaps,
   type Provenance,
   type SpatialFilter,
   type Tier,
@@ -1389,6 +1390,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
          AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
          AND author_agent_id = @author_agent_id AND resolved = 0`,
     ),
+    // Up to `@cap` unresolved predictions at a node, every author and project: bounded work.
+    predictionPendingNode: db.prepare<[Params], { n: number }>(
+      `SELECT count(*) AS n FROM (SELECT 1 FROM ${PREDICTION_TABLE}
+       WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
+         AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id AND resolved = 0
+       LIMIT @cap)`,
+    ),
     feedbackGet: db.prepare<[string], { record: string }>(
       `SELECT record FROM ${FEEDBACK_TABLE} WHERE id = ?`,
     ),
@@ -1422,6 +1430,14 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
        WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
          AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
          AND author_agent_id = @author_agent_id AND status = 'pending'`,
+    ),
+    // Up to `@cap` pending rows at a node, every author and project: bounded work.
+    feedbackPendingNode: db.prepare<[Params], { n: number }>(
+      `SELECT count(*) AS n FROM (SELECT 1 FROM ${FEEDBACK_TABLE}
+       WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
+         AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
+         AND status = 'pending'
+       LIMIT @cap)`,
     ),
     getCursor: db.prepare<[string], { value: string }>('SELECT value FROM cursors WHERE key = ?'),
     setCursor: db.prepare<[string, string]>(
@@ -2694,13 +2710,42 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       record: JSON.stringify(p),
     });
   };
+  /**
+   * Whether a new pending record at `at`'s node would pass `caps`: its author's pending records
+   * there (any project), and every author's, each counted up to its cap.
+   */
+  const overCap = (
+    at: Pick<Prediction, 'scope' | 'address' | 'author'>,
+    caps: PendingCaps,
+    mine: Statement<[Params], { n: number }>,
+    all: Statement<[Params], { n: number }>,
+  ): boolean => {
+    const where = predictionAddress(at);
+    if (caps.pendingCap !== undefined) {
+      const n = mine.get({ ...where, author_agent_id: authorOf(at).agentId })?.n ?? 0;
+      if (n >= caps.pendingCap) return true;
+    }
+    if (caps.addressPendingCap !== undefined) {
+      const n = all.get({ ...where, cap: caps.addressPendingCap })?.n ?? 0;
+      if (n >= caps.addressPendingCap) return true;
+    }
+    return false;
+  };
   const putPredictionTx = db.transaction(
-    (grant: Grant, p: Prediction, expect: { revision: number | null } | undefined): boolean => {
+    (
+      grant: Grant,
+      p: Prediction,
+      expect: { revision: number | null } | undefined,
+      caps: PendingCaps | undefined,
+    ): boolean | 'pending-cap' => {
       const was = predictionRow(p.id);
       if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, p))) {
         return false;
       }
       if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return false;
+      if (was === undefined && p.resolution === undefined && caps !== undefined) {
+        if (overCap(p, caps, q.predictionPendingAt, q.predictionPendingNode)) return 'pending-cap';
+      }
       writePrediction(p);
       return true;
     },
@@ -2737,7 +2782,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       grant: Grant,
       f: Feedback,
       expect: { revision: number | null } | undefined,
-      pendingCap: number | undefined,
+      caps: PendingCaps | undefined,
     ): FeedbackWrite => {
       const was = feedbackRow(f.id);
       if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, f))) {
@@ -2752,9 +2797,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
         return 'memory-gone';
       }
       const author = authorOf(f).agentId;
-      if (was === undefined && f.status === 'pending' && pendingCap !== undefined) {
-        const n = q.feedbackPendingAt.get({ ...predictionAddress(f), author_agent_id: author })?.n;
-        if ((n ?? 0) >= pendingCap) return 'pending-cap';
+      if (was === undefined && f.status === 'pending' && caps !== undefined) {
+        if (overCap(f, caps, q.feedbackPendingAt, q.feedbackPendingNode)) return 'pending-cap';
       }
       if (f.helpedKey !== undefined && q.feedbackHelpedBy.get(f.helpedKey, f.id) !== undefined) {
         return 'helped-today';
@@ -2823,13 +2867,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
 
     predictions: true,
 
-    async putPrediction(grant, p, expect) {
+    async putPrediction(grant, p, expect, caps) {
       open();
       assertGrant(grant);
       if (!grantWrites(grant, p)) throw new GrantError();
-      const ok = putPredictionTx.immediate(grant, p, expect);
+      const ok = putPredictionTx.immediate(grant, p, expect, caps);
       // A purge replaced the text: leave none of it in the WAL.
-      if (ok && p.purged !== undefined) truncateWal();
+      if (ok === true && p.purged !== undefined) truncateWal();
       return ok;
     },
 
@@ -2902,7 +2946,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       open();
       assertGrant(grant);
       if (!grantWrites(grant, f)) throw new GrantError();
-      return putFeedbackTx.immediate(grant, f, expect, putOpts?.pendingCap);
+      return putFeedbackTx.immediate(grant, f, expect, putOpts);
     },
 
     async getFeedback(grant, id) {

@@ -144,6 +144,15 @@ export interface SearchOptions {
 /** What `MemoryStore.putFeedback` did. */
 export type FeedbackWrite = 'written' | 'conflict' | 'memory-gone' | 'pending-cap' | 'helped-today';
 
+/**
+ * Caps on pending records a new write must stay under, counted at the record's home node across
+ * every project, in the write's transaction: per author, and for all authors together.
+ */
+export interface PendingCaps {
+  pendingCap?: number;
+  addressPendingCap?: number;
+}
+
 export interface MemoryStore {
   /**
    * True when the store keeps `Memory.place` and applies `SearchOptions.spatial` (spatial memory,
@@ -219,14 +228,19 @@ export interface MemoryStore {
    * Writes the prediction `p` (insert or replace). With `expect`, only when the stored record's
    * `revision` is `expect.revision` (`null`: only when no record has `p.id`). Resolves to false,
    * writing nothing, when that guard fails, or when a record with `p.id` exists at another
-   * address or outside the grant. Rejects with `GrantError` when `p`'s address and author are
-   * outside `grant.write`.
+   * address or outside the grant. With `caps`, a new unresolved prediction is not written, and
+   * the call resolves to `'pending-cap'`, when its author already keeps `caps.pendingCap`
+   * unresolved predictions at `p`'s node (any project), or all authors together keep
+   * `caps.addressPendingCap` there; both are counted in the same transaction as the write.
+   * Without `caps` it resolves to a boolean only. Rejects with `GrantError` when `p`'s address
+   * and author are outside `grant.write`.
    */
   putPrediction?(
     grant: Grant,
     p: Prediction,
     expect?: { revision: number | null },
-  ): Promise<boolean>;
+    caps?: PendingCaps,
+  ): Promise<boolean | 'pending-cap'>;
   /** The prediction `id`, or null when it is unknown or outside the grant. */
   getPrediction?(grant: Grant, id: string): Promise<Prediction | null>;
   /**
@@ -282,7 +296,8 @@ export interface MemoryStore {
    * - `memory-gone`: nothing written: `f` is a new row and the store holds no memory `f.memoryId`
    *   (it was forgotten), so no row outlives its memory;
    * - `pending-cap`: nothing written: `f` is a new `pending` row and its author already keeps
-   *   `opts.pendingCap` pending rows at its node, in any project (counted in the same transaction);
+   *   `opts.pendingCap` pending rows at its node, in any project, or all authors together keep
+   *   `opts.addressPendingCap` there (both counted in the same transaction);
    * - `helped-today`: nothing written: `f.helpedKey` is set and another row holds it;
    * - `written`.
    * Rejects with `GrantError` when `f`'s address and author are outside `grant.write`.
@@ -291,7 +306,7 @@ export interface MemoryStore {
     grant: Grant,
     f: Feedback,
     expect?: { revision: number | null },
-    opts?: { pendingCap?: number },
+    opts?: PendingCaps,
   ): Promise<FeedbackWrite>;
   /** The feedback row `id`, or null when it is unknown or outside the grant. */
   getFeedback?(grant: Grant, id: string): Promise<Feedback | null>;

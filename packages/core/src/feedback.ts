@@ -79,8 +79,13 @@ export type HelpedNotAppliedReason = 'already-helped-today' | 'disabled' | 'acce
 export const FEEDBACK_LIMITS = Object.freeze({
   /** `note` and `query` are kept to this many characters, on one line. */
   text: 500,
-  /** Pending (agent-recorded) rows one author keeps at one address; above it nothing is kept. */
+  /**
+   * Pending (agent-recorded) rows one author keeps at its home node, across every project; above
+   * it nothing is kept.
+   */
   pending: 5000,
+  /** Pending rows all authors together keep at one home node, across every project. */
+  pendingAddress: 50_000,
   /** A memory id. */
   memoryId: 128,
 });
@@ -533,7 +538,9 @@ export async function recordFeedback(
     deps.grant,
     row,
     { revision: null },
-    agent ? { pendingCap: FEEDBACK_LIMITS.pending } : undefined,
+    agent
+      ? { pendingCap: FEEDBACK_LIMITS.pending, addressPendingCap: FEEDBACK_LIMITS.pendingAddress }
+      : undefined,
   );
   if (w === 'pending-cap') return { kept: false, reason: 'pending-cap' };
   if (w !== 'written') throw refused(w);

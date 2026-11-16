@@ -118,6 +118,20 @@ const activeJudgments = async (store: MemoryStore) =>
   );
 
 describe('predictions: judging keeps what it proposed', () => {
+  it('prediction.all-authors-together-are-capped-at-the-node', async () => {
+    const { store, deps, item } = await setup();
+    // The store counts inside the write: a node-wide cap of one, for the test.
+    const real = store.putPrediction!.bind(store);
+    store.putPrediction = (g, p, e, c) =>
+      real(g, p, e, c === undefined ? c : { ...c, addressPendingCap: 1 });
+    const by = (agentId: string) => ({ ...deps, keep: { scope: { ...SCOPE, agentId } } });
+    expect(await judge(item, by('claude-code'))).toMatchObject({ kept: true });
+    const second = await judge(item, by('cursor'));
+    expect(second).toMatchObject({ kept: false, notKept: 'pending-cap' });
+    expect(second.predictionId).toBeUndefined();
+    expect(await listPredictions(store, GRANT)).toHaveLength(1);
+  });
+
   it('prediction.a-kept-prediction-is-bound-to-the-callers-project', async () => {
     const { store, deps, item } = await setup();
     const inA = { ...SCOPE, projectId: 'proj-a' };
@@ -178,7 +192,8 @@ describe('predictions: judging keeps what it proposed', () => {
 
   it('prediction.judging-answers-without-keeping-above-the-pending-cap-or-on-a-failed-write', async () => {
     const { store, deps, item } = await setup();
-    const full: MemoryStore = { ...store, countPendingPredictions: async () => 5000 };
+    // The store refuses inside the write when a cap is full.
+    const full: MemoryStore = { ...store, putPrediction: async () => 'pending-cap' as const };
     const capped = await judge(item, { ...deps, store: full });
     expect(capped).toMatchObject({ status: 'suggested', kept: false, notKept: 'pending-cap' });
     expect(capped.predictionId).toBeUndefined();

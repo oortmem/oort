@@ -1,5 +1,5 @@
 import { appendAccess } from './activation.js';
-import type { GuardedWriteResult, Hit, MemoryStore } from './adapters.js';
+import type { GuardedWriteResult, Hit, MemoryStore, PendingCaps } from './adapters.js';
 import { addressOf, authorOf, canonicalMemory, nodeKey, nodeOf } from './address.js';
 import {
   assertGrant,
@@ -47,6 +47,27 @@ import { tokenizeLexical as tokens } from './tokenize.js';
  */
 function sameNode(a: Parameters<typeof nodeOf>[0], b: Parameters<typeof nodeOf>[0]): boolean {
   return nodeKey(nodeOf(a)) === nodeKey(nodeOf(b));
+}
+
+/** Whether a new pending `r` would pass `caps`, counting the pending `rows` at its node. */
+function overCap(
+  rows: readonly Pick<Prediction, 'scope' | 'address' | 'author'>[],
+  r: Pick<Prediction, 'scope' | 'address' | 'author'>,
+  caps: PendingCaps,
+): boolean {
+  const where = addressOf(r);
+  const author = authorOf(r).agentId;
+  let mine = 0;
+  let all = 0;
+  for (const x of rows) {
+    if (!sameNode(addressOf(x), where)) continue;
+    all++;
+    if (authorOf(x).agentId === author) mine++;
+  }
+  return (
+    (caps.pendingCap !== undefined && mine >= caps.pendingCap) ||
+    (caps.addressPendingCap !== undefined && all >= caps.addressPendingCap)
+  );
 }
 
 export interface MemoryStoreOptions {
@@ -335,7 +356,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
 
     predictions: true,
 
-    async putPrediction(grant, p, expect) {
+    async putPrediction(grant, p, expect, caps) {
       open();
       assertGrant(grant);
       if (!grantWrites(grant, p)) throw new GrantError();
@@ -344,6 +365,10 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         return false;
       }
       if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return false;
+      if (was === undefined && p.resolution === undefined && caps !== undefined) {
+        const unresolved = [...predictions.values()].filter((x) => x.resolution === undefined);
+        if (overCap(unresolved, p, caps)) return 'pending-cap';
+      }
       predictions.set(p.id, structuredClone(p));
       return true;
     },
@@ -427,20 +452,9 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       if (was === undefined && !main.has(f.memoryId) && !cold.has(f.memoryId)) {
         return 'memory-gone';
       }
-      if (was === undefined && f.status === 'pending' && putOpts?.pendingCap !== undefined) {
-        const where = addressOf(f);
-        const author = authorOf(f).agentId;
-        let n = 0;
-        for (const x of feedback.values()) {
-          if (
-            x.status === 'pending' &&
-            sameNode(addressOf(x), where) &&
-            authorOf(x).agentId === author
-          ) {
-            n++;
-          }
-        }
-        if (n >= putOpts.pendingCap) return 'pending-cap';
+      if (was === undefined && f.status === 'pending' && putOpts !== undefined) {
+        const pending = [...feedback.values()].filter((x) => x.status === 'pending');
+        if (overCap(pending, f, putOpts)) return 'pending-cap';
       }
       if (f.helpedKey !== undefined) {
         for (const x of feedback.values()) {

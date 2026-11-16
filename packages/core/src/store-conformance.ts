@@ -2573,6 +2573,42 @@ export function predictionsConformance(name: string, make: () => Promise<MemoryS
       ).toBe(3);
     });
 
+    it('predictions.the-caps-are-counted-in-the-write', async () => {
+      const planet: Address = { level: 'user', orgId: 'local', customerId: 'self' };
+      const at = (agentId: string, projectId?: string) =>
+        addressed({ ...planet, ...(projectId !== undefined && { projectId }) }, { agentId });
+      const caps = { pendingCap: 2, addressPendingCap: 3 };
+      const put = (id: string, agentId: string, projectId?: string) =>
+        s.putPrediction(
+          TG,
+          makePrediction({ id, ...at(agentId, projectId) }),
+          { revision: null },
+          caps,
+        );
+      expect(await put('a1', 'claude-code')).toBe(true);
+      expect(await put('a2', 'claude-code', 'proj-b')).toBe(true);
+      // Its author's cap, across projects.
+      expect(await put('a3', 'claude-code', 'proj-c')).toBe('pending-cap');
+      expect(await put('b1', 'cursor')).toBe(true);
+      // Every author together: the node's cap.
+      expect(await put('c1', 'codex', 'proj-d')).toBe('pending-cap');
+      expect(await s.listPredictions(TG)).toHaveLength(3);
+      // A write without caps is not checked.
+      expect(await s.putPrediction(TG, makePrediction({ id: 'c2', ...at('codex') }))).toBe(true);
+      // Concurrent writers never pass the node's cap.
+      const more = await Promise.all(
+        ['d1', 'd2', 'd3'].map((id, i) =>
+          s.putPrediction(
+            TG,
+            makePrediction({ id, ...at(`agent-${i}`) }),
+            { revision: null },
+            { addressPendingCap: 5 },
+          ),
+        ),
+      );
+      expect(more.filter((w) => w === true)).toHaveLength(1);
+    });
+
     it('predictions.are-not-memories', async () => {
       await s.putPrediction(TG, makePrediction({ id: 'p1', item: { summary: 'zebra quokka' } }));
       expect(await store.get(TG, 'p1')).toBeNull();
@@ -2816,6 +2852,39 @@ export function feedbackConformance(name: string, make: () => Promise<MemoryStor
       // Concurrent writers never pass the cap.
       const many = await Promise.all(Array.from({ length: 6 }, (_, i) => put(`c${i}`, 'codex')));
       expect(many.filter((w) => w === 'written')).toHaveLength(2);
+    });
+
+    it('feedback.all-authors-together-are-capped-at-the-node', async () => {
+      const planet: Address = { level: 'user', orgId: 'local', customerId: 'self' };
+      const at = (agentId: string, projectId?: string) =>
+        addressed({ ...planet, ...(projectId !== undefined && { projectId }) }, { agentId });
+      const pending = { status: 'pending' as const, via: 'mcp' as const };
+      const caps = { pendingCap: 10, addressPendingCap: 3 };
+      const put = (id: string, agentId: string, projectId?: string) =>
+        s.putFeedback(
+          TG,
+          makeFeedback({ id, ...pending, ...at(agentId, projectId) }),
+          undefined,
+          caps,
+        );
+      expect(await put('a1', 'claude-code')).toBe('written');
+      expect(await put('b1', 'cursor', 'proj-b')).toBe('written');
+      expect(await put('c1', 'codex', 'proj-c')).toBe('written');
+      expect(await put('d1', 'zed')).toBe('pending-cap');
+      expect(await put('d2', 'zed', 'proj-d')).toBe('pending-cap');
+      // A person's row is not pending: the cap does not apply to it.
+      expect(
+        await s.putFeedback(TG, makeFeedback({ id: 'e1', ...at('zed') }), undefined, caps),
+      ).toBe('written');
+      // Concurrent writers by different authors never pass it.
+      const many = await Promise.all(
+        ['f1', 'f2', 'f3'].map((id, i) =>
+          s.putFeedback(TG, makeFeedback({ id, ...pending, ...at(`agent-${i}`) }), undefined, {
+            addressPendingCap: 4,
+          }),
+        ),
+      );
+      expect(many.filter((w) => w === 'written')).toHaveLength(1);
     });
 
     it('feedback.one-row-holds-a-helped-key', async () => {

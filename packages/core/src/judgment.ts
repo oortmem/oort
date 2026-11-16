@@ -964,8 +964,13 @@ export const PREDICTION_LIMITS = Object.freeze({
   details: 4000,
   /** Expired, unresolved predictions one judging call deletes. */
   prune: 100,
-  /** Unresolved predictions one author keeps at one address; above it judging keeps nothing. */
+  /**
+   * Unresolved predictions one author keeps at its home node, across every project; above it
+   * judging keeps nothing.
+   */
   pending: 5000,
+  /** Unresolved predictions all authors together keep at one home node, across every project. */
+  pendingAddress: 50_000,
 });
 
 /**
@@ -1453,13 +1458,18 @@ export async function judge(
         ttlDays: keep.ttlDays ?? PREDICTION_LIMITS.ttlDays,
       });
       await store.pruneExpiredPredictions?.(now, PREDICTION_LIMITS.prune);
-      const pending = (await store.countPendingPredictions?.(p)) ?? 0;
-      if (pending >= PREDICTION_LIMITS.pending) {
-        return { ...r, kept: false, notKept: 'pending-cap' };
-      }
-      if (!(await store.putPrediction(deps.grant, p, { revision: null }))) {
-        return { ...r, kept: false, notKept: 'write-failed' };
-      }
+      // Both caps are counted by the store, in the write's transaction.
+      const written = await store.putPrediction(
+        deps.grant,
+        p,
+        { revision: null },
+        {
+          pendingCap: PREDICTION_LIMITS.pending,
+          addressPendingCap: PREDICTION_LIMITS.pendingAddress,
+        },
+      );
+      if (written === 'pending-cap') return { ...r, kept: false, notKept: 'pending-cap' };
+      if (written !== true) return { ...r, kept: false, notKept: 'write-failed' };
       return { ...r, predictionId: p.id, kept: true };
     } catch {
       return { ...r, kept: false, notKept: 'write-failed' };

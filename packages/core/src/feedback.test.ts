@@ -387,6 +387,25 @@ describe('feedback: agents', () => {
     expect(await recordFeedback(give({}), person(store))).toMatchObject({ kept: true });
   });
 
+  it('feedback.all-agents-together-are-capped-at-the-node', async () => {
+    const store = await setup();
+    // The store counts inside the write: a node-wide cap of one, for the test.
+    const real = store.putFeedback!.bind(store);
+    store.putFeedback = (g, f, e, o) =>
+      real(g, f, e, o === undefined ? o : { ...o, addressPendingCap: 1 });
+    const as = (agentId: string): FeedbackDeps => ({
+      ...agent(store),
+      scope: { ...SCOPE, agentId },
+    });
+    expect(await recordFeedback(give({ by: 'claude-code' }), as('claude-code'))).toMatchObject({
+      kept: true,
+    });
+    expect(await recordFeedback(give({ by: 'cursor' }), as('cursor'))).toEqual({
+      kept: false,
+      reason: 'pending-cap',
+    });
+  });
+
   it('feedback.an-agent-at-the-cap-in-one-project-is-refused-in-another', async () => {
     const store = createMemoryStore({ now: () => NOW });
     const inA = { ...SCOPE, projectId: 'proj-a' };
