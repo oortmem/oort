@@ -386,6 +386,33 @@ describe('feedback: agents', () => {
     // A person's feedback is never pending, so the cap does not apply to it.
     expect(await recordFeedback(give({}), person(store))).toMatchObject({ kept: true });
   });
+
+  it('feedback.an-agent-at-the-cap-in-one-project-is-refused-in-another', async () => {
+    const store = createMemoryStore({ now: () => NOW });
+    const inA = { ...SCOPE, projectId: 'proj-a' };
+    const inB = { ...SCOPE, projectId: 'proj-b' };
+    await store.upsert(TG, makeMemory({ id: 'a1', scope: inA, text: 'Acme is the customer' }));
+    await store.upsert(TG, makeMemory({ id: 'b1', scope: inB, text: 'Globex is the customer' }));
+    const real = store.putFeedback!.bind(store);
+    store.putFeedback = (g, f, e, o) =>
+      real(g, f, e, o?.pendingCap === undefined ? o : { pendingCap: 1 });
+    const grant = localGrant({ ...SCOPE, projectIds: ['proj-a', 'proj-b', null] });
+    const via = (scope: typeof inA): FeedbackDeps => ({
+      store,
+      grant,
+      scope,
+      via: 'mcp',
+      now: NOW,
+    });
+    const a = await recordFeedback(
+      { memoryId: 'a1', signal: 'wrong', by: 'claude-code' },
+      via(inA),
+    );
+    expect(a).toMatchObject({ kept: true, feedback: { scope: { projectId: 'proj-a' } } });
+    expect(
+      await recordFeedback({ memoryId: 'b1', signal: 'wrong', by: 'claude-code' }, via(inB)),
+    ).toEqual({ kept: false, reason: 'pending-cap' });
+  });
 });
 
 describe('feedback: races', () => {

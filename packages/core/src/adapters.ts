@@ -260,8 +260,9 @@ export interface MemoryStore {
   /** Deletes up to `limit` unresolved predictions whose `expiresAt` is at or before `now`, at every address. */
   pruneExpiredPredictions?(now: Date, limit: number): Promise<number>;
   /**
-   * How many unresolved predictions `at`'s author keeps at `at`'s address (its node and project).
-   * Counted per author, so one agent filling its quota never blocks another at the same address.
+   * How many unresolved predictions `at`'s author keeps at `at`'s node, across every project
+   * (predictions are bound to the caller's project; the cap is not multiplied by them). Counted
+   * per author, so one agent filling its quota never blocks another at the same node.
    */
   countPendingPredictions?(at: Pick<Prediction, 'scope' | 'address' | 'author'>): Promise<number>;
   /**
@@ -281,7 +282,7 @@ export interface MemoryStore {
    * - `memory-gone`: nothing written: `f` is a new row and the store holds no memory `f.memoryId`
    *   (it was forgotten), so no row outlives its memory;
    * - `pending-cap`: nothing written: `f` is a new `pending` row and its author already keeps
-   *   `opts.pendingCap` pending rows at its address (counted in the same transaction);
+   *   `opts.pendingCap` pending rows at its node, in any project (counted in the same transaction);
    * - `helped-today`: nothing written: `f.helpedKey` is set and another row holds it;
    * - `written`.
    * Rejects with `GrantError` when `f`'s address and author are outside `grant.write`.
@@ -313,8 +314,9 @@ export interface MemoryStore {
     memoryId: string,
   ): Promise<{ removed: string[]; leftover: string[] }>;
   /**
-   * How many `pending` feedback rows `at`'s author keeps at `at`'s address (its node and
-   * project), so one agent filling its quota never blocks another.
+   * How many `pending` feedback rows `at`'s author keeps at `at`'s node, across every project
+   * (rows are bound to their memory's project; the cap is not multiplied by them), so one agent
+   * filling its quota never blocks another.
    */
   countPendingFeedback?(at: Pick<Feedback, 'scope' | 'address' | 'author'>): Promise<number>;
   /**

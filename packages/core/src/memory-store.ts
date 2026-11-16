@@ -1,6 +1,6 @@
 import { appendAccess } from './activation.js';
 import type { GuardedWriteResult, Hit, MemoryStore } from './adapters.js';
-import { addressOf, authorOf, canonicalMemory, nodeKey, nodeOf, sameAddress } from './address.js';
+import { addressOf, authorOf, canonicalMemory, nodeKey, nodeOf } from './address.js';
 import {
   assertGrant,
   cursorKey,
@@ -40,6 +40,14 @@ import {
 import { checkOccurrences } from './event-time.js';
 import { checkPlace, hasSpatialFilter, matchesSpatial, type SpatialFilter } from './place.js';
 import { tokenizeLexical as tokens } from './tokenize.js';
+
+/**
+ * Same node, in any project: the pending caps count an author's rows at the home node across
+ * every project it reaches, so binding rows to projects does not multiply the cap.
+ */
+function sameNode(a: Parameters<typeof nodeOf>[0], b: Parameters<typeof nodeOf>[0]): boolean {
+  return nodeKey(nodeOf(a)) === nodeKey(nodeOf(b));
+}
 
 export interface MemoryStoreOptions {
   /**
@@ -397,7 +405,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       return [...predictions.values()].filter(
         (p) =>
           p.resolution === undefined &&
-          sameAddress(addressOf(p), where) &&
+          sameNode(addressOf(p), where) &&
           authorOf(p).agentId === author,
       ).length;
     },
@@ -426,7 +434,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         for (const x of feedback.values()) {
           if (
             x.status === 'pending' &&
-            sameAddress(addressOf(x), where) &&
+            sameNode(addressOf(x), where) &&
             authorOf(x).agentId === author
           ) {
             n++;
@@ -479,9 +487,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       const author = authorOf(at).agentId;
       return [...feedback.values()].filter(
         (f) =>
-          f.status === 'pending' &&
-          sameAddress(addressOf(f), where) &&
-          authorOf(f).agentId === author,
+          f.status === 'pending' && sameNode(addressOf(f), where) && authorOf(f).agentId === author,
       ).length;
     },
 

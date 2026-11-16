@@ -1387,7 +1387,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       `SELECT count(*) AS n FROM ${PREDICTION_TABLE}
        WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
          AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
-         AND project_id IS @project_id AND author_agent_id = @author_agent_id AND resolved = 0`,
+         AND author_agent_id = @author_agent_id AND resolved = 0`,
     ),
     feedbackGet: db.prepare<[string], { record: string }>(
       `SELECT record FROM ${FEEDBACK_TABLE} WHERE id = ?`,
@@ -1421,8 +1421,7 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       `SELECT count(*) AS n FROM ${FEEDBACK_TABLE}
        WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
          AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
-         AND project_id IS @project_id AND author_agent_id = @author_agent_id
-         AND status = 'pending'`,
+         AND author_agent_id = @author_agent_id AND status = 'pending'`,
     ),
     getCursor: db.prepare<[string], { value: string }>('SELECT value FROM cursors WHERE key = ?'),
     setCursor: db.prepare<[string, string]>(

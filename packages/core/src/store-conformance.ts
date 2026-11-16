@@ -2548,7 +2548,7 @@ export function predictionsConformance(name: string, make: () => Promise<MemoryS
       expect(await s.forgetPrediction(TG, 'p1', { revision: 3 })).toBe(false);
     });
 
-    it('predictions.pending-is-counted-per-author-at-an-address', async () => {
+    it('predictions.pending-is-counted-per-author-at-a-node-in-every-project', async () => {
       const planet: Address = { level: 'user', orgId: 'local', customerId: 'self' };
       const by = (agentId: string) => addressed(planet, { agentId });
       await s.putPrediction(TG, makePrediction({ id: 'a1', ...by('claude-code') }));
@@ -2564,6 +2564,13 @@ export function predictionsConformance(name: string, make: () => Promise<MemoryS
       expect(
         await store.countPendingPredictions!(makePrediction({ id: 'x', ...by('codex') })),
       ).toBe(0);
+      // At the node, in every project: binding predictions to projects does not multiply the cap.
+      const inB = addressed({ ...planet, projectId: 'proj-b' }, { agentId: 'cursor' });
+      await s.putPrediction(TG, makePrediction({ id: 'b3', ...inB }));
+      expect(await store.countPendingPredictions!(makePrediction({ id: 'x', ...inB }))).toBe(3);
+      expect(
+        await store.countPendingPredictions!(makePrediction({ id: 'x', ...by('cursor') })),
+      ).toBe(3);
     });
 
     it('predictions.are-not-memories', async () => {
@@ -2782,7 +2789,7 @@ export function feedbackConformance(name: string, make: () => Promise<MemoryStor
       expect(ids(await s.listFeedback(TG))).toEqual(['apart']);
     });
 
-    it('feedback.pending-is-counted-per-author-at-an-address-and-capped-in-the-write', async () => {
+    it('feedback.pending-is-counted-per-author-at-a-node-and-capped-in-the-write', async () => {
       const planet: Address = { level: 'user', orgId: 'local', customerId: 'self' };
       const by = (agentId: string) => addressed(planet, { agentId });
       const pending = { status: 'pending' as const, via: 'mcp' as const };
@@ -2793,6 +2800,12 @@ export function feedbackConformance(name: string, make: () => Promise<MemoryStor
       expect(await put('b1', 'cursor')).toBe('written');
       expect(await put('b2', 'cursor')).toBe('written');
       expect(await put('b3', 'cursor')).toBe('pending-cap');
+      // At the node, in every project: an agent at the cap in one project is refused in another.
+      const inB = addressed({ ...planet, projectId: 'proj-b' }, { agentId: 'cursor' });
+      expect(
+        await s.putFeedback(TG, makeFeedback({ id: 'b5', ...pending, ...inB }), undefined, cap),
+      ).toBe('pending-cap');
+      expect(await s.countPendingFeedback(makeFeedback({ id: 'x', ...inB }))).toBe(2);
       // The cap counts pending rows only, and only for a new pending row.
       expect(await put('b4', 'cursor', {})).toBe('written');
       const at = (agentId: string) => makeFeedback({ id: 'x', ...by(agentId) });
