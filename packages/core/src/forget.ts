@@ -2,7 +2,7 @@ import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapt
 import { grantWrites, type Grant } from './grant.js';
 import { purgeFeedbackFor } from './feedback.js';
 import { purgePredictionsCiting } from './judgment.js';
-import type { Decision, Memory } from './model.js';
+import { isJudgment, type Decision, type Memory } from './model.js';
 import { tokenizeLexical } from './tokenize.js';
 
 export interface ForgetDeps {
@@ -312,6 +312,12 @@ async function pooled<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>)
  *
  * Every later memory holding a value that is not rewritten is listed in `notRewritten` with the
  * reason, so the caller can tell the person which ones may still restate it.
+ *
+ * A judgment is never rewritten, re-embedded or ended here: it is the expert's own words, never
+ * written from another memory, and only the judgment commands change it. A supersede link between
+ * a judgment and another memory (such as a crafted import could plant) is not a chain: the walk
+ * stops at it, the judgment is left exactly as it was, and the re-link over the gap points at
+ * nothing past it. Forgetting a judgment re-links the judgments that corrected it, links only.
  */
 export async function forgetMemory(
   deps: ForgetDeps,
@@ -336,10 +342,17 @@ export async function forgetMemory(
   // same reason: a purge that fails leaves the memory for a retry.
   await purgeFeedbackFor(store, grant, id);
 
+  // A judgment and another memory never share a chain: a link between them is not followed.
+  const apart = (m: Memory) => isJudgment(m) !== isJudgment(target);
   // The memory it superseded, to re-link; it was written before it, so it restates nothing.
   const chain = new Map<string, Memory>();
   const prior = target.supersedes === null ? null : await store.get(grant, target.supersedes);
-  if (prior !== null) chain.set(prior.id, prior);
+  if (prior !== null && !apart(prior)) chain.set(prior.id, prior);
+  // What the neighbours link to over the gap: never across into a judgment, or out of one.
+  const over = {
+    supersedes: prior !== null && apart(prior) ? null : target.supersedes,
+    supersededBy: target.supersededBy,
+  };
 
   // The later memories, newest last: the first MAX_CHAIN are handled, and every one past them
   // that restates a value is named, never dropped.
@@ -354,7 +367,12 @@ export async function forgetMemory(
     seen.add(next);
     const m = await store.get(grant, next);
     if (m === null) break;
-    const restates = isLater(m) && restated(forgotten, m).length > 0;
+    if (apart(m)) {
+      if (next === target.supersededBy) over.supersededBy = null;
+      break;
+    }
+    // A judgment in a chain of judgments is the expert's own words, never written from this one.
+    const restates = !isJudgment(m) && isLater(m) && restated(forgotten, m).length > 0;
     if (walked < MAX_CHAIN) {
       chain.set(m.id, m);
       if (restates) candidates.push(m);
@@ -418,8 +436,8 @@ export async function forgetMemory(
       was: m,
       next: {
         ...base,
-        ...(m.supersedes === id && { supersedes: target.supersedes }),
-        ...(m.supersededBy === id && { supersededBy: target.supersededBy }),
+        ...(m.supersedes === id && { supersedes: over.supersedes }),
+        ...(m.supersededBy === id && { supersededBy: over.supersededBy }),
         updatedAt: iso,
       },
     });

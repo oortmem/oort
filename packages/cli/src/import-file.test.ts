@@ -279,6 +279,104 @@ describe('oort import <file> (CON-137)', () => {
     expect((await to.sqlite.linksOf!(rw, planted.id))?.links).toEqual([]);
   });
 
+  it('cli.import-file-then-forget-never-changes-a-judgment-a-line-links-to', async () => {
+    // A crafted file links a fact and a judgment by supersedes, both ways. Forgetting the fact
+    // must not rewrite, re-embed or end the judgment: only the judgment commands change one.
+    const h = await onSqlite();
+    const now = new Date('2026-11-11T12:00:00.000Z');
+    const scope = { orgId: 'local', customerId: 'self', agentId: 'anonymous' };
+    const planet = {
+      node: planetNode({ orgId: 'local', customerId: 'self' }),
+      projectIds: 'all' as const,
+    };
+    const rw = nodeGrant({ principal: scope, read: [planet], write: [planet] });
+    const real = await recordJudgment(
+      {
+        subject: 'Open the dev server on port 3000',
+        verdict: 'rejected',
+        reason: 'Port 3000 is reachable from outside.',
+        domain: 'ops',
+        by: 'ada',
+        decidedAt: '2026-10-01T00:00:00.000Z',
+      },
+      { store: createMemoryStore({ now: () => now }), grant: rw, scope, now, via: 'cli' },
+    );
+    const judgment = real.memory.judgment!;
+    const port = {
+      type: 'semantic',
+      text: 'The dev server runs on port 3000.',
+      stub: 'dev server port 3000',
+      entities: ['dev server', '3000'],
+    };
+    const day = (d: number) => `2026-01-0${d}T00:00:00.000Z`;
+    const when = (d: number) => ({ createdAt: day(d), updatedAt: day(d), validFrom: day(d) });
+    const f = craftedFile(h, 'judgment-links.jsonl', [
+      // The fact is superseded by the judgment...
+      craftedLine('fact-first', { ...port, ...when(1), supersededBy: 'judged-after' }),
+      craftedLine('judged-after', {
+        type: 'judgment',
+        judgment,
+        ...when(2),
+        supersedes: 'fact-first',
+      }),
+      // ...and the judgment by a fact.
+      craftedLine('judged-before', {
+        type: 'judgment',
+        judgment,
+        ...when(1),
+        supersededBy: 'fact-after',
+      }),
+      craftedLine('fact-after', { ...port, ...when(2), supersedes: 'judged-before' }),
+    ]);
+    const r = await h.run(['import', f, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(JSON.parse(r.io.stdout).data).toMatchObject({ imported: 4, judgments: 2 });
+    // A supersede link never joins a judgment and another memory: the import keeps neither.
+    for (const m of await all(h.sqlite)) {
+      expect([m.id, m.supersedes, m.supersededBy]).toEqual([m.id, null, null]);
+    }
+
+    // A writer that would take the port out of any memory it is given.
+    const calls: string[] = [];
+    const base = h.wire;
+    h.wire = async (dir, o) => {
+      const w = await base(dir, o);
+      return {
+        ...w,
+        write: {
+          ...w.write!,
+          rewriteCurrent: async (m: Memory) => {
+            calls.push(m.id);
+            return {
+              text: m.text.replace(/ (on )?port 3000/gi, ''),
+              stub: m.stub.replace(/ (on )?port 3000/gi, ''),
+              entities: m.entities.filter((e) => e !== '3000'),
+              type: m.type,
+            };
+          },
+        },
+      };
+    };
+    const before = new Map((await all(h.sqlite)).map((m) => [m.id, m]));
+    for (const id of ['fact-first', 'fact-after']) {
+      const out = await h.run(['forget', id, '--yes']);
+      expect(out.code, out.io.stderr).toBe(0);
+      expect(out.io.stdout).toBe(`Forgot ${id}.\n`);
+    }
+    expect(calls).toEqual([]);
+    const after = await all(h.sqlite);
+    expect(after.map((m) => m.id)).toEqual(['judged-after', 'judged-before']);
+    for (const m of after) {
+      const was = before.get(m.id)!;
+      expect(m.text, m.id).toBe(was.text);
+      expect(m.text, m.id).toContain('3000');
+      expect(Array.from(m.embedding ?? []), m.id).toEqual(Array.from(was.embedding ?? []));
+      expect(m.judgment, m.id).toEqual(was.judgment);
+      expect(m, m.id).toEqual(was);
+      expect(isActiveJudgment(m, new Date()), m.id).toBe(true);
+    }
+  });
+
   it('cli.import-file-asks-first-and-refuses-what-it-cannot-read', async () => {
     const h = await onSqlite();
     // No terminal and no --yes: it never writes.

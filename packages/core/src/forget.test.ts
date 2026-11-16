@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapters.js';
 import { forgetMemory, forgottenValues, MAX_CHAIN, restatedValues } from './forget.js';
+import { recordJudgment, type JudgmentInput } from './judgment.js';
 import { createMemoryStore } from './memory-store.js';
 import type { Memory } from './model.js';
 import { makeMemory, TG, vec } from './store-conformance.js';
@@ -666,5 +667,149 @@ describe('forgetMemory (CON-144)', () => {
     const r = await forgetMemory({ store, write: current(), embed }, TG, 'b');
     expect(r).toEqual({ forgotten: 'b', rewritten: [], notRewritten: [] });
     expect((await store.get(TG, 'a'))?.supersededBy).toBeNull();
+  });
+});
+
+describe('forgetMemory never changes a judgment', () => {
+  /**
+   * A judgment is the expert's own words: only withdrawing, confirming or purging it changes it.
+   * A supersede link between it and a memory (as a crafted import can plant) never lets a forget
+   * rewrite, re-embed, re-link or end it.
+   */
+  const SCOPE = { orgId: 'local', customerId: 'self', agentId: 'claude-code' };
+  const decision = (over: Partial<JudgmentInput> = {}): JudgmentInput => ({
+    subject: 'Open the dev server on port 3000',
+    verdict: 'rejected',
+    reason: 'Port 3000 is reachable from outside.',
+    domain: 'ops',
+    by: 'ada',
+    decidedAt: at(1),
+    ...over,
+  });
+  const judged = async (store: MemoryStore, day: number, over: Partial<JudgmentInput> = {}) => {
+    const r = await recordJudgment(decision(over), {
+      store,
+      grant: TG,
+      scope: SCOPE,
+      embed,
+      now: new Date(at(day)),
+      via: 'cli',
+    });
+    return r.memory.id;
+  };
+  /** A writer that takes the port out of whatever it is given: a rewrite forget would keep. */
+  const calls: Calls = [];
+  const dropPort = (): MemoryWriter =>
+    current(calls, (m) => ({
+      text: m.text.replace(/ (on )?port 3000/gi, ''),
+      stub: m.stub.replace(/ (on )?port 3000/gi, ''),
+      entities: m.entities.filter((e) => e !== '3000'),
+      type: m.type,
+    }));
+  /** Embeds every rewrite apart from the judgment's own vector. */
+  const reembed: Embedder = { dimension: 4, embed: async (t) => t.map(() => vec(5, 5, 5, 5)) };
+  const fact = (over: Partial<Memory> & { id: string }) =>
+    makeMemory({
+      text: 'The dev server runs on port 3000.',
+      stub: 'dev server port 3000',
+      entities: ['dev server', '3000'],
+      createdAt: at(2),
+      updatedAt: at(2),
+      validFrom: at(2),
+      embedding: vec(0, 1, 0, 0),
+      ...over,
+    });
+
+  it('forget.leaves-a-judgment-that-supersedes-the-forgotten-memory-as-it-was', async () => {
+    const store = createMemoryStore();
+    const jid = await judged(store, 3);
+    await store.upsert(TG, { ...(await store.get(TG, jid))!, supersedes: 'a' });
+    await store.upsert(TG, fact({ id: 'a', supersededBy: jid }));
+    const before = (await store.get(TG, jid))!;
+    expect(before.text).toContain('3000');
+    calls.length = 0;
+    const r = await forgetMemory(
+      { store, write: dropPort(), embed: reembed, now: new Date(at(5)) },
+      TG,
+      'a',
+    );
+    // The forget itself completes; the judgment is not the forgotten memory's to rewrite.
+    expect(r).toEqual({ forgotten: 'a', rewritten: [], notRewritten: [] });
+    expect(await store.get(TG, 'a')).toBeNull();
+    expect(calls).toEqual([]);
+    const after = (await store.get(TG, jid))!;
+    expect(after.text).toBe(before.text);
+    expect(Array.from(after.embedding ?? [])).toEqual(Array.from(before.embedding ?? []));
+    expect(after.judgment).toEqual(before.judgment);
+    expect([after.expiredAt, after.endReason, after.validTo]).toEqual([null, null, null]);
+    expect(after).toEqual(before);
+  });
+
+  it('forget.leaves-a-judgment-the-forgotten-memory-supersedes-as-it-was', async () => {
+    const store = createMemoryStore();
+    const jid = await judged(store, 1);
+    await store.upsert(TG, { ...(await store.get(TG, jid))!, supersededBy: 'a' });
+    await store.upsert(TG, fact({ id: 'a', supersedes: jid, supersededBy: 'b' }));
+    await store.upsert(
+      TG,
+      fact({
+        id: 'b',
+        text: 'The dev server port changed from 3000 to 8080.',
+        stub: 'dev server port 8080',
+        entities: ['dev server', '8080'],
+        createdAt: at(3),
+        updatedAt: at(3),
+        validFrom: at(3),
+        supersedes: 'a',
+      }),
+    );
+    const before = (await store.get(TG, jid))!;
+    const r = await forgetMemory(
+      { store, write: current(), embed: reembed, now: new Date(at(5)) },
+      TG,
+      'a',
+    );
+    expect(r.forgotten).toBe('a');
+    expect(r.rewritten.map((x) => x.id)).toEqual(['b']);
+    expect(await store.get(TG, 'a')).toBeNull();
+    // The memory past it is re-linked to nothing; the judgment keeps its own link, which readers
+    // of the chain stop at.
+    expect((await store.get(TG, 'b'))?.supersedes).toBeNull();
+    const after = (await store.get(TG, jid))!;
+    expect(after.text).toBe(before.text);
+    expect(after.judgment).toEqual(before.judgment);
+    expect(after).toEqual(before);
+  });
+
+  it('forget.of-a-judgment-never-rewrites-the-judgment-that-corrected-it', async () => {
+    const store = createMemoryStore();
+    const first = await judged(store, 1, { ref: 'dev-port' });
+    const second = await judged(store, 2, {
+      ref: 'dev-port',
+      reason: 'Port 3000 is still reachable from outside.',
+    });
+    const third = await judged(store, 3, {
+      ref: 'dev-port',
+      verdict: 'approved',
+      reason: 'Port 3000 is behind the VPN now.',
+    });
+    expect((await store.get(TG, third))?.supersedes).toBe(second);
+    const before = (await store.get(TG, third))!;
+    calls.length = 0;
+    const r = await forgetMemory(
+      { store, write: dropPort(), embed: reembed, now: new Date(at(5)) },
+      TG,
+      second,
+    );
+    expect(r).toEqual({ forgotten: second, rewritten: [], notRewritten: [] });
+    expect(calls).toEqual([]);
+    expect(await store.get(TG, second)).toBeNull();
+    // A correction chain of judgments is still re-linked over the gap; nothing else changes.
+    const after = (await store.get(TG, third))!;
+    expect(after.supersedes).toBe(first);
+    expect((await store.get(TG, first))?.supersededBy).toBe(third);
+    expect({ ...after, supersedes: before.supersedes, updatedAt: before.updatedAt }).toEqual(
+      before,
+    );
   });
 });

@@ -23,7 +23,7 @@ import {
 } from './grant.js';
 import { CONTRADICTS } from './levels.js';
 import { capObservation } from './cap.js';
-import type { Decision, Memory, Scope } from './model.js';
+import { isJudgment, type Decision, type Memory, type Scope } from './model.js';
 import { checkPlace, frameOf, placeDistance, type Place } from './place.js';
 import { scrubObservation } from './scrub.js';
 import { checkWriterDate, factInterval, utcOffset } from './temporal.js';
@@ -178,7 +178,7 @@ async function candidatesFor(
     const m = await store.get(grant, id);
     // A judgment (CON-71) is the expert's own words: the write path never refines, supersedes or
     // corrects one. Only the judgment commands change it.
-    if (m !== null && isLive(m, now) && m.type !== 'judgment') out.push(m);
+    if (m !== null && isLive(m, now) && !isJudgment(m)) out.push(m);
     if (out.length === CANDIDATES) break;
   }
   return out;

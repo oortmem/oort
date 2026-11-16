@@ -7,6 +7,7 @@ import {
   addressOf,
   fileOrigin,
   importedJudgment,
+  isJudgment,
   judgmentText,
   nodeGrant,
   occurredFor,
@@ -565,11 +566,14 @@ export async function importFileCommand(
       fresh.push(r);
       links.set(r.id, { supersedes: m.supersedes, supersededBy: m.supersededBy });
     }
-    // A link is kept only to another memory of this file that is being imported.
+    // A link is kept only to another memory of this file that is being imported, and never
+    // between a judgment and another memory: only a correction links judgments, and only to each
+    // other.
+    const judged = new Map(fresh.map((m) => [m.id, isJudgment(m)]));
     for (const r of fresh) {
       const l = links.get(r.id)!;
       const to = (v: unknown): string | null =>
-        typeof v === 'string' && v !== r.id && links.has(v) ? v : null;
+        typeof v === 'string' && v !== r.id && judged.get(v) === isJudgment(r) ? v : null;
       r.supersedes = to(l.supersedes);
       r.supersededBy = to(l.supersededBy);
     }

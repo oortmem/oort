@@ -163,7 +163,9 @@ each memory is rebuilt from its content alone:
   is a start moved back to now that overtook the end: an ended fact never
   arrives as a current one.
 - **Links:** `supersedes` and `supersededBy` are kept only when they name
-  another memory of the same file that is imported too.
+  another memory of the same file that is imported too, and never between a
+  judgment and another memory (only a correction links judgments, to each
+  other).
 - **Judgments** are kept as recording one keeps them (pinned, so shown to the
   agent at every session start, with their text, stub and entities rendered
   from the decision). Each becomes an imported one (`via: "pack"` with the
