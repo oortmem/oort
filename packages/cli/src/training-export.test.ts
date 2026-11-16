@@ -276,6 +276,7 @@ describe('oort export training', () => {
       expect(mode(h.cwd)).toBe(0o755);
       expect(mode(path.join(h.cwd, 'sft.jsonl'))).toBe(0o600);
       expect(mode(path.join(h.cwd, 'manifest.json'))).toBe(0o600);
+      expect(fs.readdirSync(h.cwd).filter((n) => n.endsWith('.tmp'))).toEqual([]);
       const shared = path.join(h.cwd, 'shared');
       fs.mkdirSync(shared);
       fs.chmodSync(shared, 0o777);

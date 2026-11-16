@@ -1,9 +1,8 @@
 import * as path from 'node:path';
 import {
   agentEnvMarker,
-  buildTrainingExport,
+  runTrainingExport,
   TrainingExportError,
-  writeTrainingExport,
   type TrainingKind,
   type TrainingManifest,
 } from '@oortmem/core';
@@ -41,6 +40,9 @@ function refusal(e: TrainingExportError): Refusal {
   }
   if (e.kind === 'not-a-directory' || e.kind === 'unsafe-directory') {
     return new Refusal(e.message, { code: 'refused' });
+  }
+  if (e.kind === 'store-changing') {
+    return new Refusal(e.message, { code: 'refused', reason: 'store-changing' });
   }
   const flag = e.message.replace(/^(kind|split|since|expert|include|exclude)\b/, '--$1');
   return new Refusal(`${flag.charAt(0).toUpperCase()}${flag.slice(1)}.`, { code: 'usage' });
@@ -99,7 +101,8 @@ export async function trainingExportCommand(
     }
     const dir = path.resolve(ctx.io.cwd, o.out);
     try {
-      const exp = await buildTrainingExport(
+      const { export: exp } = await runTrainingExport(
+        dir,
         {
           kind: o.kind as TrainingKind | 'all',
           ...(o.expert !== undefined && { expert: o.expert }),
@@ -110,8 +113,8 @@ export async function trainingExportCommand(
           ...(o.preferenceReasons === true && { preferenceReasons: true }),
         },
         { store: w.store, grant: writeGrant(w), version: cliVersion() },
+        { force: o.force === true },
       );
-      writeTrainingExport(dir, exp, { force: o.force === true });
       if (jsonMode(ctx)) emit(ctx, { dir, manifest: exp.manifest });
       else ctx.io.out(summary(dir, exp.manifest));
     } catch (e) {

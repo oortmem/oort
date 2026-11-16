@@ -13,6 +13,8 @@ import { makeMemory, TG } from './store-conformance.js';
 import {
   buildTrainingExport,
   isTrainingExportFile,
+  runTrainingExport,
+  splitByGroup,
   splitByTime,
   trainingFilters,
   TrainingExportError,
@@ -764,5 +766,175 @@ describe('training export: writing files', () => {
     for (const n of ['notes.txt', 'sft.json', 'other.jsonl', 'sft.test.jsonl']) {
       expect(isTrainingExportFile(n), n).toBe(false);
     }
+  });
+});
+
+describe('training export: a resolve whose judgment changed since', () => {
+  it('a corrected or forgotten judgment takes its preference row out, with or without reasons', async () => {
+    const store = await fixture();
+    await store.upsertMany(TG, [
+      judgmentMemory(
+        'j-resolved',
+        { decidedAt: at(16) },
+        { endReason: 'corrected', expiredAt: at(17), validTo: at(17) },
+      ),
+    ]);
+    await store.putPrediction!(
+      TG,
+      prediction('p-corrected', {}, { reason: 'Changed my mind.', judgmentId: 'j-resolved' }),
+    );
+    await store.putPrediction!(TG, prediction('p-forgotten', {}, { judgmentId: 'j-gone' }));
+    for (const preferenceReasons of [false, true]) {
+      const exp = await build({ kind: 'preference', preferenceReasons }, store);
+      const ids = rowsOf(contentsOf(exp, 'preference.jsonl')).map((r) => r['id']);
+      expect(ids).toEqual(['p-disagreed', 'p-no-reason', 'p-confirmed']);
+      expect(exp.manifest.excluded.preference).toMatchObject({
+        corrected: 1,
+        'memory-forgotten': 1,
+      });
+      expect(contentsOf(exp, 'preference.jsonl')).not.toContain('Changed my mind');
+    }
+  });
+});
+
+describe('training export: fields cleaned on the way out', () => {
+  it('cleans domain and the expert filter, and normalizes or leaves out label times', async () => {
+    const store = await fixture();
+    await store.upsertMany(TG, [
+      judgmentMemory('j-offset', {
+        decidedAt: '2026-10-20T11:00:00+02:00',
+        domain: `content \u200b${AWS_KEY}`,
+      }),
+      // Date.parse reads it, but it is not ISO: a store edited by hand.
+      judgmentMemory(
+        'j-bad-time',
+        { decidedAt: 'Tue Oct 20 2026' },
+        { validFrom: at(1), createdAt: at(1), updatedAt: at(1) },
+      ),
+    ]);
+    const exp = await build({ kind: 'sft' }, store);
+    const row = rowsOf(contentsOf(exp, 'sft.jsonl')).find((r) => r['id'] === 'j-offset')!;
+    expect(row['at']).toBe('2026-10-20T09:00:00.000Z');
+    expect(row['domain']).not.toContain(AWS_KEY);
+    expect(row['domain']).toContain('[REDACTED:aws-access-key]');
+    expect(exp.manifest.excluded.sft!['invalid-time']).toBe(1);
+    const filtered = await build({ kind: 'sft', expert: 'ada\u0007\u200b' });
+    expect(filtered.manifest.filters.expert).toBe('ada');
+  });
+});
+
+describe('training export: retrieval pairs and the split by query', () => {
+  it('leaves out a memory marked both helped and irrelevant for one query, and counts it', async () => {
+    const store = await fixture();
+    await store.putFeedback!(
+      TG,
+      feedback('f-contra', {
+        signal: 'helped',
+        memoryId: 'm-lunch',
+        query: 'auth service port',
+        createdAt: at(16),
+      }),
+    );
+    const exp = await build({ kind: 'retrieval' }, store);
+    const rows = rowsOf(contentsOf(exp, 'retrieval.jsonl'));
+    for (const r of rows) {
+      if (r['query'] === 'auth service port') expect(r['negative']).not.toBe(r['positive']);
+    }
+    expect(rows.map((r) => r['id'])).not.toContain('f-neg-lunch');
+    expect(exp.manifest.excluded.retrieval!['contradictory']).toBe(2);
+  });
+
+  it('keeps every row of one query on one side of the split, the same way every time', () => {
+    const rows = [
+      { at: at(1), q: 'a' },
+      { at: at(2), q: 'b' },
+      { at: at(3), q: 'b' },
+      { at: at(4), q: 'c' },
+      { at: at(5), q: 'a' },
+    ];
+    const s = splitByGroup(rows, 0.6, (r) => r.q);
+    expect(s.train.map((r) => r.q)).toEqual(['b', 'b', 'c']);
+    expect(s.eval.map((r) => r.q)).toEqual(['a', 'a']);
+    expect(splitByGroup([...rows].reverse(), 0.6, (r) => r.q).train).toHaveLength(3);
+  });
+
+  it('splits the retrieval file by query', async () => {
+    const store = await fixture();
+    await store.putFeedback!(
+      TG,
+      feedback('f-port-late', { memoryId: 'm-db', query: 'auth service port', createdAt: at(20) }),
+    );
+    const exp = await build({ kind: 'retrieval', split: 'time:0.5' }, store);
+    const queries = (name: string) =>
+      new Set(rowsOf(contentsOf(exp, name)).map((r) => r['query'] as string));
+    const train = queries('retrieval.train.jsonl');
+    for (const q of queries('retrieval.eval.jsonl')) expect(train.has(q)).toBe(false);
+  });
+});
+
+describe('training export: built and written while the store changes', () => {
+  /** The fixture store, with `listFeedback` calls counted and `onList` run before each. */
+  async function watched(onList: (call: number, base: MemoryStore) => Promise<void> | void) {
+    const base = await fixture();
+    let calls = 0;
+    const list = base.listFeedback!.bind(base);
+    const store = Object.assign(Object.create(base) as MemoryStore, {
+      listFeedback: async (g: typeof TG, o?: Parameters<typeof list>[1]) => {
+        calls++;
+        await onList(calls, base);
+        return list(g, o);
+      },
+    });
+    return { store, calls: () => calls };
+  }
+  const run = (out: string, store: MemoryStore, force = false) =>
+    runTrainingExport(
+      out,
+      { kind: 'all' },
+      { store, grant: TG, version: '0.0.0-test', now: NOW },
+      { force },
+    );
+
+  it('a memory forgotten after the build is not in the files written', async () => {
+    const { store, calls } = await watched(async (call, base) => {
+      // The second read is the check after the first build: the forget lands in between.
+      if (call === 2) await base.forget(TG, 'm-lunch');
+    });
+    const out = path.join(dir, 'forgotten');
+    const { written } = await run(out, store);
+    expect(calls()).toBe(4);
+    const all = written.map((p) => fs.readFileSync(p, 'utf8')).join('');
+    expect(all).not.toContain('orders lunch');
+    expect(fs.readdirSync(out).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('a failure part-way leaves the earlier export as it was, and no temp file', async () => {
+    const out = path.join(dir, 'kept');
+    await run(out, await fixture());
+    const before = Object.fromEntries(
+      fs.readdirSync(out).map((n) => [n, fs.readFileSync(path.join(out, n), 'utf8')]),
+    );
+    const { store } = await watched((call) => {
+      if (call === 2) throw new Error('disk gone');
+    });
+    await expect(run(out, store, true)).rejects.toThrow('disk gone');
+    const after = Object.fromEntries(
+      fs.readdirSync(out).map((n) => [n, fs.readFileSync(path.join(out, n), 'utf8')]),
+    );
+    expect(after).toEqual(before);
+  });
+
+  it('fails as store-changing when every check finds a change, and writes nothing', async () => {
+    const { store } = await watched(async (call, base) => {
+      if (call % 2 === 0) {
+        await base.putFeedback!(TG, feedback(`f-new-${call}`, { query: 'q2', createdAt: at(1) }));
+        await base.forget(TG, call === 2 ? 'm-lunch' : call === 4 ? 'm-deploy' : 'm-port');
+      }
+    });
+    const out = path.join(dir, 'changing');
+    const err = await run(out, store).catch((e: unknown) => e as TrainingExportError);
+    expect(err).toBeInstanceOf(TrainingExportError);
+    expect((err as TrainingExportError).kind).toBe('store-changing');
+    expect(fs.existsSync(out)).toBe(false);
   });
 });

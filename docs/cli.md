@@ -2234,9 +2234,10 @@ oort export training --kind all --out reviewed/ --exclude interactive --force
   existing one keeps its mode (`--out .` never changes the mode of the current directory). Every
   file is 0600, and nothing is written outside the directory. An existing directory that group or
   others can write to is refused, because another user could replace the files before you train
-  on them. A directory that already holds files of an export (`manifest.json`, `sft.jsonl`,
-  `preference.train.jsonl`, and so on) is refused; `--force` removes those files first, and
-  leaves any other file alone.
+  on them. Someone who can write to the parent of `--out` controls where the export lands, so
+  choose a directory only you can write to. A directory that already holds files of an export
+  (`manifest.json`, `sft.jsonl`, `preference.train.jsonl`, and so on) is refused; with `--force`
+  they are replaced once every new file is complete, and any other file is left alone.
 - `--expert <id>`: only labels by this expert (a judgment's or a resolve's `by`, a feedback row's
   `by`).
 - `--since <iso>`: only labels made at or after this time: when the expert decided, when the
@@ -2245,7 +2246,9 @@ oort export training --kind all --out reviewed/ --exclude interactive --force
   `<kind>.jsonl`. Each kind's rows are sorted by that time; the earliest `fraction` go to train
   and the rest to eval, so every eval row is later than every train row. Rows with the same time
   never straddle the cut: their group goes to the side that holds most of it (train on a tie).
-  Equal times are ordered by id, so the same store always splits the same way.
+  Equal times are ordered by id, so the same store always splits the same way. Retrieval rows
+  split by query instead: all rows of one query land on the same side, the queries ordered by
+  their latest label, so a positive reused for several negatives never sits on both sides.
 - `--preference-reasons`: adds the person's reason to `chosen` in preference rows (see
   `preference.jsonl` below).
 - `--include integration` adds labels that arrived as `integration` (SDK and `oort serve` calls
@@ -2269,18 +2272,34 @@ Each of these is counted in the manifest, under `excluded.<kind>`, by its reason
 | `dismissed` | Feedback a person set aside. |
 | `not-a-retrieval-signal` | `wrong` and `stale` feedback: they say a memory is untrue, not that it was irrelevant. |
 | `helped-without-query` | A `helped` row given without `--query`: there is no query to pair it with. |
-| `memory-forgotten` | Feedback about a memory that is gone, or that this directory does not read. |
+| `memory-forgotten` | Feedback about a memory that is gone, or that this directory does not read; a resolve whose recorded judgment is gone. |
+| `corrected`, `withdrawn`, `purged`, `not-current` (preference) | A resolve whose recorded judgment would be left out of `sft.jsonl`: the expert corrected or withdrew it since. |
+| `contradictory` | `helped` and `irrelevant` feedback on the same memory for the same query: both rows stay out. |
+| `invalid-time` | A label whose time is not an ISO date and time (a store edited by hand). |
 | `expert-not-selected`, `before-since`, `origin-not-selected` | Left out by `--expert`, `--since`, or the origins chosen. |
 
 `oort forget` already deletes a forgotten memory's feedback and purges the predictions that cite
-it, and a forgotten judgment is gone with its memory, so their text never reaches an export.
+it, and a forgotten judgment is gone with its memory, so an export that starts after a forget
+never holds their text.
+
+### While the store changes
+
+The export does not lock the store, so forgets and new labels go on while it runs. It writes
+every file complete under a temporary name in `--out`, then reads every record behind its rows
+again. When one would now be left out (forgotten, withdrawn or corrected meanwhile) it builds
+the export again from the start, up to 3 times; when the labels still change, it fails with
+`reason: "store-changing"` and writes nothing. Only then are the files renamed into place, the
+manifest last. If anything fails part-way, the temporary files are removed and an earlier
+export in `--out` is left as it was. An export is a copy: forgetting a memory later does not
+change files already written, so delete those yourself.
 
 ### Scrubbing
 
 Every text field is cleaned again on the way out: invisible, bidirectional and tag characters
 are dropped, line breaks become `\n`, other control characters are dropped, and then the text is
-scrubbed with the same rules as the write path (a secret becomes `[REDACTED:<kind>]`). Tabs and
-line breaks stay, so a reason reads as the expert wrote it. Text recorded through Oort was already
+scrubbed with the same rules as the write path (a secret becomes `[REDACTED:<kind>]`). That
+covers `domain`, `reviewer` and the manifest's `filters.expert` too. Tabs and line breaks stay,
+so a reason reads as the expert wrote it. Every `at` is written as an ISO time in UTC. Text recorded through Oort was already
 scrubbed; this catches a rule added since, and a store edited by hand. `manifest.scrubbed`
 counts, per kind, the rows whose text changed.
 

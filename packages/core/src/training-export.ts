@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { MemoryStore } from './adapters.js';
@@ -28,8 +28,8 @@ import { scrub } from './scrub.js';
  * - `sft`: one chat row per judgment a person made (`messages`: the item, then the verdict and
  *   the reason as the expert gave them);
  * - `preference`: one row per resolved prediction where the person chose another verdict than
- *   the one proposed (`prompt`, `chosen`: the person's verdict and reason, `rejected`: the
- *   proposal);
+ *   the one proposed (`prompt`, `chosen`: the person's verdict, `rejected`: the proposal;
+ *   `preferenceReasons` adds the person's reason to `chosen`);
  * - `retrieval`: rows from recall feedback (`query`, `positive`, `negative`): an `irrelevant`
  *   row is a hard negative for its query, a `helped` row with a query a positive.
  *
@@ -75,7 +75,13 @@ export const TRAINING_MANIFEST = 'manifest.json';
  * - `irrelevant-without-query`: `irrelevant` feedback without its query (only in a store edited
  *   by hand: Oort requires the query);
  * - `memory-forgotten`: feedback about a memory that is gone, or that the grant does not read;
+ *   a resolve whose recorded judgment is gone;
+ * - `contradictory`: `helped` and `irrelevant` feedback on the same memory for the same query;
+ * - `invalid-time`: a label whose time is not an ISO date and time (a store edited by hand);
  * - `expert-not-selected`, `before-since`, `origin-not-selected`: left out by the filters.
+ *
+ * A resolve that recorded a judgment is left out when that judgment would be: `corrected`,
+ * `withdrawn`, `purged`, `not-current`, or `memory-forgotten` when it is gone.
  */
 export const TRAINING_EXCLUSIONS = [
   'purged',
@@ -93,6 +99,8 @@ export const TRAINING_EXCLUSIONS = [
   'helped-without-query',
   'irrelevant-without-query',
   'memory-forgotten',
+  'contradictory',
+  'invalid-time',
   'expert-not-selected',
   'before-since',
   'origin-not-selected',
@@ -107,8 +115,9 @@ export class TrainingExportError extends Error {
      * `invalid`: an option is wrong (the message names it). `exists`: the directory holds files
      * of an earlier export (pass `force`). `not-a-directory`: the path is a file or a symlink.
      * `unsafe-directory`: an existing directory that other users can write to.
+     * `store-changing`: the labels kept changing while the export ran (retry it).
      */
-    readonly kind: 'invalid' | 'exists' | 'not-a-directory' | 'unsafe-directory',
+    readonly kind: 'invalid' | 'exists' | 'not-a-directory' | 'unsafe-directory' | 'store-changing',
     message: string,
   ) {
     super(message);
@@ -185,7 +194,8 @@ export function trainingFilters(opts: TrainingExportOptions): TrainingFilters {
     if (typeof opts.expert !== 'string' || opts.expert.trim() === '') {
       throw invalid('expert must name an expert');
     }
-    expert = opts.expert.trim();
+    // Cleaned as row text is: it is written to the manifest.
+    expert = trainingText(opts.expert.trim());
   }
   return {
     kind,
@@ -289,6 +299,33 @@ class Cleaner {
   }
 }
 
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** A label's time as `toISOString` writes it, or undefined when it is not an ISO date and time. */
+function isoTime(s: unknown): string | undefined {
+  if (typeof s !== 'string' || !ISO_TIME.test(s)) return undefined;
+  const t = Date.parse(s);
+  return Number.isNaN(t) ? undefined : new Date(t).toISOString();
+}
+
+/** Why a judgment memory is not a label a person stands behind now, if it is not. */
+function judgmentExclusion(m: Memory, now: Date): TrainingExclusion | undefined {
+  const j = m.judgment!;
+  return j.purged !== undefined
+    ? 'purged'
+    : j.withdrawn !== undefined
+      ? 'withdrawn'
+      : isUnconfirmedAgentJudgment(j)
+        ? 'agent-unconfirmed'
+        : j.pack !== undefined
+          ? 'imported-from-pack'
+          : m.endReason === 'corrected'
+            ? 'corrected'
+            : !isCurrent(m, now)
+              ? 'not-current'
+              : undefined;
+}
+
 /** A label's origin fields, cleaned (`reviewer` is stored text). */
 function labelFields(r: LabelProvenance & { via?: string; confirmed?: unknown }, c: Cleaner) {
   const proposed = proposedOriginOf(r);
@@ -344,22 +381,12 @@ function sftRows(memories: readonly Memory[], f: TrainingFilters, now: Date): Ki
   for (const m of memories) {
     if (m.type !== 'judgment' || m.judgment === undefined) continue;
     const j: Judgment = m.judgment;
+    const at = isoTime(j.decidedAt);
     const why: TrainingExclusion | undefined =
-      j.purged !== undefined
-        ? 'purged'
-        : j.withdrawn !== undefined
-          ? 'withdrawn'
-          : isUnconfirmedAgentJudgment(j)
-            ? 'agent-unconfirmed'
-            : j.pack !== undefined
-              ? 'imported-from-pack'
-              : m.endReason === 'corrected'
-                ? 'corrected'
-                : !isCurrent(m, now)
-                  ? 'not-current'
-                  : filtered(f, { by: j.by, at: j.decidedAt, origin: labelOrigin(j) });
-    if (why !== undefined) {
-      bump(out.excluded, why);
+      judgmentExclusion(m, now) ??
+      (at === undefined ? 'invalid-time' : filtered(f, { by: j.by, at, origin: labelOrigin(j) }));
+    if (why !== undefined || at === undefined) {
+      bump(out.excluded, why ?? 'invalid-time');
       continue;
     }
     const c = new Cleaner();
@@ -370,8 +397,8 @@ function sftRows(memories: readonly Memory[], f: TrainingFilters, now: Date): Ki
         { role: 'assistant', content: decisionText(j.verdict, j.reason, c) },
       ],
       id: m.id,
-      at: j.decidedAt,
-      domain: j.domain,
+      at,
+      domain: c.text(j.domain),
       ...labelFields(j, c),
     };
     if (c.changed) out.scrubbed++;
@@ -382,12 +409,16 @@ function sftRows(memories: readonly Memory[], f: TrainingFilters, now: Date): Ki
 
 function preferenceRows(
   predictions: readonly Prediction[],
+  judgments: ReadonlyMap<string, Memory>,
   f: TrainingFilters,
   now: Date,
 ): KindResult {
   const out: KindResult = { rows: [], excluded: {}, scrubbed: 0 };
   for (const p of predictions) {
     const r = p.resolution;
+    const at = r === undefined ? undefined : isoTime(r.at);
+    // The judgment the resolve recorded speaks for it: a correction or withdrawal since wins.
+    const recorded = r?.judgmentId === undefined ? undefined : judgments.get(r.judgmentId);
     const why: TrainingExclusion | undefined =
       p.purged !== undefined
         ? 'purged'
@@ -401,8 +432,13 @@ function preferenceRows(
               ? 'no-proposal'
               : r.agrees
                 ? 'agreed'
-                : filtered(f, { by: r.by, at: r.at, origin: labelOrigin(r) });
-    if (why !== undefined || r === undefined || p.verdict === null) {
+                : r.judgmentId !== undefined && recorded === undefined
+                  ? 'memory-forgotten'
+                  : ((recorded === undefined ? undefined : judgmentExclusion(recorded, now)) ??
+                    (at === undefined
+                      ? 'invalid-time'
+                      : filtered(f, { by: r.by, at, origin: labelOrigin(r) })));
+    if (why !== undefined || r === undefined || p.verdict === null || at === undefined) {
       bump(out.excluded, why ?? 'pending');
       continue;
     }
@@ -412,8 +448,8 @@ function preferenceRows(
       chosen: decisionText(r.verdict, f.preferenceReasons ? r.reason : undefined, c),
       rejected: decisionText(p.verdict, undefined, c),
       id: p.id,
-      at: r.at,
-      ...(p.domain !== undefined && { domain: p.domain }),
+      at,
+      ...(p.domain !== undefined && { domain: c.text(p.domain) }),
       ...labelFields(r, c),
     };
     if (c.changed) out.scrubbed++;
@@ -425,6 +461,8 @@ function preferenceRows(
 /** A feedback row that passed every check, with its memory's text and its query, cleaned. */
 interface Labelled {
   f: Feedback;
+  /** The feedback's time, as `toISOString` writes it. */
+  at: string;
   query: string;
   memory: string;
   label: LabelFields;
@@ -440,6 +478,7 @@ async function retrievalRows(
   const negatives = new Map<string, Labelled[]>();
   const positives = new Map<string, Labelled[]>();
   for (const fb of feedback) {
+    const at = isoTime(fb.createdAt);
     let why: TrainingExclusion | undefined =
       fb.status === 'pending'
         ? 'pending'
@@ -449,7 +488,9 @@ async function retrievalRows(
             ? 'not-a-retrieval-signal'
             : fb.signal === 'helped' && (fb.query === undefined || fb.query.trim() === '')
               ? 'helped-without-query'
-              : filtered(f, { by: fb.by, at: fb.createdAt, origin: labelOrigin(fb) });
+              : at === undefined
+                ? 'invalid-time'
+                : filtered(f, { by: fb.by, at, origin: labelOrigin(fb) });
     // An irrelevant row needs its query too: one without (a store edited by hand) pairs nothing.
     if (why === undefined && (fb.query === undefined || fb.query.trim() === '')) {
       why = 'irrelevant-without-query';
@@ -459,7 +500,7 @@ async function retrievalRows(
       text = await memoryText(fb.memoryId);
       if (text === null) why = 'memory-forgotten';
     }
-    if (why !== undefined || text === null) {
+    if (why !== undefined || text === null || at === undefined) {
       bump(out.excluded, why ?? 'memory-forgotten');
       continue;
     }
@@ -467,6 +508,7 @@ async function retrievalRows(
     const query = c.text(fb.query!);
     const row: Labelled = {
       f: fb,
+      at,
       query,
       memory: c.text(text),
       label: labelFields(fb, c),
@@ -476,10 +518,18 @@ async function retrievalRows(
     into.set(query, [...(into.get(query) ?? []), row]);
   }
   const later = (a: string, b: string): string => (Date.parse(a) >= Date.parse(b) ? a : b);
-  const byTime = (a: Labelled, b: Labelled) => order(a.f.createdAt, a.f.id, b.f.createdAt, b.f.id);
+  const byTime = (a: Labelled, b: Labelled) => order(a.at, a.f.id, b.at, b.f.id);
   for (const query of [...new Set([...negatives.keys(), ...positives.keys()])].sort()) {
-    const neg = [...(negatives.get(query) ?? [])].sort(byTime);
-    const pos = [...(positives.get(query) ?? [])].sort(byTime);
+    // A memory marked both helped and irrelevant for one query says nothing: both rows stay out.
+    const helped = new Set((positives.get(query) ?? []).map((l) => l.f.memoryId));
+    const unhelpful = new Set((negatives.get(query) ?? []).map((l) => l.f.memoryId));
+    const consistent = (l: Labelled): boolean => {
+      if (!(helped.has(l.f.memoryId) && unhelpful.has(l.f.memoryId))) return true;
+      bump(out.excluded, 'contradictory');
+      return false;
+    };
+    const neg = (negatives.get(query) ?? []).filter(consistent).sort(byTime);
+    const pos = (positives.get(query) ?? []).filter(consistent).sort(byTime);
     // Each negative is paired with a positive of the same query, in turn; positives left over
     // get a row of their own.
     for (const [i, n] of neg.entries()) {
@@ -489,7 +539,7 @@ async function retrievalRows(
         positive: p?.memory ?? null,
         negative: n.memory,
         id: n.f.id,
-        at: p === undefined ? n.f.createdAt : later(n.f.createdAt, p.f.createdAt),
+        at: p === undefined ? n.at : later(n.at, p.at),
         ...n.label,
         ...(p !== undefined && {
           positiveId: p.f.id,
@@ -508,7 +558,7 @@ async function retrievalRows(
         positive: p.memory,
         negative: null,
         id: p.f.id,
-        at: p.f.createdAt,
+        at: p.at,
         ...p.label,
       } satisfies RetrievalRow);
       if (p.changed) out.scrubbed++;
@@ -548,6 +598,47 @@ export function splitByTime<T extends { at: string }>(
     k = k - s >= e - k ? e : s;
   }
   return { train: rows.slice(0, k), eval: rows.slice(k) };
+}
+
+/**
+ * `rows` (sorted) split by time in whole groups: every row with the same `key` lands on one side.
+ * Groups are ordered by their latest row (then by key); the cut falls between groups, where the
+ * train side comes closest to the `train` share (more train on a tie), never between groups with
+ * the same latest time. The same rows always split the same way.
+ */
+export function splitByGroup<T extends { at: string }>(
+  rows: readonly T[],
+  train: number,
+  key: (row: T) => string,
+): { train: T[]; eval: T[] } {
+  const groups = new Map<string, { key: string; t: number; n: number }>();
+  for (const r of rows) {
+    const k = key(r);
+    const g = groups.get(k) ?? { key: k, t: -Infinity, n: 0 };
+    g.t = Math.max(g.t, Date.parse(r.at));
+    g.n++;
+    groups.set(k, g);
+  }
+  const ordered = [...groups.values()].sort(
+    (a, b) => a.t - b.t || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
+  );
+  const target = Math.round(train * rows.length);
+  let cut = 0;
+  let best = 0;
+  let sum = 0;
+  for (let i = 0; i <= ordered.length; i++) {
+    if (i > 0) sum += ordered[i - 1]!.n;
+    if (i > 0 && i < ordered.length && ordered[i - 1]!.t === ordered[i]!.t) continue;
+    if (Math.abs(sum - target) <= Math.abs(best - target)) {
+      cut = i;
+      best = sum;
+    }
+  }
+  const trainKeys = new Set(ordered.slice(0, cut).map((g) => g.key));
+  return {
+    train: rows.filter((r) => trainKeys.has(key(r))),
+    eval: rows.filter((r) => !trainKeys.has(key(r))),
+  };
 }
 
 /** Per kind: rows written, by origin, and by split part when split. */
@@ -621,20 +712,33 @@ export async function buildTrainingExport(
   opts: TrainingExportOptions,
   deps: BuildTrainingDeps,
 ): Promise<TrainingExport> {
-  const f = trainingFilters(opts);
-  const now = deps.now ?? new Date();
+  return (await build(trainingFilters(opts), deps, deps.now ?? new Date())).exp;
+}
+
+/** The export, and the records behind its rows (`<kind>:<id>`), to check them again later. */
+async function build(
+  f: TrainingFilters,
+  deps: BuildTrainingDeps,
+  now: Date,
+): Promise<{ exp: TrainingExport; sources: Set<string> }> {
   const { store, grant } = deps;
   const results = new Map<TrainingKind, KindResult>();
-  if (f.kinds.includes('sft')) {
-    const memories = await store.list(grant, { validOnly: false, embeddings: false });
-    results.set('sft', sftRows(memories, f, now));
-  }
+  const memories =
+    f.kinds.includes('sft') || f.kinds.includes('preference')
+      ? await store.list(grant, { validOnly: false, embeddings: false })
+      : [];
+  if (f.kinds.includes('sft')) results.set('sft', sftRows(memories, f, now));
   if (f.kinds.includes('preference')) {
     const rows =
       store.predictions === true && store.listPredictions !== undefined
         ? await store.listPredictions(grant)
         : [];
-    results.set('preference', preferenceRows(rows, f, now));
+    const judgments = new Map(
+      memories
+        .filter((m) => m.type === 'judgment' && m.judgment !== undefined)
+        .map((m) => [m.id, m]),
+    );
+    results.set('preference', preferenceRows(rows, judgments, f, now));
   }
   if (f.kinds.includes('retrieval')) {
     const rows =
@@ -667,6 +771,7 @@ export async function buildTrainingExport(
         : [],
   };
   const contents: TrainingExport['contents'] = [];
+  const sources = new Set<string>();
   const file = (kind: TrainingKind, part: TrainingFile['part'], rows: Row[]) => {
     const name = part === 'all' ? `${kind}.jsonl` : `${kind}.${part}.jsonl`;
     const text = jsonl(rows);
@@ -676,10 +781,20 @@ export async function buildTrainingExport(
   for (const kind of f.kinds) {
     const r = results.get(kind)!;
     const rows = sorted(r.rows);
+    for (const row of rows) {
+      sources.add(`${kind}:${row.id}`);
+      if ('positiveId' in row && row.positiveId !== undefined) {
+        sources.add(`${kind}:${row.positiveId}`);
+      }
+    }
     const counts: TrainingCounts = { rows: rows.length, origins: originCount(rows) };
     if (f.split === null) file(kind, 'all', rows);
     else {
-      const s = splitByTime(rows, f.split.train);
+      // Retrieval splits by query, so one query's positives never sit on both sides.
+      const s =
+        kind === 'retrieval'
+          ? splitByGroup(rows, f.split.train, (row) => (row as RetrievalRow).query)
+          : splitByTime(rows, f.split.train);
       file(kind, 'train', s.train);
       file(kind, 'eval', s.eval);
       counts.train = { rows: s.train.length, origins: originCount(s.train) };
@@ -689,7 +804,7 @@ export async function buildTrainingExport(
     manifest.excluded[kind] = ordered(r.excluded);
     manifest.scrubbed[kind] = r.scrubbed;
   }
-  return { manifest, contents };
+  return { exp: { manifest, contents }, sources };
 }
 
 /** A memory's full text (a cold memory's from its cold copy), or null when the grant reads none. */
@@ -732,19 +847,17 @@ function writeNew(file: string, text: string): void {
   }
 }
 
-/**
- * Writes `exp` into `dir`, and nowhere else: one file per kind (or per kind and split part),
- * then `manifest.json`. A directory it creates is 0700; an existing one keeps its mode, and is
- * refused when group or others can write to it (`unsafe-directory`: they could swap the files).
- * Every file is 0600. A directory holding files of an earlier export is refused (`exists`)
- * unless `force`, which removes them first; other files are left alone. `dir` must not be a
- * symlink or a file (`not-a-directory`). Returns the paths written.
- */
-export function writeTrainingExport(
-  dir: string,
-  exp: TrainingExport,
-  opts: { force?: boolean } = {},
-): string[] {
+/** How many times `runTrainingExport` builds the export before it gives up (`store-changing`). */
+export const TRAINING_EXPORT_ATTEMPTS = 3;
+
+/** `dir` checked, and created when missing: whether this call made it, and the export there. */
+interface Prepared {
+  created: boolean;
+  /** Files of an earlier export in `dir` (only with `force`; otherwise refused). */
+  earlier: string[];
+}
+
+function prepareDir(dir: string, force: boolean): Prepared {
   let st: fs.Stats | undefined;
   try {
     st = fs.lstatSync(dir);
@@ -759,11 +872,13 @@ export function writeTrainingExport(
         : 'The output path is a file, not a directory.',
     );
   }
+  let created = false;
   if (st === undefined) {
     // Parents are made as mkdir makes them; the export's own directory is 0700 (umask aside).
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     try {
       fs.mkdirSync(dir, { mode: 0o700 });
+      created = true;
       if (posix) fs.chmodSync(dir, 0o700);
     } catch (e) {
       // Made meanwhile by someone else: checked as an existing directory below.
@@ -780,22 +895,165 @@ export function writeTrainingExport(
       `The output directory is writable by other users (mode ${(st.mode & 0o777).toString(8).padStart(4, '0')}), so they could replace the export's files; use a directory only you can write to, or a new one.`,
     );
   }
-  const earlier = fs.readdirSync(dir).filter(isTrainingExportFile);
-  if (earlier.length > 0 && opts.force !== true) {
+  const earlier = fs.readdirSync(dir).filter(isTrainingExportFile).sort();
+  if (earlier.length > 0 && !force) {
     throw new TrainingExportError(
       'exists',
-      `The output directory already holds an export (${earlier.sort().join(', ')}); pass force to replace it.`,
+      `The output directory already holds an export (${earlier.join(', ')}); pass force to replace it.`,
     );
   }
-  for (const name of earlier) fs.rmSync(path.join(dir, name), { force: true });
+  for (const name of earlier) {
+    if (fs.lstatSync(path.join(dir, name)).isDirectory()) {
+      throw new TrainingExportError(
+        'exists',
+        `The output directory holds a directory named ${name}; move it away first.`,
+      );
+    }
+  }
+  return { created, earlier };
+}
+
+/** Each file of `exp` written complete under a temp name in `dir`: final name to temp path. */
+function writeTemps(dir: string, exp: TrainingExport): Map<string, string> {
+  const temps = new Map<string, string>();
+  try {
+    const files = [
+      ...exp.contents,
+      { name: TRAINING_MANIFEST, text: `${JSON.stringify(exp.manifest, null, 2)}\n` },
+    ];
+    for (const { name, text } of files) {
+      const temp = path.join(dir, `.${name}.${randomBytes(8).toString('hex')}.tmp`);
+      writeNew(temp, text);
+      temps.set(name, temp);
+    }
+    return temps;
+  } catch (e) {
+    removeTemps(temps);
+    throw e;
+  }
+}
+
+function removeTemps(temps: ReadonlyMap<string, string>): void {
+  for (const temp of temps.values()) fs.rmSync(temp, { force: true });
+}
+
+/**
+ * The complete temp files moved to their names, the manifest last. With `force`, files of the
+ * earlier export that this one does not replace go only now, after every new file is complete;
+ * the earlier manifest is the last of them, replaced by the new one.
+ */
+function commit(
+  dir: string,
+  temps: Map<string, string>,
+  prepared: Prepared,
+  force: boolean,
+): string[] {
+  if (!force) {
+    // Refused when the export started; one that appeared since is not overwritten either.
+    const now = fs.readdirSync(dir).filter(isTrainingExportFile);
+    if (now.length > 0) {
+      throw new TrainingExportError(
+        'exists',
+        `The output directory already holds an export (${now.sort().join(', ')}); pass force to replace it.`,
+      );
+    }
+  }
   const written: string[] = [];
-  for (const { name, text } of exp.contents) {
+  for (const [name, temp] of temps) {
+    if (name === TRAINING_MANIFEST) continue;
     const file = path.join(dir, name);
-    writeNew(file, text);
+    fs.renameSync(temp, file);
+    temps.delete(name);
     written.push(file);
   }
+  for (const name of prepared.earlier) {
+    if (name !== TRAINING_MANIFEST && !temps.has(name) && !written.includes(path.join(dir, name))) {
+      fs.rmSync(path.join(dir, name), { force: true });
+    }
+  }
   const manifest = path.join(dir, TRAINING_MANIFEST);
-  writeNew(manifest, `${JSON.stringify(exp.manifest, null, 2)}\n`);
+  fs.renameSync(temps.get(TRAINING_MANIFEST)!, manifest);
+  temps.delete(TRAINING_MANIFEST);
   written.push(manifest);
   return written;
+}
+
+/** After a failure: the temp files go, and so does `dir` when this call made it and it is empty. */
+function cleanUp(dir: string, temps: ReadonlyMap<string, string>, prepared: Prepared): void {
+  removeTemps(temps);
+  if (prepared.created) {
+    try {
+      fs.rmdirSync(dir);
+    } catch {
+      // Not empty, or gone: left as it is.
+    }
+  }
+}
+
+/**
+ * Writes `exp` into `dir`, and nowhere else: one file per kind (or per kind and split part),
+ * then `manifest.json`. A directory it creates is 0700; an existing one keeps its mode, and is
+ * refused when group or others can write to it (`unsafe-directory`: they could swap the files).
+ * Every file is 0600, written complete under a temp name first and then renamed, the manifest
+ * last. A directory holding files of an earlier export is refused (`exists`) unless `force`,
+ * which replaces them once the new files are complete; other files are left alone. `dir` must
+ * not be a symlink or a file (`not-a-directory`). On a failure the temp files are removed and an
+ * earlier export is left as it was. Returns the paths written.
+ */
+export function writeTrainingExport(
+  dir: string,
+  exp: TrainingExport,
+  opts: { force?: boolean } = {},
+): string[] {
+  const force = opts.force === true;
+  const prepared = prepareDir(dir, force);
+  let temps = new Map<string, string>();
+  try {
+    temps = writeTemps(dir, exp);
+    return commit(dir, temps, prepared, force);
+  } catch (e) {
+    cleanUp(dir, temps, prepared);
+    throw e;
+  }
+}
+
+/**
+ * Builds the export and writes it into `dir` (as `writeTrainingExport`), without holding the
+ * store's lock: once the files are written under temp names, every record behind a row is read
+ * again, and when one would now be left out (forgotten, withdrawn, corrected meanwhile) the
+ * export is built again from the start. After `TRAINING_EXPORT_ATTEMPTS` builds that kept
+ * changing it fails (`store-changing`) and writes nothing. The files are a copy: a later forget
+ * does not change them.
+ */
+export async function runTrainingExport(
+  dir: string,
+  opts: TrainingExportOptions,
+  deps: BuildTrainingDeps,
+  write: { force?: boolean } = {},
+): Promise<{ export: TrainingExport; written: string[] }> {
+  const f = trainingFilters(opts);
+  const force = write.force === true;
+  const prepared = prepareDir(dir, force);
+  let temps = new Map<string, string>();
+  try {
+    for (let attempt = 1; attempt <= TRAINING_EXPORT_ATTEMPTS; attempt++) {
+      const now = deps.now ?? new Date();
+      const built = await build(f, deps, now);
+      temps = writeTemps(dir, built.exp);
+      const again = await build(f, deps, now);
+      if ([...built.sources].every((k) => again.sources.has(k))) {
+        return { export: built.exp, written: commit(dir, temps, prepared, force) };
+      }
+      removeTemps(temps);
+      temps = new Map();
+    }
+  } catch (e) {
+    cleanUp(dir, temps, prepared);
+    throw e;
+  }
+  cleanUp(dir, temps, prepared);
+  throw new TrainingExportError(
+    'store-changing',
+    `Labels kept being forgotten, withdrawn or corrected while the export ran (${TRAINING_EXPORT_ATTEMPTS} attempts); nothing was written. Run it again.`,
+  );
 }

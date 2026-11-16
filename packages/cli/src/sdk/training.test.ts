@@ -90,6 +90,11 @@ describe('oort.exportTraining', () => {
     await expect(
       expert.exportTraining({ kind: 'sft', out: path.join(root, 'y'), include: ['agent'] }),
     ).rejects.toMatchObject({ code: 'usage' });
+    // A relative `out` would follow the process's working directory, not the handle's.
+    await expect(
+      expert.exportTraining({ kind: 'sft', out: 'relative-out', include: ['integration'] }),
+    ).rejects.toMatchObject({ code: 'usage', reason: 'invalid-argument' });
+    expect(fs.existsSync(path.resolve('relative-out'))).toBe(false);
     if (process.platform !== 'win32') {
       const shared = path.join(root, 'shared');
       fs.mkdirSync(shared);

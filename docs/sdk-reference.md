@@ -1078,8 +1078,8 @@ export interface ExportTrainingOptions {
   /** One kind, or `all`. */
   kind: TrainingKind | 'all';
   /**
-   * The directory to write. A new one is made 0700; an existing one keeps its mode and is refused
-   * when other users can write to it. Files are 0600.
+   * The directory to write, as an absolute path. A new one is made 0700; an existing one keeps
+   * its mode and is refused when other users can write to it. Files are 0600.
    */
   out: string;
   /** Only labels by this expert. */

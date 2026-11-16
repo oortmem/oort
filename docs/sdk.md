@@ -681,7 +681,7 @@ own error is reported by its class name only.
 | `OortNeedsConfirmationError`   | `needs-confirmation` | `preview-required`, `findings-unacknowledged` (Oort Cloud 409)                      |
 | `OortCloudOnlyError`           | `cloud-only`         | `hive-level`, `end-users` (`endUsers` locally), or `forget({ everywhere })` locally |
 | `OortNetworkError`             | `network`            | `unreachable`, `timeout`, `busy` (retryable)                                        |
-| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `conflict` (a prediction changed meanwhile; retryable), `in-progress` (a feedback row another call is resolving; retryable), `memory-changed` (a supersede could not take back its new memory; inspect it first), `predictions-unsupported` (a store that cannot keep predictions), `export-exists` (`exportTraining` into a directory that holds an earlier export; pass `force`), `not-a-directory` (`exportTraining` to a file or a symlink), `unsafe-directory` (`exportTraining` to an existing directory other users can write to), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
+| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `conflict` (a prediction changed meanwhile; retryable), `in-progress` (a feedback row another call is resolving; retryable), `memory-changed` (a supersede could not take back its new memory; inspect it first), `predictions-unsupported` (a store that cannot keep predictions), `export-exists` (`exportTraining` into a directory that holds an earlier export; pass `force`), `not-a-directory` (`exportTraining` to a file or a symlink), `unsafe-directory` (`exportTraining` to an existing directory other users can write to), `store-changing` (`exportTraining` while labels kept changing; retryable), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
 | `OortInternalError`            | `internal`           | `store-busy` (retryable), `predictions-not-purged` (retryable), else none          |
 
 Retry what is `retryable`, then branch on `code`:
@@ -1444,17 +1444,27 @@ reads, so a handle scoped to one project never exports another project's feedbac
 predictions. Judgments belong to the expert, not to a project: every handle of that person reads
 them.
 
-**Options.** `kind` (`sft`, `preference`, `retrieval` or `all`) and `out` (a directory) are
-required. `expert` keeps one expert's labels; `since` keeps labels made at or after a time;
+**Options.** `kind` (`sft`, `preference`, `retrieval` or `all`) and `out` (a directory, as an
+absolute path; a relative one is a usage error) are required. `expert` keeps one expert's labels; `since` keeps labels made at or after a time;
 `split: 'time:0.8'` writes `<kind>.train.jsonl` and `<kind>.eval.jsonl` instead of
-`<kind>.jsonl`, the earliest 80% of each kind to train, and rows with the same time on one side.
+`<kind>.jsonl`, the earliest 80% of each kind to train, and rows with the same time on one side
+(retrieval rows of one query stay on one side).
 `include` adds origins to `interactive`, `dashboard` and `connector` (only `integration` adds
 one; `agent` is a usage error), and `exclude` leaves origins out. `preferenceReasons: true` adds
 the person's reason to `chosen` in preference rows. A directory the export creates is 0700; an
 existing `out` keeps its mode, and is refused (`unsafe-directory`) when group or others can write
-to it, since another user could replace the files. Each file is 0600. A directory that holds an
-earlier export is refused (`export-exists`) unless `force: true`, which replaces that export's
-files and leaves other files alone. A file or a symlink as `out` is refused (`not-a-directory`).
+to it, since another user could replace the files; someone who can write to its parent controls
+where the export lands, so choose a directory only you can write to. Each file is 0600. A
+directory that holds an earlier export is refused (`export-exists`) unless `force: true`, which
+replaces that export's files once the new ones are complete and leaves other files alone. A
+file or a symlink as `out` is refused (`not-a-directory`).
+
+**While the store changes.** The export does not lock the store. It writes each file under a
+temporary name, reads every record behind its rows again, and builds again from the start when
+one was forgotten, withdrawn or corrected meanwhile; after 3 builds that kept changing it fails
+(`store-changing`, retryable) and writes nothing. On any failure the temporary files go and an
+earlier export stays as it was. An export is a copy: forgetting a memory later does not change
+files already written.
 
 **What it writes.** Every row carries `id`, `at` (the label's time) and `origin`, with
 `proposedOrigin` and `reviewer` when set; rows are oldest first. Each text is cleaned of
