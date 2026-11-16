@@ -1382,7 +1382,7 @@ For a container sidecar, or a backend that is not you. The same protocol on TCP,
 | --- | --- | --- |
 | `oort recall <text>` | Recalls memories as they would be injected into the prompt (an `<oort-memory>` block), as the acting agent: your Planet and its own Star. The header names the agent (`as cursor`). | `--json` (the full RecallResult, without embeddings; each memory has `origin`), `--include <levels>`, `--as-of <iso>`, `--known-at <iso>`, `--history` (one at a time; see [Time](#time-recall-modes)), `--within <path>`, `--near <x,y[,z]>` with `--radius <m>`, `--map <id>` and `--frame <id>` (see [Places](#places-spatial-memory)), `--limit <n>`, `--speed <speed>`, `--budget-chars <n>` (see below), `--links`, `--no-links` (see [Following links at recall](#following-links-at-recall)) |
 | `oort remember <fact>` | Saves a fact you state, as the MCP `remember` tool and the SDK's `remember()` do: one turn framed as your statement (`Remember this: <fact>`, answered `Noted: <fact>`), through the write path (scrub, gate, reconcile, writer), as the acting agent on the cwd's project. The fact is scrubbed on your machine before it leaves, in local and cloud mode; one that is mostly a secret is `skipped (secret)` and never sent. Words without quotes are joined into one fact; a fact is one line of at most 500 characters (no line or paragraph separators). The header says what happened (`added 1b2c3d4e`, `superseded 1b2c3d4e (replaces 9f8e7d6c)`, `skipped (not durable)`; an outcome Oort does not know is `unknown`). In Oort Cloud it saves in your account, as `observe` does, with a `turnRef` built from the project, the type and the fact and the UTC day, so a retry after a lost answer is not saved twice. | `--type <type>` (a hint: `semantic`, `episodic`, `procedural` or `preference`; the write path decides), `--place <path>` and `--pose <x,y[,z]>` with `--map <id>`, `--radius <m>` and `--frame <id>` (where the fact is; local only, see [Places](#places-spatial-memory)), `--dry-run` (reports scrubbing only; touches nothing), `--json` (`data.results`, the SDK's `RememberResult`) |
-| `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation, hydrated, and where it came from (`your Planet`, `this agent's Star`, with `(overridden)` when a narrower memory contradicts it). The header names the agent, the nodes read (`reads: your Planet, Star cursor`) and the time mode (`mode: as-of 2026-04-02 (from the query)`). | `--json` (agent; read; rank, id, type, tier, validFrom, text, explanation, origin, place; temporal; spatial; timings; degraded), `--include <levels>`, `--as-of`, `--known-at`, `--history`, `--within`, `--near` (with `--radius`, `--map`, `--frame`): with one, a `place` and `dist m` column and a `place:` header line; `--links`, `--no-links`: a `via` column appears when a link brought a memory in |
+| `oort explain <query>` | Runs the same recall and shows each stage's rank and score per memory: lexical, dense, RRF, fused, reranked, activation, hydrated, and where it came from (`your Planet`, `this agent's Star`, with `(overridden)` when a narrower memory contradicts it). The header names the agent, the nodes read (`reads: your Planet, Star cursor`), the time mode (`mode: as-of 2026-04-02 (from the query)`) and, for a question about two things, its parts (`parts: 1 "buy standing desk", 2 "buy ergonomic chair"`, with a `part` column: see [Questions about two things](#questions-about-two-things)). | `--json` (agent; read; rank, id, type, tier, validFrom, text, explanation, origin, place; temporal; subQueries; spatial; timings; degraded), `--include <levels>`, `--as-of`, `--known-at`, `--history`, `--within`, `--near` (with `--radius`, `--map`, `--frame`): with one, a `place` and `dist m` column and a `place:` header line; `--links`, `--no-links`: a `via` column appears when a link brought a memory in |
 | `oort revalidate` | Lists volatile facts (a status, a current version, an owner) that nobody confirmed within `recall.staleAfterDays`, oldest first. | `--json` (`data.memories`: id, type, text, lastConfirmed; `data.staleAfterDays`) |
 | `oort inspect [id]` | Lists current memories, or shows one in full with its decisions and supersede chain. | `--json`, `--limit <n>` (default 50) |
 | `oort stats` | Counts per tier and validity, store and cold sizes, the hook queue, when the store was last consolidated (and when it is next due), and memory use. | `--json` |
@@ -1618,6 +1618,65 @@ no stated end or start, so "hasta el viernes" does not end the fact by itself. N
 the mode explicitly. The writer still turns a relative date in any language into an absolute
 `YYYY-MM-DD` in the fact's text. Reading dates in Spanish, Brazilian Portuguese, German, French,
 Japanese and Chinese is planned (CON-110).
+
+### Questions about two things
+
+A question can ask about two or more things at once: "which did I buy first, the standing desk or
+the ergonomic chair?", "how many days passed between the day I planted the tree and the day I
+picked the first apples?". One search for the whole question tends to find one of them and miss
+the other: its words and its embedding sit closer to one thing, or halfway between both.
+
+Recall splits such a question into parts, by rules in code (no model call), and searches each part
+as well as the whole question:
+
+| The question | Its parts |
+| --- | --- |
+| Which did I buy first, the standing desk or the ergonomic chair? | `buy standing desk`, `buy ergonomic chair` |
+| Who moved abroad first, Priya or Daniel? | `Priya moved abroad`, `Daniel moved abroad` |
+| How many days passed between the day I planted the tree and the day I picked the first apples? | `planted the tree`, `picked the first apples` |
+| How long had I been learning the cello when I played my first concert? | `learning the cello`, `played my first concert` |
+| How many days before the product launch did I fix the billing bug? | `product launch`, `fix the billing bug` |
+| How long did it take me to read 'Middlemarch' and 'Persuasion' combined? | `'Middlemarch'`, `'Persuasion'` |
+| In what order did these happen: the day I adopted the puppy, the day I started the new job, and the day I sold my car? | three parts, one per event |
+
+The shapes are a choice ("which or who … first, earlier, later or most recently, A or B"), an
+ordered list ("in what order …: A, B and C", "who … first, second and third among A, B and C"),
+"how many days (or how long) between A and B", "how long had I been A when B", "how many days
+before A did I B", "how long did I A before B", and "A and B combined" or "in total". The
+question's own scaffolding ("which … first", "the day I") is left out of each part, and a quoted
+title stays whole. Anything else is searched as one query, exactly as before: a prompt over 400
+characters or on several lines, one that looks like code (backticks, paths, `snake_case`,
+`camelCase`, `=`), a plan rather than past events ("which should I do first, A or B?"), a part
+with nothing to search for ("after I bought it"), or more than four parts.
+
+For a split question:
+
+- **Search.** The whole question and each part each get a keyword search and a vector search. The
+  query and its parts are embedded in one request to the embedder.
+- **Ranking.** All the result lists are fused together (reciprocal rank fusion). Then each part's
+  best match, the top of its own two lists fused, is placed right after the overall best, so the
+  top `returnK` holds a match for every part. The rest keep their fused order.
+- **Rerank** (`full`). The reranker scores the candidates against the whole question and orders
+  them, but it cannot push a part's best match out of the top: it is placed again right after the
+  reranker's best. A note about one of the two things answers the whole question only in part,
+  so the reranker scores it low even when it is exactly the evidence asked for.
+- **Relevance gate.** A part's best match passes the gate when it passes for the whole question,
+  or when it passes against its own part: it holds at least `minCoverage` of the part's words and
+  at least two of them, or its vector similarity to the part is at least `minDenseScore`. So a
+  part of one word ("bus") never lets a memory in on that word alone. With a reranker, the part's
+  test applies only when the memory's rerank score is at least half of `minRerankScore`. A match
+  that passes neither way is dropped. Every other memory faces the gate as before.
+
+The same rules run in `fast` mode (the prompt hook's default: no reranker) and in `full` mode.
+`oort explain` shows the parts in its header (`parts: 1 "buy standing desk", 2 "buy ergonomic
+chair"`) and a `part` column with the part a memory is the best match for; `--json` and
+`oort recall --json` report them as `subQueries` and `explanation.part`.
+
+**What it costs.** A split question with n parts sends n more inputs (a few tokens each) in its
+one embed request, and runs n more keyword searches and n more vector searches on the store. It
+makes no extra rerank call; the one rerank call it makes asks for every candidate's score instead
+of the top `returnK`, over the same candidates. The local query embedding cache keeps each part on
+its own, so asking the same question again embeds nothing.
 
 ### Places: spatial memory
 

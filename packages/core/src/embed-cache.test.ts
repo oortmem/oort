@@ -33,14 +33,16 @@ describe('query embedding cache', () => {
     expect([...(second[0] ?? [])]).toEqual([...(first[0] ?? [])]);
   });
 
-  it('cache.documents-and-batches-are-never-cached', async () => {
+  it('cache.documents-are-never-cached-query-batches-are', async () => {
     const inner = counting();
     const e = cachingEmbedder(inner, memoryEmbeddingCache(), { model: 'm', dimension: 4 });
     await e.embed(['a fact'], 'document');
     await e.embed(['a fact'], 'document');
+    expect(inner.calls).toHaveLength(2);
+    // A question and its sub-queries: each text is cached on its own.
     await e.embed(['q1', 'q2'], 'query');
     await e.embed(['q1', 'q2'], 'query');
-    expect(inner.calls).toHaveLength(4);
+    expect(inner.calls).toHaveLength(3);
   });
 
   it('cache.entries-expire-after-the-ttl', async () => {

@@ -338,6 +338,31 @@ describe('plan and paid models (CON-147)', () => {
     expect(cached.embed?.documents).toMatchObject({ cached: texts.size, requests: 0, tokens: 0 });
   });
 
+  it('plan.counts-sub-query-inputs', () => {
+    // A question about two things is embedded with its two parts, in the same request.
+    const h = set.haystacks[0]!;
+    const two = {
+      ...set,
+      haystacks: [
+        {
+          ...h,
+          questions: [
+            { ...h.questions[0]!, question: 'Which class did I join first, pottery or yoga?' },
+          ],
+        },
+      ],
+    };
+    const p = planPublicSet(two, {
+      embedModel: 'voyage-3.5-lite',
+      rerankK: 30,
+      tokens: estimateTokens,
+    });
+    expect(p.embed?.queries).toMatchObject({ requests: 1, inputs: 3, split: 1 });
+    const words = ['Which class did I join first, pottery or yoga?', 'join pottery', 'join yoga'];
+    expect(p.embed?.queries.tokens).toBe(words.reduce((n, t) => n + estimateTokens.count(t), 0));
+    expect(renderPlan(p)).toMatch(/1 requests with 3 inputs \(1 questions split/);
+  });
+
   it('plan.paid-models-without---yes-send-nothing', async () => {
     vi.stubEnv('VOYAGE_API_KEY', 'not-a-key');
     const net = noNetwork();

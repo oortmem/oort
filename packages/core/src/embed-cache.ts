@@ -60,9 +60,10 @@ export function memoryEmbeddingCache(
 }
 
 /**
- * Wraps an embedder so a single-text `query` embed is served from `cache` when it can be.
- * Documents and batches always go to the embedder. A failing cache is ignored: embedding never
- * fails because of it.
+ * Wraps an embedder so `query` embeds are served from `cache` when they can be: each text of a
+ * batch (a question and its sub-queries) is looked up on its own, and only the misses go
+ * to the embedder, in one request. Documents always go to the embedder. A failing cache is
+ * ignored: embedding never fails because of it.
  */
 export function cachingEmbedder(
   inner: Embedder,
@@ -72,15 +73,25 @@ export function cachingEmbedder(
   return {
     dimension: inner.dimension,
     async embed(texts, kind) {
-      const only = texts.length === 1 ? texts[0] : undefined;
-      if (kind !== 'query' || only === undefined) return inner.embed(texts, kind);
-      const key = await queryCacheKey(id.model, id.dimension, only);
-      const hit = await cache.get(key).catch(() => undefined);
-      if (hit !== undefined) return [Int8Array.from(hit)];
-      const out = await inner.embed(texts, kind);
-      const v = out[0];
-      if (v !== undefined) await cache.set(key, v).catch(() => {});
-      return out;
+      if (kind !== 'query' || texts.length === 0) return inner.embed(texts, kind);
+      const keys = await Promise.all(texts.map((t) => queryCacheKey(id.model, id.dimension, t)));
+      const out = await Promise.all(keys.map((k) => cache.get(k).catch(() => undefined)));
+      const missing = texts.flatMap((t, i) => (out[i] === undefined ? [i] : []));
+      if (missing.length === 0) return out.map((v) => Int8Array.from(v as Int8Array));
+      const fresh = await inner.embed(
+        missing.map((i) => texts[i] as string),
+        kind,
+      );
+      await Promise.all(
+        missing.map((i, j) => {
+          const v = fresh[j];
+          if (v === undefined) return undefined;
+          out[i] = v;
+          return cache.set(keys[i] as string, v).catch(() => {});
+        }),
+      );
+      if (missing.length === texts.length) return fresh;
+      return out.map((v) => (v === undefined ? v : Int8Array.from(v))) as Int8Array[];
     },
   };
 }

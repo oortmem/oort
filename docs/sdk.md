@@ -642,7 +642,7 @@ your Oort account); `whoami().routes` says which applies to each role.
 
 | Call | Local, own keys or Oort Pro relay | Local models | Cloud mode |
 | --- | --- | --- | --- |
-| `recall` | A Voyage embed (skipped on a cache hit or a confident keyword answer) and a Voyage rerank (skipped when confident, or with `speed: 'fast'`). With `recall.adaptiveStop: 'decide'` (0.9.0 or newer), a TypeSafe call when a `full` recall finds cold matches beside hot and warm ones. `speed: 'lexical'`: no model call | none (`decide` still needs a key) | Metered Oort Cloud recall |
+| `recall` | A Voyage embed (skipped on a cache hit or a confident keyword answer; a [question about two things](cli.md#questions-about-two-things) adds one input per part to the same request) and a Voyage rerank (skipped when confident, or with `speed: 'fast'`). With `recall.adaptiveStop: 'decide'` (0.9.0 or newer), a TypeSafe call when a `full` recall finds cold matches beside hot and warm ones. `speed: 'lexical'`: no model call | none (`decide` still needs a key) | Metered Oort Cloud recall |
 | `observe` | A TypeSafe gate, always. If kept: one Anthropic writer call, one batched Voyage embed, and a TypeSafe reconcile per fact | Gate, writer and reconcile still need keys | Metered Oort Cloud observe |
 | `remember` | One observe per fact | as above | One metered observe per fact |
 | `judge.record` | One Voyage embed | none | `refused` |

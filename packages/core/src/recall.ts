@@ -42,6 +42,7 @@ import {
   type SpatialFilter,
 } from './place.js';
 import { temporalIntent, type RecallMode } from './temporal.js';
+import { PART_MIN_WORDS, PART_RERANK_FLOOR, subQueries } from './subqueries.js';
 import { isStale, lastConfirmed } from './volatile.js';
 import {
   CONFIDENT_COVERAGE,
@@ -139,6 +140,11 @@ export interface RecalledMemory extends Memory {
     /** With `near` (CON-84): metres from the query point to the memory's region. */
     distanceM?: number;
     /**
+     * Set on the best match for one part of a question about several things: the part's
+     * number in `RecallResult.subQueries`, from 1. Such a memory keeps a place in the top k.
+     */
+    part?: number;
+    /**
      * Set when the search did not return this memory and a link from a returned one did
      * (CON-149). It passed the same relevance gate as a hit; its text is no more trusted.
      */
@@ -183,6 +189,12 @@ export interface RecallResult {
   embedSkipped?: 'lexical-confident';
   /** The temporal view this recall read. Always set by `recall`. */
   temporal?: RecallTemporal;
+  /**
+   * The parts of a question about several things, each searched beside the whole question:
+   * "which did I buy first, the desk or the chair?" gives two. Absent when the query was not
+   * split.
+   */
+  subQueries?: string[];
   /** The nodes this recall read, as labels show them (`your Planet`, `Star cursor`). */
   read?: string[];
   /**
@@ -246,6 +258,11 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   // words ("on 2 April", "changed over time") pick the view and are not searched for.
   const { view, temporal, text } = viewFor(q, scrub(q.text).text, now);
   if (q.includeWithdrawn === true) view.includeWithdrawn = true;
+  // A question about two or more things: each part is searched beside the whole question, and
+  // its best match keeps a place in the top k. Rules in code, no model call; a query that does
+  // not split takes exactly the path it always took.
+  const parts = subQueries(text);
+  const searches = parts === undefined ? [text] : [text, ...parts];
   const t0 = clock();
   const degraded: Degradation[] = [];
   const timings: Record<string, number> = {
@@ -278,56 +295,70 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     return m;
   };
 
-  const lexicalP = timed('lexicalMs', () =>
+  // Per search (the whole query, then each part), per node.
+  const lexicalAll = timed('lexicalMs', () =>
     Promise.all(
-      legs.map((l) => store.lexical(l.grant, text, config.recall.lexicalK, ...searchOpts)),
+      searches.map((s) =>
+        Promise.all(
+          legs.map((l) => store.lexical(l.grant, s, config.recall.lexicalK, ...searchOpts)),
+        ),
+      ),
     ),
   );
+  const lexicalP = lexicalAll.then((all) => all[0]!);
   // A failed embed must not leave the lexical promise unobserved.
   lexicalP.catch(() => {});
 
   // Lexical first (CON-57): when the lexical answer is already clear, skip the embedding round
-  // trip. Otherwise the lexical search has run while nothing else waited on it.
+  // trip. Otherwise the lexical search has run while nothing else waited on it. Not for a split
+  // question: one memory holding every word cannot answer a question about two things.
   let embedSkipped: RecallResult['embedSkipped'];
-  if (deps.embed && config.recall.lexicalFirst) {
+  if (deps.embed && config.recall.lexicalFirst && parts === undefined) {
     const first = byRank(await lexicalP);
     if (await lexicalIsConfident(first, queryTokens, read, now, view)) {
       embedSkipped = 'lexical-confident';
     }
   }
 
-  let vector: Int8Array | undefined;
+  // One embed request for the whole query and its parts.
+  let vectors: (Int8Array | undefined)[] = searches.map(() => undefined);
   if (!deps.embed) {
     degraded.push('no-embedder');
   } else if (embedSkipped === undefined) {
     const t = clock();
     try {
-      vector = (await deps.embed.embed([text], 'query'))[0];
-      if (vector === undefined) degraded.push('embed-failed');
+      const got = await deps.embed.embed(searches, 'query');
+      vectors = searches.map((_, i) => got[i]);
+      if (vectors[0] === undefined) degraded.push('embed-failed');
     } catch {
       degraded.push('embed-failed');
     }
     timings['embedMs'] = clock() - t;
   }
 
-  const v = vector;
+  const v = vectors[0];
   let denseFailed = false;
-  const [lexicalLegs, denseLegs] = await Promise.all([
-    lexicalP,
-    v === undefined
-      ? Promise.resolve<Hit[][]>(legs.map(() => []))
-      : timed('denseMs', () =>
-          Promise.all(
-            legs.map((l) =>
-              store.dense(l.grant, v, config.recall.denseK, ...searchOpts).catch((): Hit[] => {
-                denseFailed = true;
-                return [];
-              }),
-            ),
+  const noDense = (): Hit[][] => legs.map(() => []);
+  const denseFor = (x: Int8Array | undefined): Promise<Hit[][]> =>
+    x === undefined
+      ? Promise.resolve(noDense())
+      : Promise.all(
+          legs.map((l) =>
+            store.dense(l.grant, x, config.recall.denseK, ...searchOpts).catch((): Hit[] => {
+              denseFailed = true;
+              return [];
+            }),
           ),
-        ),
+        );
+  const [lexicalAllLegs, denseAllLegs] = await Promise.all([
+    lexicalAll,
+    vectors.every((x) => x === undefined)
+      ? Promise.resolve(vectors.map(noDense))
+      : timed('denseMs', () => Promise.all(vectors.map(denseFor))),
   ]);
   if (denseFailed) degraded.push('dense-failed');
+  const lexicalLegs = lexicalAllLegs[0]!;
+  const denseLegs = denseAllLegs[0]!;
   // Across nodes, by rank (one node: its own list). Used where one list is needed.
   const lexical = byRank(lexicalLegs);
   const dense = byRank(denseLegs);
@@ -337,7 +368,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
 
   // Live rows only: a cold row keeps its text, stub and entities, which is all fusion, the gate
   // and the reranker read. Hydration waits until we know what is returned (CON-47).
-  const ids = [...new Set([...lexical, ...dense].map((h) => h.id))];
+  const ids = [...new Set([...lexicalAllLegs.flat(2), ...denseAllLegs.flat(2)].map((h) => h.id))];
   const loaded = await Promise.all(ids.map((id) => read(id)));
   const memories = new Map<string, Memory>();
   for (const m of loaded) if (m !== null) memories.set(m.id, m);
@@ -345,16 +376,23 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   const tf = clock();
   // Reciprocal rank fusion within each node as before, then the nodes merged by fused score,
   // each scaled by the specificity prior (off at ε = 0). A stable sort: one node keeps its order.
-  const fused = legs
-    .flatMap((l, i) =>
-      fuse([lexicalLegs[i]!, denseLegs[i]!], memories, now, {
-        activation: config.activation,
-        view,
-      }).map((f) =>
-        epsilon === 0 ? f : { ...f, score: f.score * specificityFactor(l.node, epsilon) },
-      ),
-    )
-    .sort((x, y) => y.score - x.score);
+  // A split question fuses every search's lists, the whole query's and each part's, at once.
+  const fuseSearches = (which: number[]) =>
+    legs
+      .flatMap((l, i) =>
+        fuse(
+          which.flatMap((s) => [lexicalAllLegs[s]![i]!, denseAllLegs[s]![i]!]),
+          memories,
+          now,
+          { activation: config.activation, view },
+        ).map((f) =>
+          epsilon === 0 ? f : { ...f, score: f.score * specificityFactor(l.node, epsilon) },
+        ),
+      )
+      .sort((x, y) => y.score - x.score);
+  const fused = fuseSearches(searches.map((_, s) => s));
+  // Each part's best match: the top of its own lists, fused. It keeps a place in the top k.
+  const heads = (parts ?? []).map((_, p) => fuseSearches([p + 1])[0]?.id);
   timings['fuseMs'] = clock() - tf;
 
   const coverage = new Map<string, number>();
@@ -482,7 +520,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     }
   };
 
-  let ordered = fused.slice(0, config.recall.rerankK);
+  let ordered = withHeads(fused, heads, fusedById).slice(0, config.recall.rerankK);
   const rerankScores = new Map<string, number>();
   let rerankSkipped: RecallResult['rerankSkipped'];
   /** Linked memories that joined the rerank call; emptied when the rerank gives no answer. */
@@ -513,8 +551,13 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         deps.rerank.rerank(
           text,
           docs,
-          // Hits keep their `returnK` places: the linked memories are asked for on top.
-          linked.length > 0 ? config.recall.returnK + linkCfg.pool : config.recall.returnK,
+          // A split question asks for every score, so each part's best match has its own.
+          parts !== undefined
+            ? docs.length
+            : // Hits keep their `returnK` places: the linked memories are asked for on top.
+              linked.length > 0
+              ? config.recall.returnK + linkCfg.pool
+              : config.recall.returnK,
         ),
         config.recall.rerankBudgetMs,
       );
@@ -538,8 +581,13 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         degraded.push('rerank-empty');
         rerankScores.clear();
         linked = [];
-      } else {
+      } else if (parts === undefined) {
         ordered = next;
+      } else {
+        // The reranker scores against the whole question, which a note about one of the things
+        // asked answers only in part: it orders everything else, and cannot push a part's best
+        // match out of the top k.
+        ordered = withHeads(next, heads, fusedById);
       }
     } catch (e) {
       degraded.push(e === RERANK_TIMEOUT ? 'rerank-timeout' : 'rerank-failed');
@@ -561,7 +609,36 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     if ((coverage.get(id) ?? 0) >= minCoverage) return true;
     return minDenseScore > 0 && (denseScore.get(id) ?? -1) >= minDenseScore;
   };
-  let kept = candidates.filter((f) => relevant(f.id));
+  // A part's best match is judged against its part as well: it is about one of the things
+  // asked, so it covers few of the whole question's words and a reranker scores it low against
+  // the whole. It passes on the part's words (at least `minCoverage` of them, and at least
+  // PART_MIN_WORDS) or on its closeness to the part (`minDenseScore`), and, when reranked, only
+  // with a score of at least PART_RERANK_FLOOR × `minRerankScore`. One shared word, or a score
+  // far below the threshold, never lets a memory in.
+  const partOf = new Map<string, number>();
+  heads.forEach((id, p) => {
+    if (id !== undefined && !partOf.has(id)) partOf.set(id, p);
+  });
+  const partTokens = (parts ?? []).map((part) => informativeTokens(part));
+  const partDense = (parts ?? []).map(
+    (_, p) => new Map(byRank(denseAllLegs[p + 1]!).map((h) => [h.id, h.score])),
+  );
+  const relevantToPart = (id: string): boolean => {
+    const p = partOf.get(id);
+    if (p === undefined) return false;
+    const rs = rerankScores.get(id);
+    if (rs !== undefined && rs < minRerankScore * PART_RERANK_FLOOR) return false;
+    if (minCoverage === 0) return true;
+    const m = memories.get(id);
+    if (m !== undefined) {
+      const words = partTokens[p]!;
+      const doc = informativeTokens([m.text, m.stub, ...m.entities].join(' '));
+      const held = [...words].filter((t) => doc.has(t)).length;
+      if (held >= PART_MIN_WORDS && queryCoverage(words, m) >= minCoverage) return true;
+    }
+    return minDenseScore > 0 && (partDense[p]!.get(id) ?? -1) >= minDenseScore;
+  };
+  let kept = candidates.filter((f) => relevant(f.id) || relevantToPart(f.id));
   const dropped = candidates.length - kept.length;
 
   // Linked memories never take a hit's place: at most `admit` are added beside the hits, each
@@ -676,6 +753,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         ...(ds !== undefined ? { dense: ds } : {}),
         activation: activation(m.accessLog, m.salience, now, config.activation),
         hydrated: false,
+        ...(partOf.has(f.id) && { part: partOf.get(f.id)! + 1 }),
         ...viaOf(via.get(f.id)),
       },
       origin: originOf(m, full),
@@ -760,10 +838,35 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     ...(embedSkipped !== undefined ? { embedSkipped } : {}),
     ...(adaptiveStop !== undefined ? { adaptiveStop } : {}),
     temporal,
+    ...(parts !== undefined && { subQueries: parts }),
     read: nodes.map((n) => nodeLabel(n, full)),
     ...(spatial !== undefined && { spatial }),
     timings,
   };
+}
+
+/**
+ * `list` with each part's best match (`heads`, in part order) right after the first entry, the
+ * rest in their order. An id `list` lacks is taken from `all`. No heads: `list` itself.
+ */
+function withHeads<F extends { id: string }>(
+  list: F[],
+  heads: (string | undefined)[],
+  all: Map<string, F>,
+): F[] {
+  if (heads.length === 0 || list.length === 0) return list;
+  const out: F[] = [list[0]!];
+  const seen = new Set([list[0]!.id]);
+  const byId = new Map(list.map((f) => [f.id, f]));
+  for (const id of heads) {
+    if (id === undefined || seen.has(id)) continue;
+    const f = byId.get(id) ?? all.get(id);
+    if (f === undefined) continue;
+    out.push(f);
+    seen.add(id);
+  }
+  for (const f of list) if (!seen.has(f.id)) out.push(f);
+  return out;
 }
 
 /** A memory a link leads to, before it is admitted: where it came from and how strongly. */

@@ -150,6 +150,10 @@ from before CON-101 ignores the request and recalls in full.
 | `fast` (default) | Embeds the prompt; fusion and the relevance gate rank, with no reranker. | embed |
 | `lexical` | Lexical search only: no query embedding and no reranker. | none |
 
+In every mode, a prompt that asks about two things ("which did I buy first, the desk or the
+chair?") is also searched part by part, by rules in code, and each part's best match is placed
+near the top of the block: see [Questions about two things](cli.md#questions-about-two-things).
+
 Memory links are followed only in `full` mode. There the hook brings in the other end of a link
 you confirmed with `oort link`, when the reranker scores it and the memory it was reached from at
 or above `minRerankScore`, and its line in the block is labelled `linked`
