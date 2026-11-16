@@ -693,6 +693,7 @@
     },
     "errors": {
       "400": "bad-request",
+      "401:unauthorized": "unauthorized",
       "403:experts_not_listed": "refused",
       "403:not_an_expert": "refused",
       "403:daily_limit": "refused",
@@ -701,6 +702,7 @@
       "409:ambiguous": "ambiguous-prefix",
       "409:not_current": "bad-request",
       "409:end_user_erased": "bad-request",
+      "409:replayed": "bad-request",
       "400:user_not_supported": "bad-request",
       "402": "payment-required",
       "404": "not-found",
