@@ -661,7 +661,10 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
   feedback
     .command('list')
     .description('feedback kept in this scope, newest first (--status open for open corrections)')
-    .option('--status <status>', 'all, pending, recorded, open, retired, superseded or dismissed')
+    .option(
+      '--status <status>',
+      'all, pending, recorded, open, resolving, retired, superseded or dismissed',
+    )
     .option('--memory <id>', 'only feedback on this memory')
     .option('--signal <signal>', 'only this signal')
     .option('--limit <n>', 'at most this many (default 100)')

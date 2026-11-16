@@ -220,6 +220,7 @@ const FEEDBACK_STATUSES = [
   'pending',
   'recorded',
   'open',
+  'resolving',
   'retired',
   'superseded',
   'dismissed',

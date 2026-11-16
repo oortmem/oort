@@ -1280,11 +1280,12 @@ export type FeedbackSignal = 'helped' | 'wrong' | 'stale' | 'irrelevant';
 #### `FeedbackStatus`
 
 Where feedback stands: `pending` (an agent's, waiting for a person), `recorded` (a `helped` or
-an `irrelevant`), `open` (a `wrong` or `stale` correction recall labels), or closed by a person:
-`retired`, `superseded` or `dismissed`.
+an `irrelevant`), `open` (a `wrong` or `stale` correction recall labels), `resolving` (a person's
+retire or supersede has started; running the same call again finishes it), or closed by a
+person: `retired`, `superseded` or `dismissed`.
 
 ```ts
-export type FeedbackStatus = 'pending' | 'recorded' | 'open' | 'retired' | 'superseded' | 'dismissed';
+export type FeedbackStatus = 'pending' | 'recorded' | 'open' | 'resolving' | 'retired' | 'superseded' | 'dismissed';
 ```
 
 <a id="oortmem-feedbackinput"></a>
@@ -1320,8 +1321,11 @@ export interface FeedbackView {
   agentRecorded: boolean;
   /** `helped`: whether its accesses were added. */
   applied?: boolean;
-  /** `helped`: why they were not (`already-helped-today`, or `disabled` by config). */
-  reason?: 'already-helped-today' | 'disabled';
+  /**
+   * `helped`: why they were not (`already-helped-today`, `disabled` by config, or
+   * `access-failed`: adding them failed, and the call that gave it threw).
+   */
+  reason?: 'already-helped-today' | 'disabled' | 'access-failed';
   createdAt: string;
   confirmed?: {
     at: string;
@@ -1344,7 +1348,7 @@ export type FeedbackResultView = {
   kept: true;
   feedback: FeedbackView;
   applied?: boolean;
-  reason?: 'already-helped-today' | 'disabled';
+  reason?: 'already-helped-today' | 'disabled' | 'access-failed';
 }
 /** An agent already keeps 5,000 pending feedback rows here: nothing was kept. */
  | {

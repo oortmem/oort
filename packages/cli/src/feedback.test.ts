@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Feedback } from '@oortmem/core';
-import { TG } from '@oortmem/core/store-conformance';
+import { makeFeedback, TG } from '@oortmem/core/store-conformance';
 import { data, harness, memory, type Harness } from '../test/helpers.js';
 import { localBackend } from './mcp.js';
 
@@ -118,6 +118,30 @@ describe('oort feedback', () => {
     expect(ok).toMatchObject({ status: 'recorded', query: 'billing port' });
     const missing = await h.run(['feedback', 'ffffffff', 'wrong']);
     expect(missing.code).toBe(2);
+  });
+
+  it('cli.feedback-shows-no-invisible-characters-from-an-older-row', async () => {
+    const h = await seeded();
+    const zw = String.fromCodePoint(0x200b);
+    const tag = String.fromCodePoint(0xe0041);
+    // A row written before invisible characters were stripped on the way in.
+    await h.store.putFeedback!(
+      TG,
+      makeFeedback({
+        id: 'cccccccc-0000-4000-8000-000000000003',
+        memoryId: ID,
+        note: `It${zw} moved${tag} to 5502`,
+        by: `ad${zw}a`,
+      }),
+    );
+    const r = await h.run(['feedback', 'list']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(r.io.stdout).toContain('"It moved to 5502"');
+    expect(r.io.stdout).toContain('by ada');
+    const json = await h.run(['feedback', 'list', '--json']);
+    const [row] = data<{ feedback: { note: string; by: string }[] }>(json.io.stdout).feedback;
+    expect(row).toMatchObject({ note: 'It moved to 5502', by: 'ada' });
+    expect(await recallText(h)).toContain('(contested: wrong, note: "It moved to 5502")');
   });
 
   it('cli.feedback-list-filters-by-status', async () => {

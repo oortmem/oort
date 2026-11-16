@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { tmpdir } from '../../test/helpers.js';
 import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
 import { createOortWith } from './create.js';
-import { OortRefusedError, OortUsageError } from './errors.js';
+import { FeedbackError } from '@oortmem/core';
+import { OortRefusedError, OortUsageError, toOortError } from './errors.js';
 import type { Oort } from './types.js';
 
 /** Recall feedback from code: an expert handle is a person, an agent handle waits for one. */
@@ -30,6 +31,18 @@ const contestedOf = async (oort: Oort, id: string) =>
   (await oort.recall('staging database')).memories.find((m) => m.id === id)?.contested;
 
 describe('oort.feedback', () => {
+  it('sdk.feedback-a-project-b-handle-cannot-read-project-a-rows', async () => {
+    const { expert } = await handles();
+    const a = expert.scoped({ project: 'proj-a' });
+    const b = expert.scoped({ project: 'proj-b' });
+    const saved = await a.remember(['Acme renews in March.']);
+    const r = await a.feedback({ memoryId: saved.results[0]!.id!, signal: 'wrong' });
+    const fid = r.kept ? r.feedback.id : '';
+    expect((await a.feedback.list({})).feedback.map((f) => f.id)).toEqual([fid]);
+    expect((await b.feedback.list({})).feedback).toEqual([]);
+    await expect(b.feedback.dismiss(fid)).rejects.toMatchObject({ code: 'not-found' });
+  });
+
   it('sdk.feedback-expert-counts-at-once-and-resolves', async () => {
     const { expert, id } = await handles();
     const r = await expert.feedback({ memoryId: id, signal: 'wrong', note: 'It is 17 now.' });
@@ -78,5 +91,19 @@ describe('oort.feedback', () => {
     ).rejects.toBeInstanceOf(OortUsageError);
     const listed = await expert.feedback.list({ status: 'open' });
     expect(listed.feedback).toEqual([]);
+  });
+
+  it('sdk.feedback-errors-say-when-to-run-again', () => {
+    const inProgress = toOortError(
+      new FeedbackError('in-progress', 'Another call is resolving it.'),
+    );
+    expect(inProgress).toMatchObject({ code: 'refused', reason: 'in-progress', retryable: true });
+    const conflict = toOortError(new FeedbackError('conflict', 'It changed.'));
+    expect(conflict).toMatchObject({ reason: 'conflict', retryable: true });
+    // A supersede whose new memory could not be taken back: look before running anything again.
+    const changed = toOortError(
+      new FeedbackError('memory-ended', 'The memory ended another way.', 'open', true),
+    );
+    expect(changed).toMatchObject({ reason: 'memory-changed', retryable: false });
   });
 });

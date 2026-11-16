@@ -12,6 +12,7 @@ import {
   recordFeedback,
   retireFeedback,
   supersedeFeedback,
+  withoutInvisible,
   type Feedback,
   type FeedbackSignal,
   type FeedbackStatus,
@@ -55,10 +56,9 @@ async function refusing<T>(fn: () => Promise<T>): Promise<T> {
     return await fn();
   } catch (e) {
     if (e instanceof FeedbackError) {
-      const memo =
-        e.memoryChanged === true ? ' The memory was changed; check it with `oort inspect`.' : '';
+      // The message says what changed and what to run next (in-progress: run the same again).
       throw new Refusal(
-        e.message + memo,
+        e.message,
         e.kind === 'invalid'
           ? { code: 'usage' }
           : e.kind === 'not-found'
@@ -99,6 +99,9 @@ function limitOf(raw: string | undefined): number | undefined {
   return n;
 }
 
+/** Text as shown: invisible characters (zero-width, bidi, tag) taken out of older rows too. */
+const seen = (s: string): string => withoutInvisible(s);
+
 /** One row as JSON: the stored record, with who gave it said plainly. */
 function plain(f: Feedback) {
   return {
@@ -106,9 +109,9 @@ function plain(f: Feedback) {
     memoryId: f.memoryId,
     signal: f.signal,
     status: f.status,
-    ...(f.note !== undefined && { note: f.note }),
-    ...(f.query !== undefined && { query: f.query }),
-    by: f.by,
+    ...(f.note !== undefined && { note: seen(f.note) }),
+    ...(f.query !== undefined && { query: seen(f.query) }),
+    by: seen(f.by),
     agentRecorded: isAgentVia(f.via),
     ...(f.applied !== undefined && { applied: f.applied }),
     ...(f.reason !== undefined && { reason: f.reason }),
@@ -121,9 +124,9 @@ function plain(f: Feedback) {
 /** One line for a row: id, signal, memory, status, who, and the note. */
 function line(f: Feedback): string {
   const agent = isAgentVia(f.via) ? ' [agent]' : '';
-  const note = f.note === undefined ? '' : `  "${shown(clip(f.note, 120))}"`;
-  const query = f.query === undefined ? '' : `  query: "${shown(clip(f.query, 80))}"`;
-  return `${short(f.id)}  ${f.signal.padEnd(10)} memory ${short(f.memoryId)}  ${f.status.padEnd(10)} by ${shown(f.by)}${agent}${note}${query}`;
+  const note = f.note === undefined ? '' : `  "${shown(clip(seen(f.note), 120))}"`;
+  const query = f.query === undefined ? '' : `  query: "${shown(clip(seen(f.query), 80))}"`;
+  return `${short(f.id)}  ${f.signal.padEnd(10)} memory ${short(f.memoryId)}  ${f.status.padEnd(10)} by ${shown(seen(f.by))}${agent}${note}${query}`;
 }
 
 const NEXT: Partial<Record<FeedbackSignal, string>> = {
@@ -353,6 +356,7 @@ export async function feedbackSupersedeCommand(
       supersedeFeedback(r.f.id, fact, {
         store: w.store,
         grant: writeGrant(w),
+        scope: w.scope,
         by: r.by,
         ...(w.embed !== undefined && { embed: w.embed }),
         harness: 'cli',

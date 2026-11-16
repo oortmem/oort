@@ -7,6 +7,7 @@ import {
   recordFeedback,
   retireFeedback,
   supersedeFeedback,
+  withoutInvisible,
   type Feedback,
   type FeedbackSignal,
   type FeedbackStatus,
@@ -53,26 +54,29 @@ function byOf(ctx: Ctx): string {
   return a.source === 'none' ? 'sdk-agent' : a.id;
 }
 
+/** Stored text as shown: invisible characters out (older rows may hold them), then scrubbed. */
+const seen = (s: string): string => clean(withoutInvisible(s));
+
 export function feedbackView(f: Feedback): FeedbackView {
   return {
     id: f.id,
     memoryId: f.memoryId,
     signal: f.signal,
     status: f.status,
-    ...(f.note !== undefined && { note: clean(f.note) }),
-    ...(f.query !== undefined && { query: clean(f.query) }),
-    by: clean(f.by),
+    ...(f.note !== undefined && { note: seen(f.note) }),
+    ...(f.query !== undefined && { query: seen(f.query) }),
+    by: seen(f.by),
     agentRecorded: isAgentVia(f.via),
     ...(f.applied !== undefined && { applied: f.applied }),
     ...(f.reason !== undefined && { reason: f.reason }),
     createdAt: f.createdAt,
     ...(f.confirmed !== undefined && {
-      confirmed: { at: f.confirmed.at, by: clean(f.confirmed.by) },
+      confirmed: { at: f.confirmed.at, by: seen(f.confirmed.by) },
     }),
     ...(f.resolved !== undefined && {
       resolved: {
         at: f.resolved.at,
-        by: clean(f.resolved.by),
+        by: seen(f.resolved.by),
         ...(f.resolved.supersededBy !== undefined && { supersededBy: f.resolved.supersededBy }),
       },
     }),
@@ -170,6 +174,7 @@ export async function supersede(
   const e = ctx.engine;
   const r = await supersedeFeedback(id, fact, {
     ...deps,
+    scope: ctx.principal.scope,
     ...(e.embed !== undefined && { embed: e.embed }),
     harness: 'sdk',
   });

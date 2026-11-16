@@ -677,7 +677,7 @@ own error is reported by its class name only.
 | `OortNeedsConfirmationError`   | `needs-confirmation` | `preview-required`, `findings-unacknowledged` (Oort Cloud 409)                      |
 | `OortCloudOnlyError`           | `cloud-only`         | `hive-level`, `end-users` (`endUsers` locally), or `forget({ everywhere })` locally |
 | `OortNetworkError`             | `network`            | `unreachable`, `timeout`, `busy` (retryable)                                        |
-| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `conflict` (a prediction changed meanwhile; retryable), `predictions-unsupported` (a store that cannot keep predictions), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
+| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `conflict` (a prediction changed meanwhile; retryable), `in-progress` (a feedback row another call is resolving; retryable), `memory-changed` (a supersede could not take back its new memory; inspect it first), `predictions-unsupported` (a store that cannot keep predictions), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
 | `OortInternalError`            | `internal`           | `store-busy` (retryable), `predictions-not-purged` (retryable), else none          |
 
 Retry what is `retryable`, then branch on `code`:
@@ -1263,12 +1263,21 @@ confirms it. An agent names a memory by its whole id; a person may use a unique 
   - `feedback.dismiss(id)` closes the feedback and keeps the memory as it is.
 - `irrelevant` keeps the pair of query and memory id. Recall does not use it yet.
 
-**Limits and races.** `note` and `query` are scrubbed of secrets, made one line and cut to 500
-characters. One agent keeps at most 5,000 pending rows in one place; past that, `feedback()`
-returns `{ kept: false, reason: 'pending-cap' }`. Each resolve changes the feedback row in one
-guarded write: when two run at once, one wins and the other rejects with `OortRefusedError`
-(`already-resolved` or `conflict`), its message saying where the row stands. A memory change it
-made is undone first. `forget(id)` deletes every feedback row about the memory, whoever gave it.
+**Limits and races.** `note` and `query` lose invisible characters (zero-width, bidirectional
+and tag characters), are scrubbed of secrets, made one line and cut to 500 characters. One agent
+keeps at most 5,000 pending rows at its home, across every project; past that, `feedback()`
+returns `{ kept: false, reason: 'pending-cap' }`. A row is kept with its memory's project, so a
+handle scoped to another project does not see it.
+
+`retire` and `supersede` first mark the row `resolving`, then change the memory, then close the
+row. When two resolves run at once, one wins and the other rejects with `OortRefusedError`:
+`already-resolved`, `in-progress` (another call is resolving it; retryable) or `conflict` (the
+row changed meanwhile and nothing was written; retryable). A call that stopped part way leaves
+the row `resolving`, and recall still returns `contested`: the same call again finishes it, and a
+supersede never stores the fact twice. The new memory is authored by the expert. If the old
+memory ended another way meanwhile, the new one is removed and the row goes back to `open`; if
+it cannot be removed, the error has reason `memory-changed` and is not retryable: inspect the
+memories first. `forget(id)` deletes every feedback row about the memory, whoever gave it.
 
 ## Stability
 

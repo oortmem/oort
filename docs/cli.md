@@ -1163,13 +1163,18 @@ oort feedback dismiss 7c1d2e3f                # keep the memory, drop the label
   for `stale` (it held until now). Recall leaves it out from then on; `oort inspect` still shows
   it.
 - **supersede** stores the right fact (one line, at most 500 characters, scrubbed of secrets) as a
-  new memory of the same type and scope, and the old memory ends `superseded`. No model is called.
+  new memory of the same type and scope, authored by you, and the old memory ends `superseded`.
+  No model is called.
 - **dismiss** closes the feedback. The memory stays as it is and the label goes.
-- Each one changes the feedback in one guarded write. When two run at once, one wins; the other
-  changes nothing and says where the feedback stands (`It is retired now.`). When a memory change
-  was made and the feedback could not be closed, the change is undone; if that fails too, the
-  refusal says so and names `oort inspect`. A memory that is no longer current cannot be retired
-  or superseded.
+- **retire** and **supersede** first mark the feedback `resolving` (with who resolves it and
+  how), then change the memory, then close the feedback. When two run at once, one wins; the
+  other changes nothing and says where the feedback stands (`It is retired now.`, or that another
+  call is resolving it). If a call stops part way, the feedback stays `resolving` and recall still
+  labels the memory: run the same command again to finish it. A supersede run again never stores
+  the fact twice.
+- A memory that is no longer current cannot be retired or superseded. If it ended another way
+  while a supersede ran, the new memory is removed and the feedback goes back to `open`; if the
+  new memory cannot be removed, the refusal says so and names `oort inspect`.
 
 **Agents.** The MCP `feedback` tool lets an agent pass on what you said. What it gives is kept
 `pending` and changes nothing, neither ranking nor labels, until you confirm it:
@@ -1180,14 +1185,17 @@ oort feedback confirm 9a8b7c6d
 ```
 
 Only `oort feedback` (and the expert role over `oort serve` or in the SDK) can confirm, retire,
-supersede or dismiss. One agent keeps at most 5,000 pending rows in one place; past that the tool
-refuses and nothing is saved.
+supersede or dismiss. One agent keeps at most 5,000 pending rows at its home, across every
+project; past that the tool refuses and nothing is saved.
 
-- `--note` and `--query` are scrubbed of secrets, made one line and cut to 500 characters. `--by`
+- `--note` and `--query` lose invisible characters (zero-width, bidirectional and tag
+  characters), are scrubbed of secrets, made one line and cut to 500 characters. `--by`
   names the person (default `judge.operator` in the home config, else `local-user`).
 - `oort feedback list` shows feedback newest first: `--status` (`all`, `pending`, `recorded`,
-  `open`, `retired`, `superseded` or `dismissed`; default `all`), `--memory <id>`, `--signal`,
+  `open`, `resolving`, `retired`, `superseded` or `dismissed`; default `all`), `--memory <id>`,
+  `--signal`,
   `--limit` (default 100, at most 1000), `--json`.
+- Feedback is kept with the memory's project: you see it only where you see that project.
 - `oort forget` deletes every feedback row about the memory, whoever gave it, before it returns.
 - Feedback lives in the store file (`feedback` table), so backups include it. An older Oort
   ignores the table. In cloud mode the commands are refused (`refused`).

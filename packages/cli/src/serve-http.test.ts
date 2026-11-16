@@ -342,6 +342,20 @@ describe('service mode on TCP', () => {
     expect((await tcp({ ...auth, 'oort-user': '' })).body.error?.['reason']).toBe('user-missing');
   });
 
+  it("reads a project's feedback only with that project", async () => {
+    const as = (project: string) => ({ ...auth, 'oort-project': project, 'oort-user': 'u7' });
+    const post = (route: string, project: string, body: unknown) =>
+      request('POST', route, as(project), JSON.stringify(body), true);
+    const saved = await post('/v1/remember', 'proj-a', { facts: ['Acme renews in March.'] });
+    const [id] = (saved.body.data?.['results'] as { id: string }[]).map((r) => r.id) as [string];
+    const given = await post('/v1/feedback', 'proj-a', { memoryId: id, signal: 'wrong' });
+    expect(given.status).toBe(200);
+    const list = (project: string) => request('GET', '/v1/feedback', as(project), undefined, true);
+    expect(((await list('proj-a')).body.data?.['feedback'] as unknown[]).length).toBe(1);
+    expect((await list('proj-b')).body.data?.['feedback']).toEqual([]);
+    expect((await list('-')).body.data?.['feedback']).toEqual([]);
+  });
+
   it('answers a loopback listener only under its own Host', async () => {
     const tcp = (host: string) =>
       request('GET', '/v1/whoami', { ...auth, 'oort-user': 'u1', host }, undefined, true);

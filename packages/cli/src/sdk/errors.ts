@@ -309,9 +309,15 @@ export function toOortError(e: unknown): OortError {
       return new OortNotFoundError(err.message, { reason: kind });
     }
     if (kind === 'ambiguous') return new OortAmbiguousIdError(err.message);
+    // A conflict changed nothing and may be run again; an in-progress resolve is finished by
+    // running the same call again. A supersede whose new memory could not be taken back left the
+    // memories changed: `memory-changed`, not retryable, so the caller looks before acting.
+    if ((err as Error & { memoryChanged?: boolean }).memoryChanged === true) {
+      return new OortRefusedError(err.message, { reason: 'memory-changed', retryable: false });
+    }
     return new OortRefusedError(err.message, {
       reason: kind === 'unsupported' ? 'feedback-unsupported' : (kind ?? 'refused'),
-      ...(kind === 'conflict' && { retryable: true }),
+      ...((kind === 'conflict' || kind === 'in-progress') && { retryable: true }),
     });
   }
   if (err.name === 'FeedbackPurgeError') {

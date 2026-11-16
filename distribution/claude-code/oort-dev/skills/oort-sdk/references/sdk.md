@@ -306,7 +306,9 @@ memory ends `superseded`) or `dismiss`; an agent handle gets `refused`, `expert-
 adds `feedback.helpedAccesses` accesses (default 2) once per memory and person per UTC day.
 `wrong` and `stale` never change ranking or end a memory: recall returns `contested` on it and
 `formatForPrompt` labels the line until a person resolves it. A lost race between two resolves
-rejects with `refused` (`already-resolved` or `conflict`) and changes nothing.
+rejects with `refused` (`already-resolved`, or `in-progress` / `conflict`, both retryable) and
+changes nothing. A retire or supersede that stopped part way leaves the row `resolving`: the same
+call again finishes it. Feedback is kept with its memory's project.
 
 <!-- example: examples/src/feedback.ts -->
 

@@ -1106,8 +1106,9 @@ export async function contestedOf(
     out.set(f.memoryId, {
       feedbackId: f.id,
       signal: f.signal,
-      ...(f.note !== undefined && { note: f.note }),
-      by: f.by,
+      // Rows from before invisible characters were stripped on the way in lose them here.
+      ...(f.note !== undefined && { note: withoutInvisible(f.note) }),
+      by: withoutInvisible(f.by),
       at: f.confirmed?.at ?? f.createdAt,
     });
   }
