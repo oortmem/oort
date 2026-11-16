@@ -124,7 +124,7 @@ describe('the memory protocol on the socket', () => {
       version: VERSION,
       protocol: 1,
       mode: 'local',
-      capabilities: ['judgments', 'consolidate', 'links'],
+      capabilities: ['judgments', 'predictions', 'consolidate', 'links'],
     });
     const ping = await callDaemon(daemon.socket, 'ping', {}, { budgetMs: 2000 });
     expect(ping.ok).toBe(true);

@@ -38,13 +38,17 @@ import {
   judgeEvalCommand,
   judgeImportCommand,
   judgeConfirmCommand,
+  judgeForgetPredictionCommand,
   judgeListCommand,
+  judgePredictionsCommand,
+  judgeResolveCommand,
   judgePackExportCommand,
   judgePackImportCommand,
   judgePurgeCommand,
   judgeRecordCommand,
   judgeWithdrawCommand,
   type JudgeApplyOptions,
+  type JudgeResolveOptions,
   type JudgeRecordOptions,
 } from './commands/judge.js';
 import {
@@ -407,6 +411,7 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
 
   const judge = p
     .command('judge')
+    .alias('judgment')
     .description(
       "judgment memory: record an expert's decisions with their reasons, and apply them to new items",
     );
@@ -446,6 +451,45 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--json', 'print the full result as JSON')
     .action(run((item: string, o: JudgeApplyOptions) => judgeApplyCommand(item, o, ctx)));
   judge
+    .command('resolve')
+    .description(
+      "record the expert's decision on a kept prediction; a different verdict with a reason becomes a judgment",
+    )
+    .argument('<id>', 'prediction id or unique prefix (from `oort judge apply`)')
+    .option('--verdict <label>', 'the verdict the expert chose')
+    .option('--reason <text>', "the expert's reason, verbatim")
+    .option('--criteria <list>', 'tags the reason relies on, comma list')
+    .option('--by <expert>', "the expert's id (default: judge.operator)")
+    .option('--domain <name>', 'the domain for the judgment, when the prediction has none')
+    .option('--json', 'print oort.v1 JSON')
+    .action(run((id: string, o: JudgeResolveOptions) => judgeResolveCommand(id, o, ctx)));
+  judge
+    .command('predictions')
+    .description('kept predictions waiting for the expert (--resolved or --all for the others)')
+    .option('--resolved', 'only resolved predictions')
+    .option('--all', 'pending, resolved and expired predictions')
+    .option('--domain <name>', 'only this domain')
+    .option('--limit <n>', 'at most this many (default 100)')
+    .option('--json', 'print JSON')
+    .action(
+      run(
+        (o: {
+          resolved?: boolean;
+          all?: boolean;
+          domain?: string;
+          limit?: string;
+          json?: boolean;
+        }) => judgePredictionsCommand(o, ctx),
+      ),
+    );
+  judge
+    .command('forget-prediction')
+    .description('delete a kept prediction and its text')
+    .argument('<id>', 'prediction id or unique prefix')
+    .option('--yes', 'do not ask')
+    .option('--json', 'print oort.v1 JSON')
+    .action(run((id: string, o: { yes?: boolean }) => judgeForgetPredictionCommand(id, o, ctx)));
+  judge
     .command('list')
     .description('the judgments this agent reads (current ones; --all for withdrawn and corrected)')
     .option('--domain <name>', 'only this domain')
@@ -471,8 +515,10 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     );
   judge
     .command('confirm')
-    .description('confirm an agent-recorded judgment, so it counts when judging (never over MCP)')
-    .argument('<id>', 'judgment id or unique prefix')
+    .description(
+      "confirm an agent-recorded judgment, or an agent's resolve of a prediction, so it counts (never over MCP)",
+    )
+    .argument('<id>', 'judgment or prediction id, or a unique prefix')
     .option('--by <operator>', 'who confirms it (default: judge.operator, else local-user)')
     .option('--yes', 'do not ask')
     .option('--json', 'print oort.v1 JSON')
@@ -503,9 +549,14 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
   judge
     .command('eval')
     .description(
-      'judge held-out decisions (never recorded) and report agreement and coverage per domain',
+      'judge held-out decisions (never recorded) and report agreement and coverage per domain; --live reports on resolved predictions',
     )
-    .argument('<file>', 'held-out decisions, CSV or JSON Lines, as for import')
+    .argument('[file]', 'held-out decisions, CSV or JSON Lines, as for import')
+    .option('--live', 'agreement and calibration from resolved predictions instead of a file')
+    .option(
+      '--include-agent-resolved',
+      'with --live, also count agent-recorded decisions nobody confirmed',
+    )
     .option('--format <format>', 'csv or jsonl (default: from the file name)')
     .option('--domain <name>', 'the domain for rows without one')
     .option('--by <expert>', 'the expert for rows without one')
@@ -521,8 +572,10 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .action(
       run(
         (
-          file: string,
+          file: string | undefined,
           o: {
+            live?: boolean;
+            includeAgentResolved?: boolean;
             format?: string;
             domain?: string;
             by?: string;

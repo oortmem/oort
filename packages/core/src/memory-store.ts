@@ -1,6 +1,6 @@
 import { appendAccess } from './activation.js';
 import type { GuardedWriteResult, Hit, MemoryStore } from './adapters.js';
-import { addressOf, canonicalMemory, nodeKey, nodeOf } from './address.js';
+import { addressOf, authorOf, canonicalMemory, nodeKey, nodeOf, sameAddress } from './address.js';
 import {
   assertGrant,
   cursorKey,
@@ -11,6 +11,8 @@ import {
   type Grant,
 } from './grant.js';
 import { isCurrent, isZeroVector, type Memory, type Tier } from './model.js';
+import { purgedPrediction } from './judgment.js';
+import { predictionCites, selectPredictions, type Prediction } from './prediction.js';
 import {
   ABOUT_PER_ENTITY,
   aboutWeight,
@@ -109,6 +111,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   const main = new Map<string, Memory>();
   const cold = new Map<string, Memory>();
   const cursors = new Map<string, string>();
+  const predictions = new Map<string, Prediction>();
   /** Link and block rows, keyed `kind/a/b`, in the order they were first written. */
   const links = new Map<string, LinkRow>();
   /** Episode positions: assigned on insert, kept by a rewrite in the same session. */
@@ -318,6 +321,83 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
           score: (stated ? 2 : 1) - distance / (distance + 86_400_000),
           tier: m.tier,
         }));
+    },
+
+    predictions: true,
+
+    async putPrediction(grant, p, expect) {
+      open();
+      assertGrant(grant);
+      if (!grantWrites(grant, p)) throw new GrantError();
+      const was = predictions.get(p.id);
+      if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, p))) {
+        return false;
+      }
+      if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return false;
+      predictions.set(p.id, structuredClone(p));
+      return true;
+    },
+
+    async getPrediction(grant, id) {
+      open();
+      assertGrant(grant);
+      const p = predictions.get(id);
+      return p === undefined || !grantReads(grant, p) ? null : structuredClone(p);
+    },
+
+    async listPredictions(grant, listOpts = {}) {
+      open();
+      assertGrant(grant);
+      const readable = [...predictions.values()].filter((p) => grantReads(grant, p));
+      return selectPredictions(readable, listOpts).map((p) => structuredClone(p));
+    },
+
+    async forgetPrediction(grant, id, expect) {
+      open();
+      assertGrant(grant);
+      const p = predictions.get(id);
+      if (p === undefined || !grantWrites(grant, p)) return false;
+      if (expect !== undefined && p.revision !== expect.revision) return false;
+      predictions.delete(id);
+      return true;
+    },
+
+    async purgePredictionsCiting(grant, judgmentId, by, at) {
+      open();
+      assertGrant(grant);
+      const purged: string[] = [];
+      for (const p of [...predictions.values()]) {
+        if (p.purged !== undefined || !predictionCites(p, judgmentId)) continue;
+        predictions.set(p.id, purgedPrediction(p, by, at));
+        purged.push(p.id);
+      }
+      return { purged, leftover: [] };
+    },
+
+    async pruneExpiredPredictions(now, limit) {
+      open();
+      const t = now.getTime();
+      let n = 0;
+      for (const p of [...predictions.values()]) {
+        if (n >= limit) break;
+        if (p.resolution === undefined && Date.parse(p.expiresAt) <= t) {
+          predictions.delete(p.id);
+          n++;
+        }
+      }
+      return n;
+    },
+
+    async countPendingPredictions(at) {
+      open();
+      const where = addressOf(at);
+      const author = authorOf(at).agentId;
+      return [...predictions.values()].filter(
+        (p) =>
+          p.resolution === undefined &&
+          sameAddress(addressOf(p), where) &&
+          authorOf(p).agentId === author,
+      ).length;
     },
 
     async link(grant, x, y, linkOpts: LinkOptions) {

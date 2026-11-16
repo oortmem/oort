@@ -67,6 +67,9 @@ const CONTRACT = [
   'judge withdraw',
   'judge confirm',
   'judge purge',
+  'judge resolve',
+  'judge predictions',
+  'judge forget-prediction',
   'judge import',
   'judge eval',
   'judge pack export',
@@ -748,6 +751,45 @@ describe('oort.v1: judgment memory', () => {
       id,
       purged: true,
     });
+  });
+
+  it('predictions, resolve, forget-prediction', async () => {
+    const { run } = judging();
+    ok(await run(record), 'judge record');
+    const a = ok(
+      await run(['judge', 'apply', 'Post says a vitamin cures colds', '--json']),
+      'judge apply',
+    );
+    const id = a.predictionId as string;
+    expect(typeof id).toBe('string');
+    const listed = ok(await run(['judge', 'predictions', '--json']), 'judge predictions');
+    expect((listed.predictions as { id: string }[]).map((p) => p.id)).toEqual([id]);
+    bad(
+      await run(['judge', 'predictions', '--limit', 'many', '--json']),
+      'judge predictions',
+      'usage',
+    );
+    const r = ok(
+      await run(['judge', 'resolve', id, '--verdict', 'rejected', '--by', 'ada', '--json']),
+      'judge resolve',
+    );
+    expect(r).toHaveProperty('agrees');
+    bad(
+      await run(['judge', 'resolve', id, '--verdict', 'rejected', '--by', 'ada', '--json']),
+      'judge resolve',
+      'refused',
+    );
+    bad(
+      await run(['judge', 'forget-prediction', id, '--json']),
+      'judge forget-prediction',
+      'needs-confirmation',
+    );
+    expect(
+      ok(
+        await run(['judge', 'forget-prediction', id, '--yes', '--json']),
+        'judge forget-prediction',
+      ),
+    ).toMatchObject({ id, forgotten: true });
   });
 
   it('import, eval, pack export, pack import', async () => {

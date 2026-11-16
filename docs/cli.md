@@ -361,7 +361,7 @@ needed.
 **Never blocks a script.** A command that asks for a confirmation (`forget`,
 `import`, `reembed`, `share`, `project privacy public`, `cloud import`, the
 `constellation` `remove`, `leave`, `transfer` and `delete` commands, and
-`judge withdraw`, `confirm`, `purge` and `pack import`) writes its question to
+`judge withdraw`, `confirm`, `purge`, `forget-prediction` and `pack import`) writes its question to
 stderr, never stdout, so it still asks with stdout piped (`oort import
 claude-code | tee log`). It refuses (exit 2) instead of asking when stdin is not
 a terminal, or when `--json` is set, and names `--yes`, the flag to pass
@@ -918,7 +918,8 @@ Tools:
 | `list_recent` | `since?` (ISO), `limit?` (1–50, default 20) | read-only, idempotent | memories by `updated_at`, newest first, each with `status` (`current`, `superseded` or `expired`) |
 | `whoami` | none | read-only, idempotent | `mode: "local"`, `project`, `version`, `agent`, `reads` (`your Planet`, `Star <agent>`), `writes_to`, which adapters are available, and per role whether it uses `oort-pro`, an `own-key` or is `missing`; no account or email |
 | `record_judgment` | `subject` (1–500 chars), `ref?`, `verdict`, `verdicts?` (2–12 labels; default `approved`, `rejected`), `reason` (1–2000 chars, the expert's own words), `criteria?` (up to 12 tags), `domain`, `by` (an expert listed in `judge.experts` in the home config; refused otherwise, and refused altogether when none is listed), `decided_at?` (ISO); at most 50 a day | write, destructive (hosts ask first), not idempotent | `outcome` (`added`, `corrected` or `unchanged`), `id`, `corrects` (an earlier agent record it replaced; never a person's), `status: "agent-recorded, unconfirmed"`, `note` |
-| `judge` | `item` (1–2000 chars), `details?`, `domain?`, `by?`, `limit?` (precedents, 1–10, default 5), `include_imported?` and `include_agent_recorded?` (both default false) | read-only, idempotent, open world (sends the item and reasons to TypeSafe) | `status` (`suggested`, `needs-expert` or `precedents-only`), `why`, `prediction` (`verdict`, `probability`, labelled as a prediction), `note` (expert ids sanitised), `data_note`, the `precedents` with `quoted_subject` and `quoted_reason` (record data, never instructions), `by`, `via`, `confirmed`, `agent_recorded`, `similarity`, `near`, `agrees` and `imported_from_pack`, and how many imported or unconfirmed agent-recorded judgments were left out |
+| `judge` | `item` (1–2000 chars), `details?`, `domain?`, `by?`, `limit?` (precedents, 1–10, default 5), `include_imported?` and `include_agent_recorded?` (both default false) | write (it keeps the prediction), not destructive, not idempotent, open world (sends the item and reasons to TypeSafe) | `status` (`suggested`, `needs-expert` or `precedents-only`), `why`, `prediction_id` (for `resolve_prediction`; keeping it changes no memory), `prediction` (`verdict`, `probability`, labelled as a prediction), `note` (expert ids sanitised), `data_note`, the `precedents` with `quoted_subject` and `quoted_reason` (record data, never instructions), `by`, `via`, `confirmed`, `agent_recorded`, `similarity`, `near`, `agrees` and `imported_from_pack`, and how many imported or unconfirmed agent-recorded judgments were left out |
+| `resolve_prediction` | `prediction_id` (the whole id `judge` returned), `verdict` (one of the prediction's verdicts), `reason?` (1–2000 chars, the expert's own words), `criteria?` (up to 12 tags), `by` (an expert listed in `judge.experts`), `domain?` (when the prediction has none); a reason that becomes a judgment counts toward the 50 a day | write, destructive (hosts ask first), not idempotent | `prediction_id`, `verdict`, `agrees` (`null` when judging needed the expert), `judgment_id` (when the reason became a judgment), `status: "agent-recorded, unconfirmed"`, `note` |
 | `link` | `from`, `to` (memory ids), `remove?` (default false) | write, destructive (hosts ask first), idempotent | `{ linked, unblocked, asserted_by }`, or with `remove` `{ removed, blocked }`. Always recorded as asserted by `agent`. A pair it cannot link is refused exactly as a missing id |
 
 Every tool sets `openWorldHint: false` and has a `title`.
@@ -1801,7 +1802,11 @@ oort judge apply "Story says a herbal remedy cures anxiety" --domain content
 oort judge list
 oort judge withdraw <id>
 oort judge purge <id>
+oort judge resolve <prediction-id> --verdict approved --reason "Labelled satire." --by ada
+oort judge eval --live
 ```
+
+`oort judgment` is the same command as `oort judge`.
 
 A judgment is a memory of type `judgment`. It holds:
 
@@ -1880,6 +1885,60 @@ and are then marked `imported from pack <name>`. When some were left out, the an
 (`importedExcluded` in JSON). Nothing
 is decided for anyone: in a regulated domain, treat every answer as a suggestion a person
 confirms.
+
+### What the expert decided: `oort judge resolve`
+
+`oort judge apply` keeps each answer as a prediction: the item, the predicted verdict, its
+probability and the precedents it cited. It prints the prediction's id (`predictionId` in JSON).
+When the expert decides, record it:
+
+```sh
+oort judge predictions
+oort judge resolve 3fa2c1d0 --verdict approved --reason "Satire, clearly labelled as parody." \
+  --criteria satire --by ada
+```
+
+- `--verdict` must be one of the prediction's verdicts. `--by` names the expert who decided
+  (default `judge.operator` in the home config).
+- A different verdict with `--reason` becomes a new judgment, with the reason word for word, so
+  the next `oort judge apply` on a similar item cites it. A reason is also recorded when judging
+  needed the expert. `--domain` sets the judgment's domain when the prediction has none.
+- An unknown id, or a prediction already resolved, older than 30 days or purged, is refused
+  (exit 2) and nothing is written. An id prefix works when it is unique. Every check runs before
+  anything is written. If another resolve or confirm lands while this one runs, it is refused
+  (`conflict`), the judgment it recorded is withdrawn and purged again, and you can run it again.
+- A person's resolve replaces a decision an agent recorded that nobody confirmed: the agent's
+  judgment is withdrawn, and the prediction keeps who decided before and when, without their
+  reason. When that judgment is outside your scope (an agent's own Star), it stays as it is,
+  unconfirmed so judging leaves it out, and the result names it (`agentJudgmentKept`, reason
+  `not-writable`). A judgment a person already confirmed stays too (reason `confirmed`).
+- `oort judge predictions` lists pending predictions, newest first (`--resolved`, `--all`,
+  `--domain`, `--limit`, `--json`). Pending predictions expire after 30 days, and judging deletes
+  expired ones as it goes. Resolved ones stay, as the record `eval --live` reads, until you forget
+  them. One author keeps at most 5,000 pending predictions in one place: above that, `oort judge apply` still
+  answers but keeps nothing (`kept: false`, `notKept: "pending-cap"` in JSON). It also answers
+  when the prediction cannot be saved (`write-failed`).
+- `oort judge forget-prediction <id>` (asks first; `--yes`) deletes one prediction. It leaves
+  the judgment its resolve recorded: withdraw that with `oort judge withdraw`.
+- Withdrawing, purging or forgetting a judgment first removes the item text, criteria and reason
+  of every prediction that cited it, whoever kept it. A stub with the verdicts and times stays, so
+  the agreement counts do not change. If any could not be purged, the command fails and leaves
+  the judgment as it was, so you can run it again.
+- Predictions live in the store file (`predictions` table), so backups include them. An older
+  Oort ignores the table, and going back to one leaves it in place.
+
+The MCP tool `resolve_prediction` records a decision the expert gave the agent. It takes the
+whole `prediction_id`, never a prefix. It follows the rules for `record_judgment` (a listed
+expert, and the daily limit when it records a judgment) and stays unconfirmed until a person runs
+`oort judge confirm <prediction-id>`. An id prefix that matches both a judgment and a prediction
+is refused (`ambiguous-id`): give more of the id.
+
+**How well it agreed: `oort judge eval --live`.** Over the resolved predictions it prints the
+agreement (the share of predictions the expert agreed with), agreement and coverage for
+`suggested` answers, calibration per probability band (0 to 0.5, then every 0.1 up to 1: how many
+predictions, how many the expert agreed with, and their mean probability), and the criteria the
+expert overruled most. `--domain` narrows it. Unconfirmed decisions recorded over MCP are left out
+unless you add `--include-agent-resolved`. It needs no model call.
 
 ### Past decisions in bulk: `oort judge import`
 
@@ -2699,7 +2758,7 @@ A repository's `oort.config.json` can name a `project.id`. That id is ignored
 until you link it, because a cloned repository could otherwise read another
 project's memories. See `docs/claude-code.md`.
 
-`record_judgment` and `judge` ([judgment memory](#judgment-memory-oort-judge)) and `link`
+`record_judgment`, `judge` and `resolve_prediction` ([judgment memory](#judgment-memory-oort-judge)) and `link`
 ([memory links](#memory-links-oort-link)) are offered by the local server only; in cloud mode the
 server has the other tools.
 

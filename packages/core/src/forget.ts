@@ -1,5 +1,6 @@
 import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapters.js';
 import { grantWrites, type Grant } from './grant.js';
+import { purgePredictionsCiting } from './judgment.js';
 import type { Decision, Memory } from './model.js';
 import { tokenizeLexical } from './tokenize.js';
 
@@ -320,6 +321,12 @@ export async function forgetMemory(
   const forgotten = (target.tier === 'cold' && (await store.coldGet(grant, id))) || target;
   const iso = (deps.now ?? new Date()).toISOString();
   const outcome: ForgetOutcome = { forgotten: id, rewritten: [], notRewritten: [] };
+  // Forget wins: a prediction that cited a forgotten judgment keeps none of its text. First, so a
+  // purge that fails leaves the judgment in place for a retry, and before the store's last WAL
+  // truncate.
+  if (target.type === 'judgment') {
+    await purgePredictionsCiting(store, grant, [id], 'forget', deps.now ?? new Date());
+  }
 
   // The memory it superseded, to re-link; it was written before it, so it restates nothing.
   const chain = new Map<string, Memory>();

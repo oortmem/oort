@@ -28,6 +28,7 @@ import { GrantError, localGrant, nodeGrant, principalGrant, type Grant } from '.
 import type { Memory, Scope } from './model.js';
 import type { NearQuery, Place, SpatialFilter } from './place.js';
 import type { Occurrence } from './event-time.js';
+import type { Prediction } from './prediction.js';
 import { localScope } from './scope.js';
 import { isolationViolations, nonInterference } from './isolation.js';
 import {
@@ -2311,4 +2312,349 @@ export function occurrenceConformance(name: string, make: () => Promise<MemorySt
       expect((await store.get(TG, 'cold'))?.occurred).toEqual(cold.occurred);
     });
   });
+}
+
+/** A valid pending prediction at the local Planet, with test defaults. */
+export function makePrediction(overrides: Partial<Prediction> & { id: string }): Prediction {
+  return {
+    scope: { orgId: 'local', customerId: 'self', agentId: 'claude-code' },
+    item: { summary: 'Post claims a cure without a source', domain: 'content' },
+    domain: 'content',
+    outcome: 'suggested',
+    verdict: 'rejected',
+    probability: 0.8,
+    verdicts: ['approved', 'rejected'],
+    precedentIds: ['j1', 'j2'],
+    criteria: ['no-source'],
+    similarity: 'lexical',
+    threshold: 0.7,
+    revision: 0,
+    createdAt: '2026-11-16T10:00:00.000Z',
+    updatedAt: '2026-11-16T10:00:00.000Z',
+    expiresAt: '2026-12-16T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/**
+ * The prediction records of a store with `predictions: true`: write guards, grant isolation,
+ * the status and citing filters, newest-first order, and that a prediction is never a memory.
+ */
+export function predictionsConformance(name: string, make: () => Promise<MemoryStore>): void {
+  describe(`store predictions: ${name}`, () => {
+    let store: MemoryStore;
+    type S = Required<
+      Pick<MemoryStore, 'putPrediction' | 'getPrediction' | 'listPredictions' | 'forgetPrediction'>
+    >;
+    let s: S;
+
+    beforeEach(async () => {
+      store = await make();
+      expect(store.predictions).toBe(true);
+      s = store as MemoryStore & S;
+    });
+
+    afterEach(async () => {
+      await store.close();
+    });
+
+    const other: Grant = principalGrant({ orgId: 'other', customerId: 'c', agentId: 'a' });
+
+    it('predictions.put-get-roundtrip', async () => {
+      const p = makePrediction({ id: 'p1', item: { summary: 'One', details: 'More', ref: 'x#1' } });
+      expect(await s.putPrediction(TG, p)).toBe(true);
+      expect(await s.getPrediction(TG, 'p1')).toEqual(p);
+      expect(await s.getPrediction(TG, 'nope')).toBeNull();
+    });
+
+    it('predictions.revision-guard', async () => {
+      const p = makePrediction({ id: 'p1' });
+      expect(await s.putPrediction(TG, p, { revision: null })).toBe(true);
+      // Inserting again with `revision: null` fails: the id exists.
+      expect(await s.putPrediction(TG, p, { revision: null })).toBe(false);
+      const next = { ...p, revision: 1, verdict: 'approved' };
+      expect(await s.putPrediction(TG, next, { revision: 5 })).toBe(false);
+      expect((await s.getPrediction(TG, 'p1'))?.verdict).toBe('rejected');
+      expect(await s.putPrediction(TG, next, { revision: 0 })).toBe(true);
+      expect(await s.putPrediction(TG, { ...p, revision: 1 }, { revision: 0 })).toBe(false);
+      expect((await s.getPrediction(TG, 'p1'))?.verdict).toBe('approved');
+    });
+
+    it('predictions.outside-the-grant-looks-missing', async () => {
+      await s.putPrediction(TG, makePrediction({ id: 'p1' }));
+      expect(await s.getPrediction(other, 'p1')).toBeNull();
+      expect(await s.listPredictions(other)).toEqual([]);
+      expect(await s.forgetPrediction(other, 'p1')).toBe(false);
+      // Another grant cannot write a record at an address it does not cover.
+      await expect(s.putPrediction(other, makePrediction({ id: 'p2' }))).rejects.toBeInstanceOf(
+        GrantError,
+      );
+      // Nor take over an id that lives elsewhere.
+      const theirs = makePrediction({
+        id: 'p1',
+        scope: { orgId: 'other', customerId: 'c', agentId: 'a' },
+      });
+      expect(await s.putPrediction(other, theirs)).toBe(false);
+      expect(await s.getPrediction(TG, 'p1')).not.toBeNull();
+    });
+
+    it('predictions.list-filters-and-order', async () => {
+      const resolution = {
+        verdict: 'approved',
+        criteria: [],
+        by: 'ada',
+        at: '2026-11-16T12:00:00.000Z',
+        via: 'cli' as const,
+        agrees: false,
+        judgmentId: 'j9',
+      };
+      await s.putPrediction(TG, makePrediction({ id: 'a', createdAt: '2026-11-16T10:00:00.000Z' }));
+      await s.putPrediction(
+        TG,
+        makePrediction({ id: 'b', createdAt: '2026-11-16T11:00:00.000Z', resolution }),
+      );
+      await s.putPrediction(
+        TG,
+        makePrediction({ id: 'c', createdAt: '2026-11-16T11:00:00.000Z', precedentIds: ['j3'] }),
+      );
+      expect(ids(await s.listPredictions(TG))).toEqual(['c', 'b', 'a']);
+      expect(ids(await s.listPredictions(TG, { status: 'pending' }))).toEqual(['c', 'a']);
+      expect(ids(await s.listPredictions(TG, { status: 'resolved' }))).toEqual(['b']);
+      expect(ids(await s.listPredictions(TG, { citing: 'j1' }))).toEqual(['b', 'a']);
+      expect(ids(await s.listPredictions(TG, { citing: 'j9' }))).toEqual(['b']);
+      expect(ids(await s.listPredictions(TG, { limit: 2 }))).toEqual(['c', 'b']);
+      expect(ids(await s.listPredictions(TG, { idPrefix: 'b' }))).toEqual(['b']);
+      expect(ids(await s.listPredictions(TG, { idPrefix: '%' }))).toEqual([]);
+      expect(ids(await s.listPredictions(TG, { idPrefix: '_' }))).toEqual([]);
+      expect(ids(await s.listPredictions(TG, { domain: 'content' }))).toEqual(['c', 'b', 'a']);
+      expect(ids(await s.listPredictions(TG, { domain: 'legal' }))).toEqual([]);
+      // Pending and not expired at that time; a resolved one is never "expired".
+      expect(
+        ids(
+          await s.listPredictions(TG, {
+            status: 'pending',
+            unexpiredAt: '2026-12-16T10:00:00.000Z',
+          }),
+        ),
+      ).toEqual([]);
+      expect(ids(await s.listPredictions(TG, { unexpiredAt: '2027-01-01T00:00:00.000Z' }))).toEqual(
+        ['b'],
+      );
+    });
+
+    it('predictions.the-limit-applies-after-the-grant', async () => {
+      const theirs = { orgId: 'other', customerId: 'c', agentId: 'a' };
+      for (let i = 0; i < 5; i++) {
+        await s.putPrediction(
+          other,
+          makePrediction({ id: `o${i}`, scope: theirs, createdAt: '2026-11-17T00:00:00.000Z' }),
+        );
+      }
+      await s.putPrediction(TG, makePrediction({ id: 'a' }));
+      await s.putPrediction(TG, makePrediction({ id: 'b' }));
+      expect(ids(await s.listPredictions(TG, { limit: 2 }))).toEqual(['b', 'a']);
+      expect(ids(await s.listPredictions(TG, { idPrefix: 'o' }))).toEqual([]);
+    });
+
+    it('predictions.purge-citing-reaches-every-address-and-keeps-no-text', async () => {
+      const theirs = { orgId: 'other', customerId: 'c', agentId: 'a' };
+      await s.putPrediction(
+        TG,
+        makePrediction({ id: 'mine', item: { summary: 'zanzibar mine' }, precedentIds: ['j1'] }),
+      );
+      await s.putPrediction(
+        other,
+        makePrediction({
+          id: 'theirs',
+          scope: theirs,
+          item: { summary: 'zanzibar theirs' },
+          precedentIds: ['j1'],
+        }),
+      );
+      await s.putPrediction(TG, makePrediction({ id: 'apart', precedentIds: ['j2'] }));
+      const at = new Date('2026-11-16T12:00:00.000Z');
+      const r = await store.purgePredictionsCiting!(TG, 'j1', 'grace', at);
+      expect([...r.purged].sort()).toEqual(['mine', 'theirs']);
+      expect(r.leftover).toEqual([]);
+      for (const [g, id] of [
+        [TG, 'mine'],
+        [other, 'theirs'],
+      ] as const) {
+        const p = (await s.getPrediction(g, id))!;
+        expect(p.purged).toEqual({ at: at.toISOString(), by: 'grace' });
+        expect(JSON.stringify(p)).not.toContain('zanzibar');
+      }
+      expect((await s.getPrediction(TG, 'apart'))?.purged).toBeUndefined();
+      // Purged ones are not purged again.
+      expect((await store.purgePredictionsCiting!(TG, 'j1', 'grace', at)).purged).toEqual([]);
+    });
+
+    it('predictions.prune-and-count-pending', async () => {
+      const theirs = { orgId: 'other', customerId: 'c', agentId: 'a' };
+      const resolution = {
+        verdict: 'approved',
+        criteria: [],
+        by: 'ada',
+        at: '2026-11-16T12:00:00.000Z',
+        via: 'cli' as const,
+        agrees: false,
+      };
+      await s.putPrediction(
+        TG,
+        makePrediction({ id: 'old1', expiresAt: '2026-11-01T00:00:00.000Z' }),
+      );
+      await s.putPrediction(
+        TG,
+        makePrediction({ id: 'old2', expiresAt: '2026-11-02T00:00:00.000Z' }),
+      );
+      await s.putPrediction(
+        TG,
+        makePrediction({ id: 'oldDone', expiresAt: '2026-11-01T00:00:00.000Z', resolution }),
+      );
+      await s.putPrediction(TG, makePrediction({ id: 'live' }));
+      await s.putPrediction(
+        other,
+        makePrediction({ id: 'theirsOld', scope: theirs, expiresAt: '2026-11-01T00:00:00.000Z' }),
+      );
+      expect(await store.countPendingPredictions!(makePrediction({ id: 'x' }))).toBe(3);
+      const now = new Date('2026-11-16T00:00:00.000Z');
+      expect(await store.pruneExpiredPredictions!(now, 2)).toBe(2);
+      expect(await store.pruneExpiredPredictions!(now, 100)).toBe(1);
+      expect(await store.pruneExpiredPredictions!(now, 100)).toBe(0);
+      // Resolved ones are kept, at any age.
+      expect(ids(await s.listPredictions(TG))).toEqual(['oldDone', 'live'].sort().reverse());
+      expect(await s.getPrediction(other, 'theirsOld')).toBeNull();
+      expect(await store.countPendingPredictions!(makePrediction({ id: 'x' }))).toBe(1);
+      expect(await store.countPendingPredictions!(makePrediction({ id: 'x', scope: theirs }))).toBe(
+        0,
+      );
+    });
+
+    it('predictions.forget-removes-the-record', async () => {
+      await s.putPrediction(TG, makePrediction({ id: 'p1' }));
+      expect(await s.forgetPrediction(TG, 'p1')).toBe(true);
+      expect(await s.getPrediction(TG, 'p1')).toBeNull();
+      expect(await s.listPredictions(TG)).toEqual([]);
+      expect(await s.forgetPrediction(TG, 'p1')).toBe(false);
+    });
+
+    it('predictions.forget-with-expect-deletes-only-the-revision-read', async () => {
+      await s.putPrediction(TG, makePrediction({ id: 'p1', revision: 3 }));
+      expect(await s.forgetPrediction(TG, 'p1', { revision: 2 })).toBe(false);
+      expect((await s.getPrediction(TG, 'p1'))?.revision).toBe(3);
+      expect(await s.forgetPrediction(TG, 'p1', { revision: 3 })).toBe(true);
+      expect(await s.getPrediction(TG, 'p1')).toBeNull();
+      expect(await s.forgetPrediction(TG, 'p1', { revision: 3 })).toBe(false);
+    });
+
+    it('predictions.pending-is-counted-per-author-at-an-address', async () => {
+      const planet: Address = { level: 'user', orgId: 'local', customerId: 'self' };
+      const by = (agentId: string) => addressed(planet, { agentId });
+      await s.putPrediction(TG, makePrediction({ id: 'a1', ...by('claude-code') }));
+      await s.putPrediction(TG, makePrediction({ id: 'b1', ...by('cursor') }));
+      await s.putPrediction(TG, makePrediction({ id: 'b2', ...by('cursor') }));
+      expect(await s.listPredictions(TG)).toHaveLength(3);
+      expect(
+        await store.countPendingPredictions!(makePrediction({ id: 'x', ...by('claude-code') })),
+      ).toBe(1);
+      expect(
+        await store.countPendingPredictions!(makePrediction({ id: 'x', ...by('cursor') })),
+      ).toBe(2);
+      expect(
+        await store.countPendingPredictions!(makePrediction({ id: 'x', ...by('codex') })),
+      ).toBe(0);
+    });
+
+    it('predictions.are-not-memories', async () => {
+      await s.putPrediction(TG, makePrediction({ id: 'p1', item: { summary: 'zebra quokka' } }));
+      expect(await store.get(TG, 'p1')).toBeNull();
+      expect(await store.list(TG, { validOnly: false })).toEqual([]);
+      expect(await store.lexical(TG, 'zebra quokka', 10)).toEqual([]);
+    });
+  });
+}
+
+/**
+ * Twenty resolved predictions, by hand:
+ *
+ * | band       | probabilities (agrees)                          | n | agreed | agreement | mean   |
+ * | [0.9, 1]   | .95 T, .92 T, .91 T, .97 F, 1 T                 | 5 | 4      | 0.8       | 0.95   |
+ * | [0.8, 0.9) | .85 T, .82 T, .87 F, .82 T                      | 4 | 3      | 0.75      | 0.84   |
+ * | [0.7, 0.8) | .75 T, .7 F, .79 F                              | 3 | 1      | 0.333     | 0.747  |
+ * | [0.6, 0.7) | .65 T, .6 F                                     | 2 | 1      | 0.5       | 0.625  |
+ * | [0.5, 0.6) | .55 F, .5 T                                     | 2 | 1      | 0.5       | 0.525  |
+ * | [0, 0.5)   | .4 F, .3 F                                      | 2 | 0      | 0         | 0.35   |
+ *
+ * Two more had no predicted verdict (needs the expert, no precedents). Overall: 18 predicted,
+ * 10 agreed (0.556). Suggested (probability at or above the 0.7 threshold): 12, 8 agreed
+ * (0.667); coverage 12 of 20 (0.6). Criteria: `satire` on .75 T, .7 F, .79 F, .55 F, .4 F
+ * (5, 4 disagreed, 0.8); `no-source` on the nine at 0.8 and above (9, 2 disagreed, 0.222).
+ */
+export function livePredictionFixtures(
+  scope: Scope = { orgId: 'local', customerId: 'self', agentId: 'claude-code' },
+): Prediction[] {
+  const rows: [number | null, boolean | null, string[]][] = [
+    [0.95, true, ['no-source']],
+    [0.92, true, ['no-source']],
+    [0.91, true, ['no-source']],
+    [0.97, false, ['no-source']],
+    [1, true, ['no-source']],
+    [0.85, true, ['no-source']],
+    [0.82, true, ['no-source']],
+    [0.87, false, ['no-source']],
+    [0.82, true, ['no-source']],
+    [0.75, true, ['satire']],
+    [0.7, false, ['satire']],
+    [0.79, false, ['satire']],
+    [0.65, true, []],
+    [0.6, false, []],
+    [0.55, false, ['satire']],
+    [0.5, true, []],
+    [0.4, false, ['satire']],
+    [0.3, false, []],
+    [null, null, []],
+    [null, null, []],
+  ];
+  const out = rows.map(([p, agrees, criteria], i): Prediction => {
+    const at = new Date(Date.UTC(2026, 10, 1, 0, i)).toISOString();
+    return makePrediction({
+      scope,
+      id: `fixture-${String(i).padStart(2, '0')}`,
+      createdAt: at,
+      updatedAt: at,
+      outcome: p === null ? 'needs-expert' : p >= 0.7 ? 'suggested' : 'needs-expert',
+      ...(p === null
+        ? { why: 'no-precedents' as const }
+        : p < 0.7 && { why: 'low-confidence' as const }),
+      verdict: p === null ? null : 'rejected',
+      probability: p,
+      criteria,
+      resolution: {
+        verdict: agrees === false ? 'approved' : 'rejected',
+        criteria: [],
+        by: 'ada',
+        at,
+        via: 'cli',
+        agrees,
+      },
+    });
+  });
+  // One agent-recorded resolve nobody confirmed (left out) and one still pending.
+  out.push(
+    makePrediction({
+      scope,
+      id: 'fixture-agent',
+      probability: 0.99,
+      resolution: {
+        verdict: 'approved',
+        criteria: [],
+        by: 'ada',
+        at: '2026-11-16T12:00:00.000Z',
+        via: 'mcp',
+        agrees: false,
+      },
+    }),
+    makePrediction({ scope, id: 'fixture-pending', expiresAt: '2099-01-01T00:00:00.000Z' }),
+  );
+  return out;
 }

@@ -63,7 +63,8 @@ const ANNOTATIONS: Record<string, Record<string, boolean>> = {
   list_recent: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   whoami: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   record_judgment: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
-  judge: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  judge: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  resolve_prediction: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   link: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
 };
 

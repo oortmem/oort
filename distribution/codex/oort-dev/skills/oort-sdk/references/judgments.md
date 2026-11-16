@@ -85,3 +85,67 @@ instructions), `by`, `similarity`, `confirmed` and `agentRecorded`.
 `includeAgentRecorded`. Never let a model set the last two. `judge.apply` sends the item and the
 precedents' reasons to TypeSafe. In a regulated domain treat every answer as a suggestion a
 person confirms.
+
+## Resolving predictions (after 0.10.0)
+
+`judge.apply` keeps each answer as a prediction and returns its `predictionId`. When the person
+decides, `judge.resolve` records it, and `judge.evalLive` reports how often the predictions
+matched.
+
+<!-- example: examples/src/predictions.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+// A review screen where a person decides runs in the expert role.
+await using oort = await createOort({
+  mode: 'local',
+  judge: { role: 'expert', operator: 'ada' },
+});
+
+for (const subject of [
+  'Post claims a miracle cure for colds',
+  'Post claims a herbal cure for colds',
+]) {
+  await oort.judge.record({
+    subject,
+    verdict: 'rejected',
+    reason: 'A medical claim with no source.',
+    domain: 'content',
+    by: 'ada',
+  });
+}
+
+// judge.apply keeps each answer as a prediction and returns its id.
+const r = await oort.judge.apply({
+  summary: 'Satire post about a miracle cure for colds',
+  domain: 'content',
+});
+
+// Later, the person decides. A different verdict with a reason becomes a judgment, word for word,
+// so the next judge.apply on a similar item cites it.
+const { agrees, judgment } = await oort.judge.resolve(r.predictionId!, {
+  verdict: 'approved',
+  reason: 'Satire, clearly labelled as parody.',
+  by: 'ada',
+});
+console.log(agrees, judgment?.outcome); // false 'added' (agrees is null when there was no prediction)
+
+// Agreement and calibration over every resolved prediction.
+const live = await oort.judge.evalLive();
+console.log(live.resolved, live.bands.length);
+```
+
+- `agrees` is `null` when judging needed the expert. The verdict must be one of the prediction's
+  verdicts.
+- A reason makes a new judgment, word for word, unless the person agreed. The next
+  `judge.apply` on a similar item cites it.
+- An unknown id is `not-found`. An already resolved, expired (30 days) or purged prediction is
+  `refused` with reason `already-resolved`, `expired` or `purged`. None of them writes anything.
+- In the agent role, `resolve` follows the rules for `record`, needs the whole prediction id,
+  and stays unconfirmed until an expert role calls `judge.confirm(predictionId)`. `evalLive`
+  leaves it out until then. An expert role's own `resolve` replaces it.
+- A resolve that loses a race to another is `refused`, `conflict` (retryable); the judgment it
+  recorded is taken back.
+- Withdrawing or forgetting a judgment removes the text of the predictions that cited it.
+  Forgetting a prediction leaves the judgment its resolve recorded.

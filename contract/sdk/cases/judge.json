@@ -602,11 +602,307 @@
         }
       },
       {
+        "call": "judge.resolve",
+        "args": {
+          "id": "11111111-0000-4000-8000-000000000001",
+          "verdict": "approved",
+          "by": "ada"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "local-only"
+          }
+        }
+      },
+      {
+        "call": "judge.listPredictions",
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "local-only"
+          }
+        }
+      },
+      {
+        "call": "judge.evalLive",
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "local-only"
+          }
+        }
+      },
+      {
         "call": "consolidate",
         "expect": {
           "error": {
             "code": "refused",
             "reason": "local-only"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.resolve-closes-a-kept-prediction",
+    "transports": ["local"],
+    "seed": "judgments",
+    "options": {
+      "judge": {
+        "role": "expert",
+        "operator": "marcus"
+      }
+    },
+    "steps": [
+      {
+        "call": "judge.apply",
+        "args": {
+          "item": {
+            "summary": "Post claims a miracle cure for cancer, says a blog",
+            "domain": "content"
+          }
+        },
+        "expect": {
+          "result": {
+            "predictionId": {
+              "$type": "string"
+            }
+          }
+        },
+        "save": {
+          "prediction": "$.predictionId"
+        }
+      },
+      {
+        "call": "judge.listPredictions",
+        "args": {},
+        "expect": {
+          "result": {
+            "predictions": {
+              "$some": {
+                "id": "${prediction}",
+                "state": "pending",
+                "verdicts": ["approved", "rejected"]
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.resolve",
+        "args": {
+          "id": "${prediction}",
+          "verdict": "approved",
+          "reason": "Satire account, labelled as parody.",
+          "by": "ada"
+        },
+        "expect": {
+          "result": {
+            "prediction": {
+              "id": "${prediction}",
+              "state": "resolved",
+              "resolution": {
+                "verdict": "approved",
+                "reason": "Satire account, labelled as parody.",
+                "by": "ada",
+                "via": "sdk",
+                "agentRecorded": false
+              }
+            },
+            "judgment": {
+              "outcome": "added",
+              "status": "recorded"
+            }
+          }
+        },
+        "save": {
+          "judgment": "$.judgment.id"
+        }
+      },
+      {
+        "call": "judge.list",
+        "args": {},
+        "expect": {
+          "result": {
+            "judgments": {
+              "$some": {
+                "id": "${judgment}",
+                "verdict": "approved",
+                "reason": "Satire account, labelled as parody."
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.resolve",
+        "args": {
+          "id": "${prediction}",
+          "verdict": "rejected",
+          "by": "ada"
+        },
+        "expect": {
+          "error": {
+            "code": "refused",
+            "reason": "already-resolved"
+          }
+        }
+      },
+      {
+        "call": "judge.evalLive",
+        "args": {},
+        "expect": {
+          "result": {
+            "resolved": 1,
+            "pending": 0,
+            "agentResolvedExcluded": 0,
+            "bands": {
+              "$len": 6
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.forgetPrediction",
+        "args": {
+          "id": "${prediction}"
+        },
+        "expect": {
+          "result": {
+            "id": "${prediction}",
+            "forgotten": true
+          }
+        }
+      },
+      {
+        "call": "judge.getPrediction",
+        "args": {
+          "id": "${prediction}"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.resolve-refuses-an-unknown-id-or-a-verdict-outside-the-set",
+    "transports": ["local"],
+    "seed": "judgments",
+    "options": {
+      "judge": {
+        "role": "expert"
+      }
+    },
+    "steps": [
+      {
+        "call": "judge.resolve",
+        "args": {
+          "id": "00000000-0000-4000-8000-000000000000",
+          "verdict": "approved",
+          "by": "ada"
+        },
+        "expect": {
+          "error": {
+            "code": "not-found"
+          }
+        }
+      },
+      {
+        "call": "judge.apply",
+        "args": {
+          "item": {
+            "summary": "Post claims a miracle cure for cancer, says a blog",
+            "domain": "content"
+          }
+        },
+        "save": {
+          "prediction": "$.predictionId"
+        }
+      },
+      {
+        "call": "judge.resolve",
+        "args": {
+          "id": "${prediction}",
+          "verdict": "maybe",
+          "by": "ada"
+        },
+        "expect": {
+          "error": {
+            "code": "usage",
+            "reason": "invalid-argument"
+          }
+        }
+      },
+      {
+        "call": "judge.listPredictions",
+        "args": {},
+        "expect": {
+          "result": {
+            "predictions": {
+              "$some": {
+                "id": "${prediction}",
+                "state": "pending"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "judge.an-agent-resolve-is-unconfirmed",
+    "transports": ["local"],
+    "seed": "judgments",
+    "options": {
+      "agent": "bot",
+      "config": {
+        "judge": {
+          "experts": ["ada"]
+        }
+      }
+    },
+    "steps": [
+      {
+        "call": "judge.apply",
+        "args": {
+          "item": {
+            "summary": "Post claims a miracle cure for cancer, says a blog",
+            "domain": "content"
+          }
+        },
+        "save": {
+          "prediction": "$.predictionId"
+        }
+      },
+      {
+        "call": "judge.resolve",
+        "args": {
+          "id": "${prediction}",
+          "verdict": "approved",
+          "by": "ada"
+        },
+        "expect": {
+          "result": {
+            "prediction": {
+              "resolution": {
+                "via": "mcp",
+                "agentRecorded": true
+              }
+            }
+          }
+        }
+      },
+      {
+        "call": "judge.evalLive",
+        "args": {},
+        "expect": {
+          "result": {
+            "resolved": 0,
+            "agentResolvedExcluded": 1
           }
         }
       }

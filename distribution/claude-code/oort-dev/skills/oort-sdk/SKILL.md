@@ -85,7 +85,7 @@ Every method, option, result field and limit: [references/sdk.md](references/sdk
 | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | Modes (`local`, `cloud`, `auto`), every option and method, results, ids, limits, lifecycle                | [references/sdk.md](references/sdk.md)                       |
 | A multi-user or multi-tenant app: `scoped({ user })`, `org`, what is refused                              | [references/multi-user.md](references/multi-user.md)         |
-| Expert judgments: `judge.record`, `judge.apply`, `judge.confirm`, agent and expert roles                  | [references/judgments.md](references/judgments.md)           |
+| Expert judgments: `judge.record`, `judge.apply`, `judge.resolve`, `judge.confirm`, agent and expert roles | [references/judgments.md](references/judgments.md)           |
 | Errors: classes, `code`, `reason`, `fix`, `retryable`, `retryAfter`, a retry helper                       | [references/errors.md](references/errors.md)                 |
 | Vercel AI SDK (`oortmem/ai-sdk`), LangGraph.js, OpenAI Agents JS; Python LangGraph, OpenAI Agents, CrewAI | [references/frameworks.md](references/frameworks.md)         |
 | A long-running service, serverless (Lambda, Cloud Functions, Cloud Run), bundling                         | [references/deployment.md](references/deployment.md)         |

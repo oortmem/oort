@@ -52,9 +52,14 @@ from .types import (
     EndUserErasure,
     EndUserExport,
     Explanation,
+    ForgetPredictionResult,
     ForgetResult,
     JudgeResult,
     JudgmentList,
+    LiveEval,
+    PredictionList,
+    PredictionView,
+    ResolveResult,
     ObserveResult,
     PinResult,
     LinkResult,
@@ -835,9 +840,71 @@ class OortJudge:
         )
 
     def confirm(self, id: str) -> ConfirmResult:  # noqa: A002
-        """Confirm an agent's record of a judgment (expert role only)."""
+        """Confirm an agent's record of a judgment, or an agent's resolve of a prediction (expert
+        role only)."""
         return self._o._run(
             lambda d, h: from_wire(ConfirmResult, d.call("POST", f"/v1/judgments/{quote_id(id)}/confirm", h)),
+            _local_only("Judgments"),
+        )
+
+    def resolve(
+        self,
+        prediction_id: str,
+        *,
+        verdict: str,
+        by: str,
+        reason: Optional[str] = None,
+        criteria: Optional[Sequence[str]] = None,
+        domain: Optional[str] = None,
+    ) -> ResolveResult:
+        """Record a person's decision on a kept prediction. A different verdict with a reason
+        becomes a judgment, verbatim. In agent role it is stored unconfirmed."""
+        body = _drop_none(
+            {
+                "verdict": verdict,
+                "by": by,
+                "reason": reason,
+                "criteria": None if criteria is None else list(criteria),
+                "domain": domain,
+            }
+        )
+        return self._o._run(
+            lambda d, h: from_wire(
+                ResolveResult, d.call("POST", f"/v1/predictions/{quote_id(prediction_id)}/resolve", h, body)
+            ),
+            _local_only("Judgments"),
+        )
+
+    def list_predictions(
+        self, *, status: Optional[str] = None, limit: Optional[int] = None, domain: Optional[str] = None
+    ) -> PredictionList:
+        """Kept predictions, newest first: ``pending`` (the default) or ``resolved``."""
+        q = {"status": status, "limit": limit, "domain": domain}
+        return self._o._run(
+            lambda d, h: from_wire(PredictionList, d.call("GET", "/v1/predictions", h, query=q)),
+            _local_only("Judgments"),
+        )
+
+    def get_prediction(self, prediction_id: str) -> PredictionView:
+        return self._o._run(
+            lambda d, h: from_wire(PredictionView, d.call("GET", f"/v1/predictions/{quote_id(prediction_id)}", h)),
+            _local_only("Judgments"),
+        )
+
+    def forget_prediction(self, prediction_id: str) -> ForgetPredictionResult:
+        """Delete a kept prediction with its text."""
+        return self._o._run(
+            lambda d, h: from_wire(
+                ForgetPredictionResult, d.call("DELETE", f"/v1/predictions/{quote_id(prediction_id)}", h)
+            ),
+            _local_only("Judgments"),
+        )
+
+    def eval_live(self, *, domain: Optional[str] = None, include_agent_resolved: Optional[bool] = None) -> LiveEval:
+        """Agreement, calibration and the most overruled criteria from resolved predictions."""
+        q = {"domain": domain, "includeAgentResolved": include_agent_resolved}
+        return self._o._run(
+            lambda d, h: from_wire(LiveEval, d.call("GET", "/v1/predictions/eval", h, query=q)),
             _local_only("Judgments"),
         )
 
@@ -1030,6 +1097,21 @@ class AsyncOortJudge:
 
     async def confirm(self, id: str) -> ConfirmResult:  # noqa: A002
         return await self._a._call(self._a._sync.judge.confirm, id)
+
+    async def resolve(self, prediction_id: str, **kw: Any) -> ResolveResult:
+        return await self._a._call(self._a._sync.judge.resolve, prediction_id, **kw)
+
+    async def list_predictions(self, **kw: Any) -> PredictionList:
+        return await self._a._call(self._a._sync.judge.list_predictions, **kw)
+
+    async def get_prediction(self, prediction_id: str) -> PredictionView:
+        return await self._a._call(self._a._sync.judge.get_prediction, prediction_id)
+
+    async def forget_prediction(self, prediction_id: str) -> ForgetPredictionResult:
+        return await self._a._call(self._a._sync.judge.forget_prediction, prediction_id)
+
+    async def eval_live(self, **kw: Any) -> LiveEval:
+        return await self._a._call(self._a._sync.judge.eval_live, **kw)
 
 
 class AsyncOortEndUsers:

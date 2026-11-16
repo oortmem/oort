@@ -4,6 +4,7 @@ import { addressed } from './address.js';
 import { INVISIBLE_SOURCE } from './display.js';
 import { homeAddress, type Grant } from './grant.js';
 import { isCurrent, type Decision, type Memory, type Scope } from './model.js';
+import type { Prediction } from './prediction.js';
 import { informativeTokens } from './relevance.js';
 import { scrub } from './scrub.js';
 
@@ -167,6 +168,25 @@ function text(field: string, v: unknown, max: number, multiline = false): string
     throw new JudgmentInputError(`${field} holds bidi or invisible format characters`);
   }
   return t;
+}
+
+/**
+ * One field of free text as a judgment holds it: trimmed, not empty, at most `max` characters,
+ * one line unless `multiline`, no control, bidi or invisible format characters. Throws
+ * `JudgmentInputError` naming the field, never its value.
+ */
+export function judgmentField(field: string, v: unknown, max: number, multiline = false): string {
+  return text(field, v, max, multiline);
+}
+
+/** A domain label: lowercase letters, digits, `.`, `_` or `-`, at most 64 characters. */
+export function judgmentDomain(v: unknown): string {
+  return judgmentLabel('domain', v, DOMAIN);
+}
+
+/** A criterion label: lowercase letters, digits, `_` or `-`, at most 64 characters. */
+export function judgmentCriterion(v: unknown): string {
+  return judgmentLabel('criteria', v, CRITERION);
 }
 
 /** A verdict or criterion label: lowercase, spaces as `-`. */
@@ -357,6 +377,11 @@ export interface RecordJudgmentResult {
   redacted: string[];
   /** The embedder failed: the judgment is kept, lexical-only. */
   embedFailed?: true;
+  /**
+   * With `corrected`: the judgment it replaced, as it was just before (the full record), so a
+   * caller that must take the correction back can put it back exactly (`undoCorrection`).
+   */
+  previous?: Memory;
 }
 
 /**
@@ -500,7 +525,12 @@ const EMBED_BATCH = 128;
  * prior (kept, linked, its validity closed, its tombstone set) in the same atomic write. Returns
  * how many could not be embedded (they are kept, lexical-only).
  */
-async function commit(planned: Planned[], deps: RecordJudgmentDeps, now: Date): Promise<number> {
+async function commit(
+  planned: Planned[],
+  deps: RecordJudgmentDeps,
+  now: Date,
+  previous?: Map<string, Memory>,
+): Promise<number> {
   let embedFailed = 0;
   if (deps.embed !== undefined) {
     for (let i = 0; i < planned.length; i += EMBED_BATCH) {
@@ -528,6 +558,7 @@ async function commit(planned: Planned[], deps: RecordJudgmentDeps, now: Date): 
     }
     // The full record (a listing leaves out the embedding), so the retracted one keeps it.
     const old = (await deps.store.get(deps.grant, p.prior.id)) ?? p.prior;
+    previous?.set(old.id, old);
     const oldJ = old.judgment ?? p.prior.judgment;
     await deps.store.upsertMany(deps.grant, [
       {
@@ -603,14 +634,17 @@ export async function recordJudgment(
     };
   }
   if (r.kind !== 'write') throw new Error('unreachable: a single record is never skipped');
-  const failed = await commit([r.planned], deps, now);
+  const previous = new Map<string, Memory>();
+  const failed = await commit([r.planned], deps, now, previous);
   const { memory, prior, redacted } = r.planned;
+  const was = prior === undefined ? undefined : previous.get(prior.id);
   return {
     outcome: prior === undefined ? 'added' : 'corrected',
     memory,
     ...(prior !== undefined && { supersedes: prior.id }),
     redacted,
     ...(failed > 0 && { embedFailed: true as const }),
+    ...(was !== undefined && { previous: was }),
   };
 }
 
@@ -689,6 +723,17 @@ function sameDecision(a: Judgment, b: Judgment): boolean {
   );
 }
 
+/**
+ * Where a judgment (or a prediction) is kept: the grant's home node, unbound to any project, as
+ * the acting principal's record. Judgments belong to the expert, not to a repository.
+ */
+function homePlacement(scope: Scope, grant: Grant): Pick<Memory, 'scope' | 'address' | 'author'> {
+  const { projectId: _p, ...unbound } = scope;
+  return grant.home.level === 'user'
+    ? { scope: unbound }
+    : addressed(homeAddress(grant), { agentId: scope.agentId });
+}
+
 function judgmentMemory(
   j: Judgment,
   scope: Scope,
@@ -697,15 +742,9 @@ function judgmentMemory(
   harness: string,
 ): Memory & { judgment: Judgment } {
   const iso = now.toISOString();
-  // Judgments belong to the expert, not to a repository: unbound to any project.
-  const { projectId: _p, ...unbound } = scope;
-  const at =
-    grant.home.level === 'user'
-      ? { scope: unbound }
-      : addressed(homeAddress(grant), { agentId: scope.agentId });
   return {
     id: randomUUID(),
-    ...at,
+    ...homePlacement(scope, grant),
     type: 'judgment',
     text: judgmentText(j),
     stub: `${j.verdict}: ${j.subject.summary.slice(0, 80)}`,
@@ -749,6 +788,8 @@ export async function withdrawJudgment(
   const iso = now.toISOString();
   const full = (await store.get(grant, m.id)) ?? m;
   const j = full.judgment ?? m.judgment;
+  // First: a failed purge leaves the judgment as it was, so a retry runs it again.
+  await purgePredictionsCiting(store, grant, [m.id], by, now);
   await store.upsert(grant, {
     ...full,
     judgment: {
@@ -816,6 +857,8 @@ export async function purgeJudgment(
     purged: { at: iso, by },
     tombstone: j.tombstone ?? tombstoneKey(j),
   };
+  // First: a failed purge leaves the judgment's text, so a retry runs it again.
+  await purgePredictionsCiting(store, grant, [m.id], by, now);
   await store.upsert(grant, {
     ...rest,
     judgment: stub,
@@ -828,6 +871,243 @@ export async function purgeJudgment(
     updatedAt: iso,
   });
   return true;
+}
+
+/**
+ * Takes back a judgment `recordJudgment` just wrote, for a caller whose next step failed: the new
+ * judgment is withdrawn and purged, and a judgment it corrected is put back exactly as it was
+ * (`r.previous`), current again. Nothing to do for `unchanged`: that record was there before.
+ *
+ * The corrected judgment comes back only while it is still exactly as this call retired it:
+ * corrected by this judgment, not withdrawn, purged or forgotten since, and not corrected by
+ * another judgment that is still current. Otherwise it is left alone.
+ */
+export async function undoRecordedJudgment(
+  store: MemoryStore,
+  grant: Grant,
+  r: RecordJudgmentResult,
+  by: string,
+  now = new Date(),
+): Promise<void> {
+  if (r.outcome === 'unchanged') return;
+  const m = await store.get(grant, r.memory.id);
+  if (m !== null) await purgeJudgment(store, grant, m, by, now);
+  if (r.outcome === 'corrected' && r.previous !== undefined) {
+    await restoreCorrected(store, grant, r.previous, r.memory.id, now);
+  }
+}
+
+/** True while `m` is still the record `byId` corrected, with nothing done to it since. */
+function retiredBy(m: Memory | null, byId: string): m is Memory {
+  return (
+    m !== null &&
+    m.endReason === 'corrected' &&
+    m.supersededBy === byId &&
+    m.expiredAt !== undefined &&
+    m.judgment !== undefined &&
+    m.judgment.withdrawn === undefined &&
+    m.judgment.purged === undefined
+  );
+}
+
+async function restoreCorrected(
+  store: MemoryStore,
+  grant: Grant,
+  previous: Memory,
+  byId: string,
+  now: Date,
+): Promise<void> {
+  const live = await store.get(grant, previous.id);
+  if (!retiredBy(live, byId)) return;
+  // Another judgment that corrected the same record at the same time is still current: it stays
+  // the answer, and the corrected record stays retired.
+  const all = await store.list(grant, { validOnly: false, embeddings: false });
+  if (all.some((m) => m.id !== byId && m.supersedes === previous.id && isActiveJudgment(m, now))) {
+    return;
+  }
+  if (store.upsertManyIfUnchanged !== undefined) {
+    // Atomic: skipped when the record changed after the read above.
+    await store.upsertManyIfUnchanged(grant, [
+      { next: previous, was: { id: live.id, updatedAt: live.updatedAt, tier: live.tier } },
+    ]);
+    return;
+  }
+  const again = await store.get(grant, previous.id);
+  if (!retiredBy(again, byId) || again.updatedAt !== live.updatedAt) return;
+  await store.upsert(grant, previous);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Predictions: what judging proposed, kept until a person decides
+// ---------------------------------------------------------------------------------------------
+
+export const PREDICTION_LIMITS = Object.freeze({
+  /** Days a prediction waits for a person's verdict; after that it can no longer be resolved. */
+  ttlDays: 30,
+  /** The item's details; its summary and ref keep the judgment limits. */
+  details: 4000,
+  /** Expired, unresolved predictions one judging call deletes. */
+  prune: 100,
+  /** Unresolved predictions one author keeps at one address; above it judging keeps nothing. */
+  pending: 5000,
+});
+
+/**
+ * Predictions that still cite a judgment that was withdrawn, purged or forgotten: their text
+ * could not be purged (`leftover`). The judgment was left as it was, so the same call can be
+ * tried again.
+ */
+export class PredictionPurgeError extends Error {
+  override readonly name = 'PredictionPurgeError';
+  constructor(readonly leftover: readonly string[]) {
+    super(`The text of ${leftover.length} prediction(s) could not be purged; try again.`);
+  }
+}
+
+/** The text a purged prediction keeps. */
+const PURGED_PREDICTION = '[purged]';
+
+/**
+ * The prediction with its text removed: the item's summary, details and link, the reason a
+ * person gave and every criterion. What is left is the numbers (verdicts, probability, whether
+ * the person agreed), the domain, the expert filter and the times.
+ */
+export function purgedPrediction(p: Prediction, by: string, now: Date): Prediction {
+  const iso = now.toISOString();
+  const r = p.resolution;
+  return {
+    ...p,
+    item: {
+      summary: PURGED_PREDICTION,
+      ...(p.item.domain !== undefined && { domain: p.item.domain }),
+      ...(p.item.by !== undefined && { by: p.item.by }),
+    },
+    criteria: [],
+    ...(r !== undefined && {
+      resolution: (({ reason: _r, ...rest }) => ({ ...rest, criteria: [] }))(r),
+    }),
+    purged: { at: iso, by },
+    revision: p.revision + 1,
+    updatedAt: iso,
+  };
+}
+
+/**
+ * Purges the text of every prediction that cites one of `ids` as a precedent, or whose resolve
+ * recorded it as a judgment, at every address: forget wins, so a withdrawn, purged or forgotten
+ * judgment leaves no prediction text behind. Callers run it before they change the judgment.
+ * Returns the ids purged; throws `PredictionPurgeError` naming those it could not purge. Does
+ * nothing on a store without predictions.
+ */
+export async function purgePredictionsCiting(
+  store: MemoryStore,
+  grant: Grant,
+  ids: readonly string[],
+  by: string,
+  now = new Date(),
+): Promise<string[]> {
+  if (store.predictions !== true) return [];
+  if (store.purgePredictionsCiting === undefined) {
+    throw new Error('a store with predictions must implement purgePredictionsCiting');
+  }
+  const purged: string[] = [];
+  const leftover: string[] = [];
+  for (const id of ids) {
+    const r = await store.purgePredictionsCiting(grant, id, by, now);
+    purged.push(...r.purged);
+    leftover.push(...r.leftover);
+  }
+  if (leftover.length > 0) throw new PredictionPurgeError([...new Set(leftover)]);
+  return [...new Set(purged)];
+}
+
+/** One line of text as a prediction keeps it: line breaks, control and invisible characters dropped. */
+function oneLine(t: string, max: number): string {
+  return clipped(
+    t
+      .replace(new RegExp(INVISIBLE_SOURCE, 'g'), '')
+      .replace(/\s+/g, ' ')
+      .replace(new RegExp(CONTROL.source, 'g'), ' ')
+      .replace(/ {2,}/g, ' ')
+      .trim(),
+    max,
+  );
+}
+
+/** Free text a prediction keeps: line breaks and tabs stay, other control and invisible characters go. */
+function plainText(t: string, max: number): string {
+  return clipped(
+    t
+      .replace(new RegExp(INVISIBLE_SOURCE, 'g'), '')
+      .replace(new RegExp(CONTROL.source, 'g'), ' ')
+      .trim(),
+    max,
+  );
+}
+
+const clipped = (t: string, max: number): string => (t.length > max ? t.slice(0, max) : t);
+
+const firstLabels = (xs: Iterable<string>, max: number): string[] => [...new Set(xs)].slice(0, max);
+
+/** The prediction a judging result is kept as. */
+function predictionRecord(
+  r: JudgeResult,
+  ctx: Pick<Prediction, 'scope' | 'address' | 'author'> & {
+    item: Prediction['item'];
+    used: Judgment[];
+    now: Date;
+    ttlDays: number;
+  },
+): Prediction {
+  const iso = ctx.now.toISOString();
+  const domains = [...new Set(ctx.used.map((j) => j.domain))];
+  const domain = ctx.item.domain ?? (domains.length === 1 ? domains[0] : undefined);
+  // Over the cap, the predicted verdict goes first, so the cap never drops it.
+  const cited = [...new Set(ctx.used.flatMap((j) => j.verdicts))];
+  const predicted = r.prediction?.verdict;
+  const verdicts = firstLabels(
+    predicted !== undefined && cited.length > JUDGMENT_LIMITS.verdicts && cited.includes(predicted)
+      ? [predicted, ...cited]
+      : cited,
+    JUDGMENT_LIMITS.verdicts,
+  );
+  const { item } = ctx;
+  // The item as a judgment of it would hold it, so a resolve with a reason can record one.
+  const summary = oneLine(item.summary, JUDGMENT_LIMITS.summary);
+  const ref = item.ref === undefined ? '' : oneLine(item.ref, JUDGMENT_LIMITS.ref);
+  const details =
+    item.details === undefined ? '' : plainText(item.details, PREDICTION_LIMITS.details);
+  const by = item.by === undefined ? '' : oneLine(scrub(item.by).text, JUDGMENT_LIMITS.by);
+  return {
+    id: randomUUID(),
+    scope: ctx.scope,
+    ...(ctx.address !== undefined && { address: ctx.address }),
+    ...(ctx.author !== undefined && { author: ctx.author }),
+    item: {
+      summary: summary === '' ? '(empty)' : summary,
+      ...(details !== '' && { details }),
+      ...(ref !== '' && { ref }),
+      ...(item.domain !== undefined && { domain: item.domain }),
+      ...(by !== '' && { by }),
+    },
+    ...(domain !== undefined && { domain }),
+    outcome: r.status,
+    ...(r.why !== undefined && { why: r.why }),
+    verdict: r.prediction?.verdict ?? null,
+    probability: r.prediction?.probability ?? null,
+    verdicts: verdicts.length >= 2 ? verdicts : [...DEFAULT_VERDICTS],
+    precedentIds: r.precedents.map((x) => x.id),
+    criteria: firstLabels(
+      ctx.used.flatMap((j) => j.criteria),
+      JUDGMENT_LIMITS.criteria,
+    ),
+    similarity: r.similarity,
+    threshold: r.threshold,
+    revision: 0,
+    createdAt: iso,
+    updatedAt: iso,
+    expiresAt: new Date(ctx.now.getTime() + ctx.ttlDays * 86_400_000).toISOString(),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -885,6 +1165,12 @@ export interface JudgeDeps {
   /** Its `judge` makes the prediction; without it judging returns precedents only. */
   decide?: Pick<DecisionController, 'judge'>;
   now?: Date;
+  /**
+   * Keep the result as a prediction a person can resolve, as `scope`'s record at the grant's
+   * home node, and return its `predictionId`. Ignored on a store without predictions.
+   * Evaluation never passes it.
+   */
+  keep?: { scope: Scope; ttlDays?: number };
 }
 
 /** One precedent as a judging result cites it. */
@@ -955,6 +1241,15 @@ export interface JudgeResult {
   importedExcluded?: number;
   /** Unconfirmed agent-recorded judgments left out (`includeAgentRecorded` false). */
   agentRecordedExcluded?: number;
+  /** The kept prediction a person resolves with `resolvePrediction` (only with `deps.keep`). */
+  predictionId?: string;
+  /**
+   * With `deps.keep`: whether the answer was kept as a prediction. False when the address
+   * already keeps `PREDICTION_LIMITS.pending` unresolved ones (`notKept: 'pending-cap'`) or the
+   * write failed (`write-failed`); the answer is the same either way.
+   */
+  kept?: boolean;
+  notKept?: 'pending-cap' | 'write-failed';
 }
 
 function cosine(a: Int8Array, b: Int8Array): number {
@@ -1017,7 +1312,8 @@ const OTHER = 'other';
  * precedents and their reasons as state. It answers "needs the expert" instead of guessing when
  * there are no precedents, none is near, fewer than two near precedents would back the answer,
  * the near ones disagree, or the prediction is below `threshold`; and returns precedents only
- * when there is no decider. Never writes anything.
+ * when there is no decider. Writes nothing to memories. With `deps.keep` it keeps the answer as
+ * a prediction record (`predictionId`); a failure to keep it never fails the call (`kept: false`).
  */
 export async function judge(
   item: JudgeItem,
@@ -1115,15 +1411,54 @@ export async function judge(
     ...(agentRecordedExcluded > 0 && { agentRecordedExcluded }),
   };
 
-  if (all.length === 0) return { status: 'needs-expert', why: 'no-precedents', ...base };
-  if (near.length === 0) return { status: 'needs-expert', why: 'too-far', ...base };
+  const finish = async (r: JudgeResult): Promise<JudgeResult> => {
+    const keep = deps.keep;
+    const store = deps.store;
+    if (keep === undefined || store.predictions !== true || store.putPrediction === undefined) {
+      return r;
+    }
+    const used = (near.length > 0 ? near : shown).map((x) => x.m.judgment);
+    // Keeping is a side effect: whatever goes wrong, the answer stands, without an id.
+    try {
+      const p = predictionRecord(r, {
+        item: {
+          summary,
+          ...(details !== undefined && { details }),
+          ...(item.ref !== undefined && { ref: scrub(item.ref).text }),
+          ...(item.domain !== undefined && {
+            domain: judgmentLabel('domain', item.domain, DOMAIN),
+          }),
+          ...(item.by !== undefined && { by: item.by }),
+        },
+        used,
+        ...homePlacement(keep.scope, deps.grant),
+        now,
+        ttlDays: keep.ttlDays ?? PREDICTION_LIMITS.ttlDays,
+      });
+      await store.pruneExpiredPredictions?.(now, PREDICTION_LIMITS.prune);
+      const pending = (await store.countPendingPredictions?.(p)) ?? 0;
+      if (pending >= PREDICTION_LIMITS.pending) {
+        return { ...r, kept: false, notKept: 'pending-cap' };
+      }
+      if (!(await store.putPrediction(deps.grant, p, { revision: null }))) {
+        return { ...r, kept: false, notKept: 'write-failed' };
+      }
+      return { ...r, predictionId: p.id, kept: true };
+    } catch {
+      return { ...r, kept: false, notKept: 'write-failed' };
+    }
+  };
+
+  if (all.length === 0) return finish({ status: 'needs-expert', why: 'no-precedents', ...base });
+  if (near.length === 0) return finish({ status: 'needs-expert', why: 'too-far', ...base });
   if (near.length < JUDGE_DEFAULTS.minAgreeing) {
-    return { status: 'needs-expert', why: 'too-few', ...base };
+    return finish({ status: 'needs-expert', why: 'too-few', ...base });
   }
   const top = Math.max(...Object.values(agreement));
-  if (top < minAgreement) return { status: 'needs-expert', why: 'precedents-disagree', ...base };
+  if (top < minAgreement)
+    return finish({ status: 'needs-expert', why: 'precedents-disagree', ...base });
   if (deps.decide?.judge === undefined) {
-    return { status: 'precedents-only', why: 'no-decider', ...base };
+    return finish({ status: 'precedents-only', why: 'no-decider', ...base });
   }
 
   let choice: JudgeChoice;
@@ -1147,20 +1482,20 @@ export async function judge(
       })),
     });
   } catch {
-    return {
+    return finish({
       status: 'needs-expert',
       why: 'decider-failed',
       ...base,
       degraded: [...degraded, 'decider-failed'],
-    };
+    });
   }
   if (!verdicts.includes(choice.verdict)) {
-    return {
+    return finish({
       status: 'needs-expert',
       why: 'decider-failed',
       ...base,
       degraded: [...degraded, 'decider-failed'],
-    };
+    });
   }
   // Against "other", the prediction is always the voted verdict, at its own probability.
   const verdict = voted.length === 1 ? voted[0]! : choice.verdict;
@@ -1178,13 +1513,13 @@ export async function judge(
       : probability < threshold
         ? 'low-confidence'
         : undefined;
-  return {
+  return finish({
     status: why === undefined ? 'suggested' : 'needs-expert',
     ...(why !== undefined && { why }),
     ...base,
     prediction,
     decisions: choice.decisions,
-  };
+  });
 }
 
 const round = (x: number): number => Math.round(x * 1000) / 1000;
@@ -1884,6 +2219,8 @@ export async function evaluateJudgments(
   opts: Omit<JudgeOptions, 'threshold'> & { thresholds?: readonly number[] } = {},
 ): Promise<EvalReport> {
   const thresholds = [...(opts.thresholds ?? EVAL_THRESHOLDS)].sort((a, b) => a - b);
+  // Held-out decisions are never kept as predictions.
+  const { keep: _keep, ...pure } = deps;
   const now = deps.now ?? new Date();
   const rows: { domain: string; actual: string; r: JudgeResult }[] = [];
   const modes = new Set<string>();
@@ -1896,7 +2233,7 @@ export async function evaluateJudgments(
         by: n.by,
         ...(n.subject.ref !== undefined && { ref: n.subject.ref }),
       },
-      deps,
+      pure,
       {
         ...opts,
         threshold: 0,

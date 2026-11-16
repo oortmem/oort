@@ -113,6 +113,11 @@ export interface MemoryBackend {
   recordJudgment?(input: ToolInput<'record_judgment'>): Promise<Record<string, unknown>>;
   judge?(input: ToolInput<'judge'>): Promise<Record<string, unknown>>;
   /**
+   * A person's decision on a prediction `judge` kept. Optional, like the other judgment tools;
+   * what an agent records this way is unconfirmed until a person confirms it.
+   */
+  resolvePrediction?(input: ToolInput<'resolve_prediction'>): Promise<Record<string, unknown>>;
+  /**
    * Memory links (CON-148). Optional: a server offers `link` only when the backend has it. The
    * backend records the link as asserted by `agent`, and refuses a pair it cannot link exactly as
    * it refuses a missing id.
@@ -292,6 +297,12 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
       if (b.judge === undefined) throw new MemoryToolError('No judgment memory here.');
       return b.judge(i);
     },
+    resolve_prediction: (i) => {
+      if (b.resolvePrediction === undefined) {
+        throw new MemoryToolError('No judgment memory here.');
+      }
+      return b.resolvePrediction(i);
+    },
     link: (i) => {
       if (b.link === undefined) throw new MemoryToolError('No memory links here.');
       return b.link(i);
@@ -301,6 +312,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
     if (name === 'share') return spaces.share.length > 0 && b.share !== undefined;
     if (name === 'record_judgment') return b.recordJudgment !== undefined;
     if (name === 'judge') return b.judge !== undefined;
+    if (name === 'resolve_prediction') return b.resolvePrediction !== undefined;
     if (name === 'link') return b.link !== undefined;
     return true;
   };

@@ -109,6 +109,10 @@ The TypeScript methods, in snake_case. `AsyncOort` has the same ones as `async d
 | `judge.apply(item, *, details=None, domain=None, by=None, limit=None, threshold=None, min_similarity=None, min_agreement=None, ...)` (local only)        | `JudgeResult`        |
 | `judge.list(*, domain=None, by=None, all=False, limit=None)` (local only)                                                                                | `JudgmentList`       |
 | `judge.confirm(id)` (expert role only)                                                                                                                  | `ConfirmResult`      |
+| `judge.resolve(prediction_id, *, verdict, by, reason=None, criteria=None, domain=None)` (local only) | `ResolveResult` |
+| `judge.list_predictions(*, status=None, limit=None, domain=None)` (local only) | `PredictionList` |
+| `judge.get_prediction(prediction_id)` / `judge.forget_prediction(prediction_id)` (local only) | `PredictionView` / `ForgetPredictionResult` |
+| `judge.eval_live(*, domain=None, include_agent_resolved=None)` (local only) | `LiveEval` |
 | `scoped(*, user=..., project=..., agent=None, judge_role=None)`                                                                                         | a new handle         |
 | `end_users.erase(user)` (cloud only, a server key)                                                                                                      | `EndUserErasure`     |
 | `end_users.count()` (cloud only, a server key)                                                                                                          | `EndUserCount`       |
@@ -625,6 +629,10 @@ home config's `judge.experts`, records count against the shared daily cap, and t
 unconfirmed. Expert role (`judge_role="expert"`) is for host code where a person really decided;
 `judge.confirm` needs it. Judgments live in the local engine only (`refused`, `local-only` in
 cloud mode).
+
+`judge.apply` keeps each answer as a prediction (`r.prediction_id`). `judge.resolve` records what
+the expert then decided, and `judge.eval_live` reports agreement and calibration, as in
+[TypeScript](sdk.md#predictions-and-what-the-expert-decided).
 
 <!-- example: examples/python/judgments.py -->
 

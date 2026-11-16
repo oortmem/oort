@@ -340,6 +340,53 @@ the `occurred` they come back with, or, without one, by their `validFrom` as the
 round trip and rewrite, the check on write, overlap with its bounds, a long occurrence found from
 its far end, the order and `k`, the grant and a spatial filter, and forget and cold memories.
 
+## Judging predictions
+
+A store that sets `predictions: true` keeps the predictions `judge` makes, so a person can
+resolve them later. A prediction is a record of its own, never a memory: recall, export, sync
+and the memory methods never see it. It carries an address like a memory (`scope`, optional
+`address` and `author`), and the store applies the grant to it the same way:
+
+- `putPrediction(grant, p, expect?)` writes `p` inside `grant.write` (else `GrantError`). With
+  `expect: { revision: null }` it writes only a new id; with `expect: { revision: n }` it
+  replaces only a record whose `revision` is `n`. It returns `false`, writing nothing, when the
+  guard fails, or when the id exists at another address or outside the grant. Two resolves of
+  one prediction therefore never both land.
+- `getPrediction(grant, id)` returns the record when it is inside `grant.read`, else `null`.
+- `listPredictions(grant, opts?)` returns readable records newest first (`createdAt`, then
+  `id`). `status` is `pending` or `resolved`; `citing` keeps records whose `precedentIds` or
+  `resolution.judgmentId` holds that judgment id; `idPrefix` keeps ids that start with it (taken
+  literally, so `%` and `_` match only themselves); `domain` keeps one domain; `unexpiredAt`
+  drops pending records whose `expiresAt` is at or before it. `limit` applies after the grant
+  and every filter, so it never comes back short because of rows the grant cannot read.
+  `selectPredictions` in `@oortmem/core` is the shared filter and order.
+- `forgetPrediction(grant, id, expect?)` deletes the record when it is inside `grant.write`, and
+  returns whether it did. With `expect: { revision: n }` it deletes only a record whose
+  `revision` is still `n`, so an agent never deletes a prediction a person resolved meanwhile.
+- `purgePredictionsCiting(grant, judgmentId, by, at)` replaces every record that cites the
+  judgment with `purgedPrediction(p, by, at)`, at every address, not only the grant's: the caller
+  is withdrawing, purging or forgetting that judgment, and derived copies go with it, as a
+  memory's links do on forget. It returns `{ purged, leftover }`; core fails the withdraw, purge
+  or forget when `leftover` is not empty, before it changes the judgment.
+- `pruneExpiredPredictions(now, limit)` deletes up to `limit` unresolved records whose
+  `expiresAt` is at or before `now`, at every address. Resolved records are never pruned.
+  It is not limited to a grant because an expired pending prediction can no longer be resolved by anyone.
+- `countPendingPredictions(p)` counts the unresolved records `p`'s author keeps at `p`'s address
+  (its node and project). Judging keeps nothing above 5,000 per author, so one agent filling its
+  quota never blocks another at the same address.
+
+A forgotten or purged record leaves none of its text in a log or journal the store keeps: the
+SQLite store truncates its write-ahead log after each one, as it does after a memory's forget.
+
+Every operation takes and returns plain JSON. Expiry (30 days for a pending prediction) and the
+rules of resolve live in `@oortmem/core`, not in the store. A store that also erases an end
+user's data deletes their predictions too. The SQLite store keeps them in a `predictions` table
+with the same address columns as `memories` (so the grant predicate runs in SQL), `created_at`,
+an indexed `expires_at`, `resolved` and the record as JSON. It creates the table when it opens,
+with no schema version change: an older Oort ignores the table, a downgrade leaves it, and a
+backup copies it. `predictionsConformance(name, make)` in `@oortmem/core/store-conformance`
+proves a store.
+
 ## Known limit
 
 SQLite's lexical scores come from FTS5's `bm25`, which uses term statistics over the whole table.

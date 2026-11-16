@@ -67,6 +67,16 @@ import { startRabitqBuild, dropRabitqIndex, hasRabitqIndex } from './rabitq-stor
 export const SCHEMA_VERSION = 10;
 
 /**
+ * Judging predictions and what a person decided about them (`MemoryStore.predictions`): one row
+ * per prediction, its record as JSON, with its address columns (as `memories` has them, so the
+ * same grant predicate applies), its times and whether it is resolved. Like `meta` and `cursors`
+ * it is created on every open when missing, so it needs no schema version: an Oort that
+ * predates it never reads it, and a downgrade keeps it as it is. Backups copy it with the rest
+ * of the file. A row is never a memory: no search or listing of memories reads this table.
+ */
+export const PREDICTION_TABLE = 'predictions';
+
+/**
  * The binary index (schema version 6): one row per searchable (hot or warm) vector, with its
  * 1-bit code (`binaryCode`), its int8 vector for rescoring as an auxiliary column, and the int8
  * index's partition and filter columns. A dense query scans only the codes; it reads `rescore`
@@ -1482,6 +1492,24 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS cursors (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS cold_index (id TEXT PRIMARY KEY, path TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS ${PREDICTION_TABLE} (
+        id TEXT PRIMARY KEY,
+        level TEXT NOT NULL,
+        org_id TEXT NOT NULL,
+        customer_id TEXT,
+        agent_id TEXT,
+        hive_id TEXT,
+        run_id TEXT,
+        project_id TEXT,
+        author_agent_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        resolved INTEGER NOT NULL,
+        record TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_created ON ${PREDICTION_TABLE} (created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_expires ON ${PREDICTION_TABLE} (resolved, expires_at);
+      CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_address ON ${PREDICTION_TABLE} (org_id, level, customer_id, agent_id, resolved);
     `);
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     const put = db.prepare(

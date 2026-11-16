@@ -50,6 +50,10 @@
       "description": "Predict an expert's verdict on a new item from their judgments."
     },
     {
+      "name": "resolve_prediction",
+      "description": "Record what a person decided on an item judge predicted."
+    },
+    {
       "name": "link",
       "description": "Link two memories that belong together, or remove a link."
     }

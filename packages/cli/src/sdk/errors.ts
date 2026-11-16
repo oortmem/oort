@@ -286,6 +286,22 @@ export function toOortError(e: unknown): OortError {
   if (err.name === 'GrantError' || err.name === 'ScopeDeniedError') {
     return new OortRefusedError(err.message, { reason: 'scope-denied' });
   }
+  if (err.name === 'PredictionError') {
+    const kind = (err as Error & { kind?: string }).kind;
+    if (kind === 'not-found') return new OortNotFoundError(err.message, { reason: 'not-found' });
+    if (kind === 'ambiguous') return new OortAmbiguousIdError(err.message);
+    return new OortRefusedError(err.message, {
+      reason: kind === 'unsupported' ? 'predictions-unsupported' : (kind ?? 'refused'),
+      ...(kind === 'conflict' && { retryable: true }),
+    });
+  }
+  if (err.name === 'PredictionPurgeError') {
+    // The judgment was left as it was; the same call purges again.
+    return new OortInternalError(err.message, {
+      reason: 'predictions-not-purged',
+      retryable: true,
+    });
+  }
   if (err.name === 'JudgmentInputError' || err.name === 'ExportFormatError') {
     return new OortUsageError(err.message, { reason: 'invalid-argument' });
   }

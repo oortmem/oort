@@ -8,6 +8,10 @@ import {
 import { filterFor } from '@oortmem/claude-code';
 import {
   JudgmentInputError,
+  PredictionError,
+  getPrediction,
+  resolvePrediction,
+  resolveRecordsJudgment,
   VERSION,
   activation,
   checkNear,
@@ -525,6 +529,8 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
             ...(w.embed !== undefined && { embed: w.embed }),
             ...(w.decide !== undefined && { decide: w.decide }),
             now: now(),
+            // Kept, so the person's decision can be recorded beside it (resolve_prediction).
+            keep: { scope: w.scope },
           },
           {
             k: i.limit,
@@ -534,6 +540,69 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
         ),
       );
       return judgeOutput(r);
+    },
+
+    async resolvePrediction(i) {
+      // The same rules as record_judgment: only for listed experts, and a reason that becomes a
+      // judgment takes a slot of the daily cap. What it records is unconfirmed.
+      const experts = w.config.judge.experts;
+      if (experts.length === 0) {
+        throw new MemoryToolError(
+          'Recording decisions over MCP is off. To allow it, list the experts an agent may record for in judge.experts in ~/.oort/config.json (the home config).',
+        );
+      }
+      if (!experts.includes(i.by.trim())) {
+        throw new MemoryToolError(
+          `${safeExpertId(i.by)} is not one of the experts listed in judge.experts in the home config, so an agent cannot record decisions in their name.`,
+        );
+      }
+      const grant = writeGrant(w);
+      // The whole id, never a prefix: an agent cannot reach a prediction by guessing.
+      const p = await asToolError(() => getPrediction(w.store, grant, i.prediction_id));
+      const day = now().toISOString().slice(0, 10);
+      // A slot only for a resolve that will record a judgment.
+      const slot = resolveRecordsJudgment(p, i);
+      if (slot) await reserveMcpJudgment(w.config.home, day);
+      let wrote = false;
+      try {
+        const r = await asToolError(() =>
+          resolvePrediction(
+            p.id,
+            {
+              verdict: i.verdict,
+              by: i.by,
+              ...(i.reason !== undefined && { reason: i.reason }),
+              ...(i.criteria !== undefined && { criteria: i.criteria }),
+              ...(i.domain !== undefined && { domain: i.domain }),
+            },
+            {
+              store: w.store,
+              grant,
+              scope: w.scope,
+              ...(w.embed !== undefined && { embed: w.embed }),
+              via: 'mcp',
+              harness: 'mcp',
+              now: now(),
+            },
+          ),
+        );
+        wrote = r.judgment !== undefined && r.judgment.outcome !== 'unchanged';
+        const short = p.id.slice(0, 8);
+        return {
+          prediction_id: p.id,
+          verdict: r.prediction.resolution?.verdict,
+          agrees: r.agrees,
+          status: 'agent-recorded, unconfirmed',
+          ...(r.judgment !== undefined && { judgment_id: r.judgment.memory.id }),
+          note:
+            `Saved as agent-recorded and unconfirmed: the live evaluation leaves it out until a person runs \`oort judge confirm ${short}\`.` +
+            (r.judgment !== undefined
+              ? ' The reason was recorded as a judgment, also unconfirmed; judging leaves it out until then.'
+              : ''),
+        };
+      } finally {
+        if (slot && !wrote) await refundMcpJudgment(w.config.home, day);
+      }
     },
   };
 }
@@ -564,7 +633,9 @@ async function asToolError<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (e) {
-    if (e instanceof JudgmentInputError) throw new MemoryToolError(e.message);
+    if (e instanceof JudgmentInputError || e instanceof PredictionError) {
+      throw new MemoryToolError(e.message);
+    }
     throw e;
   }
 }
@@ -626,6 +697,17 @@ function judgeOutput(r: JudgeResult): Record<string, unknown> {
     ...(r.importedExcluded !== undefined && { imported_not_used: r.importedExcluded }),
     ...(r.agentRecordedExcluded !== undefined && {
       unconfirmed_agent_recorded_not_used: r.agentRecordedExcluded,
+    }),
+    ...(r.predictionId !== undefined && {
+      prediction_id: r.predictionId,
+      prediction_note:
+        'Kept as a prediction. Once the person explicitly decides, record their verdict (and reason, verbatim) with resolve_prediction.',
+    }),
+    ...(r.kept === false && {
+      prediction_note:
+        r.notKept === 'pending-cap'
+          ? 'Not kept as a prediction: too many wait for a decision here. The answer is the same.'
+          : 'Not kept as a prediction: it could not be saved. The answer is the same.',
     }),
   };
 }

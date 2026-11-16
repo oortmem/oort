@@ -377,6 +377,115 @@ export interface JudgeResult {
   decisions: { stage: string; question: string; answer: string; probability: number }[];
   importedExcluded?: number;
   agentRecordedExcluded?: number;
+  /**
+   * The kept prediction: resolve it with `judge.resolve(predictionId, …)` once a person decides.
+   * Absent where predictions are not kept.
+   */
+  predictionId?: string;
+  /**
+   * False when the answer was not kept as a prediction: this author already keeps 5,000
+   * unresolved ones in the scope (`notKept: 'pending-cap'`) or the write failed (`write-failed`). The answer
+   * is the same either way.
+   */
+  kept?: boolean;
+  notKept?: 'pending-cap' | 'write-failed';
+}
+
+/** What a person decided about a prediction. */
+export interface ResolveInput {
+  /** One of the prediction's `verdicts`. */
+  verdict: string;
+  /** Why, in their own words. A different verdict with a reason becomes a judgment, verbatim. */
+  reason?: string;
+  /** Tags the reason relies on. */
+  criteria?: readonly string[];
+  /** Who decided: the expert's id. */
+  by: string;
+  /** The domain for the judgment, when the prediction has none. */
+  domain?: string;
+}
+
+/** A kept prediction: what judging proposed, and what a person decided. */
+export interface PredictionView {
+  id: string;
+  /** `pending`: waiting for a person; `resolved`; `expired`: nobody resolved it in time. */
+  state: 'pending' | 'resolved' | 'expired';
+  item: { summary: string; details?: string; ref?: string; domain?: string; by?: string };
+  domain?: string;
+  /** What judging answered. */
+  outcome: JudgeResult['status'];
+  why?: JudgeResult['why'];
+  /** The predicted verdict, null when judging made none. A prediction, never the decision. */
+  verdict: string | null;
+  probability: number | null;
+  /** The verdicts it may be resolved with. */
+  verdicts: string[];
+  precedentIds: string[];
+  criteria: string[];
+  createdAt: string;
+  expiresAt: string;
+  resolution?: {
+    verdict: string;
+    reason?: string;
+    criteria: string[];
+    by: string;
+    at: string;
+    via: JudgmentVia;
+    /** The person chose the predicted verdict; null when there was none. */
+    agrees: boolean | null;
+    /** The judgment the resolve recorded. */
+    judgmentId?: string;
+    /** Resolved by an agent and not confirmed: the live evaluation leaves it out. */
+    agentRecorded: boolean;
+  };
+  /** Its text was purged: a judgment it cited was withdrawn or forgotten. */
+  purged?: true;
+}
+
+export interface ResolveView {
+  prediction: PredictionView;
+  agrees: boolean | null;
+  /** The judgment the resolve recorded: a verdict other than the predicted one, with a reason. */
+  judgment?: RecordJudgmentView;
+  /**
+   * This resolve replaced an agent's, but left the judgment the agent's recorded in place.
+   * `not-writable`: it is outside this handle's scope; it stays, unconfirmed, so judging leaves it
+   * out. `confirmed`: a person already confirmed it, so it stays.
+   */
+  agentJudgmentKept?: string;
+  agentJudgmentKeptReason?: 'not-writable' | 'confirmed';
+}
+
+export interface LiveAgreement {
+  predicted: number;
+  agreed: number;
+  /** `agreed / predicted`; null when none. */
+  agreement: number | null;
+}
+
+/** Agreement and calibration from resolved predictions. */
+export interface LiveEvalView {
+  resolved: number;
+  overall: LiveAgreement;
+  /** Only predictions judging suggested (at or above its threshold). */
+  suggested: LiveAgreement;
+  /** The share of resolved predictions judging suggested a verdict for. */
+  coverage: number | null;
+  /** Agreement per confidence band, beside the band's mean probability. */
+  bands: {
+    from: number;
+    to: number;
+    predicted: number;
+    agreed: number;
+    agreement: number | null;
+    meanProbability: number | null;
+  }[];
+  /** The criteria people overruled most. */
+  criteria: { criterion: string; predicted: number; disagreed: number; disagreement: number }[];
+  domains: Record<string, LiveAgreement & { resolved: number }>;
+  pending: number;
+  /** Agent-recorded resolves nobody confirmed, left out. */
+  agentResolvedExcluded: number;
 }
 
 export interface ConsolidateResult {
@@ -494,8 +603,27 @@ export interface OortJudge {
     all?: boolean;
     limit?: number;
   }): Promise<{ judgments: (JudgmentView & { id: string })[] }>;
-  /** Expert role only. */
+  /**
+   * Expert role only. Takes a judgment id, or a prediction id to confirm an agent's resolve of it
+   * (and the judgment that resolve recorded).
+   */
   confirm(id: string): Promise<{ id: string; changed: boolean }>;
+  /**
+   * Records a person's decision on a prediction (`JudgeResult.predictionId`). In agent role it
+   * is stored unconfirmed, and `by` must be listed in `judge.experts`.
+   */
+  resolve(predictionId: string, input: ResolveInput): Promise<ResolveView>;
+  /** Kept predictions, newest first: `pending` (the default) or `resolved`. */
+  listPredictions(opts?: {
+    status?: 'pending' | 'resolved';
+    limit?: number;
+    domain?: string;
+  }): Promise<{ predictions: PredictionView[] }>;
+  getPrediction(predictionId: string): Promise<PredictionView>;
+  /** Deletes a prediction with its text. */
+  forgetPrediction(predictionId: string): Promise<{ id: string; forgotten: true }>;
+  /** Agreement, calibration and the most overruled criteria from resolved predictions. */
+  evalLive(opts?: { domain?: string; includeAgentResolved?: boolean }): Promise<LiveEvalView>;
 }
 
 /** How many end users the account has, and how many its plan includes. */

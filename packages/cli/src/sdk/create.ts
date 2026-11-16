@@ -44,6 +44,7 @@ import type {
   RecallOptions,
   RecallResult,
   RememberResult,
+  ResolveInput,
   ScopedOptions,
   Turn,
   Warning,
@@ -58,11 +59,14 @@ import {
   JudgeListSchema,
   JudgeOptionsSchema,
   JudgmentInputSchema,
+  LiveEvalSchema,
   OptionsSchema,
+  PredictionListSchema,
   QuerySchema,
   RecallOptionsSchema,
   RecentOptionsSchema,
   RememberOptionsSchema,
+  ResolveInputSchema,
   ScopedSchema,
   SignalOnlySchema,
   TurnSchema,
@@ -265,6 +269,26 @@ class OortHandle implements Oort {
       list: (opts = {}) =>
         this.#run((ctx) => judge.list(ctx, check(JudgeListSchema, opts, 'list options'))),
       confirm: (id: string) => this.#run((ctx) => judge.confirm(ctx, check(IdSchema, id, 'id'))),
+      resolve: (predictionId: string, input: ResolveInput) =>
+        this.#run((ctx) =>
+          judge.resolve(
+            ctx,
+            check(IdSchema, predictionId, 'predictionId'),
+            check(ResolveInputSchema, input, 'resolve'),
+          ),
+        ),
+      listPredictions: (opts = {}) =>
+        this.#run((ctx) =>
+          judge.listPredictions(ctx, check(PredictionListSchema, opts, 'list options')),
+        ),
+      getPrediction: (predictionId: string) =>
+        this.#run((ctx) => judge.getPrediction(ctx, check(IdSchema, predictionId, 'predictionId'))),
+      forgetPrediction: (predictionId: string) =>
+        this.#run((ctx) =>
+          judge.forgetPrediction(ctx, check(IdSchema, predictionId, 'predictionId')),
+        ),
+      evalLive: (opts = {}) =>
+        this.#run((ctx) => judge.evalLive(ctx, check(LiveEvalSchema, opts, 'eval options'))),
     };
   }
 

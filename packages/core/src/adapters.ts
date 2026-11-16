@@ -9,6 +9,7 @@ import type {
 } from './links.js';
 import type { Decision, Memory, MemoryType, Scope, Tier } from './model.js';
 import type { Place, SpatialFilter } from './place.js';
+import type { Prediction, PredictionListOptions } from './prediction.js';
 
 /**
  * The adapter seam. Every pluggable piece of Oort (stores, embedders, rerankers,
@@ -203,6 +204,62 @@ export interface MemoryStore {
    * has it; recall takes no hop without it.
    */
   neighbours?(grant: Grant, seedIds: string[], opts: NeighbourOptions): Promise<NeighboursResult>;
+  /**
+   * True when the store keeps judging predictions (`predictionsConformance` proves it) and has
+   * `putPrediction`, `getPrediction`, `listPredictions` and `forgetPrediction`. A prediction is
+   * not a memory: no search, listing or export of memories ever returns one. Absent: judging
+   * returns no `predictionId`, and resolving one is refused.
+   */
+  readonly predictions?: true;
+  /**
+   * Writes the prediction `p` (insert or replace). With `expect`, only when the stored record's
+   * `revision` is `expect.revision` (`null`: only when no record has `p.id`). Resolves to false,
+   * writing nothing, when that guard fails, or when a record with `p.id` exists at another
+   * address or outside the grant. Rejects with `GrantError` when `p`'s address and author are
+   * outside `grant.write`.
+   */
+  putPrediction?(
+    grant: Grant,
+    p: Prediction,
+    expect?: { revision: number | null },
+  ): Promise<boolean>;
+  /** The prediction `id`, or null when it is unknown or outside the grant. */
+  getPrediction?(grant: Grant, id: string): Promise<Prediction | null>;
+  /**
+   * The predictions the grant reads, newest first (`createdAt`, then `id`), filtered as
+   * `selectPredictions` filters (status, citing, id prefix, domain, unexpired), at most
+   * `opts.limit`. The limit applies after the grant, so it never comes back short because of
+   * rows the grant cannot read.
+   */
+  listPredictions?(grant: Grant, opts?: PredictionListOptions): Promise<Prediction[]>;
+  /**
+   * Deletes the prediction `id`, its text included, leaving none of it in a log or journal the
+   * store keeps. False for an unknown id or one outside `grant.write`, changing nothing. With
+   * `expect: { revision: n }` it deletes only a record whose `revision` is still `n`, and is false
+   * otherwise, so a caller never deletes a record that changed after it read it.
+   */
+  forgetPrediction?(grant: Grant, id: string, expect?: { revision: number }): Promise<boolean>;
+  /**
+   * Replaces every prediction that cites `judgmentId` (as a precedent or as
+   * `resolution.judgmentId`), at every address, with `purgedPrediction(p, by, at)`, leaving none
+   * of the old text in a log or journal. Not limited to `grant`: the caller is withdrawing,
+   * purging or forgetting that judgment under its own grant, and derived copies go with it, as a
+   * memory's links do on forget. Returns the ids purged and those it could not purge
+   * (`leftover`, which callers treat as a failure).
+   */
+  purgePredictionsCiting?(
+    grant: Grant,
+    judgmentId: string,
+    by: string,
+    at: Date,
+  ): Promise<{ purged: string[]; leftover: string[] }>;
+  /** Deletes up to `limit` unresolved predictions whose `expiresAt` is at or before `now`, at every address. */
+  pruneExpiredPredictions?(now: Date, limit: number): Promise<number>;
+  /**
+   * How many unresolved predictions `at`'s author keeps at `at`'s address (its node and project).
+   * Counted per author, so one agent filling its quota never blocks another at the same address.
+   */
+  countPendingPredictions?(at: Pick<Prediction, 'scope' | 'address' | 'author'>): Promise<number>;
   /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
    * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).

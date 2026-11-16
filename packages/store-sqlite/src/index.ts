@@ -41,6 +41,11 @@ import {
   resolveAddressing,
   sameRecordAddress,
   scopeOf,
+  selectPredictions,
+  predictionCites,
+  purgedPrediction,
+  addressOf,
+  authorOf,
   lexicalIcuVersion,
   tokenizeLexical,
   type AccessLog,
@@ -64,6 +69,7 @@ import {
   type MemoryStore,
   type NodePattern,
   type Place,
+  type Prediction,
   type Provenance,
   type SpatialFilter,
   type Tier,
@@ -128,6 +134,7 @@ import {
   SHORT_OCCURRENCE_DAYS,
   PLACE_TABLE,
   placeCount,
+  PREDICTION_TABLE,
   rabitqIndexPlan,
   schemaVersionOf,
   searchableVectors,
@@ -1352,6 +1359,32 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     coldDelete: db.prepare<[string], { path: string }>(
       'DELETE FROM cold_index WHERE id = ? RETURNING path',
     ),
+    predictionGet: db.prepare<[string], { record: string }>(
+      `SELECT record FROM ${PREDICTION_TABLE} WHERE id = ?`,
+    ),
+    predictionPut: db.prepare<[Params]>(
+      `INSERT INTO ${PREDICTION_TABLE} (id, level, org_id, customer_id, agent_id, hive_id, run_id,
+         project_id, author_agent_id, created_at, expires_at, resolved, record)
+       VALUES (@id, @level, @org_id, @customer_id, @agent_id, @hive_id, @run_id, @project_id,
+         @author_agent_id, @created_at, @expires_at, @resolved, @record)
+       ON CONFLICT (id) DO UPDATE SET created_at = excluded.created_at,
+         expires_at = excluded.expires_at, resolved = excluded.resolved, record = excluded.record`,
+    ),
+    predictionDelete: db.prepare<[string]>(`DELETE FROM ${PREDICTION_TABLE} WHERE id = ?`),
+    predictionCiting: db.prepare<[string], { record: string }>(
+      `SELECT record FROM ${PREDICTION_TABLE} WHERE record LIKE ? ESCAPE '\\'`,
+    ),
+    predictionPrune: db.prepare<[string, number]>(
+      `DELETE FROM ${PREDICTION_TABLE} WHERE id IN (SELECT id FROM ${PREDICTION_TABLE}
+         INDEXED BY ${PREDICTION_TABLE}_expires
+         WHERE resolved = 0 AND expires_at <= ? ORDER BY expires_at LIMIT ?)`,
+    ),
+    predictionPendingAt: db.prepare<[Params], { n: number }>(
+      `SELECT count(*) AS n FROM ${PREDICTION_TABLE}
+       WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
+         AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
+         AND project_id IS @project_id AND author_agent_id = @author_agent_id AND resolved = 0`,
+    ),
     getCursor: db.prepare<[string], { value: string }>('SELECT value FROM cursors WHERE key = ?'),
     setCursor: db.prepare<[string, string]>(
       `INSERT INTO cursors (key, value) VALUES (?, ?)
@@ -1454,6 +1487,20 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       () => `SELECT * FROM memories m WHERE ${grantSql(n)} AND (@tier IS NULL OR m.tier = @tier)
          AND (@pinned IS NULL OR m.pinned = @pinned)
        ORDER BY m.rid`,
+    );
+  /** The predictions a grant of `n` patterns reads, filtered and ordered as `selectPredictions`. */
+  const predictionsScoped = (n: number) =>
+    cached<[Params], { record: string }>(
+      `predictions:${n}`,
+      () => `SELECT m.record AS record FROM ${PREDICTION_TABLE} m
+       WHERE ${grantSql(n)}
+         AND (@status IS NULL OR m.resolved = @status)
+         AND (@unexpired IS NULL OR m.resolved = 1 OR m.expires_at > @unexpired)
+         AND (@prefix IS NULL OR m.id LIKE @prefix ESCAPE '\\')
+         AND (@citing IS NULL OR m.record LIKE @citing ESCAPE '\\')
+         AND (@domain IS NULL OR json_extract(m.record, '$.domain') = @domain)
+       ORDER BY m.created_at DESC, m.id DESC
+       LIMIT @limit`,
     );
   const occurredScoped = (n: number, f?: SpatialFilter) =>
     cached<[Params], { id: string; tier: Tier; key: number }>(
@@ -2563,6 +2610,60 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     return { skipped };
   }
 
+  /** The stored prediction `id`, whatever the grant (callers check it). */
+  const predictionRow = (id: string): Prediction | undefined => {
+    const r = q.predictionGet.get(id);
+    return r === undefined ? undefined : (JSON.parse(r.record) as Prediction);
+  };
+  /** The address columns of a prediction, as `memories` has them. */
+  const predictionAddress = (p: Pick<Prediction, 'scope' | 'address'>) => {
+    const a = addressOf(p);
+    return { ...addressColumns(a), project_id: a.projectId ?? null };
+  };
+  const writePrediction = (p: Prediction): void => {
+    q.predictionPut.run({
+      id: p.id,
+      ...predictionAddress(p),
+      author_agent_id: authorOf(p).agentId,
+      created_at: p.createdAt,
+      expires_at: p.expiresAt,
+      resolved: p.resolution === undefined ? 0 : 1,
+      record: JSON.stringify(p),
+    });
+  };
+  const putPredictionTx = db.transaction(
+    (grant: Grant, p: Prediction, expect: { revision: number | null } | undefined): boolean => {
+      const was = predictionRow(p.id);
+      if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, p))) {
+        return false;
+      }
+      if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return false;
+      writePrediction(p);
+      return true;
+    },
+  );
+  const forgetPredictionTx = db.transaction(
+    (grant: Grant, id: string, expect: { revision: number } | undefined): boolean => {
+      const was = predictionRow(id);
+      if (was === undefined || !grantWrites(grant, was)) return false;
+      if (expect !== undefined && was.revision !== expect.revision) return false;
+      q.predictionDelete.run(id);
+      return true;
+    },
+  );
+  /** `LIKE` text matching `s` literally. */
+  const likeLiteral = (s: string): string => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const purgeCitingTx = db.transaction((judgmentId: string, by: string, at: Date): string[] => {
+    const out: string[] = [];
+    for (const r of q.predictionCiting.all(`%${likeLiteral(judgmentId)}%`)) {
+      const p = JSON.parse(r.record) as Prediction;
+      if (p.purged !== undefined || !predictionCites(p, judgmentId)) continue;
+      writePrediction(purgedPrediction(p, by, at));
+      out.push(p.id);
+    }
+    return out;
+  });
+
   const handle: MemoryStore = {
     spatial: true,
     links: true,
@@ -2593,6 +2694,81 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
           const d = stated ? r.key : r.key - 1e15;
           return { id: r.id, score: (stated ? 2 : 1) - d / (d + DAY_MS), tier: r.tier };
         });
+    },
+
+    predictions: true,
+
+    async putPrediction(grant, p, expect) {
+      open();
+      assertGrant(grant);
+      if (!grantWrites(grant, p)) throw new GrantError();
+      const ok = putPredictionTx.immediate(grant, p, expect);
+      // A purge replaced the text: leave none of it in the WAL.
+      if (ok && p.purged !== undefined) truncateWal();
+      return ok;
+    },
+
+    async getPrediction(grant, id) {
+      open();
+      assertGrant(grant);
+      const p = predictionRow(id);
+      return p === undefined || !grantReads(grant, p) ? null : p;
+    },
+
+    async listPredictions(grant, listOpts = {}) {
+      open();
+      assertGrant(grant);
+      const patterns = live(grant.readNodes);
+      if (patterns.length === 0) return [];
+      const o = listOpts;
+      const limit = o.limit === undefined ? -1 : Math.max(0, Math.floor(o.limit));
+      const rows = predictionsScoped(patterns.length).all({
+        ...grantParams(patterns),
+        status: o.status === undefined ? null : o.status === 'resolved' ? 1 : 0,
+        unexpired: o.unexpiredAt ?? null,
+        prefix: o.idPrefix === undefined ? null : `${likeLiteral(o.idPrefix)}%`,
+        citing: o.citing === undefined ? null : `%${likeLiteral(o.citing)}%`,
+        domain: o.domain ?? null,
+        // `citing` is matched in the text first, then exactly below: the limit comes after.
+        limit: o.citing === undefined ? limit : -1,
+      });
+      const readable = rows
+        .map((r) => JSON.parse(r.record) as Prediction)
+        .filter((p) => grantReads(grant, p));
+      return selectPredictions(readable, listOpts);
+    },
+
+    async forgetPrediction(grant, id, expect) {
+      open();
+      assertGrant(grant);
+      const ok = forgetPredictionTx.immediate(grant, id, expect);
+      if (ok) truncateWal();
+      return ok;
+    },
+
+    async purgePredictionsCiting(grant, judgmentId, by, at) {
+      open();
+      assertGrant(grant);
+      const purged = purgeCitingTx.immediate(judgmentId, by, at);
+      if (purged.length > 0) truncateWal();
+      return { purged, leftover: [] };
+    },
+
+    async pruneExpiredPredictions(now, limit) {
+      open();
+      const n = q.predictionPrune.run(now.toISOString(), Math.max(0, Math.floor(limit))).changes;
+      if (n > 0) truncateWal();
+      return n;
+    },
+
+    async countPendingPredictions(at) {
+      open();
+      return (
+        q.predictionPendingAt.get({
+          ...predictionAddress(at),
+          author_agent_id: authorOf(at).agentId,
+        })?.n ?? 0
+      );
     },
 
     async link(grant, a, b, linkOpts) {

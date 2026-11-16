@@ -195,6 +195,18 @@ describe('SDK examples (run)', () => {
     await oort.close();
   });
 
+  it('predictions: applies, resolves with a different verdict, reports agreement', async () => {
+    const { out } = await runExample('predictions.ts');
+    const [agrees, outcome] = out[0]!.split(' ');
+    expect(['false', 'null']).toContain(agrees);
+    expect(outcome).toBe('added');
+    expect(out[1]).toBe('1 6');
+    const oort = await open({ mode: 'local' });
+    const { judgments } = await oort.judge.list();
+    expect(judgments.map((j) => j.reason)).toContain('Satire, clearly labelled as parody.');
+    await oort.close();
+  });
+
   it('links: links two memories as agent, explains them, unlinks', async () => {
     const { out } = await runExample('links.ts');
     expect(out).toEqual(['true agent', 'explicit agent 0', 'true']);
