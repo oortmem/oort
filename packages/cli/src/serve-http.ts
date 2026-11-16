@@ -422,6 +422,14 @@ function idOf(raw: string): string {
   }
 }
 
+/**
+ * The confirm options in a body: `reviewer` only, checked by the SDK (a malformed one is
+ * `usage`). Other fields are left for the route to ignore or refuse.
+ */
+function confirmOptions(b: Record<string, unknown>): { reviewer?: string } | undefined {
+  return b['reviewer'] === undefined ? undefined : { reviewer: b['reviewer'] as string };
+}
+
 /** Refuses a body field a route does not take, as the SDK's strict schemas do. */
 function noFields(b: Record<string, unknown>): void {
   const extra = Object.keys(b)[0];
@@ -555,7 +563,8 @@ const ROUTES: Route[] = [
     method: 'POST',
     name: 'POST /v1/judgments/:id/confirm',
     match: new RegExp(`^/v1/judgments/${ID}/confirm$`),
-    call: (m) => (h, b) => h.judge.confirm(idOf(m[1]!), b),
+    // Takes a `reviewer`; any other field is ignored, as the route always ignored its body.
+    call: (m) => (h, b) => h.judge.confirm(idOf(m[1]!), confirmOptions(b)),
   },
   {
     method: 'GET',
@@ -651,7 +660,11 @@ const ROUTES: Route[] = [
     method: 'POST',
     name: 'POST /v1/feedback/:id/confirm',
     match: new RegExp(`^/v1/feedback/${ID}/confirm$`),
-    call: (m) => (h, b) => h.feedback.confirm(idOf(m[1]!), b),
+    call: (m) => (h, b) => {
+      const { reviewer: _, ...rest } = b;
+      noFields(rest);
+      return h.feedback.confirm(idOf(m[1]!), confirmOptions(b));
+    },
   },
   {
     method: 'POST',

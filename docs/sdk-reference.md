@@ -425,7 +425,8 @@ who stood behind it, and grants nothing. `interactive`: the CLI at a terminal. `
 Oort Cloud dashboard. `connector`: an upstream connector (`upstream` names the system and its
 actor). `integration`: expert-role SDK or `oort serve` calls, and CLI calls that are not
 interactive (`--yes`, `--json`, a pipe). `agent`: MCP, or an agent-role handle. A record written
-before origins were kept reads as `integration`.
+before origins were kept reads as `agent` when an agent recorded it and no person confirmed it,
+else `integration`.
 
 ```ts
 export type LabelOrigin = 'interactive' | 'dashboard' | 'connector' | 'integration' | 'agent';

@@ -213,6 +213,7 @@ console.log(shown(draft.id)); // integration grace@example.com agent
 - An agent-role handle always records `agent`. A `reviewer` it passes is ignored, and MCP has no
   field for either.
 - A confirm records the confirmer's origin and keeps the agent's as `proposedOrigin`.
-- Origin does not change authority. Rows written before it existed read `integration`.
+- Origin does not change authority. A row written before it existed reads `agent` when an agent
+  recorded it and no person has confirmed it, and `integration` otherwise.
 - An export of training data will trust only `interactive`, `dashboard` and `connector` labels
   by default.

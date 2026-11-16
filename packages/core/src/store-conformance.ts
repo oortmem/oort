@@ -920,8 +920,8 @@ function levelConformance(name: string, make: () => Promise<MemoryStore>): void 
     });
 
     it('levels.judgment-label-origin-roundtrips', async () => {
-      // How a judgment arrived is kept exactly; one written before origins were kept has none and
-      // reads as `integration`.
+      // How a judgment arrived is kept exactly. One written before origins were kept has none: it
+      // reads `agent` when an agent recorded it and no person confirmed it, else `integration`.
       const judgment = {
         subject: { summary: 'Post claims a cure' },
         verdict: 'rejected',
@@ -962,18 +962,36 @@ function levelConformance(name: string, make: () => Promise<MemoryStore>): void 
         type: 'judgment',
         judgment: { ...judgment, via: 'cli' },
       });
-      for (const m of [labelled, connector, old]) await store.upsert(TG, m);
+      const oldAgent = makeMemory({
+        id: 'judgment-old-agent',
+        scope: localScope(undefined),
+        type: 'judgment',
+        judgment,
+      });
+      const oldConfirmed = makeMemory({
+        id: 'judgment-old-confirmed',
+        scope: localScope(undefined),
+        type: 'judgment',
+        judgment: { ...judgment, confirmed: { at: '2026-01-02T00:00:00.000Z', by: 'ada' } },
+      });
+      for (const m of [labelled, connector, old, oldAgent, oldConfirmed]) await store.upsert(TG, m);
       expect(await store.get(TG, 'judgment-labelled')).toEqual(labelled);
       expect(await store.get(TG, 'judgment-connector')).toEqual(connector);
       const got = await store.get(TG, 'judgment-old');
       expect(got).toEqual(old);
       expect(got?.judgment?.origin).toBeUndefined();
       expect(labelOrigin(got?.judgment)).toBe('integration');
+      const agentRow = await store.get(TG, 'judgment-old-agent');
+      expect(agentRow).toEqual(oldAgent);
+      expect(agentRow?.judgment?.origin).toBeUndefined();
+      expect(labelOrigin(agentRow?.judgment)).toBe('agent');
       const listed = await store.list(TG, { validOnly: false, embeddings: false });
       expect(Object.fromEntries(listed.map((m) => [m.id, labelOrigin(m.judgment)]))).toMatchObject({
         'judgment-labelled': 'interactive',
         'judgment-connector': 'connector',
         'judgment-old': 'integration',
+        'judgment-old-agent': 'agent',
+        'judgment-old-confirmed': 'integration',
       });
     });
 
@@ -2428,7 +2446,8 @@ export function predictionsConformance(name: string, make: () => Promise<MemoryS
     });
 
     it('predictions.label-origin-roundtrips', async () => {
-      // A resolve keeps how it arrived; one written before origins were kept reads `integration`.
+      // A resolve keeps how it arrived. One written before origins were kept reads `agent` when an
+      // agent resolved it and no person confirmed it, else `integration`.
       const resolution = {
         verdict: 'approved',
         criteria: [],
@@ -2451,17 +2470,29 @@ export function predictionsConformance(name: string, make: () => Promise<MemoryS
         resolution: { ...resolution, via: 'sdk', origin: 'integration', reviewer: 'grace' },
       });
       const old = makePrediction({ id: 'p3', resolution: { ...resolution, via: 'cli' } });
-      for (const p of [confirmed, sdk, old]) expect(await s.putPrediction(TG, p)).toBe(true);
+      const oldAgent = makePrediction({ id: 'p4', resolution });
+      const oldConfirmed = makePrediction({
+        id: 'p5',
+        resolution: { ...resolution, confirmed: { at: '2026-11-16T11:30:00.000Z', by: 'ada' } },
+      });
+      for (const p of [confirmed, sdk, old, oldAgent, oldConfirmed]) {
+        expect(await s.putPrediction(TG, p)).toBe(true);
+      }
       expect(await s.getPrediction(TG, 'p1')).toEqual(confirmed);
       expect(await s.getPrediction(TG, 'p2')).toEqual(sdk);
       const got = await s.getPrediction(TG, 'p3');
       expect(got).toEqual(old);
       expect(labelOrigin(got?.resolution)).toBe('integration');
+      const agentRow = await s.getPrediction(TG, 'p4');
+      expect(agentRow).toEqual(oldAgent);
+      expect(labelOrigin(agentRow?.resolution)).toBe('agent');
       const listed = await s.listPredictions(TG, { status: 'resolved' });
       expect(Object.fromEntries(listed.map((p) => [p.id, labelOrigin(p.resolution)]))).toEqual({
         p1: 'interactive',
         p2: 'integration',
         p3: 'integration',
+        p4: 'agent',
+        p5: 'integration',
       });
     });
 
@@ -2774,7 +2805,8 @@ export function feedbackConformance(name: string, make: () => Promise<MemoryStor
     });
 
     it('feedback.label-origin-roundtrips', async () => {
-      // A row keeps how it arrived; one written before origins were kept reads `integration`.
+      // A row keeps how it arrived. One written before origins were kept reads `agent` when an
+      // agent gave it and no person confirmed it, else `integration`.
       const confirmed = makeFeedback({
         id: 'f1',
         via: 'mcp',
@@ -2790,18 +2822,30 @@ export function feedbackConformance(name: string, make: () => Promise<MemoryStor
         upstream: { system: 'zendesk', actor: 'grace' },
       });
       const old = makeFeedback({ id: 'f3' });
-      for (const f of [confirmed, connector, old])
+      const oldAgent = makeFeedback({ id: 'f4', via: 'mcp', status: 'pending' });
+      const oldConfirmed = makeFeedback({
+        id: 'f5',
+        via: 'mcp',
+        confirmed: { at: '2026-11-16T11:00:00.000Z', by: 'ada' },
+      });
+      for (const f of [confirmed, connector, old, oldAgent, oldConfirmed]) {
         expect(await s.putFeedback(TG, f)).toBe('written');
+      }
       expect(await s.getFeedback(TG, 'f1')).toEqual(confirmed);
       expect(await s.getFeedback(TG, 'f2')).toEqual(connector);
       const got = await s.getFeedback(TG, 'f3');
       expect(got).toEqual(old);
       expect(labelOrigin(got ?? undefined)).toBe('integration');
+      const agentRow = await s.getFeedback(TG, 'f4');
+      expect(agentRow).toEqual(oldAgent);
+      expect(labelOrigin(agentRow ?? undefined)).toBe('agent');
       const listed = await s.listFeedback(TG);
       expect(Object.fromEntries(listed.map((f) => [f.id, labelOrigin(f)]))).toEqual({
         f1: 'interactive',
         f2: 'connector',
         f3: 'integration',
+        f4: 'agent',
+        f5: 'integration',
       });
     });
 

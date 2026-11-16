@@ -301,8 +301,27 @@ describe('the memory protocol on the socket', () => {
     });
     const given = await post('/v1/feedback', expert, { memoryId: id, signal: 'helped' });
     expect(given.body.data?.['feedback']).toMatchObject({ origin: 'integration' });
-    const confirmExtra = await post(`/v1/judgments/${pid}/confirm`, expert, { origin: 'x' });
-    expect([confirmExtra.status, confirmExtra.body.error?.['code']]).toEqual([400, 'usage']);
+
+    // Confirming a judgment takes a `reviewer` and ignores any other field, as it always ignored
+    // its body; only a malformed reviewer is refused.
+    const recorded = await post('/v1/judgments', expert, judgment('Post says garlic cures colds'));
+    const jid = String(recorded.body.data?.['id']);
+    for (const reviewer of ['grace\nmallory', 5, 'g'.repeat(121)]) {
+      const bad = await post(`/v1/judgments/${jid}/confirm`, expert, { reviewer });
+      expect([bad.status, bad.body.error?.['code']], String(reviewer)).toEqual([400, 'usage']);
+    }
+    const extra = await post(`/v1/judgments/${jid}/confirm`, expert, {
+      origin: 'interactive',
+      by: 'mallory',
+      reviewer: 'grace',
+    });
+    expect(extra.status, JSON.stringify(extra.body)).toBe(200);
+    expect(extra.body.data).toMatchObject({ id: jid, changed: false });
+    const bare = await post(`/v1/judgments/${jid}/confirm`, expert, { anything: true });
+    expect(bare.status, JSON.stringify(bare.body)).toBe(200);
+    // Confirming feedback still refuses a field it does not take, and takes a `reviewer`.
+    const feedbackExtra = await post(`/v1/feedback/${row.id}/confirm`, expert, { origin: 'x' });
+    expect([feedbackExtra.status, feedbackExtra.body.error?.['code']]).toEqual([400, 'usage']);
   });
 
   it('keeps end users to their Planet and needs an org', async () => {

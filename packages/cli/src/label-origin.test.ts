@@ -201,7 +201,7 @@ describe('label origin: oort judge', () => {
     expect(shown.io.stdout).toContain('[origin interactive, proposed agent]');
   });
 
-  it('cli.origin-judge-list-shows-it-and-older-rows-read-integration', async () => {
+  it('cli.origin-judge-list-shows-it-and-reads-older-rows', async () => {
     const h = judging();
     expect((await h.run(record('Typed at a terminal'), TERMINAL)).code).toBe(0);
     // A judgment written before origins were kept: no origin at all.
@@ -214,9 +214,23 @@ describe('label origin: oort judge', () => {
       id: 'bbbbbbbb-0000-4000-8000-000000000002',
       judgment: { ...(j as Judgment), subject: { summary: 'Written by an older build' } },
     });
+    // An agent's, from an older build, that no person has confirmed: it reads `agent`.
+    await h.store.upsert(TG, {
+      ...m!,
+      id: 'bbbbbbbb-0000-4000-8000-000000000003',
+      judgment: {
+        ...(j as Judgment),
+        via: 'mcp',
+        subject: { summary: 'Recorded by an agent on an older build' },
+      },
+    });
     const text = await h.run(['judge', 'list']);
     expect(text.io.stdout).toMatch(/Typed at a terminal.*\[origin interactive\]/);
     expect(text.io.stdout).toMatch(/Written by an older build.*\[origin integration\]/);
+    expect(text.io.stdout).toMatch(/Recorded by an agent on an older build.*\[origin agent\]/);
+    expect(await bySubject(h, 'Recorded by an agent on an older build')).toMatchObject({
+      origin: 'agent',
+    });
     expect(await bySubject(h, 'Written by an older build')).toMatchObject({
       origin: 'integration',
     });
@@ -299,7 +313,7 @@ describe('label origin: oort feedback', () => {
     expect(text.io.stdout).toContain('[origin integration, proposed agent]');
   });
 
-  it('cli.origin-feedback-list-reads-older-rows-as-integration', async () => {
+  it('cli.origin-feedback-list-reads-older-rows', async () => {
     const h = await seeded();
     // A row written before origins were kept: no origin at all.
     const old = makeFeedback({ id: 'cccccccc-0000-4000-8000-000000000003', memoryId: MEMORY });
@@ -307,6 +321,18 @@ describe('label origin: oort feedback', () => {
     expect(await h.store.putFeedback!(TG, old)).toBe('written');
     expect((await feedback(h))[0]).toMatchObject({ origin: 'integration' });
     expect((await h.run(['feedback', 'list'])).io.stdout).toContain('[origin integration]');
+    // An agent's, from an older build, that no person has confirmed: it reads `agent`.
+    const agents = makeFeedback({
+      id: 'cccccccc-0000-4000-8000-000000000004',
+      memoryId: MEMORY,
+      via: 'mcp',
+      status: 'pending',
+    });
+    expect(await h.store.putFeedback!(TG, agents)).toBe('written');
+    const rows = await feedback(h);
+    expect(rows.find((f) => f.id === agents.id)).toMatchObject({ origin: 'agent' });
+    expect(rows.find((f) => f.id === old.id)).toMatchObject({ origin: 'integration' });
+    expect((await h.run(['feedback', 'list'])).io.stdout).toContain('[origin agent]');
   });
 
   it('mcp.origin-tools-take-no-origin-or-reviewer', () => {

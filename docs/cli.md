@@ -2156,7 +2156,8 @@ and an integration can name any reviewer it likes.
   they are.
 - `oort judge import`, packs and `oort import` record `integration`: the labels came from a file.
   A pack carries no origin, so one store's origins never reach another.
-- A row written before Oort kept origins has none, and reads as `integration`.
+- A row written before Oort kept origins has none. It reads as `agent` when an agent recorded it
+  and no person has confirmed it, and as `integration` otherwise.
 - `oort judge list`, `oort judge predictions` and `oort feedback list` show it on each row
   (`[origin interactive, proposed agent]`), and their `--json` has `origin`, with `reviewer`,
   `upstream` and `proposedOrigin` when set.

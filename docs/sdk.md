@@ -1364,7 +1364,8 @@ console.log(shown(draft.id)); // integration grace@example.com agent
   they are.
 - `JudgmentView`, `PredictionView.resolution` and `FeedbackView` carry `origin`, and `reviewer`,
   `upstream` and `proposedOrigin` when set. A label written before Oort kept origins reads as
-  `integration`.
+  `agent` when an agent recorded it and no person has confirmed it, and as `integration`
+  otherwise.
 - An export of training data will trust only `interactive`, `dashboard` and `connector` labels
   by default.
 

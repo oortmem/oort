@@ -100,7 +100,8 @@ export interface ClaimedPackOrigin {
  *   interactive. `reviewer` is who the integration says reviewed the label (its claim);
  * - `agent`: MCP, or an SDK or `oort serve` handle in agent role. Always `agent` for a label an
  *   agent wrote, whatever it asked for.
- * A record written before origins were kept reads as `integration` (`labelOrigin`).
+ * A record written before origins were kept reads as `agent` when an agent recorded it and no
+ * person confirmed it, else `integration` (`labelOrigin`).
  */
 export const LABEL_ORIGINS = [
   'interactive',
@@ -144,9 +145,16 @@ export const LABEL_LIMITS = Object.freeze({
   text: 120,
 });
 
-/** How `r` arrived: its `origin`, or `integration` for a record written before origins were kept. */
-export function labelOrigin(r: Pick<LabelProvenance, 'origin'> | undefined): LabelOrigin {
-  return r?.origin ?? 'integration';
+/** A stored label: its provenance, and how it was recorded (for records older than origins). */
+export type LabelRecord = LabelProvenance & { via?: string; confirmed?: unknown };
+
+/**
+ * How `r` arrived: its `origin`. A record written before origins were kept reads `agent` when it
+ * shows an agent made it (`via: 'mcp'`, not confirmed by a person) and `integration` otherwise.
+ */
+export function labelOrigin(r: LabelRecord | undefined): LabelOrigin {
+  if (r?.origin !== undefined) return r.origin;
+  return r?.via === 'mcp' && r.confirmed === undefined ? 'agent' : 'integration';
 }
 
 /**
@@ -962,9 +970,9 @@ export async function confirmJudgment(
   now = new Date(),
   label?: LabelSource,
 ): Promise<boolean> {
-  if (!isActiveJudgment(m, now) || !isUnconfirmedAgentJudgment(m.judgment)) return false;
-  // Checked before anything is written.
+  // Checked first, so a malformed label is refused whether or not there is anything to confirm.
   labelOf(label, false);
+  if (!isActiveJudgment(m, now) || !isUnconfirmedAgentJudgment(m.judgment)) return false;
   const iso = now.toISOString();
   const full = (await store.get(grant, m.id)) ?? m;
   const j = {

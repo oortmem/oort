@@ -16,6 +16,7 @@ import {
   recordJudgment,
   resolvePrediction,
   type Judgment,
+  labelOf,
   type LabelSource,
   type Memory,
   type RecordJudgmentResult,
@@ -235,6 +236,8 @@ export async function confirm(
   const store = storeOf(ctx);
   const grant = ctx.principal.grant;
   const label = sdkLabel(ctx, o.reviewer);
+  // A malformed reviewer is refused even when there turns out to be nothing to confirm.
+  labelOf(label, false);
   const confirmPrediction = async (pid: string) => ({
     id: pid,
     changed: await confirmResolution(store, grant, pid, ctx.judge.operator, ctx.now(), label),

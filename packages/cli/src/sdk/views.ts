@@ -5,7 +5,7 @@ import {
   labelOrigin,
   scrub,
   type Judgment,
-  type LabelProvenance,
+  type LabelRecord,
   type JudgeResult as CoreJudgeResult,
   type LiveEvalReport,
   predictionState,
@@ -69,8 +69,8 @@ function originView(o: CoreRecalled['origin']): MemoryView['origin'] | undefined
   };
 }
 
-/** How a label arrived, as the views show it: `origin` always (`integration` for older rows). */
-export function labelView(r: LabelProvenance): LabelOriginView {
+/** How a label arrived, as the views show it: `origin` always (see `labelOrigin` for older rows). */
+export function labelView(r: LabelRecord): LabelOriginView {
   return {
     origin: labelOrigin(r),
     ...(r.reviewer !== undefined && { reviewer: clean(r.reviewer) }),

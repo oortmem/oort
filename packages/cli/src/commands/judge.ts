@@ -35,7 +35,7 @@ import {
   type JudgeResult,
   type Judgment,
   type JudgmentInput,
-  type LabelProvenance,
+  type LabelRecord,
   type LabelSource,
   type LiveEvalReport,
   type Memory,
@@ -171,8 +171,8 @@ export function cliLabel(ctx: Ctx, yes?: boolean): LabelSource {
   return { origin: interactive ? 'interactive' : 'integration' };
 }
 
-/** How a label arrived, as `--json` shows it: `origin` always (`integration` for older rows). */
-export function originFields(r: LabelProvenance) {
+/** How a label arrived, as `--json` shows it: `origin` always (see `labelOrigin` for older rows). */
+export function originFields(r: LabelRecord) {
   return {
     origin: labelOrigin(r),
     ...(r.reviewer !== undefined && { reviewer: r.reviewer }),
@@ -182,7 +182,7 @@ export function originFields(r: LabelProvenance) {
 }
 
 /** How a label arrived, on a line: ` [origin interactive, proposed agent]`. */
-export function originTag(r: LabelProvenance): string {
+export function originTag(r: LabelRecord): string {
   const parts = [`origin ${labelOrigin(r)}`];
   if (r.reviewer !== undefined) parts.push(`reviewer ${shown(r.reviewer)}`);
   if (r.upstream !== undefined) {

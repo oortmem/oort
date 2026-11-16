@@ -179,11 +179,11 @@ describe('label origin', () => {
       now: NOW,
       via: 'mcp',
     });
-    // As an older build wrote it: no origin.
+    // As an older build wrote it: no origin. An agent's, unconfirmed, it reads `agent`.
     const { origin: _o, ...j } = r.memory.judgment!;
     const old: Memory = { ...r.memory, judgment: j as Judgment };
     await store.upsert(GRANT, old);
-    expect(labelOrigin((await store.get(GRANT, old.id))!.judgment)).toBe('integration');
+    expect(labelOrigin((await store.get(GRANT, old.id))!.judgment)).toBe('agent');
     await confirmJudgment(store, GRANT, old, 'ada', NOW);
     expect((await store.get(GRANT, old.id))!.judgment).toMatchObject({
       origin: 'integration',
