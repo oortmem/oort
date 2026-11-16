@@ -18,6 +18,7 @@ import {
   recordFeedback,
   retireFeedback,
   supersedeFeedback,
+  supersedingId,
   withoutInvisible,
   type Feedback,
   type FeedbackDeps,
@@ -707,6 +708,169 @@ describe('feedback: a resolve claims the row first', () => {
     });
     expect(r.memory.author).toEqual({ agentId: 'cursor' });
     expect(r.memory.address).toMatchObject({ level: 'user', orgId: 'local', customerId: 'self' });
+  });
+});
+
+describe('feedback: a claim that stopped part way', () => {
+  const fact = 'The auth service listens on port 8080';
+  const min = (n: number) => new Date(LATER.getTime() + n * 60_000);
+  const sup = (store: MemoryStore, f: Feedback, text: string, at: Date, extra = {}) =>
+    supersedeFeedback(f.id, text, { ...as(store, at), harness: 'cli', ...extra });
+
+  it('feedback.a-supersede-stopped-while-embedding-is-dismissed-after-five-minutes', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({ note: 'Moved' }), person(store)));
+    // The embed never answers: Ctrl-C after the claim, as far as the row can tell.
+    let entered!: () => void;
+    const inEmbed = new Promise<void>((r) => (entered = r));
+    const hang = {
+      dimension: 4,
+      embed: () => {
+        entered();
+        return new Promise<never>(() => {});
+      },
+    };
+    void sup(store, f, fact, LATER, { embed: hang });
+    await inEmbed;
+    const row = await findFeedback(store, TG, f.id);
+    expect(row).toMatchObject({ status: 'resolving', claim: { action: 'superseded', fact } });
+    const early = (await dismissFeedback(f.id, as(store, min(1))).catch(
+      (x: unknown) => x,
+    )) as FeedbackError;
+    expect(early.kind).toBe('in-progress');
+    expect(early.message).toMatch(/started 1 minute ago by local-user/);
+    expect(early.message).toMatch(/After 4 more minute/);
+    expect(early.message).not.toContain('8080');
+    const done = await dismissFeedback(f.id, as(store, min(6)));
+    expect(done).toMatchObject({ status: 'dismissed' });
+    expect(done.claim).toBeUndefined();
+    expect((await contestedOf(store, TG, ['port'])).size).toBe(0);
+    const r = await recalled(store);
+    expect(r.memories.find((m) => m.id === 'port')?.explanation.contested).toBeUndefined();
+    expect(await currentIds(store)).toEqual(['port']);
+    expect(await store.get(TG, supersedingId(f.id))).toBeNull();
+  });
+
+  it('feedback.a-reworded-supersede-takes-over-and-leaves-one-new-memory', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    // Stops after the new memory is written, before the old one closes.
+    crashOnce(store, 'upsertManyIfUnchanged', () => true);
+    await expect(sup(store, f, fact, LATER)).rejects.toThrow('crash');
+    expect((await currentIds(store)).sort()).toEqual(['port', supersedingId(f.id)].sort());
+    const reworded = 'The auth service listens on port 8080 now';
+    const early = (await sup(store, f, reworded, min(2)).catch((x: unknown) => x)) as FeedbackError;
+    expect(early.kind).toBe('in-progress');
+    const r = await sup(store, f, reworded, min(6));
+    expect(r.memory.text).toBe(reworded);
+    expect(await currentIds(store)).toEqual([r.memory.id]);
+    expect((await store.get(TG, 'port'))!.supersededBy).toBe(r.memory.id);
+    expect(
+      (await store.list(TG, { validOnly: false, embeddings: false })).filter(
+        (m) => m.supersedes === 'port',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('feedback.a-retire-takes-over-a-stopped-supersede-and-undoes-it-first', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    // Stops after both memories changed, before the row closes.
+    crashOnce(store, 'putFeedback', (_g, row) => row.status === 'superseded');
+    await expect(sup(store, f, fact, LATER)).rejects.toThrow('crash');
+    expect((await store.get(TG, 'port'))!.endReason).toBe('superseded');
+    const r = await retireFeedback(f.id, as(store, min(6)));
+    expect(r.feedback.status).toBe('retired');
+    expect(await store.get(TG, supersedingId(f.id))).toBeNull();
+    const old = (await store.get(TG, 'port'))!;
+    expect(old).toMatchObject({ endReason: 'corrected', supersededBy: null });
+    expect(
+      old.source.decisions.filter((d) => d.stage === 'feedback').map((d) => d.question),
+    ).toEqual(['retired']);
+  });
+
+  it('feedback.a-takeover-keeps-a-new-memory-something-else-changed', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    crashOnce(store, 'upsertManyIfUnchanged', () => true);
+    await expect(sup(store, f, fact, LATER)).rejects.toThrow('crash');
+    const n = (await store.get(TG, supersedingId(f.id)))!;
+    await store.upsert(TG, { ...n, pinned: true, updatedAt: min(1).toISOString() });
+    const done = await dismissFeedback(f.id, as(store, min(6)));
+    expect(done.status).toBe('dismissed');
+    expect((await store.get(TG, supersedingId(f.id)))?.pinned).toBe(true);
+  });
+
+  it('feedback.a-give-up-whose-new-memory-changed-still-frees-the-row', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    const newId = supersedingId(f.id);
+    // Right after the new memory lands, something edits it and ends the old one another way.
+    const real = store.upsert.bind(store);
+    let once = false;
+    store.upsert = async (g, m) => {
+      await real(g, m);
+      if (m.id === newId && !once) {
+        once = true;
+        await real(g, { ...m, pinned: true, updatedAt: min(1).toISOString() });
+        const old = (await store.get(TG, 'port'))!;
+        await real(g, {
+          ...old,
+          expiredAt: LATER.toISOString(),
+          endReason: 'corrected',
+          updatedAt: min(1).toISOString(),
+        });
+      }
+    };
+    const e = (await sup(store, f, fact, LATER).catch((x: unknown) => x)) as FeedbackError;
+    expect(e).toMatchObject({ kind: 'memory-ended', memoryChanged: true, status: 'open' });
+    expect(e.message).toMatch(/was changed meanwhile, so it was kept/);
+    expect((await findFeedback(store, TG, f.id)).status).toBe('open');
+    expect(await dismissFeedback(f.id, as(store, min(1)))).toMatchObject({ status: 'dismissed' });
+  });
+
+  it('feedback.another-memory-at-the-new-id-is-refused', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    const planted = makeMemory({ id: supersedingId(f.id), text: 'Something else entirely' });
+    await store.upsert(TG, planted);
+    const e = (await sup(store, f, fact, LATER).catch((x: unknown) => x)) as FeedbackError;
+    expect(e.kind).toBe('conflict');
+    expect(e.message).toContain(`oort inspect ${planted.id.slice(0, 8)}`);
+    expect((await findFeedback(store, TG, f.id)).status).toBe('open');
+    expect((await store.get(TG, 'port'))!.expiredAt).toBeNull();
+    expect((await store.get(TG, planted.id))!.text).toBe('Something else entirely');
+  });
+
+  it('feedback.a-finished-claim-keeps-who-claimed-it-and-records-at-write-time', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({ signal: 'stale' }), person(store)));
+    crashOnce(store, 'upsertManyIfUnchanged', () => true);
+    await expect(retireFeedback(f.id, { ...as(store, LATER), by: 'ada' })).rejects.toThrow('crash');
+    const nextDay = new Date(LATER.getTime() + 86_400_000);
+    const r = await retireFeedback(f.id, { ...as(store, nextDay), by: 'grace' });
+    expect(r.feedback.resolved).toMatchObject({
+      by: 'grace',
+      claimedBy: 'ada',
+      claimedAt: LATER.toISOString(),
+    });
+    // It held until the claim; it was recorded as ended when the retry wrote it.
+    expect(r.memory).toMatchObject({
+      validTo: LATER.toISOString(),
+      expiredAt: nextDay.toISOString(),
+      updatedAt: nextDay.toISOString(),
+    });
+  });
+
+  it('feedback.an-agents-row-being-resolved-is-never-a-label', async () => {
+    const store = await setup();
+    const f = await kept(
+      recordFeedback(give({ by: 'claude-code', note: 'unconfirmed' }), agent(store)),
+    );
+    crashOnce(store, 'upsertManyIfUnchanged', () => true);
+    await expect(retireFeedback(f.id, as(store, LATER))).rejects.toThrow('crash');
+    expect((await findFeedback(store, TG, f.id)).status).toBe('resolving');
+    expect((await contestedOf(store, TG, ['port'])).size).toBe(0);
   });
 });
 

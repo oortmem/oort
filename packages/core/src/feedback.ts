@@ -40,7 +40,9 @@ import { scrub } from './scrub.js';
  * row is claimed (`resolving`, with the resolver and the action), the memory is changed, then the
  * row closes. Only the call that claimed the row (or a later call finishing the same claim) ever
  * changes the memory, so two resolves never undo each other; a call that stopped part way leaves
- * the row `resolving`, and the same command run again finishes it.
+ * the row `resolving`, and the same command run again finishes it. After
+ * `FEEDBACK_LIMITS.staleClaimMs` a person's retire, dismiss or supersede with another fact takes
+ * such a claim over, putting back what it changed first, so a row never stays stuck.
  */
 
 export const FEEDBACK_SIGNALS = ['helped', 'wrong', 'stale', 'irrelevant'] as const;
@@ -88,6 +90,11 @@ export const FEEDBACK_LIMITS = Object.freeze({
   pendingAddress: 50_000,
   /** A memory id. */
   memoryId: 128,
+  /**
+   * A retire or supersede claim older than this (5 minutes) stopped part way: a person's retire,
+   * dismiss or supersede with another fact may take it over (`claimIsStale`).
+   */
+  staleClaimMs: 5 * 60_000,
 });
 
 export const FEEDBACK_DEFAULTS = Object.freeze({
@@ -98,12 +105,13 @@ export const FEEDBACK_DEFAULTS = Object.freeze({
 /** A person's retire or supersede, while it runs (`status: 'resolving'`). */
 export interface FeedbackClaim {
   action: 'retired' | 'superseded';
-  /** The person resolving it, when they claimed it, and a token for this claim. */
+  /** The person resolving it, and when they claimed it (the clock of the call that claimed). */
   by: string;
   at: string;
-  token: string;
   /** Where the row goes back to if the claim is given up (the memory could not be changed). */
   from: 'open' | 'pending';
+  /** The memory's `validTo` when it was claimed, to put back if the claim is taken over. */
+  validTo?: string | null;
   /** `superseded`: the fact as it is stored, the secret kinds redacted, and the new memory id. */
   fact?: string;
   redacted?: string[];
@@ -142,8 +150,17 @@ export interface Feedback {
   confirmed?: { at: string; by: string };
   /** Set while a person's retire or supersede runs. */
   claim?: FeedbackClaim;
-  /** Set when a person retired, superseded or dismissed it. */
-  resolved?: { at: string; by: string; supersededBy?: string };
+  /**
+   * Set when a person retired, superseded or dismissed it. `claimedBy` and `claimedAt`: another
+   * person claimed it first (a retire or supersede that stopped part way, finished by `by`).
+   */
+  resolved?: {
+    at: string;
+    by: string;
+    supersededBy?: string;
+    claimedBy?: string;
+    claimedAt?: string;
+  };
   /** Raised by one on every write; the store's guard for two writers at once. */
   revision: number;
   createdAt: string;
@@ -261,17 +278,41 @@ const fail = (
 
 const invalid = (message: string): FeedbackError => new FeedbackError('invalid', message);
 
-const COMMAND: Record<FeedbackClaim['action'], string> = {
+const VERB: Record<FeedbackClaim['action'], string> = {
   retired: 'retire',
-  superseded: 'supersede (with the same fact)',
+  superseded: 'supersede',
 };
 
-/** A retire or supersede of `f` is under way, or stopped part way. */
-function inProgress(f: Feedback, why = 'Another call is resolving that feedback'): FeedbackError {
-  const action = f.claim?.action ?? 'retired';
+/** `n` milliseconds as people say it: `just now`, `3 minutes ago`, `2 hours ago`. */
+function ago(ms: number): string {
+  const min = Math.floor(Math.max(0, ms) / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 120) return `${min} minute${min === 1 ? '' : 's'} ago`;
+  const h = Math.floor(min / 60);
+  return h < 48 ? `${h} hours ago` : `${Math.floor(h / 24)} days ago`;
+}
+
+/**
+ * A retire or supersede of `f` is under way, or stopped part way: who started it and when, how
+ * to finish it, and when another resolve may take it over. Never the stored fact (the row shows
+ * it: `oort feedback list`).
+ */
+function inProgress(
+  f: Feedback,
+  now: Date,
+  why = 'Another call is resolving that feedback',
+): FeedbackError {
+  const c = f.claim;
+  if (c === undefined) return new FeedbackError('in-progress', `${why}.`, 'resolving');
+  const verb = VERB[c.action];
+  const same = c.action === 'superseded' ? ' with the same fact (feedback list shows it)' : '';
+  const age = claimAge(c, now);
+  const later = claimIsStale(c, now)
+    ? 'A retire, a dismiss or a supersede with another fact now takes it over.'
+    : `After ${Math.ceil((FEEDBACK_LIMITS.staleClaimMs - Math.max(0, age)) / 60_000)} more minute(s), a retire, a dismiss or a supersede with another fact may take it over.`;
   return new FeedbackError(
     'in-progress',
-    `${why} (${COMMAND[action].split(' ')[0]}). If it stopped, run ${COMMAND[action]} again to finish it.`,
+    `${why} (${verb}, started ${ago(age)} by ${c.by}). If it stopped, run ${verb}${same} again to finish it. ${later}`,
     'resolving',
   );
 }
@@ -609,11 +650,16 @@ export interface ResolveFeedbackDeps {
 }
 
 /** Where a row stands after a guarded write on it did not land, as the error to report. */
-async function lostTo(s: FeedbackStore, grant: Grant, id: string): Promise<FeedbackError> {
+async function lostTo(
+  s: FeedbackStore,
+  grant: Grant,
+  id: string,
+  at: Date,
+): Promise<FeedbackError> {
   const now = await s.getFeedback(grant, id);
   if (now === null) return fail('not-found');
   if (isFinal(now.status)) return fail('already-resolved', now.status);
-  if (now.status === 'resolving') return inProgress(now);
+  if (now.status === 'resolving') return inProgress(now, at);
   return fail('conflict', now.status);
 }
 
@@ -647,7 +693,7 @@ export async function confirmFeedback(id: string, deps: ResolveFeedbackDeps): Pr
     updatedAt: iso,
   };
   if ((await s.putFeedback(deps.grant, next, { revision: f.revision })) !== 'written') {
-    throw await lostTo(s, deps.grant, id);
+    throw await lostTo(s, deps.grant, id, now);
   }
   return next;
 }
@@ -706,11 +752,120 @@ async function fullMemory(store: MemoryStore, grant: Grant, m: Memory): Promise<
 /** How often a memory change is tried again when the memory changed under it (an access). */
 const MEMORY_TRIES = 4;
 
+/** How long a claim has run, in milliseconds (negative when the clock went back). */
+export function claimAge(c: Pick<FeedbackClaim, 'at'>, now: Date): number {
+  return now.getTime() - Date.parse(c.at);
+}
+
+/**
+ * True when a claim is old enough (`FEEDBACK_LIMITS.staleClaimMs`) for a person's retire, dismiss
+ * or supersede with another fact to take it over. A clock set back never makes it stale.
+ */
+export function claimIsStale(c: Pick<FeedbackClaim, 'at'>, now: Date): boolean {
+  return claimAge(c, now) >= FEEDBACK_LIMITS.staleClaimMs;
+}
+
+/**
+ * True when `m` is the memory claim `c` writes for `f`: its id, the memory it supersedes, the
+ * fact, and this feedback's decision. With `unchanged`, also nothing else changed it since.
+ */
+function isClaimMemory(m: Memory, f: Feedback, c: FeedbackClaim, unchanged: boolean): boolean {
+  const ours =
+    m.id === c.memoryId &&
+    m.supersedes === f.memoryId &&
+    m.text === c.fact &&
+    changedBy(m, 'superseded', f);
+  if (!ours || !unchanged) return ours;
+  return (
+    m.source.decisions.length === 1 &&
+    m.updatedAt === m.createdAt &&
+    m.validTo === null &&
+    m.expiredAt === null &&
+    m.supersededBy === null
+  );
+}
+
+/** True when `m`'s end was set by claim `c` of `f` (and nothing ended it since). */
+function endSetBy(m: Memory, f: Feedback, c: FeedbackClaim): boolean {
+  if (!changedBy(m, c.action, f)) return false;
+  if (c.action === 'superseded') {
+    return m.endReason === 'superseded' && m.supersededBy === c.memoryId;
+  }
+  return m.endReason === (f.signal === 'wrong' ? 'corrected' : 'expired');
+}
+
+/** `m` as it was before claim `c` of `f` ended it: current again, without that decision. */
+function reopened(m: Memory, f: Feedback, c: FeedbackClaim, now: Date): Memory {
+  return {
+    ...m,
+    validTo: c.validTo !== undefined ? c.validTo : m.endReason === 'corrected' ? m.validTo : null,
+    expiredAt: null,
+    endReason: null,
+    ...(c.action === 'superseded' && { supersededBy: null }),
+    updatedAt: now.toISOString(),
+    source: {
+      ...m.source,
+      decisions: m.source.decisions.filter(
+        (d) => !(d.stage === 'feedback' && d.question === c.action && d.answer === f.id),
+      ),
+    },
+  };
+}
+
+/**
+ * Takes over a claim that stopped part way (`claimIsStale`): what it changed is put back first
+ * (the new memory a supersede wrote, only while nothing else changed it; the old memory's end,
+ * only while that claim set it and no kept new memory supersedes it), then the row goes back to
+ * where it was before the claim, in one guarded write. Returns that row.
+ */
+async function takeOver(
+  s: FeedbackStore,
+  deps: ResolveFeedbackDeps,
+  f: Feedback,
+  now: Date,
+): Promise<Feedback> {
+  const c = f.claim!;
+  let keptNew = false;
+  if (c.action === 'superseded' && c.memoryId !== undefined) {
+    const n = await deps.store.get(deps.grant, c.memoryId);
+    if (n !== null) {
+      // A memory changed since (or not this claim's) is someone's now: it stays.
+      if (isClaimMemory(n, f, c, true)) await deps.store.forget(deps.grant, n.id);
+      else keptNew = true;
+    }
+  }
+  let undone = keptNew;
+  for (let i = 0; i < MEMORY_TRIES && !undone; i++) {
+    const m = await deps.store.get(deps.grant, f.memoryId);
+    if (m === null || !endSetBy(m, f, c)) {
+      undone = true;
+      break;
+    }
+    const full = await fullMemory(deps.store, deps.grant, m);
+    const next = reopened(full, f, c, now);
+    if ((await guarded(deps.store, deps.grant, [{ next, was: m }])).length === 0) undone = true;
+  }
+  if (!undone) throw inProgress(f, now, 'Its memory kept changing while this ran');
+  const { claim: _c, ...rest } = f;
+  const back: Feedback = {
+    ...rest,
+    status: c.from,
+    revision: f.revision + 1,
+    updatedAt: now.toISOString(),
+  };
+  if ((await s.putFeedback(deps.grant, back, { revision: f.revision })) !== 'written') {
+    throw await lostTo(s, deps.grant, f.id, now);
+  }
+  return back;
+}
+
 /**
  * The correction `ref` names, for `action`, claimed for this call: an open (or pending) row is
- * claimed in one guarded write; a row already `resolving` with the same action (and for a
- * supersede, the same fact) is taken over, so a call that stopped part way is finished. Anything
- * else is refused with where it stands.
+ * claimed in one guarded write. A row already `resolving` with the same action (and for a
+ * supersede, the same fact) is taken over as it is, so a call that stopped part way is finished.
+ * A row `resolving` another way is refused (`in-progress`) until its claim is stale, and then
+ * taken over (`takeOver`) and claimed for this call. Anything else is refused with where it
+ * stands.
  */
 async function claimed(
   s: FeedbackStore,
@@ -724,25 +879,33 @@ async function claimed(
 ): Promise<{ f: Feedback; c: FeedbackClaim; by: string }> {
   const now = deps.now ?? new Date();
   const by = feedbackBy(deps.by);
-  const f = await s.getFeedback(deps.grant, id);
+  let f = await s.getFeedback(deps.grant, id);
   if (f === null) throw fail('not-found');
   if (isFinal(f.status)) throw fail('already-resolved', f.status);
   if (f.signal !== 'wrong' && f.signal !== 'stale') throw fail('not-a-correction');
   if (!grantWrites(deps.grant, f)) throw new GrantError();
-  const m = await deps.store.get(deps.grant, f.memoryId);
-  if (m === null || !grantReads(deps.grant, m)) throw fail('memory-not-found');
-  if (!grantWrites(deps.grant, m)) throw new GrantError();
+  const memoryOf = async (row: Feedback): Promise<Memory> => {
+    const m = await deps.store.get(deps.grant, row.memoryId);
+    if (m === null || !grantReads(deps.grant, m)) throw fail('memory-not-found');
+    if (!grantWrites(deps.grant, m)) throw new GrantError();
+    return m;
+  };
+  let m = await memoryOf(f);
   if (f.status === 'resolving') {
     const c = f.claim;
     const want = extra(f, m);
     if (
-      c === undefined ||
-      c.action !== action ||
-      (want.fact !== undefined && want.fact !== c.fact)
+      c !== undefined &&
+      c.action === action &&
+      (want.fact === undefined || want.fact === c.fact)
     ) {
-      throw inProgress(f, 'That feedback is being resolved another way');
+      return { f, c, by };
     }
-    return { f, c, by };
+    if (c === undefined || !claimIsStale(c, now)) {
+      throw inProgress(f, now, 'That feedback is being resolved another way');
+    }
+    f = await takeOver(s, deps, f, now);
+    m = await memoryOf(f);
   }
   if (f.status !== 'open' && f.status !== 'pending') throw fail('already-resolved', f.status);
   if (!isCurrent(m, now)) throw fail('memory-ended');
@@ -750,8 +913,8 @@ async function claimed(
     action,
     by,
     at: now.toISOString(),
-    token: randomUUID(),
     from: f.status,
+    validTo: m.validTo,
     ...extra(f, m),
   };
   const next: Feedback = {
@@ -762,23 +925,28 @@ async function claimed(
     updatedAt: c.at,
   };
   if ((await s.putFeedback(deps.grant, next, { revision: f.revision })) !== 'written') {
-    throw await lostTo(s, deps.grant, id);
+    throw await lostTo(s, deps.grant, id, now);
   }
   return { f: next, c, by };
 }
 
+/** Fails, with where the row stands, unless `f` is still as this call claimed it. */
+async function stillClaimed(s: FeedbackStore, grant: Grant, f: Feedback, now: Date): Promise<void> {
+  const live = await s.getFeedback(grant, f.id);
+  if (live?.revision !== f.revision) throw await lostTo(s, grant, f.id, now);
+}
+
 /**
- * Gives a claim up when the memory cannot be changed (it ended, or is gone): the row goes back to
- * where it was. Throws `fail(kind)` either way; a row that moved on meanwhile is left as it is.
+ * Gives a claim up (the memory cannot be changed: it ended, or is gone): the row goes back to
+ * where it was, in one guarded write. A row that moved on meanwhile is left as it is.
  */
 async function release(
   s: FeedbackStore,
   grant: Grant,
   f: Feedback,
   c: FeedbackClaim,
-  kind: 'memory-ended' | 'memory-not-found',
   now: Date,
-): Promise<never> {
+): Promise<void> {
   const { claim: _c, ...rest } = f;
   await s
     .putFeedback(
@@ -787,10 +955,12 @@ async function release(
       { revision: f.revision },
     )
     .catch(() => undefined);
-  throw fail(kind);
 }
 
-/** Closes a claimed row as `c.action`; a lost race (another call finished it) is reported. */
+/**
+ * Closes a claimed row as `c.action`; a lost race (another call finished it) is reported. When
+ * another person claimed it, the row keeps who and when (`resolved.claimedBy`, `claimedAt`).
+ */
 async function finish(
   s: FeedbackStore,
   grant: Grant,
@@ -808,12 +978,13 @@ async function finish(
       at: iso,
       by,
       ...(c.memoryId !== undefined && { supersededBy: c.memoryId }),
+      ...(c.by !== by && { claimedBy: c.by, claimedAt: c.at }),
     },
     revision: f.revision + 1,
     updatedAt: iso,
   };
   if ((await s.putFeedback(grant, done, { revision: f.revision })) !== 'written') {
-    throw await lostTo(s, grant, f.id);
+    throw await lostTo(s, grant, f.id, now);
   }
   return done;
 }
@@ -833,31 +1004,41 @@ export interface RetireResult {
  * The row is claimed (`resolving`), the memory is ended in one guarded write that records this
  * feedback in its decisions, and the row closes. A retire that stopped part way is finished by
  * running it again. When two run at once, one closes the row and the other fails
- * `already-resolved` (or `in-progress`), and the memory is ended once.
+ * `already-resolved` (or `in-progress`), and the memory is ended once. The memory's valid time
+ * ends when the retire was claimed; its record time (`expiredAt`, `updatedAt`) is when it was
+ * written.
  */
 export async function retireFeedback(id: string, deps: ResolveFeedbackDeps): Promise<RetireResult> {
   const s = feedbackOf(deps.store);
   const now = deps.now ?? new Date();
+  const iso = now.toISOString();
   const { f, c, by } = await claimed(s, deps, id, 'retired');
   const endReason = f.signal === 'wrong' ? 'corrected' : 'expired';
   const at = new Date(c.at);
   let ended: Memory | undefined;
   for (let i = 0; i < MEMORY_TRIES && ended === undefined; i++) {
     const m = await deps.store.get(deps.grant, f.memoryId);
-    if (m === null) return release(s, deps.grant, f, c, 'memory-not-found', now);
+    if (m === null) {
+      await release(s, deps.grant, f, c, now);
+      throw fail('memory-not-found', c.from);
+    }
     if (changedBy(m, 'retired', f)) {
       ended = m;
       break;
     }
-    if (!isCurrent(m, now)) return release(s, deps.grant, f, c, 'memory-ended', now);
+    if (!isCurrent(m, now)) {
+      await release(s, deps.grant, f, c, now);
+      throw fail('memory-ended', c.from);
+    }
+    await stillClaimed(s, deps.grant, f, now);
     const full = await fullMemory(deps.store, deps.grant, m);
     const next: Memory = {
       ...full,
-      expiredAt: c.at,
+      expiredAt: iso,
       endReason,
       // Wrong: it never held, so its valid interval is left as it was (as observe's CORRECT).
       ...(endReason === 'expired' && { validTo: closeAt(m, at) }),
-      updatedAt: c.at,
+      updatedAt: iso,
       source: {
         ...full.source,
         decisions: [...full.source.decisions, feedbackDecision('retired', f)],
@@ -865,7 +1046,7 @@ export async function retireFeedback(id: string, deps: ResolveFeedbackDeps): Pro
     };
     if ((await guarded(deps.store, deps.grant, [{ next, was: m }])).length === 0) ended = next;
   }
-  if (ended === undefined) throw inProgress(f, 'Its memory kept changing while this ran');
+  if (ended === undefined) throw inProgress(f, now, 'Its memory kept changing while this ran');
   return { feedback: await finish(s, deps.grant, f, c, by, now), memory: ended, endReason };
 }
 
@@ -922,10 +1103,12 @@ function factOf(fact: unknown): { text: string; redacted: string[] } {
  * and is scrubbed. The feedback closes `superseded`, naming the new memory.
  *
  * The row is claimed with the fact and the new memory's id (`supersedingId`, the same on every
- * try), the new memory is written unless it is there already, the old one is closed in one
- * guarded write, and the row closes. A supersede that stopped part way is finished by running it
- * again with the same fact. When the old memory ended meanwhile (another way), the new memory is
- * removed if it is still as written and the claim is given up (`memory-ended`).
+ * try), the new memory is written unless this claim's memory is there already, the old one is
+ * closed in one guarded write, and the row closes. A supersede that stopped part way is finished
+ * by running it again with the same fact; after `FEEDBACK_LIMITS.staleClaimMs`, a supersede with
+ * another fact (or a retire, or a dismiss) takes it over. When the old memory ended meanwhile
+ * (another way), the new memory is removed if it is still as written and the claim is given up
+ * (`memory-ended`). Another memory already at the new id is refused (`conflict`).
  */
 export async function supersedeFeedback(
   id: string,
@@ -934,6 +1117,7 @@ export async function supersedeFeedback(
 ): Promise<SupersedeFeedbackResult> {
   const s = feedbackOf(deps.store);
   const now = deps.now ?? new Date();
+  const iso = now.toISOString();
   const asStored = factOf(fact);
   const { f, c, by } = await claimed(s, deps, id, 'superseded', (row) => ({
     fact: asStored.text,
@@ -942,58 +1126,58 @@ export async function supersedeFeedback(
   }));
   const text = c.fact!;
   const newId = c.memoryId!;
+  const short = newId.slice(0, 8);
   const at = new Date(c.at);
   const decision = feedbackDecision('superseded', f);
 
   let written = await deps.store.get(deps.grant, newId);
-  const removeNew = async (): Promise<void> => {
-    // Only the memory this claim wrote, while nothing else changed it.
-    const live = await deps.store.get(deps.grant, newId);
-    if (live === null) return;
-    if (
-      live.supersedes !== f.memoryId ||
-      live.updatedAt !== c.at ||
-      !changedBy(live, 'superseded', f)
-    ) {
-      throw new FeedbackError(
-        'memory-ended',
-        `${MESSAGES['memory-ended']} The new memory ${newId.slice(0, 8)} was changed meanwhile, so it was kept; check it with \`oort inspect ${newId.slice(0, 8)}\`.`,
-        'resolving',
-        true,
-      );
-    }
-    await deps.store.forget(deps.grant, newId);
-  };
+  if (written !== null && !isClaimMemory(written, f, c, false)) {
+    // Not the memory this claim writes: never taken as it, never overwritten.
+    await release(s, deps.grant, f, c, now);
+    throw new FeedbackError(
+      'conflict',
+      `Another memory already has the id this supersede writes (${short}); nothing was changed. Check it with \`oort inspect ${short}\`.`,
+      c.from,
+    );
+  }
   const giveUp = async (kind: 'memory-ended' | 'memory-not-found'): Promise<never> => {
+    // The new memory this claim wrote goes, while nothing else changed it; the row goes back.
+    let kept: string | undefined;
     try {
-      await removeNew();
-    } catch (e) {
-      if (e instanceof FeedbackError) throw e;
-      throw new FeedbackError(
-        kind,
-        `${MESSAGES[kind]} The new memory ${newId.slice(0, 8)} written for it could not be removed; check it with \`oort inspect ${newId.slice(0, 8)}\`.`,
-        'resolving',
-        true,
-      );
+      const live = await deps.store.get(deps.grant, newId);
+      if (live !== null) {
+        if (isClaimMemory(live, f, c, true)) await deps.store.forget(deps.grant, newId);
+        else kept = 'was changed meanwhile, so it was kept';
+      }
+    } catch {
+      kept = 'written for it could not be removed';
     }
-    return release(s, deps.grant, f, c, kind, now);
+    await release(s, deps.grant, f, c, now);
+    if (kept === undefined) throw fail(kind, c.from);
+    throw new FeedbackError(
+      kind,
+      `${MESSAGES[kind]} The new memory ${short} ${kept}; check it with \`oort inspect ${short}\`.`,
+      c.from,
+      true,
+    );
   };
 
+  let embedding: Int8Array | undefined;
+  let embedded = false;
   let old: Memory | undefined;
   for (let i = 0; i < MEMORY_TRIES && old === undefined; i++) {
     const m = await deps.store.get(deps.grant, f.memoryId);
     if (m === null) return giveUp('memory-not-found');
-    if (m.supersededBy === newId && changedBy(m, 'superseded', f)) {
-      old = m;
-      break;
-    }
-    if (!isCurrent(m, now)) return giveUp('memory-ended');
+    const closedByThis = m.supersededBy === newId && changedBy(m, 'superseded', f);
+    if (!closedByThis && !isCurrent(m, now)) return giveUp('memory-ended');
     if (written === null) {
-      let embedding: Int8Array | undefined;
-      try {
-        embedding = (await deps.embed?.embed([text], 'document'))?.[0];
-      } catch {
-        embedding = undefined;
+      if (!embedded) {
+        try {
+          embedding = (await deps.embed?.embed([text], 'document'))?.[0];
+        } catch {
+          embedding = undefined;
+        }
+        embedded = true;
       }
       const words = new Set(text.toLowerCase().split(/[^\p{L}\p{N}._/-]+/u));
       const next: Memory = {
@@ -1009,31 +1193,38 @@ export async function supersedeFeedback(
         pinned: m.pinned,
         tier: m.tier === 'cold' ? 'warm' : m.tier,
         accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
+        // Valid from when the person said so; recorded when it was written.
         validFrom: c.at,
         validTo: null,
         expiredAt: null,
         endReason: null,
-        lastConfirmedAt: c.at,
+        lastConfirmedAt: iso,
         supersedes: m.id,
         supersededBy: null,
         ...(m.place !== undefined && { place: structuredClone(m.place) }),
         ...(embedding !== undefined && { embedding }),
         source: { harness: deps.harness, decisions: [decision] },
-        createdAt: c.at,
-        updatedAt: c.at,
+        createdAt: iso,
+        updatedAt: iso,
       };
       if (!grantWrites(deps.grant, next)) throw new GrantError();
+      await stillClaimed(s, deps.grant, f, now);
       await deps.store.upsert(deps.grant, next);
       written = next;
     }
+    if (closedByThis) {
+      old = m;
+      break;
+    }
+    await stillClaimed(s, deps.grant, f, now);
     const full = await fullMemory(deps.store, deps.grant, m);
     const closedOld: Memory = {
       ...full,
       validTo: closeAt(m, at),
-      expiredAt: c.at,
+      expiredAt: iso,
       endReason: 'superseded',
       supersededBy: newId,
-      updatedAt: c.at,
+      updatedAt: iso,
       source: { ...full.source, decisions: [...full.source.decisions, decision] },
     };
     if ((await guarded(deps.store, deps.grant, [{ next: closedOld, was: m }])).length === 0) {
@@ -1041,7 +1232,7 @@ export async function supersedeFeedback(
     }
   }
   if (old === undefined || written === null) {
-    throw inProgress(f, 'Its memory kept changing while this ran');
+    throw inProgress(f, now, 'Its memory kept changing while this ran');
   }
   return {
     feedback: await finish(s, deps.grant, f, c, by, now),
@@ -1055,18 +1246,22 @@ export async function supersedeFeedback(
  * A person sets feedback aside: a pending row (an agent's) or an open correction closes
  * `dismissed`, and recall stops labelling the memory. The memory is not touched. One guarded
  * write; a lost race fails with where the row stands. A row being retired or superseded is
- * refused (`in-progress`).
+ * refused (`in-progress`) until its claim is stale (`claimIsStale`); then what that claim changed
+ * is put back first (`takeOver`), and the row is dismissed.
  */
 export async function dismissFeedback(id: string, deps: ResolveFeedbackDeps): Promise<Feedback> {
   const s = feedbackOf(deps.store);
   const now = deps.now ?? new Date();
   const by = feedbackBy(deps.by);
-  const f = await s.getFeedback(deps.grant, id);
+  let f = await s.getFeedback(deps.grant, id);
   if (f === null) throw fail('not-found');
   if (isFinal(f.status)) throw fail('already-resolved', f.status);
-  if (f.status === 'resolving') throw inProgress(f);
-  if (f.status !== 'pending' && f.status !== 'open') throw fail('already-resolved', f.status);
   if (!grantWrites(deps.grant, f)) throw new GrantError();
+  if (f.status === 'resolving') {
+    if (f.claim === undefined || !claimIsStale(f.claim, now)) throw inProgress(f, now);
+    f = await takeOver(s, deps, f, now);
+  }
+  if (f.status !== 'pending' && f.status !== 'open') throw fail('already-resolved', f.status);
   const iso = now.toISOString();
   const next: Feedback = {
     ...f,
@@ -1076,7 +1271,7 @@ export async function dismissFeedback(id: string, deps: ResolveFeedbackDeps): Pr
     updatedAt: iso,
   };
   if ((await s.putFeedback(deps.grant, next, { revision: f.revision })) !== 'written') {
-    throw await lostTo(s, deps.grant, id);
+    throw await lostTo(s, deps.grant, id, now);
   }
   return next;
 }
@@ -1110,6 +1305,8 @@ export async function contestedOf(
   });
   for (const f of rows) {
     if (out.has(f.memoryId) || (f.signal !== 'wrong' && f.signal !== 'stale')) continue;
+    // An agent's unconfirmed row a person is resolving was never a label: it does not become one.
+    if (f.status === 'resolving' && f.claim?.from === 'pending') continue;
     out.set(f.memoryId, {
       feedbackId: f.id,
       signal: f.signal,
