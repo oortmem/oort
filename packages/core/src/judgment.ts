@@ -724,14 +724,30 @@ function sameDecision(a: Judgment, b: Judgment): boolean {
 }
 
 /**
- * Where a judgment (or a prediction) is kept: the grant's home node, unbound to any project, as
- * the acting principal's record. Judgments belong to the expert, not to a repository.
+ * Where a judgment is kept: the grant's home node, unbound to any project, as the acting
+ * principal's record. Judgments belong to the expert, not to a repository.
  */
-function homePlacement(scope: Scope, grant: Grant): Pick<Memory, 'scope' | 'address' | 'author'> {
+export function homePlacement(
+  scope: Scope,
+  grant: Grant,
+): Pick<Memory, 'scope' | 'address' | 'author'> {
+  return projectPlacement(scope, grant, undefined);
+}
+
+/**
+ * Where a record about project data is kept (a prediction about an item, recall feedback about a
+ * memory): the grant's home node, bound to `projectId` (none: unbound), so a grant reads it only
+ * where it reads that project, as it reads the project's memories.
+ */
+export function projectPlacement(
+  scope: Scope,
+  grant: Grant,
+  projectId: string | undefined,
+): Pick<Memory, 'scope' | 'address' | 'author'> {
   const { projectId: _p, ...unbound } = scope;
   return grant.home.level === 'user'
-    ? { scope: unbound }
-    : addressed(homeAddress(grant), { agentId: scope.agentId });
+    ? { scope: projectId === undefined ? unbound : { ...unbound, projectId } }
+    : addressed(homeAddress(grant, projectId), { agentId: scope.agentId });
 }
 
 function judgmentMemory(
@@ -948,8 +964,13 @@ export const PREDICTION_LIMITS = Object.freeze({
   details: 4000,
   /** Expired, unresolved predictions one judging call deletes. */
   prune: 100,
-  /** Unresolved predictions one author keeps at one address; above it judging keeps nothing. */
+  /**
+   * Unresolved predictions one author keeps at its home node, across every project; above it
+   * judging keeps nothing.
+   */
   pending: 5000,
+  /** Unresolved predictions all authors together keep at one home node, across every project. */
+  pendingAddress: 50_000,
 });
 
 /**
@@ -1431,18 +1452,24 @@ export async function judge(
           ...(item.by !== undefined && { by: item.by }),
         },
         used,
-        ...homePlacement(keep.scope, deps.grant),
+        // The item is the caller's project data: the prediction is read where that project is.
+        ...projectPlacement(keep.scope, deps.grant, keep.scope.projectId),
         now,
         ttlDays: keep.ttlDays ?? PREDICTION_LIMITS.ttlDays,
       });
       await store.pruneExpiredPredictions?.(now, PREDICTION_LIMITS.prune);
-      const pending = (await store.countPendingPredictions?.(p)) ?? 0;
-      if (pending >= PREDICTION_LIMITS.pending) {
-        return { ...r, kept: false, notKept: 'pending-cap' };
-      }
-      if (!(await store.putPrediction(deps.grant, p, { revision: null }))) {
-        return { ...r, kept: false, notKept: 'write-failed' };
-      }
+      // Both caps are counted by the store, in the write's transaction.
+      const written = await store.putPrediction(
+        deps.grant,
+        p,
+        { revision: null },
+        {
+          pendingCap: PREDICTION_LIMITS.pending,
+          addressPendingCap: PREDICTION_LIMITS.pendingAddress,
+        },
+      );
+      if (written === 'pending-cap') return { ...r, kept: false, notKept: 'pending-cap' };
+      if (written !== true) return { ...r, kept: false, notKept: 'write-failed' };
       return { ...r, predictionId: p.id, kept: true };
     } catch {
       return { ...r, kept: false, notKept: 'write-failed' };

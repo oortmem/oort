@@ -3,6 +3,7 @@ import {
   linksConformance,
   occurrenceConformance,
   predictionsConformance,
+  feedbackConformance,
   spatialConformance,
   storeConformance,
 } from './store-conformance.js';
@@ -12,3 +13,4 @@ spatialConformance('memory', async () => createMemoryStore());
 linksConformance('memory', async () => createMemoryStore(), memoryStoreProbe);
 occurrenceConformance('memory', async () => createMemoryStore());
 predictionsConformance('memory', async () => createMemoryStore());
+feedbackConformance('memory', async () => createMemoryStore());

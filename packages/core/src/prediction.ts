@@ -482,7 +482,7 @@ export async function resolvePrediction(
   };
   let landed = false;
   try {
-    landed = await store.putPrediction(deps.grant, done, { revision: p.revision });
+    landed = (await store.putPrediction(deps.grant, done, { revision: p.revision })) === true;
   } finally {
     if (!landed && judgment !== undefined) {
       await undoRecordedJudgment(deps.store, deps.grant, judgment, by, now);
@@ -559,7 +559,7 @@ async function supersedeAgentResolve(
     revision: p.revision + 1,
     updatedAt: iso,
   };
-  if (!(await store.putPrediction(deps.grant, reopened, { revision: p.revision }))) {
+  if ((await store.putPrediction(deps.grant, reopened, { revision: p.revision })) !== true) {
     throw fail('conflict');
   }
   for (const m of withdraw) await withdrawJudgment(deps.store, deps.grant, m, by, now);
@@ -602,7 +602,7 @@ export async function confirmResolution(
     },
     { revision: p.revision },
   );
-  if (!ok) throw fail('conflict');
+  if (ok !== true) throw fail('conflict');
   return true;
 }
 

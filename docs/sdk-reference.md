@@ -26,7 +26,7 @@ await oort.observe({ user: 'We deploy on Fridays now.', assistant: 'Noted.' });
 
 **Classes:** [`OortError`](#oortmem-oorterror), [`OortAmbiguousIdError`](#oortmem-oortambiguousiderror), [`OortCloudOnlyError`](#oortmem-oortcloudonlyerror), [`OortInternalError`](#oortmem-oortinternalerror), [`OortNeedsConfirmationError`](#oortmem-oortneedsconfirmationerror), [`OortNeedsKeyError`](#oortmem-oortneedskeyerror), [`OortNeedsLoginError`](#oortmem-oortneedsloginerror), [`OortNetworkError`](#oortmem-oortnetworkerror), [`OortNotFoundError`](#oortmem-oortnotfounderror), [`OortRefusedError`](#oortmem-oortrefusederror), [`OortUsageError`](#oortmem-oortusageerror)
 
-**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`Pose`](#oortmem-pose), [`Place`](#oortmem-place), [`NearQuery`](#oortmem-nearquery), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`LinkView`](#oortmem-linkview), [`LinkResult`](#oortmem-linkresult), [`UnlinkResult`](#oortmem-unlinkresult), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ResolveInput`](#oortmem-resolveinput), [`PredictionView`](#oortmem-predictionview), [`ResolveView`](#oortmem-resolveview), [`LiveAgreement`](#oortmem-liveagreement), [`LiveEvalView`](#oortmem-liveevalview), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`EndUserCount`](#oortmem-endusercount), [`EndUserErasure`](#oortmem-endusererasure), [`EndUserExport`](#oortmem-enduserexport), [`OortEndUsers`](#oortmem-oortendusers), [`Oort`](#oortmem-oort)
+**Interfaces and types:** [`ModelRole`](#oortmem-modelrole), [`OortErrorCode`](#oortmem-oorterrorcode), [`OortMode`](#oortmem-oortmode), [`KeySource`](#oortmem-keysource), [`OortKeys`](#oortmem-oortkeys), [`JudgeRole`](#oortmem-judgerole), [`OortConfigOverlay`](#oortmem-oortconfigoverlay), [`OortOptions`](#oortmem-oortoptions), [`MemoryType`](#oortmem-memorytype), [`MemoryStatus`](#oortmem-memorystatus), [`IncludeLevel`](#oortmem-includelevel), [`RecallMode`](#oortmem-recallmode), [`JudgmentVia`](#oortmem-judgmentvia), [`JudgmentView`](#oortmem-judgmentview), [`Pose`](#oortmem-pose), [`Place`](#oortmem-place), [`NearQuery`](#oortmem-nearquery), [`MemoryView`](#oortmem-memoryview), [`RecalledMemory`](#oortmem-recalledmemory), [`Warning`](#oortmem-warning), [`RecallResult`](#oortmem-recallresult), [`Outcome`](#oortmem-outcome), [`ObserveResult`](#oortmem-observeresult), [`RememberResult`](#oortmem-rememberresult), [`ForgetResult`](#oortmem-forgetresult), [`PinResult`](#oortmem-pinresult), [`Explanation`](#oortmem-explanation), [`LinkView`](#oortmem-linkview), [`LinkResult`](#oortmem-linkresult), [`UnlinkResult`](#oortmem-unlinkresult), [`RecordJudgmentView`](#oortmem-recordjudgmentview), [`Precedent`](#oortmem-precedent), [`JudgeResult`](#oortmem-judgeresult), [`ResolveInput`](#oortmem-resolveinput), [`PredictionView`](#oortmem-predictionview), [`ResolveView`](#oortmem-resolveview), [`LiveAgreement`](#oortmem-liveagreement), [`LiveEvalView`](#oortmem-liveevalview), [`ConsolidateResult`](#oortmem-consolidateresult), [`RouteKind`](#oortmem-routekind), [`Whoami`](#oortmem-whoami), [`RecallOptions`](#oortmem-recalloptions), [`Turn`](#oortmem-turn), [`JudgmentInput`](#oortmem-judgmentinput), [`JudgeItem`](#oortmem-judgeitem), [`JudgeOptions`](#oortmem-judgeoptions), [`ScopedOptions`](#oortmem-scopedoptions), [`OortJudge`](#oortmem-oortjudge), [`FeedbackSignal`](#oortmem-feedbacksignal), [`FeedbackStatus`](#oortmem-feedbackstatus), [`FeedbackInput`](#oortmem-feedbackinput), [`FeedbackView`](#oortmem-feedbackview), [`FeedbackResultView`](#oortmem-feedbackresultview), [`FeedbackRetireView`](#oortmem-feedbackretireview), [`FeedbackSupersedeView`](#oortmem-feedbacksupersedeview), [`OortFeedback`](#oortmem-oortfeedback), [`EndUserCount`](#oortmem-endusercount), [`EndUserErasure`](#oortmem-endusererasure), [`EndUserExport`](#oortmem-enduserexport), [`OortEndUsers`](#oortmem-oortendusers), [`Oort`](#oortmem-oort)
 
 ### Functions
 
@@ -568,6 +568,18 @@ export interface RecalledMemory extends MemoryView {
   /** The fused score, comparable only within one result. */
   score: number;
   stale?: true;
+  /**
+   * A person said it is wrong or out of date (open `wrong` or `stale` feedback, local mode): the
+   * newest such feedback, its signal and scrubbed note. It ranks as before.
+   */
+  contested?: {
+    feedbackId: string;
+    signal: 'wrong' | 'stale';
+    note?: string;
+    /** Who gave it, and when (or when a person confirmed it). */
+    by: string;
+    at: string;
+  };
   /** @experimental Diagnostic; may change in a minor release. */
   why: {
     lexicalRank?: number;
@@ -1253,6 +1265,184 @@ export interface OortJudge {
 }
 ```
 
+<a id="oortmem-feedbacksignal"></a>
+
+#### `FeedbackSignal`
+
+What a person says about a recalled memory.
+
+```ts
+export type FeedbackSignal = 'helped' | 'wrong' | 'stale' | 'irrelevant';
+```
+
+<a id="oortmem-feedbackstatus"></a>
+
+#### `FeedbackStatus`
+
+Where feedback stands: `pending` (an agent's, waiting for a person), `recorded` (a `helped` or
+an `irrelevant`), `open` (a `wrong` or `stale` correction recall labels), `resolving` (a person's
+retire or supersede has started; running the same call again finishes it), or closed by a
+person: `retired`, `superseded` or `dismissed`.
+
+```ts
+export type FeedbackStatus = 'pending' | 'recorded' | 'open' | 'resolving' | 'retired' | 'superseded' | 'dismissed';
+```
+
+<a id="oortmem-feedbackinput"></a>
+
+#### `FeedbackInput`
+
+```ts
+export interface FeedbackInput {
+  /** The recalled memory's id (a person may give a unique prefix of 8 or more characters). */
+  memoryId: string;
+  signal: FeedbackSignal;
+  /** Why, in a few words: scrubbed, kept on one line, at most 500 characters. */
+  note?: string;
+  /** The query the memory was recalled for. Required for `irrelevant`. */
+  query?: string;
+}
+```
+
+<a id="oortmem-feedbackview"></a>
+
+#### `FeedbackView`
+
+```ts
+export interface FeedbackView {
+  id: string;
+  memoryId: string;
+  signal: FeedbackSignal;
+  status: FeedbackStatus;
+  note?: string;
+  query?: string;
+  by: string;
+  /** Given by an agent (MCP, or an SDK handle in agent role). */
+  agentRecorded: boolean;
+  /** `helped`: whether its accesses were added. */
+  applied?: boolean;
+  /**
+   * `helped`: why they were not (`already-helped-today`, `disabled` by config, or
+   * `access-failed`: adding them failed, and the call that gave it threw).
+   */
+  reason?: 'already-helped-today' | 'disabled' | 'access-failed';
+  createdAt: string;
+  confirmed?: {
+    at: string;
+    by: string;
+  };
+  /**
+   * `resolving`: the retire or supersede under way, or stopped part way. Running the same call
+   * again takes it and finishes it (`takenOverBy`, `takenOverAt`); once `canTakeOver` (5 minutes
+   * after `takenOverAt`, or `at`), a retire, a dismiss or a supersede with another fact takes it
+   * over. A claim whose changes are all in place is finished as it was meant; otherwise what it
+   * changed is put back first (`undoing` while that runs). `fact` is what a supersede would store.
+   */
+  claim?: {
+    action: 'retired' | 'superseded';
+    by: string;
+    at: string;
+    ageSeconds: number;
+    canTakeOver: boolean;
+    takenOverBy?: string;
+    takenOverAt?: string;
+    undoing?: true;
+    fact?: string;
+    memoryId?: string;
+  };
+  /**
+   * Who resolved it and when. `claimedBy` and `claimedAt`: another person started it, and `by`
+   * finished it.
+   */
+  resolved?: {
+    at: string;
+    by: string;
+    supersededBy?: string;
+    claimedBy?: string;
+    claimedAt?: string;
+  };
+}
+```
+
+<a id="oortmem-feedbackresultview"></a>
+
+#### `FeedbackResultView`
+
+```ts
+export type FeedbackResultView = {
+  kept: true;
+  feedback: FeedbackView;
+  applied?: boolean;
+  reason?: 'already-helped-today' | 'disabled' | 'access-failed';
+}
+/** An agent already keeps 5,000 pending feedback rows here: nothing was kept. */
+ | {
+  kept: false;
+  reason: 'pending-cap';
+};
+```
+
+<a id="oortmem-feedbackretireview"></a>
+
+#### `FeedbackRetireView`
+
+```ts
+export interface FeedbackRetireView {
+  feedback: FeedbackView;
+  memoryId: string;
+  /** `corrected` for wrong (it never held), `expired` for stale (it held until now). */
+  endReason: 'corrected' | 'expired';
+}
+```
+
+<a id="oortmem-feedbacksupersedeview"></a>
+
+#### `FeedbackSupersedeView`
+
+```ts
+export interface FeedbackSupersedeView {
+  feedback: FeedbackView;
+  /** The new memory, holding the right fact. */
+  memoryId: string;
+  /** The old memory, now ended `superseded`. */
+  supersedes: string;
+  /** Secret kinds redacted from the fact before it was stored. */
+  redacted: string[];
+}
+```
+
+<a id="oortmem-oortfeedback"></a>
+
+#### `OortFeedback`
+
+Recall feedback (local mode). Call it to give feedback on a recalled memory: in expert role it
+counts at once (`helped` adds accesses, `wrong` and `stale` label the memory contested in
+recall); in agent role (the default) it is pending until a person confirms it. The other
+methods are for a person: expert role only, except `list`.
+
+```ts
+export interface OortFeedback {
+  (input: FeedbackInput): Promise<FeedbackResultView>;
+  /** Newest first, at most `limit` (default 100). */
+  list(opts?: {
+    status?: FeedbackStatus;
+    memoryId?: string;
+    signal?: FeedbackSignal;
+    limit?: number;
+  }): Promise<{
+    feedback: FeedbackView[];
+  }>;
+  /** Confirms an agent's pending feedback: from then on it counts, once. */
+  confirm(id: string): Promise<FeedbackView>;
+  /** Ends the memory a wrong or stale feedback names, now. */
+  retire(id: string): Promise<FeedbackRetireView>;
+  /** Stores the right fact in place of the memory a wrong or stale feedback names. */
+  supersede(id: string, fact: string): Promise<FeedbackSupersedeView>;
+  /** Sets feedback aside: the memory is not changed, and recall stops labelling it. */
+  dismiss(id: string): Promise<FeedbackView>;
+}
+```
+
 <a id="oortmem-endusercount"></a>
 
 #### `EndUserCount`
@@ -1340,6 +1530,8 @@ A handle on Oort memory, its scope fixed when it was made (`createOort`, `scoped
 export interface Oort {
   readonly mode: 'local' | 'cloud';
   readonly judge: OortJudge;
+  /** Recall feedback: `oort.feedback({ memoryId, signal })`, and a person's `list`, `confirm`, … */
+  readonly feedback: OortFeedback;
   recall(query: string, opts?: RecallOptions): Promise<RecallResult>;
   observe(turn: Turn, opts?: {
     signal?: AbortSignal;

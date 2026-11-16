@@ -120,6 +120,15 @@ function recalledView(m: CoreRecalled, now: Date): RecalledMemory {
     ...memoryView(m, now),
     score: e.fused,
     ...(e.stale === true && { stale: true as const }),
+    ...(e.contested !== undefined && {
+      contested: {
+        feedbackId: e.contested.feedbackId,
+        signal: e.contested.signal,
+        ...(e.contested.note !== undefined && { note: clean(e.contested.note) }),
+        by: clean(e.contested.by),
+        at: e.contested.at,
+      },
+    }),
     why: {
       ...(e.lexicalRank !== undefined && { lexicalRank: e.lexicalRank }),
       ...(e.denseRank !== undefined && { denseRank: e.denseRank }),
@@ -231,6 +240,7 @@ function fromView(m: RecalledMemory): CoreRecalled {
       activation: m.why.activation,
       hydrated: false,
       ...(m.stale === true && { stale: true as const }),
+      ...(m.contested !== undefined && { contested: { ...m.contested } }),
       ...(m.why.via !== undefined && { via: { ...m.why.via } }),
     },
     ...(m.origin !== undefined && {

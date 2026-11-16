@@ -77,6 +77,18 @@ export const SCHEMA_VERSION = 10;
 export const PREDICTION_TABLE = 'predictions';
 
 /**
+ * Recall feedback (`MemoryStore.feedback`): one row per feedback, its record as JSON, with its
+ * address columns (so the same grant predicate applies, project included), the memory it is
+ * about, its status, when it was given, and an applied `helped`'s key (unique: one per memory,
+ * person and day). Created on every open when missing, like `predictions`, so it needs no schema
+ * version. Indexed by memory and status (recall reads the open ones for the memories it returns,
+ * and a forget removes every row about a memory, at every address), by node and time (listing),
+ * by status, and pending rows alone by node and author (the pending caps count only those). A
+ * row is never a memory: no search or listing of memories reads this table.
+ */
+export const FEEDBACK_TABLE = 'feedback';
+
+/**
  * The binary index (schema version 6): one row per searchable (hot or warm) vector, with its
  * 1-bit code (`binaryCode`), its int8 vector for rescoring as an auxiliary column, and the int8
  * index's partition and filter columns. A dense query scans only the codes; it reads `rescore`
@@ -1510,6 +1522,41 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_created ON ${PREDICTION_TABLE} (created_at DESC, id DESC);
       CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_expires ON ${PREDICTION_TABLE} (resolved, expires_at);
       CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_address ON ${PREDICTION_TABLE} (org_id, level, customer_id, agent_id, resolved);
+      CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_pending ON ${PREDICTION_TABLE} (org_id, level, customer_id, agent_id, author_agent_id) WHERE resolved = 0;
+      CREATE TABLE IF NOT EXISTS ${FEEDBACK_TABLE} (
+        id TEXT PRIMARY KEY,
+        level TEXT NOT NULL,
+        org_id TEXT NOT NULL,
+        customer_id TEXT,
+        agent_id TEXT,
+        hive_id TEXT,
+        run_id TEXT,
+        project_id TEXT,
+        author_agent_id TEXT NOT NULL,
+        memory_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        helped_key TEXT,
+        record TEXT NOT NULL
+      );
+    `);
+    // A table an earlier build of this feature made has no helped_key, and its indexes had other
+    // shapes: add the column and replace them (the table was never in a release).
+    const cols = db
+      .prepare<[], { name: string }>(`SELECT name FROM pragma_table_info('${FEEDBACK_TABLE}')`)
+      .all()
+      .map((c) => c.name);
+    if (!cols.includes('helped_key')) {
+      db.exec(`ALTER TABLE ${FEEDBACK_TABLE} ADD COLUMN helped_key TEXT`);
+    }
+    db.exec(`
+      DROP INDEX IF EXISTS ${FEEDBACK_TABLE}_address;
+      DROP INDEX IF EXISTS ${FEEDBACK_TABLE}_memory;
+      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_node ON ${FEEDBACK_TABLE} (org_id, level, customer_id, agent_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_memory_status ON ${FEEDBACK_TABLE} (memory_id, status);
+      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_status ON ${FEEDBACK_TABLE} (status, created_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_helped ON ${FEEDBACK_TABLE} (helped_key) WHERE helped_key IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_pending ON ${FEEDBACK_TABLE} (org_id, level, customer_id, agent_id, author_agent_id) WHERE status = 'pending';
     `);
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     const put = db.prepare(

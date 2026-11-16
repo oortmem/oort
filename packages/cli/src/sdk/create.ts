@@ -10,6 +10,7 @@ import {
   toOortError,
   type OortError,
 } from './errors.js';
+import * as feedback from './feedback.js';
 import * as judge from './judge.js';
 import * as local from './local.js';
 import {
@@ -25,6 +26,8 @@ import {
 import type {
   ConsolidateResult,
   Explanation,
+  FeedbackInput,
+  OortFeedback,
   LinkResult,
   UnlinkResult,
   ForgetResult,
@@ -52,7 +55,10 @@ import type {
 } from './types.js';
 import {
   ConsolidateSchema,
+  FactSchema,
   FactsSchema,
+  FeedbackInputSchema,
+  FeedbackListSchema,
   ForgetOptionsSchema,
   IdSchema,
   JudgeItemSchema,
@@ -290,6 +296,21 @@ class OortHandle implements Oort {
       evalLive: (opts = {}) =>
         this.#run((ctx) => judge.evalLive(ctx, check(LiveEvalSchema, opts, 'eval options'))),
     };
+  }
+
+  get feedback(): OortFeedback {
+    const id = (ref: string) => check(IdSchema, ref, 'id');
+    const give = (input: FeedbackInput) =>
+      this.#run((ctx) => feedback.give(ctx, check(FeedbackInputSchema, input, 'feedback')));
+    return Object.assign(give, {
+      list: (opts = {}) =>
+        this.#run((ctx) => feedback.list(ctx, check(FeedbackListSchema, opts, 'list options'))),
+      confirm: (ref: string) => this.#run((ctx) => feedback.confirm(ctx, id(ref))),
+      retire: (ref: string) => this.#run((ctx) => feedback.retire(ctx, id(ref))),
+      supersede: (ref: string, fact: string) =>
+        this.#run((ctx) => feedback.supersede(ctx, id(ref), check(FactSchema, fact, 'fact'))),
+      dismiss: (ref: string) => this.#run((ctx) => feedback.dismiss(ctx, id(ref))),
+    });
   }
 
   get endUsers(): OortEndUsers {

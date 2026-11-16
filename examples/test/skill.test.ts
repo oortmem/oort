@@ -266,6 +266,7 @@ describe('skills/oort-sdk: every SDK name exists in the built .d.ts', () => {
     const oort = new Set(members('Oort'));
     const judge = new Set(members('OortJudge'));
     const endUsers = new Set(members('OortEndUsers'));
+    const feedback = new Set(members('OortFeedback'));
     const NOT_OORT = new Set([
       'JSON.stringify',
       'util.inspect',
@@ -283,6 +284,7 @@ describe('skills/oort-sdk: every SDK name exists in the built .d.ts', () => {
       if (NOT_OORT.has(c.receiver === undefined ? c.name : `${c.receiver}.${c.name}`)) return false;
       if (c.judged) return !judge.has(c.name);
       if (c.receiver === 'endUsers') return !endUsers.has(c.name);
+      if (c.receiver === 'feedback') return !feedback.has(c.name);
       return !oort.has(c.name) && exported.get(c.name)?.kind !== 'function';
     });
     expect(missing.map((c) => c.s)).toEqual([]);

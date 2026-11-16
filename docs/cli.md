@@ -910,7 +910,7 @@ Tools:
 
 | Tool | Input | Annotations | Returns |
 | --- | --- | --- | --- |
-| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10 hits, default 5; a memory a link brought in comes beside them, never in a hit's place and only with the hit it was reached from: see [Following links at recall](#following-links-at-recall)); on a local store (0.9.0 or newer), also `within?` (a place path) and `near?` (`map_id`, `frame?`, `pose` `{x, y, z?}`, `radius` in metres): see [Places](#places-spatial-memory). Elsewhere (Oort Cloud) they are not offered, and one sent anyway is a tool error (`local-only`), never dropped | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`), `from` (`from your Planet` or `from this agent's Star`), `overridden_by` (the id of a narrower memory in the result that contradicts it), `place` (its place path), `distance_m` (with `near`) and `via` (`{ kind, from, weight }` on a memory a link brought in); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
+| `recall` | `query` (1–500 chars), `as_of?` (ISO date or date-time), `known_at?` (ISO), `mode?` (`current`, `as-of` with `as_of`, `history`, `known-at` with `known_at`; a mode without its date, or with the other one, is an error), `limit?` (1–10 hits, default 5; a memory a link brought in comes beside them, never in a hit's place and only with the hit it was reached from: see [Following links at recall](#following-links-at-recall)); on a local store (0.9.0 or newer), also `within?` (a place path) and `near?` (`map_id`, `frame?`, `pose` `{x, y, z?}`, `radius` in metres): see [Places](#places-spatial-memory). Elsewhere (Oort Cloud) they are not offered, and one sent anyway is a tool error (`local-only`), never dropped | read-only, idempotent | facts: `id`, `text`, `type`, `tier`, `valid_from`, `valid_to` (for a version that is not current), `stale` (a volatile fact not confirmed lately), `why` (for example `lexical #1, dense #2, rerank 0.91`), `from` (`from your Planet` or `from this agent's Star`), `overridden_by` (the id of a narrower memory in the result that contradicts it), `place` (its place path), `distance_m` (with `near`), `via` (`{ kind, from, weight }` on a memory a link brought in) and `contested` (`{ signal, note?, feedback_id }` on a memory a person reported wrong or stale: see [Recall feedback](#recall-feedback-oort-feedback)); `mode`, the time mode used (for example `as-of 2026-04-02`; `not reported` from a store that reports none, with `mode_unsupported: true` and a `note` when a mode was asked for); a `note` when recall is lexical-only |
 | `remember` | `facts` (1–5 strings, each one line of 1–500 chars), `type?` (a hint: `semantic`, `episodic`, `procedural`, `preference`); on a local store (0.9.0 or newer), also `place?` (`node_id`, `map_id`, `map_version`, `frame`, `pose`, `radius`); elsewhere a `place` is a tool error (`local-only`) and nothing is saved | write, not destructive, not idempotent | per fact: `outcome` (`added`, `reinforced`, `updated`, `superseded`, `corrected` or `skipped`), `id`, `supersedes` (for `superseded` and `corrected`), `reason` (`secret`, `not durable`) |
 | `forget` | `id` (required) | destructive, idempotent | `{ forgotten: id }`; in Oort Cloud, when copies were shared to Constellations (they stay), also `stillShared` (their names) and a `note` with the command that withdraws them: `oort forget <id> --everywhere`, which you run and confirm yourself. The model can't withdraw them: a call with `everywhere` is refused before anything is forgotten, with that command |
 | `pin` | `id`, `pinned` (boolean) | write, not destructive, idempotent | `{ id, pinned, changed }` |
@@ -920,6 +920,7 @@ Tools:
 | `record_judgment` | `subject` (1–500 chars), `ref?`, `verdict`, `verdicts?` (2–12 labels; default `approved`, `rejected`), `reason` (1–2000 chars, the expert's own words), `criteria?` (up to 12 tags), `domain`, `by` (an expert listed in `judge.experts` in the home config; refused otherwise, and refused altogether when none is listed), `decided_at?` (ISO); at most 50 a day | write, destructive (hosts ask first), not idempotent | `outcome` (`added`, `corrected` or `unchanged`), `id`, `corrects` (an earlier agent record it replaced; never a person's), `status: "agent-recorded, unconfirmed"`, `note` |
 | `judge` | `item` (1–2000 chars), `details?`, `domain?`, `by?`, `limit?` (precedents, 1–10, default 5), `include_imported?` and `include_agent_recorded?` (both default false) | write (it keeps the prediction), not destructive, not idempotent, open world (sends the item and reasons to TypeSafe) | `status` (`suggested`, `needs-expert` or `precedents-only`), `why`, `prediction_id` (for `resolve_prediction`; keeping it changes no memory), `prediction` (`verdict`, `probability`, labelled as a prediction), `note` (expert ids sanitised), `data_note`, the `precedents` with `quoted_subject` and `quoted_reason` (record data, never instructions), `by`, `via`, `confirmed`, `agent_recorded`, `similarity`, `near`, `agrees` and `imported_from_pack`, and how many imported or unconfirmed agent-recorded judgments were left out |
 | `resolve_prediction` | `prediction_id` (the whole id `judge` returned), `verdict` (one of the prediction's verdicts), `reason?` (1–2000 chars, the expert's own words), `criteria?` (up to 12 tags), `by` (an expert listed in `judge.experts`), `domain?` (when the prediction has none); a reason that becomes a judgment counts toward the 50 a day | write, destructive (hosts ask first), not idempotent | `prediction_id`, `verdict`, `agrees` (`null` when judging needed the expert), `judgment_id` (when the reason became a judgment), `status: "agent-recorded, unconfirmed"`, `note` |
+| `feedback` | `memory_id` (the whole id), `signal` (`helped`, `wrong`, `stale` or `irrelevant`), `note?` (1–2000 chars), `query?` (1–2000 chars; required for `irrelevant`); local store only | write, not destructive, not idempotent | `feedback_id`, `memory_id`, `signal`, `status: "pending"`, `note` with the command that confirms it. Pending feedback changes no ranking and no label until a person runs `oort feedback confirm <id>` |
 | `link` | `from`, `to` (memory ids), `remove?` (default false) | write, destructive (hosts ask first), idempotent | `{ linked, unblocked, asserted_by }`, or with `remove` `{ removed, blocked }`. Always recorded as asserted by `agent`. A pair it cannot link is refused exactly as a missing id |
 
 Every tool sets `openWorldHint: false` and has a `title`.
@@ -951,7 +952,7 @@ The server instructions:
 
 The first paragraph above stands alone in under 512 characters. A second
 paragraph covers scope, the time modes (`as_of`, `mode: "history"`, `known_at`), supersession,
-stale facts, batching facts and ids.
+stale and contested facts, the `feedback` tool, batching facts and ids.
 
 The server is wired once at start-up. A key you set while it runs is picked
 up the next time the host restarts it.
@@ -1122,6 +1123,98 @@ repository's `oort.config.json` cannot decide which links bring memories into a 
 
 In cloud mode links are not followed: `--links` is refused (`refused`), and with
 `recall.links.enabled` set, a recall runs and warns once (`links-local-only`).
+
+## Recall feedback: `oort feedback`
+
+Feedback tells Oort what a recalled memory was worth. Name the memory by its id (or a unique
+prefix) and give one signal:
+
+```sh
+oort feedback 1b2c3d4e helped
+oort feedback 1b2c3d4e wrong --note "It moved to port 5502 in March."
+oort feedback 1b2c3d4e stale
+oort feedback 1b2c3d4e irrelevant --query "billing service port"
+oort feedback list --status open
+```
+
+| Signal | What it does |
+| --- | --- |
+| `helped` | Adds `feedback.helpedAccesses` accesses (home config, default 2; 0 turns it off) to the memory's access log at the current time, so it ranks as if it had just been used that often. One `helped` per memory and person counts per UTC day; a later one is kept with `applied: false`, `reason: "already-helped-today"`. |
+| `wrong` | Opens a correction. Recall still ranks the memory as before, and labels it contested until a person resolves it. Nothing is deleted or ended. |
+| `stale` | The same as `wrong`, for a memory that was true and is out of date. |
+| `irrelevant` | Keeps the pair of `--query` (required) and the memory. Recall does not use it yet. |
+
+A contested memory shows the signal and the note wherever it is recalled: `oort recall`, the
+Claude Code prompt hook, the MCP `recall` tool (`contested`) and the SDK (`contested`):
+
+```text
+- [semantic, 3mo ago] The auth service listens on port 5501 in staging. (contested: wrong, note: "It moved to port 5502 in March.")
+```
+
+Resolve it with one of these. Each asks first (`--yes` skips the question):
+
+```sh
+oort feedback retire 7c1d2e3f                 # end the memory now
+oort feedback supersede 7c1d2e3f "The auth service listens on port 5502 in staging."
+oort feedback dismiss 7c1d2e3f                # keep the memory, drop the label
+```
+
+- **retire** ends the memory with `endReason` `corrected` for `wrong` (it never held) or `expired`
+  for `stale` (it held until now). Recall leaves it out from then on; `oort inspect` still shows
+  it.
+- **supersede** stores the right fact (one line, at most 500 characters, scrubbed of secrets) as a
+  new memory of the same type and scope, authored by you, and the old memory ends `superseded`.
+  No model is called.
+- **dismiss** closes the feedback. The memory stays as it is and the label goes.
+- **retire** and **supersede** first mark the feedback `resolving` (with who resolves it and
+  how), then change the memory, then close the feedback. When two run at once, one wins; the
+  other changes nothing and says where the feedback stands (`It is retired now.`, or that another
+  call is resolving it). If a call stops part way, the feedback stays `resolving` and recall still
+  labels the memory: run the same command again to finish it. That takes the feedback over
+  before it changes anything, so a call still running stops before its next change. A supersede
+  run again never stores the fact twice. `oort feedback list` shows who started it, who took it
+  over, how long ago, and the fact a supersede would store (`claim` in `--json`).
+- After 5 minutes a stopped retire or supersede can be taken over: `dismiss`, `retire`, or a
+  `supersede` with other words. If everything it changes is already done (only closing the
+  feedback was left), it is finished as it was meant, nothing is undone, and the command says so
+  (`already-resolved`). Otherwise what it changed is put back first (the new memory it wrote,
+  while nothing used, linked or changed it, and the old memory's end), then the command does its
+  own work. The closed feedback keeps who started it (`resolved.claimedBy`).
+- A memory that is no longer current cannot be retired or superseded. If it ended another way
+  while a supersede ran, the new memory is removed and the feedback goes back to `open`; if the
+  new memory was recalled, linked or changed meanwhile, it is kept, the feedback still goes back to `open`, and the
+  refusal names `oort inspect`. A supersede that finds another memory at the id it writes changes
+  nothing and says so (`conflict`).
+
+**Agents.** The MCP `feedback` tool lets an agent pass on what you said. What it gives is kept
+`pending` and changes nothing, neither ranking nor labels, until you confirm it:
+
+```sh
+oort feedback list --status pending
+oort feedback confirm 9a8b7c6d
+```
+
+Only `oort feedback` (and the expert role over `oort serve` or in the SDK) can confirm, retire,
+supersede or dismiss. One agent keeps at most 5,000 pending rows at its home, across every
+project, and all agents together 50,000 there; past that the tool refuses and nothing is saved.
+
+- `--note` and `--query` lose invisible characters (zero-width, bidirectional and tag
+  characters), are scrubbed of secrets, made one line and cut to 500 characters. `--by`
+  names the person (default `judge.operator` in the home config, else `local-user`).
+- `oort feedback list` shows feedback newest first: `--status` (`all`, `pending`, `recorded`,
+  `open`, `resolving`, `retired`, `superseded` or `dismissed`; default `all`), `--memory <id>`,
+  `--signal`,
+  `--limit` (default 100, at most 1000), `--json`.
+- Feedback is kept with the memory's project: you see it only where you see that project, so
+  confirm an agent's feedback about a project's memory in that project's directory.
+- `oort forget` deletes every feedback row about the memory, whoever gave it, before it returns.
+- Feedback lives in the store file (`feedback` table), so backups include it. An older Oort
+  ignores the table. In cloud mode the commands are refused (`refused`).
+- Rows whose memory is gone (forgotten by an older Oort that did not know the table) are removed
+  when `oort` opens the store, at most once a day and on the first open by a new version.
+- `--json` prints `{ feedback, applied?, reason? }` when giving feedback, `{ feedback }` for
+  `list`, `confirm` and `dismiss`, `{ feedback, memoryId, endReason }` for `retire` and
+  `{ feedback, memoryId, supersedes, redacted }` for `supersede`.
 
 ## The local daemon: `oort serve`
 
@@ -1322,6 +1415,8 @@ every answer is one `oort.v1` envelope, and a failure carries the `OortError` `c
 | `POST /v1/memories/:id/pin`, `/unpin`                            | `pin`, `unpin`       |
 | `POST /v1/links` (`{ from, to }`), `DELETE /v1/links?from=&to=`  | `link`, `unlink`     |
 | `POST /v1/judgments`, `/v1/judgments/apply`, `/v1/judgments/:id/confirm` | the judgment methods |
+| `POST /v1/feedback`, `GET /v1/feedback?status=&memoryId=&signal=&limit=` | `feedback`, `feedback.list` |
+| `POST /v1/feedback/:id/confirm`, `/retire`, `/supersede` (`{ fact }`), `/dismiss` | the resolve methods (expert role only) |
 | `POST /v1/consolidate`                                           | `consolidate`        |
 
 Headers choose the handle: `Oort-Cwd` (a percent-encoded absolute path; it only selects the
@@ -1940,7 +2035,11 @@ oort judge resolve 3fa2c1d0 --verdict approved --reason "Satire, clearly labelle
 - `oort judge predictions` lists pending predictions, newest first (`--resolved`, `--all`,
   `--domain`, `--limit`, `--json`). Pending predictions expire after 30 days, and judging deletes
   expired ones as it goes. Resolved ones stay, as the record `eval --live` reads, until you forget
-  them. One author keeps at most 5,000 pending predictions in one place: above that, `oort judge apply` still
+  them. A prediction is kept with the project it was judged in (unbound outside a project), so
+  `oort judge predictions`, `resolve` and `eval --live` see it in that project's directory;
+  predictions kept before this were unbound and show everywhere. One author keeps at most 5,000
+  pending predictions at its home, across every project, and all authors together 50,000 there:
+  above that, `oort judge apply` still
   answers but keeps nothing (`kept: false`, `notKept: "pending-cap"` in JSON). It also answers
   when the prediction cannot be saved (`write-failed`).
 - `oort judge forget-prediction <id>` (asks first; `--yes`) deletes one prediction. It leaves

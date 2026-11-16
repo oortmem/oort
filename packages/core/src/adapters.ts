@@ -9,6 +9,7 @@ import type {
 } from './links.js';
 import type { Decision, Memory, MemoryType, Scope, Tier } from './model.js';
 import type { Place, SpatialFilter } from './place.js';
+import type { Feedback, FeedbackListOptions } from './feedback.js';
 import type { Prediction, PredictionListOptions } from './prediction.js';
 
 /**
@@ -140,6 +141,18 @@ export interface SearchOptions {
   spatial?: SpatialFilter;
 }
 
+/** What `MemoryStore.putFeedback` did. */
+export type FeedbackWrite = 'written' | 'conflict' | 'memory-gone' | 'pending-cap' | 'helped-today';
+
+/**
+ * Caps on pending records a new write must stay under, counted at the record's home node across
+ * every project, in the write's transaction: per author, and for all authors together.
+ */
+export interface PendingCaps {
+  pendingCap?: number;
+  addressPendingCap?: number;
+}
+
 export interface MemoryStore {
   /**
    * True when the store keeps `Memory.place` and applies `SearchOptions.spatial` (spatial memory,
@@ -215,14 +228,19 @@ export interface MemoryStore {
    * Writes the prediction `p` (insert or replace). With `expect`, only when the stored record's
    * `revision` is `expect.revision` (`null`: only when no record has `p.id`). Resolves to false,
    * writing nothing, when that guard fails, or when a record with `p.id` exists at another
-   * address or outside the grant. Rejects with `GrantError` when `p`'s address and author are
-   * outside `grant.write`.
+   * address or outside the grant. With `caps`, a new unresolved prediction is not written, and
+   * the call resolves to `'pending-cap'`, when its author already keeps `caps.pendingCap`
+   * unresolved predictions at `p`'s node (any project), or all authors together keep
+   * `caps.addressPendingCap` there; both are counted in the same transaction as the write.
+   * Without `caps` it resolves to a boolean only. Rejects with `GrantError` when `p`'s address
+   * and author are outside `grant.write`.
    */
   putPrediction?(
     grant: Grant,
     p: Prediction,
     expect?: { revision: number | null },
-  ): Promise<boolean>;
+    caps?: PendingCaps,
+  ): Promise<boolean | 'pending-cap'>;
   /** The prediction `id`, or null when it is unknown or outside the grant. */
   getPrediction?(grant: Grant, id: string): Promise<Prediction | null>;
   /**
@@ -256,10 +274,66 @@ export interface MemoryStore {
   /** Deletes up to `limit` unresolved predictions whose `expiresAt` is at or before `now`, at every address. */
   pruneExpiredPredictions?(now: Date, limit: number): Promise<number>;
   /**
-   * How many unresolved predictions `at`'s author keeps at `at`'s address (its node and project).
-   * Counted per author, so one agent filling its quota never blocks another at the same address.
+   * How many unresolved predictions `at`'s author keeps at `at`'s node, across every project
+   * (predictions are bound to the caller's project; the cap is not multiplied by them). Counted
+   * per author, so one agent filling its quota never blocks another at the same node.
    */
   countPendingPredictions?(at: Pick<Prediction, 'scope' | 'address' | 'author'>): Promise<number>;
+  /**
+   * True when the store keeps recall feedback (`feedbackConformance` proves it) and has
+   * `putFeedback`, `getFeedback`, `listFeedback`, `purgeFeedbackFor` and `countPendingFeedback`.
+   * A store also removes feedback rows whose memory it no longer holds (an older Oort forgot it)
+   * when it opens.
+   * A feedback row is not a memory: no search, listing or export of memories ever returns one.
+   * Absent: feedback is refused, and recall labels nothing contested.
+   */
+  readonly feedback?: true;
+  /**
+   * Writes the feedback row `f` (insert or replace) in one transaction, and says what happened:
+   * - `conflict`: nothing written: with `expect`, the stored row's `revision` is not
+   *   `expect.revision` (`null`: a row with `f.id` exists); or a row with `f.id` is at another
+   *   address, outside the grant, or about another memory;
+   * - `memory-gone`: nothing written: `f` is a new row and the store holds no memory `f.memoryId`
+   *   (it was forgotten), so no row outlives its memory;
+   * - `pending-cap`: nothing written: `f` is a new `pending` row and its author already keeps
+   *   `opts.pendingCap` pending rows at its node, in any project, or all authors together keep
+   *   `opts.addressPendingCap` there (both counted in the same transaction);
+   * - `helped-today`: nothing written: `f.helpedKey` is set and another row holds it;
+   * - `written`.
+   * Rejects with `GrantError` when `f`'s address and author are outside `grant.write`.
+   */
+  putFeedback?(
+    grant: Grant,
+    f: Feedback,
+    expect?: { revision: number | null },
+    opts?: PendingCaps,
+  ): Promise<FeedbackWrite>;
+  /** The feedback row `id`, or null when it is unknown or outside the grant. */
+  getFeedback?(grant: Grant, id: string): Promise<Feedback | null>;
+  /**
+   * The feedback rows the grant reads, newest first (`createdAt`, then `id`), filtered as
+   * `selectFeedback` filters (status, memory ids, signal, id prefix), at most `opts.limit`. The
+   * limit applies after the grant. With `memoryIds` (recall's lookup) the store reads only the
+   * rows about those memories, by an index on the memory id.
+   */
+  listFeedback?(grant: Grant, opts?: FeedbackListOptions): Promise<Feedback[]>;
+  /**
+   * Deletes every feedback row about `memoryId`, at every address, leaving none of its text in a
+   * log or journal the store keeps (as `forget` does: a write-ahead log another process keeps
+   * open is reset at a later checkpoint, and the store logs that). Only for a memory `grant` may
+   * change; then rows other principals wrote about it go too, as its links do. Returns the ids
+   * removed and those it could not remove (`leftover`, which callers treat as a failure).
+   */
+  purgeFeedbackFor?(
+    grant: Grant,
+    memoryId: string,
+  ): Promise<{ removed: string[]; leftover: string[] }>;
+  /**
+   * How many `pending` feedback rows `at`'s author keeps at `at`'s node, across every project
+   * (rows are bound to their memory's project; the cap is not multiplied by them), so one agent
+   * filling its quota never blocks another.
+   */
+  countPendingFeedback?(at: Pick<Feedback, 'scope' | 'address' | 'author'>): Promise<number>;
   /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
    * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).
@@ -293,7 +367,8 @@ export interface MemoryStore {
   /**
    * Removes the memory everywhere (main record and cold copy) when it is inside
    * `grant.write`. Never throws for an unknown or out-of-grant id. A store with `links` removes
-   * every link, block and entity index row of the memory in the same transaction.
+   * every link, block and entity index row of the memory in the same transaction, and a store
+   * with `feedback` every feedback row about it, at every address.
    */
   forget(grant: Grant, id: string): Promise<void>;
   /**

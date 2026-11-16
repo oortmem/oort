@@ -43,7 +43,13 @@ const SERVICE_HEADERS_TIMEOUT_MS = 5_000;
 const CONNECTIONS_CHECK_MS = 1_000;
 const KEEP_ALIVE_MS = 5_000;
 /** What this daemon serves beyond the core routes (`GET /v1/health`). */
-export const CAPABILITIES = ['judgments', 'predictions', 'consolidate', 'links'] as const;
+export const CAPABILITIES = [
+  'judgments',
+  'predictions',
+  'consolidate',
+  'links',
+  'feedback',
+] as const;
 /** A root handle is replaced once it is this old, so edited config and keys are picked up. */
 export const HANDLE_TTL_MS = 60_000;
 /** At most this many root handles (one per cwd, org and judge role) stay open. */
@@ -416,6 +422,12 @@ function idOf(raw: string): string {
   }
 }
 
+/** Refuses a body field a route does not take, as the SDK's strict schemas do. */
+function noFields(b: Record<string, unknown>): void {
+  const extra = Object.keys(b)[0];
+  if (extra !== undefined) throw usage(`Unknown field ${safe(extra)}.`);
+}
+
 type Call = (h: Oort, body: Record<string, unknown>) => Promise<unknown>;
 
 interface Route {
@@ -610,6 +622,67 @@ const ROUTES: Route[] = [
     name: 'DELETE /v1/predictions/:id',
     match: new RegExp(`^/v1/predictions/${ID}$`),
     call: (m) => (h) => h.judge.forgetPrediction(idOf(m[1]!)),
+  },
+  {
+    method: 'POST',
+    name: 'POST /v1/feedback',
+    match: /^\/v1\/feedback$/,
+    call: () => (h, b) => h.feedback(b as never),
+  },
+  {
+    method: 'GET',
+    name: 'GET /v1/feedback',
+    match: /^\/v1\/feedback$/,
+    query: ['status', 'memoryId', 'signal', 'limit'],
+    call: (_m, q) => (h) => {
+      const status = q.get('status');
+      const memoryId = q.get('memoryId');
+      const signal = q.get('signal');
+      const limit = intParam(q, 'limit');
+      return h.feedback.list({
+        ...(status !== undefined && { status: status as 'open' }),
+        ...(memoryId !== undefined && { memoryId }),
+        ...(signal !== undefined && { signal: signal as 'wrong' }),
+        ...(limit !== undefined && { limit }),
+      });
+    },
+  },
+  {
+    method: 'POST',
+    name: 'POST /v1/feedback/:id/confirm',
+    match: new RegExp(`^/v1/feedback/${ID}/confirm$`),
+    call: (m) => (h, b) => {
+      noFields(b);
+      return h.feedback.confirm(idOf(m[1]!));
+    },
+  },
+  {
+    method: 'POST',
+    name: 'POST /v1/feedback/:id/retire',
+    match: new RegExp(`^/v1/feedback/${ID}/retire$`),
+    call: (m) => (h, b) => {
+      noFields(b);
+      return h.feedback.retire(idOf(m[1]!));
+    },
+  },
+  {
+    method: 'POST',
+    name: 'POST /v1/feedback/:id/supersede',
+    match: new RegExp(`^/v1/feedback/${ID}/supersede$`),
+    call: (m) => (h, b) => {
+      const { fact, ...rest } = b;
+      noFields(rest);
+      return h.feedback.supersede(idOf(m[1]!), fact as string);
+    },
+  },
+  {
+    method: 'POST',
+    name: 'POST /v1/feedback/:id/dismiss',
+    match: new RegExp(`^/v1/feedback/${ID}/dismiss$`),
+    call: (m) => (h, b) => {
+      noFields(b);
+      return h.feedback.dismiss(idOf(m[1]!));
+    },
   },
   {
     method: 'POST',

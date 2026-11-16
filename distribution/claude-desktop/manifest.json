@@ -56,6 +56,10 @@
     {
       "name": "link",
       "description": "Link two memories that belong together, or remove a link."
+    },
+    {
+      "name": "feedback",
+      "description": "Pass on that a recalled memory helped, is wrong, stale or off topic."
     }
   ],
   "user_config": {

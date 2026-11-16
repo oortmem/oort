@@ -42,6 +42,7 @@ import {
   sameRecordAddress,
   scopeOf,
   selectPredictions,
+  selectFeedback,
   predictionCites,
   purgedPrediction,
   addressOf,
@@ -70,6 +71,9 @@ import {
   type NodePattern,
   type Place,
   type Prediction,
+  type Feedback,
+  type FeedbackWrite,
+  type PendingCaps,
   type Provenance,
   type SpatialFilter,
   type Tier,
@@ -135,6 +139,7 @@ import {
   PLACE_TABLE,
   placeCount,
   PREDICTION_TABLE,
+  FEEDBACK_TABLE,
   rabitqIndexPlan,
   schemaVersionOf,
   searchableVectors,
@@ -413,6 +418,22 @@ interface MemoryRow {
 type RowParams = Omit<MemoryRow, 'rid'>;
 
 const DAY_MS = 86_400_000;
+
+/** The `meta` key holding when this store last swept orphan feedback rows, and by which build. */
+export const ORPHAN_SWEEP_KEY = 'feedback_orphan_sweep';
+/** Orphan feedback rows are swept at most this often (and on the first open by a new build). */
+const ORPHAN_SWEEP_EVERY_MS = DAY_MS;
+/** This package's version: a store opened by another build sweeps again. */
+const STORE_BUILD: string = (() => {
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version?: unknown };
+    return typeof pkg.version === 'string' ? pkg.version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 
 /** An FTS5 query matching any token, each quoted as a phrase so no input is parsed as syntax. */
 function matchQuery(q: string): string | null {
@@ -1380,10 +1401,61 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
          WHERE resolved = 0 AND expires_at <= ? ORDER BY expires_at LIMIT ?)`,
     ),
     predictionPendingAt: db.prepare<[Params], { n: number }>(
-      `SELECT count(*) AS n FROM ${PREDICTION_TABLE}
+      `SELECT count(*) AS n FROM ${PREDICTION_TABLE} INDEXED BY ${PREDICTION_TABLE}_pending
        WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
          AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
-         AND project_id IS @project_id AND author_agent_id = @author_agent_id AND resolved = 0`,
+         AND author_agent_id = @author_agent_id AND resolved = 0`,
+    ),
+    // Up to `@cap` unresolved predictions at a node, every author and project: bounded work.
+    predictionPendingNode: db.prepare<[Params], { n: number }>(
+      `SELECT count(*) AS n FROM (SELECT 1 FROM ${PREDICTION_TABLE}
+       INDEXED BY ${PREDICTION_TABLE}_pending
+       WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
+         AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id AND resolved = 0
+       LIMIT @cap)`,
+    ),
+    feedbackGet: db.prepare<[string], { record: string }>(
+      `SELECT record FROM ${FEEDBACK_TABLE} WHERE id = ?`,
+    ),
+    feedbackPut: db.prepare<[Params]>(
+      `INSERT INTO ${FEEDBACK_TABLE} (id, level, org_id, customer_id, agent_id, hive_id, run_id,
+         project_id, author_agent_id, memory_id, status, created_at, helped_key, record)
+       VALUES (@id, @level, @org_id, @customer_id, @agent_id, @hive_id, @run_id, @project_id,
+         @author_agent_id, @memory_id, @status, @created_at, @helped_key, @record)
+       ON CONFLICT (id) DO UPDATE SET status = excluded.status, helped_key = excluded.helped_key,
+         record = excluded.record`,
+    ),
+    feedbackForget: db.prepare<[string], { id: string }>(
+      `DELETE FROM ${FEEDBACK_TABLE} INDEXED BY ${FEEDBACK_TABLE}_memory_status
+       WHERE memory_id = ? RETURNING id`,
+    ),
+    feedbackHelpedBy: db.prepare<[string, string], { id: string }>(
+      `SELECT id FROM ${FEEDBACK_TABLE} INDEXED BY ${FEEDBACK_TABLE}_helped
+       WHERE helped_key = ? AND id <> ?`,
+    ),
+    feedbackMemoryHeld: db.prepare<[string], { one: number }>(
+      'SELECT 1 AS one FROM memories WHERE id = ?',
+    ),
+    // Rows about a memory the store no longer holds: an older Oort forgot it without them.
+    feedbackOrphans: db.prepare<[], { id: string }>(
+      `DELETE FROM ${FEEDBACK_TABLE}
+       WHERE NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = ${FEEDBACK_TABLE}.memory_id)
+       RETURNING id`,
+    ),
+    feedbackPendingAt: db.prepare<[Params], { n: number }>(
+      `SELECT count(*) AS n FROM ${FEEDBACK_TABLE} INDEXED BY ${FEEDBACK_TABLE}_pending
+       WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
+         AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
+         AND author_agent_id = @author_agent_id AND status = 'pending'`,
+    ),
+    // Up to `@cap` pending rows at a node, every author and project: bounded work.
+    feedbackPendingNode: db.prepare<[Params], { n: number }>(
+      `SELECT count(*) AS n FROM (SELECT 1 FROM ${FEEDBACK_TABLE}
+       INDEXED BY ${FEEDBACK_TABLE}_pending
+       WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
+         AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
+         AND status = 'pending'
+       LIMIT @cap)`,
     ),
     getCursor: db.prepare<[string], { value: string }>('SELECT value FROM cursors WHERE key = ?'),
     setCursor: db.prepare<[string, string]>(
@@ -1501,6 +1573,29 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
          AND (@domain IS NULL OR json_extract(m.record, '$.domain') = @domain)
        ORDER BY m.created_at DESC, m.id DESC
        LIMIT @limit`,
+    );
+  /**
+   * The feedback rows a grant of `n` patterns reads, filtered and ordered as `selectFeedback`: one
+   * statement per filter shape, so each one has only the conditions it needs (no `@x IS NULL OR`,
+   * which keeps SQLite from an index).
+   */
+  const feedbackScoped = (n: number, has: { status: boolean; signal: boolean; prefix: boolean }) =>
+    cached<[Params], { record: string }>(
+      `feedback:${n}:${has.status ? 's' : ''}${has.signal ? 'g' : ''}${has.prefix ? 'p' : ''}`,
+      () => `SELECT m.record AS record FROM ${FEEDBACK_TABLE} m
+       WHERE ${grantSql(n)}${has.status ? `\n         AND m.status IN (SELECT value FROM json_each(@statuses))` : ''}${has.signal ? `\n         AND json_extract(m.record, '$.signal') = @signal` : ''}${has.prefix ? `\n         AND m.id LIKE @prefix ESCAPE '\\'` : ''}
+       ORDER BY m.created_at DESC, m.id DESC
+       LIMIT @limit`,
+    );
+  /**
+   * The feedback rows about some memories (recall's lookup), by the memory index: a handful of
+   * rows, which the caller checks against the grant.
+   */
+  const feedbackOfMemories = (status: boolean) =>
+    cached<[Params], { record: string }>(
+      `feedback-of:${status ? 's' : ''}`,
+      () => `SELECT record FROM ${FEEDBACK_TABLE} INDEXED BY ${FEEDBACK_TABLE}_memory_status
+       WHERE memory_id IN (SELECT value FROM json_each(@memories))${status ? `\n         AND status IN (SELECT value FROM json_each(@statuses))` : ''}`,
     );
   const occurredScoped = (n: number, f?: SpatialFilter) =>
     cached<[Params], { id: string; tier: Tier; key: number }>(
@@ -2105,6 +2200,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     lexicalTx((grant: Grant, id: string): string | undefined => {
       const scoped = scopedRow(grant.writeNodes, id);
       if (scoped === undefined) return undefined;
+      // Feedback about it goes with it, at every address (`MemoryStore.forget`).
+      q.feedbackForget.all(id);
       const row = q.deleteRow.get(id);
       if (row !== undefined) {
         // Its links, blocks and entity rows went with it (ON DELETE CASCADE). The node's own row
@@ -2631,13 +2728,42 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       record: JSON.stringify(p),
     });
   };
+  /**
+   * Whether a new pending record at `at`'s node would pass `caps`: its author's pending records
+   * there (any project), and every author's, each counted up to its cap.
+   */
+  const overCap = (
+    at: Pick<Prediction, 'scope' | 'address' | 'author'>,
+    caps: PendingCaps,
+    mine: Statement<[Params], { n: number }>,
+    all: Statement<[Params], { n: number }>,
+  ): boolean => {
+    const where = predictionAddress(at);
+    if (caps.pendingCap !== undefined) {
+      const n = mine.get({ ...where, author_agent_id: authorOf(at).agentId })?.n ?? 0;
+      if (n >= caps.pendingCap) return true;
+    }
+    if (caps.addressPendingCap !== undefined) {
+      const n = all.get({ ...where, cap: caps.addressPendingCap })?.n ?? 0;
+      if (n >= caps.addressPendingCap) return true;
+    }
+    return false;
+  };
   const putPredictionTx = db.transaction(
-    (grant: Grant, p: Prediction, expect: { revision: number | null } | undefined): boolean => {
+    (
+      grant: Grant,
+      p: Prediction,
+      expect: { revision: number | null } | undefined,
+      caps: PendingCaps | undefined,
+    ): boolean | 'pending-cap' => {
       const was = predictionRow(p.id);
       if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, p))) {
         return false;
       }
       if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return false;
+      if (was === undefined && p.resolution === undefined && caps !== undefined) {
+        if (overCap(p, caps, q.predictionPendingAt, q.predictionPendingNode)) return 'pending-cap';
+      }
       writePrediction(p);
       return true;
     },
@@ -2663,6 +2789,101 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     }
     return out;
   });
+
+  /** The stored feedback row `id`, whatever the grant (callers check it). */
+  const feedbackRow = (id: string): Feedback | undefined => {
+    const r = q.feedbackGet.get(id);
+    return r === undefined ? undefined : (JSON.parse(r.record) as Feedback);
+  };
+  const putFeedbackTx = db.transaction(
+    (
+      grant: Grant,
+      f: Feedback,
+      expect: { revision: number | null } | undefined,
+      caps: PendingCaps | undefined,
+    ): FeedbackWrite => {
+      const was = feedbackRow(f.id);
+      if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, f))) {
+        return 'conflict';
+      }
+      if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return 'conflict';
+      // A row keeps the memory it is about: a write naming another is refused.
+      if (was !== undefined && was.memoryId !== f.memoryId) return 'conflict';
+      // A new row only about a memory this store holds, checked in the same transaction as the
+      // write, so a forget that lands first leaves no row behind.
+      if (was === undefined && q.feedbackMemoryHeld.get(f.memoryId) === undefined) {
+        return 'memory-gone';
+      }
+      const author = authorOf(f).agentId;
+      if (was === undefined && f.status === 'pending' && caps !== undefined) {
+        if (overCap(f, caps, q.feedbackPendingAt, q.feedbackPendingNode)) return 'pending-cap';
+      }
+      if (f.helpedKey !== undefined && q.feedbackHelpedBy.get(f.helpedKey, f.id) !== undefined) {
+        return 'helped-today';
+      }
+      q.feedbackPut.run({
+        id: f.id,
+        ...predictionAddress(f),
+        author_agent_id: author,
+        memory_id: f.memoryId,
+        status: f.status,
+        created_at: f.createdAt,
+        helped_key: f.helpedKey ?? null,
+        record: JSON.stringify(f),
+      });
+      return 'written';
+    },
+  );
+  const purgeFeedbackTx = db.transaction((grant: Grant, memoryId: string): string[] => {
+    // Only for a memory this grant may change (or one already gone: its rows are orphans).
+    if (
+      q.feedbackMemoryHeld.get(memoryId) !== undefined &&
+      scopedRow(grant.writeNodes, memoryId) === undefined
+    ) {
+      return [];
+    }
+    return q.feedbackForget.all(memoryId).map((r) => r.id);
+  });
+  // Feedback rows whose memory is gone (an older Oort forgot it, not knowing the table) go when
+  // a process that may migrate opens the store, at most once a day, and on the first open by a
+  // new build; hooks leave it to the next one.
+  if (opts.migrate !== false) sweepOrphanFeedback();
+
+  function sweepOrphanFeedback(): void {
+    const now = clock().getTime();
+    const raw = db
+      .prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?')
+      .get(ORPHAN_SWEEP_KEY)?.value;
+    let last: { at?: unknown; build?: unknown } | undefined;
+    try {
+      last = raw === undefined ? undefined : (JSON.parse(raw) as typeof last);
+    } catch {
+      last = undefined;
+    }
+    const age = typeof last?.at === 'number' ? now - last.at : Number.NaN;
+    // A clock that went back counts as due, as does a marker another build wrote.
+    if (last?.build === STORE_BUILD && age >= 0 && age < ORPHAN_SWEEP_EVERY_MS) return;
+    const swept = db.transaction((): number => {
+      const n = q.feedbackOrphans.all().length;
+      db.prepare(
+        `INSERT INTO meta (key, value) VALUES (?, ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+      ).run(ORPHAN_SWEEP_KEY, JSON.stringify({ at: now, build: STORE_BUILD }));
+      return n;
+    });
+    // A busy or locked store never fails the open: the marker stays as it was, so the next open
+    // tries again.
+    let n: number;
+    try {
+      n = swept.immediate();
+    } catch (e) {
+      log(
+        `oort store: feedback about forgotten memories was not swept (${e instanceof Error ? e.message : String(e)}); the next open tries again`,
+      );
+      return;
+    }
+    if (n > 0) truncateWal();
+  }
 
   const handle: MemoryStore = {
     spatial: true,
@@ -2698,13 +2919,13 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
 
     predictions: true,
 
-    async putPrediction(grant, p, expect) {
+    async putPrediction(grant, p, expect, caps) {
       open();
       assertGrant(grant);
       if (!grantWrites(grant, p)) throw new GrantError();
-      const ok = putPredictionTx.immediate(grant, p, expect);
+      const ok = putPredictionTx.immediate(grant, p, expect, caps);
       // A purge replaced the text: leave none of it in the WAL.
-      if (ok && p.purged !== undefined) truncateWal();
+      if (ok === true && p.purged !== undefined) truncateWal();
       return ok;
     },
 
@@ -2765,6 +2986,79 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       open();
       return (
         q.predictionPendingAt.get({
+          ...predictionAddress(at),
+          author_agent_id: authorOf(at).agentId,
+        })?.n ?? 0
+      );
+    },
+
+    feedback: true,
+
+    async putFeedback(grant, f, expect, putOpts) {
+      open();
+      assertGrant(grant);
+      if (!grantWrites(grant, f)) throw new GrantError();
+      return putFeedbackTx.immediate(grant, f, expect, putOpts);
+    },
+
+    async getFeedback(grant, id) {
+      open();
+      assertGrant(grant);
+      const f = feedbackRow(id);
+      return f === undefined || !grantReads(grant, f) ? null : f;
+    },
+
+    async listFeedback(grant, listOpts = {}) {
+      open();
+      assertGrant(grant);
+      const patterns = live(grant.readNodes);
+      if (patterns.length === 0) return [];
+      const o = listOpts;
+      const statuses =
+        o.status === undefined ? null : typeof o.status === 'string' ? [o.status] : [...o.status];
+      if (o.memoryIds !== undefined) {
+        if (o.memoryIds.length === 0) return [];
+        const about = feedbackOfMemories(statuses !== null).all({
+          memories: JSON.stringify([...new Set(o.memoryIds)]),
+          ...(statuses !== null && { statuses: JSON.stringify(statuses) }),
+        });
+        const readable = about
+          .map((r) => JSON.parse(r.record) as Feedback)
+          .filter((f) => grantReads(grant, f));
+        return selectFeedback(readable, listOpts);
+      }
+      const has = {
+        status: statuses !== null,
+        signal: o.signal !== undefined,
+        prefix: o.idPrefix !== undefined,
+      };
+      const rows = feedbackScoped(patterns.length, has).all({
+        ...grantParams(patterns),
+        ...(has.status && { statuses: JSON.stringify(statuses) }),
+        ...(has.signal && { signal: o.signal }),
+        ...(has.prefix && { prefix: `${likeLiteral(o.idPrefix!)}%` }),
+        limit: o.limit === undefined ? -1 : Math.max(0, Math.floor(o.limit)),
+      });
+      const readable = rows
+        .map((r) => JSON.parse(r.record) as Feedback)
+        .filter((f) => grantReads(grant, f));
+      return selectFeedback(readable, listOpts);
+    },
+
+    async purgeFeedbackFor(grant, memoryId) {
+      open();
+      assertGrant(grant);
+      const removed = purgeFeedbackTx.immediate(grant, memoryId);
+      // Its notes and queries leave the WAL too, not only the database file. As for a forget, a
+      // WAL another process keeps open is reset at a later checkpoint (`truncateWal` logs it).
+      if (removed.length > 0) truncateWal();
+      return { removed, leftover: [] };
+    },
+
+    async countPendingFeedback(at) {
+      open();
+      return (
+        q.feedbackPendingAt.get({
           ...predictionAddress(at),
           author_agent_id: authorOf(at).agentId,
         })?.n ?? 0

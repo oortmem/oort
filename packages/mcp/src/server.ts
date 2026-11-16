@@ -42,6 +42,11 @@ export interface RecalledFact {
    * `2023-05-20 to 2023-05-21`), resolved from its text against when it was said.
    */
   happened?: string;
+  /**
+   * A person said it is wrong or out of date, and nobody has resolved that yet: the signal and
+   * their note. It ranks as before; confirm it with the user before relying on it.
+   */
+  contested?: { signal: string; note?: string; feedback_id: string };
 }
 
 export interface RecallOutput {
@@ -123,6 +128,11 @@ export interface MemoryBackend {
    * it refuses a missing id.
    */
   link?(input: ToolInput<'link'>): Promise<Record<string, unknown>>;
+  /**
+   * Recall feedback. Optional: a server offers `feedback` only when the backend has it. What an
+   * agent gives is kept pending and changes nothing until a person confirms it.
+   */
+  feedback?(input: ToolInput<'feedback'>): Promise<Record<string, unknown>>;
 }
 
 /** What `share` returns. */
@@ -307,6 +317,10 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
       if (b.link === undefined) throw new MemoryToolError('No memory links here.');
       return b.link(i);
     },
+    feedback: (i) => {
+      if (b.feedback === undefined) throw new MemoryToolError('No recall feedback here.');
+      return b.feedback(i);
+    },
   };
   const offered = (name: ToolName): boolean => {
     if (name === 'share') return spaces.share.length > 0 && b.share !== undefined;
@@ -314,6 +328,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
     if (name === 'judge') return b.judge !== undefined;
     if (name === 'resolve_prediction') return b.resolvePrediction !== undefined;
     if (name === 'link') return b.link !== undefined;
+    if (name === 'feedback') return b.feedback !== undefined;
     return true;
   };
   const registered = new Map<ToolName, RegisteredTool>();

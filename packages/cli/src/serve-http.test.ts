@@ -124,7 +124,7 @@ describe('the memory protocol on the socket', () => {
       version: VERSION,
       protocol: 1,
       mode: 'local',
-      capabilities: ['judgments', 'predictions', 'consolidate', 'links'],
+      capabilities: ['judgments', 'predictions', 'consolidate', 'links', 'feedback'],
     });
     const ping = await callDaemon(daemon.socket, 'ping', {}, { budgetMs: 2000 });
     expect(ping.ok).toBe(true);
@@ -183,6 +183,59 @@ describe('the memory protocol on the socket', () => {
       JSON.stringify({ from: a, to: 'eeeeeeee-0000-4000-8000-000000000001' }),
     );
     expect(missing.body.error?.['code']).toBe('not-found');
+  });
+
+  it('records feedback over /v1/feedback, and only the expert role resolves it', async () => {
+    const org = { 'oort-org': 'feedback-test' };
+    const expert = { ...org, 'oort-judge-role': 'expert', 'oort-operator': 'ada' };
+    const saved = await request(
+      'POST',
+      '/v1/remember',
+      org,
+      JSON.stringify({ facts: ['The deploy window is Tuesday.'] }),
+    );
+    const [id] = (saved.body.data?.['results'] as { id: string }[]).map((r) => r.id) as [string];
+    // The agent role (the default) records pending feedback, which changes nothing yet.
+    const pending = await request(
+      'POST',
+      '/v1/feedback',
+      org,
+      JSON.stringify({ memoryId: id, signal: 'stale', note: 'Moved to Thursday.' }),
+    );
+    expect(pending.status).toBe(200);
+    const row = (pending.body.data?.['feedback'] ?? {}) as { id: string; status: string };
+    expect(row.status).toBe('pending');
+    const refused = await request('POST', `/v1/feedback/${row.id}/confirm`, org, '{}');
+    expect([refused.status, refused.body.error?.['reason']]).toEqual([403, 'expert-only']);
+    const listed = await request('GET', '/v1/feedback?status=pending', org);
+    expect((listed.body.data?.['feedback'] as unknown[]).length).toBe(1);
+    expect((await request('GET', '/v1/feedback?status=nope', org)).status).toBe(400);
+    expect((await request('GET', '/v1/feedback?x=1', org)).status).toBe(400);
+
+    const extra = await request(
+      'POST',
+      `/v1/feedback/${row.id}/confirm`,
+      expert,
+      JSON.stringify({ by: 'mallory' }),
+    );
+    expect([extra.status, extra.body.error?.['code']]).toEqual([400, 'usage']);
+    const confirmed = await request('POST', `/v1/feedback/${row.id}/confirm`, expert, '{}');
+    expect(confirmed.body.data).toMatchObject({ status: 'open', confirmed: { by: 'ada' } });
+    const recalled = await request(
+      'POST',
+      '/v1/recall',
+      org,
+      JSON.stringify({ query: 'deploy window' }),
+    );
+    const hit = (recalled.body.data?.['memories'] as { id: string; contested?: unknown }[]).find(
+      (m) => m.id === id,
+    );
+    expect(hit?.contested).toMatchObject({ signal: 'stale', note: 'Moved to Thursday.' });
+
+    const retired = await request('POST', `/v1/feedback/${row.id}/retire`, expert, '{}');
+    expect(retired.body.data).toMatchObject({ memoryId: id, endReason: 'expired' });
+    const again = await request('POST', `/v1/feedback/${row.id}/dismiss`, expert, '{}');
+    expect([again.status, again.body.error?.['reason']]).toEqual([403, 'already-resolved']);
   });
 
   it('keeps end users to their Planet and needs an org', async () => {
@@ -287,6 +340,20 @@ describe('service mode on TCP', () => {
     // The health handshake needs no user; an empty one is still the SDK's user-missing.
     expect((await tcp(auth, '/v1/health')).status).toBe(200);
     expect((await tcp({ ...auth, 'oort-user': '' })).body.error?.['reason']).toBe('user-missing');
+  });
+
+  it("reads a project's feedback only with that project", async () => {
+    const as = (project: string) => ({ ...auth, 'oort-project': project, 'oort-user': 'u7' });
+    const post = (route: string, project: string, body: unknown) =>
+      request('POST', route, as(project), JSON.stringify(body), true);
+    const saved = await post('/v1/remember', 'proj-a', { facts: ['Acme renews in March.'] });
+    const [id] = (saved.body.data?.['results'] as { id: string }[]).map((r) => r.id) as [string];
+    const given = await post('/v1/feedback', 'proj-a', { memoryId: id, signal: 'wrong' });
+    expect(given.status).toBe(200);
+    const list = (project: string) => request('GET', '/v1/feedback', as(project), undefined, true);
+    expect(((await list('proj-a')).body.data?.['feedback'] as unknown[]).length).toBe(1);
+    expect((await list('proj-b')).body.data?.['feedback']).toEqual([]);
+    expect((await list('-')).body.data?.['feedback']).toEqual([]);
   });
 
   it('answers a loopback listener only under its own Host', async () => {

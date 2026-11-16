@@ -1,6 +1,6 @@
 import { appendAccess } from './activation.js';
-import type { GuardedWriteResult, Hit, MemoryStore } from './adapters.js';
-import { addressOf, authorOf, canonicalMemory, nodeKey, nodeOf, sameAddress } from './address.js';
+import type { GuardedWriteResult, Hit, MemoryStore, PendingCaps } from './adapters.js';
+import { addressOf, authorOf, canonicalMemory, nodeKey, nodeOf } from './address.js';
 import {
   assertGrant,
   cursorKey,
@@ -13,6 +13,7 @@ import {
 import { isCurrent, isZeroVector, type Memory, type Tier } from './model.js';
 import { purgedPrediction } from './judgment.js';
 import { predictionCites, selectPredictions, type Prediction } from './prediction.js';
+import { selectFeedback, type Feedback } from './feedback.js';
 import {
   ABOUT_PER_ENTITY,
   aboutWeight,
@@ -39,6 +40,35 @@ import {
 import { checkOccurrences } from './event-time.js';
 import { checkPlace, hasSpatialFilter, matchesSpatial, type SpatialFilter } from './place.js';
 import { tokenizeLexical as tokens } from './tokenize.js';
+
+/**
+ * Same node, in any project: the pending caps count an author's rows at the home node across
+ * every project it reaches, so binding rows to projects does not multiply the cap.
+ */
+function sameNode(a: Parameters<typeof nodeOf>[0], b: Parameters<typeof nodeOf>[0]): boolean {
+  return nodeKey(nodeOf(a)) === nodeKey(nodeOf(b));
+}
+
+/** Whether a new pending `r` would pass `caps`, counting the pending `rows` at its node. */
+function overCap(
+  rows: readonly Pick<Prediction, 'scope' | 'address' | 'author'>[],
+  r: Pick<Prediction, 'scope' | 'address' | 'author'>,
+  caps: PendingCaps,
+): boolean {
+  const where = addressOf(r);
+  const author = authorOf(r).agentId;
+  let mine = 0;
+  let all = 0;
+  for (const x of rows) {
+    if (!sameNode(addressOf(x), where)) continue;
+    all++;
+    if (authorOf(x).agentId === author) mine++;
+  }
+  return (
+    (caps.pendingCap !== undefined && mine >= caps.pendingCap) ||
+    (caps.addressPendingCap !== undefined && all >= caps.addressPendingCap)
+  );
+}
 
 export interface MemoryStoreOptions {
   /**
@@ -112,6 +142,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   const cold = new Map<string, Memory>();
   const cursors = new Map<string, string>();
   const predictions = new Map<string, Prediction>();
+  const feedback = new Map<string, Feedback>();
   /** Link and block rows, keyed `kind/a/b`, in the order they were first written. */
   const links = new Map<string, LinkRow>();
   /** Episode positions: assigned on insert, kept by a rewrite in the same session. */
@@ -325,7 +356,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
 
     predictions: true,
 
-    async putPrediction(grant, p, expect) {
+    async putPrediction(grant, p, expect, caps) {
       open();
       assertGrant(grant);
       if (!grantWrites(grant, p)) throw new GrantError();
@@ -334,6 +365,10 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
         return false;
       }
       if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return false;
+      if (was === undefined && p.resolution === undefined && caps !== undefined) {
+        const unresolved = [...predictions.values()].filter((x) => x.resolution === undefined);
+        if (overCap(unresolved, p, caps)) return 'pending-cap';
+      }
       predictions.set(p.id, structuredClone(p));
       return true;
     },
@@ -395,8 +430,78 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       return [...predictions.values()].filter(
         (p) =>
           p.resolution === undefined &&
-          sameAddress(addressOf(p), where) &&
+          sameNode(addressOf(p), where) &&
           authorOf(p).agentId === author,
+      ).length;
+    },
+
+    feedback: true,
+
+    // No await from the checks to the write: one call is atomic, as the SQLite transaction is.
+    async putFeedback(grant, f, expect, putOpts) {
+      open();
+      assertGrant(grant);
+      if (!grantWrites(grant, f)) throw new GrantError();
+      const was = feedback.get(f.id);
+      if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, f))) {
+        return 'conflict';
+      }
+      if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return 'conflict';
+      // A row keeps the memory it is about: a write naming another is refused.
+      if (was !== undefined && was.memoryId !== f.memoryId) return 'conflict';
+      if (was === undefined && !main.has(f.memoryId) && !cold.has(f.memoryId)) {
+        return 'memory-gone';
+      }
+      if (was === undefined && f.status === 'pending' && putOpts !== undefined) {
+        const pending = [...feedback.values()].filter((x) => x.status === 'pending');
+        if (overCap(pending, f, putOpts)) return 'pending-cap';
+      }
+      if (f.helpedKey !== undefined) {
+        for (const x of feedback.values()) {
+          if (x.id !== f.id && x.helpedKey === f.helpedKey) return 'helped-today';
+        }
+      }
+      feedback.set(f.id, structuredClone(f));
+      return 'written';
+    },
+
+    async getFeedback(grant, id) {
+      open();
+      assertGrant(grant);
+      const f = feedback.get(id);
+      return f === undefined || !grantReads(grant, f) ? null : structuredClone(f);
+    },
+
+    async listFeedback(grant, listOpts = {}) {
+      open();
+      assertGrant(grant);
+      const readable = [...feedback.values()].filter((f) => grantReads(grant, f));
+      return selectFeedback(readable, listOpts).map((f) => structuredClone(f));
+    },
+
+    async purgeFeedbackFor(grant, memoryId) {
+      open();
+      assertGrant(grant);
+      const removed: string[] = [];
+      // Only for a memory this grant may change (or one already gone: its rows are orphans).
+      if (main.has(memoryId) && writable(grant, memoryId) === undefined) {
+        return { removed, leftover: [] };
+      }
+      for (const f of [...feedback.values()]) {
+        if (f.memoryId !== memoryId) continue;
+        feedback.delete(f.id);
+        removed.push(f.id);
+      }
+      return { removed, leftover: [] };
+    },
+
+    async countPendingFeedback(at) {
+      open();
+      const where = addressOf(at);
+      const author = authorOf(at).agentId;
+      return [...feedback.values()].filter(
+        (f) =>
+          f.status === 'pending' && sameNode(addressOf(f), where) && authorOf(f).agentId === author,
       ).length;
     },
 
@@ -685,6 +790,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       assertGrant(grant);
       if (writable(grant, id) === undefined) return;
       forgetLinks(id);
+      for (const f of [...feedback.values()]) if (f.memoryId === id) feedback.delete(f.id);
       main.delete(id);
       cold.delete(id);
     },

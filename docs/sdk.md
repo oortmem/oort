@@ -122,6 +122,11 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 | `judge.listPredictions({ status?, limit?, domain? })` | `{ predictions }`                   | yes   | `refused`                 |
 | `judge.getPrediction(id)` / `judge.forgetPrediction(id)` | `PredictionView` / `{ id, forgotten }` | yes | `refused`               |
 | `judge.evalLive({ domain?, includeAgentResolved? })` | `LiveEvalView`                       | yes   | `refused`                 |
+| `feedback({ memoryId, signal, note?, query? })` | `FeedbackResultView` (`kept`, `feedback`, `applied?`, `reason?`) | yes | `refused` |
+| `feedback.list({ status?, memoryId?, signal?, limit? })` | `{ feedback }`                    | yes   | `refused`                 |
+| `feedback.confirm(id)` / `feedback.dismiss(id)` | `FeedbackView`                            | expert role only | `refused`      |
+| `feedback.retire(id)`                          | `{ feedback, memoryId, endReason }`        | expert role only | `refused`      |
+| `feedback.supersede(id, fact)`                 | `{ feedback, memoryId, supersedes, redacted }` | expert role only | `refused`  |
 | `consolidate({ budgetMs?, signal? })`          | `ConsolidateResult`                        | yes   | `refused`                 |
 | `scoped({ user?, project?, agent?, judgeRole? })` | a new handle                            | yes   | yes (`user`: a server key) |
 | `endUsers.erase(user)`                         | `EndUserErasure` (`erased`, `memories`, `coldCopies`, `turnRefs`, `cursors`) | `cloud-only` | a server key |
@@ -168,8 +173,9 @@ date without `mode` picks its view, and with neither `inferTime` decides.
 on the way out), `type`, `tier`, `pinned`, `status` (`current`, `superseded`, `corrected`,
 `expired`, `not-yet-valid` or `withdrawn`), `validFrom`, `validTo`, `recordedAt`, `updatedAt`,
 `entities`, `origin`, for a judgment, `judgment`, and for a memory remembered with one (0.9.0 or
-newer), `place`. Recalled memories add `score` (comparable within one result only), `stale` and
-`why` (`@experimental`). A degraded recall is not an error:
+newer), `place`. Recalled memories add `score` (comparable within one result only), `stale`, `why`
+(`@experimental`) and, for a memory a person reported wrong or stale, `contested` (see
+[Recall feedback](#recall-feedback)). A degraded recall is not an error:
 it returns what it found and fills `degraded` and `warnings` (`lexical-only`, `recall-degraded`,
 `time-mode-unreported`). Ignore result fields you do not know: new ones may appear in any release.
 
@@ -414,7 +420,10 @@ console.log(live.resolved, live.bands.length);
   `meanProbability`), and the `criteria` the expert overruled most.
 - `judge.listPredictions()` lists pending predictions, newest first. Pass `status: 'resolved'` for
   decided ones. A pending prediction expires after 30 days; resolved ones stay until forgotten.
-  Above 5,000 pending from one author in one place, `judge.apply` answers without keeping one (`kept: false`,
+  A prediction is kept with the handle's project (unbound without one), so a handle scoped to
+  another project does not list or resolve it; predictions kept before this were unbound.
+  Above 5,000 pending from one author at its home (any project), or 50,000 from all authors there,
+  `judge.apply` answers without keeping one (`kept: false`,
   `notKept: 'pending-cap'`); a failed write is `notKept: 'write-failed'`.
 - Withdrawing, purging or forgetting a judgment first removes the text of every prediction that
   cited it; if one could not be purged the call fails (`internal`, `predictions-not-purged`,
@@ -671,7 +680,7 @@ own error is reported by its class name only.
 | `OortNeedsConfirmationError`   | `needs-confirmation` | `preview-required`, `findings-unacknowledged` (Oort Cloud 409)                      |
 | `OortCloudOnlyError`           | `cloud-only`         | `hive-level`, `end-users` (`endUsers` locally), or `forget({ everywhere })` locally |
 | `OortNetworkError`             | `network`            | `unreachable`, `timeout`, `busy` (retryable)                                        |
-| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `conflict` (a prediction changed meanwhile; retryable), `predictions-unsupported` (a store that cannot keep predictions), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
+| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `conflict` (a prediction changed meanwhile; retryable), `in-progress` (a feedback row another call is resolving; retryable), `memory-changed` (a supersede could not take back its new memory; inspect it first), `predictions-unsupported` (a store that cannot keep predictions), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
 | `OortInternalError`            | `internal`           | `store-busy` (retryable), `predictions-not-purged` (retryable), else none          |
 
 Retry what is `retryable`, then branch on `code`:
@@ -1195,6 +1204,93 @@ console.log(removed.removed); // true
 - In cloud mode `link` and `unlink` reject with `OortRefusedError` (`reason: 'local-only'`),
   `explain().links` is empty, and recall follows no link: `why.via` never appears, and a home
   config with `recall.links.enabled` adds the warning `links-local-only` to each recall.
+
+## Recall feedback
+
+Feedback says what a recalled memory was worth: it `helped`, it is `wrong`, it is `stale` (out of
+date), or it was `irrelevant` to a query (local mode). There is no recall log: you name the memory
+by its id, and for `irrelevant` you pass the query it was recalled for.
+
+<!-- example: examples/src/feedback.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+// A review screen where a person reads what was recalled runs in the expert role.
+await using person = await createOort({
+  mode: 'local',
+  judge: { role: 'expert', operator: 'ada' },
+});
+
+const saved = await person.remember(['The staging database runs Postgres 15.']);
+const memoryId = saved.results[0]!.id!;
+
+// Model-facing code runs in the agent role: its feedback waits for a person.
+const agent = person.scoped({ judgeRole: 'agent' });
+const draft = await agent.feedback({ memoryId, signal: 'wrong', note: 'Upgraded to 16 in May.' });
+console.log(draft.kept && draft.feedback.status); // pending
+
+// Nothing changes until the person confirms it. Then recall labels the memory contested.
+const pending = await person.feedback.list({ status: 'pending' });
+await person.feedback.confirm(pending.feedback[0]!.id);
+const r = await person.recall('staging database version');
+console.log(r.memories.find((m) => m.id === memoryId)?.contested?.signal); // wrong
+
+// The person resolves it: store the right fact, and the old memory ends superseded.
+const done = await person.feedback.supersede(
+  pending.feedback[0]!.id,
+  'The staging database runs Postgres 16.',
+);
+console.log(done.supersedes === memoryId, done.feedback.status); // true superseded
+```
+
+**Who counts.** The judge role decides, as for judgments. A handle in the expert role is a person:
+its feedback counts at once (`via: 'sdk'`), and only it may `confirm`, `retire`, `supersede` or
+`dismiss`; an agent handle is refused (`expert-only`). A handle in the agent role (the default)
+gives feedback as an MCP agent does: kept `pending`, with no effect on recall until a person
+confirms it. An agent names a memory by its whole id; a person may use a unique prefix.
+
+**What each signal does.**
+
+- `helped` adds `feedback.helpedAccesses` accesses (home config, default 2, 0 turns it off) to the
+  memory's access log at the current time, so it ranks as if it had just been used that often. One
+  `helped` per memory and person counts per UTC day; a later one is kept with `applied: false` and
+  `reason: 'already-helped-today'`.
+- `wrong` and `stale` open a correction. Ranking does not change and no memory is ended. Recall
+  returns the memory with `contested: { feedbackId, signal, note?, by, at }`, and `formatForPrompt`
+  adds `(contested: wrong, note: "...")` to its line, until a person resolves it:
+  - `feedback.retire(id)` ends the memory now: `corrected` for `wrong` (it never held), `expired`
+    for `stale` (it held until now).
+  - `feedback.supersede(id, fact)` stores `fact` (one line, at most 500 characters, scrubbed of
+    secrets) as a new memory, and the old one ends `superseded`.
+  - `feedback.dismiss(id)` closes the feedback and keeps the memory as it is.
+- `irrelevant` keeps the pair of query and memory id. Recall does not use it yet.
+
+**Limits and races.** `note` and `query` lose invisible characters (zero-width, bidirectional
+and tag characters), are scrubbed of secrets, made one line and cut to 500 characters. One agent
+keeps at most 5,000 pending rows at its home, across every project, and all agents together
+50,000 there; past that, `feedback()`
+returns `{ kept: false, reason: 'pending-cap' }`. A row is kept with its memory's project, so a
+handle scoped to another project does not see it.
+
+`retire` and `supersede` first mark the row `resolving`, then change the memory, then close the
+row. When two resolves run at once, one wins and the other rejects with `OortRefusedError`:
+`already-resolved`, `in-progress` (another call is resolving it; retryable) or `conflict` (the
+row changed meanwhile and nothing was written; retryable). A call that stopped part way leaves
+the row `resolving`, and recall still returns `contested`: the same call again finishes it, and a
+supersede never stores the fact twice. The same call again takes the row over before it changes
+anything (`claim.takenOverBy`, `takenOverAt`), so a call still running stops before its next
+change. The row's `claim` says who started it, who took it over, `ageSeconds`, and the `fact` a
+supersede would store. Once `claim.canTakeOver` (5 minutes), `dismiss`, `retire` or a `supersede`
+with another fact takes it over. When everything the claim changes is already in place, it is
+finished as it was meant and the call rejects with `already-resolved`, saying nothing was undone.
+Otherwise what it changed is put back first (its new memory, while nothing recalled, linked or
+changed it, and the old memory's end; `claim.undoing` while that runs). The closed row keeps
+`resolved.claimedBy`. The new memory is authored by the expert. If the old memory ended another
+way meanwhile, the new one is removed and the row goes back to `open`; if the new one was
+recalled, linked or changed meanwhile, it is kept, the row still goes back to `open`, and the error has reason
+`memory-changed` and is not retryable: inspect the memories first. Another memory already at the
+id a supersede writes is refused (`conflict`) and nothing changes. `forget(id)` deletes every feedback row about the memory, whoever gave it.
 
 ## Stability
 

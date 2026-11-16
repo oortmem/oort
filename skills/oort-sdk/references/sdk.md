@@ -63,32 +63,34 @@ usage error.
 
 ## Methods
 
-| Method                                                                  | Returns                                | Cloud mode                                                        |
-| ----------------------------------------------------------------------- | -------------------------------------- | ----------------------------------------------------------------- |
-| `recall(query, opts?)`                                                  | `RecallResult`                         | yes                                                               |
-| `observe(turn, { signal? })`                                            | `ObserveResult`                        | yes                                                               |
-| `remember(facts, { type?, place? })`                                    | `RememberResult`                       | yes (`place`: `refused`, `local-only`)                            |
-| `forget(id, { everywhere? })`                                           | `ForgetResult`                         | yes (`everywhere`: cloud only)                                    |
-| `pin(id)` / `unpin(id)`                                                 | `PinResult`                            | yes (`changed: null`)                                             |
-| `recent({ since?, limit? })`                                            | `{ memories, warnings }`               | yes                                                               |
-| `explain(id)`                                                           | `Explanation`                          | yes (`links`, after 0.10.0, is empty)                             |
-| `link(from, to)` / `unlink(from, to)` (after 0.10.0)                    | `LinkResult` / `UnlinkResult`          | `refused` (`local-only`)                                          |
-| `whoami()`                                                              | `Whoami`                               | yes                                                               |
-| `judge.record(input)`                                                   | `RecordJudgmentView`                   | `refused`                                                         |
-| `judge.apply(item, opts?)`                                              | `JudgeResult`                          | `refused`                                                         |
-| `judge.list({ domain?, by?, all?, limit? })`                            | `{ judgments }`                        | `refused`                                                         |
-| `judge.confirm(id)`                                                     | `{ id, changed }` (expert role)        | `refused`                                                         |
-| `judge.resolve(predictionId, input)` (after 0.10.0)                     | `ResolveView`                          | `refused`                                                         |
-| `judge.listPredictions({ status?, limit?, domain? })` (after 0.10.0)    | `{ predictions }`                      | `refused`                                                         |
-| `judge.getPrediction(id)` / `judge.forgetPrediction(id)` (after 0.10.0) | `PredictionView` / `{ id, forgotten }` | `refused`                                                         |
-| `judge.evalLive({ domain?, includeAgentResolved? })` (after 0.10.0)     | `LiveEvalView`                         | `refused`                                                         |
-| `consolidate({ budgetMs?, signal? })`                                   | `ConsolidateResult`                    | `refused`                                                         |
-| `scoped({ user?, project?, agent?, judgeRole? })`                       | a new handle                           | `project`, `agent` only in 0.7.0 (`user`: after it, a server key) |
-| `endUsers.erase(user)`                                                  | `EndUserErasure`                       | 0.8.0, a server key                                               |
-| `endUsers.count()`                                                      | `EndUserCount`                         | 0.8.0, a server key                                               |
-| `endUsers.export(user)`                                                 | `EndUserExport`                        | 0.8.0, a server key                                               |
-| `close()`, `[Symbol.asyncDispose]()`                                    | `void`                                 |                                                                   |
-| `formatForPrompt(result, { budgetChars? })`                             | `string` (a function, not a method)    | both                                                              |
+| Method                                                                                                                                           | Returns                                       | Cloud mode                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | ----------------------------------------------------------------- |
+| `recall(query, opts?)`                                                                                                                           | `RecallResult`                                | yes                                                               |
+| `observe(turn, { signal? })`                                                                                                                     | `ObserveResult`                               | yes                                                               |
+| `remember(facts, { type?, place? })`                                                                                                             | `RememberResult`                              | yes (`place`: `refused`, `local-only`)                            |
+| `forget(id, { everywhere? })`                                                                                                                    | `ForgetResult`                                | yes (`everywhere`: cloud only)                                    |
+| `pin(id)` / `unpin(id)`                                                                                                                          | `PinResult`                                   | yes (`changed: null`)                                             |
+| `recent({ since?, limit? })`                                                                                                                     | `{ memories, warnings }`                      | yes                                                               |
+| `explain(id)`                                                                                                                                    | `Explanation`                                 | yes (`links`, after 0.10.0, is empty)                             |
+| `link(from, to)` / `unlink(from, to)` (after 0.10.0)                                                                                             | `LinkResult` / `UnlinkResult`                 | `refused` (`local-only`)                                          |
+| `whoami()`                                                                                                                                       | `Whoami`                                      | yes                                                               |
+| `judge.record(input)`                                                                                                                            | `RecordJudgmentView`                          | `refused`                                                         |
+| `judge.apply(item, opts?)`                                                                                                                       | `JudgeResult`                                 | `refused`                                                         |
+| `judge.list({ domain?, by?, all?, limit? })`                                                                                                     | `{ judgments }`                               | `refused`                                                         |
+| `judge.confirm(id)`                                                                                                                              | `{ id, changed }` (expert role)               | `refused`                                                         |
+| `judge.resolve(predictionId, input)` (after 0.10.0)                                                                                              | `ResolveView`                                 | `refused`                                                         |
+| `judge.listPredictions({ status?, limit?, domain? })` (after 0.10.0)                                                                             | `{ predictions }`                             | `refused`                                                         |
+| `judge.getPrediction(id)` / `judge.forgetPrediction(id)` (after 0.10.0)                                                                          | `PredictionView` / `{ id, forgotten }`        | `refused`                                                         |
+| `judge.evalLive({ domain?, includeAgentResolved? })` (after 0.10.0)                                                                              | `LiveEvalView`                                | `refused`                                                         |
+| `feedback({ memoryId, signal, note?, query? })` (after 0.10.0)                                                                                   | `FeedbackResultView`                          | `refused`                                                         |
+| `feedback.list(opts?)` / `feedback.confirm(id)` / `feedback.retire(id)` / `feedback.supersede(id, fact)` / `feedback.dismiss(id)` (after 0.10.0) | `{ feedback }` / views (expert role resolves) | `refused`                                                         |
+| `consolidate({ budgetMs?, signal? })`                                                                                                            | `ConsolidateResult`                           | `refused`                                                         |
+| `scoped({ user?, project?, agent?, judgeRole? })`                                                                                                | a new handle                                  | `project`, `agent` only in 0.7.0 (`user`: after it, a server key) |
+| `endUsers.erase(user)`                                                                                                                           | `EndUserErasure`                              | 0.8.0, a server key                                               |
+| `endUsers.count()`                                                                                                                               | `EndUserCount`                                | 0.8.0, a server key                                               |
+| `endUsers.export(user)`                                                                                                                          | `EndUserExport`                               | 0.8.0, a server key                                               |
+| `close()`, `[Symbol.asyncDispose]()`                                                                                                             | `void`                                        |                                                                   |
+| `formatForPrompt(result, { budgetChars? })`                                                                                                      | `string` (a function, not a method)           | both                                                              |
 
 **`recall` options.** `limit` (1 to 50, default 10), `mode` (`current`, `as-of`, `history`,
 `known-at`), `asOf` (valid time), `knownAt` (transaction time), `include` (narrows the levels
@@ -287,6 +289,61 @@ console.log(links.map((l) => `${l.kind} ${l.assertedBy}`).join(', '), hiddenLink
 // Unlinking removes the link. A pair that could be related again is blocked until it is linked.
 const removed = await oort.unlink(deploys!, freeze!);
 console.log(removed.removed); // true
+```
+
+## Recall feedback (local mode, after 0.10.0)
+
+Not in 0.10.0: `feedback` and `RecalledMemory.contested` come in the release after it. On 0.10.0,
+do not call them.
+
+`feedback({ memoryId, signal, note?, query? })` says a recalled memory `helped`, is `wrong`, is
+`stale`, or was `irrelevant` to `query` (required for that signal). There is no recall log: name
+the memory by id. The judge role decides who counts. An agent-role handle (the default, and what
+model-facing code should use) records `pending` feedback that changes nothing until an
+expert-role handle or `oort feedback confirm` confirms it. An expert-role handle counts at once,
+and only it can `confirm`, `retire` (end the memory), `supersede` (store the right fact; the old
+memory ends `superseded`) or `dismiss`; an agent handle gets `refused`, `expert-only`. `helped`
+adds `feedback.helpedAccesses` accesses (default 2) once per memory and person per UTC day.
+`wrong` and `stale` never change ranking or end a memory: recall returns `contested` on it and
+`formatForPrompt` labels the line until a person resolves it. A lost race between two resolves
+rejects with `refused` (`already-resolved`, or `in-progress` / `conflict`, both retryable) and
+changes nothing. A retire or supersede that stopped part way leaves the row `resolving` (its
+`claim` shows who, how long ago and the pending fact): the same call again finishes it, and after
+5 minutes `dismiss`, `retire` or a reworded `supersede` takes it over, finishing it when its
+changes are all in place (`already-resolved`) and otherwise putting them back first. Feedback is kept with its
+memory's project, and a kept prediction with the handle's project.
+
+<!-- example: examples/src/feedback.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+// A review screen where a person reads what was recalled runs in the expert role.
+await using person = await createOort({
+  mode: 'local',
+  judge: { role: 'expert', operator: 'ada' },
+});
+
+const saved = await person.remember(['The staging database runs Postgres 15.']);
+const memoryId = saved.results[0]!.id!;
+
+// Model-facing code runs in the agent role: its feedback waits for a person.
+const agent = person.scoped({ judgeRole: 'agent' });
+const draft = await agent.feedback({ memoryId, signal: 'wrong', note: 'Upgraded to 16 in May.' });
+console.log(draft.kept && draft.feedback.status); // pending
+
+// Nothing changes until the person confirms it. Then recall labels the memory contested.
+const pending = await person.feedback.list({ status: 'pending' });
+await person.feedback.confirm(pending.feedback[0]!.id);
+const r = await person.recall('staging database version');
+console.log(r.memories.find((m) => m.id === memoryId)?.contested?.signal); // wrong
+
+// The person resolves it: store the right fact, and the old memory ends superseded.
+const done = await person.feedback.supersede(
+  pending.feedback[0]!.id,
+  'The staging database runs Postgres 16.',
+);
+console.log(done.supersedes === memoryId, done.feedback.status); // true superseded
 ```
 
 ## Stability

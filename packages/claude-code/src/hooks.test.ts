@@ -2,8 +2,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  confirmFeedback,
+  dismissFeedback,
   linkProject,
   localScope,
+  recordFeedback,
+  retireFeedback,
   projectIdFor,
   type Embedder,
   type MemoryStore,
@@ -240,6 +244,46 @@ describe('UserPromptSubmit', () => {
     // Room for the linked line but not the hit: nothing, never the linked line by itself.
     const none = await block(29 + roomy[1]!.length);
     expect(none).not.toContain('Postgres');
+  });
+
+  it('hook.prompt-labels-a-contested-memory-until-a-person-resolves-it', async () => {
+    const t = tempHome();
+    const deps = await withMemories(t, PORT_MEMORY);
+    const ask = async () =>
+      context(
+        (await handleUserPromptSubmit(prompt(t, 'which port does the auth service use?'), deps))
+          .stdout,
+        'UserPromptSubmit',
+      );
+    const scope = { orgId: 'local', customerId: 'self', agentId: 'claude-code' };
+    const give = (via: 'cli' | 'mcp', note: string) =>
+      recordFeedback(
+        { memoryId: 'm-port', signal: 'wrong', by: 'local-user', note },
+        { store: deps.store, grant: TG, scope, via },
+      );
+    // An agent's feedback changes nothing until a person confirms it.
+    const pending = await give('mcp', 'It moved to 4472.');
+    expect(await ask()).not.toContain('contested');
+    if (!pending.kept) throw new Error('not kept');
+    await confirmFeedback(pending.feedback.id, { store: deps.store, grant: TG, by: 'local-user' });
+    expect(await ask()).toContain(
+      'The auth service listens on port 4471. (contested: wrong, note: "It moved to 4472.")',
+    );
+    // Dismissed: the label goes and the memory stays.
+    await dismissFeedback(pending.feedback.id, { store: deps.store, grant: TG, by: 'local-user' });
+    const after = await ask();
+    expect(after).toContain('The auth service listens on port 4471.');
+    expect(after).not.toContain('contested');
+    // Retired by a person: only now is it gone from the hook's context.
+    const wrong = await give('cli', 'It moved to 4472.');
+    if (!wrong.kept) throw new Error('not kept');
+    expect(await ask()).toContain('(contested: wrong');
+    await retireFeedback(wrong.feedback.id, { store: deps.store, grant: TG, by: 'local-user' });
+    const out = await handleUserPromptSubmit(
+      prompt(t, 'which port does the auth service use?'),
+      deps,
+    );
+    expect(out.stdout).not.toContain('4471');
   });
 
   it('hook.prompt-skips-trivial-silently', async () => {
