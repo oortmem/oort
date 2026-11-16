@@ -401,6 +401,7 @@ console.log(live.resolved, live.bands.length);
   anything.
 - In the agent role, `resolve` follows the rules for `record`: only for a listed expert, and the
   decision stays unconfirmed until an expert role calls `judge.confirm(predictionId)`.
+  A prefix that matches both a memory and a prediction is `ambiguous-id`.
   `evalLive` leaves unconfirmed decisions out unless `includeAgentResolved` is set.
 - `evalLive` reports `overall` agreement, agreement on `suggested` items and their `coverage`,
   calibration per probability band (`bands`: `from`, `to`, `predicted`, `agreed`, `agreement`,

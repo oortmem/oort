@@ -11,6 +11,7 @@ import {
   confirmResolution,
   evaluateLive,
   findPrediction,
+  predictionMatch,
   forgetPrediction,
   listPredictions,
   predictionState,
@@ -265,6 +266,14 @@ function reportRecorded(ctx: Ctx, w: Wired, r: RecordJudgmentResult, json: boole
   } else {
     ctx.io.out(`Recorded ${short(r.memory.id)}: ${judgmentLine(j)}.\n`);
   }
+}
+
+/** A prefix that matches both a judgment and a prediction. */
+function ambiguousKinds(ref: string): Refusal {
+  return new Refusal(
+    `${echo(ref)} matches both a judgment and a prediction; give more of the id (\`oort judge list --all\` and \`oort judge predictions --all\` show them).`,
+    { code: 'ambiguous-id', fix: 'oort judge predictions --all' },
+  );
 }
 
 /** The judgment `ref` names (an id or unique prefix), current or not. */
@@ -549,6 +558,14 @@ export async function judgeConfirmCommand(
           : undefined;
       if (p === undefined) throw e;
       return confirmResolved(ctx, w, p, o);
+    }
+    if (m.id !== id) {
+      // A prefix: it must not also name a prediction, or the wrong one would be confirmed.
+      const match = await predictionMatch(w.store, writeGrant(w), id);
+      if (match === 'exact') {
+        return confirmResolved(ctx, w, await findPrediction(w.store, writeGrant(w), id), o);
+      }
+      if (match === 'prefix') throw ambiguousKinds(id);
     }
     const grant = writeGrantFor(w, m);
     if (!isUnconfirmedAgentJudgment(m.judgment)) {

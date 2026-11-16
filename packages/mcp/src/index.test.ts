@@ -477,6 +477,13 @@ describe('@oortmem/mcp definitions', () => {
     const by = Object.fromEntries(TOOLS.map((t) => [t.name, t.annotations]));
     expect(by['forget']).toMatchObject({ readOnlyHint: false, destructiveHint: true });
     expect(by['remember']).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    // judge writes the prediction record a later resolve_prediction closes.
+    expect(by['judge']).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
     for (const n of ['recall', 'explain', 'list_recent', 'whoami'] as const) {
       expect(by[n], n).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     }

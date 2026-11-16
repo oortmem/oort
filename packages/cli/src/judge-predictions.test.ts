@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DecisionController, Embedder } from '@oortmem/core';
-import { livePredictionFixtures } from '@oortmem/core/store-conformance';
+import { livePredictionFixtures, makePrediction } from '@oortmem/core/store-conformance';
 import { data, fakeDecide, harness, type Harness } from '../test/helpers.js';
 import { localBackend } from './mcp.js';
 import { writeGrant } from './util.js';
@@ -225,5 +225,53 @@ describe('oort judge resolve', () => {
       list.io.stdout,
     ).judgments.find((j) => j.reason === 'Labelled satire.');
     expect(made?.confirmed).toBeDefined();
+  });
+  it('cli.judge-confirm-refuses-a-prefix-of-both-a-judgment-and-a-prediction', async () => {
+    const h = judging();
+    await seed(h);
+    const w = await h.wire(h.cwd);
+    const listed = await h.run(['judge', 'list', '--json']);
+    const jid = data<{ judgments: { id: string }[] }>(listed.io.stdout).judgments[0]!.id;
+    // A prediction an agent resolved, whose id starts like the judgment's.
+    const c = jid[6] === 'f' ? '0' : 'f';
+    const pid = `${jid.slice(0, 6)}${c}${c}-0000-4000-8000-000000000000`;
+    await h.store.putPrediction!(
+      writeGrant(w),
+      makePrediction({
+        id: pid,
+        scope: w.scope,
+        createdAt: new Date().toISOString(),
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        resolution: {
+          verdict: 'approved',
+          criteria: [],
+          by: 'ada',
+          at: new Date().toISOString(),
+          via: 'mcp',
+          agrees: false,
+        },
+      }),
+    );
+    const both = await h.run(['judge', 'confirm', jid.slice(0, 6), '--yes', '--json']);
+    expect(both.code).toBe(2);
+    const env = JSON.parse(both.io.stdout) as {
+      ok: boolean;
+      error: { code: string; message: string };
+    };
+    expect(env.ok).toBe(false);
+    expect(env.error.code).toBe('ambiguous-id');
+    expect(env.error.message).toMatch(/matches both a judgment and a prediction/);
+    // Nothing was confirmed.
+    expect(
+      (await h.store.getPrediction!(writeGrant(w), pid))?.resolution?.confirmed,
+    ).toBeUndefined();
+
+    // A longer id names one of them.
+    const p = await h.run(['judge', 'confirm', pid.slice(0, 8), '--yes']);
+    expect(p.code).toBe(0);
+    expect((await h.store.getPrediction!(writeGrant(w), pid))?.resolution?.confirmed).toBeDefined();
+    const j = await h.run(['judge', 'confirm', jid, '--yes']);
+    expect(j.code).toBe(0);
+    expect(j.io.stdout).toMatch(/recorded by a person; there is nothing to confirm/);
   });
 });

@@ -245,6 +245,22 @@ export async function findPrediction(
   return matches[0]!;
 }
 
+/**
+ * How `ref` names a prediction: `exact` (a prediction's whole id), `prefix` (the start of one or
+ * more ids) or `none`. A store without predictions has none. Lets a command that takes a memory
+ * id or a prediction id refuse a prefix that matches both.
+ */
+export async function predictionMatch(
+  store: MemoryStore,
+  grant: Grant,
+  ref: string,
+): Promise<'exact' | 'prefix' | 'none'> {
+  if (!keepsPredictions(store)) return 'none';
+  const s = predictionsOf(store);
+  if ((await s.getPrediction(grant, ref)) !== null) return 'exact';
+  return (await s.listPredictions(grant)).some((p) => p.id.startsWith(ref)) ? 'prefix' : 'none';
+}
+
 /** True when the store keeps predictions. */
 export function keepsPredictions(store: MemoryStore): boolean {
   try {

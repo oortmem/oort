@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { tmpdir } from '../../test/helpers.js';
 import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
@@ -10,7 +11,7 @@ import type { Oort } from './types.js';
 // In the past: the store lists memories valid at the real time.
 const NOW = new Date('2026-11-01T12:00:00.000Z');
 
-async function handles(): Promise<{ expert: Oort; agent: Oort }> {
+async function handles(): Promise<{ expert: Oort; agent: Oort; home: string }> {
   const root = tmpdir('oort-sdk-predictions-');
   const base = {
     mode: 'local' as const,
@@ -21,7 +22,7 @@ async function handles(): Promise<{ expert: Oort; agent: Oort }> {
   const deps = { adapters: fakeAdapters(), now: () => NOW };
   const expert = await createOortWith({ ...base, judge: { role: 'expert' } }, deps as never);
   const agent = await createOortWith(base, deps as never);
-  return { expert, agent };
+  return { expert, agent, home: base.home };
 }
 
 async function seed(oort: Oort): Promise<void> {
@@ -121,6 +122,48 @@ describe('sdk predictions', () => {
     expect(after.agentResolvedExcluded).toBe(0);
     const j = (await expert.judge.list()).judgments.find((x) => x.id === resolved.judgment!.id);
     expect(j?.confirmed).toBe(true);
+    await expert.close();
+    await agent.close();
+  });
+  it('sdk.predictions.confirm-refuses-a-prefix-of-both-a-memory-and-a-prediction', async () => {
+    const { expert, agent, home } = await handles();
+    await seed(expert);
+    const jid = (await expert.judge.list()).judgments[0]!.id;
+    const r = await expert.judge.apply(item);
+    // A copy of that prediction, resolved by an agent, whose id starts like the judgment's.
+    const c = jid.slice(9, 13) === 'ffff' ? '0000' : 'ffff';
+    const pid = `${jid.slice(0, 8)}-${c}-4000-8000-000000000000`;
+    const db = new Database(path.join(home, 'oort.sqlite'));
+    try {
+      const row = db
+        .prepare('SELECT created_at, record FROM predictions WHERE id = ?')
+        .get(r.predictionId) as { created_at: string; record: string };
+      const record = {
+        ...(JSON.parse(row.record) as object),
+        id: pid,
+        resolution: {
+          verdict: 'approved',
+          criteria: [],
+          by: 'ada',
+          at: NOW.toISOString(),
+          via: 'mcp',
+          agrees: false,
+        },
+      };
+      db.prepare(
+        'INSERT INTO predictions (id, created_at, resolved, record) VALUES (?, ?, 1, ?)',
+      ).run(pid, row.created_at, JSON.stringify(record));
+    } finally {
+      db.close();
+    }
+    await expect(expert.judge.confirm(jid.slice(0, 8))).rejects.toMatchObject({
+      code: 'ambiguous-id',
+      message: expect.stringMatching(/both a memory and a prediction/),
+    });
+    expect((await expert.judge.getPrediction(pid)).resolution?.agentRecorded).toBe(true);
+    expect((await expert.judge.evalLive()).agentResolvedExcluded).toBe(1);
+    expect(await expert.judge.confirm(pid)).toEqual({ id: pid, changed: true });
+    expect((await expert.judge.evalLive()).agentResolvedExcluded).toBe(0);
     await expert.close();
     await agent.close();
   });

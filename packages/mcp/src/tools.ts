@@ -444,9 +444,15 @@ export const TOOLS: readonly ToolDefinition[] = [
     title: "Apply an expert's judgments",
     description:
       "Predict an expert's verdict on a new item from their judgments, with probability and cited precedents, or say it needs the expert. Sends the item and reasons to TypeSafe.",
-    // Reads memories only, but sends the item and the precedents' reasons to TypeSafe for the
-    // prediction. The prediction it keeps for a later resolve changes no memory.
-    annotations: { ...read("Apply an expert's judgments"), openWorldHint: true },
+    // Sends the item and the precedents' reasons to TypeSafe for the prediction, and writes the
+    // prediction record a later resolve_prediction closes. It changes no memory.
+    annotations: {
+      title: "Apply an expert's judgments",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
   },
   {
     name: 'resolve_prediction',

@@ -4,6 +4,7 @@ import {
   confirmResolution,
   evaluateLive,
   findPrediction,
+  predictionMatch,
   forgetPrediction as coreForgetPrediction,
   isActiveJudgment,
   isUnconfirmedAgentJudgment,
@@ -19,7 +20,7 @@ import { AgentJudgmentCapError, refundAgentJudgment, reserveAgentJudgment } from
 import { storeOf, type Ctx } from './context.js';
 import { localOnly } from './cloud.js';
 import { findLocal } from './local.js';
-import { OortNotFoundError, OortRefusedError } from './errors.js';
+import { OortAmbiguousIdError, OortNotFoundError, OortRefusedError } from './errors.js';
 import type {
   JudgeItem,
   JudgeOptions,
@@ -230,6 +231,26 @@ export async function confirm(ctx: Ctx, id: string): Promise<{ id: string; chang
       ctx.now(),
     );
     return { id: p.id, changed };
+  }
+  if (m.id !== id) {
+    // A prefix: it must not also name a prediction, or the wrong one would be confirmed.
+    const store = storeOf(ctx);
+    const match = await predictionMatch(store, ctx.principal.grant, id);
+    if (match === 'exact') {
+      const changed = await confirmResolution(
+        store,
+        ctx.principal.grant,
+        id,
+        ctx.judge.operator,
+        ctx.now(),
+      );
+      return { id, changed };
+    }
+    if (match === 'prefix') {
+      throw new OortAmbiguousIdError(
+        'That id prefix matches both a memory and a prediction; give more of the id.',
+      );
+    }
   }
   if (m.type !== 'judgment' || m.judgment === undefined) {
     throw new OortNotFoundError('No judgment with that id in this scope.');
