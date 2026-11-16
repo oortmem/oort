@@ -118,6 +118,23 @@ const activeJudgments = async (store: MemoryStore) =>
   );
 
 describe('predictions: judging keeps what it proposed', () => {
+  it('prediction.a-kept-prediction-is-bound-to-the-callers-project', async () => {
+    const { store, deps, item } = await setup();
+    const inA = { ...SCOPE, projectId: 'proj-a' };
+    const a = localGrant({ ...SCOPE, projectIds: ['proj-a', null] });
+    const b = localGrant({ ...SCOPE, projectIds: ['proj-b', null] });
+    const r = await judge(
+      { ...item, details: 'Acme launch copy', ref: 'acme/post-7' },
+      { ...deps, grant: a, keep: { scope: inA } },
+    );
+    expect(r.predictionId).toBeDefined();
+    const p = await getPrediction(store, a, r.predictionId!);
+    expect(p.scope.projectId).toBe('proj-a');
+    expect((await listPredictions(store, a)).map((x) => x.id)).toEqual([r.predictionId]);
+    expect(await listPredictions(store, b)).toEqual([]);
+    await expect(getPrediction(store, b, r.predictionId!)).rejects.toBeInstanceOf(PredictionError);
+  });
+
   it('prediction.judge-keeps-the-prediction', async () => {
     const { store, deps, precedents, item } = await setup();
     const r = await judge(item, deps);

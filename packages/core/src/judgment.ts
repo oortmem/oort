@@ -1447,7 +1447,8 @@ export async function judge(
           ...(item.by !== undefined && { by: item.by }),
         },
         used,
-        ...homePlacement(keep.scope, deps.grant),
+        // The item is the caller's project data: the prediction is read where that project is.
+        ...projectPlacement(keep.scope, deps.grant, keep.scope.projectId),
         now,
         ttlDays: keep.ttlDays ?? PREDICTION_LIMITS.ttlDays,
       });
