@@ -724,10 +724,14 @@ function sameDecision(a: Judgment, b: Judgment): boolean {
 }
 
 /**
- * Where a judgment (or a prediction) is kept: the grant's home node, unbound to any project, as
- * the acting principal's record. Judgments belong to the expert, not to a repository.
+ * Where a judgment (or a prediction, or recall feedback) is kept: the grant's home node, unbound to
+ * any project, as the acting principal's record. Judgments belong to the expert, not to a
+ * repository.
  */
-function homePlacement(scope: Scope, grant: Grant): Pick<Memory, 'scope' | 'address' | 'author'> {
+export function homePlacement(
+  scope: Scope,
+  grant: Grant,
+): Pick<Memory, 'scope' | 'address' | 'author'> {
   const { projectId: _p, ...unbound } = scope;
   return grant.home.level === 'user'
     ? { scope: unbound }

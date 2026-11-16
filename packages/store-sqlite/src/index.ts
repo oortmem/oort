@@ -42,6 +42,7 @@ import {
   sameRecordAddress,
   scopeOf,
   selectPredictions,
+  selectFeedback,
   predictionCites,
   purgedPrediction,
   addressOf,
@@ -70,6 +71,7 @@ import {
   type NodePattern,
   type Place,
   type Prediction,
+  type Feedback,
   type Provenance,
   type SpatialFilter,
   type Tier,
@@ -135,6 +137,7 @@ import {
   PLACE_TABLE,
   placeCount,
   PREDICTION_TABLE,
+  FEEDBACK_TABLE,
   rabitqIndexPlan,
   schemaVersionOf,
   searchableVectors,
@@ -1385,6 +1388,27 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
          AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
          AND project_id IS @project_id AND author_agent_id = @author_agent_id AND resolved = 0`,
     ),
+    feedbackGet: db.prepare<[string], { record: string }>(
+      `SELECT record FROM ${FEEDBACK_TABLE} WHERE id = ?`,
+    ),
+    feedbackPut: db.prepare<[Params]>(
+      `INSERT INTO ${FEEDBACK_TABLE} (id, level, org_id, customer_id, agent_id, hive_id, run_id,
+         project_id, author_agent_id, memory_id, status, created_at, record)
+       VALUES (@id, @level, @org_id, @customer_id, @agent_id, @hive_id, @run_id, @project_id,
+         @author_agent_id, @memory_id, @status, @created_at, @record)
+       ON CONFLICT (id) DO UPDATE SET status = excluded.status, record = excluded.record`,
+    ),
+    feedbackForget: db.prepare<[string], { id: string }>(
+      `DELETE FROM ${FEEDBACK_TABLE} INDEXED BY ${FEEDBACK_TABLE}_memory WHERE memory_id = ?
+       RETURNING id`,
+    ),
+    feedbackPendingAt: db.prepare<[Params], { n: number }>(
+      `SELECT count(*) AS n FROM ${FEEDBACK_TABLE}
+       WHERE org_id = @org_id AND level = @level AND customer_id IS @customer_id
+         AND agent_id IS @agent_id AND hive_id IS @hive_id AND run_id IS @run_id
+         AND project_id IS @project_id AND author_agent_id = @author_agent_id
+         AND status = 'pending'`,
+    ),
     getCursor: db.prepare<[string], { value: string }>('SELECT value FROM cursors WHERE key = ?'),
     setCursor: db.prepare<[string, string]>(
       `INSERT INTO cursors (key, value) VALUES (?, ?)
@@ -1499,6 +1523,19 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
          AND (@prefix IS NULL OR m.id LIKE @prefix ESCAPE '\\')
          AND (@citing IS NULL OR m.record LIKE @citing ESCAPE '\\')
          AND (@domain IS NULL OR json_extract(m.record, '$.domain') = @domain)
+       ORDER BY m.created_at DESC, m.id DESC
+       LIMIT @limit`,
+    );
+  /** The feedback rows a grant of `n` patterns reads, filtered and ordered as `selectFeedback`. */
+  const feedbackScoped = (n: number) =>
+    cached<[Params], { record: string }>(
+      `feedback:${n}`,
+      () => `SELECT m.record AS record FROM ${FEEDBACK_TABLE} m
+       WHERE ${grantSql(n)}
+         AND (@statuses IS NULL OR m.status IN (SELECT value FROM json_each(@statuses)))
+         AND (@memories IS NULL OR m.memory_id IN (SELECT value FROM json_each(@memories)))
+         AND (@signal IS NULL OR json_extract(m.record, '$.signal') = @signal)
+         AND (@prefix IS NULL OR m.id LIKE @prefix ESCAPE '\\')
        ORDER BY m.created_at DESC, m.id DESC
        LIMIT @limit`,
     );
@@ -2105,6 +2142,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     lexicalTx((grant: Grant, id: string): string | undefined => {
       const scoped = scopedRow(grant.writeNodes, id);
       if (scoped === undefined) return undefined;
+      // Feedback about it goes with it, at every address (`MemoryStore.forget`).
+      q.feedbackForget.all(id);
       const row = q.deleteRow.get(id);
       if (row !== undefined) {
         // Its links, blocks and entity rows went with it (ON DELETE CASCADE). The node's own row
@@ -2664,6 +2703,36 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     return out;
   });
 
+  /** The stored feedback row `id`, whatever the grant (callers check it). */
+  const feedbackRow = (id: string): Feedback | undefined => {
+    const r = q.feedbackGet.get(id);
+    return r === undefined ? undefined : (JSON.parse(r.record) as Feedback);
+  };
+  const putFeedbackTx = db.transaction(
+    (grant: Grant, f: Feedback, expect: { revision: number | null } | undefined): boolean => {
+      const was = feedbackRow(f.id);
+      if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, f))) {
+        return false;
+      }
+      if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return false;
+      // A row keeps the memory it is about: a write naming another is refused.
+      if (was !== undefined && was.memoryId !== f.memoryId) return false;
+      q.feedbackPut.run({
+        id: f.id,
+        ...predictionAddress(f),
+        author_agent_id: authorOf(f).agentId,
+        memory_id: f.memoryId,
+        status: f.status,
+        created_at: f.createdAt,
+        record: JSON.stringify(f),
+      });
+      return true;
+    },
+  );
+  const purgeFeedbackTx = db.transaction((memoryId: string): string[] =>
+    q.feedbackForget.all(memoryId).map((r) => r.id),
+  );
+
   const handle: MemoryStore = {
     spatial: true,
     links: true,
@@ -2765,6 +2834,63 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       open();
       return (
         q.predictionPendingAt.get({
+          ...predictionAddress(at),
+          author_agent_id: authorOf(at).agentId,
+        })?.n ?? 0
+      );
+    },
+
+    feedback: true,
+
+    async putFeedback(grant, f, expect) {
+      open();
+      assertGrant(grant);
+      if (!grantWrites(grant, f)) throw new GrantError();
+      return putFeedbackTx.immediate(grant, f, expect);
+    },
+
+    async getFeedback(grant, id) {
+      open();
+      assertGrant(grant);
+      const f = feedbackRow(id);
+      return f === undefined || !grantReads(grant, f) ? null : f;
+    },
+
+    async listFeedback(grant, listOpts = {}) {
+      open();
+      assertGrant(grant);
+      const patterns = live(grant.readNodes);
+      if (patterns.length === 0) return [];
+      const o = listOpts;
+      const statuses =
+        o.status === undefined ? null : typeof o.status === 'string' ? [o.status] : [...o.status];
+      const rows = feedbackScoped(patterns.length).all({
+        ...grantParams(patterns),
+        statuses: statuses === null ? null : JSON.stringify(statuses),
+        memories: o.memoryIds === undefined ? null : JSON.stringify([...o.memoryIds]),
+        signal: o.signal ?? null,
+        prefix: o.idPrefix === undefined ? null : `${likeLiteral(o.idPrefix)}%`,
+        limit: o.limit === undefined ? -1 : Math.max(0, Math.floor(o.limit)),
+      });
+      const readable = rows
+        .map((r) => JSON.parse(r.record) as Feedback)
+        .filter((f) => grantReads(grant, f));
+      return selectFeedback(readable, listOpts);
+    },
+
+    async purgeFeedbackFor(grant, memoryId) {
+      open();
+      assertGrant(grant);
+      const removed = purgeFeedbackTx.immediate(memoryId);
+      // Its notes and queries leave the WAL too, not only the database file.
+      if (removed.length > 0) truncateWal();
+      return { removed, leftover: [] };
+    },
+
+    async countPendingFeedback(at) {
+      open();
+      return (
+        q.feedbackPendingAt.get({
           ...predictionAddress(at),
           author_agent_id: authorOf(at).agentId,
         })?.n ?? 0

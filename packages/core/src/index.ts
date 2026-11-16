@@ -44,4 +44,5 @@ export * from './errors.js';
 export * from './private-fs.js';
 export * from './judgment.js';
 export * from './prediction.js';
+export * from './feedback.js';
 export * from './display.js';

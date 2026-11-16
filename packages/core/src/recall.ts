@@ -29,6 +29,7 @@ import {
   type IncludeLevel,
   type MemoryOrigin,
 } from './levels.js';
+import { contestedOf, type Contested } from './feedback.js';
 import { scrub } from './scrub.js';
 import { isCurrent, type Memory } from './model.js';
 import type { NeighbourKind } from './links.js';
@@ -148,6 +149,11 @@ export interface RecalledMemory extends Memory {
     chain?: true;
     /** A volatile fact nobody confirmed within `recall.staleAfterDays`. */
     stale?: true;
+    /**
+     * A person said it is wrong or out of date (an open `wrong` or `stale` feedback): the
+     * newest such feedback. It ranks as before; the label says it is contested.
+     */
+    contested?: Contested;
     /** With a spatial filter (CON-84): the memory's place path, when it has one. */
     placePath?: string;
     /** With `near` (CON-84): metres from the query point to the memory's region. */
@@ -187,7 +193,9 @@ export type Degradation =
   /** Following links took longer than `recall.links.budgetMs` (or failed): some were not read. */
   | 'links-skipped'
   /** The store's range read for the time channel failed: it ranked only what the searches found. */
-  | 'time-failed';
+  | 'time-failed'
+  /** Reading open feedback failed: memories a person contested may be shown without the label. */
+  | 'contested-failed';
 
 export interface RecallResult {
   memories: RecalledMemory[];
@@ -891,6 +899,21 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     }
     if (spatial !== undefined) explainPlace(m, spatial);
   }
+  // A memory a person said is wrong or out of date is labelled, never re-ranked. Before the
+  // budget cut, since the label takes room in the block.
+  try {
+    const contested = await contestedOf(
+      store,
+      grant,
+      result.map((m) => m.id),
+    );
+    for (const m of result) {
+      const c = contested.get(m.id);
+      if (c !== undefined) m.explanation.contested = c;
+    }
+  } catch {
+    degraded.push('contested-failed');
+  }
   // With a budget, return only what the injection block holds, so nothing cut is touched below.
   if (q.budgetChars !== undefined) result = fitForInjection(result, q.budgetChars, now).kept;
   // Touch only what is returned: the search's own hits (not chain-only versions). Cold ones that
@@ -1352,7 +1375,7 @@ export function fitForInjection<M extends RecalledMemory>(
       m.explanation.stale === true
         ? ` (may be outdated; last confirmed ${age(lastConfirmed(m), now)})`
         : '';
-    return `- [${labelFor(m, labelled, now)}] ${injectableText(m.text)}${note}`;
+    return `- [${labelFor(m, labelled, now)}] ${injectableText(m.text)}${note}${contestedNote(m)}`;
   };
   const fitted = new Map<M, string>();
   // Whether `line` fits now, and if so takes its place. A line after the first costs a newline.
@@ -1385,6 +1408,19 @@ export function fitForInjection<M extends RecalledMemory>(
   const kept = memories.filter((m) => fitted.has(m));
   const lines = kept.map((m) => fitted.get(m) as string);
   return { kept, lines };
+}
+
+/**
+ * The block's note for a contested memory: ` (contested: wrong, note: "…")`. The signal comes
+ * from code; the note is a person's words, scrubbed and escaped as memory text is.
+ */
+export function contestedNote(m: Pick<RecalledMemory, 'explanation'>): string {
+  const c = m.explanation.contested;
+  if (c === undefined) return '';
+  const signal = c.signal === 'wrong' ? 'wrong' : 'stale';
+  return c.note === undefined
+    ? ` (contested: ${signal})`
+    : ` (contested: ${signal}, note: "${injectableText(c.note)}")`;
 }
 
 /**

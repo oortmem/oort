@@ -13,6 +13,7 @@ import {
 import { isCurrent, isZeroVector, type Memory, type Tier } from './model.js';
 import { purgedPrediction } from './judgment.js';
 import { predictionCites, selectPredictions, type Prediction } from './prediction.js';
+import { selectFeedback, type Feedback } from './feedback.js';
 import {
   ABOUT_PER_ENTITY,
   aboutWeight,
@@ -112,6 +113,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   const cold = new Map<string, Memory>();
   const cursors = new Map<string, string>();
   const predictions = new Map<string, Prediction>();
+  const feedback = new Map<string, Feedback>();
   /** Link and block rows, keyed `kind/a/b`, in the order they were first written. */
   const links = new Map<string, LinkRow>();
   /** Episode positions: assigned on insert, kept by a rewrite in the same session. */
@@ -400,6 +402,61 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       ).length;
     },
 
+    feedback: true,
+
+    async putFeedback(grant, f, expect) {
+      open();
+      assertGrant(grant);
+      if (!grantWrites(grant, f)) throw new GrantError();
+      const was = feedback.get(f.id);
+      if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, f))) {
+        return false;
+      }
+      if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return false;
+      // A row keeps the memory it is about: a write naming another is refused.
+      if (was !== undefined && was.memoryId !== f.memoryId) return false;
+      feedback.set(f.id, structuredClone(f));
+      return true;
+    },
+
+    async getFeedback(grant, id) {
+      open();
+      assertGrant(grant);
+      const f = feedback.get(id);
+      return f === undefined || !grantReads(grant, f) ? null : structuredClone(f);
+    },
+
+    async listFeedback(grant, listOpts = {}) {
+      open();
+      assertGrant(grant);
+      const readable = [...feedback.values()].filter((f) => grantReads(grant, f));
+      return selectFeedback(readable, listOpts).map((f) => structuredClone(f));
+    },
+
+    async purgeFeedbackFor(grant, memoryId) {
+      open();
+      assertGrant(grant);
+      const removed: string[] = [];
+      for (const f of [...feedback.values()]) {
+        if (f.memoryId !== memoryId) continue;
+        feedback.delete(f.id);
+        removed.push(f.id);
+      }
+      return { removed, leftover: [] };
+    },
+
+    async countPendingFeedback(at) {
+      open();
+      const where = addressOf(at);
+      const author = authorOf(at).agentId;
+      return [...feedback.values()].filter(
+        (f) =>
+          f.status === 'pending' &&
+          sameAddress(addressOf(f), where) &&
+          authorOf(f).agentId === author,
+      ).length;
+    },
+
     async link(grant, x, y, linkOpts: LinkOptions) {
       open();
       assertGrant(grant);
@@ -685,6 +742,7 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       assertGrant(grant);
       if (writable(grant, id) === undefined) return;
       forgetLinks(id);
+      for (const f of [...feedback.values()]) if (f.memoryId === id) feedback.delete(f.id);
       main.delete(id);
       cold.delete(id);
     },

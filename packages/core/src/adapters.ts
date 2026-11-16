@@ -9,6 +9,7 @@ import type {
 } from './links.js';
 import type { Decision, Memory, MemoryType, Scope, Tier } from './model.js';
 import type { Place, SpatialFilter } from './place.js';
+import type { Feedback, FeedbackListOptions } from './feedback.js';
 import type { Prediction, PredictionListOptions } from './prediction.js';
 
 /**
@@ -261,6 +262,44 @@ export interface MemoryStore {
    */
   countPendingPredictions?(at: Pick<Prediction, 'scope' | 'address' | 'author'>): Promise<number>;
   /**
+   * True when the store keeps recall feedback (`feedbackConformance` proves it) and has
+   * `putFeedback`, `getFeedback`, `listFeedback`, `purgeFeedbackFor` and `countPendingFeedback`.
+   * A feedback row is not a memory: no search, listing or export of memories ever returns one.
+   * Absent: feedback is refused, and recall labels nothing contested.
+   */
+  readonly feedback?: true;
+  /**
+   * Writes the feedback row `f` (insert or replace). With `expect`, only when the stored row's
+   * `revision` is `expect.revision` (`null`: only when no row has `f.id`). Resolves to false,
+   * writing nothing, when that guard fails, or when a row with `f.id` exists at another address
+   * or outside the grant. Rejects with `GrantError` when `f`'s address and author are outside
+   * `grant.write`.
+   */
+  putFeedback?(grant: Grant, f: Feedback, expect?: { revision: number | null }): Promise<boolean>;
+  /** The feedback row `id`, or null when it is unknown or outside the grant. */
+  getFeedback?(grant: Grant, id: string): Promise<Feedback | null>;
+  /**
+   * The feedback rows the grant reads, newest first (`createdAt`, then `id`), filtered as
+   * `selectFeedback` filters (status, memory ids, signal, id prefix), at most `opts.limit`. The
+   * limit applies after the grant.
+   */
+  listFeedback?(grant: Grant, opts?: FeedbackListOptions): Promise<Feedback[]>;
+  /**
+   * Deletes every feedback row about `memoryId`, at every address, leaving none of its text in a
+   * log or journal the store keeps. Not limited to `grant`: the caller is forgetting that memory
+   * under its own grant, and feedback about it goes with it, as its links do. Returns the ids
+   * removed and those it could not remove (`leftover`, which callers treat as a failure).
+   */
+  purgeFeedbackFor?(
+    grant: Grant,
+    memoryId: string,
+  ): Promise<{ removed: string[]; leftover: string[] }>;
+  /**
+   * How many `pending` feedback rows `at`'s author keeps at `at`'s address (its node and
+   * project), so one agent filling its quota never blocks another.
+   */
+  countPendingFeedback?(at: Pick<Feedback, 'scope' | 'address' | 'author'>): Promise<number>;
+  /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
    * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).
    * An all-zero `m.embedding` has no direction and is not kept: the memory is
@@ -293,7 +332,8 @@ export interface MemoryStore {
   /**
    * Removes the memory everywhere (main record and cold copy) when it is inside
    * `grant.write`. Never throws for an unknown or out-of-grant id. A store with `links` removes
-   * every link, block and entity index row of the memory in the same transaction.
+   * every link, block and entity index row of the memory in the same transaction, and a store
+   * with `feedback` every feedback row about it, at every address.
    */
   forget(grant: Grant, id: string): Promise<void>;
   /**

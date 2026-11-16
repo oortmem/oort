@@ -258,6 +258,18 @@ const store = z
   })
   .default({ vectorIndex: 'auto', binaryAutoThreshold: 100_000 });
 
+/**
+ * Recall feedback. Read from the home config only: a repository must not change how much your
+ * own feedback weighs.
+ * - `helpedAccesses`: accesses one applied `helped` adds to a memory's access log (0 turns
+ *   `helped` off; it is still kept). Default 2.
+ */
+const feedback = z
+  .strictObject({
+    helpedAccesses: z.number().int().min(0).max(10).default(2),
+  })
+  .default({ helpedAccesses: 2 });
+
 export const OortConfig = z.strictObject({
   embed,
   rerank,
@@ -270,6 +282,7 @@ export const OortConfig = z.strictObject({
   judge,
   updates,
   store,
+  feedback,
 });
 export type OortConfig = z.infer<typeof OortConfig>;
 
@@ -281,7 +294,8 @@ export type ResolvedConfig = OortConfig & {
   /**
    * Keys a project's `oort.config.json` set that only the home config may set (`serve`: a
    * repository must not start processes on this machine; `judge`: nor name experts; `updates`:
-   * the update check is your preference; `store`: one store per home; `recall.adaptiveStop` and
+   * the update check is your preference; `store`: one store per home; `feedback`: how much your
+   * own feedback weighs; `recall.adaptiveStop` and
    * `recall.sufficientAt`: a model call on your recalled text; `recall.links` and
    * `recall.userLinks`: which links bring memories into a prompt). Ignored;
    * absent when there are none.
@@ -290,7 +304,13 @@ export type ResolvedConfig = OortConfig & {
 };
 
 /** Keys read from the home config only; a project file's value is ignored (and reported). */
-const HOME_ONLY_KEYS: ReadonlySet<string> = new Set(['serve', 'judge', 'updates', 'store']);
+const HOME_ONLY_KEYS: ReadonlySet<string> = new Set([
+  'serve',
+  'judge',
+  'updates',
+  'store',
+  'feedback',
+]);
 
 /**
  * Keys inside a section that only the home config may set, though the rest of the section may

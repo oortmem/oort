@@ -28,6 +28,7 @@ import { GrantError, localGrant, nodeGrant, principalGrant, type Grant } from '.
 import type { Memory, Scope } from './model.js';
 import type { NearQuery, Place, SpatialFilter } from './place.js';
 import type { Occurrence } from './event-time.js';
+import type { Feedback } from './feedback.js';
 import type { Prediction } from './prediction.js';
 import { localScope } from './scope.js';
 import { isolationViolations, nonInterference } from './isolation.js';
@@ -2568,6 +2569,192 @@ export function predictionsConformance(name: string, make: () => Promise<MemoryS
     it('predictions.are-not-memories', async () => {
       await s.putPrediction(TG, makePrediction({ id: 'p1', item: { summary: 'zebra quokka' } }));
       expect(await store.get(TG, 'p1')).toBeNull();
+      expect(await store.list(TG, { validOnly: false })).toEqual([]);
+      expect(await store.lexical(TG, 'zebra quokka', 10)).toEqual([]);
+    });
+  });
+}
+
+/** A valid open `wrong` feedback row at the local Planet, with test defaults. */
+export function makeFeedback(overrides: Partial<Feedback> & { id: string }): Feedback {
+  return {
+    scope: { orgId: 'local', customerId: 'self', agentId: 'claude-code' },
+    memoryId: 'm1',
+    signal: 'wrong',
+    note: 'The port moved to 8080',
+    by: 'ada',
+    via: 'cli',
+    status: 'open',
+    revision: 0,
+    createdAt: '2026-11-16T10:00:00.000Z',
+    updatedAt: '2026-11-16T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/**
+ * The recall feedback rows of a store with `feedback: true`: write guards, grant isolation, the
+ * filters and newest-first order, the pending count, and that forgetting a memory removes every
+ * row about it, at every address, rows other principals wrote included.
+ */
+export function feedbackConformance(name: string, make: () => Promise<MemoryStore>): void {
+  describe(`store feedback: ${name}`, () => {
+    let store: MemoryStore;
+    type S = Required<
+      Pick<
+        MemoryStore,
+        'putFeedback' | 'getFeedback' | 'listFeedback' | 'purgeFeedbackFor' | 'countPendingFeedback'
+      >
+    >;
+    let s: S;
+
+    beforeEach(async () => {
+      store = await make();
+      expect(store.feedback).toBe(true);
+      s = store as MemoryStore & S;
+    });
+
+    afterEach(async () => {
+      await store.close();
+    });
+
+    const theirs = { orgId: 'other', customerId: 'c', agentId: 'a' };
+    const other: Grant = principalGrant(theirs);
+
+    it('feedback.put-get-roundtrip', async () => {
+      const f = makeFeedback({ id: 'f1', query: 'which port' });
+      expect(await s.putFeedback(TG, f)).toBe(true);
+      expect(await s.getFeedback(TG, 'f1')).toEqual(f);
+      expect(await s.getFeedback(TG, 'nope')).toBeNull();
+    });
+
+    it('feedback.revision-guard', async () => {
+      const f = makeFeedback({ id: 'f1' });
+      expect(await s.putFeedback(TG, f, { revision: null })).toBe(true);
+      expect(await s.putFeedback(TG, f, { revision: null })).toBe(false);
+      const next = { ...f, status: 'dismissed' as const, revision: 1 };
+      expect(await s.putFeedback(TG, next, { revision: 5 })).toBe(false);
+      expect((await s.getFeedback(TG, 'f1'))?.status).toBe('open');
+      expect(await s.putFeedback(TG, next, { revision: 0 })).toBe(true);
+      // The second of two writers that read revision 0 loses.
+      expect(
+        await s.putFeedback(TG, { ...f, status: 'retired', revision: 1 }, { revision: 0 }),
+      ).toBe(false);
+      expect((await s.getFeedback(TG, 'f1'))?.status).toBe('dismissed');
+    });
+
+    it('feedback.outside-the-grant-looks-missing', async () => {
+      await s.putFeedback(TG, makeFeedback({ id: 'f1' }));
+      expect(await s.getFeedback(other, 'f1')).toBeNull();
+      expect(await s.listFeedback(other)).toEqual([]);
+      await expect(s.putFeedback(other, makeFeedback({ id: 'f2' }))).rejects.toBeInstanceOf(
+        GrantError,
+      );
+      // Nor take over an id that lives elsewhere.
+      expect(await s.putFeedback(other, makeFeedback({ id: 'f1', scope: theirs }))).toBe(false);
+      expect((await s.getFeedback(TG, 'f1'))?.scope.orgId).toBe('local');
+    });
+
+    it('feedback.list-filters-and-order', async () => {
+      await s.putFeedback(TG, makeFeedback({ id: 'a', createdAt: '2026-11-16T10:00:00.000Z' }));
+      await s.putFeedback(
+        TG,
+        makeFeedback({
+          id: 'b',
+          memoryId: 'm2',
+          signal: 'helped',
+          status: 'recorded',
+          createdAt: '2026-11-16T11:00:00.000Z',
+        }),
+      );
+      await s.putFeedback(
+        TG,
+        makeFeedback({
+          id: 'c',
+          signal: 'stale',
+          status: 'pending',
+          via: 'mcp',
+          createdAt: '2026-11-16T11:00:00.000Z',
+        }),
+      );
+      expect(ids(await s.listFeedback(TG))).toEqual(['c', 'b', 'a']);
+      expect(ids(await s.listFeedback(TG, { status: 'open' }))).toEqual(['a']);
+      expect(ids(await s.listFeedback(TG, { status: ['open', 'pending'] }))).toEqual(['c', 'a']);
+      expect(ids(await s.listFeedback(TG, { memoryIds: ['m1'] }))).toEqual(['c', 'a']);
+      expect(ids(await s.listFeedback(TG, { memoryIds: ['m2', 'zz'] }))).toEqual(['b']);
+      expect(ids(await s.listFeedback(TG, { memoryIds: [] }))).toEqual([]);
+      expect(ids(await s.listFeedback(TG, { signal: 'helped' }))).toEqual(['b']);
+      expect(ids(await s.listFeedback(TG, { idPrefix: 'a' }))).toEqual(['a']);
+      expect(ids(await s.listFeedback(TG, { idPrefix: '%' }))).toEqual([]);
+      expect(ids(await s.listFeedback(TG, { idPrefix: '_' }))).toEqual([]);
+      expect(ids(await s.listFeedback(TG, { limit: 2 }))).toEqual(['c', 'b']);
+      expect(
+        ids(await s.listFeedback(TG, { memoryIds: ['m1'], status: 'open', signal: 'wrong' })),
+      ).toEqual(['a']);
+    });
+
+    it('feedback.the-limit-applies-after-the-grant', async () => {
+      for (let i = 0; i < 5; i++) {
+        await s.putFeedback(
+          other,
+          makeFeedback({ id: `o${i}`, scope: theirs, createdAt: '2026-11-17T00:00:00.000Z' }),
+        );
+      }
+      await s.putFeedback(TG, makeFeedback({ id: 'a' }));
+      await s.putFeedback(TG, makeFeedback({ id: 'b' }));
+      expect(ids(await s.listFeedback(TG, { limit: 2 }))).toEqual(['b', 'a']);
+      expect(ids(await s.listFeedback(TG, { memoryIds: ['m1'], limit: 1 }))).toEqual(['b']);
+    });
+
+    it('feedback.purge-for-a-memory-reaches-every-address', async () => {
+      await s.putFeedback(TG, makeFeedback({ id: 'mine', note: 'zanzibar mine' }));
+      await s.putFeedback(
+        other,
+        makeFeedback({ id: 'theirs', scope: theirs, note: 'zanzibar theirs', via: 'mcp' }),
+      );
+      await s.putFeedback(TG, makeFeedback({ id: 'apart', memoryId: 'm2' }));
+      const r = await s.purgeFeedbackFor(TG, 'm1');
+      expect([...r.removed].sort()).toEqual(['mine', 'theirs']);
+      expect(r.leftover).toEqual([]);
+      expect(await s.getFeedback(TG, 'mine')).toBeNull();
+      expect(await s.getFeedback(other, 'theirs')).toBeNull();
+      expect(await s.getFeedback(TG, 'apart')).not.toBeNull();
+      expect((await s.purgeFeedbackFor(TG, 'm1')).removed).toEqual([]);
+    });
+
+    it('feedback.forget-removes-the-rows-about-the-memory-at-every-address', async () => {
+      await store.upsert(TG, makeMemory({ id: 'm1' }));
+      await store.upsert(TG, makeMemory({ id: 'm2' }));
+      await s.putFeedback(TG, makeFeedback({ id: 'mine' }));
+      await s.putFeedback(other, makeFeedback({ id: 'theirs', scope: theirs }));
+      await s.putFeedback(TG, makeFeedback({ id: 'apart', memoryId: 'm2' }));
+      // A grant that cannot change the memory forgets nothing, and no feedback goes.
+      await store.forget(other, 'm1');
+      expect(await s.getFeedback(TG, 'mine')).not.toBeNull();
+      await store.forget(TG, 'm1');
+      expect(await s.getFeedback(TG, 'mine')).toBeNull();
+      expect(await s.getFeedback(other, 'theirs')).toBeNull();
+      expect(ids(await s.listFeedback(TG))).toEqual(['apart']);
+    });
+
+    it('feedback.pending-is-counted-per-author-at-an-address', async () => {
+      const planet: Address = { level: 'user', orgId: 'local', customerId: 'self' };
+      const by = (agentId: string) => addressed(planet, { agentId });
+      const pending = { status: 'pending' as const, via: 'mcp' as const };
+      await s.putFeedback(TG, makeFeedback({ id: 'a1', ...pending, ...by('claude-code') }));
+      await s.putFeedback(TG, makeFeedback({ id: 'b1', ...pending, ...by('cursor') }));
+      await s.putFeedback(TG, makeFeedback({ id: 'b2', ...pending, ...by('cursor') }));
+      await s.putFeedback(TG, makeFeedback({ id: 'b3', ...by('cursor') }));
+      const at = (agentId: string) => makeFeedback({ id: 'x', ...by(agentId) });
+      expect(await s.countPendingFeedback(at('claude-code'))).toBe(1);
+      expect(await s.countPendingFeedback(at('cursor'))).toBe(2);
+      expect(await s.countPendingFeedback(at('codex'))).toBe(0);
+      expect(await s.countPendingFeedback(makeFeedback({ id: 'x', scope: theirs }))).toBe(0);
+    });
+
+    it('feedback.is-not-a-memory', async () => {
+      await s.putFeedback(TG, makeFeedback({ id: 'f1', note: 'zebra quokka' }));
+      expect(await store.get(TG, 'f1')).toBeNull();
       expect(await store.list(TG, { validOnly: false })).toEqual([]);
       expect(await store.lexical(TG, 'zebra quokka', 10)).toEqual([]);
     });

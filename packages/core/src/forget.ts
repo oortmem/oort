@@ -1,5 +1,6 @@
 import type { Embedder, MemoryStore, MemoryWriter, WrittenMemory } from './adapters.js';
 import { grantWrites, type Grant } from './grant.js';
+import { purgeFeedbackFor } from './feedback.js';
 import { purgePredictionsCiting } from './judgment.js';
 import type { Decision, Memory } from './model.js';
 import { tokenizeLexical } from './tokenize.js';
@@ -305,6 +306,10 @@ async function pooled<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>)
  *    (`upsertManyIfUnchanged` where the store has it): a memory changed meanwhile is reported
  *    as `changed`. Then the memory is forgotten.
  *
+ * Before anything changes, feedback about the memory is removed at every address
+ * (`purgeFeedbackFor`; `FeedbackPurgeError` when a row could not be), and predictions that
+ * cite a forgotten judgment are purged.
+ *
  * Every later memory holding a value that is not rewritten is listed in `notRewritten` with the
  * reason, so the caller can tell the person which ones may still restate it.
  */
@@ -327,6 +332,9 @@ export async function forgetMemory(
   if (target.type === 'judgment') {
     await purgePredictionsCiting(store, grant, [id], 'forget', deps.now ?? new Date());
   }
+  // Feedback about it goes too, at every address (other principals' included), first for the
+  // same reason: a purge that fails leaves the memory for a retry.
+  await purgeFeedbackFor(store, grant, id);
 
   // The memory it superseded, to re-link; it was written before it, so it restates nothing.
   const chain = new Map<string, Memory>();

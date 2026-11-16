@@ -77,6 +77,16 @@ export const SCHEMA_VERSION = 10;
 export const PREDICTION_TABLE = 'predictions';
 
 /**
+ * Recall feedback (`MemoryStore.feedback`): one row per feedback, its record as JSON, with its
+ * address columns (so the same grant predicate applies), the memory it is about, its status and
+ * when it was given. Created on every open when missing, like `predictions`, so it needs no schema
+ * version. Indexed by address and memory (recall reads the open ones for its results), by memory
+ * alone (a forget removes every row about a memory, at every address) and by status. A row is
+ * never a memory: no search or listing of memories reads this table.
+ */
+export const FEEDBACK_TABLE = 'feedback';
+
+/**
  * The binary index (schema version 6): one row per searchable (hot or warm) vector, with its
  * 1-bit code (`binaryCode`), its int8 vector for rescoring as an auxiliary column, and the int8
  * index's partition and filter columns. A dense query scans only the codes; it reads `rescore`
@@ -1510,6 +1520,24 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_created ON ${PREDICTION_TABLE} (created_at DESC, id DESC);
       CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_expires ON ${PREDICTION_TABLE} (resolved, expires_at);
       CREATE INDEX IF NOT EXISTS ${PREDICTION_TABLE}_address ON ${PREDICTION_TABLE} (org_id, level, customer_id, agent_id, resolved);
+      CREATE TABLE IF NOT EXISTS ${FEEDBACK_TABLE} (
+        id TEXT PRIMARY KEY,
+        level TEXT NOT NULL,
+        org_id TEXT NOT NULL,
+        customer_id TEXT,
+        agent_id TEXT,
+        hive_id TEXT,
+        run_id TEXT,
+        project_id TEXT,
+        author_agent_id TEXT NOT NULL,
+        memory_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        record TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_address ON ${FEEDBACK_TABLE} (org_id, level, customer_id, agent_id, memory_id);
+      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_memory ON ${FEEDBACK_TABLE} (memory_id);
+      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_status ON ${FEEDBACK_TABLE} (status, created_at DESC);
     `);
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     const put = db.prepare(
