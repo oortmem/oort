@@ -31,7 +31,7 @@ import {
 } from './levels.js';
 import { scrub } from './scrub.js';
 import { isCurrent, type Memory } from './model.js';
-import type { NeighbourKind } from './links.js';
+import { episodeSession, type NeighbourKind } from './links.js';
 import {
   checkSpatialFilter,
   hasSpatialFilter,
@@ -43,6 +43,7 @@ import {
 } from './place.js';
 import { rangeWordsOut, temporalIntent, type RecallMode, type TimeShape } from './temporal.js';
 import { PART_MIN_WORDS, PART_RERANK_FLOOR, subQueries } from './subqueries.js';
+import { isEnumeration, spreadAcrossSources } from './enumeration.js';
 import { formatRange, queryRange, type TimeRange } from './event-time.js';
 import { readOccurrences, timeBoosted, timeList, timeScore } from './time-channel.js';
 import { isStale, lastConfirmed } from './volatile.js';
@@ -271,7 +272,8 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   const now = deps.now ?? new Date();
   // Scrub once: the query text reaches embedders and rerankers, which may be remote. Temporal
   // words ("on 2 April", "changed over time") pick the view and are not searched for.
-  const { view, temporal, text: asked, fast } = viewFor(q, scrub(q.text).text, now);
+  const said = scrub(q.text).text;
+  const { view, temporal, text: asked, fast } = viewFor(q, said, now);
   if (q.includeWithdrawn === true) view.includeWithdrawn = true;
   // The time channel: a past time read from the query ranks, and never filters.
   const timeRange =
@@ -316,6 +318,11 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   // Never the search text: its calendar names are not what a part is about.
   const partGate = (parts ?? []).map((p, i) => partForms[i]!.gate ?? p);
   const searches = [text, ...partSearch];
+  // A question that gathers many things ("how many charity events did I go to?") spreads its top
+  // k across source sessions; see `spreadAcrossSources`, below the gate. Rules in code, no model
+  // call; any other query takes exactly the path it always took.
+  const perSource = config.recall.enumerationPerSource;
+  const enumeration = perSource > 0 && isEnumeration(said);
   const t0 = clock();
   const degraded: Degradation[] = [];
   const timings: Record<string, number> = {
@@ -647,9 +654,11 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
           text,
           docs,
           // A split question asks for every score, so each part's best match has its own; with a
-          // time range every score comes back, so the time boost below can reorder them. Else
-          // hits keep their `returnK` places: the linked memories are asked for on top.
-          parts !== undefined || timeRange !== undefined
+          // time range every score comes back, so the time boost below can reorder them; a
+          // question that gathers many things needs the scores below the top `returnK` to spread
+          // its top k. Else hits keep their `returnK` places: the linked memories are asked for on
+          // top.
+          parts !== undefined || timeRange !== undefined || enumeration
             ? docs.length
             : linked.length > 0
               ? config.recall.returnK + linkCfg.pool
@@ -747,15 +756,32 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     timeRange !== undefined && !searched.has(id) && !relevant(id);
   const headDropped = (id: string): boolean =>
     partOf.has(id) && !relevant(id) && !relevantToPart(id);
+  // A question that gathers many things is gated over every candidate, not only the top k, and
+  // then spread across sources and cut to `returnK`. The spread only reorders what passed the
+  // gate, so a memory the gate took out never comes back; `dropped` counts every one it took out.
   const candidates: typeof ordered = [];
   let droppedEarly = 0;
   for (const f of ordered) {
-    if (candidates.length >= config.recall.returnK) break;
+    if (!enumeration && candidates.length >= config.recall.returnK) break;
     if (timeOnlyDropped(f.id) || headDropped(f.id)) droppedEarly++;
     else candidates.push(f);
   }
   let kept = candidates.filter((f) => relevant(f.id) || relevantToPart(f.id));
   const dropped = droppedEarly + candidates.length - kept.length;
+  if (enumeration) {
+    // After the time boost and the part heads have set the order. A part's best match keeps its
+    // place, whatever its source; a memory with no session is a source of its own.
+    kept = spreadAcrossSources(
+      kept,
+      (id) => {
+        const m = memories.get(id);
+        return m === undefined ? undefined : episodeSession(m);
+      },
+      perSource,
+      config.recall.returnK,
+      new Set(partOf.keys()),
+    );
+  }
 
   // Linked memories never take a hit's place: at most `admit` are added beside the hits, each
   // through the gate a hit passes, and only from a hit that passed it too. They are chosen here

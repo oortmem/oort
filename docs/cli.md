@@ -1738,6 +1738,27 @@ makes no extra rerank call; the one rerank call it makes asks for every candidat
 of the top `returnK`, over the same candidates. The local query embedding cache keeps each part on
 its own, so asking the same question again embeds nothing.
 
+### Questions that gather many things
+
+Some questions gather many things told on different days: "how many charity events did I take
+part in?", "what is the order of the six museums I visited?", "which airline did I fly with the
+most?", "list the restaurants I tried". Each event tends to sit in its own session. A session
+that talked about the topic at length can fill the top `returnK` and push the others out.
+
+Recall spots these questions by rules in code (no model call). It looks for "the order of" or
+"in what order", "how many" before a plural thing (not a unit of time), "the most", "the least"
+or "most often" (not "most recent"), "all the", "every", "list", and "in total". The question
+must be about you ("I", "my", "we"). Code, instructions ("fix all the failing tests") and long
+or multi-line prompts never count. For such a question, the relevance gate runs over every
+candidate first. Then each session keeps at most `recall.enumerationPerSource` places (2 by
+default) in rank order, and memories from other sessions take the next ones. When there are
+fewer sessions than places, the skipped memories fill the rest in rank order. The spread only
+reorders what passed the gate, so it never lets a weak match in. It runs after the time boost
+and keeps each part's best match in its place. A memory with no session counts as its own. With
+a reranker, the one rerank call asks for every candidate's score, as a split question does.
+`fast` and `full` modes both spread. Any other question is ranked exactly as before. Set
+`recall.enumerationPerSource` to 0 to turn the spread off.
+
 ### Places: spatial memory
 
 In 0.9.0 or newer, a memory can carry where it is: a robot, a phone or anything else that knows

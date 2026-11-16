@@ -164,6 +164,12 @@ const recall = z
      * Off: such a query is ranked by its words alone.
      */
     timeChannel: z.boolean().default(true),
+    /**
+     * For a question that gathers many things ("how many charity events did I go to", "list
+     * the museums I visited"): the most memories from one source session the top k holds before
+     * memories from other sessions take the next places. 0 turns the spread off.
+     */
+    enumerationPerSource: z.number().int().min(0).default(2),
   })
   .default({
     lexicalK: 50,
@@ -187,6 +193,7 @@ const recall = z
     links: LINKS_DEFAULT,
     userLinks: true,
     timeChannel: true,
+    enumerationPerSource: 2,
   });
 
 const project = z

@@ -62,7 +62,7 @@ const SUBJECT = '(?:I|we|you|he|she|they|the narrator)';
  * Code, paths and markup: a prompt to a coding assistant ("which did I run first, `pnpm test` or
  * `pnpm build`?", "src/a.ts or src/b.ts") is never split.
  */
-function looksLikeCode(t: string): boolean {
+export function looksLikeCode(t: string): boolean {
   return (
     /[`{}[\]<>=;\\|]|::|->|=>|\(\s*\)/.test(t) ||
     /\w\/\w/.test(t) ||
