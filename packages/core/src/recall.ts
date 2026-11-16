@@ -41,7 +41,7 @@ import {
   type NearQuery,
   type SpatialFilter,
 } from './place.js';
-import { temporalIntent, type RecallMode, type TimeShape } from './temporal.js';
+import { rangeWordsOut, temporalIntent, type RecallMode, type TimeShape } from './temporal.js';
 import { PART_MIN_WORDS, PART_RERANK_FLOOR, subQueries } from './subqueries.js';
 import { formatRange, type TimeRange } from './event-time.js';
 import { readOccurrences, timeBoosted, timeList, timeScore } from './time-channel.js';
@@ -291,9 +291,18 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   // A question about two or more things: each part is searched beside the whole question, and
   // its best match keeps a place in the top k. Rules in code, no model call; a query that does
   // not split takes exactly the path it always took. The parts are read from the question as
-  // asked.
+  // asked. With a range, a part's own gate never counts the words of a past time (the one it
+  // names, or what the split left of the question's): its coverage is a word count, with or
+  // without a reranker. Without a reranker its search drops them too, bar calendar names.
   const parts = subQueries(asked);
-  const searches = parts === undefined ? [text] : [text, ...parts];
+  const partForms = (parts ?? []).map((p) =>
+    timeRange === undefined ? {} : rangeWordsOut(p, now, asked),
+  );
+  const partSearch = (parts ?? []).map((p, i) =>
+    rangeWords === undefined ? p : (partForms[i]!.text ?? p),
+  );
+  const partGate = (parts ?? []).map((p, i) => partForms[i]!.gate ?? partForms[i]!.text ?? p);
+  const searches = [text, ...partSearch];
   const t0 = clock();
   const degraded: Degradation[] = [];
   const timings: Record<string, number> = {
@@ -692,7 +701,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   heads.forEach((id, p) => {
     if (id !== undefined && !partOf.has(id)) partOf.set(id, p);
   });
-  const partTokens = (parts ?? []).map((part) => informativeTokens(part));
+  const partTokens = partGate.map((part) => informativeTokens(part));
   const partDense = (parts ?? []).map(
     (_, p) => new Map(byRank(denseAllLegs[p + 1]!).map((h) => [h.id, h.score])),
   );

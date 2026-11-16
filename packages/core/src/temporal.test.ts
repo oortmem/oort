@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkWriterDate, factInterval, temporalIntent } from './temporal.js';
+import { checkWriterDate, factInterval, rangeWordsOut, temporalIntent } from './temporal.js';
 
 // A Wednesday.
 const AT = new Date('2026-11-04T10:00:00.000Z');
@@ -212,6 +212,34 @@ describe('temporalIntent', () => {
       fastText: 'what did we deploy',
       fastGate: 'what did we deploy',
     });
+  });
+
+  it('temporal.a-part-loses-its-own-time-and-what-is-left-of-the-questions', () => {
+    // A part of a split question that names its own time.
+    expect(rangeWordsOut('buy standing desk two weeks ago', AT)).toEqual({
+      text: 'buy standing desk',
+      gate: 'buy standing desk',
+    });
+    // The split dropped "last": "week" alone names nothing, yet is a word of the question's time.
+    const q = 'Which did I buy first last week, the standing desk or the office chair?';
+    expect(rangeWordsOut('buy standing desk week', AT, q)).toEqual({
+      text: 'buy standing desk',
+      gate: 'buy standing desk',
+    });
+    // A calendar name stays in the search (unchanged: no `text`), never in the gate.
+    expect(
+      rangeWordsOut(
+        'buy desk Saturday',
+        AT,
+        'Which did I buy first last Saturday, the desk or the chair?',
+      ),
+    ).toEqual({
+      gate: 'buy desk',
+    });
+    // No time in the part or the question: nothing to drop.
+    expect(rangeWordsOut('buy desk', AT, 'Which did I buy first, the desk or the chair?')).toEqual(
+      {},
+    );
   });
 
   it('temporal.intent-range-words-without-a-reranker', () => {

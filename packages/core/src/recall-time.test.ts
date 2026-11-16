@@ -406,3 +406,86 @@ describe('timeBoosted', () => {
     expect(order({ boots: -0.4, hike: -0.5 })).toEqual(['boots', 'hike']);
   });
 });
+
+describe('recall: the time channel with a question about two things', () => {
+  // Two weeks before 20 April 2023: 3 to 10 April. The split gives "buy standing desk two weeks
+  // ago" and "buy office chair two weeks ago".
+  const question = 'Which did I buy first two weeks ago, the standing desk or the office chair?';
+  const desk = said('desk', 'Got a standing desk for the study.', '2023-04-05T09:00:00.000Z');
+  const chair = said('chair', 'Got an office chair, a green one.', '2023-04-06T09:00:00.000Z');
+  // Found by its time alone: no word of the question.
+  const shed = said('shed', 'Painted a fence.', '2023-04-07T09:00:00.000Z');
+  const lamp = said(
+    'lamp',
+    'On April 6, 2023 I bought a lamp for my study.',
+    '2023-04-12T09:00:00.000Z',
+  );
+  const mat = said('mat', 'I bought a mat and a cushion for my study.', '2023-04-19T09:00:00.000Z');
+  const all = [desk, chair, shed, lamp, mat];
+  const heads = (r: RecallResult) =>
+    r.memories
+      .filter((m) => m.explanation.part !== undefined)
+      .map((m) => [m.id, m.explanation.part])
+      .sort((x, y) => Number(x[1]) - Number(y[1]));
+
+  it('time.split-without-a-reranker-keeps-each-parts-head', async () => {
+    const r = await recall(
+      { text: question, scope: SCOPE },
+      { store: (await storeWith(all)).store, config, now: NOW },
+    );
+    expect(r.temporal?.range?.from).toBe('2023-04-03T00:00:00.000Z');
+    expect(r.subQueries).toEqual([
+      'buy standing desk two weeks ago',
+      'buy office chair two weeks ago',
+    ]);
+    // Each part's head passes on its part's words: "two weeks ago" no longer halves them.
+    expect(heads(r)).toEqual([
+      ['desk', 1],
+      ['chair', 2],
+    ]);
+    // A head always has a lexical or dense hit, so the time-only rule never drops one.
+    for (const m of r.memories.filter((x) => x.explanation.part !== undefined)) {
+      expect(m.explanation.lexicalRank ?? m.explanation.denseRank).toBeDefined();
+    }
+    // The time-only rule still holds: the shed is in the range and in no search.
+    expect(r.memories.map((m) => m.id)).not.toContain('shed');
+  });
+
+  it('time.split-after-a-rerank-boosts-then-keeps-each-parts-head', async () => {
+    const asked: number[] = [];
+    const scores: Record<string, number> = {
+      desk: 0.3,
+      chair: 0.3,
+      shed: 0.1,
+      lamp: 0.6,
+      mat: 0.62,
+    };
+    const rerank: Reranker = {
+      async rerank(_q, docs, topK) {
+        asked.push(topK === docs.length ? 1 : 0);
+        return docs
+          .map((d) => ({ id: d.id, score: scores[d.id] ?? 0 }))
+          .sort((x, y) => y.score - x.score)
+          .slice(0, topK);
+      },
+    };
+    const r = await recall(
+      { text: question, scope: SCOPE },
+      {
+        store: (await storeWith(all)).store,
+        rerank,
+        config: withRecall({ skipRerankWhenConfident: false }),
+        now: NOW,
+      },
+    );
+    // Every score was asked for.
+    expect(asked).toEqual([1]);
+    // The boost first: the lamp, bought on 6 April, passes the mat said after the range. Then
+    // each part's head, which the reranker scored low against the whole question.
+    expect(r.memories.map((m) => m.id)).toEqual(['lamp', 'desk', 'chair', 'mat']);
+    expect(heads(r)).toEqual([
+      ['desk', 1],
+      ['chair', 2],
+    ]);
+  });
+});

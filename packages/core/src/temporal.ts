@@ -1,5 +1,6 @@
 import type * as chrono from 'chrono-node';
 import { chronoParse, queryRange, type TimeRange } from './event-time.js';
+import { informativeTokens } from './relevance.js';
 
 /**
  * Time handling in code, never in a model (CON-34): relative expressions are resolved with
@@ -302,14 +303,68 @@ export function temporalIntent(query: string, now: Date): TemporalIntent {
   if (shape === 'state') {
     return withText({ mode: 'as-of', asOf: end, range, shape }, rest, query);
   }
-  const i: TemporalIntent = { mode: 'current', range, shape };
+  const forms = formsWithout(query, q.text);
+  return {
+    mode: 'current',
+    range,
+    shape,
+    ...(forms.text !== undefined && { fastText: forms.text }),
+    ...(forms.gate !== undefined && { fastGate: forms.gate }),
+  };
+}
+
+/**
+ * `query` without the words of the past time it names, as recall without a reranker reads it:
+ * `gate` drops them, `text` keeps the calendar names among them (see `fastText`, `fastGate`).
+ * Each is set only when it differs from `query`; neither when nothing was dropped. Recall reads
+ * each part of a split question this way, with `whole` the question: a part loses the time it
+ * names itself and any word left of the question's time ("week" of "last week" once the split
+ * dropped "last").
+ */
+export function rangeWordsOut(
+  query: string,
+  now: Date,
+  whole?: string,
+): { text?: string; gate?: string } {
+  let own: string | undefined;
+  let all: string | undefined;
+  try {
+    own = queryRange(query, now)?.text;
+    all = whole === undefined ? undefined : queryRange(whole, now)?.text;
+  } catch {
+    return {};
+  }
+  let gate = own === undefined ? query : without(query, own, true);
+  const names: string[] = [...(own?.match(CALENDAR_NAME) ?? [])];
+  for (const w of all?.split(/[^\p{L}\p{N}]+/u) ?? []) {
+    if (informativeTokens(w).size === 0) continue;
+    const at = new RegExp(`(^|[^\\p{L}\\p{N}])${w}(?![\\p{L}\\p{N}])`, 'iu').exec(gate);
+    if (at === null) continue;
+    const start = at.index + at[1]!.length;
+    if (new RegExp(`^${CALENDAR_NAME.source}$`, 'i').test(w))
+      names.push(gate.slice(start, start + w.length));
+    gate = `${gate.slice(0, start)} ${gate.slice(start + w.length)}`.replace(/\s+/g, ' ').trim();
+  }
+  if (gate === query) return {};
+  return textAndGate(query, gate, names);
+}
+
+function formsWithout(query: string, part: string): { text?: string; gate?: string } {
+  return textAndGate(query, without(query, part, true), part.match(CALENDAR_NAME) ?? []);
+}
+
+function textAndGate(
+  query: string,
+  rest: string,
+  names: readonly string[],
+): { text?: string; gate?: string } {
   // Tidied: no space left before a question mark where the range words were.
-  const tidy = (t: string) => t.replace(/\s+([?.!,;:])/g, '$1');
-  const gate = tidy(rest);
-  const named = [gate, ...(q.text.match(CALENDAR_NAME) ?? [])].join(' ').trim();
-  if (gate !== '' && gate !== query) i.fastGate = gate;
-  if (named !== '' && named !== query) i.fastText = named;
-  return i;
+  const gate = rest.replace(/\s+([?.!,;:])/g, '$1');
+  const text = [gate, ...names].join(' ').trim();
+  return {
+    ...(text !== '' && text !== query && { text }),
+    ...(gate !== '' && gate !== query && { gate }),
+  };
 }
 
 function withText(i: TemporalIntent, rest: string, query: string): TemporalIntent {
