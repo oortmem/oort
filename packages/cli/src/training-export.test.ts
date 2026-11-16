@@ -243,6 +243,78 @@ describe('oort export training', () => {
     expect(fs.existsSync(path.join(h.cwd, 'b'))).toBe(false);
   });
 
+  it('cli.training-export-refuses-under-an-agent-harness-even-with-yes', async () => {
+    const h = await seeded();
+    const agentEnv = { env: { HOME: h.root, OORT_HOME: h.home, CLAUDECODE: '1' } };
+    const r = await h.run(['export', 'training', '--kind', 'all', '--out', 'x'], agentEnv);
+    expect(r.code).toBe(2);
+    expect(r.io.stderr).toMatch(/CLAUDECODE is set/);
+    expect(r.io.stderr).toMatch(/in your own terminal/);
+    const yes = await h.run(
+      ['export', 'training', '--kind', 'all', '--out', 'x', '--yes', '--json'],
+      agentEnv,
+    );
+    expect(yes.code).toBe(2);
+    const body = JSON.parse(yes.io.stdout) as {
+      ok: boolean;
+      error: { code: string; reason?: string };
+    };
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatchObject({ code: 'refused', reason: 'agent-harness' });
+    expect(fs.existsSync(path.join(h.cwd, 'x'))).toBe(false);
+    // In a person's terminal the same command runs, and --yes changes nothing.
+    const person = await h.run(['export', 'training', '--kind', 'all', '--out', 'x', '--yes']);
+    expect(person.code, person.io.stderr).toBe(0);
+  });
+
+  it('cli.training-export-keeps-the-mode-of-an-existing-out-and-refuses-a-shared-one', async () => {
+    const h = await seeded();
+    if (posix) fs.chmodSync(h.cwd, 0o755);
+    const r = await h.run(['export', 'training', '--kind', 'sft', '--out', '.']);
+    expect(r.code, r.io.stderr).toBe(0);
+    if (posix) {
+      expect(mode(h.cwd)).toBe(0o755);
+      expect(mode(path.join(h.cwd, 'sft.jsonl'))).toBe(0o600);
+      expect(mode(path.join(h.cwd, 'manifest.json'))).toBe(0o600);
+      const shared = path.join(h.cwd, 'shared');
+      fs.mkdirSync(shared);
+      fs.chmodSync(shared, 0o777);
+      const refused = await h.run(['export', 'training', '--kind', 'sft', '--out', 'shared']);
+      expect(refused.code).toBe(2);
+      expect(refused.io.stderr).toMatch(/writable by other users.*could replace/);
+      expect(mode(shared)).toBe(0o777);
+      expect(fs.readdirSync(shared)).toEqual([]);
+    }
+  });
+
+  it('cli.training-export-adds-preference-reasons-only-when-asked', async () => {
+    const h = await seeded();
+    const plain = await h.run(['export', 'training', '--kind', 'preference', '--out', 'p']);
+    expect(plain.code, plain.io.stderr).toBe(0);
+    expect(lines(path.join(h.cwd, 'p', 'preference.jsonl'))[0]).toMatchObject({
+      chosen: 'Verdict: rejected',
+      rejected: 'Verdict: approved',
+    });
+    const r = await h.run([
+      'export',
+      'training',
+      '--kind',
+      'preference',
+      '--out',
+      'q',
+      '--preference-reasons',
+      '--json',
+    ]);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(lines(path.join(h.cwd, 'q', 'preference.jsonl'))[0]).toMatchObject({
+      chosen: 'Verdict: rejected\nReason: No source.',
+      rejected: 'Verdict: approved',
+    });
+    const { manifest } = data<{ manifest: TrainingManifest }>(r.io.stdout);
+    expect(manifest.filters.preferenceReasons).toBe(true);
+    expect(manifest.notes[0]).toMatch(/rejected .*has no reason/);
+  });
+
   it('cli.training-export-leaves-oort-export-as-it-was', async () => {
     const h = await seeded();
     const r = await h.run(['export', '--out', 'backup.jsonl', '--json']);

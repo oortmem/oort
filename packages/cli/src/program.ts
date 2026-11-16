@@ -1272,7 +1272,10 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .command('training')
     .description('write the labels people gave as fine-tuning JSON Lines, one file per kind')
     .requiredOption('--kind <kind>', 'sft, preference, retrieval or all')
-    .requiredOption('--out <dir>', 'the directory to write (0700; files 0600)')
+    .requiredOption(
+      '--out <dir>',
+      'the directory to write: a new one is made 0700, files are 0600, and one others can write to is refused',
+    )
     .option('--expert <id>', 'only labels by this expert')
     .option('--since <iso>', 'only labels made at or after this time')
     .option('--split <time:fraction>', 'split each kind by time, e.g. time:0.8 (train, then eval)')
@@ -1281,7 +1284,9 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
       'add origins to interactive, dashboard, connector: integration',
     )
     .option('--exclude <origin...>', 'leave out origins, e.g. interactive')
+    .option('--preference-reasons', "add the person's reason to chosen in preference rows")
     .option('--force', 'replace the files of an earlier export in --out')
+    .option('--yes', 'accepted, but never skips the check that a person, not an agent, runs it')
     .option('--json', 'print oort.v1 JSON')
     .action(run((o: TrainingExportCliOptions) => trainingExportCommand(o, ctx)));
 

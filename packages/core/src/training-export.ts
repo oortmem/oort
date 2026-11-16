@@ -17,7 +17,6 @@ import {
 } from './judgment.js';
 import { isCurrent, type Memory } from './model.js';
 import type { Prediction, PredictionItem } from './prediction.js';
-import { ensurePrivateDir } from './private-fs.js';
 import { scrub } from './scrub.js';
 
 /**
@@ -107,8 +106,9 @@ export class TrainingExportError extends Error {
     /**
      * `invalid`: an option is wrong (the message names it). `exists`: the directory holds files
      * of an earlier export (pass `force`). `not-a-directory`: the path is a file or a symlink.
+     * `unsafe-directory`: an existing directory that other users can write to.
      */
-    readonly kind: 'invalid' | 'exists' | 'not-a-directory',
+    readonly kind: 'invalid' | 'exists' | 'not-a-directory' | 'unsafe-directory',
     message: string,
   ) {
     super(message);
@@ -130,6 +130,11 @@ export interface TrainingExportOptions {
   include?: readonly string[];
   /** Origins removed from the set (mainly `interactive`). */
   exclude?: readonly string[];
+  /**
+   * Add the person's reason to a preference row's `chosen`. Off by default: `rejected` (the
+   * proposal) has no reason, so a reason on one side only is a length cue, not a judgment.
+   */
+  preferenceReasons?: boolean;
 }
 
 /** The filters as checked: what the manifest records. */
@@ -143,6 +148,8 @@ export interface TrainingFilters {
   expert: string | null;
   since: string | null;
   split: { by: 'time'; train: number } | null;
+  /** `chosen` in preference rows holds the person's reason too. */
+  preferenceReasons: boolean;
 }
 
 /** Checks `opts`; throws `TrainingExportError` (`invalid`) naming the option. */
@@ -189,6 +196,7 @@ export function trainingFilters(opts: TrainingExportOptions): TrainingFilters {
     expert,
     since,
     split: opts.split === undefined ? null : { by: 'time', train: trainingSplit(opts.split) },
+    preferenceReasons: opts.preferenceReasons === true,
   };
 }
 
@@ -401,7 +409,7 @@ function preferenceRows(
     const c = new Cleaner();
     const row: PreferenceRow = {
       prompt: itemText(p.item, c),
-      chosen: decisionText(r.verdict, r.reason, c),
+      chosen: decisionText(r.verdict, f.preferenceReasons ? r.reason : undefined, c),
       rejected: decisionText(p.verdict, undefined, c),
       id: p.id,
       at: r.at,
@@ -573,6 +581,8 @@ export interface TrainingManifest {
   excluded: Partial<Record<TrainingKind, Partial<Record<TrainingExclusion, number>>>>;
   /** Rows whose text the export's cleaning or scrubbing changed, by kind. */
   scrubbed: Partial<Record<TrainingKind, number>>;
+  /** What a reader should know about the rows: with `preferenceReasons`, that `rejected` has none. */
+  notes: string[];
 }
 
 export interface TrainingExport {
@@ -649,6 +659,12 @@ export async function buildTrainingExport(
     counts: {},
     excluded: {},
     scrubbed: {},
+    notes:
+      f.preferenceReasons && f.kinds.includes('preference')
+        ? [
+            "preference: chosen holds the person's reason when they gave one; rejected (the proposed verdict) has no reason.",
+          ]
+        : [],
   };
   const contents: TrainingExport['contents'] = [];
   const file = (kind: TrainingKind, part: TrainingFile['part'], rows: Row[]) => {
@@ -718,10 +734,11 @@ function writeNew(file: string, text: string): void {
 
 /**
  * Writes `exp` into `dir`, and nowhere else: one file per kind (or per kind and split part),
- * then `manifest.json`. The directory is created 0700 (an existing one is tightened to 0700, as
- * `ensurePrivateDir` does) and every file 0600. A directory holding files of an earlier export
- * is refused (`exists`) unless `force`, which removes them first; other files are left alone.
- * `dir` must not be a symlink or a file (`not-a-directory`). Returns the paths written.
+ * then `manifest.json`. A directory it creates is 0700; an existing one keeps its mode, and is
+ * refused when group or others can write to it (`unsafe-directory`: they could swap the files).
+ * Every file is 0600. A directory holding files of an earlier export is refused (`exists`)
+ * unless `force`, which removes them first; other files are left alone. `dir` must not be a
+ * symlink or a file (`not-a-directory`). Returns the paths written.
  */
 export function writeTrainingExport(
   dir: string,
@@ -742,7 +759,27 @@ export function writeTrainingExport(
         : 'The output path is a file, not a directory.',
     );
   }
-  ensurePrivateDir(dir);
+  if (st === undefined) {
+    // Parents are made as mkdir makes them; the export's own directory is 0700 (umask aside).
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    try {
+      fs.mkdirSync(dir, { mode: 0o700 });
+      if (posix) fs.chmodSync(dir, 0o700);
+    } catch (e) {
+      // Made meanwhile by someone else: checked as an existing directory below.
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      st = fs.lstatSync(dir);
+      if (!st.isDirectory()) {
+        throw new TrainingExportError('not-a-directory', 'The output path is not a directory.');
+      }
+    }
+  }
+  if (st !== undefined && posix && (st.mode & 0o022) !== 0) {
+    throw new TrainingExportError(
+      'unsafe-directory',
+      `The output directory is writable by other users (mode ${(st.mode & 0o777).toString(8).padStart(4, '0')}), so they could replace the export's files; use a directory only you can write to, or a new one.`,
+    );
+  }
   const earlier = fs.readdirSync(dir).filter(isTrainingExportFile);
   if (earlier.length > 0 && opts.force !== true) {
     throw new TrainingExportError(

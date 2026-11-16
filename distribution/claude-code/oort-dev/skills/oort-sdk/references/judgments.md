@@ -256,13 +256,20 @@ await review.judge.record({
 });
 
 // Labels from code arrive as `integration`: add it to the default origins to export them.
+// Preference rows hold verdicts only; preferenceReasons adds the person's reason to `chosen`.
 const out = mkdtempSync(join(tmpdir(), 'oort-training-'));
-const { manifest } = await review.exportTraining({ kind: 'sft', out, include: ['integration'] });
+const { manifest } = await review.exportTraining({
+  kind: 'all',
+  out,
+  include: ['integration'],
+  preferenceReasons: true,
+});
 
 const rows = readFileSync(join(out, 'sft.jsonl'), 'utf8').trim().split('\n');
 const row = JSON.parse(rows[0]!) as { messages: { content: string }[]; origin: string };
 console.log(manifest.counts.sft?.rows, row.origin); // 1 integration
 console.log(row.messages[1]!.content.split('\n')[0]); // Verdict: rejected
+console.log(manifest.notes.length); // 1 (the manifest notes that `rejected` has no reason)
 
 // Model-facing code runs in the agent role, and an agent never exports training data.
 const agent = review.scoped({ judgeRole: 'agent' });
@@ -279,6 +286,12 @@ await agent.exportTraining({ kind: 'sft', out }).catch((e: { reason?: string }) 
   out and counted in the manifest by reason. Text is scrubbed of secrets again on the way out.
 - `split: 'time:0.8'` writes `<kind>.train.jsonl` and `<kind>.eval.jsonl`, every eval row
   later than every train row. An earlier export in `out` is refused (`export-exists`) unless
-  `force: true`. The directory is 0700 and the files 0600.
+  `force: true`. A new directory is made 0700; an existing one keeps its mode and is refused
+  when other users can write to it (`unsafe-directory`). Files are 0600.
+- Preference rows are verdict-only on both sides, so length does not give away the chosen one.
+  `preferenceReasons: true` adds the person's reason to `chosen`; `manifest.notes` then says
+  that `rejected` has none.
+- `oort export training` refuses under an agent harness (`agent-harness`), even with `--yes`:
+  a person runs it in their own terminal.
 - `origin` says how a label arrived, not who made it: choose the origins you trust before you
   train on them.

@@ -511,7 +511,10 @@ export type TrainingKind = 'sft' | 'preference' | 'retrieval';
 export interface ExportTrainingOptions {
   /** One kind, or `all`. */
   kind: TrainingKind | 'all';
-  /** The directory to write: created 0700 (an existing one is tightened), files 0600. */
+  /**
+   * The directory to write. A new one is made 0700; an existing one keeps its mode and is refused
+   * when other users can write to it. Files are 0600.
+   */
   out: string;
   /** Only labels by this expert. */
   expert?: string;
@@ -523,6 +526,11 @@ export interface ExportTrainingOptions {
   include?: readonly LabelOrigin[];
   /** Origins left out, such as `interactive`. */
   exclude?: readonly LabelOrigin[];
+  /**
+   * Add the person's reason to `chosen` in preference rows. Off by default, so that `chosen` and
+   * `rejected` have the same shape (the proposal has no reason).
+   */
+  preferenceReasons?: boolean;
   /** Replace the files of an earlier export in `out`. */
   force?: boolean;
 }
@@ -559,6 +567,7 @@ export interface TrainingManifestView {
     expert: string | null;
     since: string | null;
     split: { by: 'time'; train: number } | null;
+    preferenceReasons: boolean;
   };
   files: TrainingFileView[];
   counts: Partial<Record<TrainingKind, TrainingCountsView>>;
@@ -566,6 +575,8 @@ export interface TrainingManifestView {
   excluded: Partial<Record<TrainingKind, Record<string, number>>>;
   /** Rows whose text the export cleaned or redacted, by kind. */
   scrubbed: Partial<Record<TrainingKind, number>>;
+  /** What a reader should know about the rows: with `preferenceReasons`, that `rejected` has none. */
+  notes: string[];
 }
 
 /** What `exportTraining` wrote: the directory and its manifest. */

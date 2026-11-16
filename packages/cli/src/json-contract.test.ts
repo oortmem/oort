@@ -497,6 +497,15 @@ describe('oort.v1: memories (local store)', () => {
       'export training',
       'usage',
     );
+    // Under an agent harness it refuses, --yes or not, with a reason scripts can match.
+    const harnessed = bad(
+      await run(['export', 'training', '--kind', 'all', '--out', out, '--yes', '--json'], {
+        env: { HOME: h.root, OORT_HOME: h.home, CLAUDECODE: '1' },
+      }),
+      'export training',
+      'refused',
+    ) as { reason?: string };
+    expect(harnessed.reason).toBe('agent-harness');
   });
 
   it('import claude-code', async () => {

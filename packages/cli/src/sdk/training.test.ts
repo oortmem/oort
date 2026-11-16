@@ -90,6 +90,22 @@ describe('oort.exportTraining', () => {
     await expect(
       expert.exportTraining({ kind: 'sft', out: path.join(root, 'y'), include: ['agent'] }),
     ).rejects.toMatchObject({ code: 'usage' });
+    if (process.platform !== 'win32') {
+      const shared = path.join(root, 'shared');
+      fs.mkdirSync(shared);
+      fs.chmodSync(shared, 0o777);
+      await expect(
+        expert.exportTraining({ kind: 'sft', out: shared, include: ['integration'] }),
+      ).rejects.toMatchObject({ code: 'refused', reason: 'unsafe-directory' });
+      expect(fs.statSync(shared).mode & 0o777).toBe(0o777);
+    }
+    const reasons = await expert.exportTraining({
+      kind: 'preference',
+      out: path.join(root, 'reasons'),
+      preferenceReasons: true,
+    });
+    expect(reasons.manifest.filters.preferenceReasons).toBe(true);
+    expect(reasons.manifest.notes).toHaveLength(1);
     await expert.close();
   });
 

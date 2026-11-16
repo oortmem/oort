@@ -264,6 +264,7 @@ export const ExportTrainingSchema = z.strictObject({
   split: z.string().max(64).optional(),
   include: z.array(Origin).max(5).optional(),
   exclude: z.array(Origin).max(5).optional(),
+  preferenceReasons: z.boolean().optional(),
   force: z.boolean().optional(),
 });
 

@@ -219,7 +219,7 @@ describe('SDK examples (run)', () => {
 
   it('training-export: an expert exports integration labels, an agent is refused', async () => {
     const { out } = await runExample('training-export.ts');
-    expect(out).toEqual(['1 integration', 'Verdict: rejected', 'expert-only']);
+    expect(out).toEqual(['1 integration', 'Verdict: rejected', '1', 'expert-only']);
   });
 
   it('feedback: an agent reports a wrong memory, a person confirms and supersedes it', async () => {

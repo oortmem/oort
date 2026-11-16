@@ -37,6 +37,7 @@ export async function exportTraining(
         ...(o.split !== undefined && { split: o.split }),
         ...(o.include !== undefined && { include: o.include }),
         ...(o.exclude !== undefined && { exclude: o.exclude }),
+        ...(o.preferenceReasons === true && { preferenceReasons: true }),
       },
       { store: storeOf(ctx), grant: ctx.principal.grant, version: VERSION, now: ctx.now() },
     );
@@ -47,8 +48,12 @@ export async function exportTraining(
     if (e.kind === 'invalid') {
       throw new OortUsageError(`${e.message}.`, { reason: 'invalid-argument' });
     }
-    throw new OortRefusedError(e.message, {
-      reason: e.kind === 'exists' ? 'export-exists' : 'not-a-directory',
-    });
+    const reason =
+      e.kind === 'exists'
+        ? 'export-exists'
+        : e.kind === 'unsafe-directory'
+          ? 'unsafe-directory'
+          : 'not-a-directory';
+    throw new OortRefusedError(e.message, { reason });
   }
 }

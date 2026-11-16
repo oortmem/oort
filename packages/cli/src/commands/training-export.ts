@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import {
+  agentEnvMarker,
   buildTrainingExport,
   TrainingExportError,
   writeTrainingExport,
@@ -14,7 +15,8 @@ import { Refusal, withWired, writeGrant, type Ctx } from '../util.js';
  * `oort export training`: the labels people gave here (judgments, resolves of predictions,
  * recall feedback) as fine-tuning JSON Lines in `--out`, one file per kind and a manifest. It
  * reads what `oort judge list` and `oort feedback list` read in this directory: the cwd's project
- * and global records. Local store only.
+ * and global records. Local store only. A person runs it, never an agent: it refuses while an
+ * agent harness is running it (`AGENT_ENV_MARKERS`), and `--yes` does not change that.
  */
 
 export interface TrainingExportCliOptions {
@@ -25,7 +27,10 @@ export interface TrainingExportCliOptions {
   split?: string;
   include?: string[];
   exclude?: string[];
+  preferenceReasons?: boolean;
   force?: boolean;
+  /** Accepted so that it can be refused plainly: it never skips the agent check. */
+  yes?: boolean;
   json?: boolean;
 }
 
@@ -34,7 +39,9 @@ function refusal(e: TrainingExportError): Refusal {
   if (e.kind === 'exists') {
     return new Refusal(e.message.replace('pass force', 'pass --force'), { code: 'refused' });
   }
-  if (e.kind === 'not-a-directory') return new Refusal(e.message, { code: 'refused' });
+  if (e.kind === 'not-a-directory' || e.kind === 'unsafe-directory') {
+    return new Refusal(e.message, { code: 'refused' });
+  }
   const flag = e.message.replace(/^(kind|split|since|expert|include|exclude)\b/, '--$1');
   return new Refusal(`${flag.charAt(0).toUpperCase()}${flag.slice(1)}.`, { code: 'usage' });
 }
@@ -75,6 +82,14 @@ export async function trainingExportCommand(
   o: TrainingExportCliOptions,
   ctx: Ctx,
 ): Promise<number> {
+  // Before the store is opened: an agent never reads the labels out, whatever flags it passes.
+  const marker = agentEnvMarker(ctx.io.env);
+  if (marker !== undefined) {
+    throw new Refusal(
+      `oort export training runs only for a person, and an agent harness is running this one (${marker} is set). Run it yourself in your own terminal, outside the agent.`,
+      { code: 'refused', reason: 'agent-harness' },
+    );
+  }
   return withWired(ctx, async (w) => {
     if (w.mode === 'cloud') {
       throw new Refusal(
@@ -92,6 +107,7 @@ export async function trainingExportCommand(
           ...(o.split !== undefined && { split: o.split }),
           ...(o.include !== undefined && { include: o.include }),
           ...(o.exclude !== undefined && { exclude: o.exclude }),
+          ...(o.preferenceReasons === true && { preferenceReasons: true }),
         },
         { store: w.store, grant: writeGrant(w), version: cliVersion() },
       );

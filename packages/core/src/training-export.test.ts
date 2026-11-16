@@ -348,12 +348,14 @@ describe('training export: golden files', () => {
   });
 
   it('preference: only disagreements, the proposal rejected and the decision chosen', async () => {
-    const rows = rowsOf(contentsOf(await build(), 'preference.jsonl'));
+    const exp = await build();
+    const rows = rowsOf(contentsOf(exp, 'preference.jsonl'));
     expect(rows.map((r) => r['id'])).toEqual(['p-disagreed', 'p-no-reason', 'p-confirmed']);
+    // Both sides are verdict-only by default, so length says nothing about which is chosen.
     expect(rows[0]).toEqual({
       prompt:
         'Post says garlic cures infections\n\nA reel with 40k views.\n\nRef: https://example.com/r/9',
-      chosen: 'Verdict: rejected\nReason: Health claim with no source.',
+      chosen: 'Verdict: rejected',
       rejected: 'Verdict: approved',
       id: 'p-disagreed',
       at: at(8),
@@ -362,6 +364,22 @@ describe('training export: golden files', () => {
     });
     expect(rows[1]).toMatchObject({ chosen: 'Verdict: rejected', reviewer: 'grace@example.com' });
     expect(rows[2]).toMatchObject({ proposedOrigin: 'agent' });
+    expect(exp.manifest.notes).toEqual([]);
+  });
+
+  it('preference: preferenceReasons adds the reason to chosen, and the manifest says rejected has none', async () => {
+    const exp = await build({ preferenceReasons: true });
+    const rows = rowsOf(contentsOf(exp, 'preference.jsonl'));
+    expect(rows[0]).toMatchObject({
+      chosen: 'Verdict: rejected\nReason: Health claim with no source.',
+      rejected: 'Verdict: approved',
+    });
+    expect(rows[1]).toMatchObject({ chosen: 'Verdict: rejected' });
+    expect(exp.manifest.filters.preferenceReasons).toBe(true);
+    expect(exp.manifest.notes).toHaveLength(1);
+    expect(exp.manifest.notes[0]).toMatch(/rejected .*has no reason/);
+    // Without preference rows there is nothing to note.
+    expect((await build({ kind: 'sft', preferenceReasons: true })).manifest.notes).toEqual([]);
   });
 
   it('retrieval: negatives paired with a positive of the same query, null when there is none', async () => {
@@ -598,9 +616,11 @@ describe('training export: the manifest', () => {
         expert: 'ada',
         since: null,
         split: null,
+        preferenceReasons: false,
       },
       counts: { preference: { rows: 3, origins: { interactive: 2, dashboard: 1 } } },
       scrubbed: { preference: 0 },
+      notes: [],
     });
     const { createHash } = await import('node:crypto');
     expect(manifest.files).toEqual([
@@ -677,12 +697,35 @@ describe('training export: writing files', () => {
     if (posix) expect(mode(path.join(out, 'sft.jsonl'))).toBe(0o600);
   });
 
-  it('tightens an existing directory, and refuses a file or a symlink as the directory', async () => {
+  it('leaves an existing directory mode alone, and refuses one other users can write to', async () => {
     const open = path.join(dir, 'open');
     fs.mkdirSync(open, { mode: 0o755 });
     fs.chmodSync(open, 0o755);
     writeTrainingExport(open, await build({ kind: 'sft' }));
-    if (posix) expect(mode(open)).toBe(0o700);
+    if (posix) {
+      expect(mode(open)).toBe(0o755);
+      expect(mode(path.join(open, 'sft.jsonl'))).toBe(0o600);
+      const shared = path.join(dir, 'shared');
+      fs.mkdirSync(shared);
+      fs.chmodSync(shared, 0o777);
+      const err = (() => {
+        try {
+          writeTrainingExport(shared, { manifest: {} as never, contents: [] });
+        } catch (e) {
+          return e as TrainingExportError;
+        }
+        return undefined;
+      })();
+      expect(err?.kind).toBe('unsafe-directory');
+      expect(err?.message).toMatch(/writable by other users/);
+      expect(mode(shared)).toBe(0o777);
+      expect(fs.readdirSync(shared)).toEqual([]);
+    }
+  });
+
+  it('refuses a file or a symlink as the directory', async () => {
+    const open = path.join(dir, 'link-target');
+    fs.mkdirSync(open, { mode: 0o700 });
     const file = path.join(dir, 'a-file');
     fs.writeFileSync(file, '');
     expect(() => writeTrainingExport(file, { manifest: {} as never, contents: [] })).toThrow(

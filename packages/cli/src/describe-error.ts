@@ -24,6 +24,8 @@ export interface ErrorInfo {
   retryable?: true;
   /** Seconds the service asked to wait (its `Retry-After`), when it sent one. */
   retryAfter?: number;
+  /** A finer, stable string some refusals carry (`agent-harness`). Absent otherwise. */
+  reason?: string;
 }
 
 const shownOrNull = (fix: string | undefined): string | null =>
@@ -126,7 +128,8 @@ export function describeError(e: unknown, rerun: (flag: string) => string): Erro
   }
   if (err instanceof Refusal) {
     const fix = err.fix ?? (err.code === 'needs-confirmation' ? rerun('--yes') : undefined);
-    return make(err.code, err.message, fix, err.exitCode);
+    const info = make(err.code, err.message, fix, err.exitCode);
+    return err.reason === undefined ? info : { ...info, reason: err.reason };
   }
   if (err instanceof OortRelayError) {
     const code: ErrorCode =

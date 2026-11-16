@@ -505,6 +505,10 @@ alone will not fix this":
 }
 ```
 
+A few refusals add `reason`, a finer and stable string for scripts:
+`oort export training` refused under an agent harness has `code: "refused"`,
+`reason: "agent-harness"`. It is absent otherwise.
+
 `fix` is a command you can run as it is, where one fixes it, else `null`. The
 "same command with `--yes`" fix repeats your arguments only when every one of
 them is a known flag, a subcommand, an id, a name or an enum; anything else
@@ -2214,6 +2218,11 @@ job reads. It collects nothing new: it reads the judgments, the resolves of pred
 recall feedback that `oort judge list`, `oort judge predictions` and `oort feedback list` read in
 this directory (the cwd's project and global records), and nothing outside them.
 
+A person runs it, not an agent. While an agent harness runs it (one of the variables in
+[Where a label came from](#where-a-label-came-from) is set, such as `CLAUDECODE`), it refuses and
+writes nothing: run it yourself in your own terminal. `--yes` does not change that, and with
+`--json` the error is `code: "refused"`, `reason: "agent-harness"`.
+
 ```sh
 oort export training --kind all --out training/
 oort export training --kind sft --out sft-2026/ --since 2026-01-01 --split time:0.8
@@ -2221,10 +2230,13 @@ oort export training --kind all --out reviewed/ --exclude interactive --force
 ```
 
 - `--kind`: `sft`, `preference`, `retrieval` or `all` (required).
-- `--out <dir>`: the directory to write (required). It is created 0700, or an existing one is
-  tightened to 0700, and every file is 0600. Nothing is written outside it. A directory that
-  already holds files of an export (`manifest.json`, `sft.jsonl`, `preference.train.jsonl`, and
-  so on) is refused; `--force` removes those files first, and leaves any other file alone.
+- `--out <dir>`: the directory to write (required). A directory the export creates is 0700; an
+  existing one keeps its mode (`--out .` never changes the mode of the current directory). Every
+  file is 0600, and nothing is written outside the directory. An existing directory that group or
+  others can write to is refused, because another user could replace the files before you train
+  on them. A directory that already holds files of an export (`manifest.json`, `sft.jsonl`,
+  `preference.train.jsonl`, and so on) is refused; `--force` removes those files first, and
+  leaves any other file alone.
 - `--expert <id>`: only labels by this expert (a judgment's or a resolve's `by`, a feedback row's
   `by`).
 - `--since <iso>`: only labels made at or after this time: when the expert decided, when the
@@ -2234,6 +2246,8 @@ oort export training --kind all --out reviewed/ --exclude interactive --force
   and the rest to eval, so every eval row is later than every train row. Rows with the same time
   never straddle the cut: their group goes to the side that holds most of it (train on a tie).
   Equal times are ordered by id, so the same store always splits the same way.
+- `--preference-reasons`: adds the person's reason to `chosen` in preference rows (see
+  `preference.jsonl` below).
 - `--include integration` adds labels that arrived as `integration` (SDK and `oort serve` calls
   in the expert role, CLI calls without the prompt, imports). `--exclude <origin>...` leaves out
   origins, mainly `interactive`. `agent` is never exported: `--include agent` is refused.
@@ -2294,9 +2308,12 @@ becomes:
 
 **`preference.jsonl`**: one row per resolved prediction where the person chose another verdict
 than judging proposed. `prompt` is the item (summary, details, `Ref:`), `chosen` is the person's
-verdict with their reason when they gave one, `rejected` is the proposed verdict. Where the
-person agreed there is no preference row; a judgment a disagreeing resolve recorded is also in
-`sft.jsonl`. A resolved prediction, as `oort judge predictions --json` shows it:
+verdict and `rejected` is the proposed verdict, both as `Verdict: <verdict>`. A proposal has no
+reason, so a reason on the chosen side only would teach a model to prefer the longer answer
+rather than the right verdict. `--preference-reasons` adds the person's reason to `chosen` when
+they gave one, and the manifest's `notes` then says that `rejected` has none. Where the person
+agreed there is no preference row; a judgment a disagreeing resolve recorded is also in
+`sft.jsonl`, with its reason. A resolved prediction, as `oort judge predictions --json` shows it:
 
 ```json
 { "id": "9a8b…", "item": { "summary": "Post says garlic cures infections" },
@@ -2309,8 +2326,10 @@ person agreed there is no preference row; a judgment a disagreeing resolve recor
 becomes:
 
 ```json
-{"prompt":"Post says garlic cures infections","chosen":"Verdict: rejected\nReason: Health claim with no source.","rejected":"Verdict: approved","id":"9a8b…","at":"2026-10-08T09:00:00.000Z","domain":"content","origin":"dashboard","reviewer":"grace@example.com"}
+{"prompt":"Post says garlic cures infections","chosen":"Verdict: rejected","rejected":"Verdict: approved","id":"9a8b…","at":"2026-10-08T09:00:00.000Z","domain":"content","origin":"dashboard","reviewer":"grace@example.com"}
 ```
+
+and with `--preference-reasons`, `"chosen":"Verdict: rejected\nReason: Health claim with no source."`.
 
 **`retrieval.jsonl`**: rows of `query`, `positive` and `negative`, each a memory's text. An
 `irrelevant` row is a hard negative for its query; a `helped` row is a positive only when it was
@@ -2337,9 +2356,10 @@ become (memory `1b2c…` says the team orders lunch on Fridays, `5e6f…` names 
 
 **`manifest.json`**: `oort` (`"training-export"`), `version` (1), `exportedAt`, `oortVersion`,
 `filters` (`kind`, `kinds`, the `origins` exported, `include`, `exclude`, `expert`, `since`,
-`split`), `files` (each file's `name`, `kind`, `part`, `rows` and `sha256`), `counts` (per kind:
-`rows` and `origins`, and with a split the same for `train` and `eval`), `excluded` (per kind,
-by reason) and `scrubbed` (per kind).
+`split`, `preferenceReasons`), `files` (each file's `name`, `kind`, `part`, `rows` and
+`sha256`), `counts` (per kind: `rows` and `origins`, and with a split the same for `train` and
+`eval`), `excluded` (per kind, by reason), `scrubbed` (per kind) and `notes` (sentences about the
+rows; with `--preference-reasons`, that `rejected` has no reason).
 
 ### What `origin` proves
 

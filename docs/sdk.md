@@ -681,7 +681,7 @@ own error is reported by its class name only.
 | `OortNeedsConfirmationError`   | `needs-confirmation` | `preview-required`, `findings-unacknowledged` (Oort Cloud 409)                      |
 | `OortCloudOnlyError`           | `cloud-only`         | `hive-level`, `end-users` (`endUsers` locally), or `forget({ everywhere })` locally |
 | `OortNetworkError`             | `network`            | `unreachable`, `timeout`, `busy` (retryable)                                        |
-| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `conflict` (a prediction changed meanwhile; retryable), `in-progress` (a feedback row another call is resolving; retryable), `memory-changed` (a supersede could not take back its new memory; inspect it first), `predictions-unsupported` (a store that cannot keep predictions), `export-exists` (`exportTraining` into a directory that holds an earlier export; pass `force`), `not-a-directory` (`exportTraining` to a file or a symlink), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
+| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `conflict` (a prediction changed meanwhile; retryable), `in-progress` (a feedback row another call is resolving; retryable), `memory-changed` (a supersede could not take back its new memory; inspect it first), `predictions-unsupported` (a store that cannot keep predictions), `export-exists` (`exportTraining` into a directory that holds an earlier export; pass `force`), `not-a-directory` (`exportTraining` to a file or a symlink), `unsafe-directory` (`exportTraining` to an existing directory other users can write to), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
 | `OortInternalError`            | `internal`           | `store-busy` (retryable), `predictions-not-purged` (retryable), else none          |
 
 Retry what is `retryable`, then branch on `code`:
@@ -1416,13 +1416,20 @@ await review.judge.record({
 });
 
 // Labels from code arrive as `integration`: add it to the default origins to export them.
+// Preference rows hold verdicts only; preferenceReasons adds the person's reason to `chosen`.
 const out = mkdtempSync(join(tmpdir(), 'oort-training-'));
-const { manifest } = await review.exportTraining({ kind: 'sft', out, include: ['integration'] });
+const { manifest } = await review.exportTraining({
+  kind: 'all',
+  out,
+  include: ['integration'],
+  preferenceReasons: true,
+});
 
 const rows = readFileSync(join(out, 'sft.jsonl'), 'utf8').trim().split('\n');
 const row = JSON.parse(rows[0]!) as { messages: { content: string }[]; origin: string };
 console.log(manifest.counts.sft?.rows, row.origin); // 1 integration
 console.log(row.messages[1]!.content.split('\n')[0]); // Verdict: rejected
+console.log(manifest.notes.length); // 1 (the manifest notes that `rejected` has no reason)
 
 // Model-facing code runs in the agent role, and an agent never exports training data.
 const agent = review.scoped({ judgeRole: 'agent' });
@@ -1442,8 +1449,10 @@ required. `expert` keeps one expert's labels; `since` keeps labels made at or af
 `split: 'time:0.8'` writes `<kind>.train.jsonl` and `<kind>.eval.jsonl` instead of
 `<kind>.jsonl`, the earliest 80% of each kind to train, and rows with the same time on one side.
 `include` adds origins to `interactive`, `dashboard` and `connector` (only `integration` adds
-one; `agent` is a usage error), and `exclude` leaves origins out. `out` is created 0700 (an
-existing directory is tightened to 0700) and each file is 0600. A directory that holds an
+one; `agent` is a usage error), and `exclude` leaves origins out. `preferenceReasons: true` adds
+the person's reason to `chosen` in preference rows. A directory the export creates is 0700; an
+existing `out` keeps its mode, and is refused (`unsafe-directory`) when group or others can write
+to it, since another user could replace the files. Each file is 0600. A directory that holds an
 earlier export is refused (`export-exists`) unless `force: true`, which replaces that export's
 files and leaves other files alone. A file or a symlink as `out` is refused (`not-a-directory`).
 
@@ -1461,14 +1470,19 @@ invisible and control characters and scrubbed of secrets again on the way out.
   ```
 
 - `preference.jsonl`: one row per resolved prediction where the person chose another verdict
-  than the one proposed, `{ prompt, chosen, rejected }`: `chosen` is the person's verdict (and
-  reason), `rejected` the proposal. A resolve that agreed gives no row. A prediction that
-  proposed `approved` for `Post says garlic cures infections`, resolved `rejected` with the
-  reason `Health claim with no source.`, becomes:
+  than the one proposed, `{ prompt, chosen, rejected }`: `chosen` is the person's verdict,
+  `rejected` the proposal, both as `Verdict: <verdict>`. A proposal has no reason, so a reason
+  on the chosen side only would teach a model to prefer the longer answer rather than the right
+  verdict. With `preferenceReasons: true`, `chosen` adds the person's reason and
+  `manifest.notes` says that `rejected` has none. A resolve that agreed gives no row. A
+  prediction that proposed `approved` for `Post says garlic cures infections`, resolved
+  `rejected` with the reason `Health claim with no source.`, becomes:
 
   ```json
-  {"prompt":"Post says garlic cures infections","chosen":"Verdict: rejected\nReason: Health claim with no source.","rejected":"Verdict: approved","id":"9a8b…","at":"2026-10-08T09:00:00.000Z","domain":"content","origin":"dashboard","reviewer":"grace@example.com"}
+  {"prompt":"Post says garlic cures infections","chosen":"Verdict: rejected","rejected":"Verdict: approved","id":"9a8b…","at":"2026-10-08T09:00:00.000Z","domain":"content","origin":"dashboard","reviewer":"grace@example.com"}
   ```
+
+  With `preferenceReasons: true`, `chosen` is `"Verdict: rejected\nReason: Health claim with no source."`.
 
 - `retrieval.jsonl`: `{ query, positive, negative }`, each a memory's text. An `irrelevant`
   row is a hard negative for its query, paired with a `helped` row of the same query when there
@@ -1483,7 +1497,8 @@ invisible and control characters and scrubbed of secrets again on the way out.
 - `manifest.json` (`TrainingManifestView`, also returned as `manifest`): the export time, the
   Oort version, the filters, rows per kind, origin and split part, every record left out by
   kind and reason (`agent-unconfirmed`, `withdrawn`, `pending`, `dismissed`, `agreed`, …), the
-  rows whose text changed, and each file's `sha256`. The CLI reference lists every reason.
+  rows whose text changed, `notes` about the rows, and each file's `sha256`. The CLI reference
+  lists every reason.
 
 **What `origin` proves.** It says how a label reached Oort, not who made it: your integration
 names any `reviewer` it likes, and whatever drives a terminal can answer the CLI's prompt (see

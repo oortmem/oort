@@ -19,13 +19,20 @@ await review.judge.record({
 });
 
 // Labels from code arrive as `integration`: add it to the default origins to export them.
+// Preference rows hold verdicts only; preferenceReasons adds the person's reason to `chosen`.
 const out = mkdtempSync(join(tmpdir(), 'oort-training-'));
-const { manifest } = await review.exportTraining({ kind: 'sft', out, include: ['integration'] });
+const { manifest } = await review.exportTraining({
+  kind: 'all',
+  out,
+  include: ['integration'],
+  preferenceReasons: true,
+});
 
 const rows = readFileSync(join(out, 'sft.jsonl'), 'utf8').trim().split('\n');
 const row = JSON.parse(rows[0]!) as { messages: { content: string }[]; origin: string };
 console.log(manifest.counts.sft?.rows, row.origin); // 1 integration
 console.log(row.messages[1]!.content.split('\n')[0]); // Verdict: rejected
+console.log(manifest.notes.length); // 1 (the manifest notes that `rejected` has no reason)
 
 // Model-facing code runs in the agent role, and an agent never exports training data.
 const agent = review.scoped({ judgeRole: 'agent' });

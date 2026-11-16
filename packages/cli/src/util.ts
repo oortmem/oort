@@ -87,13 +87,19 @@ export class Refusal extends Error {
   readonly code: ErrorCode;
   readonly fix: string | undefined;
   readonly exitCode: number | undefined;
+  /** A finer, stable string for scripts (`agent-harness`), in the JSON error as `reason`. */
+  readonly reason: string | undefined;
 
-  constructor(message: string, opts: { code?: ErrorCode; fix?: string; exitCode?: number } = {}) {
+  constructor(
+    message: string,
+    opts: { code?: ErrorCode; fix?: string; exitCode?: number; reason?: string } = {},
+  ) {
     super(message);
     this.name = 'Refusal';
     this.code = opts.code ?? 'usage';
     this.fix = opts.fix;
     this.exitCode = opts.exitCode;
+    this.reason = opts.reason;
   }
 }
 
