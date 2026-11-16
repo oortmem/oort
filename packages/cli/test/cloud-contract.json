@@ -530,7 +530,7 @@
         "billing": "any"
       }
     ],
-    "erased": ["memories", "coldCopies", "turnRefs", "cursors"],
+    "erased": ["memories", "coldCopies", "turnRefs", "cursors", "judgments"],
     "errors": {
       "400:user_missing": "bad-request",
       "400:self_not_derivable": "bad-request",
@@ -658,7 +658,7 @@
       "402": "payment-required",
       "404": "not-found",
       "413": "too-large",
-      "429:rate_limit": "rate-limit"
+      "429:rate_limited": "rate-limit"
     }
   }
 }
