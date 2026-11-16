@@ -419,6 +419,22 @@ type RowParams = Omit<MemoryRow, 'rid'>;
 
 const DAY_MS = 86_400_000;
 
+/** The `meta` key holding when this store last swept orphan feedback rows, and by which build. */
+export const ORPHAN_SWEEP_KEY = 'feedback_orphan_sweep';
+/** Orphan feedback rows are swept at most this often (and on the first open by a new build). */
+const ORPHAN_SWEEP_EVERY_MS = DAY_MS;
+/** This package's version: a store opened by another build sweeps again. */
+const STORE_BUILD: string = (() => {
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version?: unknown };
+    return typeof pkg.version === 'string' ? pkg.version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
+
 /** An FTS5 query matching any token, each quoted as a phrase so no input is parsed as syntax. */
 function matchQuery(q: string): string | null {
   const unique = [...new Set(tokenizeLexical(q))];
@@ -2827,10 +2843,33 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     return q.feedbackForget.all(memoryId).map((r) => r.id);
   });
   // Feedback rows whose memory is gone (an older Oort forgot it, not knowing the table) go when
-  // a process that may migrate opens the store; hooks leave it to the next one.
-  if (opts.migrate !== false) {
-    const orphans = q.feedbackOrphans.all();
-    if (orphans.length > 0) truncateWal();
+  // a process that may migrate opens the store, at most once a day, and on the first open by a
+  // new build; hooks leave it to the next one.
+  if (opts.migrate !== false) sweepOrphanFeedback();
+
+  function sweepOrphanFeedback(): void {
+    const now = clock().getTime();
+    const raw = db
+      .prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?')
+      .get(ORPHAN_SWEEP_KEY)?.value;
+    let last: { at?: unknown; build?: unknown } | undefined;
+    try {
+      last = raw === undefined ? undefined : (JSON.parse(raw) as typeof last);
+    } catch {
+      last = undefined;
+    }
+    const age = typeof last?.at === 'number' ? now - last.at : Number.NaN;
+    // A clock that went back counts as due, as does a marker another build wrote.
+    if (last?.build === STORE_BUILD && age >= 0 && age < ORPHAN_SWEEP_EVERY_MS) return;
+    const swept = db.transaction((): number => {
+      const n = q.feedbackOrphans.all().length;
+      db.prepare(
+        `INSERT INTO meta (key, value) VALUES (?, ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+      ).run(ORPHAN_SWEEP_KEY, JSON.stringify({ at: now, build: STORE_BUILD }));
+      return n;
+    });
+    if (swept.immediate() > 0) truncateWal();
   }
 
   const handle: MemoryStore = {

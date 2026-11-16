@@ -25,7 +25,7 @@ import {
   makeMemory,
   TG,
 } from '@oortmem/core/store-conformance';
-import { openSqliteStore } from './index.js';
+import { openSqliteStore, ORPHAN_SWEEP_KEY } from './index.js';
 import { FEEDBACK_TABLE, SCHEMA_VERSION, WRITER_GUARD } from './schema.js';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-store-feedback-'));
@@ -250,29 +250,56 @@ describe('sqlite feedback', () => {
     );
   });
 
-  it('feedback.orphan-rows-go-when-the-store-opens', async () => {
+  it('feedback.orphan-rows-go-when-the-store-opens-at-most-once-a-day', async () => {
     const dir = fresh();
-    const s1 = await openSqliteStore(optsIn(dir));
-    await s1.upsert(TG, makeMemory({ id: 'm1', scope: SCOPE }));
-    await s1.upsert(TG, makeMemory({ id: 'm2', scope: SCOPE }));
+    const T0 = Date.parse('2026-11-16T08:00:00.000Z');
+    const at = (hours: number) => ({ ...optsIn(dir), now: () => new Date(T0 + hours * 3_600_000) });
+    const s1 = await openSqliteStore(at(0));
+    for (const id of ['m1', 'm2', 'm3', 'm4']) {
+      await s1.upsert(TG, makeMemory({ id, scope: SCOPE }));
+    }
     await s1.putFeedback!(TG, makeFeedback({ id: 'f1', note: 'wallabyorphannote' }));
-    await s1.putFeedback!(TG, makeFeedback({ id: 'f2', memoryId: 'm2' }));
+    for (const id of ['f2', 'f3', 'f4']) {
+      await s1.putFeedback!(TG, makeFeedback({ id, memoryId: `m${id.slice(1)}` }));
+    }
     await s1.close();
-    // An earlier build forgot m1 without knowing the feedback table.
-    const raw = new Database(optsIn(dir).path);
-    raw.function(WRITER_GUARD, () => 1);
-    raw.prepare(`DELETE FROM memories WHERE id = 'm1'`).run();
-    raw.close();
-    // A hook opens without migrating and leaves the sweep to the next process.
-    const hook = await openSqliteStore({ ...optsIn(dir), migrate: false });
-    expect((await hook.listFeedback!(TG)).map((f) => f.id)).toEqual(['f2', 'f1']);
-    await hook.close();
-    const s2 = await openSqliteStore(optsIn(dir));
-    expect((await s2.listFeedback!(TG)).map((f) => f.id)).toEqual(['f2']);
     const dbPath = optsIn(dir).path;
+    // An earlier build forgets a memory without knowing the feedback table.
+    const forgetRaw = (memoryId: string, also?: (db: Database.Database) => void) => {
+      const raw = new Database(dbPath);
+      raw.function(WRITER_GUARD, () => 1);
+      raw.prepare(`DELETE FROM memories WHERE id = ?`).run(memoryId);
+      also?.(raw);
+      raw.close();
+    };
+    const ids = async (hours: number, migrate = true) => {
+      const s = await openSqliteStore({ ...at(hours), ...(!migrate && { migrate: false }) });
+      const out = (await s.listFeedback!(TG)).map((f) => f.id).sort();
+      await s.close();
+      return out;
+    };
+    forgetRaw('m1');
+    // A hook opens without migrating and leaves the sweep to a later process.
+    expect(await ids(1, false)).toEqual(['f1', 'f2', 'f3', 'f4']);
+    // The first open swept within the day: a second open does not sweep again.
+    expect(await ids(2)).toEqual(['f1', 'f2', 'f3', 'f4']);
+    // A day after the last sweep, the next open sweeps, and the note leaves the WAL too.
+    expect(await ids(25)).toEqual(['f2', 'f3', 'f4']);
     const wal = fs.existsSync(`${dbPath}-wal`) ? fs.readFileSync(`${dbPath}-wal`) : Buffer.alloc(0);
     expect(wal.includes('wallabyorphannote')).toBe(false);
-    await s2.close();
+    expect(fs.readFileSync(dbPath).includes('wallabyorphannote')).toBe(false);
+    // A sweep marker another build wrote, or none (a store from before it), sweeps at once.
+    forgetRaw('m2', (db) =>
+      db
+        .prepare(`UPDATE meta SET value = json_set(value, '$.build', 'older') WHERE key = ?`)
+        .run(ORPHAN_SWEEP_KEY),
+    );
+    expect(await ids(26)).toEqual(['f3', 'f4']);
+    forgetRaw('m3', (db) => db.prepare(`DELETE FROM meta WHERE key = ?`).run(ORPHAN_SWEEP_KEY));
+    expect(await ids(27)).toEqual(['f4']);
+    // A clock set back counts as due.
+    forgetRaw('m4');
+    expect(await ids(-5)).toEqual([]);
   });
 
   it('feedback.five-helped-at-once-against-one-file-apply-once', async () => {

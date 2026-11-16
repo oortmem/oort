@@ -1186,7 +1186,7 @@ oort feedback confirm 9a8b7c6d
 
 Only `oort feedback` (and the expert role over `oort serve` or in the SDK) can confirm, retire,
 supersede or dismiss. One agent keeps at most 5,000 pending rows at its home, across every
-project; past that the tool refuses and nothing is saved.
+project, and all agents together 50,000 there; past that the tool refuses and nothing is saved.
 
 - `--note` and `--query` lose invisible characters (zero-width, bidirectional and tag
   characters), are scrubbed of secrets, made one line and cut to 500 characters. `--by`
@@ -1199,6 +1199,8 @@ project; past that the tool refuses and nothing is saved.
 - `oort forget` deletes every feedback row about the memory, whoever gave it, before it returns.
 - Feedback lives in the store file (`feedback` table), so backups include it. An older Oort
   ignores the table. In cloud mode the commands are refused (`refused`).
+- Rows whose memory is gone (forgotten by an older Oort that did not know the table) are removed
+  when `oort` opens the store, at most once a day and on the first open by a new version.
 - `--json` prints `{ feedback, applied?, reason? }` when giving feedback, `{ feedback }` for
   `list`, `confirm` and `dismiss`, `{ feedback, memoryId, endReason }` for `retire` and
   `{ feedback, memoryId, supersedes, redacted }` for `supersede`.
@@ -1997,7 +1999,8 @@ oort judge resolve 3fa2c1d0 --verdict approved --reason "Satire, clearly labelle
 - `oort judge predictions` lists pending predictions, newest first (`--resolved`, `--all`,
   `--domain`, `--limit`, `--json`). Pending predictions expire after 30 days, and judging deletes
   expired ones as it goes. Resolved ones stay, as the record `eval --live` reads, until you forget
-  them. One author keeps at most 5,000 pending predictions in one place: above that, `oort judge apply` still
+  them. One author keeps at most 5,000 pending predictions at its home, across every project, and
+  all authors together 50,000 there: above that, `oort judge apply` still
   answers but keeps nothing (`kept: false`, `notKept: "pending-cap"` in JSON). It also answers
   when the prediction cannot be saved (`write-failed`).
 - `oort judge forget-prediction <id>` (asks first; `--yes`) deletes one prediction. It leaves
