@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { DecisionController, Embedder, JudgeChoice, MemoryStore } from './adapters.js';
 import { addressed } from './address.js';
 import { INVISIBLE_SOURCE } from './display.js';
-import { GrantError, homeAddress, type Grant } from './grant.js';
+import { homeAddress, type Grant } from './grant.js';
 import { isCurrent, type Decision, type Memory, type Scope } from './model.js';
 import type { Prediction } from './prediction.js';
 import { informativeTokens } from './relevance.js';
@@ -774,6 +774,8 @@ export async function withdrawJudgment(
   const iso = now.toISOString();
   const full = (await store.get(grant, m.id)) ?? m;
   const j = full.judgment ?? m.judgment;
+  // First: a failed purge leaves the judgment as it was, so a retry runs it again.
+  await purgePredictionsCiting(store, grant, [m.id], by, now);
   await store.upsert(grant, {
     ...full,
     judgment: {
@@ -786,7 +788,6 @@ export async function withdrawJudgment(
     validTo: closeAt(full, now),
     updatedAt: iso,
   });
-  await purgePredictionsCiting(store, grant, [m.id], by, now);
   return true;
 }
 
@@ -842,6 +843,8 @@ export async function purgeJudgment(
     purged: { at: iso, by },
     tombstone: j.tombstone ?? tombstoneKey(j),
   };
+  // First: a failed purge leaves the judgment's text, so a retry runs it again.
+  await purgePredictionsCiting(store, grant, [m.id], by, now);
   await store.upsert(grant, {
     ...rest,
     judgment: stub,
@@ -853,7 +856,6 @@ export async function purgeJudgment(
     validTo: closeAt(full, now),
     updatedAt: iso,
   });
-  await purgePredictionsCiting(store, grant, [m.id], by, now);
   return true;
 }
 
@@ -864,14 +866,25 @@ export async function purgeJudgment(
 export const PREDICTION_LIMITS = Object.freeze({
   /** Days a prediction waits for a person's verdict; after that it can no longer be resolved. */
   ttlDays: 30,
-  summary: 500,
+  /** The item's details; its summary and ref keep the judgment limits. */
   details: 4000,
-  ref: 2000,
-  /** Verdicts and criteria one prediction keeps. */
-  labels: 24,
   /** Expired, unresolved predictions one judging call deletes. */
   prune: 100,
+  /** Unresolved predictions one address keeps; above it judging answers but keeps nothing. */
+  pending: 5000,
 });
+
+/**
+ * Predictions that still cite a judgment that was withdrawn, purged or forgotten: their text
+ * could not be purged (`leftover`). The judgment was left as it was, so the same call can be
+ * tried again.
+ */
+export class PredictionPurgeError extends Error {
+  override readonly name = 'PredictionPurgeError';
+  constructor(readonly leftover: readonly string[]) {
+    super(`The text of ${leftover.length} prediction(s) could not be purged; try again.`);
+  }
+}
 
 /** The text a purged prediction keeps. */
 const PURGED_PREDICTION = '[purged]';
@@ -903,9 +916,10 @@ export function purgedPrediction(p: Prediction, by: string, now: Date): Predicti
 
 /**
  * Purges the text of every prediction that cites one of `ids` as a precedent, or whose resolve
- * recorded it as a judgment: forget wins, so a withdrawn, purged or forgotten judgment leaves no
- * prediction text behind. A prediction the grant cannot change is left as it is. Returns the ids
- * purged. Does nothing on a store without predictions.
+ * recorded it as a judgment, at every address: forget wins, so a withdrawn, purged or forgotten
+ * judgment leaves no prediction text behind. Callers run it before they change the judgment.
+ * Returns the ids purged; throws `PredictionPurgeError` naming those it could not purge. Does
+ * nothing on a store without predictions.
  */
 export async function purgePredictionsCiting(
   store: MemoryStore,
@@ -914,44 +928,48 @@ export async function purgePredictionsCiting(
   by: string,
   now = new Date(),
 ): Promise<string[]> {
-  if (
-    store.predictions !== true ||
-    store.listPredictions === undefined ||
-    store.putPrediction === undefined
-  ) {
-    return [];
+  if (store.predictions !== true) return [];
+  if (store.purgePredictionsCiting === undefined) {
+    throw new Error('a store with predictions must implement purgePredictionsCiting');
   }
-  const out: string[] = [];
-  const seen = new Set<string>();
+  const purged: string[] = [];
+  const leftover: string[] = [];
   for (const id of ids) {
-    for (const listed of await store.listPredictions(grant, { citing: id })) {
-      if (seen.has(listed.id)) continue;
-      seen.add(listed.id);
-      let p: Prediction | null = listed;
-      // A resolve may land meanwhile: read again and retry, a few times.
-      for (let attempt = 0; attempt < 3 && p !== null && p.purged === undefined; attempt++) {
-        try {
-          if (
-            await store.putPrediction(grant, purgedPrediction(p, by, now), { revision: p.revision })
-          ) {
-            out.push(p.id);
-            break;
-          }
-        } catch (e) {
-          if (e instanceof GrantError) break;
-          throw e;
-        }
-        p = (await store.getPrediction?.(grant, p.id)) ?? null;
-      }
-    }
+    const r = await store.purgePredictionsCiting(grant, id, by, now);
+    purged.push(...r.purged);
+    leftover.push(...r.leftover);
   }
-  return out;
+  if (leftover.length > 0) throw new PredictionPurgeError([...new Set(leftover)]);
+  return [...new Set(purged)];
+}
+
+/** One line of text as a prediction keeps it: line breaks, control and invisible characters dropped. */
+function oneLine(t: string, max: number): string {
+  return clipped(
+    t
+      .replace(new RegExp(INVISIBLE_SOURCE, 'g'), '')
+      .replace(/\s+/g, ' ')
+      .replace(new RegExp(CONTROL.source, 'g'), ' ')
+      .replace(/ {2,}/g, ' ')
+      .trim(),
+    max,
+  );
+}
+
+/** Free text a prediction keeps: line breaks and tabs stay, other control and invisible characters go. */
+function plainText(t: string, max: number): string {
+  return clipped(
+    t
+      .replace(new RegExp(INVISIBLE_SOURCE, 'g'), '')
+      .replace(new RegExp(CONTROL.source, 'g'), ' ')
+      .trim(),
+    max,
+  );
 }
 
 const clipped = (t: string, max: number): string => (t.length > max ? t.slice(0, max) : t);
 
-const firstLabels = (xs: Iterable<string>): string[] =>
-  [...new Set(xs)].slice(0, PREDICTION_LIMITS.labels);
+const firstLabels = (xs: Iterable<string>, max: number): string[] => [...new Set(xs)].slice(0, max);
 
 /** The prediction a judging result is kept as. */
 function predictionRecord(
@@ -966,21 +984,28 @@ function predictionRecord(
   const iso = ctx.now.toISOString();
   const domains = [...new Set(ctx.used.map((j) => j.domain))];
   const domain = ctx.item.domain ?? (domains.length === 1 ? domains[0] : undefined);
-  const verdicts = firstLabels(ctx.used.flatMap((j) => j.verdicts));
+  const verdicts = firstLabels(
+    ctx.used.flatMap((j) => j.verdicts),
+    JUDGMENT_LIMITS.verdicts,
+  );
   const { item } = ctx;
+  // The item as a judgment of it would hold it, so a resolve with a reason can record one.
+  const summary = oneLine(item.summary, JUDGMENT_LIMITS.summary);
+  const ref = item.ref === undefined ? '' : oneLine(item.ref, JUDGMENT_LIMITS.ref);
+  const details =
+    item.details === undefined ? '' : plainText(item.details, PREDICTION_LIMITS.details);
+  const by = item.by === undefined ? '' : oneLine(scrub(item.by).text, JUDGMENT_LIMITS.by);
   return {
     id: randomUUID(),
     scope: ctx.scope,
     ...(ctx.address !== undefined && { address: ctx.address }),
     ...(ctx.author !== undefined && { author: ctx.author }),
     item: {
-      summary: clipped(item.summary, PREDICTION_LIMITS.summary),
-      ...(item.details !== undefined && {
-        details: clipped(item.details, PREDICTION_LIMITS.details),
-      }),
-      ...(item.ref !== undefined && { ref: clipped(item.ref, PREDICTION_LIMITS.ref) }),
+      summary: summary === '' ? '(empty)' : summary,
+      ...(details !== '' && { details }),
+      ...(ref !== '' && { ref }),
       ...(item.domain !== undefined && { domain: item.domain }),
-      ...(item.by !== undefined && { by: clipped(item.by, JUDGMENT_LIMITS.by) }),
+      ...(by !== '' && { by }),
     },
     ...(domain !== undefined && { domain }),
     outcome: r.status,
@@ -989,7 +1014,10 @@ function predictionRecord(
     probability: r.prediction?.probability ?? null,
     verdicts: verdicts.length >= 2 ? verdicts : [...DEFAULT_VERDICTS],
     precedentIds: r.precedents.map((x) => x.id),
-    criteria: firstLabels(ctx.used.flatMap((j) => j.criteria)),
+    criteria: firstLabels(
+      ctx.used.flatMap((j) => j.criteria),
+      JUDGMENT_LIMITS.criteria,
+    ),
     similarity: r.similarity,
     threshold: r.threshold,
     revision: 0,
@@ -997,16 +1025,6 @@ function predictionRecord(
     updatedAt: iso,
     expiresAt: new Date(ctx.now.getTime() + ctx.ttlDays * 86_400_000).toISOString(),
   };
-}
-
-/** Deletes unresolved predictions past their expiry (a bounded batch): nobody can resolve them. */
-async function prunePredictions(store: MemoryStore, grant: Grant, now: Date): Promise<void> {
-  if (store.listPredictions === undefined || store.forgetPrediction === undefined) return;
-  const t = now.getTime();
-  const stale = (await store.listPredictions(grant, { status: 'pending' }))
-    .filter((p) => Date.parse(p.expiresAt) <= t)
-    .slice(0, PREDICTION_LIMITS.prune);
-  for (const p of stale) await store.forgetPrediction(grant, p.id);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1142,6 +1160,13 @@ export interface JudgeResult {
   agentRecordedExcluded?: number;
   /** The kept prediction a person resolves with `resolvePrediction` (only with `deps.keep`). */
   predictionId?: string;
+  /**
+   * With `deps.keep`: whether the answer was kept as a prediction. False when the address
+   * already keeps `PREDICTION_LIMITS.pending` unresolved ones (`notKept: 'pending-cap'`) or the
+   * write failed (`write-failed`); the answer is the same either way.
+   */
+  kept?: boolean;
+  notKept?: 'pending-cap' | 'write-failed';
 }
 
 function cosine(a: Int8Array, b: Int8Array): number {
@@ -1204,7 +1229,8 @@ const OTHER = 'other';
  * precedents and their reasons as state. It answers "needs the expert" instead of guessing when
  * there are no precedents, none is near, fewer than two near precedents would back the answer,
  * the near ones disagree, or the prediction is below `threshold`; and returns precedents only
- * when there is no decider. Never writes anything.
+ * when there is no decider. Writes nothing to memories. With `deps.keep` it keeps the answer as
+ * a prediction record (`predictionId`); a failure to keep it never fails the call (`kept: false`).
  */
 export async function judge(
   item: JudgeItem,
@@ -1309,22 +1335,35 @@ export async function judge(
       return r;
     }
     const used = (near.length > 0 ? near : shown).map((x) => x.m.judgment);
-    const p = predictionRecord(r, {
-      item: {
-        summary,
-        ...(details !== undefined && { details }),
-        ...(item.ref !== undefined && { ref: scrub(item.ref).text }),
-        ...(item.domain !== undefined && { domain: judgmentLabel('domain', item.domain, DOMAIN) }),
-        ...(item.by !== undefined && { by: item.by }),
-      },
-      used,
-      ...homePlacement(keep.scope, deps.grant),
-      now,
-      ttlDays: keep.ttlDays ?? PREDICTION_LIMITS.ttlDays,
-    });
-    await prunePredictions(store, deps.grant, now);
-    await store.putPrediction(deps.grant, p, { revision: null });
-    return { ...r, predictionId: p.id };
+    // Keeping is a side effect: whatever goes wrong, the answer stands, without an id.
+    try {
+      const p = predictionRecord(r, {
+        item: {
+          summary,
+          ...(details !== undefined && { details }),
+          ...(item.ref !== undefined && { ref: scrub(item.ref).text }),
+          ...(item.domain !== undefined && {
+            domain: judgmentLabel('domain', item.domain, DOMAIN),
+          }),
+          ...(item.by !== undefined && { by: item.by }),
+        },
+        used,
+        ...homePlacement(keep.scope, deps.grant),
+        now,
+        ttlDays: keep.ttlDays ?? PREDICTION_LIMITS.ttlDays,
+      });
+      await store.pruneExpiredPredictions?.(now, PREDICTION_LIMITS.prune);
+      const pending = (await store.countPendingPredictions?.(p)) ?? 0;
+      if (pending >= PREDICTION_LIMITS.pending) {
+        return { ...r, kept: false, notKept: 'pending-cap' };
+      }
+      if (!(await store.putPrediction(deps.grant, p, { revision: null }))) {
+        return { ...r, kept: false, notKept: 'write-failed' };
+      }
+      return { ...r, predictionId: p.id, kept: true };
+    } catch {
+      return { ...r, kept: false, notKept: 'write-failed' };
+    }
   };
 
   if (all.length === 0) return finish({ status: 'needs-expert', why: 'no-precedents', ...base });

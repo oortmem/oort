@@ -281,9 +281,8 @@ export function inputSchemasFor(spaces: ToolSpaces, opts: ToolSchemaOptions = {}
       prediction_id: z
         .string()
         .trim()
-        .min(4)
-        .max(64)
-        .describe('The prediction_id a judge call returned'),
+        .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+        .describe('The whole prediction_id a judge call returned'),
       verdict: Label.describe('The verdict the person chose, one of the prediction verdicts'),
       reason: z
         .string()

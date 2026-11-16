@@ -449,6 +449,10 @@ class JudgeResult:
     agent_recorded_excluded: Optional[int] = None
     #: The kept prediction: resolve it with ``judge.resolve`` once a person decides.
     prediction_id: Optional[str] = None
+    #: False when the answer was not kept as a prediction (``not_kept``: ``pending-cap`` or
+    #: ``write-failed``). The answer is the same either way.
+    kept: Optional[bool] = None
+    not_kept: Optional[str] = None
 
 
 @dataclass(**_FROZEN)

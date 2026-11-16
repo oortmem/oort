@@ -382,6 +382,13 @@ export interface JudgeResult {
    * Absent where predictions are not kept.
    */
   predictionId?: string;
+  /**
+   * False when the answer was not kept as a prediction: the scope already keeps 5,000
+   * unresolved ones (`notKept: 'pending-cap'`) or the write failed (`write-failed`). The answer
+   * is the same either way.
+   */
+  kept?: boolean;
+  notKept?: 'pending-cap' | 'write-failed';
 }
 
 /** What a person decided about a prediction. */

@@ -398,18 +398,27 @@ console.log(live.resolved, live.bands.length);
   domain: the one you pass, else the prediction's.
 - An unknown id is `not-found`. A prediction that is already resolved, older than 30 days or
   purged is `refused` with reason `already-resolved`, `expired` or `purged`. None of them writes
-  anything.
-- In the agent role, `resolve` follows the rules for `record`: only for a listed expert, and the
-  decision stays unconfirmed until an expert role calls `judge.confirm(predictionId)`.
-  A prefix that matches both a memory and a prediction is `ambiguous-id`.
-  `evalLive` leaves unconfirmed decisions out unless `includeAgentResolved` is set.
+  anything. Another resolve or confirm landing meanwhile is `refused`, `conflict` (retryable):
+  the judgment this call recorded is withdrawn and purged again.
+- In the agent role, `resolve` follows the rules for `record`: only for a listed expert, a slot of
+  the daily limit only when it records a judgment, and the whole prediction id (a prefix is
+  `not-found`). The decision stays unconfirmed until an expert role calls
+  `judge.confirm(predictionId)`, and an expert role's own `resolve` replaces it (the agent's
+  judgment is withdrawn). A prefix that matches both a judgment and a prediction is
+  `ambiguous-id`. `evalLive` leaves unconfirmed decisions out unless `includeAgentResolved` is
+  set.
 - `evalLive` reports `overall` agreement, agreement on `suggested` items and their `coverage`,
   calibration per probability band (`bands`: `from`, `to`, `predicted`, `agreed`, `agreement`,
   `meanProbability`), and the `criteria` the expert overruled most.
 - `judge.listPredictions()` lists pending predictions, newest first. Pass `status: 'resolved'` for
-  decided ones. A pending prediction expires after 30 days.
-- Withdrawing, purging or forgetting a judgment removes the text of every prediction that cited
-  it. `judge.forgetPrediction(id)` deletes one prediction.
+  decided ones. A pending prediction expires after 30 days; resolved ones stay until forgotten.
+  Above 5,000 pending in one place, `judge.apply` answers without keeping one (`kept: false`,
+  `notKept: 'pending-cap'`); a failed write is `notKept: 'write-failed'`.
+- Withdrawing, purging or forgetting a judgment first removes the text of every prediction that
+  cited it; if one could not be purged the call fails (`internal`, `predictions-not-purged`,
+  retryable) and the judgment is unchanged. `judge.forgetPrediction(id)` deletes one prediction
+  (in the agent role, only a pending one). It leaves the judgment its resolve recorded.
+- Predictions are in the store file, so backups include them.
 
 ## Scopes and multi-tenant use
 
@@ -659,8 +668,8 @@ own error is reported by its class name only.
 | `OortNeedsConfirmationError`   | `needs-confirmation` | `preview-required`, `findings-unacknowledged` (Oort Cloud 409)                      |
 | `OortCloudOnlyError`           | `cloud-only`         | `hive-level`, `end-users` (`endUsers` locally), or `forget({ everywhere })` locally |
 | `OortNetworkError`             | `network`            | `unreachable`, `timeout`, `busy` (retryable)                                        |
-| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `predictions-unsupported` (a store that cannot keep predictions), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
-| `OortInternalError`            | `internal`           | `store-busy` (retryable), else none                                                 |
+| `OortRefusedError`             | `refused`            | `scope-denied`, `star-in-cloud`, `star-with-user`, `local-only`, `experts-not-listed`, `not-an-expert`, `daily-limit`, `expert-only`, `payment-required`, `not-enabled`, `hive-not-enabled`, `end-users-unsupported`, `end-users-not-allowed` (not a server key), `end-user-limit`, `end-user-erased`, `forbidden` (another Oort Cloud refusal), `not-current` (`judge.confirm` on a judgment that is no longer current), `already-resolved`, `expired`, `purged` (`judge.resolve`), `not-resolved` (`judge.confirm` on a pending prediction), `conflict` (a prediction changed meanwhile; retryable), `predictions-unsupported` (a store that cannot keep predictions), `cap-unavailable` (the daily judgment count could not be kept; retryable), `rate-limit` (retryable), `migration-required` (fix `oort doctor`) |
+| `OortInternalError`            | `internal`           | `store-busy` (retryable), `predictions-not-purged` (retryable), else none          |
 
 Retry what is `retryable`, then branch on `code`:
 

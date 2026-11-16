@@ -142,6 +142,10 @@ console.log(live.resolved, live.bands.length);
   `judge.apply` on a similar item cites it.
 - An unknown id is `not-found`. An already resolved, expired (30 days) or purged prediction is
   `refused` with reason `already-resolved`, `expired` or `purged`. None of them writes anything.
-- In the agent role, `resolve` follows the rules for `record` and stays unconfirmed until an
-  expert role calls `judge.confirm(predictionId)`. `evalLive` leaves it out until then.
+- In the agent role, `resolve` follows the rules for `record`, needs the whole prediction id,
+  and stays unconfirmed until an expert role calls `judge.confirm(predictionId)`. `evalLive`
+  leaves it out until then. An expert role's own `resolve` replaces it.
+- A resolve that loses a race to another is `refused`, `conflict` (retryable); the judgment it
+  recorded is taken back.
 - Withdrawing or forgetting a judgment removes the text of the predictions that cited it.
+  Forgetting a prediction leaves the judgment its resolve recorded.

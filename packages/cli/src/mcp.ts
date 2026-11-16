@@ -9,8 +9,9 @@ import { filterFor } from '@oortmem/claude-code';
 import {
   JudgmentInputError,
   PredictionError,
-  findPrediction,
+  getPrediction,
   resolvePrediction,
+  resolveRecordsJudgment,
   VERSION,
   activation,
   checkNear,
@@ -556,9 +557,11 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
         );
       }
       const grant = writeGrant(w);
-      const p = await asToolError(() => findPrediction(w.store, grant, i.prediction_id));
+      // The whole id, never a prefix: an agent cannot reach a prediction by guessing.
+      const p = await asToolError(() => getPrediction(w.store, grant, i.prediction_id));
       const day = now().toISOString().slice(0, 10);
-      const slot = i.reason !== undefined;
+      // A slot only for a resolve that will record a judgment.
+      const slot = resolveRecordsJudgment(p, i);
       if (slot) await reserveMcpJudgment(w.config.home, day);
       let wrote = false;
       try {
@@ -699,6 +702,12 @@ function judgeOutput(r: JudgeResult): Record<string, unknown> {
       prediction_id: r.predictionId,
       prediction_note:
         'Kept as a prediction. Once the person explicitly decides, record their verdict (and reason, verbatim) with resolve_prediction.',
+    }),
+    ...(r.kept === false && {
+      prediction_note:
+        r.notKept === 'pending-cap'
+          ? 'Not kept as a prediction: too many wait for a decision here. The answer is the same.'
+          : 'Not kept as a prediction: it could not be saved. The answer is the same.',
     }),
   };
 }

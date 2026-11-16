@@ -292,6 +292,14 @@ export function toOortError(e: unknown): OortError {
     if (kind === 'ambiguous') return new OortAmbiguousIdError(err.message);
     return new OortRefusedError(err.message, {
       reason: kind === 'unsupported' ? 'predictions-unsupported' : (kind ?? 'refused'),
+      ...(kind === 'conflict' && { retryable: true }),
+    });
+  }
+  if (err.name === 'PredictionPurgeError') {
+    // The judgment was left as it was; the same call purges again.
+    return new OortInternalError(err.message, {
+      reason: 'predictions-not-purged',
+      retryable: true,
     });
   }
   if (err.name === 'JudgmentInputError' || err.name === 'ExportFormatError') {

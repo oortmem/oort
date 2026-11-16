@@ -353,20 +353,36 @@ and the memory methods never see it. It carries an address like a memory (`scope
   guard fails, or when the id exists at another address or outside the grant. Two resolves of
   one prediction therefore never both land.
 - `getPrediction(grant, id)` returns the record when it is inside `grant.read`, else `null`.
-- `listPredictions(grant, { status?, citing?, limit? })` returns readable records newest first
-  (`createdAt`). `status` is `pending` or `resolved`, and `citing` keeps records whose
-  `precedentIds` or `resolution.judgmentId` holds that judgment id. `selectPredictions` in
-  `@oortmem/core` is the shared filter and order.
+- `listPredictions(grant, opts?)` returns readable records newest first (`createdAt`, then
+  `id`). `status` is `pending` or `resolved`; `citing` keeps records whose `precedentIds` or
+  `resolution.judgmentId` holds that judgment id; `idPrefix` keeps ids that start with it (taken
+  literally, so `%` and `_` match only themselves); `domain` keeps one domain; `unexpiredAt`
+  drops pending records whose `expiresAt` is at or before it. `limit` applies after the grant
+  and every filter, so it never comes back short because of rows the grant cannot read.
+  `selectPredictions` in `@oortmem/core` is the shared filter and order.
 - `forgetPrediction(grant, id)` deletes the record when it is inside `grant.write`, and returns
   whether it did.
+- `purgePredictionsCiting(grant, judgmentId, by, at)` replaces every record that cites the
+  judgment with `purgedPrediction(p, by, at)`, at every address, not only the grant's: the caller
+  is withdrawing, purging or forgetting that judgment, and derived copies go with it, as a
+  memory's links do on forget. It returns `{ purged, leftover }`; core fails the withdraw, purge
+  or forget when `leftover` is not empty, before it changes the judgment.
+- `pruneExpiredPredictions(now, limit)` deletes up to `limit` unresolved records whose
+  `expiresAt` is at or before `now`, at every address. Resolved records are never pruned.
+- `countPendingPredictions(p)` counts the unresolved records at `p`'s address (its node and
+  project). Judging keeps nothing above 5,000.
+
+A forgotten or purged record leaves none of its text in a log or journal the store keeps: the
+SQLite store truncates its write-ahead log after each one, as it does after a memory's forget.
 
 Every operation takes and returns plain JSON. Expiry (30 days for a pending prediction) and the
-rules of resolve live in `@oortmem/core`, not in the store. When a judgment is withdrawn, purged
-or forgotten, core rewrites every prediction that cited it to a stub without its text, through
-`putPrediction` with the revision guard. A store that also erases an end user's data deletes their
-predictions too. The SQLite store keeps them in a `predictions` table that it creates when it
-opens, with no schema version change: an older Oort ignores the table.
-`predictionsConformance(name, make)` in `@oortmem/core/store-conformance` proves a store.
+rules of resolve live in `@oortmem/core`, not in the store. A store that also erases an end
+user's data deletes their predictions too. The SQLite store keeps them in a `predictions` table
+with the same address columns as `memories` (so the grant predicate runs in SQL), `created_at`,
+an indexed `expires_at`, `resolved` and the record as JSON. It creates the table when it opens,
+with no schema version change: an older Oort ignores the table, a downgrade leaves it, and a
+backup copies it. `predictionsConformance(name, make)` in `@oortmem/core/store-conformance`
+proves a store.
 
 ## Known limit
 

@@ -7,6 +7,7 @@ import {
   isActiveJudgment,
   isUnconfirmedAgentJudgment,
   judge,
+  PredictionPurgeError,
   purgeJudgment,
   recordJudgment,
   withdrawJudgment,
@@ -25,7 +26,7 @@ import {
   resolvePrediction,
   type Prediction,
 } from './prediction.js';
-import { livePredictionFixtures as liveFixtures } from './store-conformance.js';
+import { livePredictionFixtures as liveFixtures, makePrediction } from './store-conformance.js';
 
 const NOW = new Date('2026-11-16T12:00:00.000Z');
 const SCOPE: Scope = { orgId: 'local', customerId: 'self', agentId: 'claude-code' };
@@ -93,6 +94,28 @@ async function snapshot(store: MemoryStore) {
   });
 }
 
+/** `store`, with `putPrediction` running `before` ahead of its `n`th call (1-based). */
+function beforePut(
+  store: MemoryStore,
+  n: number,
+  before: (p: Prediction) => Promise<void>,
+): MemoryStore {
+  let calls = 0;
+  return {
+    ...store,
+    async putPrediction(grant, p, expect) {
+      calls++;
+      if (calls === n) await before(p);
+      return store.putPrediction!(grant, p, expect);
+    },
+  };
+}
+
+const activeJudgments = async (store: MemoryStore) =>
+  (await store.list(GRANT, { validOnly: false, embeddings: false })).filter(
+    (m) => m.type === 'judgment' && isActiveJudgment(m, NOW),
+  );
+
 describe('predictions: judging keeps what it proposed', () => {
   it('prediction.judge-keeps-the-prediction', async () => {
     const { store, deps, precedents, item } = await setup();
@@ -133,6 +156,50 @@ describe('predictions: judging keeps what it proposed', () => {
     expect(p.verdict).toBeNull();
     expect(p.probability).toBeNull();
     expect(p.outcome).toBe('needs-expert');
+  });
+
+  it('prediction.judging-answers-without-keeping-above-the-pending-cap-or-on-a-failed-write', async () => {
+    const { store, deps, item } = await setup();
+    const full: MemoryStore = { ...store, countPendingPredictions: async () => 5000 };
+    const capped = await judge(item, { ...deps, store: full });
+    expect(capped).toMatchObject({ status: 'suggested', kept: false, notKept: 'pending-cap' });
+    expect(capped.predictionId).toBeUndefined();
+    const broken: MemoryStore = {
+      ...store,
+      putPrediction: async () => {
+        throw new Error('disk full');
+      },
+    };
+    const failed = await judge(item, { ...deps, store: broken });
+    expect(failed).toMatchObject({ status: 'suggested', kept: false, notKept: 'write-failed' });
+    expect(failed.predictionId).toBeUndefined();
+    expect(await store.listPredictions!(GRANT)).toEqual([]);
+    expect((await judge(item, deps)).kept).toBe(true);
+  });
+
+  it('prediction.a-multi-line-item-is-kept-on-one-line-and-resolves-with-a-reason', async () => {
+    const { store, deps } = await setup();
+    const r = await judge(
+      {
+        summary: 'Post says a vitamin\ncures the flu\u200b fast',
+        ref: 'https://example.test/p\r\n1',
+        details: 'Line one.\nLine two.\u202e',
+        domain: 'content',
+      },
+      deps,
+    );
+    const p = await getPrediction(store, GRANT, r.predictionId!);
+    expect(p.item).toMatchObject({
+      summary: 'Post says a vitamin cures the flu fast',
+      ref: 'https://example.test/p 1',
+      details: 'Line one.\nLine two.',
+    });
+    const done = await resolvePrediction(
+      p.id,
+      { verdict: 'approved', reason: 'Satire.\nLabelled as parody.', by: 'ada' },
+      resolveDeps(store),
+    );
+    expect(done.judgment?.memory.judgment?.subject.summary).toBe(p.item.summary);
   });
 });
 
@@ -236,9 +303,153 @@ describe('predictions: resolving', () => {
     ]);
     expect(results.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
     const failed = results.find((x) => x.status === 'rejected') as PromiseRejectedResult;
-    expect((failed.reason as PredictionError).kind).toBe('already-resolved');
+    // The loser recorded its judgment, lost the guarded write, and took the judgment back.
+    expect((failed.reason as PredictionError).kind).toBe('conflict');
     const judgments = (await store.list(GRANT)).filter((m) => m.type === 'judgment');
     expect(judgments).toHaveLength(4);
+    const won = (await getPrediction(store, GRANT, id)).resolution!;
+    const reasons = judgments.map((m) => m.judgment!.reason);
+    expect(reasons).toContain(won.reason);
+    expect(reasons).not.toContain(won.reason === 'One.' ? 'Two.' : 'One.');
+    expect(won.judgmentId).toBe(judgments.find((m) => m.judgment!.reason === won.reason)!.id);
+  });
+
+  it('prediction.a-failure-between-steps-leaves-no-half-state', async () => {
+    const { store, deps, item } = await setup();
+    const id = (await judge(item, deps)).predictionId!;
+    const before = await snapshot(store);
+    // The judgment write fails: nothing was claimed, so the same call works again.
+    const noUpsert: MemoryStore = {
+      ...store,
+      upsert: async () => {
+        throw new Error('disk full');
+      },
+    };
+    const input = { verdict: 'approved', by: 'ada', reason: 'Satire.' };
+    await expect(
+      resolvePrediction(id, input, { ...resolveDeps(store), store: noUpsert }),
+    ).rejects.toThrow('disk full');
+    expect(await snapshot(store)).toBe(before);
+    // The resolve write fails after the judgment was recorded: the judgment is taken back.
+    const noResolve = beforePut(store, 1, async () => {
+      throw new Error('disk full');
+    });
+    await expect(
+      resolvePrediction(id, input, { ...resolveDeps(store), store: noResolve }),
+    ).rejects.toThrow('disk full');
+    expect((await getPrediction(store, GRANT, id)).resolution).toBeUndefined();
+    expect((await activeJudgments(store)).map((m) => m.judgment!.reason)).not.toContain('Satire.');
+    const r = await resolvePrediction(id, input, resolveDeps(store));
+    expect(r.prediction.resolution?.judgmentId).toBe(r.judgment!.memory.id);
+    expect((await getPrediction(store, GRANT, id)).resolution?.judgmentId).toBe(
+      r.judgment!.memory.id,
+    );
+  });
+
+  it('prediction.a-confirm-racing-a-resolve-gives-conflict-and-no-orphan-judgment', async () => {
+    const { store, deps, item } = await setup();
+    const id = (await judge(item, deps)).predictionId!;
+    await resolvePrediction(
+      id,
+      { verdict: 'approved', by: 'ada', reason: 'Agent says satire.' },
+      resolveDeps(store, 'mcp'),
+    );
+    // A person's resolve replaces the agent's; a confirm of the agent's lands first.
+    const racing = beforePut(store, 1, async () => {
+      expect(await confirmResolution(store, GRANT, id, 'grace', NOW)).toBe(true);
+    });
+    await expect(
+      resolvePrediction(
+        id,
+        { verdict: 'rejected', by: 'ada', reason: 'No, a real claim.' },
+        { ...resolveDeps(store), store: racing },
+      ),
+    ).rejects.toMatchObject({ kind: 'conflict' });
+    const reasons = (await activeJudgments(store)).map((m) => m.judgment!.reason);
+    expect(reasons).not.toContain('No, a real claim.');
+    expect(reasons).toContain('Agent says satire.');
+
+    // Another writer lands between the judgment and the resolve: conflict, judgment taken back.
+    const id2 = (await judge({ ...item, summary: 'Post says a vitamin cures colds' }, deps))
+      .predictionId!;
+    const bump = beforePut(store, 1, async () => {
+      const p = await getPrediction(store, GRANT, id2);
+      await store.putPrediction!(
+        GRANT,
+        { ...p, revision: p.revision + 1 },
+        { revision: p.revision },
+      );
+    });
+    await expect(
+      resolvePrediction(
+        id2,
+        { verdict: 'approved', by: 'ada', reason: 'Lost the race.' },
+        { ...resolveDeps(store), store: bump },
+      ),
+    ).rejects.toMatchObject({ kind: 'conflict' });
+    expect((await activeJudgments(store)).map((m) => m.judgment!.reason)).not.toContain(
+      'Lost the race.',
+    );
+    expect((await getPrediction(store, GRANT, id2)).resolution).toBeUndefined();
+  });
+
+  it('prediction.a-person-replaces-an-agents-unconfirmed-resolve', async () => {
+    const { store, deps, item } = await setup();
+    const id = (await judge(item, deps)).predictionId!;
+    const agent = await resolvePrediction(
+      id,
+      { verdict: 'approved', by: 'ada', reason: 'Agent says satire.' },
+      resolveDeps(store, 'mcp'),
+    );
+    // Another agent resolve does not replace it.
+    await expect(
+      resolvePrediction(id, { verdict: 'rejected', by: 'ada' }, resolveDeps(store, 'mcp')),
+    ).rejects.toMatchObject({ kind: 'already-resolved' });
+    const person = await resolvePrediction(
+      id,
+      { verdict: 'rejected', by: 'ada', reason: 'A real health claim.' },
+      resolveDeps(store),
+    );
+    expect(person.prediction.resolution).toMatchObject({ via: 'cli', verdict: 'rejected' });
+    expect(person.prediction.superseded).toEqual([
+      expect.objectContaining({ via: 'mcp', verdict: 'approved', by: 'ada' }),
+    ]);
+    expect(JSON.stringify(person.prediction.superseded)).not.toContain('satire');
+    const agentJudgment = (await store.get(GRANT, agent.judgment!.memory.id))!;
+    expect(agentJudgment.judgment?.withdrawn).toBeDefined();
+    // A confirmed agent resolve stays: a person decides again only through a new prediction.
+    const id2 = (await judge({ ...item, summary: 'Post says a vitamin cures colds' }, deps))
+      .predictionId!;
+    await resolvePrediction(id2, { verdict: 'approved', by: 'ada' }, resolveDeps(store, 'mcp'));
+    await confirmResolution(store, GRANT, id2, 'grace', NOW);
+    await expect(
+      resolvePrediction(id2, { verdict: 'rejected', by: 'ada' }, resolveDeps(store)),
+    ).rejects.toMatchObject({ kind: 'already-resolved' });
+  });
+
+  it('prediction.confirm-finishes-a-half-confirmed-state', async () => {
+    const { store, deps, item } = await setup();
+    const id = (await judge(item, deps)).predictionId!;
+    const r = await resolvePrediction(
+      id,
+      { verdict: 'approved', by: 'ada', reason: 'Labelled satire.' },
+      resolveDeps(store, 'mcp'),
+    );
+    // The judgment is confirmed, then the resolve write fails.
+    const broken = beforePut(store, 1, async () => {
+      throw new Error('disk full');
+    });
+    await expect(confirmResolution(broken, GRANT, id, 'grace', NOW)).rejects.toThrow('disk full');
+    expect(
+      isUnconfirmedAgentJudgment((await store.get(GRANT, r.judgment!.memory.id))!.judgment!),
+    ).toBe(false);
+    expect((await getPrediction(store, GRANT, id)).resolution?.confirmed).toBeUndefined();
+    // The next call finishes it.
+    expect(await confirmResolution(store, GRANT, id, 'grace', NOW)).toBe(true);
+    expect((await getPrediction(store, GRANT, id)).resolution?.confirmed?.by).toBe('grace');
+    await expect(confirmResolution(store, GRANT, id, 'grace\nmallory', NOW)).rejects.toThrow(
+      /by holds control characters/,
+    );
   });
 
   it('prediction.agent-resolve-is-unconfirmed-until-a-person-confirms-it', async () => {
@@ -289,6 +500,45 @@ describe('predictions: resolving', () => {
 
 describe('predictions: forget wins', () => {
   const words = (p: Prediction | null) => JSON.stringify(p);
+
+  it('prediction.a-prediction-another-principal-wrote-is-purged-too', async () => {
+    const { store, precedents } = await setup();
+    const other: Scope = { orgId: 'local', customerId: 'other', agentId: 'cursor' };
+    const otherGrant = localGrant({ ...other, projectIds: [null] });
+    await store.putPrediction!(
+      otherGrant,
+      makePrediction({
+        id: 'theirs',
+        scope: other,
+        item: { summary: 'their zanzibar item' },
+        precedentIds: [precedents[0]!.id],
+      }),
+    );
+    await withdrawJudgment(store, GRANT, precedents[0]!, 'grace', NOW);
+    const p = (await store.getPrediction!(otherGrant, 'theirs'))!;
+    expect(p.purged).toBeDefined();
+    expect(JSON.stringify(p)).not.toContain('zanzibar');
+  });
+
+  it('prediction.a-purge-that-leaves-text-fails-and-changes-no-judgment', async () => {
+    const { store, precedents } = await setup();
+    const stuck: MemoryStore = {
+      ...store,
+      purgePredictionsCiting: async () => ({ purged: [], leftover: ['p-left'] }),
+    };
+    await expect(withdrawJudgment(stuck, GRANT, precedents[0]!, 'grace', NOW)).rejects.toEqual(
+      new PredictionPurgeError(['p-left']),
+    );
+    await expect(
+      forgetMemory({ store: stuck, now: NOW }, GRANT, precedents[1]!.id),
+    ).rejects.toBeInstanceOf(PredictionPurgeError);
+    const [a, b] = await Promise.all([
+      store.get(GRANT, precedents[0]!.id),
+      store.get(GRANT, precedents[1]!.id),
+    ]);
+    expect(a?.judgment?.withdrawn).toBeUndefined();
+    expect(b).not.toBeNull();
+  });
 
   it('prediction.withdrawing-a-precedent-purges-the-text', async () => {
     const { store, deps, precedents, item } = await setup();

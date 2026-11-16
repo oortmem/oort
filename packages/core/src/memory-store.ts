@@ -1,6 +1,6 @@
 import { appendAccess } from './activation.js';
 import type { GuardedWriteResult, Hit, MemoryStore } from './adapters.js';
-import { addressOf, canonicalMemory, nodeKey, nodeOf } from './address.js';
+import { addressOf, canonicalMemory, nodeKey, nodeOf, sameAddress } from './address.js';
 import {
   assertGrant,
   cursorKey,
@@ -11,7 +11,8 @@ import {
   type Grant,
 } from './grant.js';
 import { isCurrent, isZeroVector, type Memory, type Tier } from './model.js';
-import { selectPredictions, type Prediction } from './prediction.js';
+import { purgedPrediction } from './judgment.js';
+import { predictionCites, selectPredictions, type Prediction } from './prediction.js';
 import {
   ABOUT_PER_ENTITY,
   aboutWeight,
@@ -358,6 +359,40 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       if (p === undefined || !grantWrites(grant, p)) return false;
       predictions.delete(id);
       return true;
+    },
+
+    async purgePredictionsCiting(grant, judgmentId, by, at) {
+      open();
+      assertGrant(grant);
+      const purged: string[] = [];
+      for (const p of [...predictions.values()]) {
+        if (p.purged !== undefined || !predictionCites(p, judgmentId)) continue;
+        predictions.set(p.id, purgedPrediction(p, by, at));
+        purged.push(p.id);
+      }
+      return { purged, leftover: [] };
+    },
+
+    async pruneExpiredPredictions(now, limit) {
+      open();
+      const t = now.getTime();
+      let n = 0;
+      for (const p of [...predictions.values()]) {
+        if (n >= limit) break;
+        if (p.resolution === undefined && Date.parse(p.expiresAt) <= t) {
+          predictions.delete(p.id);
+          n++;
+        }
+      }
+      return n;
+    },
+
+    async countPendingPredictions(at) {
+      open();
+      const where = addressOf(at);
+      return [...predictions.values()].filter(
+        (p) => p.resolution === undefined && sameAddress(addressOf(p), where),
+      ).length;
     },
 
     async link(grant, x, y, linkOpts: LinkOptions) {

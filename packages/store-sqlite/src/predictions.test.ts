@@ -39,6 +39,50 @@ function fileBytes(dbPath: string): Buffer {
 }
 
 describe('sqlite predictions', () => {
+  it('predictions.forget-and-purge-leave-no-text-in-the-wal-while-open', async () => {
+    const dir = fresh();
+    const s = await openSqliteStore(optsIn(dir));
+    const dbPath = optsIn(dir).path;
+    const words = ['quokkaforgotten', 'quollpurged', 'numbatcited'];
+    await s.putPrediction!(TG, makePrediction({ id: 'p1', item: { summary: words[0]! } }));
+    const p2 = makePrediction({ id: 'p2', item: { summary: words[1]! } });
+    await s.putPrediction!(TG, p2);
+    await s.putPrediction!(
+      TG,
+      makePrediction({ id: 'p3', item: { summary: words[2]! }, precedentIds: ['j7'] }),
+    );
+    expect(fs.readFileSync(`${dbPath}-wal`).includes(words[0]!)).toBe(true);
+    const at = new Date('2026-11-16T12:00:00Z');
+    expect(await s.forgetPrediction!(TG, 'p1')).toBe(true);
+    expect(await s.putPrediction!(TG, purgedPrediction(p2, 'ada', at), { revision: 0 })).toBe(true);
+    expect((await s.purgePredictionsCiting!(TG, 'j7', 'ada', at)).purged).toEqual(['p3']);
+    // The store is still open: the WAL and the database file hold none of the words.
+    const wal = fs.existsSync(`${dbPath}-wal`) ? fs.readFileSync(`${dbPath}-wal`) : Buffer.alloc(0);
+    const main = fs.readFileSync(dbPath);
+    for (const w of words) {
+      expect(wal.includes(w), `${w} in the WAL`).toBe(false);
+      expect(main.includes(w), `${w} in the file`).toBe(false);
+    }
+    await s.close();
+  });
+
+  it('predictions.prune-uses-the-expiry-index', async () => {
+    const dir = fresh();
+    const s = await openSqliteStore(optsIn(dir));
+    await s.close();
+    const db = new Database(optsIn(dir).path, { readonly: true });
+    const plan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT id FROM ${PREDICTION_TABLE} INDEXED BY ${PREDICTION_TABLE}_expires
+         WHERE resolved = 0 AND expires_at <= ? ORDER BY expires_at LIMIT 100`,
+      )
+      .all('2026-11-16') as { detail: string }[];
+    db.close();
+    expect(plan.map((r) => r.detail).join(' ')).toMatch(
+      /USING (COVERING )?INDEX predictions_expires/,
+    );
+  });
+
   it('predictions.survive-a-reopen-without-a-schema-change', async () => {
     const dir = fresh();
     const s1 = await openSqliteStore(optsIn(dir));

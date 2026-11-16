@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DecisionController, Embedder } from '@oortmem/core';
 import { livePredictionFixtures, makePrediction } from '@oortmem/core/store-conformance';
 import { data, fakeDecide, harness, type Harness } from '../test/helpers.js';
+import { reserveAgentJudgment } from './judge-cap.js';
 import { localBackend } from './mcp.js';
 import { writeGrant } from './util.js';
 
@@ -273,5 +274,83 @@ describe('oort judge resolve', () => {
     const j = await h.run(['judge', 'confirm', jid, '--yes']);
     expect(j.code).toBe(0);
     expect(j.io.stdout).toMatch(/recorded by a person; there is nothing to confirm/);
+  });
+  it('mcp.resolve-prediction-needs-the-whole-id-a-slot-only-for-a-judgment-and-a-person-replaces-it', async () => {
+    const h = judging();
+    await seed(h);
+    const w = await h.wire(h.cwd);
+    w.config = { ...w.config, judge: { ...w.config.judge, experts: ['ada'] } };
+    const b = localBackend({ wired: w });
+    const judgeIt = async (item: string) =>
+      (
+        await b.judge!({
+          item,
+          domain: 'content',
+          limit: 5,
+          include_imported: false,
+          include_agent_recorded: false,
+        })
+      )['prediction_id'] as string;
+    const id = await judgeIt('Satire site says a vitamin cures the flu');
+    // A prefix is for people: the agent gets "no such prediction".
+    await expect(
+      b.resolvePrediction!({ prediction_id: id.slice(0, 8), verdict: 'approved', by: 'ada' }),
+    ).rejects.toThrow(/No prediction with that id/);
+
+    // The day's agent slots are used up: agreeing (no judgment to record) still works.
+    const day = new Date().toISOString().slice(0, 10);
+    for (let i = 0; i < 50; i++) await reserveAgentJudgment(w.config.home, day);
+    const other = await judgeIt('Satire site says a vitamin cures colds');
+    expect(
+      await b.resolvePrediction!({
+        prediction_id: other,
+        verdict: 'rejected',
+        by: 'ada',
+        reason: 'Agreed: no source.',
+      }),
+    ).toMatchObject({ agrees: true });
+    await expect(
+      b.resolvePrediction!({
+        prediction_id: id,
+        verdict: 'approved',
+        by: 'ada',
+        reason: 'Satire.',
+      }),
+    ).rejects.toThrow(/50/);
+    // The next day, a different verdict with a reason records a judgment.
+    const r = await localBackend({
+      wired: w,
+      now: () => new Date(Date.now() + 86_400_000),
+    }).resolvePrediction!({
+      prediction_id: id,
+      verdict: 'approved',
+      by: 'ada',
+      reason: 'Agent says satire.',
+    });
+    const agentJudgment = r['judgment_id'] as string;
+    expect(agentJudgment).toEqual(expect.any(String));
+
+    // A person's resolve replaces the agent's unconfirmed one, and withdraws its judgment.
+    const person = await h.run([
+      'judge',
+      'resolve',
+      id.slice(0, 8),
+      '--verdict',
+      'approved',
+      '--reason',
+      'Satire, and labelled as such.',
+      '--by',
+      'ada',
+    ]);
+    expect(person.code, person.io.stderr).toBe(0);
+    const all = data<{ judgments: { id: string; reason: string; withdrawn?: unknown }[] }>(
+      (await h.run(['judge', 'list', '--all', '--json'])).io.stdout,
+    ).judgments;
+    expect(all.find((j) => j.id === agentJudgment)?.withdrawn).toBeDefined();
+    expect(all.map((j) => j.reason)).toContain('Satire, and labelled as such.');
+    const shown = data<{ resolution: { via: string; verdict: string } }>(
+      (await h.run(['judge', 'predictions', '--resolved', '--json'])).io.stdout,
+    );
+    expect(JSON.stringify(shown)).toContain('"via":"cli"');
   });
 });

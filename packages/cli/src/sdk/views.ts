@@ -298,6 +298,8 @@ export function judgeView(r: CoreJudgeResult): JudgeResult {
       agentRecordedExcluded: r.agentRecordedExcluded,
     }),
     ...(r.predictionId !== undefined && { predictionId: r.predictionId }),
+    ...(r.kept !== undefined && { kept: r.kept }),
+    ...(r.notKept !== undefined && { notKept: r.notKept }),
   };
 }
 

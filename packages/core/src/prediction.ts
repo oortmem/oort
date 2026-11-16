@@ -10,8 +10,12 @@ import {
   judgmentField,
   judgmentLabel,
   JUDGMENT_LIMITS,
+  normaliseJudgment,
+  purgeJudgment,
   recordJudgment,
+  withdrawJudgment,
   type JudgeResult,
+  type JudgmentInput,
   type JudgeWhy,
   type JudgmentVia,
   type RecordJudgmentDeps,
@@ -103,8 +107,22 @@ export interface Prediction {
   /** After this time an unresolved prediction can no longer be resolved. */
   expiresAt: string;
   resolution?: PredictionResolution;
+  /**
+   * Agent-recorded resolves a person's resolve replaced, oldest first: who and when, and the
+   * judgment each recorded (withdrawn when it was replaced). No reason or criteria.
+   */
+  superseded?: SupersededResolution[];
   /** Set when its text was purged (a cited judgment was withdrawn, purged or forgotten). */
   purged?: { at: string; by: string };
+}
+
+/** An agent-recorded resolve a person's resolve replaced. */
+export interface SupersededResolution {
+  verdict: string;
+  by: string;
+  at: string;
+  via: JudgmentVia;
+  judgmentId?: string;
 }
 
 /** What `MemoryStore.listPredictions` filters by. */
@@ -113,6 +131,12 @@ export interface PredictionListOptions {
   status?: 'pending' | 'resolved';
   /** Only predictions citing this judgment id, as a precedent or as `resolution.judgmentId`. */
   citing?: string;
+  /** Only predictions whose id starts with this (an id or the start of one). */
+  idPrefix?: string;
+  /** Only predictions of this domain. */
+  domain?: string;
+  /** With `status: 'pending'`: only those whose `expiresAt` is after this ISO time. */
+  unexpiredAt?: string;
   limit?: number;
 }
 
@@ -138,12 +162,18 @@ export function selectPredictions(
   opts: PredictionListOptions = {},
 ): Prediction[] {
   const citing = opts.citing;
+  const unexpired = opts.unexpiredAt === undefined ? undefined : Date.parse(opts.unexpiredAt);
   return rows
     .filter(
       (p) =>
         (opts.status === undefined ||
           (opts.status === 'resolved') === (p.resolution !== undefined)) &&
-        (citing === undefined || predictionCites(p, citing)),
+        (citing === undefined || predictionCites(p, citing)) &&
+        (opts.idPrefix === undefined || p.id.startsWith(opts.idPrefix)) &&
+        (opts.domain === undefined || p.domain === opts.domain) &&
+        (unexpired === undefined ||
+          p.resolution !== undefined ||
+          Date.parse(p.expiresAt) > unexpired),
     )
     .sort((a, b) =>
       a.createdAt === b.createdAt
@@ -168,6 +198,8 @@ export function selectPredictions(
  * - `purged`: its text was purged;
  * - `not-resolved`: confirming, but nobody resolved it yet;
  * - `ambiguous`: an id prefix that matches more than one prediction;
+ * - `conflict`: it changed while this call ran (another resolve or confirm landed first); any
+ *   judgment this call recorded was withdrawn and purged again, so try again;
  * - `unsupported`: the store keeps no predictions.
  */
 export type PredictionErrorKind =
@@ -177,6 +209,7 @@ export type PredictionErrorKind =
   | 'already-resolved'
   | 'purged'
   | 'not-resolved'
+  | 'conflict'
   | 'unsupported';
 
 export class PredictionError extends Error {
@@ -196,6 +229,7 @@ const MESSAGES: Record<PredictionErrorKind, string> = {
   purged: 'That prediction was purged: a judgment it cited was withdrawn or forgotten.',
   'not-resolved': 'That prediction is not resolved yet.',
   ambiguous: 'That id prefix matches more than one prediction; give more of the id.',
+  conflict: 'That prediction changed while this ran; nothing was kept. Try again.',
   unsupported: 'This store keeps no predictions.',
 };
 
@@ -239,7 +273,7 @@ export async function findPrediction(
   const s = predictionsOf(store);
   const exact = await s.getPrediction(grant, ref);
   if (exact !== null) return exact;
-  const matches = (await s.listPredictions(grant)).filter((p) => p.id.startsWith(ref));
+  const matches = await s.listPredictions(grant, { idPrefix: ref, limit: 2 });
   if (matches.length > 1) throw fail('ambiguous');
   if (matches.length === 0) throw fail('not-found');
   return matches[0]!;
@@ -258,7 +292,9 @@ export async function predictionMatch(
   if (!keepsPredictions(store)) return 'none';
   const s = predictionsOf(store);
   if ((await s.getPrediction(grant, ref)) !== null) return 'exact';
-  return (await s.listPredictions(grant)).some((p) => p.id.startsWith(ref)) ? 'prefix' : 'none';
+  return (await s.listPredictions(grant, { idPrefix: ref, limit: 1 })).length > 0
+    ? 'prefix'
+    : 'none';
 }
 
 /** True when the store keeps predictions. */
@@ -283,17 +319,12 @@ export async function listPredictions(
   now = new Date(),
 ): Promise<Prediction[]> {
   const limit = Math.max(1, Math.min(opts.limit ?? 100, 1000));
-  const domain = opts.domain === undefined ? undefined : judgmentDomain(opts.domain);
-  const all = await predictionsOf(store).listPredictions(grant, {
+  return predictionsOf(store).listPredictions(grant, {
     ...(opts.status !== undefined && { status: opts.status }),
+    ...(opts.status === 'pending' && { unexpiredAt: now.toISOString() }),
+    ...(opts.domain !== undefined && { domain: judgmentDomain(opts.domain) }),
+    limit,
   });
-  return all
-    .filter(
-      (p) =>
-        (opts.status !== 'pending' || predictionState(p, now) === 'pending') &&
-        (domain === undefined || p.domain === domain),
-    )
-    .slice(0, limit);
 }
 
 /** What a person decided, as a caller hands it in. */
@@ -319,14 +350,54 @@ export interface ResolveResult {
 }
 
 /**
- * Records a person's decision on prediction `id`. When their verdict is not the predicted one
- * (or judging predicted none) and they give a reason, the reason is recorded as a new judgment
- * of the item, verbatim, by `input.by`, so the next judging call can cite it. `deps.via` says how
- * it was recorded: `mcp` (an agent) leaves both the resolve and the judgment unconfirmed.
+ * True when resolving `p` with `input` would record a judgment: a reason, and a verdict other
+ * than the predicted one (or none was predicted). Never throws; for a caller that must reserve
+ * something first.
+ */
+export function resolveRecordsJudgment(
+  p: Prediction,
+  input: Pick<ResolveInput, 'verdict' | 'reason'>,
+): boolean {
+  if (typeof input.reason !== 'string' || input.reason.trim() === '') return false;
+  try {
+    return p.verdict === null || judgmentLabel('verdict', input.verdict) !== p.verdict;
+  } catch {
+    return false;
+  }
+}
+
+/** True for a resolve an agent recorded that no person has confirmed. */
+function unconfirmedAgentResolve(r: PredictionResolution | undefined): boolean {
+  return r !== undefined && isAgentVia(r.via) && r.confirmed === undefined;
+}
+
+/** Withdraws, then purges, a judgment a failed resolve recorded: it must not count. */
+async function undoJudgment(
+  deps: RecordJudgmentDeps,
+  r: RecordJudgmentResult,
+  by: string,
+  now: Date,
+): Promise<void> {
+  if (r.outcome === 'unchanged') return; // An earlier record: not this call's to take back.
+  const m = await deps.store.get(deps.grant, r.memory.id);
+  if (m !== null) await purgeJudgment(deps.store, deps.grant, m, by, now);
+}
+
+/**
+ * Records a person's decision on prediction `id` (an exact id). When their verdict is not the
+ * predicted one (or judging predicted none) and they give a reason, the reason is recorded as a
+ * new judgment of the item, verbatim, by `input.by`, so the next judging call can cite it.
+ * `deps.via` says how it was recorded: `mcp` (an agent) leaves both the resolve and the judgment
+ * unconfirmed.
  *
- * Fails with `PredictionError` (`not-found`, `purged`, `already-resolved`, `expired`,
- * `unsupported`) or `JudgmentInputError` before writing anything. Two resolves of one
- * prediction never both land: the second fails `already-resolved`.
+ * Everything is checked before anything is written: `PredictionError` (`not-found`, `purged`,
+ * `already-resolved`, `expired`, `unsupported`) or `JudgmentInputError`. Then the judgment is
+ * recorded, and one guarded write sets the resolution with the judgment's id. When that write
+ * loses a race the judgment is withdrawn and purged and the call fails `conflict`.
+ *
+ * A person's resolve (any `via` but `mcp`) replaces an agent's unconfirmed one: the agent's
+ * resolve moves to `superseded`, and the judgment it recorded is withdrawn, before the person's
+ * is recorded.
  */
 export async function resolvePrediction(
   id: string,
@@ -335,11 +406,12 @@ export async function resolvePrediction(
 ): Promise<ResolveResult> {
   const store = predictionsOf(deps.store);
   const now = deps.now ?? new Date();
-  const p = await store.getPrediction(deps.grant, id);
+  let p = await store.getPrediction(deps.grant, id);
   if (p === null) throw fail('not-found');
   if (p.purged !== undefined) throw fail('purged');
-  if (p.resolution !== undefined) throw fail('already-resolved');
-  if (predictionState(p, now) === 'expired') throw fail('expired');
+  const supersede = !isAgentVia(deps.via) && unconfirmedAgentResolve(p.resolution);
+  if (p.resolution !== undefined && !supersede) throw fail('already-resolved');
+  if (Date.parse(p.expiresAt) <= now.getTime()) throw fail('expired');
 
   if (typeof input !== 'object' || input === null) {
     throw new JudgmentInputError('a resolve must be an object');
@@ -369,30 +441,9 @@ export async function resolvePrediction(
       'domain is needed to record the reason as a judgment: the prediction has none',
     );
   }
-
   const iso = now.toISOString();
-  const resolution: PredictionResolution = {
-    verdict,
-    ...(reason !== undefined && { reason }),
-    criteria,
-    by,
-    at: iso,
-    via: deps.via,
-    agrees,
-  };
-  const claimed: Prediction = { ...p, resolution, revision: p.revision + 1, updatedAt: iso };
-  if (!(await store.putPrediction(deps.grant, claimed, { revision: p.revision }))) {
-    const now2 = await store.getPrediction(deps.grant, id);
-    throw fail(
-      now2 === null ? 'not-found' : now2.purged !== undefined ? 'purged' : 'already-resolved',
-    );
-  }
-  if (!records) return { prediction: claimed, agrees };
-
-  let judgment: RecordJudgmentResult;
-  try {
-    judgment = await recordJudgment(
-      {
+  const judgmentInput: JudgmentInput | undefined = records
+    ? {
         subject: p.item.summary,
         ...(p.item.ref !== undefined && { ref: p.item.ref }),
         verdict,
@@ -402,31 +453,90 @@ export async function resolvePrediction(
         domain: domain!,
         by,
         decidedAt: iso,
-      },
-      deps,
-    );
-  } catch (e) {
-    // Put the prediction back as it was: a failed resolve writes nothing.
-    await store.putPrediction(
-      deps.grant,
-      { ...p, revision: claimed.revision + 1, updatedAt: iso },
-      { revision: claimed.revision },
-    );
-    throw e;
-  }
+      }
+    : undefined;
+  // The judgment's own checks, before anything is written.
+  if (judgmentInput !== undefined) normaliseJudgment(judgmentInput, now);
+
+  if (supersede) p = await supersedeAgentResolve(deps, p, by, now);
+
+  let judgment: RecordJudgmentResult | undefined;
+  if (judgmentInput !== undefined) judgment = await recordJudgment(judgmentInput, deps);
   const done: Prediction = {
-    ...claimed,
-    resolution: { ...resolution, judgmentId: judgment.memory.id },
-    revision: claimed.revision + 1,
+    ...p,
+    resolution: {
+      verdict,
+      ...(reason !== undefined && { reason }),
+      criteria,
+      by,
+      at: iso,
+      via: deps.via,
+      agrees,
+      ...(judgment !== undefined && { judgmentId: judgment.memory.id }),
+    },
+    revision: p.revision + 1,
+    updatedAt: iso,
   };
-  const linked = await store.putPrediction(deps.grant, done, { revision: claimed.revision });
-  return { prediction: linked ? done : claimed, agrees, judgment };
+  let landed = false;
+  try {
+    landed = await store.putPrediction(deps.grant, done, { revision: p.revision });
+  } finally {
+    if (!landed && judgment !== undefined) await undoJudgment(deps, judgment, by, now);
+  }
+  if (!landed) throw fail('conflict');
+  return { prediction: done, agrees, ...(judgment !== undefined && { judgment }) };
+}
+
+/**
+ * A person's resolve replacing an agent's unconfirmed one: the agent's resolve moves to
+ * `superseded` (no reason or criteria kept) and the prediction is pending again, then the
+ * judgment that resolve recorded is withdrawn, and so is any a superseded resolve recorded that
+ * an earlier, interrupted call left current. Returns the prediction as now stored.
+ */
+async function supersedeAgentResolve(
+  deps: RecordJudgmentDeps,
+  p: Prediction,
+  by: string,
+  now: Date,
+): Promise<Prediction> {
+  const store = predictionsOf(deps.store);
+  const r = p.resolution!;
+  const iso = now.toISOString();
+  const { resolution: _r, ...rest } = p;
+  const reopened: Prediction = {
+    ...rest,
+    superseded: [
+      ...(p.superseded ?? []),
+      {
+        verdict: r.verdict,
+        by: r.by,
+        at: r.at,
+        via: r.via,
+        ...(r.judgmentId !== undefined && { judgmentId: r.judgmentId }),
+      },
+    ],
+    revision: p.revision + 1,
+    updatedAt: iso,
+  };
+  if (!(await store.putPrediction(deps.grant, reopened, { revision: p.revision }))) {
+    throw fail('conflict');
+  }
+  for (const s of reopened.superseded ?? []) {
+    if (s.judgmentId === undefined) continue;
+    const m = await deps.store.get(deps.grant, s.judgmentId);
+    if (m !== null && m.judgment?.withdrawn === undefined) {
+      await withdrawJudgment(deps.store, deps.grant, m, by, now);
+    }
+  }
+  return reopened;
 }
 
 /**
  * Confirms an agent-recorded resolve: a person (`by`, the operator) vouches that the expert
- * decided it. The evaluation counts it from then on, and the judgment it recorded, if any, is
- * confirmed too. Returns false when the resolve was not agent-recorded or is already confirmed.
+ * decided it. The judgment it recorded, if any, is confirmed first, then the resolve, so a call
+ * that stopped half way is finished by the next one. The evaluation counts it from then on.
+ * Returns false when the resolve was not agent-recorded or is already confirmed; fails
+ * `conflict` when the prediction changed meanwhile.
  */
 export async function confirmResolution(
   store: MemoryStore,
@@ -436,29 +546,28 @@ export async function confirmResolution(
   now = new Date(),
 ): Promise<boolean> {
   const s = predictionsOf(store);
+  const who = scrub(judgmentField('by', by, JUDGMENT_LIMITS.by)).text;
   const p = await s.getPrediction(grant, id);
   if (p === null) throw fail('not-found');
   const r = p.resolution;
   if (r === undefined) throw fail('not-resolved');
   if (!isAgentVia(r.via) || r.confirmed !== undefined) return false;
+  if (r.judgmentId !== undefined) {
+    const m = await store.get(grant, r.judgmentId);
+    if (m !== null) await confirmJudgment(store, grant, m, who, now);
+  }
   const iso = now.toISOString();
   const ok = await s.putPrediction(
     grant,
     {
       ...p,
-      resolution: { ...r, confirmed: { at: iso, by } },
+      resolution: { ...r, confirmed: { at: iso, by: who } },
       revision: p.revision + 1,
       updatedAt: iso,
     },
     { revision: p.revision },
   );
-  if (!ok) throw fail('not-found');
-  if (r.judgmentId !== undefined) {
-    const m = await store.get(grant, r.judgmentId);
-    if (m !== null) {
-      await confirmJudgment(store, grant, m, by, now);
-    }
-  }
+  if (!ok) throw fail('conflict');
   return true;
 }
 

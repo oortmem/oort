@@ -226,16 +226,35 @@ export interface MemoryStore {
   /** The prediction `id`, or null when it is unknown or outside the grant. */
   getPrediction?(grant: Grant, id: string): Promise<Prediction | null>;
   /**
-   * The predictions the grant reads, newest first (`createdAt`, then `id`), filtered by
-   * `opts.status` (`pending`: no `resolution`) and `opts.citing` (a precedent id or the
-   * `resolution.judgmentId`), at most `opts.limit`.
+   * The predictions the grant reads, newest first (`createdAt`, then `id`), filtered as
+   * `selectPredictions` filters (status, citing, id prefix, domain, unexpired), at most
+   * `opts.limit`. The limit applies after the grant, so it never comes back short because of
+   * rows the grant cannot read.
    */
   listPredictions?(grant: Grant, opts?: PredictionListOptions): Promise<Prediction[]>;
   /**
-   * Deletes the prediction `id`, its text included. False for an unknown id or one outside
-   * `grant.write`, changing nothing.
+   * Deletes the prediction `id`, its text included, leaving none of it in a log or journal the
+   * store keeps. False for an unknown id or one outside `grant.write`, changing nothing.
    */
   forgetPrediction?(grant: Grant, id: string): Promise<boolean>;
+  /**
+   * Replaces every prediction that cites `judgmentId` (as a precedent or as
+   * `resolution.judgmentId`), at every address, with `purgedPrediction(p, by, at)`, leaving none
+   * of the old text in a log or journal. Not limited to `grant`: the caller is withdrawing,
+   * purging or forgetting that judgment under its own grant, and derived copies go with it, as a
+   * memory's links do on forget. Returns the ids purged and those it could not purge
+   * (`leftover`, which callers treat as a failure).
+   */
+  purgePredictionsCiting?(
+    grant: Grant,
+    judgmentId: string,
+    by: string,
+    at: Date,
+  ): Promise<{ purged: string[]; leftover: string[] }>;
+  /** Deletes up to `limit` unresolved predictions whose `expiresAt` is at or before `now`, at every address. */
+  pruneExpiredPredictions?(now: Date, limit: number): Promise<number>;
+  /** How many unresolved predictions are kept at `at`'s address (its node and project). */
+  countPendingPredictions?(at: Pick<Prediction, 'scope' | 'address'>): Promise<number>;
   /**
    * Insert or replace the memory with `m.id`. When `m.tier` is not `cold`, any
    * cold copy of `m.id` is dropped (a hydrated memory leaves no orphan blob).

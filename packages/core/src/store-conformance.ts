@@ -2423,6 +2423,111 @@ export function predictionsConformance(name: string, make: () => Promise<MemoryS
       expect(ids(await s.listPredictions(TG, { citing: 'j1' }))).toEqual(['b', 'a']);
       expect(ids(await s.listPredictions(TG, { citing: 'j9' }))).toEqual(['b']);
       expect(ids(await s.listPredictions(TG, { limit: 2 }))).toEqual(['c', 'b']);
+      expect(ids(await s.listPredictions(TG, { idPrefix: 'b' }))).toEqual(['b']);
+      expect(ids(await s.listPredictions(TG, { idPrefix: '%' }))).toEqual([]);
+      expect(ids(await s.listPredictions(TG, { idPrefix: '_' }))).toEqual([]);
+      expect(ids(await s.listPredictions(TG, { domain: 'content' }))).toEqual(['c', 'b', 'a']);
+      expect(ids(await s.listPredictions(TG, { domain: 'legal' }))).toEqual([]);
+      // Pending and not expired at that time; a resolved one is never "expired".
+      expect(
+        ids(
+          await s.listPredictions(TG, {
+            status: 'pending',
+            unexpiredAt: '2026-12-16T10:00:00.000Z',
+          }),
+        ),
+      ).toEqual([]);
+      expect(ids(await s.listPredictions(TG, { unexpiredAt: '2027-01-01T00:00:00.000Z' }))).toEqual(
+        ['b'],
+      );
+    });
+
+    it('predictions.the-limit-applies-after-the-grant', async () => {
+      const theirs = { orgId: 'other', customerId: 'c', agentId: 'a' };
+      for (let i = 0; i < 5; i++) {
+        await s.putPrediction(
+          other,
+          makePrediction({ id: `o${i}`, scope: theirs, createdAt: '2026-11-17T00:00:00.000Z' }),
+        );
+      }
+      await s.putPrediction(TG, makePrediction({ id: 'a' }));
+      await s.putPrediction(TG, makePrediction({ id: 'b' }));
+      expect(ids(await s.listPredictions(TG, { limit: 2 }))).toEqual(['b', 'a']);
+      expect(ids(await s.listPredictions(TG, { idPrefix: 'o' }))).toEqual([]);
+    });
+
+    it('predictions.purge-citing-reaches-every-address-and-keeps-no-text', async () => {
+      const theirs = { orgId: 'other', customerId: 'c', agentId: 'a' };
+      await s.putPrediction(
+        TG,
+        makePrediction({ id: 'mine', item: { summary: 'zanzibar mine' }, precedentIds: ['j1'] }),
+      );
+      await s.putPrediction(
+        other,
+        makePrediction({
+          id: 'theirs',
+          scope: theirs,
+          item: { summary: 'zanzibar theirs' },
+          precedentIds: ['j1'],
+        }),
+      );
+      await s.putPrediction(TG, makePrediction({ id: 'apart', precedentIds: ['j2'] }));
+      const at = new Date('2026-11-16T12:00:00.000Z');
+      const r = await store.purgePredictionsCiting!(TG, 'j1', 'grace', at);
+      expect([...r.purged].sort()).toEqual(['mine', 'theirs']);
+      expect(r.leftover).toEqual([]);
+      for (const [g, id] of [
+        [TG, 'mine'],
+        [other, 'theirs'],
+      ] as const) {
+        const p = (await s.getPrediction(g, id))!;
+        expect(p.purged).toEqual({ at: at.toISOString(), by: 'grace' });
+        expect(JSON.stringify(p)).not.toContain('zanzibar');
+      }
+      expect((await s.getPrediction(TG, 'apart'))?.purged).toBeUndefined();
+      // Purged ones are not purged again.
+      expect((await store.purgePredictionsCiting!(TG, 'j1', 'grace', at)).purged).toEqual([]);
+    });
+
+    it('predictions.prune-and-count-pending', async () => {
+      const theirs = { orgId: 'other', customerId: 'c', agentId: 'a' };
+      const resolution = {
+        verdict: 'approved',
+        criteria: [],
+        by: 'ada',
+        at: '2026-11-16T12:00:00.000Z',
+        via: 'cli' as const,
+        agrees: false,
+      };
+      await s.putPrediction(
+        TG,
+        makePrediction({ id: 'old1', expiresAt: '2026-11-01T00:00:00.000Z' }),
+      );
+      await s.putPrediction(
+        TG,
+        makePrediction({ id: 'old2', expiresAt: '2026-11-02T00:00:00.000Z' }),
+      );
+      await s.putPrediction(
+        TG,
+        makePrediction({ id: 'oldDone', expiresAt: '2026-11-01T00:00:00.000Z', resolution }),
+      );
+      await s.putPrediction(TG, makePrediction({ id: 'live' }));
+      await s.putPrediction(
+        other,
+        makePrediction({ id: 'theirsOld', scope: theirs, expiresAt: '2026-11-01T00:00:00.000Z' }),
+      );
+      expect(await store.countPendingPredictions!(makePrediction({ id: 'x' }))).toBe(3);
+      const now = new Date('2026-11-16T00:00:00.000Z');
+      expect(await store.pruneExpiredPredictions!(now, 2)).toBe(2);
+      expect(await store.pruneExpiredPredictions!(now, 100)).toBe(1);
+      expect(await store.pruneExpiredPredictions!(now, 100)).toBe(0);
+      // Resolved ones are kept, at any age.
+      expect(ids(await s.listPredictions(TG))).toEqual(['oldDone', 'live'].sort().reverse());
+      expect(await s.getPrediction(other, 'theirsOld')).toBeNull();
+      expect(await store.countPendingPredictions!(makePrediction({ id: 'x' }))).toBe(1);
+      expect(await store.countPendingPredictions!(makePrediction({ id: 'x', scope: theirs }))).toBe(
+        0,
+      );
     });
 
     it('predictions.forget-removes-the-record', async () => {

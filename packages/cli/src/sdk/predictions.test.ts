@@ -102,6 +102,16 @@ describe('sdk predictions', () => {
     await expect(
       agent.judge.resolve(r.predictionId!, { verdict: 'approved', by: 'bo', reason: 'No.' }),
     ).rejects.toMatchObject({ code: 'refused', reason: 'not-an-expert' });
+    // The agent role names a prediction by its whole id.
+    await expect(
+      agent.judge.resolve(r.predictionId!.slice(0, 8), { verdict: 'approved', by: 'ada' }),
+    ).rejects.toMatchObject({ code: 'not-found' });
+    // It may forget a pending prediction, never a resolved one.
+    const spare = await agent.judge.apply({ ...item, summary: 'Post says a vitamin cures colds' });
+    expect(await agent.judge.forgetPrediction(spare.predictionId!)).toEqual({
+      id: spare.predictionId,
+      forgotten: true,
+    });
     const resolved = await agent.judge.resolve(r.predictionId!, {
       verdict: 'approved',
       by: 'ada',
@@ -110,6 +120,10 @@ describe('sdk predictions', () => {
     expect(resolved.prediction.resolution).toMatchObject({ via: 'mcp', agentRecorded: true });
     expect(resolved.judgment?.status).toBe('agent-recorded');
     expect((await expert.judge.evalLive()).agentResolvedExcluded).toBe(1);
+    await expect(agent.judge.forgetPrediction(r.predictionId!)).rejects.toMatchObject({
+      code: 'refused',
+      reason: 'expert-only',
+    });
     await expect(agent.judge.confirm(r.predictionId!)).rejects.toMatchObject({
       reason: 'expert-only',
     });
@@ -125,7 +139,7 @@ describe('sdk predictions', () => {
     await expert.close();
     await agent.close();
   });
-  it('sdk.predictions.confirm-refuses-a-prefix-of-both-a-memory-and-a-prediction', async () => {
+  it('sdk.predictions.confirm-refuses-a-prefix-of-both-a-judgment-and-a-prediction', async () => {
     const { expert, agent, home } = await handles();
     await seed(expert);
     const jid = (await expert.judge.list()).judgments[0]!.id;
@@ -151,14 +165,15 @@ describe('sdk predictions', () => {
         },
       };
       db.prepare(
-        'INSERT INTO predictions (id, created_at, resolved, record) VALUES (?, ?, 1, ?)',
-      ).run(pid, row.created_at, JSON.stringify(record));
+        `INSERT INTO predictions SELECT ?, level, org_id, customer_id, agent_id, hive_id, run_id,
+           project_id, author_agent_id, created_at, expires_at, 1, ? FROM predictions WHERE id = ?`,
+      ).run(pid, JSON.stringify(record), r.predictionId);
     } finally {
       db.close();
     }
     await expect(expert.judge.confirm(jid.slice(0, 8))).rejects.toMatchObject({
       code: 'ambiguous-id',
-      message: expect.stringMatching(/both a memory and a prediction/),
+      message: expect.stringMatching(/both a judgment and a prediction/),
     });
     expect((await expert.judge.getPrediction(pid)).resolution?.agentRecorded).toBe(true);
     expect((await expert.judge.evalLive()).agentResolvedExcluded).toBe(1);

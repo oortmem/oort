@@ -4,7 +4,10 @@ import {
   confirmResolution,
   evaluateLive,
   findPrediction,
+  getPrediction as getExactPrediction,
   predictionMatch,
+  PredictionError,
+  resolveRecordsJudgment,
   forgetPrediction as coreForgetPrediction,
   isActiveJudgment,
   isUnconfirmedAgentJudgment,
@@ -213,50 +216,41 @@ export async function confirm(ctx: Ctx, id: string): Promise<{ id: string; chang
       { reason: 'expert-only' },
     );
   }
-  let m: Memory;
+  const store = storeOf(ctx);
+  const grant = ctx.principal.grant;
+  const confirmPrediction = async (pid: string) => ({
+    id: pid,
+    changed: await confirmResolution(store, grant, pid, ctx.judge.operator, ctx.now()),
+  });
+  let m: Memory | undefined;
   try {
     m = await findLocal(ctx, id);
   } catch (e) {
     if (!(e instanceof OortNotFoundError)) throw e;
-    // Not a memory: a prediction whose agent-recorded resolve a person confirms.
-    const store = storeOf(ctx);
-    const p = await findPrediction(store, ctx.principal.grant, id).catch(() => {
+  }
+  // Only a judgment counts as the memory an id names here: anything else, try a prediction.
+  if (m !== undefined && (m.type !== 'judgment' || m.judgment === undefined)) m = undefined;
+  if (m === undefined) {
+    const p = await findPrediction(store, grant, id).catch((e: unknown) => {
+      if (e instanceof PredictionError && e.kind === 'not-found') {
+        throw new OortNotFoundError('No judgment or prediction with that id in this scope.');
+      }
       throw e;
     });
-    const changed = await confirmResolution(
-      store,
-      ctx.principal.grant,
-      p.id,
-      ctx.judge.operator,
-      ctx.now(),
-    );
-    return { id: p.id, changed };
+    return confirmPrediction(p.id);
   }
   if (m.id !== id) {
     // A prefix: it must not also name a prediction, or the wrong one would be confirmed.
-    const store = storeOf(ctx);
-    const match = await predictionMatch(store, ctx.principal.grant, id);
-    if (match === 'exact') {
-      const changed = await confirmResolution(
-        store,
-        ctx.principal.grant,
-        id,
-        ctx.judge.operator,
-        ctx.now(),
-      );
-      return { id, changed };
-    }
+    const match = await predictionMatch(store, grant, id);
+    if (match === 'exact') return confirmPrediction(id);
     if (match === 'prefix') {
       throw new OortAmbiguousIdError(
-        'That id prefix matches both a memory and a prediction; give more of the id.',
+        'That id prefix matches both a judgment and a prediction; give more of the id.',
       );
     }
   }
-  if (m.type !== 'judgment' || m.judgment === undefined) {
-    throw new OortNotFoundError('No judgment with that id in this scope.');
-  }
   const now = ctx.now();
-  if (!isUnconfirmedAgentJudgment(m.judgment)) return { id: m.id, changed: false };
+  if (!isUnconfirmedAgentJudgment(m.judgment!)) return { id: m.id, changed: false };
   if (!isActiveJudgment(m, now)) {
     throw new OortRefusedError('That judgment is not current, so it cannot be confirmed.', {
       reason: 'not-current',
@@ -277,10 +271,14 @@ export async function resolve(ctx: Ctx, ref: string, input: ResolveInput): Promi
   const grant = ctx.principal.grant;
   const now = ctx.now();
   const agent = ctx.judge.role === 'agent';
-  const p = await findPrediction(store, grant, ref);
+  // An agent names a prediction by its whole id; a prefix is for people.
+  const p = agent
+    ? await getExactPrediction(store, grant, ref)
+    : await findPrediction(store, grant, ref);
   if (agent) agentMayActFor(ctx, input.by);
   const day = now.toISOString().slice(0, 10);
-  const mayRecord = agent && input.reason !== undefined && input.reason.trim() !== '';
+  // A slot only for a resolve that will record a judgment.
+  const mayRecord = agent && resolveRecordsJudgment(p, input);
   if (mayRecord) await reserveSlot(ctx, day);
   let wrote = false;
   try {
@@ -345,6 +343,12 @@ export async function forgetPrediction(
   localJudgments(ctx);
   const store = storeOf(ctx);
   const p = await findPrediction(store, ctx.principal.grant, ref);
+  if (ctx.judge.role === 'agent' && p.resolution !== undefined) {
+    throw new OortRefusedError(
+      'Only a person forgets a resolved prediction: it is the record of what the expert decided.',
+      { reason: 'expert-only' },
+    );
+  }
   if (!(await coreForgetPrediction(store, ctx.principal.grant, p.id))) {
     throw new OortRefusedError('This handle cannot change that prediction.', {
       reason: 'scope-denied',

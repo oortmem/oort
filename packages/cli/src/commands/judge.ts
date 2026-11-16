@@ -11,6 +11,7 @@ import {
   confirmResolution,
   evaluateLive,
   findPrediction,
+  PREDICTION_LIMITS,
   predictionMatch,
   forgetPrediction,
   listPredictions,
@@ -376,6 +377,12 @@ export async function judgeApplyCommand(
     if (r.predictionId !== undefined) {
       ctx.io.out(
         `\nKept as prediction ${short(r.predictionId)}. When the expert decides: \`oort judge resolve ${short(r.predictionId)} --verdict <label> [--reason <text>]\`.\n`,
+      );
+    } else if (r.kept === false) {
+      ctx.io.out(
+        r.notKept === 'pending-cap'
+          ? `\nNot kept as a prediction: ${PREDICTION_LIMITS.pending} wait for a decision already (\`oort judge predictions\`).\n`
+          : '\nNot kept as a prediction: it could not be saved. The answer is the same.\n',
       );
     }
     return 0;
