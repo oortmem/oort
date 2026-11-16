@@ -46,4 +46,5 @@ export * from './private-fs.js';
 export * from './judgment.js';
 export * from './prediction.js';
 export * from './feedback.js';
+export * from './training-export.js';
 export * from './display.js';

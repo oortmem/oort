@@ -505,6 +505,10 @@ alone will not fix this":
 }
 ```
 
+A few refusals add `reason`, a finer and stable string for scripts:
+`oort export training` refused under an agent harness has `code: "refused"`,
+`reason: "agent-harness"`. It is absent otherwise.
+
 `fix` is a command you can run as it is, where one fixes it, else `null`. The
 "same command with `--yes`" fix repeats your arguments only when every one of
 them is a known flag, a subcommand, an id, a name or an enum; anything else
@@ -1492,6 +1496,7 @@ For a container sidecar, or a backend that is not you. The same protocol on TCP,
 | `oort link <a> <b>` / `oort unlink <a> <b>` | Links two memories that belong together, or removes the link. Both must be memories you can change, in the same Planet or Star; any other pair is refused as a missing id. Local store only. See [Memory links](#memory-links-oort-link). | `--yes`, `--json` |
 | `oort consolidate` | Expires, re-tiers and evicts memories, every project and the global ones: your Planet, the acting agent's Star, and the Star of every agent configured with `--star`. Each node, and inside it each project and the global memories, is re-tiered on its own. The hooks also run it about daily (see `docs/claude-code.md`); a manual run counts as that day's. | |
 | `oort export` | A backup of what you own in the cwd's project plus global: your Planet and the Star of every agent this machine knows (each host, every agent in `agents.json`, the acting one), as v2 JSON Lines with each memory's level in `address`. `--format 1` writes Planet memories only. Withdrawn judgments are left out. | `--out <file>` (0600), `--force`, `--format 1\|2`, `--include-withdrawn` |
+| `oort export training` | The labels people gave here (judgments, resolves of predictions, recall feedback) as fine-tuning JSON Lines in a directory, one file per kind and `manifest.json`. See [Training export](#training-export-oort-export-training). Local store only. | `--kind sft\|preference\|retrieval\|all`, `--out <dir>`, `--expert <id>`, `--since <iso>`, `--split time:<fraction>`, `--include integration`, `--exclude <origin>...`, `--force`, `--json` |
 | `oort import claude-code` | Imports Claude Code transcripts. It prints the estimate first, then asks. On a terminal a progress line on stderr shows how far it is (see below). It exits 3 when some sessions stopped at a failed observation (the rest are imported; run it again to retry them), and 130 when Ctrl-C stopped it. | `--since <age>`, `--yes`, `--estimate-only`, `--include-unresolved`, `--projects-dir <dir>` |
 | `oort import <file>` | Reads an Oort export (from `oort export`, `oort cloud export` or an end user's export from Oort Cloud) into the local store. It shows how many memories are new, then asks; the question says how many are pinned or judgments (both shown to your agent at every session start), and where each memory's text goes to be embedded again (Voyage AI, with your Voyage key or through the Oort relay, or this machine's local model). Planet memories move to this machine's Planet; memories of a Star or a Constellation are left out and counted; ids already here are skipped, so running it twice is safe. The file is not trusted: each memory is rebuilt from its content (text, stub, entities, type, salience, pin, project, a well-formed source, its dates) and starts as a new one here (warm, never read, never confirmed). A date after now becomes now, and a year outside 0000 to 9999 is not read; a planned end (`validTo`) is kept even when still ahead, an expiry ahead of now is dropped, and every end must hold together, or the line is left out (an ended fact never arrives as a current one); a `supersedes` link is kept only to another memory of the same file. A line no store would write is left out and counted as not valid; a file that repeats an id, or is over 100 MB, is refused. A judgment arrives as an imported one (normalised and redacted as from a pack, never confirmed), so it counts only when judging includes imports; one the file says was withdrawn or purged is not imported (the summary says how many), since only a person here may end a decision. [What an import keeps and resets](export-format.md#version-1). Local mode only: in cloud mode, run `oort cloud use --local` first. With `--json`: `{ outcome, file, memories, imported, skipped, outside, invalid, ended, pinned, judgments }`. | `--yes` |
 
@@ -2176,8 +2181,9 @@ a determined one.
 
 An agent that can run commands on your machine can unset those variables and drive a terminal:
 it can answer the prompt itself. So `interactive` is only as trustworthy as the shells on that
-machine. For labels you will fine-tune on, prefer the dashboard and connectors; the training
-export will let you exclude `interactive`.
+machine. For labels you will fine-tune on, prefer the dashboard and connectors; the
+[training export](#training-export-oort-export-training) can leave out `interactive`
+(`--exclude interactive`).
 
 - Confirming an agent's label (`oort judge confirm`, `oort feedback confirm`) records your origin
   as the row's origin and keeps the agent's as `proposedOrigin`. An agent's judgment confirmed
@@ -2201,8 +2207,194 @@ export will let you exclude `interactive`.
 - `oort judge list`, `oort judge predictions` and `oort feedback list` show it on each row
   (`[origin interactive, proposed agent]`), and their `--json` has `origin`, with `reviewer`,
   `upstream` and `proposedOrigin` when set.
-- An export of training data will trust only `interactive`, `dashboard` and `connector` labels
-  by default, and will let you exclude `interactive`.
+- `oort export training` exports only `interactive`, `dashboard` and `connector` labels by
+  default; `--include integration` adds integration labels, `--exclude interactive` leaves out
+  the terminal's, and `agent` labels never leave.
+
+## Training export: `oort export training`
+
+`oort export training` writes the labels people gave in Oort as JSON Lines that a fine-tuning
+job reads. It collects nothing new: it reads the judgments, the resolves of predictions and the
+recall feedback that `oort judge list`, `oort judge predictions` and `oort feedback list` read in
+this directory (the cwd's project and global records), and nothing outside them.
+
+A person runs it, not an agent. While an agent harness runs it (one of the variables in
+[Where a label came from](#where-a-label-came-from) is set, such as `CLAUDECODE`), it refuses and
+writes nothing: run it yourself in your own terminal. `--yes` does not change that, and with
+`--json` the error is `code: "refused"`, `reason: "agent-harness"`.
+
+```sh
+oort export training --kind all --out training/
+oort export training --kind sft --out sft-2026/ --since 2026-01-01 --split time:0.8
+oort export training --kind all --out reviewed/ --exclude interactive --force
+```
+
+- `--kind`: `sft`, `preference`, `retrieval` or `all` (required).
+- `--out <dir>`: the directory to write (required). A directory the export creates is 0700; an
+  existing one keeps its mode (`--out .` never changes the mode of the current directory). Every
+  file is 0600, and nothing is written outside the directory. An existing directory that group or
+  others can write to is refused, because another user could replace the files before you train
+  on them. Someone who can write to the parent of `--out` controls where the export lands, so
+  choose a directory only you can write to. A directory that already holds files of an export
+  (`manifest.json`, `sft.jsonl`, `preference.train.jsonl`, and so on) is refused; with `--force`
+  they are replaced once every new file is complete, and any other file is left alone.
+- `--expert <id>`: only labels by this expert (a judgment's or a resolve's `by`, a feedback row's
+  `by`).
+- `--since <iso>`: only labels made at or after this time: when the expert decided, when the
+  person resolved the prediction, when the feedback was given.
+- `--split time:<fraction>`: writes `<kind>.train.jsonl` and `<kind>.eval.jsonl` instead of
+  `<kind>.jsonl`. Each kind's rows are sorted by that time; the earliest `fraction` go to train
+  and the rest to eval, so every eval row is later than every train row. Rows with the same time
+  never straddle the cut: their group goes to the side that holds most of it (train on a tie).
+  Equal times are ordered by id, so the same store always splits the same way. A retrieval query
+  whose rows would fall on both sides of the cut is left out of both, counted as
+  `straddles-split`, so a positive reused for several negatives never sits in train and eval.
+- `--preference-reasons`: adds the person's reason to `chosen` in preference rows (see
+  `preference.jsonl` below).
+- `--include integration` adds labels that arrived as `integration` (SDK and `oort serve` calls
+  in the expert role, CLI calls without the prompt, imports). `--exclude <origin>...` leaves out
+  origins, mainly `interactive`. `agent` is never exported: `--include agent` is refused.
+- `--json`: `{ dir, manifest }`. In cloud mode the command is refused (`refused`).
+
+### What is left out
+
+Each of these is counted in the manifest, under `excluded.<kind>`, by its reason:
+
+| Reason | What it leaves out |
+| --- | --- |
+| `agent-unconfirmed` | An agent's judgment, resolve or row that no person confirmed. A confirmed one has the confirmer's origin and is exported with `proposedOrigin: "agent"`. |
+| `withdrawn`, `purged` | A withdrawn judgment, or one whose text was purged. |
+| `corrected`, `not-current` | A judgment the same expert later corrected, or one that is not current for another reason. |
+| `imported-from-pack` | A judgment imported from a pack or an export file: it names its expert only as the file states it. |
+| `pending`, `expired` | A prediction nobody resolved yet, or before it expired; feedback an agent gave that waits for a person. |
+| `purged` (preference) | A prediction whose text was purged because a judgment it cites was withdrawn, purged or forgotten. |
+| `agreed`, `no-proposal` | A resolve that chose the proposed verdict, or one for which judging proposed none: there is no preference to learn. |
+| `dismissed` | Feedback a person set aside. |
+| `not-a-retrieval-signal` | `wrong` and `stale` feedback: they say a memory is untrue, not that it was irrelevant. |
+| `helped-without-query` | A `helped` row given without `--query`: there is no query to pair it with. |
+| `memory-forgotten` | Feedback about a memory that is gone, or that this directory does not read; a resolve whose recorded judgment is gone. |
+| `corrected`, `withdrawn`, `purged`, `not-current` (preference) | A resolve whose recorded judgment would be left out of `sft.jsonl`: the expert corrected or withdrew it since. |
+| `contradictory` | `helped` and `irrelevant` feedback on the same memory for the same query: both rows stay out. |
+| `invalid-time` | A label whose time is not an ISO date and time (a store edited by hand). |
+| `straddles-split` | With `--split`, the retrieval rows of a query that would fall on both sides of the cut. |
+| `expert-not-selected`, `before-since`, `origin-not-selected` | Left out by `--expert`, `--since`, or the origins chosen. |
+
+`oort forget` already deletes a forgotten memory's feedback and purges the predictions that cite
+it, and a forgotten judgment is gone with its memory, so an export that starts after a forget
+never holds their text.
+
+### While the store changes
+
+The export does not lock the store, so forgets and new labels go on while it runs. It writes
+every file complete under a temporary name in `--out`, then reads every record behind its rows
+again. When one would now be left out (forgotten, withdrawn or corrected meanwhile) it builds
+the export again from the start, up to 3 times; when the labels still change, it fails with
+`reason: "store-changing"` and writes nothing. Only then are the files renamed into place: the
+earlier manifest is removed first and the new one comes last. If the export fails before the
+renames, the temporary files are removed and an earlier export in `--out` is left as it was. If
+the export fails while renaming, `--out` has no manifest.json; run it again. Temporary files are
+also removed on Ctrl-C (SIGINT) or SIGTERM, and any that an interrupted run left are removed when
+the next export into that directory starts. A forget that finishes in the moment between that check
+and the renames can still be in the files; to be sure, export again after forgetting. An export
+is a copy: forgetting a memory later does not change files already written, so delete those
+yourself.
+
+### Scrubbing
+
+Every text field is cleaned again on the way out: invisible, bidirectional and tag characters
+are dropped, line breaks become `\n`, other control characters are dropped, and then the text is
+scrubbed with the same rules as the write path (a secret becomes `[REDACTED:<kind>]`). That
+covers `domain`, `reviewer` and the manifest's `filters.expert` too. Tabs and line breaks stay,
+so a reason reads as the expert wrote it. Every `at` is written as an ISO time in UTC. Text recorded through Oort was already
+scrubbed; this catches a rule added since, and a store edited by hand. `manifest.scrubbed`
+counts, per kind, the rows whose text changed.
+
+### Format
+
+Every row carries `id` (the judgment, prediction or feedback row it came from), `at` (the
+label's time) and `origin`, with `proposedOrigin` and `reviewer` when they are set. Rows are
+oldest first.
+
+**`sft.jsonl`**: one chat row per judgment a person made. The user message is the item (its
+summary, then `Ref: <ref>` when it has one); the assistant message is the verdict and the
+reason, as the expert gave them. A judgment, as `oort judge list --json` shows it:
+
+```json
+{ "id": "4f1c…", "subject": { "summary": "Post says a vitamin cures the flu" }, "verdict": "rejected",
+  "reason": "A health claim with no cited source.", "domain": "content", "by": "ada",
+  "decidedAt": "2026-10-01T09:00:00.000Z", "origin": "interactive" }
+```
+
+becomes:
+
+```json
+{"messages":[{"role":"user","content":"Post says a vitamin cures the flu"},{"role":"assistant","content":"Verdict: rejected\nReason: A health claim with no cited source."}],"id":"4f1c…","at":"2026-10-01T09:00:00.000Z","domain":"content","origin":"interactive"}
+```
+
+**`preference.jsonl`**: one row per resolved prediction where the person chose another verdict
+than judging proposed. `prompt` is the item (summary, details, `Ref:`), `chosen` is the person's
+verdict and `rejected` is the proposed verdict, both as `Verdict: <verdict>`. A proposal has no
+reason, so a reason on the chosen side only would teach a model to prefer the longer answer
+rather than the right verdict. `--preference-reasons` adds the person's reason to `chosen` when
+they gave one, and the manifest's `notes` then says that `rejected` has none. Where the person
+agreed there is no preference row; a judgment a disagreeing resolve recorded is also in
+`sft.jsonl`, with its reason. A resolved prediction, as `oort judge predictions --json` shows it:
+
+```json
+{ "id": "9a8b…", "item": { "summary": "Post says garlic cures infections" },
+  "domain": "content", "verdict": "approved", "probability": 0.81,
+  "resolution": { "verdict": "rejected", "reason": "Health claim with no source.", "by": "ada",
+    "at": "2026-10-08T09:00:00.000Z", "agrees": false, "origin": "dashboard",
+    "reviewer": "grace@example.com" } }
+```
+
+becomes:
+
+```json
+{"prompt":"Post says garlic cures infections","chosen":"Verdict: rejected","rejected":"Verdict: approved","id":"9a8b…","at":"2026-10-08T09:00:00.000Z","domain":"content","origin":"dashboard","reviewer":"grace@example.com"}
+```
+
+and with `--preference-reasons`, `"chosen":"Verdict: rejected\nReason: Health claim with no source."`.
+
+**`retrieval.jsonl`**: rows of `query`, `positive` and `negative`, each a memory's text. An
+`irrelevant` row is a hard negative for its query; a `helped` row is a positive only when it was
+given with `--query`. Each negative is paired with a positive of the same query (the same text),
+taking the positives in turn; a negative with none has `positive: null`, and a positive left
+over has `negative: null`. `origin`, `proposedOrigin` and `reviewer` are the negative's (the
+positive's when there is no negative); a row with both names the positive's row in `positiveId`
+and its origin in `positiveOrigin` (with `positiveProposedOrigin` and `positiveReviewer` when
+set). Its `at` is the later of the two. Two feedback rows, as `oort feedback list --json` shows
+them:
+
+```json
+{ "id": "71c2…", "memoryId": "1b2c…", "signal": "irrelevant", "query": "auth service port",
+  "origin": "interactive", "createdAt": "2026-10-11T09:00:00.000Z" }
+{ "id": "83d4…", "memoryId": "5e6f…", "signal": "helped", "query": "auth service port",
+  "origin": "interactive", "createdAt": "2026-10-12T09:00:00.000Z" }
+```
+
+become (memory `1b2c…` says the team orders lunch on Fridays, `5e6f…` names the port):
+
+```json
+{"query":"auth service port","positive":"The auth service listens on port 5502 in staging.","negative":"The team orders lunch on Fridays.","id":"71c2…","at":"2026-10-12T09:00:00.000Z","origin":"interactive","positiveId":"83d4…","positiveOrigin":"interactive"}
+```
+
+**`manifest.json`**: `oort` (`"training-export"`), `version` (1), `exportedAt`, `oortVersion`,
+`filters` (`kind`, `kinds`, the `origins` exported, `include`, `exclude`, `expert`, `since`,
+`split`, `preferenceReasons`), `files` (each file's `name`, `kind`, `part`, `rows` and
+`sha256`), `counts` (per kind: `rows` and `origins`, and with a split the same for `train` and
+`eval`), `excluded` (per kind, by reason), `scrubbed` (per kind) and `notes` (sentences about the
+rows; with `--preference-reasons`, that `rejected` has no reason).
+
+### What `origin` proves
+
+`origin` says how a label reached Oort, not who made it (see
+[Where a label came from](#where-a-label-came-from)). `interactive` means someone answered the
+CLI's prompt at a terminal, which an agent on the same machine can do too. `dashboard` and
+`connector` are kept only when a server that authenticates the person or the upstream system
+vouched for them, but code that edits the store can write any origin. `integration` and
+`reviewer` are what your code asserted. A training export carries these fields as stored, so
+choose the origins you trust with `--include` and `--exclude` before you train on them.
 
 ## Keys: `oort keys`
 

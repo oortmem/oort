@@ -504,6 +504,87 @@ export interface LiveAgreement {
   agreement: number | null;
 }
 
+/** A kind of training data: chat rows, preference pairs, or retrieval pairs. */
+export type TrainingKind = 'sft' | 'preference' | 'retrieval';
+
+/** `exportTraining` options (expert role, local mode). */
+export interface ExportTrainingOptions {
+  /** One kind, or `all`. */
+  kind: TrainingKind | 'all';
+  /**
+   * The directory to write, as an absolute path. A new one is made 0700; an existing one keeps
+   * its mode and is refused when other users can write to it. Files are 0600.
+   */
+  out: string;
+  /** Only labels by this expert. */
+  expert?: string;
+  /** Only labels made at or after this time. */
+  since?: string | Date;
+  /** `time:<fraction>`: the earliest share of each kind to `<kind>.train.jsonl`, the rest to eval. */
+  split?: string;
+  /** Origins added to `interactive`, `dashboard` and `connector`: `integration`. Never `agent`. */
+  include?: readonly LabelOrigin[];
+  /** Origins left out, such as `interactive`. */
+  exclude?: readonly LabelOrigin[];
+  /**
+   * Add the person's reason to `chosen` in preference rows. Off by default, so that `chosen` and
+   * `rejected` have the same shape (the proposal has no reason).
+   */
+  preferenceReasons?: boolean;
+  /** Replace the files of an earlier export in `out`. */
+  force?: boolean;
+}
+
+/** One file a training export wrote. */
+export interface TrainingFileView {
+  name: string;
+  kind: TrainingKind;
+  part: 'all' | 'train' | 'eval';
+  rows: number;
+  sha256: string;
+}
+
+/** Rows written for one kind, by origin, and by split part when split. */
+export interface TrainingCountsView {
+  rows: number;
+  origins: Partial<Record<LabelOrigin, number>>;
+  train?: { rows: number; origins: Partial<Record<LabelOrigin, number>> };
+  eval?: { rows: number; origins: Partial<Record<LabelOrigin, number>> };
+}
+
+/** `manifest.json` of a training export (docs/sdk.md, "Training export"). */
+export interface TrainingManifestView {
+  oort: 'training-export';
+  version: number;
+  exportedAt: string;
+  oortVersion: string;
+  filters: {
+    kind: TrainingKind | 'all';
+    kinds: TrainingKind[];
+    origins: LabelOrigin[];
+    include: LabelOrigin[];
+    exclude: LabelOrigin[];
+    expert: string | null;
+    since: string | null;
+    split: { by: 'time'; train: number } | null;
+    preferenceReasons: boolean;
+  };
+  files: TrainingFileView[];
+  counts: Partial<Record<TrainingKind, TrainingCountsView>>;
+  /** Records left out, by kind and reason (`withdrawn`, `agent-unconfirmed`, …). */
+  excluded: Partial<Record<TrainingKind, Record<string, number>>>;
+  /** Rows whose text the export cleaned or redacted, by kind. */
+  scrubbed: Partial<Record<TrainingKind, number>>;
+  /** What a reader should know about the rows: with `preferenceReasons`, that `rejected` has none. */
+  notes: string[];
+}
+
+/** What `exportTraining` wrote: the directory and its manifest. */
+export interface TrainingExportView {
+  dir: string;
+  manifest: TrainingManifestView;
+}
+
 /** Agreement and calibration from resolved predictions. */
 export interface LiveEvalView {
   resolved: number;
@@ -892,6 +973,11 @@ export interface Oort {
   whoami(): Promise<Whoami>;
   /** Local only. */
   consolidate(opts?: { budgetMs?: number; signal?: AbortSignal }): Promise<ConsolidateResult>;
+  /**
+   * Writes the labels people gave (judgments, resolves of predictions, recall feedback) as
+   * fine-tuning JSON Lines in `out`, with a manifest. Expert role only; local only.
+   */
+  exportTraining(opts: ExportTrainingOptions): Promise<TrainingExportView>;
   /**
    * The account's end users (Oort Cloud with server keys, CON-132): erase or export one, or count
    * them.
