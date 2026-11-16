@@ -201,7 +201,7 @@ export async function feedbackCommand(
     const by = operatorOf(w, o.by);
     const label = await askLabel(
       ctx,
-      `Mark memory ${short(m.id)} as ${signal}, by ${shown(by)}?${o.note === undefined ? '' : ` Note: "${shown(clip(o.note, 120))}"`}`,
+      `Mark memory ${short(m.id)} as ${shown(signal)}, by ${shown(by)}?${o.note === undefined ? '' : ` Note: "${shown(clip(o.note, 120))}"`}`,
       o.yes,
     );
     if (label === null) {

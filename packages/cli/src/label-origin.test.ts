@@ -1,7 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import type { DecisionController, Feedback, Judgment, Prediction } from '@oortmem/core';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  AGENT_ENV_MARKERS,
+  type DecisionController,
+  type Feedback,
+  type Judgment,
+  type Prediction,
+} from '@oortmem/core';
 import { inputSchemas } from '@oortmem/mcp';
 import { makeFeedback, TG } from '@oortmem/core/store-conformance';
 import { data, fakeDecide, harness, memory, type Harness } from '../test/helpers.js';
@@ -99,6 +105,22 @@ async function feedback(h: Harness): Promise<(Feedback & { id: string })[]> {
   expect(r.code, r.io.stderr).toBe(0);
   return data<{ feedback: (Feedback & { id: string })[] }>(r.io.stdout).feedback;
 }
+
+// These tests decide the environment themselves: an agent harness running them (its markers in
+// this process's environment) must not change what core records.
+const outer = new Map<string, string | undefined>();
+beforeEach(() => {
+  for (const k of AGENT_ENV_MARKERS) {
+    outer.set(k, process.env[k]);
+    delete process.env[k];
+  }
+});
+afterEach(() => {
+  for (const [k, v] of outer) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
 
 describe('label origin: oort judge', () => {
   it('cli.origin-judge-record-is-interactive-only-when-a-person-answers', async () => {
@@ -282,6 +304,31 @@ describe('label origin: oort judge', () => {
       origin: 'integration',
     });
     expect(await bySubject(h, 'Typed at a terminal')).toMatchObject({ origin: 'interactive' });
+  });
+});
+
+describe('label origin: what the question shows', () => {
+  it('cli.origin-question-shows-no-escape-sequences', async () => {
+    const h = judging();
+    const r = await h.run(record('Post \u001b[2J\u001b]52;c;eA==\u0007says hi'), TERMINAL);
+    expect(r.io.asked).toHaveLength(1);
+    expect(r.io.asked[0]).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
+    expect(r.io.asked[0]).toContain('\\u{1b}');
+    // A signal is checked before anything is asked.
+    await h.store.upsert(TG, memory({ id: MEMORY, text: 'The auth service listens on 5501.' }));
+    const bad = await h.run(['feedback', MEMORY, '\u001b[2Jwrong'], TERMINAL);
+    expect(bad.code).not.toBe(0);
+    expect(bad.io.asked).toEqual([]);
+  });
+
+  it('cli.origin-core-checks-the-process-environment-too', async () => {
+    // The process runs under an agent harness even though the command's own view of the
+    // environment does not show it: core still records `integration`.
+    const h = judging();
+    process.env['CLAUDECODE'] = '1';
+    const r = await h.run(record('Asked, but under a harness'), TERMINAL);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect((await bySubject(h, 'Asked, but under a harness'))?.origin).toBe('integration');
   });
 });
 

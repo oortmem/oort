@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { JudgeChoice, JudgeRequest } from './adapters.js';
 import {
   confirmFeedback,
@@ -79,6 +79,22 @@ async function withPrediction() {
   );
   return { store, id: r.predictionId! };
 }
+
+// These tests decide the environment themselves: an agent harness running them (its markers in
+// this process's environment) must not change what core records.
+const outer = new Map<string, string | undefined>();
+beforeEach(() => {
+  for (const k of AGENT_ENV_MARKERS) {
+    outer.set(k, process.env[k]);
+    delete process.env[k];
+  }
+});
+afterEach(() => {
+  for (const [k, v] of outer) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
 
 describe('label origin', () => {
   it('label.of-checks-the-source-and-never-trusts-an-agent', () => {
@@ -181,6 +197,35 @@ describe('label origin', () => {
     expect(labelOrigin({ origin: '\u001b]52;c;x\u0007' as never })).toBe('integration');
     expect(proposedOriginOf({ proposedOrigin: 'robot' as never })).toBeUndefined();
     expect(proposedOriginOf({ proposedOrigin: 'agent' })).toBe('agent');
+  });
+
+  it('label.interactive-is-integration-under-an-agent-harness', async () => {
+    // The same check the CLI makes, for code that calls the library directly.
+    expect(labelOf({ origin: 'interactive' }, false, {})).toEqual({ origin: 'interactive' });
+    expect(labelOf({ origin: 'interactive' }, false, { CLAUDECODE: '1' })).toEqual({
+      origin: 'integration',
+    });
+    expect(
+      labelOf({ origin: 'interactive', reviewer: 'grace' }, false, { CURSOR_AGENT: '1' }),
+    ).toEqual({ origin: 'integration', reviewer: 'grace' });
+    // By default, this process's environment.
+    process.env['GEMINI_CLI'] = '1';
+    const store = createMemoryStore({ now: () => NOW });
+    const deps = { store, grant: GRANT, scope: SCOPE, now: NOW };
+    const typed = await recordJudgment(ada({ ref: 'a' }), {
+      ...deps,
+      via: 'cli',
+      label: { origin: 'interactive' },
+    });
+    expect(typed.memory.judgment?.origin).toBe('integration');
+    const agent = await recordJudgment(ada({ ref: 'b' }), { ...deps, via: 'mcp' });
+    await confirmJudgment(store, GRANT, agent.memory, 'ada', NOW, { origin: 'interactive' });
+    expect((await store.get(GRANT, agent.memory.id))?.judgment).toMatchObject({
+      origin: 'integration',
+      proposedOrigin: 'agent',
+    });
+    delete process.env['GEMINI_CLI'];
+    expect(labelOf({ origin: 'interactive' }, false)).toEqual({ origin: 'interactive' });
   });
 
   it('label.agent-env-markers', () => {

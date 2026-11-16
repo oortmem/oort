@@ -1345,8 +1345,8 @@ console.log(shown(draft.id)); // integration grace@example.com agent
 
 | Origin | How the label arrived |
 | --- | --- |
-| `interactive` | A person answered the CLI's confirmation prompt for this label at a terminal, unless something on that machine drove the terminal for them. Never from the SDK. |
-| `dashboard` | The Oort Cloud dashboard. The SDK, `oort serve` and MCP never record it, and `@oortmem/core` records `integration` for any other caller that asks for it. |
+| `interactive` | A person answered the CLI's confirmation prompt for this label at a terminal, unless something on that machine drove the terminal for them. Never from the SDK. Code that calls the core library (`@oortmem/core`) directly can also record it, outside an agent harness; the CLI's question is the only path Oort itself offers. |
+| `dashboard` | The Oort Cloud dashboard. The public API cannot set it: asking for it records `integration`. Code that edits the store or loads Oort's internal files can write anything, just as it could edit the database. |
 | `connector` | An upstream connector, with `upstream` naming the system and who made the label there. Kept only as `dashboard` is. |
 | `integration` | An expert-role handle, here or over `oort serve`, and every CLI call that does not record `interactive`. |
 | `agent` | An agent-role handle (the default), here or over `oort serve`, and the MCP tools. |

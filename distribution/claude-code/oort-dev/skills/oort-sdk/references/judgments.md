@@ -155,13 +155,13 @@ console.log(live.resolved, live.bands.length);
 Each judgment, prediction resolution and feedback row records an `origin`: how the label
 arrived. It is not proof that a person made it.
 
-| Origin        | Recorded when                                                                                |
-| ------------- | -------------------------------------------------------------------------------------------- |
-| `interactive` | A person answered the CLI's prompt for this label on the controlling terminal                |
-| `dashboard`   | Reserved for the Oort Cloud dashboard; any other caller that asks for it gets `integration`  |
-| `connector`   | Reserved for upstream connectors (`upstream: { system, actor }`), kept only as `dashboard`   |
-| `integration` | An expert-role handle, `oort serve`, or a CLI call that is piped or uses `--yes` or `--json` |
-| `agent`       | MCP or an agent-role handle                                                                  |
+| Origin        | Recorded when                                                                                                                                                                                                             |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interactive` | A person answered the CLI's prompt for this label on the controlling terminal. Code calling `@oortmem/core` directly can also record it, outside an agent harness; the CLI's question is the only path Oort itself offers |
+| `dashboard`   | Reserved for the Oort Cloud dashboard. The public API cannot set it (it records `integration`); code that edits the store or loads Oort's internal files can write anything, as it could edit the database                |
+| `connector`   | Reserved for upstream connectors (`upstream: { system, actor }`), kept only as `dashboard`                                                                                                                                |
+| `integration` | An expert-role handle, `oort serve`, or a CLI call that is piped or uses `--yes` or `--json`                                                                                                                              |
+| `agent`       | MCP or an agent-role handle                                                                                                                                                                                               |
 
 <!-- example: examples/src/label-origin.ts -->
 

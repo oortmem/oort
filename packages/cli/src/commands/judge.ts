@@ -181,6 +181,12 @@ function mayAskForLabel(ctx: Ctx, yes: boolean | undefined): boolean {
 const said = (answer: string): boolean => ['y', 'yes'].includes(answer.trim().toLowerCase());
 
 /**
+ * A question as the terminal shows it: every control, escape and invisible character escaped
+ * (`shown`), its own line breaks kept, so no value in it can rewrite what the person reads.
+ */
+const asked = (question: string): string => `${shown(question, { newlines: true })} [y/N] `;
+
+/**
  * The label a command that did not ask before records: when it may ask (`mayAskForLabel`), it
  * asks `question` (which names the label) on the controlling terminal, never stdin. `interactive`
  * when the person said yes; null when they said no, and nothing is written. Otherwise, without
@@ -193,7 +199,7 @@ export async function askLabel(
   yes?: boolean,
 ): Promise<LabelSource | null> {
   if (!mayAskForLabel(ctx, yes)) return { origin: 'integration' };
-  const answer = await ctx.io.askTerminal!(`${question} [y/N] `);
+  const answer = await ctx.io.askTerminal!(asked(question));
   if (answer === undefined) return { origin: 'integration' };
   return said(answer) ? { origin: 'interactive' } : null;
 }
@@ -211,10 +217,12 @@ export async function confirmLabel(
   flagHint: string,
 ): Promise<LabelSource | null> {
   if (mayAskForLabel(ctx, yes)) {
-    const answer = await ctx.io.askTerminal!(`${question} [y/N] `);
+    const answer = await ctx.io.askTerminal!(asked(question));
     if (answer !== undefined) return said(answer) ? { origin: 'interactive' } : null;
   }
-  const ok = await confirm(ctx.io, question, yes === true, flagHint, { json: jsonMode(ctx) });
+  const ok = await confirm(ctx.io, shown(question, { newlines: true }), yes === true, flagHint, {
+    json: jsonMode(ctx),
+  });
   return ok ? { origin: 'integration' } : null;
 }
 

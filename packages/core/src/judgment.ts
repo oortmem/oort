@@ -95,11 +95,13 @@ export interface ClaimedPackOrigin {
  * change memory is decided as before (`via`, and the caller's role).
  * - `interactive`: the CLI, when a person answered a confirmation prompt for this label on the
  *   controlling terminal (stdin and stdout terminals, no `--yes` or `--json`, and none of
- *   `AGENT_ENV_MARKERS` set);
- * - `dashboard`: the cloud dashboard. Kept only for a source vouched for by a server that
- *   authenticates the person; any other caller gets `integration`;
- * - `connector`: an upstream connector, with `upstream` naming the system and its actor. Kept
- *   only for a vouched-for source, as `dashboard`;
+ *   `AGENT_ENV_MARKERS` set). Code that calls this library directly can also record it, outside
+ *   an agent harness; the CLI's question is the only path Oort itself offers;
+ * - `dashboard`: the cloud dashboard. The public API cannot set it: asking for it records
+ *   `integration`. Code that edits the store or loads Oort's internal files can write anything,
+ *   as it could edit the database;
+ * - `connector`: an upstream connector, with `upstream` naming the system and its actor. As
+ *   `dashboard`;
  * - `integration`: SDK or `oort serve` calls in expert role, and CLI calls that are not
  *   interactive. `reviewer` is who the integration says reviewed the label (its claim);
  * - `agent`: MCP, or an SDK or `oort serve` handle in agent role. Always `agent` for a label an
@@ -222,12 +224,14 @@ function labelLine(field: string, v: unknown): string {
  * and at most `LABEL_LIMITS.text` characters (no tabs, separators or invisible characters,
  * scrubbed), and `upstream` only with `connector`. `dashboard` and `connector` are kept only for a
  * source vouched for by a server that authenticates the caller; any other source asking for
- * either records `integration` (its reviewer kept, its upstream dropped). Without `source`,
- * `integration`.
+ * either records `integration` (its reviewer kept, its upstream dropped). `interactive` records
+ * `integration` while one of `AGENT_ENV_MARKERS` is set in `env` (the process's, by default), as
+ * the CLI's own check does. Without `source`, `integration`.
  */
 export function labelOf(
   source: LabelSource | undefined,
   agent: boolean,
+  env: Record<string, string | undefined> = process.env,
 ): LabelProvenance & { origin: LabelOrigin } {
   if (agent) return { origin: 'agent' };
   if (source === undefined) return { origin: 'integration' };
@@ -239,7 +243,8 @@ export function labelOf(
   }
   const vouched = isTrustedLabel(source);
   const origin: LabelOrigin =
-    (source.origin === 'dashboard' || source.origin === 'connector') && !vouched
+    ((source.origin === 'dashboard' || source.origin === 'connector') && !vouched) ||
+    (source.origin === 'interactive' && agentEnvMarker(env) !== undefined)
       ? 'integration'
       : source.origin;
   const line = labelLine;

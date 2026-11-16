@@ -4,7 +4,9 @@ import type { LabelSource } from './judgment.js';
  * The `dashboard` and `connector` origins, kept only for a label source vouched for here. This
  * module is not exported from the package entry points: a server that authenticates the person
  * (the Oort Cloud dashboard) or the upstream system (a connector) imports it from inside the
- * repository. Any other caller that asks for either origin records `integration` (`labelOf`).
+ * repository. Through the public API, asking for either origin records `integration`
+ * (`labelOf`). It is not a security boundary: code that loads this file by its path, or edits
+ * the store, can write any origin, as it could edit the database.
  */
 const vouched = new WeakSet<object>();
 

@@ -2147,8 +2147,8 @@ Oort. It is how a label arrived, not proof that a person made it.
 
 | Origin | How the label arrived |
 | --- | --- |
-| `interactive` | A person answered a confirmation prompt for this label at a terminal, unless something on that machine drove the terminal for them. See below. |
-| `dashboard` | The Oort Cloud dashboard. The CLI, the SDK, `oort serve` and MCP never record it, and neither does `@oortmem/core` for any other caller: asking for it records `integration`. |
+| `interactive` | A person answered a confirmation prompt for this label at a terminal, unless something on that machine drove the terminal for them. See below. Code that calls the core library (`@oortmem/core`) directly can also record it, outside an agent harness; the CLI's question is the only path Oort itself offers. |
+| `dashboard` | The Oort Cloud dashboard. The public API cannot set it: asking for it records `integration`. Code that edits the store or loads Oort's internal files can write anything, just as it could edit the database. |
 | `connector` | An upstream connector, with `upstream` naming the system and who made the label there. Kept only as `dashboard` is. |
 | `integration` | Code: the SDK or `oort serve` in the expert role, and every CLI call that does not record `interactive`. The SDK may pass a `reviewer`, which is kept as the integration states it. |
 | `agent` | An agent: the MCP tools, or an SDK or `oort serve` handle in the agent role. |
