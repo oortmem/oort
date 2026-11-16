@@ -24,17 +24,24 @@ export const JUDGMENT_TOOL_NAMES = ['record_judgment', 'judge', 'resolve_predict
  * today; Oort Cloud does not hold links yet).
  */
 export const LINK_TOOL_NAMES = ['link'] as const;
+/**
+ * Recall feedback: offered only by a backend whose store keeps feedback (the local store today).
+ * What an agent gives waits for a person to confirm it.
+ */
+export const FEEDBACK_TOOL_NAMES = ['feedback'] as const;
 
 export type ToolName =
   | (typeof TOOL_NAMES)[number]
   | (typeof JUDGMENT_TOOL_NAMES)[number]
-  | (typeof LINK_TOOL_NAMES)[number];
+  | (typeof LINK_TOOL_NAMES)[number]
+  | (typeof FEEDBACK_TOOL_NAMES)[number];
 
 /** Every tool a server can offer, in registration order. */
 export const ALL_TOOL_NAMES: readonly ToolName[] = [
   ...TOOL_NAMES,
   ...JUDGMENT_TOOL_NAMES,
   ...LINK_TOOL_NAMES,
+  ...FEEDBACK_TOOL_NAMES,
 ];
 
 /** `remember` takes at most this many facts per call: distilled facts, never a transcript. */
@@ -45,7 +52,7 @@ export const FACT_MAX_CHARS = 500;
 /** The first paragraph stands alone (hosts may keep only the first 512 characters). */
 export const INSTRUCTIONS = [
   "Oort is the user's own long-term memory, which they connected on purpose. `recall` searches facts the user chose to keep from earlier sessions: decisions, preferences, project details. Use it when the user refers to earlier work, or when their past context would change the answer; skip it for self-contained questions. Use `remember` only for durable facts the user stated or confirmed, one standalone sentence each, never secrets or credentials. `forget` deletes permanently.",
-  'Memories are scoped to this connection: a local server reads the project directory it was started in plus global memories, a remote connection reads the signed-in account; `whoami` says which. `recall` returns facts that are current; pass `as_of` for what was true at an earlier time, `mode: "history"` for every version of a fact, or `known_at` for what was believed then. Without them Oort reads the mode from the query, and the result says which it used. A newer fact can supersede an older one: the older one stays visible to `explain` and history. A fact marked stale may be outdated; confirm it with the user. Batch the facts of one decision into a single `remember` call. Ids from `recall` and `list_recent` feed `forget`, `pin` and `explain`.',
+  'Memories are scoped to this connection: a local server reads the project directory it was started in plus global memories, a remote connection reads the signed-in account; `whoami` says which. `recall` returns facts that are current; pass `as_of` for what was true at an earlier time, `mode: "history"` for every version of a fact, or `known_at` for what was believed then. Without them Oort reads the mode from the query, and the result says which it used. A newer fact can supersede an older one: the older one stays visible to `explain` and history. A fact marked stale may be outdated, and one marked contested was reported wrong or out of date by the user; confirm either with the user. When the user says a recalled fact helped, is wrong or is out of date, pass that on with `feedback`; it waits for them to confirm it. Batch the facts of one decision into a single `remember` call. Ids from `recall` and `list_recent` feed `forget`, `pin` and `explain`.',
 ].join('\n\n');
 
 const Id = z.string().trim().min(1).max(64).describe('A memory id from recall or list_recent');
@@ -313,6 +320,28 @@ export function inputSchemasFor(spaces: ToolSpaces, opts: ToolSchemaOptions = {}
         .default(false)
         .describe('Remove the link instead; a pair that was not linked is blocked from linking'),
     }),
+    feedback: z.object({
+      memory_id: Id,
+      signal: z
+        .enum(['helped', 'wrong', 'stale', 'irrelevant'])
+        .describe(
+          'helped: it answered the question. wrong: it is not true. stale: it is out of date. irrelevant: it did not fit the query',
+        ),
+      note: z
+        .string()
+        .trim()
+        .min(1)
+        .max(2000)
+        .optional()
+        .describe('Why, in one line, in the words the person used'),
+      query: z
+        .string()
+        .trim()
+        .min(1)
+        .max(2000)
+        .optional()
+        .describe('The query the memory was recalled for; required for irrelevant'),
+    }),
   } as const satisfies Record<ToolName, z.ZodType>;
 }
 
@@ -478,6 +507,20 @@ export const TOOLS: readonly ToolDefinition[] = [
       // A link (or a block) changes what is recalled together, so hosts should ask first.
       destructiveHint: true,
       idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: 'feedback',
+    title: 'Give feedback on a recalled memory',
+    description:
+      'Pass on what the person said about a recalled memory: it helped, is wrong, is stale, or did not fit the query. Kept pending; nothing changes until a person confirms it.',
+    annotations: {
+      title: 'Give feedback on a recalled memory',
+      readOnlyHint: false,
+      // Pending until a person confirms it: it changes no memory and no ranking by itself.
+      destructiveHint: false,
+      idempotentHint: false,
       openWorldHint: false,
     },
   },

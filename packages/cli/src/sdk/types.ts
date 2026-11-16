@@ -180,6 +180,18 @@ export interface RecalledMemory extends MemoryView {
   /** The fused score, comparable only within one result. */
   score: number;
   stale?: true;
+  /**
+   * A person said it is wrong or out of date (open `wrong` or `stale` feedback, local mode): the
+   * newest such feedback, its signal and scrubbed note. It ranks as before.
+   */
+  contested?: {
+    feedbackId: string;
+    signal: 'wrong' | 'stale';
+    note?: string;
+    /** Who gave it, and when (or when a person confirmed it). */
+    by: string;
+    at: string;
+  };
   /** @experimental Diagnostic; may change in a minor release. */
   why: {
     lexicalRank?: number;
@@ -626,6 +638,98 @@ export interface OortJudge {
   evalLive(opts?: { domain?: string; includeAgentResolved?: boolean }): Promise<LiveEvalView>;
 }
 
+/** What a person says about a recalled memory. */
+export type FeedbackSignal = 'helped' | 'wrong' | 'stale' | 'irrelevant';
+
+/**
+ * Where feedback stands: `pending` (an agent's, waiting for a person), `recorded` (a `helped` or
+ * an `irrelevant`), `open` (a `wrong` or `stale` correction recall labels), or closed by a person:
+ * `retired`, `superseded` or `dismissed`.
+ */
+export type FeedbackStatus =
+  'pending' | 'recorded' | 'open' | 'retired' | 'superseded' | 'dismissed';
+
+export interface FeedbackInput {
+  /** The recalled memory's id (a person may give a unique prefix of 8 or more characters). */
+  memoryId: string;
+  signal: FeedbackSignal;
+  /** Why, in a few words: scrubbed, kept on one line, at most 500 characters. */
+  note?: string;
+  /** The query the memory was recalled for. Required for `irrelevant`. */
+  query?: string;
+}
+
+export interface FeedbackView {
+  id: string;
+  memoryId: string;
+  signal: FeedbackSignal;
+  status: FeedbackStatus;
+  note?: string;
+  query?: string;
+  by: string;
+  /** Given by an agent (MCP, or an SDK handle in agent role). */
+  agentRecorded: boolean;
+  /** `helped`: whether its accesses were added. */
+  applied?: boolean;
+  /** `helped`: why they were not (`already-helped-today`, or `disabled` by config). */
+  reason?: 'already-helped-today' | 'disabled';
+  createdAt: string;
+  confirmed?: { at: string; by: string };
+  resolved?: { at: string; by: string; supersededBy?: string };
+}
+
+export type FeedbackResultView =
+  | {
+      kept: true;
+      feedback: FeedbackView;
+      applied?: boolean;
+      reason?: 'already-helped-today' | 'disabled';
+    }
+  /** An agent already keeps 5,000 pending feedback rows here: nothing was kept. */
+  | { kept: false; reason: 'pending-cap' };
+
+export interface FeedbackRetireView {
+  feedback: FeedbackView;
+  memoryId: string;
+  /** `corrected` for wrong (it never held), `expired` for stale (it held until now). */
+  endReason: 'corrected' | 'expired';
+}
+
+export interface FeedbackSupersedeView {
+  feedback: FeedbackView;
+  /** The new memory, holding the right fact. */
+  memoryId: string;
+  /** The old memory, now ended `superseded`. */
+  supersedes: string;
+  /** Secret kinds redacted from the fact before it was stored. */
+  redacted: string[];
+}
+
+/**
+ * Recall feedback (local mode). Call it to give feedback on a recalled memory: in expert role it
+ * counts at once (`helped` adds accesses, `wrong` and `stale` label the memory contested in
+ * recall); in agent role (the default) it is pending until a person confirms it. The other
+ * methods are for a person: expert role only, except `list`.
+ */
+export interface OortFeedback {
+  (input: FeedbackInput): Promise<FeedbackResultView>;
+  /** Newest first, at most `limit` (default 100). */
+  list(opts?: {
+    status?: FeedbackStatus;
+    memoryId?: string;
+    signal?: FeedbackSignal;
+    limit?: number;
+  }): Promise<{ feedback: FeedbackView[] }>;
+  /** Confirms an agent's pending feedback: from then on it counts, once. */
+  confirm(id: string): Promise<FeedbackView>;
+  /** Ends the memory a wrong or stale feedback names, now. */
+  retire(id: string): Promise<FeedbackRetireView>;
+  /** Stores the right fact in place of the memory a wrong or stale feedback names. */
+  supersede(id: string, fact: string): Promise<FeedbackSupersedeView>;
+  /** Sets feedback aside: the memory is not changed, and recall stops labelling it. */
+  dismiss(id: string): Promise<FeedbackView>;
+}
+
 /** How many end users the account has, and how many its plan includes. */
 export interface EndUserCount {
   endUsers: number;
@@ -683,6 +787,8 @@ export interface OortEndUsers {
 export interface Oort {
   readonly mode: 'local' | 'cloud';
   readonly judge: OortJudge;
+  /** Recall feedback: `oort.feedback({ memoryId, signal })`, and a person's `list`, `confirm`, … */
+  readonly feedback: OortFeedback;
   recall(query: string, opts?: RecallOptions): Promise<RecallResult>;
   observe(turn: Turn, opts?: { signal?: AbortSignal }): Promise<ObserveResult>;
   remember(

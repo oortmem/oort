@@ -18,6 +18,8 @@ export const LIMITS = Object.freeze({
   recentLimit: 100,
   idMinPrefix: 8,
   idMax: 128,
+  /** Raw `note` and `query` of feedback, before it is scrubbed and clipped to 500. */
+  feedbackText: 8192,
 });
 
 /** Checks `v` against `schema`; a failure names the fields only. */
@@ -212,6 +214,33 @@ export const PredictionListSchema = z.strictObject({
   limit: z.number().int().min(1).max(1000).optional(),
   domain: z.string().optional(),
 });
+
+const FEEDBACK_SIGNALS = ['helped', 'wrong', 'stale', 'irrelevant'] as const;
+const FEEDBACK_STATUSES = [
+  'pending',
+  'recorded',
+  'open',
+  'retired',
+  'superseded',
+  'dismissed',
+] as const;
+
+export const FeedbackInputSchema = z.strictObject({
+  memoryId: IdSchema,
+  signal: z.enum(FEEDBACK_SIGNALS),
+  // Kept to 500 characters on one line after scrubbing; longer input is clipped, not refused.
+  note: z.string().max(LIMITS.feedbackText).optional(),
+  query: z.string().max(LIMITS.feedbackText).optional(),
+});
+
+export const FeedbackListSchema = z.strictObject({
+  status: z.enum(FEEDBACK_STATUSES).optional(),
+  memoryId: IdSchema.optional(),
+  signal: z.enum(FEEDBACK_SIGNALS).optional(),
+  limit: z.number().int().min(1).max(1000).optional(),
+});
+
+export const FactSchema = z.string().min(1).max(LIMITS.factChars);
 
 export const LiveEvalSchema = z.strictObject({
   domain: z.string().optional(),

@@ -70,6 +70,12 @@ const CONTRACT = [
   'judge resolve',
   'judge predictions',
   'judge forget-prediction',
+  'feedback give',
+  'feedback list',
+  'feedback confirm',
+  'feedback retire',
+  'feedback supersede',
+  'feedback dismiss',
   'judge import',
   'judge eval',
   'judge pack export',
@@ -751,6 +757,50 @@ describe('oort.v1: judgment memory', () => {
       id,
       purged: true,
     });
+  });
+
+  it('feedback give, list, confirm, retire, supersede, dismiss', async () => {
+    const { h, run } = local();
+    const [a, b, c] = [memory(), memory(), memory()];
+    for (const m of [a, b, c]) await h.store.upsert(TG, m);
+    const given = ok(await run(['feedback', a.id, 'wrong', '--json']), 'feedback give');
+    const fa = (given.feedback as { id: string }).id;
+    expect(given.feedback).toMatchObject({ memoryId: a.id, signal: 'wrong', status: 'open' });
+    bad(await run(['feedback', a.id, 'meh', '--json']), 'feedback give', 'usage');
+    const listed = ok(await run(['feedback', 'list', '--json']), 'feedback list');
+    expect((listed.feedback as { id: string }[]).map((f) => f.id)).toEqual([fa]);
+    bad(await run(['feedback', 'list', '--limit', 'many', '--json']), 'feedback list', 'usage');
+    // A person's feedback has nothing to confirm.
+    bad(await run(['feedback', 'confirm', fa, '--yes', '--json']), 'feedback confirm', 'refused');
+    bad(await run(['feedback', 'retire', fa, '--json']), 'feedback retire', 'needs-confirmation');
+    expect(
+      ok(await run(['feedback', 'retire', fa, '--yes', '--json']), 'feedback retire'),
+    ).toMatchObject({ memoryId: a.id, endReason: 'corrected' });
+    const fb = (
+      ok(await run(['feedback', b.id, 'stale', '--json']), 'feedback give').feedback as {
+        id: string;
+      }
+    ).id;
+    bad(
+      await run(['feedback', 'supersede', 'ffffffff', 'x', '--yes', '--json']),
+      'feedback supersede',
+      'not-found',
+    );
+    expect(
+      ok(
+        await run(['feedback', 'supersede', fb, 'The new fact.', '--yes', '--json']),
+        'feedback supersede',
+      ),
+    ).toMatchObject({ supersedes: b.id });
+    const fc = (
+      ok(await run(['feedback', c.id, 'wrong', '--json']), 'feedback give').feedback as {
+        id: string;
+      }
+    ).id;
+    expect(
+      ok(await run(['feedback', 'dismiss', fc, '--yes', '--json']), 'feedback dismiss').feedback,
+    ).toMatchObject({ status: 'dismissed' });
+    bad(await run(['feedback', 'dismiss', fc, '--yes', '--json']), 'feedback dismiss', 'refused');
   });
 
   it('predictions, resolve, forget-prediction', async () => {

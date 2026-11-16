@@ -302,6 +302,22 @@ export function toOortError(e: unknown): OortError {
       retryable: true,
     });
   }
+  if (err.name === 'FeedbackError') {
+    const kind = (err as Error & { kind?: string }).kind;
+    if (kind === 'invalid') return new OortUsageError(err.message, { reason: 'invalid-argument' });
+    if (kind === 'not-found' || kind === 'memory-not-found') {
+      return new OortNotFoundError(err.message, { reason: kind });
+    }
+    if (kind === 'ambiguous') return new OortAmbiguousIdError(err.message);
+    return new OortRefusedError(err.message, {
+      reason: kind === 'unsupported' ? 'feedback-unsupported' : (kind ?? 'refused'),
+      ...(kind === 'conflict' && { retryable: true }),
+    });
+  }
+  if (err.name === 'FeedbackPurgeError') {
+    // The memory was left as it was; the same forget removes its feedback again.
+    return new OortInternalError(err.message, { reason: 'feedback-not-purged', retryable: true });
+  }
   if (err.name === 'JudgmentInputError' || err.name === 'ExportFormatError') {
     return new OortUsageError(err.message, { reason: 'invalid-argument' });
   }

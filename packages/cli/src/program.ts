@@ -52,6 +52,15 @@ import {
   type JudgeRecordOptions,
 } from './commands/judge.js';
 import {
+  feedbackCommand,
+  feedbackConfirmCommand,
+  feedbackDismissCommand,
+  feedbackListCommand,
+  feedbackRetireCommand,
+  feedbackSupersedeCommand,
+  type FeedbackGiveOptions,
+} from './commands/feedback.js';
+import {
   keysCreateCommand,
   keysListCommand,
   keysRmCommand,
@@ -628,6 +637,90 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
       ),
     );
 
+  const feedback = p
+    .command('feedback')
+    .description(
+      'say a recalled memory helped, is wrong, is stale or did not fit the query: oort feedback <memoryId> <signal>',
+    );
+  // `oort feedback <memoryId> <signal>` runs `give`: the parent takes no options of its own, so
+  // `--json` and `--by` reach the subcommand they follow.
+  feedback
+    .command('give', { isDefault: true })
+    .description('give feedback on a memory (the default: `oort feedback <memoryId> <signal>`)')
+    .argument('<memoryId>', 'memory id or unique prefix')
+    .argument('<signal>', 'helped, wrong, stale or irrelevant')
+    .option('--note <text>', 'why, in one line (for wrong and stale, what is right)')
+    .option('--query <text>', 'the query the memory was recalled for (required for irrelevant)')
+    .option('--by <person>', 'who gives it (default: judge.operator, else local-user)')
+    .option('--json', 'print oort.v1 JSON')
+    .action(
+      run((memoryId: string, signal: string, o: FeedbackGiveOptions) =>
+        feedbackCommand(memoryId, signal, o, ctx),
+      ),
+    );
+  feedback
+    .command('list')
+    .description('feedback kept in this scope, newest first (--status open for open corrections)')
+    .option('--status <status>', 'all, pending, recorded, open, retired, superseded or dismissed')
+    .option('--memory <id>', 'only feedback on this memory')
+    .option('--signal <signal>', 'only this signal')
+    .option('--limit <n>', 'at most this many (default 100)')
+    .option('--json', 'print JSON')
+    .action(
+      run(
+        (o: {
+          status?: string;
+          memory?: string;
+          signal?: string;
+          limit?: string;
+          json?: boolean;
+        }) => feedbackListCommand(o, ctx),
+      ),
+    );
+  feedback
+    .command('confirm')
+    .description("confirm an agent's pending feedback so it counts (never over MCP)")
+    .argument('<id>', 'feedback id or unique prefix')
+    .option('--by <person>', 'who confirms it (default: judge.operator, else local-user)')
+    .option('--yes', 'do not ask')
+    .option('--json', 'print oort.v1 JSON')
+    .action(
+      run((id: string, o: { yes?: boolean; by?: string }) => feedbackConfirmCommand(id, o, ctx)),
+    );
+  feedback
+    .command('retire')
+    .description('end the memory a wrong or stale feedback names (corrected or expired)')
+    .argument('<id>', 'feedback id or unique prefix')
+    .option('--by <person>', 'who retires it (default: judge.operator, else local-user)')
+    .option('--yes', 'do not ask')
+    .option('--json', 'print oort.v1 JSON')
+    .action(
+      run((id: string, o: { yes?: boolean; by?: string }) => feedbackRetireCommand(id, o, ctx)),
+    );
+  feedback
+    .command('supersede')
+    .description('store the right fact; the memory a wrong or stale feedback names ends superseded')
+    .argument('<id>', 'feedback id or unique prefix')
+    .argument('<fact>', 'the right fact, in one line')
+    .option('--by <person>', 'who supersedes it (default: judge.operator, else local-user)')
+    .option('--yes', 'do not ask')
+    .option('--json', 'print oort.v1 JSON')
+    .action(
+      run((id: string, fact: string, o: { yes?: boolean; by?: string }) =>
+        feedbackSupersedeCommand(id, fact, o, ctx),
+      ),
+    );
+  feedback
+    .command('dismiss')
+    .description('close a feedback and keep the memory as it is; recall stops labelling it')
+    .argument('<id>', 'feedback id or unique prefix')
+    .option('--by <person>', 'who dismisses it (default: judge.operator, else local-user)')
+    .option('--yes', 'do not ask')
+    .option('--json', 'print oort.v1 JSON')
+    .action(
+      run((id: string, o: { yes?: boolean; by?: string }) => feedbackDismissCommand(id, o, ctx)),
+    );
+
   p.command('share')
     .description('Oort Cloud: share a copy of a memory with a Constellation (shows it first)')
     .argument('<id>', 'memory id or unique prefix')
@@ -1177,6 +1270,7 @@ export const HELP_GROUPS: readonly (readonly [string, readonly string[]])[] = [
       'import',
       'export',
       'judge',
+      'feedback',
     ],
   ],
   ['Agents:', ['connect', 'disconnect', 'install', 'uninstall', 'mcp', 'hook', 'serve']],

@@ -7,8 +7,11 @@ import {
 } from '@oortmem/mcp';
 import { filterFor } from '@oortmem/claude-code';
 import {
+  FeedbackError,
   JudgmentInputError,
   PredictionError,
+  recordFeedback,
+  type FeedbackSignal,
   getPrediction,
   resolvePrediction,
   resolveRecordsJudgment,
@@ -208,8 +211,55 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
   const spatial = w.mode !== 'cloud';
   // Links live in the local store only (CON-148): Oort Cloud holds none until CON-153.
   const links = w.mode !== 'cloud' && w.store.links === true;
+  // Recall feedback lives in the local store only.
+  const feedback = w.mode !== 'cloud' && w.store.feedback === true;
   return {
     ...(spatial && { spatial: true as const }),
+    ...(feedback && {
+      /**
+       * Kept pending, by this agent: it changes no ranking and no label until a person confirms
+       * it at a terminal. The whole memory id, never a prefix.
+       */
+      async feedback(i: {
+        memory_id: string;
+        signal: FeedbackSignal;
+        note?: string;
+        query?: string;
+      }) {
+        const r = await asToolError(() =>
+          recordFeedback(
+            {
+              memoryId: i.memory_id,
+              signal: i.signal,
+              by: w.agent.id,
+              ...(i.note !== undefined && { note: i.note }),
+              ...(i.query !== undefined && { query: i.query }),
+            },
+            {
+              store: w.store,
+              grant: writeGrant(w),
+              scope: w.scope,
+              via: 'mcp',
+              helpedAccesses: w.config.feedback.helpedAccesses,
+              now: now(),
+            },
+          ),
+        );
+        if (!r.kept) {
+          throw new MemoryToolError(
+            'Too much feedback from this agent is waiting for a person; nothing was saved. Ask the person to review it with `oort feedback list --status pending`.',
+          );
+        }
+        const short = r.feedback.id.slice(0, 8);
+        return {
+          feedback_id: r.feedback.id,
+          memory_id: r.feedback.memoryId,
+          signal: r.feedback.signal,
+          status: 'pending',
+          note: `Saved as pending: it changes nothing until a person runs \`oort feedback confirm ${short}\`.`,
+        };
+      },
+    }),
     ...(links && {
       /** Asserted by `agent`; a pair the store cannot link is refused as a missing id. */
       async link({ from, to, remove }: { from: string; to: string; remove: boolean }) {
@@ -293,6 +343,14 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
             via: { kind: e.via.kind, from: e.via.from, weight: Number(e.via.weight.toFixed(3)) },
           }),
           ...happenedOf(m),
+          // A person said it is wrong or out of date: the label, the signal and their note.
+          ...(e.contested !== undefined && {
+            contested: {
+              signal: e.contested.signal,
+              ...(e.contested.note !== undefined && { note: clean(e.contested.note) }),
+              feedback_id: e.contested.feedbackId,
+            },
+          }),
         };
       });
       const lexicalOnly = w.mode !== 'cloud' && (w.embed === undefined || w.rerank === undefined);
@@ -633,7 +691,11 @@ async function asToolError<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (e) {
-    if (e instanceof JudgmentInputError || e instanceof PredictionError) {
+    if (
+      e instanceof JudgmentInputError ||
+      e instanceof PredictionError ||
+      e instanceof FeedbackError
+    ) {
       throw new MemoryToolError(e.message);
     }
     throw e;

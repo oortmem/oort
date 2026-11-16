@@ -250,6 +250,7 @@ export function keepsFeedback(store: MemoryStore): boolean {
 }
 
 const INVISIBLE = new RegExp(INVISIBLE_SOURCE, 'g');
+// oxlint-disable-next-line no-control-regex -- matching control characters is the point
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
 
 /**
@@ -278,6 +279,7 @@ export function feedbackBy(v: unknown): string {
 function memoryIdOf(v: unknown): string {
   if (typeof v !== 'string') throw invalid('memoryId must be text');
   const t = v.trim();
+  // oxlint-disable-next-line no-control-regex -- matching control characters is the point
   if (t === '' || t.length > FEEDBACK_LIMITS.memoryId || /[\s\u0000-\u001f\u007f-\u009f]/.test(t)) {
     throw invalid(`memoryId must be a memory id (1 to ${FEEDBACK_LIMITS.memoryId} characters)`);
   }

@@ -149,7 +149,7 @@ const OPERATOR_UNSAFE = new RegExp(DISPLAY_UNSAFE_SOURCE);
  * Who withdraws, confirms or purges from this machine: `--by`, else `judge.operator` in the home
  * config, else `local-user`. Never the expert who made the judgment.
  */
-function operatorOf(w: Wired, flag: string | undefined): string {
+export function operatorOf(w: Wired, flag: string | undefined): string {
   const by = flag ?? w.config.judge.operator ?? 'local-user';
   if (by.trim() === '' || by.length > 128 || OPERATOR_UNSAFE.test(by)) {
     throw new Refusal('--by must be one line of text, at most 128 characters.');
