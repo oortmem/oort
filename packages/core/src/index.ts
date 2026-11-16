@@ -19,6 +19,7 @@ export * from './gate.js';
 export * from './recall.js';
 export * from './relevance.js';
 export { MAX_SUB_QUERIES, PART_MIN_WORDS, PART_RERANK_FLOOR, subQueries } from './subqueries.js';
+export { isEnumeration } from './enumeration.js';
 export * from './forget.js';
 export * from './observe.js';
 export * from './temporal.js';

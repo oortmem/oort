@@ -153,6 +153,9 @@ from before CON-101 ignores the request and recalls in full.
 In every mode, a prompt that asks about two things ("which did I buy first, the desk or the
 chair?") is also searched part by part, by rules in code, and each part's best match is placed
 near the top of the block: see [Questions about two things](cli.md#questions-about-two-things).
+A prompt that gathers many things ("how many charity events did I go to?") gives each session at
+most two places before other sessions get theirs: see
+[Questions that gather many things](cli.md#questions-that-gather-many-things).
 
 Memory links are followed only in `full` mode. There the hook brings in the other end of a link
 you confirmed with `oort link`, when the reranker scores it and the memory it was reached from at

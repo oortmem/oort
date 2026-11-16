@@ -58,6 +58,7 @@ describe('config', () => {
       },
       userLinks: true,
       timeChannel: true,
+      enumerationPerSource: 2,
     });
     expect(c.project).toEqual({ private: false });
     expect(c.sources['embed']).toBe('default');
