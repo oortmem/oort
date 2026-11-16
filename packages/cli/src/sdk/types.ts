@@ -447,6 +447,12 @@ export interface ResolveView {
   agrees: boolean | null;
   /** The judgment the resolve recorded: a verdict other than the predicted one, with a reason. */
   judgment?: RecordJudgmentView;
+  /**
+   * This resolve replaced an agent's, but the judgment the agent's recorded is outside this
+   * handle's scope (`not-writable`): it stays, unconfirmed, so judging leaves it out.
+   */
+  agentJudgmentKept?: string;
+  agentJudgmentKeptReason?: 'not-writable';
 }
 
 export interface LiveAgreement {

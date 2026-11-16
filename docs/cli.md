@@ -1909,7 +1909,9 @@ oort judge resolve 3fa2c1d0 --verdict approved --reason "Satire, clearly labelle
   (`conflict`), the judgment it recorded is withdrawn and purged again, and you can run it again.
 - A person's resolve replaces a decision an agent recorded that nobody confirmed: the agent's
   judgment is withdrawn, and the prediction keeps who decided before and when, without their
-  reason.
+  reason. When that judgment is outside your scope (an agent's own Star), it stays as it is,
+  unconfirmed so judging leaves it out, and the result names it (`agentJudgmentKept`, reason
+  `not-writable`).
 - `oort judge predictions` lists pending predictions, newest first (`--resolved`, `--all`,
   `--domain`, `--limit`, `--json`). Pending predictions expire after 30 days, and judging deletes
   expired ones as it goes. Resolved ones stay, as the record `eval --live` reads, until you forget

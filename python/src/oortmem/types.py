@@ -525,6 +525,10 @@ class ResolveResult:
     agrees: Optional[bool]
     #: The judgment the resolve recorded: a verdict other than the predicted one, with a reason.
     judgment: Optional[RecordJudgmentView] = None
+    #: This resolve replaced an agent's, whose judgment is outside this scope (``not-writable``):
+    #: it stays, unconfirmed.
+    agent_judgment_kept: Optional[str] = None
+    agent_judgment_kept_reason: Optional[str] = None
 
 
 @dataclass(**_FROZEN)

@@ -404,7 +404,8 @@ console.log(live.resolved, live.bands.length);
   the daily limit only when it records a judgment, and the whole prediction id (a prefix is
   `not-found`). The decision stays unconfirmed until an expert role calls
   `judge.confirm(predictionId)`, and an expert role's own `resolve` replaces it (the agent's
-  judgment is withdrawn). A prefix that matches both a judgment and a prediction is
+  judgment is withdrawn, or, outside the handle's scope, kept and named in `agentJudgmentKept`
+  with `agentJudgmentKeptReason: 'not-writable'`). A prefix that matches both a judgment and a prediction is
   `ambiguous-id`. `evalLive` leaves unconfirmed decisions out unless `includeAgentResolved` is
   set.
 - `evalLive` reports `overall` agreement, agreement on `suggested` items and their `coverage`,

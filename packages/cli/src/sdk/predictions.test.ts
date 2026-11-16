@@ -42,6 +42,40 @@ async function seed(oort: Oort): Promise<void> {
   }
 }
 
+/**
+ * A copy of prediction `of`, resolved by an agent and unconfirmed, written straight into the
+ * store file under an id that starts with `like`'s first eight characters. Returns its id.
+ */
+function agentResolvedCopy(home: string, of: string, like: string): string {
+  const c = like.slice(9, 13) === 'ffff' ? '0000' : 'ffff';
+  const pid = `${like.slice(0, 8)}-${c}-4000-8000-000000000000`;
+  const db = new Database(path.join(home, 'oort.sqlite'));
+  try {
+    const row = db.prepare('SELECT record FROM predictions WHERE id = ?').get(of) as {
+      record: string;
+    };
+    const record = {
+      ...(JSON.parse(row.record) as object),
+      id: pid,
+      resolution: {
+        verdict: 'approved',
+        criteria: [],
+        by: 'ada',
+        at: NOW.toISOString(),
+        via: 'mcp',
+        agrees: false,
+      },
+    };
+    db.prepare(
+      `INSERT INTO predictions SELECT ?, level, org_id, customer_id, agent_id, hive_id, run_id,
+         project_id, author_agent_id, created_at, expires_at, 1, ? FROM predictions WHERE id = ?`,
+    ).run(pid, JSON.stringify(record), of);
+  } finally {
+    db.close();
+  }
+  return pid;
+}
+
 const item = { summary: 'Post says a vitamin cures the flu fast', domain: 'content' };
 
 describe('sdk predictions', () => {
@@ -145,32 +179,7 @@ describe('sdk predictions', () => {
     const jid = (await expert.judge.list()).judgments[0]!.id;
     const r = await expert.judge.apply(item);
     // A copy of that prediction, resolved by an agent, whose id starts like the judgment's.
-    const c = jid.slice(9, 13) === 'ffff' ? '0000' : 'ffff';
-    const pid = `${jid.slice(0, 8)}-${c}-4000-8000-000000000000`;
-    const db = new Database(path.join(home, 'oort.sqlite'));
-    try {
-      const row = db
-        .prepare('SELECT created_at, record FROM predictions WHERE id = ?')
-        .get(r.predictionId) as { created_at: string; record: string };
-      const record = {
-        ...(JSON.parse(row.record) as object),
-        id: pid,
-        resolution: {
-          verdict: 'approved',
-          criteria: [],
-          by: 'ada',
-          at: NOW.toISOString(),
-          via: 'mcp',
-          agrees: false,
-        },
-      };
-      db.prepare(
-        `INSERT INTO predictions SELECT ?, level, org_id, customer_id, agent_id, hive_id, run_id,
-           project_id, author_agent_id, created_at, expires_at, 1, ? FROM predictions WHERE id = ?`,
-      ).run(pid, JSON.stringify(record), r.predictionId);
-    } finally {
-      db.close();
-    }
+    const pid = agentResolvedCopy(home, r.predictionId!, jid);
     await expect(expert.judge.confirm(jid.slice(0, 8))).rejects.toMatchObject({
       code: 'ambiguous-id',
       message: expect.stringMatching(/both a judgment and a prediction/),
@@ -179,6 +188,19 @@ describe('sdk predictions', () => {
     expect((await expert.judge.evalLive()).agentResolvedExcluded).toBe(1);
     expect(await expert.judge.confirm(pid)).toEqual({ id: pid, changed: true });
     expect((await expert.judge.evalLive()).agentResolvedExcluded).toBe(0);
+    await expert.close();
+    await agent.close();
+  });
+  it('sdk.predictions.confirm-with-a-prefix-of-another-kind-of-memory-confirms-the-prediction', async () => {
+    const { expert, agent, home } = await handles();
+    await seed(expert);
+    const fact = (await expert.remember(['The team ships on Fridays.'])).results[0]!.id!;
+    expect(fact).toEqual(expect.any(String));
+    const r = await expert.judge.apply(item);
+    const pid = agentResolvedCopy(home, r.predictionId!, fact);
+    // The prefix names a memory that is not a judgment, and a prediction: the prediction.
+    expect(await expert.judge.confirm(fact.slice(0, 8))).toEqual({ id: pid, changed: true });
+    expect((await expert.judge.getPrediction(pid)).resolution?.agentRecorded).toBe(false);
     await expert.close();
     await agent.close();
   });

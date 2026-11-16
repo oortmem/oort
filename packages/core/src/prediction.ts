@@ -1,6 +1,6 @@
 import type { MemoryStore } from './adapters.js';
 import type { Address, Author } from './address.js';
-import type { Grant } from './grant.js';
+import { GrantError, grantWrites, type Grant } from './grant.js';
 import {
   JudgmentInputError,
   confirmJudgment,
@@ -11,8 +11,8 @@ import {
   judgmentLabel,
   JUDGMENT_LIMITS,
   normaliseJudgment,
-  purgeJudgment,
   recordJudgment,
+  undoRecordedJudgment,
   withdrawJudgment,
   type JudgeResult,
   type JudgmentInput,
@@ -21,7 +21,7 @@ import {
   type RecordJudgmentDeps,
   type RecordJudgmentResult,
 } from './judgment.js';
-import type { Scope } from './model.js';
+import type { Memory, Scope } from './model.js';
 import { scrub } from './scrub.js';
 
 /**
@@ -347,6 +347,13 @@ export interface ResolveResult {
   agrees: boolean | null;
   /** The judgment the resolve recorded: a verdict other than the predicted one, with a reason. */
   judgment?: RecordJudgmentResult;
+  /**
+   * A person's resolve replaced an agent's, but could not withdraw the judgment the agent's
+   * recorded: it is outside the person's grant (`not-writable`, for instance in that agent's own
+   * Star). It stays as it was, unconfirmed, so judging leaves it out.
+   */
+  agentJudgmentKept?: string;
+  agentJudgmentKeptReason?: 'not-writable';
 }
 
 /**
@@ -369,18 +376,6 @@ export function resolveRecordsJudgment(
 /** True for a resolve an agent recorded that no person has confirmed. */
 function unconfirmedAgentResolve(r: PredictionResolution | undefined): boolean {
   return r !== undefined && isAgentVia(r.via) && r.confirmed === undefined;
-}
-
-/** Withdraws, then purges, a judgment a failed resolve recorded: it must not count. */
-async function undoJudgment(
-  deps: RecordJudgmentDeps,
-  r: RecordJudgmentResult,
-  by: string,
-  now: Date,
-): Promise<void> {
-  if (r.outcome === 'unchanged') return; // An earlier record: not this call's to take back.
-  const m = await deps.store.get(deps.grant, r.memory.id);
-  if (m !== null) await purgeJudgment(deps.store, deps.grant, m, by, now);
 }
 
 /**
@@ -412,6 +407,8 @@ export async function resolvePrediction(
   const supersede = !isAgentVia(deps.via) && unconfirmedAgentResolve(p.resolution);
   if (p.resolution !== undefined && !supersede) throw fail('already-resolved');
   if (Date.parse(p.expiresAt) <= now.getTime()) throw fail('expired');
+  // Checked now, so the guarded writes below never fail on the grant after a change.
+  if (!grantWrites(deps.grant, p)) throw new GrantError();
 
   if (typeof input !== 'object' || input === null) {
     throw new JudgmentInputError('a resolve must be an object');
@@ -458,7 +455,8 @@ export async function resolvePrediction(
   // The judgment's own checks, before anything is written.
   if (judgmentInput !== undefined) normaliseJudgment(judgmentInput, now);
 
-  if (supersede) p = await supersedeAgentResolve(deps, p, by, now);
+  let kept: string | undefined;
+  if (supersede) ({ p, kept } = await supersedeAgentResolve(deps, p, by, now));
 
   let judgment: RecordJudgmentResult | undefined;
   if (judgmentInput !== undefined) judgment = await recordJudgment(judgmentInput, deps);
@@ -481,54 +479,74 @@ export async function resolvePrediction(
   try {
     landed = await store.putPrediction(deps.grant, done, { revision: p.revision });
   } finally {
-    if (!landed && judgment !== undefined) await undoJudgment(deps, judgment, by, now);
+    if (!landed && judgment !== undefined) {
+      await undoRecordedJudgment(deps.store, deps.grant, judgment, by, now);
+    }
   }
   if (!landed) throw fail('conflict');
-  return { prediction: done, agrees, ...(judgment !== undefined && { judgment }) };
+  return {
+    prediction: done,
+    agrees,
+    ...(judgment !== undefined && { judgment }),
+    ...(kept !== undefined && {
+      agentJudgmentKept: kept,
+      agentJudgmentKeptReason: 'not-writable' as const,
+    }),
+  };
 }
 
 /**
  * A person's resolve replacing an agent's unconfirmed one: the agent's resolve moves to
  * `superseded` (no reason or criteria kept) and the prediction is pending again, then the
  * judgment that resolve recorded is withdrawn, and so is any a superseded resolve recorded that
- * an earlier, interrupted call left current. Returns the prediction as now stored.
+ * an earlier, interrupted call left current. A judgment outside the person's grant is left as it
+ * is (unconfirmed, so judging leaves it out) and named in `kept`; this is decided before any
+ * write. Returns the prediction as now stored.
  */
 async function supersedeAgentResolve(
   deps: RecordJudgmentDeps,
   p: Prediction,
   by: string,
   now: Date,
-): Promise<Prediction> {
+): Promise<{ p: Prediction; kept?: string }> {
   const store = predictionsOf(deps.store);
   const r = p.resolution!;
   const iso = now.toISOString();
+  const history = [
+    ...(p.superseded ?? []),
+    {
+      verdict: r.verdict,
+      by: r.by,
+      at: r.at,
+      via: r.via,
+      ...(r.judgmentId !== undefined && { judgmentId: r.judgmentId }),
+    },
+  ];
+  // Which of their judgments this grant can withdraw, before anything changes.
+  const withdraw: Memory[] = [];
+  let kept: string | undefined;
+  for (const s of history) {
+    if (s.judgmentId === undefined) continue;
+    const m = await deps.store.get(deps.grant, s.judgmentId);
+    if (m !== null && m.judgment?.withdrawn !== undefined) continue;
+    if (m === null || !grantWrites(deps.grant, m)) {
+      if (s === history[history.length - 1]) kept = s.judgmentId;
+      continue;
+    }
+    withdraw.push(m);
+  }
   const { resolution: _r, ...rest } = p;
   const reopened: Prediction = {
     ...rest,
-    superseded: [
-      ...(p.superseded ?? []),
-      {
-        verdict: r.verdict,
-        by: r.by,
-        at: r.at,
-        via: r.via,
-        ...(r.judgmentId !== undefined && { judgmentId: r.judgmentId }),
-      },
-    ],
+    superseded: history,
     revision: p.revision + 1,
     updatedAt: iso,
   };
   if (!(await store.putPrediction(deps.grant, reopened, { revision: p.revision }))) {
     throw fail('conflict');
   }
-  for (const s of reopened.superseded ?? []) {
-    if (s.judgmentId === undefined) continue;
-    const m = await deps.store.get(deps.grant, s.judgmentId);
-    if (m !== null && m.judgment?.withdrawn === undefined) {
-      await withdrawJudgment(deps.store, deps.grant, m, by, now);
-    }
-  }
-  return reopened;
+  for (const m of withdraw) await withdrawJudgment(deps.store, deps.grant, m, by, now);
+  return { p: reopened, ...(kept !== undefined && { kept }) };
 }
 
 /**

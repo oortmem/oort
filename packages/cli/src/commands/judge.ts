@@ -955,6 +955,10 @@ export async function judgeResolveCommand(
         ...(r.judgment !== undefined && {
           judgment: { outcome: r.judgment.outcome, id: r.judgment.memory.id },
         }),
+        ...(r.agentJudgmentKept !== undefined && {
+          agentJudgmentKept: r.agentJudgmentKept,
+          agentJudgmentKeptReason: r.agentJudgmentKeptReason,
+        }),
       });
       return 0;
     }
@@ -974,6 +978,11 @@ export async function judgeResolveCommand(
     } else if (r.agrees !== true && o.reason === undefined) {
       ctx.io.out(
         'Give --reason next time to teach judging why; without one nothing new is recorded.\n',
+      );
+    }
+    if (r.agentJudgmentKept !== undefined) {
+      ctx.io.out(
+        `This replaces what an agent recorded. Its judgment ${short(r.agentJudgmentKept)} is outside this scope, so it stays as it is: unconfirmed, and judging leaves it out.\n`,
       );
     }
     return 0;

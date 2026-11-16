@@ -369,6 +369,7 @@ and the memory methods never see it. It carries an address like a memory (`scope
   or forget when `leftover` is not empty, before it changes the judgment.
 - `pruneExpiredPredictions(now, limit)` deletes up to `limit` unresolved records whose
   `expiresAt` is at or before `now`, at every address. Resolved records are never pruned.
+  It is not limited to a grant because an expired pending prediction can no longer be resolved by anyone.
 - `countPendingPredictions(p)` counts the unresolved records at `p`'s address (its node and
   project). Judging keeps nothing above 5,000.
 

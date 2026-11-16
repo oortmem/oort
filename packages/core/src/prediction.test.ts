@@ -427,6 +427,98 @@ describe('predictions: resolving', () => {
     ).rejects.toMatchObject({ kind: 'already-resolved' });
   });
 
+  it('prediction.a-lost-race-puts-back-the-judgment-a-resolve-corrected', async () => {
+    const { store, deps, item } = await setup();
+    const ref = 'https://example.test/posts/9';
+    const earlier = (
+      await recordJudgment(ada({ subject: item.summary, ref }), {
+        store,
+        grant: GRANT,
+        scope: SCOPE,
+        now: NOW,
+        via: 'cli',
+      })
+    ).memory;
+    const before = await store.get(GRANT, earlier.id);
+    const id = (await judge({ ...item, ref }, deps)).predictionId!;
+    const bump = beforePut(store, 1, async () => {
+      const p = await getPrediction(store, GRANT, id);
+      await store.putPrediction!(
+        GRANT,
+        { ...p, revision: p.revision + 1 },
+        { revision: p.revision },
+      );
+    });
+    await expect(
+      resolvePrediction(
+        id,
+        { verdict: 'approved', by: 'ada', reason: 'Satire, labelled.' },
+        { ...resolveDeps(store), store: bump },
+      ),
+    ).rejects.toMatchObject({ kind: 'conflict' });
+    // The earlier judgment is current again, exactly as it was; the correction is gone.
+    expect(await store.get(GRANT, earlier.id)).toEqual(before);
+    expect(isActiveJudgment((await store.get(GRANT, earlier.id))!, NOW)).toBe(true);
+    expect((await activeJudgments(store)).map((m) => m.judgment!.reason)).not.toContain(
+      'Satire, labelled.',
+    );
+    // The same resolve, without the race, corrects it.
+    const r = await resolvePrediction(
+      id,
+      { verdict: 'approved', by: 'ada', reason: 'Satire, labelled.' },
+      resolveDeps(store),
+    );
+    expect(r.judgment).toMatchObject({ outcome: 'corrected', supersedes: earlier.id });
+  });
+
+  it('prediction.a-person-replaces-an-agent-resolve-whose-judgment-they-cannot-withdraw', async () => {
+    const { store, deps, item } = await setup();
+    const id = (await judge(item, deps)).predictionId!;
+    // The agent's judgment lives where the person's grant cannot write (its own Star, say).
+    const star: Scope = { orgId: 'local', customerId: 'elsewhere', agentId: 'cursor' };
+    const starGrant = localGrant({ ...star, projectIds: [null] });
+    const theirs = (
+      await recordJudgment(ada({ reason: 'Agent says satire.', verdict: 'approved' }), {
+        store,
+        grant: starGrant,
+        scope: star,
+        now: NOW,
+        via: 'mcp',
+      })
+    ).memory;
+    const p = await getPrediction(store, GRANT, id);
+    await store.putPrediction!(
+      GRANT,
+      {
+        ...p,
+        resolution: {
+          verdict: 'approved',
+          criteria: [],
+          by: 'ada',
+          at: NOW.toISOString(),
+          via: 'mcp',
+          agrees: false,
+          judgmentId: theirs.id,
+        },
+        revision: p.revision + 1,
+      },
+      { revision: p.revision },
+    );
+    const r = await resolvePrediction(
+      id,
+      { verdict: 'approved', by: 'ada', reason: 'Satire, and labelled.' },
+      resolveDeps(store),
+    );
+    expect(r).toMatchObject({
+      agentJudgmentKept: theirs.id,
+      agentJudgmentKeptReason: 'not-writable',
+    });
+    expect(r.prediction.resolution).toMatchObject({ via: 'cli', reason: 'Satire, and labelled.' });
+    const left = (await store.get(starGrant, theirs.id))!;
+    expect(left.judgment?.withdrawn).toBeUndefined();
+    expect(isUnconfirmedAgentJudgment(left.judgment!)).toBe(true);
+  });
+
   it('prediction.confirm-finishes-a-half-confirmed-state', async () => {
     const { store, deps, item } = await setup();
     const id = (await judge(item, deps)).predictionId!;

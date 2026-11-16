@@ -306,6 +306,10 @@ export async function resolve(ctx: Ctx, ref: string, input: ResolveInput): Promi
       prediction: predictionView(r.prediction, now),
       agrees: r.agrees,
       ...(r.judgment !== undefined && { judgment: recordView(r.judgment, agent) }),
+      ...(r.agentJudgmentKept !== undefined && {
+        agentJudgmentKept: r.agentJudgmentKept,
+        agentJudgmentKeptReason: r.agentJudgmentKeptReason!,
+      }),
     };
   } finally {
     if (mayRecord && !wrote) await refundAgentJudgment(ctx.engine.config.home, day);

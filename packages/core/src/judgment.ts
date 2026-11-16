@@ -377,6 +377,11 @@ export interface RecordJudgmentResult {
   redacted: string[];
   /** The embedder failed: the judgment is kept, lexical-only. */
   embedFailed?: true;
+  /**
+   * With `corrected`: the judgment it replaced, as it was just before (the full record), so a
+   * caller that must take the correction back can put it back exactly (`undoCorrection`).
+   */
+  previous?: Memory;
 }
 
 /**
@@ -520,7 +525,12 @@ const EMBED_BATCH = 128;
  * prior (kept, linked, its validity closed, its tombstone set) in the same atomic write. Returns
  * how many could not be embedded (they are kept, lexical-only).
  */
-async function commit(planned: Planned[], deps: RecordJudgmentDeps, now: Date): Promise<number> {
+async function commit(
+  planned: Planned[],
+  deps: RecordJudgmentDeps,
+  now: Date,
+  previous?: Map<string, Memory>,
+): Promise<number> {
   let embedFailed = 0;
   if (deps.embed !== undefined) {
     for (let i = 0; i < planned.length; i += EMBED_BATCH) {
@@ -548,6 +558,7 @@ async function commit(planned: Planned[], deps: RecordJudgmentDeps, now: Date): 
     }
     // The full record (a listing leaves out the embedding), so the retracted one keeps it.
     const old = (await deps.store.get(deps.grant, p.prior.id)) ?? p.prior;
+    previous?.set(old.id, old);
     const oldJ = old.judgment ?? p.prior.judgment;
     await deps.store.upsertMany(deps.grant, [
       {
@@ -623,14 +634,17 @@ export async function recordJudgment(
     };
   }
   if (r.kind !== 'write') throw new Error('unreachable: a single record is never skipped');
-  const failed = await commit([r.planned], deps, now);
+  const previous = new Map<string, Memory>();
+  const failed = await commit([r.planned], deps, now, previous);
   const { memory, prior, redacted } = r.planned;
+  const was = prior === undefined ? undefined : previous.get(prior.id);
   return {
     outcome: prior === undefined ? 'added' : 'corrected',
     memory,
     ...(prior !== undefined && { supersedes: prior.id }),
     redacted,
     ...(failed > 0 && { embedFailed: true as const }),
+    ...(was !== undefined && { previous: was }),
   };
 }
 
@@ -857,6 +871,26 @@ export async function purgeJudgment(
     updatedAt: iso,
   });
   return true;
+}
+
+/**
+ * Takes back a judgment `recordJudgment` just wrote, for a caller whose next step failed: the new
+ * judgment is withdrawn and purged, and a judgment it corrected is put back exactly as it was
+ * (`r.previous`), current again. Nothing to do for `unchanged`: that record was there before.
+ */
+export async function undoRecordedJudgment(
+  store: MemoryStore,
+  grant: Grant,
+  r: RecordJudgmentResult,
+  by: string,
+  now = new Date(),
+): Promise<void> {
+  if (r.outcome === 'unchanged') return;
+  const m = await store.get(grant, r.memory.id);
+  if (m !== null) await purgeJudgment(store, grant, m, by, now);
+  if (r.outcome === 'corrected' && r.previous !== undefined) {
+    await store.upsert(grant, r.previous);
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
