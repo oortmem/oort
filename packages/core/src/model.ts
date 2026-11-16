@@ -127,6 +127,15 @@ export function isCurrent(m: Memory, at: Date): boolean {
 }
 
 /**
+ * True for a judgment: the expert's own words. Only the judgment commands (withdraw, confirm,
+ * purge) change one; the write path never refines, supersedes or corrects it, and a forget never
+ * rewrites, re-embeds or re-links it from another memory's chain.
+ */
+export function isJudgment(m: Pick<Memory, 'type' | 'judgment'>): boolean {
+  return m.type === 'judgment' || m.judgment !== undefined;
+}
+
+/**
  * True when every component of `v` is 0 (CON-141). Such a vector has no direction, so cosine
  * similarity is undefined for it: stores keep no zero embedding, and a zero query vector matches
  * nothing.
