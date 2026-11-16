@@ -110,6 +110,7 @@ describe('oort.feedback', () => {
       action: 'superseded' as const,
       by: 'ada',
       at: '2026-11-16T10:00:00.000Z',
+      token: 't1',
       from: 'open' as const,
       fact: 'Port 8080',
       memoryId: 'n1',
@@ -128,6 +129,28 @@ describe('oort.feedback', () => {
     expect(feedbackView({ ...base, status: 'resolving', claim }, at(5)).claim?.canTakeOver).toBe(
       true,
     );
+    // Taken over at 6 minutes: its age, and when it can be taken over again, count from then.
+    const taken = {
+      ...claim,
+      token: 't2',
+      takenOverBy: 'grace',
+      takenOverAt: at(6).toISOString(),
+      undoing: true as const,
+    };
+    expect(feedbackView({ ...base, status: 'resolving', claim: taken }, at(8)).claim).toMatchObject(
+      {
+        by: 'ada',
+        at: claim.at,
+        takenOverBy: 'grace',
+        takenOverAt: at(6).toISOString(),
+        undoing: true,
+        ageSeconds: 120,
+        canTakeOver: false,
+      },
+    );
+    expect(
+      feedbackView({ ...base, status: 'resolving', claim: taken }, at(8)).claim,
+    ).not.toHaveProperty('token');
     const done = feedbackView({
       ...base,
       status: 'superseded',

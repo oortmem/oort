@@ -82,6 +82,11 @@ export function feedbackView(f: Feedback, now = new Date()): FeedbackView {
         at: f.claim.at,
         ageSeconds: Math.max(0, Math.floor(claimAge(f.claim, now) / 1000)),
         canTakeOver: claimIsStale(f.claim, now),
+        ...(f.claim.takenOverBy !== undefined && {
+          takenOverBy: seen(f.claim.takenOverBy),
+          takenOverAt: f.claim.takenOverAt,
+        }),
+        ...(f.claim.undoing === true && { undoing: true }),
         ...(f.claim.fact !== undefined && { fact: seen(f.claim.fact) }),
         ...(f.claim.memoryId !== undefined && { memoryId: f.claim.memoryId }),
       },

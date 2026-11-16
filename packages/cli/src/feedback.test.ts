@@ -157,6 +157,7 @@ describe('oort feedback', () => {
         action: 'superseded',
         by: 'ada',
         at,
+        token: 't1',
         from: 'open',
         fact: 'Port 5502 now',
         validTo: null,
@@ -176,6 +177,19 @@ describe('oort feedback', () => {
       fact: 'Port 5502 now',
       canTakeOver: true,
     });
+    // Run again by another person, who stopped too.
+    const claimedRow = (await h.store.getFeedback!(TG, f.id))!;
+    await h.store.putFeedback!(TG, {
+      ...claimedRow,
+      claim: { ...claimedRow.claim!, token: 't2', takenOverBy: 'grace', takenOverAt: at },
+      revision: claimedRow.revision + 1,
+    });
+    const taken = await h.run(['feedback', 'list']);
+    expect(taken.io.stdout).toMatch(/\[supersede by ada, taken over by grace, 60 min ago, can be/);
+    const takenJson = await h.run(['feedback', 'list', '--json']);
+    const [takenRow] = data<{ feedback: { claim?: unknown }[] }>(takenJson.io.stdout).feedback;
+    expect(takenRow?.claim).toMatchObject({ by: 'ada', takenOverBy: 'grace', takenOverAt: at });
+    expect(takenRow?.claim).not.toHaveProperty('token');
     expect(await recallText(h)).toContain('(contested: wrong)');
     const r = await h.run(['feedback', 'dismiss', f.id, '--yes']);
     expect(r.code, r.io.stderr).toBe(0);

@@ -681,9 +681,10 @@ export interface FeedbackView {
   confirmed?: { at: string; by: string };
   /**
    * `resolving`: the retire or supersede under way, or stopped part way. Running the same call
-   * again finishes it; once `canTakeOver` (5 minutes after `at`), a retire, a dismiss or a
-   * supersede with another fact takes it over, putting back what it changed first. `fact` is what
-   * a supersede would store.
+   * again takes it and finishes it (`takenOverBy`, `takenOverAt`); once `canTakeOver` (5 minutes
+   * after `takenOverAt`, or `at`), a retire, a dismiss or a supersede with another fact takes it
+   * over. A claim whose changes are all in place is finished as it was meant; otherwise what it
+   * changed is put back first (`undoing` while that runs). `fact` is what a supersede would store.
    */
   claim?: {
     action: 'retired' | 'superseded';
@@ -691,6 +692,9 @@ export interface FeedbackView {
     at: string;
     ageSeconds: number;
     canTakeOver: boolean;
+    takenOverBy?: string;
+    takenOverAt?: string;
+    undoing?: true;
     fact?: string;
     memoryId?: string;
   };

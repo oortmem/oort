@@ -116,6 +116,11 @@ function claimOf(c: FeedbackClaim, now = new Date()) {
     at: c.at,
     ageSeconds: Math.max(0, Math.floor(claimAge(c, now) / 1000)),
     canTakeOver: claimIsStale(c, now),
+    ...(c.takenOverBy !== undefined && {
+      takenOverBy: seen(c.takenOverBy),
+      takenOverAt: c.takenOverAt,
+    }),
+    ...(c.undoing === true && { undoing: true }),
     ...(c.fact !== undefined && { fact: seen(c.fact) }),
     ...(c.memoryId !== undefined && { memoryId: c.memoryId }),
   };
@@ -149,7 +154,10 @@ function line(f: Feedback): string {
   return `${short(f.id)}  ${f.signal.padEnd(10)} memory ${short(f.memoryId)}  ${f.status.padEnd(10)} by ${shown(seen(f.by))}${agent}${note}${query}${claimLine(f.claim)}`;
 }
 
-/** A claim, on a row's line: `[supersede by ada, 7 min ago, can be taken over: "fact"]`. */
+/**
+ * A claim, on a row's line: `[supersede by ada, 7 min ago, can be taken over: "fact"]`, or
+ * `[supersede by ada, taken over by grace, just now: "fact"]` (the age counts from the takeover).
+ */
 function claimLine(claim: FeedbackClaim | undefined): string {
   if (claim === undefined) return '';
   const c = claimOf(claim);
@@ -157,7 +165,11 @@ function claimLine(claim: FeedbackClaim | undefined): string {
   const age = c.ageSeconds < 60 ? 'just now' : `${Math.floor(c.ageSeconds / 60)} min ago`;
   const over = c.canTakeOver ? ', can be taken over' : '';
   const fact = c.fact === undefined ? '' : `: "${shown(clip(c.fact, 120))}"`;
-  return `  [${verb} by ${shown(c.by)}, ${age}${over}${fact}]`;
+  const taken =
+    c.takenOverBy === undefined
+      ? ''
+      : `, ${c.undoing === true ? 'being put back' : 'taken over'} by ${shown(c.takenOverBy)}`;
+  return `  [${verb} by ${shown(c.by)}${taken}, ${age}${over}${fact}]`;
 }
 
 const NEXT: Partial<Record<FeedbackSignal, string>> = {

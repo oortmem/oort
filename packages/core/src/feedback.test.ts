@@ -775,10 +775,9 @@ describe('feedback: a claim that stopped part way', () => {
   it('feedback.a-retire-takes-over-a-stopped-supersede-and-undoes-it-first', async () => {
     const store = await setup();
     const f = await kept(recordFeedback(give({}), person(store)));
-    // Stops after both memories changed, before the row closes.
-    crashOnce(store, 'putFeedback', (_g, row) => row.status === 'superseded');
+    // Stops after the new memory is written, before the old one closes.
+    crashOnce(store, 'upsertManyIfUnchanged', () => true);
     await expect(sup(store, f, fact, LATER)).rejects.toThrow('crash');
-    expect((await store.get(TG, 'port'))!.endReason).toBe('superseded');
     const r = await retireFeedback(f.id, as(store, min(6)));
     expect(r.feedback.status).toBe('retired');
     expect(await store.get(TG, supersedingId(f.id))).toBeNull();
@@ -787,6 +786,69 @@ describe('feedback: a claim that stopped part way', () => {
     expect(
       old.source.decisions.filter((d) => d.stage === 'feedback').map((d) => d.question),
     ).toEqual(['retired']);
+  });
+
+  it('feedback.a-takeover-finishes-a-supersede-that-only-missed-its-close', async () => {
+    for (const takeOver of ['retire', 'dismiss', 'reworded'] as const) {
+      const store = await setup();
+      const f = await kept(recordFeedback(give({}), person(store)));
+      // Stops after both memories changed, before the row closes.
+      crashOnce(store, 'putFeedback', (_g, row) => row.status === 'superseded');
+      await expect(sup(store, f, fact, LATER, { by: 'ada' })).rejects.toThrow('crash');
+      const late = { ...as(store, min(6)), by: 'grace' };
+      const e = (await (
+        takeOver === 'retire'
+          ? retireFeedback(f.id, late)
+          : takeOver === 'dismiss'
+            ? dismissFeedback(f.id, late)
+            : sup(store, f, `${fact} now`, min(6), { by: 'grace' })
+      ).catch((x: unknown) => x)) as FeedbackError;
+      expect(e).toMatchObject({ kind: 'already-resolved', status: 'superseded' });
+      expect(e.message).toMatch(/supersede ada started had already changed the memory/);
+      expect(e.message).toMatch(/finished, not undone/);
+      const row = await findFeedback(store, TG, f.id);
+      expect(row.status).toBe('superseded');
+      expect(row.claim).toBeUndefined();
+      expect(row.resolved).toMatchObject({
+        by: 'grace',
+        claimedBy: 'ada',
+        supersededBy: supersedingId(f.id),
+      });
+      expect(await currentIds(store)).toEqual([supersedingId(f.id)]);
+      expect((await store.get(TG, supersedingId(f.id)))!.text).toBe(fact);
+      expect((await store.get(TG, 'port'))!.supersededBy).toBe(supersedingId(f.id));
+    }
+  });
+
+  it('feedback.a-dismiss-finishes-a-retire-that-only-missed-its-close', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    crashOnce(store, 'putFeedback', (_g, row) => row.status === 'retired');
+    await expect(retireFeedback(f.id, as(store, LATER))).rejects.toThrow('crash');
+    const e = (await dismissFeedback(f.id, as(store, min(6))).catch(
+      (x: unknown) => x,
+    )) as FeedbackError;
+    expect(e).toMatchObject({ kind: 'already-resolved', status: 'retired' });
+    expect(e.message).toMatch(/the memory stays ended/);
+    expect((await findFeedback(store, TG, f.id)).status).toBe('retired');
+    expect((await store.get(TG, 'port'))!.endReason).toBe('corrected');
+  });
+
+  it('feedback.a-takeover-keeps-a-new-memory-recall-served-or-a-link-names', async () => {
+    for (const use of ['recalled', 'linked'] as const) {
+      const store = await setup();
+      await store.upsert(TG, makeMemory({ id: 'db', text: 'The database is Postgres' }));
+      const f = await kept(recordFeedback(give({}), person(store)));
+      crashOnce(store, 'upsertManyIfUnchanged', () => true);
+      await expect(sup(store, f, fact, LATER)).rejects.toThrow('crash');
+      const newId = supersedingId(f.id);
+      if (use === 'recalled') await store.recordAccess(TG, [newId], min(1));
+      else await store.link!(TG, newId, 'db', { assertedBy: 'user' });
+      expect(await dismissFeedback(f.id, as(store, min(6)))).toMatchObject({
+        status: 'dismissed',
+      });
+      expect((await store.get(TG, newId))?.text).toBe(fact);
+    }
   });
 
   it('feedback.a-takeover-keeps-a-new-memory-something-else-changed', async () => {
@@ -824,7 +886,7 @@ describe('feedback: a claim that stopped part way', () => {
     };
     const e = (await sup(store, f, fact, LATER).catch((x: unknown) => x)) as FeedbackError;
     expect(e).toMatchObject({ kind: 'memory-ended', memoryChanged: true, status: 'open' });
-    expect(e.message).toMatch(/was changed meanwhile, so it was kept/);
+    expect(e.message).toMatch(/was used or changed meanwhile, so it was kept/);
     expect((await findFeedback(store, TG, f.id)).status).toBe('open');
     expect(await dismissFeedback(f.id, as(store, min(1)))).toMatchObject({ status: 'dismissed' });
   });
@@ -872,6 +934,170 @@ describe('feedback: a claim that stopped part way', () => {
     expect((await findFeedback(store, TG, f.id)).status).toBe('resolving');
     expect((await contestedOf(store, TG, ['port'])).size).toBe(0);
   });
+});
+
+describe('feedback: a takeover and the same command at once', () => {
+  const fact = 'The auth service listens on port 8080';
+  const at = new Date(LATER.getTime() + 6 * 60_000);
+  type Action = 'supersede' | 'retire';
+  const closes = { supersede: 'superseded', retire: 'retired' } as const;
+  const outcome = (p: Promise<unknown>) =>
+    p.then(
+      () => 'ok',
+      (e: FeedbackError) =>
+        e.kind === 'already-resolved' && /finished, not undone/.test(e.message)
+          ? 'applied'
+          : e.kind,
+    );
+
+  /** A claim of `action` that stopped: at its close (`whole`), or before the old memory changed. */
+  async function stopped(action: Action, whole: boolean) {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    if (whole) crashOnce(store, 'putFeedback', (_g, row) => row.status === closes[action]);
+    else crashOnce(store, 'upsertManyIfUnchanged', () => true);
+    const run =
+      action === 'supersede'
+        ? supersedeFeedback(f.id, fact, { ...as(store, LATER), harness: 'cli' })
+        : retireFeedback(f.id, as(store, LATER));
+    await expect(run).rejects.toThrow('crash');
+    return { store, f };
+  }
+
+  /** The same command run again (by ada), and a dismiss (by grace), both after five minutes. */
+  const again = (store: MemoryStore, f: Feedback, action: Action) =>
+    action === 'supersede'
+      ? supersedeFeedback(f.id, fact, { ...as(store, at), by: 'ada', harness: 'cli' })
+      : retireFeedback(f.id, { ...as(store, at), by: 'ada' });
+  const dismiss = (store: MemoryStore, f: Feedback) =>
+    dismissFeedback(f.id, { ...as(store, at), by: 'grace' });
+
+  /** The row's status matches the memories: the right one is current, and no half is left. */
+  async function consistent(store: MemoryStore, f: Feedback): Promise<string> {
+    const row = await findFeedback(store, TG, f.id);
+    const old = (await store.get(TG, 'port'))!;
+    const newId = supersedingId(f.id);
+    expect(row.claim).toBeUndefined();
+    if (row.status === 'superseded') {
+      expect(await currentIds(store)).toEqual([newId]);
+      expect(old.supersededBy).toBe(newId);
+      expect(row.resolved?.supersededBy).toBe(newId);
+    } else if (row.status === 'retired') {
+      expect(await currentIds(store)).toEqual([]);
+      expect(old.endReason).toBe('corrected');
+      expect(await store.get(TG, newId)).toBeNull();
+    } else {
+      expect(row.status).toBe('dismissed');
+      expect(await currentIds(store)).toEqual(['port']);
+      expect(old.source.decisions.filter((d) => d.stage === 'feedback')).toEqual([]);
+      expect(await store.get(TG, newId)).toBeNull();
+    }
+    return row.status;
+  }
+
+  for (const action of ['supersede', 'retire'] as const) {
+    it(`feedback.${action}-run-again-paused-before-its-close-and-a-dismiss`, async () => {
+      // A crash at the very end. The same command, run again, pauses at its close; a dismiss runs
+      // meanwhile and pauses before its row write (if it gets that far); the close lands first.
+      const { store, f } = await stopped(action, true);
+      const gate = <T = void>() => {
+        let open!: (v: T) => void;
+        return { wait: new Promise<T>((r) => (open = r)), open };
+      };
+      const closing = gate();
+      const closeGo = gate();
+      const dismissing = gate();
+      const dismissGo = gate();
+      const real = store.putFeedback!.bind(store);
+      store.putFeedback = async (g, row, e, o) => {
+        if (row.status === closes[action]) {
+          closing.open();
+          await closeGo.wait;
+        } else if (row.status === 'open' || row.status === 'dismissed') {
+          dismissing.open();
+          await dismissGo.wait;
+        }
+        return real(g, row, e, o);
+      };
+      const c = outcome(again(store, f, action));
+      await closing.wait;
+      const d = outcome(dismiss(store, f));
+      await Promise.race([d, dismissing.wait]);
+      closeGo.open();
+      const cr = await c;
+      dismissGo.open();
+      expect([cr, await d]).toEqual(['ok', 'in-progress']);
+      expect(await consistent(store, f)).toBe(closes[action]);
+    });
+
+    it(`feedback.a-dismiss-paused-after-its-undo-and-${action}-run-again`, async () => {
+      // A crash before the old memory changed; the dismiss takes over, puts back, and pauses
+      // before the row goes back; the same command runs meanwhile.
+      const { store, f } = await stopped(action, false);
+      let go!: () => void;
+      const gate = new Promise<void>((r) => (go = r));
+      let undone!: () => void;
+      const paused = new Promise<void>((r) => (undone = r));
+      const real = store.putFeedback!.bind(store);
+      store.putFeedback = async (g, row, e, o) => {
+        if (row.status === 'open') {
+          undone();
+          await gate;
+        }
+        return real(g, row, e, o);
+      };
+      const d = outcome(dismiss(store, f));
+      await paused;
+      const c = await outcome(again(store, f, action));
+      go();
+      expect([c, await d]).toEqual(['in-progress', 'ok']);
+      expect(await consistent(store, f)).toBe('dismissed');
+    });
+
+    for (const whole of [true, false]) {
+      for (const first of ['again', 'dismiss'] as const) {
+        const state = whole ? 'stopped-at-its-close' : 'stopped-part-way';
+        it(`feedback.${action}-${state}-run-again-and-dismissed-at-once-${first}-first`, async () => {
+          const { store, f } = await stopped(action, whole);
+          // Both read the stopped row; then their first row writes land in the order given.
+          const real = store.putFeedback!.bind(store);
+          let arrived = 0;
+          let both!: () => void;
+          const bothIn = new Promise<void>((r) => (both = r));
+          let firstLanded!: () => void;
+          const landed = new Promise<void>((r) => (firstLanded = r));
+          store.putFeedback = async (g, row, e, o) => {
+            const c = row.claim;
+            if (row.status !== 'resolving' || c?.takenOverBy === undefined || arrived >= 2) {
+              return real(g, row, e, o);
+            }
+            if (++arrived === 2) both();
+            await bothIn;
+            const mine = c.undoing === true ? 'dismiss' : 'again';
+            if (mine !== first) await landed;
+            const w = await real(g, row, e, o);
+            if (mine === first) firstLanded();
+            return w;
+          };
+          const [c, d] = await Promise.all([
+            outcome(again(store, f, action)),
+            outcome(dismiss(store, f)),
+          ]);
+          const status = await consistent(store, f);
+          // The other call wrote nothing: it found the row taken (or already closed).
+          const lost = whole ? 'already-resolved' : 'in-progress';
+          if (first === 'again') {
+            expect([c, d]).toEqual(['ok', lost]);
+            expect(status).toBe(closes[action]);
+          } else {
+            // The dismiss took the row: it finishes a claim whose changes were all in place.
+            expect([c, d]).toEqual([lost, whole ? 'applied' : 'ok']);
+            expect(status).toBe(whole ? closes[action] : 'dismissed');
+          }
+        });
+      }
+    }
+  }
 });
 
 describe('feedback: the store holds the rules', () => {

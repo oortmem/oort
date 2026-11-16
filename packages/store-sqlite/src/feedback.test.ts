@@ -417,4 +417,66 @@ describe('sqlite feedback', () => {
     expect(all.find((m) => m.id === 'm1')?.supersededBy).toBe(done.memory.id);
     await s.close();
   });
+
+  it('feedback.a-dismiss-from-another-connection-never-undoes-a-supersede-run-again', async () => {
+    const dir = fresh();
+    const s1 = await openSqliteStore(optsIn(dir));
+    await s1.upsert(
+      TG,
+      makeMemory({ id: 'm1', scope: SCOPE, validFrom: '2026-11-01T00:00:00.000Z' }),
+    );
+    const r = await recordFeedback(
+      { memoryId: 'm1', signal: 'wrong', by: 'local-user' },
+      { store: s1, grant: TG, scope: SCOPE, via: 'cli', now: NOW },
+    );
+    if (!r.kept) throw new Error('not kept');
+    const id = r.feedback.id;
+    const at = (min: number) => new Date(NOW.getTime() + min * 60_000);
+    const deps = (store: MemoryStore, now: Date, by: string) => ({
+      store,
+      grant: TG,
+      scope: SCOPE,
+      by,
+      now,
+      harness: 'test',
+    });
+    // Stops after both memories changed, before the row closes.
+    const put = s1.putFeedback!.bind(s1);
+    let gate: Promise<void> | undefined;
+    let closing!: () => void;
+    let go!: () => void;
+    const s1b = {
+      ...s1,
+      putFeedback: async (...a: Parameters<typeof put>) => {
+        if (a[1].status === 'superseded') {
+          if (gate === undefined) throw new Error('stopped');
+          closing();
+          await gate;
+        }
+        return put(...a);
+      },
+    } as MemoryStore;
+    await expect(
+      supersedeFeedback(id, 'The port is 8080', deps(s1b, at(1), 'ada')),
+    ).rejects.toThrow('stopped');
+    // Run again, it pauses at its close; another connection dismisses meanwhile.
+    gate = new Promise<void>((res) => (go = res));
+    const atClose = new Promise<void>((res) => (closing = res));
+    const again = supersedeFeedback(id, 'The port is 8080', deps(s1b, at(7), 'ada'));
+    await atClose;
+    const s2 = await openSqliteStore(optsIn(dir));
+    const e = (await dismissFeedback(id, deps(s2, at(7), 'grace')).catch(
+      (x: unknown) => x,
+    )) as FeedbackError;
+    expect(e.kind).toBe('in-progress');
+    go();
+    const done = await again;
+    expect(done.feedback.status).toBe('superseded');
+    const all = await s2.list(TG, { validOnly: false, embeddings: false });
+    const current = all.filter((m) => m.expiredAt === null && m.validTo === null);
+    expect(current.map((m) => m.id)).toEqual([supersedingId(id)]);
+    expect((await s2.getFeedback!(TG, id))?.status).toBe('superseded');
+    await s2.close();
+    await s1.close();
+  });
 });
