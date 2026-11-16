@@ -95,8 +95,32 @@ export type IncludeLevel = 'self' | 'planet' | 'star' | 'constellation' | 'galax
 export type RecallMode = 'current' | 'as-of' | 'history' | 'known-at';
 export type JudgmentVia = 'cli' | 'mcp' | 'import' | 'pack' | 'sdk';
 
+/**
+ * How a label (a judgment, a resolve, a feedback row) arrived. It says which path wrote it, not
+ * who stood behind it, and grants nothing. `interactive`: a person answered the CLI's prompt for
+ * the label on the controlling terminal (whatever drives that terminal can answer it).
+ * `dashboard`: the Oort Cloud dashboard. `connector`: an upstream connector (`upstream` names the
+ * system and its actor). `integration`: expert-role SDK or `oort serve` calls, and every CLI call
+ * that is not interactive (`--yes`, `--json`, a pipe, an agent harness). `agent`: MCP, or an
+ * agent-role handle. A record written
+ * before origins were kept reads as `agent` when an agent recorded it and no person confirmed it,
+ * else `integration`.
+ */
+export type LabelOrigin = 'interactive' | 'dashboard' | 'connector' | 'integration' | 'agent';
+
+/** How a label arrived, as a view shows it. */
+export interface LabelOriginView {
+  origin: LabelOrigin;
+  /** Who the integration says reviewed it: its claim, not checked by Oort. */
+  reviewer?: string;
+  /** `connector`: the upstream system and who made the label there. */
+  upstream?: { system: string; actor: string };
+  /** Set on an agent's label a person confirmed: the origin it had before (`agent`). */
+  proposedOrigin?: LabelOrigin;
+}
+
 /** A judgment as a memory carries it (local mode). */
-export interface JudgmentView {
+export interface JudgmentView extends LabelOriginView {
   subject: { summary: string; ref?: string };
   verdict: string;
   verdicts: string[];
@@ -415,6 +439,11 @@ export interface ResolveInput {
   by: string;
   /** The domain for the judgment, when the prediction has none. */
   domain?: string;
+  /**
+   * Expert role: who reviewed it, as your integration asserts (one line, at most 120 characters,
+   * scrubbed). Recorded as `reviewer`. Ignored in agent role.
+   */
+  reviewer?: string;
 }
 
 /** A kept prediction: what judging proposed, and what a person decided. */
@@ -436,7 +465,7 @@ export interface PredictionView {
   criteria: string[];
   createdAt: string;
   expiresAt: string;
-  resolution?: {
+  resolution?: LabelOriginView & {
     verdict: string;
     reason?: string;
     criteria: string[];
@@ -577,6 +606,17 @@ export interface JudgmentInput {
   domain: string;
   by: string;
   decidedAt?: string | Date;
+  /**
+   * Expert role: who reviewed it, as your integration asserts (one line, at most 120 characters,
+   * scrubbed). Recorded as `reviewer`. Ignored in agent role.
+   */
+  reviewer?: string;
+}
+
+/** What a confirm takes besides the id. */
+export interface ConfirmOptions {
+  /** Who reviewed it, as your integration asserts (one line, at most 120 characters, scrubbed). */
+  reviewer?: string;
 }
 
 export interface JudgeItem {
@@ -619,7 +659,7 @@ export interface OortJudge {
    * Expert role only. Takes a judgment id, or a prediction id to confirm an agent's resolve of it
    * (and the judgment that resolve recorded).
    */
-  confirm(id: string): Promise<{ id: string; changed: boolean }>;
+  confirm(id: string, opts?: ConfirmOptions): Promise<{ id: string; changed: boolean }>;
   /**
    * Records a person's decision on a prediction (`JudgeResult.predictionId`). In agent role it
    * is stored unconfirmed, and `by` must be listed in `judge.experts`.
@@ -658,9 +698,14 @@ export interface FeedbackInput {
   note?: string;
   /** The query the memory was recalled for. Required for `irrelevant`. */
   query?: string;
+  /**
+   * Expert role: who reviewed it, as your integration asserts (one line, at most 120 characters,
+   * scrubbed). Recorded as `reviewer`. Ignored in agent role.
+   */
+  reviewer?: string;
 }
 
-export interface FeedbackView {
+export interface FeedbackView extends LabelOriginView {
   id: string;
   memoryId: string;
   signal: FeedbackSignal;
@@ -702,7 +747,8 @@ export interface FeedbackView {
    * Who resolved it and when. `claimedBy` and `claimedAt`: another person started it, and `by`
    * finished it.
    */
-  resolved?: {
+  /** How the person's retire, supersede or dismiss arrived is its `origin` (and `reviewer`). */
+  resolved?: LabelOriginView & {
     at: string;
     by: string;
     supersededBy?: string;
@@ -754,7 +800,7 @@ export interface OortFeedback {
     limit?: number;
   }): Promise<{ feedback: FeedbackView[] }>;
   /** Confirms an agent's pending feedback: from then on it counts, once. */
-  confirm(id: string): Promise<FeedbackView>;
+  confirm(id: string, opts?: ConfirmOptions): Promise<FeedbackView>;
   /** Ends the memory a wrong or stale feedback names, now. */
   retire(id: string): Promise<FeedbackRetireView>;
   /** Stores the right fact in place of the memory a wrong or stale feedback names. */

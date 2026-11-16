@@ -2,8 +2,11 @@ import {
   formatForInjection,
   isAgentVia,
   isCurrent,
+  labelOrigin,
+  proposedOriginOf,
   scrub,
   type Judgment,
+  type LabelRecord,
   type JudgeResult as CoreJudgeResult,
   type LiveEvalReport,
   predictionState,
@@ -16,6 +19,7 @@ import type {
   IncludeLevel,
   JudgeResult,
   JudgmentView,
+  LabelOriginView,
   LiveEvalView,
   PredictionView,
   MemoryStatus,
@@ -66,6 +70,21 @@ function originView(o: CoreRecalled['origin']): MemoryView['origin'] | undefined
   };
 }
 
+/**
+ * How a label arrived, as the views show it: `origin` always (see `labelOrigin` for older rows,
+ * and for a stored value that is not an origin), and the rest when set.
+ */
+export function labelView(r: LabelRecord): LabelOriginView {
+  return {
+    origin: labelOrigin(r),
+    ...(r.reviewer !== undefined && { reviewer: clean(r.reviewer) }),
+    ...(r.upstream !== undefined && {
+      upstream: { system: clean(r.upstream.system), actor: clean(r.upstream.actor) },
+    }),
+    ...(proposedOriginOf(r) !== undefined && { proposedOrigin: proposedOriginOf(r) }),
+  };
+}
+
 export function judgmentView(j: Judgment, m: Memory, now: Date): JudgmentView & { id: string } {
   const confirmed = !isAgentVia(j.via) || j.confirmed !== undefined;
   return {
@@ -85,6 +104,7 @@ export function judgmentView(j: Judgment, m: Memory, now: Date): JudgmentView & 
     status: memoryStatus(m, now),
     confirmed,
     agentRecorded: isAgentVia(j.via) && !confirmed,
+    ...labelView(j),
     ...(j.withdrawn !== undefined && { withdrawn: { ...j.withdrawn } }),
     ...(j.pack !== undefined && { pack: { id: j.pack.id, name: j.pack.name } }),
   };
@@ -347,6 +367,7 @@ export function predictionView(p: Prediction, now: Date): PredictionView {
         agrees: r.agrees,
         ...(r.judgmentId !== undefined && { judgmentId: r.judgmentId }),
         agentRecorded: isAgentVia(r.via) && r.confirmed === undefined,
+        ...labelView(r),
       },
     }),
     ...(p.purged !== undefined && { purged: true as const }),

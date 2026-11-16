@@ -1,0 +1,476 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  AGENT_ENV_MARKERS,
+  type DecisionController,
+  type Feedback,
+  type Judgment,
+  type Prediction,
+} from '@oortmem/core';
+import { inputSchemas } from '@oortmem/mcp';
+import { makeFeedback, TG } from '@oortmem/core/store-conformance';
+import { data, fakeDecide, harness, memory, type Harness } from '../test/helpers.js';
+import { localBackend } from './mcp.js';
+
+/**
+ * How a label arrived (`origin`), through the CLI and MCP: `interactive` only when a person
+ * answered a prompt naming the label on the controlling terminal (stdin and stdout terminals, no
+ * `--yes` or `--json`, no agent harness), `integration` for every other CLI call, `agent` for MCP
+ * whatever it sends, and on a confirm the confirmer's origin with the agent's kept as
+ * `proposedOrigin`. A person who says no writes nothing.
+ */
+
+const MEMORY = 'aaaaaaaa-0000-4000-8000-000000000001';
+/** stdin and stdout terminals, and a person answering yes on the controlling terminal. */
+const TERMINAL = { tty: true, stdoutTTY: true, terminal: 'y' } as const;
+/** The same, answered no. */
+const DECLINED = { ...TERMINAL, terminal: 'n' } as const;
+/** A terminal an agent harness runs commands in (Claude Code sets CLAUDECODE). */
+const underAgent = (h: Harness) =>
+  ({ ...TERMINAL, env: { HOME: h.root, OORT_HOME: h.home, CLAUDECODE: '1' } }) as const;
+
+function judging(): Harness {
+  const h = harness();
+  // Agents may record for ada (MCP needs a listed expert).
+  fs.mkdirSync(h.home, { recursive: true });
+  fs.writeFileSync(
+    path.join(h.home, 'config.json'),
+    JSON.stringify({ judge: { experts: ['ada'] } }),
+  );
+  const decide: DecisionController = {
+    ...fakeDecide,
+    async judge(req) {
+      const probabilities = Object.fromEntries(
+        req.verdicts.map((v) => [v, v === 'rejected' ? 0.9 : 0.1 / (req.verdicts.length - 1)]),
+      );
+      return { verdict: 'rejected', probability: 0.9, probabilities, decisions: [] };
+    },
+  };
+  const base = h.wire;
+  h.wire = async (dir, o) => ({ ...(await base(dir, o)), decide });
+  return h;
+}
+
+const record = (subject: string, ref?: string) => [
+  'judge',
+  'record',
+  '--subject',
+  subject,
+  '--verdict',
+  'rejected',
+  '--reason',
+  'Health claim with no cited source.',
+  '--criteria',
+  'no-source',
+  '--domain',
+  'content',
+  '--by',
+  'ada',
+  ...(ref === undefined ? [] : ['--ref', ref]),
+];
+
+async function judgments(h: Harness): Promise<(Judgment & { id: string })[]> {
+  const r = await h.run(['judge', 'list', '--all', '--json']);
+  expect(r.code, r.io.stderr).toBe(0);
+  return data<{ judgments: (Judgment & { id: string })[] }>(r.io.stdout).judgments;
+}
+
+const bySubject = async (h: Harness, subject: string) =>
+  (await judgments(h)).find((j) => j.subject.summary === subject);
+
+async function seed(h: Harness): Promise<void> {
+  for (const subject of [
+    'Post says a vitamin cures the flu',
+    'Ad says a miracle remedy cures the flu',
+    'Post says a vitamin cures colds',
+  ]) {
+    expect((await h.run(record(subject))).code).toBe(0);
+  }
+}
+
+async function predict(h: Harness, item: string): Promise<string> {
+  const r = await h.run(['judge', 'apply', item, '--domain', 'content', '--json']);
+  expect(r.code, r.io.stderr).toBe(0);
+  return data<{ predictionId: string }>(r.io.stdout).predictionId;
+}
+
+async function prediction(h: Harness, id: string): Promise<Prediction> {
+  const r = await h.run(['judge', 'predictions', '--all', '--json']);
+  return data<{ predictions: Prediction[] }>(r.io.stdout).predictions.find((p) => p.id === id)!;
+}
+
+async function feedback(h: Harness): Promise<(Feedback & { id: string })[]> {
+  const r = await h.run(['feedback', 'list', '--json']);
+  expect(r.code, r.io.stderr).toBe(0);
+  return data<{ feedback: (Feedback & { id: string })[] }>(r.io.stdout).feedback;
+}
+
+// These tests decide the environment themselves: an agent harness running them (its markers in
+// this process's environment) must not change what core records.
+const outer = new Map<string, string | undefined>();
+beforeEach(() => {
+  for (const k of AGENT_ENV_MARKERS) {
+    outer.set(k, process.env[k]);
+    delete process.env[k];
+  }
+});
+afterEach(() => {
+  for (const [k, v] of outer) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
+
+describe('label origin: oort judge', () => {
+  it('cli.origin-judge-record-is-interactive-only-when-a-person-answers', async () => {
+    const h = judging();
+    const cases: [string, Parameters<Harness['run']>[1], string[], string][] = [
+      ['answered at the terminal', TERMINAL, [], 'interactive'],
+      ['with --yes', TERMINAL, ['--yes'], 'integration'],
+      ['with --json', TERMINAL, ['--json'], 'integration'],
+      ['stdin piped', { ...TERMINAL, tty: false }, [], 'integration'],
+      ['stdout piped', { ...TERMINAL, stdoutTTY: false }, [], 'integration'],
+      ['under an agent harness', underAgent(h), [], 'integration'],
+      ['no controlling terminal', { tty: true, stdoutTTY: true }, [], 'integration'],
+    ];
+    for (const [subject, io, extra, origin] of cases) {
+      const r = await h.run([...record(subject), ...extra], io);
+      expect(r.code, r.io.stderr).toBe(0);
+      // Only an interactive label was asked about, and the question names it.
+      if (origin === 'interactive') {
+        expect(r.io.asked, subject).toHaveLength(1);
+        expect(r.io.asked[0]).toContain('rejected');
+        expect(r.io.asked[0]).toContain(subject);
+      } else {
+        expect(r.io.asked, subject).toEqual([]);
+      }
+    }
+    for (const [subject, , , origin] of cases) {
+      expect((await bySubject(h, subject))?.origin, subject).toBe(origin);
+    }
+    // Declined: nothing is written.
+    const no = await h.run(record('Declined at the terminal'), DECLINED);
+    expect(no.code).toBe(0);
+    expect(no.io.stdout).toContain('Nothing recorded.');
+    expect(await bySubject(h, 'Declined at the terminal')).toBeUndefined();
+  });
+
+  it('cli.origin-judge-resolve-records-it-on-the-resolve-and-its-judgment', async () => {
+    const h = judging();
+    await seed(h);
+    const typed = await predict(h, 'Satire site says a vitamin cures the flu');
+    const piped = await predict(h, 'Parody blog says a vitamin cures colds');
+    const resolve = (id: string, reason: string) => [
+      'judge',
+      'resolve',
+      id,
+      '--verdict',
+      'approved',
+      '--reason',
+      reason,
+      '--by',
+      'ada',
+    ];
+    const declined = await h.run(resolve(typed, 'Labelled satire.'), DECLINED);
+    expect(declined.io.stdout).toContain('Nothing recorded.');
+    expect((await prediction(h, typed)).resolution).toBeUndefined();
+    const asked = await h.run(resolve(typed, 'Labelled satire.'), TERMINAL);
+    expect(asked.code, asked.io.stderr).toBe(0);
+    expect(asked.io.asked[0]).toContain(typed.slice(0, 8));
+    expect(asked.io.asked[0]).toContain('approved');
+    const viaPipe = await h.run(resolve(piped, 'Labelled parody.'), { ...TERMINAL, tty: false });
+    expect(viaPipe.code, viaPipe.io.stderr).toBe(0);
+    expect(viaPipe.io.asked).toEqual([]);
+    expect((await prediction(h, typed)).resolution).toMatchObject({ origin: 'interactive' });
+    expect((await prediction(h, piped)).resolution).toMatchObject({ origin: 'integration' });
+    const all = await judgments(h);
+    expect(all.find((j) => j.reason === 'Labelled satire.')?.origin).toBe('interactive');
+    expect(all.find((j) => j.reason === 'Labelled parody.')?.origin).toBe('integration');
+  });
+
+  it('cli.origin-agent-judgment-confirmed-at-a-terminal-keeps-the-proposed-origin', async () => {
+    const h = judging();
+    const b = localBackend({ wired: await h.wire(h.cwd) });
+    // An agent cannot set or spoof an origin: extra fields are not part of the tool.
+    const input = (subject: string) =>
+      inputSchemas.record_judgment.parse({
+        subject,
+        verdict: 'rejected',
+        reason: 'Health claim with no cited source.',
+        domain: 'content',
+        by: 'ada',
+        origin: 'interactive',
+        reviewer: 'grace',
+      });
+    const typed = await b.recordJudgment!(input('Agent row one'));
+    const flagged = await b.recordJudgment!(input('Agent row two'));
+    expect(await bySubject(h, 'Agent row one')).toMatchObject({ origin: 'agent' });
+    expect((await bySubject(h, 'Agent row one'))?.reviewer).toBeUndefined();
+
+    const no = await h.run(['judge', 'confirm', String(typed['id'])], DECLINED);
+    expect(no.io.stdout).toContain('Not confirmed.');
+    expect(await bySubject(h, 'Agent row one')).toMatchObject({ origin: 'agent' });
+    const ok = await h.run(['judge', 'confirm', String(typed['id'])], TERMINAL);
+    expect(ok.code, ok.io.stderr).toBe(0);
+    expect(ok.io.asked[0]).toContain(String(typed['id']).slice(0, 8));
+    expect(ok.io.asked[0]).toContain('rejected');
+    expect(await bySubject(h, 'Agent row one')).toMatchObject({
+      origin: 'interactive',
+      proposedOrigin: 'agent',
+    });
+    // `--yes` never asks, so it is not a terminal confirm, even at one.
+    const yes = await h.run(['judge', 'confirm', String(flagged['id']), '--yes'], TERMINAL);
+    expect(yes.code, yes.io.stderr).toBe(0);
+    expect(await bySubject(h, 'Agent row two')).toMatchObject({
+      origin: 'integration',
+      proposedOrigin: 'agent',
+    });
+    // Under an agent harness, a yes on stdin confirms as before, but not as `interactive`.
+    const third = await b.recordJudgment!(input('Agent row three'));
+    const harnessed = await h.run(['judge', 'confirm', String(third['id'])], {
+      ...underAgent(h),
+      answer: 'y',
+    });
+    expect(harnessed.code, harnessed.io.stderr).toBe(0);
+    expect(await bySubject(h, 'Agent row three')).toMatchObject({
+      origin: 'integration',
+      proposedOrigin: 'agent',
+    });
+  });
+
+  it('cli.origin-agent-resolve-confirmed-at-a-terminal', async () => {
+    const h = judging();
+    await seed(h);
+    const b = localBackend({ wired: await h.wire(h.cwd) });
+    const id = await predict(h, 'Satire site says a vitamin cures the flu');
+    const r = await b.resolvePrediction!(
+      inputSchemas.resolve_prediction.parse({
+        prediction_id: id,
+        verdict: 'approved',
+        by: 'ada',
+        reason: 'Labelled satire.',
+        origin: 'interactive',
+        reviewer: 'grace',
+      }),
+    );
+    expect(r).toMatchObject({ status: 'agent-recorded, unconfirmed' });
+    expect((await prediction(h, id)).resolution).toMatchObject({ origin: 'agent' });
+    expect((await judgments(h)).find((j) => j.reason === 'Labelled satire.')?.origin).toBe('agent');
+    const ok = await h.run(['judge', 'confirm', id], TERMINAL);
+    expect(ok.code, ok.io.stderr).toBe(0);
+    const resolution = (await prediction(h, id)).resolution;
+    expect(resolution).toMatchObject({ origin: 'interactive', proposedOrigin: 'agent' });
+    expect(resolution?.reviewer).toBeUndefined();
+    expect((await judgments(h)).find((j) => j.reason === 'Labelled satire.')).toMatchObject({
+      origin: 'interactive',
+      proposedOrigin: 'agent',
+    });
+    const shown = await h.run(['judge', 'predictions', '--resolved']);
+    expect(shown.io.stdout).toContain('[origin interactive, proposed agent]');
+  });
+
+  it('cli.origin-judge-list-shows-it-and-reads-older-rows', async () => {
+    const h = judging();
+    expect((await h.run(record('Typed at a terminal'), TERMINAL)).code).toBe(0);
+    // A judgment written before origins were kept: no origin at all.
+    const [m] = (await h.store.list(TG, { validOnly: false })).filter(
+      (x) => x.judgment !== undefined,
+    );
+    const { origin: _o, ...j } = m!.judgment!;
+    await h.store.upsert(TG, {
+      ...m!,
+      id: 'bbbbbbbb-0000-4000-8000-000000000002',
+      judgment: { ...(j as Judgment), subject: { summary: 'Written by an older build' } },
+    });
+    // An agent's, from an older build, that no person has confirmed: it reads `agent`.
+    await h.store.upsert(TG, {
+      ...m!,
+      id: 'bbbbbbbb-0000-4000-8000-000000000003',
+      judgment: {
+        ...(j as Judgment),
+        via: 'mcp',
+        subject: { summary: 'Recorded by an agent on an older build' },
+      },
+    });
+    const text = await h.run(['judge', 'list']);
+    expect(text.io.stdout).toMatch(/Typed at a terminal.*\[origin interactive\]/);
+    expect(text.io.stdout).toMatch(/Written by an older build.*\[origin integration\]/);
+    expect(text.io.stdout).toMatch(/Recorded by an agent on an older build.*\[origin agent\]/);
+    expect(await bySubject(h, 'Recorded by an agent on an older build')).toMatchObject({
+      origin: 'agent',
+    });
+    expect(await bySubject(h, 'Written by an older build')).toMatchObject({
+      origin: 'integration',
+    });
+    expect(await bySubject(h, 'Typed at a terminal')).toMatchObject({ origin: 'interactive' });
+  });
+});
+
+describe('label origin: what the question shows', () => {
+  it('cli.origin-question-shows-no-escape-sequences', async () => {
+    const h = judging();
+    const r = await h.run(record('Post \u001b[2J\u001b]52;c;eA==\u0007says hi'), TERMINAL);
+    expect(r.io.asked).toHaveLength(1);
+    expect(r.io.asked[0]).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
+    expect(r.io.asked[0]).toContain('\\u{1b}');
+    // A signal is checked before anything is asked.
+    await h.store.upsert(TG, memory({ id: MEMORY, text: 'The auth service listens on 5501.' }));
+    const bad = await h.run(['feedback', MEMORY, '\u001b[2Jwrong'], TERMINAL);
+    expect(bad.code).not.toBe(0);
+    expect(bad.io.asked).toEqual([]);
+  });
+
+  it('cli.origin-core-checks-the-process-environment-too', async () => {
+    // The process runs under an agent harness even though the command's own view of the
+    // environment does not show it: core still records `integration`.
+    const h = judging();
+    process.env['CLAUDECODE'] = '1';
+    const r = await h.run(record('Asked, but under a harness'), TERMINAL);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect((await bySubject(h, 'Asked, but under a harness'))?.origin).toBe('integration');
+  });
+});
+
+describe('label origin: oort feedback', () => {
+  async function seeded(): Promise<Harness> {
+    const h = harness();
+    await h.store.upsert(
+      TG,
+      memory({ id: MEMORY, text: 'The auth service listens on port 5501 in staging.' }),
+    );
+    return h;
+  }
+
+  it('cli.origin-feedback-is-interactive-only-when-a-person-answers', async () => {
+    const h = await seeded();
+    const give = async (note: string, io: Parameters<Harness['run']>[1], extra: string[] = []) => {
+      const r = await h.run(['feedback', MEMORY, 'stale', '--note', note, ...extra], io);
+      expect(r.code, r.io.stderr).toBe(0);
+      return r;
+    };
+    const typed = await give('typed', TERMINAL);
+    expect(typed.io.asked[0]).toContain(MEMORY.slice(0, 8));
+    expect(typed.io.asked[0]).toContain('stale');
+    await give('yes', TERMINAL, ['--yes']);
+    await give('json', TERMINAL, ['--json']);
+    await give('stdin piped', { ...TERMINAL, tty: false });
+    await give('stdout piped', { ...TERMINAL, stdoutTTY: false });
+    const harnessed = await give('under an agent harness', underAgent(h));
+    expect(harnessed.io.asked).toEqual([]);
+    const declined = await give('declined', DECLINED);
+    expect(declined.io.stdout).toContain('Nothing recorded.');
+    const rows = Object.fromEntries((await feedback(h)).map((f) => [f.note, f.origin]));
+    expect(rows).toEqual({
+      typed: 'interactive',
+      yes: 'integration',
+      json: 'integration',
+      'stdin piped': 'integration',
+      'stdout piped': 'integration',
+      'under an agent harness': 'integration',
+    });
+  });
+
+  it('cli.origin-feedback-resolves-record-how-they-arrived', async () => {
+    const h = await seeded();
+    const give = async (note: string) => {
+      const r = await h.run(['feedback', MEMORY, 'stale', '--note', note, '--yes', '--json']);
+      expect(r.code, r.io.stderr).toBe(0);
+      return data<{ feedback: { id: string } }>(r.io.stdout).feedback.id;
+    };
+    const one = await give('dismissed at the terminal');
+    const two = await give('dismissed with yes');
+    const three = await give('declined');
+    const no = await h.run(['feedback', 'dismiss', three], DECLINED);
+    expect(no.io.stdout).toContain('Nothing changed.');
+    const ok = await h.run(['feedback', 'dismiss', one], TERMINAL);
+    expect(ok.code, ok.io.stderr).toBe(0);
+    expect(ok.io.asked[0]).toContain(one.slice(0, 8));
+    expect(ok.io.asked[0]).toContain('stale');
+    expect((await h.run(['feedback', 'dismiss', two, '--yes'])).code).toBe(0);
+    const rows = await h.run(['feedback', 'list', '--status', 'all', '--json']);
+    const all = data<{ feedback: (Feedback & { id: string })[] }>(rows.io.stdout).feedback;
+    expect(all.find((f) => f.id === one)?.resolved).toMatchObject({ origin: 'interactive' });
+    expect(all.find((f) => f.id === two)?.resolved).toMatchObject({ origin: 'integration' });
+    expect(all.find((f) => f.id === three)).toMatchObject({ status: 'open' });
+    const retired = await h.run(['feedback', 'retire', three], TERMINAL);
+    expect(retired.code, retired.io.stderr).toBe(0);
+    expect((await h.store.getFeedback!(TG, three))?.resolved).toMatchObject({
+      origin: 'interactive',
+    });
+  });
+
+  it('cli.origin-agent-feedback-confirmed-keeps-the-proposed-origin', async () => {
+    const h = await seeded();
+    const b = localBackend({ wired: await h.wire(h.cwd) });
+    expect(Object.keys(inputSchemas.feedback.shape)).not.toContain('origin');
+    const pending = async (note: string) =>
+      String(
+        (
+          await b.feedback!(
+            inputSchemas.feedback.parse({
+              memory_id: MEMORY,
+              signal: 'wrong',
+              note,
+              origin: 'interactive',
+              reviewer: 'grace',
+            }),
+          )
+        )['feedback_id'],
+      );
+    const typed = await pending('confirmed at a terminal');
+    const flagged = await pending('confirmed with yes');
+    const before = (await feedback(h)).find((f) => f.id === typed);
+    expect(before).toMatchObject({ origin: 'agent', status: 'pending' });
+    expect(before?.reviewer).toBeUndefined();
+
+    const ok = await h.run(['feedback', 'confirm', typed], TERMINAL);
+    expect(ok.code, ok.io.stderr).toBe(0);
+    const yes = await h.run(['feedback', 'confirm', flagged, '--yes'], TERMINAL);
+    expect(yes.code, yes.io.stderr).toBe(0);
+    const rows = await feedback(h);
+    expect(rows.find((f) => f.id === typed)).toMatchObject({
+      origin: 'interactive',
+      proposedOrigin: 'agent',
+      status: 'open',
+    });
+    expect(rows.find((f) => f.id === flagged)).toMatchObject({
+      origin: 'integration',
+      proposedOrigin: 'agent',
+    });
+    const text = await h.run(['feedback', 'list']);
+    expect(text.io.stdout).toContain('[origin interactive, proposed agent]');
+    expect(text.io.stdout).toContain('[origin integration, proposed agent]');
+  });
+
+  it('cli.origin-feedback-list-reads-older-rows', async () => {
+    const h = await seeded();
+    // A row written before origins were kept: no origin at all.
+    const old = makeFeedback({ id: 'cccccccc-0000-4000-8000-000000000003', memoryId: MEMORY });
+    expect(old.origin).toBeUndefined();
+    expect(await h.store.putFeedback!(TG, old)).toBe('written');
+    expect((await feedback(h))[0]).toMatchObject({ origin: 'integration' });
+    expect((await h.run(['feedback', 'list'])).io.stdout).toContain('[origin integration]');
+    // An agent's, from an older build, that no person has confirmed: it reads `agent`.
+    const agents = makeFeedback({
+      id: 'cccccccc-0000-4000-8000-000000000004',
+      memoryId: MEMORY,
+      via: 'mcp',
+      status: 'pending',
+    });
+    expect(await h.store.putFeedback!(TG, agents)).toBe('written');
+    const rows = await feedback(h);
+    expect(rows.find((f) => f.id === agents.id)).toMatchObject({ origin: 'agent' });
+    expect(rows.find((f) => f.id === old.id)).toMatchObject({ origin: 'integration' });
+    expect((await h.run(['feedback', 'list'])).io.stdout).toContain('[origin agent]');
+  });
+
+  it('mcp.origin-tools-take-no-origin-or-reviewer', () => {
+    for (const tool of ['record_judgment', 'resolve_prediction', 'feedback'] as const) {
+      const keys = Object.keys(inputSchemas[tool].shape);
+      for (const k of ['origin', 'reviewer', 'upstream', 'proposed_origin']) {
+        expect(keys, `${tool} ${k}`).not.toContain(k);
+      }
+    }
+  });
+});

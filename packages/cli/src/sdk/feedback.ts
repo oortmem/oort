@@ -17,15 +17,17 @@ import {
 import { localOnly } from './cloud.js';
 import { storeOf, type Ctx } from './context.js';
 import { OortNotFoundError, OortRefusedError } from './errors.js';
+import { sdkLabel } from './judge.js';
 import { findLocal } from './local.js';
 import type {
+  ConfirmOptions,
   FeedbackInput,
   FeedbackResultView,
   FeedbackRetireView,
   FeedbackSupersedeView,
   FeedbackView,
 } from './types.js';
-import { clean } from './views.js';
+import { clean, labelView } from './views.js';
 
 /**
  * Recall feedback from code. A handle in expert role is a person: what it records counts at once
@@ -69,6 +71,7 @@ export function feedbackView(f: Feedback, now = new Date()): FeedbackView {
     ...(f.query !== undefined && { query: seen(f.query) }),
     by: seen(f.by),
     agentRecorded: isAgentVia(f.via),
+    ...labelView(f),
     ...(f.applied !== undefined && { applied: f.applied }),
     ...(f.reason !== undefined && { reason: f.reason }),
     createdAt: f.createdAt,
@@ -98,6 +101,7 @@ export function feedbackView(f: Feedback, now = new Date()): FeedbackView {
         ...(f.resolved.supersededBy !== undefined && { supersededBy: f.resolved.supersededBy }),
         ...(f.resolved.claimedBy !== undefined && { claimedBy: seen(f.resolved.claimedBy) }),
         ...(f.resolved.claimedAt !== undefined && { claimedAt: f.resolved.claimedAt }),
+        ...labelView(f.resolved),
       },
     }),
   };
@@ -128,6 +132,7 @@ export async function give(ctx: Ctx, input: FeedbackInput): Promise<FeedbackResu
       grant,
       scope: ctx.principal.scope,
       via: person(ctx) ? 'sdk' : 'mcp',
+      label: sdkLabel(ctx, input.reviewer),
       helpedAccesses: ctx.engine.config.feedback.helpedAccesses,
       now: ctx.now(),
     },
@@ -169,15 +174,21 @@ async function resolving(ctx: Ctx, ref: string, what: string) {
       store,
       grant,
       by: ctx.judge.operator,
+      // How the resolve arrived; a confirm passes its own reviewer.
+      label: sdkLabel(ctx, undefined),
       helpedAccesses: ctx.engine.config.feedback.helpedAccesses,
       now: ctx.now(),
     },
   };
 }
 
-export async function confirm(ctx: Ctx, ref: string): Promise<FeedbackView> {
+export async function confirm(
+  ctx: Ctx,
+  ref: string,
+  o: ConfirmOptions = {},
+): Promise<FeedbackView> {
   const { id, deps } = await resolving(ctx, ref, 'confirms');
-  return feedbackView(await confirmFeedback(id, deps));
+  return feedbackView(await confirmFeedback(id, { ...deps, label: sdkLabel(ctx, o.reviewer) }));
 }
 
 export async function retire(ctx: Ctx, ref: string): Promise<FeedbackRetireView> {

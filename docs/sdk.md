@@ -117,14 +117,14 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 | `judge.record(input)`                          | `RecordJudgmentView`                       | yes   | `refused`                 |
 | `judge.apply(item, opts?)`                     | `JudgeResult`                              | yes   | `refused`                 |
 | `judge.list({ domain?, by?, all?, limit? })`   | `{ judgments }`                            | yes   | `refused`                 |
-| `judge.confirm(id)`                            | `{ id, changed }`                          | expert role only | `refused`      |
-| `judge.resolve(predictionId, { verdict, reason?, criteria?, by, domain? })` | `ResolveView` (`agrees`, `prediction`, `judgment?`) | yes | `refused` |
+| `judge.confirm(id, { reviewer? })`             | `{ id, changed }`                          | expert role only | `refused`      |
+| `judge.resolve(predictionId, { verdict, reason?, criteria?, by, domain?, reviewer? })` | `ResolveView` (`agrees`, `prediction`, `judgment?`) | yes | `refused` |
 | `judge.listPredictions({ status?, limit?, domain? })` | `{ predictions }`                   | yes   | `refused`                 |
 | `judge.getPrediction(id)` / `judge.forgetPrediction(id)` | `PredictionView` / `{ id, forgotten }` | yes | `refused`               |
 | `judge.evalLive({ domain?, includeAgentResolved? })` | `LiveEvalView`                       | yes   | `refused`                 |
-| `feedback({ memoryId, signal, note?, query? })` | `FeedbackResultView` (`kept`, `feedback`, `applied?`, `reason?`) | yes | `refused` |
+| `feedback({ memoryId, signal, note?, query?, reviewer? })` | `FeedbackResultView` (`kept`, `feedback`, `applied?`, `reason?`) | yes | `refused` |
 | `feedback.list({ status?, memoryId?, signal?, limit? })` | `{ feedback }`                    | yes   | `refused`                 |
-| `feedback.confirm(id)` / `feedback.dismiss(id)` | `FeedbackView`                            | expert role only | `refused`      |
+| `feedback.confirm(id, { reviewer? })` / `feedback.dismiss(id)` | `FeedbackView`                            | expert role only | `refused`      |
 | `feedback.retire(id)`                          | `{ feedback, memoryId, endReason }`        | expert role only | `refused`      |
 | `feedback.supersede(id, fact)`                 | `{ feedback, memoryId, supersedes, redacted }` | expert role only | `refused`  |
 | `consolidate({ budgetMs?, signal? })`          | `ConsolidateResult`                        | yes   | `refused`                 |
@@ -1291,6 +1291,96 @@ way meanwhile, the new one is removed and the row goes back to `open`; if the ne
 recalled, linked or changed meanwhile, it is kept, the row still goes back to `open`, and the error has reason
 `memory-changed` and is not retryable: inspect the memories first. Another memory already at the
 id a supersede writes is refused (`conflict`) and nothing changes. `forget(id)` deletes every feedback row about the memory, whoever gave it.
+
+## Where a label came from
+
+Every judgment, every resolve of a prediction, and every feedback row records how it arrived, as
+`origin` (local mode). It tells a later reader, such as an export of training data, how the label
+reached Oort. It is how a label arrived, not proof that a person made it: your integration can
+name any reviewer, and whatever drives a terminal can answer the CLI's prompt.
+
+<!-- example: examples/src/label-origin.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+// A review screen in your app: a person decides, and your integration names who that was.
+await using review = await createOort({
+  mode: 'local',
+  judge: { role: 'expert', operator: 'ada' },
+  config: { judge: { experts: ['ada'] } },
+});
+
+const reviewed = await review.judge.record({
+  subject: 'Post claims a cure for diabetes',
+  verdict: 'rejected',
+  reason: 'A medical claim with no source.',
+  domain: 'content',
+  by: 'ada',
+  reviewer: 'grace@example.com',
+});
+
+// Model-facing code runs in the agent role: what it records is `agent`, whatever it passes.
+const agent = review.scoped({ judgeRole: 'agent' });
+const draft = await agent.judge.record({
+  subject: 'Post claims a miracle cure for colds',
+  verdict: 'rejected',
+  reason: 'No source.',
+  domain: 'content',
+  by: 'ada',
+  reviewer: 'grace@example.com',
+});
+
+// A confirm records its own origin and keeps the agent's as `proposedOrigin`.
+await review.judge.confirm(draft.id, { reviewer: 'grace@example.com' });
+
+const { judgments } = await review.judge.list();
+const shown = (id: string) => {
+  const j = judgments.find((x) => x.id === id)!;
+  return [j.origin, j.reviewer, j.proposedOrigin ?? '-'].join(' ');
+};
+console.log(shown(reviewed.id)); // integration grace@example.com -
+console.log(shown(draft.id)); // integration grace@example.com agent
+```
+
+| Origin | How the label arrived |
+| --- | --- |
+| `interactive` | A person answered the CLI's confirmation prompt for this label at a terminal, unless something on that machine drove the terminal for them. Never from the SDK. Code that calls the core library (`@oortmem/core`) directly can also record it, outside an agent harness; the CLI's question is the only path Oort itself offers. |
+| `dashboard` | The Oort Cloud dashboard. The public API cannot set it: asking for it records `integration`. Code that edits the store or loads Oort's internal files can write anything, just as it could edit the database. |
+| `connector` | An upstream connector, with `upstream` naming the system and who made the label there. Kept only as `dashboard` is. |
+| `integration` | An expert-role handle, here or over `oort serve`, and every CLI call that does not record `interactive`. |
+| `agent` | An agent-role handle (the default), here or over `oort serve`, and the MCP tools. |
+
+- In the expert role, `judge.record`, `judge.resolve`, `feedback()` and both `confirm` calls take
+  an optional `reviewer`: who reviewed the label, as your integration asserts it. It is kept as
+  `reviewer`, scrubbed of secrets, one line with no tabs or invisible characters, at most 120
+  characters (otherwise `OortUsageError`). Oort does not check who it names.
+- Agents over MCP and agent-role handles always record `agent`. A `reviewer` an agent-role handle
+  passes is ignored (one over 120 characters is still `OortUsageError`), and the MCP tools take
+  no origin or reviewer at all.
+- The CLI records `interactive` only when a person answered a prompt naming the label on the
+  controlling terminal, and never while one of `AGENT_ENV_MARKERS` (from `@oortmem/core`) is set:
+  `AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CODEX_SANDBOX`,
+  `CODEX_SANDBOX_NETWORK_DISABLED`, `CURSOR_AGENT` and `GEMINI_CLI`. An agent that can run
+  commands on your machine can unset them and drive a terminal, so `interactive` is only as
+  trustworthy as the shells on that machine. For labels you will fine-tune on, prefer the
+  dashboard and connectors; the training export will let you exclude `interactive`. See
+  [Where a label came from](cli.md#where-a-label-came-from) in the CLI reference.
+- A confirm records the confirmer's origin as the label's origin and keeps the agent's as
+  `proposedOrigin`: an agent's judgment confirmed by an expert-role handle reads
+  `origin: 'integration', proposedOrigin: 'agent'`.
+- Origin changes nothing about who may do what: the rules for the agent and expert roles stay as
+  they are.
+- `feedback.retire`, `supersede` and `dismiss` keep how they arrived in `FeedbackView.resolved`
+  (`origin: 'integration'` from an expert-role handle).
+- `JudgmentView`, `PredictionView.resolution` and `FeedbackView` carry `origin`, and `reviewer`,
+  `upstream` and `proposedOrigin` when set. A label written before Oort kept origins reads as
+  `agent` when an agent recorded it and no person has confirmed it, and as `integration`
+  otherwise.
+- Purging a judgment drops its `reviewer`, and recording the same decision again leaves the row,
+  and its origin, as they were.
+- An export of training data will trust only `interactive`, `dashboard` and `connector` labels
+  by default, and will let you exclude `interactive`.
 
 ## Stability
 

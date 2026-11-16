@@ -16,6 +16,8 @@ import {
   recordJudgment,
   resolvePrediction,
   type Judgment,
+  labelOf,
+  type LabelSource,
   type Memory,
   type RecordJudgmentResult,
 } from '@oortmem/core';
@@ -25,6 +27,7 @@ import { localOnly } from './cloud.js';
 import { findLocal } from './local.js';
 import { OortAmbiguousIdError, OortNotFoundError, OortRefusedError } from './errors.js';
 import type {
+  ConfirmOptions,
   JudgeItem,
   JudgeOptions,
   JudgeResult,
@@ -46,6 +49,15 @@ import { judgeView, judgmentView, liveEvalView, predictionView } from './views.j
  * 'sdk'`), so every reader, 0.5.x included, treats it as unconfirmed. Expert role is explicit and
  * records `via: 'sdk'`.
  */
+
+/**
+ * How a label from this handle arrives: `agent` in agent role (a reviewer it passes is ignored,
+ * unchecked), else `integration`, with the reviewer the integration asserts.
+ */
+export function sdkLabel(ctx: Ctx, reviewer: string | undefined): LabelSource {
+  if (ctx.judge.role !== 'expert') return { origin: 'agent' };
+  return { origin: 'integration', ...(reviewer !== undefined && { reviewer }) };
+}
 
 function localJudgments(ctx: Ctx): void {
   if (ctx.engine.mode === 'cloud') throw localOnly('Judgment memory');
@@ -127,6 +139,7 @@ export async function record(ctx: Ctx, input: JudgmentInput): Promise<RecordJudg
         // An agent's record is MCP's in every way that counts: unconfirmed for every reader.
         via: agent ? 'mcp' : 'sdk',
         harness: 'sdk',
+        label: sdkLabel(ctx, input.reviewer),
         now,
       },
     );
@@ -208,7 +221,11 @@ export async function list(
   };
 }
 
-export async function confirm(ctx: Ctx, id: string): Promise<{ id: string; changed: boolean }> {
+export async function confirm(
+  ctx: Ctx,
+  id: string,
+  o: ConfirmOptions = {},
+): Promise<{ id: string; changed: boolean }> {
   localJudgments(ctx);
   if (ctx.judge.role !== 'expert') {
     throw new OortRefusedError(
@@ -218,9 +235,12 @@ export async function confirm(ctx: Ctx, id: string): Promise<{ id: string; chang
   }
   const store = storeOf(ctx);
   const grant = ctx.principal.grant;
+  const label = sdkLabel(ctx, o.reviewer);
+  // A malformed reviewer is refused even when there turns out to be nothing to confirm.
+  labelOf(label, false);
   const confirmPrediction = async (pid: string) => ({
     id: pid,
-    changed: await confirmResolution(store, grant, pid, ctx.judge.operator, ctx.now()),
+    changed: await confirmResolution(store, grant, pid, ctx.judge.operator, ctx.now(), label),
   });
   let m: Memory | undefined;
   try {
@@ -256,7 +276,14 @@ export async function confirm(ctx: Ctx, id: string): Promise<{ id: string; chang
       reason: 'not-current',
     });
   }
-  const ok = await confirmJudgment(storeOf(ctx), ctx.principal.grant, m, ctx.judge.operator, now);
+  const ok = await confirmJudgment(
+    storeOf(ctx),
+    ctx.principal.grant,
+    m,
+    ctx.judge.operator,
+    now,
+    label,
+  );
   return { id: m.id, changed: ok };
 }
 
@@ -298,6 +325,7 @@ export async function resolve(ctx: Ctx, ref: string, input: ResolveInput): Promi
         ...(ctx.engine.embed !== undefined && { embed: ctx.engine.embed }),
         via: agent ? 'mcp' : 'sdk',
         harness: 'sdk',
+        label: sdkLabel(ctx, input.reviewer),
         now,
       },
     );

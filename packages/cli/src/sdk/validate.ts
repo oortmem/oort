@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { checkNear, checkPlace, checkPlacePath, utf8Bytes } from '@oortmem/core';
+import { checkNear, checkPlace, checkPlacePath, LABEL_LIMITS, utf8Bytes } from '@oortmem/core';
 import { OortUsageError } from './errors.js';
 
 /**
@@ -50,6 +50,12 @@ const isoDate = z.union([
 export const NAME = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/;
 
 const signal = z.custom<AbortSignal>((v) => v instanceof AbortSignal);
+
+/**
+ * Who the integration says reviewed a label: at most `LABEL_LIMITS.text` characters in either
+ * role (an agent role's is then ignored); core checks the rest in expert role.
+ */
+const Reviewer = z.string().max(LABEL_LIMITS.text).optional();
 
 /**
  * A value checked by one of core's place checks: its RangeError names the field (`place.pose.x
@@ -179,6 +185,7 @@ export const JudgmentInputSchema = z.strictObject({
   domain: z.string(),
   by: z.string(),
   decidedAt: isoDate.optional(),
+  reviewer: Reviewer,
 });
 
 export const JudgeItemSchema = z.union([
@@ -207,7 +214,10 @@ export const ResolveInputSchema = z.strictObject({
   criteria: z.array(z.string()).optional(),
   by: z.string(),
   domain: z.string().optional(),
+  reviewer: Reviewer,
 });
+
+export const ConfirmOptionsSchema = z.strictObject({ reviewer: Reviewer });
 
 export const PredictionListSchema = z.strictObject({
   status: z.enum(['pending', 'resolved']).optional(),
@@ -232,6 +242,7 @@ export const FeedbackInputSchema = z.strictObject({
   // Kept to 500 characters on one line after scrubbing; longer input is clipped, not refused.
   note: z.string().max(LIMITS.feedbackText).optional(),
   query: z.string().max(LIMITS.feedbackText).optional(),
+  reviewer: Reviewer,
 });
 
 export const FeedbackListSchema = z.strictObject({

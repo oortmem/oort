@@ -24,6 +24,7 @@ import {
   refuseStarWithUser,
 } from './principal.js';
 import type {
+  ConfirmOptions,
   ConsolidateResult,
   Explanation,
   FeedbackInput,
@@ -54,6 +55,7 @@ import type {
   Whoami,
 } from './types.js';
 import {
+  ConfirmOptionsSchema,
   ConsolidateSchema,
   FactSchema,
   FactsSchema,
@@ -274,7 +276,14 @@ class OortHandle implements Oort {
         ),
       list: (opts = {}) =>
         this.#run((ctx) => judge.list(ctx, check(JudgeListSchema, opts, 'list options'))),
-      confirm: (id: string) => this.#run((ctx) => judge.confirm(ctx, check(IdSchema, id, 'id'))),
+      confirm: (id: string, opts: ConfirmOptions = {}) =>
+        this.#run((ctx) =>
+          judge.confirm(
+            ctx,
+            check(IdSchema, id, 'id'),
+            check(ConfirmOptionsSchema, opts, 'confirm options'),
+          ),
+        ),
       resolve: (predictionId: string, input: ResolveInput) =>
         this.#run((ctx) =>
           judge.resolve(
@@ -305,7 +314,10 @@ class OortHandle implements Oort {
     return Object.assign(give, {
       list: (opts = {}) =>
         this.#run((ctx) => feedback.list(ctx, check(FeedbackListSchema, opts, 'list options'))),
-      confirm: (ref: string) => this.#run((ctx) => feedback.confirm(ctx, id(ref))),
+      confirm: (ref: string, opts: ConfirmOptions = {}) =>
+        this.#run((ctx) =>
+          feedback.confirm(ctx, id(ref), check(ConfirmOptionsSchema, opts, 'confirm options')),
+        ),
       retire: (ref: string) => this.#run((ctx) => feedback.retire(ctx, id(ref))),
       supersede: (ref: string, fact: string) =>
         this.#run((ctx) => feedback.supersede(ctx, id(ref), check(FactSchema, fact, 'fact'))),

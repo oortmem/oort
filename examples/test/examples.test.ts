@@ -212,6 +212,11 @@ describe('SDK examples (run)', () => {
     expect(out).toEqual(['true agent', 'explicit agent 0', 'true']);
   });
 
+  it('label-origin: an expert label names its reviewer, a confirmed agent label keeps its origin', async () => {
+    const { out } = await runExample('label-origin.ts');
+    expect(out).toEqual(['integration grace@example.com -', 'integration grace@example.com agent']);
+  });
+
   it('feedback: an agent reports a wrong memory, a person confirms and supersedes it', async () => {
     const { out } = await runExample('feedback.ts');
     expect(out).toEqual(['pending', 'wrong', 'true superseded']);

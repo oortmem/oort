@@ -4,12 +4,16 @@ import { addressOf, addressed, type Address, type Author } from './address.js';
 import { INVISIBLE_SOURCE } from './display.js';
 import { GrantError, grantReads, grantWrites, type Grant } from './grant.js';
 import {
+  confirmedLabel,
   isAgentVia,
   judgmentField,
   JudgmentInputError,
   JUDGMENT_LIMITS,
+  labelOf,
   projectPlacement,
   type JudgmentVia,
+  type LabelProvenance,
+  type LabelSource,
 } from './judgment.js';
 import { isCurrent, type Decision, type Memory, type Scope } from './model.js';
 import { scrub } from './scrub.js';
@@ -30,6 +34,9 @@ import { scrub } from './scrub.js';
  *
  * Feedback recorded by an agent (`via: 'mcp'`) is `pending`: it changes nothing (no access, no
  * label) until a person confirms it (`confirmFeedback`).
+ *
+ * Every row records how it arrived (`origin`, read with `labelOrigin`): `agent` for an agent's,
+ * and on a confirm the confirmer's, the agent's kept as `proposedOrigin`.
  *
  * Feedback is not a memory: it lives in the store's own feedback records (the `feedback`
  * capability), at the grant's home node and bound to the memory's project, so a grant reads it
@@ -134,7 +141,7 @@ export interface FeedbackClaim {
 }
 
 /** One feedback record. */
-export interface Feedback {
+export interface Feedback extends LabelProvenance {
   id: string;
   /** Where it lives: the grant's home node, bound to the memory's project. Read with `addressOf`. */
   scope: Scope;
@@ -169,7 +176,7 @@ export interface Feedback {
    * Set when a person retired, superseded or dismissed it. `claimedBy` and `claimedAt`: another
    * person claimed it first (a retire or supersede that stopped part way, finished by `by`).
    */
-  resolved?: {
+  resolved?: Pick<LabelProvenance, 'origin' | 'reviewer' | 'upstream'> & {
     at: string;
     by: string;
     supersededBy?: string;
@@ -406,6 +413,16 @@ export function feedbackBy(v: unknown): string {
   }
 }
 
+/** `labelOf`, its input problems as `invalid`. */
+function labelOrInvalid(source: LabelSource | undefined, agent: boolean) {
+  try {
+    return labelOf(source, agent);
+  } catch (e) {
+    if (e instanceof JudgmentInputError) throw invalid(e.message);
+    throw e;
+  }
+}
+
 function memoryIdOf(v: unknown): string {
   if (typeof v !== 'string') throw invalid('memoryId must be text');
   const t = v.trim();
@@ -453,6 +470,11 @@ export interface FeedbackDeps {
   scope: Scope;
   /** `mcp`: an agent, so the row is pending. */
   via: FeedbackVia;
+  /**
+   * How it arrived (`labelOf`): `integration` when absent, and always `agent` with `via: 'mcp'`,
+   * whatever is passed.
+   */
+  label?: LabelSource;
   /** Accesses an applied `helped` adds (config `feedback.helpedAccesses`, default 2). */
   helpedAccesses?: number;
   now?: Date;
@@ -564,9 +586,10 @@ export async function recordFeedback(
   }
   const by = feedbackBy(input.by);
   const accesses = accessesOf(deps.helpedAccesses);
+  const agent = isAgentVia(deps.via);
+  const label = labelOrInvalid(deps.label, agent);
   const memory = await deps.store.get(deps.grant, memoryId);
   if (memory === null) throw fail('memory-not-found');
-  const agent = isAgentVia(deps.via);
   const iso = now.toISOString();
   const row: Feedback = {
     id: randomUUID(),
@@ -577,6 +600,7 @@ export async function recordFeedback(
     ...(query !== undefined && { query }),
     by,
     via: deps.via,
+    ...label,
     status: agent ? 'pending' : signal === 'wrong' || signal === 'stale' ? 'open' : 'recorded',
     revision: 0,
     createdAt: iso,
@@ -662,6 +686,11 @@ export interface ResolveFeedbackDeps {
   grant: Grant;
   /** The person: the operator's id. */
   by: string;
+  /**
+   * How the person's confirm, retire, supersede or dismiss arrived (`integration` when absent).
+   * A confirm keeps it as the row's origin; the others keep it in `resolved`.
+   */
+  label?: LabelSource;
   helpedAccesses?: number;
   now?: Date;
 }
@@ -687,19 +716,21 @@ const isFinal = (st: FeedbackStatus): boolean =>
  * A person confirms agent-recorded (`pending`) feedback: from then on it counts as theirs would
  * have. A `helped` adds its accesses once (unless one was applied for that memory and author
  * today), a `wrong` or `stale` opens its correction (recall labels the memory), an `irrelevant`
- * is kept. One guarded write; a lost race fails with where the row stands.
+ * is kept. One guarded write; a lost race fails with where the row stands. The confirm's origin
+ * (`deps.label`) is the row's from then on, the agent's kept as `proposedOrigin`.
  */
 export async function confirmFeedback(id: string, deps: ResolveFeedbackDeps): Promise<Feedback> {
   const s = feedbackOf(deps.store);
   const now = deps.now ?? new Date();
   const who = feedbackBy(deps.by);
+  labelOrInvalid(deps.label, false);
   const accesses = accessesOf(deps.helpedAccesses);
   const f = await s.getFeedback(deps.grant, id);
   if (f === null) throw fail('not-found');
   if (f.status !== 'pending') throw fail('not-pending', f.status);
   if (!grantWrites(deps.grant, f)) throw new GrantError();
   const iso = now.toISOString();
-  const confirmed: Feedback = { ...f, confirmed: { at: iso, by: who } };
+  const confirmed: Feedback = { ...confirmedLabel(f, deps.label), confirmed: { at: iso, by: who } };
   if (f.signal === 'helped') {
     return applyHelped(s, deps.store, deps.grant, confirmed, f.revision, accesses, now);
   }
@@ -930,7 +961,8 @@ async function takeOver(
     throw await lostTo(s, deps.grant, f.id, now);
   }
   if (await applied(deps.store, deps.grant, held, c, now)) {
-    throw alreadyApplied(await finish(s, deps.grant, held, c, by, now), c);
+    const label = labelOrInvalid(deps.label, false);
+    throw alreadyApplied(await finish(s, deps.grant, held, c, by, now, label), c);
   }
   let keptNew = false;
   if (c.action === 'superseded' && c.memoryId !== undefined) {
@@ -1094,6 +1126,7 @@ async function finish(
   c: FeedbackClaim,
   by: string,
   now: Date,
+  label: LabelProvenance,
 ): Promise<Feedback> {
   const { claim: _c, ...rest } = f;
   const iso = now.toISOString();
@@ -1103,6 +1136,7 @@ async function finish(
     resolved: {
       at: iso,
       by,
+      ...label,
       ...(c.memoryId !== undefined && { supersededBy: c.memoryId }),
       ...(c.by !== by && { claimedBy: c.by, claimedAt: c.at }),
     },
@@ -1138,6 +1172,7 @@ export async function retireFeedback(id: string, deps: ResolveFeedbackDeps): Pro
   const s = feedbackOf(deps.store);
   const now = deps.now ?? new Date();
   const iso = now.toISOString();
+  const label = labelOrInvalid(deps.label, false);
   const { f, c, by } = await claimed(s, deps, id, 'retired');
   const endReason = f.signal === 'wrong' ? 'corrected' : 'expired';
   const at = new Date(c.at);
@@ -1173,7 +1208,11 @@ export async function retireFeedback(id: string, deps: ResolveFeedbackDeps): Pro
     if ((await guarded(deps.store, deps.grant, [{ next, was: m }])).length === 0) ended = next;
   }
   if (ended === undefined) throw inProgress(f, now, 'Its memory kept changing while this ran');
-  return { feedback: await finish(s, deps.grant, f, c, by, now), memory: ended, endReason };
+  return {
+    feedback: await finish(s, deps.grant, f, c, by, now, label),
+    memory: ended,
+    endReason,
+  };
 }
 
 export interface SupersedeFeedbackDeps extends ResolveFeedbackDeps {
@@ -1246,6 +1285,7 @@ export async function supersedeFeedback(
   const now = deps.now ?? new Date();
   const iso = now.toISOString();
   const asStored = factOf(fact);
+  const label = labelOrInvalid(deps.label, false);
   const { f, c, by } = await claimed(s, deps, id, 'superseded', (row) => ({
     fact: asStored.text,
     redacted: asStored.redacted,
@@ -1364,7 +1404,7 @@ export async function supersedeFeedback(
     throw inProgress(f, now, 'Its memory kept changing while this ran');
   }
   return {
-    feedback: await finish(s, deps.grant, f, c, by, now),
+    feedback: await finish(s, deps.grant, f, c, by, now, label),
     memory: written,
     supersedes: f.memoryId,
     redacted: c.redacted ?? [],
@@ -1384,6 +1424,7 @@ export async function dismissFeedback(id: string, deps: ResolveFeedbackDeps): Pr
   const s = feedbackOf(deps.store);
   const now = deps.now ?? new Date();
   const by = feedbackBy(deps.by);
+  const label = labelOrInvalid(deps.label, false);
   let f = await s.getFeedback(deps.grant, id);
   if (f === null) throw fail('not-found');
   if (isFinal(f.status)) throw fail('already-resolved', f.status);
@@ -1397,7 +1438,7 @@ export async function dismissFeedback(id: string, deps: ResolveFeedbackDeps): Pr
   const next: Feedback = {
     ...f,
     status: 'dismissed',
-    resolved: { at: iso, by },
+    resolved: { at: iso, by, ...label },
     revision: f.revision + 1,
     updatedAt: iso,
   };

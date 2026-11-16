@@ -19,6 +19,7 @@ import {
   type FeedbackClaim,
   type FeedbackSignal,
   type FeedbackStatus,
+  type LabelSource,
 } from '@oortmem/core';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
@@ -26,7 +27,6 @@ import {
   Refusal,
   agentLabel,
   clip,
-  confirm,
   findMemory,
   short,
   shown,
@@ -35,7 +35,7 @@ import {
   type Ctx,
 } from '../util.js';
 import type { Wired } from '../wire.js';
-import { operatorOf } from './judge.js';
+import { askLabel, confirmLabel, operatorOf, originFields, originTag } from './judge.js';
 
 /**
  * `oort feedback …`: a person says a recalled memory helped, is wrong, is out of date, or did
@@ -137,12 +137,13 @@ function plain(f: Feedback) {
     ...(f.query !== undefined && { query: seen(f.query) }),
     by: seen(f.by),
     agentRecorded: isAgentVia(f.via),
+    ...originFields(f),
     ...(f.applied !== undefined && { applied: f.applied }),
     ...(f.reason !== undefined && { reason: f.reason }),
     createdAt: f.createdAt,
     ...(f.confirmed !== undefined && { confirmed: f.confirmed }),
     ...(f.claim !== undefined && { claim: claimOf(f.claim) }),
-    ...(f.resolved !== undefined && { resolved: f.resolved }),
+    ...(f.resolved !== undefined && { resolved: { ...f.resolved, ...originFields(f.resolved) } }),
   };
 }
 
@@ -151,7 +152,7 @@ function line(f: Feedback): string {
   const agent = isAgentVia(f.via) ? ' [agent]' : '';
   const note = f.note === undefined ? '' : `  "${shown(clip(seen(f.note), 120))}"`;
   const query = f.query === undefined ? '' : `  query: "${shown(clip(seen(f.query), 80))}"`;
-  return `${short(f.id)}  ${f.signal.padEnd(10)} memory ${short(f.memoryId)}  ${f.status.padEnd(10)} by ${shown(seen(f.by))}${agent}${note}${query}${claimLine(f.claim)}`;
+  return `${short(f.id)}  ${f.signal.padEnd(10)} memory ${short(f.memoryId)}  ${f.status.padEnd(10)} by ${shown(seen(f.by))}${agent}${originTag(f)}${note}${query}${claimLine(f.claim)}`;
 }
 
 /**
@@ -183,6 +184,7 @@ export interface FeedbackGiveOptions {
   query?: string;
   by?: string;
   json?: boolean;
+  yes?: boolean;
 }
 
 /** `oort feedback <memoryId> <signal> [--note] [--query]`: a person's feedback, counted at once. */
@@ -197,6 +199,15 @@ export async function feedbackCommand(
     localOnly(w);
     const m = await findMemory(w.store, filterFor(w.scope), memoryRef);
     const by = operatorOf(w, o.by);
+    const label = await askLabel(
+      ctx,
+      `Mark memory ${short(m.id)} as ${shown(signal)}, by ${shown(by)}?${o.note === undefined ? '' : ` Note: "${shown(clip(o.note, 120))}"`}`,
+      o.yes,
+    );
+    if (label === null) {
+      ctx.io.out('Nothing recorded.\n');
+      return 0;
+    }
     const r = await refusing(() =>
       recordFeedback(
         {
@@ -211,6 +222,7 @@ export async function feedbackCommand(
           grant: writeGrant(w),
           scope: w.scope,
           via: 'cli',
+          label,
           helpedAccesses: w.config.feedback.helpedAccesses,
         },
       ),
@@ -287,7 +299,10 @@ interface ResolveOptions {
   json?: boolean;
 }
 
-/** The row an id or unique prefix names, asked about first unless `--yes`. */
+/**
+ * The row an id or unique prefix names, asked about first unless `--yes`, and how the person's
+ * answer arrived (`confirmLabel`). The question names the row: its id, signal and memory.
+ */
 async function resolving(
   ctx: Ctx,
   w: Wired,
@@ -295,17 +310,15 @@ async function resolving(
   o: ResolveOptions,
   question: (f: Feedback) => string,
   flagHint: string,
-): Promise<{ f: Feedback; by: string } | undefined> {
+): Promise<{ f: Feedback; by: string; label: LabelSource } | undefined> {
   const f = await refusing(() => findFeedback(w.store, writeGrant(w), ref));
   const by = operatorOf(w, o.by);
-  const ok = await confirm(ctx.io, `${question(f)}\n  ${line(f)}`, o.yes === true, flagHint, {
-    json: jsonMode(ctx),
-  });
-  if (!ok) {
+  const label = await confirmLabel(ctx, `${question(f)}\n  ${line(f)}`, o.yes, flagHint);
+  if (label === null) {
     ctx.io.out('Nothing changed.\n');
     return undefined;
   }
-  return { f, by };
+  return { f, by, label };
 }
 
 /** `oort feedback confirm <id>`: a person vouches for an agent's pending feedback. */
@@ -330,6 +343,7 @@ export async function feedbackConfirmCommand(
         store: w.store,
         grant: writeGrant(w),
         by: r.by,
+        label: r.label,
         helpedAccesses: w.config.feedback.helpedAccesses,
       }),
     );
@@ -360,7 +374,7 @@ export async function feedbackRetireCommand(
     );
     if (r === undefined) return 0;
     const done = await refusing(() =>
-      retireFeedback(r.f.id, { store: w.store, grant: writeGrant(w), by: r.by }),
+      retireFeedback(r.f.id, { store: w.store, grant: writeGrant(w), by: r.by, label: r.label }),
     );
     ctx.io.out(
       `Retired ${short(done.memory.id)} (${done.endReason}); feedback ${short(done.feedback.id)} is closed. \`oort inspect ${short(done.memory.id)}\` shows it.\n`,
@@ -401,6 +415,7 @@ export async function feedbackSupersedeCommand(
         grant: writeGrant(w),
         scope: w.scope,
         by: r.by,
+        label: r.label,
         ...(w.embed !== undefined && { embed: w.embed }),
         harness: 'cli',
       }),
@@ -440,7 +455,7 @@ export async function feedbackDismissCommand(
     );
     if (r === undefined) return 0;
     const f = await refusing(() =>
-      dismissFeedback(r.f.id, { store: w.store, grant: writeGrant(w), by: r.by }),
+      dismissFeedback(r.f.id, { store: w.store, grant: writeGrant(w), by: r.by, label: r.label }),
     );
     ctx.io.out(`Dismissed ${short(f.id)}; memory ${short(f.memoryId)} is unchanged.\n`);
     if (jsonMode(ctx)) emit(ctx, { feedback: plain(f) });

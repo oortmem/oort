@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { DecisionController, Embedder, JudgeChoice, MemoryStore } from './adapters.js';
 import { addressed } from './address.js';
 import { INVISIBLE_SOURCE } from './display.js';
+import { isTrustedLabel } from './label-trust.js';
 import { homeAddress, type Grant } from './grant.js';
 import { isCurrent, type Decision, type Memory, type Scope } from './model.js';
 import type { Prediction } from './prediction.js';
@@ -87,8 +88,204 @@ export interface ClaimedPackOrigin {
   originalId: string;
 }
 
+/**
+ * How a label arrived: a judgment, a prediction's resolve, or a recall feedback row. It names the
+ * path that wrote the label, not who stood behind it: whatever drives a terminal on the machine
+ * can answer a prompt, and an integration can name any reviewer. It grants nothing; who may
+ * change memory is decided as before (`via`, and the caller's role).
+ * - `interactive`: the CLI, when a person answered a confirmation prompt for this label on the
+ *   controlling terminal (stdin and stdout terminals, no `--yes` or `--json`, and none of
+ *   `AGENT_ENV_MARKERS` set). Code that calls this library directly can also record it, outside
+ *   an agent harness; the CLI's question is the only path Oort itself offers;
+ * - `dashboard`: the cloud dashboard. The public API cannot set it: asking for it records
+ *   `integration`. Code that edits the store or loads Oort's internal files can write anything,
+ *   as it could edit the database;
+ * - `connector`: an upstream connector, with `upstream` naming the system and its actor. As
+ *   `dashboard`;
+ * - `integration`: SDK or `oort serve` calls in expert role, and CLI calls that are not
+ *   interactive. `reviewer` is who the integration says reviewed the label (its claim);
+ * - `agent`: MCP, or an SDK or `oort serve` handle in agent role. Always `agent` for a label an
+ *   agent wrote, whatever it asked for.
+ * A record written before origins were kept reads as `agent` when an agent recorded it and no
+ * person confirmed it, else `integration` (`labelOrigin`).
+ */
+export const LABEL_ORIGINS = [
+  'interactive',
+  'dashboard',
+  'connector',
+  'integration',
+  'agent',
+] as const;
+export type LabelOrigin = (typeof LABEL_ORIGINS)[number];
+
+/** Whether `v` is one of `LABEL_ORIGINS`. */
+export function isLabelOrigin(v: unknown): v is LabelOrigin {
+  return typeof v === 'string' && (LABEL_ORIGINS as readonly string[]).includes(v);
+}
+
+/**
+ * Environment variables an agent harness sets on the shell commands it runs. When any is set
+ * (not empty), the CLI records `integration`, never `interactive`: the command is an agent's,
+ * whatever terminal it has. This catches the usual case, not a determined one; an agent can unset
+ * them.
+ * - `AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`: Claude Code;
+ * - `CODEX_SANDBOX`, `CODEX_SANDBOX_NETWORK_DISABLED`: Codex, for a sandboxed command;
+ * - `CURSOR_AGENT`: Cursor's agent;
+ * - `GEMINI_CLI`: Gemini CLI.
+ */
+export const AGENT_ENV_MARKERS = Object.freeze([
+  'AI_AGENT',
+  'CLAUDECODE',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CODEX_SANDBOX',
+  'CODEX_SANDBOX_NETWORK_DISABLED',
+  'CURSOR_AGENT',
+  'GEMINI_CLI',
+] as const);
+
+/** The first of `AGENT_ENV_MARKERS` set (not empty) in `env`, if any. */
+export function agentEnvMarker(env: Record<string, string | undefined>): string | undefined {
+  return AGENT_ENV_MARKERS.find((k) => (env[k] ?? '') !== '');
+}
+
+/** The system a connector label came from, and who made it there. */
+export interface LabelUpstream {
+  system: string;
+  actor: string;
+}
+
+/** How a label arrived, as a judgment, a resolve or a feedback row keeps it. */
+export interface LabelProvenance {
+  /** Absent on a record written before origins were kept: read it with `labelOrigin`. */
+  origin?: LabelOrigin;
+  /** Who the integration says reviewed it: its claim, scrubbed, one line. */
+  reviewer?: string;
+  /** `connector` only: the upstream system and its actor. */
+  upstream?: LabelUpstream;
+  /**
+   * Set when a person confirmed an agent's label: the origin it had before. `origin` is then
+   * the confirmer's (an agent's row confirmed at a terminal: `interactive`, proposed `agent`).
+   */
+  proposedOrigin?: LabelOrigin;
+}
+
+/** What the caller says about how a label arrives. */
+export interface LabelSource {
+  origin: LabelOrigin;
+  reviewer?: string;
+  upstream?: LabelUpstream;
+}
+
+export const LABEL_LIMITS = Object.freeze({
+  /** `reviewer`, and each of `upstream.system` and `upstream.actor`. */
+  text: 120,
+});
+
+/** A stored label: its provenance, and how it was recorded (for records older than origins). */
+export type LabelRecord = LabelProvenance & { via?: string; confirmed?: unknown };
+
+/**
+ * How `r` arrived: its `origin`. A record written before origins were kept reads `agent` when it
+ * shows an agent made it (`via: 'mcp'`, not confirmed by a person) and `integration` otherwise. A
+ * stored value that is not one of `LABEL_ORIGINS` (a store edited by hand) reads `integration`.
+ */
+export function labelOrigin(r: LabelRecord | undefined): LabelOrigin {
+  if (r?.origin !== undefined) return isLabelOrigin(r.origin) ? r.origin : 'integration';
+  return r?.via === 'mcp' && r.confirmed === undefined ? 'agent' : 'integration';
+}
+
+/** A record's `proposedOrigin` as shown: undefined when absent or not one of `LABEL_ORIGINS`. */
+export function proposedOriginOf(r: LabelProvenance | undefined): LabelOrigin | undefined {
+  return isLabelOrigin(r?.proposedOrigin) ? r.proposedOrigin : undefined;
+}
+
+/** Single-line label text: tabs, line and paragraph separators, and every default-ignorable. */
+const LABEL_FORBIDDEN = /[\t\u2028\u2029\p{Default_Ignorable_Code_Point}]/u;
+
+/** One line of label text (`reviewer`, `upstream.*`): checked, scrubbed, and still in bounds. */
+function labelLine(field: string, v: unknown): string {
+  const t = text(field, v, LABEL_LIMITS.text);
+  if (LABEL_FORBIDDEN.test(t)) {
+    throw new JudgmentInputError(`${field} holds tabs, separators or invisible characters`);
+  }
+  const scrubbed = scrub(t).text;
+  if (scrubbed.length > LABEL_LIMITS.text) {
+    throw new JudgmentInputError(
+      `${field} is longer than ${LABEL_LIMITS.text} characters once secrets are redacted`,
+    );
+  }
+  return scrubbed;
+}
+
+/**
+ * The provenance a new label stores. A label an agent writes (`agent` true) is always
+ * `{ origin: 'agent' }`: whatever origin, reviewer or upstream it passed is dropped, unchecked.
+ * Otherwise `source` is checked (`JudgmentInputError`): a known origin, a `reviewer` of one line
+ * and at most `LABEL_LIMITS.text` characters (no tabs, separators or invisible characters,
+ * scrubbed), and `upstream` only with `connector`. `dashboard` and `connector` are kept only for a
+ * source vouched for by a server that authenticates the caller; any other source asking for
+ * either records `integration` (its reviewer kept, its upstream dropped). `interactive` records
+ * `integration` while one of `AGENT_ENV_MARKERS` is set in `env` (the process's, by default), as
+ * the CLI's own check does. Without `source`, `integration`.
+ */
+export function labelOf(
+  source: LabelSource | undefined,
+  agent: boolean,
+  env: Record<string, string | undefined> = process.env,
+): LabelProvenance & { origin: LabelOrigin } {
+  if (agent) return { origin: 'agent' };
+  if (source === undefined) return { origin: 'integration' };
+  if (typeof source !== 'object' || source === null) {
+    throw new JudgmentInputError('the label origin must be an object');
+  }
+  if (!isLabelOrigin(source.origin)) {
+    throw new JudgmentInputError(`origin must be one of: ${LABEL_ORIGINS.join(', ')}`);
+  }
+  const vouched = isTrustedLabel(source);
+  const origin: LabelOrigin =
+    ((source.origin === 'dashboard' || source.origin === 'connector') && !vouched) ||
+    (source.origin === 'interactive' && agentEnvMarker(env) !== undefined)
+      ? 'integration'
+      : source.origin;
+  const line = labelLine;
+  const reviewer = source.reviewer === undefined ? undefined : line('reviewer', source.reviewer);
+  let upstream: LabelUpstream | undefined;
+  if (source.upstream !== undefined && (vouched || source.origin !== 'connector')) {
+    if (origin !== 'connector') {
+      throw new JudgmentInputError('upstream is only for the connector origin');
+    }
+    const u = source.upstream as Partial<LabelUpstream> | null;
+    if (typeof u !== 'object' || u === null) {
+      throw new JudgmentInputError('upstream must name a system and an actor');
+    }
+    upstream = {
+      system: line('upstream.system', u.system),
+      actor: line('upstream.actor', u.actor),
+    };
+  }
+  return {
+    origin,
+    ...(reviewer !== undefined && { reviewer }),
+    ...(upstream !== undefined && { upstream }),
+  };
+}
+
+/**
+ * `row` as a confirm leaves it: the confirmer's origin (`labelOf(confirmer, false)`) is its
+ * origin now, and the one it had (an agent's, so `agent` when it has none stored) is kept as
+ * `proposedOrigin`. A reviewer or upstream the row had goes with its old origin.
+ */
+export function confirmedLabel<T extends LabelProvenance>(
+  row: T,
+  confirmer: LabelSource | undefined,
+): T {
+  const label = labelOf(confirmer, false);
+  const { origin, reviewer: _r, upstream: _u, proposedOrigin: _p, ...rest } = row;
+  return { ...rest, ...label, proposedOrigin: isLabelOrigin(origin) ? origin : 'agent' } as T;
+}
+
 /** The decision itself. Everything an expert said is kept as they said it (secrets redacted). */
-export interface Judgment {
+export interface Judgment extends LabelProvenance {
   subject: JudgmentSubject;
   /** One of `verdicts`. */
   verdict: string;
@@ -122,7 +319,7 @@ export interface Judgment {
 /** A judgment's decision fields, as `normaliseJudgment` returns them. */
 export type JudgmentCore = Omit<
   Judgment,
-  'via' | 'pack' | 'withdrawn' | 'confirmed' | 'purged' | 'tombstone'
+  'via' | 'pack' | 'withdrawn' | 'confirmed' | 'purged' | 'tombstone' | keyof LabelProvenance
 >;
 
 /** A judgment as a caller describes it, before checking and normalising. */
@@ -361,6 +558,11 @@ export interface RecordJudgmentDeps {
   now?: Date;
   /** The harness or tool that recorded it, for `source`. */
   harness?: string;
+  /**
+   * How it arrived (`labelOf`): `integration` when absent, and always `agent` for an agent's
+   * record (`via: 'mcp'`), whatever is passed. Imports and packs leave it out.
+   */
+  label?: LabelSource;
 }
 
 export interface RecordJudgmentResult {
@@ -483,6 +685,8 @@ function plan(
   const j: Judgment = {
     ...base,
     via: ctx.via,
+    // A pack's judgment arrived in a file: never the origin its line claims.
+    ...labelOf(ctx.via === 'pack' ? undefined : ctx.deps.label, isAgentVia(ctx.via)),
     ...(ctx.pack !== undefined && { pack: ctx.pack }),
   };
   const key = itemKey(j);
@@ -824,7 +1028,9 @@ export async function withdrawJudgment(
 /**
  * Confirms an agent-recorded (`mcp`) judgment: a person (`by`, the operator) vouches that the
  * expert really decided it, and judging uses it from then on. Only for a current, unconfirmed
- * agent-recorded judgment; returns false otherwise. Never offered over MCP.
+ * agent-recorded judgment; returns false otherwise. Never offered over MCP. `label` is how the
+ * confirm arrived (`integration` when absent): the judgment's origin from then on, with the
+ * agent's kept as `proposedOrigin` (`confirmedLabel`).
  */
 export async function confirmJudgment(
   store: MemoryStore,
@@ -832,11 +1038,17 @@ export async function confirmJudgment(
   m: Memory,
   by: string,
   now = new Date(),
+  label?: LabelSource,
 ): Promise<boolean> {
+  // Checked first, so a malformed label is refused whether or not there is anything to confirm.
+  labelOf(label, false);
   if (!isActiveJudgment(m, now) || !isUnconfirmedAgentJudgment(m.judgment)) return false;
   const iso = now.toISOString();
   const full = (await store.get(grant, m.id)) ?? m;
-  const j = { ...(full.judgment ?? m.judgment), confirmed: { at: iso, by } };
+  const j = {
+    ...confirmedLabel(full.judgment ?? m.judgment, label),
+    confirmed: { at: iso, by },
+  };
   await store.upsert(grant, { ...full, judgment: j, text: judgmentText(j), updatedAt: iso });
   return true;
 }
@@ -864,8 +1076,11 @@ export async function purgeJudgment(
   const full = (await store.get(grant, m.id)) ?? m;
   const j = full.judgment ?? m.judgment;
   const { embedding: _e, ...rest } = full;
+  // Who reviewed it goes with the text; how it arrived stays.
+  const { reviewer: _r, upstream, ...kept } = j;
   const stub: Judgment = {
-    ...j,
+    ...kept,
+    ...(upstream !== undefined && { upstream: { system: upstream.system, actor: PURGED } }),
     subject: { summary: PURGED },
     reason: PURGED,
     criteria: [],
@@ -1711,7 +1926,7 @@ export function importedJudgment(raw: unknown, origin: JudgmentPackOrigin): Judg
   const { judgment: core } = redactJudgment(
     normaliseJudgment(packInput(j as unknown as JudgmentPackLine['judgment']), new Date(0)),
   );
-  return { ...core, via: 'pack', pack: origin };
+  return { ...core, via: 'pack', origin: 'integration', pack: origin };
 }
 
 /** A line's claimed earlier origin: exactly the six fields, each plain text. */
@@ -1736,7 +1951,19 @@ function claimedOrigin(v: unknown, where: string): ClaimedPackOrigin {
 }
 
 const lineOf = (m: Memory & { judgment: Judgment }): JudgmentPackLine => {
-  const { withdrawn: _w, confirmed: _c, purged: _p, tombstone: _t, pack, ...j } = m.judgment;
+  // How it arrived here stays here: an importer records its own (`integration`).
+  const {
+    withdrawn: _w,
+    confirmed: _c,
+    purged: _p,
+    tombstone: _t,
+    origin: _o,
+    reviewer: _r,
+    upstream: _u,
+    proposedOrigin: _po,
+    pack,
+    ...j
+  } = m.judgment;
   // The exporter's own import record travels, field by field; a claim it holds itself does not.
   return {
     id: m.id,
