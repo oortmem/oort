@@ -78,6 +78,8 @@ export const TRAINING_MANIFEST = 'manifest.json';
  *   a resolve whose recorded judgment is gone;
  * - `contradictory`: `helped` and `irrelevant` feedback on the same memory for the same query;
  * - `invalid-time`: a label whose time is not an ISO date and time (a store edited by hand);
+ * - `straddles-split`: a retrieval row of a query whose rows would fall on both sides of the time
+ *   split (all of that query's rows stay out, so no query is in both train and eval);
  * - `expert-not-selected`, `before-since`, `origin-not-selected`: left out by the filters.
  *
  * A resolve that recorded a judgment is left out when that judgment would be: `corrected`,
@@ -101,6 +103,7 @@ export const TRAINING_EXCLUSIONS = [
   'memory-forgotten',
   'contradictory',
   'invalid-time',
+  'straddles-split',
   'expert-not-selected',
   'before-since',
   'origin-not-selected',
@@ -601,44 +604,20 @@ export function splitByTime<T extends { at: string }>(
 }
 
 /**
- * `rows` (sorted) split by time in whole groups: every row with the same `key` lands on one side.
- * Groups are ordered by their latest row (then by key); the cut falls between groups, where the
- * train side comes closest to the `train` share (more train on a tie), never between groups with
- * the same latest time. The same rows always split the same way.
+ * Retrieval rows (sorted) split by time as `splitByTime` splits them, then every query with rows
+ * on both sides is left out of both, so no query's positives sit in train and eval. Every eval
+ * row is still later than every train row. `straddling` counts the rows left out.
  */
-export function splitByGroup<T extends { at: string }>(
+export function splitRetrievalByTime<T extends { at: string; query: string }>(
   rows: readonly T[],
   train: number,
-  key: (row: T) => string,
-): { train: T[]; eval: T[] } {
-  const groups = new Map<string, { key: string; t: number; n: number }>();
-  for (const r of rows) {
-    const k = key(r);
-    const g = groups.get(k) ?? { key: k, t: -Infinity, n: 0 };
-    g.t = Math.max(g.t, Date.parse(r.at));
-    g.n++;
-    groups.set(k, g);
-  }
-  const ordered = [...groups.values()].sort(
-    (a, b) => a.t - b.t || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
-  );
-  const target = Math.round(train * rows.length);
-  let cut = 0;
-  let best = 0;
-  let sum = 0;
-  for (let i = 0; i <= ordered.length; i++) {
-    if (i > 0) sum += ordered[i - 1]!.n;
-    if (i > 0 && i < ordered.length && ordered[i - 1]!.t === ordered[i]!.t) continue;
-    if (Math.abs(sum - target) <= Math.abs(best - target)) {
-      cut = i;
-      best = sum;
-    }
-  }
-  const trainKeys = new Set(ordered.slice(0, cut).map((g) => g.key));
-  return {
-    train: rows.filter((r) => trainKeys.has(key(r))),
-    eval: rows.filter((r) => !trainKeys.has(key(r))),
-  };
+): { train: T[]; eval: T[]; straddling: number } {
+  const s = splitByTime(rows, train);
+  const inTrain = new Set(s.train.map((r) => r.query));
+  const both = new Set(s.eval.filter((r) => inTrain.has(r.query)).map((r) => r.query));
+  const kept = (r: T): boolean => !both.has(r.query);
+  const out = { train: s.train.filter(kept), eval: s.eval.filter(kept) };
+  return { ...out, straddling: rows.length - out.train.length - out.eval.length };
 }
 
 /** Per kind: rows written, by origin, and by split part when split. */
@@ -780,7 +759,22 @@ async function build(
   };
   for (const kind of f.kinds) {
     const r = results.get(kind)!;
-    const rows = sorted(r.rows);
+    const excluded: Tally = { ...r.excluded };
+    let rows = sorted(r.rows);
+    let parts: { part: TrainingFile['part']; rows: Row[] }[] = [{ part: 'all', rows }];
+    if (f.split !== null) {
+      // Retrieval leaves out a query that straddles the cut, so its positives sit on one side.
+      const s =
+        kind === 'retrieval'
+          ? splitRetrievalByTime(rows as (Row & RetrievalRow)[], f.split.train)
+          : { ...splitByTime(rows, f.split.train), straddling: 0 };
+      for (let i = 0; i < s.straddling; i++) bump(excluded, 'straddles-split');
+      parts = [
+        { part: 'train', rows: s.train },
+        { part: 'eval', rows: s.eval },
+      ];
+      rows = [...s.train, ...s.eval];
+    }
     for (const row of rows) {
       sources.add(`${kind}:${row.id}`);
       if ('positiveId' in row && row.positiveId !== undefined) {
@@ -788,20 +782,12 @@ async function build(
       }
     }
     const counts: TrainingCounts = { rows: rows.length, origins: originCount(rows) };
-    if (f.split === null) file(kind, 'all', rows);
-    else {
-      // Retrieval splits by query, so one query's positives never sit on both sides.
-      const s =
-        kind === 'retrieval'
-          ? splitByGroup(rows, f.split.train, (row) => (row as RetrievalRow).query)
-          : splitByTime(rows, f.split.train);
-      file(kind, 'train', s.train);
-      file(kind, 'eval', s.eval);
-      counts.train = { rows: s.train.length, origins: originCount(s.train) };
-      counts.eval = { rows: s.eval.length, origins: originCount(s.eval) };
+    for (const p of parts) {
+      file(kind, p.part, p.rows);
+      if (p.part !== 'all') counts[p.part] = { rows: p.rows.length, origins: originCount(p.rows) };
     }
     manifest.counts[kind] = counts;
-    manifest.excluded[kind] = ordered(r.excluded);
+    manifest.excluded[kind] = ordered(excluded);
     manifest.scrubbed[kind] = r.scrubbed;
   }
   return { exp: { manifest, contents }, sources };
@@ -846,6 +832,11 @@ function writeNew(file: string, text: string): void {
     fs.closeSync(fd);
   }
 }
+
+/** A temp file of this export: `.<file name>.<16 hex>.tmp`. */
+const TEMP_NAME = new RegExp(
+  `^\\.(?:manifest\\.json|(?:${TRAINING_KINDS.join('|')})(?:\\.train|\\.eval)?\\.jsonl)\\.[0-9a-f]{16}\\.tmp$`,
+);
 
 /** How many times `runTrainingExport` builds the export before it gives up (`store-changing`). */
 export const TRAINING_EXPORT_ATTEMPTS = 3;
@@ -895,6 +886,12 @@ function prepareDir(dir: string, force: boolean): Prepared {
       `The output directory is writable by other users (mode ${(st.mode & 0o777).toString(8).padStart(4, '0')}), so they could replace the export's files; use a directory only you can write to, or a new one.`,
     );
   }
+  // Temp files an interrupted run left: this export's own names only, never another file.
+  for (const name of fs.readdirSync(dir)) {
+    if (!TEMP_NAME.test(name)) continue;
+    const temp = path.join(dir, name);
+    if (!fs.lstatSync(temp).isDirectory()) fs.rmSync(temp, { force: true });
+  }
   const earlier = fs.readdirSync(dir).filter(isTrainingExportFile).sort();
   if (earlier.length > 0 && !force) {
     throw new TrainingExportError(
@@ -938,9 +935,10 @@ function removeTemps(temps: ReadonlyMap<string, string>): void {
 }
 
 /**
- * The complete temp files moved to their names, the manifest last. With `force`, files of the
- * earlier export that this one does not replace go only now, after every new file is complete;
- * the earlier manifest is the last of them, replaced by the new one.
+ * The complete temp files moved to their names. The earlier manifest goes first, then the data
+ * files are renamed, files of the earlier export this one does not replace are removed, and the
+ * new manifest comes last: a directory with a manifest always holds the files it describes, and
+ * one where this fails part-way has none.
  */
 function commit(
   dir: string,
@@ -959,6 +957,8 @@ function commit(
     }
   }
   const written: string[] = [];
+  const manifest = path.join(dir, TRAINING_MANIFEST);
+  if (force) fs.rmSync(manifest, { force: true });
   for (const [name, temp] of temps) {
     if (name === TRAINING_MANIFEST) continue;
     const file = path.join(dir, name);
@@ -971,12 +971,39 @@ function commit(
       fs.rmSync(path.join(dir, name), { force: true });
     }
   }
-  const manifest = path.join(dir, TRAINING_MANIFEST);
   fs.renameSync(temps.get(TRAINING_MANIFEST)!, manifest);
   temps.delete(TRAINING_MANIFEST);
   written.push(manifest);
   return written;
 }
+
+/**
+ * While an export runs: on SIGINT or SIGTERM its temp files are removed, and the signal is raised
+ * again when nothing else listens for it (so the process ends as it would have). `interrupted`
+ * names the signal once one came. `release` removes the listeners.
+ */
+function guardTemps(temps: () => ReadonlyMap<string, string>): {
+  interrupted: () => NodeJS.Signals | undefined;
+  release: () => void;
+} {
+  let caught: NodeJS.Signals | undefined;
+  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
+  const release = (): void => {
+    for (const sig of signals) process.off(sig, onSignal);
+  };
+  function onSignal(sig: NodeJS.Signals): void {
+    caught = sig;
+    removeTemps(temps());
+    release();
+    if (process.listenerCount(sig) === 0) process.kill(process.pid, sig);
+  }
+  for (const sig of signals) process.on(sig, onSignal);
+  return { interrupted: () => caught, release };
+}
+
+const stopIfInterrupted = (sig: NodeJS.Signals | undefined): void => {
+  if (sig !== undefined) throw new Error(`The training export was interrupted (${sig}).`);
+};
 
 /** After a failure: the temp files go, and so does `dir` when this call made it and it is empty. */
 function cleanUp(dir: string, temps: ReadonlyMap<string, string>, prepared: Prepared): void {
@@ -997,8 +1024,10 @@ function cleanUp(dir: string, temps: ReadonlyMap<string, string>, prepared: Prep
  * Every file is 0600, written complete under a temp name first and then renamed, the manifest
  * last. A directory holding files of an earlier export is refused (`exists`) unless `force`,
  * which replaces them once the new files are complete; other files are left alone. `dir` must
- * not be a symlink or a file (`not-a-directory`). On a failure the temp files are removed and an
- * earlier export is left as it was. Returns the paths written.
+ * not be a symlink or a file (`not-a-directory`). Temp files an interrupted run left in `dir` are
+ * removed first. On a failure before the renames the temp files are removed and an earlier
+ * export is left as it was; a failure while renaming leaves `dir` without a manifest. Returns
+ * the paths written.
  */
 export function writeTrainingExport(
   dir: string,
@@ -1022,8 +1051,8 @@ export function writeTrainingExport(
  * store's lock: once the files are written under temp names, every record behind a row is read
  * again, and when one would now be left out (forgotten, withdrawn, corrected meanwhile) the
  * export is built again from the start. After `TRAINING_EXPORT_ATTEMPTS` builds that kept
- * changing it fails (`store-changing`) and writes nothing. The files are a copy: a later forget
- * does not change them.
+ * changing it fails (`store-changing`) and writes nothing. On SIGINT or SIGTERM meanwhile the
+ * temp files are removed. The files are a copy: a later forget does not change them.
  */
 export async function runTrainingExport(
   dir: string,
@@ -1035,12 +1064,15 @@ export async function runTrainingExport(
   const force = write.force === true;
   const prepared = prepareDir(dir, force);
   let temps = new Map<string, string>();
+  const guard = guardTemps(() => temps);
   try {
     for (let attempt = 1; attempt <= TRAINING_EXPORT_ATTEMPTS; attempt++) {
       const now = deps.now ?? new Date();
       const built = await build(f, deps, now);
+      stopIfInterrupted(guard.interrupted());
       temps = writeTemps(dir, built.exp);
       const again = await build(f, deps, now);
+      stopIfInterrupted(guard.interrupted());
       if ([...built.sources].every((k) => again.sources.has(k))) {
         return { export: built.exp, written: commit(dir, temps, prepared, force) };
       }
@@ -1050,6 +1082,8 @@ export async function runTrainingExport(
   } catch (e) {
     cleanUp(dir, temps, prepared);
     throw e;
+  } finally {
+    guard.release();
   }
   cleanUp(dir, temps, prepared);
   throw new TrainingExportError(

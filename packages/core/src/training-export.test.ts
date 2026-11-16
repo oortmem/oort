@@ -14,8 +14,8 @@ import {
   buildTrainingExport,
   isTrainingExportFile,
   runTrainingExport,
-  splitByGroup,
   splitByTime,
+  splitRetrievalByTime,
   trainingFilters,
   TrainingExportError,
   writeTrainingExport,
@@ -844,18 +844,39 @@ describe('training export: retrieval pairs and the split by query', () => {
     expect(exp.manifest.excluded.retrieval!['contradictory']).toBe(2);
   });
 
-  it('keeps every row of one query on one side of the split, the same way every time', () => {
+  it('splits strictly by time, and leaves out a query that would straddle the cut', async () => {
     const rows = [
-      { at: at(1), q: 'a' },
-      { at: at(2), q: 'b' },
-      { at: at(3), q: 'b' },
-      { at: at(4), q: 'c' },
-      { at: at(5), q: 'a' },
+      { at: at(1), query: 'A' },
+      { at: at(5), query: 'B' },
+      { at: at(10), query: 'A' },
+      { at: at(11), query: 'C' },
     ];
-    const s = splitByGroup(rows, 0.6, (r) => r.q);
-    expect(s.train.map((r) => r.q)).toEqual(['b', 'b', 'c']);
-    expect(s.eval.map((r) => r.q)).toEqual(['a', 'a']);
-    expect(splitByGroup([...rows].reverse(), 0.6, (r) => r.q).train).toHaveLength(3);
+    const s = splitRetrievalByTime(rows, 0.25);
+    expect(s.straddling).toBe(2);
+    expect(s.eval.map((r) => r.query)).toEqual(['B', 'C']);
+    const latestTrain = Math.max(...s.train.map((r) => Date.parse(r.at)), -Infinity);
+    for (const r of s.eval) expect(Date.parse(r.at)).toBeGreaterThan(latestTrain);
+
+    // The same through an export: A is counted as straddling, and split.by stays time.
+    const store = createMemoryStore({ now: () => NOW });
+    await store.upsertMany(TG, MEMORIES);
+    for (const [id, query, day, memoryId] of [
+      ['f-a1', 'A', 1, 'm-lunch'],
+      ['f-b5', 'B', 5, 'm-lunch'],
+      ['f-a10', 'A', 10, 'm-deploy'],
+      ['f-c11', 'C', 11, 'm-lunch'],
+    ] as const) {
+      await store.putFeedback!(TG, feedback(id, { query, memoryId, createdAt: at(day) }));
+    }
+    const exp = await build({ kind: 'retrieval', split: 'time:0.25' }, store);
+    expect(exp.manifest.filters.split).toEqual({ by: 'time', train: 0.25 });
+    expect(exp.manifest.excluded.retrieval!['straddles-split']).toBe(2);
+    expect(rowsOf(contentsOf(exp, 'retrieval.train.jsonl'))).toEqual([]);
+    expect(rowsOf(contentsOf(exp, 'retrieval.eval.jsonl')).map((r) => r['id'])).toEqual([
+      'f-b5',
+      'f-c11',
+    ]);
+    expect(exp.manifest.counts.retrieval).toMatchObject({ rows: 2, train: { rows: 0 } });
   });
 
   it('splits the retrieval file by query', async () => {
@@ -922,6 +943,58 @@ describe('training export: built and written while the store changes', () => {
       fs.readdirSync(out).map((n) => [n, fs.readFileSync(path.join(out, n), 'utf8')]),
     );
     expect(after).toEqual(before);
+  });
+
+  it('a failure while renaming leaves no manifest, never an old one over new files', async () => {
+    const out = path.join(dir, 'mid-rename');
+    await run(out, await fixture());
+    // During the build a directory takes the place of a file the export renames over.
+    const { store } = await watched((call) => {
+      if (call === 2) {
+        fs.rmSync(path.join(out, 'retrieval.jsonl'));
+        fs.mkdirSync(path.join(out, 'retrieval.jsonl'));
+        fs.writeFileSync(path.join(out, 'retrieval.jsonl', 'x'), 'x');
+      }
+    });
+    await expect(run(out, store, true)).rejects.toThrow();
+    const names = fs.readdirSync(out);
+    expect(names).not.toContain('manifest.json');
+    expect(names.filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('removes temp files an interrupted run left, and no other file', async () => {
+    const out = path.join(dir, 'leftovers');
+    fs.mkdirSync(out, { mode: 0o700 });
+    const leftover = path.join(out, '.sft.jsonl.0123456789abcdef.tmp');
+    const others = [
+      '.sft.jsonl.notes',
+      '.env',
+      '.manifest.json.0123.tmp',
+      '.chat.jsonl.0123456789abcdef.tmp',
+    ];
+    fs.writeFileSync(leftover, 'an old copy');
+    for (const n of others) fs.writeFileSync(path.join(out, n), 'mine');
+    await run(out, await fixture());
+    expect(fs.existsSync(leftover)).toBe(false);
+    for (const n of others) expect(fs.readFileSync(path.join(out, n), 'utf8')).toBe('mine');
+  });
+
+  it('removes its temp files on SIGINT and stops before renaming', async () => {
+    const out = path.join(dir, 'interrupted');
+    // Another listener keeps the process alive: the export does not raise the signal again.
+    const keep = (): void => {};
+    const before = process.listenerCount('SIGINT');
+    process.on('SIGINT', keep);
+    try {
+      const { store } = await watched((call) => {
+        if (call === 2) process.emit('SIGINT', 'SIGINT');
+      });
+      await expect(run(out, store)).rejects.toThrow(/interrupted \(SIGINT\)/);
+      expect(fs.existsSync(out)).toBe(false);
+      expect(process.listenerCount('SIGINT')).toBe(before + 1);
+    } finally {
+      process.off('SIGINT', keep);
+    }
   });
 
   it('fails as store-changing when every check finds a change, and writes nothing', async () => {

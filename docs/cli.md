@@ -2246,9 +2246,9 @@ oort export training --kind all --out reviewed/ --exclude interactive --force
   `<kind>.jsonl`. Each kind's rows are sorted by that time; the earliest `fraction` go to train
   and the rest to eval, so every eval row is later than every train row. Rows with the same time
   never straddle the cut: their group goes to the side that holds most of it (train on a tie).
-  Equal times are ordered by id, so the same store always splits the same way. Retrieval rows
-  split by query instead: all rows of one query land on the same side, the queries ordered by
-  their latest label, so a positive reused for several negatives never sits on both sides.
+  Equal times are ordered by id, so the same store always splits the same way. A retrieval query
+  whose rows would fall on both sides of the cut is left out of both, counted as
+  `straddles-split`, so a positive reused for several negatives never sits in train and eval.
 - `--preference-reasons`: adds the person's reason to `chosen` in preference rows (see
   `preference.jsonl` below).
 - `--include integration` adds labels that arrived as `integration` (SDK and `oort serve` calls
@@ -2276,6 +2276,7 @@ Each of these is counted in the manifest, under `excluded.<kind>`, by its reason
 | `corrected`, `withdrawn`, `purged`, `not-current` (preference) | A resolve whose recorded judgment would be left out of `sft.jsonl`: the expert corrected or withdrew it since. |
 | `contradictory` | `helped` and `irrelevant` feedback on the same memory for the same query: both rows stay out. |
 | `invalid-time` | A label whose time is not an ISO date and time (a store edited by hand). |
+| `straddles-split` | With `--split`, the retrieval rows of a query that would fall on both sides of the cut. |
 | `expert-not-selected`, `before-since`, `origin-not-selected` | Left out by `--expert`, `--since`, or the origins chosen. |
 
 `oort forget` already deletes a forgotten memory's feedback and purges the predictions that cite
@@ -2288,9 +2289,12 @@ The export does not lock the store, so forgets and new labels go on while it run
 every file complete under a temporary name in `--out`, then reads every record behind its rows
 again. When one would now be left out (forgotten, withdrawn or corrected meanwhile) it builds
 the export again from the start, up to 3 times; when the labels still change, it fails with
-`reason: "store-changing"` and writes nothing. Only then are the files renamed into place, the
-manifest last. If anything fails part-way, the temporary files are removed and an earlier
-export in `--out` is left as it was. A forget that finishes in the moment between that check
+`reason: "store-changing"` and writes nothing. Only then are the files renamed into place: the
+earlier manifest is removed first and the new one comes last. If the export fails before the
+renames, the temporary files are removed and an earlier export in `--out` is left as it was. If
+the export fails while renaming, `--out` has no manifest.json; run it again. Temporary files are
+also removed on Ctrl-C (SIGINT) or SIGTERM, and any that an interrupted run left are removed when
+the next export into that directory starts. A forget that finishes in the moment between that check
 and the renames can still be in the files; to be sure, export again after forgetting. An export
 is a copy: forgetting a memory later does not change files already written, so delete those
 yourself.

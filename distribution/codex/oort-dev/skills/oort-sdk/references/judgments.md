@@ -285,13 +285,15 @@ await agent.exportTraining({ kind: 'sft', out }).catch((e: { reason?: string }) 
 - Agent labels nobody confirmed, withdrawn judgments, pending and dismissed feedback are left
   out and counted in the manifest by reason. Text is scrubbed of secrets again on the way out.
 - `split: 'time:0.8'` writes `<kind>.train.jsonl` and `<kind>.eval.jsonl`, every eval row
-  later than every train row. An earlier export in `out` is refused (`export-exists`) unless
+  later than every train row. A retrieval query that would straddle the cut is left out of both
+  (`straddles-split`). An earlier export in `out` is refused (`export-exists`) unless
   `force: true`. `out` must be an absolute path. A new directory is made 0700; an existing one
   keeps its mode and is refused when other users can write to it (`unsafe-directory`). Files
   are 0600.
 - The export is a copy. It checks again before renaming and rebuilds when a label was
   forgotten meanwhile (`store-changing` after 3 tries); a forget in the moment before the
-  renames can still be in the files, and a later forget does not change written files.
+  renames can still be in the files, and a later forget does not change written files. If it
+  fails while renaming, `out` has no `manifest.json`: run it again.
 - Preference rows are verdict-only on both sides, so length does not give away the chosen one.
   `preferenceReasons: true` adds the person's reason to `chosen`; `manifest.notes` then says
   that `rejected` has none.

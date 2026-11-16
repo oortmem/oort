@@ -1447,8 +1447,8 @@ them.
 **Options.** `kind` (`sft`, `preference`, `retrieval` or `all`) and `out` (a directory, as an
 absolute path; a relative one is a usage error) are required. `expert` keeps one expert's labels; `since` keeps labels made at or after a time;
 `split: 'time:0.8'` writes `<kind>.train.jsonl` and `<kind>.eval.jsonl` instead of
-`<kind>.jsonl`, the earliest 80% of each kind to train, and rows with the same time on one side
-(retrieval rows of one query stay on one side).
+`<kind>.jsonl`, the earliest 80% of each kind to train, and rows with the same time on one side.
+A retrieval query whose rows would fall on both sides is left out of both (`straddles-split`).
 `include` adds origins to `interactive`, `dashboard` and `connector` (only `integration` adds
 one; `agent` is a usage error), and `exclude` leaves origins out. `preferenceReasons: true` adds
 the person's reason to `chosen` in preference rows. A directory the export creates is 0700; an
@@ -1462,8 +1462,10 @@ file or a symlink as `out` is refused (`not-a-directory`).
 **While the store changes.** The export does not lock the store. It writes each file under a
 temporary name, reads every record behind its rows again, and builds again from the start when
 one was forgotten, withdrawn or corrected meanwhile; after 3 builds that kept changing it fails
-(`store-changing`, retryable) and writes nothing. On any failure the temporary files go and an
-earlier export stays as it was. A forget that finishes between that check and the renames can
+(`store-changing`, retryable) and writes nothing. On a failure before the renames the temporary
+files go and an earlier export stays as it was. If the export fails while renaming, `out` has no
+`manifest.json`; run it again. The temporary files also go on SIGINT or SIGTERM, and leftovers
+of an interrupted run are removed when the next export into `out` starts. A forget that finishes between that check and the renames can
 still be in the files, so export again after forgetting to be sure. An export is a copy:
 forgetting a memory later does not change files already written.
 
