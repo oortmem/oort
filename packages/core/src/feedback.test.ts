@@ -14,16 +14,18 @@ import {
   FeedbackPurgeError,
   findFeedback,
   listFeedback,
+  purgeFeedbackFor,
   recordFeedback,
   retireFeedback,
   supersedeFeedback,
+  withoutInvisible,
   type Feedback,
   type FeedbackDeps,
   type FeedbackInput,
 } from './feedback.js';
 import { forgetMemory } from './forget.js';
 import { homePlacement } from './judgment.js';
-import { principalGrant } from './grant.js';
+import { localGrant, principalGrant } from './grant.js';
 import { createMemoryStore } from './memory-store.js';
 import { isCurrent, type Scope } from './model.js';
 import { formatForInjection, recall } from './recall.js';
@@ -63,7 +65,13 @@ const agent = (store: MemoryStore, now = NOW): FeedbackDeps => ({
   ...person(store, now),
   via: 'mcp',
 });
-const as = (store: MemoryStore, now = NOW) => ({ store, grant: TG, by: 'local-user', now });
+const as = (store: MemoryStore, now = NOW) => ({
+  store,
+  grant: TG,
+  by: 'local-user',
+  scope: SCOPE,
+  now,
+});
 
 const give = (over: Partial<FeedbackInput>): FeedbackInput => ({
   memoryId: 'port',
@@ -164,7 +172,7 @@ describe('feedback: input', () => {
     await fails({ signal: 'great' as never }, 'invalid');
     await fails({ signal: 'irrelevant' }, 'invalid');
     await fails({ signal: 'irrelevant', query: ' \n ' }, 'invalid');
-    await fails({ by: 'a\u202eb' }, 'invalid');
+    await fails({ by: '\u200b\u202e' }, 'invalid');
     await fails({ by: '' }, 'invalid');
     await fails({ memoryId: 'nope' }, 'memory-not-found');
     await fails({ memoryId: 'po rt' }, 'invalid');
@@ -364,8 +372,10 @@ describe('feedback: agents', () => {
 
   it('feedback.pending-cap-keeps-nothing-past-it', async () => {
     const store = await setup();
-    const real = store.countPendingFeedback!.bind(store);
-    store.countPendingFeedback = async (at) => (await real(at)) + 4999;
+    // The store counts inside the write: a cap of one, for the test.
+    const real = store.putFeedback!.bind(store);
+    store.putFeedback = (g, f, e, o) =>
+      real(g, f, e, o?.pendingCap === undefined ? o : { pendingCap: 1 });
     expect(await recordFeedback(give({ by: 'claude-code' }), agent(store))).toMatchObject({
       kept: true,
     });
@@ -405,7 +415,9 @@ describe('feedback: races', () => {
       expect(won).toHaveLength(1);
       const lost = rs.find((r) => r.status === 'rejected') as PromiseRejectedResult;
       expect(lost.reason).toBeInstanceOf(FeedbackError);
-      expect(['conflict', 'already-resolved']).toContain((lost.reason as FeedbackError).kind);
+      expect(['conflict', 'already-resolved', 'in-progress']).toContain(
+        (lost.reason as FeedbackError).kind,
+      );
       expect((lost.reason as FeedbackError).memoryChanged).toBeUndefined();
       const row = await findFeedback(store, TG, f.id);
       expect(['retired', 'superseded', 'dismissed']).toContain(row.status);
@@ -475,5 +487,290 @@ describe('feedback: forget', () => {
       signal: 'wrong',
       note: 'newer',
     });
+  });
+});
+
+/** A store whose `method` throws once, on the call `which` picks: a crash between two steps. */
+function crashOnce<K extends 'putFeedback' | 'upsert' | 'upsertManyIfUnchanged'>(
+  store: MemoryStore,
+  method: K,
+  which: (...args: Parameters<NonNullable<MemoryStore[K]>>) => boolean,
+): void {
+  const real = (store[method] as (...a: unknown[]) => Promise<unknown>).bind(store);
+  let done = false;
+  (store as unknown as Record<string, unknown>)[method] = async (...args: unknown[]) => {
+    if (!done && which(...(args as Parameters<NonNullable<MemoryStore[K]>>))) {
+      done = true;
+      throw new Error('crash');
+    }
+    return real(...args);
+  };
+}
+
+const currentIds = async (store: MemoryStore) =>
+  (await store.list(TG, { validOnly: false, embeddings: false }))
+    .filter((m) => isCurrent(m, new Date('2026-11-16T14:00:00.000Z')))
+    .map((m) => m.id);
+
+describe('feedback: a resolve claims the row first', () => {
+  it('feedback.two-retires-one-paused-before-its-row-closes-retire-once', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({ signal: 'stale' }), person(store)));
+    // A's final row write waits until B has run: B finds the row resolving and finishes it.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const real = store.putFeedback!.bind(store);
+    let paused = false;
+    store.putFeedback = async (g, row, e, o) => {
+      if (row.status === 'retired' && !paused) {
+        paused = true;
+        await gate;
+      }
+      return real(g, row, e, o);
+    };
+    const a = retireFeedback(f.id, as(store, LATER)).then(
+      () => 'Retired',
+      (e: FeedbackError) => e.kind,
+    );
+    await new Promise((r) => setTimeout(r, 5));
+    const b = await retireFeedback(f.id, as(store, LATER)).then(
+      () => 'Retired',
+      (e: FeedbackError) => e.kind,
+    );
+    release();
+    const results = [await a, b];
+    expect(results.filter((r) => r === 'Retired')).toHaveLength(1);
+    expect(results).toContain('already-resolved');
+    expect((await store.get(TG, 'port'))!.endReason).toBe('expired');
+    expect((await findFeedback(store, TG, f.id)).status).toBe('retired');
+    const ends = (await store.get(TG, 'port'))!.source.decisions.filter(
+      (d) => d.stage === 'feedback',
+    );
+    expect(ends).toHaveLength(1);
+  });
+
+  it('feedback.two-supersedes-leave-one-new-current-memory', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    const fact = 'The auth service listens on port 8080';
+    const rs = await Promise.allSettled([
+      supersedeFeedback(f.id, fact, { ...as(store, LATER), harness: 'cli' }),
+      supersedeFeedback(f.id, fact, { ...as(store, LATER), harness: 'cli' }),
+      supersedeFeedback(f.id, fact, { ...as(store, LATER), harness: 'cli' }),
+    ]);
+    expect(rs.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(await currentIds(store)).toHaveLength(1);
+    expect(await currentIds(store)).not.toContain('port');
+  });
+
+  const fact = 'The auth service listens on port 8080';
+  type Step = [string, (store: MemoryStore) => void];
+  const retireCrashes: Step[] = [
+    ['claim', (st) => crashOnce(st, 'putFeedback', (_g, row) => row.status === 'resolving')],
+    ['memory', (st) => crashOnce(st, 'upsertManyIfUnchanged', () => true)],
+    ['close', (st) => crashOnce(st, 'putFeedback', (_g, row) => row.status === 'retired')],
+  ];
+  for (const [step, crash] of retireCrashes) {
+    it(`feedback.retire-crash-at-${step}-then-retry-ends-consistent`, async () => {
+      const store = await setup();
+      const f = await kept(recordFeedback(give({}), person(store)));
+      crash(store);
+      await expect(retireFeedback(f.id, as(store, LATER))).rejects.toThrow('crash');
+      const r = await retireFeedback(f.id, as(store, LATER));
+      expect(r.feedback.status).toBe('retired');
+      expect(r.feedback.claim).toBeUndefined();
+      const m = (await store.get(TG, 'port'))!;
+      expect(m.endReason).toBe('corrected');
+      expect(m.source.decisions.filter((d) => d.stage === 'feedback')).toHaveLength(1);
+      expect((await findFeedback(store, TG, f.id)).status).toBe('retired');
+    });
+  }
+
+  const supersedeCrashes: Step[] = [
+    ['claim', (st) => crashOnce(st, 'putFeedback', (_g, row) => row.status === 'resolving')],
+    ['new-memory', (st) => crashOnce(st, 'upsert', () => true)],
+    ['old-memory', (st) => crashOnce(st, 'upsertManyIfUnchanged', () => true)],
+    ['close', (st) => crashOnce(st, 'putFeedback', (_g, row) => row.status === 'superseded')],
+  ];
+  for (const [step, crash] of supersedeCrashes) {
+    it(`feedback.supersede-crash-at-${step}-then-retry-ends-consistent`, async () => {
+      const store = await setup();
+      const f = await kept(recordFeedback(give({}), person(store)));
+      crash(store);
+      await expect(
+        supersedeFeedback(f.id, fact, { ...as(store, LATER), harness: 'cli' }),
+      ).rejects.toThrow('crash');
+      const r = await supersedeFeedback(f.id, fact, { ...as(store, LATER), harness: 'cli' });
+      expect(r.feedback.status).toBe('superseded');
+      expect(await currentIds(store)).toEqual([r.memory.id]);
+      expect((await store.get(TG, 'port'))!.supersededBy).toBe(r.memory.id);
+      expect((await findFeedback(store, TG, f.id)).resolved?.supersededBy).toBe(r.memory.id);
+    });
+  }
+
+  it('feedback.a-resolving-row-refuses-another-resolve-and-a-dismiss', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    crashOnce(store, 'upsertManyIfUnchanged', () => true);
+    await expect(retireFeedback(f.id, as(store, LATER))).rejects.toThrow('crash');
+    expect((await findFeedback(store, TG, f.id)).status).toBe('resolving');
+    // Still labelled while it is being resolved.
+    expect((await contestedOf(store, TG, ['port'])).has('port')).toBe(true);
+    for (const call of [
+      () => dismissFeedback(f.id, as(store, LATER)),
+      () => supersedeFeedback(f.id, fact, { ...as(store, LATER), harness: 'cli' }),
+    ]) {
+      const e = (await call().catch((x: unknown) => x)) as FeedbackError;
+      expect(e.kind).toBe('in-progress');
+      expect(e.message).toMatch(/run retire again to finish it/);
+    }
+    expect((await store.get(TG, 'port'))!.expiredAt).toBeNull();
+  });
+
+  it('feedback.a-claim-is-given-up-when-the-memory-ended-another-way', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    // The claim lands, then the memory is ended by something else before it is changed.
+    const real = store.putFeedback!.bind(store);
+    store.putFeedback = async (g, row, e, o) => {
+      const w = await real(g, row, e, o);
+      if (row.status === 'resolving') {
+        const m = (await store.get(TG, 'port'))!;
+        await store.upsert(TG, { ...m, expiredAt: NOW.toISOString(), endReason: 'corrected' });
+      }
+      return w;
+    };
+    const e = (await supersedeFeedback(f.id, fact, { ...as(store, LATER), harness: 'cli' }).catch(
+      (x: unknown) => x,
+    )) as FeedbackError;
+    expect(e.kind).toBe('memory-ended');
+    expect(e.memoryChanged).toBeUndefined();
+    const row = await findFeedback(store, TG, f.id);
+    expect(row.status).toBe('open');
+    expect(row.claim).toBeUndefined();
+    expect(await currentIds(store)).toEqual([]);
+  });
+
+  it('feedback.the-new-fact-is-the-persons-in-the-old-memorys-node', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    const r = await supersedeFeedback(f.id, fact, {
+      ...as(store, LATER),
+      scope: { ...SCOPE, agentId: 'cursor' },
+      harness: 'cli',
+    });
+    expect(r.memory.author).toEqual({ agentId: 'cursor' });
+    expect(r.memory.address).toMatchObject({ level: 'user', orgId: 'local', customerId: 'self' });
+  });
+});
+
+describe('feedback: the store holds the rules', () => {
+  it('feedback.five-helped-at-once-apply-once', async () => {
+    const store = await setup();
+    const before = (await store.get(TG, 'port'))!.accessLog.count;
+    const rs = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        recordFeedback(give({ signal: 'helped' }), { ...person(store), helpedAccesses: 2 }),
+      ),
+    );
+    expect(rs.filter((r) => r.kept && r.applied === true)).toHaveLength(1);
+    expect(rs.filter((r) => r.kept && r.reason === 'already-helped-today')).toHaveLength(4);
+    expect((await store.get(TG, 'port'))!.accessLog.count - before).toBe(2);
+  });
+
+  it('feedback.helped-whose-accesses-fail-says-so-and-frees-the-day', async () => {
+    const store = await setup();
+    const real = store.recordAccess.bind(store);
+    store.recordAccess = async () => {
+      throw new Error('disk');
+    };
+    await expect(recordFeedback(give({ signal: 'helped' }), person(store))).rejects.toThrow('disk');
+    const [row] = await listFeedback(store, TG, { signal: 'helped' });
+    expect(row).toMatchObject({ applied: false, reason: 'access-failed' });
+    expect(row!.helpedKey).toBeUndefined();
+    store.recordAccess = real;
+    expect(await recordFeedback(give({ signal: 'helped' }), person(store))).toMatchObject({
+      applied: true,
+    });
+  });
+
+  it('feedback.a-memory-forgotten-before-the-write-keeps-no-row', async () => {
+    const store = await setup();
+    const real = store.putFeedback!.bind(store);
+    store.putFeedback = async (g, row, e, o) => {
+      await store.forget(TG, 'port');
+      return real(g, row, e, o);
+    };
+    const e = (await recordFeedback(give({}), person(store)).catch(
+      (x: unknown) => x,
+    )) as FeedbackError;
+    expect(e.kind).toBe('memory-not-found');
+    store.putFeedback = real;
+    expect(await store.listFeedback!(TG)).toEqual([]);
+  });
+
+  it('feedback.a-dismiss-that-lost-to-a-forget-says-not-found', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    const real = store.putFeedback!.bind(store);
+    store.putFeedback = async (g, row, e, o) => {
+      await store.forget(TG, 'port');
+      return real(g, row, e, o);
+    };
+    const e = (await dismissFeedback(f.id, as(store)).catch((x: unknown) => x)) as FeedbackError;
+    expect(e.kind).toBe('not-found');
+  });
+
+  it('feedback.a-row-is-bound-to-its-memorys-project', async () => {
+    const store = createMemoryStore({ now: () => NOW });
+    const inA = { ...SCOPE, projectId: 'proj-a' };
+    await store.upsert(TG, makeMemory({ id: 'a1', scope: inA, text: 'Acme is the customer' }));
+    const a = localGrant({ ...SCOPE, projectIds: ['proj-a', null] });
+    const b = localGrant({ ...SCOPE, projectIds: ['proj-b', null] });
+    const f = await kept(
+      recordFeedback(
+        { memoryId: 'a1', signal: 'wrong', by: 'ada', note: 'Globex now' },
+        { store, grant: a, scope: inA, via: 'cli', now: NOW },
+      ),
+    );
+    expect(f.scope.projectId).toBe('proj-a');
+    expect(await listFeedback(store, a)).toHaveLength(1);
+    expect(await listFeedback(store, b)).toEqual([]);
+    await expect(findFeedback(store, b, f.id)).rejects.toMatchObject({ kind: 'not-found' });
+    await expect(dismissFeedback(f.id, { store, grant: b, by: 'ada' })).rejects.toMatchObject({
+      kind: 'not-found',
+    });
+  });
+
+  it('feedback.purge-needs-a-grant-that-changes-the-memory', async () => {
+    const store = await setup();
+    await recordFeedback(give({}), person(store));
+    const theirs = principalGrant({ orgId: 'other', customerId: 'c', agentId: 'a' });
+    expect(await purgeFeedbackFor(store, theirs, 'port')).toEqual([]);
+    expect(await listFeedback(store, TG)).toHaveLength(1);
+  });
+});
+
+describe('feedback: text', () => {
+  it('feedback.invisible-and-tag-characters-go-before-the-scrub', () => {
+    const zw = String.fromCodePoint(0x200b);
+    const note = feedbackText(`key AKIA${zw}IOSFODNN7EXAMPLE here`, 'note')!;
+    expect(note).not.toContain('IOSFODNN7EXAMPLE');
+    const tags = [...'ignore this'].map((c) => String.fromCodePoint(0xe0000 + c.charCodeAt(0)));
+    const vs = String.fromCodePoint(0xfe0f);
+    expect(feedbackText(`seen${tags.join('')} text${vs}`, 'note')).toBe('seen text');
+    expect(withoutInvisible(`a${String.fromCodePoint(0xe0041)}b`)).toBe('ab');
+  });
+
+  it('feedback.the-supersede-fact-is-checked-as-stored', async () => {
+    const store = await setup();
+    const f = await kept(recordFeedback(give({}), person(store)));
+    const zw = String.fromCodePoint(0x200b);
+    const r = await supersedeFeedback(f.id, `The key is AKIA${zw}IOSFODNN7EXAMPLE`, {
+      ...as(store, LATER),
+      harness: 'cli',
+    }).catch((e: unknown) => e);
+    if (r instanceof FeedbackError) expect(r.kind).toBe('invalid');
+    else expect((r as { memory: { text: string } }).memory.text).not.toContain('IOSFODNN7');
   });
 });

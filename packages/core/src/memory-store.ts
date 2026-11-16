@@ -404,19 +404,43 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
 
     feedback: true,
 
-    async putFeedback(grant, f, expect) {
+    // No await from the checks to the write: one call is atomic, as the SQLite transaction is.
+    async putFeedback(grant, f, expect, putOpts) {
       open();
       assertGrant(grant);
       if (!grantWrites(grant, f)) throw new GrantError();
       const was = feedback.get(f.id);
       if (was !== undefined && (!grantWrites(grant, was) || !sameRecordAddress(was, f))) {
-        return false;
+        return 'conflict';
       }
-      if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return false;
+      if (expect !== undefined && (was?.revision ?? null) !== expect.revision) return 'conflict';
       // A row keeps the memory it is about: a write naming another is refused.
-      if (was !== undefined && was.memoryId !== f.memoryId) return false;
+      if (was !== undefined && was.memoryId !== f.memoryId) return 'conflict';
+      if (was === undefined && !main.has(f.memoryId) && !cold.has(f.memoryId)) {
+        return 'memory-gone';
+      }
+      if (was === undefined && f.status === 'pending' && putOpts?.pendingCap !== undefined) {
+        const where = addressOf(f);
+        const author = authorOf(f).agentId;
+        let n = 0;
+        for (const x of feedback.values()) {
+          if (
+            x.status === 'pending' &&
+            sameAddress(addressOf(x), where) &&
+            authorOf(x).agentId === author
+          ) {
+            n++;
+          }
+        }
+        if (n >= putOpts.pendingCap) return 'pending-cap';
+      }
+      if (f.helpedKey !== undefined) {
+        for (const x of feedback.values()) {
+          if (x.id !== f.id && x.helpedKey === f.helpedKey) return 'helped-today';
+        }
+      }
       feedback.set(f.id, structuredClone(f));
-      return true;
+      return 'written';
     },
 
     async getFeedback(grant, id) {
@@ -437,6 +461,10 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
       open();
       assertGrant(grant);
       const removed: string[] = [];
+      // Only for a memory this grant may change (or one already gone: its rows are orphans).
+      if (main.has(memoryId) && writable(grant, memoryId) === undefined) {
+        return { removed, leftover: [] };
+      }
       for (const f of [...feedback.values()]) {
         if (f.memoryId !== memoryId) continue;
         feedback.delete(f.id);

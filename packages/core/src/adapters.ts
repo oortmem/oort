@@ -141,6 +141,9 @@ export interface SearchOptions {
   spatial?: SpatialFilter;
 }
 
+/** What `MemoryStore.putFeedback` did. */
+export type FeedbackWrite = 'written' | 'conflict' | 'memory-gone' | 'pending-cap' | 'helped-today';
+
 export interface MemoryStore {
   /**
    * True when the store keeps `Memory.place` and applies `SearchOptions.spatial` (spatial memory,
@@ -264,30 +267,45 @@ export interface MemoryStore {
   /**
    * True when the store keeps recall feedback (`feedbackConformance` proves it) and has
    * `putFeedback`, `getFeedback`, `listFeedback`, `purgeFeedbackFor` and `countPendingFeedback`.
+   * A store also removes feedback rows whose memory it no longer holds (an older Oort forgot it)
+   * when it opens.
    * A feedback row is not a memory: no search, listing or export of memories ever returns one.
    * Absent: feedback is refused, and recall labels nothing contested.
    */
   readonly feedback?: true;
   /**
-   * Writes the feedback row `f` (insert or replace). With `expect`, only when the stored row's
-   * `revision` is `expect.revision` (`null`: only when no row has `f.id`). Resolves to false,
-   * writing nothing, when that guard fails, or when a row with `f.id` exists at another address
-   * or outside the grant. Rejects with `GrantError` when `f`'s address and author are outside
-   * `grant.write`.
+   * Writes the feedback row `f` (insert or replace) in one transaction, and says what happened:
+   * - `conflict`: nothing written: with `expect`, the stored row's `revision` is not
+   *   `expect.revision` (`null`: a row with `f.id` exists); or a row with `f.id` is at another
+   *   address, outside the grant, or about another memory;
+   * - `memory-gone`: nothing written: `f` is a new row and the store holds no memory `f.memoryId`
+   *   (it was forgotten), so no row outlives its memory;
+   * - `pending-cap`: nothing written: `f` is a new `pending` row and its author already keeps
+   *   `opts.pendingCap` pending rows at its address (counted in the same transaction);
+   * - `helped-today`: nothing written: `f.helpedKey` is set and another row holds it;
+   * - `written`.
+   * Rejects with `GrantError` when `f`'s address and author are outside `grant.write`.
    */
-  putFeedback?(grant: Grant, f: Feedback, expect?: { revision: number | null }): Promise<boolean>;
+  putFeedback?(
+    grant: Grant,
+    f: Feedback,
+    expect?: { revision: number | null },
+    opts?: { pendingCap?: number },
+  ): Promise<FeedbackWrite>;
   /** The feedback row `id`, or null when it is unknown or outside the grant. */
   getFeedback?(grant: Grant, id: string): Promise<Feedback | null>;
   /**
    * The feedback rows the grant reads, newest first (`createdAt`, then `id`), filtered as
    * `selectFeedback` filters (status, memory ids, signal, id prefix), at most `opts.limit`. The
-   * limit applies after the grant.
+   * limit applies after the grant. With `memoryIds` (recall's lookup) the store reads only the
+   * rows about those memories, by an index on the memory id.
    */
   listFeedback?(grant: Grant, opts?: FeedbackListOptions): Promise<Feedback[]>;
   /**
    * Deletes every feedback row about `memoryId`, at every address, leaving none of its text in a
-   * log or journal the store keeps. Not limited to `grant`: the caller is forgetting that memory
-   * under its own grant, and feedback about it goes with it, as its links do. Returns the ids
+   * log or journal the store keeps (as `forget` does: a write-ahead log another process keeps
+   * open is reset at a later checkpoint, and the store logs that). Only for a memory `grant` may
+   * change; then rows other principals wrote about it go too, as its links do. Returns the ids
    * removed and those it could not remove (`leftover`, which callers treat as a failure).
    */
   purgeFeedbackFor?(

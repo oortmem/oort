@@ -78,11 +78,12 @@ export const PREDICTION_TABLE = 'predictions';
 
 /**
  * Recall feedback (`MemoryStore.feedback`): one row per feedback, its record as JSON, with its
- * address columns (so the same grant predicate applies), the memory it is about, its status and
- * when it was given. Created on every open when missing, like `predictions`, so it needs no schema
- * version. Indexed by address and memory (recall reads the open ones for its results), by memory
- * alone (a forget removes every row about a memory, at every address) and by status. A row is
- * never a memory: no search or listing of memories reads this table.
+ * address columns (so the same grant predicate applies, project included), the memory it is
+ * about, its status, when it was given, and an applied `helped`'s key (unique: one per memory,
+ * person and day). Created on every open when missing, like `predictions`, so it needs no schema
+ * version. Indexed by memory and status (recall reads the open ones for the memories it returns,
+ * and a forget removes every row about a memory, at every address), by node and time (listing)
+ * and by status. A row is never a memory: no search or listing of memories reads this table.
  */
 export const FEEDBACK_TABLE = 'feedback';
 
@@ -1533,11 +1534,26 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
         memory_id TEXT NOT NULL,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        helped_key TEXT,
         record TEXT NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_address ON ${FEEDBACK_TABLE} (org_id, level, customer_id, agent_id, memory_id);
-      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_memory ON ${FEEDBACK_TABLE} (memory_id);
+    `);
+    // A table an earlier build of this feature made has no helped_key, and its indexes had other
+    // shapes: add the column and replace them (the table was never in a release).
+    const cols = db
+      .prepare<[], { name: string }>(`SELECT name FROM pragma_table_info('${FEEDBACK_TABLE}')`)
+      .all()
+      .map((c) => c.name);
+    if (!cols.includes('helped_key')) {
+      db.exec(`ALTER TABLE ${FEEDBACK_TABLE} ADD COLUMN helped_key TEXT`);
+    }
+    db.exec(`
+      DROP INDEX IF EXISTS ${FEEDBACK_TABLE}_address;
+      DROP INDEX IF EXISTS ${FEEDBACK_TABLE}_memory;
+      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_node ON ${FEEDBACK_TABLE} (org_id, level, customer_id, agent_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_memory_status ON ${FEEDBACK_TABLE} (memory_id, status);
       CREATE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_status ON ${FEEDBACK_TABLE} (status, created_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS ${FEEDBACK_TABLE}_helped ON ${FEEDBACK_TABLE} (helped_key) WHERE helped_key IS NOT NULL;
     `);
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     const put = db.prepare(

@@ -724,18 +724,30 @@ function sameDecision(a: Judgment, b: Judgment): boolean {
 }
 
 /**
- * Where a judgment (or a prediction, or recall feedback) is kept: the grant's home node, unbound to
- * any project, as the acting principal's record. Judgments belong to the expert, not to a
- * repository.
+ * Where a judgment is kept: the grant's home node, unbound to any project, as the acting
+ * principal's record. Judgments belong to the expert, not to a repository.
  */
 export function homePlacement(
   scope: Scope,
   grant: Grant,
 ): Pick<Memory, 'scope' | 'address' | 'author'> {
+  return projectPlacement(scope, grant, undefined);
+}
+
+/**
+ * Where a record about project data is kept (a prediction about an item, recall feedback about a
+ * memory): the grant's home node, bound to `projectId` (none: unbound), so a grant reads it only
+ * where it reads that project, as it reads the project's memories.
+ */
+export function projectPlacement(
+  scope: Scope,
+  grant: Grant,
+  projectId: string | undefined,
+): Pick<Memory, 'scope' | 'address' | 'author'> {
   const { projectId: _p, ...unbound } = scope;
   return grant.home.level === 'user'
-    ? { scope: unbound }
-    : addressed(homeAddress(grant), { agentId: scope.agentId });
+    ? { scope: projectId === undefined ? unbound : { ...unbound, projectId } }
+    : addressed(homeAddress(grant, projectId), { agentId: scope.agentId });
 }
 
 function judgmentMemory(
