@@ -489,3 +489,68 @@ describe('recall: the time channel with a question about two things', () => {
     ]);
   });
 });
+
+describe('recall: a split question, its time and the gate', () => {
+  const JUNE = new Date('2024-06-01T10:00:00.000Z');
+  // "move" and "in March 2024": the second part is only a time.
+  const timeQuestion = 'How long between the move and in March 2024?';
+  const move = said('move', 'We did the move to Oslo in the spring.', '2024-03-20T09:00:00.000Z');
+  const dentist = said('dentist', 'Dentist, March 2024: two fillings.', '2024-03-05T09:00:00.000Z');
+  const fullRerank = (scores: Record<string, number>): Reranker => ({
+    async rerank(_q, docs, topK) {
+      return docs
+        .map((d) => ({ id: d.id, score: scores[d.id] ?? 0 }))
+        .sort((x, y) => y.score - x.score)
+        .slice(0, topK);
+    },
+  });
+
+  it('time.a-part-that-is-only-a-time-is-not-searched-and-has-no-head', async () => {
+    const fast = await recall(
+      { text: timeQuestion, scope: SCOPE },
+      { store: (await storeWith([move, dentist])).store, config, now: JUNE },
+    );
+    expect(fast.subQueries).toEqual(['move']);
+    // Saying "March 2024" is not being about a part: no head, and no pass on calendar words.
+    expect(fast.memories.find((m) => m.id === 'dentist')).toBeUndefined();
+    const full = await recall(
+      { text: timeQuestion, scope: SCOPE },
+      {
+        store: (await storeWith([move, dentist])).store,
+        rerank: fullRerank({ move: 0.5, dentist: 0.2 }),
+        config: withRecall({ skipRerankWhenConfident: false }),
+        now: JUNE,
+      },
+    );
+    expect(full.subQueries).toEqual(['move']);
+    expect(full.memories.map((m) => m.id)).toEqual(['move']);
+  });
+
+  // Three hits that pass the gate, and the best match for "adopt cat", which does not.
+  const pets = [
+    said('g1', 'Adopted my first pet, a dog.', '2024-03-01T09:00:00.000Z'),
+    said('g2', 'The dog was my first pet.', '2024-03-02T09:00:00.000Z'),
+    said('g3', 'First pet: a dog named Rex.', '2024-03-03T09:00:00.000Z'),
+    said('cat', 'A cat sat on the wall.', '2024-03-04T09:00:00.000Z'),
+  ];
+  const petQuestion = { text: 'Which pet did I adopt first, the cat or the dog?', scope: SCOPE };
+
+  it('gate.a-head-that-fails-the-gate-takes-no-place-in-the-top-k', async () => {
+    const cfg = withRecall({ returnK: 3, skipRerankWhenConfident: false });
+    const fast = await recall(petQuestion, {
+      store: (await storeWith(pets)).store,
+      config: cfg,
+      now: JUNE,
+    });
+    expect(new Set(fast.memories.map((m) => m.id))).toEqual(new Set(['g1', 'g2', 'g3']));
+    const full = await recall(petQuestion, {
+      store: (await storeWith(pets)).store,
+      rerank: fullRerank({ g1: 0.6, g2: 0.6, g3: 0.6, cat: 0.1 }),
+      config: cfg,
+      now: JUNE,
+    });
+    expect(new Set(full.memories.map((m) => m.id))).toEqual(new Set(['g1', 'g2', 'g3']));
+    // The gate still says what it did.
+    expect(full.gate?.dropped).toBe(1);
+  });
+});

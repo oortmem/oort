@@ -221,25 +221,26 @@ describe('temporalIntent', () => {
       gate: 'buy standing desk',
     });
     // The split dropped "last": "week" alone names nothing, yet is a word of the question's time.
-    const q = 'Which did I buy first last week, the standing desk or the office chair?';
-    expect(rangeWordsOut('buy standing desk week', AT, q)).toEqual({
+    expect(rangeWordsOut('buy standing desk week', AT, 'last week')).toEqual({
       text: 'buy standing desk',
       gate: 'buy standing desk',
     });
-    // A calendar name stays in the search (unchanged: no `text`), never in the gate.
-    expect(
-      rangeWordsOut(
-        'buy desk Saturday',
-        AT,
-        'Which did I buy first last Saturday, the desk or the chair?',
-      ),
-    ).toEqual({
-      gate: 'buy desk',
+    // The word left of the question's time is the last one: "the week planner" keeps its own.
+    expect(rangeWordsOut('fix the week planner week', AT, 'last week')).toEqual({
+      text: 'fix the week planner',
+      gate: 'fix the week planner',
     });
+    // A calendar name stays in the search (unchanged: no `text`), never in the gate.
+    expect(rangeWordsOut('buy desk Saturday', AT, 'last Saturday')).toEqual({ gate: 'buy desk' });
     // No time in the part or the question: nothing to drop.
-    expect(rangeWordsOut('buy desk', AT, 'Which did I buy first, the desk or the chair?')).toEqual(
-      {},
-    );
+    expect(rangeWordsOut('buy desk', AT)).toEqual({});
+  });
+
+  it('temporal.a-part-that-is-only-a-time-says-so', () => {
+    // Nothing is left to gate on: the part is the question's time, which the time channel serves.
+    const r = rangeWordsOut('in March 2024', new Date('2024-06-01T10:00:00.000Z'), 'March 2024');
+    expect(r.timeOnly).toBe(true);
+    expect(r.gate).toBeUndefined();
   });
 
   it('temporal.intent-range-words-without-a-reranker', () => {

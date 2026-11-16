@@ -317,36 +317,45 @@ export function temporalIntent(query: string, now: Date): TemporalIntent {
  * `query` without the words of the past time it names, as recall without a reranker reads it:
  * `gate` drops them, `text` keeps the calendar names among them (see `fastText`, `fastGate`).
  * Each is set only when it differs from `query`; neither when nothing was dropped. Recall reads
- * each part of a split question this way, with `whole` the question: a part loses the time it
- * names itself and any word left of the question's time ("week" of "last week" once the split
- * dropped "last").
+ * each part of a split question this way, with `wholeRange` the words of the question's time: a
+ * part loses the time it names itself and any word left of the question's ("week" of "last
+ * week" once the split dropped "last"), the last such word first, since a word of the part's own
+ * may come before it. `timeOnly`: no word but the time is left, so there is nothing to gate on.
  */
 export function rangeWordsOut(
   query: string,
   now: Date,
-  whole?: string,
-): { text?: string; gate?: string } {
+  wholeRange?: string,
+): { text?: string; gate?: string; timeOnly?: true } {
   let own: string | undefined;
-  let all: string | undefined;
   try {
     own = queryRange(query, now)?.text;
-    all = whole === undefined ? undefined : queryRange(whole, now)?.text;
   } catch {
     return {};
   }
   let gate = own === undefined ? query : without(query, own, true);
   const names: string[] = [...(own?.match(CALENDAR_NAME) ?? [])];
-  for (const w of all?.split(/[^\p{L}\p{N}]+/u) ?? []) {
+  for (const w of wholeRange?.split(/[^\p{L}\p{N}]+/u) ?? []) {
     if (informativeTokens(w).size === 0) continue;
-    const at = new RegExp(`(^|[^\\p{L}\\p{N}])${w}(?![\\p{L}\\p{N}])`, 'iu').exec(gate);
-    if (at === null) continue;
-    const start = at.index + at[1]!.length;
-    if (new RegExp(`^${CALENDAR_NAME.source}$`, 'i').test(w))
+    const found = [
+      ...gate.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${w}(?![\\p{L}\\p{N}])`, 'giu')),
+    ];
+    const at = found[found.length - 1];
+    if (at === undefined) continue;
+    const start = at.index;
+    if (new RegExp(`^${CALENDAR_NAME.source}$`, 'i').test(w)) {
       names.push(gate.slice(start, start + w.length));
+    }
     gate = `${gate.slice(0, start)} ${gate.slice(start + w.length)}`.replace(/\s+/g, ' ').trim();
   }
   if (gate === query) return {};
-  return textAndGate(query, gate, names);
+  const forms = textAndGate(query, gate, names);
+  // No word of its own left ("in March 2024", or "the" of "the week"): nothing to gate on.
+  if (informativeTokens(gate).size === 0) {
+    const { gate: _g, ...rest } = forms;
+    return { ...rest, timeOnly: true };
+  }
+  return forms;
 }
 
 function formsWithout(query: string, part: string): { text?: string; gate?: string } {

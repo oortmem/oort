@@ -43,7 +43,7 @@ import {
 } from './place.js';
 import { rangeWordsOut, temporalIntent, type RecallMode, type TimeShape } from './temporal.js';
 import { PART_MIN_WORDS, PART_RERANK_FLOOR, subQueries } from './subqueries.js';
-import { formatRange, type TimeRange } from './event-time.js';
+import { formatRange, queryRange, type TimeRange } from './event-time.js';
 import { readOccurrences, timeBoosted, timeList, timeScore } from './time-channel.js';
 import { isStale, lastConfirmed } from './volatile.js';
 import {
@@ -293,15 +293,28 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   // not split takes exactly the path it always took. The parts are read from the question as
   // asked. With a range, a part's own gate never counts the words of a past time (the one it
   // names, or what the split left of the question's): its coverage is a word count, with or
-  // without a reranker. Without a reranker its search drops them too, bar calendar names.
-  const parts = subQueries(asked);
-  const partForms = (parts ?? []).map((p) =>
-    timeRange === undefined ? {} : rangeWordsOut(p, now, asked),
-  );
+  // without a reranker. Without a reranker its search drops them too, bar calendar names. A part
+  // that is only a time ("in March 2024") is no part: nothing is left to search for or to gate
+  // on, and the time channel ranks by it. A reader that fails leaves the parts as split.
+  let parts = subQueries(asked);
+  let partForms: { text?: string; gate?: string }[] = (parts ?? []).map(() => ({}));
+  if (parts !== undefined && timeRange !== undefined) {
+    try {
+      const whole = queryRange(asked, now)?.text;
+      const forms = parts.map((p) => rangeWordsOut(p, now, whole));
+      const keep = forms.map((f) => f.timeOnly !== true);
+      const left = parts.filter((_, i) => keep[i]);
+      parts = left.length > 0 ? left : undefined;
+      partForms = forms.filter((_, i) => keep[i]);
+    } catch {
+      // As split, unstripped.
+    }
+  }
   const partSearch = (parts ?? []).map((p, i) =>
     rangeWords === undefined ? p : (partForms[i]!.text ?? p),
   );
-  const partGate = (parts ?? []).map((p, i) => partForms[i]!.gate ?? partForms[i]!.text ?? p);
+  // Never the search text: its calendar names are not what a part is about.
+  const partGate = (parts ?? []).map((p, i) => partForms[i]!.gate ?? p);
   const searches = [text, ...partSearch];
   const t0 = clock();
   const degraded: Degradation[] = [];
@@ -720,19 +733,29 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     }
     return minDenseScore > 0 && (partDense[p]!.get(id) ?? -1) >= minDenseScore;
   };
-  // A memory only the time channel found (no lexical or dense hit) that fails the gate takes no
-  // place: without a reranker to judge it, it would push out a searched hit and then be dropped.
-  // Every other memory is sliced and gated as without a time range.
-  // A hit of any search counts, the whole query's or a part's: a part's best match comes from its
-  // own lexical and dense lists, so it is never time-only.
+  // Two rules take a memory out before the top k is cut, so it never holds a place a hit that
+  // passes the gate would have had (it would be dropped right after the cut):
+  // 1. Time-only: a memory only the time channel found (no lexical or dense hit of any search,
+  //    the whole query's or a part's) that fails the gate. A part's best match comes from its own
+  //    lists, so it is never time-only.
+  // 2. A failed head: a part's best match, put in the top k as one, that fails both the gate and
+  //    its part's gate.
+  // Every other memory is cut and gated as before. `dropped` counts all three: the two rules up
+  // to the cut, and the gate after it.
   const searched = new Set([...lexicalAllLegs.flat(2), ...denseAllLegs.flat(2)].map((h) => h.id));
   const timeOnlyDropped = (id: string): boolean =>
     timeRange !== undefined && !searched.has(id) && !relevant(id);
-  const candidates = (
-    timeRange === undefined ? ordered : ordered.filter((f) => !timeOnlyDropped(f.id))
-  ).slice(0, config.recall.returnK);
+  const headDropped = (id: string): boolean =>
+    partOf.has(id) && !relevant(id) && !relevantToPart(id);
+  const candidates: typeof ordered = [];
+  let droppedEarly = 0;
+  for (const f of ordered) {
+    if (candidates.length >= config.recall.returnK) break;
+    if (timeOnlyDropped(f.id) || headDropped(f.id)) droppedEarly++;
+    else candidates.push(f);
+  }
   let kept = candidates.filter((f) => relevant(f.id) || relevantToPart(f.id));
-  const dropped = candidates.length - kept.length;
+  const dropped = droppedEarly + candidates.length - kept.length;
 
   // Linked memories never take a hit's place: at most `admit` are added beside the hits, each
   // through the gate a hit passes, and only from a hit that passed it too. They are chosen here

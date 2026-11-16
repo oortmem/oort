@@ -1633,10 +1633,14 @@ dense searches and fuses all three by reciprocal rank (k = 60):
 - A question about two things is split into parts as it was asked. Each part's own gate never
   counts the words of a past time, the one it names or what the split left of the question's
   ("week" of "last week"), with or without a reranker: it is a word count either way. Without a
-  reranker each part's search drops them too, bar calendar names. The time list is fused once,
+  reranker each part's search drops them too, bar calendar names. A part that is only a time
+  ("how long between the move and March 2024") is no part: the time list ranks by it, and a
+  memory that says "March 2024" does not pass as its best match. The time list is fused once,
   with the whole question's lists; a part's best match comes from its own searches, so the
   time-only rule never drops it. After a rerank the time boost comes first, then each part's
-  best match takes its place in the top k.
+  best match takes its place in the top k. A part's best match that fails both the gate and its
+  part's gate is taken out before the top k is cut, as a memory only the time list found is, so
+  neither takes the place of a memory that passes.
 
 `recall.timeChannel: false` turns the list off; a question about a state still reads as-of. A
 query with no time in it is ranked exactly as before. Recalled memories that state a time say so:
