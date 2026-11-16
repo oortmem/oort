@@ -376,7 +376,7 @@ export async function judgeApplyCommand(
     printJudgeResult(ctx, w, r);
     if (r.predictionId !== undefined) {
       ctx.io.out(
-        `\nKept as prediction ${short(r.predictionId)}. When the expert decides: \`oort judge resolve ${short(r.predictionId)} --verdict <label> [--reason <text>]\`.\n`,
+        `\nKept as prediction ${short(r.predictionId)}. When the expert decides: \`oort judge resolve ${short(r.predictionId)} --verdict <label> [--reason <text>]\`${w.scope.projectId === undefined ? '' : " in this project's directory"}.\n`,
       );
     } else if (r.kept === false) {
       ctx.io.out(

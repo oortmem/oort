@@ -679,7 +679,32 @@ export interface FeedbackView {
   reason?: 'already-helped-today' | 'disabled' | 'access-failed';
   createdAt: string;
   confirmed?: { at: string; by: string };
-  resolved?: { at: string; by: string; supersededBy?: string };
+  /**
+   * `resolving`: the retire or supersede under way, or stopped part way. Running the same call
+   * again finishes it; once `canTakeOver` (5 minutes after `at`), a retire, a dismiss or a
+   * supersede with another fact takes it over, putting back what it changed first. `fact` is what
+   * a supersede would store.
+   */
+  claim?: {
+    action: 'retired' | 'superseded';
+    by: string;
+    at: string;
+    ageSeconds: number;
+    canTakeOver: boolean;
+    fact?: string;
+    memoryId?: string;
+  };
+  /**
+   * Who resolved it and when. `claimedBy` and `claimedAt`: another person started it, and `by`
+   * finished it.
+   */
+  resolved?: {
+    at: string;
+    by: string;
+    supersededBy?: string;
+    claimedBy?: string;
+    claimedAt?: string;
+  };
 }
 
 export type FeedbackResultView =

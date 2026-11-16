@@ -420,6 +420,8 @@ console.log(live.resolved, live.bands.length);
   `meanProbability`), and the `criteria` the expert overruled most.
 - `judge.listPredictions()` lists pending predictions, newest first. Pass `status: 'resolved'` for
   decided ones. A pending prediction expires after 30 days; resolved ones stay until forgotten.
+  A prediction is kept with the handle's project (unbound without one), so a handle scoped to
+  another project does not list or resolve it; predictions kept before this were unbound.
   Above 5,000 pending from one author at its home (any project), or 50,000 from all authors there,
   `judge.apply` answers without keeping one (`kept: false`,
   `notKept: 'pending-cap'`); a failed write is `notKept: 'write-failed'`.
@@ -1276,10 +1278,15 @@ row. When two resolves run at once, one wins and the other rejects with `OortRef
 `already-resolved`, `in-progress` (another call is resolving it; retryable) or `conflict` (the
 row changed meanwhile and nothing was written; retryable). A call that stopped part way leaves
 the row `resolving`, and recall still returns `contested`: the same call again finishes it, and a
-supersede never stores the fact twice. The new memory is authored by the expert. If the old
-memory ended another way meanwhile, the new one is removed and the row goes back to `open`; if
-it cannot be removed, the error has reason `memory-changed` and is not retryable: inspect the
-memories first. `forget(id)` deletes every feedback row about the memory, whoever gave it.
+supersede never stores the fact twice. The row's `claim` says who started it, `ageSeconds`, and the
+`fact` a supersede would store. Once `claim.canTakeOver` (5 minutes), `dismiss`, `retire` or a
+`supersede` with another fact takes it over: what it changed is put back first (its new memory,
+while nothing else changed it, and the old memory's end), and the closed row keeps
+`resolved.claimedBy`. The new memory is authored by the expert. If the old memory ended another
+way meanwhile, the new one is removed and the row goes back to `open`; if the new one was changed
+meanwhile, it is kept, the row still goes back to `open`, and the error has reason
+`memory-changed` and is not retryable: inspect the memories first. Another memory already at the
+id a supersede writes is refused (`conflict`) and nothing changes. `forget(id)` deletes every feedback row about the memory, whoever gave it.
 
 ## Stability
 

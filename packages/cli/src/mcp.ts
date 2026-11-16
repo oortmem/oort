@@ -251,12 +251,15 @@ export function localBackend(deps: OortServerDeps): MemoryBackend {
           );
         }
         const short = r.feedback.id.slice(0, 8);
+        // Kept with the memory's project: a person sees it only where that project is.
+        const where =
+          r.feedback.scope.projectId === undefined ? '' : " in this project's directory";
         return {
           feedback_id: r.feedback.id,
           memory_id: r.feedback.memoryId,
           signal: r.feedback.signal,
           status: 'pending',
-          note: `Saved as pending: it changes nothing until a person runs \`oort feedback confirm ${short}\`.`,
+          note: `Saved as pending: it changes nothing until a person runs \`oort feedback confirm ${short}\`${where}.`,
         };
       },
     }),

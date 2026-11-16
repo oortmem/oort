@@ -1171,10 +1171,17 @@ oort feedback dismiss 7c1d2e3f                # keep the memory, drop the label
   other changes nothing and says where the feedback stands (`It is retired now.`, or that another
   call is resolving it). If a call stops part way, the feedback stays `resolving` and recall still
   labels the memory: run the same command again to finish it. A supersede run again never stores
-  the fact twice.
+  the fact twice. `oort feedback list` shows who started it, how long ago, and the fact a
+  supersede would store (`claim` in `--json`).
+- After 5 minutes a stopped retire or supersede can be taken over: `dismiss`, `retire`, or a
+  `supersede` with other words first puts back what it changed (the new memory it wrote, while
+  nothing else changed it, and the old memory's end), then does its own work. The closed
+  feedback keeps who started it (`resolved.claimedBy`).
 - A memory that is no longer current cannot be retired or superseded. If it ended another way
   while a supersede ran, the new memory is removed and the feedback goes back to `open`; if the
-  new memory cannot be removed, the refusal says so and names `oort inspect`.
+  new memory was changed meanwhile, it is kept, the feedback still goes back to `open`, and the
+  refusal names `oort inspect`. A supersede that finds another memory at the id it writes changes
+  nothing and says so (`conflict`).
 
 **Agents.** The MCP `feedback` tool lets an agent pass on what you said. What it gives is kept
 `pending` and changes nothing, neither ranking nor labels, until you confirm it:
@@ -1195,7 +1202,8 @@ project, and all agents together 50,000 there; past that the tool refuses and no
   `open`, `resolving`, `retired`, `superseded` or `dismissed`; default `all`), `--memory <id>`,
   `--signal`,
   `--limit` (default 100, at most 1000), `--json`.
-- Feedback is kept with the memory's project: you see it only where you see that project.
+- Feedback is kept with the memory's project: you see it only where you see that project, so
+  confirm an agent's feedback about a project's memory in that project's directory.
 - `oort forget` deletes every feedback row about the memory, whoever gave it, before it returns.
 - Feedback lives in the store file (`feedback` table), so backups include it. An older Oort
   ignores the table. In cloud mode the commands are refused (`refused`).
@@ -1999,8 +2007,11 @@ oort judge resolve 3fa2c1d0 --verdict approved --reason "Satire, clearly labelle
 - `oort judge predictions` lists pending predictions, newest first (`--resolved`, `--all`,
   `--domain`, `--limit`, `--json`). Pending predictions expire after 30 days, and judging deletes
   expired ones as it goes. Resolved ones stay, as the record `eval --live` reads, until you forget
-  them. One author keeps at most 5,000 pending predictions at its home, across every project, and
-  all authors together 50,000 there: above that, `oort judge apply` still
+  them. A prediction is kept with the project it was judged in (unbound outside a project), so
+  `oort judge predictions`, `resolve` and `eval --live` see it in that project's directory;
+  predictions kept before this were unbound and show everywhere. One author keeps at most 5,000
+  pending predictions at its home, across every project, and all authors together 50,000 there:
+  above that, `oort judge apply` still
   answers but keeps nothing (`kept: false`, `notKept: "pending-cap"` in JSON). It also answers
   when the prediction cannot be saved (`write-failed`).
 - `oort judge forget-prediction <id>` (asks first; `--yes`) deletes one prediction. It leaves

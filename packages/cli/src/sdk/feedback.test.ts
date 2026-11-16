@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { tmpdir } from '../../test/helpers.js';
 import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
 import { createOortWith } from './create.js';
+import { feedbackView } from './feedback.js';
 import { FeedbackError } from '@oortmem/core';
 import { OortRefusedError, OortUsageError, toOortError } from './errors.js';
 import type { Oort } from './types.js';
@@ -91,6 +92,48 @@ describe('oort.feedback', () => {
     ).rejects.toBeInstanceOf(OortUsageError);
     const listed = await expert.feedback.list({ status: 'open' });
     expect(listed.feedback).toEqual([]);
+  });
+
+  it('sdk.feedback-view-shows-a-claim-and-who-started-it', () => {
+    const base = {
+      id: 'f1',
+      scope: { orgId: 'local', customerId: 'self', agentId: 'a' },
+      memoryId: 'm1',
+      signal: 'wrong' as const,
+      by: 'ada',
+      via: 'cli' as const,
+      revision: 2,
+      createdAt: '2026-11-16T10:00:00.000Z',
+      updatedAt: '2026-11-16T10:00:00.000Z',
+    };
+    const claim = {
+      action: 'superseded' as const,
+      by: 'ada',
+      at: '2026-11-16T10:00:00.000Z',
+      from: 'open' as const,
+      fact: 'Port 8080',
+      memoryId: 'n1',
+    };
+    const at = (min: number) => new Date(Date.parse(claim.at) + min * 60_000);
+    const running = feedbackView({ ...base, status: 'resolving', claim }, at(2));
+    expect(running.claim).toEqual({
+      action: 'superseded',
+      by: 'ada',
+      at: claim.at,
+      ageSeconds: 120,
+      canTakeOver: false,
+      fact: 'Port 8080',
+      memoryId: 'n1',
+    });
+    expect(feedbackView({ ...base, status: 'resolving', claim }, at(5)).claim?.canTakeOver).toBe(
+      true,
+    );
+    const done = feedbackView({
+      ...base,
+      status: 'superseded',
+      resolved: { at: at(9).toISOString(), by: 'grace', claimedBy: 'ada', claimedAt: claim.at },
+    });
+    expect(done.resolved).toMatchObject({ by: 'grace', claimedBy: 'ada', claimedAt: claim.at });
   });
 
   it('sdk.feedback-errors-say-when-to-run-again', () => {

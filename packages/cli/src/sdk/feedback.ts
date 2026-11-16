@@ -1,4 +1,6 @@
 import {
+  claimAge,
+  claimIsStale,
   confirmFeedback,
   dismissFeedback,
   findFeedback,
@@ -57,7 +59,7 @@ function byOf(ctx: Ctx): string {
 /** Stored text as shown: invisible characters out (older rows may hold them), then scrubbed. */
 const seen = (s: string): string => clean(withoutInvisible(s));
 
-export function feedbackView(f: Feedback): FeedbackView {
+export function feedbackView(f: Feedback, now = new Date()): FeedbackView {
   return {
     id: f.id,
     memoryId: f.memoryId,
@@ -73,11 +75,24 @@ export function feedbackView(f: Feedback): FeedbackView {
     ...(f.confirmed !== undefined && {
       confirmed: { at: f.confirmed.at, by: seen(f.confirmed.by) },
     }),
+    ...(f.claim !== undefined && {
+      claim: {
+        action: f.claim.action,
+        by: seen(f.claim.by),
+        at: f.claim.at,
+        ageSeconds: Math.max(0, Math.floor(claimAge(f.claim, now) / 1000)),
+        canTakeOver: claimIsStale(f.claim, now),
+        ...(f.claim.fact !== undefined && { fact: seen(f.claim.fact) }),
+        ...(f.claim.memoryId !== undefined && { memoryId: f.claim.memoryId }),
+      },
+    }),
     ...(f.resolved !== undefined && {
       resolved: {
         at: f.resolved.at,
         by: seen(f.resolved.by),
         ...(f.resolved.supersededBy !== undefined && { supersededBy: f.resolved.supersededBy }),
+        ...(f.resolved.claimedBy !== undefined && { claimedBy: seen(f.resolved.claimedBy) }),
+        ...(f.resolved.claimedAt !== undefined && { claimedAt: f.resolved.claimedAt }),
       },
     }),
   };
@@ -132,7 +147,8 @@ export async function list(
     ...(o.signal !== undefined && { signal: o.signal }),
     ...(o.limit !== undefined && { limit: o.limit }),
   });
-  return { feedback: rows.map(feedbackView) };
+  const now = ctx.now();
+  return { feedback: rows.map((f) => feedbackView(f, now)) };
 }
 
 /** The deps every person's resolve takes; the feedback named by an id or a unique prefix. */

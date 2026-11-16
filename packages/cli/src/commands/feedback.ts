@@ -4,6 +4,8 @@ import {
   FEEDBACK_STATUSES,
   FeedbackError,
   FeedbackPurgeError,
+  claimAge,
+  claimIsStale,
   confirmFeedback,
   dismissFeedback,
   findFeedback,
@@ -14,6 +16,7 @@ import {
   supersedeFeedback,
   withoutInvisible,
   type Feedback,
+  type FeedbackClaim,
   type FeedbackSignal,
   type FeedbackStatus,
 } from '@oortmem/core';
@@ -102,6 +105,22 @@ function limitOf(raw: string | undefined): number | undefined {
 /** Text as shown: invisible characters (zero-width, bidi, tag) taken out of older rows too. */
 const seen = (s: string): string => withoutInvisible(s);
 
+/**
+ * A retire or supersede under way (or stopped part way): what it does, who started it, how long
+ * ago, whether another resolve may take it over yet, and the fact a supersede would store.
+ */
+function claimOf(c: FeedbackClaim, now = new Date()) {
+  return {
+    action: c.action,
+    by: seen(c.by),
+    at: c.at,
+    ageSeconds: Math.max(0, Math.floor(claimAge(c, now) / 1000)),
+    canTakeOver: claimIsStale(c, now),
+    ...(c.fact !== undefined && { fact: seen(c.fact) }),
+    ...(c.memoryId !== undefined && { memoryId: c.memoryId }),
+  };
+}
+
 /** One row as JSON: the stored record, with who gave it said plainly. */
 function plain(f: Feedback) {
   return {
@@ -117,6 +136,7 @@ function plain(f: Feedback) {
     ...(f.reason !== undefined && { reason: f.reason }),
     createdAt: f.createdAt,
     ...(f.confirmed !== undefined && { confirmed: f.confirmed }),
+    ...(f.claim !== undefined && { claim: claimOf(f.claim) }),
     ...(f.resolved !== undefined && { resolved: f.resolved }),
   };
 }
@@ -126,7 +146,18 @@ function line(f: Feedback): string {
   const agent = isAgentVia(f.via) ? ' [agent]' : '';
   const note = f.note === undefined ? '' : `  "${shown(clip(seen(f.note), 120))}"`;
   const query = f.query === undefined ? '' : `  query: "${shown(clip(seen(f.query), 80))}"`;
-  return `${short(f.id)}  ${f.signal.padEnd(10)} memory ${short(f.memoryId)}  ${f.status.padEnd(10)} by ${shown(seen(f.by))}${agent}${note}${query}`;
+  return `${short(f.id)}  ${f.signal.padEnd(10)} memory ${short(f.memoryId)}  ${f.status.padEnd(10)} by ${shown(seen(f.by))}${agent}${note}${query}${claimLine(f.claim)}`;
+}
+
+/** A claim, on a row's line: `[supersede by ada, 7 min ago, can be taken over: "fact"]`. */
+function claimLine(claim: FeedbackClaim | undefined): string {
+  if (claim === undefined) return '';
+  const c = claimOf(claim);
+  const verb = c.action === 'retired' ? 'retire' : 'supersede';
+  const age = c.ageSeconds < 60 ? 'just now' : `${Math.floor(c.ageSeconds / 60)} min ago`;
+  const over = c.canTakeOver ? ', can be taken over' : '';
+  const fact = c.fact === undefined ? '' : `: "${shown(clip(c.fact, 120))}"`;
+  return `  [${verb} by ${shown(c.by)}, ${age}${over}${fact}]`;
 }
 
 const NEXT: Partial<Record<FeedbackSignal, string>> = {

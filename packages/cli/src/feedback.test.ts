@@ -144,6 +144,44 @@ describe('oort feedback', () => {
     expect(await recallText(h)).toContain('(contested: wrong, note: "It moved to 5502")');
   });
 
+  it('cli.feedback-list-shows-a-stopped-claim-and-dismiss-takes-it-over', async () => {
+    const h = await seeded();
+    const f = await give(h, [ID, 'wrong']);
+    // A supersede stopped after its claim, an hour ago.
+    const row = (await h.store.getFeedback!(TG, f.id))!;
+    const at = new Date(Date.now() - 3_600_000).toISOString();
+    await h.store.putFeedback!(TG, {
+      ...row,
+      status: 'resolving',
+      claim: {
+        action: 'superseded',
+        by: 'ada',
+        at,
+        from: 'open',
+        fact: 'Port 5502 now',
+        validTo: null,
+      },
+      revision: row.revision + 1,
+    });
+    const text = await h.run(['feedback', 'list']);
+    expect(text.io.stdout).toMatch(
+      /resolving .*\[supersede by ada, 60 min ago, can be taken over: "Port 5502 now"\]/,
+    );
+    const json = await h.run(['feedback', 'list', '--json']);
+    const [listed] = data<{ feedback: { claim?: unknown }[] }>(json.io.stdout).feedback;
+    expect(listed?.claim).toMatchObject({
+      action: 'superseded',
+      by: 'ada',
+      at,
+      fact: 'Port 5502 now',
+      canTakeOver: true,
+    });
+    expect(await recallText(h)).toContain('(contested: wrong)');
+    const r = await h.run(['feedback', 'dismiss', f.id, '--yes']);
+    expect(r.code, r.io.stderr).toBe(0);
+    expect(await recallText(h)).not.toContain('contested');
+  });
+
   it('cli.feedback-list-filters-by-status', async () => {
     const h = await seeded();
     await give(h, [ID, 'wrong']);
