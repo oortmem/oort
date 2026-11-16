@@ -561,7 +561,16 @@
           "decidedAt": "string?",
           "reviewer": "string?"
         },
-        "response": ["outcome", "id", "corrects?", "status", "redacted", "embedFailed?"]
+        "response": [
+          "outcome",
+          "id",
+          "corrects?",
+          "status",
+          "redacted",
+          "embedFailed?",
+          "via",
+          "agentRecorded"
+        ]
       },
       {
         "method": "GET",
@@ -610,13 +619,13 @@
         "request": {
           "reviewer": "string?"
         },
-        "response": ["id", "changed"]
+        "response": ["id", "changed", "via", "agentRecorded"]
       },
       {
         "method": "POST",
         "path": "/v1/judgments/:id/withdraw",
         "request": {},
-        "response": ["id", "withdrawn", "changed", "by"],
+        "response": ["id", "withdrawn", "changed", "by", "via", "agentRecorded"],
         "billing": "any"
       },
       {
