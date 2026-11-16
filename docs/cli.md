@@ -2290,8 +2290,10 @@ again. When one would now be left out (forgotten, withdrawn or corrected meanwhi
 the export again from the start, up to 3 times; when the labels still change, it fails with
 `reason: "store-changing"` and writes nothing. Only then are the files renamed into place, the
 manifest last. If anything fails part-way, the temporary files are removed and an earlier
-export in `--out` is left as it was. An export is a copy: forgetting a memory later does not
-change files already written, so delete those yourself.
+export in `--out` is left as it was. A forget that finishes in the moment between that check
+and the renames can still be in the files; to be sure, export again after forgetting. An export
+is a copy: forgetting a memory later does not change files already written, so delete those
+yourself.
 
 ### Scrubbing
 

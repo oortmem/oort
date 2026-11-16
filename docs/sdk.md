@@ -1463,8 +1463,9 @@ file or a symlink as `out` is refused (`not-a-directory`).
 temporary name, reads every record behind its rows again, and builds again from the start when
 one was forgotten, withdrawn or corrected meanwhile; after 3 builds that kept changing it fails
 (`store-changing`, retryable) and writes nothing. On any failure the temporary files go and an
-earlier export stays as it was. An export is a copy: forgetting a memory later does not change
-files already written.
+earlier export stays as it was. A forget that finishes between that check and the renames can
+still be in the files, so export again after forgetting to be sure. An export is a copy:
+forgetting a memory later does not change files already written.
 
 **What it writes.** Every row carries `id`, `at` (the label's time) and `origin`, with
 `proposedOrigin` and `reviewer` when set; rows are oldest first. Each text is cleaned of

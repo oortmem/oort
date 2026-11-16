@@ -289,8 +289,9 @@ await agent.exportTraining({ kind: 'sft', out }).catch((e: { reason?: string }) 
   `force: true`. `out` must be an absolute path. A new directory is made 0700; an existing one
   keeps its mode and is refused when other users can write to it (`unsafe-directory`). Files
   are 0600.
-- The export is a copy. Labels forgotten while it runs are left out (it checks again and
-  rebuilds; `store-changing` after 3 tries), but a later forget does not change written files.
+- The export is a copy. It checks again before renaming and rebuilds when a label was
+  forgotten meanwhile (`store-changing` after 3 tries); a forget in the moment before the
+  renames can still be in the files, and a later forget does not change written files.
 - Preference rows are verdict-only on both sides, so length does not give away the chosen one.
   `preferenceReasons: true` adds the person's reason to `chosen`; `manifest.notes` then says
   that `rejected` has none.
