@@ -2149,8 +2149,9 @@ In cloud mode the Oort key on this machine acts as an agent, so the `oort judge`
   newest 100; the dashboard lists them all. `apply` keeps no prediction in the cloud.
 - `oort judge record`, `confirm` and `withdraw` are a person's decisions, so they refuse
   (`refused`, reason `expert-only`) and point to the dashboard at
-  [oortcloud.dev/dashboard/judgments](https://oortcloud.dev/dashboard/judgments), where you record,
-  confirm and withdraw judgments and set the experts list.
+  [oortcloud.dev/dashboard/judgments](https://oortcloud.dev/dashboard/judgments), where a person
+  confirms, discards and withdraws judgments and sets the experts list. Agents record over MCP or
+  the SDK.
 - The rest (`resolve`, `predictions`, `eval`, `import`, `pack`, `purge` and the others) are
   local-only for now and refuse with `local-only`.
 

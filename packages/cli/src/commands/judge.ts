@@ -72,7 +72,7 @@ import type { Io } from '../io.js';
  * `oort judge …`: judgment memory (CON-71). An expert's approve or reject decisions, with their
  * reasons verbatim, recorded explicitly and applied to new items with an honest "needs the
  * expert" when the precedents disagree or are too far. In cloud mode `list` and `apply` read
- * Oort Cloud as an agent, the key's role; a person records, confirms and withdraws in the
+ * Oort Cloud as an agent, the key's role; a person confirms, discards and withdraws in the
  * dashboard; the rest is local only for now.
  */
 
@@ -91,13 +91,15 @@ function localOnly(w: Wired): void {
 
 /**
  * Refuses a person's decision in cloud mode (R2): the Oort key on this machine acts as an agent,
- * so a record from here would be an unconfirmed agent's, not the person's. They decide in the
- * dashboard instead.
+ * so a record from here would be an unconfirmed agent's, not the person's. A person confirms,
+ * discards and withdraws in the dashboard; agents record over MCP or the SDK.
  */
 function personInCloud(w: Wired, what: string): void {
   if (w.mode === 'cloud') {
     throw new Refusal(
-      `In Oort Cloud a person ${what} judgments in the dashboard: ${DASHBOARD_JUDGMENTS_URL}. The Oort key on this machine acts as an agent, so it cannot do this for you.`,
+      what === 'records'
+        ? `In Oort Cloud the Oort key on this machine acts as an agent, so it cannot record a person's judgment. Agents record over MCP or the SDK, and a person confirms those records in the dashboard: ${DASHBOARD_JUDGMENTS_URL}.`
+        : `In Oort Cloud a person ${what} judgments in the dashboard: ${DASHBOARD_JUDGMENTS_URL}. The Oort key on this machine acts as an agent, so it cannot do this for you.`,
       { code: 'refused', reason: 'expert-only' },
     );
   }
@@ -706,7 +708,7 @@ async function judgeListInCloud(
   );
   if (items.length === 0) {
     ctx.io.err(
-      `oort: no judgments yet. A person records them in the dashboard (${DASHBOARD_JUDGMENTS_URL}), and an agent can record them over MCP, unconfirmed until a person confirms them.\n`,
+      `oort: no judgments yet. Agents record them over MCP or the SDK, unconfirmed until a person confirms them in the dashboard (${DASHBOARD_JUDGMENTS_URL}).\n`,
     );
     return 0;
   }

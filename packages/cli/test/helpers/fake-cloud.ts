@@ -223,7 +223,7 @@ async function judgmentRoute(c: FakeCloud, req: Request, url: URL): Promise<Resp
       return err(
         403,
         'daily_limit',
-        `Agents already recorded ${limits.agentPerDay} judgments today; a person records more in the dashboard.`,
+        `Agents already recorded ${limits.agentPerDay} judgments today; try again tomorrow.`,
       );
     }
     j.counts.set(day, n + 1);
