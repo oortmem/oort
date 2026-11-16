@@ -27,6 +27,7 @@ import type { Decision, Memory, Scope } from './model.js';
 import { checkPlace, frameOf, placeDistance, type Place } from './place.js';
 import { scrubObservation } from './scrub.js';
 import { checkWriterDate, factInterval, utcOffset } from './temporal.js';
+import { checkOccurrences, occurrencesOf, type Occurrence } from './event-time.js';
 import { tokenizeLexical } from './tokenize.js';
 
 export type MemoryOutcomeKind =
@@ -345,6 +346,9 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
       : from;
   const validTo = bounds.validTo ?? null;
   const validFrom = startBefore(bounds.validFrom ?? turnAt.toISOString(), validTo);
+  // When what it tells of happened, read against the turn's own time, then the turn's
+  // day: recall ranks time questions by it. It never bounds validity.
+  const occurred = occurredFor(w.text, turnAt, offset);
 
   if (action === 'REFINE' && prior !== undefined) {
     // Same fact, more detail: rewrite in place. The earlier wording stays in the decisions, and
@@ -364,6 +368,8 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
       salience: Math.max(prior.salience, a.salience),
       validFrom: startBefore(bounds.validFrom ?? prior.validFrom, to),
       validTo: to,
+      // Undefined when the reader failed: the earlier text's event time does not carry over.
+      occurred,
       lastConfirmedAt: iso,
       updatedAt: iso,
       source: {
@@ -404,6 +410,7 @@ async function apply(a: ApplyArgs): Promise<MemoryOutcome> {
     accessLog: { count: 0, recent: [], compactedSum: 0, compactedAt: null },
     validFrom,
     validTo,
+    ...(occurred !== undefined && { occurred }),
     expiredAt: null,
     endReason: null,
     lastConfirmedAt: null,
@@ -753,4 +760,18 @@ async function observeMany(
     memories,
     counts: countOf(memories),
   };
+}
+
+/**
+ * A memory's event time as the write path stores it: what `occurrencesOf` reads from `text`
+ * against `at`, checked as a store checks it. Undefined when the reader fails or returns anything
+ * a store would refuse, so the write goes on without event time instead of failing. A caller that
+ * sets `occurred` itself (the SDK, a version 2 import) is checked by the store and refused loudly.
+ */
+export function occurredFor(text: string, at: Date, offset = 0): Occurrence[] | undefined {
+  try {
+    return checkOccurrences(occurrencesOf(text, at, offset));
+  } catch {
+    return undefined;
+  }
 }

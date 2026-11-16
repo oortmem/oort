@@ -1,9 +1,9 @@
 {
   "en mono": {
     "rows": 34,
-    "recall5": 0.767,
-    "recall10": 0.767,
-    "mrr": 0.75,
+    "recall5": 0.8,
+    "recall10": 0.8,
+    "mrr": 0.783,
     "staleLeak": 0,
     "abstainFp": 0.25,
     "sameLanguageFirst": null
@@ -226,12 +226,12 @@
   },
   "en mixed": {
     "rows": 34,
-    "recall5": 0.8,
-    "recall10": 0.8,
-    "mrr": 0.8,
+    "recall5": 0.833,
+    "recall10": 0.833,
+    "mrr": 0.833,
     "staleLeak": 0,
     "abstainFp": 0.25,
-    "sameLanguageFirst": 0.792
+    "sameLanguageFirst": 0.76
   },
   "es mixed": {
     "rows": 34,

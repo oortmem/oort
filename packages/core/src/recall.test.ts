@@ -817,10 +817,17 @@ describe('recall modes (CON-34)', () => {
       { store, config, now },
     );
     expect(r.memories.map((m) => m.id)).toEqual(['v1']);
+    // A question about a state then ("which port did … use"): as-of the end of that day.
     expect(r.temporal).toEqual({
       mode: 'as-of',
       asOf: '2026-04-02T23:59:59.999Z',
       inferred: true,
+      range: {
+        from: '2026-04-02T00:00:00.000Z',
+        to: '2026-04-03T00:00:00.000Z',
+        precision: 'day',
+      },
+      shape: 'state',
     });
   });
 

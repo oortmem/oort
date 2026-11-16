@@ -1,0 +1,556 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import type { MemoryStore, Reranker, ScopeFilter } from './adapters.js';
+import { resolveConfig, type ResolvedConfig } from './config.js';
+import { occurrencesOf } from './event-time.js';
+import { createMemoryStore } from './memory-store.js';
+import type { Memory } from './model.js';
+import { formatForInjection, recall, type RecallResult } from './recall.js';
+import { makeMemory, TG } from './store-conformance.js';
+import { TIME_BOOST, timeBoosted, timeScore } from './time-channel.js';
+
+/**
+ * The time channel: a past time in the query ranks memories by when what they tell of happened,
+ * as one more reciprocal-rank-fusion list. It never filters; only a question about a state then
+ * reads as-of.
+ */
+
+const SCOPE: ScopeFilter = {
+  orgId: 'local',
+  customerId: 'self',
+  agentId: 'claude-code',
+  projectIds: [null],
+};
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oort-recall-time-'));
+const config = resolveConfig(dir, { OORT_HOME: path.join(dir, 'home') });
+const withRecall = (r: Partial<ResolvedConfig['recall']>): ResolvedConfig => ({
+  ...config,
+  recall: { ...config.recall, ...r },
+});
+const NOW = new Date('2023-04-20T10:00:00.000Z');
+
+/** A memory written at `at`, its event time read from its text as observe reads it. */
+function said(id: string, text: string, at: string, extra: Partial<Memory> = {}): Memory {
+  return makeMemory({
+    id,
+    text,
+    stub: text.slice(0, 40),
+    createdAt: at,
+    validFrom: at,
+    updatedAt: at,
+    occurred: occurrencesOf(text, new Date(at)),
+    ...extra,
+  });
+}
+
+/** An in-memory store holding `ms`, counting its range reads. */
+async function storeWith(ms: Memory[]): Promise<{ store: MemoryStore; reads: () => number }> {
+  const inner = createMemoryStore({ d: config.activation.d });
+  for (const m of ms) await inner.upsert(TG, m);
+  let n = 0;
+  const store = Object.create(inner) as MemoryStore & { occurredIn: MemoryStore['occurredIn'] };
+  store.occurredIn = (...args) => {
+    n++;
+    return inner.occurredIn!(...args);
+  };
+  return { store, reads: () => n };
+}
+
+/** A recall result without its timings, which differ run to run. */
+const stable = (r: RecallResult) => {
+  const { timings: _t, ...rest } = r as RecallResult & { timings?: unknown };
+  return rest;
+};
+
+// Said in early April about March: after the end of the range the question names.
+const hike = said(
+  'hike',
+  'In March I went hiking at Mount Tam with Sam.',
+  '2023-04-02T09:00:00.000Z',
+);
+// Said in January, before March: it cannot tell of March.
+const boots = said('boots', 'My hiking boots are in the garage.', '2023-01-10T09:00:00.000Z');
+
+describe('recall: the time channel', () => {
+  it('time.a-memory-written-after-the-range-about-it-is-found', async () => {
+    // As-of the end of March (the old read) hid it: it was written on 2 April.
+    const { store, reads } = await storeWith([hike, boots]);
+    const r = await recall(
+      { text: 'Where did I go hiking in March?', scope: SCOPE },
+      { store, config, now: NOW },
+    );
+    expect(r.temporal).toEqual({
+      mode: 'current',
+      inferred: true,
+      range: {
+        from: '2023-03-01T00:00:00.000Z',
+        to: '2023-04-01T00:00:00.000Z',
+        precision: 'month',
+      },
+      shape: 'range',
+    });
+    expect(r.memories[0]?.id).toBe('hike');
+    expect(r.memories[0]?.explanation.timeRank).toBe(1);
+    expect(r.memories[0]?.explanation.time).toBeGreaterThan(0.75);
+    // One range read per node the grant reads.
+    expect(reads()).toBeGreaterThan(0);
+  });
+
+  it('time.fused-as-one-more-rrf-list-never-a-filter', async () => {
+    const { store } = await storeWith([hike, boots]);
+    const r = await recall(
+      { text: 'Where did I go hiking in March?', scope: SCOPE },
+      { store, config: withRecall({ minCoverage: 0 }), now: NOW },
+    );
+    const byId = new Map(r.memories.map((m) => [m.id, m]));
+    const h = byId.get('hike')!.explanation;
+    expect(h.rrf).toBeCloseTo(1 / (60 + h.lexicalRank!) + 1 / (60 + h.timeRank!), 12);
+    // Said before March: no place in the time list, and still returned on its words.
+    const b = byId.get('boots')!.explanation;
+    expect(b.timeRank).toBeUndefined();
+    expect(b.rrf).toBeCloseTo(1 / (60 + b.lexicalRank!), 12);
+  });
+
+  it('time.a-query-without-a-time-is-unchanged', async () => {
+    // Channel on or off, memories with or without event time: the same result, and no range read.
+    const plain = (m: Memory): Memory => {
+      const { occurred: _o, ...rest } = m;
+      return rest;
+    };
+    const q = { text: 'where are my hiking boots?', scope: SCOPE };
+    const a = await storeWith([hike, boots]);
+    // A recall records access, so each run reads its own copy.
+    const c = await storeWith([hike, boots]);
+    const b = await storeWith([plain(hike), plain(boots)]);
+    const on = await recall(q, { store: a.store, config, now: NOW });
+    const off = await recall(q, {
+      store: c.store,
+      config: withRecall({ timeChannel: false }),
+      now: NOW,
+    });
+    const without = await recall(q, { store: b.store, config, now: NOW });
+    expect(on.temporal?.range).toBeUndefined();
+    expect(stable(on)).toEqual(stable(off));
+    expect(without.memories.map((m) => [m.id, m.explanation])).toEqual(
+      on.memories.map((m) => [m.id, m.explanation]),
+    );
+    expect(formatForInjection(on, 4000, NOW)).toBe(formatForInjection(off, 4000, NOW));
+    expect(a.reads() + b.reads() + c.reads()).toBe(0);
+  });
+
+  it('time.a-question-about-a-state-then-still-reads-as-of', async () => {
+    const { store, reads } = await storeWith([hike]);
+    const r = await recall(
+      { text: 'Which trail did we use in March?', scope: SCOPE },
+      { store, config, now: NOW },
+    );
+    expect(r.temporal).toMatchObject({
+      mode: 'as-of',
+      asOf: '2023-03-31T23:59:59.999Z',
+      inferred: true,
+      shape: 'state',
+    });
+    expect(r.memories).toEqual([]);
+    expect(reads()).toBe(0);
+  });
+
+  it('time.an-explicit-mode-is-kept', async () => {
+    const { store, reads } = await storeWith([hike, boots]);
+    const r = await recall(
+      {
+        text: 'Where did I go hiking in March?',
+        scope: SCOPE,
+        mode: 'as-of',
+        asOf: '2023-03-31T23:59:59.999Z',
+      },
+      { store, config: withRecall({ minCoverage: 0 }), now: NOW },
+    );
+    expect(r.temporal).toEqual({
+      mode: 'as-of',
+      asOf: '2023-03-31T23:59:59.999Z',
+      inferred: false,
+    });
+    expect(r.memories.map((m) => m.id)).toEqual(['boots']);
+    expect(reads()).toBe(0);
+  });
+
+  it('time.the-range-read-brings-in-what-the-searches-missed', async () => {
+    // No word of the query in it: only its time finds it, and the reranker judges it.
+    const reyes = said(
+      'reyes',
+      'On Saturday we drove out to Point Reyes.',
+      '2023-03-13T09:00:00.000Z',
+    );
+    const { store } = await storeWith([reyes, boots]);
+    const rerank: Reranker = {
+      async rerank(_q, docs) {
+        return docs.map((d) => ({ id: d.id, score: d.id === 'reyes' ? 0.9 : 0.1 }));
+      },
+    };
+    const r = await recall(
+      { text: 'What did I do in March?', scope: SCOPE },
+      { store, rerank, config, now: NOW },
+    );
+    expect(r.memories.map((m) => m.id)).toEqual(['reyes']);
+    expect(r.memories[0]?.explanation.lexicalRank).toBeUndefined();
+    expect(r.memories[0]?.explanation.timeRank).toBe(1);
+  });
+
+  it('time.after-a-rerank-a-bounded-boost-reorders-and-the-gate-reads-raw-scores', async () => {
+    const inRange = said('in', 'In March I went hiking at Mount Tam.', '2023-04-02T09:00:00.000Z');
+    const weak = said('weak', 'In March I went hiking near the lake.', '2023-04-03T09:00:00.000Z');
+    const out = said('out', 'I went hiking at Mount Tam.', '2023-01-10T09:00:00.000Z');
+    const { store } = await storeWith([inRange, weak, out]);
+    const scores: Record<string, number> = { in: 0.49, out: 0.5, weak: 0.3 };
+    let asked = -1;
+    let given = -1;
+    const rerank: Reranker = {
+      async rerank(_q, docs, topK) {
+        asked = topK;
+        given = docs.length;
+        return docs
+          .map((d) => ({ id: d.id, score: scores[d.id] ?? 0 }))
+          .sort((x, y) => y.score - x.score);
+      },
+    };
+    const cfg = withRecall({ skipRerankWhenConfident: false, minRerankScore: 0.35 });
+    const r = await recall(
+      { text: 'Where did I go hiking in March?', scope: SCOPE },
+      { store, rerank, config: cfg, now: NOW },
+    );
+    // Every score comes back, so the boost can reorder any of them.
+    expect(asked).toBe(given);
+    // 0.49 in the range overtakes 0.50 said before it; the boost is at most TIME_BOOST.
+    expect(timeScore(inRange, r.temporal!.range!)).toBeGreaterThan(0.75);
+    expect(r.memories.map((m) => [m.id, m.explanation.reranked])).toEqual([
+      ['in', 0.49],
+      ['out', 0.5],
+    ]);
+    // 0.30 cannot reach 0.35 with a boost of at most 10%: the gate keeps the raw score.
+    expect(0.3 * (1 + TIME_BOOST)).toBeLessThan(0.35);
+  });
+
+  it('time.the-label-says-when-it-happened', async () => {
+    const { store } = await storeWith([hike]);
+    const r = await recall(
+      { text: 'Where did I go hiking in March?', scope: SCOPE },
+      { store, config, now: NOW },
+    );
+    expect(formatForInjection(r, 4000, NOW)).toContain('happened 2023-03]');
+    // A memory with only the day it was said gets no such words.
+    const { store: s2 } = await storeWith([boots]);
+    const r2 = await recall(
+      { text: 'hiking boots', scope: SCOPE },
+      { store: s2, config, now: NOW },
+    );
+    expect(formatForInjection(r2, 4000, NOW)).not.toContain('happened');
+  });
+
+  it('time.a-failed-range-read-degrades-and-recall-goes-on', async () => {
+    const { store } = await storeWith([hike]);
+    (store as { occurredIn: MemoryStore['occurredIn'] }).occurredIn = () =>
+      Promise.reject(new Error('boom'));
+    const r = await recall(
+      { text: 'Where did I go hiking in March?', scope: SCOPE },
+      { store, config, now: NOW },
+    );
+    expect(r.degraded).toContain('time-failed');
+    // The lexical search found it; the channel still ranks it.
+    expect(r.memories[0]?.id).toBe('hike');
+    expect(r.memories[0]?.explanation.timeRank).toBe(1);
+  });
+
+  it('time.a-store-without-the-range-read-ranks-what-the-searches-found', async () => {
+    const inner = createMemoryStore({ d: config.activation.d });
+    await inner.upsertMany(TG, [hike, boots]);
+    // A store that keeps no event time: memories come back without `occurred`.
+    const store = Object.create(inner) as MemoryStore;
+    Object.defineProperty(store, 'occurrences', { value: undefined });
+    Object.defineProperty(store, 'occurredIn', { value: undefined });
+    store.get = async (g, id) => {
+      const m = await inner.get(g, id);
+      if (m === null) return m;
+      const { occurred: _o, ...rest } = m;
+      return rest;
+    };
+    const r = await recall(
+      { text: 'Where did I go hiking in March?', scope: SCOPE },
+      { store, config, now: NOW },
+    );
+    expect(r.degraded ?? []).not.toContain('time-failed');
+    // When it was said (2 April, just after March) still ranks it; January's cannot be.
+    expect(r.memories[0]?.id).toBe('hike');
+    expect(r.memories[0]?.explanation.timeRank).toBe(1);
+    expect(r.memories.find((m) => m.id === 'boots')?.explanation.timeRank).toBeUndefined();
+  });
+});
+
+describe('recall: the time channel without a reranker', () => {
+  it('time.memories-found-only-by-time-never-take-a-searched-hits-place', async () => {
+    // Fast mode: no reranker judges a memory the range read alone found, and the gate drops it
+    // (no words of the query, no dense match). It must not push out a hit the gate would keep.
+    const poles = said('poles', 'My hiking poles are in the closet.', '2023-01-09T09:00:00.000Z');
+    const filler = Array.from({ length: 10 }, (_, i) =>
+      said(`shed${i}`, `Painted the shed, coat ${i}.`, `2023-03-${String(i + 10)}T09:00:00.000Z`),
+    );
+    const { store } = await storeWith([hike, boots, poles, ...filler]);
+    const r = await recall(
+      { text: 'Where did I go hiking in March?', scope: SCOPE },
+      { store, config: withRecall({ returnK: 3, minCoverage: 0.3 }), now: NOW },
+    );
+    expect(new Set(r.memories.map((m) => m.id))).toEqual(new Set(['hike', 'poles', 'boots']));
+  });
+
+  it('time.without-a-reranker-the-range-words-are-not-searched-for', async () => {
+    // "last Saturday" is in no memory: counted as query words, it halves every memory's coverage
+    // and the gate drops what the question is about. A reranker still reads every word.
+    const book = said('book', 'Dune is a great book.', '2023-04-15T18:00:00.000Z');
+    const q = { text: 'Which book did I read last Saturday?', scope: SCOPE };
+    const fast = await recall(q, { store: (await storeWith([book])).store, config, now: NOW });
+    expect(fast.temporal?.range?.from).toBe('2023-04-15T00:00:00.000Z');
+    expect(fast.memories.map((m) => m.id)).toEqual(['book']);
+
+    const asked: string[] = [];
+    const rerank: Reranker = {
+      async rerank(query, docs) {
+        asked.push(query);
+        return docs.map((d) => ({ id: d.id, score: 0.9 }));
+      },
+    };
+    await recall(q, {
+      store: (await storeWith([book])).store,
+      rerank,
+      config: withRecall({ skipRerankWhenConfident: false }),
+      now: NOW,
+    });
+    expect(asked).toEqual(['Which book did I read last Saturday?']);
+  });
+
+  it('time.without-a-reranker-calendar-names-are-still-searched-for', async () => {
+    // "Saturday" may be in a memory: the search keeps it, while the gate counts only "book" and
+    // "read", so a memory that says neither "last" nor "Saturday" is not held back by them.
+    const sat = said('sat', 'On Saturday: tea with Ana.', '2023-04-15T18:00:00.000Z');
+    const book = said('book', 'Dune is a great book.', '2023-04-15T18:00:00.000Z');
+    const r = await recall(
+      { text: 'Which book did I read last Saturday?', scope: SCOPE },
+      {
+        store: (await storeWith([sat, book])).store,
+        config: withRecall({ minCoverage: 0 }),
+        now: NOW,
+      },
+    );
+    const sats = r.memories.find((m) => m.id === 'sat')?.explanation;
+    expect(sats?.lexicalRank).toBeDefined();
+    expect(r.memories.find((m) => m.id === 'book')?.explanation.coverage).toBe(0.5);
+  });
+});
+
+describe('timeScore', () => {
+  const march = {
+    from: '2023-03-01T00:00:00.000Z',
+    to: '2023-04-01T00:00:00.000Z',
+    precision: 'month' as const,
+  };
+  const bare = (at: string): Memory =>
+    makeMemory({ id: at, text: 'x', createdAt: at, validFrom: at, updatedAt: at });
+
+  it('score.a-stated-time-in-the-range-beats-a-mention', () => {
+    expect(timeScore(hike, march)).toBeGreaterThan(0.75);
+    expect(timeScore(bare('2023-03-15T00:00:00.000Z'), march)).toBeCloseTo(0.4, 6);
+  });
+
+  it('score.said-before-the-range-is-zero-said-after-decays', () => {
+    expect(timeScore(bare('2023-02-10T00:00:00.000Z'), march)).toBe(0);
+    const soon = timeScore(bare('2023-04-05T00:00:00.000Z'), march);
+    const later = timeScore(bare('2023-06-10T00:00:00.000Z'), march);
+    expect(soon).toBeLessThan(0.4);
+    expect(later).toBeLessThan(soon);
+    expect(later).toBeGreaterThan(0);
+  });
+
+  it('score.a-stated-time-outside-the-range-falls-back-to-when-it-was-said', () => {
+    const wedding = said('w', 'We got married on March 4, 2021.', '2023-03-20T00:00:00.000Z');
+    // March 2021 is not March 2023: only the mention, inside the range, counts.
+    expect(timeScore(wedding, march)).toBeCloseTo(0.4, 6);
+  });
+});
+
+describe('timeBoosted', () => {
+  const march = {
+    from: '2023-03-01T00:00:00.000Z',
+    to: '2023-04-01T00:00:00.000Z',
+    precision: 'month' as const,
+  };
+  const memories = new Map([
+    ['hike', hike],
+    ['boots', boots],
+  ]);
+  const order = (scores: Record<string, number>) =>
+    timeBoosted(
+      Object.keys(scores).map((id) => ({ id })),
+      new Map(Object.entries(scores)),
+      memories,
+      march,
+    ).map((f) => f.id);
+
+  it('boost.lifts-a-memory-in-the-range-by-at-most-the-bound', () => {
+    expect(order({ boots: 0.5, hike: 0.49 })).toEqual(['hike', 'boots']);
+    expect(order({ boots: 0.5, hike: 0.4 })).toEqual(['boots', 'hike']);
+  });
+
+  it('boost.never-demotes-a-negative-score', () => {
+    // A reranker that returns logits: a memory in the range must still move up, not down.
+    expect(order({ boots: -0.49, hike: -0.5 })).toEqual(['hike', 'boots']);
+    expect(order({ boots: -0.4, hike: -0.5 })).toEqual(['boots', 'hike']);
+  });
+});
+
+describe('recall: the time channel with a question about two things', () => {
+  // Two weeks before 20 April 2023: 3 to 10 April. The split gives "buy standing desk two weeks
+  // ago" and "buy office chair two weeks ago".
+  const question = 'Which did I buy first two weeks ago, the standing desk or the office chair?';
+  const desk = said('desk', 'Got a standing desk for the study.', '2023-04-05T09:00:00.000Z');
+  const chair = said('chair', 'Got an office chair, a green one.', '2023-04-06T09:00:00.000Z');
+  // Found by its time alone: no word of the question.
+  const shed = said('shed', 'Painted a fence.', '2023-04-07T09:00:00.000Z');
+  const lamp = said(
+    'lamp',
+    'On April 6, 2023 I bought a lamp for my study.',
+    '2023-04-12T09:00:00.000Z',
+  );
+  const mat = said('mat', 'I bought a mat and a cushion for my study.', '2023-04-19T09:00:00.000Z');
+  const all = [desk, chair, shed, lamp, mat];
+  const heads = (r: RecallResult) =>
+    r.memories
+      .filter((m) => m.explanation.part !== undefined)
+      .map((m) => [m.id, m.explanation.part])
+      .sort((x, y) => Number(x[1]) - Number(y[1]));
+
+  it('time.split-without-a-reranker-keeps-each-parts-head', async () => {
+    const r = await recall(
+      { text: question, scope: SCOPE },
+      { store: (await storeWith(all)).store, config, now: NOW },
+    );
+    expect(r.temporal?.range?.from).toBe('2023-04-03T00:00:00.000Z');
+    expect(r.subQueries).toEqual([
+      'buy standing desk two weeks ago',
+      'buy office chair two weeks ago',
+    ]);
+    // Each part's head passes on its part's words: "two weeks ago" no longer halves them.
+    expect(heads(r)).toEqual([
+      ['desk', 1],
+      ['chair', 2],
+    ]);
+    // A head always has a lexical or dense hit, so the time-only rule never drops one.
+    for (const m of r.memories.filter((x) => x.explanation.part !== undefined)) {
+      expect(m.explanation.lexicalRank ?? m.explanation.denseRank).toBeDefined();
+    }
+    // The time-only rule still holds: the shed is in the range and in no search.
+    expect(r.memories.map((m) => m.id)).not.toContain('shed');
+  });
+
+  it('time.split-after-a-rerank-boosts-then-keeps-each-parts-head', async () => {
+    const asked: number[] = [];
+    const scores: Record<string, number> = {
+      desk: 0.3,
+      chair: 0.3,
+      shed: 0.1,
+      lamp: 0.6,
+      mat: 0.62,
+    };
+    const rerank: Reranker = {
+      async rerank(_q, docs, topK) {
+        asked.push(topK === docs.length ? 1 : 0);
+        return docs
+          .map((d) => ({ id: d.id, score: scores[d.id] ?? 0 }))
+          .sort((x, y) => y.score - x.score)
+          .slice(0, topK);
+      },
+    };
+    const r = await recall(
+      { text: question, scope: SCOPE },
+      {
+        store: (await storeWith(all)).store,
+        rerank,
+        config: withRecall({ skipRerankWhenConfident: false }),
+        now: NOW,
+      },
+    );
+    // Every score was asked for.
+    expect(asked).toEqual([1]);
+    // The boost first: the lamp, bought on 6 April, passes the mat said after the range. Then
+    // each part's head, which the reranker scored low against the whole question.
+    expect(r.memories.map((m) => m.id)).toEqual(['lamp', 'desk', 'chair', 'mat']);
+    expect(heads(r)).toEqual([
+      ['desk', 1],
+      ['chair', 2],
+    ]);
+  });
+});
+
+describe('recall: a split question, its time and the gate', () => {
+  const JUNE = new Date('2024-06-01T10:00:00.000Z');
+  // "move" and "in March 2024": the second part is only a time.
+  const timeQuestion = 'How long between the move and in March 2024?';
+  const move = said('move', 'We did the move to Oslo in the spring.', '2024-03-20T09:00:00.000Z');
+  const dentist = said('dentist', 'Dentist, March 2024: two fillings.', '2024-03-05T09:00:00.000Z');
+  const fullRerank = (scores: Record<string, number>): Reranker => ({
+    async rerank(_q, docs, topK) {
+      return docs
+        .map((d) => ({ id: d.id, score: scores[d.id] ?? 0 }))
+        .sort((x, y) => y.score - x.score)
+        .slice(0, topK);
+    },
+  });
+
+  it('time.a-part-that-is-only-a-time-is-not-searched-and-has-no-head', async () => {
+    const fast = await recall(
+      { text: timeQuestion, scope: SCOPE },
+      { store: (await storeWith([move, dentist])).store, config, now: JUNE },
+    );
+    expect(fast.subQueries).toEqual(['move']);
+    // Saying "March 2024" is not being about a part: no head, and no pass on calendar words.
+    expect(fast.memories.find((m) => m.id === 'dentist')).toBeUndefined();
+    const full = await recall(
+      { text: timeQuestion, scope: SCOPE },
+      {
+        store: (await storeWith([move, dentist])).store,
+        rerank: fullRerank({ move: 0.5, dentist: 0.2 }),
+        config: withRecall({ skipRerankWhenConfident: false }),
+        now: JUNE,
+      },
+    );
+    expect(full.subQueries).toEqual(['move']);
+    expect(full.memories.map((m) => m.id)).toEqual(['move']);
+  });
+
+  // Three hits that pass the gate, and the best match for "adopt cat", which does not.
+  const pets = [
+    said('g1', 'Adopted my first pet, a dog.', '2024-03-01T09:00:00.000Z'),
+    said('g2', 'The dog was my first pet.', '2024-03-02T09:00:00.000Z'),
+    said('g3', 'First pet: a dog named Rex.', '2024-03-03T09:00:00.000Z'),
+    said('cat', 'A cat sat on the wall.', '2024-03-04T09:00:00.000Z'),
+  ];
+  const petQuestion = { text: 'Which pet did I adopt first, the cat or the dog?', scope: SCOPE };
+
+  it('gate.a-head-that-fails-the-gate-takes-no-place-in-the-top-k', async () => {
+    const cfg = withRecall({ returnK: 3, skipRerankWhenConfident: false });
+    const fast = await recall(petQuestion, {
+      store: (await storeWith(pets)).store,
+      config: cfg,
+      now: JUNE,
+    });
+    expect(new Set(fast.memories.map((m) => m.id))).toEqual(new Set(['g1', 'g2', 'g3']));
+    const full = await recall(petQuestion, {
+      store: (await storeWith(pets)).store,
+      rerank: fullRerank({ g1: 0.6, g2: 0.6, g3: 0.6, cat: 0.1 }),
+      config: cfg,
+      now: JUNE,
+    });
+    expect(new Set(full.memories.map((m) => m.id))).toEqual(new Set(['g1', 'g2', 'g3']));
+    // The gate still says what it did.
+    expect(full.gate?.dropped).toBe(1);
+  });
+});

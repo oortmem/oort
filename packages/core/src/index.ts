@@ -22,6 +22,19 @@ export { MAX_SUB_QUERIES, PART_MIN_WORDS, PART_RERANK_FLOOR, subQueries } from '
 export * from './forget.js';
 export * from './observe.js';
 export * from './temporal.js';
+export {
+  checkOccurrences,
+  formatRange,
+  MAX_OCCURRENCE_DAYS,
+  occurrencesOf,
+  queryRange,
+  type Occurrence,
+  type OccurrenceSource,
+  type QueryTime,
+  type TimePrecision,
+  type TimeRange,
+} from './event-time.js';
+export { timeScore, TIME_BOOST, TIME_K } from './time-channel.js';
 export { chronoLoaded, mayHaveDateCue, preloadChrono } from './date-cue.js';
 export * from './volatile.js';
 export * from './scrub.js';

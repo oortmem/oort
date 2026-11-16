@@ -16,6 +16,7 @@ import {
   type Author,
 } from './address.js';
 import type { Memory, Scope } from './model.js';
+import { checkOccurrences } from './event-time.js';
 import { checkPlace } from './place.js';
 
 /** The version `oort export` writes. */
@@ -97,7 +98,8 @@ export function exportLine(
         `memory ${id} is outside the Planet, a judgment or has a place; version 1 cannot hold it`,
       );
     }
-    const { links: _links, ...v1 } = rest; // version 1 holds no links
+    // Version 1 holds no links, and no event time: `oort import` reads it again from the text.
+    const { links: _links, occurred: _occurred, ...v1 } = rest;
     return { id, scope, ...v1, ...tail };
   }
   const address = addressOf(m);
@@ -268,6 +270,7 @@ function readLine(
     supersedesHidden: _sh,
     supersededByHidden: _bh,
     place: rawPlace,
+    occurred: rawOccurred,
     ...rest
   } = raw;
   let address: Address;
@@ -292,6 +295,10 @@ function readLine(
     ...(provenance !== undefined && provenance !== null && { provenance }),
     // An optional field of version 2 (CON-84), checked like a write: a bad one fails the line.
     ...(rawPlace !== undefined && rawPlace !== null && { place: checkPlace(rawPlace) }),
+    // Event time, optional in version 2, checked like a write.
+    ...(version === 2 &&
+      rawOccurred !== undefined &&
+      rawOccurred !== null && { occurred: checkOccurrences(rawOccurred) }),
     ...(typeof embedding === 'string' && {
       embedding: Int8Array.from(Buffer.from(embedding, 'base64')),
     }),

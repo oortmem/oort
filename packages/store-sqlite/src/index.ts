@@ -7,7 +7,9 @@ import {
   appendAccess,
   assertGrant,
   canonicalMemory,
+  checkOccurrences,
   checkPlace,
+  MAX_OCCURRENCE_DAYS,
   cursorKey,
   ABOUT_PER_ENTITY,
   aboutWeight,
@@ -121,6 +123,9 @@ import {
   lexicalIndexState,
   judgmentCount,
   migrationBlockers,
+  OCCURRED_TABLE,
+  occurrenceRows,
+  SHORT_OCCURRENCE_DAYS,
   PLACE_TABLE,
   placeCount,
   rabitqIndexPlan,
@@ -134,6 +139,8 @@ import {
 
 export {
   BIT_TABLE,
+  OCCURRED_TABLE,
+  SHORT_OCCURRENCE_DAYS,
   FTS_TABLE,
   FTS_VALUES_TABLE,
   FTS_TOKENIZE,
@@ -388,6 +395,8 @@ interface MemoryRow {
   place: string | null;
   /** The place's `nodeId`, for `within`; NULL when it has none. */
   place_node: string | null;
+  /** The memory's occurrences as JSON (schema version 10); NULL without them. */
+  occurred: string | null;
   /** `source.sessionId` (schema version 8, CON-148); NULL without one, and at level `hive`. */
   session_id?: string | null;
   /** The memory's place in its session; NULL with no `session_id`. */
@@ -395,6 +404,8 @@ interface MemoryRow {
 }
 
 type RowParams = Omit<MemoryRow, 'rid'>;
+
+const DAY_MS = 86_400_000;
 
 /** An FTS5 query matching any token, each quoted as a phrase so no input is parsed as syntax. */
 function matchQuery(q: string): string | null {
@@ -486,6 +497,7 @@ function toRow(m: Memory, address: Address, author: Author): RowParams {
     judgment: m.judgment === undefined ? null : JSON.stringify(m.judgment),
     place: m.place === undefined ? null : JSON.stringify(m.place),
     place_node: m.place?.nodeId ?? null,
+    occurred: m.occurred === undefined ? null : JSON.stringify(m.occurred),
   };
 }
 
@@ -544,6 +556,14 @@ function fromRow(r: MemoryRow, embedding: Int8Array | undefined): Memory {
       /* dropped */
     }
   }
+  if (r.occurred !== null && r.occurred !== undefined) {
+    // Checked as a write is: occurrences from a crafted or damaged copy read back as none.
+    try {
+      m.occurred = checkOccurrences(JSON.parse(r.occurred));
+    } catch {
+      /* dropped */
+    }
+  }
   if (embedding !== undefined) m.embedding = embedding;
   return m;
 }
@@ -582,6 +602,7 @@ const COLUMNS: (keyof RowParams)[] = [
   'judgment',
   'place',
   'place_node',
+  'occurred',
 ];
 
 /**
@@ -676,6 +697,30 @@ function grantParams(patterns: readonly NodePattern[]): Record<string, string | 
 function live(patterns: readonly NodePattern[]): NodePattern[] {
   return patterns.filter((p) => p.projectIds === 'all' || p.projectIds.length > 0);
 }
+
+/**
+ * The event-time read for a grant of `n` patterns: two ranges of `memory_occurred_from`, short
+ * occurrences that start in [from - SHORT_OCCURRENCE_DAYS, to) and long ones that start in
+ * [from - MAX_OCCURRENCE_DAYS, to) (together, every occurrence that overlaps [from, to)), joined
+ * to their memory by rid, inside the grant (and the spatial predicate, when given). Per memory its
+ * best occurrence: stated before `mention` (the 1e15 offset), then nearest the range's middle.
+ */
+function occurredSql(n: number, spatial?: string): string {
+  const arm = (long: 0 | 1, lo: string) =>
+    `SELECT memory_rid, from_ms, to_ms, stated FROM ${OCCURRED_TABLE} INDEXED BY memory_occurred_from
+       WHERE long = ${long} AND from_ms >= ${lo} AND from_ms < @to AND to_ms > @from`;
+  return `SELECT m.id AS id, m.tier AS tier,
+       min((1 - o.stated) * 1e15 + abs((o.from_ms + o.to_ms) / 2.0 - @mid)) AS key
+     FROM (${arm(0, '@loShort')} UNION ALL ${arm(1, '@lo')}) o
+     CROSS JOIN memories m ON m.rid = o.memory_rid
+     WHERE ${grantSql(n)}${spatial === undefined ? '' : ` AND ${spatial}`}
+     GROUP BY m.rid
+     ORDER BY key, m.id
+     LIMIT @k`;
+}
+
+/** The event-time read for a one-pattern grant, for plan tests. */
+export const OCCURRED_READ = occurredSql(1);
 
 /** One candidate neighbour: its row id, node and whether the reader's grant and place admit it. */
 interface NeighbourRow {
@@ -941,7 +986,9 @@ export function sqliteSchemaVersion(dbPath: string): number | undefined {
  * were never moved), 6 for Oort before the RaBitQ index (it is dropped, and the version 6
  * writer guard put back), 7 for Oort before memory links (the link schema is dropped, and the
  * version 7 guard put back), or 8 for Oort before the version 9 lexical index (CON-159; the
- * lexical index is rebuilt as version 8's, and the version 8 guard put back). First copies it
+ * lexical index is rebuilt as version 8's, and the version 8 guard put back), or 9 for Oort before
+ * event time (the `occurred` column and its index are dropped, and the version 9 guard put
+ * back). First copies it
  * to `<path>.pre-downgrade.<UTC time>` (the three newest such copies are kept). Refuses,
  * changing nothing, when it holds memories that version cannot represent: for 1, any level but
  * Planet, an author with an account, provenance or a judgment; for 2, a judgment; below 5, a
@@ -953,7 +1000,7 @@ export function sqliteSchemaVersion(dbPath: string): number | undefined {
  */
 export function downgradeSqliteStore(opts: {
   path: string;
-  to?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  to?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
   /**
    * Delete every memory link and block (schema version 8) instead of refusing while any
    * explicit, distilledFrom or blocked row exists. The copy taken first still holds them.
@@ -1246,6 +1293,10 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     ),
     setAccess: db.prepare<[string, string]>('UPDATE memories SET access_log = ? WHERE id = ?'),
     placeDelete: db.prepare<[number]>(`DELETE FROM ${PLACE_TABLE} WHERE rid = ?`),
+    occurredDelete: db.prepare<[number]>(`DELETE FROM ${OCCURRED_TABLE} WHERE memory_rid = ?`),
+    occurredInsert: db.prepare<[number, number, number, number, number]>(
+      `INSERT INTO ${OCCURRED_TABLE} (memory_rid, from_ms, to_ms, stated, long) VALUES (?, ?, ?, ?, ?)`,
+    ),
     placeInsert: db.prepare<[number, number, number, number, number, number, number, string]>(
       `INSERT INTO ${PLACE_TABLE} (rid, min_x, max_x, min_y, max_y, min_z, max_z, map_key)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1403,6 +1454,11 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
       () => `SELECT * FROM memories m WHERE ${grantSql(n)} AND (@tier IS NULL OR m.tier = @tier)
          AND (@pinned IS NULL OR m.pinned = @pinned)
        ORDER BY m.rid`,
+    );
+  const occurredScoped = (n: number, f?: SpatialFilter) =>
+    cached<[Params], { id: string; tier: Tier; key: number }>(
+      `occurred:${n}${spatialShape(f)}`,
+      () => occurredSql(n, f === undefined ? undefined : spatialSql(f, 'm')),
     );
   /** With a spatial filter (CON-84), its predicate joins the grant's; without one, as before. */
   const lexicalScoped = (n: number, f?: SpatialFilter) =>
@@ -1885,6 +1941,8 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     const m = canonicalMemory(input);
     if (m.place !== undefined) m.place = checkPlace(m.place);
     else delete m.place;
+    if (m.occurred !== undefined) m.occurred = checkOccurrences(m.occurred);
+    else delete m.occurred;
     const { address, author } = resolveAddressing(m);
     if (!grantWrites(grant, m)) throw new GrantError();
     const existing = q.getRow.get(m.id);
@@ -1895,6 +1953,10 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
     if (row === undefined) throw new Error(`upsert ${m.id}: no row returned`);
     writeFts(row.rid, m.tier, m.text, m.stub, m.entities, existing);
     writeLinkIndexes(row.rid, m, address, existing);
+    q.occurredDelete.run(row.rid);
+    for (const o of occurrenceRows(m.occurred === undefined ? null : JSON.stringify(m.occurred))) {
+      q.occurredInsert.run(row.rid, o.from, o.to, o.stated, o.long);
+    }
     q.placeDelete.run(row.rid);
     const box = placeBox(m.place);
     if (box !== undefined) {
@@ -2504,6 +2566,34 @@ export async function openSqliteStore(opts: SqliteStoreOptions): Promise<MemoryS
   const handle: MemoryStore = {
     spatial: true,
     links: true,
+    occurrences: true,
+
+    async occurredIn(grant, range, k, searchOpts) {
+      open();
+      assertGrant(grant);
+      const from = Date.parse(range.from);
+      const to = Date.parse(range.to);
+      const patterns = live(grant.readNodes);
+      if (!(to > from) || k <= 0 || patterns.length === 0) return [];
+      const sp = searchOpts?.spatial;
+      const f = hasSpatialFilter(sp) ? sp : undefined;
+      return occurredScoped(patterns.length, f)
+        .all({
+          ...grantParams(patterns),
+          ...(f !== undefined && spatialParams(f)),
+          from,
+          to,
+          lo: from - MAX_OCCURRENCE_DAYS * DAY_MS,
+          loShort: from - SHORT_OCCURRENCE_DAYS * DAY_MS,
+          mid: (from + to) / 2,
+          k: Math.floor(k),
+        })
+        .map((r): Hit => {
+          const stated = r.key < 1e15;
+          const d = stated ? r.key : r.key - 1e15;
+          return { id: r.id, score: (stated ? 2 : 1) - d / (d + DAY_MS), tier: r.tier };
+        });
+    },
 
     async link(grant, a, b, linkOpts) {
       open();

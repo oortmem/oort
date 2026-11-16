@@ -166,9 +166,9 @@ describe('schema version 9: a lexical index that deletes a row by its own terms 
   it('fts-delete.new-store-is-v9-with-a-plain-contentless-secure-delete-index', async () => {
     const s = fresh();
     await (await open(s)).close();
-    expect(SCHEMA_VERSION).toBe(9);
-    expect(WRITER_GUARD).toBe('oort_writer_v9');
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(9);
+    expect(SCHEMA_VERSION).toBe(10);
+    expect(WRITER_GUARD).toBe('oort_writer_v10');
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     const [fts] = read<{ sql: string }>(
       s.dbPath,
       'SELECT sql FROM sqlite_master WHERE name = ?',
@@ -887,14 +887,14 @@ describe('schema migration 8 to 9 (CON-159)', () => {
     clearCopies(s);
     const logged: string[] = [];
     await (await open(s, { log: (m) => logged.push(m) })).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(9);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(logged.filter((m) => m.startsWith('Rebuilding the search index'))).toEqual([
       'Rebuilding the search index (3 memories)…',
     ]);
     // No copy: the rebuild reads the stored rows, and going back to 8 loses nothing.
     expect(fs.readdirSync(s.dir).filter((f) => f.includes('.pre-'))).toEqual([]);
     expect(ftsSql(s.dbPath)).not.toContain('contentless_delete');
-    expect(guards(s.dbPath)).toEqual(Array(3).fill('oort_writer_v9'));
+    expect(guards(s.dbPath)).toEqual(Array(3).fill(WRITER_GUARD));
     expect({
       auth: await finds(s, 'auth'),
       ledger: await finds(s, 'ledger'),
@@ -921,10 +921,10 @@ describe('schema migration 8 to 9 (CON-159)', () => {
     db.function('oort_writer_v8', () => 1);
     try {
       expect(() => db.prepare("UPDATE memories SET salience = 0.9 WHERE id = 'a'").run()).toThrow(
-        /no such function: oort_writer_v9/,
+        /no such function: oort_writer_v10/,
       );
       expect(() => db.prepare("DELETE FROM memories WHERE id = 'a'").run()).toThrow(
-        /no such function: oort_writer_v9/,
+        /no such function: oort_writer_v10/,
       );
     } finally {
       db.close();
@@ -940,7 +940,7 @@ describe('schema migration 8 to 9 (CON-159)', () => {
       expect(hasValues(s.dbPath)).toBe(false);
       clearCopies(s);
       await (await open(s)).close();
-      expect(sqliteSchemaVersion(s.dbPath)).toBe(9);
+      expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
       expect(hasValues(s.dbPath)).toBe(true);
       expect(await finds(s, 'auth')).toEqual(want);
       const { live, rebuilt } = liveAndRebuilt(s);
@@ -994,7 +994,7 @@ describe('schema migration 8 to 9 (CON-159)', () => {
     db.prepare(`UPDATE memories SET entities = '{"x":1}' WHERE id = 'b'`).run();
     db.close();
     await (await open(s)).close();
-    expect(sqliteSchemaVersion(s.dbPath)).toBe(9);
+    expect(sqliteSchemaVersion(s.dbPath)).toBe(SCHEMA_VERSION);
     expect(await finds(s, 'auth')).toEqual(['a']);
     expect(await finds(s, '認証')).toEqual(['b']);
     // And a write that has to index such a row again does not fail either.

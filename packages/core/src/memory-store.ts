@@ -34,6 +34,7 @@ import {
   type Neighbour,
   type StoredLink,
 } from './links.js';
+import { checkOccurrences } from './event-time.js';
 import { checkPlace, hasSpatialFilter, matchesSpatial, type SpatialFilter } from './place.js';
 import { tokenizeLexical as tokens } from './tokenize.js';
 
@@ -214,6 +215,8 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
     const c = canonicalMemory(m);
     if (c.place !== undefined) c.place = checkPlace(c.place);
     else delete c.place;
+    if (c.occurred !== undefined) c.occurred = checkOccurrences(c.occurred);
+    else delete c.occurred;
     if (!grantWrites(grant, c)) throw new GrantError();
     if (existing !== undefined && !sameRecordAddress(existing, c)) throw new GrantError();
     return c;
@@ -275,6 +278,47 @@ export function createMemoryStore(opts: MemoryStoreOptions = {}): MemoryStore {
   const handle: MemoryStore = {
     spatial: true,
     links: true,
+    occurrences: true,
+
+    async occurredIn(grant, range, k, searchOpts) {
+      open();
+      assertGrant(grant);
+      const from = Date.parse(range.from);
+      const to = Date.parse(range.to);
+      if (!(to > from) || k <= 0) return [];
+      const mid = (from + to) / 2;
+      const scored: { m: Memory; stated: boolean; distance: number }[] = [];
+      for (const m of scoped(grant, searchOpts?.spatial)) {
+        let best: { stated: boolean; distance: number } | undefined;
+        for (const o of m.occurred ?? []) {
+          const a = Date.parse(o.from);
+          const b = Date.parse(o.to);
+          if (!(a < to && b > from)) continue;
+          const c = { stated: o.source !== 'mention', distance: Math.abs((a + b) / 2 - mid) };
+          if (
+            best === undefined ||
+            (c.stated && !best.stated) ||
+            (c.stated === best.stated && c.distance < best.distance)
+          ) {
+            best = c;
+          }
+        }
+        if (best !== undefined) scored.push({ m, ...best });
+      }
+      return scored
+        .sort(
+          (x, y) =>
+            Number(y.stated) - Number(x.stated) ||
+            x.distance - y.distance ||
+            (x.m.id < y.m.id ? -1 : x.m.id > y.m.id ? 1 : 0),
+        )
+        .slice(0, Math.floor(k))
+        .map(({ m, stated, distance }) => ({
+          id: m.id,
+          score: (stated ? 2 : 1) - distance / (distance + 86_400_000),
+          tier: m.tier,
+        }));
+    },
 
     async link(grant, x, y, linkOpts: LinkOptions) {
       open();

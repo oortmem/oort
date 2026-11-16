@@ -41,8 +41,10 @@ import {
   type NearQuery,
   type SpatialFilter,
 } from './place.js';
-import { temporalIntent, type RecallMode } from './temporal.js';
+import { rangeWordsOut, temporalIntent, type RecallMode, type TimeShape } from './temporal.js';
 import { PART_MIN_WORDS, PART_RERANK_FLOOR, subQueries } from './subqueries.js';
+import { formatRange, queryRange, type TimeRange } from './event-time.js';
+import { readOccurrences, timeBoosted, timeList, timeScore } from './time-channel.js';
 import { isStale, lastConfirmed } from './volatile.js';
 import {
   CONFIDENT_COVERAGE,
@@ -114,6 +116,13 @@ export interface RecallTemporal {
   asOf?: string;
   knownAt?: string;
   inferred: boolean;
+  /**
+   * The past time the query names, when it was read from the query. Recall ranked by it
+   * (the time channel) and did not filter by it, unless `shape` is `state` (then `as-of` its end).
+   */
+  range?: TimeRange;
+  /** What the query asks about `range`: `range`, `order`, `duration`, `count` or `state`. */
+  shape?: TimeShape;
 }
 
 export interface RecalledMemory extends Memory {
@@ -129,6 +138,10 @@ export interface RecalledMemory extends Memory {
     coverage: number;
     /** Dense (cosine) similarity to the query, when the dense search found it. */
     dense?: number;
+    /** Its 1-based rank in the time channel's list, when the query named a time. */
+    timeRank?: number;
+    /** How well when it happened fits the query's time, 0 to 1 (`timeScore`), with `timeRank`. */
+    time?: number;
     activation: number;
     hydrated: boolean;
     /** History mode: found by walking the supersede chain, not by the search. */
@@ -172,7 +185,9 @@ export type Degradation =
   /** The adaptive stop's question failed: recall widened into the cold matches, as without it. */
   | 'stop-failed'
   /** Following links took longer than `recall.links.budgetMs` (or failed): some were not read. */
-  | 'links-skipped';
+  | 'links-skipped'
+  /** The store's range read for the time channel failed: it ranked only what the searches found. */
+  | 'time-failed';
 
 export interface RecallResult {
   memories: RecalledMemory[];
@@ -256,13 +271,51 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   const now = deps.now ?? new Date();
   // Scrub once: the query text reaches embedders and rerankers, which may be remote. Temporal
   // words ("on 2 April", "changed over time") pick the view and are not searched for.
-  const { view, temporal, text } = viewFor(q, scrub(q.text).text, now);
+  const { view, temporal, text: asked, fast } = viewFor(q, scrub(q.text).text, now);
   if (q.includeWithdrawn === true) view.includeWithdrawn = true;
+  // The time channel: a past time read from the query ranks, and never filters.
+  const timeRange =
+    temporal.inferred && view.mode === 'current' && config.recall.timeChannel
+      ? temporal.range
+      : undefined;
+  if (timeRange === undefined && view.mode === 'current') {
+    // Channel off: nothing was ranked by the range, so the result does not claim one.
+    delete temporal.range;
+    delete temporal.shape;
+  }
+  // A range keeps every word for the reranker to read. Without a reranker, the words that name it
+  // ("last Saturday", "a week ago") are in no memory: they are not searched for, bar the calendar
+  // names among them, and do not count against a memory's coverage at the gate.
+  const rangeWords = timeRange !== undefined && !deps.rerank ? fast : undefined;
+  const text = rangeWords?.text ?? asked;
   // A question about two or more things: each part is searched beside the whole question, and
   // its best match keeps a place in the top k. Rules in code, no model call; a query that does
-  // not split takes exactly the path it always took.
-  const parts = subQueries(text);
-  const searches = parts === undefined ? [text] : [text, ...parts];
+  // not split takes exactly the path it always took. The parts are read from the question as
+  // asked. With a range, a part's own gate never counts the words of a past time (the one it
+  // names, or what the split left of the question's): its coverage is a word count, with or
+  // without a reranker. Without a reranker its search drops them too, bar calendar names. A part
+  // that is only a time ("in March 2024") is no part: nothing is left to search for or to gate
+  // on, and the time channel ranks by it. A reader that fails leaves the parts as split.
+  let parts = subQueries(asked);
+  let partForms: { text?: string; gate?: string }[] = (parts ?? []).map(() => ({}));
+  if (parts !== undefined && timeRange !== undefined) {
+    try {
+      const whole = queryRange(asked, now)?.text;
+      const forms = parts.map((p) => rangeWordsOut(p, now, whole));
+      const keep = forms.map((f) => f.timeOnly !== true);
+      const left = parts.filter((_, i) => keep[i]);
+      parts = left.length > 0 ? left : undefined;
+      partForms = forms.filter((_, i) => keep[i]);
+    } catch {
+      // As split, unstripped.
+    }
+  }
+  const partSearch = (parts ?? []).map((p, i) =>
+    rangeWords === undefined ? p : (partForms[i]!.text ?? p),
+  );
+  // Never the search text: its calendar names are not what a part is about.
+  const partGate = (parts ?? []).map((p, i) => partForms[i]!.gate ?? p);
+  const searches = [text, ...partSearch];
   const t0 = clock();
   const degraded: Degradation[] = [];
   const timings: Record<string, number> = {
@@ -285,7 +338,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     }
   };
 
-  const queryTokens = informativeTokens(text);
+  const queryTokens = informativeTokens(rangeWords?.gate ?? text);
   // Memories read while deciding, reused below so nothing is read twice.
   const prefetched = new Map<string, Memory | null>();
   const read = async (id: string): Promise<Memory | null> => {
@@ -308,6 +361,15 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   const lexicalP = lexicalAll.then((all) => all[0]!);
   // A failed embed must not leave the lexical promise unobserved.
   lexicalP.catch(() => {});
+  const timeP =
+    timeRange === undefined
+      ? undefined
+      : readOccurrences(
+          store,
+          legs.map((l) => l.grant),
+          timeRange,
+          searchOpts,
+        );
 
   // Lexical first (CON-57): when the lexical answer is already clear, skip the embedding round
   // trip. Otherwise the lexical search has run while nothing else waited on it. Not for a split
@@ -359,6 +421,8 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   if (denseFailed) degraded.push('dense-failed');
   const lexicalLegs = lexicalAllLegs[0]!;
   const denseLegs = denseAllLegs[0]!;
+  const timeRead = timeP === undefined ? undefined : await timeP;
+  if (timeRead?.failed === true) degraded.push('time-failed');
   // Across nodes, by rank (one node: its own list). Used where one list is needed.
   const lexical = byRank(lexicalLegs);
   const dense = byRank(denseLegs);
@@ -368,20 +432,48 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
 
   // Live rows only: a cold row keeps its text, stub and entities, which is all fusion, the gate
   // and the reranker read. Hydration waits until we know what is returned (CON-47).
-  const ids = [...new Set([...lexicalAllLegs.flat(2), ...denseAllLegs.flat(2)].map((h) => h.id))];
+  const ids = [
+    ...new Set(
+      [...lexicalAllLegs.flat(2), ...denseAllLegs.flat(2), ...(timeRead?.hits.flat() ?? [])].map(
+        (h) => h.id,
+      ),
+    ),
+  ];
   const loaded = await Promise.all(ids.map((id) => read(id)));
   const memories = new Map<string, Memory>();
   for (const m of loaded) if (m !== null) memories.set(m.id, m);
 
   const tf = clock();
+  // The time channel's list per node, over what the searches and the range read found.
+  const timeLegs =
+    timeRange === undefined
+      ? undefined
+      : legs.map((_, i) => {
+          const pool = new Map<string, Memory>();
+          for (const h of [...lexicalLegs[i]!, ...denseLegs[i]!, ...(timeRead?.hits[i] ?? [])]) {
+            const m = memories.get(h.id);
+            if (m !== undefined) pool.set(h.id, m);
+          }
+          return timeList(pool.values(), timeRange, (m) =>
+            v !== undefined && m.embedding?.length === v.length
+              ? cosine(v, m.embedding)
+              : queryCoverage(queryTokens, m),
+          );
+        });
+  const timeRank = timeLegs === undefined ? new Map<string, number>() : rankWithin(timeLegs);
   // Reciprocal rank fusion within each node as before, then the nodes merged by fused score,
   // each scaled by the specificity prior (off at ε = 0). A stable sort: one node keeps its order.
-  // A split question fuses every search's lists, the whole query's and each part's, at once.
-  const fuseSearches = (which: number[]) =>
+  // A split question fuses every search's lists, the whole query's and each part's, at once. The
+  // time list is fused once, with the whole query's lists; a part's best match comes from its own
+  // lexical and dense lists alone.
+  const fuseSearches = (which: number[], withTime = false) =>
     legs
       .flatMap((l, i) =>
         fuse(
-          which.flatMap((s) => [lexicalAllLegs[s]![i]!, denseAllLegs[s]![i]!]),
+          [
+            ...which.flatMap((s) => [lexicalAllLegs[s]![i]!, denseAllLegs[s]![i]!]),
+            ...(withTime && timeLegs !== undefined ? [timeLegs[i]!] : []),
+          ],
           memories,
           now,
           { activation: config.activation, view },
@@ -390,7 +482,10 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         ),
       )
       .sort((x, y) => y.score - x.score);
-  const fused = fuseSearches(searches.map((_, s) => s));
+  const fused = fuseSearches(
+    searches.map((_, s) => s),
+    true,
+  );
   // Each part's best match: the top of its own lists, fused. It keeps a place in the top k.
   const heads = (parts ?? []).map((_, p) => fuseSearches([p + 1])[0]?.id);
   timings['fuseMs'] = clock() - tf;
@@ -551,11 +646,12 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         deps.rerank.rerank(
           text,
           docs,
-          // A split question asks for every score, so each part's best match has its own.
-          parts !== undefined
+          // A split question asks for every score, so each part's best match has its own; with a
+          // time range every score comes back, so the time boost below can reorder them. Else
+          // hits keep their `returnK` places: the linked memories are asked for on top.
+          parts !== undefined || timeRange !== undefined
             ? docs.length
-            : // Hits keep their `returnK` places: the linked memories are asked for on top.
-              linked.length > 0
+            : linked.length > 0
               ? config.recall.returnK + linkCfg.pool
               : config.recall.returnK,
         ),
@@ -581,13 +677,13 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         degraded.push('rerank-empty');
         rerankScores.clear();
         linked = [];
-      } else if (parts === undefined) {
-        ordered = next;
       } else {
-        // The reranker scores against the whole question, which a note about one of the things
-        // asked answers only in part: it orders everything else, and cannot push a part's best
-        // match out of the top k.
-        ordered = withHeads(next, heads, fusedById);
+        // The time boost first, then each part's best match back in the top k: the reranker
+        // scores against the whole question, which a note about one of the things asked answers
+        // only in part, so it orders everything else and cannot push a part's head out.
+        const boosted =
+          timeRange === undefined ? next : timeBoosted(next, rerankScores, memories, timeRange);
+        ordered = parts === undefined ? boosted : withHeads(boosted, heads, fusedById);
       }
     } catch (e) {
       degraded.push(e === RERANK_TIMEOUT ? 'rerank-timeout' : 'rerank-failed');
@@ -600,7 +696,6 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   // Relevance gate (CON-45): a reranker score when there is one, else query-word coverage or a
   // strong dense match. A threshold of 0 switches that test off.
   const { minRerankScore, minCoverage, minDenseScore } = config.recall;
-  const candidates = ordered.slice(0, config.recall.returnK);
   const byRerank = rerankScores.size > 0;
   const relevant = (id: string): boolean => {
     const rs = rerankScores.get(id);
@@ -619,7 +714,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
   heads.forEach((id, p) => {
     if (id !== undefined && !partOf.has(id)) partOf.set(id, p);
   });
-  const partTokens = (parts ?? []).map((part) => informativeTokens(part));
+  const partTokens = partGate.map((part) => informativeTokens(part));
   const partDense = (parts ?? []).map(
     (_, p) => new Map(byRank(denseAllLegs[p + 1]!).map((h) => [h.id, h.score])),
   );
@@ -638,8 +733,29 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     }
     return minDenseScore > 0 && (partDense[p]!.get(id) ?? -1) >= minDenseScore;
   };
+  // Two rules take a memory out before the top k is cut, so it never holds a place a hit that
+  // passes the gate would have had (it would be dropped right after the cut):
+  // 1. Time-only: a memory only the time channel found (no lexical or dense hit of any search,
+  //    the whole query's or a part's) that fails the gate. A part's best match comes from its own
+  //    lists, so it is never time-only.
+  // 2. A failed head: a part's best match, put in the top k as one, that fails both the gate and
+  //    its part's gate.
+  // Every other memory is cut and gated as before. `dropped` counts all three: the two rules up
+  // to the cut, and the gate after it.
+  const searched = new Set([...lexicalAllLegs.flat(2), ...denseAllLegs.flat(2)].map((h) => h.id));
+  const timeOnlyDropped = (id: string): boolean =>
+    timeRange !== undefined && !searched.has(id) && !relevant(id);
+  const headDropped = (id: string): boolean =>
+    partOf.has(id) && !relevant(id) && !relevantToPart(id);
+  const candidates: typeof ordered = [];
+  let droppedEarly = 0;
+  for (const f of ordered) {
+    if (candidates.length >= config.recall.returnK) break;
+    if (timeOnlyDropped(f.id) || headDropped(f.id)) droppedEarly++;
+    else candidates.push(f);
+  }
   let kept = candidates.filter((f) => relevant(f.id) || relevantToPart(f.id));
-  const dropped = candidates.length - kept.length;
+  const dropped = droppedEarly + candidates.length - kept.length;
 
   // Linked memories never take a hit's place: at most `admit` are added beside the hits, each
   // through the gate a hit passes, and only from a hit that passed it too. They are chosen here
@@ -684,7 +800,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
       if (ask !== undefined) {
         try {
           const answer = await ask.call(deps.decide, {
-            query: text,
+            query: asked,
             memories: live.map((f) => {
               const rs = rerankScores.get(f.id);
               return {
@@ -741,6 +857,7 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
     const dr = denseRank.get(f.id) ?? -1;
     const rs = rerankScores.get(f.id);
     const ds = denseScore.get(f.id);
+    const tr = timeRank.get(f.id) ?? -1;
     out.push({
       ...m,
       explanation: {
@@ -751,6 +868,9 @@ export async function recall(q: RecallQuery, deps: RecallDeps): Promise<RecallRe
         ...(rs !== undefined ? { reranked: rs } : {}),
         coverage: coverage.get(f.id) ?? 0,
         ...(ds !== undefined ? { dense: ds } : {}),
+        ...(tr >= 0 && timeRange !== undefined
+          ? { timeRank: tr + 1, time: timeScore(m, timeRange) }
+          : {}),
         activation: activation(m.accessLog, m.salience, now, config.activation),
         hydrated: false,
         ...(partOf.has(f.id) && { part: partOf.get(f.id)! + 1 }),
@@ -988,7 +1108,12 @@ function viewFor(
   q: RecallQuery,
   text: string,
   now: Date,
-): { view: TemporalView; temporal: RecallTemporal; text: string } {
+): {
+  view: TemporalView;
+  temporal: RecallTemporal;
+  text: string;
+  fast?: { text?: string; gate?: string };
+} {
   const at = (iso: string | undefined) => iso ?? now.toISOString();
   let view: TemporalView;
   let inferred = false;
@@ -1010,6 +1135,15 @@ function viewFor(
     };
     inferred = true;
     search = i.text ?? text;
+    if (i.range !== undefined) {
+      const temporal: RecallTemporal = { ...view, inferred, range: i.range };
+      if (i.shape !== undefined) temporal.shape = i.shape;
+      const fast = {
+        ...(i.fastText !== undefined && { text: i.fastText }),
+        ...(i.fastGate !== undefined && { gate: i.fastGate }),
+      };
+      return { view, temporal, text: search, fast };
+    }
   }
   return { view, temporal: { ...view, inferred }, text: search };
 }
@@ -1285,6 +1419,10 @@ function labelFor(m: RecalledMemory, labelled: boolean, now: Date): string {
   const parts: string[] = [m.type];
   if (labelled && m.origin !== undefined) parts.push(m.origin.node);
   parts.push(when(m, now));
+  // When what it tells of happened, when it states a date: the reader need not work it
+  // out from "last Friday".
+  const happened = (m.occurred ?? []).filter((o) => o.source !== 'mention').slice(0, 2);
+  if (happened.length > 0) parts.push(`happened ${happened.map(formatRange).join(', ')}`);
   // Reached through a link, not by the search: said in the label, never with the entity's name.
   if (m.explanation.via !== undefined) parts.push('linked');
   if (m.origin?.overriddenBy !== undefined)

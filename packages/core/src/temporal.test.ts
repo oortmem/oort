@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkWriterDate, factInterval, temporalIntent } from './temporal.js';
+import { checkWriterDate, factInterval, rangeWordsOut, temporalIntent } from './temporal.js';
 
 // A Wednesday.
 const AT = new Date('2026-11-04T10:00:00.000Z');
@@ -199,8 +199,67 @@ describe('temporalIntent', () => {
   it('temporal.intent-a-bare-date-is-a-keyword-not-as-of', () => {
     expect(temporalIntent('2026-05-16 connection pooling tsup', AT)).toEqual({ mode: 'current' });
     expect(temporalIntent('2026-09-16', AT)).toEqual({ mode: 'current' });
-    // A relative past day needs no preposition.
-    expect(temporalIntent('what did we deploy yesterday', AT).mode).toBe('as-of');
+    // A relative past day needs no preposition. "What did we deploy" asks about an event, so it is
+    // a range to rank by, not an as-of filter.
+    expect(temporalIntent('what did we deploy yesterday', AT)).toEqual({
+      mode: 'current',
+      range: {
+        from: '2026-11-03T00:00:00.000Z',
+        to: '2026-11-04T00:00:00.000Z',
+        precision: 'day',
+      },
+      shape: 'range',
+      fastText: 'what did we deploy',
+      fastGate: 'what did we deploy',
+    });
+  });
+
+  it('temporal.a-part-loses-its-own-time-and-what-is-left-of-the-questions', () => {
+    // A part of a split question that names its own time.
+    expect(rangeWordsOut('buy standing desk two weeks ago', AT)).toEqual({
+      text: 'buy standing desk',
+      gate: 'buy standing desk',
+    });
+    // The split dropped "last": "week" alone names nothing, yet is a word of the question's time.
+    expect(rangeWordsOut('buy standing desk week', AT, 'last week')).toEqual({
+      text: 'buy standing desk',
+      gate: 'buy standing desk',
+    });
+    // The word left of the question's time is the last one: "the week planner" keeps its own.
+    expect(rangeWordsOut('fix the week planner week', AT, 'last week')).toEqual({
+      text: 'fix the week planner',
+      gate: 'fix the week planner',
+    });
+    // A calendar name stays in the search (unchanged: no `text`), never in the gate.
+    expect(rangeWordsOut('buy desk Saturday', AT, 'last Saturday')).toEqual({ gate: 'buy desk' });
+    // No time in the part or the question: nothing to drop.
+    expect(rangeWordsOut('buy desk', AT)).toEqual({});
+  });
+
+  it('temporal.a-part-that-is-only-a-time-says-so', () => {
+    // Nothing is left to gate on: the part is the question's time, which the time channel serves.
+    const r = rangeWordsOut('in March 2024', new Date('2024-06-01T10:00:00.000Z'), 'March 2024');
+    expect(r.timeOnly).toBe(true);
+    expect(r.gate).toBeUndefined();
+  });
+
+  it('temporal.intent-range-words-without-a-reranker', () => {
+    // A relative range names nothing a memory says: both drop it.
+    expect(temporalIntent('Which book did I finish a week ago?', AT)).toMatchObject({
+      fastText: 'Which book did I finish?',
+      fastGate: 'Which book did I finish?',
+    });
+    // Calendar names stay in the search, never in the gate's word count.
+    expect(temporalIntent('Who did I go with to the music event last Saturday?', AT)).toMatchObject(
+      {
+        fastText: 'Who did I go with to the music event? Saturday',
+        fastGate: 'Who did I go with to the music event?',
+      },
+    );
+    expect(temporalIntent('what did we ship from July to October?', AT)).toMatchObject({
+      fastText: 'what did we ship from? July October',
+      fastGate: 'what did we ship from?',
+    });
   });
 
   it('temporal.intent-a-future-date-is-not-as-of', () => {

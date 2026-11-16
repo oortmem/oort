@@ -1,4 +1,5 @@
 import type { Address, Author, Provenance } from './address.js';
+import type { Occurrence } from './event-time.js';
 import type { Judgment } from './judgment.js';
 import type { Place } from './place.js';
 
@@ -98,6 +99,14 @@ export interface Memory {
    * every memory without one. Stores that set `MemoryStore.spatial` keep it and filter by it.
    */
   place?: Place;
+  /**
+   * When what it describes happened (event time), resolved in code from its text against
+   * the turn it was written in: the dates it states ("on 2023-05-20", "last weekend"), widened to
+   * what they name, then the day it was said (`source: 'mention'`). Absent on memories written
+   * without it; recall then takes `validFrom` as the day it was said. Stores that set
+   * `MemoryStore.occurrences` keep it and read it by range (`occurredIn`).
+   */
+  occurred?: Occurrence[];
   embedding?: Int8Array;
   createdAt: string;
   updatedAt: string;

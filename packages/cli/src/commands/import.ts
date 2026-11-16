@@ -9,6 +9,7 @@ import {
   importedJudgment,
   judgmentText,
   nodeGrant,
+  occurredFor,
   type Decision,
   type Judgment,
   type JudgmentPackOrigin,
@@ -651,7 +652,14 @@ export async function importFileCommand(
       );
       batch.forEach((m, k) => {
         const v = vectors[k];
-        ready.push({ ...m, ...(v !== undefined && { embedding: v }) });
+        ready.push({
+          ...m,
+          // When what it tells of happened: from the file (version 2, checked strictly when the
+          // line was read), else read from its text against when it was stored, as the store
+          // migration reads it. A reading a store would refuse leaves it out; the line still lands.
+          ...occurredOf(m),
+          ...(v !== undefined && { embedding: v }),
+        });
       });
     }
     // The file's explicit links between two memories this import writes (CON-148), asserted by
@@ -672,4 +680,10 @@ export async function importFileCommand(
     if (json) emit(ctx, { outcome: 'imported', ...result(ready.length, linked) });
     return 0;
   });
+}
+
+/** A line's event time: the file's own, else read from its text; nothing when neither holds. */
+function occurredOf(m: Memory): Pick<Memory, 'occurred'> {
+  const occurred = m.occurred ?? occurredFor(m.text, new Date(m.createdAt));
+  return occurred === undefined ? {} : { occurred };
 }

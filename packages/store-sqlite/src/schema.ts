@@ -1,16 +1,20 @@
 import type { Database } from 'better-sqlite3';
 import {
+  checkOccurrences,
   checkPlace,
   entityKeys,
   hasSegmentedScript,
   lexicalIcuVersion,
   LEXICAL_VERSION,
   nodeKey,
+  occurrencesOf,
   placeBox,
   tokenizerForVersion,
   type NodeRef,
 } from '@oortmem/core';
 import { BINARY_AUTO_THRESHOLD, binaryCode, bitWidth } from './binary.js';
+
+const DAY_MS = 86_400_000;
 import { startRabitqBuild, dropRabitqIndex, hasRabitqIndex } from './rabitq-store.js';
 
 /**
@@ -53,8 +57,14 @@ import { startRabitqBuild, dropRabitqIndex, hasRabitqIndex } from './rabitq-stor
  *    removes the row's terms from the index at once, so `forget` no longer merges the index. The
  *    guard triggers call `oort_writer_v9()`. The migration rebuilds the index from the stored
  *    rows in one transaction; nothing else changes.
+ * 10: event time. A nullable column, `occurred` (a memory's occurrences as JSON), and
+ *    `memory_occurred` (`OCCURRED_TABLE`): one row per occurrence, its interval in epoch ms and
+ *    whether the text stated it, indexed by start so a range read is one bounded index range.
+ *    Rows cascade with their memory. The guard triggers call `oort_writer_v10()`, so a writer that
+ *    predates it (which would leave the rows behind) fails loudly. The migration fills both from
+ *    each stored memory's text, read against the time it was stored (`created_at`).
  */
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * The binary index (schema version 6): one row per searchable (hot or warm) vector, with its
@@ -69,7 +79,10 @@ export const BIT_TABLE = 'memories_vec_bit';
  * defines it with `defineWriterGuard`; one that does not (an Oort that predates version 9) gets
  * `no such function: oort_writer_v9` and writes nothing.
  */
-export const WRITER_GUARD = 'oort_writer_v9';
+export const WRITER_GUARD = 'oort_writer_v10';
+
+/** The version 9 guard's function, which a downgrade to version 9 puts back. */
+const WRITER_GUARD_V9 = 'oort_writer_v9';
 
 /** The version 8 guard's function, which a downgrade to version 8 puts back. */
 const WRITER_GUARD_V8 = 'oort_writer_v8';
@@ -78,6 +91,9 @@ const WRITER_GUARD_V8 = 'oort_writer_v8';
 const WRITER_GUARD_V7 = 'oort_writer_v7';
 /** The version 6 guard's function, which a downgrade to version 6 puts back. */
 const WRITER_GUARD_V6 = 'oort_writer_v6';
+
+/** The event-time index of schema version 10. */
+export const OCCURRED_TABLE = 'memory_occurred';
 
 /** The link tables of schema version 8 (CON-148). */
 export const NODE_TABLE = 'nodes';
@@ -1118,7 +1134,7 @@ export function migrateV8toV7(db: Database, dropLinks = false): void {
  */
 export function migrateV8toV9(db: Database, icu = lexicalIcuVersion()): number {
   dropWriterGuard(db);
-  createWriterGuard(db);
+  createWriterGuard(db, WRITER_GUARD_V9);
   return isLexicalIndexV9(db) ? 0 : rebuildFts(db, 2, icu);
 }
 
@@ -1133,6 +1149,149 @@ export function migrateV9toV8(db: Database, rebuild = true): void {
   else db.exec(`DROP TABLE IF EXISTS ${FTS_VALUES_TABLE}`);
   dropWriterGuard(db);
   createWriterGuard(db, WRITER_GUARD_V8);
+}
+
+/**
+ * An occurrence at most this many days long is short: a day, a week, a month, a weekend. The
+ * range read looks for short ones only from this long before the range, and for the few long
+ * ones (a season, a year, "the past few months") from `MAX_OCCURRENCE_DAYS` before it.
+ */
+export const SHORT_OCCURRENCE_DAYS = 32;
+
+/**
+ * A memory's occurrence rows: each interval in epoch ms, 1 when the text stated it (not the
+ * `mention` day), and 1 when it is longer than `SHORT_OCCURRENCE_DAYS`. Invalid or missing JSON
+ * gives none.
+ */
+export function occurrenceRows(
+  json: string | null,
+): { from: number; to: number; stated: number; long: number }[] {
+  if (json === null) return [];
+  try {
+    return checkOccurrences(JSON.parse(json)).map((o) => {
+      const from = Date.parse(o.from);
+      const to = Date.parse(o.to);
+      return {
+        from,
+        to,
+        stated: o.source === 'mention' ? 0 : 1,
+        long: to - from > SHORT_OCCURRENCE_DAYS * DAY_MS ? 1 : 0,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The event-time schema of version 10. `memory_occurred_from` leads with `long`, then the start,
+ * so a read for a range is two index ranges: short occurrences that start in
+ * [from - SHORT_OCCURRENCE_DAYS, to), and long ones (never longer than `MAX_OCCURRENCE_DAYS`)
+ * that start in [from - MAX_OCCURRENCE_DAYS, to). A read for one day walks a month of rows, not a
+ * year of them.
+ */
+function createOccurrenceSchema(db: Database): void {
+  db.exec(`
+    ALTER TABLE memories ADD COLUMN occurred TEXT;
+    CREATE TABLE ${OCCURRED_TABLE} (
+      memory_rid INTEGER NOT NULL REFERENCES memories(rid) ON DELETE CASCADE,
+      from_ms    INTEGER NOT NULL,
+      to_ms      INTEGER NOT NULL,
+      stated     INTEGER NOT NULL CHECK (stated IN (0, 1)),
+      long       INTEGER NOT NULL CHECK (long IN (0, 1)),
+      CHECK (to_ms > from_ms)
+    );
+    CREATE INDEX memory_occurred_from ON ${OCCURRED_TABLE} (long, from_ms, to_ms, stated, memory_rid);
+    CREATE INDEX memory_occurred_rid ON ${OCCURRED_TABLE} (memory_rid);
+  `);
+}
+
+/** A refined memory's text was last rewritten when it was last updated, not when it was made. */
+function rewrittenAt(row: { created_at: string; updated_at: string; source: string }): number {
+  try {
+    const decisions = (JSON.parse(row.source) as { decisions?: unknown }).decisions;
+    const refined =
+      Array.isArray(decisions) &&
+      decisions.some(
+        (d: { stage?: unknown; question?: unknown }) =>
+          d?.stage === 'refine' && d?.question === 'previous-text',
+      );
+    if (refined) {
+      const t = Date.parse(row.updated_at);
+      if (Number.isFinite(t)) return t;
+    }
+  } catch {
+    // An unreadable source: the time it was made.
+  }
+  return Date.parse(row.created_at);
+}
+
+/**
+ * Version 9 to 10, inside the caller's transaction: the guard triggers call
+ * `oort_writer_v10`, the event-time schema is created, and it is filled from the stored rows:
+ * each memory's occurrences are read from its text against the time the text was written (when
+ * it was made, or for a refined memory when it was last updated), in UTC, as the write path reads
+ * a turn against the turn's time. The turn's own UTC offset is not stored, so it is not used. A
+ * text the reader fails on keeps only the day it was written; one with no readable time keeps
+ * none. Returns how many memories it read.
+ */
+export function migrateV9toV10(db: Database): number {
+  dropWriterGuard(db);
+  createOccurrenceSchema(db);
+  const page = db.prepare<
+    [number],
+    { rid: number; text: string; created_at: string; updated_at: string; source: string }
+  >(
+    `SELECT rid, text, created_at, updated_at, source FROM memories WHERE rid > ? ORDER BY rid LIMIT 1000`,
+  );
+  const set = db.prepare<[string, number]>('UPDATE memories SET occurred = ? WHERE rid = ?');
+  const insert = db.prepare<[number, number, number, number, number]>(
+    `INSERT INTO ${OCCURRED_TABLE} (memory_rid, from_ms, to_ms, stated, long) VALUES (?, ?, ?, ?, ?)`,
+  );
+  let after = -Infinity;
+  let n = 0;
+  // Paged by rid: better-sqlite3 cannot write while a statement iterates.
+  for (;;) {
+    const rows = page.all(after);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      after = r.rid;
+      const t = rewrittenAt(r);
+      if (Number.isNaN(t)) continue;
+      let json: string | undefined;
+      try {
+        json = JSON.stringify(occurrencesOf(r.text, new Date(t)));
+      } catch {
+        // One text the reader fails on must not keep the store from opening.
+        try {
+          json = JSON.stringify(occurrencesOf('', new Date(t)));
+        } catch {
+          json = undefined;
+        }
+      }
+      if (json === undefined) continue;
+      set.run(json, r.rid);
+      for (const o of occurrenceRows(json)) insert.run(r.rid, o.from, o.to, o.stated, o.long);
+      n++;
+    }
+  }
+  createWriterGuard(db);
+  return n;
+}
+
+/**
+ * Version 10 back to 9, inside the caller's transaction: drops the event-time schema and puts
+ * the version 9 guard back. Nothing is refused, but nothing of it is kept: going up again reads
+ * event time anew from each memory's text, so what the text does not say (the turn's UTC offset,
+ * `occurred` set by an SDK caller or a version 2 import) is lost.
+ */
+export function migrateV10toV9(db: Database): void {
+  db.exec(`
+    DROP TABLE IF EXISTS ${OCCURRED_TABLE};
+    ALTER TABLE memories DROP COLUMN occurred;
+  `);
+  dropWriterGuard(db);
+  createWriterGuard(db, WRITER_GUARD_V9);
 }
 
 /**
@@ -1352,6 +1511,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       createLexicalIndex(db);
       recordLexical(db, opts.icu ?? lexicalIcuVersion());
       migrateV8toV9(db);
+      migrateV9toV10(db);
     } else if (version === '1') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 1);
       assertMigratable(db);
@@ -1364,6 +1524,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV6toV7(db);
       migrateV7toV8(db);
       migrateV8toV9(db);
+      migrateV9toV10(db);
     } else if (version === '2') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 2);
       rebuilding();
@@ -1374,6 +1535,7 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV6toV7(db);
       migrateV7toV8(db);
       migrateV8toV9(db);
+      migrateV9toV10(db);
     } else if (version === '3') {
       if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, 3);
       rebuilding();
@@ -1383,26 +1545,31 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
       migrateV6toV7(db);
       migrateV7toV8(db);
       migrateV8toV9(db);
+      migrateV9toV10(db);
     } else if (
       version === '4' ||
       version === '5' ||
       version === '6' ||
       version === '7' ||
       version === '8' ||
+      version === '9' ||
       version === String(SCHEMA_VERSION)
     ) {
       // Version 4 to 5 adds columns and an empty index, 5 to 6 and 6 to 7 the writer guard, 7 to
       // 8 the link schema filled from stored rows: no rebuild, and no notice. 8 to 9 rebuilds the
-      // lexical index (CON-159), and says so.
-      const older = ['4', '5', '6', '7', '8'];
+      // lexical index (CON-159), and says so. 9 to 10 reads each memory's event time.
+      const older = ['4', '5', '6', '7', '8', '9'];
       if (older.includes(version)) {
         if (opts.migrate === false) throw new StoreMigrationRequiredError(db.name, Number(version));
         if (version === '4') migrateV4toV5(db);
         if (version === '4' || version === '5') migrateV5toV6(db);
-        if (version !== '7' && version !== '8') migrateV6toV7(db);
-        if (version !== '8') migrateV7toV8(db);
-        if (!isLexicalIndexV9(db)) rebuilding();
-        migrateV8toV9(db, opts.icu ?? lexicalIcuVersion());
+        if (version !== '7' && version !== '8' && version !== '9') migrateV6toV7(db);
+        if (version !== '8' && version !== '9') migrateV7toV8(db);
+        if (version !== '9') {
+          if (!isLexicalIndexV9(db)) rebuilding();
+          migrateV8toV9(db, opts.icu ?? lexicalIcuVersion());
+        }
+        migrateV9toV10(db);
       }
       // An index to repair is a migration: an open that may not migrate (a hook) refuses, changing
       // nothing, rather than create an empty index that would then look current. The same for a
@@ -1461,7 +1628,8 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
  * spatial memory (0.8), 5 for Oort before the binary vector index, 6 for Oort before the RaBitQ
  * index (the RaBitQ index is dropped, a binary index kept), 7 for Oort before memory links (the
  * link schema is dropped), 8 for Oort before version 9's lexical index (it is rebuilt as version
- * 8's, with `contentless_delete` and no `FTS_VALUES_TABLE`). Refuses, changing nothing, when the
+ * 8's, with `contentless_delete` and no `FTS_VALUES_TABLE`), 9 for Oort before event time (the
+ * `occurred` column and its index are dropped). Refuses, changing nothing, when the
  * store holds anything that version cannot represent (see `migrateV2toV1`, `migrateV3toV2`,
  * `migrateV5toV4` and `migrateV8toV7`). Leaving version 6 drops the binary index and the writer
  * guard; leaving version 4 rebuilds the lexical index with tokeniser v1. No other connection may
@@ -1469,19 +1637,23 @@ export function applySchema(db: Database, dimension: number, opts: ApplySchemaOp
  */
 export function downgradeSchema(
   db: Database,
-  to: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 = 1,
+  to: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 = 1,
   opts: { dropLinks?: boolean } = {},
 ): void {
   db.transaction(() => {
     const get = db.prepare<[string], { value: string }>('SELECT value FROM meta WHERE key = ?');
     let version = Number(get.get('schema_version')?.value);
     if (version <= to && version >= 1) return;
-    if (![2, 3, 4, 5, 6, 7, 8, 9].includes(version)) {
+    if (![2, 3, 4, 5, 6, 7, 8, 9, 10].includes(version)) {
       throw new Error(
         `sqlite store: cannot downgrade schema version ${Number.isNaN(version) ? 'unknown' : version}`,
       );
     }
-    if (version === 9) {
+    if (version === 10) {
+      migrateV10toV9(db);
+      version = 9;
+    }
+    if (version === 9 && to < 9) {
       // Below 4 the index is rebuilt with tokeniser v1 anyway: one rebuild, not two.
       migrateV9toV8(db, to >= 4);
       version = 8;

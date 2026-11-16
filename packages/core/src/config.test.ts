@@ -57,6 +57,7 @@ describe('config', () => {
         factors: { explicit: 1, episode: 0.5, about: 0.6 },
       },
       userLinks: true,
+      timeChannel: true,
     });
     expect(c.project).toEqual({ private: false });
     expect(c.sources['embed']).toBe('default');

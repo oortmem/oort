@@ -581,6 +581,58 @@ describe('oort import <file> (CON-137)', () => {
     expect((await h.run(['inspect', 'poison'])).code).toBe(0);
   });
 
+  it('cli.import-file-reads-when-a-memory-happened-from-its-text', async () => {
+    // A version 1 file holds no event time: it is read from the text against when it was stored.
+    const h = await onSqlite();
+    const said = '2025-05-22T10:00:00.000Z';
+    const f = craftedFile(h, 'event-time.jsonl', [
+      craftedLine('hike', {
+        text: 'I went hiking with Sam last weekend.',
+        createdAt: said,
+        updatedAt: said,
+        validFrom: said,
+      }),
+    ]);
+    const r = await h.run(['import', f, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(0);
+    const [m] = await all(h.sqlite);
+    expect(m?.occurred?.[0]).toEqual({
+      from: '2025-05-17T00:00:00.000Z',
+      to: '2025-05-19T00:00:00.000Z',
+      precision: 'span',
+      source: 'relative',
+    });
+    expect(m?.occurred?.at(-1)).toMatchObject({
+      from: '2025-05-22T00:00:00.000Z',
+      source: 'mention',
+    });
+  });
+
+  it('cli.import-file-lands-a-line-whose-dates-no-store-can-hold', async () => {
+    // A year before year 0 has no plain ISO 8601 form: the line lands with the day it was stored.
+    const h = await onSqlite();
+    const said = '2025-05-22T10:00:00.000Z';
+    const f = craftedFile(h, 'bc.jsonl', [
+      craftedLine('creation', {
+        text: 'Some thinkers agreed upon June 12, 5012 BC at noon as the date of Creation.',
+        createdAt: said,
+        updatedAt: said,
+        validFrom: said,
+      }),
+    ]);
+    const r = await h.run(['import', f, '--yes', '--json']);
+    expect(r.code, r.io.stderr).toBe(0);
+    const [m] = await all(h.sqlite);
+    expect(m?.occurred).toEqual([
+      {
+        from: '2025-05-22T00:00:00.000Z',
+        to: '2025-05-23T00:00:00.000Z',
+        precision: 'day',
+        source: 'mention',
+      },
+    ]);
+  });
+
   it('cli.import-file-normalises-times-and-keeps-links-within-the-file', async () => {
     // Times are normalised (an unreadable one makes the line
     // not valid; one ahead of now is clamped to now), an end is kept only when consistent (an end

@@ -37,6 +37,11 @@ export interface RecalledFact {
    * (CON-149): the link's kind, the id it was reached from, and a weight from 0 to 1.
    */
   via?: { kind: string; from: string; weight: number };
+  /**
+   * When what it tells of happened, when it states a time (`2023-05-20`, `2023-03`,
+   * `2023-05-20 to 2023-05-21`), resolved from its text against when it was said.
+   */
+  happened?: string;
 }
 
 export interface RecallOutput {

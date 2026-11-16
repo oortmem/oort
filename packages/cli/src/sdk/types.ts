@@ -416,7 +416,11 @@ export interface RecallOptions {
   includeWithdrawn?: boolean;
   /** `full`: embed and rerank; `fast`: no rerank; `lexical`: no model call. */
   speed?: 'full' | 'fast' | 'lexical';
-  /** Default true: "on 2 April" picks as-of, as the CLI and MCP do. */
+  /**
+   * Default true, as the CLI and MCP do: a past time in the query ranks the results ("where did
+   * I go in March"), and a question about a state then ("which port did we use on 2 April") picks
+   * as-of. False: the current view, ranked without the time.
+   */
   inferTime?: boolean;
   /**
    * Only memories whose place path contains this path as whole segments (`room:B` keeps
