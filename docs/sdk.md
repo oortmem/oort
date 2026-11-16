@@ -122,6 +122,11 @@ Keys given in code stay in memory. They are kept out of every enumerable field, 
 | `judge.listPredictions({ status?, limit?, domain? })` | `{ predictions }`                   | yes   | `refused`                 |
 | `judge.getPrediction(id)` / `judge.forgetPrediction(id)` | `PredictionView` / `{ id, forgotten }` | yes | `refused`               |
 | `judge.evalLive({ domain?, includeAgentResolved? })` | `LiveEvalView`                       | yes   | `refused`                 |
+| `feedback({ memoryId, signal, note?, query? })` | `FeedbackResultView` (`kept`, `feedback`, `applied?`, `reason?`) | yes | `refused` |
+| `feedback.list({ status?, memoryId?, signal?, limit? })` | `{ feedback }`                    | yes   | `refused`                 |
+| `feedback.confirm(id)` / `feedback.dismiss(id)` | `FeedbackView`                            | expert role only | `refused`      |
+| `feedback.retire(id)`                          | `{ feedback, memoryId, endReason }`        | expert role only | `refused`      |
+| `feedback.supersede(id, fact)`                 | `{ feedback, memoryId, supersedes, redacted }` | expert role only | `refused`  |
 | `consolidate({ budgetMs?, signal? })`          | `ConsolidateResult`                        | yes   | `refused`                 |
 | `scoped({ user?, project?, agent?, judgeRole? })` | a new handle                            | yes   | yes (`user`: a server key) |
 | `endUsers.erase(user)`                         | `EndUserErasure` (`erased`, `memories`, `coldCopies`, `turnRefs`, `cursors`) | `cloud-only` | a server key |
@@ -168,8 +173,9 @@ date without `mode` picks its view, and with neither `inferTime` decides.
 on the way out), `type`, `tier`, `pinned`, `status` (`current`, `superseded`, `corrected`,
 `expired`, `not-yet-valid` or `withdrawn`), `validFrom`, `validTo`, `recordedAt`, `updatedAt`,
 `entities`, `origin`, for a judgment, `judgment`, and for a memory remembered with one (0.9.0 or
-newer), `place`. Recalled memories add `score` (comparable within one result only), `stale` and
-`why` (`@experimental`). A degraded recall is not an error:
+newer), `place`. Recalled memories add `score` (comparable within one result only), `stale`, `why`
+(`@experimental`) and, for a memory a person reported wrong or stale, `contested` (see
+[Recall feedback](#recall-feedback)). A degraded recall is not an error:
 it returns what it found and fills `degraded` and `warnings` (`lexical-only`, `recall-degraded`,
 `time-mode-unreported`). Ignore result fields you do not know: new ones may appear in any release.
 
@@ -1195,6 +1201,74 @@ console.log(removed.removed); // true
 - In cloud mode `link` and `unlink` reject with `OortRefusedError` (`reason: 'local-only'`),
   `explain().links` is empty, and recall follows no link: `why.via` never appears, and a home
   config with `recall.links.enabled` adds the warning `links-local-only` to each recall.
+
+## Recall feedback
+
+Feedback says what a recalled memory was worth: it `helped`, it is `wrong`, it is `stale` (out of
+date), or it was `irrelevant` to a query (local mode). There is no recall log: you name the memory
+by its id, and for `irrelevant` you pass the query it was recalled for.
+
+<!-- example: examples/src/feedback.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+// A review screen where a person reads what was recalled runs in the expert role.
+await using person = await createOort({
+  mode: 'local',
+  judge: { role: 'expert', operator: 'ada' },
+});
+
+const saved = await person.remember(['The staging database runs Postgres 15.']);
+const memoryId = saved.results[0]!.id!;
+
+// Model-facing code runs in the agent role: its feedback waits for a person.
+const agent = person.scoped({ judgeRole: 'agent' });
+const draft = await agent.feedback({ memoryId, signal: 'wrong', note: 'Upgraded to 16 in May.' });
+console.log(draft.kept && draft.feedback.status); // pending
+
+// Nothing changes until the person confirms it. Then recall labels the memory contested.
+const pending = await person.feedback.list({ status: 'pending' });
+await person.feedback.confirm(pending.feedback[0]!.id);
+const r = await person.recall('staging database version');
+console.log(r.memories.find((m) => m.id === memoryId)?.contested?.signal); // wrong
+
+// The person resolves it: store the right fact, and the old memory ends superseded.
+const done = await person.feedback.supersede(
+  pending.feedback[0]!.id,
+  'The staging database runs Postgres 16.',
+);
+console.log(done.supersedes === memoryId, done.feedback.status); // true superseded
+```
+
+**Who counts.** The judge role decides, as for judgments. A handle in the expert role is a person:
+its feedback counts at once (`via: 'sdk'`), and only it may `confirm`, `retire`, `supersede` or
+`dismiss`; an agent handle is refused (`expert-only`). A handle in the agent role (the default)
+gives feedback as an MCP agent does: kept `pending`, with no effect on recall until a person
+confirms it. An agent names a memory by its whole id; a person may use a unique prefix.
+
+**What each signal does.**
+
+- `helped` adds `feedback.helpedAccesses` accesses (home config, default 2, 0 turns it off) to the
+  memory's access log at the current time, so it ranks as if it had just been used that often. One
+  `helped` per memory and person counts per UTC day; a later one is kept with `applied: false` and
+  `reason: 'already-helped-today'`.
+- `wrong` and `stale` open a correction. Ranking does not change and no memory is ended. Recall
+  returns the memory with `contested: { feedbackId, signal, note?, by, at }`, and `formatForPrompt`
+  adds `(contested: wrong, note: "...")` to its line, until a person resolves it:
+  - `feedback.retire(id)` ends the memory now: `corrected` for `wrong` (it never held), `expired`
+    for `stale` (it held until now).
+  - `feedback.supersede(id, fact)` stores `fact` (one line, at most 500 characters, scrubbed of
+    secrets) as a new memory, and the old one ends `superseded`.
+  - `feedback.dismiss(id)` closes the feedback and keeps the memory as it is.
+- `irrelevant` keeps the pair of query and memory id. Recall does not use it yet.
+
+**Limits and races.** `note` and `query` are scrubbed of secrets, made one line and cut to 500
+characters. One agent keeps at most 5,000 pending rows in one place; past that, `feedback()`
+returns `{ kept: false, reason: 'pending-cap' }`. Each resolve changes the feedback row in one
+guarded write: when two run at once, one wins and the other rejects with `OortRefusedError`
+(`already-resolved` or `conflict`), its message saying where the row stands. A memory change it
+made is undone first. `forget(id)` deletes every feedback row about the memory, whoever gave it.
 
 ## Stability
 

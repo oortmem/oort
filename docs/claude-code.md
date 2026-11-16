@@ -318,6 +318,16 @@ The last line is a volatile fact (a status, a current version, an owner) that no
 within `recall.staleAfterDays` (default 30). `oort revalidate` lists them; confirming one in a
 session clears the note.
 
+A memory you reported wrong or out of date with `oort feedback` keeps its place and carries your
+note until you resolve it (see [Recall feedback](cli.md#recall-feedback-oort-feedback)):
+
+```text
+- [semantic, 3mo ago] auth-service listens on port 3000 in local development. (contested: wrong, note: "It is 8080 now.")
+```
+
+When Claude passes on what you said through the MCP `feedback` tool, nothing changes until you
+run `oort feedback confirm <id>`.
+
 A memory that states when what it tells of happened says so in its label, resolved against the
 day it was said, so the model need not work out "last weekend" itself:
 

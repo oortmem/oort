@@ -212,6 +212,11 @@ describe('SDK examples (run)', () => {
     expect(out).toEqual(['true agent', 'explicit agent 0', 'true']);
   });
 
+  it('feedback: an agent reports a wrong memory, a person confirms and supersedes it', async () => {
+    const { out } = await runExample('feedback.ts');
+    expect(out).toEqual(['pending', 'wrong', 'true superseded']);
+  });
+
   it('spatial: remembers ten things in three rooms, recalls within a room and near a point', async () => {
     const { out } = await runExample('spatial.ts');
     const rows = out.map((l) => l.split(' | '));
