@@ -1137,6 +1137,10 @@ oort feedback 1b2c3d4e irrelevant --query "billing service port"
 oort feedback list --status open
 ```
 
+At a terminal, `oort feedback` asks you to confirm before it records, as `interactive`; `--yes`
+skips the question and records `integration` (see
+[Where a label came from](#where-a-label-came-from)).
+
 | Signal | What it does |
 | --- | --- |
 | `helped` | Adds `feedback.helpedAccesses` accesses (home config, default 2; 0 turns it off) to the memory's access log at the current time, so it ranks as if it had just been used that often. One `helped` per memory and person counts per UTC day; a later one is kept with `applied: false`, `reason: "already-helped-today"`. |
@@ -1926,6 +1930,10 @@ oort judge resolve <prediction-id> --verdict approved --reason "Labelled satire.
 oort judge eval --live
 ```
 
+At a terminal, `oort judge record` and `oort judge resolve` ask you to confirm the label before
+they write it, and record it as `interactive`; `--yes` skips the question and records
+`integration` (see [Where a label came from](#where-a-label-came-from)).
+
 `oort judgment` is the same command as `oort judge`.
 
 A judgment is a memory of type `judgment`. It holds:
@@ -2135,34 +2143,66 @@ Judgment memory is local for now: in cloud mode the `oort judge` commands refuse
 
 Every judgment, every resolve of a prediction, and every feedback row records how it arrived, as
 `origin`. It tells a later reader, such as an export of training data, how the label reached
-Oort. It is how a label arrived, not proof that a person made it: a program can drive a terminal,
-and an integration can name any reviewer it likes.
+Oort. It is how a label arrived, not proof that a person made it.
 
 | Origin | How the label arrived |
 | --- | --- |
-| `interactive` | `oort judge` or `oort feedback` with stdin and stdout both a terminal, and no `--yes` or `--json`. |
-| `dashboard` | The Oort Cloud dashboard. Nothing local sets it. |
-| `connector` | An upstream connector, with `upstream` naming the system and who made the label there. Nothing local sets it yet. |
-| `integration` | Code: the SDK or `oort serve` in the expert role, and any CLI call that is not interactive (`--yes`, `--json`, piped stdin or piped stdout). The SDK may pass a `reviewer`, which is kept as the integration states it. |
+| `interactive` | A person answered a confirmation prompt for this label at a terminal, unless something on that machine drove the terminal for them. See below. |
+| `dashboard` | The Oort Cloud dashboard. The CLI, the SDK, `oort serve` and MCP never record it, and neither does `@oortmem/core` for any other caller: asking for it records `integration`. |
+| `connector` | An upstream connector, with `upstream` naming the system and who made the label there. Kept only as `dashboard` is. |
+| `integration` | Code: the SDK or `oort serve` in the expert role, and every CLI call that does not record `interactive`. The SDK may pass a `reviewer`, which is kept as the integration states it. |
 | `agent` | An agent: the MCP tools, or an SDK or `oort serve` handle in the agent role. |
 
+**When the CLI records `interactive`.** `oort judge record`, `oort judge resolve`,
+`oort judge confirm`, `oort feedback`, and `oort feedback confirm`, `retire`, `supersede` and
+`dismiss` record `interactive` only when all of these hold:
+
+- stdin and stdout are both a terminal;
+- neither `--yes` nor `--json` is given;
+- none of the agent markers below is set;
+- the command asked about this one label (its verdict or signal, and the item or the memory id)
+  on the controlling terminal (`/dev/tty`), not on stdin, and the person answered yes.
+
+A person who answers no writes nothing. In every other case the command records `integration`:
+`oort judge record`, `oort judge resolve` and `oort feedback` then do not ask at all, as before,
+and the commands that always confirm take `--yes` or a yes on stdin, as before. A script started
+from a terminal stops at the question, or records `integration` with `--yes`.
+
+The agent markers (`AGENT_ENV_MARKERS` in `@oortmem/core`) are environment variables agent
+harnesses set on the commands they run: `AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`
+(Claude Code), `CODEX_SANDBOX`, `CODEX_SANDBOX_NETWORK_DISABLED` (Codex, for a sandboxed
+command), `CURSOR_AGENT` (Cursor) and `GEMINI_CLI` (Gemini CLI). They catch the usual case, not
+a determined one.
+
+An agent that can run commands on your machine can unset those variables and drive a terminal:
+it can answer the prompt itself. So `interactive` is only as trustworthy as the shells on that
+machine. For labels you will fine-tune on, prefer the dashboard and connectors; the training
+export will let you exclude `interactive`.
+
 - Confirming an agent's label (`oort judge confirm`, `oort feedback confirm`) records your origin
-  as the row's origin and keeps the agent's as `proposedOrigin`. An agent's judgment confirmed at
-  a terminal reads `origin: interactive, proposedOrigin: agent`; the same confirm with `--yes`
+  as the row's origin and keeps the agent's as `proposedOrigin`. An agent's judgment confirmed
+  at the prompt reads `origin: interactive, proposedOrigin: agent`; the same confirm with `--yes`
   reads `origin: integration, proposedOrigin: agent`.
-- Agents cannot set an origin. The MCP tools take no origin or reviewer, and an agent-role handle
-  always records `agent`, whatever it passes.
+- `oort feedback retire`, `supersede` and `dismiss` keep how they arrived in the row's
+  `resolved` (`resolved.origin`).
+- Agents over MCP and agent-role handles always record `agent`. The MCP tools take no origin or
+  reviewer, and an agent-role handle records `agent` whatever it passes.
 - Origin changes nothing about who may do what: the rules for agents and people above stay as
   they are.
 - `oort judge import`, packs and `oort import` record `integration`: the labels came from a file.
   A pack carries no origin, so one store's origins never reach another.
+- `oort export` carries each judgment's `origin`, `reviewer` and `proposedOrigin` as stored.
+  Purging a judgment drops its `reviewer` and its upstream actor, and keeps how it arrived.
+- Recording the same decision again leaves the row as it was (`unchanged`), with the origin it
+  was first recorded with.
 - A row written before Oort kept origins has none. It reads as `agent` when an agent recorded it
-  and no person has confirmed it, and as `integration` otherwise.
+  and no person has confirmed it, and as `integration` otherwise. A stored value that is not an
+  origin reads as `integration`.
 - `oort judge list`, `oort judge predictions` and `oort feedback list` show it on each row
   (`[origin interactive, proposed agent]`), and their `--json` has `origin`, with `reviewer`,
   `upstream` and `proposedOrigin` when set.
 - An export of training data will trust only `interactive`, `dashboard` and `connector` labels
-  by default.
+  by default, and will let you exclude `interactive`.
 
 ## Keys: `oort keys`
 

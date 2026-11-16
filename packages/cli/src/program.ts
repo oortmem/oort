@@ -437,6 +437,7 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--by <expert>', "the expert's id")
     .option('--decided-at <iso>', 'when the expert decided (default now)')
     .option('--corrects <id>', 'replace this earlier judgment (it stops counting)')
+    .option('--yes', 'do not ask; the label is then recorded as integration, not interactive')
     .option('--json', 'print JSON')
     .action(run((o: JudgeRecordOptions) => judgeRecordCommand(o, ctx)));
   judge
@@ -470,6 +471,7 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--criteria <list>', 'tags the reason relies on, comma list')
     .option('--by <expert>', "the expert's id (default: judge.operator)")
     .option('--domain <name>', 'the domain for the judgment, when the prediction has none')
+    .option('--yes', 'do not ask; the label is then recorded as integration, not interactive')
     .option('--json', 'print oort.v1 JSON')
     .action(run((id: string, o: JudgeResolveOptions) => judgeResolveCommand(id, o, ctx)));
   judge
@@ -652,6 +654,7 @@ export function program(ctx: Ctx, setCode: (code: number) => void): Command {
     .option('--note <text>', 'why, in one line (for wrong and stale, what is right)')
     .option('--query <text>', 'the query the memory was recalled for (required for irrelevant)')
     .option('--by <person>', 'who gives it (default: judge.operator, else local-user)')
+    .option('--yes', 'do not ask; the label is then recorded as integration, not interactive')
     .option('--json', 'print oort.v1 JSON')
     .action(
       run((memoryId: string, signal: string, o: FeedbackGiveOptions) =>

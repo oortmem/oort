@@ -176,7 +176,7 @@ export interface Feedback extends LabelProvenance {
    * Set when a person retired, superseded or dismissed it. `claimedBy` and `claimedAt`: another
    * person claimed it first (a retire or supersede that stopped part way, finished by `by`).
    */
-  resolved?: {
+  resolved?: Pick<LabelProvenance, 'origin' | 'reviewer' | 'upstream'> & {
     at: string;
     by: string;
     supersededBy?: string;
@@ -686,7 +686,10 @@ export interface ResolveFeedbackDeps {
   grant: Grant;
   /** The person: the operator's id. */
   by: string;
-  /** How a confirm arrived (`integration` when absent); the other resolves do not use it. */
+  /**
+   * How the person's confirm, retire, supersede or dismiss arrived (`integration` when absent).
+   * A confirm keeps it as the row's origin; the others keep it in `resolved`.
+   */
   label?: LabelSource;
   helpedAccesses?: number;
   now?: Date;
@@ -958,7 +961,8 @@ async function takeOver(
     throw await lostTo(s, deps.grant, f.id, now);
   }
   if (await applied(deps.store, deps.grant, held, c, now)) {
-    throw alreadyApplied(await finish(s, deps.grant, held, c, by, now), c);
+    const label = labelOrInvalid(deps.label, false);
+    throw alreadyApplied(await finish(s, deps.grant, held, c, by, now, label), c);
   }
   let keptNew = false;
   if (c.action === 'superseded' && c.memoryId !== undefined) {
@@ -1122,6 +1126,7 @@ async function finish(
   c: FeedbackClaim,
   by: string,
   now: Date,
+  label: LabelProvenance,
 ): Promise<Feedback> {
   const { claim: _c, ...rest } = f;
   const iso = now.toISOString();
@@ -1131,6 +1136,7 @@ async function finish(
     resolved: {
       at: iso,
       by,
+      ...label,
       ...(c.memoryId !== undefined && { supersededBy: c.memoryId }),
       ...(c.by !== by && { claimedBy: c.by, claimedAt: c.at }),
     },
@@ -1166,6 +1172,7 @@ export async function retireFeedback(id: string, deps: ResolveFeedbackDeps): Pro
   const s = feedbackOf(deps.store);
   const now = deps.now ?? new Date();
   const iso = now.toISOString();
+  const label = labelOrInvalid(deps.label, false);
   const { f, c, by } = await claimed(s, deps, id, 'retired');
   const endReason = f.signal === 'wrong' ? 'corrected' : 'expired';
   const at = new Date(c.at);
@@ -1201,7 +1208,11 @@ export async function retireFeedback(id: string, deps: ResolveFeedbackDeps): Pro
     if ((await guarded(deps.store, deps.grant, [{ next, was: m }])).length === 0) ended = next;
   }
   if (ended === undefined) throw inProgress(f, now, 'Its memory kept changing while this ran');
-  return { feedback: await finish(s, deps.grant, f, c, by, now), memory: ended, endReason };
+  return {
+    feedback: await finish(s, deps.grant, f, c, by, now, label),
+    memory: ended,
+    endReason,
+  };
 }
 
 export interface SupersedeFeedbackDeps extends ResolveFeedbackDeps {
@@ -1274,6 +1285,7 @@ export async function supersedeFeedback(
   const now = deps.now ?? new Date();
   const iso = now.toISOString();
   const asStored = factOf(fact);
+  const label = labelOrInvalid(deps.label, false);
   const { f, c, by } = await claimed(s, deps, id, 'superseded', (row) => ({
     fact: asStored.text,
     redacted: asStored.redacted,
@@ -1392,7 +1404,7 @@ export async function supersedeFeedback(
     throw inProgress(f, now, 'Its memory kept changing while this ran');
   }
   return {
-    feedback: await finish(s, deps.grant, f, c, by, now),
+    feedback: await finish(s, deps.grant, f, c, by, now, label),
     memory: written,
     supersedes: f.memoryId,
     redacted: c.redacted ?? [],
@@ -1412,6 +1424,7 @@ export async function dismissFeedback(id: string, deps: ResolveFeedbackDeps): Pr
   const s = feedbackOf(deps.store);
   const now = deps.now ?? new Date();
   const by = feedbackBy(deps.by);
+  const label = labelOrInvalid(deps.label, false);
   let f = await s.getFeedback(deps.grant, id);
   if (f === null) throw fail('not-found');
   if (isFinal(f.status)) throw fail('already-resolved', f.status);
@@ -1425,7 +1438,7 @@ export async function dismissFeedback(id: string, deps: ResolveFeedbackDeps): Pr
   const next: Feedback = {
     ...f,
     status: 'dismissed',
-    resolved: { at: iso, by },
+    resolved: { at: iso, by, ...label },
     revision: f.revision + 1,
     updatedAt: iso,
   };

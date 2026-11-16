@@ -157,9 +157,9 @@ arrived. It is not proof that a person made it.
 
 | Origin        | Recorded when                                                                                |
 | ------------- | -------------------------------------------------------------------------------------------- |
-| `interactive` | `oort` at a terminal, stdin and stdout both a TTY, without `--yes` or `--json`               |
-| `dashboard`   | Reserved for the Oort Cloud dashboard                                                        |
-| `connector`   | Reserved for upstream connectors, with an optional `upstream: { system, actor }`             |
+| `interactive` | A person answered the CLI's prompt for this label on the controlling terminal                |
+| `dashboard`   | Reserved for the Oort Cloud dashboard; any other caller that asks for it gets `integration`  |
+| `connector`   | Reserved for upstream connectors (`upstream: { system, actor }`), kept only as `dashboard`   |
 | `integration` | An expert-role handle, `oort serve`, or a CLI call that is piped or uses `--yes` or `--json` |
 | `agent`       | MCP or an agent-role handle                                                                  |
 
@@ -210,10 +210,16 @@ console.log(shown(draft.id)); // integration grace@example.com agent
 - An expert-role handle can pass `reviewer` (one line, at most 120 characters) to `record`,
   `resolve`, `feedback`, `judge.confirm` and `feedback.confirm`. It is the person your
   integration says decided; Oort stores it but cannot check it.
-- An agent-role handle always records `agent`. A `reviewer` it passes is ignored, and MCP has no
-  field for either.
+- Agents over MCP and agent-role handles always record `agent`. A `reviewer` an agent-role
+  handle passes is ignored, and MCP has no field for either.
+- The CLI never records `interactive` while one of `AGENT_ENV_MARKERS` is set (`AI_AGENT`,
+  `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CODEX_SANDBOX`, `CODEX_SANDBOX_NETWORK_DISABLED`,
+  `CURSOR_AGENT`, `GEMINI_CLI`). An agent that can run commands can still drive a terminal, so
+  `interactive` is only as trustworthy as the shells on that machine. For labels you will
+  fine-tune on, prefer the dashboard and connectors; the training export will let you exclude
+  `interactive`.
 - A confirm records the confirmer's origin and keeps the agent's as `proposedOrigin`.
 - Origin does not change authority. A row written before it existed reads `agent` when an agent
   recorded it and no person has confirmed it, and `integration` otherwise.
 - An export of training data will trust only `interactive`, `dashboard` and `connector` labels
-  by default.
+  by default, and will let you exclude `interactive`.

@@ -97,10 +97,12 @@ export type JudgmentVia = 'cli' | 'mcp' | 'import' | 'pack' | 'sdk';
 
 /**
  * How a label (a judgment, a resolve, a feedback row) arrived. It says which path wrote it, not
- * who stood behind it, and grants nothing. `interactive`: the CLI at a terminal. `dashboard`: the
- * Oort Cloud dashboard. `connector`: an upstream connector (`upstream` names the system and its
- * actor). `integration`: expert-role SDK or `oort serve` calls, and CLI calls that are not
- * interactive (`--yes`, `--json`, a pipe). `agent`: MCP, or an agent-role handle. A record written
+ * who stood behind it, and grants nothing. `interactive`: a person answered the CLI's prompt for
+ * the label on the controlling terminal (whatever drives that terminal can answer it).
+ * `dashboard`: the Oort Cloud dashboard. `connector`: an upstream connector (`upstream` names the
+ * system and its actor). `integration`: expert-role SDK or `oort serve` calls, and every CLI call
+ * that is not interactive (`--yes`, `--json`, a pipe, an agent harness). `agent`: MCP, or an
+ * agent-role handle. A record written
  * before origins were kept reads as `agent` when an agent recorded it and no person confirmed it,
  * else `integration`.
  */
@@ -745,7 +747,8 @@ export interface FeedbackView extends LabelOriginView {
    * Who resolved it and when. `claimedBy` and `claimedAt`: another person started it, and `by`
    * finished it.
    */
-  resolved?: {
+  /** How the person's retire, supersede or dismiss arrived is its `origin` (and `reviewer`). */
+  resolved?: LabelOriginView & {
     at: string;
     by: string;
     supersededBy?: string;

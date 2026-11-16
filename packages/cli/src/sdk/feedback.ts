@@ -101,6 +101,7 @@ export function feedbackView(f: Feedback, now = new Date()): FeedbackView {
         ...(f.resolved.supersededBy !== undefined && { supersededBy: f.resolved.supersededBy }),
         ...(f.resolved.claimedBy !== undefined && { claimedBy: seen(f.resolved.claimedBy) }),
         ...(f.resolved.claimedAt !== undefined && { claimedAt: f.resolved.claimedAt }),
+        ...labelView(f.resolved),
       },
     }),
   };
@@ -173,6 +174,8 @@ async function resolving(ctx: Ctx, ref: string, what: string) {
       store,
       grant,
       by: ctx.judge.operator,
+      // How the resolve arrived; a confirm passes its own reviewer.
+      label: sdkLabel(ctx, undefined),
       helpedAccesses: ctx.engine.config.feedback.helpedAccesses,
       now: ctx.now(),
     },

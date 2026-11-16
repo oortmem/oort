@@ -19,6 +19,7 @@ import {
   type FeedbackClaim,
   type FeedbackSignal,
   type FeedbackStatus,
+  type LabelSource,
 } from '@oortmem/core';
 import { emit, jsonMode } from '../output.js';
 import { uiFor } from '../ui.js';
@@ -26,7 +27,6 @@ import {
   Refusal,
   agentLabel,
   clip,
-  confirm,
   findMemory,
   short,
   shown,
@@ -35,7 +35,7 @@ import {
   type Ctx,
 } from '../util.js';
 import type { Wired } from '../wire.js';
-import { cliLabel, operatorOf, originFields, originTag } from './judge.js';
+import { askLabel, confirmLabel, operatorOf, originFields, originTag } from './judge.js';
 
 /**
  * `oort feedback …`: a person says a recalled memory helped, is wrong, is out of date, or did
@@ -143,7 +143,7 @@ function plain(f: Feedback) {
     createdAt: f.createdAt,
     ...(f.confirmed !== undefined && { confirmed: f.confirmed }),
     ...(f.claim !== undefined && { claim: claimOf(f.claim) }),
-    ...(f.resolved !== undefined && { resolved: f.resolved }),
+    ...(f.resolved !== undefined && { resolved: { ...f.resolved, ...originFields(f.resolved) } }),
   };
 }
 
@@ -184,6 +184,7 @@ export interface FeedbackGiveOptions {
   query?: string;
   by?: string;
   json?: boolean;
+  yes?: boolean;
 }
 
 /** `oort feedback <memoryId> <signal> [--note] [--query]`: a person's feedback, counted at once. */
@@ -198,6 +199,15 @@ export async function feedbackCommand(
     localOnly(w);
     const m = await findMemory(w.store, filterFor(w.scope), memoryRef);
     const by = operatorOf(w, o.by);
+    const label = await askLabel(
+      ctx,
+      `Mark memory ${short(m.id)} as ${signal}, by ${shown(by)}?${o.note === undefined ? '' : ` Note: "${shown(clip(o.note, 120))}"`}`,
+      o.yes,
+    );
+    if (label === null) {
+      ctx.io.out('Nothing recorded.\n');
+      return 0;
+    }
     const r = await refusing(() =>
       recordFeedback(
         {
@@ -212,7 +222,7 @@ export async function feedbackCommand(
           grant: writeGrant(w),
           scope: w.scope,
           via: 'cli',
-          label: cliLabel(ctx),
+          label,
           helpedAccesses: w.config.feedback.helpedAccesses,
         },
       ),
@@ -289,7 +299,10 @@ interface ResolveOptions {
   json?: boolean;
 }
 
-/** The row an id or unique prefix names, asked about first unless `--yes`. */
+/**
+ * The row an id or unique prefix names, asked about first unless `--yes`, and how the person's
+ * answer arrived (`confirmLabel`). The question names the row: its id, signal and memory.
+ */
 async function resolving(
   ctx: Ctx,
   w: Wired,
@@ -297,17 +310,15 @@ async function resolving(
   o: ResolveOptions,
   question: (f: Feedback) => string,
   flagHint: string,
-): Promise<{ f: Feedback; by: string } | undefined> {
+): Promise<{ f: Feedback; by: string; label: LabelSource } | undefined> {
   const f = await refusing(() => findFeedback(w.store, writeGrant(w), ref));
   const by = operatorOf(w, o.by);
-  const ok = await confirm(ctx.io, `${question(f)}\n  ${line(f)}`, o.yes === true, flagHint, {
-    json: jsonMode(ctx),
-  });
-  if (!ok) {
+  const label = await confirmLabel(ctx, `${question(f)}\n  ${line(f)}`, o.yes, flagHint);
+  if (label === null) {
     ctx.io.out('Nothing changed.\n');
     return undefined;
   }
-  return { f, by };
+  return { f, by, label };
 }
 
 /** `oort feedback confirm <id>`: a person vouches for an agent's pending feedback. */
@@ -332,7 +343,7 @@ export async function feedbackConfirmCommand(
         store: w.store,
         grant: writeGrant(w),
         by: r.by,
-        label: cliLabel(ctx, o.yes),
+        label: r.label,
         helpedAccesses: w.config.feedback.helpedAccesses,
       }),
     );
@@ -363,7 +374,7 @@ export async function feedbackRetireCommand(
     );
     if (r === undefined) return 0;
     const done = await refusing(() =>
-      retireFeedback(r.f.id, { store: w.store, grant: writeGrant(w), by: r.by }),
+      retireFeedback(r.f.id, { store: w.store, grant: writeGrant(w), by: r.by, label: r.label }),
     );
     ctx.io.out(
       `Retired ${short(done.memory.id)} (${done.endReason}); feedback ${short(done.feedback.id)} is closed. \`oort inspect ${short(done.memory.id)}\` shows it.\n`,
@@ -404,6 +415,7 @@ export async function feedbackSupersedeCommand(
         grant: writeGrant(w),
         scope: w.scope,
         by: r.by,
+        label: r.label,
         ...(w.embed !== undefined && { embed: w.embed }),
         harness: 'cli',
       }),
@@ -443,7 +455,7 @@ export async function feedbackDismissCommand(
     );
     if (r === undefined) return 0;
     const f = await refusing(() =>
-      dismissFeedback(r.f.id, { store: w.store, grant: writeGrant(w), by: r.by }),
+      dismissFeedback(r.f.id, { store: w.store, grant: writeGrant(w), by: r.by, label: r.label }),
     );
     ctx.io.out(`Dismissed ${short(f.id)}; memory ${short(f.memoryId)} is unchanged.\n`);
     if (jsonMode(ctx)) emit(ctx, { feedback: plain(f) });

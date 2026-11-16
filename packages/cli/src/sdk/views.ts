@@ -3,6 +3,7 @@ import {
   isAgentVia,
   isCurrent,
   labelOrigin,
+  proposedOriginOf,
   scrub,
   type Judgment,
   type LabelRecord,
@@ -69,7 +70,10 @@ function originView(o: CoreRecalled['origin']): MemoryView['origin'] | undefined
   };
 }
 
-/** How a label arrived, as the views show it: `origin` always (see `labelOrigin` for older rows). */
+/**
+ * How a label arrived, as the views show it: `origin` always (see `labelOrigin` for older rows,
+ * and for a stored value that is not an origin), and the rest when set.
+ */
 export function labelView(r: LabelRecord): LabelOriginView {
   return {
     origin: labelOrigin(r),
@@ -77,7 +81,7 @@ export function labelView(r: LabelRecord): LabelOriginView {
     ...(r.upstream !== undefined && {
       upstream: { system: clean(r.upstream.system), actor: clean(r.upstream.actor) },
     }),
-    ...(r.proposedOrigin !== undefined && { proposedOrigin: r.proposedOrigin }),
+    ...(proposedOriginOf(r) !== undefined && { proposedOrigin: proposedOriginOf(r) }),
   };
 }
 

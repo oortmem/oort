@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { DecisionController, Embedder, JudgeChoice, MemoryStore } from './adapters.js';
 import { addressed } from './address.js';
 import { INVISIBLE_SOURCE } from './display.js';
+import { isTrustedLabel } from './label-trust.js';
 import { homeAddress, type Grant } from './grant.js';
 import { isCurrent, type Decision, type Memory, type Scope } from './model.js';
 import type { Prediction } from './prediction.js';
@@ -89,13 +90,16 @@ export interface ClaimedPackOrigin {
 
 /**
  * How a label arrived: a judgment, a prediction's resolve, or a recall feedback row. It names the
- * path that wrote the label, not who stood behind it: a program can drive a terminal, and an
- * integration can name any reviewer. It grants nothing; who may change memory is decided as
- * before (`via`, and the caller's role).
- * - `interactive`: the CLI with stdin and stdout both a terminal, and no `--yes` or `--json`;
- * - `dashboard`: the cloud dashboard (nothing local sets it);
- * - `connector`: an upstream connector, with `upstream` naming the system and its actor (nothing
- *   local sets it yet);
+ * path that wrote the label, not who stood behind it: whatever drives a terminal on the machine
+ * can answer a prompt, and an integration can name any reviewer. It grants nothing; who may
+ * change memory is decided as before (`via`, and the caller's role).
+ * - `interactive`: the CLI, when a person answered a confirmation prompt for this label on the
+ *   controlling terminal (stdin and stdout terminals, no `--yes` or `--json`, and none of
+ *   `AGENT_ENV_MARKERS` set);
+ * - `dashboard`: the cloud dashboard. Kept only for a source vouched for by a server that
+ *   authenticates the person; any other caller gets `integration`;
+ * - `connector`: an upstream connector, with `upstream` naming the system and its actor. Kept
+ *   only for a vouched-for source, as `dashboard`;
  * - `integration`: SDK or `oort serve` calls in expert role, and CLI calls that are not
  *   interactive. `reviewer` is who the integration says reviewed the label (its claim);
  * - `agent`: MCP, or an SDK or `oort serve` handle in agent role. Always `agent` for a label an
@@ -111,6 +115,36 @@ export const LABEL_ORIGINS = [
   'agent',
 ] as const;
 export type LabelOrigin = (typeof LABEL_ORIGINS)[number];
+
+/** Whether `v` is one of `LABEL_ORIGINS`. */
+export function isLabelOrigin(v: unknown): v is LabelOrigin {
+  return typeof v === 'string' && (LABEL_ORIGINS as readonly string[]).includes(v);
+}
+
+/**
+ * Environment variables an agent harness sets on the shell commands it runs. When any is set
+ * (not empty), the CLI records `integration`, never `interactive`: the command is an agent's,
+ * whatever terminal it has. This catches the usual case, not a determined one; an agent can unset
+ * them.
+ * - `AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`: Claude Code;
+ * - `CODEX_SANDBOX`, `CODEX_SANDBOX_NETWORK_DISABLED`: Codex, for a sandboxed command;
+ * - `CURSOR_AGENT`: Cursor's agent;
+ * - `GEMINI_CLI`: Gemini CLI.
+ */
+export const AGENT_ENV_MARKERS = Object.freeze([
+  'AI_AGENT',
+  'CLAUDECODE',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CODEX_SANDBOX',
+  'CODEX_SANDBOX_NETWORK_DISABLED',
+  'CURSOR_AGENT',
+  'GEMINI_CLI',
+] as const);
+
+/** The first of `AGENT_ENV_MARKERS` set (not empty) in `env`, if any. */
+export function agentEnvMarker(env: Record<string, string | undefined>): string | undefined {
+  return AGENT_ENV_MARKERS.find((k) => (env[k] ?? '') !== '');
+}
 
 /** The system a connector label came from, and who made it there. */
 export interface LabelUpstream {
@@ -150,19 +184,46 @@ export type LabelRecord = LabelProvenance & { via?: string; confirmed?: unknown 
 
 /**
  * How `r` arrived: its `origin`. A record written before origins were kept reads `agent` when it
- * shows an agent made it (`via: 'mcp'`, not confirmed by a person) and `integration` otherwise.
+ * shows an agent made it (`via: 'mcp'`, not confirmed by a person) and `integration` otherwise. A
+ * stored value that is not one of `LABEL_ORIGINS` (a store edited by hand) reads `integration`.
  */
 export function labelOrigin(r: LabelRecord | undefined): LabelOrigin {
-  if (r?.origin !== undefined) return r.origin;
+  if (r?.origin !== undefined) return isLabelOrigin(r.origin) ? r.origin : 'integration';
   return r?.via === 'mcp' && r.confirmed === undefined ? 'agent' : 'integration';
+}
+
+/** A record's `proposedOrigin` as shown: undefined when absent or not one of `LABEL_ORIGINS`. */
+export function proposedOriginOf(r: LabelProvenance | undefined): LabelOrigin | undefined {
+  return isLabelOrigin(r?.proposedOrigin) ? r.proposedOrigin : undefined;
+}
+
+/** Single-line label text: tabs, line and paragraph separators, and every default-ignorable. */
+const LABEL_FORBIDDEN = /[\t\u2028\u2029\p{Default_Ignorable_Code_Point}]/u;
+
+/** One line of label text (`reviewer`, `upstream.*`): checked, scrubbed, and still in bounds. */
+function labelLine(field: string, v: unknown): string {
+  const t = text(field, v, LABEL_LIMITS.text);
+  if (LABEL_FORBIDDEN.test(t)) {
+    throw new JudgmentInputError(`${field} holds tabs, separators or invisible characters`);
+  }
+  const scrubbed = scrub(t).text;
+  if (scrubbed.length > LABEL_LIMITS.text) {
+    throw new JudgmentInputError(
+      `${field} is longer than ${LABEL_LIMITS.text} characters once secrets are redacted`,
+    );
+  }
+  return scrubbed;
 }
 
 /**
  * The provenance a new label stores. A label an agent writes (`agent` true) is always
  * `{ origin: 'agent' }`: whatever origin, reviewer or upstream it passed is dropped, unchecked.
  * Otherwise `source` is checked (`JudgmentInputError`): a known origin, a `reviewer` of one line
- * and at most `LABEL_LIMITS.text` characters (scrubbed), and `upstream` only with `connector`.
- * Without `source`, `integration`.
+ * and at most `LABEL_LIMITS.text` characters (no tabs, separators or invisible characters,
+ * scrubbed), and `upstream` only with `connector`. `dashboard` and `connector` are kept only for a
+ * source vouched for by a server that authenticates the caller; any other source asking for
+ * either records `integration` (its reviewer kept, its upstream dropped). Without `source`,
+ * `integration`.
  */
 export function labelOf(
   source: LabelSource | undefined,
@@ -173,14 +234,18 @@ export function labelOf(
   if (typeof source !== 'object' || source === null) {
     throw new JudgmentInputError('the label origin must be an object');
   }
-  const origin = source.origin;
-  if (!(LABEL_ORIGINS as readonly string[]).includes(origin)) {
+  if (!isLabelOrigin(source.origin)) {
     throw new JudgmentInputError(`origin must be one of: ${LABEL_ORIGINS.join(', ')}`);
   }
-  const line = (field: string, v: unknown): string => scrub(text(field, v, LABEL_LIMITS.text)).text;
+  const vouched = isTrustedLabel(source);
+  const origin: LabelOrigin =
+    (source.origin === 'dashboard' || source.origin === 'connector') && !vouched
+      ? 'integration'
+      : source.origin;
+  const line = labelLine;
   const reviewer = source.reviewer === undefined ? undefined : line('reviewer', source.reviewer);
   let upstream: LabelUpstream | undefined;
-  if (source.upstream !== undefined) {
+  if (source.upstream !== undefined && (vouched || source.origin !== 'connector')) {
     if (origin !== 'connector') {
       throw new JudgmentInputError('upstream is only for the connector origin');
     }
@@ -211,7 +276,7 @@ export function confirmedLabel<T extends LabelProvenance>(
 ): T {
   const label = labelOf(confirmer, false);
   const { origin, reviewer: _r, upstream: _u, proposedOrigin: _p, ...rest } = row;
-  return { ...rest, ...label, proposedOrigin: origin ?? 'agent' } as T;
+  return { ...rest, ...label, proposedOrigin: isLabelOrigin(origin) ? origin : 'agent' } as T;
 }
 
 /** The decision itself. Everything an expert said is kept as they said it (secrets redacted). */
@@ -1006,8 +1071,11 @@ export async function purgeJudgment(
   const full = (await store.get(grant, m.id)) ?? m;
   const j = full.judgment ?? m.judgment;
   const { embedding: _e, ...rest } = full;
+  // Who reviewed it goes with the text; how it arrived stays.
+  const { reviewer: _r, upstream, ...kept } = j;
   const stub: Judgment = {
-    ...j,
+    ...kept,
+    ...(upstream !== undefined && { upstream: { system: upstream.system, actor: PURGED } }),
     subject: { summary: PURGED },
     reason: PURGED,
     criteria: [],

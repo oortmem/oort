@@ -79,8 +79,11 @@ describe('oort.judge: label origin', () => {
     const { expert, agent } = await handles();
     const r = await agent.judge.record(judgment('Agent post', 'grace'));
     expect(r.status).toBe('agent-recorded');
-    // Not checked either: it is never stored.
+    // Not checked either, beyond its length: it is never stored.
     await agent.judge.record(judgment('Agent post two', 'grace\nmallory'));
+    await expect(
+      agent.judge.record(judgment('Agent post three', 'g'.repeat(121))),
+    ).rejects.toBeInstanceOf(OortUsageError);
     for (const subject of ['Agent post', 'Agent post two']) {
       const j = await listed(expert, subject);
       expect(j, subject).toMatchObject({ origin: 'agent', agentRecorded: true });
@@ -172,5 +175,10 @@ describe('oort.feedback: label origin', () => {
     await expect(
       expert.feedback({ memoryId, signal: 'helped', reviewer: 'a\nb' }),
     ).rejects.toBeInstanceOf(OortUsageError);
+    // A person's resolve through the SDK records `integration`.
+    const stale = await expert.feedback({ memoryId, signal: 'stale' });
+    if (!stale.kept) throw new Error('not kept');
+    const dismissed = await expert.feedback.dismiss(stale.feedback.id);
+    expect(dismissed.resolved).toMatchObject({ by: 'ada', origin: 'integration' });
   });
 });

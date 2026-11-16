@@ -1297,7 +1297,7 @@ id a supersede writes is refused (`conflict`) and nothing changes. `forget(id)` 
 Every judgment, every resolve of a prediction, and every feedback row records how it arrived, as
 `origin` (local mode). It tells a later reader, such as an export of training data, how the label
 reached Oort. It is how a label arrived, not proof that a person made it: your integration can
-name any reviewer, and a program can drive a terminal.
+name any reviewer, and whatever drives a terminal can answer the CLI's prompt.
 
 <!-- example: examples/src/label-origin.ts -->
 
@@ -1345,29 +1345,42 @@ console.log(shown(draft.id)); // integration grace@example.com agent
 
 | Origin | How the label arrived |
 | --- | --- |
-| `interactive` | `oort judge` or `oort feedback` with stdin and stdout both a terminal, and no `--yes` or `--json`. |
-| `dashboard` | The Oort Cloud dashboard. Nothing local sets it. |
-| `connector` | An upstream connector, with `upstream` naming the system and who made the label there. Nothing local sets it yet. |
-| `integration` | An expert-role handle, here or over `oort serve`, and any CLI call that is not interactive. |
+| `interactive` | A person answered the CLI's confirmation prompt for this label at a terminal, unless something on that machine drove the terminal for them. Never from the SDK. |
+| `dashboard` | The Oort Cloud dashboard. The SDK, `oort serve` and MCP never record it, and `@oortmem/core` records `integration` for any other caller that asks for it. |
+| `connector` | An upstream connector, with `upstream` naming the system and who made the label there. Kept only as `dashboard` is. |
+| `integration` | An expert-role handle, here or over `oort serve`, and every CLI call that does not record `interactive`. |
 | `agent` | An agent-role handle (the default), here or over `oort serve`, and the MCP tools. |
 
 - In the expert role, `judge.record`, `judge.resolve`, `feedback()` and both `confirm` calls take
   an optional `reviewer`: who reviewed the label, as your integration asserts it. It is kept as
-  `reviewer`, scrubbed of secrets, one line, at most 120 characters (longer, or more than one
-  line, is `OortUsageError`). Oort does not check who it names.
-- An agent-role handle always records `agent`. A `reviewer` it passes is ignored, and the MCP
-  tools take no origin or reviewer at all.
+  `reviewer`, scrubbed of secrets, one line with no tabs or invisible characters, at most 120
+  characters (otherwise `OortUsageError`). Oort does not check who it names.
+- Agents over MCP and agent-role handles always record `agent`. A `reviewer` an agent-role handle
+  passes is ignored (one over 120 characters is still `OortUsageError`), and the MCP tools take
+  no origin or reviewer at all.
+- The CLI records `interactive` only when a person answered a prompt naming the label on the
+  controlling terminal, and never while one of `AGENT_ENV_MARKERS` (from `@oortmem/core`) is set:
+  `AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CODEX_SANDBOX`,
+  `CODEX_SANDBOX_NETWORK_DISABLED`, `CURSOR_AGENT` and `GEMINI_CLI`. An agent that can run
+  commands on your machine can unset them and drive a terminal, so `interactive` is only as
+  trustworthy as the shells on that machine. For labels you will fine-tune on, prefer the
+  dashboard and connectors; the training export will let you exclude `interactive`. See
+  [Where a label came from](cli.md#where-a-label-came-from) in the CLI reference.
 - A confirm records the confirmer's origin as the label's origin and keeps the agent's as
   `proposedOrigin`: an agent's judgment confirmed by an expert-role handle reads
   `origin: 'integration', proposedOrigin: 'agent'`.
 - Origin changes nothing about who may do what: the rules for the agent and expert roles stay as
   they are.
+- `feedback.retire`, `supersede` and `dismiss` keep how they arrived in `FeedbackView.resolved`
+  (`origin: 'integration'` from an expert-role handle).
 - `JudgmentView`, `PredictionView.resolution` and `FeedbackView` carry `origin`, and `reviewer`,
   `upstream` and `proposedOrigin` when set. A label written before Oort kept origins reads as
   `agent` when an agent recorded it and no person has confirmed it, and as `integration`
   otherwise.
+- Purging a judgment drops its `reviewer`, and recording the same decision again leaves the row,
+  and its origin, as they were.
 - An export of training data will trust only `interactive`, `dashboard` and `connector` labels
-  by default.
+  by default, and will let you exclude `interactive`.
 
 ## Stability
 

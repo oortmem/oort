@@ -1,8 +1,17 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { JudgeChoice, JudgeRequest } from './adapters.js';
-import { confirmFeedback, FeedbackError, recordFeedback } from './feedback.js';
+import {
+  confirmFeedback,
+  dismissFeedback,
+  FeedbackError,
+  recordFeedback,
+  retireFeedback,
+} from './feedback.js';
 import { localGrant } from './grant.js';
 import {
+  AGENT_ENV_MARKERS,
+  agentEnvMarker,
   confirmJudgment,
   formatJudgmentPack,
   importJudgmentPack,
@@ -11,6 +20,8 @@ import {
   labelOf,
   labelOrigin,
   parseJudgmentPack,
+  proposedOriginOf,
+  purgeJudgment,
   recordJudgment,
   type Judgment,
   type JudgmentInput,
@@ -18,6 +29,7 @@ import {
 import { createMemoryStore } from './memory-store.js';
 import type { Memory, Scope } from './model.js';
 import { confirmResolution, resolvePrediction } from './prediction.js';
+import { trustedLabel } from './label-trust.js';
 import { makeMemory, TG } from './store-conformance.js';
 
 /** How a label arrived: recorded on judgments, resolves, confirms and feedback, never trusted from an agent. */
@@ -77,10 +89,14 @@ describe('label origin', () => {
       reviewer: 'grace',
     });
     expect(
-      labelOf({ origin: 'connector', upstream: { system: 'jira', actor: 'grace' } }, false),
+      labelOf(
+        trustedLabel({ origin: 'connector', upstream: { system: 'jira', actor: 'grace' } }),
+        false,
+      ),
     ).toEqual({ origin: 'connector', upstream: { system: 'jira', actor: 'grace' } });
-    expect(labelOf({ origin: 'dashboard', reviewer: 'grace' }, false)).toMatchObject({
+    expect(labelOf(trustedLabel({ origin: 'dashboard', reviewer: 'grace' }), false)).toEqual({
       origin: 'dashboard',
+      reviewer: 'grace',
     });
     // An agent's label is `agent`, whatever it asked for; nothing it passed is even checked.
     expect(
@@ -103,14 +119,82 @@ describe('label origin', () => {
       labelOf({ origin: 'integration', upstream: { system: 'jira', actor: 'g' } }, false),
     ).toThrow(/only for the connector/);
     expect(() =>
-      labelOf({ origin: 'connector', upstream: { system: 'jira' } as never }, false),
+      labelOf(trustedLabel({ origin: 'connector', upstream: { system: 'jira' } as never }), false),
     ).toThrow(/upstream.actor/);
+    // One line means no tab, no line or paragraph separator, and nothing invisible.
+    for (const reviewer of ['ada\tadmin', 'ada\u2028root', 'ad\u00ada', 'a\u034fda', 'a\u115fda']) {
+      expect(() => labelOf({ origin: 'integration', reviewer }, false), reviewer).toThrow(
+        JudgmentInputError,
+      );
+    }
+  });
+
+  it('label.dashboard-and-connector-only-from-a-vouched-source', async () => {
+    // Any other caller asking for either records `integration`: its reviewer kept, its upstream
+    // dropped unchecked.
+    expect(labelOf({ origin: 'dashboard', reviewer: 'grace' }, false)).toEqual({
+      origin: 'integration',
+      reviewer: 'grace',
+    });
+    expect(
+      labelOf({ origin: 'connector', upstream: { system: 'jira', actor: 'grace' } }, false),
+    ).toEqual({ origin: 'integration' });
+    expect(labelOf({ origin: 'connector', upstream: null as never }, false)).toEqual({
+      origin: 'integration',
+    });
+    // A copy of a vouched-for source is not vouched for.
+    const vouched = trustedLabel({ origin: 'dashboard' });
+    expect(labelOf({ ...vouched }, false)).toEqual({ origin: 'integration' });
+    expect(labelOf(vouched, false)).toEqual({ origin: 'dashboard' });
+    // Through the exported functions, too.
+    const store = createMemoryStore({ now: () => NOW });
+    await store.upsert(TG, makeMemory({ id: 'm1' }));
+    const deps = { store, grant: TG, scope: SCOPE, now: NOW };
+    const f = await recordFeedback(
+      { memoryId: 'm1', signal: 'wrong', by: 'ada' },
+      { ...deps, via: 'cli', label: { origin: 'dashboard' } },
+    );
+    expect(f.kept && f.feedback.origin).toBe('integration');
+    const j = await recordJudgment(ada(), {
+      ...deps,
+      grant: GRANT,
+      via: 'sdk',
+      label: { origin: 'connector', upstream: { system: 'jira', actor: 'grace' } },
+    });
+    expect(j.memory.judgment).toMatchObject({ origin: 'integration' });
+    expect(j.memory.judgment?.upstream).toBeUndefined();
+    // The capability is not reachable from the package entry points.
+    const entry = await import('./index.js');
+    expect(Object.keys(entry)).not.toContain('trustedLabel');
+    expect(Object.keys(entry)).not.toContain('isTrustedLabel');
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      exports: Record<string, unknown>;
+    };
+    expect(Object.keys(pkg.exports).sort()).toEqual(['.', './store-conformance']);
   });
 
   it('label.reads-integration-without-an-origin', () => {
     expect(labelOrigin({})).toBe('integration');
     expect(labelOrigin(undefined)).toBe('integration');
     expect(labelOrigin({ origin: 'agent' })).toBe('agent');
+    // A stored value that is not an origin (a store edited by hand) is never shown as one.
+    expect(labelOrigin({ origin: '\u001b]52;c;x\u0007' as never })).toBe('integration');
+    expect(proposedOriginOf({ proposedOrigin: 'robot' as never })).toBeUndefined();
+    expect(proposedOriginOf({ proposedOrigin: 'agent' })).toBe('agent');
+  });
+
+  it('label.agent-env-markers', () => {
+    expect(AGENT_ENV_MARKERS).toEqual(
+      expect.arrayContaining([
+        'CLAUDECODE',
+        'CLAUDE_CODE_ENTRYPOINT',
+        'CURSOR_AGENT',
+        'GEMINI_CLI',
+      ]),
+    );
+    expect(agentEnvMarker({})).toBeUndefined();
+    expect(agentEnvMarker({ CLAUDECODE: '' })).toBeUndefined();
+    expect(agentEnvMarker({ PATH: '/bin', GEMINI_CLI: '1' })).toBe('GEMINI_CLI');
   });
 
   it('label.judgment-records-its-origin', async () => {
@@ -308,5 +392,53 @@ describe('label origin', () => {
       label: { origin: 'interactive' },
     });
     expect((await into.get(GRANT, r.added[0]!))?.judgment?.origin).toBe('integration');
+  });
+
+  it('label.retire-and-dismiss-record-how-the-resolve-arrived', async () => {
+    // The memories are current now (their validFrom is the real clock).
+    const at = new Date();
+    const store = createMemoryStore({ now: () => at });
+    await store.upsert(TG, makeMemory({ id: 'm1' }));
+    await store.upsert(TG, makeMemory({ id: 'm2' }));
+    const deps = { store, grant: TG, scope: SCOPE, now: at };
+    const give = async (memoryId: string) => {
+      const r = await recordFeedback(
+        { memoryId, signal: 'wrong', by: 'ada' },
+        { ...deps, via: 'cli', label: { origin: 'integration' } },
+      );
+      if (!r.kept) throw new Error('not kept');
+      return r.feedback.id;
+    };
+    const one = await give('m1');
+    const two = await give('m2');
+    const resolve = { store, grant: TG, by: 'ada', now: at };
+    const retired = await retireFeedback(one, { ...resolve, label: { origin: 'interactive' } });
+    expect(retired.feedback.resolved).toMatchObject({ by: 'ada', origin: 'interactive' });
+    const dismissed = await dismissFeedback(two, resolve);
+    expect(dismissed.resolved).toMatchObject({ by: 'ada', origin: 'integration' });
+    expect((await store.getFeedback!(TG, two))?.resolved?.origin).toBe('integration');
+    // A bad label is refused before the row is touched.
+    const three = await give('m2');
+    await expect(
+      dismissFeedback(three, { ...resolve, label: { origin: 'integration', reviewer: 'a\nb' } }),
+    ).rejects.toMatchObject({ kind: 'invalid' });
+    expect((await store.getFeedback!(TG, three))?.status).toBe('open');
+  });
+
+  it('label.purge-drops-the-reviewer-and-keeps-the-origin', async () => {
+    const store = createMemoryStore({ now: () => NOW });
+    const r = await recordJudgment(ada(), {
+      store,
+      grant: GRANT,
+      scope: SCOPE,
+      now: NOW,
+      via: 'sdk',
+      label: { origin: 'integration', reviewer: 'grace@example.test' },
+    });
+    expect(await purgeJudgment(store, GRANT, r.memory, 'ada', NOW)).toBe(true);
+    const j = (await store.get(GRANT, r.memory.id))!.judgment!;
+    expect(j.origin).toBe('integration');
+    expect(j.reviewer).toBeUndefined();
+    expect(JSON.stringify(j)).not.toContain('grace');
   });
 });
