@@ -128,6 +128,8 @@ describe('judgment memory: recording', () => {
       by: 'ada',
       decidedAt: '2026-10-01T00:00:00.000Z',
       via: 'cli',
+      // No label passed: how it arrived is not known to be at a terminal.
+      origin: 'integration',
     });
     // Unbound to the project, pinned (never cold), embedded, and readable as text by recall.
     expect(m.scope.projectId).toBeUndefined();

@@ -29,6 +29,7 @@ import type { Memory, Scope } from './model.js';
 import type { NearQuery, Place, SpatialFilter } from './place.js';
 import type { Occurrence } from './event-time.js';
 import type { Feedback } from './feedback.js';
+import { labelOrigin } from './judgment.js';
 import type { Prediction } from './prediction.js';
 import { localScope } from './scope.js';
 import { isolationViolations, nonInterference } from './isolation.js';
@@ -916,6 +917,64 @@ function levelConformance(name: string, make: () => Promise<MemoryStore>): void 
       expect('judgment' in ((await store.get(TG, 'plain-1')) as Memory)).toBe(false);
       expect((await store.coldPut(TG, m)).skipped).toEqual([]);
       expect(await store.coldGet(TG, 'judgment-1')).toEqual(m);
+    });
+
+    it('levels.judgment-label-origin-roundtrips', async () => {
+      // How a judgment arrived is kept exactly; one written before origins were kept has none and
+      // reads as `integration`.
+      const judgment = {
+        subject: { summary: 'Post claims a cure' },
+        verdict: 'rejected',
+        verdicts: ['approved', 'rejected'],
+        reason: 'No cited source.',
+        criteria: [],
+        domain: 'content',
+        by: 'ada',
+        decidedAt: '2026-01-01T00:00:00.000Z',
+        via: 'mcp' as const,
+      };
+      const labelled = makeMemory({
+        id: 'judgment-labelled',
+        scope: localScope(undefined),
+        type: 'judgment',
+        judgment: {
+          ...judgment,
+          origin: 'interactive',
+          proposedOrigin: 'agent',
+          confirmed: { at: '2026-01-02T00:00:00.000Z', by: 'ada' },
+        },
+      });
+      const connector = makeMemory({
+        id: 'judgment-connector',
+        scope: localScope(undefined),
+        type: 'judgment',
+        judgment: {
+          ...judgment,
+          via: 'sdk',
+          origin: 'connector',
+          reviewer: 'grace',
+          upstream: { system: 'jira', actor: 'grace@example.test' },
+        },
+      });
+      const old = makeMemory({
+        id: 'judgment-old',
+        scope: localScope(undefined),
+        type: 'judgment',
+        judgment: { ...judgment, via: 'cli' },
+      });
+      for (const m of [labelled, connector, old]) await store.upsert(TG, m);
+      expect(await store.get(TG, 'judgment-labelled')).toEqual(labelled);
+      expect(await store.get(TG, 'judgment-connector')).toEqual(connector);
+      const got = await store.get(TG, 'judgment-old');
+      expect(got).toEqual(old);
+      expect(got?.judgment?.origin).toBeUndefined();
+      expect(labelOrigin(got?.judgment)).toBe('integration');
+      const listed = await store.list(TG, { validOnly: false, embeddings: false });
+      expect(Object.fromEntries(listed.map((m) => [m.id, labelOrigin(m.judgment)]))).toMatchObject({
+        'judgment-labelled': 'interactive',
+        'judgment-connector': 'connector',
+        'judgment-old': 'integration',
+      });
     });
 
     it('levels.every-level-roundtrips', async () => {
@@ -2368,6 +2427,44 @@ export function predictionsConformance(name: string, make: () => Promise<MemoryS
       expect(await s.getPrediction(TG, 'nope')).toBeNull();
     });
 
+    it('predictions.label-origin-roundtrips', async () => {
+      // A resolve keeps how it arrived; one written before origins were kept reads `integration`.
+      const resolution = {
+        verdict: 'approved',
+        criteria: [],
+        by: 'ada',
+        at: '2026-11-16T11:00:00.000Z',
+        via: 'mcp' as const,
+        agrees: false,
+      };
+      const confirmed = makePrediction({
+        id: 'p1',
+        resolution: {
+          ...resolution,
+          origin: 'interactive',
+          proposedOrigin: 'agent',
+          confirmed: { at: '2026-11-16T11:30:00.000Z', by: 'ada' },
+        },
+      });
+      const sdk = makePrediction({
+        id: 'p2',
+        resolution: { ...resolution, via: 'sdk', origin: 'integration', reviewer: 'grace' },
+      });
+      const old = makePrediction({ id: 'p3', resolution: { ...resolution, via: 'cli' } });
+      for (const p of [confirmed, sdk, old]) expect(await s.putPrediction(TG, p)).toBe(true);
+      expect(await s.getPrediction(TG, 'p1')).toEqual(confirmed);
+      expect(await s.getPrediction(TG, 'p2')).toEqual(sdk);
+      const got = await s.getPrediction(TG, 'p3');
+      expect(got).toEqual(old);
+      expect(labelOrigin(got?.resolution)).toBe('integration');
+      const listed = await s.listPredictions(TG, { status: 'resolved' });
+      expect(Object.fromEntries(listed.map((p) => [p.id, labelOrigin(p.resolution)]))).toEqual({
+        p1: 'interactive',
+        p2: 'integration',
+        p3: 'integration',
+      });
+    });
+
     it('predictions.revision-guard', async () => {
       const p = makePrediction({ id: 'p1' });
       expect(await s.putPrediction(TG, p, { revision: null })).toBe(true);
@@ -2674,6 +2771,38 @@ export function feedbackConformance(name: string, make: () => Promise<MemoryStor
       expect(await s.putFeedback(TG, f)).toBe('written');
       expect(await s.getFeedback(TG, 'f1')).toEqual(f);
       expect(await s.getFeedback(TG, 'nope')).toBeNull();
+    });
+
+    it('feedback.label-origin-roundtrips', async () => {
+      // A row keeps how it arrived; one written before origins were kept reads `integration`.
+      const confirmed = makeFeedback({
+        id: 'f1',
+        via: 'mcp',
+        origin: 'interactive',
+        proposedOrigin: 'agent',
+        confirmed: { at: '2026-11-16T11:00:00.000Z', by: 'ada' },
+      });
+      const connector = makeFeedback({
+        id: 'f2',
+        via: 'sdk',
+        origin: 'connector',
+        reviewer: 'grace',
+        upstream: { system: 'zendesk', actor: 'grace' },
+      });
+      const old = makeFeedback({ id: 'f3' });
+      for (const f of [confirmed, connector, old])
+        expect(await s.putFeedback(TG, f)).toBe('written');
+      expect(await s.getFeedback(TG, 'f1')).toEqual(confirmed);
+      expect(await s.getFeedback(TG, 'f2')).toEqual(connector);
+      const got = await s.getFeedback(TG, 'f3');
+      expect(got).toEqual(old);
+      expect(labelOrigin(got ?? undefined)).toBe('integration');
+      const listed = await s.listFeedback(TG);
+      expect(Object.fromEntries(listed.map((f) => [f.id, labelOrigin(f)]))).toEqual({
+        f1: 'interactive',
+        f2: 'connector',
+        f3: 'integration',
+      });
     });
 
     it('feedback.revision-guard', async () => {

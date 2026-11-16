@@ -35,7 +35,7 @@ import {
   type Ctx,
 } from '../util.js';
 import type { Wired } from '../wire.js';
-import { operatorOf } from './judge.js';
+import { cliLabel, operatorOf, originFields, originTag } from './judge.js';
 
 /**
  * `oort feedback …`: a person says a recalled memory helped, is wrong, is out of date, or did
@@ -137,6 +137,7 @@ function plain(f: Feedback) {
     ...(f.query !== undefined && { query: seen(f.query) }),
     by: seen(f.by),
     agentRecorded: isAgentVia(f.via),
+    ...originFields(f),
     ...(f.applied !== undefined && { applied: f.applied }),
     ...(f.reason !== undefined && { reason: f.reason }),
     createdAt: f.createdAt,
@@ -151,7 +152,7 @@ function line(f: Feedback): string {
   const agent = isAgentVia(f.via) ? ' [agent]' : '';
   const note = f.note === undefined ? '' : `  "${shown(clip(seen(f.note), 120))}"`;
   const query = f.query === undefined ? '' : `  query: "${shown(clip(seen(f.query), 80))}"`;
-  return `${short(f.id)}  ${f.signal.padEnd(10)} memory ${short(f.memoryId)}  ${f.status.padEnd(10)} by ${shown(seen(f.by))}${agent}${note}${query}${claimLine(f.claim)}`;
+  return `${short(f.id)}  ${f.signal.padEnd(10)} memory ${short(f.memoryId)}  ${f.status.padEnd(10)} by ${shown(seen(f.by))}${agent}${originTag(f)}${note}${query}${claimLine(f.claim)}`;
 }
 
 /**
@@ -211,6 +212,7 @@ export async function feedbackCommand(
           grant: writeGrant(w),
           scope: w.scope,
           via: 'cli',
+          label: cliLabel(ctx),
           helpedAccesses: w.config.feedback.helpedAccesses,
         },
       ),
@@ -330,6 +332,7 @@ export async function feedbackConfirmCommand(
         store: w.store,
         grant: writeGrant(w),
         by: r.by,
+        label: cliLabel(ctx, o.yes),
         helpedAccesses: w.config.feedback.helpedAccesses,
       }),
     );

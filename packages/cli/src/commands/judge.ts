@@ -25,6 +25,7 @@ import {
   isAgentVia,
   isUnconfirmedAgentJudgment,
   judge,
+  labelOrigin,
   parseJudgmentPack,
   parseJudgmentRows,
   purgeJudgment,
@@ -34,6 +35,8 @@ import {
   type JudgeResult,
   type Judgment,
   type JudgmentInput,
+  type LabelProvenance,
+  type LabelSource,
   type LiveEvalReport,
   type Memory,
   type Prediction,
@@ -157,6 +160,38 @@ export function operatorOf(w: Wired, flag: string | undefined): string {
   return by.trim();
 }
 
+/**
+ * How a label given by this command arrives: `interactive` when stdin and stdout are both a
+ * terminal and neither `--yes` nor `--json` was given, else `integration`. It says how the
+ * label arrived, not that a person typed it (a program can drive a terminal), and grants nothing.
+ */
+export function cliLabel(ctx: Ctx, yes?: boolean): LabelSource {
+  const interactive =
+    ctx.io.stdinIsTTY && ctx.io.stdoutIsTTY === true && !jsonMode(ctx) && yes !== true;
+  return { origin: interactive ? 'interactive' : 'integration' };
+}
+
+/** How a label arrived, as `--json` shows it: `origin` always (`integration` for older rows). */
+export function originFields(r: LabelProvenance) {
+  return {
+    origin: labelOrigin(r),
+    ...(r.reviewer !== undefined && { reviewer: r.reviewer }),
+    ...(r.upstream !== undefined && { upstream: { ...r.upstream } }),
+    ...(r.proposedOrigin !== undefined && { proposedOrigin: r.proposedOrigin }),
+  };
+}
+
+/** How a label arrived, on a line: ` [origin interactive, proposed agent]`. */
+export function originTag(r: LabelProvenance): string {
+  const parts = [`origin ${labelOrigin(r)}`];
+  if (r.reviewer !== undefined) parts.push(`reviewer ${shown(r.reviewer)}`);
+  if (r.upstream !== undefined) {
+    parts.push(`from ${shown(r.upstream.system)} (${shown(r.upstream.actor)})`);
+  }
+  if (r.proposedOrigin !== undefined) parts.push(`proposed ${r.proposedOrigin}`);
+  return ` [${parts.join(', ')}]`;
+}
+
 /** How a precedent or judgment was recorded, for labels. */
 function recordedLabel(j: Pick<Judgment, 'via' | 'confirmed'>): string {
   if (!isAgentVia(j.via)) return '';
@@ -166,7 +201,7 @@ function recordedLabel(j: Pick<Judgment, 'via' | 'confirmed'>): string {
 }
 
 function plainJudgment(m: Memory & { judgment: Judgment }) {
-  return { id: m.id, ...m.judgment, current: m.expiredAt === null };
+  return { id: m.id, ...m.judgment, ...originFields(m.judgment), current: m.expiredAt === null };
 }
 
 export interface JudgeRecordOptions {
@@ -222,6 +257,7 @@ export async function judgeRecordCommand(o: JudgeRecordOptions, ctx: Ctx): Promi
         ...(w.embed !== undefined && { embed: w.embed }),
         via: 'cli',
         harness: 'cli',
+        label: cliLabel(ctx),
         ...(corrects !== undefined && { corrects }),
       }),
     );
@@ -502,7 +538,8 @@ export async function judgeListCommand(
         recordedLabel(m.judgment) +
         (m.judgment.pack === undefined
           ? ''
-          : ` [imported from pack ${shown(m.judgment.pack.name)}]`);
+          : ` [imported from pack ${shown(m.judgment.pack.name)}]`) +
+        originTag(m.judgment);
       ctx.io.out(`${short(m.id)}  ${judgmentLine(m.judgment)}${state}\n`);
       ctx.io.out(`          reason: ${shown(clip(m.judgment.reason, 200))}\n`);
     }
@@ -603,7 +640,7 @@ export async function judgeConfirmCommand(
       ctx.io.out('Not confirmed.\n');
       return 0;
     }
-    await confirmJudgment(w.store, grant, m, by);
+    await confirmJudgment(w.store, grant, m, by, new Date(), cliLabel(ctx, o.yes));
     ctx.io.out(`Confirmed ${short(m.id)} (by ${shown(by)}): it counts when judging now.\n`);
     if (jsonMode(ctx)) emit(ctx, { id: m.id, confirmed: true, changed: true, by });
     return 0;
@@ -887,13 +924,17 @@ function resolutionLine(p: Prediction): string {
     : r.confirmed === undefined
       ? ' [agent-recorded, unconfirmed]'
       : ` [agent-recorded, confirmed by ${shown(r.confirmed.by)}]`;
-  return `${shown(r.verdict)} by ${shown(r.by)}, ${r.at.slice(0, 10)}${agrees}${agent}`;
+  return `${shown(r.verdict)} by ${shown(r.by)}, ${r.at.slice(0, 10)}${agrees}${agent}${originTag(r)}`;
 }
 
 /** The prediction as `--json` prints it: the record without its address. */
 function plainPrediction(p: Prediction, now: Date) {
-  const { scope: _s, address: _a, author: _au, revision: _r, ...rest } = p;
-  return { ...rest, state: predictionState(p, now) };
+  const { scope: _s, address: _a, author: _au, revision: _r, resolution, ...rest } = p;
+  return {
+    ...rest,
+    ...(resolution !== undefined && { resolution: { ...resolution, ...originFields(resolution) } }),
+    state: predictionState(p, now),
+  };
 }
 
 export interface JudgeResolveOptions {
@@ -941,6 +982,7 @@ export async function judgeResolveCommand(
           ...(w.embed !== undefined && { embed: w.embed }),
           via: 'cli',
           harness: 'cli',
+          label: cliLabel(ctx),
         },
       );
     });
@@ -1098,7 +1140,9 @@ async function confirmResolved(
     ctx.io.out('Not confirmed.\n');
     return 0;
   }
-  await refusing(() => confirmResolution(w.store, writeGrant(w), p.id, by));
+  await refusing(() =>
+    confirmResolution(w.store, writeGrant(w), p.id, by, new Date(), cliLabel(ctx, o.yes)),
+  );
   ctx.io.out(`Confirmed the decision on ${short(p.id)} (by ${shown(by)}).\n`);
   if (jsonMode(ctx)) emit(ctx, { id: p.id, confirmed: true, changed: true, by });
   return 0;

@@ -238,6 +238,73 @@ describe('the memory protocol on the socket', () => {
     expect([again.status, again.body.error?.['reason']]).toEqual([403, 'already-resolved']);
   });
 
+  it('records how a label arrived: integration in expert role, agent in agent role', async () => {
+    const org = { 'oort-org': 'origin-test' };
+    const expert = { ...org, 'oort-judge-role': 'expert', 'oort-operator': 'ada' };
+    const post = (route: string, headers: Record<string, string>, body: unknown) =>
+      request('POST', route, headers, JSON.stringify(body));
+    const judgment = (subject: string) => ({
+      subject,
+      verdict: 'rejected',
+      reason: 'Health claim with no cited source.',
+      domain: 'content',
+      by: 'ada',
+    });
+    for (const subject of [
+      'Post says a vitamin cures the flu',
+      'Post says a vitamin cures colds overnight',
+      'Post says a miracle remedy cures the flu',
+    ]) {
+      const r = await post('/v1/judgments', expert, { ...judgment(subject), reviewer: 'grace' });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+    }
+    const listed = await request('GET', '/v1/judgments', org);
+    expect(listed.body.data?.['judgments']).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ origin: 'integration', reviewer: 'grace' }),
+      ]),
+    );
+    const applied = await post('/v1/judgments/apply', expert, {
+      item: { summary: 'Satire says a vitamin cures the flu', domain: 'content' },
+    });
+    const pid = String(applied.body.data?.['predictionId']);
+    const resolved = await post(`/v1/predictions/${pid}/resolve`, expert, {
+      verdict: 'approved',
+      by: 'ada',
+      reason: 'Labelled satire.',
+      reviewer: 'grace',
+    });
+    expect(resolved.body.data?.['prediction']).toMatchObject({
+      resolution: { origin: 'integration', reviewer: 'grace' },
+    });
+
+    const saved = await post('/v1/remember', org, { facts: ['The release train leaves at 9.'] });
+    const [id] = (saved.body.data?.['results'] as { id: string }[]).map((r) => r.id) as [string];
+    // The agent role (the default) records `agent`; a reviewer it sends is ignored.
+    const pending = await post('/v1/feedback', org, {
+      memoryId: id,
+      signal: 'stale',
+      reviewer: 'grace',
+    });
+    const row = pending.body.data?.['feedback'] as {
+      id: string;
+      origin: string;
+      reviewer?: string;
+    };
+    expect(row.origin).toBe('agent');
+    expect(row.reviewer).toBeUndefined();
+    const confirmed = await post(`/v1/feedback/${row.id}/confirm`, expert, { reviewer: 'grace' });
+    expect(confirmed.body.data).toMatchObject({
+      origin: 'integration',
+      reviewer: 'grace',
+      proposedOrigin: 'agent',
+    });
+    const given = await post('/v1/feedback', expert, { memoryId: id, signal: 'helped' });
+    expect(given.body.data?.['feedback']).toMatchObject({ origin: 'integration' });
+    const confirmExtra = await post(`/v1/judgments/${pid}/confirm`, expert, { origin: 'x' });
+    expect([confirmExtra.status, confirmExtra.body.error?.['code']]).toEqual([400, 'usage']);
+  });
+
   it('keeps end users to their Planet and needs an org', async () => {
     const no = await request('GET', '/v1/whoami', { 'oort-user': 'u1' });
     expect([no.status, no.body.error?.['reason']]).toEqual([400, 'principal-required']);

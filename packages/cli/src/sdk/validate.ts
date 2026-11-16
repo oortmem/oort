@@ -179,6 +179,7 @@ export const JudgmentInputSchema = z.strictObject({
   domain: z.string(),
   by: z.string(),
   decidedAt: isoDate.optional(),
+  reviewer: z.string().optional(),
 });
 
 export const JudgeItemSchema = z.union([
@@ -207,7 +208,10 @@ export const ResolveInputSchema = z.strictObject({
   criteria: z.array(z.string()).optional(),
   by: z.string(),
   domain: z.string().optional(),
+  reviewer: z.string().optional(),
 });
+
+export const ConfirmOptionsSchema = z.strictObject({ reviewer: z.string().optional() });
 
 export const PredictionListSchema = z.strictObject({
   status: z.enum(['pending', 'resolved']).optional(),
@@ -232,6 +236,7 @@ export const FeedbackInputSchema = z.strictObject({
   // Kept to 500 characters on one line after scrubbing; longer input is clipped, not refused.
   note: z.string().max(LIMITS.feedbackText).optional(),
   query: z.string().max(LIMITS.feedbackText).optional(),
+  reviewer: z.string().optional(),
 });
 
 export const FeedbackListSchema = z.strictObject({

@@ -555,7 +555,7 @@ const ROUTES: Route[] = [
     method: 'POST',
     name: 'POST /v1/judgments/:id/confirm',
     match: new RegExp(`^/v1/judgments/${ID}/confirm$`),
-    call: (m) => (h) => h.judge.confirm(idOf(m[1]!)),
+    call: (m) => (h, b) => h.judge.confirm(idOf(m[1]!), b),
   },
   {
     method: 'GET',
@@ -651,10 +651,7 @@ const ROUTES: Route[] = [
     method: 'POST',
     name: 'POST /v1/feedback/:id/confirm',
     match: new RegExp(`^/v1/feedback/${ID}/confirm$`),
-    call: (m) => (h, b) => {
-      noFields(b);
-      return h.feedback.confirm(idOf(m[1]!));
-    },
+    call: (m) => (h, b) => h.feedback.confirm(idOf(m[1]!), b),
   },
   {
     method: 'POST',

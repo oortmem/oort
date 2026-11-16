@@ -149,3 +149,70 @@ console.log(live.resolved, live.bands.length);
   recorded is taken back.
 - Withdrawing or forgetting a judgment removes the text of the predictions that cited it.
   Forgetting a prediction leaves the judgment its resolve recorded.
+
+## Where a label came from (after 0.10.0)
+
+Each judgment, prediction resolution and feedback row records an `origin`: how the label
+arrived. It is not proof that a person made it.
+
+| Origin        | Recorded when                                                                                |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| `interactive` | `oort` at a terminal, stdin and stdout both a TTY, without `--yes` or `--json`               |
+| `dashboard`   | Reserved for the Oort Cloud dashboard                                                        |
+| `connector`   | Reserved for upstream connectors, with an optional `upstream: { system, actor }`             |
+| `integration` | An expert-role handle, `oort serve`, or a CLI call that is piped or uses `--yes` or `--json` |
+| `agent`       | MCP or an agent-role handle                                                                  |
+
+<!-- example: examples/src/label-origin.ts -->
+
+```ts
+import { createOort } from 'oortmem';
+
+// A review screen in your app: a person decides, and your integration names who that was.
+await using review = await createOort({
+  mode: 'local',
+  judge: { role: 'expert', operator: 'ada' },
+  config: { judge: { experts: ['ada'] } },
+});
+
+const reviewed = await review.judge.record({
+  subject: 'Post claims a cure for diabetes',
+  verdict: 'rejected',
+  reason: 'A medical claim with no source.',
+  domain: 'content',
+  by: 'ada',
+  reviewer: 'grace@example.com',
+});
+
+// Model-facing code runs in the agent role: what it records is `agent`, whatever it passes.
+const agent = review.scoped({ judgeRole: 'agent' });
+const draft = await agent.judge.record({
+  subject: 'Post claims a miracle cure for colds',
+  verdict: 'rejected',
+  reason: 'No source.',
+  domain: 'content',
+  by: 'ada',
+  reviewer: 'grace@example.com',
+});
+
+// A confirm records its own origin and keeps the agent's as `proposedOrigin`.
+await review.judge.confirm(draft.id, { reviewer: 'grace@example.com' });
+
+const { judgments } = await review.judge.list();
+const shown = (id: string) => {
+  const j = judgments.find((x) => x.id === id)!;
+  return [j.origin, j.reviewer, j.proposedOrigin ?? '-'].join(' ');
+};
+console.log(shown(reviewed.id)); // integration grace@example.com -
+console.log(shown(draft.id)); // integration grace@example.com agent
+```
+
+- An expert-role handle can pass `reviewer` (one line, at most 120 characters) to `record`,
+  `resolve`, `feedback`, `judge.confirm` and `feedback.confirm`. It is the person your
+  integration says decided; Oort stores it but cannot check it.
+- An agent-role handle always records `agent`. A `reviewer` it passes is ignored, and MCP has no
+  field for either.
+- A confirm records the confirmer's origin and keeps the agent's as `proposedOrigin`.
+- Origin does not change authority. Rows written before it existed read `integration`.
+- An export of training data will trust only `interactive`, `dashboard` and `connector` labels
+  by default.

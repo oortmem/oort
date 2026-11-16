@@ -4,6 +4,7 @@ import { GrantError, grantWrites, type Grant } from './grant.js';
 import {
   JudgmentInputError,
   confirmJudgment,
+  confirmedLabel,
   isAgentVia,
   isUnconfirmedAgentJudgment,
   judgmentCriterion,
@@ -11,6 +12,7 @@ import {
   judgmentField,
   judgmentLabel,
   JUDGMENT_LIMITS,
+  labelOf,
   normaliseJudgment,
   recordJudgment,
   undoRecordedJudgment,
@@ -19,6 +21,9 @@ import {
   type JudgmentInput,
   type JudgeWhy,
   type JudgmentVia,
+  type LabelOrigin,
+  type LabelProvenance,
+  type LabelSource,
   type RecordJudgmentDeps,
   type RecordJudgmentResult,
 } from './judgment.js';
@@ -42,6 +47,9 @@ import { scrub } from './scrub.js';
  * A resolve recorded by an agent (`via: 'mcp'`) is unconfirmed, as an agent-recorded judgment
  * is: the evaluation leaves it out, and the judgment it records does not count when judging,
  * until a person confirms it (`confirmResolution`).
+ *
+ * A resolve records how it arrived (`origin`, `deps.label`), and the judgment it records the
+ * same: `agent` for an agent's, whatever it passed.
  */
 
 /** The item a prediction was made for, as judging saw it (secrets redacted). */
@@ -55,8 +63,11 @@ export interface PredictionItem {
   by?: string;
 }
 
-/** What a person decided about a predicted item. */
-export interface PredictionResolution {
+/**
+ * What a person decided about a predicted item. How the decision arrived is `origin` (read with
+ * `labelOrigin`); a confirm makes it the confirmer's, the agent's kept as `proposedOrigin`.
+ */
+export interface PredictionResolution extends LabelProvenance {
   /** The person's verdict, one of the prediction's `verdicts`. */
   verdict: string;
   /** Their reason, in their own words (secrets redacted). */
@@ -123,6 +134,8 @@ export interface SupersededResolution {
   by: string;
   at: string;
   via: JudgmentVia;
+  /** How it arrived, when the replaced resolve recorded it. */
+  origin?: LabelOrigin;
   judgmentId?: string;
 }
 
@@ -434,6 +447,7 @@ export async function resolvePrediction(
     throw new JudgmentInputError(`criteria has more than ${JUDGMENT_LIMITS.criteria} entries`);
   }
   const criteria = [...new Set((input.criteria ?? []).map((c) => judgmentCriterion(c)))];
+  const label = labelOf(deps.label, isAgentVia(deps.via));
   const agrees = p.verdict === null ? null : verdict === p.verdict;
   const records = reason !== undefined && agrees !== true;
   const domain =
@@ -474,6 +488,7 @@ export async function resolvePrediction(
       by,
       at: iso,
       via: deps.via,
+      ...label,
       agrees,
       ...(judgment !== undefined && { judgmentId: judgment.memory.id }),
     },
@@ -531,6 +546,7 @@ async function supersedeAgentResolve(
       by: r.by,
       at: r.at,
       via: r.via,
+      ...(r.origin !== undefined && { origin: r.origin }),
       ...(r.judgmentId !== undefined && { judgmentId: r.judgmentId }),
     },
   ];
@@ -571,7 +587,9 @@ async function supersedeAgentResolve(
  * decided it. The judgment it recorded, if any, is confirmed first, then the resolve, so a call
  * that stopped half way is finished by the next one. The evaluation counts it from then on.
  * Returns false when the resolve was not agent-recorded or is already confirmed; fails
- * `conflict` when the prediction changed meanwhile.
+ * `conflict` when the prediction changed meanwhile. `label` is how the confirm arrived
+ * (`integration` when absent): the resolve's origin, and its judgment's, from then on, with the
+ * agent's kept as `proposedOrigin`.
  */
 export async function confirmResolution(
   store: MemoryStore,
@@ -579,9 +597,11 @@ export async function confirmResolution(
   id: string,
   by: string,
   now = new Date(),
+  label?: LabelSource,
 ): Promise<boolean> {
   const s = predictionsOf(store);
   const who = scrub(judgmentField('by', by, JUDGMENT_LIMITS.by)).text;
+  labelOf(label, false);
   const p = await s.getPrediction(grant, id);
   if (p === null) throw fail('not-found');
   const r = p.resolution;
@@ -589,14 +609,14 @@ export async function confirmResolution(
   if (!isAgentVia(r.via) || r.confirmed !== undefined) return false;
   if (r.judgmentId !== undefined) {
     const m = await store.get(grant, r.judgmentId);
-    if (m !== null) await confirmJudgment(store, grant, m, who, now);
+    if (m !== null) await confirmJudgment(store, grant, m, who, now, label);
   }
   const iso = now.toISOString();
   const ok = await s.putPrediction(
     grant,
     {
       ...p,
-      resolution: { ...r, confirmed: { at: iso, by: who } },
+      resolution: { ...confirmedLabel(r, label), confirmed: { at: iso, by: who } },
       revision: p.revision + 1,
       updatedAt: iso,
     },
