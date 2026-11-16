@@ -686,7 +686,7 @@ describe('serve.autostart: on by default', () => {
     fs.writeFileSync(path.join(s.oortHome, 'config.json'), '{"serve":{"idleMinutes":7}}\n');
     const env = autoEnv(s);
     await oort(s, ['hook', 'UserPromptSubmit'], { input: promptInput(s), env });
-    await daemonPid(s);
+    const pid = await daemonPid(s);
     const status = data((await oort(s, ['serve', 'status', '--json'])).stdout) as Record<
       string,
       unknown
@@ -694,6 +694,9 @@ describe('serve.autostart: on by default', () => {
     expect(status['idleExitMs']).toBe(7 * 60_000);
     // (`serve.exits-when-idle` waits one out; here the log line doctor reads after one.)
     expect((await oort(s, ['serve', 'stop'])).exitCode).toBe(0);
+    // The daemon logs its own `stopped (...)` line as it exits; wait for it, so the line below
+    // is the last one doctor reads.
+    await until(() => !alive(pid) && serveLog(s).includes('stopped ('));
     fs.appendFileSync(
       path.join(s.oortHome, 'logs', 'serve.log'),
       `${new Date().toISOString()} stopped (idle)\n`,
