@@ -313,6 +313,8 @@ def main() -> int:
     handles = {"root": o}
     try:
         for i, step in enumerate(case["steps"]):
+            if transport not in step.get("transports", [transport]):
+                continue  # a step for the other transport
             what = f"step {i} ({step['call']})"
             ask({"step": i})
             args = substitute(step.get("args") or {}, saved)

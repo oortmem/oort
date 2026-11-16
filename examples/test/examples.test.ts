@@ -86,6 +86,16 @@ describe('SDK examples (run)', () => {
     expect(h.cloud.seen).toContain('POST /v1/recall');
   });
 
+  it('cloud-judgments: a key records as an agent and a person confirms in the dashboard', async () => {
+    h.cloud.judgments.experts = ['ada'];
+    const { out } = await runExample('cloud-judgments.ts');
+    expect(out).toEqual(['agent-recorded', 'needs-expert 1', 'confirm in the dashboard']);
+    expect(h.cloud.judgments.records).toEqual([
+      expect.objectContaining({ by: 'ada', subject: 'Post claims a miracle cure for colds' }),
+    ]);
+    expect(h.cloud.seen).toContain('POST /v1/judgments/apply');
+  });
+
   it('multi-user: each end user gets their own Planet', async () => {
     const { out } = await runExample('multi-user.ts');
     expect(out[0]).toMatch(/^<oort-memory>\n.*My order number is 1042\./);

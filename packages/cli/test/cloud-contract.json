@@ -6,7 +6,16 @@
     {
       "method": "GET",
       "path": "/v1/whoami",
-      "response": ["account", "plan", "via", "spaces?", "galaxies?", "scope?", "capabilities?"],
+      "response": [
+        "account",
+        "plan",
+        "via",
+        "spaces?",
+        "galaxies?",
+        "scope?",
+        "capabilities?",
+        "judge?"
+      ],
       "query": ["agent"]
     },
     {
@@ -496,7 +505,12 @@
       "GET /v1/memories/:id",
       "DELETE /v1/memories/:id",
       "POST /v1/memories/:id/pin",
-      "POST /v1/memories/:id/unpin"
+      "POST /v1/memories/:id/unpin",
+      "POST /v1/judgments",
+      "GET /v1/judgments",
+      "POST /v1/judgments/apply",
+      "POST /v1/judgments/:id/confirm",
+      "POST /v1/judgments/:id/withdraw"
     ],
     "routes": [
       {
@@ -527,6 +541,124 @@
       "402:end_user_limit": "end-user-limit",
       "403:end_users_not_allowed": "refused",
       "409:end_user_erased": "bad-request"
+    }
+  },
+  "judgments": {
+    "$comment": "Judgment memory in Oort Cloud: an expert's decisions with their reasons, recorded and applied as `oort judge` does locally, with core's own rules. The credential sets the role and a header only narrows it: every key (oort login keys and server keys too) acts as an agent; the signed-in dashboard acts as the expert. An agent records only for the account's experts list (403 experts_not_listed when it is empty, 403 not_an_expert for another name), at most limits.agentPerDay a UTC day per principal (the Planet, and each end user separately; 403 daily_limit; 503 cap_unavailable when the count could not be kept, nothing saved), and what it records is unconfirmed (via mcp) until a person confirms it in the dashboard. confirm, withdraw and PUT experts take the expert role only: a key gets 403 expert_only. A body carrying origin, proposedOrigin or upstream answers 400; a field the judgment rules refuse answers 400 naming the field. The answers are the SDK's views: RecordJudgmentView, { judgments: JudgmentView[], next? } (current judgments unless all; next pages on as cursor), JudgeResult (clients pass no predictionId on: predictions are local-only), { id, changed }, { id, withdrawn, changed, by }. A judgment view carries origin from core 0.11; before it, clients read an unconfirmed via mcp record as agent and any other as integration. Oort-User scopes record, list, apply, confirm and withdraw to the end user's Planet (the account's experts list applies); the experts routes answer it 400 user_not_supported. record, apply and confirm need Oort Pro (402); list, withdraw and the experts routes work in every billing state. whoami adds judge: { role, operator? }. Record is metered as a save, apply as one recall.",
+    "routes": [
+      {
+        "method": "POST",
+        "path": "/v1/judgments",
+        "request": {
+          "subject": "string",
+          "ref": "string?",
+          "verdict": "string",
+          "verdicts": "string[]?",
+          "reason": "string",
+          "criteria": "string[]?",
+          "domain": "string",
+          "by": "string",
+          "decidedAt": "string?",
+          "reviewer": "string?"
+        },
+        "response": ["outcome", "id", "corrects?", "status", "redacted", "embedFailed?"]
+      },
+      {
+        "method": "GET",
+        "path": "/v1/judgments",
+        "query": ["domain", "by", "all", "limit", "cursor", "verdict", "unconfirmed"],
+        "response": ["judgments", "next?"],
+        "billing": "any"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/judgments/apply",
+        "request": {
+          "item": {
+            "summary": "string",
+            "details": "string?",
+            "ref": "string?",
+            "domain": "string?",
+            "by": "string?"
+          },
+          "limit": "number?",
+          "threshold": "number?",
+          "minSimilarity": "number?",
+          "minAgreement": "number?",
+          "includeImported": "boolean?",
+          "includeAgentRecorded": "boolean?"
+        },
+        "response": [
+          "status",
+          "why?",
+          "prediction?",
+          "precedents",
+          "verdicts",
+          "agreement",
+          "similarity",
+          "threshold",
+          "minSimilarity",
+          "degraded?",
+          "decisions",
+          "importedExcluded?",
+          "agentRecordedExcluded?"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/v1/judgments/:id/confirm",
+        "request": {
+          "reviewer": "string?"
+        },
+        "response": ["id", "changed"]
+      },
+      {
+        "method": "POST",
+        "path": "/v1/judgments/:id/withdraw",
+        "request": {},
+        "response": ["id", "withdrawn", "changed", "by"],
+        "billing": "any"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/judgments/experts",
+        "response": ["experts"],
+        "billing": "any"
+      },
+      {
+        "method": "PUT",
+        "path": "/v1/judgments/experts",
+        "request": {
+          "experts": "string[]"
+        },
+        "response": ["experts"],
+        "billing": "any"
+      }
+    ],
+    "limits": {
+      "recordBytes": 16384,
+      "applyBytes": 16384,
+      "confirmBytes": 1024,
+      "listLimit": 100,
+      "experts": 50,
+      "expertChars": 128,
+      "agentPerDay": 50
+    },
+    "errors": {
+      "400": "bad-request",
+      "403:experts_not_listed": "refused",
+      "403:not_an_expert": "refused",
+      "403:daily_limit": "refused",
+      "403:expert_only": "refused",
+      "503:cap_unavailable": "refused",
+      "409:ambiguous": "ambiguous-prefix",
+      "409:not_current": "bad-request",
+      "409:end_user_erased": "bad-request",
+      "400:user_not_supported": "bad-request",
+      "402": "payment-required",
+      "404": "not-found",
+      "413": "too-large",
+      "429:rate_limit": "rate-limit"
     }
   }
 }

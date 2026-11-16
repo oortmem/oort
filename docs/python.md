@@ -627,8 +627,9 @@ with Oort() as root:
 The same rules as TypeScript. In agent role (the default) `by` must be an expert listed in the
 home config's `judge.experts`, records count against the shared daily cap, and they are stored
 unconfirmed. Expert role (`judge_role="expert"`) is for host code where a person really decided;
-`judge.confirm` needs it. Judgments live in the local engine only (`refused`, `local-only` in
-cloud mode).
+`judge.confirm` needs it. In Python, judgments live in the local engine only (`refused`,
+`local-only` in cloud mode). This is unchanged: judgments in Oort Cloud are TypeScript only for
+now (see [In Oort Cloud](sdk.md#in-oort-cloud)).
 
 `judge.apply` keeps each answer as a prediction (`r.prediction_id`). `judge.resolve` records what
 the expert then decided, and `judge.eval_live` reports agreement and calibration, as in

@@ -3,8 +3,8 @@
 Judgment memory keeps an expert's decisions (a content reviewer, a lawyer, a code reviewer) with
 the reason in their own words, then predicts how they would judge a new item from those
 precedents, citing them, or says it needs the expert. It is the same store as `oort judge` and the
-MCP tools `record_judgment` and `judge`. Local mode only: in cloud mode every `judge.*` call is
-`refused`.
+MCP tools `record_judgment` and `judge`. In cloud mode (after 0.10.0) an Oort key acts in the
+agent role: see "In Oort Cloud" below.
 
 <!-- example: examples/src/judgments.ts -->
 
@@ -64,6 +64,58 @@ person's and may `confirm` an agent's record. Use it only for code paths where a
 decided: a review UI, an import job. `scoped({ judgeRole: 'agent' })` narrows a handle back to
 the agent role; nothing widens it. Framework tools (`oortmem/ai-sdk`) always run in the agent
 role.
+
+`judge.withdraw(id)` (after 0.10.0) takes a judgment back; it is the expert role's, like
+`confirm`. `judge.experts.get()` returns the experts list.
+
+## In Oort Cloud (after 0.10.0)
+
+The credential sets the role: an Oort key acts in the agent role.
+
+<!-- example: examples/src/cloud-judgments.ts -->
+
+```ts
+import { createOort, OortRefusedError } from 'oortmem';
+
+// In Oort Cloud an Oort key acts in the agent role: it records for the experts your account lists
+// in the dashboard, and what it records waits there for a person to confirm it.
+await using oort = await createOort({ mode: 'cloud', keySources: ['env'] });
+
+const { experts } = await oort.judge.experts.get();
+const draft = await oort.judge.record({
+  subject: 'Post claims a miracle cure for colds',
+  verdict: 'rejected',
+  reason: 'No source.',
+  domain: 'content',
+  by: experts[0]!,
+});
+console.log(draft.status); // 'agent-recorded'
+
+// Unconfirmed agent records are left out of judging until a person confirms them.
+const r = await oort.judge.apply({ summary: 'Post claims a miracle cure', domain: 'content' });
+console.log(r.status, r.agentRecordedExcluded);
+
+try {
+  await oort.judge.confirm(draft.id);
+} catch (e) {
+  // A person's decision: made in the dashboard, not with a key.
+  if (!(e instanceof OortRefusedError) || e.reason !== 'expert-only') throw e;
+  console.log('confirm in the dashboard');
+}
+```
+
+- `judge.record`, `judge.list` and `judge.apply` work as above, for the experts the account lists
+  in the dashboard. The cap of 50 agent records a day is per account, and per end user for a
+  server key's `scoped({ user })` handles.
+- A person confirms, withdraws and sets the experts list in the dashboard
+  (https://oortcloud.dev/dashboard/judgments): `judge.confirm`, `judge.withdraw` and
+  `judge.experts.set` are refused (`expert-only`).
+- `createOort({ mode: 'cloud', judge: { role: 'expert' } })` is refused before any request
+  (`expert-only`).
+- Predictions stay local: cloud `judge.apply` returns no `predictionId`, and `judge.resolve`,
+  `judge.listPredictions`, `judge.getPrediction`, `judge.forgetPrediction`, `judge.evalLive` and
+  `exportTraining` are refused (`local-only`).
+- Python's client keeps judgments local only.
 
 ## Applying
 

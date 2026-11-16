@@ -251,6 +251,9 @@ export function cloudErrorKind(status: number, code?: string): CloudErrorKind {
   if (status === 409 && code === 'ambiguous') return 'ambiguous-prefix';
   if (status === 413) return 'too-large';
   if (status === 429) return 'rate-limit';
+  // The daily count of agent-recorded judgments could not be kept: nothing was saved. Not an outage,
+  // so a queue never holds for it.
+  if (status === 503 && code === 'cap_unavailable') return 'refused';
   if (status >= 500) return 'busy';
   return 'bad-request';
 }
@@ -350,7 +353,18 @@ export interface CloudWhoami {
    * acts for end users (CON-132). Absent from an older API, and for every other key.
    */
   capabilities?: string[];
+  /**
+   * Who this credential records judgments as: `agent` for every key (a header only narrows it),
+   * `expert` for the signed-in dashboard. Absent from an Oort Cloud without judgments.
+   */
+  judge?: { role: 'agent' | 'expert'; operator?: string };
 }
+
+/**
+ * A judgment as Oort Cloud records, lists or applies it: the SDK's views (`RecordJudgmentView`,
+ * `JudgmentView`, `JudgeResult`), as JSON. The callers shape them again; nothing here trusts them.
+ */
+export type CloudJudgmentBody = Record<string, unknown>;
 
 /** How many end users the account has, and how many its plan includes (CON-132). */
 export interface CloudEndUserCount {
@@ -730,6 +744,32 @@ export interface CloudClient {
    * same capability check). An erased or unknown end user's export is the manifest alone.
    */
   exportEndUser(id: string): Promise<string>;
+  /**
+   * Records one judgment as this credential's role (a key: `agent`, so only for the account's
+   * listed experts, unconfirmed, and within the daily cap). Answers a `RecordJudgmentView`.
+   */
+  recordJudgment(b: CloudJudgmentBody): Promise<CloudJudgmentBody>;
+  /** Current judgments (`all`: every one), newest first; `next` pages on. */
+  listJudgments(q: {
+    domain?: string;
+    by?: string;
+    all?: boolean;
+    limit?: number;
+    cursor?: string;
+  }): Promise<{ judgments: CloudJudgmentBody[]; next?: string }>;
+  /** Judges one item from the recorded judgments. Answers a `JudgeResult`. */
+  applyJudgments(b: { item: CloudJudgmentBody } & CloudJudgmentBody): Promise<CloudJudgmentBody>;
+  /**
+   * A person confirms an agent's judgment. Only the expert role may: a key acts as an agent, so
+   * Oort Cloud answers 403 `expert_only` (the dashboard is where a person confirms).
+   */
+  confirmJudgment(id: string, b: { reviewer?: string }): Promise<CloudJudgmentBody>;
+  /** A person withdraws a judgment (the expert role only, as `confirmJudgment`). */
+  withdrawJudgment(id: string): Promise<CloudJudgmentBody>;
+  /** The experts an agent may record judgments for (the account's list). */
+  judgmentExperts(): Promise<{ experts: string[] }>;
+  /** Replaces the account's experts list (the expert role only, as `confirmJudgment`). */
+  setJudgmentExperts(experts: string[]): Promise<{ experts: string[] }>;
 }
 
 export interface CloudClientOptions {
@@ -1078,6 +1118,20 @@ export function createCloudClient(opts: CloudClientOptions): CloudClient {
             text: lines.map((l) => `${l}\n`).join(''),
           })
         ).json()) as CloudImportResult,
+      recordJudgment: (b) => json('POST', '/v1/judgments', b),
+      listJudgments: (q) => {
+        const p = new URLSearchParams();
+        for (const [k, v] of Object.entries(q)) if (v !== undefined) p.set(k, String(v));
+        const qs = p.toString();
+        return json('GET', `/v1/judgments${qs === '' ? '' : `?${qs}`}`);
+      },
+      applyJudgments: (b) => json('POST', '/v1/judgments/apply', b),
+      confirmJudgment: (id, b) =>
+        json('POST', `/v1/judgments/${encodeURIComponent(id)}/confirm`, b),
+      withdrawJudgment: (id) =>
+        json('POST', `/v1/judgments/${encodeURIComponent(id)}/withdraw`, {}),
+      judgmentExperts: () => json('GET', '/v1/judgments/experts'),
+      setJudgmentExperts: (experts) => json('PUT', '/v1/judgments/experts', { experts }),
     };
   };
   return build(undefined);

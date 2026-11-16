@@ -24,6 +24,7 @@ import {
   isAgentVia,
   isCurrent,
   judge,
+  normaliseJudgment,
   recordJudgment,
   safeExpertId,
   scrub,
@@ -51,6 +52,7 @@ import {
   type TemporalView,
 } from './engine/recall.js';
 import { rememberFacts, rememberFactsInCloud } from './remember.js';
+import { DASHBOARD_JUDGMENTS_URL, cloudJudgeResult, cloudRecordView } from './sdk/cloud.js';
 import {
   OortCloudError,
   copyName,
@@ -789,8 +791,8 @@ const leftAsTheyWere = (ids: readonly string[], unnamed = 0): string => {
 
 /**
  * Oort Cloud as an MCP memory backend: the same seven tools, answered by the API for this
- * machine's project (plus account-wide memories). Recall goes through `runRecall`, which already
- * calls the cloud in cloud mode.
+ * machine's project (plus account-wide memories), and `record_judgment` and `judge` as an agent
+ * (the key's role). Recall goes through `runRecall`, which already calls the cloud in cloud mode.
  */
 export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): MemoryBackend {
   const w = deps.wired;
@@ -920,6 +922,51 @@ export function cloudBackend(deps: OortServerDeps & { client: CloudClient }): Me
           updated_at: m.updatedAt,
         }));
       return { memories };
+    },
+
+    async recordJudgment(i) {
+      // Oort Cloud holds the experts list and the daily cap: it refuses a name it does not list,
+      // and what a key records stays unconfirmed until a person confirms it in the dashboard.
+      refuseStarInCloud(w);
+      const body = {
+        subject: i.subject,
+        verdict: i.verdict,
+        reason: i.reason,
+        domain: i.domain,
+        by: i.by,
+        ...(i.ref !== undefined && { ref: i.ref }),
+        ...(i.verdicts !== undefined && { verdicts: i.verdicts }),
+        ...(i.criteria !== undefined && { criteria: i.criteria }),
+        ...(i.decided_at !== undefined && { decidedAt: i.decided_at }),
+      };
+      // Refused here as locally, before anything is sent.
+      await asToolError(async () => normaliseJudgment(body, now()));
+      const r = cloudRecordView(await client.recordJudgment(body));
+      return {
+        outcome: r.outcome,
+        id: r.id,
+        ...(r.corrects !== undefined && { corrects: r.corrects }),
+        status: 'agent-recorded, unconfirmed',
+        note: `Saved as agent-recorded and unconfirmed: judging leaves it out until a person confirms it in the Oort Cloud dashboard (${DASHBOARD_JUDGMENTS_URL}).${r.redacted.length > 0 ? ' A secret was redacted before saving.' : ''}`,
+      };
+    },
+
+    async judge(i) {
+      const r = cloudJudgeResult(
+        await client.applyJudgments({
+          item: {
+            summary: i.item,
+            ...(i.details !== undefined && { details: i.details }),
+            ...(i.domain !== undefined && { domain: i.domain }),
+            ...(i.by !== undefined && { by: i.by }),
+          },
+          ...(i.limit !== undefined && { limit: i.limit }),
+          ...(i.include_imported === true && { includeImported: true }),
+          ...(i.include_agent_recorded === true && { includeAgentRecorded: true }),
+        }),
+      );
+      // The same fields as core's result: the view only scrubbed its text again.
+      return judgeOutput(r as unknown as JudgeResult);
     },
 
     async whoami() {

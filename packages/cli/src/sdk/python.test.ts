@@ -11,18 +11,16 @@ import {
   CASES,
   DEFAULT_NOW,
   ROOT,
-  endUsersOf,
   readJson,
   readJudgment,
+  seedCloud,
   seedLocal,
-  seedMemory,
   substitute,
   type Case,
   type Seed,
-  type SeedMemory,
   type Transport,
 } from '../../test/helpers/contract.js';
-import { fakeCloud, fakeMemory, type FakeCloud } from '../../test/helpers/fake-cloud.js';
+import { fakeCloud, type FakeCloud } from '../../test/helpers/fake-cloud.js';
 import { fakeAdapters } from '../../test/helpers/sdk-fakes.js';
 import {
   END_USERS_CAPABILITY,
@@ -225,21 +223,8 @@ async function runCase(c: Case, transport: Transport): Promise<void> {
     close = async () => void (await daemon.stop('test'));
   } else {
     const fake = fakeCloud(key);
-    for (const raw of seed.memories ?? []) {
-      const s = substitute(raw, new Map()) as SeedMemory;
-      if ((s.level ?? 'planet') !== 'planet' || (s.user ?? 'self') !== 'self') continue;
-      const m = seedMemory(s);
-      fake.memories.set(
-        m.id,
-        fakeMemory({ ...(m as unknown as Record<string, unknown>), id: m.id }),
-      );
-    }
-    for (let i = 0; i < (c.cloud?.memories ?? 0); i++) {
-      const at = new Date(Date.parse(now) - i * 60_000).toISOString();
-      const m = fakeMemory({ text: `bulk memory number ${i}`, updatedAt: at, createdAt: at });
-      fake.memories.set(m.id, m);
-    }
-    endUsersOf(fake, c);
+    // The Python runner leaves config out itself; here it only sets the account's experts.
+    await seedCloud(fake, c, seed, now, options);
     const served = await serveFake(fake);
     spec['url'] = served.url;
     onStep = (i) => {
@@ -267,6 +252,21 @@ const PYTHON_GAPS: Record<string, string> = {
   'cloud scrub.a-secret-in-a-query-never-comes-back': 'no client-side scrub (Q3)',
   'cloud ids.recent-lists-newest-first-within-its-limit':
     'no client-side scrub (Q3): the seed holds a pre-rule secret',
+  // Judgments in Oort Cloud reach the TypeScript SDK first; the Python client's cloud mode keeps
+  // them local-only for now.
+  ...Object.fromEntries(
+    [
+      'agent-record-is-unconfirmed',
+      'agent-role-needs-listed-experts',
+      'agent-role-records-only-for-a-listed-expert',
+      'the-daily-cap-is-shared-with-mcp',
+      'an-agent-never-corrects-a-person',
+      'apply-leaves-out-unconfirmed-agent-records',
+      'input-limits',
+      'cloud-expert-role-is-refused',
+      'cloud-a-key-records-and-a-person-decides',
+    ].map((id) => [`cloud judge.${id}`, 'judgments in cloud mode are TypeScript only for now']),
+  ),
 };
 
 describePy('Python client: the SDK contract suite (contract/sdk)', () => {
@@ -584,6 +584,13 @@ describe('golden vectors (contract/sdk/vectors)', () => {
         message: 'Only a server key can act for an end user.',
       },
       { status: 409, code: 'end_user_erased', message: 'This end user was erased.' },
+      // Judgments in Oort Cloud: the wire codes, as the reasons local mode gives.
+      { status: 403, code: 'experts_not_listed', message: 'No experts are listed.' },
+      { status: 403, code: 'not_an_expert', message: 'by is not a listed expert.' },
+      { status: 403, code: 'daily_limit', message: 'Agents recorded 50 judgments today.' },
+      { status: 403, code: 'expert_only', message: 'A person decides this in the dashboard.' },
+      { status: 503, code: 'cap_unavailable', message: 'The daily count could not be kept.' },
+      { status: 409, code: 'not_current', message: 'That judgment is not current.' },
     ];
     vector(
       'cloud-errors.json',

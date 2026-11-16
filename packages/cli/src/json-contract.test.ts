@@ -770,7 +770,11 @@ describe('oort.v1: judgment memory', () => {
     expect(typeof a.status).toBe('string');
     bad(await run(['judge', 'apply', 'x', '--k', 'many', '--json']), 'judge apply', 'usage');
     expect(ok(await run(['judge', 'list', '--json']), 'judge list').judgments).toHaveLength(1);
-    bad(await cloudEnv().run(['judge', 'list', '--json']), 'judge list', 'refused');
+    // Cloud mode lists the account's judgments; a person records them in the dashboard.
+    const cloud = cloudEnv();
+    expect(ok(await cloud.run(['judge', 'list', '--json']), 'judge list').judgments).toEqual([]);
+    bad(await cloud.run(record), 'judge record', 'refused');
+    bad(await cloud.run(['judge', 'purge', 'ffff', '--yes', '--json']), 'judge purge', 'refused');
     // A person recorded it: nothing to confirm, changed false.
     expect(ok(await run(['judge', 'confirm', id, '--json']), 'judge confirm')).toMatchObject({
       id,

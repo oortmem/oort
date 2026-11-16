@@ -1,0 +1,13 @@
+{
+  "memories": [],
+  "judgments": [
+    {
+      "subject": "Post 1",
+      "ref": "post-1",
+      "verdict": "rejected",
+      "reason": "No source.",
+      "domain": "content",
+      "by": "ada"
+    }
+  ]
+}
